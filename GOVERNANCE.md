@@ -1,6 +1,6 @@
 # Governance
 
-cxthub uses a maintainer-led governance model during its alpha stage.
+CXTHub uses a maintainer-led governance model during its alpha stage.
 
 ## Roles
 
@@ -71,4 +71,4 @@ evidence, user impact, and project invariants.
 
 The Apache License 2.0 permits forks. Forks must follow
 [TRADEMARKS.md](TRADEMARKS.md) and must not imply that they are official
-cxthub services or releases.
+CXTHub services or releases.
