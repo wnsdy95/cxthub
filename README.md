@@ -1,9 +1,5 @@
 <h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="frontend/web/public/cxt-logo-dark-theme.svg">
-    <source media="(prefers-color-scheme: light)" srcset="frontend/web/public/cxt-logo-light-theme.svg">
-    <img src="frontend/web/public/cxt-logo-light-theme.svg" alt="" width="38" align="absmiddle">
-  </picture>
+  <img src="frontend/web/src/assets/cxt-logo-light-theme.png" alt="" width="38" align="absmiddle">
   CXTHub
 </h1>
 
