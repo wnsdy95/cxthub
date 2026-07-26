@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible problem in cxt, cxtd, or the web UI.
+title: "bug: "
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private repository URLs, or agent transcripts.
+        Security vulnerabilities belong in GitHub private vulnerability reporting.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - cxt CLI
+        - cxtd server
+        - Web UI
+        - Claude Code integration
+        - Codex integration
+        - Deployment or self-hosting
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0 or a full commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS 15 arm64, Go 1.26.5, FS store
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest deterministic sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or additional context
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, private context, and personal data.
+          required: true
+        - label: I searched existing issues for this problem.
+          required: true

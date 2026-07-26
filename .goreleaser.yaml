@@ -1,0 +1,47 @@
+# GoReleaser configuration for publishing the cxt CLI from the public cxthub repository.
+#
+# Trigger: git tag vX.Y.Z && git push --tags → .github/workflows/release.yml
+# Destination: the current github.com/wnsdy95/cxthub repository (GITHUB_TOKEN only)
+# Local validation: goreleaser check / goreleaser release --snapshot --clean
+version: 2
+project_name: cxt
+
+builds:
+  - id: cxt
+    dir: cli
+    main: ./cmd/cxt
+    binary: cxt
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags: ["-s -w -X main.version={{.Version}}"]
+
+archives:
+  - ids: [cxt]
+    formats: [tar.gz]
+    name_template: "cxt_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES.md
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  # Never overwrite assets for an existing tag; publish fixes under a new patch tag.
+  mode: keep-existing
+  header: |
+    ## cxt {{ .Tag }}
+
+    Install or update:
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/wnsdy95/cxthub/main/distrib/install | sh
+    ```
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^test:'
+      - '^chore:'

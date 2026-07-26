@@ -1,0 +1,2575 @@
+openapi: "3.1.0"
+
+info:
+  title: cxt Sync API
+  version: "1"
+  description: |
+    REST API of the central server for cxt (cxthub).
+    This file is the common wire contract for the CLI, backend, and frontend.
+    The CLI and backend do not share a Go module, so this schema defines their
+    interoperable HTTP surface.
+    CIR object schema: schemas/cir.schema.json. Manifest schema: schemas/manifest.schema.json.
+  contact:
+    name: cxthub maintainers
+    url: https://github.com/wnsdy95/cxthub
+
+servers:
+  - url: "https://{host}/api/v1"
+    description: Central server (main/dev common)
+    variables:
+      host:
+        default: localhost:8080
+        description: Server host. Local development is localhost:8080, production is team domain.
+
+# ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+security:
+  - SessionCookie: []
+  - BearerToken: []
+
+# Permission model (5-step role ladder — serial AND gates):
+#   Authentication → workspace membership → role (viewer→puller→member→maintainer→owner) → action-specific policies.
+#   viewer     read-only (web context·graph)          — GET repos/snapshots/docs/memories/diff
+#   puller     +local synchronization of team assets  — GET settings/secrets/settings-objects, pull/objects
+#   member     +Context write (default)               — push/*, PUT refs/memories/settings-objects, fork
+#   maintainer +Team asset write·invite creation          — PUT settings/secrets, PATCH about, POST invites
+#   owner      +Operations                              — PATCH workspace, member management, transfer(creator)
+# viewer level GET is allowed for anonymous if public workspace. Policy(secrets/settings_policy) is
+# maintainer gate can narrow down to 'owner only'.
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: cxt_session
+      description: |
+        Web login session(HttpOnly cookie). POST /auth/session exchanges IDP token(Firebase/dev) for
+        issuance. Token value is not exposed in JS.
+    BearerToken:
+      type: http
+      scheme: bearer
+      description: |
+        Authorization: Bearer <token>. Accepts two formats:
+        - `sess_*` server session token — CLI token(sess_cli_*, POST /me/cli-tokens issuance, 1 year) included.
+          CLI stores `cxt login <token>` in ~/.cxt/auth.json(0600, per host).
+        - IDP token(Firebase ID token / dev token) — validated for user upsert.
+
+  headers:
+    X-Cxt-Identity:
+      description: |
+        User identity header. Used for author attribution and audit logs.
+        format: `name="<name>"; email="<email>"; team="<team>"`.
+        If the team value does not match the team of the Team Token, a 403 team_mismatch.
+      schema:
+        type: string
+        example: 'name="Alice"; email="alice@example.com"; team="acme"'
+
+  # -------------------------------------------------------------------------
+  # Reusable Schemas
+  # -------------------------------------------------------------------------
+  schemas:
+    ContentHash:
+      type: string
+      description: "Content address hash. Format: sha256:<hex64>. Same content → same value."
+      pattern: "^sha256:[0-9a-f]{64}$"
+      example: "sha256:9f1c0000000000000000000000000000000000000000000000000000000000ab"
+
+    RepoID:
+      $ref: "#/components/schemas/ContentHash"
+
+    RefKind:
+      type: string
+      enum: [head, branch, session, tag]
+      description: "head=Current checkout symbolic ref, branch=Actual git branch pointer, session=Preservation pointer within the same git branch (for join internal use), tag=Immutable label."
+
+    Ref:
+      type: object
+      description: "Mutable pointer (HEAD/branch/session/tag). domain.Ref serialization. Original format: schemas/manifest.schema.json."
+      required: [kind, name, repo_id, target]
+      additionalProperties: false
+      properties:
+        kind:
+          $ref: "#/components/schemas/RefKind"
+        name:
+          type: string
+          description: "Branch/session/tag name or HEAD (fixed)."
+        repo_id:
+          $ref: "#/components/schemas/ContentHash"
+        target:
+          $ref: "#/components/schemas/ContentHash"
+        symbolic:
+          type: string
+          description: "Symbolic target (branch name when HEAD points to a branch). Direct reference is an empty string."
+          default: ""
+
+    Author:
+      type: object
+      description: "Snapshot author. domain.TeamIdentity projection."
+      required: [name, email, team]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        team:
+          type: string
+
+    Snapshot:
+      type: object
+      description: |
+        Snapshot metadata. ID points to the body and natural parents are immutable.
+        Branches and graft overlay fields are outside the content hash and use
+        explicit merge or compare-and-swap rules. The body is a separate
+        docs/{hash} resource.
+      required: [id, repo_id, branch, parents, doc_hash, provider, fidelity, message, author, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ContentHash"
+        repo_id:
+          $ref: "#/components/schemas/ContentHash"
+        branch:
+          type: string
+        parents:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContentHash"
+          description: "List of parent snapshot IDs. DAG root is an empty array."
+        doc_hash:
+          $ref: "#/components/schemas/ContentHash"
+        provider:
+          type: string
+          enum: [claude, codex, unknown]
+        fidelity:
+          type: string
+          enum: [full, reconstructed, memory]
+        message:
+          type: string
+        author:
+          $ref: "#/components/schemas/Author"
+        created_at:
+          type: string
+          format: date-time
+        memory_hash:
+          $ref: "#/components/schemas/ContentHash"
+          description: "Optional MemoryDigest pointer attached to the raw document."
+        claude_settings:
+          $ref: "#/components/schemas/ContentHash"
+          description: "Commit point .claude folder snapshot hash (content-addressed, optional)."
+        agents_settings:
+          $ref: "#/components/schemas/ContentHash"
+          description: "Commit snapshot hash of .agents folder (optional)."
+        codex_settings:
+          $ref: "#/components/schemas/ContentHash"
+          description: "Commit point .codex folder snapshot hash (optional)."
+        grafted:
+          type: boolean
+          description: "graft(diverged append) overlay edge attached (UI merge indicator). ID calculation excluded."
+        graft_parents:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContentHash"
+          description: "The server appends to diverged branches, and the reachability overlay parent (Parents remain unchanged). Reachability = Parents ∪ GraftParents. ID calculation excluded."
+        graft_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9223372036854775807
+          description: "graft (set, seq) version register — join reordering support for supersede (edge removal). High seq replaces the entire set, while seq=0 allows legacy union of sets. seq>0 version conflicts are resolved by adjusting the server projection to the base. ID calculation excluded."
+        branches:
+          type: array
+          readOnly: true
+          items: { type: string }
+          description: "branch reflog projection of git branch membership. branch is the initial capture compatible field, and content dedup snapshot can belong to multiple branches."
+        session_id:
+          type: string
+          description: "Original agent session identifier (meta for session boundary). ID calculation excluded."
+        models:
+          type: array
+          items:
+            type: string
+          description: "List of models that appeared in the session (for AI icon participation). ID calculation excluded."
+        compaction_count:
+          type: integer
+          description: "Number of context compression (compact_boundary) times for the session. If greater than parent, it includes a compression marker (◈). ID calculation excluded."
+
+    SessionDoc:
+      type: object
+      description: |
+        content-addressed blob body. CIR container.
+        cir internal follows schemas/cir.schema.json definition.
+      required: [hash, cir]
+      additionalProperties: false
+      properties:
+        hash:
+          $ref: "#/components/schemas/ContentHash"
+        cir:
+          type: object
+          description: "CIR v1 object. Schema: schemas/cir.schema.json."
+          required: [envelope, events]
+          additionalProperties: true
+
+    ChunkedDoc:
+      type: object
+      description: |
+        SessionDoc canonical body chunk manifest. hash is not the chunk itself,
+        the ContentHash of the fully reassembled canonical CIR body.
+      required: [hash, envelope, chunks]
+      additionalProperties: false
+      properties:
+        hash:
+          $ref: "#/components/schemas/ContentHash"
+        envelope:
+          type: object
+          additionalProperties: true
+        chunks:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ContentHash"
+
+    ChunkObject:
+      type: object
+      description: "Content-addressed uncompressed chunk. data is JSON base64 and sha256(data) == hash."
+      required: [hash, data]
+      additionalProperties: false
+      properties:
+        hash:
+          $ref: "#/components/schemas/ContentHash"
+        data:
+          type: string
+          format: byte
+
+    Repo:
+      type: object
+      description: "Repo metadata. local_path is always an empty string on the server (local-only field)."
+      required: [id, remote_url, default_branch]
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ContentHash"
+        remote_url:
+          type: string
+          description: "Normalized git remote URL."
+        local_path:
+          type: string
+          description: "Local absolute path. Always an empty string on server response."
+          default: ""
+        default_branch:
+          type: string
+          default: main
+        workspace_id:
+          type: string
+          description: "Owning workspace (visibility boundary). Server automatically binds to remote_url path /<username>/<workspace>. '' = unowned."
+        git_remote_url:
+          type: string
+          description: "Code repo's git origin (GitHub etc.) — web 'connected' link, onboarding origin validation criterion."
+        description:
+          type: string
+          description: "Repo About (editable on web)."
+        website:
+          type: string
+        topics:
+          type: array
+          items:
+            type: string
+        protect_default:
+          type: boolean
+          description: "If set, rejects --force ref move of default branch (protected branch)."
+
+    Manifest:
+      type: object
+      description: |
+        repo unit metadata index. Used in the first step of push/pull negotiation.
+        Schema template: schemas/manifest.schema.json.
+      required: [repo_id, refs, snapshot_index, version, updated_at]
+      additionalProperties: false
+      properties:
+        repo_id:
+          $ref: "#/components/schemas/ContentHash"
+        refs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Ref"
+        snapshot_index:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContentHash"
+          description: "List of all snapshot IDs held by this store."
+        version:
+          type: integer
+          minimum: 0
+          description: "Monotonic increasing version for optimistic locking."
+        updated_at:
+          type: string
+          format: date-time
+
+    MemoryDigest:
+      type: object
+      description: "Summary of snapshot memory growth."
+      required: [snapshot_id, summary, key_facts, open_tasks, provider]
+      additionalProperties: false
+      properties:
+        snapshot_id:
+          $ref: "#/components/schemas/ContentHash"
+        summary:
+          type: string
+        key_facts:
+          type: array
+          items:
+            type: string
+        open_tasks:
+          type: array
+          items:
+            type: string
+        provider:
+          type: string
+          enum: [claude, codex, unknown]
+
+    ErrorResponse:
+      type: object
+      description: "Common error envelope used by API failures."
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              enum:
+                - bad_request
+                - unauthenticated
+                - forbidden
+                - team_mismatch
+                - not_found
+                - non_fast_forward
+                - ref_conflict
+                - git_origin_mismatch
+                - conflict
+                - validation
+                - integrity_violation
+                - missing_object
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+
+    MemberRole:
+      type: string
+      description: "5-step role ladder. Unknown values are conservatively rejected."
+      enum: [viewer, puller, member, maintainer, owner]
+
+    User:
+      type: object
+      description: "Authenticated user. username is URL segment (change is heavy), nickname is for display."
+      properties:
+        id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        username: { type: string }
+        nickname: { type: string }
+        load_mode:
+          type: string
+          description: "Personal load default mode (web settings, CLI consumption). Empty value = unset (falls back to full)."
+          enum: ["", full, reconstructed, memory]
+        avatar: { type: string, description: "Profile picture data URL (data:image/…;base64,…). '' = unset." }
+        locale:
+          type: string
+          description: "UI display language personal setting (web switch). Empty value = unset (client detects browser)."
+          enum: ["", ko, en]
+        created_at: { type: string, format: date-time }
+
+    Workspace:
+      type: object
+      description: |
+        Multi-tenancy/visibility boundary. visibility default private.
+        When gh_visibility_sync is enabled, manual visibility settings are locked (409),
+        It becomes public only when all connected GitHub repos are public.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        owner_id: { type: string, description: "Creator — role cannot be fixed or removed, can only be changed via transfer" }
+        slug: { type: string, description: "Unique URL segment within the owner" }
+        owner_username: { type: string }
+        visibility: { type: string, enum: [private, public] }
+        secrets_policy: { type: string, enum: ["", members, owner], description: "'' = members (maintainer and above)" }
+        settings_policy: { type: string, enum: ["", members, owner] }
+        gh_visibility_sync: { type: boolean }
+        gh_synced_at: { type: string, format: date-time }
+        archived: { type: boolean, description: "Archived (read-only) — actions beyond viewer result in 403" }
+        webhook_url: { type: string, description: "Notification webhook (compatible with Slack incoming webhook)" }
+        public_role: { type: string, enum: ["", viewer, puller], description: "Public role for non-members (including anonymous, '' = viewer)" }
+        created_at: { type: string, format: date-time }
+
+    Membership:
+      type: object
+      properties:
+        workspace_id: { type: string }
+        user_id: { type: string }
+        role: { $ref: "#/components/schemas/MemberRole" }
+        created_at: { type: string, format: date-time }
+        user: { $ref: "#/components/schemas/User" }
+
+    Invite:
+      type: object
+      description: "Shared invitation token — reusable until revoked. Role can be specified upon joining."
+      properties:
+        token: { type: string }
+        workspace_id: { type: string }
+        email: { type: string, description: "Anyone can accept" }
+        role: { $ref: "#/components/schemas/MemberRole" }
+        status: { type: string, enum: [pending, accepted, revoked] }
+
+    Pending:
+      type: object
+      description: |
+        Session-specific context pointer (CLI hook auto capture mirror). Does not move branch ref,
+        pointing to the latest hook capture snapshot. When a commit snapshot absorbs the session, it is resolved by DELETE.
+        The web renders as "continuing conversation tail" if the session is like a tip commit, otherwise as Uncommitted.
+      properties:
+        repo_id: { type: string }
+        session_id: { type: string }
+        branch: { type: string }
+        provider: { type: string, enum: [claude, codex, unknown] }
+        target: { $ref: "#/components/schemas/ContentHash" }
+        author: { $ref: "#/components/schemas/Author" }
+        updated_at: { type: string, format: date-time }
+        dismissed:
+          type: boolean
+          description: "A session that the user has hidden from the uncommitted list (data deletion is not involved, sticky). If true, it is excluded from the web Uncommitted list."
+
+    Unsync:
+      type: object
+      description: |
+        (User, Branch) push waiting pointer — locally committed but not yet shared via git push.
+        Chain tip that is not on the timeline. The object first reaches via shadow push,
+        is resolved by deletion during git push (ref forward). The web renders the On Hold tab.
+      properties:
+        repo_id: { type: string }
+        user: { type: string }
+        branch: { type: string }
+        target: { $ref: "#/components/schemas/ContentHash" }
+        author: { $ref: "#/components/schemas/Author" }
+        updated_at: { type: string, format: date-time }
+
+    SettingsBundle:
+      type: object
+      description: "Team default settings folder bundle (.claude/.agents/.codex). Files are 2MB each, path deviation 422."
+      properties:
+        kind: { type: string, enum: [claude, agents, codex] }
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              content_b64: { type: string }
+        updated_at: { type: string, format: date-time }
+        updated_by: { type: string }
+
+    SecretsEnvelope:
+      type: object
+      description: |
+        .cxtsecrets inter-process encrypted envelope. The server only stores it transparently (plain text and passphrase not included).
+        PBKDF2-SHA256(600k) + AES-256-GCM, AAD = "cxtsecrets:v1:<repoID>".
+      properties:
+        version: { type: integer }
+        kdf: { type: string, example: PBKDF2-SHA256 }
+        iterations: { type: integer, minimum: 100000 }
+        salt_b64: { type: string }
+        cipher: { type: string, example: AES-256-GCM }
+        nonce_b64: { type: string }
+        ciphertext_b64: { type: string }
+        updated_at: { type: string, format: date-time }
+        updated_by: { type: string }
+
+    CLITokenInfo:
+      type: object
+      description: "CLI token list item — the entire value is exposed only once at issuance, then only the suffix."
+      properties:
+        suffix: { type: string, description: "The last 8 characters of the token (revoke identifier)" }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+  # -------------------------------------------------------------------------
+  # Reusable Parameters
+  # -------------------------------------------------------------------------
+  parameters:
+    repoID:
+      name: repoID
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ContentHash"
+      description: "Repo ID (sha256 hash)."
+
+    snapshotID:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ContentHash"
+      description: "Snapshot ID (content hash)."
+
+    docHash:
+      name: hash
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ContentHash"
+      description: "SessionDoc content hash."
+    sessionID:
+      name: sessionID
+      in: path
+      required: true
+      schema: { type: string }
+      description: "Original agent session identifier (pending pointer key)."
+
+    refKind:
+      name: kind
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/RefKind"
+      description: "Ref type."
+
+    refName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+      description: "Ref name (branch name/internal session ref name/tag name/HEAD)."
+
+  # -------------------------------------------------------------------------
+  # Reusable Responses
+  # -------------------------------------------------------------------------
+  responses:
+    Unauthorized:
+      description: "No token or invalid (unauthenticated)."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    Forbidden:
+      description: "Outside team visibility or team_mismatch (forbidden)."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    NotFound:
+      description: "Resource not found (not_found)."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  /health:
+    get:
+      operationId: health
+      summary: Server liveness check
+      description: "Process-level probe for deployment and load balancer that does not expose authentication or repository content."
+      tags: [system]
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+                    const: ok
+
+  # =========================================================================
+  # Repos
+  # =========================================================================
+  /repos:
+    get:
+      operationId: listRepos
+      summary: List accessible repos
+      description: "Returns a list of accessible repos within the team visibility of the Team Token."
+      tags: [repos]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repos]
+                properties:
+                  repos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Repo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      operationId: createRepo
+      summary: Register repo (idempotent)
+      description: |
+        Registers the repo on the central server. Automatically called on the first push or explicitly created.
+        If the same `id`, returns the existing record (idempotent, 201 or 200).
+      tags: [repos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, remote_url, default_branch]
+              additionalProperties: false
+              properties:
+                id:
+                  $ref: "#/components/schemas/ContentHash"
+                remote_url:
+                  type: string
+                default_branch:
+                  type: string
+                  default: main
+      responses:
+        "200":
+          description: "Returns an existing repo."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repo"
+        "201":
+          description: "Returns a newly created repo."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repo"
+        "400":
+          description: "Invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /repos/{repoID}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: getRepo
+      summary: Single repo retrieval
+      tags: [repos]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # =========================================================================
+  # Manifest
+  # =========================================================================
+  /repos/{repoID}/manifest:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: getManifest
+      summary: Server Manifest retrieval (push/pull negotiation phase 1)
+      description: |
+        Returns a list of refs held by the server + the entire snapshot_index.
+        `RemoteSync.RemoteManifest` port is called. Start point of push/pull negotiation.
+        Schema template: schemas/manifest.schema.json.
+      tags: [manifest]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Manifest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # =========================================================================
+  # Branches (convenience retrieval)
+  # =========================================================================
+  /repos/{repoID}/fsck:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: fsck
+      summary: Reference reachability audit (read-only, git fsck response)
+      description: "Calculates the reachability set of parents from all refs, reporting unreachable (dangling) references, non-existent parent references (corruption), and parentless roots. Does not modify anything; parentless roots are treated as normal roots."
+      tags: [repos]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, reachable]
+                properties:
+                  total: { type: integer }
+                  reachable: { type: integer }
+                  roots: { type: array, items: { type: string } }
+                  unreachable: { type: array, items: { type: string } }
+                  dangling_parents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        snapshot: { type: string }
+                        missing: { type: string }
+  /repos/{repoID}/reflog:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: reflog
+      summary: Ref movement history (latest first, git reflog response)
+      description: "Append-only log of ref movements. Basis for recovering tips that were pushed over."
+      tags: [repos]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    kind: { type: string }
+                    name: { type: string }
+                    old: { type: string }
+                    new: { type: string }
+                    created_at: { type: string }
+  /repos/{repoID}/branches:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: listBranches
+      summary: Get branch list (refs kind=branch projection)
+      description: "Return items from refs where kind=branch in a convenient form. Includes head snapshot pointer."
+      tags: [branches]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [branches]
+                properties:
+                  branches:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, repo_id, head]
+                      additionalProperties: false
+                      properties:
+                        name:
+                          type: string
+                        repo_id:
+                          $ref: "#/components/schemas/ContentHash"
+                        head:
+                          $ref: "#/components/schemas/ContentHash"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # =========================================================================
+  # Snapshots
+  # =========================================================================
+  /repos/{repoID}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: listSnapshots
+      summary: Get snapshot list (metadata only)
+      description: |
+        List of snapshot metadata by branch. Mirrors `ListSnapshots`.
+        Body blob is not included. Snapshot creation is only possible via push/objects batch endpoints.
+      tags: [snapshots]
+      parameters:
+        - name: branch
+          in: query
+          schema:
+            type: string
+          description: "Branch name filter. Defaults to all if omitted."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshots]
+                properties:
+                  snapshots:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Snapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repos/{repoID}/snapshots/{id}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/snapshotID"
+    get:
+      operationId: getSnapshot
+      summary: Get single snapshot metadata
+      tags: [snapshots]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repos/{repoID}/search:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: searchRepo
+      summary: Search commit messages and conversation body
+      description: |
+        Searches for snapshot metadata (commit message/author) and doc (CIR) conversation surface (message/turn text,
+        reasoning summary) as partial strings (case-insensitive, requires viewer or higher).
+        Duplicate events due to inheritance (doc sharing) are deduplicated to the first occurrence of a snapshot.
+        Tool input/output original text is not included in the search. Search terms must be at least 2 characters (422 if less).
+      tags: [snapshots]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+          description: "Search term (partial string, case insensitive)"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hits, truncated]
+                properties:
+                  hits:
+                    type: array
+                    items:
+                      type: object
+                      required: [snapshot_id, branch, kind, snippet, created_at]
+                      properties:
+                        snapshot_id:
+                          $ref: "#/components/schemas/ContentHash"
+                        branch:
+                          type: string
+                        kind:
+                          type: string
+                          enum: [commit, event]
+                        role:
+                          type: string
+                          description: "Speaker (user/assistant, etc.) in event match"
+                        seq:
+                          type: integer
+                          description: "CIR seq in event match"
+                        snippet:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+                  truncated:
+                    type: boolean
+                    description: "Threshold (50) reached — signal to narrow down search term"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: "Search term less than 2 characters (validation)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # =========================================================================
+  # Docs (content-addressed blob)
+  # =========================================================================
+  /repos/{repoID}/docs/{hash}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/docHash"
+    get:
+      operationId: getDoc
+      summary: Retrieve a single body of a SessionDoc
+      description: |
+        CIR container (SessionDoc) body for single retrieval. Download missing blobs during pull.
+        Body creation is limited to push/objects batch. Schema: schemas/cir.schema.json.
+      tags: [docs]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDoc"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # =========================================================================
+  # Refs
+  # =========================================================================
+  /repos/{repoID}/refs:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: listRefs
+      summary: Retrieve all ref lists
+      description: "`ListRefs` mirror. Format is the same as manifest.refs array."
+      tags: [refs]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [refs]
+                properties:
+                  refs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Ref"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # Implementation note: Actual route is {name...} (allows branch names with slashes). Diverged automatic fork removal —
+  # Non-fast-forward is 409 non_fast_forward (only pass with force), diverged is resolved by append (lossless reordering).
+  # Authentication/Workspace API is described in the section below. Remaining unmentioned: GET /repos?workspace=(membership filter).
+  /repos/{repoID}/refs/{kind}/{name}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/refKind"
+      - $ref: "#/components/parameters/refName"
+    put:
+      operationId: updateRef
+      summary: Ref Move (compare-and-swap, push step C)
+      description: |
+        moves the ref to a new target. compare-and-swap meaning:
+        if `expected_target` is different from the server's current value, a 409 ref_conflict.
+        accepts after fast-forward determination (DAG reachability). non-fast-forward is a 409 non_fast_forward
+        (`force: true` only), diverged is resolved by a lossless rebase (graft) with `append: true`.
+        objects (snapshot+doc) must arrive first via push/objects (object precedence invariant).
+        `kind=session` is an internal pointer managed by join. General ref API only allows idempotent echo for the same target, and creation/movement/force are rejected with 403.
+        only allows idempotent echo for the same target, and creation/movement/force are rejected with 403.
+      tags: [refs]
+      parameters:
+        - name: X-Cxt-Identity
+          in: header
+          schema:
+            type: string
+          description: "User identity used for attribution and audit logs."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ref, expected_target]
+              additionalProperties: false
+              properties:
+                ref:
+                  $ref: "#/components/schemas/Ref"
+                expected_target:
+                  $ref: "#/components/schemas/ContentHash"
+                force:
+                  type: boolean
+                  description: "Force non-fast-forward move (git push --force). Protected branches are rejected."
+                append:
+                  type: boolean
+                  description: "Reattaches with a lossless rebase (graft) behind the server head when diverged."
+      responses:
+        "200":
+          description: "Accepts fast-forward or up-to-date."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result, ref]
+                additionalProperties: false
+                properties:
+                  result:
+                    type: string
+                    enum: [fast_forward, up_to_date]
+                  ref:
+                    $ref: "#/components/schemas/Ref"
+        "400":
+          description: "Invalid request."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            ref Move conflict:
+            - `ref_conflict`: expected_target differs from server current value (concurrent update). Retry after pull.
+            - `non_fast_forward`: Server is ahead. Rejected without `force` or `append`.
+            (diverged automatic fork is removed — replaced by append lossless reordering.)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # =========================================================================
+  # Memories
+  # =========================================================================
+  /repos/{repoID}/memories/{snapshotID}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: snapshotID
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/ContentHash"
+        description: "Target snapshot ID."
+    get:
+      operationId: getMemory
+      summary: MemoryDigest retrieval
+      description: "Returns MemoryDigest associated with the snapshot. Returns 404 if not found."
+      tags: [memories]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDigest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: putMemory
+      summary: MemoryDigest upload (idempotent)
+      description: |
+        Uploads MemoryDigest for the snapshot. Idempotent.
+        Snapshot must exist first (returns 422 missing_object if not).
+      tags: [memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryDigest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDigest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          description: "Snapshot does not exist (missing_object) or integrity error."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # =========================================================================
+  # Push Negotiation
+  # =========================================================================
+  /repos/{repoID}/push/negotiate:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: pushNegotiate
+      summary: Push Negotiation — Server returns list of needed objects (Step A)
+      description: |
+        If the client presents snapshot/doc hashes it can send,
+        the server returns only the ones it does not have. Have/Want negotiation.
+        This is step A of push negotiation.
+      tags: [push]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [snapshot_haves, doc_haves]
+              additionalProperties: false
+              properties:
+                snapshot_haves:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ContentHash"
+                doc_haves:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ContentHash"
+                chunk_haves:
+                  type: array
+                  description: "Chunk hashes referenced by the doc manifest to be sent. Server responds with only missing chunks."
+                  items:
+                    $ref: "#/components/schemas/ContentHash"
+      responses:
+        "200":
+          description: OK — Server returns the missing parts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshot_wants, doc_wants]
+                additionalProperties: false
+                properties:
+                  snapshot_wants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ContentHash"
+                  doc_wants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ContentHash"
+                  chunks_supported:
+                    type: boolean
+                    description: "Chunk manifest wire support."
+                  bounded_chunks_supported:
+                    type: boolean
+                    description: "If true, chunk bodies are sent to /push/chunks and /pull/chunks paths."
+                  chunk_wants:
+                    type: array
+                    description: "Chunk hashes the server does not have."
+                    items:
+                      $ref: "#/components/schemas/ContentHash"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repos/{repoID}/push/objects:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: pushObjects
+      summary: Object batch upload (Step B)
+      description: |
+        Uploads a batch of missing snapshots and docs.
+        The server recalculates each object hash for integrity verification.
+        A transaction with no partial failures. Rejects the entire batch on validation failure with 422 integrity_violation.
+        This is step B of push negotiation.
+      tags: [push]
+      parameters:
+        - name: X-Cxt-Identity
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                snapshots:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Snapshot"
+                docs:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/SessionDoc"
+                chunked_docs:
+                  type: array
+                  description: "Reassembles a doc manifest using chunks previously uploaded."
+                  items:
+                    $ref: "#/components/schemas/ChunkedDoc"
+                chunk_objects:
+                  type: array
+                  deprecated: true
+                  description: "Fallback inline chunk for old servers. Use /push/chunks on bounded_chunks_supported servers."
+                  items:
+                    $ref: "#/components/schemas/ChunkObject"
+      responses:
+        "200":
+          description: OK — Storage/dedup statistics.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stored_snapshots, stored_docs, deduped_snapshots, deduped_docs]
+                additionalProperties: false
+                properties:
+                  stored_snapshots:
+                    type: integer
+                    minimum: 0
+                  stored_docs:
+                    type: integer
+                    minimum: 0
+                  deduped_snapshots:
+                    type: integer
+                    minimum: 0
+                  deduped_docs:
+                    type: integer
+                    minimum: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          description: "Hash mismatch (integrity_violation) or object precedence violation (missing_object)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /repos/{repoID}/push/chunks:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: pushChunks
+      summary: Bounded chunk batch upload
+      description: |
+        Stages missing chunks content-addressed before confirming the manifest with push/objects.
+        Idempotent storage. Up to 32 chunks per request, uncompressed total of 2 MiB, JSON body of 4 MiB.
+        After resuming, already stored chunks are excluded from chunk_wants.
+      tags: [push]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chunks]
+              additionalProperties: false
+              properties:
+                chunks:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  items:
+                    $ref: "#/components/schemas/ChunkObject"
+      responses:
+        "200":
+          description: OK — saved/dedup chunk count.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stored, deduped]
+                additionalProperties: false
+                properties:
+                  stored:
+                    type: integer
+                    minimum: 0
+                  deduped:
+                    type: integer
+                    minimum: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          description: "JSON body exceeds bounded transport limit."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: "Chunk count/size/hash integrity verification failed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # =========================================================================
+  # Pull Negotiation
+  # =========================================================================
+  /repos/{repoID}/pull/objects:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: pullObjects
+      summary: Object batch download (Step B)
+      description: |
+        Specifies local snapshots/doc hashes to download in bulk.
+        Pull step A is performed via GET /manifest.
+        This is step B of pull negotiation.
+      tags: [pull]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                snapshot_wants:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ContentHash"
+                doc_wants:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ContentHash"
+                doc_manifest_wants:
+                  type: array
+                  description: "Doc hash to receive instead of a full doc manifest."
+                  items:
+                    $ref: "#/components/schemas/ContentHash"
+                chunk_wants:
+                  type: array
+                  deprecated: true
+                  description: "Server-compatible inline chunk request. Bounded servers use /pull/chunks."
+                  items:
+                    $ref: "#/components/schemas/ContentHash"
+      responses:
+        "200":
+          description: OK — requested snapshot + doc returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshots, docs]
+                additionalProperties: false
+                properties:
+                  snapshots:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Snapshot"
+                  docs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionDoc"
+                  doc_manifests:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ChunkedDoc"
+                  chunk_objects:
+                    type: array
+                    deprecated: true
+                    description: "Client-compatible inline chunk."
+                    items:
+                      $ref: "#/components/schemas/ChunkObject"
+                  bounded_chunks_supported:
+                    type: boolean
+                    description: "true if the chunk body is received as a bounded batch from /pull/chunks."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repos/{repoID}/pull/chunks:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: pullChunks
+      summary: Bounded chunk batch download
+      description: |
+        Returns the prefix of the request order as an uncompressed sum of 2 MiB or less. The client advances by the returned number of hashes and repeats the request. The maximum per request is 32.
+        The request body is 64 KiB, and the response JSON is no more than 4 MiB.
+        The request body is 64 KiB, and the response JSON is no more than 4 MiB.
+      tags: [pull]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chunk_wants]
+              additionalProperties: false
+              properties:
+                chunk_wants:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  items:
+                    $ref: "#/components/schemas/ContentHash"
+      responses:
+        "200":
+          description: OK — bounded prefix of the request order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chunk_objects]
+                additionalProperties: false
+                properties:
+                  chunk_objects:
+                    type: array
+                    minItems: 1
+                    maxItems: 32
+                    items:
+                      $ref: "#/components/schemas/ChunkObject"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          description: "JSON body exceeds bounded transport limit."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: "Chunk request count/hash/size validation failed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # =========================================================================
+  # Web UI action endpoints
+  # =========================================================================
+  /repos/{repoID}/diff:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: diffSnapshots
+      summary: Return event delta of two snapshots (DiffSnapshots)
+      description: |
+        Calculates and returns the event delta of two snapshots (left, right).
+        Common `DiffSnapshots` server action for the Web UI and CLI.
+      tags: [actions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [left, right]
+              additionalProperties: false
+              properties:
+                left:
+                  $ref: "#/components/schemas/ContentHash"
+                right:
+                  $ref: "#/components/schemas/ContentHash"
+      responses:
+        "200":
+          description: OK — event delta.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [left, right, added, removed]
+                additionalProperties: false
+                properties:
+                  left:
+                    $ref: "#/components/schemas/ContentHash"
+                  right:
+                    $ref: "#/components/schemas/ContentHash"
+                  added:
+                    type: array
+                    description: "List of event seqs only in right."
+                    items:
+                      type: integer
+                  removed:
+                    type: array
+                    description: "List of event seqs only in left."
+                    items:
+                      type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repos/{repoID}/fork:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: forkSession
+      summary: Create branch (ForkSession)
+      description: |
+        Creates a new branch `newBranch` with `from` snapshot as the parent.
+        `ForkSession` server action.
+        The existing original branch is not modified ("original immutable, new ref created" invariant).
+      tags: [actions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, newBranch]
+              additionalProperties: false
+              properties:
+                from:
+                  $ref: "#/components/schemas/ContentHash"
+                newBranch:
+                  type: string
+                  description: "Name of branch to create."
+      responses:
+        "200":
+          description: OK — created branch and head snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [branch, head]
+                additionalProperties: false
+                properties:
+                  branch:
+                    type: string
+                    description: "Name of created branch."
+                  head:
+                    $ref: "#/components/schemas/ContentHash"
+        "400":
+          description: "Invalid request."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /repos/{repoID}/load:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: loadSession
+      summary: (Unavailable) Session loading is local-CLI only — always returns 501
+      description: |
+        Session loading (file materialization and memory injection) is a local filesystem
+        operation and is not performed by the server. This informational endpoint always
+        returns 501; use `cxt load <ref>`. (Audit 2026-07-09: corrected a drift where the
+        specification documented behavior that the server did not implement.)
+      tags: [actions]
+      responses:
+        "501":
+          description: "not implemented — use the local cxt load command"
+  /hooks/github:
+    post:
+      operationId: githubWebhook
+      summary: Receive GitHub webhook (merged PR → context promotion) with HMAC verification
+      description: |
+        On a closed and merged `pull_request`, append the head branch's cxt tip to the base
+        branch with a lossless graft. This provides server-side coverage when squash or
+        rebase merges remove the local [git sha] mapping. Repositories are matched by
+        normalized Git origin (GitRemoteURL). Instead of user authentication, the endpoint
+        verifies X-Hub-Signature-256 using HMAC-SHA256 and CXT_GITHUB_WEBHOOK_SECRET. It
+        returns 404 when the secret is unset and the receiver is disabled.
+      tags: [actions]
+      responses:
+        "200": { description: "ok with promotion count, or ignored" }
+        "401": { description: "signature mismatch" }
+        "404": { description: "receiver disabled because the secret is unset" }
+  /repos/{repoID}/about:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    patch:
+      operationId: updateAbout
+      summary: Update About metadata (description, website, topics) — maintainer or higher
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description: { type: string }
+                website: { type: string }
+                topics: { type: array, items: { type: string } }
+                default_branch: { type: string }
+                protect_default: { type: boolean, description: "Default branch --force move forbidden (protected branch)" }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /repos/{repoID}/settings/{kind}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: kind
+        in: path
+        required: true
+        schema: { type: string, enum: [claude, agents] }
+    get:
+      operationId: getSettings
+      summary: Team basic settings bundle retrieval — puller and above
+      tags: [assets]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingsBundle" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: putSettings
+      summary: Team basic settings bundle upload — maintainer and above + settings_policy
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingsBundle" }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { description: "Path deviation or over 2MB (integrity_violation)" }
+
+  /repos/{repoID}/settings-objects/{hash}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/docHash"
+    get:
+      operationId: getSettingsObject
+      summary: Content-addressed commit attachment settings object retrieval — puller and above
+      tags: [assets]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingsBundle" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: putSettingsObject
+      summary: Idempotent commit attachment settings object upload — member and above
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingsBundle" }
+      responses:
+        "200": { description: OK }
+        "422": { description: "Hash mismatch/path deviation" }
+
+  /repos/{repoID}/pending:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: listPending
+      summary: List of active context pointers — puller and above (for web display)
+      tags: [assets]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Pending" }
+
+  /repos/{repoID}/pending/{sessionID}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/sessionID"
+    put:
+      operationId: putPending
+      summary: Idempotent pointer upsert (hook capture mirror, idempotent overwrite) — member and above
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Pending" }
+      responses:
+        "200": { description: OK }
+        "422": { description: "session_id/target missing, or target snapshot non-existent (object push prerequisite — pointer/object non-atomicity fail-closed)" }
+    delete:
+      operationId: deletePending
+      summary: Idempotently resolve a pointer after commit incorporation or manual cleanup — member and above
+      tags: [assets]
+      responses:
+        "200": { description: OK }
+
+  /repos/{repoID}/snapshots/{id}/promote:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+        description: Snapshot ID (sha256:*)
+    post:
+      operationId: promoteSnapshotMessage
+      summary: Promote hook label snapshot message to commit message (one-way·idempotent) — member and above
+      description: "Content-hash deduplication can cause a hook-capture leaf to be reused by a commit without receiving its [git sha] link. Only messages prefixed with 'hook:' may be replaced; all other rewrites are rejected. This endpoint is the metadata-only repair path because inventory-only pushes do not retransmit snapshot metadata."
+      tags: [sync]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, maxLength: 2000 }
+      responses:
+        "200": { description: OK }
+        "409": { description: promotion rejected because the label is not hook-derived or integrity would be violated }
+
+  /repos/{repoID}/snapshots/{id}/graft:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+        description: Snapshot ID(sha256:*)
+    post:
+      operationId: graftSnapshotParents
+      summary: Adds reachability overlay edge (graft_parents) to snapshot — member or higher
+      description: "Replicates a client graft during a multi-session commit so the previous head history remains reachable. Natural parents are immutable. A new edge is added only when current_seq == expected_seq. If the edge already exists, the server records the event once (seq+1) when current_seq == expected_seq and treats current_seq == expected_seq+1 as an idempotent retry after a lost response. All other versions conflict. Cycle validation and CAS occur within the same atomic boundary so a delayed queue item cannot resurrect an edge superseded by join."
+      tags: [sync]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [parents, expected_seq]
+              properties:
+                parents:
+                  type: array
+                  minItems: 1
+                  maxItems: 16
+                  items: { type: string }
+                expected_seq:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  maximum: 9223372036854775807
+                  description: "Client's observation of graft_seq just before local graft"
+      responses:
+        "200": { description: OK }
+        "404": { description: "No snapshot or graft parent" }
+        "409": { description: "Stale expected_seq or attempted cycle. The client reloads the server snapshot baseline, drops stale queued operations for that snapshot, and stops before publishing the ref." }
+
+  /repos/{repoID}/join:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: joinSnapshot
+      summary: Reorder a same-Git-branch session fork behind its branch head (graph drag and drop) — member or higher
+      description: "This endpoint reorders session commits within one Git branch; it is not a Git branch merge. The operation changes the graft register and refs while leaving natural parents immutable. The server seeds legacy membership from Snapshot.Branch and projects current membership from the branch reflog. The selected snapshot must belong to the target branch, and neither the moved segment nor any superseded source may reach another branch ref or branch-scoped session ref, so cross-Git-branch joins are impossible. The client does not submit a tip: the server computes the unique first-parent segment from snapshot X to its leaf. With include_descendants=true, that full segment moves behind the branch head. With false, only X moves; its natural descendants continue to branch from X and their tip is preserved under the internal session ref fork/v1/<branch-byte-length>/<branch>/<short-tip>. That ref is not a Git branch, but its name encodes a branch-scoped ownership boundary. Inside the atomic FS-journal or PostgreSQL-transaction boundary, the repository revalidates target scope, first-parent continuity and unique-leaf topology, reachability from other Git branches, graft_seq, and branch/session-ref CAS."
+      tags: [sync]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch, snapshot]
+              properties:
+                branch: { type: string, description: target branch name (= commit's git branch) }
+                snapshot: { type: string, description: "Commit to reposition (X)" }
+                include_descendants: { type: boolean, description: true moves the entire first-parent segment }
+      responses:
+        "200":
+          description: Join result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  branch: { type: string }
+                  head: { type: string }
+                  fork_branch: { type: string, description: "For a partial join, the internal session-ref name that preserves the natural descendant tip (compatibility field name; not a real Git branch)" }
+        "404": { description: "Snapshot/branch not found" }
+        "409": { description: "Cannot rebase natural history/head, unattached/unpushed segments, other git branch reachability, branching or stale first-parent topology, concurrent graft_seq/branch/session ref changes" }
+
+  /repos/{repoID}/pending/{sessionID}/dismiss:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/sessionID"
+    post:
+      operationId: dismissPending
+      summary: Hide an in-progress session from the uncommitted list without deleting data (sticky) — member or higher
+      description: "Sets dismissed=true. Snapshot, document, and session history remain intact, and a later CLI re-push does not make the item visible again."
+      tags: [assets]
+      responses:
+        "200": { description: OK }
+
+  /repos/{repoID}/pending/{sessionID}/undismiss:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/sessionID"
+    post:
+      operationId: undismissPending
+      summary: Restore a dismissed uncommitted session to the list (inverse of dismiss) — member or higher
+      description: "Sets dismissed=false without changing session data (idempotent). Subsequent CLI re-pushes preserve the restored state."
+      tags: [assets]
+      responses:
+        "200": { description: OK }
+  /repos/{repoID}/unsync:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: listUnsync
+      summary: List of push pending pointers (unsync) — puller level and above (for web On Hold display)
+      tags: [assets]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Unsync" }
+
+  /repos/{repoID}/unsync/{branch}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: branch
+        in: path
+        required: true
+        schema: { type: string }
+        description: "Branch name (slashes allowed — rest matching)."
+    put:
+      operationId: putUnsync
+      summary: Upsert push pending pointer (shadow sync, authentication user key) — member level and above
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Unsync" }
+      responses:
+        "200": { description: OK }
+        "422": { description: "Target missing" }
+    delete:
+      operationId: deleteUnsync
+      summary: Push wait pointer resolution (git push/manual, idempotent) — member level
+      tags: [assets]
+      responses:
+        "200": { description: OK }
+
+  /repos/{repoID}/secrets:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: getSecrets
+      summary: Secret ciphertext envelope retrieval — puller level (decryption requires team passphrase only)
+      tags: [assets]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecretsEnvelope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: putSecrets
+      summary: Secret ciphertext envelope storage — maintainer level + secrets_policy
+      description: |
+        The server stores the envelope transparently (256KB limit + format probe). Plain text never passes through the server (E2E).
+        Passphrase consistency: if the envelope fingerprint differs from the stored fingerprint, the server returns 409 (passphrase_mismatch).
+        This prevents secrets from being overwritten with a different key and becoming undecryptable. A legacy cxt envelope without a fingerprint is
+        accepted only when the existing team envelope also has no fingerprint; otherwise the server returns 400 (fingerprint_required).
+        rotate=true explicitly replaces the envelope after re-encryption. The expect parameter must contain the fingerprint read before rotation.
+        If it differs from the server's current fingerprint, the server returns 409 (rotate_conflict), preventing a concurrent update from being
+        overwritten by stale re-encrypted data.
+      tags: [assets]
+      parameters:
+        - name: rotate
+          in: query
+          required: false
+          schema: { type: string, enum: ["true"] }
+          description: "Explicit passphrase rotation guarded by fingerprint CAS"
+        - name: expect
+          in: query
+          required: false
+          schema: { type: string }
+          description: "Fingerprint of the envelope observed before rotation; required when rotate=true"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretsEnvelope" }
+      responses:
+        "200": { description: OK }
+        "400": { description: "fingerprint_required — team is using fingerprint system but no fingerprint in envelope (legacy cxt)" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: "passphrase_mismatch (fingerprint mismatch) or rotate_conflict (conflict during rotation)" }
+        "503": { description: "consistency_check_failed — failed to query existing envelope, unable to perform consistency check (fail-closed)" }
+
+  # =========================================================================
+  # Authentication · Account
+  # =========================================================================
+  /auth/session:
+    post:
+      operationId: login
+      summary: IDP token (Firebase/dev) → server session exchange (HttpOnly cookie issuance)
+      security: [{ BearerToken: [] }]
+      tags: [identity]
+      responses:
+        "200":
+          description: "set session cookie + return user (token not included in body)."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  expires_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: logout
+      summary: session deletion + cookie expiration
+      tags: [identity]
+      responses:
+        "200": { description: OK }
+
+  /auth/device/start:
+    post:
+      operationId: deviceStart
+      summary: CLI pairing start (device flow — RFC 8628 pattern)
+      description: |
+        unauthenticated (rate limit 10/min). authorization (short code) and receipt (long poll_token) are separated
+        cannot obtain token by guessing the code. 5-minute TTL, one-time use.
+      security: []
+      tags: [identity]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string, example: KX3-9F2 }
+                  poll_token: { type: string }
+                  expires_in: { type: integer, example: 300 }
+                  interval: { type: integer, example: 3 }
+
+  /auth/device/approve:
+    post:
+      operationId: deviceApprove
+      summary: pairing approval — web login user confirms code
+      tags: [identity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200": { description: approved }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "expired/nonexistent code" }
+
+  /auth/device/poll:
+    post:
+      operationId: devicePoll
+      summary: Approval polling — Receive CLI token once upon approval
+      security: []
+      tags: [identity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, poll_token]
+              properties:
+                code: { type: string }
+                poll_token: { type: string }
+      responses:
+        "200":
+          description: "pending or approved (+token — Exposed only once in this response)"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [pending, approved] }
+                  token: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "404": { description: "Expired/Invalid pairing (including permission mismatch — Information not exposed)" }
+
+  /me:
+    get:
+      operationId: me
+      summary: Current User
+      tags: [identity]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      operationId: updateMe
+      summary: Account Settings — nickname (free) / username (heavy, URL change) / load_mode
+      description: "username is validated as slug (422) · globally unique (409). On update, owner_username in associated workspace is synchronized. load_mode is the default CLI load mode."
+      tags: [identity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                nickname: { type: string }
+                load_mode: { type: string, enum: ["", full, reconstructed, memory] }
+                avatar: { type: string, description: "Profile picture data URL (empty value = remove)" }
+                locale: { type: string, enum: ["", ko, en], description: "UI display language (empty value = unset)" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "409": { description: "Username taken" }
+        "422": { description: "Invalid slug format" }
+
+  /me/cli-tokens:
+    post:
+      operationId: createCliToken
+      summary: CLI Token Issuance (1 year) — Value exposed only once in this response
+      tags: [identity]
+      responses:
+        "200":
+          description: "Register with `cxt login <token>`."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  expires_at: { type: string, format: date-time }
+    get:
+      operationId: listCliTokens
+      summary: List of CLI tokens (suffix only)
+      tags: [identity]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CLITokenInfo" }
+
+  /me/sessions:
+    get:
+      operationId: listWebSessions
+      summary: List of web login sessions (device management — current session marked as current)
+      tags: [identity]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: "#/components/schemas/CLITokenInfo"
+                    - type: object
+                      properties:
+                        current: { type: boolean }
+
+  /me/sessions/{suffix}:
+    parameters:
+      - name: suffix
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: revokeWebSession
+      summary: Invalidate web session (logout from other devices)
+      tags: [identity]
+      responses:
+        "200": { description: revoked }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /public/workspaces/{username}/{slug}:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema: { type: string }
+      - name: slug
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: publicWorkspace
+      summary: Anonymous public read entry point — only public workspaces are interpreted
+      description: "private does not leak existence to avoid 404. Authentication not required."
+      security: []
+      tags: [workspaces]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /public/users/{username}:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: publicUser
+      summary: User profile — user + visible workspaces
+      description: "Authentication selection (if present, determines if it is the user). Others/anonymous can only see public workspaces, user can see private. email is only for the user."
+      security: []
+      tags: [identity]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  workspaces:
+                    type: array
+                    items: { $ref: "#/components/schemas/Workspace" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /public/users/{username}/contributions:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: userContributions
+      summary: Contribution heatmap — commits per day (visible workspaces)
+      description: "Authentication selection. Anonymous can only see public workspaces, user can see private. Excludes hook captures and stashes."
+      security: []
+      tags: [identity]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  days:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, description: "YYYY-MM-DD (UTC)" }
+                        count: { type: integer }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /public/users/{username}/activity:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: userActivity
+      summary: Activity feed — monthly commit bundles + workspace creation
+      description: "Authentication selection (same visibility as PublicUser). PRs, reviews, languages have no data."
+      security: []
+      tags: [identity]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  months:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        month: { type: string, description: "YYYY-MM" }
+                        commit_total: { type: integer }
+                        commit_repos:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              name: { type: string }
+                              path: { type: string }
+                              count: { type: integer }
+                        created:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              name: { type: string }
+                              path: { type: string }
+                              visibility: { type: string }
+                              date: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /me/cli-tokens/{suffix}:
+    parameters:
+      - name: suffix
+        in: path
+        required: true
+        schema: { type: string }
+        description: "Last 8 characters of the token."
+    delete:
+      operationId: revokeCliToken
+      summary: Invalidate CLI token
+      tags: [identity]
+      responses:
+        "200": { description: revoked }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # =========================================================================
+  # Workspace · Member · Invite
+  # =========================================================================
+  /workspaces:
+    post:
+      operationId: createWorkspace
+      summary: Create workspace (creator = owner member registration)
+      tags: [workspaces]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+    get:
+      operationId: listWorkspaces
+      summary: List workspaces I belong to
+      tags: [workspaces]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Workspace" }
+
+  /workspaces/{wsID}:
+    parameters: &wsIDParam
+      - name: wsID
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      operationId: updateWorkspace
+      summary: Update workspace settings section — owner only
+      description: |
+        visibility(gh_visibility_sync on = 409 lock), secrets_policy/settings_policy,
+        gh_visibility_sync(on = immediate 1-time sync run).
+      tags: [workspaces]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                visibility: { type: string, enum: [private, public] }
+                secrets_policy: { type: string, enum: [members, owner] }
+                settings_policy: { type: string, enum: [members, owner] }
+                gh_visibility_sync: { type: boolean }
+                archived: { type: boolean, description: "Archived (read-only) — write 403 for viewers" }
+                webhook_url: { type: string, description: "Slack incoming webhook compatible. Empty string = disable" }
+                slug: { type: string, description: "Manually change URL segment (unicode allowed, unique within owner 409)" }
+                public_role: { type: string, enum: ["", viewer, puller], description: "Public default role for non-members ('' | viewer | puller)" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: "Manual visibility setting during sync" }
+        "422": { description: "Invalid policy value (includes legacy 'list')" }
+
+  /workspaces/{wsID}/transfer:
+    parameters: *wsIDParam
+    post:
+      operationId: transferWorkspace
+      summary: Ownership Transfer — Constructor's exclusive rights, only to existing members
+      description: |
+        The new owner is promoted to owner role, while the original constructor remains as owner role (GitHub style).
+        URL changes with OwnerUsername change, appending -2, -3, ... on slug collision.
+      tags: [workspaces]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to_user_id]
+              properties:
+                to_user_id: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        "403": { description: "Not the constructor" }
+        "404": { description: "Target is not a member" }
+
+  /workspaces/{wsID}/sync-visibility:
+    parameters: *wsIDParam
+    post:
+      operationId: syncVisibility
+      summary: Manual GitHub public state sync — owner exclusive
+      description: "Public only when all linked GitHub repos are public (404/failure/non-GitHub = private, conservative)."
+      tags: [workspaces]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        "422": { description: "gh_visibility_sync disabled" }
+
+  /workspaces/{wsID}/members:
+    parameters: *wsIDParam
+    get:
+      operationId: listMembers
+      summary: Member List (members only)
+      tags: [workspaces]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Membership" }
+
+  /workspaces/{wsID}/members/{userID}:
+    parameters:
+      - name: wsID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: userID
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      operationId: updateMemberRole
+      summary: Role Change — owner exclusive, constructor role fixed (409)
+      tags: [workspaces]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: "#/components/schemas/MemberRole" }
+      responses:
+        "200": { description: updated }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: "Attempt to change constructor role" }
+    delete:
+      operationId: removeMember
+      summary: Remove member — owner can do it, self cannot (creator cannot 409)
+      tags: [workspaces]
+      responses:
+        "200": { description: removed }
+        "409": { description: "Attempt to remove creator" }
+
+  /workspaces/{wsID}/invites:
+    parameters: *wsIDParam
+    get:
+      operationId: listInvites
+      summary: Invite list — maintainer and above (management screen)
+      tags: [workspaces]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Invite" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createInvite
+      summary: Invite link creation — maintainer and above, role assignment possible
+      tags: [workspaces]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                role: { $ref: "#/components/schemas/MemberRole" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invite" }
+
+  /workspaces/{wsID}/invites/{token}/revoke:
+    parameters:
+      - name: wsID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: token
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: revokeInvite
+      summary: Invalidate invite
+      tags: [workspaces]
+      responses:
+        "200": { description: revoked }
+
+  /invites/{token}/accept:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: acceptInvite
+      summary: Accept invite — join with role specified in invite (idempotent)
+      tags: [workspaces]
+      responses:
+        "200":
+          description: "Return joined workspace."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+        "403": { description: "Email specified invite mismatch" }
+        "409": { description: "revoked/expired" }
+
+tags:
+  - name: repos
+    description: Repo registration and retrieval.
+  - name: manifest
+    description: "Manifest for push/pull negotiation (have/want 1st step)."
+  - name: branches
+    description: Convenience branch retrieval.
+  - name: snapshots
+    description: "commit metadata. The body and natural parents are immutable, while the hash outside projection/overlay is updated using a CAS. Creation is only allowed via the push/objects path."
+  - name: docs
+    description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
+  - name: refs
+    description: "mutable pointer (HEAD/branch/session/tag). CAS move."
+  - name: memories
+    description: "snapshot attachment MemoryDigest."
+  - name: push
+    description: "Push negotiation in three stages (negotiate → objects → ref PUT)."
+  - name: pull
+    description: "Pull negotiation (manifest GET → pull/objects → local ref merge)."
+  - name: actions
+    description: "common use-case actions for web UI / CLI (diff / fork / load)."
+  - name: assets
+    description: "repo team assets — About / team settings bundle / E2E secret envelope / commit attachment settings object."
+  - name: identity
+    description: "authentication (session exchange) · account (username/nickname) · CLI token."
+  - name: workspaces
+    description: "workspace settings (publicity/policy/GitHub sync) · members (5 roles) · invite · ownership transfer."

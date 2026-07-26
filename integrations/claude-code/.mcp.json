@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cxt": {
+      "command": "cxt",
+      "args": ["mcp"]
+    }
+  }
+}

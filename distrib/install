@@ -1,0 +1,86 @@
+#!/bin/sh
+# cxt installation script — https://github.com/wnsdy95/cxthub
+#
+#   curl -fsSL https://raw.githubusercontent.com/wnsdy95/cxthub/main/distrib/install | sh
+#
+# Detects OS/architecture to download the latest release binary, verify it, and install it to PATH.
+# Environment variables: CXT_VERSION=vX.Y.Z, CXT_INSTALL_DIR=<dir>, CXT_REPO=<owner/repo>
+set -eu
+
+REPO="${CXT_REPO:-wnsdy95/cxthub}"
+
+os=$(uname -s)
+case "$os" in
+  Darwin) os=darwin ;;
+  Linux)  os=linux ;;
+  *) echo "Unsupported OS: $os (darwin/linux support only)" >&2; exit 1 ;;
+esac
+
+arch=$(uname -m)
+case "$arch" in
+  arm64|aarch64) arch=arm64 ;;
+  x86_64|amd64)  arch=amd64 ;;
+  *) echo "Unsupported architecture: $arch (arm64/amd64 support only)" >&2; exit 1 ;;
+esac
+
+asset="cxt_${os}_${arch}.tar.gz"
+if [ "${CXT_VERSION:-}" != "" ]; then
+  base="https://github.com/${REPO}/releases/download/${CXT_VERSION}"
+else
+  base="https://github.com/${REPO}/releases/latest/download"
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "→ Downloading ${asset}..."
+curl -fsSL -o "$tmp/$asset" "$base/$asset"
+curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
+
+echo "→ Verifying checksum..."
+cd "$tmp"
+if command -v sha256sum >/dev/null 2>&1; then
+  grep " ${asset}\$" checksums.txt | sha256sum -c - >/dev/null
+else
+  grep " ${asset}\$" checksums.txt | shasum -a 256 -c - >/dev/null
+fi
+
+tar -xzf "$asset"
+
+# Installation location: CXT_INSTALL_DIR > /usr/local/bin (writable) > ~/.local/bin
+dir="${CXT_INSTALL_DIR:-}"
+if [ -z "$dir" ]; then
+  if [ -w /usr/local/bin ]; then
+    dir=/usr/local/bin
+  else
+    dir="$HOME/.local/bin"
+    mkdir -p "$dir"
+  fi
+fi
+install -m 0755 cxt "$dir/cxt"
+
+echo "✓ Installed: $dir/cxt ($("$dir/cxt" --version))"
+
+# Register PATH when needed. The marker keeps repeated installer runs idempotent.
+case ":$PATH:" in
+  *":$dir:"*)
+    : # Already on PATH.
+    ;;
+  *)
+    marker="# added by cxt install"
+    line="export PATH=\"$dir:\$PATH\"  $marker"
+    # Select rc file based on current shell (zsh/bash/other). Bash is a login shell on macOS, so .bash_profile.
+    case "$(basename "${SHELL:-sh}")" in
+      zsh)  rc="$HOME/.zshrc" ;;
+      bash) [ "$(uname -s)" = Darwin ] && rc="$HOME/.bash_profile" || rc="$HOME/.bashrc" ;;
+      *)    rc="$HOME/.profile" ;;
+    esac
+    if [ -f "$rc" ] && grep -qF "$line" "$rc"; then
+      echo "✓ PATH already configured in $rc"
+    else
+      printf '\n%s\n' "$line" >> "$rc"
+      echo "✓ Added PATH entry to $rc — open a new terminal or run 'source $rc'"
+    fi
+    ;;
+esac
+echo "Next step: from a code repository, run cxt setup https://cxthub.com/<username>/<workspace>"

@@ -1,0 +1,200 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+)
+
+// BranchSeedService implements the SeedBranch use-case.
+//
+// Context switch logic (user agreement): New branches are born with only the necessary layers —
+//
+//	[Project Understanding] main head's MemoryDigest        (long-term memory)
+//	[Changelog Summary] departure branch head's on-the-fly distillation      (mid-term summary — including ancestor inheritance, items overlapping with main layer removed)
+//	[Previous Context] departure head's last commit raw tail   (original reason for the context switch)
+//
+// The seed is committed as the first snapshot of the new branch (branch birth — cut meaning), and serialized to a session file (ledger record — capture excluded for resumption).
+type BranchSeedService struct {
+	gitCtx        outbound.GitContext
+	store         outbound.SessionStore
+	distiller     outbound.MemoryDistiller
+	codecs        map[domain.ProviderKind]outbound.ProviderCodec
+	materializers map[domain.ProviderKind]outbound.SessionMaterializer
+}
+
+// NewBranchSeedService creates BranchSeedService and injects dependencies.
+func NewBranchSeedService(
+	gitCtx outbound.GitContext,
+	store outbound.SessionStore,
+	distiller outbound.MemoryDistiller,
+	codecs map[domain.ProviderKind]outbound.ProviderCodec,
+	materializers map[domain.ProviderKind]outbound.SessionMaterializer,
+) *BranchSeedService {
+	return &BranchSeedService{gitCtx: gitCtx, store: store, distiller: distiller, codecs: codecs, materializers: materializers}
+}
+
+var _ inbound.SeedBranch = (*BranchSeedService)(nil)
+
+// Seed creates a new branch seed from FromBranch materials and commits/serializes it.
+func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inbound.SeedOutput, error) {
+	provider := in.Provider
+	if provider == "" {
+		provider = domain.ProviderClaude
+	}
+	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
+	if err != nil {
+		return inbound.SeedOutput{}, err
+	}
+	fromRef, err := s.store.GetRef(ctx, repo.ID, domain.RefBranch, in.FromBranch)
+	if err != nil || fromRef.Target == "" {
+		return inbound.SeedOutput{}, domain.ErrNotFound // no context for departure branch
+	}
+	fromSnap, err := s.store.GetSnapshot(ctx, fromRef.Target)
+	if err != nil {
+		return inbound.SeedOutput{}, err
+	}
+	fromDoc, err := s.store.GetDoc(ctx, fromSnap.DocHash)
+	if err != nil {
+		return inbound.SeedOutput{}, err
+	}
+
+	// Layer 1: main head memory (if present — explicit layer of project shared understanding).
+	var mainMem *domain.MemoryDigest
+	mainBranch := repo.DefaultBranch
+	if mainBranch == "" {
+		mainBranch = "main"
+	}
+	if mainBranch != in.FromBranch {
+		if mref, merr := s.store.GetRef(ctx, repo.ID, domain.RefBranch, mainBranch); merr == nil && mref.Target != "" {
+			if msnap, serr := s.store.GetSnapshot(ctx, mref.Target); serr == nil && msnap.MemoryHash != "" {
+				if d, derr := s.store.GetMemory(ctx, msnap.MemoryHash); derr == nil {
+					mainMem = &d
+				}
+			}
+		}
+	}
+
+	// Layer 2: departure branch on-the-fly distillation (+ ancestor inheritance) — always fresh without relying on stored digest.
+	branchMem, err := s.distiller.Distill(ctx, fromDoc.CIR, nil)
+	if err != nil {
+		return inbound.SeedOutput{}, err
+	}
+	if prior, ok := nearestAncestorDigest(ctx, s.store, fromSnap); ok {
+		branchMem = domain.MergeDigests(prior, branchMem)
+	}
+
+	// Layer 3: last commit's raw tail — suffix (complement of inheritance prefix) excluding parent doc.
+	tail := fromDoc.CIR.Events
+	if len(fromSnap.Parents) > 0 {
+		if psnap, perr := s.store.GetSnapshot(ctx, fromSnap.Parents[0]); perr == nil {
+			if pdoc, derr := s.store.GetDoc(ctx, psnap.DocHash); derr == nil && len(pdoc.CIR.Events) < len(tail) {
+				tail = tail[len(pdoc.CIR.Events):]
+			}
+		}
+	}
+	// Budget trimming — same rules as existing branch switch (Load path) — byte budget + user boundary truncation.
+	// Audit #6: fixed event count limit (formerly 120) split across paths.
+	trimmedTail, _ := trimEventsForSeed(domain.CIRDocument{Events: tail}, seedBudgetBytes)
+	tail = trimmedTail.Events
+
+	// Seed CIR synthesis: [Layer1⊕Layer2 summary message] + [Layer3 raw tail]. Seq is reset to 0.
+	now := time.Now().UTC().Format(time.RFC3339)
+	seedSession := providerfs.NewSessionID()
+	events := []domain.Event{{
+		Kind: domain.EventMessage, Role: "user", Ts: now, Seq: 0,
+		Blocks: []domain.ContentBlock{{Type: "text", Text: renderSeedText(in.FromBranch, in.NewBranch, mainMem, branchMem)}},
+	}}
+	for i, ev := range tail {
+		ev.Seq = i + 1
+		events = append(events, ev)
+	}
+	cir := domain.CIRDocument{Events: events}
+	cir.Envelope = fromDoc.CIR.Envelope // Inherit model, cwd, etc.
+	cir.Envelope.GitBranch = in.NewBranch
+	cir.Envelope.SessionOriginID = seedSession
+	cir.Envelope.CapturedAt = now
+	cir.Envelope.Fidelity = domain.FidelityReconstructed
+	cir.Envelope.ContextTokens = 0 // New seed — statistical reset
+	cir.Envelope.OutputTokens = 0
+
+	docHash, err := s.store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		return inbound.SeedOutput{}, err
+	}
+	snap := domain.Snapshot{
+		ID: docHash, RepoID: repo.ID, Branch: in.NewBranch,
+		Parents: []domain.ContentHash{fromRef.Target}, DocHash: docHash,
+		Provider: provider, Fidelity: domain.FidelityReconstructed,
+		Message:   fmt.Sprintf("seed: %s → %s", in.FromBranch, in.NewBranch),
+		Author:    in.Author,
+		CreatedAt: time.Now().UTC(),
+		SessionID: seedSession,
+		Models:    fromDoc.CIR.Envelope.OrderedModels(),
+	}
+	if err := s.store.PutSnapshot(ctx, snap); err != nil {
+		return inbound.SeedOutput{}, err
+	}
+	if err := s.store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: in.NewBranch, RepoID: repo.ID, Target: docHash}); err != nil {
+		return inbound.SeedOutput{}, err
+	}
+	_ = s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: in.NewBranch})
+
+	out := inbound.SeedOutput{SnapshotID: docHash, SessionID: seedSession}
+	// Materialization (best-effort): Seed snapshot is committed even on failure — can be restored with cxt checkout.
+	if cdc, ok := s.codecs[provider]; ok {
+		if mat, ok2 := s.materializers[provider]; ok2 {
+			if raw, encErr := cdc.Encode(ctx, cir, provider); encErr == nil {
+				if path, resume, mErr := mat.Materialize(ctx, raw, in.Cwd); mErr == nil {
+					_ = providerfs.RecordMaterialized(in.Cwd, path)
+					out.WrittenPath, out.ResumeCmd = path, resume
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// renderSeedText renders the seed's summary layer (Layer1⊕Layer2) as labeled markdown.
+// Removes overlapping key facts/tasks from Layer2 (maintains layer distinction + removes duplicates).
+func renderSeedText(from, to string, mainMem *domain.MemoryDigest, branchMem domain.MemoryDigest) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[cxt seed] Branch-switch context: %s → %s\n", from, to)
+	b.WriteString("This session is the seed of a new branch — continue from the summaries and the verbatim recent context below.\n")
+	seen := map[string]bool{}
+	if mainMem != nil {
+		b.WriteString("\n## Project understanding (main)\n")
+		writeDigest(&b, *mainMem, seen)
+	}
+	b.WriteString("\n## Work summary of this lineage (" + from + ")\n")
+	writeDigest(&b, branchMem, seen)
+	b.WriteString("\n## Recent context (verbatim)\nThe events below are the actual conversation right before the switch.\n")
+	return b.String()
+}
+
+func writeDigest(b *strings.Builder, d domain.MemoryDigest, seen map[string]bool) {
+	if d.Summary != "" && !seen[d.Summary] {
+		seen[d.Summary] = true
+		b.WriteString(d.Summary + "\n")
+	}
+	for _, f := range d.KeyFacts {
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		b.WriteString("- " + f + "\n")
+	}
+	for _, t := range d.OpenTasks {
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		b.WriteString("- ☐ " + t + "\n")
+	}
+}

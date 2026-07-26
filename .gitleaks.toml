@@ -1,0 +1,4 @@
+title = "cxthub secret scanning"
+
+[extend]
+useDefault = true

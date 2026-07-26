@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  public-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Validate the publishable tree
+        run: bash scripts/public-preflight.sh tree
+      - name: Validate the complete public history
+        if: github.event.repository.private == false
+        run: bash scripts/public-preflight.sh full
+
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cxt
+          POSTGRES_PASSWORD: cxt
+          POSTGRES_DB: cxthub_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cxt"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: backend/go.sum
+      - name: build (both tags)
+        working-directory: backend
+        run: |
+          go build ./...
+          go build -tags postgres ./...
+      - name: vet
+        working-directory: backend
+        run: go vet ./... && go vet -tags postgres ./internal/adapters/store/
+      - name: test (FS) + openapi drift guard
+        working-directory: backend
+        run: go test ./...
+      - name: vulnerability scan
+        working-directory: backend
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: test (PG smoke — real Postgres)
+        working-directory: backend
+        env:
+          CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
+        run: go test -tags postgres ./internal/adapters/store/ -run TestPGSmoke -v
+
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: build · vet · test
+        working-directory: cli
+        run: go build ./... && go vet ./... && go test ./...
+      - name: vulnerability scan
+        working-directory: cli
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/web/package-lock.json
+      - name: install · i18n check · typecheck · build
+        working-directory: frontend/web
+        run: |
+          npm ci
+          npm audit --audit-level=high
+          npm run check:i18n
+          npm run check:vercel
+          npx tsc --noEmit
+          npx vite build
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: backend/go.sum
+      - name: e2e (real binary startup — FS store, full surface)
+        run: make e2e
+
+  e2e-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: backend/go.sum
+      - name: Synchronized E2E deep dive (append/graft · memory promotion · session boundary · fetch-only)
+        run: make e2e-sync
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Deployment image build validation (no push)
+        run: docker build -f deploy/Dockerfile -t cxtd:ci .
+
+  deployment-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Terraform fmt · provider lock · schema/input tests (no apply)
+        run: |
+          mkdir -p "$RUNNER_TEMP/terraform-data"
+          docker run --rm \
+            -e TF_DATA_DIR=/tmp/terraform-data \
+            -v "$PWD/deploy/terraform:/workspace:ro" \
+            -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
+            -w /workspace \
+            hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 fmt -check -recursive
+          docker run --rm \
+            -e TF_DATA_DIR=/tmp/terraform-data \
+            -v "$PWD/deploy/terraform:/workspace:ro" \
+            -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
+            -w /workspace \
+            hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 init -backend=false -input=false -lockfile=readonly
+          docker run --rm \
+            -e TF_DATA_DIR=/tmp/terraform-data \
+            -v "$PWD/deploy/terraform:/workspace:ro" \
+            -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
+            -w /workspace \
+            hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 validate
+          docker run --rm \
+            -e TF_DATA_DIR=/tmp/terraform-data \
+            -v "$PWD/deploy/terraform:/workspace:ro" \
+            -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
+            -w /workspace \
+            hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 test

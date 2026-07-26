@@ -1,0 +1,19 @@
+# Example of non-sensitive deployment input. The actual terraform.tfvars is gitignored.
+domain           = "example.com"
+gcp_project      = "replace-with-gcp-project-id"
+image_tag        = "replace-with-40-character-git-commit-sha"
+firebase_project = "replace-with-firebase-project"
+
+# Check in the Firebase console > Project settings > General > Web app SDK setup.
+# The Web API key is exposed in the browser bundle and is not a server secret,
+# but it still requires Google Cloud API and web-referrer restrictions.
+firebase_web_api_key = "replace-with-firebase-web-api-key"
+
+# The default value is <firebase_project>.firebaseapp.com.
+# firebase_auth_domain = "replace-with-firebase-project.firebaseapp.com"
+
+# For personal Vercel account, it is null. For teams, enter team_… ID instead of slug.
+vercel_team_id = null
+
+# The Vercel GitHub App must be able to read it.
+github_repository = "wnsdy95/cxthub"

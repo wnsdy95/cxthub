@@ -1,0 +1,56 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /cli
+    schedule:
+      interval: weekly
+    groups:
+      cli-go-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    # Major upgrades are reviewed as explicit migration work.
+    # Dependabot security updates are not affected by this rule.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+    groups:
+      backend-go-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /frontend/web
+    schedule:
+      interval: weekly
+    groups:
+      web-production-dependencies:
+        dependency-type: production
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      web-development-dependencies:
+        dependency-type: development
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

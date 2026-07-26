@@ -1,0 +1,30 @@
+{
+  "name": "@cxt/web-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "cxt web UI — Firebase auth + workspaces + invites + team session browser (React + Vite)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check:vercel": "node scripts/check-vercel-config.mjs"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.101.4",
+    "firebase": "^11.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^6.0.4",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.6.3",
+    "vite": "^8.1.5"
+  }
+}

@@ -1,0 +1,92 @@
+package boundary
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+)
+
+func TestLoadValidatesBoundaryState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	sessionDir := filepath.Join(home, ".claude", "projects", "repo")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := filepath.Join(sessionDir, providerfs.NewSessionID()+".jsonl")
+	if err := os.WriteFile(seed, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	superseded := seed + ".superseded"
+	b := Boundary{PrevBranch: "main", Branch: "feature/auth", SeedPath: seed, SeedID: providerfs.NewSessionID(), Superseded: []string{superseded}}
+	if err := Record(repo, b); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := Load(repo)
+	if !ok || len(got.Superseded) != 1 || got.SeedID != b.SeedID {
+		t.Fatalf("valid boundary rejected: %+v, %v", got, ok)
+	}
+
+	poisoned := got
+	poisoned.At = time.Now().Add(time.Hour).Format(time.RFC3339)
+	writeBoundaryFixture(t, repo, poisoned)
+	if _, ok := Load(repo); ok {
+		t.Fatal("future boundary timestamp was accepted")
+	}
+
+	poisoned = got
+	poisoned.SeedID = "../../outside"
+	writeBoundaryFixture(t, repo, poisoned)
+	if _, ok := Load(repo); ok {
+		t.Fatal("unsafe seed ID was accepted")
+	}
+}
+
+func TestLoadFiltersOutsideSupersededPaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	b := Boundary{
+		At:         time.Now().UTC().Format(time.RFC3339),
+		PrevBranch: "main",
+		Branch:     "feature/auth",
+		Superseded: []string{filepath.Join(t.TempDir(), "victim.jsonl")},
+	}
+	writeBoundaryFixture(t, repo, b)
+	got, ok := Load(repo)
+	if !ok || len(got.Superseded) != 0 {
+		t.Fatalf("outside path was not filtered: %+v, %v", got, ok)
+	}
+}
+
+func TestSupersedeRejectsOutsidePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "victim.jsonl")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := Supersede(repo, outside); got != "" {
+		t.Fatalf("outside path superseded as %q", got)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "keep" {
+		t.Fatalf("outside file changed: %q, %v", data, err)
+	}
+}
+
+func writeBoundaryFixture(t *testing.T, repo string, b Boundary) {
+	t.Helper()
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := providerfs.WriteRepoFileAtomic(repo, filepath.Join(".cxt", "boundary.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
