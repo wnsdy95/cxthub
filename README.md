@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="frontend/web/public/cxt-logo-dark-theme.svg">
     <source media="(prefers-color-scheme: light)" srcset="frontend/web/public/cxt-logo-light-theme.svg">
-    <img src="frontend/web/public/cxt-logo-light-theme.svg" alt="CXTHub logo" width="38" align="absmiddle">
+    <img src="frontend/web/public/cxt-logo-light-theme.svg" alt="" width="38" align="absmiddle">
   </picture>
   CXTHub
 </h1>
@@ -24,9 +24,9 @@ Git preserves outcomes with extraordinary discipline: commits, diffs,
 branches, authors, and dates. The investigation and judgment that made those
 outcomes necessary still disappear inside temporary agent conversations.
 
-CXTHub versions that missing context alongside the code. A developer or agent
-can return to a branch, hand work to a teammate, or continue in another
-supported agent without reconstructing the reasoning from scratch.
+CXTHub captures and versions the missing context alongside the code. A
+developer or agent can return to a branch, hand work to a teammate, or continue
+in another supported agent without reconstructing the reasoning from scratch.
 
 It is not a chat archive, a project wiki, or a second workflow beside Git. It
 is a context layer that follows the lifecycle of the code.
