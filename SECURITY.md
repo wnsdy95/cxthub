@@ -1,6 +1,6 @@
 # Security policy
 
-cxthub stores coding-agent conversations and may process sensitive repository
+CXTHub stores coding-agent conversations and may process sensitive repository
 context. Treat suspected vulnerabilities as confidential.
 
 ## Reporting a vulnerability

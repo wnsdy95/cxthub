@@ -1,6 +1,6 @@
 # Code of conduct
 
-We want cxthub collaboration to be technically rigorous, welcoming, and safe.
+We want CXTHub collaboration to be technically rigorous, welcoming, and safe.
 
 ## Expected behavior
 
@@ -14,7 +14,7 @@ We want cxthub collaboration to be technically rigorous, welcoming, and safe.
 ## Scope
 
 This policy applies in repository issues, pull requests, discussions, review
-threads, project chat, and public events where someone represents cxthub.
+threads, project chat, and public events where someone represents CXTHub.
 
 ## Reporting and enforcement
 

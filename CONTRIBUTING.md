@@ -1,4 +1,4 @@
-# Contributing to cxthub
+# Contributing to CXTHub
 
 Thank you for helping make coding-agent context portable, inspectable, and
 safe to share.

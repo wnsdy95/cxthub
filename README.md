@@ -1,44 +1,78 @@
-# cxthub
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="frontend/web/public/cxt-logo-dark-theme.svg">
+    <source media="(prefers-color-scheme: light)" srcset="frontend/web/public/cxt-logo-light-theme.svg">
+    <img src="frontend/web/public/cxt-logo-light-theme.svg" alt="CXTHub logo" width="38" align="absmiddle">
+  </picture>
+  CXTHub
+</h1>
 
-[![CI](https://github.com/wnsdy95/cxthub/actions/workflows/ci.yml/badge.svg)](https://github.com/wnsdy95/cxthub/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/wnsdy95/cxthub?display_name=tag&sort=semver)](https://github.com/wnsdy95/cxthub/releases)
-[![License](https://img.shields.io/github/license/wnsdy95/cxthub)](LICENSE)
+**Where the code goes, the context follows.**
 
-cxthub is Git-style version control for coding-agent context. It captures
-Claude Code and Codex sessions, connects them to Git history, restores them
-across branches or providers, and synchronizes them through a self-hostable
-server.
+Git-native shared memory for coding agents.
+
+[![CI](https://github.com/wnsdy95/cxthub/actions/workflows/ci.yml/badge.svg)](https://github.com/wnsdy95/cxthub/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/wnsdy95/cxthub?display_name=tag&sort=semver)](https://github.com/wnsdy95/cxthub/releases) [![License](https://img.shields.io/github/license/wnsdy95/cxthub)](LICENSE)
 
 > [!WARNING]
-> cxthub is alpha software. Back up important data, review captured context
+> CXTHub is alpha software. Back up important data, review captured context
 > before sharing it, and never rely on automatic secret scrubbing as your only
 > security control.
 
-## What it does
+## The repository remembers the change. It should remember the reason.
 
-- Captures agent sessions automatically through Git and provider hooks.
-- Stores normalized context as content-addressed snapshots.
-- Keeps context aligned with commits, branches, rebases, resets, and stashes.
-- Restores sessions in full, reconstructed, or distilled-memory form.
-- Converts supported context between Claude Code and Codex.
-- Synchronizes immutable objects and mutable refs through `cxtd`.
-- Provides a web UI for history, comparison, review, and workspace management.
-- Shares selected agent settings and end-to-end encrypted secret-mask lists.
+Git preserves outcomes with extraordinary discipline: commits, diffs,
+branches, authors, and dates. The investigation and judgment that made those
+outcomes necessary still disappear inside temporary agent conversations.
+
+CXTHub versions that missing context alongside the code. A developer or agent
+can return to a branch, hand work to a teammate, or continue in another
+supported agent without reconstructing the reasoning from scratch.
+
+It is not a chat archive, a project wiki, or a second workflow beside Git. It
+is a context layer that follows the lifecycle of the code.
+
+## No new workflow
+
+CXTHub follows Git actions developers already use:
+
+| Git action | CXTHub behavior |
+|---|---|
+| `git commit` | Capture staged active agent sessions and link them to the commit |
+| `git switch` / `git checkout` | Restore the destination branch context |
+| `git branch` | Create the corresponding context branch |
+| `git rebase` / `git commit --amend` | Track rewritten commit links |
+| `git stash` / `git stash pop` | Preserve or restore unfinished agent work |
+| `git push` / `git pull` | Synchronize context with the configured remote |
+
+Install the hooks once with `cxt init`. After that, the code and the context
+move together.
+
+## What CXTHub carries forward
+
+- **Sessions** — capture Claude Code and Codex work through provider and Git
+  hooks.
+- **Snapshots** — store normalized context as immutable, content-addressed
+  states.
+- **Commit links** — connect the session state to the code change it shaped.
+- **Branches and stashes** — reorient or resume when repository work moves.
+- **Agent transfer** — materialize supported context for Claude Code or Codex,
+  regardless of which one created it.
+- **Team history** — push and pull shared context through a self-hostable
+  `cxtd` remote.
+- **Retrieval** — let compatible agents inspect repository context through the
+  read-only MCP server.
+- **Review** — inspect history, comparisons, pending sessions, and workspace
+  state in the web interface.
+
+The underlying model is deliberately Git-like:
+
+```text
+agent session → cxt snapshot → Git commit → cxtd remote → person or agent
+```
 
 Natural snapshot parents are immutable. Repairs and session placement use
-versioned overlay edges, so synchronization never rewrites a snapshot's
-content identity.
-
-## Components
-
-| Path | Purpose |
-|---|---|
-| `cli/` | Go `cxt` CLI, capture adapters, codecs, local object store, and MCP server |
-| `backend/` | Go `cxtd` HTTP server with filesystem and PostgreSQL stores |
-| `frontend/web/` | React and TypeScript web application |
-| `schemas/` | OpenAPI, JSON Schema, and ordered PostgreSQL migrations |
-| `integrations/` | Claude Code and Codex integration assets |
-| `deploy/` | Optional self-hosting infrastructure |
+versioned overlay edges, so synchronization can preserve reachability without
+rewriting a snapshot's content identity.
 
 ## Install
 
@@ -71,18 +105,6 @@ cxt login
 cxt remote -v
 ```
 
-`cxt init` installs Git hooks by default. Once installed, normal Git actions
-capture and move context:
-
-| Git action | cxt behavior |
-|---|---|
-| `git commit` | Capture staged active agent sessions and link the Git commit |
-| `git switch` / `git checkout` | Restore the destination branch context |
-| `git branch` | Create the corresponding context branch |
-| `git rebase` / `git commit --amend` | Track rewritten Git commit links |
-| `git stash` / `git stash pop` | Save or restore the active session |
-| `git push` / `git pull` | Synchronize context with the configured origin |
-
 Useful manual commands:
 
 ```bash
@@ -94,30 +116,46 @@ cxt fsck
 cxt --help
 ```
 
-Use `cxt init --no-hooks` to opt out, or `cxt hooks uninstall` to remove the
-managed hooks.
+Use `cxt init --no-hooks` to opt out of automatic Git integration, or
+`cxt hooks uninstall` to remove the managed hooks.
 
 ## Provider integrations
 
-- `integrations/claude-code/` contains Claude Code plugin, command, MCP, and
-  hook assets.
-- `integrations/codex/` contains Codex MCP, prompt, and hook configuration.
+- `integrations/claude-code/` contains the Claude Code plugin, command, MCP,
+  and hook assets.
+- `integrations/codex/` contains the Codex MCP, prompt, and hook
+  configuration.
 
-The CLI can also wrap either provider directly:
+The CLI can also start either provider with repository context:
 
 ```bash
 cxt claude
 cxt codex
 ```
 
-## Secret handling
+## Privacy is architecture
+
+CXTHub processes coding-agent conversations, which may contain source code,
+credentials, customer data, or internal decisions.
 
 Place exact secret values, one per line, in `.cxtsecrets`. The CLI masks those
 values before writing a capture. The file is ignored by Git and is not uploaded
-in plaintext.
+in plaintext. Shared secret-mask lists are end-to-end encrypted.
 
 Pattern-based scrubbing and `.cxtsecrets` are defense in depth. If a credential
-may have entered an agent session or Git history, revoke it immediately.
+may have entered an agent session or Git history, revoke it immediately. See
+[SECURITY.md](SECURITY.md) for the disclosure process and security boundaries.
+
+## Components
+
+| Path | Purpose |
+|---|---|
+| `cli/` | Go `cxt` CLI, capture adapters, codecs, local object store, and MCP server |
+| `backend/` | Go `cxtd` HTTP server with filesystem and PostgreSQL stores |
+| `frontend/web/` | React and TypeScript web application |
+| `schemas/` | OpenAPI, JSON Schema, and ordered PostgreSQL migrations |
+| `integrations/` | Claude Code and Codex integration assets |
+| `deploy/` | Optional self-hosting infrastructure |
 
 ## Self-hosting
 

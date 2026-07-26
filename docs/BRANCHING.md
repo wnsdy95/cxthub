@@ -1,6 +1,6 @@
 # Branching and integration
 
-cxthub follows a trunk-based GitHub Flow. `main` is the only long-lived
+CXTHub follows a trunk-based GitHub Flow. `main` is the only long-lived
 development branch and should remain releasable.
 
 ## Branch names

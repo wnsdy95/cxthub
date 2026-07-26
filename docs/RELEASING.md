@@ -1,6 +1,6 @@
-# Releasing cxthub
+# Releasing CXTHub
 
-cxthub uses Semantic Versioning tags:
+CXTHub uses Semantic Versioning tags:
 
 ```text
 vMAJOR.MINOR.PATCH
@@ -17,7 +17,7 @@ release authority. Release automation uses the repository-scoped
 `GITHUB_TOKEN`; no personal access token is required.
 
 Service deployment and open-source releases are separate operations. Creating a
-tag does not deploy a hosted cxthub service.
+tag does not deploy a hosted CXTHub service.
 
 ## Before tagging
 
@@ -45,7 +45,7 @@ Use a release candidate for changes that need broader installation or
 compatibility testing:
 
 ```bash
-git tag -s v0.2.0-rc.1 -m "cxthub v0.2.0-rc.1"
+git tag -s v0.2.0-rc.1 -m "CXTHub v0.2.0-rc.1"
 git push origin v0.2.0-rc.1
 ```
 
@@ -54,7 +54,7 @@ git push origin v0.2.0-rc.1
 Create a signed annotated tag on the verified `main` commit:
 
 ```bash
-git tag -s v0.2.0 -m "cxthub v0.2.0"
+git tag -s v0.2.0 -m "CXTHub v0.2.0"
 git push origin v0.2.0
 ```
 
