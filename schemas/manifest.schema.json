@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wnsdy95.github.io/cxthub/schemas/manifest.schema.json",
+  "title": "cxt Manifest v1 — repository metadata index",
+  "description": "Catalog of a repository's refs and snapshot index. It supports push/pull negotiation (missing-object calculation) and optimistic locking through version. See docs/DATA-MODEL.md and the parent contract in docs/_SPINE.md §4. This is the serialized domain.Manifest form.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["repo_id", "refs", "snapshot_index", "version", "updated_at"],
+  "properties": {
+    "repo_id": {
+      "type": "string",
+      "description": "The ID of the repo this manifest belongs to (normalized remote URL or cwd fallback hash)."
+    },
+    "refs": {
+      "type": "array",
+      "description": "All mutable repository pointers (HEAD/branch/session/tag), unique by (kind,name).",
+      "items": { "$ref": "#/$defs/ref" }
+    },
+    "snapshot_index": {
+      "type": "array",
+      "description": "Snapshot IDs held by this store (content hashes). Push/pull computes the remote difference and transfers only missing objects.",
+      "items": { "$ref": "#/$defs/contentHash" }
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonically increasing version for optimistic locking. Writes compare it with the version observed at read time (CAS)."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last update time of the manifest (RFC3339)."
+    }
+  },
+  "$defs": {
+    "contentHash": {
+      "type": "string",
+      "description": "Content-addressed hash in 'sha256:<hex>' format. Identical content produces the same deduplication key.",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "refKind": {
+      "type": "string",
+      "description": "Ref type: head=current checkout symbolic ref, branch=actual Git branch pointer, session=preserved pointer within the same Git branch, tag=immutable label.",
+      "enum": ["head", "branch", "session", "tag"]
+    },
+    "ref": {
+      "type": "object",
+      "description": "Mutable HEAD/branch/session/tag pointer serialized from domain.Ref.",
+      "additionalProperties": false,
+      "required": ["kind", "name", "repo_id", "target"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/refKind" },
+        "name": {
+          "type": "string",
+          "description": "Ref name. A branch uses the Git branch name, a session uses an internal session name, a tag uses its tag name, and HEAD is fixed at 'HEAD'."
+        },
+        "repo_id": {
+          "type": "string",
+          "description": "Owner repo ID."
+        },
+        "target": {
+          "$ref": "#/$defs/contentHash",
+          "description": "Referenced Snapshot.ID. It must identify an existing snapshot (referential-integrity invariant)."
+        },
+        "symbolic": {
+          "type": "string",
+          "description": "Optional symbolic target. Set it to the branch name when HEAD points to a branch; leave it empty for a direct snapshot pointer."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "head" } } },
+          "then": {
+            "properties": { "name": { "const": "HEAD" } },
+            "description": "If kind=head, name is fixed to 'HEAD'."
+          }
+        }
+      ]
+    }
+  }
+}

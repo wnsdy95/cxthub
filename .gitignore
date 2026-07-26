@@ -1,0 +1,229 @@
+# cxthub source-only repository boundary — Go + Node monorepo
+
+# =============================================================================
+# Go
+# =============================================================================
+
+# build artifacts
+/bin/
+/dist/
+
+# ad-hoc `go build` generated binaries (Makefile builds to bin/)
+/backend/cxt
+/backend/cxtd
+/cli/cxt
+/cli/cxtd
+
+# Go test cache
+*.test
+*.out
+
+# Go coverage and profiling
+/coverage/
+coverage/
+coverage.html
+coverage.out
+*.coverprofile
+*.prof
+*.pprof
+
+# Go workspace (local overrides)
+go.work
+go.work.sum
+
+# cgo intermediate artifacts
+*.so
+*.a
+
+# =============================================================================
+# Node / TypeScript (frontend/)
+# =============================================================================
+
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.next/
+frontend/out/
+
+# frontend/web (React + Vite UI). The global rule covers node_modules, while build
+# directories are listed explicitly because their paths are fixed.
+frontend/web/dist/
+frontend/web/build/
+vite.config.ts.timestamp-*
+.vercel/
+
+# pnpm
+.pnpm-store/
+pnpm-lock.yaml.bak
+
+# TypeScript build cache
+*.tsbuildinfo
+frontend/.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+
+# JavaScript tool caches and generated test output
+.cache/
+.vite/
+.turbo/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.nyc_output/
+playwright-report/
+blob-report/
+test-results/
+
+# =============================================================================
+# OS / editor
+# =============================================================================
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+ehthumbs.db
+Thumbs.db
+
+# Linux
+*~
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# VS Code (ignore local-only settings; shared workspace settings may be committed)
+.vscode/settings.json
+.vscode/launch.json
+
+# Local coding-agent configuration and state. Public integrations belong under
+# integrations/ and must be installed explicitly; cloning the repository must
+# never activate project-local agent hooks automatically.
+/.claude/
+/.codex/
+/.agents/
+/.cursor/
+/.windsurf/
+/.mcp.json
+
+# Vim / Emacs
+*.swp
+*.swo
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+
+# =============================================================================
+# Environment and secret settings
+# =============================================================================
+
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+!**/.env.example
+!*.env.example
+!**/*.env.example
+
+*.secret
+*.secrets
+.secrets*
+secrets/
+credentials.json
+auth.json
+client_secret*.json
+application_default_credentials.json
+
+# User-level package and network authentication.
+.npmrc
+.netrc
+.pypirc
+
+# Private keys and credential containers. Public keys (*.pub) and certificate
+# files (*.crt) remain reviewable source files if deliberately added.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.kdbx
+id_rsa
+id_ed25519
+
+# Terraform local state/input — provider lock is committed for reproducibility.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+crash.log
+crash.*.log
+
+# Firebase secrets — never commit service-account keys or Admin SDK credentials.
+# `.env.example` may contain placeholders; real VITE_FIREBASE_* values belong only in ignored `.env` files.
+serviceAccount*.json
+*serviceAccount*.json
+*-firebase-adminsdk-*.json
+firebase-service-account.json
+.firebase/
+firebase-debug.log
+firestore-debug.log
+.runtimeconfig.json
+
+# =============================================================================
+# Local cxt stores and runtime data
+# =============================================================================
+
+# CLI client stores may be created in the repository or nested test projects.
+.cxt/
+
+# cxtd server default data directory (--data ./cxt-data) and variations
+cxt-data/
+/backend/cxt-data/
+*.cxt-data/
+
+# Local secrets and daemon state.
+.cxtsecrets
+.cxt-daemon/
+
+# Embedded databases and process state.
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.bolt
+*.bbolt
+*.pid
+*.sock
+
+# =============================================================================
+# Test, temporary, and language-tool files
+# =============================================================================
+
+/tmp/
+/.tmp/
+testdata/generated/
+**/testdata/generated/
+*.tmp
+*.bak
+*.log
+
+# Auxiliary Python tooling occasionally used by release scripts.
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

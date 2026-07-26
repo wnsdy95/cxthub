@@ -1,0 +1,34 @@
+# cxt — Codex CLI configuration snippet
+#
+# Merge the contents of this file into ~/.codex/config.toml to register the cxt MCP server with Codex.
+# Hook registration is automatically merged by cxt setup (MCP registration will be added to setup after server implementation).
+#
+# Note: ~/.codex/config.toml may contain sections like [mcp_servers.<name>], [plugins."..."], [projects."<path>"].
+# This block adds the cxt item to the [mcp_servers] section.
+
+# ---------------------------------------------------------------------------
+# MCP Server Registration — cxt stdio MCP Server
+# ---------------------------------------------------------------------------
+# The cxt binary must be in your $PATH (verify with cxt --version).
+[mcp_servers.cxt]
+command = "cxt"
+args    = ["mcp"]
+
+# ---------------------------------------------------------------------------
+# [projects] Section Guide (Optional)
+# ---------------------------------------------------------------------------
+# To connect cxt to a specific project directory, add it in the following format:
+#
+# [projects."/path/to/your/project"]
+# # Project-specific settings (e.g., remote server address) are managed in .cxt/config.
+#
+# Example:
+# [projects."/Users/work/projects/my-app"]
+# # mcp_servers inherit from global settings.
+
+# ---------------------------------------------------------------------------
+# Team Remote Server Configuration (Optional — can also be set via cxt-specific environment variables)
+# ---------------------------------------------------------------------------
+# To use cxt push/pull, you need the central server address and team token.
+# CLI setup: cxt config set remote.url https://<your-cxt-server>
+#             cxt config set remote.token cxt_team_<opaque>

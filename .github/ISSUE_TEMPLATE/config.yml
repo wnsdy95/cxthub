@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and design discussions
+    url: https://github.com/wnsdy95/cxthub/discussions
+    about: Ask for help or explore a design before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/wnsdy95/cxthub/security/advisories/new
+    about: Report vulnerabilities privately. Never disclose them in a public issue.

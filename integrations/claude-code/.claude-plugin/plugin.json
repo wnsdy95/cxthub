@@ -1,0 +1,5 @@
+{
+  "name": "cxthub",
+  "version": "0.1.0",
+  "description": "cxthub — Git-like session snapshotting and cross-provider replay for Claude Code and Codex. Captures sessions on hook events and exposes save/fork/load/diff/sync as slash commands via MCP. Local CLI: cxt."
+}
