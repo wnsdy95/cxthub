@@ -9,7 +9,7 @@ go 1.26.5
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/klauspost/compress v1.19.0
+	github.com/klauspost/compress v1.19.1
 )
 
 require (
