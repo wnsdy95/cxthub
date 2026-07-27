@@ -14,7 +14,8 @@ esac
 required=(
   LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md
   SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md GOVERNANCE.md SUPPORT.md
-  TRADEMARKS.md CHANGELOG.md docs/BRANCHING.md docs/RELEASING.md
+  TRADEMARKS.md CHANGELOG.md docs/BRANCHING.md docs/CLI.md
+  docs/INSTALLATION.md docs/RELEASING.md
   .github/workflows/ci.yml .github/workflows/release.yml
 )
 for file in "${required[@]}"; do
@@ -45,7 +46,8 @@ do
 done
 for path in \
   frontend/web/.env.example deploy/terraform/terraform.tfvars.example \
-  frontend/web/package-lock.json deploy/terraform/.terraform.lock.hcl
+  frontend/web/package-lock.json deploy/terraform/.terraform.lock.hcl \
+  docs/BRANCHING.md docs/CLI.md docs/INSTALLATION.md docs/RELEASING.md
 do
   if git check-ignore -q --no-index "$path"; then
     echo "[public-check] reproducible source file is incorrectly ignored: $path" >&2

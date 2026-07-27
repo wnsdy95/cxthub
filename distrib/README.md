@@ -18,7 +18,16 @@ curl -fsSL https://raw.githubusercontent.com/wnsdy95/cxthub/main/distrib/install
 ```
 
 Supports macOS (arm64/amd64) and Linux (arm64/amd64).
-Pin a version with the `CXT_VERSION=v0.1.0` environment variable.
+Pin a version by passing the variable to the installer shell:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wnsdy95/cxthub/main/distrib/install |
+  CXT_VERSION=v0.1.0 sh
+```
+
+The release installer installs the `cxt` client only. See the full
+[installation guide](../docs/INSTALLATION.md) for manual verification, source
+builds, upgrades, removal, and `cxtd`.
 
 ## Getting started
 

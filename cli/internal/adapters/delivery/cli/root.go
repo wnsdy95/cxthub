@@ -111,7 +111,7 @@ func Run(c *Container, args []string) error {
 			}
 		}
 		if _, ok := remotecfg.Origin(cwd); !ok {
-			fmt.Println("hint: to connect to team server → cxt setup https://<host>/<username>/<workspace>/<repo>")
+			fmt.Println("hint: to connect to team server → cxt setup https://<host>/<username>/<workspace>")
 		}
 		return nil
 
@@ -293,7 +293,7 @@ func Run(c *Container, args []string) error {
 			}
 			return nil
 		default:
-			return fmt.Errorf("supported keys: checkout.mode | load.mode | boundary.enforce | secrets.redact | secrets.minlen")
+			return fmt.Errorf("supported keys: checkout.mode | load.mode | boundary.enforce | capture.debounce | secrets.scrub | secrets.redact | secrets.minlen")
 		}
 
 	case "login":
@@ -967,9 +967,10 @@ usage: cxt <command> [flags]
   Getting started:
   setup [remote-url]        initialize everything: repository → Git hooks → remote → login → agent hooks → team settings
                             (safe to rerun; use --no-login to skip login)
-  init [--no-hooks]         initialize the local context store and install Git hooks
+  init [--no-hooks] [--remote <url>]
+                            initialize the local context store and install Git hooks
   repo create <url>         initialize and connect a server repository
-  login [token]             authenticate with the configured origin
+  login [token|-t token]    authenticate with the configured origin
   logout                    remove the saved origin credential
 
   Agent commands:
@@ -985,8 +986,10 @@ usage: cxt <command> [flags]
   remote remove <name>      remove a configured remote
   add [claude|codex]        stage providers for the next commit (defaults to both)
   commit [-m msg]           capture the active session (also run automatically by the Git commit hook)
-  checkout <ref> [-b new]   restore or branch context (also run automatically by Git checkout)
-  switch <branch> [-c new]  alias for checkout (equivalent to Git switch)
+  checkout [<ref>] [-b new] [--provider claude|codex] [--mode full|reconstructed|memory]
+                            restore or branch context (also run automatically by Git checkout)
+  switch [<branch>] [-c new] [--mode full|reconstructed|memory]
+                            alias for checkout (equivalent to Git switch)
   push [--force|--append]   synchronize local context to origin
   pull [--force]            synchronize origin context locally
   tag [<name> [ref]]        list or create immutable tags (equivalent to Git tags)
@@ -994,16 +997,20 @@ usage: cxt <command> [flags]
 
   Context commands:
   save [-m msg] [--provider claude|codex]
-                            create a snapshot without resolving pending state
+                            create a single-provider snapshot without commit staging or remote pending sync
   list | log [--branch B]   list snapshots
-  fork <ref> --as <branch>  fork and restore a context branch
-  load <ref> [--mode full|reconstructed|memory]
-                            restore a snapshot
-  memorize | memory         distill head context into reusable memory
+  fork <ref> --as <branch> [--provider claude|codex] [--mode full|reconstructed|memory]
+                            fork and restore a context branch
+  load [<ref>] [--provider claude|codex] [--mode full|reconstructed|memory]
+                            restore a snapshot (current head when ref is omitted)
+  memorize | memory [<ref>] [--provider claude|codex]
+                            distill context into reusable memory
 
   Configuration and maintenance:
-  settings pull|list|restore  apply team defaults, list backups, or restore a backup
-  secrets push|pull -p <pw> share .cxtsecrets with end-to-end encryption
+  settings pull|list|restore [n]
+                            apply team defaults, list backups, or restore a backup
+  secrets push|pull [-p <pw>] [--remember] [--rotate]
+                            share .cxtsecrets with end-to-end encryption
   hooks install|uninstall   manage Git hooks manually
   config <key> [value]      inspect or set checkout, load, boundary, capture, or scrub behavior
   fsck                      audit repository integrity
