@@ -78,9 +78,14 @@ Release binaries support macOS and Linux on arm64 and amd64:
 curl -fsSL https://raw.githubusercontent.com/wnsdy95/cxthub/main/distrib/install | sh
 ```
 
-Pin a version with `CXT_VERSION=v0.1.0`.
+Pin a version by passing the variable to the installer shell:
 
-To build from source, install Go 1.26+, Node.js 22+, npm, and Git 2.28+:
+```bash
+curl -fsSL https://raw.githubusercontent.com/wnsdy95/cxthub/main/distrib/install |
+  CXT_VERSION=v0.1.0 sh
+```
+
+To build the Go binaries from source, install Go 1.26.5+ and Git 2.28+:
 
 ```bash
 git clone https://github.com/wnsdy95/cxthub.git
@@ -90,16 +95,22 @@ make build
 
 The binaries are written to `bin/cxt` and `bin/cxtd`.
 
+See the [installation guide](docs/INSTALLATION.md) for manual archive
+verification, custom install directories, upgrades, removal, source builds,
+and the separate `cxtd` server.
+
 ## Quick start
 
 Run these commands inside an existing Git repository:
 
 ```bash
-cxt init
-cxt remote add origin https://<host>/<username>/<workspace>
-cxt login
+cxt setup https://<host>/<username>/<workspace>
 cxt remote -v
 ```
+
+`cxt setup` initializes the local store, installs Git hooks, registers the
+workspace, starts browser login, merges provider hooks, and pulls team settings.
+It is safe to rerun. Use `cxt init` instead for local-only operation.
 
 Useful manual commands:
 
@@ -114,6 +125,9 @@ cxt --help
 
 Use `cxt init --no-hooks` to opt out of automatic Git integration, or
 `cxt hooks uninstall` to remove the managed hooks.
+
+The complete command and option reference is in
+[docs/CLI.md](docs/CLI.md).
 
 ## Provider integrations
 
@@ -181,6 +195,11 @@ make public-check
 
 PostgreSQL changes should also run `make test-postgres` against PostgreSQL 16.
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
+
+## Documentation
+
+- [Installation](docs/INSTALLATION.md)
+- [CLI reference](docs/CLI.md)
 
 ## Project policy
 

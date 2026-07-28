@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,5 +44,32 @@ func TestUnknownCommandUsesPublicCommandCatalog(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "git-hook") {
 		t.Errorf("unknown-command error exposed internal git-hook command: %v", err)
+	}
+}
+
+func TestCLIReferenceCoversEveryPublicCommand(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate test source")
+	}
+	docPath := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../../../docs/CLI.md"))
+	raw, err := os.ReadFile(docPath)
+	if errors.Is(err, os.ErrNotExist) {
+		// A separately packaged cli module may not include repository-level
+		// documentation. The public repository preflight requires the file.
+		t.Skip("repository-level CLI reference is not present in this module package")
+	}
+	if err != nil {
+		t.Fatalf("read CLI reference: %v", err)
+	}
+	doc := string(raw)
+
+	for _, command := range publicCommandNames {
+		if !strings.Contains(doc, "cxt "+command) {
+			t.Errorf("CLI reference does not mention public command %q", command)
+		}
+	}
+	if strings.Contains(doc, "cxt git-hook") {
+		t.Error("CLI reference exposed internal git-hook command")
 	}
 }

@@ -112,11 +112,12 @@ Thumbs.db
 /.mcp.json
 
 # Private design, research, planning, and deployment notes. Public project
-# policy belongs in the tracked top-level files and docs/BRANCHING.md or
-# docs/RELEASING.md.
+# documentation is explicitly allowlisted below.
 /docs/internal/
 /docs/*.md
 !/docs/BRANCHING.md
+!/docs/CLI.md
+!/docs/INSTALLATION.md
 !/docs/RELEASING.md
 
 # Vim / Emacs
