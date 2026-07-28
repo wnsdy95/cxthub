@@ -316,7 +316,7 @@ func (s *FSStore) UpdateRepoConfig(ctx context.Context, id domain.ContentHash, d
 	return writeAtomic(filepath.Join(s.repoDir(id), "repo.json"), data)
 }
 
-// PutSettingsBundle stores the team default settings bundle (.claude/.agents).
+// PutSettingsBundle stores the team default settings bundle (.claude/.agents/.codex).
 func (s *FSStore) PutSettingsBundle(_ context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error {
 	if err := validateHash(repoID); err != nil {
 		return err

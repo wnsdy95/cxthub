@@ -157,6 +157,16 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return newHTTPError(resp.StatusCode, method, path, b)
 	}
+	if resp.StatusCode == http.StatusNoContent {
+		// Optional singleton assets (team settings and the sealed secrets
+		// envelope) use 204 for "not configured". Preserve the CLI's existing
+		// domain-level absence behavior while keeping browser probes out of the
+		// failed-request path.
+		if out != nil {
+			return domain.ErrNotFound
+		}
+		return nil
+	}
 	if out != nil {
 		if max > 0 {
 			b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))

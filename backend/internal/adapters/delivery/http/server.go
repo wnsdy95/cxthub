@@ -515,11 +515,22 @@ func (s *Server) patchAbout(w http.ResponseWriter, r *http.Request) {
 
 // getSettings returns team default setting bundles.
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.GetSettings(r.Context(), s.repoID(r), r.PathValue("kind"))
+	kind := r.PathValue("kind")
+	if !domain.ValidSettingsKind(kind) {
+		s.writeError(w, http.StatusNotFound, "not_found", "settings kind not found")
+		return
+	}
+	out, err := s.b.GetSettings(r.Context(), s.repoID(r), kind)
+	if errors.Is(err, domain.ErrNotFound) {
+		// These optional singleton assets are queried to render their configured/unset
+		// status. Absence is a successful state, not a failed HTTP request.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	s.respond(w, out, err)
 }
 
-// putSettings uploads team default setting bundles (claude|agents folder).
+// putSettings uploads team default setting bundles (claude|agents|codex folder).
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRepoAction(w, r, "settings") {
 		return
@@ -615,6 +626,13 @@ func fingerprintOf(raw []byte) string {
 // getSecrets returns the encrypted envelope as is (decryption is on the client — E2E).
 func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 	raw, err := s.b.GetSecrets(r.Context(), s.repoID(r))
+	if errors.Is(err, domain.ErrNotFound) {
+		// The web status rail probes this endpoint before a team envelope exists.
+		// Keep genuine repository/auth failures in middleware, but represent an
+		// unconfigured optional envelope without a noisy 404.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if err != nil {
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())

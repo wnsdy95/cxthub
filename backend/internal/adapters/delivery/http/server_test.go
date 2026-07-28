@@ -563,6 +563,53 @@ func TestSecretsFingerprintConsistency(t *testing.T) {
 	}
 }
 
+func TestOptionalTeamAssetsReturnNoContentWhenUnset(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	var me struct {
+		Username string `json:"username"`
+	}
+	doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me)
+	var ws struct {
+		Slug string `json:"slug"`
+	}
+	doJSON(t, http.MethodPost, ts.URL+"/api/v1/workspaces", map[string]any{"name": "Optional"}, &ws)
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	rid := repoIDForRemoteURLForTest(remoteURL)
+	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
+		"id": rid, "remote_url": remoteURL, "default_branch": "main",
+	}, nil); code != http.StatusOK {
+		t.Fatalf("repo create code %d", code)
+	}
+
+	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid))
+	for _, path := range []string{
+		"/settings/claude",
+		"/settings/agents",
+		"/settings/codex",
+		"/secrets",
+	} {
+		if code := doJSON(t, http.MethodGet, base+path, nil, nil); code != http.StatusNoContent {
+			t.Errorf("GET %s = %d, want 204", path, code)
+		}
+	}
+	if code := doJSON(t, http.MethodGet, base+"/settings/unknown", nil, nil); code != http.StatusNotFound {
+		t.Errorf("unknown settings kind = %d, want 404", code)
+	}
+
+	if code := doJSON(t, http.MethodPut, base+"/settings/claude", map[string]any{"files": []any{}}, nil); code != http.StatusOK {
+		t.Fatalf("configure claude settings = %d, want 200", code)
+	}
+	var configured domain.SettingsBundle
+	if code := doJSON(t, http.MethodGet, base+"/settings/claude", nil, &configured); code != http.StatusOK {
+		t.Fatalf("configured claude settings GET = %d, want 200", code)
+	}
+	if configured.Kind != "claude" || configured.Files == nil {
+		t.Errorf("configured bundle = %+v", configured)
+	}
+}
+
 // TestContentTypeGuard: status change body must be application/json — empty/incorrect Content-Type is 415
 // (CSRF 2nd defense regardless of SameSite setting). Correct CT passes.
 func TestContentTypeGuard(t *testing.T) {

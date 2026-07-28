@@ -54,7 +54,7 @@ type MetadataStore interface {
 	UpdateRepoAbout(ctx context.Context, id domain.ContentHash, description, website string, topics []string) error
 	// UpdateRepoConfig updates repo structure settings (default branch, protected branch). nil = no change.
 	UpdateRepoConfig(ctx context.Context, id domain.ContentHash, defaultBranch *string, protectDefault *bool) error
-	// Team default settings bundle (.claude/.agents) — kind ∈ {claude, agents}.
+	// Team default settings bundle (.claude/.agents/.codex) — kind ∈ {claude, agents, codex}.
 	PutSettingsBundle(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettingsBundle(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
 	// Secret ciphertext envelope (E2E — server cannot decrypt, stored as opaque bytes only).

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,22 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
+
+func TestOptionalAssetNoContentMapsToNotFound(t *testing.T) {
+	repo := string(domain.HashContent([]byte("repo")))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if _, err := c.PullSettings(context.Background(), repo, "claude"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("PullSettings 204 error = %v, want ErrNotFound", err)
+	}
+	if _, err := c.PullSecrets(context.Background(), repo); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("PullSecrets 204 error = %v, want ErrNotFound", err)
+	}
+}
 
 func TestSnapshotForCreateStripsServerOwnedGraftMetadata(t *testing.T) {
 	id := domain.HashContent([]byte("snapshot"))

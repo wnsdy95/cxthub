@@ -288,7 +288,8 @@ type Pending struct {
 	Dismissed bool `json:"dismissed,omitempty"`
 }
 
-// SettingsFile / SettingsBundle — Server team default settings bundle (.claude/.agents) mirror type.
+// SettingsFile / SettingsBundle — server team default settings bundle
+// (.claude/.agents/.codex) mirror type.
 // cxt settings pull updates the local folder with the received settings.
 type SettingsFile struct {
 	Path       string `json:"path"`

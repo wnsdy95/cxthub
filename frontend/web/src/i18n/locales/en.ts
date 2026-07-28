@@ -162,6 +162,7 @@ export const en: Messages = {
   },
   secrets: {
     envUnsupported: 'Unsupported envelope format',
+    notConfigured: 'No team secrets are configured yet',
     kdfLow: 'KDF iteration count is abnormally low',
     decryptFail: 'Decryption failed — wrong passphrase or tampered data',
     passInvalid: 'Team passphrase must be 4+ English words and 12+ chars (e.g. harbor twist ledger cousin)',

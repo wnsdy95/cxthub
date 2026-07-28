@@ -174,7 +174,8 @@ type RemoteSync interface {
 	PushMemory(ctx context.Context, repoID string, digest domain.MemoryDigest) error
 	// PullMemory downloads the MemoryDigest from the snapshot. Returns ErrNotFound if not found.
 	PullMemory(ctx context.Context, repoID string, snapshotID domain.ContentHash) (domain.MemoryDigest, error)
-	// PullSettings downloads the team default settings bundle (claude|agents). Returns ErrNotFound if not found.
+	// PullSettings downloads the team default settings bundle
+	// (claude|agents|codex). Returns ErrNotFound if not found.
 	PullSettings(ctx context.Context, repoID, kind string) (domain.SettingsBundle, error)
 	// Secret ciphertext envelope (E2E — raw bytes, server opaque). rotate=true performs an explicit replacement — protects updates inserted during CAS (conditional assignment) based on the envelope's fingerprint read during replacement.
 	PushSecrets(ctx context.Context, repoID string, raw []byte, rotate bool, expect string) error

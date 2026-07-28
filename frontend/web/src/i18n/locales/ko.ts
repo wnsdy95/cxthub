@@ -165,6 +165,7 @@ export const ko = {
   },
   secrets: {
     envUnsupported: '지원하지 않는 봉투 형식',
+    notConfigured: '아직 팀 시크릿이 설정되지 않았습니다',
     kdfLow: 'KDF 반복 횟수가 비정상적으로 낮음',
     decryptFail: '복호화 실패 — 패스프레이즈가 다르거나 데이터가 변조됨',
     passInvalid: '팀 패스프레이즈는 영단어 4개 이상·12자 이상이어야 합니다 (예: harbor twist ledger cousin)',

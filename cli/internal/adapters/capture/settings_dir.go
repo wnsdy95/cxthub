@@ -11,7 +11,8 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
-// ReadSettingsDir reads the SettingsBundle from the repoRoot/.{kind}(claude|agents) folder.
+// ReadSettingsDir reads the SettingsBundle from the
+// repoRoot/.{kind}(claude|agents|codex) folder.
 // It records the agent settings state at the commit point content-addressed.
 // Determinism: path sorting. Safety: hidden subdirectories (.git etc.) and truncation at 2MB (bundle, false).
 func ReadSettingsDir(repoRoot, kind string) (domain.SettingsBundle, bool) {
