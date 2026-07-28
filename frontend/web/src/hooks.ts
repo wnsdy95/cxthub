@@ -422,7 +422,7 @@ export function useSettingsBundle(repoId: string | null, kind: 'claude' | 'agent
     queryKey: ['settings', repoId, kind],
     queryFn: () => api.getSettings(repoId as string, kind),
     enabled: enabled && Boolean(repoId),
-    retry: false, // 404 = unset (normal)
+    retry: false, // 204/null = unset (normal)
   });
 }
 // Secret envelope metadata (ciphertext — server storage status and update timestamp. Decryption is only by user passphrase).
@@ -431,7 +431,7 @@ export function useSecretsEnvelope(repoId: string | null) {
     queryKey: ['secrets', repoId],
     queryFn: () => api.getSecrets(repoId as string),
     enabled: Boolean(repoId),
-    retry: false, // 404 = unset (normal)
+    retry: false, // 204/null = unset (normal)
   });
 }
 export function usePutSettings() {

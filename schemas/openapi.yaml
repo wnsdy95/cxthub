@@ -1666,7 +1666,7 @@ paths:
       - name: kind
         in: path
         required: true
-        schema: { type: string, enum: [claude, agents] }
+        schema: { type: string, enum: [claude, agents, codex] }
     get:
       operationId: getSettings
       summary: Team basic settings bundle retrieval — puller and above
@@ -1677,6 +1677,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SettingsBundle" }
+        "204": { description: "Team settings of this kind are not configured" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
       operationId: putSettings
@@ -1935,6 +1936,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SecretsEnvelope" }
+        "204": { description: "Team secrets are not configured" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
       operationId: putSecrets

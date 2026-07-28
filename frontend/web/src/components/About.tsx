@@ -351,6 +351,12 @@ export function SecretsPanel({ repoId, canWrite }: { repoId: string; canWrite: b
   const envelope = useSecretsEnvelope(repoId);
   const qc = useQueryClient();
 
+  async function requireEnvelope() {
+    const env = await api.getSecrets(repoId);
+    if (!env) throw new Error(t('secrets.notConfigured'));
+    return env;
+  }
+
   async function save() {
     if (!pass || !lines.trim()) {
       setOpen(true);
@@ -398,7 +404,7 @@ export function SecretsPanel({ repoId, canWrite }: { repoId: string; canWrite: b
     setBusy(true);
     setMsg(null);
     try {
-      const cur = await api.getSecrets(repoId);
+      const cur = await requireEnvelope();
       const plain = await decryptSecrets(pass, cur, repoId, t); // decrypts with current passphrase (throws if incorrect)
       const env = await encryptSecrets(newPass, plain, repoId); // re-encrypts with new passphrase
       await api.putSecrets(repoId, env, true, cur.fingerprint ?? ''); // rotate CAS — based envelope fingerprint
@@ -423,7 +429,7 @@ export function SecretsPanel({ repoId, canWrite }: { repoId: string; canWrite: b
     setBusy(true);
     setMsg(null);
     try {
-      const env = await api.getSecrets(repoId);
+      const env = await requireEnvelope();
       setLines(await decryptSecrets(pass, env, repoId, t));
       setOpen(true); // decryption result confirmed and editable in modal
       setMsg(t('about.decrypted') + (env.updated_at ? ` (${env.updated_at.slice(0, 10)})` : ''));
@@ -445,7 +451,7 @@ export function SecretsPanel({ repoId, canWrite }: { repoId: string; canWrite: b
     setBusy(true);
     setMsg(null);
     try {
-      const env = await api.getSecrets(repoId);
+      const env = await requireEnvelope();
       const text = await decryptSecrets(pass, env, repoId, t);
       if (window.showDirectoryPicker) {
         const dir = await window.showDirectoryPicker({ mode: 'readwrite' });

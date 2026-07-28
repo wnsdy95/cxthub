@@ -1,5 +1,6 @@
 // zip.ts — Minimal ZIP generator (STORE, no compression, dependency-free).
-// Download button for team default settings bundle (.claude/.agents) preserves folder structure.
+// Download button for team default settings bundle
+// (.claude/.agents/.codex) preserves folder structure.
 // Sufficient for small files and text-heavy content (format: PKWARE APPNOTE 4.3).
 
 const CRC_TABLE = (() => {

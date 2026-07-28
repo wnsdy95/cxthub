@@ -118,7 +118,7 @@ export const api = {
   ) =>
     call<Repo>('PATCH', `/repos/${encodeURIComponent(repoId)}/about`, about),
   getSettings: (repoId: string, kind: 'claude' | 'agents' | 'codex') =>
-    call<{ kind: string; files: { path: string; content_b64: string }[]; updated_at: string; updated_by?: string }>(
+    call<{ kind: string; files: { path: string; content_b64: string }[]; updated_at: string; updated_by?: string } | null>(
       'GET',
       `/repos/${encodeURIComponent(repoId)}/settings/${kind}`,
     ),
@@ -131,7 +131,8 @@ export const api = {
       `/repos/${encodeURIComponent(repoId)}/secrets${rotate ? `?rotate=true&expect=${encodeURIComponent(expect)}` : ''}`,
       envelope,
     ),
-  getSecrets: (repoId: string) => call<import('./secretscrypto').SecretsEnvelope>('GET', `/repos/${encodeURIComponent(repoId)}/secrets`),
+  getSecrets: (repoId: string) =>
+    call<import('./secretscrypto').SecretsEnvelope | null>('GET', `/repos/${encodeURIComponent(repoId)}/secrets`),
   getMemory: (repoId: string, snapshotId: string) =>
     call<MemoryDigest>('GET', `/repos/${encodeURIComponent(repoId)}/memories/${encodeURIComponent(snapshotId)}`),
   listPending: (repoId: string) => call<Pending[]>('GET', `/repos/${encodeURIComponent(repoId)}/pending`),

@@ -176,9 +176,9 @@ mrow() { # mrow <jar|-> → "read pull push secretsPUT"
 }
 expect "anonymous 401/401/401/401" "$(mrow -)" "401 401 401 401"
 expect "viewer 200/403/403/403" "$(mrow "$JV")" "200 403 403 403"
-expect "puller 200/404/403/403" "$(mrow "$JP")" "200 404 403 403"
-expect "member 200/404/200/403" "$(mrow "$JM")" "200 404 200 403"
-expect "maint. 200/404/200/200" "$(mrow "$JT")" "200 404 200 200"
+expect "puller 200/204/403/403" "$(mrow "$JP")" "200 204 403 403"
+expect "member 200/204/200/403" "$(mrow "$JM")" "200 204 200 403"
+expect "maint. 200/204/200/200" "$(mrow "$JT")" "200 204 200 200"
 expect "policy owner narrowed → maintainer 403" "$(ccurl -sb "$JA" -o /dev/null -w '' -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"secrets_policy":"owner"}')$(ccode -b "$JT" -X PUT "$RB/secrets" -H 'Content-Type: application/json' -d "$ENVL")" 403
 ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"secrets_policy":"members"}' >/dev/null
 

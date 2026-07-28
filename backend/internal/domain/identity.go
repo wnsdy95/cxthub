@@ -132,7 +132,8 @@ type Workspace struct {
 	// ""|"members"(role-based = maintainer and above, default) | "owner"(only owner).
 	// User-level segmentation is handled by a 5-tier role ladder (specified lists are removed upon role introduction).
 	SecretsPolicy string `json:"secrets_policy,omitempty"`
-	// SettingsPolicy is the upload permission for team default settings (.claude/.agents): the value meaning is the same as SecretsPolicy.
+	// SettingsPolicy is the upload permission for team default settings
+	// (.claude/.agents/.codex): the value meaning is the same as SecretsPolicy.
 	SettingsPolicy string `json:"settings_policy,omitempty"`
 	// GHVisibilitySync, when enabled, derives the visibility from the GitHub repo status (manual toggle lock).
 	// Rule: Public if the linked GitHub repo has 1 or more and all are public (conservative —

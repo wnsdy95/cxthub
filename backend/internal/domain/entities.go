@@ -41,9 +41,11 @@ type SettingsFile struct {
 	ContentB64 string `json:"content_b64"`
 }
 
-// SettingsBundle is the team default agent settings for the repo (.claude/.agents folder).
-// Upload folder (claude|agents) via web, team members receive via cxt and overwrite local .claude/.agents.
-// Kind ∈ {claude, agents}.
+// SettingsBundle is the team default agent settings for the repo
+// (.claude/.agents/.codex folder).
+// Upload folder (claude|agents|codex) via web; team members receive it via cxt
+// and overwrite the matching local directory.
+// Kind ∈ {claude, agents, codex}.
 type SettingsBundle struct {
 	Kind      string         `json:"kind"`
 	Files     []SettingsFile `json:"files"`

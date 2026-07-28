@@ -1064,7 +1064,7 @@ func shortHash(h domain.ContentHash) string {
 	return hexPart
 }
 
-// applySettings applies server setting bundles (kind ∈ claude|agents) to
+// applySettings applies server setting bundles (kind ∈ claude|agents|codex) to
 // the repo root .claude/ or .agents/ directory (includes path traversal defense).
 func applySettings(ctx context.Context, c *Container, cwd, repoID, kind string) (int, error) {
 	bundle, err := c.Settings.PullSettings(ctx, repoID, kind)
