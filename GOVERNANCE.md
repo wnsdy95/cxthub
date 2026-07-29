@@ -49,6 +49,13 @@ owner has an explicit ruleset bypass for emergency security work, release
 recovery, and authorized history maintenance. It is not the normal contribution
 path and should retain a public audit trail whenever confidentiality permits.
 
+While the project has only one eligible maintainer, an owner-authored pull
+request cannot receive an independent code-owner approval. The owner may use
+the documented solo-maintainer exception only after required checks pass and
+the bypass rationale is recorded in the pull request. Contributor-authored
+changes still require owner review, and the exception expires when another
+eligible maintainer or code owner is available.
+
 The branching and review policy is documented in
 [docs/BRANCHING.md](docs/BRANCHING.md).
 

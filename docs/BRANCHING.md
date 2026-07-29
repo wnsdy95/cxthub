@@ -79,10 +79,21 @@ Repository rules require:
 - linear history;
 - no branch deletion or force-push.
 
-The repository owner has an explicit ruleset bypass for emergency security
-work, release recovery, and authorized history maintenance. Bypass is not the
-normal merge path. When confidentiality does not prevent it, bypassed changes
-must retain an issue, pull request, release note, or other public audit trail.
+When the project has only one eligible maintainer and that maintainer authors a
+pull request, GitHub cannot accept the author's own approval. In that
+solo-maintainer state, the owner may use the ruleset bypass after every required
+status check passes and must record the reason in the pull request. The bypass
+replaces only the unavailable independent approval: the change must still use a
+short-lived branch, signed commits, a pull request targeting `main`, resolved
+review conversations, and linear history.
+
+The solo-maintainer exception never permits direct pushes to `main`, merging
+failed checks, force-pushing protected refs, or moving release tags. It ends
+when another eligible maintainer or code owner is available. Outside this
+narrow exception, the owner bypass remains reserved for emergency security
+work, release recovery, and authorized history maintenance. When
+confidentiality does not prevent it, every bypassed change must retain a public
+audit trail.
 
 ## Releases and fixes
 
