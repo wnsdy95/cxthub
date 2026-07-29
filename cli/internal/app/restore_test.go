@@ -179,4 +179,78 @@ func TestCheckoutForkAndLoad(t *testing.T) {
 	if err != nil || ref.Target != head {
 		t.Fatalf("forked branch ref: %v %+v", err, ref)
 	}
+	symbolic, err := store.GetRef(ctx, "", domain.RefHEAD, "HEAD")
+	if err != nil || symbolic.Symbolic != "feat/x" {
+		t.Fatalf("HEAD must follow forked branch: %v %+v", err, symbolic)
+	}
+}
+
+func TestCheckoutExistingBranchUpdatesHEAD(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	head := seedClaudeSnapshot(t, store)
+	cwd := t.TempDir()
+
+	if err := store.PutRef(ctx, domain.Ref{
+		Kind: domain.RefBranch, Name: "other", Target: head,
+	}); err != nil {
+		t.Fatalf("put other branch: %v", err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{
+		Kind: domain.RefHEAD, Name: "HEAD", Symbolic: "other",
+	}); err != nil {
+		t.Fatalf("point HEAD at other: %v", err)
+	}
+
+	checkout := NewCheckoutSessionService(
+		NewForkSessionService(store),
+		newLoadSvc(store),
+		store,
+	)
+	out, err := checkout.Checkout(ctx, inbound.CheckoutInput{
+		From: "main", TargetProvider: domain.ProviderCodex, Mode: domain.FidelityFull, Cwd: cwd,
+	})
+	if err != nil {
+		t.Fatalf("checkout main: %v", err)
+	}
+	if out.Branch != "main" {
+		t.Fatalf("checkout branch = %q, want main", out.Branch)
+	}
+	symbolic, err := store.GetRef(ctx, "", domain.RefHEAD, "HEAD")
+	if err != nil || symbolic.Symbolic != "main" {
+		t.Fatalf("HEAD must follow existing branch: %v %+v", err, symbolic)
+	}
+}
+
+func TestCheckoutTagKeepsCurrentHEAD(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	head := seedClaudeSnapshot(t, store)
+	cwd := t.TempDir()
+
+	if err := store.PutRef(ctx, domain.Ref{
+		Kind: domain.RefTag, Name: "v1", Target: head,
+	}); err != nil {
+		t.Fatalf("put tag: %v", err)
+	}
+	checkout := NewCheckoutSessionService(
+		NewForkSessionService(store),
+		newLoadSvc(store),
+		store,
+	)
+	out, err := checkout.Checkout(ctx, inbound.CheckoutInput{
+		From: "v1", TargetProvider: domain.ProviderCodex, Mode: domain.FidelityFull, Cwd: cwd,
+	})
+	if err != nil {
+		t.Fatalf("checkout tag: %v", err)
+	}
+	if out.Branch != "" {
+		t.Fatalf("tag restore must be detached, got branch %q", out.Branch)
+	}
+	symbolic, err := store.GetRef(ctx, "", domain.RefHEAD, "HEAD")
+	if err != nil || symbolic.Symbolic != "main" {
+		t.Fatalf("tag restore must not move HEAD: %v %+v", err, symbolic)
+	}
 }
