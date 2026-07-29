@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -105,11 +106,18 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	// full / reconstructed: codec.Encode → materializer.Materialize
 	// Seed budget: Session doc can exceed target model context (empirically: weekly session summary → codex "ran out of room" like empty session).
 	// Recent event tail remains within budget — truncation point is user prompt boundary.
-	seedCIR, dropped := trimEventsForSeed(cir, seedBudgetBytes)
+	seedCIR := cir
+	var omitted []domain.Event
+	if eventsJSONBytes(cir.Events) > seedBudgetBytes {
+		seedCIR, omitted = trimEventsForSeed(cir, seedTailBudgetBytes)
+	}
+	dropped := len(omitted)
 	if dropped > 0 {
 		// Omit memory digest of skipped segment at seed start with "CompactSummary" event — context compression equivalent (summary + recent raw). Viewer collapses, distiller 1st priority last-wins (memory ↔ context cycle accumulation block).
 		// Failure is fail-open (tail only).
-		seedCIR = s.prependTrimDigest(ctx, cir, seedCIR, snap, target, in.Cwd, dropped)
+		omittedCIR := cir
+		omittedCIR.Events = omitted
+		seedCIR = s.prependTrimDigest(ctx, omittedCIR, seedCIR, snap, target, in.Cwd)
 	}
 	// A restored session belongs to the working tree it is being restored into,
 	// not the machine/path where the source snapshot was captured. Codex active
@@ -205,31 +213,210 @@ func (s *LoadSessionService) reachesFrom(ctx context.Context, from, anc domain.C
 // Claude(200k)/Codex(258k) windows leave room for default instructions and buffer.
 const seedBudgetBytes = 400 << 10
 
-// Trims old events exceeding the budget, leaving only the recent tail. Returns: (trimmed CIR, number of omitted events). The cut point advances to the user message boundary to ensure the seed starts from the user prompt and that tool call/response pairs are not split.
-func trimEventsForSeed(cir domain.CIRDocument, budget int) (domain.CIRDocument, int) {
+// A bounded digest gets a fixed share of the total event budget. Without this
+// reservation, a large inherited digest can dwarf the raw-tail limit and push
+// the materialized session over the target model's context window.
+const seedDigestBudgetBytes = 96 << 10
+const seedTailBudgetBytes = seedBudgetBytes - seedDigestBudgetBytes
+
+func eventsJSONBytes(evs []domain.Event) int {
+	total := 0
+	for _, ev := range evs {
+		b, _ := json.Marshal(ev)
+		total += len(b)
+	}
+	return total
+}
+
+func isSeedSummaryEvent(ev domain.Event) bool {
+	return ev.Kind == domain.EventMessage && ev.Role == "user" && len(ev.Blocks) > 0 &&
+		strings.HasPrefix(ev.Blocks[0].Text, seedSummaryPrefix)
+}
+
+func isSeedUserBoundary(ev domain.Event) bool {
+	return ev.Kind == domain.EventMessage && ev.Role == "user" && !isSeedSummaryEvent(ev)
+}
+
+// trimEventsForSeed keeps a bounded recent tail and returns the exact omitted
+// events. Normally the cut advances to the next user message, preserving whole
+// turns. If the newest in-progress turn alone exceeds the budget, there is no
+// next user boundary; in that case the latest user request is anchored in
+// front of the bounded suffix. Unmatched tool results at that synthetic gap are
+// removed so the provider never receives an output without its call.
+func trimEventsForSeed(cir domain.CIRDocument, budget int) (domain.CIRDocument, []domain.Event) {
 	evs := cir.Events
+	if eventsJSONBytes(evs) <= budget {
+		return cir, nil
+	}
 	sum := 0
-	cut := 0 // Start index of the maintained segment
+	cut := len(evs)
 	for i := len(evs) - 1; i >= 0; i-- {
 		b, _ := json.Marshal(evs[i])
 		if sum+len(b) > budget {
-			cut = i + 1
 			break
 		}
 		sum += len(b)
+		cut = i
 	}
-	if cut == 0 {
-		return cir, 0
-	}
+
+	selected := make([]bool, len(evs))
+	nextUser := -1
 	for i := cut; i < len(evs); i++ {
-		if evs[i].Kind == domain.EventMessage && evs[i].Role == "user" {
-			cut = i
+		if isSeedUserBoundary(evs[i]) {
+			nextUser = i
 			break
 		}
 	}
+
+	if nextUser >= 0 {
+		for i := nextUser; i < len(evs); i++ {
+			selected[i] = true
+		}
+	} else {
+		latestUser := -1
+		for i := cut - 1; i >= 0; i-- {
+			if isSeedUserBoundary(evs[i]) {
+				latestUser = i
+				break
+			}
+		}
+		if latestUser < 0 {
+			for i := cut; i < len(evs); i++ {
+				selected[i] = true
+			}
+		} else {
+			selected[latestUser] = true
+			userBytes, _ := json.Marshal(evs[latestUser])
+			remaining := budget - len(userBytes)
+			suffixCut := len(evs)
+			suffixBytes := 0
+			if remaining > 0 {
+				for i := len(evs) - 1; i > latestUser; i-- {
+					b, _ := json.Marshal(evs[i])
+					if suffixBytes+len(b) > remaining {
+						break
+					}
+					suffixBytes += len(b)
+					suffixCut = i
+				}
+			}
+			for i := suffixCut; i < len(evs); i++ {
+				selected[i] = true
+			}
+		}
+	}
+
+	// Any bounded suffix can begin after a tool call but before its result.
+	// Keep only results whose call is also present in the selected stream.
+	calls := map[string]bool{}
+	for i, keep := range selected {
+		if keep && evs[i].Kind == domain.EventToolCall && evs[i].CallID != "" {
+			calls[evs[i].CallID] = true
+		}
+	}
+	for i, keep := range selected {
+		if keep && evs[i].Kind == domain.EventToolResult && evs[i].CallID != "" && !calls[evs[i].CallID] {
+			selected[i] = false
+		}
+	}
+
 	out := cir
-	out.Events = append([]domain.Event{}, evs[cut:]...)
-	return out, cut
+	out.Events = make([]domain.Event, 0, len(evs))
+	omitted := make([]domain.Event, 0, len(evs))
+	for i, ev := range evs {
+		if selected[i] {
+			out.Events = append(out.Events, ev)
+		} else {
+			omitted = append(omitted, ev)
+		}
+	}
+	if len(omitted) == 0 {
+		return cir, nil
+	}
+	return out, omitted
+}
+
+func truncateUTF8Prefix(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(s[:end]) {
+		end--
+	}
+	return s[:end]
+}
+
+func truncateUTF8Tail(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	const marker = "[... earlier summary omitted ...]\n"
+	if maxBytes <= len(marker) {
+		return truncateUTF8Prefix(marker, maxBytes)
+	}
+	start := len(s) - (maxBytes - len(marker))
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return marker + s[start:]
+}
+
+func renderSeedBulletSection(title string, items []string, maxBytes int) string {
+	header := "\n" + title + "\n"
+	if len(items) == 0 || maxBytes <= len(header)+2 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(header)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		line := "- " + item + "\n"
+		remaining := maxBytes - b.Len()
+		if remaining <= 2 {
+			break
+		}
+		if len(line) > remaining {
+			b.WriteString("- " + truncateUTF8Prefix(item, remaining-2))
+			break
+		}
+		b.WriteString(line)
+	}
+	if b.Len() == len(header) {
+		return ""
+	}
+	return b.String()
+}
+
+func renderSeedDigest(digest domain.MemoryDigest, dropped, budget int) string {
+	header := fmt.Sprintf("%s %d events were omitted to fit the context window; below is a bounded memory summary of the omitted span. The recent history follows verbatim.\n", seedSummaryPrefix, dropped)
+	if len(header) >= budget {
+		return truncateUTF8Prefix(header, budget)
+	}
+
+	facts := renderSeedBulletSection("Key facts:", seedWorthyFacts(digest.KeyFacts), budget/6)
+	tasks := renderSeedBulletSection("Open tasks:", digest.OpenTasks, budget/4)
+	remaining := budget - len(header) - len(facts) - len(tasks)
+
+	summaryBlock := ""
+	if summary := strings.TrimSpace(digest.Summary); summary != "" && remaining > 2 {
+		summary = truncateUTF8Tail(summary, remaining-2)
+		summaryBlock = "\n" + summary + "\n"
+	}
+	out := header + summaryBlock + facts + tasks
+	if len(out) > budget {
+		return truncateUTF8Prefix(out, budget)
+	}
+	return out
 }
 
 // `seedSummaryPrefix` is the identifier prefix for seed compression summary events — a marker to find and replace (remove) the previous generation summary in the tail when the next seed is generated. It is removed from materialized copies, while the saved doc remains unchanged.
@@ -245,10 +432,8 @@ const seedSummaryPrefix = "[cxt] This session was resumed from a branch context 
 //   - Previous generation seed summary (prefix CompactSummary) in the tail is removed — the new summary takes precedence.
 //   - If the digest summary matches the original native memory (e.g., MEMORY.md) of the target provider, it is omitted — the agent loads context itself at session start, so context re-injection is redundant.
 //   - KeyFacts noise such as whitespace-free tool tokens and legacy ingestion markers ("native memory:"/"absorbed from") is excluded from seed content.
-func (s *LoadSessionService) prependTrimDigest(ctx context.Context, full, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string, dropped int) domain.CIRDocument {
-	head := full
-	head.Events = full.Events[:dropped]
-	digest, derr := s.distiller.Distill(ctx, head, nil)
+func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) domain.CIRDocument {
+	digest, derr := s.distiller.Distill(ctx, omitted, nil)
 	if derr != nil {
 		digest = domain.MemoryDigest{} // Send the stored digest even if empty
 	}
@@ -277,30 +462,13 @@ func (s *LoadSessionService) prependTrimDigest(ctx context.Context, full, seed d
 			digest.Summary = ""
 		}
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s %d older events were omitted to fit the context window; below is the memory summary of the omitted span. The recent history follows verbatim.\n", seedSummaryPrefix, dropped)
-	if digest.Summary != "" {
-		b.WriteString("\n" + digest.Summary + "\n")
-	}
-	if facts := seedWorthyFacts(digest.KeyFacts); len(facts) > 0 {
-		b.WriteString("\nKey facts:\n")
-		for _, f := range facts {
-			b.WriteString("- " + f + "\n")
-		}
-	}
-	if len(digest.OpenTasks) > 0 {
-		b.WriteString("\nOpen tasks:\n")
-		for _, t := range digest.OpenTasks {
-			b.WriteString("- " + t + "\n")
-		}
-	}
-	ev := domain.Event{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: b.String()}}}
+	text := renderSeedDigest(digest, len(omitted.Events), seedDigestBudgetBytes)
+	ev := domain.Event{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: text}}}
 	// Remove previous generation seed summary (materialized copy limit): Since the new summary inherits its content,
 	// leaving it would cause ◈ blocks to accumulate per generation. Determination is based on prefix text — legacy seed messages (unmarked user) must also be removed.
 	tail := make([]domain.Event, 0, len(seed.Events))
 	for _, e := range seed.Events {
-		if e.Kind == domain.EventMessage && e.Role == "user" && len(e.Blocks) > 0 &&
-			strings.HasPrefix(e.Blocks[0].Text, seedSummaryPrefix) {
+		if isSeedSummaryEvent(e) {
 			continue
 		}
 		tail = append(tail, e)

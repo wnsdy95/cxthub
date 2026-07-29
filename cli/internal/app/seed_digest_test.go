@@ -53,7 +53,7 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 		Summary:  "did X, decided Y",
 		KeyFacts: []string{"apply_patch", "unknown:Agent", "native memory: claude:MEMORY.md", "absorbed from claude:MEMORY.md", "budget is 400KB per seed"},
 	}, "")
-	out := svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir(), 2)
+	out := svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
 
 	if len(out.Events) != 2 {
 		t.Fatalf("Event count: got %d want 2 (new summary 1 + recent 1 — old [cxt] removed)", len(out.Events))
@@ -79,7 +79,7 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 
 	// (4) Omit summary of native memory text as-is.
 	svc = mk(domain.MemoryDigest{Summary: "MEMROOT\nfacts"}, "MEMROOT\nfacts")
-	out = svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir(), 2)
+	out = svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
 	if strings.Contains(out.Events[0].Blocks[0].Text, "MEMROOT") {
 		t.Fatalf("Native memory text re-injected into seed: %q", out.Events[0].Blocks[0].Text)
 	}
