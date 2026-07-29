@@ -109,6 +109,94 @@ func TestCodexMultiModel(t *testing.T) {
 	}
 }
 
+// TestCodexToolSearchItemsAreAuxiliary fixes compatibility with Codex rollouts that include
+// tool_search_call arguments as an object and tool_search_output tool-schema arrays. These are
+// control-plane discovery records, not conversation events, so they must neither fail decoding
+// nor inflate the persisted CIR document.
+func TestCodexToolSearchItemsAreAuxiliary(t *testing.T) {
+	withToolSearch := `{"timestamp":"2026-07-29T00:00:00Z","type":"session_meta","payload":{"id":"roll-tool-search","cwd":"/work/proj","model":"gpt-5.5-codex"}}
+{"timestamp":"2026-07-29T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"review this"}]}}
+{"timestamp":"2026-07-29T00:00:02Z","type":"response_item","payload":{"type":"tool_search_call","call_id":"search-1","status":"completed","arguments":{"query":"code review","limit":3},"execution":"client"}}
+{"timestamp":"2026-07-29T00:00:03Z","type":"response_item","payload":{"type":"tool_search_output","call_id":"search-1","status":"completed","tools":[{"name":"review","description":"Review code","input_schema":{"type":"object"}}],"execution":"client"}}
+{"timestamp":"2026-07-29T00:00:04Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"go test ./...\"}","call_id":"call-1"}}
+{"timestamp":"2026-07-29T00:00:05Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"ok"}}
+{"timestamp":"2026-07-29T00:00:06Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`
+	withoutToolSearch := `{"timestamp":"2026-07-29T00:00:00Z","type":"session_meta","payload":{"id":"roll-tool-search","cwd":"/work/proj","model":"gpt-5.5-codex"}}
+{"timestamp":"2026-07-29T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"review this"}]}}
+{"timestamp":"2026-07-29T00:00:04Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"go test ./...\"}","call_id":"call-1"}}
+{"timestamp":"2026-07-29T00:00:05Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"ok"}}
+{"timestamp":"2026-07-29T00:00:06Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`
+
+	got, err := NewCodexCodec().Decode(context.Background(), []byte(withToolSearch))
+	if err != nil {
+		t.Fatalf("decode rollout with tool search items: %v", err)
+	}
+	want, err := NewCodexCodec().Decode(context.Background(), []byte(withoutToolSearch))
+	if err != nil {
+		t.Fatalf("decode baseline rollout: %v", err)
+	}
+	if mustJSON(t, got) != mustJSON(t, want) {
+		t.Fatalf("tool search control records must not affect CIR\ngot=%s\nwant=%s", mustJSON(t, got), mustJSON(t, want))
+	}
+}
+
+// TestCodexFunctionCallObjectArguments verifies that a future/alternate Codex function_call
+// object form remains readable while materialization emits the conventional JSON string form.
+func TestCodexFunctionCallObjectArguments(t *testing.T) {
+	fixture := `{"timestamp":"2026-07-29T00:00:00Z","type":"session_meta","payload":{"id":"roll-object-args","cwd":"/work/proj","model":"gpt-5.5-codex"}}
+{"timestamp":"2026-07-29T00:00:01Z","type":"response_item","payload":{"type":"function_call","name":"tool_search","arguments":{"query":"code review","limit":3},"call_id":"call-1"}}`
+
+	codec := NewCodexCodec()
+	cir, err := codec.Decode(context.Background(), []byte(fixture))
+	if err != nil {
+		t.Fatalf("decode object arguments: %v", err)
+	}
+	if len(cir.Events) != 1 {
+		t.Fatalf("expected one tool call, got %d", len(cir.Events))
+	}
+	wantInput := map[string]interface{}{"query": "code review", "limit": float64(3)}
+	if mustJSON(t, cir.Events[0].Input) != mustJSON(t, wantInput) {
+		t.Fatalf("unexpected tool input: %#v", cir.Events[0].Input)
+	}
+
+	out, err := codec.Encode(context.Background(), cir, domain.ProviderCodex)
+	if err != nil {
+		t.Fatalf("encode object arguments: %v", err)
+	}
+	found := false
+	for _, rawLine := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var line struct {
+			Type    string                 `json:"type"`
+			Payload map[string]interface{} `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(rawLine), &line); err != nil {
+			t.Fatalf("decode encoded line: %v", err)
+		}
+		if line.Type != "response_item" || line.Payload["type"] != "function_call" {
+			continue
+		}
+		found = true
+		args, ok := line.Payload["arguments"].(string)
+		if !ok {
+			t.Fatalf("encoded function_call.arguments must be a JSON string, got %#v", line.Payload["arguments"])
+		}
+		if mustJSON(t, parseToolInput(args)) != mustJSON(t, wantInput) {
+			t.Fatalf("encoded function_call.arguments changed meaning: %q", args)
+		}
+	}
+	if !found {
+		t.Fatal("encoded function_call not found")
+	}
+
+	roundTrip, err := codec.Decode(context.Background(), out)
+	if err != nil {
+		t.Fatalf("decode encoded object arguments: %v", err)
+	}
+	if len(roundTrip.Events) != 1 || mustJSON(t, roundTrip.Events[0].Input) != mustJSON(t, wantInput) {
+		t.Fatalf("object arguments round trip changed meaning: %#v", roundTrip.Events)
+	}
+}
+
 func mustJSON(t *testing.T, v interface{}) string {
 	t.Helper()
 	b, err := json.Marshal(v)
