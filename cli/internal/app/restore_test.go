@@ -83,6 +83,13 @@ func TestLoadFullSameProvider(t *testing.T) {
 	if !strings.Contains(string(data), "SIG1") {
 		t.Fatalf("full same-provider must preserve signature")
 	}
+	restored, err := codec.NewClaudeCodec().Decode(ctx, data)
+	if err != nil {
+		t.Fatalf("decode restored Claude session: %v", err)
+	}
+	if restored.Envelope.Cwd != cwd {
+		t.Fatalf("restored Claude session cwd = %q, want target %q", restored.Envelope.Cwd, cwd)
+	}
 }
 
 // Cross-provider full request: claude → codex, reconstructed fallback + claude signature masked.
@@ -112,6 +119,13 @@ func TestLoadCrossProvider(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "session_meta") {
 		t.Fatalf("codex output should be a rollout (session_meta)")
+	}
+	restored, err := codec.NewCodexCodec().Decode(ctx, data)
+	if err != nil {
+		t.Fatalf("decode restored Codex session: %v", err)
+	}
+	if restored.Envelope.Cwd != cwd {
+		t.Fatalf("restored Codex session cwd = %q, want target %q", restored.Envelope.Cwd, cwd)
 	}
 }
 

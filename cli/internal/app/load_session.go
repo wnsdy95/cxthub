@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -110,6 +111,13 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 		// Failure is fail-open (tail only).
 		seedCIR = s.prependTrimDigest(ctx, cir, seedCIR, snap, target, in.Cwd, dropped)
 	}
+	// A restored session belongs to the working tree it is being restored into,
+	// not the machine/path where the source snapshot was captured. Codex active
+	// session discovery reads payload.cwd, so retaining the source path makes a
+	// relocated clone impossible to capture after resume.
+	if targetCwd := materializationCwd(in.Cwd); targetCwd != "" {
+		seedCIR.Envelope.Cwd = targetCwd
+	}
 	cdc, okCodec := s.codecs[target]
 	mat, okMat := s.materializers[target]
 	if okCodec && okMat {
@@ -127,6 +135,17 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	}
 	// Fallback (compatibility rules): full restoration failure → memory mode downgrade.
 	return s.loadMemory(ctx, cir, snap, target, in.Cwd)
+}
+
+func materializationCwd(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return cwd
+	}
+	return abs
 }
 
 // pendingTailOf returns the latest pending (uncommitted hook capture) snapshot connecting to head.

@@ -117,6 +117,13 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	}
 	cir := domain.CIRDocument{Events: events}
 	cir.Envelope = fromDoc.CIR.Envelope // Inherit model, cwd, etc.
+	targetCwd := in.Cwd
+	if targetCwd == "" {
+		targetCwd = repo.LocalPath
+	}
+	if targetCwd = materializationCwd(targetCwd); targetCwd != "" {
+		cir.Envelope.Cwd = targetCwd
+	}
 	cir.Envelope.GitBranch = in.NewBranch
 	cir.Envelope.SessionOriginID = seedSession
 	cir.Envelope.CapturedAt = now
