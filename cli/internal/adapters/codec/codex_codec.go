@@ -16,7 +16,7 @@ import (
 //
 // Decode mapping (response_item.payload → CIR event):
 //   - message{role,content:[{input_text|output_text,text}]} → message(role, blocks:[{text}...])
-//   - function_call{name,arguments(JSON string),call_id}     → tool_call(call_id, provider_tool_name:name, input:parse(arguments))
+//   - function_call{name,arguments(JSON string|object),call_id} → tool_call(call_id, provider_tool_name:name, input:parse(arguments))
 //   - function_call_output{call_id,output}                   → tool_result
 //   - custom_tool_call{status,call_id,name,input(string)}    → tool_call(status, input:parse(input))
 //   - custom_tool_call_output{call_id,output}                → tool_result
@@ -117,7 +117,7 @@ type codexResponseItem struct {
 	Role             string          `json:"role,omitempty"`
 	Content          []codexContent  `json:"content,omitempty"`
 	Name             string          `json:"name,omitempty"`
-	Arguments        string          `json:"arguments,omitempty"`
+	Arguments        json.RawMessage `json:"arguments,omitempty"`
 	CallID           string          `json:"call_id,omitempty"`
 	Output           json.RawMessage `json:"output,omitempty"`
 	Input            string          `json:"input,omitempty"`
@@ -125,6 +125,10 @@ type codexResponseItem struct {
 	EncryptedContent string          `json:"encrypted_content,omitempty"`
 	Summary          []interface{}   `json:"summary,omitempty"`
 	Action           *codexAction    `json:"action,omitempty"`
+}
+
+type codexResponseItemHeader struct {
+	Type string `json:"type"`
 }
 
 // Decode converts Codex rollout JSONL bytes to CIRDocument.
@@ -175,6 +179,19 @@ func (c *CodexCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument, 
 				}
 			}
 		case "response_item":
+			// Codex also emits control-plane response items such as tool_search_call,
+			// tool_search_output, and image_generation_call. Their payloads use schemas
+			// that intentionally differ from conversation tool calls (for example,
+			// tool_search_call.arguments is an object and tool_search_output contains
+			// repeated tool schemas). Discriminate first so auxiliary records cannot
+			// break decoding or bloat persisted CIR documents.
+			var header codexResponseItemHeader
+			if err := json.Unmarshal(ln.Payload, &header); err != nil {
+				return domain.CIRDocument{}, fmt.Errorf("codex decode response_item header: %w", err)
+			}
+			if !isCodexConversationItem(header.Type) {
+				continue
+			}
 			var it codexResponseItem
 			if err := json.Unmarshal(ln.Payload, &it); err != nil {
 				return domain.CIRDocument{}, fmt.Errorf("codex decode response_item: %w", err)
@@ -210,6 +227,21 @@ func (c *CodexCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument, 
 	return doc, nil
 }
 
+func isCodexConversationItem(itemType string) bool {
+	switch itemType {
+	case "message",
+		"function_call",
+		"custom_tool_call",
+		"function_call_output",
+		"custom_tool_call_output",
+		"web_search_call",
+		"reasoning":
+		return true
+	default:
+		return false
+	}
+}
+
 func codexItemToEvent(it codexResponseItem, ts string) (domain.Event, bool) {
 	ev := domain.Event{Ts: ts}
 	switch it.Type {
@@ -228,17 +260,21 @@ func codexItemToEvent(it codexResponseItem, ts string) (domain.Event, bool) {
 		}
 		ev.Blocks = blocks
 		return ev, true
-	case "function_call", "custom_tool_call":
+	case "function_call":
 		ev.Kind = domain.EventToolCall
 		ev.CallID = it.CallID
 		ev.ProviderToolName = it.Name
 		ev.ToolName = canonicalToolName(it.Name)
 		ev.Status = it.Status
-		args := it.Arguments
-		if args == "" {
-			args = it.Input
-		}
-		ev.Input = parseToolInput(args)
+		ev.Input = parseCodexFunctionArguments(it.Arguments)
+		return ev, true
+	case "custom_tool_call":
+		ev.Kind = domain.EventToolCall
+		ev.CallID = it.CallID
+		ev.ProviderToolName = it.Name
+		ev.ToolName = canonicalToolName(it.Name)
+		ev.Status = it.Status
+		ev.Input = parseToolInput(it.Input)
 		return ev, true
 	case "function_call_output", "custom_tool_call_output":
 		ev.Kind = domain.EventToolResult
@@ -269,6 +305,27 @@ func codexItemToEvent(it codexResponseItem, ts string) (domain.Event, bool) {
 	default:
 		return domain.Event{}, false
 	}
+}
+
+// parseCodexFunctionArguments accepts the conventional JSON-encoded string and
+// the object form observed in newer response item variants. Non-object values
+// remain lossless through CIR's _raw escape hatch.
+func parseCodexFunctionArguments(raw json.RawMessage) map[string]interface{} {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return map[string]interface{}{}
+	}
+
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err == nil {
+		return parseToolInput(text)
+	}
+
+	var object map[string]interface{}
+	if err := json.Unmarshal(trimmed, &object); err == nil && object != nil {
+		return object
+	}
+	return map[string]interface{}{"_raw": string(trimmed)}
 }
 
 // Encode converts CIRDocument to target provider JSONL bytes.
@@ -327,7 +384,7 @@ func (c *CodexCodec) Encode(_ context.Context, doc domain.CIRDocument, _ domain.
 			it.Type = "function_call"
 			it.Name = name
 			it.CallID = ev.CallID
-			it.Arguments = marshalToolInput(ev.Input)
+			it.Arguments, _ = json.Marshal(marshalToolInput(ev.Input))
 			it.Status = ev.Status
 		case domain.EventToolResult:
 			it.Type = "function_call_output"
