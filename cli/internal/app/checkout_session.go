@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
@@ -35,10 +36,14 @@ func (s *CheckoutSessionService) Checkout(ctx context.Context, in inbound.Checko
 		return inbound.CheckoutOutput{}, err
 	}
 
-	// Output branch label determination: -b for new branch, otherwise the branch name from From.
+	// Output branch label determination: -b for new branch, otherwise only an
+	// actual branch ref from From. Tags and direct hashes are detached restores
+	// and must not become symbolic HEAD values.
 	branch := in.NewBranch
 	if branch == "" && in.From != "" && in.From != "HEAD" && !strings.HasPrefix(in.From, "sha256:") {
-		branch = in.From
+		if _, branchErr := s.store.GetRef(ctx, in.RepoID, domain.RefBranch, in.From); branchErr == nil {
+			branch = in.From
+		}
 	}
 
 	if in.NewBranch != "" {
@@ -60,6 +65,13 @@ func (s *CheckoutSessionService) Checkout(ctx context.Context, in inbound.Checko
 	})
 	if err != nil {
 		return inbound.CheckoutOutput{}, err
+	}
+	if branch != "" {
+		if err := s.store.PutRef(ctx, domain.Ref{
+			Kind: domain.RefHEAD, Name: "HEAD", RepoID: in.RepoID, Symbolic: branch,
+		}); err != nil {
+			return inbound.CheckoutOutput{}, err
+		}
 	}
 
 	return inbound.CheckoutOutput{
