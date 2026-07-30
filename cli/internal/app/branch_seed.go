@@ -18,7 +18,7 @@ import (
 //
 //	[Project Understanding] main head's MemoryDigest        (long-term memory)
 //	[Changelog Summary] departure branch head's on-the-fly distillation      (mid-term summary — including ancestor inheritance, items overlapping with main layer removed)
-//	[Previous Context] departure head's last commit raw tail   (original reason for the context switch)
+//	[Previous Context] departure head's bounded full session   (conversation at the switch point)
 //
 // The seed is committed as the first snapshot of the new branch (branch birth — cut meaning), and serialized to a session file (ledger record — capture excluded for resumption).
 type BranchSeedService struct {
@@ -65,18 +65,42 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		return inbound.SeedOutput{}, err
 	}
 
-	// Layer 1: main head memory (if present — explicit layer of project shared understanding).
-	var mainMem *domain.MemoryDigest
+	// Layer 1: main head memory (explicit project understanding), including
+	// when the departure branch itself is main. The post-checkout hook
+	// checkpoints and memorizes main immediately before this service runs; the
+	// old equality guard discarded exactly that freshly attached digest.
 	mainBranch := repo.DefaultBranch
 	if mainBranch == "" {
 		mainBranch = "main"
 	}
-	if mainBranch != in.FromBranch {
-		if mref, merr := s.store.GetRef(ctx, repo.ID, domain.RefBranch, mainBranch); merr == nil && mref.Target != "" {
-			if msnap, serr := s.store.GetSnapshot(ctx, mref.Target); serr == nil && msnap.MemoryHash != "" {
-				if d, derr := s.store.GetMemory(ctx, msnap.MemoryHash); derr == nil {
-					mainMem = &d
+	var mainMem *domain.MemoryDigest
+	var mainSnap domain.Snapshot
+	var mainDoc domain.SessionDoc
+	mainDocAvailable := false
+	if mainBranch == in.FromBranch {
+		mainSnap, mainDoc = fromSnap, fromDoc
+		mainDocAvailable = true
+	} else if mref, merr := s.store.GetRef(ctx, repo.ID, domain.RefBranch, mainBranch); merr == nil && mref.Target != "" {
+		if msnap, serr := s.store.GetSnapshot(ctx, mref.Target); serr == nil {
+			mainSnap = msnap
+			if mdoc, derr := s.store.GetDoc(ctx, msnap.DocHash); derr == nil {
+				mainDoc = mdoc
+				mainDocAvailable = true
+			}
+		}
+	}
+	if mainSnap.ID != "" {
+		if mainSnap.MemoryHash != "" {
+			if d, derr := s.store.GetMemory(ctx, mainSnap.MemoryHash); derr == nil {
+				mainMem = &d
+			}
+		}
+		if mainMem == nil && mainDocAvailable {
+			if d, derr := s.distiller.Distill(ctx, mainDoc.CIR, nil); derr == nil {
+				if prior, ok := nearestAncestorDigest(ctx, s.store, mainSnap); ok {
+					d = domain.MergeDigests(prior, d)
 				}
+				mainMem = &d
 			}
 		}
 	}
@@ -90,28 +114,25 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		branchMem = domain.MergeDigests(prior, branchMem)
 	}
 
-	// Layer 3: last commit's raw tail — suffix (complement of inheritance prefix) excluding parent doc.
-	tail := fromDoc.CIR.Events
-	if len(fromSnap.Parents) > 0 {
-		if psnap, perr := s.store.GetSnapshot(ctx, fromSnap.Parents[0]); perr == nil {
-			if pdoc, derr := s.store.GetDoc(ctx, psnap.DocHash); derr == nil && len(pdoc.CIR.Events) < len(tail) {
-				tail = tail[len(pdoc.CIR.Events):]
-			}
-		}
-	}
-	// Budget trimming — same rules as existing branch switch (Load path) — byte budget + user boundary truncation.
-	// Audit #6: fixed event count limit (formerly 120) split across paths.
-	trimmedTail, _ := trimEventsForSeed(domain.CIRDocument{Events: tail}, seedBudgetBytes)
-	tail = trimmedTail.Events
-
-	// Seed CIR synthesis: [Layer1⊕Layer2 summary message] + [Layer3 raw tail]. Seq is reset to 0.
+	// Seed CIR synthesis: [Layer1⊕Layer2 summary message] + [Layer3 bounded
+	// full session]. The summary has a fixed maximum, and the exact encoded
+	// summary size is subtracted from the shared seed budget before selecting
+	// the recent user-boundary-aligned conversation tail.
 	now := time.Now().UTC().Format(time.RFC3339)
 	seedSession := providerfs.NewSessionID()
-	events := []domain.Event{{
+	seedText := renderSeedText(in.FromBranch, in.NewBranch, mainMem, branchMem)
+	seedText = truncateUTF8Prefix(seedText, seedDigestBudgetBytes)
+	summaryEvent := domain.Event{
 		Kind: domain.EventMessage, Role: "user", Ts: now, Seq: 0,
-		Blocks: []domain.ContentBlock{{Type: "text", Text: renderSeedText(in.FromBranch, in.NewBranch, mainMem, branchMem)}},
-	}}
-	for i, ev := range tail {
+		Blocks: []domain.ContentBlock{{Type: "text", Text: seedText}},
+	}
+	conversationBudget := seedBudgetBytes - eventsJSONBytes([]domain.Event{summaryEvent})
+	if conversationBudget < 0 {
+		conversationBudget = 0
+	}
+	trimmedConversation, _ := trimEventsForSeed(fromDoc.CIR, conversationBudget)
+	events := []domain.Event{summaryEvent}
+	for i, ev := range trimmedConversation.Events {
 		ev.Seq = i + 1
 		events = append(events, ev)
 	}
