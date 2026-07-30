@@ -197,8 +197,9 @@ expect "All previous sessions isolated (renamed)" "$(ls "$PROJ"/*.jsonl.supersed
 expect "Boundary record" "$([ -f .cxt/boundary.json ] && echo yes)" yes
 SEED=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_path',''))")
 SEEDID=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_id',''))")
+RESUMEID=$(python3 -c "import json;cmd=json.load(open('.cxt/boundary.json')).get('resume_cmd','').split();print(cmd[-1] if cmd else '')")
 expect "seed materialization" "$([ -n "$SEED" ] && [ -f "$SEED" ] && echo yes)" yes
-expect "boundary seed ID matches materialized resume target" "$(basename "$SEED" .jsonl)" "$SEEDID"
+expect "boundary seed ID matches materialized resume target" "$RESUMEID" "$SEEDID"
 SEEDMSG=$(python3 -c "
 import json,glob
 tgt=open('.cxt/refs/heads/feature-x').read().strip()
@@ -212,7 +213,14 @@ expect "seed is first snapshot of feature-x" "$SEEDMSG" "seed:"
 echo x > x.txt; git add x.txt; git commit -qm nocap >"$TMP/nc.out" 2>&1
 expect "unresumed seed is not captured" "$(grep -c 'cxt: snapshot' "$TMP/nc.out")" 0
 # After resuming (file growth), it captures as a formal active session.
-echo '{"type":"user","sessionId":"resumed","gitBranch":"feature-x","message":{"role":"user","content":"resumed work"}}' >> "$SEED"
+case "$SEED" in
+  "$HOME"/.codex/sessions/*)
+    echo '{"timestamp":"2026-07-05T00:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"resumed work"}}' >> "$SEED"
+    ;;
+  *)
+    echo '{"type":"user","sessionId":"resumed","gitBranch":"feature-x","message":{"role":"user","content":"resumed work"}}' >> "$SEED"
+    ;;
+esac
 echo y > y.txt; git add y.txt; git commit -qm cap >"$TMP/cap.out" 2>&1
 expect "resumed seed captures" "$(grep -c 'cxt: snapshot' "$TMP/cap.out")" 1
 

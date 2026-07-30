@@ -270,7 +270,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 			// Existing branch: load context of that task (current context is not carried).
 			if out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{From: branch, TargetProvider: targetProvider, Mode: hookLoadMode(cwd), Cwd: cwd}); err == nil {
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
-				b.SeedID = sessionIDFromPath(out.WrittenPath)
+				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd, "")
 				fmt.Printf("cxt: %q context prepared  [fidelity: %s]\n", branch, out.Fidelity)
 				syncSettingsToSnapshot(ctx, c, cwd, out.Head, "git checkout "+branch)
 			}
@@ -278,7 +278,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 			// New branch: seed genesis — main memory ⊕ ancestry summary + previous commit raw tail.
 			if out, err := c.Seed.Seed(ctx, inbound.SeedInput{Cwd: cwd, FromBranch: prevBranch, NewBranch: branch, Provider: targetProvider, Author: c.Identity}); err == nil {
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
-				b.SeedID = sessionIDFromPath(out.WrittenPath)
+				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd, out.SessionID)
 				fmt.Printf("cxt: seed created → branch %q (snapshot %s)\n", branch, shortHash(out.SnapshotID))
 				if _, ok := remotecfg.Origin(cwd); ok {
 					if _, perr := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd}); perr != nil && strings.Contains(perr.Error(), domain.ErrSyncConflict.Error()) {
@@ -292,7 +292,14 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 
 	// 4) Boundary signal + execution.
 	if len(superseded) > 0 || b.SeedPath != "" {
-		_ = boundary.Record(cwd, b)
+		if !boundaryTransitionSafe(b, wrapperManaged) {
+			hookWarn("context boundary has no valid resume target; active agent was not terminated — continue explicitly with cxt checkout %s", branch)
+			return nil
+		}
+		if err := boundary.Record(cwd, b); err != nil {
+			hookWarn("context boundary was not recorded; active agent was not terminated: %v", err)
+			return nil
+		}
 		if b.ResumeCmd != "" {
 			fmt.Printf("cxt: ⚠ Context switch — previous session is isolated (not recorded). Continue: %s\n", b.ResumeCmd)
 		} else if len(superseded) > 0 {
@@ -388,13 +395,35 @@ func codexSessionFiles(ctx context.Context, cwd string) []string {
 	return capture.NewCodexCapture().SessionFilesForCwd(ctx, cwd)
 }
 
-// sessionIDFromPath extracts the session ID (file name UUID) from the session file path.
-func sessionIDFromPath(path string) string {
-	if path == "" {
+// restoredSessionID returns the canonical provider-rewritten resume target.
+// Materialization must have produced both a path and a trusted resume command.
+// For branch seeds, materializedID cross-checks the use-case output against the
+// command so a stale synthetic CIR ID cannot become the wrapper restart target.
+func restoredSessionID(path, resumeCmd, materializedID string) string {
+	if path == "" || resumeCmd == "" {
 		return ""
 	}
-	base := filepath.Base(path)
-	return strings.TrimSuffix(base, filepath.Ext(base))
+	fields := strings.Fields(resumeCmd)
+	if len(fields) == 0 {
+		return ""
+	}
+	resumeID := fields[len(fields)-1]
+	if !providerfs.ValidSessionID(resumeID) {
+		return ""
+	}
+	if materializedID != "" && (!providerfs.ValidSessionID(materializedID) || materializedID != resumeID) {
+		return ""
+	}
+	return resumeID
+}
+
+// boundaryTransitionSafe prevents a live wrapper from observing a boundary
+// that cannot restart its child. An unmanaged superseded-only boundary remains
+// recordable for audit and explicit enforcement.
+func boundaryTransitionSafe(b boundary.Boundary, wrapperManaged bool) bool {
+	restartable := b.SeedPath != "" && b.ResumeCmd != "" && providerfs.ValidSessionID(b.SeedID)
+	preparedResume := b.SeedPath != "" || b.ResumeCmd != "" || b.SeedID != ""
+	return restartable || (!wrapperManaged && !preparedResume)
 }
 
 // runGitHook handles `cxt git-hook <event> [args...]`. Always returns nil (fail-open).
