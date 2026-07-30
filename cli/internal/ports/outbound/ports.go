@@ -32,8 +32,9 @@ type SessionStore interface {
 	// Returns domain.ErrNotFound if not found.
 	GetSnapshot(ctx context.Context, id domain.ContentHash) (domain.Snapshot, error)
 
-	// ReconcileGraftState reverts an optimistic graft event rejected by the server to the server's source of truth.
-	// It replaces only the graft register, leaving immutable metadata (ID/Parents) unchanged.
+	// ReconcileGraftState adopts a snapshot graft register from an authoritative
+	// server read. It replaces only the graft register, leaving immutable
+	// metadata (ID/Parents) unchanged.
 	ReconcileGraftState(ctx context.Context, authoritative domain.Snapshot) error
 
 	// ListSnapshots returns a list of snapshots (history) for a specific repo/branch.
@@ -174,7 +175,8 @@ type RemoteSync interface {
 	// GraftSnapshotParents propagates local graft events using expectedSeq CAS. 409 stale/cycle is terminal, and retrying an already reflected edge is idempotent.
 	GraftSnapshotParents(ctx context.Context, repoID string, id domain.ContentHash, parents []domain.ContentHash, expectedSeq uint64) error
 
-	// GetSnapshotRemote is used to adjust the server truth register after a graft CAS conflict.
+	// GetSnapshotRemote reads authoritative snapshot metadata, including the
+	// server-owned graft register.
 	GetSnapshotRemote(ctx context.Context, repoID string, id domain.ContentHash) (domain.Snapshot, error)
 
 	// Search is the server search (commit messages, conversation bodies) — MCP context_search (read-only).

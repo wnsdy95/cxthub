@@ -57,7 +57,7 @@ type SyncRepo interface {
 	SyncPendings(ctx context.Context, in SyncInput, resolveSessions []string) (int, error)
 	// ResolveRemoteBranch queries the remote (server) branch ref and prepares it for fetch-only if the target snapshot object is not present locally (for web fork connection). Returns ErrNotFound if not found.
 	ResolveRemoteBranch(ctx context.Context, in SyncInput, branch string) (domain.Ref, error)
-	// AppendBranch appends the server branch ref to the target (lossless graft) — path for merging PR merge context into branch. On success, local ref mirrors only if fast-forward (local is ahead). Already reflected (behind) targets are rejected by the server as non_fast_forward — caller treats as idempotent no-op.
+	// AppendBranch appends the server branch ref to the target (lossless graft) — path for merging PR context into a branch. On success, it reconciles the authoritative graft path and mirrors the local ref only if doing so preserves local history. Already reflected (behind) targets are rejected by the server as non_fast_forward — caller treats them as idempotent no-ops.
 	AppendBranch(ctx context.Context, in SyncInput, branch string, target domain.ContentHash) error
 }
 

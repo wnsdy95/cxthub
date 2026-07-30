@@ -415,7 +415,10 @@ func sameHashList(left, right []domain.ContentHash) bool {
 	return true
 }
 
-// ReconcileGraftState forces adoption of server truth graft register after 409 (stale/cycle). Local GraftSeq can be ahead of server due to pending add, so cannot be recovered with general PutSnapshot max-seq merge. Caller passes validated GET response only.
+// ReconcileGraftState forces adoption of a server truth graft register after an
+// authoritative GET. Local GraftSeq can be ahead of server due to a pending add,
+// so this cannot be recovered with general PutSnapshot max-seq merge. Caller
+// passes a validated GET response only.
 func (s *FileStore) ReconcileGraftState(_ context.Context, authoritative domain.Snapshot) error {
 	if err := validateSnapshotRefs(authoritative); err != nil {
 		return err
