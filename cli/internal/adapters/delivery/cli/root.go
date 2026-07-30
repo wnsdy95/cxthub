@@ -30,6 +30,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/secretscrypto"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 // Container is a bundle of inbound ports used by the CLI driver + author identifier.
@@ -45,6 +46,9 @@ type Container struct {
 	Seed     inbound.SeedBranch
 	Tag      inbound.TagRef
 	Stash    inbound.StashSession
+	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
+	// can promote the source branch context into the checked-out base timeline.
+	PRMerges outbound.PullRequestMergeResolver
 	// Settings is a remote client for setting bundles (outbound direct — thin utility path).
 	Settings interface {
 		PullSettings(ctx context.Context, repoID, kind string) (domain.SettingsBundle, error)

@@ -858,12 +858,16 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 				Ref string `json:"ref"`
 			} `json:"base"`
 			Head struct {
-				Ref string `json:"ref"`
+				Ref  string `json:"ref"`
+				Repo struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
 			} `json:"head"`
 		} `json:"pull_request"`
 		Repository struct {
 			HTMLURL  string `json:"html_url"`
 			CloneURL string `json:"clone_url"`
+			FullName string `json:"full_name"`
 		} `json:"repository"`
 	}
 	if jerr := json.Unmarshal(body, &payload); jerr != nil {
@@ -872,6 +876,13 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	if payload.Action != "closed" || !payload.PullRequest.Merged {
 		s.respond(w, map[string]string{"status": "ignored"}, nil)
+		return
+	}
+	// Context branch refs belong to the base cxt repository. A fork PR's
+	// same-named branch could otherwise resolve to unrelated base-repo context.
+	if payload.Repository.FullName == "" || payload.PullRequest.Head.Repo.FullName == "" ||
+		!strings.EqualFold(payload.Repository.FullName, payload.PullRequest.Head.Repo.FullName) {
+		s.respond(w, map[string]string{"status": "ignored", "reason": "fork_head"}, nil)
 		return
 	}
 	gitURL := payload.Repository.CloneURL

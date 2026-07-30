@@ -138,6 +138,22 @@ type GitContext interface {
 	CurrentBranch(ctx context.Context, cwd string) (string, error)
 }
 
+// MergedPullRequest identifies a Git-host PR whose merge commit entered the
+// currently checked-out base branch.
+type MergedPullRequest struct {
+	Number         int
+	BaseBranch     string
+	HeadBranch     string
+	MergeCommitSHA string
+}
+
+// PullRequestMergeResolver maps incoming Git commits back to merged pull
+// requests. It is provider-specific discovery only; context promotion remains
+// in the SyncRepo use case.
+type PullRequestMergeResolver interface {
+	ResolveMergedPullRequests(ctx context.Context, gitRemoteURL, baseBranch string, commitSHAs []string) ([]MergedPullRequest, error)
+}
+
 // RemoteSync is the sync port to the central server (domain model).
 //
 // Transfers only missing parts (push/pull) based on content-hash. Mimics git push/pull.

@@ -279,7 +279,7 @@ ready_check() {
   require_env TF_VAR_firebase_web_api_key
   reject_placeholder TF_VAR_firebase_web_api_key
 
-  local head remote required enabled api postgres_secret region image
+  local head remote required enabled api postgres_secret github_webhook_secret region image
   head="$(git -C "$ROOT" rev-parse HEAD)"
   [ "$TF_VAR_image_tag" = "$head" ] || die "TF_VAR_image_tag is not the current HEAD"
   [ -z "$(git -C "$ROOT" status --porcelain)" ] || die "Working tree is not clean"
@@ -297,7 +297,11 @@ ready_check() {
   gcloud secrets describe "$postgres_secret" --project "$TF_VAR_gcp_project" >/dev/null
   [ -n "$(gcloud secrets versions list "$postgres_secret" --project "$TF_VAR_gcp_project" --filter='state=ENABLED' --limit=1 --format='value(name)')" ] \
     || die "No ENABLED version in $postgres_secret"
-  pass "GCP API/state bucket/Postgres secret metadata verified"
+  github_webhook_secret="${TF_VAR_github_webhook_secret_id:-cxt-github-webhook-secret}"
+  gcloud secrets describe "$github_webhook_secret" --project "$TF_VAR_gcp_project" >/dev/null
+  [ -n "$(gcloud secrets versions list "$github_webhook_secret" --project "$TF_VAR_gcp_project" --filter='state=ENABLED' --limit=1 --format='value(name)')" ] \
+    || die "No ENABLED version in $github_webhook_secret"
+  pass "GCP API/state bucket/Postgres and GitHub webhook secret metadata verified"
 
   region="${TF_VAR_gcp_region:-asia-northeast3}"
   image="${region}-docker.pkg.dev/${TF_VAR_gcp_project}/cxthub/cxtd:${TF_VAR_image_tag}"

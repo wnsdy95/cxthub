@@ -252,6 +252,7 @@ func buildContainer(cfg config) container {
 		Seed:            seedSvc,
 		Tag:             tagSvc,
 		Stash:           stashSvc,
+		PRMerges:        gitctx.NewGitHubPRMergeResolver(),
 		Settings:        remote,
 		SettingsObjects: store,
 		Repack:          store.RepackDocs,
