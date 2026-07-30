@@ -198,6 +198,7 @@ expect "Boundary record" "$([ -f .cxt/boundary.json ] && echo yes)" yes
 SEED=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_path',''))")
 SEEDID=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_id',''))")
 expect "seed materialization" "$([ -n "$SEED" ] && [ -f "$SEED" ] && echo yes)" yes
+expect "boundary seed ID matches materialized resume target" "$(basename "$SEED" .jsonl)" "$SEEDID"
 SEEDMSG=$(python3 -c "
 import json,glob
 tgt=open('.cxt/refs/heads/feature-x').read().strip()

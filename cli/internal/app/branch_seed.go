@@ -161,6 +161,12 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 				if path, resume, mErr := mat.Materialize(ctx, raw, in.Cwd); mErr == nil {
 					_ = providerfs.RecordMaterialized(in.Cwd, path)
 					out.WrittenPath, out.ResumeCmd = path, resume
+					// Materializers rewrite provider-native session IDs to avoid
+					// colliding with the source session. The restart target is the
+					// rewritten ID, not the synthetic CIR origin ID.
+					if fields := strings.Fields(resume); len(fields) > 0 && providerfs.ValidSessionID(fields[len(fields)-1]) {
+						out.SessionID = fields[len(fields)-1]
+					}
 				}
 			}
 		}

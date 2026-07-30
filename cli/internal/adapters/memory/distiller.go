@@ -81,14 +81,102 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 			Provider: prov,
 		}, nil
 	}
-	// Storage artifacts (team sharing, agent injection) are the English data layer — independent of UI language.
-	summary := fmt.Sprintf("session summary: branch %q · %d user / %d assistant messages · tools %v · first request: %q",
-		cir.Envelope.GitBranch, userMsgs, asstMsgs, tools, truncate(firstUser, 120))
+	// Codex compaction bodies can be provider-encrypted while payload.message is
+	// empty. The raw CIR is still losslessly available, so preserve a bounded
+	// extractive digest of meaningful conversation instead of reducing memory to
+	// counters and tool names. This is intentionally deterministic: content hashes
+	// must not depend on an external model or provider-owned decryption.
+	summary := extractiveConversationDigest(cir.Events)
+	if summary == "" {
+		// Empty/non-conversational documents retain the old diagnostic fallback.
+		// Storage artifacts are the English data layer, independent of UI language.
+		summary = fmt.Sprintf("session summary: branch %q · %d user / %d assistant messages · tools %v · first request: %q",
+			cir.Envelope.GitBranch, userMsgs, asstMsgs, tools, truncate(firstUser, 120))
+	}
 	return domain.MemoryDigest{
 		Summary:  summary,
-		KeyFacts: tools,
 		Provider: prov,
 	}, nil
+}
+
+const (
+	extractiveDigestMaxRunes = 16000
+	extractiveItemMaxRunes   = 2000
+	extractiveItemsPerRole   = 6
+)
+
+// extractiveConversationDigest preserves recent user intent and assistant
+// outcomes when the provider's own compaction summary is unavailable. Tool
+// calls/results and compact-summary events are excluded; the latter already
+// have a higher-priority path above and synthetic branch seeds can be very
+// large. Selection is recent-first but rendered chronologically.
+func extractiveConversationDigest(events []domain.Event) string {
+	var users, assistants []string
+	for _, ev := range events {
+		if ev.Kind != domain.EventMessage || ev.CompactSummary {
+			continue
+		}
+		text := messageText(ev.Blocks)
+		if text == "" || isSyntheticSeedText(text) {
+			continue
+		}
+		switch ev.Role {
+		case "user":
+			users = appendRecentDistinct(users, text, extractiveItemsPerRole)
+		case "assistant":
+			assistants = appendRecentDistinct(assistants, text, extractiveItemsPerRole)
+		}
+	}
+	if len(users) == 0 && len(assistants) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Conversation digest (extractive fallback; provider compaction summary unavailable):\n")
+	writeExtractiveSection(&b, "Recent user intent", users)
+	writeExtractiveSection(&b, "Recent assistant outcomes", assistants)
+	return truncate(strings.TrimSpace(b.String()), extractiveDigestMaxRunes-1)
+}
+
+func messageText(blocks []domain.ContentBlock) string {
+	var parts []string
+	for _, block := range blocks {
+		if block.Type != "text" || strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		parts = append(parts, strings.TrimSpace(block.Text))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func isSyntheticSeedText(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), "[cxt seed] Branch-switch context:")
+}
+
+func appendRecentDistinct(items []string, text string, limit int) []string {
+	text = strings.Join(strings.Fields(text), " ")
+	text = truncate(text, extractiveItemMaxRunes)
+	if text == "" || (len(items) > 0 && items[len(items)-1] == text) {
+		return items
+	}
+	items = append(items, text)
+	if len(items) > limit {
+		items = items[len(items)-limit:]
+	}
+	return items
+}
+
+func writeExtractiveSection(b *strings.Builder, title string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	b.WriteString("\n\n")
+	b.WriteString(title)
+	b.WriteString(":\n")
+	for _, item := range items {
+		b.WriteString("- ")
+		b.WriteString(item)
+		b.WriteByte('\n')
+	}
 }
 
 // extractSummarySections extracts the top-level bullets from the KeyFacts ("Key Technical Concepts") and OpenTasks ("Pending Tasks") sections of a compression summary. It accumulates summaries, so it writes the last occurrence of each section. For unstructured text, it returns an empty result (fallback for the caller). Deterministic.

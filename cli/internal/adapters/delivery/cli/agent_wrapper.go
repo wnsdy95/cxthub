@@ -55,7 +55,11 @@ func runAgentWrapper(ctx context.Context, c *Container, cwd, agent string, args 
 		start := time.Now()
 		child := exec.Command(bin, args...)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
-		child.Env = append(os.Environ(), "CXT_WRAPPED=1")
+		child.Env = append(os.Environ(),
+			"CXT_WRAPPED=1",
+			fmt.Sprintf("CXT_WRAPPER_PID=%d", os.Getpid()),
+			"CXT_WRAPPED_AGENT="+agent,
+		)
 		if err := child.Start(); err != nil {
 			return err
 		}
