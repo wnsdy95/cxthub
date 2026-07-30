@@ -381,7 +381,8 @@ func (c *BackendClient) GraftSnapshotParents(ctx context.Context, repoID string,
 	return c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/snapshots/"+url.PathEscape(string(id))+"/graft", body, nil)
 }
 
-// GetSnapshotRemote re-reads the (set,seq) source of truth from the server after a graft CAS conflict.
+// GetSnapshotRemote reads authoritative snapshot metadata, including the
+// server-owned graft register.
 func (c *BackendClient) GetSnapshotRemote(ctx context.Context, repoID string, id domain.ContentHash) (domain.Snapshot, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return domain.Snapshot{}, err

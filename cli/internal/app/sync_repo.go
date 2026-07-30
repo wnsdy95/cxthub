@@ -535,6 +535,128 @@ func (s *SyncRepoService) ResolveRemoteBranch(ctx context.Context, in inbound.Sy
 	return domain.Ref{}, domain.ErrNotFound
 }
 
+const maxAppendReconcileSnapshots = 256
+
+// reconcileAppendedPath adopts the authoritative remote graft registers on one
+// path from target to ancestor. appendDiverged can attach its overlay to an
+// ancestor of target rather than target itself, so re-reading only target is
+// insufficient.
+//
+// Remote metadata is collected and checked against immutable local metadata
+// before any graft register is replaced. The traversal is bounded because this
+// path runs from a Git hook; a later full pull remains the recovery path for an
+// unusually large graph.
+func (s *SyncRepoService) reconcileAppendedPath(
+	ctx context.Context,
+	repoID string,
+	target, ancestor domain.ContentHash,
+) (bool, error) {
+	if ancestor == "" || ancestor == target {
+		return true, nil
+	}
+
+	queue := []domain.ContentHash{target}
+	discovered := map[domain.ContentHash]bool{target: true}
+	// towardTarget[parent] is the child from which the parent was discovered.
+	towardTarget := make(map[domain.ContentHash]domain.ContentHash)
+	remoteByID := make(map[domain.ContentHash]domain.Snapshot)
+	found := false
+
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if id == ancestor {
+			found = true
+			break
+		}
+		if len(remoteByID) >= maxAppendReconcileSnapshots {
+			return false, fmt.Errorf(
+				"%w: authoritative append path exceeded %d snapshots; run cxt pull",
+				domain.ErrSyncConflict,
+				maxAppendReconcileSnapshots,
+			)
+		}
+
+		snap, err := s.remote.GetSnapshotRemote(ctx, repoID, id)
+		if err != nil {
+			return false, fmt.Errorf("read authoritative append snapshot %s: %w", id, err)
+		}
+		if err := validateSnapshotObject(snap); err != nil {
+			return false, err
+		}
+		if snap.ID != id || snap.RepoID != repoID {
+			return false, domain.ErrHashMismatch
+		}
+		remoteByID[id] = snap
+
+		for _, parent := range snap.ReachabilityParents() {
+			if discovered[parent] {
+				continue
+			}
+			discovered[parent] = true
+			towardTarget[parent] = id
+			queue = append(queue, parent)
+		}
+	}
+	if !found {
+		return false, nil
+	}
+
+	// Reconstruct only the proven path. Side branches visited by the bounded
+	// search are not required for this ref movement and are left for normal pull.
+	type pathStep struct {
+		snapshot domain.Snapshot
+		parent   domain.ContentHash
+	}
+	path := make([]pathStep, 0)
+	for id := ancestor; id != target; {
+		child, ok := towardTarget[id]
+		if !ok {
+			return false, domain.ErrHashMismatch
+		}
+		snap, ok := remoteByID[child]
+		if !ok {
+			return false, domain.ErrHashMismatch
+		}
+		path = append(path, pathStep{snapshot: snap, parent: id})
+		id = child
+	}
+
+	// Preflight all immutable metadata before replacing any local graft register.
+	localByID := make(map[domain.ContentHash]domain.Snapshot, len(path))
+	for _, step := range path {
+		remoteSnap := step.snapshot
+		localSnap, err := s.store.GetSnapshot(ctx, remoteSnap.ID)
+		if err != nil {
+			return false, err
+		}
+		if err := validateSnapshotObject(localSnap); err != nil {
+			return false, err
+		}
+		if localSnap.RepoID != repoID || !sameParents(localSnap.Parents, remoteSnap.Parents) {
+			return false, domain.ErrHashMismatch
+		}
+		localByID[localSnap.ID] = localSnap
+	}
+	for _, step := range path {
+		localSnap := localByID[step.snapshot.ID]
+		edgePresent := false
+		for _, parent := range localSnap.ReachabilityParents() {
+			if parent == step.parent {
+				edgePresent = true
+				break
+			}
+		}
+		if edgePresent {
+			continue
+		}
+		if err := s.store.ReconcileGraftState(ctx, step.snapshot); err != nil {
+			return false, fmt.Errorf("reconcile authoritative append snapshot %s: %w", step.snapshot.ID, err)
+		}
+	}
+	return true, nil
+}
+
 // AppendBranch appends the server branch ref to the target (lossless graft) without modifying the commit history.
 // It is idempotent, conflict-free, and does not interfere with branch protection policies (e.g., --force).
 func (s *SyncRepoService) AppendBranch(ctx context.Context, in inbound.SyncInput, branch string, target domain.ContentHash) error {
@@ -546,11 +668,36 @@ func (s *SyncRepoService) AppendBranch(ctx context.Context, in inbound.SyncInput
 	if err := s.remote.UpdateRefRemote(ctx, repoID, ref, true); err != nil {
 		return err
 	}
-	// Local mirror preserves the history when fast-forwarding — it keeps my chain when the local branch is ahead (unpushed segments).
-	if cur, gerr := s.store.GetRef(ctx, repoID, domain.RefBranch, branch); gerr != nil || cur.Target == "" || s.isAncestor(ctx, cur.Target, target) {
-		_ = s.store.PutRef(ctx, ref)
+
+	cur, err := s.store.GetRef(ctx, repoID, domain.RefBranch, branch)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return s.store.PutRef(ctx, ref)
+	case err != nil:
+		return err
+	case cur.Target == "":
+		return s.store.PutRef(ctx, ref)
+	case cur.Target == target:
+		return nil
+	case s.isAncestor(ctx, cur.Target, target):
+		return s.store.PutRef(ctx, ref)
 	}
-	return nil
+
+	// A diverged server append may have added its graft to an ancestor of target.
+	// Re-read that narrow authoritative path before deciding whether the local
+	// branch can safely fast-forward. If the local branch is genuinely ahead,
+	// the path will not reach it and its ref is preserved.
+	reached, err := s.reconcileAppendedPath(ctx, repoID, target, cur.Target)
+	if err != nil {
+		return err
+	}
+	if !reached {
+		return nil
+	}
+	if !s.isAncestor(ctx, cur.Target, target) {
+		return fmt.Errorf("%w: authoritative append path did not converge", domain.ErrSyncConflict)
+	}
+	return s.store.PutRef(ctx, ref)
 }
 
 // collectObjects gathers push target objects (snapshots+docs) for Push/Shadow Sync.
