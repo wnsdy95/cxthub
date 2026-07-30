@@ -200,6 +200,8 @@ SEEDID=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get
 RESUMEID=$(python3 -c "import json;cmd=json.load(open('.cxt/boundary.json')).get('resume_cmd','').split();print(cmd[-1] if cmd else '')")
 expect "seed materialization" "$([ -n "$SEED" ] && [ -f "$SEED" ] && echo yes)" yes
 expect "boundary seed ID matches materialized resume target" "$RESUMEID" "$SEEDID"
+expect "seed inherits main compact memory" "$(grep -q 'Project understanding (main)' "$SEED" && echo yes)" yes
+expect "seed inherits main session conversation" "$(grep -q 'task E' "$SEED" && echo yes)" yes
 SEEDMSG=$(python3 -c "
 import json,glob
 tgt=open('.cxt/refs/heads/feature-x').read().strip()

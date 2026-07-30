@@ -231,7 +231,10 @@ cxt checkout [<ref>] [-b <new-branch>]
 
 Restores a ref. With `-b`, creates and restores a new context branch from that
 ref. Git checkout hooks normally invoke the corresponding behavior
-automatically.
+automatically. A new branch seed carries the main head's compact memory plus
+the departure branch head's session conversation. Conversations that fit are
+preserved in full; larger sessions keep a bounded recent tail starting at a
+user-turn boundary.
 
 ### `cxt switch`
 
