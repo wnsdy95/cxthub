@@ -40,7 +40,10 @@ func boundaryPath(repoRoot string) string { return filepath.Join(repoRoot, ".cxt
 
 // Record logs the boundary (keeps only the last transition — wrapper/enforcement care only about the latest boundary).
 func Record(repoRoot string, b Boundary) error {
-	b.At = time.Now().UTC().Format(time.RFC3339)
+	// Preserve sub-second ordering. The wrapper records its child start time with
+	// nanosecond precision; RFC3339 second truncation can make a newly written
+	// boundary appear older than a child started earlier in the same second.
+	b.At = time.Now().UTC().Format(time.RFC3339Nano)
 	normalized, ok := validateBoundary(b)
 	if !ok || len(normalized.Superseded) != len(b.Superseded) {
 		return fmt.Errorf("invalid context boundary")

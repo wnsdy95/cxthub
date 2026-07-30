@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -128,5 +129,76 @@ func TestDistillNoProvenanceMarkerInFacts(t *testing.T) {
 		if strings.HasPrefix(f, "native memory:") {
 			t.Fatalf("source marker mixed with KeyFacts: %q", f)
 		}
+	}
+}
+
+func TestDistillExtractiveFallbackPreservesRecentIntentAndOutcomes(t *testing.T) {
+	cir := domain.CIRDocument{}
+	cir.Envelope.SourceProvider = domain.ProviderCodex
+	cir.Envelope.CompactionCount = 2 // plaintext message unavailable (encrypted provider payload)
+	cir.Events = []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "[cxt seed] Branch-switch context: main → fix/x\n" + strings.Repeat("old seed ", 5000)}}},
+		{Kind: domain.EventToolCall, ToolName: "apply_patch"},
+		{Kind: domain.EventToolResult, Output: "noisy tool output"},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "Find why compacted memory is lost."}}},
+		{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "Chunk storage is lossless; the plaintext compaction message is empty."}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "Fix it without decrypting provider content."}}},
+		{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "Use a deterministic extractive fallback from preserved CIR."}}},
+	}
+
+	d, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Recent user intent",
+		"Find why compacted memory is lost.",
+		"Fix it without decrypting provider content.",
+		"Recent assistant outcomes",
+		"Chunk storage is lossless",
+		"deterministic extractive fallback",
+	} {
+		if !strings.Contains(d.Summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, d.Summary)
+		}
+	}
+	for _, unwanted := range []string{"[cxt seed]", "apply_patch", "noisy tool output", "tools ["} {
+		if strings.Contains(d.Summary, unwanted) {
+			t.Fatalf("summary contains noise %q:\n%s", unwanted, d.Summary)
+		}
+	}
+	if len([]rune(d.Summary)) > extractiveDigestMaxRunes {
+		t.Fatalf("summary exceeds bound: %d", len([]rune(d.Summary)))
+	}
+	if len(d.KeyFacts) != 0 {
+		t.Fatalf("tool names leaked into key facts: %v", d.KeyFacts)
+	}
+}
+
+func TestDistillExtractiveFallbackIsRecentBoundedAndDeterministic(t *testing.T) {
+	cir := domain.CIRDocument{}
+	cir.Envelope.SourceProvider = domain.ProviderCodex
+	for i := 0; i < 20; i++ {
+		cir.Events = append(cir.Events,
+			domain.Event{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: fmt.Sprintf("request-%02d %s", i, strings.Repeat("x", 3000))}}},
+			domain.Event{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: fmt.Sprintf("outcome-%02d %s", i, strings.Repeat("y", 3000))}}},
+		)
+	}
+	first, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Summary != second.Summary {
+		t.Fatal("extractive fallback is not deterministic")
+	}
+	if strings.Contains(first.Summary, "request-00") || !strings.Contains(first.Summary, "request-19") {
+		t.Fatalf("fallback did not retain the recent bounded window")
+	}
+	if len([]rune(first.Summary)) > extractiveDigestMaxRunes {
+		t.Fatalf("summary exceeds bound: %d", len([]rune(first.Summary)))
 	}
 }

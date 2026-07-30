@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -184,6 +185,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 	branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	prevBranch := gitOut(cwd, "rev-parse", "--abbrev-ref", "@{-1}")
 	detached := branch == "" || branch == "HEAD"
+	targetProvider, wrapperManaged := supervisedProvider()
 
 	// 1) Checkpoint: snapshot and push (best-effort) the live sessions from the previous branch.
 	//    Ensure isolation target file paths here (direct use of capture adapter — hook-specific paths).
@@ -266,7 +268,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		}
 		if lerr == nil && (len(existing.Snapshots) > 0 || hasRef) {
 			// Existing branch: load context of that task (current context is not carried).
-			if out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{From: branch, Mode: hookLoadMode(cwd), Cwd: cwd}); err == nil {
+			if out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{From: branch, TargetProvider: targetProvider, Mode: hookLoadMode(cwd), Cwd: cwd}); err == nil {
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
 				b.SeedID = sessionIDFromPath(out.WrittenPath)
 				fmt.Printf("cxt: %q context prepared  [fidelity: %s]\n", branch, out.Fidelity)
@@ -274,8 +276,9 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 			}
 		} else if prevBranch != "" && prevBranch != branch {
 			// New branch: seed genesis — main memory ⊕ ancestry summary + previous commit raw tail.
-			if out, err := c.Seed.Seed(ctx, inbound.SeedInput{Cwd: cwd, FromBranch: prevBranch, NewBranch: branch, Author: c.Identity}); err == nil {
-				b.SeedPath, b.ResumeCmd, b.SeedID = out.WrittenPath, out.ResumeCmd, out.SessionID
+			if out, err := c.Seed.Seed(ctx, inbound.SeedInput{Cwd: cwd, FromBranch: prevBranch, NewBranch: branch, Provider: targetProvider, Author: c.Identity}); err == nil {
+				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
+				b.SeedID = sessionIDFromPath(out.WrittenPath)
 				fmt.Printf("cxt: seed created → branch %q (snapshot %s)\n", branch, shortHash(out.SnapshotID))
 				if _, ok := remotecfg.Origin(cwd); ok {
 					if _, perr := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd}); perr != nil && strings.Contains(perr.Error(), domain.ErrSyncConflict.Error()) {
@@ -296,7 +299,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 			fmt.Println("cxt: ⚠ Context switch — previous session is isolated (not recorded)")
 		}
 		boundary.Notify("cxt Context switch", fmt.Sprintf("%s → %s — previous session isolated, new context prepared", b.PrevBranch, b.Branch))
-		if len(superseded) > 0 && remotecfg.BoundaryEnforce(cwd) == "kill" {
+		if len(superseded) > 0 && remotecfg.BoundaryEnforce(cwd) == "kill" && wrapperManaged {
 			// Detach session agent delay end — detached helper (hook can be a descendant of the agent, so it cannot be killed immediately). The wrapper (cxt claude) detects child death and automatically restarts the seed.
 			if exe, err := os.Executable(); err == nil {
 				cmd := exec.Command(exe, "git-hook", "boundary-enforce")
@@ -304,9 +307,58 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 				_ = cmd.Start()
 			}
+		} else if len(superseded) > 0 && remotecfg.BoundaryEnforce(cwd) == "kill" {
+			hookWarn("no live owning cxt wrapper — active agent was not terminated; continue explicitly with %s", b.ResumeCmd)
 		}
 	}
 	return nil
+}
+
+// supervisedProvider returns the provider owned by the live cxt wrapper in the
+// current process ancestry. A boolean environment marker alone is insufficient:
+// resumed shells and app integrations can retain CXT_WRAPPED after the original
+// supervisor has exited, which previously caused an unrestartable boundary kill.
+func supervisedProvider() (domain.ProviderKind, bool) {
+	agent := domain.ProviderKind(os.Getenv("CXT_WRAPPED_AGENT"))
+	if agent != domain.ProviderClaude && agent != domain.ProviderCodex {
+		agent = domain.ProviderClaude
+	}
+	if os.Getenv("CXT_WRAPPED") != "1" {
+		return agent, false
+	}
+	wrapperPID, err := strconv.Atoi(os.Getenv("CXT_WRAPPER_PID"))
+	if err != nil || wrapperPID <= 1 {
+		return agent, false
+	}
+	return agent, hasProcessAncestor(os.Getppid(), wrapperPID, processParentPID)
+}
+
+func processParentPID(pid int) (int, bool) {
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0, false
+	}
+	ppid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	return ppid, err == nil && ppid > 0
+}
+
+func hasProcessAncestor(start, want int, parent func(int) (int, bool)) bool {
+	if start <= 1 || want <= 1 {
+		return false
+	}
+	seen := map[int]bool{}
+	for pid, depth := start, 0; pid > 1 && depth < 64 && !seen[pid]; depth++ {
+		if pid == want {
+			return true
+		}
+		seen[pid] = true
+		next, ok := parent(pid)
+		if !ok {
+			return false
+		}
+		pid = next
+	}
+	return false
 }
 
 // hookLoadMode is the load fidelity of the hook path (no flag): local load.mode > server personal setting.

@@ -412,7 +412,7 @@ Reading a key prints its effective local value. Supported keys are:
 |---|---|---|---|
 | `checkout.mode` | `auto`, `prepare` | `auto` | Restore automatically or only prepare the resume action after Git checkout |
 | `load.mode` | `full`, `reconstructed`, `memory`, `default` | `full` | Default restore fidelity; `default` clears the local override |
-| `boundary.enforce` | `kill`, `none`, `default` | `kill` | Enforce process isolation across context switches |
+| `boundary.enforce` | `kill`, `none`, `default` | `kill` | Enforce process isolation across context switches when a live owning `cxt claude`/`cxt codex` wrapper can restart the prepared seed; unmanaged sessions are not killed and receive an explicit resume command |
 | `capture.debounce` | non-negative seconds, `default` | 60 seconds | Minimum interval for repeated Stop-event captures |
 | `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier |
 | `secrets.redact` | replacement text, `default` | built-in redaction token | Exact-secret replacement text |
