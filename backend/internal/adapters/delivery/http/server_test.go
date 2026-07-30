@@ -3,6 +3,9 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +23,31 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
+
+type githubWebhookBackend struct {
+	Backend
+	promoted int
+	err      error
+	calls    []githubWebhookPromotion
+}
+
+type githubWebhookPromotion struct {
+	gitURL string
+	base   string
+	head   string
+}
+
+func (b *githubWebhookBackend) PromoteMergedPR(
+	_ context.Context,
+	gitURL, baseBranch, headBranch string,
+) (int, error) {
+	b.calls = append(b.calls, githubWebhookPromotion{
+		gitURL: gitURL,
+		base:   baseBranch,
+		head:   headBranch,
+	})
+	return b.promoted, b.err
+}
 
 type policyDownIdentity struct {
 	*app.IdentityService
@@ -89,6 +117,213 @@ func repoIDForRemoteURLForTest(raw string) domain.ContentHash {
 	normalized = strings.TrimSuffix(normalized, ".git")
 	normalized = strings.TrimRight(normalized, "/")
 	return domain.HashContent([]byte(strings.ToLower(normalized)))
+}
+
+func githubWebhookRequest(t *testing.T, handler http.Handler, secret, event string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/github", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Event", event)
+	if secret != "" {
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write(body)
+		req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestGitHubWebhookSecurityAndPromotion(t *testing.T) {
+	const secret = "test-webhook-secret"
+	merged := []byte(`{
+		"action":"closed",
+		"pull_request":{
+			"merged":true,
+			"base":{"ref":"main"},
+			"head":{"ref":"feature/x","repo":{"full_name":"acme/project"}}
+		},
+		"repository":{
+			"full_name":"acme/project",
+			"html_url":"https://github.com/acme/project",
+			"clone_url":"https://github.com/acme/project.git"
+		}
+	}`)
+
+	t.Run("disabled when secret is unset", func(t *testing.T) {
+		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", "")
+		backend := &githubWebhookBackend{}
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), "", "pull_request", merged)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", rec.Code)
+		}
+		if len(backend.calls) != 0 {
+			t.Fatalf("promotion calls = %#v, want none", backend.calls)
+		}
+	})
+
+	t.Run("rejects bad signature", func(t *testing.T) {
+		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+		backend := &githubWebhookBackend{}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/github", bytes.NewReader(merged))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-GitHub-Event", "pull_request")
+		req.Header.Set("X-Hub-Signature-256", "sha256=bad")
+		rec := httptest.NewRecorder()
+		NewServer(backend, nil).Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+		if len(backend.calls) != 0 {
+			t.Fatalf("promotion calls = %#v, want none", backend.calls)
+		}
+	})
+
+	t.Run("ignores other events", func(t *testing.T) {
+		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+		backend := &githubWebhookBackend{}
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "ping", []byte(`{"zen":"safe"}`))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if len(backend.calls) != 0 {
+			t.Fatalf("promotion calls = %#v, want none", backend.calls)
+		}
+	})
+
+	t.Run("ignores unmerged pull request", func(t *testing.T) {
+		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+		backend := &githubWebhookBackend{}
+		body := bytes.Replace(merged, []byte(`"merged":true`), []byte(`"merged":false`), 1)
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if len(backend.calls) != 0 {
+			t.Fatalf("promotion calls = %#v, want none", backend.calls)
+		}
+	})
+
+	t.Run("ignores fork head", func(t *testing.T) {
+		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+		backend := &githubWebhookBackend{}
+		body := bytes.Replace(merged, []byte(`"full_name":"acme/project"}}`), []byte(`"full_name":"fork/project"}}`), 1)
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if len(backend.calls) != 0 {
+			t.Fatalf("promotion calls = %#v, want none", backend.calls)
+		}
+	})
+
+	t.Run("promotes same-repository merged head", func(t *testing.T) {
+		t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+		backend := &githubWebhookBackend{promoted: 1}
+		rec := githubWebhookRequest(t, NewServer(backend, nil).Handler(), secret, "pull_request", merged)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+		}
+		if len(backend.calls) != 1 {
+			t.Fatalf("promotion calls = %#v, want one", backend.calls)
+		}
+		want := githubWebhookPromotion{
+			gitURL: "https://github.com/acme/project.git",
+			base:   "main",
+			head:   "feature/x",
+		}
+		if backend.calls[0] != want {
+			t.Fatalf("promotion call = %#v, want %#v", backend.calls[0], want)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if response["status"] != "ok" || response["promoted"] != float64(1) {
+			t.Fatalf("response = %#v, want status ok and promoted 1", response)
+		}
+	})
+}
+
+func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
+	const secret = "integration-webhook-secret"
+	t.Setenv("CXT_GITHUB_WEBHOOK_SECRET", secret)
+
+	st := store.NewFSStore(t.TempDir())
+	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	repoID := domain.HashContent([]byte("github.com/acme/project"))
+	if _, err := st.PutRepo(context.Background(), domain.Repo{
+		ID:            repoID,
+		DefaultBranch: "main",
+		GitRemoteURL:  "git@github.com:acme/project.git",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base, mainTip, featureTip := domain.HashContent([]byte("base")), domain.HashContent([]byte("main")), domain.HashContent([]byte("feature"))
+	for _, snap := range []domain.Snapshot{
+		{ID: base, RepoID: repoID, DocHash: base},
+		{ID: mainTip, RepoID: repoID, DocHash: mainTip, Parents: []domain.ContentHash{base}},
+		{ID: featureTip, RepoID: repoID, DocHash: featureTip, Parents: []domain.ContentHash{base}},
+	} {
+		if err := st.PutSnapshot(context.Background(), snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range map[string]domain.ContentHash{"main": mainTip, "feature/x": featureTip} {
+		if err := st.CompareAndSwapRef(context.Background(), repoID, domain.Ref{
+			Kind: domain.RefBranch, Name: name, RepoID: repoID, Target: target,
+		}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := []byte(`{
+		"action":"closed",
+		"pull_request":{
+			"merged":true,
+			"base":{"ref":"main"},
+			"head":{"ref":"feature/x","repo":{"full_name":"acme/project"}}
+		},
+		"repository":{
+			"full_name":"acme/project",
+			"clone_url":"https://github.com/acme/project.git"
+		}
+	}`)
+	handler := NewServer(svc, nil).Handler()
+	for attempt := 1; attempt <= 2; attempt++ {
+		rec := githubWebhookRequest(t, handler, secret, "pull_request", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("attempt %d status = %d, body=%s", attempt, rec.Code, rec.Body.String())
+		}
+		var response struct {
+			Promoted int `json:"promoted"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		want := 1
+		if attempt == 2 {
+			want = 0
+		}
+		if response.Promoted != want {
+			t.Fatalf("attempt %d promoted = %d, want %d", attempt, response.Promoted, want)
+		}
+	}
+
+	mainRef, err := st.GetRef(context.Background(), repoID, domain.RefBranch, "main")
+	if err != nil || mainRef.Target != featureTip {
+		t.Fatalf("main ref = (%s, %v), want feature tip %s", mainRef.Target, err, featureTip)
+	}
+	promoted, err := st.GetSnapshot(context.Background(), repoID, featureTip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(promoted.Parents) != 1 || promoted.Parents[0] != base {
+		t.Fatalf("natural parents changed: %v, want [%s]", promoted.Parents, base)
+	}
+	if len(promoted.GraftParents) != 1 || promoted.GraftParents[0] != mainTip {
+		t.Fatalf("graft parents = %v, want prior main tip %s", promoted.GraftParents, mainTip)
+	}
 }
 
 func TestHealthIsPublicAndMinimal(t *testing.T) {

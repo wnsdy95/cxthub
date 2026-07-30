@@ -9,6 +9,11 @@ firebase_project = "replace-with-firebase-project"
 # but it still requires Google Cloud API and web-referrer restrictions.
 firebase_web_api_key = "replace-with-firebase-web-api-key"
 
+# Secret values are created outside Terraform. Override only when using
+# non-default Secret Manager IDs.
+# postgres_secret_id       = "cxt-postgres-dsn"
+# github_webhook_secret_id = "cxt-github-webhook-secret"
+
 # The default value is <firebase_project>.firebaseapp.com.
 # firebase_auth_domain = "replace-with-firebase-project.firebaseapp.com"
 

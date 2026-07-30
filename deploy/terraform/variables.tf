@@ -89,6 +89,17 @@ variable "postgres_secret_id" {
   }
 }
 
+variable "github_webhook_secret_id" {
+  description = "GitHub PR webhook HMAC secret ID pre-injected into Secret Manager. The secret version is managed outside Terraform."
+  type        = string
+  default     = "cxt-github-webhook-secret"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]{1,255}$", var.github_webhook_secret_id))
+    error_message = "github_webhook_secret_id must be a Secret Manager ID containing only letters, numbers, hyphens, and underscores."
+  }
+}
+
 variable "vercel_team_id" {
   description = "Vercel team ID (team_…). null for individual accounts. Do not include slugs or usernames."
   type        = string

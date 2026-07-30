@@ -16,6 +16,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,6 +32,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 // gitOut runs a git subcommand in cwd and returns the trimmed stdout (empty on failure).
@@ -645,30 +647,91 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 			break
 		}
 	}
-	// PR merge context promotion: This merge/pull incorporates git commits and chained snapshots into the cxt branch
-	// (objects already in local cache from previous fetch).
-	appendMergedContexts(ctx, c, cwd, branch)
+	// PR merge context promotion: First resolve host-side squash/rebase/merge
+	// commits back to their source branches. Then retain the generic [git sha]
+	// path for non-GitHub and direct merge histories.
+	shas := incomingCommitSHAs(cwd)
+	appendMergedPRContexts(ctx, c.PRMerges, c.Sync, cwd, branch, gitOut(cwd, "config", "--get", "remote.origin.url"), shas)
+	appendMergedContexts(ctx, c, cwd, branch, shas)
+}
+
+func incomingCommitSHAs(cwd string) []string {
+	if gitOut(cwd, "rev-parse", "--verify", "-q", "ORIG_HEAD") == "" {
+		return nil // not merge/pull path (initial clone, etc.)
+	}
+	raw := gitOut(cwd, "rev-list", "--reverse", "ORIG_HEAD..HEAD")
+	if raw == "" {
+		return nil
+	}
+	shas := strings.Fields(raw) // oldest first
+	if len(shas) > 200 {
+		shas = shas[len(shas)-200:] // large merge defense — last 200 only
+	}
+	return shas
+}
+
+type mergedPRContextSync interface {
+	ResolveRemoteBranch(ctx context.Context, in inbound.SyncInput, branch string) (domain.Ref, error)
+	AppendBranch(ctx context.Context, in inbound.SyncInput, branch string, target domain.ContentHash) error
+}
+
+// appendMergedPRContexts promotes each merged PR source tip to the current base
+// branch in Git commit order. Discovery failure is fail-open because this runs
+// inside a Git hook; the hosted signed webhook remains the primary path.
+func appendMergedPRContexts(
+	ctx context.Context,
+	resolver outbound.PullRequestMergeResolver,
+	syncer mergedPRContextSync,
+	cwd, branch, gitRemoteURL string,
+	shas []string,
+) {
+	if resolver == nil || syncer == nil || branch == "" || branch == "HEAD" || gitRemoteURL == "" || len(shas) == 0 {
+		return
+	}
+	pulls, err := resolver.ResolveMergedPullRequests(ctx, gitRemoteURL, branch, shas)
+	if err != nil {
+		hookWarn("GitHub PR context lookup failed (git continues): %v", err)
+		return
+	}
+
+	appended := 0
+	for _, pull := range pulls {
+		if pull.BaseBranch != branch || pull.HeadBranch == "" || pull.HeadBranch == branch {
+			continue
+		}
+		ref, rerr := syncer.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, pull.HeadBranch)
+		if rerr != nil {
+			if !errors.Is(rerr, domain.ErrNotFound) {
+				hookWarn("PR #%d context branch %q lookup failed: %v", pull.Number, pull.HeadBranch, rerr)
+			}
+			continue
+		}
+		if ref.Target == "" {
+			continue
+		}
+		if aerr := syncer.AppendBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch, ref.Target); aerr != nil {
+			if strings.Contains(aerr.Error(), "non_fast_forward") {
+				continue // hosted webhook or another client already promoted it
+			}
+			hookWarn("PR #%d context promotion failed (%s → %s): %v", pull.Number, pull.HeadBranch, branch, aerr)
+			continue
+		}
+		appended++
+	}
+	if appended > 0 {
+		fmt.Printf("cxt: promoted %d merged PR context(s) to %q timeline (appended)\n", appended, branch)
+	}
 }
 
 // appendMergedContexts appends git merge/pull commits and chained context snapshots to the same-named cxt branch.
 //
 // In the PR flow, context accumulates on feature branches and merge happens on git host, so cxt main becomes the permanent anchor
 // — this hook fills that gap. Append is a lossless operation (overlay) that is idempotent and conflict-free (server CAS,
-// non-ff targets rejected → skip). Flows like squash/rebase-merge that erase original commit sha are skipped locally (server webhook path to follow).
-func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string) {
-	if branch == "" || branch == "HEAD" {
+// non-ff targets rejected → skip). Provider PR resolution above supplies the
+// squash/rebase path whose original commit links are absent from the base Git history.
+func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string, shas []string) {
+	if branch == "" || branch == "HEAD" || len(shas) == 0 {
 		return
-	}
-	if gitOut(cwd, "rev-parse", "--verify", "-q", "ORIG_HEAD") == "" {
-		return // not merge/pull path (initial clone, etc.)
-	}
-	rawShas := gitOut(cwd, "rev-list", "--reverse", "ORIG_HEAD..HEAD")
-	if rawShas == "" {
-		return
-	}
-	shas := strings.Fields(rawShas) // oldest first
-	if len(shas) > 200 {
-		shas = shas[len(shas)-200:] // large merge defense — last 200 only
 	}
 	list, err := c.List.List(ctx, inbound.ListInput{})
 	if err != nil {
