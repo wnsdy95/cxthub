@@ -149,7 +149,14 @@ func messageText(blocks []domain.ContentBlock) string {
 }
 
 func isSyntheticSeedText(text string) bool {
-	return strings.HasPrefix(strings.TrimSpace(text), "[cxt seed] Branch-switch context:")
+	t := strings.TrimSpace(text)
+	// Resume seeds start life as CompactSummary events, but materializing into a
+	// provider rollout and re-capturing them yields plain user messages (measured
+	// in real Codex digests) — match the boilerplate by prefix as well. Harness
+	// environment_context blocks are machine-generated state, not user intent.
+	return strings.HasPrefix(t, "[cxt seed] Branch-switch context:") ||
+		strings.HasPrefix(t, "[cxt] This session was resumed from a branch context seed.") ||
+		strings.HasPrefix(t, "<environment_context>")
 }
 
 func appendRecentDistinct(items []string, text string, limit int) []string {

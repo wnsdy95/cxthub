@@ -267,7 +267,7 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
 	repo := domain.Repo{ID: "repo-main-bounded", DefaultBranch: "main", LocalPath: t.TempDir()}
-	fullMainSummary := "MAIN COMPACT MEMORY START\n" + strings.Repeat("project memory ", 12000)
+	fullMainSummary := "MAIN COMPACT MEMORY START\n" + strings.Repeat("project memory ", 12000) + "\nMAIN COMPACT MEMORY NEWEST TAIL"
 
 	events := make([]domain.Event, 0, 122)
 	for i := 0; i < 60; i++ {
@@ -306,7 +306,9 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 	if got := eventsJSONBytes(seed.CIR.Events); got > seedBudgetBytes {
 		t.Fatalf("seed size = %d, want <= %d", got, seedBudgetBytes)
 	}
-	if !strings.Contains(seed.CIR.Events[0].Blocks[0].Text, "MAIN COMPACT MEMORY START") {
+	// The prompt keeps the newest tail of an oversized summary (#31); the full
+	// digest including the head stays reachable via the seed MemoryHash below.
+	if !strings.Contains(seed.CIR.Events[0].Blocks[0].Text, "MAIN COMPACT MEMORY NEWEST TAIL") {
 		t.Fatal("bounded seed lost main compact memory")
 	}
 	foundLatest := false
@@ -338,5 +340,47 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 	}
 	if !strings.Contains(seedMemory.Summary, "bounded lineage summary") {
 		t.Fatal("attached seed memory lost the fresh departure-lineage digest")
+	}
+}
+
+// TestRenderSeedTextKeepsBulletsAndNewestSummaryTail fixes the seed-prompt
+// budgeting contract (#31): MergeDigests places the oldest summary generations
+// first, so whole-text prefix truncation used to keep only stale summary head
+// and drop key facts, open tasks, the Layer2 digest, and the trailer whenever
+// the main summary outgrew the digest budget.
+func TestRenderSeedTextKeepsBulletsAndNewestSummaryTail(t *testing.T) {
+	mainMem := &domain.MemoryDigest{
+		Summary:   "OLDEST-GENERATION-HEAD\n" + strings.Repeat("m", 4*seedDigestBudgetBytes) + "\nNEWEST-MAIN-TAIL",
+		KeyFacts:  []string{"main fact alpha beta"},
+		OpenTasks: []string{"main task gamma delta"},
+	}
+	branchMem := domain.MemoryDigest{
+		Summary:   "OLD-BRANCH-HEAD\n" + strings.Repeat("b", 2*seedDigestBudgetBytes) + "\nNEWEST-BRANCH-TAIL",
+		KeyFacts:  []string{"branch fact epsilon zeta"},
+		OpenTasks: []string{"branch task eta theta"},
+	}
+	out := renderSeedText("main", "fix/x", mainMem, branchMem, seedDigestBudgetBytes)
+	if len(out) > seedDigestBudgetBytes {
+		t.Fatalf("seed text = %d bytes, want <= %d", len(out), seedDigestBudgetBytes)
+	}
+	for _, want := range []string{
+		"## Project understanding (main)",
+		"- main fact alpha beta",
+		"- ☐ main task gamma delta",
+		"NEWEST-MAIN-TAIL",
+		"## Work summary of this lineage (main)",
+		"- branch fact epsilon zeta",
+		"- ☐ branch task eta theta",
+		"NEWEST-BRANCH-TAIL",
+		"## Recent context (verbatim)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("seed text missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"OLDEST-GENERATION-HEAD", "OLD-BRANCH-HEAD"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("seed text kept stale summary head %q instead of the newest tail", unwanted)
+		}
 	}
 }
