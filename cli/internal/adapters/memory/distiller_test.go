@@ -202,3 +202,34 @@ func TestDistillExtractiveFallbackIsRecentBoundedAndDeterministic(t *testing.T) 
 		t.Fatalf("summary exceeds bound: %d", len([]rune(first.Summary)))
 	}
 }
+
+// TestExtractiveDigestSkipsResumeSeedAndEnvironmentContext (#32): resume-seed
+// boilerplate loses its CompactSummary marking after materialize→re-capture and
+// harness environment_context blocks are machine state — neither may consume
+// the bounded per-role slots of the extractive fallback.
+func TestExtractiveDigestSkipsResumeSeedAndEnvironmentContext(t *testing.T) {
+	cir := domain.CIRDocument{}
+	cir.Envelope.SourceProvider = domain.ProviderCodex
+	cir.Events = []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text",
+			Text: "[cxt] This session was resumed from a branch context seed. 601 older events were omitted." + strings.Repeat(" boilerplate", 300)}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text",
+			Text: "<environment_context>\n<cwd>/tmp/x</cwd>\n</environment_context>"}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "Fix findings one and two."}}},
+		{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "Budgeted the seed prompt sections."}}},
+	}
+	d, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Fix findings one and two.", "Budgeted the seed prompt sections."} {
+		if !strings.Contains(d.Summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, d.Summary)
+		}
+	}
+	for _, unwanted := range []string{"This session was resumed from a branch context seed", "<environment_context>"} {
+		if strings.Contains(d.Summary, unwanted) {
+			t.Fatalf("summary contains noise %q:\n%s", unwanted, d.Summary)
+		}
+	}
+}

@@ -120,8 +120,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	// the recent user-boundary-aligned conversation tail.
 	now := time.Now().UTC().Format(time.RFC3339)
 	seedSession := providerfs.NewSessionID()
-	seedText := renderSeedText(in.FromBranch, in.NewBranch, mainMem, branchMem)
-	seedText = truncateUTF8Prefix(seedText, seedDigestBudgetBytes)
+	seedText := renderSeedText(in.FromBranch, in.NewBranch, mainMem, branchMem, seedDigestBudgetBytes)
 	summaryEvent := domain.Event{
 		Kind: domain.EventMessage, Role: "user", Ts: now, Seq: 0,
 		Blocks: []domain.ContentBlock{{Type: "text", Text: seedText}},
@@ -214,38 +213,92 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 
 // renderSeedText renders the seed's summary layer (Layer1⊕Layer2) as labeled markdown.
 // Removes overlapping key facts/tasks from Layer2 (maintains layer distinction + removes duplicates).
-func renderSeedText(from, to string, mainMem *domain.MemoryDigest, branchMem domain.MemoryDigest) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "[cxt seed] Branch-switch context: %s → %s\n", from, to)
-	b.WriteString("This session is the seed of a new branch — continue from the summaries and the verbatim recent context below.\n")
-	seen := map[string]bool{}
+//
+// Sections are budgeted individually (resume-path parity with renderSeedDigest):
+// MergeDigests puts the oldest summary generations first, so a single whole-text
+// prefix cut would keep only stale summary head and silently drop key facts,
+// open tasks, the entire Layer2 digest, and the trailer once the main summary
+// outgrows the digest budget. Bullets are reserved first and summaries keep
+// their newest tail; exact byte accounting guarantees the result fits maxBytes.
+func renderSeedText(from, to string, mainMem *domain.MemoryDigest, branchMem domain.MemoryDigest, maxBytes int) string {
+	header := fmt.Sprintf("[cxt seed] Branch-switch context: %s → %s\n", from, to) +
+		"This session is the seed of a new branch — continue from the summaries and the verbatim recent context below.\n"
+	trailer := "\n## Recent context (verbatim)\nThe events below are the actual conversation right before the switch.\n"
+	mainHeader := "\n## Project understanding (main)\n"
+	branchHeader := "\n## Work summary of this lineage (" + from + ")\n"
+
+	budget := maxBytes - len(header) - len(trailer) - len(branchHeader)
 	if mainMem != nil {
-		b.WriteString("\n## Project understanding (main)\n")
-		writeDigest(&b, *mainMem, seen)
+		budget -= len(mainHeader)
 	}
-	b.WriteString("\n## Work summary of this lineage (" + from + ")\n")
-	writeDigest(&b, branchMem, seen)
-	b.WriteString("\n## Recent context (verbatim)\nThe events below are the actual conversation right before the switch.\n")
+	if budget <= 0 {
+		return truncateUTF8Prefix(header, maxBytes)
+	}
+
+	// Bullets first — the distilled high-value layer must survive an oversized summary.
+	seen := map[string]bool{}
+	var mainFacts, mainTasks string
+	if mainMem != nil {
+		mainFacts = seedBulletLines(seedWorthyFacts(mainMem.KeyFacts), "- ", seen, budget/6)
+		mainTasks = seedBulletLines(mainMem.OpenTasks, "- ☐ ", seen, budget/8)
+	}
+	branchFacts := seedBulletLines(seedWorthyFacts(branchMem.KeyFacts), "- ", seen, budget/8)
+	branchTasks := seedBulletLines(branchMem.OpenTasks, "- ☐ ", seen, budget/8)
+	remaining := budget - len(mainFacts) - len(mainTasks) - len(branchFacts) - len(branchTasks)
+
+	// Summaries share what is left; each keeps its newest tail. The branch
+	// summary is capped so a large lineage digest cannot starve the main layer
+	// (and vice versa — the main summary takes only the final remainder).
+	mainSummary, branchSummary := "", ""
+	if s := strings.TrimSpace(branchMem.Summary); s != "" && remaining > 1 {
+		limit := remaining
+		if mainMem != nil && strings.TrimSpace(mainMem.Summary) != "" && limit > budget/4 {
+			limit = budget / 4
+		}
+		branchSummary = truncateUTF8Tail(s, limit-1) + "\n"
+		seen[s] = true
+		remaining -= len(branchSummary)
+	}
+	if mainMem != nil {
+		if s := strings.TrimSpace(mainMem.Summary); s != "" && !seen[s] && remaining > 1 {
+			mainSummary = truncateUTF8Tail(s, remaining-1) + "\n"
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(header)
+	if mainMem != nil {
+		b.WriteString(mainHeader)
+		b.WriteString(mainSummary)
+		b.WriteString(mainFacts)
+		b.WriteString(mainTasks)
+	}
+	b.WriteString(branchHeader)
+	b.WriteString(branchSummary)
+	b.WriteString(branchFacts)
+	b.WriteString(branchTasks)
+	b.WriteString(trailer)
 	return b.String()
 }
 
-func writeDigest(b *strings.Builder, d domain.MemoryDigest, seen map[string]bool) {
-	if d.Summary != "" && !seen[d.Summary] {
-		seen[d.Summary] = true
-		b.WriteString(d.Summary + "\n")
+// seedBulletLines renders "- item" lines within maxBytes, skipping items already
+// emitted by an earlier layer (seen dedup shared across Layer1/Layer2).
+func seedBulletLines(items []string, prefix string, seen map[string]bool, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
 	}
-	for _, f := range d.KeyFacts {
-		if f == "" || seen[f] {
+	var b strings.Builder
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
 			continue
 		}
-		seen[f] = true
-		b.WriteString("- " + f + "\n")
-	}
-	for _, t := range d.OpenTasks {
-		if t == "" || seen[t] {
-			continue
+		line := prefix + item + "\n"
+		if b.Len()+len(line) > maxBytes {
+			continue // keep scanning — a shorter later item may still fit
 		}
-		seen[t] = true
-		b.WriteString("- ☐ " + t + "\n")
+		seen[item] = true
+		b.WriteString(line)
 	}
+	return b.String()
 }
