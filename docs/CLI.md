@@ -234,7 +234,9 @@ ref. Git checkout hooks normally invoke the corresponding behavior
 automatically. A new branch seed carries the main head's compact memory plus
 the departure branch head's session conversation. Conversations that fit are
 preserved in full; larger sessions keep a bounded recent tail starting at a
-user-turn boundary.
+user-turn boundary. The prompt copy is bounded independently; the complete
+untruncated merged memory remains attached to the seed snapshot for future
+memorize and branch operations.
 
 ### `cxt switch`
 

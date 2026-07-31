@@ -156,10 +156,27 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
+	// The materialized prompt is intentionally bounded, but the branch must not
+	// lose the complete inherited digest. Attach the untruncated main +
+	// departure-lineage memory to the seed snapshot so the next memorize/seed
+	// operation inherits the full value rather than re-distilling the truncated
+	// summary event.
+	seedMemory := branchMem
+	if mainMem != nil {
+		seedMemory = domain.MergeDigests(*mainMem, branchMem)
+	}
+	seedMemory.SnapshotID = docHash
+	if seedMemory.Provider == "" {
+		seedMemory.Provider = provider
+	}
+	memoryHash, err := s.store.PutMemory(ctx, seedMemory)
+	if err != nil {
+		return inbound.SeedOutput{}, err
+	}
 	snap := domain.Snapshot{
 		ID: docHash, RepoID: repo.ID, Branch: in.NewBranch,
 		Parents: []domain.ContentHash{fromRef.Target}, DocHash: docHash,
-		Provider: provider, Fidelity: domain.FidelityReconstructed,
+		MemoryHash: memoryHash, Provider: provider, Fidelity: domain.FidelityReconstructed,
 		Message:   fmt.Sprintf("seed: %s → %s", in.FromBranch, in.NewBranch),
 		Author:    in.Author,
 		CreatedAt: time.Now().UTC(),

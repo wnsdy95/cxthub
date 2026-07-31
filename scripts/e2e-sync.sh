@@ -202,6 +202,14 @@ expect "seed materialization" "$([ -n "$SEED" ] && [ -f "$SEED" ] && echo yes)" 
 expect "boundary seed ID matches materialized resume target" "$RESUMEID" "$SEEDID"
 expect "seed inherits main compact memory" "$(grep -q 'Project understanding (main)' "$SEED" && echo yes)" yes
 expect "seed inherits main session conversation" "$(grep -q 'task E' "$SEED" && echo yes)" yes
+SEEDMEM=$(python3 -c "
+import json,glob
+tgt=open('.cxt/refs/heads/feature-x').read().strip()
+for p in glob.glob('.cxt/objects/snapshots/*'):
+    s=json.load(open(p))
+    if s['id']==tgt: print(s.get('memory_hash','')); break
+")
+expect "seed snapshot retains full inherited memory object" "$([ -n "$SEEDMEM" ] && [ -f ".cxt/objects/memories/${SEEDMEM#sha256:}" ] && echo yes)" yes
 SEEDMSG=$(python3 -c "
 import json,glob
 tgt=open('.cxt/refs/heads/feature-x').read().strip()
