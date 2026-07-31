@@ -267,6 +267,7 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
 	repo := domain.Repo{ID: "repo-main-bounded", DefaultBranch: "main", LocalPath: t.TempDir()}
+	fullMainSummary := "MAIN COMPACT MEMORY START\n" + strings.Repeat("project memory ", 12000)
 
 	events := make([]domain.Event, 0, 122)
 	for i := 0; i < 60; i++ {
@@ -280,7 +281,7 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 		seedMessage("assistant", "latest main answer", len(events)+1),
 	)
 	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", events, nil, &domain.MemoryDigest{
-		Summary:  "MAIN COMPACT MEMORY START\n" + strings.Repeat("project memory ", 12000),
+		Summary:  fullMainSummary,
 		Provider: domain.ProviderCodex,
 	})
 	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
@@ -317,5 +318,25 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 	}
 	if !foundLatest {
 		t.Fatal("bounded seed lost latest main user request")
+	}
+	seedSnapshot, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("get seed snapshot: %v", err)
+	}
+	if seedSnapshot.MemoryHash == "" {
+		t.Fatal("seed snapshot lost the full inherited memory digest")
+	}
+	seedMemory, err := store.GetMemory(ctx, seedSnapshot.MemoryHash)
+	if err != nil {
+		t.Fatalf("get seed memory: %v", err)
+	}
+	if seedMemory.SnapshotID != out.SnapshotID {
+		t.Fatalf("seed memory snapshot = %s, want %s", seedMemory.SnapshotID, out.SnapshotID)
+	}
+	if !strings.Contains(seedMemory.Summary, fullMainSummary) {
+		t.Fatalf("attached seed memory lost full main digest: got %d bytes, want at least %d", len(seedMemory.Summary), len(fullMainSummary))
+	}
+	if !strings.Contains(seedMemory.Summary, "bounded lineage summary") {
+		t.Fatal("attached seed memory lost the fresh departure-lineage digest")
 	}
 }
