@@ -77,6 +77,7 @@ export const en: Messages = {
     reflogEmpty: 'No entries',
     memoryBadgeTitle: 'Has a distilled memory digest — shown in the memory panel when selected',
     compactSummary: 'Context compaction summary (agent-written)',
+    cxtSeedSummary: 'cxt seed summary (auto-generated — inherited context)',
     branchOff: '⎇ branch off (checkout -b)',
     branchOffTitle: 'Create a branch at this tip — carries every unpushed commit and the uncommitted state with it',
     compareClear: 'Clear compare base',

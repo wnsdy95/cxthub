@@ -233,3 +233,40 @@ func TestExtractiveDigestSkipsResumeSeedAndEnvironmentContext(t *testing.T) {
 		}
 	}
 }
+
+// TestDistillDoesNotPromoteSeedDigestAsAgentCompaction (#38): cxt-synthesized
+// seed digests carry the CompactSummary marking but are bounded copies of
+// inherited memory. They must not be selected as the agent's own compression
+// summary; a real agent summary must still win when both are present.
+func TestDistillDoesNotPromoteSeedDigestAsAgentCompaction(t *testing.T) {
+	seedText := "[cxt] This session was resumed from a branch context seed. 2819 older events were omitted." + strings.Repeat(" inherited", 200)
+	cir := domain.CIRDocument{}
+	cir.Envelope.SourceProvider = domain.ProviderClaude
+	cir.Events = []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true,
+			Blocks: []domain.ContentBlock{{Type: "text", Text: seedText}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "Relabel the seed summary rows."}}},
+		{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "Excluded seed digests from the priority path."}}},
+	}
+	d, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(d.Summary, "resumed from a branch context seed") {
+		t.Fatalf("seed digest promoted to agent compaction summary:\n%s", d.Summary[:200])
+	}
+	if !strings.Contains(d.Summary, "Relabel the seed summary rows.") {
+		t.Fatalf("extractive fallback missing real conversation:\n%s", d.Summary)
+	}
+
+	agent := structuredSummary
+	cir.Events = append(cir.Events, domain.Event{Kind: domain.EventMessage, Role: "user", CompactSummary: true,
+		Blocks: []domain.ContentBlock{{Type: "text", Text: agent}}})
+	d2, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(d2.Summary, "The user is dogfooding cxthub.") {
+		t.Fatalf("real agent summary lost priority:\n%s", d2.Summary[:200])
+	}
+}
