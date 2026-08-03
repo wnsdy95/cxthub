@@ -80,6 +80,7 @@ export const ko = {
     reflogEmpty: '기록 없음',
     memoryBadgeTitle: '압축 메모리(digest) 보유 — 선택하면 메모리 패널에 표시됩니다',
     compactSummary: '컨텍스트 압축 요약 (에이전트 생성)',
+    cxtSeedSummary: 'cxt 시드 요약 (자동 생성 — 상속 컨텍스트)',
     branchOff: '⎇ 분기 (checkout -b)',
     branchOffTitle: '이 tip 에서 새 브랜치 생성 — 미푸시 커밋과 미커밋 상태 전체를 들고 갑니다',
     compareClear: '비교 기준 해제',
