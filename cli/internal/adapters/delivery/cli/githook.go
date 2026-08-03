@@ -185,7 +185,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 	branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	prevBranch := gitOut(cwd, "rev-parse", "--abbrev-ref", "@{-1}")
 	detached := branch == "" || branch == "HEAD"
-	targetProvider, wrapperManaged := supervisedProvider()
+	targetProvider, wrapperManaged := supervisedProvider(ctx, cwd)
 
 	// 1) Checkpoint: snapshot and push (best-effort) the live sessions from the previous branch.
 	//    Ensure isolation target file paths here (direct use of capture adapter — hook-specific paths).
@@ -270,7 +270,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 			// Existing branch: load context of that task (current context is not carried).
 			if out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{From: branch, TargetProvider: targetProvider, Mode: hookLoadMode(cwd), Cwd: cwd}); err == nil {
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
-				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd, "")
+				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd)
 				fmt.Printf("cxt: %q context prepared  [fidelity: %s]\n", branch, out.Fidelity)
 				syncSettingsToSnapshot(ctx, c, cwd, out.Head, "git checkout "+branch)
 			}
@@ -278,7 +278,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 			// New branch: seed genesis — main memory ⊕ ancestry summary + previous commit raw tail.
 			if out, err := c.Seed.Seed(ctx, inbound.SeedInput{Cwd: cwd, FromBranch: prevBranch, NewBranch: branch, Provider: targetProvider, Author: c.Identity}); err == nil {
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
-				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd, out.SessionID)
+				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd)
 				fmt.Printf("cxt: seed created → branch %q (snapshot %s)\n", branch, shortHash(out.SnapshotID))
 				if _, ok := remotecfg.Origin(cwd); ok {
 					if _, perr := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd}); perr != nil && strings.Contains(perr.Error(), domain.ErrSyncConflict.Error()) {
@@ -325,10 +325,13 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 // current process ancestry. A boolean environment marker alone is insufficient:
 // resumed shells and app integrations can retain CXT_WRAPPED after the original
 // supervisor has exited, which previously caused an unrestartable boundary kill.
-func supervisedProvider() (domain.ProviderKind, bool) {
+func supervisedProvider(ctx context.Context, cwd string) (domain.ProviderKind, bool) {
 	agent := domain.ProviderKind(os.Getenv("CXT_WRAPPED_AGENT"))
 	if agent != domain.ProviderClaude && agent != domain.ProviderCodex {
-		agent = domain.ProviderClaude
+		// Pre-wrapper-env sessions and plain terminals carry no agent marker.
+		// A fixed claude default materialized claude seeds for live codex
+		// sessions (#35) — follow the provider that is actually active here.
+		agent = activeProviderForCwd(ctx, cwd)
 	}
 	if os.Getenv("CXT_WRAPPED") != "1" {
 		return agent, false
@@ -337,7 +340,62 @@ func supervisedProvider() (domain.ProviderKind, bool) {
 	if err != nil || wrapperPID <= 1 {
 		return agent, false
 	}
-	return agent, hasProcessAncestor(os.Getppid(), wrapperPID, processParentPID)
+	return agent, hasProcessAncestor(os.Getppid(), wrapperPID, snapshotParentPID())
+}
+
+// activeProviderForCwd picks the provider whose session file for this cwd was
+// modified most recently (claude on ties and when neither has sessions).
+func activeProviderForCwd(ctx context.Context, cwd string) domain.ProviderKind {
+	newest := func(paths []string) int64 {
+		var best int64
+		for _, p := range paths {
+			if info, err := os.Stat(p); err == nil {
+				if ns := info.ModTime().UnixNano(); ns > best {
+					best = ns
+				}
+			}
+		}
+		return best
+	}
+	return providerByRecency(newest(claudeSessionFiles(cwd)), newest(codexSessionFiles(ctx, cwd)))
+}
+
+func providerByRecency(claudeNewest, codexNewest int64) domain.ProviderKind {
+	if codexNewest > claudeNewest {
+		return domain.ProviderCodex
+	}
+	return domain.ProviderClaude
+}
+
+// snapshotParentPID reads the process table once and answers ancestry lookups
+// from memory — the previous per-ancestor `ps -p` spawned a process for every
+// step of the walk on the git-hook hot path (#35).
+func snapshotParentPID() func(int) (int, bool) {
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=").Output()
+	if err != nil {
+		return processParentPID // degraded fallback: per-pid query
+	}
+	table := parsePIDTable(out)
+	return func(pid int) (int, bool) {
+		ppid, ok := table[pid]
+		return ppid, ok && ppid > 0
+	}
+}
+
+func parsePIDTable(out []byte) map[int]int {
+	table := map[int]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		pid, perr := strconv.Atoi(fields[0])
+		ppid, qerr := strconv.Atoi(fields[1])
+		if perr == nil && qerr == nil && pid > 0 {
+			table[pid] = ppid
+		}
+	}
+	return table
 }
 
 func processParentPID(pid int) (int, bool) {
@@ -397,9 +455,12 @@ func codexSessionFiles(ctx context.Context, cwd string) []string {
 
 // restoredSessionID returns the canonical provider-rewritten resume target.
 // Materialization must have produced both a path and a trusted resume command.
-// For branch seeds, materializedID cross-checks the use-case output against the
-// command so a stale synthetic CIR ID cannot become the wrapper restart target.
-func restoredSessionID(path, resumeCmd, materializedID string) string {
+// The resume ID is cross-checked against the materialized file name — an
+// independent source (both materializers embed the rewritten ID in it) — so a
+// stale or mismatched resume command cannot become the wrapper restart target.
+// The previous cross-check compared two values parsed from the same command
+// string and could never disagree (#34).
+func restoredSessionID(path, resumeCmd string) string {
 	if path == "" || resumeCmd == "" {
 		return ""
 	}
@@ -411,7 +472,7 @@ func restoredSessionID(path, resumeCmd, materializedID string) string {
 	if !providerfs.ValidSessionID(resumeID) {
 		return ""
 	}
-	if materializedID != "" && (!providerfs.ValidSessionID(materializedID) || materializedID != resumeID) {
+	if !strings.Contains(filepath.Base(path), resumeID) {
 		return ""
 	}
 	return resumeID

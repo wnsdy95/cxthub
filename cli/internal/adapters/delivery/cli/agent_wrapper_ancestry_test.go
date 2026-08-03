@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"testing"
@@ -44,18 +45,40 @@ func TestSupervisedProviderRequiresOwningWrapperPID(t *testing.T) {
 	t.Setenv("CXT_WRAPPED", "1")
 	t.Setenv("CXT_WRAPPED_AGENT", "codex")
 	t.Setenv("CXT_WRAPPER_PID", strconv.Itoa(os.Getppid()))
-	provider, managed := supervisedProvider()
+	provider, managed := supervisedProvider(context.Background(), t.TempDir())
 	if provider != domain.ProviderCodex || !managed {
 		t.Fatalf("provider=%q managed=%v, want codex/true", provider, managed)
 	}
 
 	t.Setenv("CXT_WRAPPER_PID", "99999999")
-	if _, managed := supervisedProvider(); managed {
+	if _, managed := supervisedProvider(context.Background(), t.TempDir()); managed {
 		t.Fatal("stale wrapper PID was accepted")
 	}
 
 	t.Setenv("CXT_WRAPPER_PID", "")
-	if _, managed := supervisedProvider(); managed {
+	if _, managed := supervisedProvider(context.Background(), t.TempDir()); managed {
 		t.Fatal("missing wrapper PID was accepted")
+	}
+}
+
+func TestProviderByRecency(t *testing.T) {
+	if providerByRecency(0, 0) != domain.ProviderClaude {
+		t.Fatal("no sessions must default to claude")
+	}
+	if providerByRecency(100, 200) != domain.ProviderCodex {
+		t.Fatal("newer codex session was not selected")
+	}
+	if providerByRecency(200, 100) != domain.ProviderClaude {
+		t.Fatal("newer claude session was not selected")
+	}
+	if providerByRecency(100, 100) != domain.ProviderClaude {
+		t.Fatal("tie must stay claude")
+	}
+}
+
+func TestParsePIDTable(t *testing.T) {
+	table := parsePIDTable([]byte("  50   40\n40 30\ngarbage line here\n 30    1\n\n"))
+	if len(table) != 3 || table[50] != 40 || table[40] != 30 || table[30] != 1 {
+		t.Fatalf("parsed table = %v", table)
 	}
 }

@@ -9,11 +9,10 @@ import (
 func TestRestoredSessionID(t *testing.T) {
 	const sessionID = "12345678-1234-4abc-8def-1234567890ab"
 	tests := []struct {
-		name           string
-		path           string
-		resumeCmd      string
-		materializedID string
-		want           string
+		name      string
+		path      string
+		resumeCmd string
+		want      string
 	}{
 		{
 			name:      "claude materialization",
@@ -28,17 +27,17 @@ func TestRestoredSessionID(t *testing.T) {
 			want:      sessionID,
 		},
 		{
-			name:           "seed output agrees with resume command",
-			path:           "/tmp/materialized.jsonl",
-			resumeCmd:      "codex resume " + sessionID,
-			materializedID: sessionID,
-			want:           sessionID,
+			// The materialized file name is the independent cross-check (#34):
+			// a resume command pointing at a session the materializer did not
+			// write must never become the wrapper restart target.
+			name:      "resume target absent from materialized file name",
+			path:      "/tmp/materialized.jsonl",
+			resumeCmd: "codex resume " + sessionID,
 		},
 		{
-			name:           "seed output disagrees with resume command",
-			path:           "/tmp/materialized.jsonl",
-			resumeCmd:      "codex resume " + sessionID,
-			materializedID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			name:      "materialized file name carries a different session",
+			path:      "/tmp/.claude/projects/repo/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl",
+			resumeCmd: "claude --resume " + sessionID,
 		},
 		{
 			name:      "missing materialized path",
@@ -46,24 +45,18 @@ func TestRestoredSessionID(t *testing.T) {
 		},
 		{
 			name: "missing resume command",
-			path: "/tmp/materialized.jsonl",
+			path: "/tmp/" + sessionID + ".jsonl",
 		},
 		{
 			name:      "invalid resume target",
-			path:      "/tmp/materialized.jsonl",
+			path:      "/tmp/" + sessionID + ".jsonl",
 			resumeCmd: "codex resume ../../outside",
-		},
-		{
-			name:           "invalid materialized ID",
-			path:           "/tmp/materialized.jsonl",
-			resumeCmd:      "codex resume " + sessionID,
-			materializedID: "../../outside",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := restoredSessionID(tt.path, tt.resumeCmd, tt.materializedID); got != tt.want {
+			if got := restoredSessionID(tt.path, tt.resumeCmd); got != tt.want {
 				t.Fatalf("restoredSessionID() = %q, want %q", got, tt.want)
 			}
 		})
