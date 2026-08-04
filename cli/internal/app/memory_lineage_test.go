@@ -79,3 +79,35 @@ func TestNearestAncestorDigest(t *testing.T) {
 		t.Fatalf("overlay graft inheritance failed: ok=%v summary=%q", ok, d.Summary)
 	}
 }
+
+// TestBoundCarriedDigestKeepsNewestTail (#33 — bounded carry): the forward
+// working set is capped at memoryCarryBudgetBytes keeping the newest tail;
+// under-budget digests pass through unchanged.
+func TestBoundCarriedDigestKeepsNewestTail(t *testing.T) {
+	small := domain.MemoryDigest{Summary: "compact history", KeyFacts: []string{"f"}}
+	if got := boundCarriedDigest(small); got.Summary != small.Summary {
+		t.Fatalf("under-budget summary changed: %q", got.Summary)
+	}
+
+	big := domain.MemoryDigest{
+		Summary:   "OLDEST-GENERATION-HEAD\n" + strings.Repeat("m", 2*memoryCarryBudgetBytes) + "\nNEWEST-GENERATION-TAIL",
+		KeyFacts:  []string{"fact stays"},
+		OpenTasks: []string{"task stays"},
+	}
+	got := boundCarriedDigest(big)
+	if len(got.Summary) > memoryCarryBudgetBytes {
+		t.Fatalf("carried summary = %d bytes, want <= %d", len(got.Summary), memoryCarryBudgetBytes)
+	}
+	if !strings.Contains(got.Summary, "NEWEST-GENERATION-TAIL") {
+		t.Fatal("bounded carry lost the newest generation")
+	}
+	if strings.Contains(got.Summary, "OLDEST-GENERATION-HEAD") {
+		t.Fatal("bounded carry kept the oldest head instead of the newest tail")
+	}
+	if !strings.Contains(got.Summary, "[... earlier summary omitted ...]") {
+		t.Fatal("bounded carry missing the omission marker")
+	}
+	if len(got.KeyFacts) != 1 || len(got.OpenTasks) != 1 {
+		t.Fatalf("bullets changed: facts=%v tasks=%v", got.KeyFacts, got.OpenTasks)
+	}
+}

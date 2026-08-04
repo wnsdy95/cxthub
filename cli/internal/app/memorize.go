@@ -109,6 +109,7 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 		prior.KeyFacts = seedWorthyFacts(prior.KeyFacts)
 		digest = domain.MergeDigests(prior, digest)
 	}
+	digest = boundCarriedDigest(digest)
 	digest.SnapshotID = snap.ID
 
 	memHash, err := s.store.PutMemory(ctx, digest)
@@ -149,4 +150,22 @@ func nearestAncestorDigest(ctx context.Context, store outbound.SessionStore, sna
 		queue = append(queue, ps.ReachabilityParents()...)
 	}
 	return domain.MemoryDigest{}, false
+}
+
+// memoryCarryBudgetBytes bounds the summary carried forward by a merged digest
+// (#33 — bounded carry, user-approved policy). MergeDigests concatenates
+// generations oldest-first, so the forward working set grew without bound
+// (measured 768KB in the dogfood repo). The carried copy keeps the newest
+// tail; every prior generation's full digest object stays attached to its
+// ancestor snapshot (content-addressed, never deleted), so complete history
+// remains recoverable through the parent chain.
+const memoryCarryBudgetBytes = 256 << 10
+
+// boundCarriedDigest caps the summary of a digest that will be carried forward
+// (stored on a new snapshot or injected as a provider memory file).
+func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
+	if len(d.Summary) > memoryCarryBudgetBytes {
+		d.Summary = truncateUTF8Tail(d.Summary, memoryCarryBudgetBytes)
+	}
+	return d
 }
