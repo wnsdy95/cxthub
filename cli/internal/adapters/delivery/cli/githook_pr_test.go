@@ -151,7 +151,11 @@ func TestIncomingCommitSHAsOldestFirstAndBounded(t *testing.T) {
 	// Keep this repository hermetic. Developer/CI machines can have a global
 	// cxt hooksPath; running 202 commits through those hooks performs real
 	// checkpoint/network work and made this pure rev-list test flaky (#42).
+	// Disable ambient auto-maintenance too: a background pack can race TempDir
+	// cleanup after the 202-commit loop.
 	runGitForTest(t, repo, "config", "core.hooksPath", t.TempDir())
+	runGitForTest(t, repo, "config", "gc.auto", "0")
+	runGitForTest(t, repo, "config", "maintenance.auto", "false")
 	runGitForTest(t, repo, "config", "user.name", "Test")
 	runGitForTest(t, repo, "config", "user.email", "test@example.com")
 	for i := 0; i < 202; i++ {
