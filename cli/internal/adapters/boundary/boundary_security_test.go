@@ -80,6 +80,33 @@ func TestSupersedeRejectsOutsidePath(t *testing.T) {
 	}
 }
 
+func TestRestoreSupersededRollsBackFileAndLedger(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	sessionDir := filepath.Join(home, ".claude", "projects", "repo")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(sessionDir, providerfs.NewSessionID()+".jsonl")
+	if err := os.WriteFile(original, []byte("session\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	renamed := Supersede(repo, original)
+	if renamed == "" || !providerfs.CaptureExcluded(repo, original, 999) {
+		t.Fatal("session was not superseded")
+	}
+	if !RestoreSuperseded(repo, renamed) {
+		t.Fatal("superseded session was not restored")
+	}
+	if data, err := os.ReadFile(original); err != nil || string(data) != "session\n" {
+		t.Fatalf("restored file = %q, err=%v", data, err)
+	}
+	if providerfs.CaptureExcluded(repo, original, 999) {
+		t.Fatal("rollback left the session excluded in the ledger")
+	}
+}
+
 func writeBoundaryFixture(t *testing.T, repo string, b Boundary) {
 	t.Helper()
 	data, err := json.Marshal(b)

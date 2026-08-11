@@ -107,9 +107,9 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 	// Filter noisy prior KeyFacts so tool names and ingestion markers do not propagate forever across generations. Keep only sentence-form facts, using the same rules as the seed filter.
 	if prior, ok := nearestAncestorDigest(ctx, s.store, snap); ok {
 		prior.KeyFacts = seedWorthyFacts(prior.KeyFacts)
+		prior = boundCarriedDigest(prior)
 		digest = domain.MergeDigests(prior, digest)
 	}
-	digest = boundCarriedDigest(digest)
 	digest.SnapshotID = snap.ID
 
 	memHash, err := s.store.PutMemory(ctx, digest)
@@ -160,12 +160,40 @@ func nearestAncestorDigest(ctx context.Context, store outbound.SessionStore, sna
 // ancestor snapshot (content-addressed, never deleted), so complete history
 // remains recoverable through the parent chain.
 const memoryCarryBudgetBytes = 256 << 10
+const memoryCarryListBudgetBytes = 64 << 10
 
-// boundCarriedDigest caps the summary of a digest that will be carried forward
-// (stored on a new snapshot or injected as a provider memory file).
+// boundCarriedDigest caps only an inherited digest before it is merged into a
+// fresh generation. The fresh digest itself is never truncated: otherwise a
+// >256KiB native memory or newly generated summary would be lossy on its first
+// storage and there would be no full ancestor object to recover it from.
 func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
 	if len(d.Summary) > memoryCarryBudgetBytes {
 		d.Summary = truncateUTF8Tail(d.Summary, memoryCarryBudgetBytes)
 	}
+	d.KeyFacts = boundStringListTail(d.KeyFacts, memoryCarryListBudgetBytes)
+	d.OpenTasks = boundStringListTail(d.OpenTasks, memoryCarryListBudgetBytes)
 	return d
+}
+
+func boundStringListTail(items []string, maxBytes int) []string {
+	if maxBytes <= 0 || len(items) == 0 {
+		return nil
+	}
+	used := 0
+	start := len(items)
+	for start > 0 {
+		n := len(items[start-1])
+		if used+n > maxBytes {
+			break
+		}
+		used += n
+		start--
+	}
+	if start == 0 {
+		return items
+	}
+	if start == len(items) {
+		return []string{truncateUTF8Tail(items[len(items)-1], maxBytes)}
+	}
+	return append([]string(nil), items[start:]...)
 }

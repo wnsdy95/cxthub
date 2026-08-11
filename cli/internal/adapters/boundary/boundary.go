@@ -117,6 +117,28 @@ func Supersede(repoRoot, path string) string {
 	return renamed
 }
 
+// RestoreSuperseded rolls back Supersede when the transition boundary could
+// not be recorded. The bytes remain recoverable even if rename-back fails; in
+// that case the ledger marker is intentionally retained.
+func RestoreSuperseded(repoRoot, renamed string) bool {
+	if !providerfs.IsProviderSessionPath(renamed) {
+		return false
+	}
+	original := strings.TrimSuffix(renamed, ".superseded")
+	if original == renamed {
+		return providerfs.UnmarkSuperseded(repoRoot, original) == nil
+	}
+	if _, err := os.Stat(original); err == nil {
+		// A provider recreated the path while its old descriptor pointed at the
+		// renamed file. Never replace those newly written bytes.
+		return false
+	}
+	if err := os.Rename(renamed, original); err != nil {
+		return false
+	}
+	return providerfs.UnmarkSuperseded(repoRoot, original) == nil
+}
+
 // Notify sends an OS alert (best-effort — macOS osascript / Linux notify-send).
 func Notify(title, msg string) {
 	switch runtime.GOOS {

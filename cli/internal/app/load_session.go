@@ -513,11 +513,9 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 	// Heritage continuation (same logic as memorize): Merge the closest ancestor digest to inherit —
 	// appending the context to memory mode loads the previous context's memory even if the context is merged.
 	if prior, ok := nearestAncestorDigest(ctx, s.store, snap); ok {
+		prior = boundCarriedDigest(prior)
 		digest = domain.MergeDigests(prior, digest)
 	}
-	// Injected provider memory files are a forward working copy too — bounded
-	// carry (#33) keeps the newest tail instead of writing an ever-growing file.
-	digest = boundCarriedDigest(digest)
 	digest.SnapshotID = snap.ID
 	if digest.Provider == "" {
 		digest.Provider = target
