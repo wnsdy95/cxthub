@@ -159,3 +159,5 @@ jobs:
             -v "$RUNNER_TEMP/terraform-data:/tmp/terraform-data" \
             -w /workspace \
             hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963 test
+      - name: Signed GitHub webhook operator tests
+        run: bash scripts/test-github-webhook.sh

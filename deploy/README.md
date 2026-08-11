@@ -38,6 +38,19 @@ repository webhook:
 - Events: select **Pull requests**
 - Active: enabled
 
+After the API deployment and same-origin `/api` rewrite are live, reconcile the
+hook without exposing its secret on the command line:
+
+```bash
+scripts/github-webhook.sh apply
+```
+
+The command fails before changing GitHub when the public health endpoint or
+Secret Manager version is unavailable. It then creates or reconciles exactly
+one hook and requires a successful signed GitHub ping. Use `check` for a
+read-only drift check. `TF_VAR_gcp_project` and `TF_VAR_domain` are required;
+`CXT_GITHUB_REPOSITORY=owner/repo` overrides the current `gh` repository.
+
 On a same-repository PR `closed` event with `merged: true`, `cxtd` appends the
 head context branch tip to the base context branch. This preserves the source
 branch and immutable natural snapshot parents; the append is represented by
