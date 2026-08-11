@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -37,8 +39,17 @@ func NewGitHubPRMergeResolver() *GitHubPRMergeResolver {
 	return newGitHubPRMergeResolver(
 		&http.Client{Timeout: githubResolveWindow},
 		githubAPIBase,
-		githubToken,
+		cachedToken(githubToken),
 	)
+}
+
+func cachedToken(resolve func() string) func() string {
+	var once sync.Once
+	var token string
+	return func() string {
+		once.Do(func() { token = resolve() })
+		return token
+	}
 }
 
 func newGitHubPRMergeResolver(client *http.Client, apiBase string, token func() string) *GitHubPRMergeResolver {
@@ -50,12 +61,33 @@ func newGitHubPRMergeResolver(client *http.Client, apiBase string, token func() 
 }
 
 func githubToken() string {
+	return discoverGitHubToken(os.Getenv, githubCLIToken)
+}
+
+func discoverGitHubToken(getenv func(string) string, cliToken func() string) string {
 	for _, name := range []string{"CXT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
-		if token := strings.TrimSpace(os.Getenv(name)); token != "" {
+		if token := strings.TrimSpace(getenv(name)); token != "" {
 			return token
 		}
 	}
+	if cliToken != nil {
+		return strings.TrimSpace(cliToken())
+	}
 	return ""
+}
+
+// githubCLIToken reuses the user's existing `gh auth login` credential when
+// no explicit environment token is configured. gh may keep the token in the
+// OS keyring (not ~/.config/gh), so invoking its non-interactive token command
+// is the only portable discovery path. Keep this bounded inside Git hooks.
+func githubCLIToken() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "gh", "auth", "token", "--hostname", "github.com").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 type githubPullRequest struct {
@@ -185,6 +217,10 @@ func (r *GitHubPRMergeResolver) getJSON(ctx context.Context, endpoint string, ou
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		remaining := strings.TrimSpace(resp.Header.Get("X-RateLimit-Remaining"))
+		if remaining != "" {
+			return fmt.Errorf("github PR resolver: GitHub API returned %s (rate-limit remaining=%s)", resp.Status, remaining)
+		}
 		return fmt.Errorf("github PR resolver: GitHub API returned %s", resp.Status)
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out); err != nil {

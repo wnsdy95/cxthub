@@ -41,6 +41,37 @@ func TestGitHubRepository(t *testing.T) {
 	}
 }
 
+func TestDiscoverGitHubTokenPrecedenceAndCLIFallback(t *testing.T) {
+	values := map[string]string{
+		"CXT_GITHUB_TOKEN": " cxt-token ",
+		"GH_TOKEN":         "gh-env-token",
+		"GITHUB_TOKEN":     "actions-token",
+	}
+	getenv := func(name string) string { return values[name] }
+	cliCalls := 0
+	cli := func() string { cliCalls++; return "gh-keyring-token" }
+	if got := discoverGitHubToken(getenv, cli); got != "cxt-token" || cliCalls != 0 {
+		t.Fatalf("explicit precedence = %q, cli calls=%d", got, cliCalls)
+	}
+	delete(values, "CXT_GITHUB_TOKEN")
+	if got := discoverGitHubToken(getenv, cli); got != "gh-env-token" || cliCalls != 0 {
+		t.Fatalf("GH_TOKEN precedence = %q, cli calls=%d", got, cliCalls)
+	}
+	delete(values, "GH_TOKEN")
+	delete(values, "GITHUB_TOKEN")
+	if got := discoverGitHubToken(getenv, cli); got != "gh-keyring-token" || cliCalls != 1 {
+		t.Fatalf("CLI fallback = %q, cli calls=%d", got, cliCalls)
+	}
+}
+
+func TestCachedTokenResolvesOnce(t *testing.T) {
+	calls := 0
+	resolve := cachedToken(func() string { calls++; return "token" })
+	if resolve() != "token" || resolve() != "token" || calls != 1 {
+		t.Fatalf("cached token calls=%d", calls)
+	}
+}
+
 func TestGitHubPRMergeResolver(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +177,7 @@ func TestGitHubPRMergeResolverHTTPFailure(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
 		http.Error(w, "rate limited with secret details", http.StatusForbidden)
 	}))
 	defer server.Close()
@@ -159,6 +191,9 @@ func TestGitHubPRMergeResolverHTTPFailure(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "403 Forbidden") {
 		t.Fatalf("error = %v, want sanitized HTTP status", err)
+	}
+	if !strings.Contains(err.Error(), "rate-limit remaining=0") {
+		t.Fatalf("error omitted safe rate-limit diagnostic: %v", err)
 	}
 	if strings.Contains(err.Error(), "secret details") {
 		t.Fatalf("error leaked response body: %v", err)
