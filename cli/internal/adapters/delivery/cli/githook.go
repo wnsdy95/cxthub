@@ -238,43 +238,46 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		fmt.Printf("cxt: prepare mode — no recovery. Context switch: cxt checkout %s\n", branch)
 		return nil
 	}
-
-	// 2) Isolation: old session ended at switch point — subsequent utterances are not recorded.
-	// Isolates all session files in this cwd, not just the latest session: branch switch changes disk state (all session prerequisites), so must prevent remaining sessions from being erroneously active in next commit (multi-terminal cases included). Applies to claude/codex as well.
-	var superseded []string
-	for _, p := range append(claudeSessionFiles(cwd), codexSessionFiles(ctx, cwd)...) {
-		if renamed := boundary.Supersede(cwd, p); renamed != "" {
-			superseded = append(superseded, renamed)
-		}
+	if detached {
+		// Detached HEAD has no target branch context to prepare. Keep every live
+		// provider session captureable; isolating first would strand the running
+		// agent without a restart target.
+		fmt.Println("cxt: detached HEAD — time travel mode (current session maintained). Recovery: cxt checkout <ref>")
+		return nil
 	}
 
-	// 3) Recovery/seed.
-	b := boundary.Boundary{PrevBranch: prevBranch, Branch: branch, Superseded: superseded}
-	switch {
-	case detached:
-		fmt.Println("cxt: detached HEAD — time travel mode (no context capture). Recovery: cxt checkout <ref>")
-	default:
-		existing, lerr := c.List.List(ctx, inbound.ListInput{Branch: branch})
+	// 2) Prepare recovery/seed before mutating any provider session file. A
+	// failed or memory-only materialization must leave the current session
+	// captureable; isolation is the commit step of this transition.
+	b := boundary.Boundary{PrevBranch: prevBranch, Branch: branch}
+	prepareExpected := false
+	var prepareErr error
+	existing, lerr := c.List.List(ctx, inbound.ListInput{Branch: branch})
+	if lerr != nil {
+		prepareErr = lerr
+	} else {
 		// fork-only ref (web fork connection·git branch fork) exists without label snapshot —
 		// this is also an "existing branch" (seed override invalidates fork connection).
 		hasRef := false
-		if lerr == nil {
-			for _, r := range existing.Refs {
-				if r.Kind == domain.RefBranch && r.Name == branch && r.Target != "" {
-					hasRef = true
-					break
-				}
+		for _, r := range existing.Refs {
+			if r.Kind == domain.RefBranch && r.Name == branch && r.Target != "" {
+				hasRef = true
+				break
 			}
 		}
-		if lerr == nil && (len(existing.Snapshots) > 0 || hasRef) {
+		if len(existing.Snapshots) > 0 || hasRef {
+			prepareExpected = true
 			// Existing branch: load context of that task (current context is not carried).
 			if out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{From: branch, TargetProvider: targetProvider, Mode: hookLoadMode(cwd), Cwd: cwd}); err == nil {
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
 				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd)
 				fmt.Printf("cxt: %q context prepared  [fidelity: %s]\n", branch, out.Fidelity)
 				syncSettingsToSnapshot(ctx, c, cwd, out.Head, "git checkout "+branch)
+			} else {
+				prepareErr = err
 			}
 		} else if prevBranch != "" && prevBranch != branch {
+			prepareExpected = true
 			// New branch: seed genesis — main memory ⊕ ancestry summary + previous commit raw tail.
 			if out, err := c.Seed.Seed(ctx, inbound.SeedInput{Cwd: cwd, FromBranch: prevBranch, NewBranch: branch, Provider: targetProvider, Author: c.Identity}); err == nil {
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
@@ -286,27 +289,47 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 						hookWarn("remote context branch %q exists with same name (web fork?) — push reordering will occur", branch)
 					}
 				}
+			} else {
+				prepareErr = err
 			}
 		}
 	}
 
-	// 4) Boundary signal + execution.
-	if len(superseded) > 0 || b.SeedPath != "" {
-		if !boundaryTransitionSafe(b, wrapperManaged) {
-			hookWarn("context boundary has no valid resume target; active agent was not terminated — continue explicitly with cxt checkout %s", branch)
-			return nil
+	// 3) Preflight the complete restart target before isolation. In particular,
+	// memory-mode fallback has a path but no resume command and cannot restart a
+	// wrapper child automatically.
+	if !transitionPreflightSafe(prepareErr, prepareExpected, b, wrapperManaged) {
+		hookWarn("context recovery was not restartable; current session was preserved — continue explicitly with cxt checkout %s", branch)
+		return nil
+	}
+
+	// 4) Commit isolation only after recovery preflight succeeds. Isolate all
+	// sessions in this cwd (multi-terminal invariant), then atomically record the
+	// boundary consumed by the wrapper. The newly materialized restart target is
+	// deliberately excluded from the old-session inventory.
+	for _, p := range append(claudeSessionFiles(cwd), codexSessionFiles(ctx, cwd)...) {
+		if !shouldSupersedeSession(p, b.SeedPath) {
+			continue
 		}
+		if renamed := boundary.Supersede(cwd, p); renamed != "" {
+			b.Superseded = append(b.Superseded, renamed)
+		}
+	}
+	if len(b.Superseded) > 0 || b.SeedPath != "" {
 		if err := boundary.Record(cwd, b); err != nil {
+			for i := len(b.Superseded) - 1; i >= 0; i-- {
+				_ = boundary.RestoreSuperseded(cwd, b.Superseded[i])
+			}
 			hookWarn("context boundary was not recorded; active agent was not terminated: %v", err)
 			return nil
 		}
 		if b.ResumeCmd != "" {
 			fmt.Printf("cxt: ⚠ Context switch — previous session is isolated (not recorded). Continue: %s\n", b.ResumeCmd)
-		} else if len(superseded) > 0 {
+		} else if len(b.Superseded) > 0 {
 			fmt.Println("cxt: ⚠ Context switch — previous session is isolated (not recorded)")
 		}
 		boundary.Notify("cxt Context switch", fmt.Sprintf("%s → %s — previous session isolated, new context prepared", b.PrevBranch, b.Branch))
-		if len(superseded) > 0 && remotecfg.BoundaryEnforce(cwd) == "kill" && wrapperManaged {
+		if len(b.Superseded) > 0 && remotecfg.BoundaryEnforce(cwd) == "kill" && wrapperManaged {
 			// Detach session agent delay end — detached helper (hook can be a descendant of the agent, so it cannot be killed immediately). The wrapper (cxt claude) detects child death and automatically restarts the seed.
 			if exe, err := os.Executable(); err == nil {
 				cmd := exec.Command(exe, "git-hook", "boundary-enforce")
@@ -314,7 +337,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 				_ = cmd.Start()
 			}
-		} else if len(superseded) > 0 && remotecfg.BoundaryEnforce(cwd) == "kill" {
+		} else if len(b.Superseded) > 0 && remotecfg.BoundaryEnforce(cwd) == "kill" {
 			hookWarn("no live owning cxt wrapper — active agent was not terminated; continue explicitly with %s", b.ResumeCmd)
 		}
 	}
@@ -343,21 +366,23 @@ func supervisedProvider(ctx context.Context, cwd string) (domain.ProviderKind, b
 	return agent, hasProcessAncestor(os.Getppid(), wrapperPID, snapshotParentPID())
 }
 
-// activeProviderForCwd picks the provider whose session file for this cwd was
-// modified most recently (claude on ties and when neither has sessions).
+// activeProviderForCwd picks the provider whose capture-eligible active session
+// for this cwd was modified most recently (claude on ties and when neither has
+// sessions). Use LocateActiveSession rather than the isolation inventory: the
+// latter intentionally includes ledger-excluded materialized recovery files.
 func activeProviderForCwd(ctx context.Context, cwd string) domain.ProviderKind {
-	newest := func(paths []string) int64 {
-		var best int64
-		for _, p := range paths {
-			if info, err := os.Stat(p); err == nil {
-				if ns := info.ModTime().UnixNano(); ns > best {
-					best = ns
-				}
-			}
+	mtime := func(path string, err error) int64 {
+		if err != nil || path == "" {
+			return 0
 		}
-		return best
+		if info, statErr := os.Stat(path); statErr == nil {
+			return info.ModTime().UnixNano()
+		}
+		return 0
 	}
-	return providerByRecency(newest(claudeSessionFiles(cwd)), newest(codexSessionFiles(ctx, cwd)))
+	claudePath, claudeErr := capture.NewClaudeCapture().LocateActiveSession(ctx, cwd)
+	codexPath, codexErr := capture.NewCodexCapture().LocateActiveSession(ctx, cwd)
+	return providerByRecency(mtime(claudePath, claudeErr), mtime(codexPath, codexErr))
 }
 
 func providerByRecency(claudeNewest, codexNewest int64) domain.ProviderKind {
@@ -485,6 +510,20 @@ func boundaryTransitionSafe(b boundary.Boundary, wrapperManaged bool) bool {
 	restartable := b.SeedPath != "" && b.ResumeCmd != "" && providerfs.ValidSessionID(b.SeedID)
 	preparedResume := b.SeedPath != "" || b.ResumeCmd != "" || b.SeedID != ""
 	return restartable || (!wrapperManaged && !preparedResume)
+}
+
+func transitionPreflightSafe(prepareErr error, prepareExpected bool, b boundary.Boundary, wrapperManaged bool) bool {
+	if prepareErr != nil {
+		return false
+	}
+	if prepareExpected || wrapperManaged {
+		return boundaryTransitionSafe(b, wrapperManaged)
+	}
+	return true
+}
+
+func shouldSupersedeSession(path, preparedSeedPath string) bool {
+	return path != "" && (preparedSeedPath == "" || filepath.Clean(path) != filepath.Clean(preparedSeedPath))
 }
 
 // runGitHook handles `cxt git-hook <event> [args...]`. Always returns nil (fail-open).

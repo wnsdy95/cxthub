@@ -42,4 +42,30 @@ func TestLedger(t *testing.T) {
 	if !CaptureExcluded(root, sess, info.Size()+9999) {
 		t.Fatal("Isolation session captured as paused (isolation breakdown)")
 	}
+	if err := UnmarkSuperseded(root, sess); err != nil {
+		t.Fatalf("unmark superseded: %v", err)
+	}
+	if CaptureExcluded(root, sess, info.Size()+9999) {
+		t.Fatal("rolled-back isolation remains excluded")
+	}
+}
+
+func TestUnmarkSupersededRestoresMaterializationGate(t *testing.T) {
+	root := t.TempDir()
+	sess := filepath.Join(root, "seed.jsonl")
+	if err := os.WriteFile(sess, []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordMaterialized(root, sess); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkSuperseded(root, sess); err != nil {
+		t.Fatal(err)
+	}
+	if err := UnmarkSuperseded(root, sess); err != nil {
+		t.Fatal(err)
+	}
+	if !CaptureExcluded(root, sess, int64(len("seed"))) {
+		t.Fatal("rollback discarded the pre-existing materialization gate")
+	}
 }
