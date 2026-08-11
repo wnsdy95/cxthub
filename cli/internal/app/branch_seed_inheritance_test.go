@@ -419,8 +419,8 @@ func TestBranchSeedCarriedMemoryIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(carried.Summary) > memoryCarryBudgetBytes {
-		t.Fatalf("carried seed memory = %d bytes, want <= %d", len(carried.Summary), memoryCarryBudgetBytes)
+	if len(carried.Summary) > memoryCarryBudgetBytes+len("\n\nfresh lineage summary") {
+		t.Fatalf("carried seed memory = %d bytes, inherited carry exceeded %d", len(carried.Summary), memoryCarryBudgetBytes)
 	}
 	if !strings.Contains(carried.Summary, "NEWEST-GENERATION-TAIL") || !strings.Contains(carried.Summary, "fresh lineage summary") {
 		t.Fatal("carried seed memory lost the newest generations")

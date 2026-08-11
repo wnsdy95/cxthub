@@ -111,3 +111,30 @@ func TestBoundCarriedDigestKeepsNewestTail(t *testing.T) {
 		t.Fatalf("bullets changed: facts=%v tasks=%v", got.KeyFacts, got.OpenTasks)
 	}
 }
+
+// A fresh generation is not a carried ancestor and must remain byte-for-byte
+// intact even when it exceeds the carry budget. Only the inherited side is
+// bounded before MergeDigests.
+func TestBoundedCarryDoesNotTruncateFreshDigest(t *testing.T) {
+	prior := domain.MemoryDigest{Summary: strings.Repeat("old", memoryCarryBudgetBytes)}
+	freshText := "FRESH-HEAD\n" + strings.Repeat("new", memoryCarryBudgetBytes) + "\nFRESH-TAIL"
+	fresh := domain.MemoryDigest{Summary: freshText}
+	merged := domain.MergeDigests(boundCarriedDigest(prior), fresh)
+	if !strings.Contains(merged.Summary, freshText) {
+		t.Fatal("fresh digest was truncated while limiting inherited carry")
+	}
+}
+
+func TestBoundCarriedDigestBoundsStructuredListsFromNewestTail(t *testing.T) {
+	d := domain.MemoryDigest{
+		KeyFacts:  []string{"old-fact", strings.Repeat("f", memoryCarryListBudgetBytes), "new-fact"},
+		OpenTasks: []string{"old-task", strings.Repeat("t", memoryCarryListBudgetBytes), "new-task"},
+	}
+	got := boundCarriedDigest(d)
+	if len(got.KeyFacts) != 1 || got.KeyFacts[0] != "new-fact" {
+		t.Fatalf("facts carry = %v, want newest tail", got.KeyFacts)
+	}
+	if len(got.OpenTasks) != 1 || got.OpenTasks[0] != "new-task" {
+		t.Fatalf("tasks carry = %v, want newest tail", got.OpenTasks)
+	}
+}

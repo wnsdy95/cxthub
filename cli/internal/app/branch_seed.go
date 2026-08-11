@@ -98,6 +98,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		if mainMem == nil && mainDocAvailable {
 			if d, derr := s.distiller.Distill(ctx, mainDoc.CIR, nil); derr == nil {
 				if prior, ok := nearestAncestorDigest(ctx, s.store, mainSnap); ok {
+					prior = boundCarriedDigest(prior)
 					d = domain.MergeDigests(prior, d)
 				}
 				mainMem = &d
@@ -111,6 +112,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		return inbound.SeedOutput{}, err
 	}
 	if prior, ok := nearestAncestorDigest(ctx, s.store, fromSnap); ok {
+		prior = boundCarriedDigest(prior)
 		branchMem = domain.MergeDigests(prior, branchMem)
 	}
 
@@ -163,9 +165,8 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	// through the parent chain's memory objects.
 	seedMemory := branchMem
 	if mainMem != nil {
-		seedMemory = domain.MergeDigests(*mainMem, branchMem)
+		seedMemory = domain.MergeDigests(boundCarriedDigest(*mainMem), branchMem)
 	}
-	seedMemory = boundCarriedDigest(seedMemory)
 	seedMemory.SnapshotID = docHash
 	if seedMemory.Provider == "" {
 		seedMemory.Provider = provider
