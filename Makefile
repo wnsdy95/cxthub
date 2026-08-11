@@ -109,3 +109,10 @@ deploy-check-accounts: ## Read-only check for GCP/Vercel account credentials
 .PHONY: deploy-check-ready
 deploy-check-ready: ## Run final read-only checks for bootstrap resources and the image
 	bash scripts/deploy-preflight.sh ready
+
+.PHONY: webhook-check webhook-apply
+webhook-check: ## Verify the production signed GitHub PR webhook without changes
+	bash scripts/github-webhook.sh check
+
+webhook-apply: ## Create or reconcile the production signed GitHub PR webhook
+	bash scripts/github-webhook.sh apply
