@@ -156,14 +156,16 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		return inbound.SeedOutput{}, err
 	}
 	// The materialized prompt is intentionally bounded, but the branch must not
-	// lose the complete inherited digest. Attach the untruncated main +
-	// departure-lineage memory to the seed snapshot so the next memorize/seed
-	// operation inherits the full value rather than re-distilling the truncated
-	// summary event.
+	// lose the inherited digest. Attach the merged main + departure-lineage
+	// memory to the seed snapshot so the next memorize/seed operation inherits
+	// it rather than re-distilling the truncated summary event. The carried
+	// copy is bounded (#33 — newest tail); older generations stay reachable
+	// through the parent chain's memory objects.
 	seedMemory := branchMem
 	if mainMem != nil {
 		seedMemory = domain.MergeDigests(*mainMem, branchMem)
 	}
+	seedMemory = boundCarriedDigest(seedMemory)
 	seedMemory.SnapshotID = docHash
 	if seedMemory.Provider == "" {
 		seedMemory.Provider = provider

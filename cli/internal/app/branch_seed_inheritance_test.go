@@ -384,3 +384,56 @@ func TestRenderSeedTextKeepsBulletsAndNewestSummaryTail(t *testing.T) {
 		}
 	}
 }
+
+// TestBranchSeedCarriedMemoryIsBounded (#33): a seed born under an oversized
+// main memory stores a bounded carried digest (newest tail), while the
+// ancestor's full memory object stays untouched and reachable via the parent.
+func TestBranchSeedCarriedMemoryIsBounded(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-mem-cap", DefaultBranch: "main", LocalPath: t.TempDir()}
+	oversized := "OLDEST-GENERATION-HEAD\n" + strings.Repeat("project memory ", 2*memoryCarryBudgetBytes/15) + "\nNEWEST-GENERATION-TAIL"
+	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main",
+		[]domain.Event{seedMessage("user", "latest main request", 0)}, nil,
+		&domain.MemoryDigest{Summary: oversized, Provider: domain.ProviderCodex})
+	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
+
+	service := NewBranchSeedService(
+		branchSeedGit{repo: repo},
+		store,
+		stubDistiller{d: domain.MemoryDigest{Summary: "fresh lineage summary"}},
+		nil,
+		nil,
+	)
+	out, err := service.Seed(ctx, inbound.SeedInput{
+		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/cap", Provider: domain.ProviderCodex,
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	seedSnap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil || seedSnap.MemoryHash == "" {
+		t.Fatalf("seed snapshot missing memory: %+v err=%v", seedSnap, err)
+	}
+	carried, err := store.GetMemory(ctx, seedSnap.MemoryHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(carried.Summary) > memoryCarryBudgetBytes {
+		t.Fatalf("carried seed memory = %d bytes, want <= %d", len(carried.Summary), memoryCarryBudgetBytes)
+	}
+	if !strings.Contains(carried.Summary, "NEWEST-GENERATION-TAIL") || !strings.Contains(carried.Summary, "fresh lineage summary") {
+		t.Fatal("carried seed memory lost the newest generations")
+	}
+	mainSnap, err := store.GetSnapshot(ctx, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := store.GetMemory(ctx, mainSnap.MemoryHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Summary != oversized {
+		t.Fatal("ancestor full memory object changed — history must stay recoverable")
+	}
+}

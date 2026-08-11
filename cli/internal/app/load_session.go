@@ -515,6 +515,9 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 	if prior, ok := nearestAncestorDigest(ctx, s.store, snap); ok {
 		digest = domain.MergeDigests(prior, digest)
 	}
+	// Injected provider memory files are a forward working copy too — bounded
+	// carry (#33) keeps the newest tail instead of writing an ever-growing file.
+	digest = boundCarriedDigest(digest)
 	digest.SnapshotID = snap.ID
 	if digest.Provider == "" {
 		digest.Provider = target
