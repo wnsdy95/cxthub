@@ -109,6 +109,183 @@ func makeChunkedClientDoc(t *testing.T, events int) (domain.SessionDoc, chunkcas
 	return doc, plan
 }
 
+func makePullClientDoc(t *testing.T, repoID string) (domain.Snapshot, domain.SessionDoc) {
+	t.Helper()
+	cir := domain.CIRDocument{
+		Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex, Fidelity: domain.FidelityFull, GitBranch: "main"},
+		Events:   []domain.Event{{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "pull delta"}}}},
+	}
+	canonical, err := domain.CanonicalBytes(cir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := domain.SessionDoc{Hash: domain.HashContent(canonical), CIR: cir}
+	snap := domain.Snapshot{ID: doc.Hash, RepoID: repoID, Branch: "main", DocHash: doc.Hash, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull, Message: "commit"}
+	return snap, doc
+}
+
+func TestPullSkipsUnchangedSnapshotMetadata(t *testing.T) {
+	repoID := string(domain.HashContent([]byte("delta-pull-repo")))
+	const snapshotCount = 301
+	index := make([]domain.ContentHash, 0, snapshotCount)
+	states := make(map[domain.ContentHash]domain.ContentHash, snapshotCount)
+	for i := 0; i < snapshotCount; i++ {
+		id := domain.HashContent([]byte{byte(i >> 8), byte(i)})
+		snap := domain.Snapshot{ID: id, RepoID: repoID, Branch: "main", DocHash: id, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull, Message: "commit"}
+		state, err := domain.SnapshotStateHash(snap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		index = append(index, id)
+		states[id] = state
+	}
+	ref := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repoID, Target: index[len(index)-1]}
+	objectCalls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/manifest"):
+			_ = json.NewEncoder(w).Encode(domain.Manifest{
+				RepoID: repoID, SnapshotIndex: index, SnapshotStates: states, Refs: []domain.Ref{ref},
+			})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pull/objects"):
+			objectCalls++
+			http.Error(w, "unchanged pull requested objects", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	snaps, docs, refs, err := c.Pull(context.Background(), repoID, states, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if objectCalls != 0 || len(snaps) != 0 || len(docs) != 0 || len(refs) != 1 || refs[0].Target != ref.Target {
+		t.Fatalf("calls=%d snapshots=%d docs=%d refs=%+v", objectCalls, len(snaps), len(docs), refs)
+	}
+}
+
+func TestPullFetchesChangedStateAndVerifiesManifestToken(t *testing.T) {
+	repoID := string(domain.HashContent([]byte("changed-pull-repo")))
+	snap, _ := makePullClientDoc(t, repoID)
+	snap.Grafted = true
+	snap.GraftParents = []domain.ContentHash{domain.HashContent([]byte("graft-parent"))}
+	snap.GraftSeq = 3
+	state, err := domain.SnapshotStateHash(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localState := domain.HashContent([]byte("old-state"))
+	var wants []domain.ContentHash
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/manifest"):
+			_ = json.NewEncoder(w).Encode(domain.Manifest{RepoID: repoID, SnapshotIndex: []domain.ContentHash{snap.ID}, SnapshotStates: map[domain.ContentHash]domain.ContentHash{snap.ID: state}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pull/objects"):
+			var req pullReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			wants = append(wants, req.SnapshotWants...)
+			_ = json.NewEncoder(w).Encode(pullResp{Snapshots: []domain.Snapshot{snap}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	snaps, docs, _, err := c.Pull(context.Background(), repoID, map[domain.ContentHash]domain.ContentHash{snap.ID: localState}, []domain.ContentHash{snap.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wants) != 1 || wants[0] != snap.ID || len(snaps) != 1 || len(docs) != 0 {
+		t.Fatalf("wants=%v snapshots=%d docs=%d", wants, len(snaps), len(docs))
+	}
+
+	// A state catalog is an integrity commitment, not merely a cache hint.
+	snap.Message = "tampered after manifest"
+	if _, _, _, err := c.Pull(context.Background(), repoID, map[domain.ContentHash]domain.ContentHash{snap.ID: localState}, []domain.ContentHash{snap.ID}); !errors.Is(err, domain.ErrHashMismatch) {
+		t.Fatalf("mismatched state response error = %v", err)
+	}
+}
+
+func TestPullLegacyManifestFallsBackAndMissingDocForcesSnapshot(t *testing.T) {
+	repoID := string(domain.HashContent([]byte("legacy-pull-repo")))
+	snap, doc := makePullClientDoc(t, repoID)
+	state, err := domain.SnapshotStateHash(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, modern := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "missing-doc"}[modern], func(t *testing.T) {
+			snapshotCalls, docCalls := 0, 0
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/manifest"):
+					manifest := domain.Manifest{RepoID: repoID, SnapshotIndex: []domain.ContentHash{snap.ID}}
+					if modern {
+						manifest.SnapshotStates = map[domain.ContentHash]domain.ContentHash{snap.ID: state}
+					}
+					_ = json.NewEncoder(w).Encode(manifest)
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pull/objects"):
+					var req pullReq
+					_ = json.NewDecoder(r.Body).Decode(&req)
+					switch {
+					case len(req.SnapshotWants) > 0:
+						snapshotCalls++
+						_ = json.NewEncoder(w).Encode(pullResp{Snapshots: []domain.Snapshot{snap}})
+					case len(req.DocManifestWants) > 0:
+						docCalls++
+						_ = json.NewEncoder(w).Encode(pullResp{Docs: []domain.SessionDoc{doc}})
+					default:
+						http.Error(w, "unexpected pull request", http.StatusBadRequest)
+					}
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer ts.Close()
+
+			c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+			localStates := map[domain.ContentHash]domain.ContentHash{snap.ID: state}
+			docHaves := []domain.ContentHash{snap.ID}
+			if modern {
+				docHaves = nil
+			}
+			snaps, docs, _, err := c.Pull(context.Background(), repoID, localStates, docHaves)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshotCalls != 1 || len(snaps) != 1 {
+				t.Fatalf("snapshot calls=%d snapshots=%d", snapshotCalls, len(snaps))
+			}
+			if modern && (docCalls != 1 || len(docs) != 1) {
+				t.Fatalf("missing-doc repair calls=%d docs=%d", docCalls, len(docs))
+			}
+			if !modern && (docCalls != 0 || len(docs) != 0) {
+				t.Fatalf("legacy existing-doc calls=%d docs=%d", docCalls, len(docs))
+			}
+		})
+	}
+}
+
+func TestRemoteManifestRejectsPartialSnapshotStates(t *testing.T) {
+	repoID := string(domain.HashContent([]byte("partial-state-repo")))
+	a := domain.HashContent([]byte("a"))
+	b := domain.HashContent([]byte("b"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(domain.Manifest{
+			RepoID: repoID, SnapshotIndex: []domain.ContentHash{a, b},
+			SnapshotStates: map[domain.ContentHash]domain.ContentHash{a: domain.HashContent([]byte("state-a"))},
+		})
+	}))
+	defer ts.Close()
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if _, err := c.RemoteManifest(context.Background(), repoID); !errors.Is(err, domain.ErrHashMismatch) {
+		t.Fatalf("partial state catalog error = %v", err)
+	}
+}
+
 func TestChunkUploadBatchesEnforceRawAndCountBounds(t *testing.T) {
 	countChunks := make([]chunkObjWire, maxChunkWireObjects+1)
 	for i := range countChunks {

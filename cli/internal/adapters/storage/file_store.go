@@ -760,6 +760,7 @@ func (s *FileStore) Manifest(ctx context.Context, repoID string) (domain.Manifes
 	}
 	var index []domain.ContentHash
 	memoryAttachments := map[domain.ContentHash]domain.ContentHash{}
+	snapshotStates := map[domain.ContentHash]domain.ContentHash{}
 	dir := filepath.Join(s.storeDir(), "objects", "snapshots")
 	if entries, err := readCxtDir(dir); err == nil {
 		for _, e := range entries {
@@ -778,6 +779,11 @@ func (s *FileStore) Manifest(ctx context.Context, repoID string) (domain.Manifes
 			if snap.MemoryHash != "" {
 				memoryAttachments[id] = snap.MemoryHash
 			}
+			state, err := domain.SnapshotStateHash(snap)
+			if err != nil {
+				return domain.Manifest{}, err
+			}
+			snapshotStates[id] = state
 		}
 	} else if !os.IsNotExist(err) {
 		return domain.Manifest{}, err
@@ -787,6 +793,7 @@ func (s *FileStore) Manifest(ctx context.Context, repoID string) (domain.Manifes
 		Refs:              refs,
 		SnapshotIndex:     index,
 		MemoryAttachments: memoryAttachments,
+		SnapshotStates:    snapshotStates,
 		Version:           0,
 		UpdatedAt:         time.Now().UTC(),
 	}, nil

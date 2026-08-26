@@ -620,6 +620,22 @@ func (c *BackendClient) RemoteManifest(ctx context.Context, repoID string) (doma
 			return domain.Manifest{}, domain.ErrHashMismatch
 		}
 	}
+	if m.SnapshotStates != nil {
+		if len(m.SnapshotStates) != len(index) {
+			return domain.Manifest{}, domain.ErrHashMismatch
+		}
+		for snapshotID, stateHash := range m.SnapshotStates {
+			if err := domain.ValidateContentHash(snapshotID); err != nil {
+				return domain.Manifest{}, err
+			}
+			if err := domain.ValidateContentHash(stateHash); err != nil {
+				return domain.Manifest{}, err
+			}
+			if !index[snapshotID] {
+				return domain.Manifest{}, domain.ErrHashMismatch
+			}
+		}
+	}
 	return m, nil
 }
 
@@ -867,11 +883,33 @@ func (c *BackendClient) UpdateRefRemote(ctx context.Context, repoID string, ref 
 	return c.do(ctx, http.MethodPut, path, putRefReq{Target: ref.Target, Symbolic: ref.Symbolic, Append: appendDiverged}, nil)
 }
 
-// Pulls manifest → pull/objects(snapshots) → pull/objects(docs) to fetch server objects.
+// Pulls manifest → changed pull/objects(snapshots) → missing pull/objects(docs)
+// to fetch server objects. Snapshot IDs hash only CIR, so the manifest's
+// snapshot state hash is the safe metadata delta token.
 // Local storage/ref merge is performed by the caller (SyncRepo).
-func (c *BackendClient) Pull(ctx context.Context, repoID string, docHaves []domain.ContentHash) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
+func (c *BackendClient) Pull(
+	ctx context.Context,
+	repoID string,
+	snapshotStates map[domain.ContentHash]domain.ContentHash,
+	docHaves []domain.ContentHash,
+) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return nil, nil, nil, err
+	}
+	for id, state := range snapshotStates {
+		if err := domain.ValidateContentHash(id); err != nil {
+			return nil, nil, nil, err
+		}
+		if err := domain.ValidateContentHash(state); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	haveDoc := make(map[domain.ContentHash]bool, len(docHaves))
+	for _, hash := range docHaves {
+		if err := domain.ValidateContentHash(hash); err != nil {
+			return nil, nil, nil, err
+		}
+		haveDoc[hash] = true
 	}
 	man, err := c.RemoteManifest(ctx, repoID)
 	if err != nil {
@@ -880,15 +918,23 @@ func (c *BackendClient) Pull(ctx context.Context, repoID string, docHaves []doma
 	if man.RepoID != repoID {
 		return nil, nil, nil, domain.ErrHashMismatch
 	}
+	legacyStates := man.SnapshotStates == nil
 	wantedSnapshots := make(map[domain.ContentHash]bool, len(man.SnapshotIndex))
+	var snapshotWants []domain.ContentHash
+	docWantSet := make(map[domain.ContentHash]bool, len(man.SnapshotIndex))
+	var docWants []domain.ContentHash
 	for _, id := range man.SnapshotIndex {
 		if err := domain.ValidateContentHash(id); err != nil {
 			return nil, nil, nil, err
 		}
-		if wantedSnapshots[id] {
-			return nil, nil, nil, domain.ErrHashMismatch
+		if !haveDoc[id] {
+			docWantSet[id] = true
+			docWants = append(docWants, id)
 		}
-		wantedSnapshots[id] = true
+		if legacyStates || snapshotStates[id] != man.SnapshotStates[id] || !haveDoc[id] {
+			wantedSnapshots[id] = true
+			snapshotWants = append(snapshotWants, id)
+		}
 	}
 	for _, ref := range man.Refs {
 		if err := domain.ValidateRef(ref); err != nil {
@@ -902,17 +948,12 @@ func (c *BackendClient) Pull(ctx context.Context, repoID string, docHaves []doma
 		return nil, nil, man.Refs, nil
 	}
 	var snapResp pullResp
-	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{SnapshotWants: man.SnapshotIndex, CIRVersionsSupported: domain.SupportedCIRVersions()}, &snapResp); err != nil {
-		return nil, nil, nil, err
-	}
-	// Delta reception: Does not request doc(docHaves) already in local storage — eliminates waste by re-receiving entire body (snapshot meta is received fully — graft/memory sync).
-	haveDoc := make(map[domain.ContentHash]bool, len(docHaves))
-	for _, h := range docHaves {
-		haveDoc[h] = true
+	if len(snapshotWants) > 0 {
+		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{SnapshotWants: snapshotWants, CIRVersionsSupported: domain.SupportedCIRVersions()}, &snapResp); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	seenSnapshots := make(map[domain.ContentHash]bool, len(snapResp.Snapshots))
-	docWantSet := make(map[domain.ContentHash]bool, len(snapResp.Snapshots))
-	var docWants []domain.ContentHash
 	for _, s := range snapResp.Snapshots {
 		if err := validateSnapshotObject(s); err != nil {
 			return nil, nil, nil, err
@@ -921,9 +962,11 @@ func (c *BackendClient) Pull(ctx context.Context, repoID string, docHaves []doma
 			return nil, nil, nil, domain.ErrHashMismatch
 		}
 		seenSnapshots[s.ID] = true
-		if !haveDoc[s.DocHash] && !docWantSet[s.DocHash] {
-			docWantSet[s.DocHash] = true
-			docWants = append(docWants, s.DocHash)
+		if man.SnapshotStates != nil {
+			state, serr := domain.SnapshotStateHash(s)
+			if serr != nil || state != man.SnapshotStates[s.ID] {
+				return nil, nil, nil, domain.ErrHashMismatch
+			}
 		}
 	}
 	if len(seenSnapshots) != len(wantedSnapshots) {

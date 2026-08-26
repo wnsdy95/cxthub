@@ -447,6 +447,9 @@ type Manifest struct {
 	// MemoryAttachments is the server/local current memory ref per snapshot.
 	// Nil means a legacy peer that does not advertise causal attachment state.
 	MemoryAttachments map[ContentHash]ContentHash `json:"memory_attachments,omitempty"`
+	// SnapshotStates fingerprints the mutable replicated projection keyed by
+	// snapshot ID. Nil means a legacy peer and requires a full metadata pull.
+	SnapshotStates map[ContentHash]ContentHash `json:"snapshot_states,omitempty"`
 	// Version is an optimistic lock monotonically increasing version.
 	Version int `json:"version"`
 	// UpdatedAt is the last time this manifest was updated.

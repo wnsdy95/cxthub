@@ -119,6 +119,21 @@ func TestPGSmoke(t *testing.T) {
 	if err := st.CompareAndSwapSnapshotMemory(ctx, repoID, snapID, "", memoryHash); err != nil {
 		t.Fatalf("attach memory: %v", err)
 	}
+	attached, err := st.GetSnapshot(ctx, repoID, snapID)
+	if err != nil {
+		t.Fatalf("get attached snapshot: %v", err)
+	}
+	repoManifest, err := st.GetManifest(ctx, repoID)
+	if err != nil {
+		t.Fatalf("manifest snapshot state: %v", err)
+	}
+	wantState, err := domain.SnapshotStateHash(attached)
+	if err != nil {
+		t.Fatalf("snapshot state hash: %v", err)
+	}
+	if len(repoManifest.SnapshotStates) != 1 || repoManifest.SnapshotStates[snapID] != wantState {
+		t.Fatalf("manifest snapshot states = %+v, want %s=%s", repoManifest.SnapshotStates, snapID, wantState)
+	}
 	// Two database clients racing from the same causal parent must serialize on
 	// SELECT ... FOR UPDATE: exactly one advances and the stale writer conflicts.
 	contenderHashes := make([]domain.ContentHash, 0, 2)
@@ -156,7 +171,7 @@ func TestPGSmoke(t *testing.T) {
 	if memoryCASSuccesses != 1 || memoryCASConflicts != 1 {
 		t.Fatalf("concurrent memory CAS: successes=%d conflicts=%d", memoryCASSuccesses, memoryCASConflicts)
 	}
-	attached, err := st.GetSnapshot(ctx, repoID, snapID)
+	attached, err = st.GetSnapshot(ctx, repoID, snapID)
 	if err != nil {
 		t.Fatalf("snapshot after concurrent memory CAS: %v", err)
 	}
@@ -374,9 +389,9 @@ func TestPGSmoke(t *testing.T) {
 			t.Fatalf("legacy owner fixture: %v", err)
 		}
 	}
-	manifest, err := st.GetDocManifest(ctx, repoID, legacyHash)
-	if err != nil || manifest.Format != domain.ChunkFormatV2 || len(manifest.Chunks) < 2 {
-		t.Fatalf("legacy manifest=%+v err=%v", manifest, err)
+	docManifest, err := st.GetDocManifest(ctx, repoID, legacyHash)
+	if err != nil || docManifest.Format != domain.ChunkFormatV2 || len(docManifest.Chunks) < 2 {
+		t.Fatalf("legacy manifest=%+v err=%v", docManifest, err)
 	}
 	for _, owner := range []domain.ContentHash{repoID, repo2} {
 		got, err := st.GetDoc(ctx, owner, legacyHash)

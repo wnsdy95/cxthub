@@ -51,3 +51,24 @@ func TestFSPutSnapshotPromotesStashLabel(t *testing.T) {
 		t.Fatalf("Commit label promoted by stash re-save: branch=%q message=%q", got2.Branch, got2.Message)
 	}
 }
+
+func TestFSManifestAdvertisesSnapshotState(t *testing.T) {
+	ctx := context.Background()
+	st := NewFSStore(t.TempDir())
+	repo, id := ph("manifest-repo"), ph("manifest-snapshot")
+	snap := domain.Snapshot{ID: id, RepoID: repo, Branch: "main", DocHash: id, Message: "commit", GraftSeq: 2}
+	if err := st.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := st.GetManifest(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := domain.SnapshotStateHash(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.SnapshotStates) != 1 || manifest.SnapshotStates[id] != want {
+		t.Fatalf("snapshot states = %+v, want %s=%s", manifest.SnapshotStates, id, want)
+	}
+}

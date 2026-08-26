@@ -1079,22 +1079,21 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return inbound.SyncOutput{}, err
 	}
-	// Delta pull: Does not re-receive documents that already exist locally. Existence is confirmed by checking DocHash in the local snapshot index (body not loaded — cheap negotiation).
+	// Delta pull advertises the verified local metadata and document inventory.
+	// Snapshot IDs equal DocHash, so document existence needs only a cheap stat;
+	// opening every cumulative session body or re-reading snapshots a second time
+	// would make the post-merge hook O(total history).
+	var snapshotStates map[domain.ContentHash]domain.ContentHash
 	var docHaves []domain.ContentHash
 	if man, merr := s.store.Manifest(ctx, repoID); merr == nil {
-		seen := map[domain.ContentHash]bool{}
+		snapshotStates = man.SnapshotStates
 		for _, id := range man.SnapshotIndex {
-			snap, gerr := s.store.GetSnapshot(ctx, id)
-			if gerr != nil || snap.DocHash == "" || seen[snap.DocHash] {
-				continue
-			}
-			seen[snap.DocHash] = true
-			if ok, herr := s.store.HasDoc(ctx, snap.DocHash); herr == nil && ok {
-				docHaves = append(docHaves, snap.DocHash)
+			if ok, herr := s.store.HasDoc(ctx, id); herr == nil && ok {
+				docHaves = append(docHaves, id)
 			}
 		}
 	}
-	snaps, docs, refs, err := s.remote.Pull(ctx, repoID, docHaves)
+	snaps, docs, refs, err := s.remote.Pull(ctx, repoID, snapshotStates, docHaves)
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}

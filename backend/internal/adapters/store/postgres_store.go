@@ -739,32 +739,52 @@ func (s *PostgresStore) GetManifest(ctx context.Context, repoID domain.ContentHa
 	if err != nil {
 		return domain.Manifest{}, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(memory_hash,'') FROM snapshots WHERE repo_id=$1`, string(repoID))
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, branch, COALESCE(memory_hash,''), message, grafted,
+		       COALESCE(graft_parents,'{}'), COALESCE(graft_seq,0)
+		  FROM snapshots WHERE repo_id=$1`, string(repoID))
 	if err != nil {
 		return domain.Manifest{}, err
 	}
 	defer rows.Close()
 	var index []domain.ContentHash
 	memoryAttachments := map[domain.ContentHash]domain.ContentHash{}
+	snapshotStates := map[domain.ContentHash]domain.ContentHash{}
 	for rows.Next() {
-		var id, memoryHash string
-		if err := rows.Scan(&id, &memoryHash); err != nil {
+		var id, branch, memoryHash, message string
+		var grafted bool
+		var graftParents []string
+		var graftSeq uint64
+		if err := rows.Scan(&id, &branch, &memoryHash, &message, &grafted, &graftParents, &graftSeq); err != nil {
 			return domain.Manifest{}, err
 		}
-		hash := domain.ContentHash(id)
-		if err := domain.ValidateContentHash(hash); err != nil {
+		snap := domain.Snapshot{
+			ID: domain.ContentHash(id), Branch: branch, MemoryHash: domain.ContentHash(memoryHash), Message: message,
+			Grafted: grafted, GraftParents: hashes(graftParents), GraftSeq: graftSeq,
+		}
+		if err := domain.ValidateContentHash(snap.ID); err != nil {
 			return domain.Manifest{}, err
 		}
-		index = append(index, hash)
-		if memoryHash != "" {
-			memory := domain.ContentHash(memoryHash)
-			if err := domain.ValidateContentHash(memory); err != nil {
-				return domain.Manifest{}, err
-			}
-			memoryAttachments[hash] = memory
+		if err := domain.ValidateOptionalContentHash(snap.MemoryHash); err != nil {
+			return domain.Manifest{}, err
 		}
+		if err := validateHashes(snap.GraftParents...); err != nil {
+			return domain.Manifest{}, err
+		}
+		if snap.GraftSeq > domain.MaxGraftSeq {
+			return domain.Manifest{}, domain.ErrIntegrity
+		}
+		index = append(index, snap.ID)
+		if snap.MemoryHash != "" {
+			memoryAttachments[snap.ID] = snap.MemoryHash
+		}
+		state, err := domain.SnapshotStateHash(snap)
+		if err != nil {
+			return domain.Manifest{}, err
+		}
+		snapshotStates[snap.ID] = state
 	}
-	return domain.Manifest{RepoID: repoID, Refs: refs, SnapshotIndex: index, MemoryAttachments: memoryAttachments, Version: len(index)}, rows.Err()
+	return domain.Manifest{RepoID: repoID, Refs: refs, SnapshotIndex: index, MemoryAttachments: memoryAttachments, SnapshotStates: snapshotStates, Version: len(index)}, rows.Err()
 }
 
 // --- Memory Meta ---

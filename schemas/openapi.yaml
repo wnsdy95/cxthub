@@ -310,6 +310,13 @@ components:
             pattern: '^sha256:[0-9a-f]{64}$'
           additionalProperties:
             $ref: "#/components/schemas/ContentHash"
+        snapshot_states:
+          type: object
+          description: "Deterministic hash of mutable replicated state (branch/message promotion, memory attachment, and graft register) keyed by snapshot ID. A complete map enables incremental metadata pulls; absence means a legacy peer and requires a full metadata pull."
+          propertyNames:
+            pattern: '^sha256:[0-9a-f]{64}$'
+          additionalProperties:
+            $ref: "#/components/schemas/ContentHash"
         version:
           type: integer
           minimum: 0
@@ -767,7 +774,8 @@ paths:
       operationId: getManifest
       summary: Server Manifest retrieval (push/pull negotiation phase 1)
       description: |
-        Returns a list of refs held by the server + the entire snapshot_index.
+        Returns refs, the snapshot index, memory attachments, and snapshot state
+        hashes used to negotiate incremental metadata pulls.
         `RemoteSync.RemoteManifest` port is called. Start point of push/pull negotiation.
         Schema template: schemas/manifest.schema.json.
       tags: [manifest]
