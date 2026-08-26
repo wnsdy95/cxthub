@@ -161,20 +161,26 @@ expect "session C↔B boundary detected from session_id" "$BOUND" boundary
 echo "── E. repo1: post-merge hook = fetch-only(keep local refs + upstream hint) + pull briefing"
 cd "$TMP/repo1"
 LOCAL_BEFORE=$(cat .cxt/refs/heads/main)
-HOOKOUT=$(cxt git-hook post-merge 0 2>&1)
+PULL_TERM=cxt-e2e-pull-terminal
+HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
 expect "fetch-only: keep local main ref" "$(cat .cxt/refs/heads/main)" "$LOCAL_BEFORE"
 expect "upstream hint output" "$(echo "$HOOKOUT" | grep -ci 'new context')" 1
 # Pull briefing: summarize and store the incoming codeB/codeC range, then consume it once
-# from the next prompt hook as additionalContext (the shared Claude/Codex live-injection channel).
+# from the next prompt hook in the initiating terminal as additionalContext.
 expect "briefing creation notice output" "$(echo "$HOOKOUT" | grep -c 'briefed to the agent')" 1
-expect "team member commit summary included in briefing" "$(python3 -c "import json;d=json.load(open('.cxt/briefing.json'));print('codeC' in '\n'.join(d.get('texts') or [d.get('text','')]))" 2>/dev/null)" True
-BRIEF=$(echo "{\"cwd\":\"$TMP/repo1\",\"prompt\":\"go on\"}" | cxt hook --provider claude --event UserPromptSubmit)
+BRIEF_FILE=$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)
+expect "briefing uses one scoped queue" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 1
+expect "team member commit summary included in briefing" "$(python3 -c "import json;d=json.load(open('$BRIEF_FILE'));print('codeC' in '\n'.join(d.get('texts') or [d.get('text','')]))" 2>/dev/null)" True
+WRONG_BRIEF=$(echo "{\"cwd\":\"$TMP/repo1\",\"prompt\":\"go on elsewhere\"}" | TERM_SESSION_ID=cxt-e2e-other-terminal cxt hook --provider claude --event UserPromptSubmit)
+expect "another terminal cannot consume pull briefing" "$([ -z "$WRONG_BRIEF" ] && echo yes)" yes
+expect "wrong terminal leaves scoped briefing intact" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 1
+BRIEF=$(echo "{\"cwd\":\"$TMP/repo1\",\"prompt\":\"go on\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit)
 expect "hook emits additionalContext JSON" "$(echo "$BRIEF" | python3 -c "
 import json,sys
 try: print('codeC' in json.load(sys.stdin)['hookSpecificOutput']['additionalContext'])
 except Exception: print('parse-fail')")" True
-expect "briefing is consumed once and deleted" "$([ ! -f .cxt/briefing.json ] && echo yes)" yes
-BRIEF2=$(echo "{\"cwd\":\"$TMP/repo1\"}" | cxt hook --provider claude --event UserPromptSubmit)
+expect "briefing is consumed once and deleted" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 0
+BRIEF2=$(echo "{\"cwd\":\"$TMP/repo1\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit)
 expect "subsequent prompt emits no briefing" "$([ -z "$BRIEF2" ] && echo yes)" yes
 
 echo "── F. repo1: both-moved diverge push → automatic rebase-graft"

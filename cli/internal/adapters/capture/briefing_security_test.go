@@ -26,6 +26,28 @@ func TestConsumeBriefingRefusesSymlinkedCxtDirectory(t *testing.T) {
 	}
 }
 
+func TestScopedBriefingRefusesSymlinkedQueueDirectory(t *testing.T) {
+	repo := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repo, ".cxt", "briefings")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	t.Setenv("TERM_SESSION_ID", "terminal-secret")
+	if err := WriteBriefing(repo, "must stay inside repo"); err == nil {
+		t.Fatal("scoped briefing followed a symlinked queue directory")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("scoped briefing escaped repository: %v", entries)
+	}
+}
+
 func TestBriefingQueuesMultiplePullsUntilNextPrompt(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
@@ -43,6 +65,80 @@ func TestBriefingQueuesMultiplePullsUntilNextPrompt(t *testing.T) {
 	}
 	if text, ok := ConsumeBriefing(repo); ok || text != "" {
 		t.Fatalf("briefing was consumed twice: %q", text)
+	}
+}
+
+func TestBriefingIsScopedToInitiatingTerminal(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TERM_SESSION_ID", "terminal-a")
+	relative := briefingRelativePath()
+	if relative == legacyBriefingRelativePath || strings.Contains(relative, "terminal-a") {
+		t.Fatalf("terminal briefing path is not scoped and opaque: %q", relative)
+	}
+	if err := WriteBriefing(repo, "terminal A pull context"); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TERM_SESSION_ID", "terminal-b")
+	if err := WriteBriefing(repo, "terminal B pull context"); err != nil {
+		t.Fatal(err)
+	}
+	text, ok := ConsumeBriefing(repo)
+	if !ok || text != "terminal B pull context" {
+		t.Fatalf("terminal B briefing = %q, ok=%v", text, ok)
+	}
+	if text, ok := ConsumeBriefing(repo); ok || text != "" {
+		t.Fatalf("terminal B briefing was consumed twice: %q", text)
+	}
+
+	t.Setenv("TERM_SESSION_ID", "terminal-a")
+	text, ok = ConsumeBriefing(repo)
+	if !ok || text != "terminal A pull context" {
+		t.Fatalf("terminal A briefing = %q, ok=%v", text, ok)
+	}
+	if text, ok := ConsumeBriefing(repo); ok || text != "" {
+		t.Fatalf("terminal A briefing was consumed twice: %q", text)
+	}
+}
+
+func TestBriefingFallsBackToLiveWrapperScopeWithoutTerminalID(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TERM_SESSION_ID", "")
+	t.Setenv("ITERM_SESSION_ID", "")
+	t.Setenv("CXT_WRAPPED", "1")
+	t.Setenv("CXT_WRAPPED_AGENT", "codex")
+	t.Setenv("CXT_WRAPPER_PID", "10101")
+	if err := WriteBriefing(repo, "wrapper A pull context"); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CXT_WRAPPER_PID", "20202")
+	if text, ok := ConsumeBriefing(repo); ok || text != "" {
+		t.Fatalf("wrapper B consumed wrapper A briefing: %q", text)
+	}
+
+	t.Setenv("CXT_WRAPPER_PID", "10101")
+	text, ok := ConsumeBriefing(repo)
+	if !ok || text != "wrapper A pull context" {
+		t.Fatalf("wrapper A briefing = %q, ok=%v", text, ok)
+	}
+}
+
+func TestBriefingWithoutDeliveryOwnerUsesLegacyPath(t *testing.T) {
+	t.Setenv("TERM_SESSION_ID", "")
+	t.Setenv("ITERM_SESSION_ID", "")
+	t.Setenv("CXT_WRAPPED", "")
+	t.Setenv("CXT_WRAPPER_PID", "")
+	t.Setenv("CXT_WRAPPED_AGENT", "")
+	if got := briefingRelativePath(); got != legacyBriefingRelativePath {
+		t.Fatalf("unowned briefing path = %q, want %q", got, legacyBriefingRelativePath)
 	}
 }
 

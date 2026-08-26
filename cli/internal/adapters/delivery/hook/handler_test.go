@@ -77,7 +77,7 @@ func TestHandlerUnknownEventNoop(t *testing.T) {
 }
 
 // TestHandlerBriefingEmission fixes the one-time consumption and additionalContext emission of pull briefing:
-// The UserPromptSubmit hook consumes .cxt/briefing.json and outputs hookSpecificOutput JSON to stdout (model transmission channel), and in the second utterance, nothing is output.
+// The UserPromptSubmit hook consumes its scoped briefing queue and outputs hookSpecificOutput JSON to stdout (model transmission channel), and in the second utterance, nothing is output.
 func TestHandlerBriefingEmission(t *testing.T) {
 	cwd := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755)
