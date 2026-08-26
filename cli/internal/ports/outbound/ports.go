@@ -168,8 +168,11 @@ type RemoteSync interface {
 	// Push uploads local (snapshot, ref) to the central server. Can call object-only/ref-only steps by passing nil objects or refs. Normal SyncRepo push splits into two steps to ensure object -> queued graft -> ref order, avoiding hash duplication on the server. Sends both raw doc (Snapshot.DocHash) and memory (Snapshot.MemoryHash). (compatibility rules: Snapshots hold and propagate raw+memory). Force moves non-fast-forward refs to the server (git push --force). AppendDiverged appends diverged pushes to the server head (cxt push --append — grafts head onto incoming lineage; no history loss).
 	Push(ctx context.Context, repoID string, snapshots []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, force, appendDiverged bool) error
 
-	// Pull downloads (snapshot, doc body, ref) from the central server. Merge/conflict handling (local storage + ref merge) is performed by the caller (SyncRepo use-case). docHaves are local doc hashes — the server requests only missing (partial) ones. (Snapshot metadata is always fully received: graft overlay and memory pointer updates are propagated.)
-	Pull(ctx context.Context, repoID string, docHaves []domain.ContentHash) (snapshots []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, err error)
+	// Pull downloads (snapshot metadata, doc body, ref) from the central server.
+	// snapshotStates are local state hashes keyed by snapshot ID; a modern peer
+	// returns only new or changed metadata, while a legacy manifest safely falls
+	// back to all snapshots. docHaves are verified local document hashes.
+	Pull(ctx context.Context, repoID string, snapshotStates map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash) (snapshots []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, err error)
 
 	// RemoteManifest queries the server-side repo catalog. Used in push/pull negotiation step 1 to calculate what to send/receive.
 	RemoteManifest(ctx context.Context, repoID string) (domain.Manifest, error)

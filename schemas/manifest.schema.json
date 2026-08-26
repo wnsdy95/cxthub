@@ -27,6 +27,12 @@
       "propertyNames": { "$ref": "#/$defs/contentHash" },
       "additionalProperties": { "$ref": "#/$defs/contentHash" }
     },
+    "snapshot_states": {
+      "type": "object",
+      "description": "Deterministic hash of mutable replicated state (branch/message promotion, memory attachment, and graft register) keyed by snapshot ID. A complete map enables incremental metadata pulls; omission means a legacy peer and requires a full metadata pull.",
+      "propertyNames": { "$ref": "#/$defs/contentHash" },
+      "additionalProperties": { "$ref": "#/$defs/contentHash" }
+    },
     "version": {
       "type": "integer",
       "minimum": 0,

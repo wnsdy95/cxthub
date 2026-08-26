@@ -29,7 +29,7 @@ type causalPullRemote struct {
 	objectReads []domain.ContentHash
 }
 
-func (r *causalPullRemote) Pull(context.Context, string, []domain.ContentHash) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
+func (r *causalPullRemote) Pull(context.Context, string, map[domain.ContentHash]domain.ContentHash, []domain.ContentHash) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
 	return []domain.Snapshot{r.snapshot}, []domain.SessionDoc{r.doc}, []domain.Ref{{
 		Kind: domain.RefBranch, Name: "main", RepoID: r.snapshot.RepoID, Target: r.snapshot.ID,
 	}}, nil

@@ -1927,6 +1927,7 @@ func (s *FSStore) GetManifest(ctx context.Context, repoID domain.ContentHash) (d
 	}
 	var index []domain.ContentHash
 	memoryAttachments := map[domain.ContentHash]domain.ContentHash{}
+	snapshotStates := map[domain.ContentHash]domain.ContentHash{}
 	dir := filepath.Join(s.repoDir(repoID), "snapshots")
 	if entries, err := os.ReadDir(dir); err == nil {
 		for _, e := range entries {
@@ -1945,6 +1946,11 @@ func (s *FSStore) GetManifest(ctx context.Context, repoID domain.ContentHash) (d
 			if snap.MemoryHash != "" {
 				memoryAttachments[id] = snap.MemoryHash
 			}
+			state, err := domain.SnapshotStateHash(snap)
+			if err != nil {
+				return domain.Manifest{}, err
+			}
+			snapshotStates[id] = state
 		}
 	} else if !os.IsNotExist(err) {
 		return domain.Manifest{}, err
@@ -1954,6 +1960,7 @@ func (s *FSStore) GetManifest(ctx context.Context, repoID domain.ContentHash) (d
 		Refs:              refs,
 		SnapshotIndex:     index,
 		MemoryAttachments: memoryAttachments,
+		SnapshotStates:    snapshotStates,
 		Version:           len(index),
 		UpdatedAt:         time.Now().UTC(),
 	}, nil

@@ -136,6 +136,13 @@ func TestSnapshotAndRefs(t *testing.T) {
 	if len(man.SnapshotIndex) != 1 || len(man.Refs) < 2 {
 		t.Fatalf("Manifest contents: idx=%d refs=%d", len(man.SnapshotIndex), len(man.Refs))
 	}
+	wantState, err := domain.SnapshotStateHash(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(man.SnapshotStates) != 1 || man.SnapshotStates[h] != wantState {
+		t.Fatalf("Manifest snapshot states: %+v, want %s=%s", man.SnapshotStates, h, wantState)
+	}
 }
 
 func TestPutSnapshotEqualVersionUsesServerProjection(t *testing.T) {

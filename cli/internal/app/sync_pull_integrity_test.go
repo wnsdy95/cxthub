@@ -77,7 +77,56 @@ type corruptMemoryRemote struct {
 	memory domain.MemoryDigest
 }
 
-func (r *corruptMemoryRemote) Pull(context.Context, string, []domain.ContentHash) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
+type inventoryPullRemote struct {
+	outbound.RemoteSync
+	states   map[domain.ContentHash]domain.ContentHash
+	docHaves []domain.ContentHash
+	refs     []domain.Ref
+}
+
+func (r *inventoryPullRemote) Pull(_ context.Context, _ string, states map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
+	r.states = states
+	r.docHaves = append([]domain.ContentHash{}, docHaves...)
+	return nil, nil, r.refs, nil
+}
+
+func TestSyncPullAdvertisesSnapshotStatesAndVerifiedDocs(t *testing.T) {
+	ctx := context.Background()
+	repo := string(domain.HashContent([]byte("pull-inventory-repo")))
+	doc := pullDoc(t, "already synchronized")
+	snap := domain.Snapshot{ID: doc.Hash, DocHash: doc.Hash, RepoID: repo, Branch: "main", Message: "commit", GraftSeq: 2}
+	st := storage.NewFileStore(t.TempDir())
+	if _, err := st.PutDoc(ctx, doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo, Target: snap.ID}
+	if err := st.PutRef(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	remote := &inventoryPullRemote{refs: []domain.Ref{ref}}
+	out, err := NewSyncRepoService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo, FetchOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantState, err := domain.SnapshotStateHash(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.states) != 1 || remote.states[snap.ID] != wantState {
+		t.Fatalf("advertised states = %+v, want %s=%s", remote.states, snap.ID, wantState)
+	}
+	if len(remote.docHaves) != 1 || remote.docHaves[0] != doc.Hash {
+		t.Fatalf("advertised docs = %v", remote.docHaves)
+	}
+	if out.Pulled != 0 || len(out.RemoteAhead) != 0 {
+		t.Fatalf("unchanged pull output = %+v", out)
+	}
+}
+
+func (r *corruptMemoryRemote) Pull(context.Context, string, map[domain.ContentHash]domain.ContentHash, []domain.ContentHash) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
 	return []domain.Snapshot{r.snap}, []domain.SessionDoc{r.doc}, []domain.Ref{r.ref}, nil
 }
 

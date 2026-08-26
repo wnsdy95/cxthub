@@ -230,6 +230,7 @@ type Manifest struct {
 	Refs              []Ref                       `json:"refs"`
 	SnapshotIndex     []ContentHash               `json:"snapshot_index"`
 	MemoryAttachments map[ContentHash]ContentHash `json:"memory_attachments"`
+	SnapshotStates    map[ContentHash]ContentHash `json:"snapshot_states,omitempty"`
 	Version           int                         `json:"version"`
 	UpdatedAt         time.Time                   `json:"updated_at"`
 }

@@ -196,6 +196,12 @@ expect "subsequent prompt emits no briefing" "$([ -z "$BRIEF2" ] && echo yes)" y
 REPEAT_HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
 expect "same remote tip is not briefed again" "$(echo "$REPEAT_HOOKOUT" | grep -c 'briefed to the agent')" 0
 expect "repeat pull leaves no briefing queue" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 0
+expect "repeat fetch negotiates zero snapshot metadata" "$(echo "$REPEAT_HOOKOUT" | grep -c 'fetched .*snapshot')" 0
+MANIFEST_STATE=$(curl -sb "$J" "$B/repos/$RID/manifest" | python3 -c "
+import json,sys
+m=json.load(sys.stdin); print('complete' if len(m.get('snapshot_states') or {})==len(m.get('snapshot_index') or []) else 'partial')
+")
+expect "manifest advertises complete snapshot state catalog" "$MANIFEST_STATE" complete
 
 echo "── F. repo1: both-moved diverge push → automatic rebase-graft"
 HEAD_PREV=$(main_head)
