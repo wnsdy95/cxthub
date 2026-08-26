@@ -135,11 +135,7 @@ func extractiveConversationDigest(events []domain.Event) string {
 	if len(users) == 0 && len(assistants) == 0 {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("Conversation digest (extractive fallback; provider compaction summary unavailable):\n")
-	writeExtractiveSection(&b, "Recent user intent", users)
-	writeExtractiveSection(&b, "Recent assistant outcomes", assistants)
-	return truncate(strings.TrimSpace(b.String()), extractiveDigestMaxRunes-1)
+	return truncate(domain.RenderExtractiveFallbackSummary(users, assistants), extractiveDigestMaxRunes-1)
 }
 
 func messageText(blocks []domain.ContentBlock) string {
@@ -188,20 +184,6 @@ func appendRecentDistinct(items []string, text string, limit int) []string {
 		items = items[len(items)-limit:]
 	}
 	return items
-}
-
-func writeExtractiveSection(b *strings.Builder, title string, items []string) {
-	if len(items) == 0 {
-		return
-	}
-	b.WriteString("\n\n")
-	b.WriteString(title)
-	b.WriteString(":\n")
-	for _, item := range items {
-		b.WriteString("- ")
-		b.WriteString(item)
-		b.WriteByte('\n')
-	}
 }
 
 // extractSummarySections extracts the top-level bullets from the KeyFacts ("Key Technical Concepts") and OpenTasks ("Pending Tasks") sections of a compression summary. It accumulates summaries, so it writes the last occurrence of each section. For unstructured text, it returns an empty result (fallback for the caller). Deterministic.
