@@ -172,6 +172,31 @@ func TestBoundCarriedDigestCapsFragmentProjection(t *testing.T) {
 	}
 }
 
+func TestBoundCarriedDigestDropsNestedSeedNarrativeButKeepsStructure(t *testing.T) {
+	source := domain.ContentHash("sha256:" + strings.Repeat("a", 64))
+	prior := domain.MemoryDigest{
+		SnapshotID: source,
+		Summary:    "project history\n" + seedSummaryPrefix + " 99 events omitted\nrecursive history",
+		KeyFacts:   []string{"The immutable parent rule remains in force."},
+		OpenTasks:  []string{"Verify the clean projection."},
+		Fragments: []domain.MemoryFragment{{
+			SourceSnapshot: source,
+			Summary:        "project history\n" + seedSummaryPrefix + " 99 events omitted\nrecursive history",
+			KeyFacts:       []string{"The immutable parent rule remains in force."},
+			OpenTasks:      []string{"Verify the clean projection."},
+		}},
+	}
+	carried := boundCarriedDigest(prior)
+	fresh := domain.MemoryDigest{SnapshotID: domain.ContentHash("sha256:" + strings.Repeat("b", 64)), Summary: "clean current work"}
+	got := domain.MergeDigests(carried, fresh)
+	if strings.Contains(got.Summary, seedSummaryPrefix) || strings.Contains(got.Summary, "recursive history") {
+		t.Fatalf("nested legacy narrative survived:\n%s", got.Summary)
+	}
+	if !strings.Contains(got.Summary, "clean current work") || len(got.KeyFacts) != 1 || len(got.OpenTasks) != 1 {
+		t.Fatalf("clean projection lost structure: %+v", got)
+	}
+}
+
 // A fresh generation is not a carried ancestor and must remain byte-for-byte
 // intact even when it exceeds the carry budget. Only the inherited side is
 // bounded before MergeDigests.
