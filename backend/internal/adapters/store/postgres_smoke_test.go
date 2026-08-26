@@ -4,8 +4,10 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,5 +149,148 @@ func TestPGSmoke(t *testing.T) {
 	}
 	if got, err := st.GetSnapshot(ctx, repo2, snapID); err != nil || got.RepoID != repo2 {
 		t.Fatalf("repo2 snapshot: repo=%s err=%v", got.RepoID, err)
+	}
+
+	// Rolling v1→v2 dedup: a v2 writer must migrate the global manifest and grant
+	// every old/new doc owner the v2 chunks instead of retaining two representations.
+	v1CIR := domain.CIRDocument{
+		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude},
+		Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser,
+			Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("v1", 400<<10)}}}},
+	}
+	v1Canonical, _ := domain.CanonicalBytes(v1CIR)
+	v1Hash := domain.HashContent(v1Canonical)
+	v1Plan, ok := domain.PlanDocChunksV1(v1Canonical)
+	if !ok {
+		t.Fatal("v1 PG fixture plan unavailable")
+	}
+	for _, chunkHash := range v1Plan.Order {
+		if _, err := st.pool.Exec(ctx, `INSERT INTO blobs (hash,bytes) VALUES ($1,$2)`, string(chunkHash), docCompress(v1Plan.Bodies[chunkHash])); err != nil {
+			t.Fatalf("v1 chunk fixture: %v", err)
+		}
+		if _, err := st.pool.Exec(ctx, `INSERT INTO repo_blobs (repo_id,kind,hash) VALUES ($1,'chunk',$2)`, string(repoID), string(chunkHash)); err != nil {
+			t.Fatalf("v1 chunk owner fixture: %v", err)
+		}
+	}
+	v1Manifest, _ := json.Marshal(v1Plan.Manifest)
+	if _, err := st.pool.Exec(ctx, `INSERT INTO blobs (hash,bytes) VALUES ($1,$2)`, string(v1Hash), docCompress(v1Manifest)); err != nil {
+		t.Fatalf("v1 manifest fixture: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO repo_blobs (repo_id,kind,hash) VALUES ($1,'doc',$2)`, string(repoID), string(v1Hash)); err != nil {
+		t.Fatalf("v1 doc owner fixture: %v", err)
+	}
+	if _, err := st.PutDoc(ctx, repo2, domain.SessionDoc{Hash: v1Hash, CIR: v1CIR}); err != nil {
+		t.Fatalf("v2 writer dedup against v1: %v", err)
+	}
+	var migratedRaw []byte
+	if err := st.pool.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(v1Hash)).Scan(&migratedRaw); err != nil {
+		t.Fatalf("read migrated manifest: %v", err)
+	}
+	migratedRaw, err = docDecompress(migratedRaw)
+	if err != nil {
+		t.Fatalf("decompress migrated manifest: %v", err)
+	}
+	migrated, ok := domain.ParseDocChunkManifest(migratedRaw)
+	if !ok || migrated.Format != domain.ChunkFormatV2 {
+		t.Fatalf("stored representation was not migrated to v2: %+v", migrated)
+	}
+	for _, owner := range []domain.ContentHash{repoID, repo2} {
+		if got, err := st.GetDoc(ctx, owner, v1Hash); err != nil || domain.ValidateSessionDocHash(got) != nil {
+			t.Fatalf("owner %s cannot read migrated v2 representation: %v", owner, err)
+		}
+		for _, chunkHash := range migrated.Chunks {
+			if _, err := st.GetChunk(ctx, owner, chunkHash); err != nil {
+				t.Fatalf("owner %s lacks migrated chunk %s: %v", owner, chunkHash, err)
+			}
+		}
+	}
+
+	// Legacy global monolith repack must grant chunks to every repo that owns
+	// the doc before replacing the shared blob with a v2 manifest.
+	legacyCIR := domain.CIRDocument{
+		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex},
+		Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser,
+			Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", domain.MaxPortableChunkBytes+1)}}}},
+	}
+	legacyCanonical, _ := domain.CanonicalBytes(legacyCIR)
+	legacyHash := domain.HashContent(legacyCanonical)
+	if _, err := st.pool.Exec(ctx, `INSERT INTO blobs (hash,bytes) VALUES ($1,$2)`, string(legacyHash), docCompress(legacyCanonical)); err != nil {
+		t.Fatalf("legacy blob fixture: %v", err)
+	}
+	for _, owner := range []domain.ContentHash{repoID, repo2} {
+		if _, err := st.pool.Exec(ctx, `INSERT INTO repo_blobs (repo_id,kind,hash) VALUES ($1,'doc',$2)`, string(owner), string(legacyHash)); err != nil {
+			t.Fatalf("legacy owner fixture: %v", err)
+		}
+	}
+	manifest, err := st.GetDocManifest(ctx, repoID, legacyHash)
+	if err != nil || manifest.Format != domain.ChunkFormatV2 || len(manifest.Chunks) < 2 {
+		t.Fatalf("legacy manifest=%+v err=%v", manifest, err)
+	}
+	for _, owner := range []domain.ContentHash{repoID, repo2} {
+		got, err := st.GetDoc(ctx, owner, legacyHash)
+		if err != nil || domain.ValidateSessionDocHash(got) != nil {
+			t.Fatalf("owner %s lost repacked doc: %v", owner, err)
+		}
+	}
+
+	// PutDoc and lazy GetDocManifest both acquire doc → chunk locks. Exercise the
+	// same legacy row concurrently so an inverted order would surface as a timeout
+	// or PostgreSQL deadlock error instead of an intermittent production failure.
+	raceCIR := domain.CIRDocument{
+		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude},
+		Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser,
+			Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("lock-order", 96<<10)}}}},
+	}
+	raceCanonical, _ := domain.CanonicalBytes(raceCIR)
+	raceHash := domain.HashContent(raceCanonical)
+	if _, err := st.pool.Exec(ctx, `INSERT INTO blobs (hash,bytes) VALUES ($1,$2)`, string(raceHash), docCompress(raceCanonical)); err != nil {
+		t.Fatalf("lock-order blob fixture: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO repo_blobs (repo_id,kind,hash) VALUES ($1,'doc',$2)`, string(repoID), string(raceHash)); err != nil {
+		t.Fatalf("lock-order owner fixture: %v", err)
+	}
+	raceCtx, cancelRace := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelRace()
+	startRace := make(chan struct{})
+	raceErrs := make(chan error, 2)
+	go func() {
+		<-startRace
+		_, err := st.GetDocManifest(raceCtx, repoID, raceHash)
+		raceErrs <- err
+	}()
+	go func() {
+		<-startRace
+		_, err := st.PutDoc(raceCtx, repo2, domain.SessionDoc{Hash: raceHash, CIR: raceCIR})
+		raceErrs <- err
+	}()
+	close(startRace)
+	for i := 0; i < 2; i++ {
+		if err := <-raceErrs; err != nil {
+			t.Fatalf("concurrent doc/chunk lock ordering: %v", err)
+		}
+	}
+
+	// A corrupt globally deduplicated chunk must abort the whole new-doc
+	// transaction; the manifest row must not survive the rollback.
+	corruptCIR := domain.CIRDocument{
+		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex},
+		Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser,
+			Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("collision", 80<<10)}}}},
+	}
+	corruptCanonical, _ := domain.CanonicalBytes(corruptCIR)
+	corruptHash := domain.HashContent(corruptCanonical)
+	corruptPlan, ok := domain.PlanDocChunks(corruptCanonical)
+	if !ok {
+		t.Fatal("corrupt chunk fixture plan unavailable")
+	}
+	badChunk := corruptPlan.Order[0]
+	if _, err := st.pool.Exec(ctx, `INSERT INTO blobs (hash,bytes) VALUES ($1,$2)`, string(badChunk), docCompress([]byte("corrupt body"))); err != nil {
+		t.Fatalf("corrupt chunk fixture: %v", err)
+	}
+	if _, err := st.PutDoc(ctx, repoID, domain.SessionDoc{Hash: corruptHash, CIR: corruptCIR}); !errors.Is(err, domain.ErrIntegrity) {
+		t.Fatalf("corrupt chunk PutDoc err=%v, want ErrIntegrity", err)
+	}
+	if _, err := st.GetDoc(ctx, repoID, corruptHash); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("failed PutDoc left a visible doc: %v", err)
 	}
 }

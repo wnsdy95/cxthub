@@ -103,8 +103,8 @@ func makeChunkedClientDoc(t *testing.T, events int) (domain.SessionDoc, chunkcas
 	}
 	doc := domain.SessionDoc{Hash: domain.HashContent(canonical), CIR: cir}
 	plan, ok := chunkcas.PlanDoc(canonical)
-	if !ok || len(plan.Order) != events {
-		t.Fatalf("chunk plan ok=%v chunks=%d, want %d", ok, len(plan.Order), events)
+	if !ok || len(plan.Order) < 2 {
+		t.Fatalf("chunk plan ok=%v chunks=%d, want multiple", ok, len(plan.Order))
 	}
 	return doc, plan
 }
@@ -159,6 +159,7 @@ func TestPushUploadsBoundedChunksBeforeManifestCommit(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(negotiateResp{
 				SnapshotWants: req.SnapshotHaves, DocWants: req.DocHaves, ChunkWants: req.ChunkHaves,
 				ChunksSupported: true, BoundedChunksSupported: true,
+				ChunkFormatsSupported: []string{chunkcas.FormatV1, chunkcas.FormatV2},
 			})
 		case "/repos/" + string(repoID) + "/push/chunks":
 			var req chunksReq
@@ -204,12 +205,12 @@ func TestPushUploadsBoundedChunksBeforeManifestCommit(t *testing.T) {
 	if len(committed.ChunkObjects) != 0 || len(committed.Docs) != 0 {
 		t.Fatalf("bounded final commit leaked inline bodies: docs=%d chunks=%d", len(committed.Docs), len(committed.ChunkObjects))
 	}
-	if len(plan.Order) != 7 {
-		t.Fatalf("test precondition chunks=%d", len(plan.Order))
+	if committed.ChunkedDocs[0].Format != chunkcas.FormatV2 || len(plan.Order) < 2 {
+		t.Fatalf("format=%q test chunks=%d", committed.ChunkedDocs[0].Format, len(plan.Order))
 	}
 }
 
-func TestPushKeepsInlineChunksForChunkAwareLegacyServer(t *testing.T) {
+func TestPushFallsBackToFullDocForChunkAwareV1Server(t *testing.T) {
 	repoID := domain.HashContent([]byte("legacy-chunk-push-repo"))
 	doc, plan := makeChunkedClientDoc(t, 2)
 	snap := domain.Snapshot{ID: doc.Hash, RepoID: string(repoID), Branch: "main", DocHash: doc.Hash}
@@ -239,12 +240,13 @@ func TestPushKeepsInlineChunksForChunkAwareLegacyServer(t *testing.T) {
 	if err := c.Push(context.Background(), string(repoID), []domain.Snapshot{snap}, []domain.SessionDoc{doc}, nil, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if pushChunksCalled || len(committed.ChunkObjects) != len(plan.Order) || len(committed.ChunkedDocs) != 1 {
-		t.Fatalf("legacy fallback pushChunks=%v manifests=%d chunks=%d", pushChunksCalled, len(committed.ChunkedDocs), len(committed.ChunkObjects))
+	if pushChunksCalled || len(committed.Docs) != 1 || len(committed.ChunkObjects) != 0 || len(committed.ChunkedDocs) != 0 {
+		t.Fatalf("v1 fallback pushChunks=%v docs=%d manifests=%d chunks=%d", pushChunksCalled, len(committed.Docs), len(committed.ChunkedDocs), len(committed.ChunkObjects))
 	}
+	_ = plan
 }
 
-func TestPushFallsBackToFullDocForOversizedSingleEvent(t *testing.T) {
+func TestPushUsesV2ForOversizedSingleEvent(t *testing.T) {
 	repoID := domain.HashContent([]byte("oversized-event-push-repo"))
 	cir := domain.CIRDocument{
 		Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude, Fidelity: domain.FidelityFull, GitBranch: "main"},
@@ -266,16 +268,17 @@ func TestPushFallsBackToFullDocForOversizedSingleEvent(t *testing.T) {
 		case "/repos/" + string(repoID) + "/push/negotiate":
 			var req negotiateReq
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if len(req.ChunkHaves) != 0 {
-				t.Errorf("oversized doc advertised chunk haves: %d", len(req.ChunkHaves))
+			if len(req.ChunkHaves) < 2 {
+				t.Errorf("oversized doc advertised only %d chunk haves", len(req.ChunkHaves))
 			}
 			_ = json.NewEncoder(w).Encode(negotiateResp{
-				SnapshotWants: req.SnapshotHaves, DocWants: req.DocHaves,
+				SnapshotWants: req.SnapshotHaves, DocWants: req.DocHaves, ChunkWants: req.ChunkHaves,
 				ChunksSupported: true, BoundedChunksSupported: true,
+				ChunkFormatsSupported: []string{chunkcas.FormatV1, chunkcas.FormatV2},
 			})
 		case "/repos/" + string(repoID) + "/push/chunks":
 			pushChunksCalled = true
-			http.Error(w, "unexpected", http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]int{})
 		case "/repos/" + string(repoID) + "/push/objects":
 			_ = json.NewDecoder(r.Body).Decode(&committed)
 			_ = json.NewEncoder(w).Encode(map[string]int{})
@@ -289,8 +292,42 @@ func TestPushFallsBackToFullDocForOversizedSingleEvent(t *testing.T) {
 	if err := c.Push(context.Background(), string(repoID), []domain.Snapshot{snap}, []domain.SessionDoc{doc}, nil, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if pushChunksCalled || len(committed.Docs) != 1 || len(committed.ChunkedDocs) != 0 || len(committed.ChunkObjects) != 0 {
-		t.Fatalf("oversized fallback pushChunks=%v docs=%d manifests=%d chunks=%d", pushChunksCalled, len(committed.Docs), len(committed.ChunkedDocs), len(committed.ChunkObjects))
+	format := ""
+	if len(committed.ChunkedDocs) == 1 {
+		format = committed.ChunkedDocs[0].Format
+	}
+	if !pushChunksCalled || len(committed.Docs) != 0 || len(committed.ChunkedDocs) != 1 || format != chunkcas.FormatV2 || len(committed.ChunkObjects) != 0 {
+		t.Fatalf("oversized v2 pushChunks=%v docs=%d manifests=%d chunks=%d format=%q", pushChunksCalled, len(committed.Docs), len(committed.ChunkedDocs), len(committed.ChunkObjects), format)
+	}
+}
+
+func TestPushFallsBackToFullDocForOversizedEventOnV1Server(t *testing.T) {
+	repoID := domain.HashContent([]byte("oversized-event-old-server"))
+	cir := domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: "1"}, Events: []domain.Event{{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", chunkcas.MaxPortableChunkBytes+1)}}}}}
+	canonical, _ := domain.CanonicalBytes(cir)
+	doc := domain.SessionDoc{Hash: domain.HashContent(canonical), CIR: cir}
+	snap := domain.Snapshot{ID: doc.Hash, RepoID: string(repoID), Branch: "main", DocHash: doc.Hash}
+	var committed objectsReq
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/" + string(repoID) + "/push/negotiate":
+			var req negotiateReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewEncoder(w).Encode(negotiateResp{SnapshotWants: req.SnapshotHaves, DocWants: req.DocHaves, ChunkWants: req.ChunkHaves, ChunksSupported: true, BoundedChunksSupported: true})
+		case "/repos/" + string(repoID) + "/push/objects":
+			_ = json.NewDecoder(r.Body).Decode(&committed)
+			_ = json.NewEncoder(w).Encode(map[string]int{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if err := c.Push(context.Background(), string(repoID), []domain.Snapshot{snap}, []domain.SessionDoc{doc}, nil, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(committed.Docs) != 1 || len(committed.ChunkedDocs) != 0 {
+		t.Fatalf("old-server fallback docs=%d manifests=%d", len(committed.Docs), len(committed.ChunkedDocs))
 	}
 }
 
@@ -306,8 +343,11 @@ func TestPullFetchesBoundedChunkPrefixesUntilComplete(t *testing.T) {
 			if len(req.DocManifestWants) != 1 || req.DocManifestWants[0] != doc.Hash {
 				t.Errorf("manifest wants=%v", req.DocManifestWants)
 			}
+			if !containsString(req.ChunkFormatsSupported, chunkcas.FormatV2) {
+				t.Errorf("client formats=%v", req.ChunkFormatsSupported)
+			}
 			_ = json.NewEncoder(w).Encode(pullResp{
-				DocManifests:           []chunkedDocWire{{Hash: doc.Hash, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}},
+				DocManifests:           []chunkedDocWire{{Hash: doc.Hash, Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}},
 				BoundedChunksSupported: true,
 			})
 		case "/repos/" + string(repoID) + "/pull/chunks":
@@ -333,8 +373,9 @@ func TestPullFetchesBoundedChunkPrefixesUntilComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pullCalls != 4 {
-		t.Fatalf("pull/chunks calls=%d, want 4", pullCalls)
+	wantCalls := (len(plan.Order) + 1) / 2
+	if pullCalls != wantCalls {
+		t.Fatalf("pull/chunks calls=%d, want %d", pullCalls, wantCalls)
 	}
 	if len(docs) != 1 || docs[0].Hash != doc.Hash || len(docs[0].CIR.Events) != 7 {
 		t.Fatalf("pulled docs=%+v", docs)

@@ -100,7 +100,9 @@ type Authenticate interface {
 
 // ChunkedDoc represents a doc as a manifest (envelope+chunk hash) in a wire format (chunk delta transmission).
 type ChunkedDoc struct {
-	Hash     domain.ContentHash   `json:"hash"`
+	Hash domain.ContentHash `json:"hash"`
+	// Format is explicit for v2. Empty is the legacy wire representation and means v1.
+	Format   string               `json:"format,omitempty"`
 	Envelope json.RawMessage      `json:"envelope"`
 	Chunks   []domain.ContentHash `json:"chunks"`
 }
@@ -112,7 +114,7 @@ type ChunkObject struct {
 }
 
 const (
-	// Limit raw batch to 2MiB to comfortably fit within 4MiB, even with JSON base64 overhead. Explicitly reject chunks larger than this for a single event.
+	// Limit raw batch to 2MiB to comfortably fit within 4MiB, even with JSON base64 overhead.
 	MaxChunkWireRawBytes = domain.MaxPortableChunkBytes
 	MaxChunkWireObjects  = 32
 	MaxChunkWireJSONBody = 4 << 20
@@ -247,6 +249,7 @@ type PushNegotiateOutput struct {
 	ChunksSupported bool `json:"chunks_supported,omitempty"`
 	// BoundedChunksSupported true if chunk bodies are sent as bounded batches to /push/chunks·/pull/chunks. For old servers, the existing push/objects compatibility paths are used.
 	BoundedChunksSupported bool                 `json:"bounded_chunks_supported,omitempty"`
+	ChunkFormatsSupported  []string             `json:"chunk_formats_supported,omitempty"`
 	ChunkWants             []domain.ContentHash `json:"chunk_wants,omitempty"`
 }
 
@@ -258,6 +261,8 @@ type PullSendInput struct {
 	// Chunk Wire (Delta Download): Manifest/Chunk Body Request.
 	DocManifestWants []domain.ContentHash
 	ChunkWants       []domain.ContentHash
+	// Empty means a pre-v2 client, which can safely consume v1 only.
+	ChunkFormatsSupported []string
 }
 
 // PullSendOutput: Download Target Object (push/objects Request Body Equivalent). (wire: snake_case)

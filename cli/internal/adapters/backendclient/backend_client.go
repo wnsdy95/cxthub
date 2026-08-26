@@ -52,12 +52,14 @@ type negotiateResp struct {
 	// ChunksSupported true = chunk wire support server (old servers lack field → false — blanket fallback).
 	ChunksSupported        bool                 `json:"chunks_supported,omitempty"`
 	BoundedChunksSupported bool                 `json:"bounded_chunks_supported,omitempty"`
+	ChunkFormatsSupported  []string             `json:"chunk_formats_supported,omitempty"`
 	ChunkWants             []domain.ContentHash `json:"chunk_wants,omitempty"`
 }
 
 // chunkedDocWire is the wire form sending doc as manifest (envelope+chunk hash).
 type chunkedDocWire struct {
 	Hash     domain.ContentHash   `json:"hash"`
+	Format   string               `json:"format,omitempty"`
 	Envelope json.RawMessage      `json:"envelope"`
 	Chunks   []domain.ContentHash `json:"chunks"`
 }
@@ -82,8 +84,9 @@ type pullReq struct {
 	SnapshotWants []domain.ContentHash `json:"snapshot_wants"`
 	DocWants      []domain.ContentHash `json:"doc_wants"`
 	// Chunk wire (new type): receive doc as manifest and only missing chunk bodies (delta download).
-	DocManifestWants []domain.ContentHash `json:"doc_manifest_wants,omitempty"`
-	ChunkWants       []domain.ContentHash `json:"chunk_wants,omitempty"`
+	DocManifestWants      []domain.ContentHash `json:"doc_manifest_wants,omitempty"`
+	ChunkWants            []domain.ContentHash `json:"chunk_wants,omitempty"`
+	ChunkFormatsSupported []string             `json:"chunk_formats_supported,omitempty"`
 }
 type pullResp struct {
 	Snapshots              []domain.Snapshot   `json:"snapshots"`
@@ -597,7 +600,12 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 			return domain.ErrHashMismatch
 		}
 		docHaves = append(docHaves, d.Hash)
-		if plan, ok := chunkcas.PlanDoc(cb); ok {
+		// Storage and transport use the same v2 chunk identities. Sending v1 to a
+		// v2 server would leave a second, unreferenced chunk representation in its
+		// CAS. A pre-v2 server gets the complete document below; correctness is
+		// preserved during rolling upgrades at the cost of temporary delta upload.
+		plan, ok := chunkcas.PlanDoc(cb)
+		if ok {
 			plans[d.Hash] = plan
 			for _, ch := range plan.Order {
 				if !seenChunk[ch] {
@@ -642,11 +650,18 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 			continue
 		}
 		plan, planned := plans[d.Hash]
+		if planned && plan.Manifest.Format == chunkcas.FormatV2 && !containsString(neg.ChunkFormatsSupported, chunkcas.FormatV2) {
+			planned = false
+		}
 		if !neg.ChunksSupported || !planned {
 			sendDocs = append(sendDocs, d) // fallback to old server/plan — full (original path)
 			continue
 		}
-		chunkedDocs = append(chunkedDocs, chunkedDocWire{Hash: d.Hash, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks})
+		wireFormat := plan.Manifest.Format
+		if wireFormat == chunkcas.FormatV1 {
+			wireFormat = "" // pre-v2 servers interpret the omitted field as v1
+		}
+		chunkedDocs = append(chunkedDocs, chunkedDocWire{Hash: d.Hash, Format: wireFormat, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks})
 		for _, ch := range plan.Order {
 			if wantChunk[ch] && !sentChunk[ch] {
 				sentChunk[ch] = true
@@ -686,6 +701,15 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 		return fmt.Errorf("%w: %s", domain.ErrSyncConflict, strings.Join(rejected, ", "))
 	}
 	return nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func snapshotForCreate(s domain.Snapshot) domain.Snapshot {
@@ -800,7 +824,7 @@ func (c *BackendClient) pullDocs(ctx context.Context, repoID string, docWants []
 	// 1) Manifest request (new) — old server ignores fields, returns empty response → fallback to entire body.
 	// New server can return entire body for unplanable docs (mixed response).
 	var manResp pullResp
-	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{DocManifestWants: docWants}, &manResp); err != nil {
+	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{DocManifestWants: docWants, ChunkFormatsSupported: []string{chunkcas.FormatV1, chunkcas.FormatV2}}, &manResp); err != nil {
 		return nil, err
 	}
 	if len(manResp.DocManifests) == 0 && len(manResp.Docs) == 0 {
@@ -840,7 +864,7 @@ func (c *BackendClient) pullDocs(ctx context.Context, repoID string, docWants []
 	var need []domain.ContentHash
 	bodies := map[domain.ContentHash][]byte{}
 	for _, m := range manResp.DocManifests {
-		if !docWantSet[m.Hash] || seenMan[m.Hash] || len(m.Chunks) == 0 {
+		if !docWantSet[m.Hash] || seenMan[m.Hash] || len(m.Chunks) == 0 || !chunkcas.SupportedFormat(m.Format) {
 			return nil, domain.ErrHashMismatch
 		}
 		seenMan[m.Hash] = true
@@ -914,7 +938,7 @@ func (c *BackendClient) pullDocs(ctx context.Context, repoID string, docWants []
 			chunks = append(chunks, b)
 		}
 		// AssembleChunks validates integrity hashes (equivalent to ValidateSessionDocHash for entire path).
-		cb, aerr := chunkcas.AssembleChunks(chunkcas.Manifest{Format: chunkcas.Format, Envelope: m.Envelope, Chunks: m.Chunks}, chunks, m.Hash)
+		cb, aerr := chunkcas.AssembleChunks(chunkcas.Manifest{Format: m.Format, Envelope: m.Envelope, Chunks: m.Chunks}, chunks, m.Hash)
 		if aerr != nil {
 			return nil, aerr
 		}

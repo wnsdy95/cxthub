@@ -2012,7 +2012,7 @@ func (s *FSStore) PutDoc(_ context.Context, repoID domain.ContentHash, doc domai
 	}
 	// Chunk CAS basic (doc_chunks.go) — append-only session prefixes are deduped across pushes.
 	// Inapplicable chunking falls back to whole. Integrity hash remains whole canonical.
-	chunked, err := s.putDocChunked(repoID, doc.Hash, data)
+	chunked, _, err := s.putDocChunked(repoID, doc.Hash, data)
 	if err != nil {
 		return false, err
 	}

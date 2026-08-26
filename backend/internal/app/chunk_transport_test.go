@@ -69,9 +69,19 @@ func TestBoundedChunkStorePullAndRepoScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !neg.ChunksSupported || !neg.BoundedChunksSupported || len(neg.ChunkWants) != 0 {
+	if !neg.ChunksSupported || !neg.BoundedChunksSupported || len(neg.ChunkWants) != 0 ||
+		!containsString(neg.ChunkFormatsSupported, domain.ChunkFormatV1) || !containsString(neg.ChunkFormatsSupported, domain.ChunkFormatV2) {
 		t.Fatalf("negotiate after staging = %+v", neg)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBoundedChunkStoreRejectsInvalidBatchBeforeWriting(t *testing.T) {
@@ -137,7 +147,7 @@ func TestCommitUsesPreviouslyStagedChunks(t *testing.T) {
 			ID: docHash, RepoID: repo, Branch: "main", DocHash: docHash,
 			Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull,
 		}},
-		ChunkedDocs: []inbound.ChunkedDoc{{Hash: docHash, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}},
+		ChunkedDocs: []inbound.ChunkedDoc{{Hash: docHash, Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}},
 	})
 	if err != nil {
 		t.Fatalf("commit staged manifest: %v", err)
@@ -148,5 +158,35 @@ func TestCommitUsesPreviouslyStagedChunks(t *testing.T) {
 	got, err := st.GetDoc(ctx, repo, docHash)
 	if err != nil || len(got.CIR.Events) != len(cir.Events) {
 		t.Fatalf("staged doc roundtrip events=%d err=%v", len(got.CIR.Events), err)
+	}
+	legacyPull, err := svc.Send(ctx, inbound.PullSendInput{RepoID: repo, DocManifestWants: []domain.ContentHash{docHash}})
+	if err != nil || len(legacyPull.Docs) != 1 || len(legacyPull.DocManifests) != 0 {
+		t.Fatalf("legacy pull projection=%+v err=%v", legacyPull, err)
+	}
+}
+
+func TestPullOversizedEventRequiresExplicitV2Capability(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("v2-capability-repo")
+	bindCommitTestRepo(t, st, repo)
+	cir := domain.CIRDocument{
+		Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex},
+		Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser,
+			Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("x", domain.MaxPortableChunkBytes+1)}}}},
+	}
+	canonical, _ := domain.CanonicalBytes(cir)
+	hash := domain.HashContent(canonical)
+	if _, err := st.PutDoc(ctx, repo, domain.SessionDoc{Hash: hash, CIR: cir}); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy, err := svc.Send(ctx, inbound.PullSendInput{RepoID: repo, DocManifestWants: []domain.ContentHash{hash}})
+	if err != nil || len(legacy.Docs) != 1 || len(legacy.DocManifests) != 0 {
+		t.Fatalf("legacy oversized response docs=%d manifests=%d err=%v", len(legacy.Docs), len(legacy.DocManifests), err)
+	}
+	v2, err := svc.Send(ctx, inbound.PullSendInput{RepoID: repo, DocManifestWants: []domain.ContentHash{hash}, ChunkFormatsSupported: []string{domain.ChunkFormatV1, domain.ChunkFormatV2}})
+	if err != nil || len(v2.DocManifests) != 1 || v2.DocManifests[0].Format != domain.ChunkFormatV2 || len(v2.Docs) != 0 {
+		t.Fatalf("v2 oversized response=%+v err=%v", v2, err)
 	}
 }

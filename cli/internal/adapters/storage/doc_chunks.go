@@ -7,14 +7,15 @@
 // Layout:
 //
 //	objects/docs/<hash>   = zstd(manifest JSON {format, envelope, chunks[]})  ← or legacy zstd(entire)
-//	objects/chunks/<h_i>  = zstd(event canonical fragments joined by '\n' bytes)
+//	objects/chunks/<h_i>  = zstd(v2 canonical event-stream byte range; v1 whole-event group remains readable)
 //
 // Canonical bytes are exactly `{"envelope":<env>,"events":[<e1>,<e2>,…]}` form (key sorting: envelope < events, compact) so the envelope fragment + event fragment list can be reassembled byte-by-byte. On write, reassembly==validation, and if mismatched, fallback to full storage (fail-safe — even if the shape assumption is broken, data is always stored correctly). On read, compare the hash of the reassembly result with the requested hash to detect chunk corruption (free of charge).
 //
-// Chunk boundaries are prefix-dependent and deterministic: when accumulating event fragments exceeds docChunkTarget, it closes. Closed chunks from append-only growth are the same bytes in subsequent captures → same hash for deduplication, and only the last open chunk is rewritten (capture increase ≈ delta + one open chunk).
+// v2 chunk boundaries are fixed offsets in the canonical events-array interior. Closed chunks from append-only growth are the same bytes in subsequent captures → same hash for deduplication, and only the last open chunk is rewritten (capture increase ≈ delta + one open chunk), even when one event is larger than the transport bound.
 package storage
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,24 +28,36 @@ import (
 
 // putDocChunked stores canonical bytes as chunks+manifest.
 // Returns false if reassembly does not match the original byte-for-byte (caller should fallback to full storage).
-func (s *FileStore) putDocChunked(h domain.ContentHash, cb []byte) (bool, error) {
+func (s *FileStore) putDocChunked(h domain.ContentHash, cb []byte) (bool, int64, error) {
 	plan, ok := chunkcas.PlanDoc(cb)
 	if !ok {
-		return false, nil // shape assumption failure/reassembly mismatch — fallback to full storage
+		return false, 0, nil // shape assumption failure/reassembly mismatch — fallback to full storage
 	}
+	var added int64
 	for _, ch := range plan.Order {
 		p := s.objectPath("chunks", ch)
-		if !fileExists(p) {
-			if err := writeAtomic(p, docCompress(plan.Bodies[ch])); err != nil {
-				return false, err
+		if fileExists(p) {
+			raw, err := readCxtFile(p)
+			if err != nil {
+				return false, added, err
 			}
+			existing, err := docDecompress(raw)
+			if err != nil || !bytes.Equal(existing, plan.Bodies[ch]) {
+				return false, added, domain.ErrHashMismatch
+			}
+		} else {
+			compressed := docCompress(plan.Bodies[ch])
+			if err := writeAtomic(p, compressed); err != nil {
+				return false, added, err
+			}
+			added += int64(len(compressed))
 		}
 	}
 	mb, err := json.Marshal(plan.Manifest)
 	if err != nil {
-		return false, err
+		return false, added, err
 	}
-	return true, writeAtomic(s.objectPath("docs", h), docCompress(mb))
+	return true, added, writeAtomic(s.objectPath("docs", h), docCompress(mb))
 }
 
 // getDocChunked reconstructs canonical bytes from manifest in chunks.
@@ -129,14 +142,28 @@ func (s *FileStore) RepackDocs() (converted int, saved int64, err error) {
 		if derr != nil {
 			continue
 		}
-		if _, isMan, _ := s.getDocChunked(hash, data); isMan {
+		if cb, isMan, chunkErr := s.getDocChunked(hash, data); isMan {
 			var man chunkcas.Manifest
-			if json.Unmarshal(data, &man) == nil {
+			if json.Unmarshal(data, &man) != nil {
+				continue
+			}
+			if chunkErr != nil {
+				// Preserve every referenced body when an existing manifest cannot be
+				// reassembled. Repack is maintenance, never corruption repair.
 				for _, ch := range man.Chunks {
 					live[ch] = true
 				}
+				continue
 			}
-			continue // already chunked
+			if man.Format == chunkcas.FormatV2 {
+				for _, ch := range man.Chunks {
+					live[ch] = true
+				}
+				continue
+			}
+			// A valid v1 manifest is a migration source. Reassemble first, then
+			// atomically replace only the manifest after all v2 chunks exist.
+			data = cb
 		}
 		// Legacy monolithic: hash verification then chunk transformation.
 		if domain.HashContent(data) != hash {
@@ -153,7 +180,7 @@ func (s *FileStore) RepackDocs() (converted int, saved int64, err error) {
 			data = cb
 		}
 		before := int64(len(raw))
-		ok, perr := s.putDocChunked(hash, data)
+		ok, added, perr := s.putDocChunked(hash, data)
 		if perr != nil {
 			return converted, saved, perr
 		}
@@ -166,7 +193,7 @@ func (s *FileStore) RepackDocs() (converted int, saved int64, err error) {
 				for _, ch := range man.Chunks {
 					live[ch] = true
 				}
-				saved += before - int64(len(mraw))
+				saved += before - int64(len(mraw)) - added
 			}
 		}
 		converted++
