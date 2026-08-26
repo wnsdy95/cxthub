@@ -28,10 +28,18 @@ const briefingMaxBytes = 4 << 10
 // briefingTTL is the briefing validity period — stale briefings pulled long ago are not consumed.
 const briefingTTL = 24 * time.Hour
 
+const briefingLockStaleAfter = 2 * time.Minute
+
 type briefingFile struct {
 	At    time.Time `json:"at"`
 	Text  string    `json:"text,omitempty"`  // legacy single-entry format
 	Texts []string  `json:"texts,omitempty"` // ordered pull queue
+}
+
+type pullBriefingCursorFile struct {
+	Branch    string             `json:"branch"`
+	Target    domain.ContentHash `json:"target"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
 const legacyBriefingRelativePath = ".cxt/briefing.json"
@@ -49,6 +57,19 @@ func briefingRelativePath() string {
 	}
 	key := strings.TrimPrefix(string(domain.HashContent([]byte(owner))), "sha256:")
 	return filepath.Join(".cxt", "briefings", key+".json")
+}
+
+// pullBriefingCursorRelativePath is separate from the consumable briefing
+// queue. A pull briefing disappears after one prompt, while this cursor must
+// survive so later pulls do not inject the same remote range again. Both the
+// delivery owner and branch are represented only by an opaque content hash.
+func pullBriefingCursorRelativePath(branch string) string {
+	owner := briefingOwner()
+	if owner == "" {
+		owner = "unowned"
+	}
+	key := strings.TrimPrefix(string(domain.HashContent([]byte(owner+"\x00"+branch))), "sha256:")
+	return filepath.Join(".cxt", "briefing-cursors", key+".json")
 }
 
 func briefingOwner() string {
@@ -70,6 +91,38 @@ func briefingOwner() string {
 	return "wrapper\x00" + pid + "\x00" + agent
 }
 
+func withBriefingFileLock(cwd, relative string, fn func() error) error {
+	return withBriefingFileLockTimeout(cwd, relative, time.Second, fn)
+}
+
+func withBriefingFileLockTimeout(cwd, relative string, wait time.Duration, fn func() error) error {
+	lockPath, err := providerfs.PrepareRepoFile(cwd, relative+".lock", 0o755)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		lock, lockErr := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if lockErr == nil {
+			_ = lock.Close()
+			break
+		}
+		if !os.IsExist(lockErr) {
+			return lockErr
+		}
+		if info, statErr := os.Lstat(lockPath); statErr == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) > briefingLockStaleAfter {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("briefing file lock timeout")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer func() { _ = os.Remove(lockPath) }()
+	return fn()
+}
+
 // WriteBriefing queues the briefing for the initiating terminal/wrapper.
 // In an inactive repo (.cxt file absent), it is a no-op (same as opt-in gate).
 func WriteBriefing(cwd, text string) error {
@@ -77,22 +130,91 @@ func WriteBriefing(cwd, text string) error {
 		return nil
 	}
 	relative := briefingRelativePath()
-	entries := []string{}
-	if data, err := providerfs.ReadRepoFile(cwd, relative); err == nil {
-		var old briefingFile
-		if json.Unmarshal(data, &old) == nil && time.Since(old.At) <= briefingTTL {
-			entries = briefingEntries(old)
+	return withBriefingFileLock(cwd, relative, func() error {
+		entries := []string{}
+		if data, err := providerfs.ReadRepoFile(cwd, relative); err == nil {
+			var old briefingFile
+			if json.Unmarshal(data, &old) == nil && time.Since(old.At) <= briefingTTL {
+				entries = briefingEntries(old)
+			}
 		}
+		if len(entries) == 0 || entries[len(entries)-1] != text {
+			entries = append(entries, text)
+		}
+		entries = boundBriefingEntries(entries, briefingMaxBytes)
+		b, err := json.Marshal(briefingFile{At: time.Now().UTC(), Texts: entries})
+		if err != nil {
+			return err
+		}
+		return providerfs.WriteRepoFileAtomic(cwd, relative, b, 0o644)
+	})
+}
+
+// ReadPullBriefingCursor returns the last remote branch tip durably queued for
+// this terminal/wrapper. Corrupt, cross-branch, and invalid-hash files fail
+// closed and are ignored by the caller, which falls back to the local ref.
+func ReadPullBriefingCursor(cwd, branch string) (domain.ContentHash, bool) {
+	if domain.ValidateBranchName(branch) != nil {
+		return "", false
 	}
-	if len(entries) == 0 || entries[len(entries)-1] != text {
-		entries = append(entries, text)
-	}
-	entries = boundBriefingEntries(entries, briefingMaxBytes)
-	b, err := json.Marshal(briefingFile{At: time.Now().UTC(), Texts: entries})
+	data, err := providerfs.ReadRepoFile(cwd, pullBriefingCursorRelativePath(branch))
 	if err != nil {
+		return "", false
+	}
+	var cursor pullBriefingCursorFile
+	if json.Unmarshal(data, &cursor) != nil || cursor.Branch != branch || domain.ValidateContentHash(cursor.Target) != nil {
+		return "", false
+	}
+	return cursor.Target, true
+}
+
+// CompareAndSwapPullBriefingCursor advances only after the corresponding queue
+// entry is durable (ordering enforced by the caller). The filesystem lock and
+// expected pointer prevent concurrent post-merge hooks from moving C back to B.
+// A lost race leaves the queue intact and safely re-evaluates on the next pull.
+func CompareAndSwapPullBriefingCursor(cwd, branch string, expected, target domain.ContentHash) error {
+	if !cxtEnabled(cwd) {
+		return nil
+	}
+	if err := domain.ValidateBranchName(branch); err != nil {
 		return err
 	}
-	return providerfs.WriteRepoFileAtomic(cwd, relative, b, 0o644)
+	if err := domain.ValidateContentHash(target); err != nil {
+		return err
+	}
+	if err := domain.ValidateOptionalContentHash(expected); err != nil {
+		return err
+	}
+	relative := pullBriefingCursorRelativePath(branch)
+	return withBriefingFileLock(cwd, relative, func() error {
+		current, _ := ReadPullBriefingCursor(cwd, branch)
+		if current == target {
+			return nil
+		}
+		if current != expected {
+			return domain.ErrSyncConflict
+		}
+		b, err := json.Marshal(pullBriefingCursorFile{Branch: branch, Target: target, UpdatedAt: time.Now().UTC()})
+		if err != nil {
+			return err
+		}
+		return providerfs.WriteRepoFileAtomic(cwd, relative, b, 0o644)
+	})
+}
+
+// WithPullBriefingTransaction serializes one terminal's pull delivery for a
+// branch across graph selection, queueing, and cursor advancement. The queue
+// and cursor retain their own narrower locks because prompt consumption and
+// direct cursor repair do not take this transaction lock.
+func WithPullBriefingTransaction(cwd, branch string, fn func() error) error {
+	if !cxtEnabled(cwd) {
+		return nil
+	}
+	if err := domain.ValidateBranchName(branch); err != nil {
+		return err
+	}
+	relative := pullBriefingCursorRelativePath(branch) + ".transaction"
+	return withBriefingFileLockTimeout(cwd, relative, 30*time.Second, fn)
 }
 
 // ConsumeBriefing reads and consumes only the current terminal/wrapper queue.
@@ -101,35 +223,40 @@ func WriteBriefing(cwd, text string) error {
 // only one will succeed in renaming the file (the other will get ENOENT). Previous read-then-delete could lead to duplicate briefing injection (backlog #1 TOCTOU).
 func ConsumeBriefing(cwd string) (string, bool) {
 	relative := briefingRelativePath()
-	source, err := providerfs.PrepareRepoFile(cwd, relative, 0o755)
-	if err != nil {
+	var text string
+	var consumed bool
+	if err := withBriefingFileLock(cwd, relative, func() error {
+		source, err := providerfs.PrepareRepoFile(cwd, relative, 0o755)
+		if err != nil {
+			return err
+		}
+		claimRel := filepath.Join(filepath.Dir(relative), fmt.Sprintf("%s.claim.%d", filepath.Base(relative), os.Getpid()))
+		claim, err := providerfs.PrepareRepoFile(cwd, claimRel, 0o755)
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(source, claim); err != nil {
+			return err // absent or another hook already claimed it
+		}
+		defer func() { _ = os.Remove(claim) }()
+		data, err := providerfs.ReadRegularFile(claim)
+		if err != nil {
+			return err
+		}
+		var f briefingFile
+		if json.Unmarshal(data, &f) != nil || time.Since(f.At) > briefingTTL {
+			return nil
+		}
+		entries := briefingEntries(f)
+		if len(entries) == 0 {
+			return nil
+		}
+		text, consumed = strings.Join(entries, "\n\n"), true
+		return nil
+	}); err != nil {
 		return "", false
 	}
-	claimRel := filepath.Join(filepath.Dir(relative), fmt.Sprintf("%s.claim.%d", filepath.Base(relative), os.Getpid()))
-	claim, err := providerfs.PrepareRepoFile(cwd, claimRel, 0o755)
-	if err != nil {
-		return "", false
-	}
-	if err := os.Rename(source, claim); err != nil {
-		return "", false // absent or another hook already claimed it
-	}
-	defer func() { _ = os.Remove(claim) }()
-	data, err := providerfs.ReadRegularFile(claim)
-	if err != nil {
-		return "", false
-	}
-	var f briefingFile
-	if json.Unmarshal(data, &f) != nil {
-		return "", false
-	}
-	if time.Since(f.At) > briefingTTL {
-		return "", false
-	}
-	entries := briefingEntries(f)
-	if len(entries) == 0 {
-		return "", false
-	}
-	return strings.Join(entries, "\n\n"), true
+	return text, consumed
 }
 
 func briefingEntries(f briefingFile) []string {

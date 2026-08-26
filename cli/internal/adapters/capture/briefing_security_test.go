@@ -1,11 +1,15 @@
 package capture
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 func TestConsumeBriefingRefusesSymlinkedCxtDirectory(t *testing.T) {
@@ -68,6 +72,82 @@ func TestBriefingQueuesMultiplePullsUntilNextPrompt(t *testing.T) {
 	}
 }
 
+func TestBriefingConcurrentWritersPreserveEveryEntry(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TERM_SESSION_ID", "concurrent-briefing-terminal")
+
+	const writers = 16
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		text := fmt.Sprintf("pull context %02d", i)
+		go func() {
+			<-start
+			errs <- WriteBriefing(repo, text)
+		}()
+	}
+	close(start)
+	for i := 0; i < writers; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	text, ok := ConsumeBriefing(repo)
+	if !ok {
+		t.Fatal("concurrent briefing queue was empty")
+	}
+	for i := 0; i < writers; i++ {
+		want := fmt.Sprintf("pull context %02d", i)
+		if got := strings.Count(text, want); got != 1 {
+			t.Fatalf("%q count=%d in %q", want, got, text)
+		}
+	}
+}
+
+func TestBriefingConsumeAndWriteNeverReplayConsumedEntry(t *testing.T) {
+	for iteration := 0; iteration < 50; iteration++ {
+		repo := t.TempDir()
+		if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("TERM_SESSION_ID", fmt.Sprintf("consume-write-%d", iteration))
+		if err := WriteBriefing(repo, "old pull context"); err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		written := make(chan error, 1)
+		consumed := make(chan string, 1)
+		go func() {
+			<-start
+			written <- WriteBriefing(repo, "new pull context")
+		}()
+		go func() {
+			<-start
+			text, _ := ConsumeBriefing(repo)
+			consumed <- text
+		}()
+		close(start)
+		if err := <-written; err != nil {
+			t.Fatal(err)
+		}
+		all := <-consumed
+		if rest, ok := ConsumeBriefing(repo); ok {
+			all += "\n\n" + rest
+		}
+		if got := strings.Count(all, "old pull context"); got != 1 {
+			t.Fatalf("iteration %d replayed/lost old entry: count=%d all=%q", iteration, got, all)
+		}
+		if got := strings.Count(all, "new pull context"); got != 1 {
+			t.Fatalf("iteration %d replayed/lost new entry: count=%d all=%q", iteration, got, all)
+		}
+	}
+}
+
 func TestBriefingIsScopedToInitiatingTerminal(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
@@ -102,6 +182,104 @@ func TestBriefingIsScopedToInitiatingTerminal(t *testing.T) {
 	}
 	if text, ok := ConsumeBriefing(repo); ok || text != "" {
 		t.Fatalf("terminal A briefing was consumed twice: %q", text)
+	}
+}
+
+func TestPullBriefingCursorSurvivesConsumptionAndIsScoped(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mainTarget := domain.HashContent([]byte("terminal-a-main-cursor"))
+	t.Setenv("TERM_SESSION_ID", "terminal-a")
+	if err := CompareAndSwapPullBriefingCursor(repo, "main", "", mainTarget); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBriefing(repo, "consume me once"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ConsumeBriefing(repo); !ok {
+		t.Fatal("briefing queue was not consumed")
+	}
+	if got, ok := ReadPullBriefingCursor(repo, "main"); !ok || got != mainTarget {
+		t.Fatalf("cursor after queue consumption=%s ok=%v", got, ok)
+	}
+	if _, ok := ReadPullBriefingCursor(repo, "feature/x"); ok {
+		t.Fatal("main cursor leaked into another branch")
+	}
+
+	t.Setenv("TERM_SESSION_ID", "terminal-b")
+	if _, ok := ReadPullBriefingCursor(repo, "main"); ok {
+		t.Fatal("terminal A cursor leaked into terminal B")
+	}
+	t.Setenv("TERM_SESSION_ID", "terminal-a")
+	if relative := pullBriefingCursorRelativePath("main"); strings.Contains(relative, "terminal-a") || strings.Contains(relative, "main") {
+		t.Fatalf("cursor path exposes scope input: %q", relative)
+	}
+}
+
+func TestPullBriefingCursorRefusesSymlinkedDirectory(t *testing.T) {
+	repo := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repo, ".cxt", "briefing-cursors")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	t.Setenv("TERM_SESSION_ID", "cursor-security-terminal")
+	if err := CompareAndSwapPullBriefingCursor(repo, "main", "", domain.HashContent([]byte("cursor target"))); err == nil {
+		t.Fatal("cursor write followed a symlinked directory")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cursor escaped repository: %v", entries)
+	}
+}
+
+func TestPullBriefingCursorConcurrentCASRejectsStaleWriter(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TERM_SESSION_ID", "cursor-cas-terminal")
+	root := domain.HashContent([]byte("cursor root"))
+	if err := CompareAndSwapPullBriefingCursor(repo, "main", "", root); err != nil {
+		t.Fatal(err)
+	}
+	contenders := []domain.ContentHash{
+		domain.HashContent([]byte("cursor child one")),
+		domain.HashContent([]byte("cursor child two")),
+	}
+	start := make(chan struct{})
+	errs := make(chan error, len(contenders))
+	for _, contender := range contenders {
+		go func(next domain.ContentHash) {
+			<-start
+			errs <- CompareAndSwapPullBriefingCursor(repo, "main", root, next)
+		}(contender)
+	}
+	close(start)
+	var successes, conflicts int
+	for range contenders {
+		switch err := <-errs; {
+		case err == nil:
+			successes++
+		case errors.Is(err, domain.ErrSyncConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected cursor CAS error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("cursor CAS results: successes=%d conflicts=%d", successes, conflicts)
+	}
+	got, ok := ReadPullBriefingCursor(repo, "main")
+	if !ok || (got != contenders[0] && got != contenders[1]) {
+		t.Fatalf("cursor winner=%s ok=%v", got, ok)
 	}
 }
 

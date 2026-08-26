@@ -191,6 +191,9 @@ except Exception: print('parse-fail')")" True
 expect "briefing is consumed once and deleted" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 0
 BRIEF2=$(echo "{\"cwd\":\"$TMP/repo1\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit)
 expect "subsequent prompt emits no briefing" "$([ -z "$BRIEF2" ] && echo yes)" yes
+REPEAT_HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
+expect "same remote tip is not briefed again" "$(echo "$REPEAT_HOOKOUT" | grep -c 'briefed to the agent')" 0
+expect "repeat pull leaves no briefing queue" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 0
 
 echo "── F. repo1: both-moved diverge push → automatic rebase-graft"
 HEAD_PREV=$(main_head)

@@ -1100,59 +1100,149 @@ func refSync(ctx context.Context, c *Container, cwd string) {
 // Branch base = the commit the new branch points to and the linked snapshot ([git <sha>]) — if none, the latest of the current branch.
 // A ref is created (the active session is not affected — git branch is a background task),
 // and if the cxt branch already exists (e.g., due to a team context pull), it is preserved.
-// writePullBriefing summarizes the team member snapshots received via git pull (remote head → local head) into a briefing sidecar.
+// pullBriefingDelta returns the remote DAG difference after the last delivered
+// cursor (or local branch ref fallback). It traverses natural and overlay graft
+// parents, so an appended side history is neither disconnected nor repeatedly
+// re-read from an intentionally stationary local ref. The newest 12 visible
+// entries are retained and returned oldest-to-newest, so the queue's prefix
+// truncation preserves the newest information. The full difference is still
+// validated before a caller may advance its cursor.
+func pullBriefingDelta(
+	snapshots []domain.Snapshot,
+	remoteTarget, localTarget, cursorTarget domain.ContentHash,
+) ([]domain.Snapshot, bool) {
+	byID := make(map[domain.ContentHash]domain.Snapshot, len(snapshots))
+	for _, snap := range snapshots {
+		byID[snap.ID] = snap
+	}
+	if remoteTarget == "" {
+		return nil, true
+	}
+	if _, ok := byID[remoteTarget]; !ok {
+		return nil, false
+	}
+
+	reachable := func(start, target domain.ContentHash) bool {
+		if start == "" || target == "" {
+			return false
+		}
+		seen := map[domain.ContentHash]bool{}
+		stack := []domain.ContentHash{start}
+		for len(stack) > 0 {
+			cur := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if cur == target {
+				return true
+			}
+			if cur == "" || seen[cur] {
+				continue
+			}
+			seen[cur] = true
+			if snap, ok := byID[cur]; ok {
+				stack = append(stack, snap.ReachabilityParents()...)
+			}
+		}
+		return false
+	}
+
+	base := localTarget
+	if cursorTarget != "" && reachable(remoteTarget, cursorTarget) {
+		base = cursorTarget
+	}
+	excluded := map[domain.ContentHash]bool{}
+	if base != "" {
+		stack := []domain.ContentHash{base}
+		for len(stack) > 0 {
+			cur := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if cur == "" || excluded[cur] {
+				continue
+			}
+			excluded[cur] = true
+			if snap, ok := byID[cur]; ok {
+				stack = append(stack, snap.ReachabilityParents()...)
+			}
+		}
+	}
+
+	const maxVisible = 12
+	var visible []domain.Snapshot
+	seen := map[domain.ContentHash]bool{}
+	queue := []domain.ContentHash{remoteTarget}
+	for next := 0; next < len(queue); next++ {
+		cur := queue[next]
+		if cur == "" || seen[cur] || excluded[cur] {
+			continue
+		}
+		seen[cur] = true
+		snap, ok := byID[cur]
+		if !ok {
+			return visible, false
+		}
+		if !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) && len(visible) < maxVisible {
+			visible = append(visible, snap)
+		}
+		queue = append(queue, snap.ReachabilityParents()...)
+	}
+	for left, right := 0, len(visible)-1; left < right; left, right = left+1, right-1 {
+		visible[left], visible[right] = visible[right], visible[left]
+	}
+	return visible, true
+}
+
+// writePullBriefing summarizes the team member snapshots received via git pull
+// into a terminal-scoped briefing sidecar and advances a separate durable
+// remote cursor. The active/local context ref remains untouched.
 // The next prompt's UserPromptSubmit hook consumes this once, injecting it into the live agent session (no raw merge — summary layer at commit message and author level).
 func writePullBriefing(ctx context.Context, c *Container, cwd, branch string) {
-	ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch)
-	if err != nil || ref.Target == "" {
-		return
-	}
-	all, err := c.List.List(ctx, inbound.ListInput{})
-	if err != nil {
-		return
-	}
-	byID := map[domain.ContentHash]*domain.Snapshot{}
-	for i := range all.Snapshots {
-		byID[all.Snapshots[i].ID] = &all.Snapshots[i]
-	}
-	var localTarget domain.ContentHash
-	for _, r := range all.Refs {
-		if r.Kind == domain.RefBranch && r.Name == branch {
-			localTarget = r.Target
-			break
+	if err := capture.WithPullBriefingTransaction(cwd, branch, func() error {
+		ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch)
+		if err != nil || ref.Target == "" {
+			return err
 		}
-	}
-	// The "ingestion range" is from the remote head to the local head (latest first, max 12).
-	var items []string
-	seen := map[domain.ContentHash]bool{}
-	for cur := ref.Target; cur != "" && cur != localTarget && !seen[cur] && len(items) < 12; {
-		seen[cur] = true
-		s := byID[cur]
-		if s == nil {
-			break // object not reached (fetch failure etc.) — only what is available
+		all, err := c.List.List(ctx, inbound.ListInput{})
+		if err != nil {
+			return err
 		}
-		if !strings.HasPrefix(s.Message, domain.HookMessagePrefix) {
-			who := s.Author.Name
+		var localTarget domain.ContentHash
+		for _, r := range all.Refs {
+			if r.Kind == domain.RefBranch && r.Name == branch {
+				localTarget = r.Target
+				break
+			}
+		}
+		cursorTarget, _ := capture.ReadPullBriefingCursor(cwd, branch)
+		delta, complete := pullBriefingDelta(all.Snapshots, ref.Target, localTarget, cursorTarget)
+		if !complete {
+			return nil // fetched graph is incomplete — do not skip an unobserved range
+		}
+		var items []string
+		for _, snap := range delta {
+			who := snap.Author.Name
 			if who == "" {
-				who = s.Author.Email
+				who = snap.Author.Email
 			}
 			if who == "" {
-				who = s.Provider
+				who = snap.Provider
 			}
-			items = append(items, fmt.Sprintf("- %s: %s", who, s.Message))
+			items = append(items, fmt.Sprintf("- %s: %s", who, snap.Message))
 		}
-		if len(s.Parents) == 0 {
-			break
+		if len(items) > 0 {
+			text := fmt.Sprintf("── Teammate context arrived (git pull, %s) ──\n%s\n(full conversations are available in the web context tab — the code changes are already in your working tree)",
+				branch, strings.Join(items, "\n"))
+			if err := capture.WriteBriefing(cwd, text); err != nil {
+				return err // queue first: a cursor must never skip an undelivered range
+			}
 		}
-		cur = s.Parents[0]
-	}
-	if len(items) == 0 {
-		return
-	}
-	text := fmt.Sprintf("── Teammate context arrived (git pull, %s) ──\n%s\n(full conversations are available in the web context tab — the code changes are already in your working tree)",
-		branch, strings.Join(items, "\n"))
-	if capture.WriteBriefing(cwd, text) == nil {
-		fmt.Printf("cxt: %d team member contexts received — will be briefed to the agent in the next prompt\n", len(items))
+		if err := capture.CompareAndSwapPullBriefingCursor(cwd, branch, cursorTarget, ref.Target); err != nil {
+			return err
+		}
+		if len(items) > 0 {
+			fmt.Printf("cxt: %d team member contexts received — will be briefed to the agent in the next prompt\n", len(items))
+		}
+		return nil
+	}); err != nil && !errors.Is(err, domain.ErrSyncConflict) {
+		hookWarn("pull briefing cursor was not saved: %v", err)
 	}
 }
 
