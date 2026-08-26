@@ -275,7 +275,11 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 		return inbound.SyncOutput{}, err
 	}
 
-	snaps, docs, err := s.collectObjects(ctx, repoID, man)
+	snaps, err := s.collectSnapshots(ctx, repoID, man)
+	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
+	pushSnaps, pushDocs, err := s.selectPushObjects(ctx, repoID, snaps)
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
@@ -344,8 +348,10 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 	}
 
 	// Publish order is object → graft overlay → ref. New snapshots arrive without server-owned graft metadata. Publishing refs first would make sibling-session histories that depend on the queued graft appear non-fast-forward. Call RemoteSync.Push twice to make the protocol boundary explicit: objects first, refs last.
-	if err := s.remote.Push(ctx, repoID, snaps, docs, nil, false, false); err != nil {
-		return inbound.SyncOutput{}, err
+	if len(pushSnaps) > 0 || len(pushDocs) > 0 {
+		if err := s.remote.Push(ctx, repoID, pushSnaps, pushDocs, nil, false, false); err != nil {
+			return inbound.SyncOutput{}, err
+		}
 	}
 	for _, plan := range memoryPlans {
 		// Another terminal or machine already advanced this snapshot's memory.
@@ -394,7 +400,7 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 			_ = s.remote.DeleteUnsyncRemote(ctx, repoID, r.Name)
 		}
 	}
-	return inbound.SyncOutput{Pushed: len(snaps), NewRefs: refs}, nil
+	return inbound.SyncOutput{Pushed: len(pushSnaps), NewRefs: refs}, nil
 }
 
 // flushPromotions flushes the <repoRoot>/.cxt/promotions.json queue to the server, removing successful items.
@@ -749,16 +755,17 @@ func (s *SyncRepoService) AppendBranch(ctx context.Context, in inbound.SyncInput
 	return s.store.PutRef(ctx, ref)
 }
 
-// collectObjects gathers push target objects (snapshots+docs) for Push/Shadow Sync.
+// collectSnapshots gathers push target metadata for Push/Shadow Sync without
+// opening cumulative document bodies.
 // Stash is local-only (like git), so it is excluded, but the determination is based on ref reachability, not labels.
 // Content-hash deduplication ensures that if the same session content is stored in both stash and commits, one "(stash)" label object can be part of the commit history.
 // Removing the label alone can lead to parent loss (fsck corruption) and permanent ref advancement blockage (stash-dedup trap).
-func (s *SyncRepoService) collectObjects(ctx context.Context, repoID string, man domain.Manifest) ([]domain.Snapshot, []domain.SessionDoc, error) {
+func (s *SyncRepoService) collectSnapshots(ctx context.Context, repoID string, man domain.Manifest) ([]domain.Snapshot, error) {
 	byID := make(map[domain.ContentHash]domain.Snapshot, len(man.SnapshotIndex))
 	for _, id := range man.SnapshotIndex {
 		snap, err := s.store.GetSnapshot(ctx, id)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		byID[id] = snap
 	}
@@ -785,8 +792,6 @@ func (s *SyncRepoService) collectObjects(ctx context.Context, repoID string, man
 		stack = append(stack, snap.ReachabilityParents()...)
 	}
 	var snaps []domain.Snapshot
-	var docs []domain.SessionDoc
-	seenDoc := map[domain.ContentHash]bool{}
 	for _, id := range man.SnapshotIndex {
 		snap := byID[id]
 		if snap.Branch == domain.StashBranchLabel && !reachable[id] {
@@ -794,16 +799,92 @@ func (s *SyncRepoService) collectObjects(ctx context.Context, repoID string, man
 		}
 		snap.RepoID = repoID // Normalize to current origin-derived repoID (remote redirection)
 		snaps = append(snaps, snap)
-		if snap.DocHash != "" && !seenDoc[snap.DocHash] {
-			doc, err := s.store.GetDoc(ctx, snap.DocHash)
-			if err != nil {
-				return nil, nil, err
-			}
-			docs = append(docs, doc)
-			seenDoc[snap.DocHash] = true
+	}
+	return snaps, nil
+}
+
+// selectPushObjects asks the server which independent snapshot/doc objects it
+// lacks before opening any cumulative SessionDoc body. A server can retain a
+// snapshot while losing its doc (or vice versa), so manifest snapshot indexes
+// are not a sufficient repair proof. Optional capability fallback preserves
+// compatibility with non-HTTP remotes and older adapters.
+func (s *SyncRepoService) selectPushObjects(ctx context.Context, repoID string, snaps []domain.Snapshot) ([]domain.Snapshot, []domain.SessionDoc, error) {
+	negotiator, ok := s.remote.(outbound.PushObjectNegotiator)
+	if !ok {
+		docs, err := s.loadPushDocs(ctx, snaps, nil)
+		return snaps, docs, err
+	}
+
+	snapshotHaves := make([]domain.ContentHash, 0, len(snaps))
+	docHaves := make([]domain.ContentHash, 0, len(snaps))
+	seenDocs := map[domain.ContentHash]bool{}
+	for _, snap := range snaps {
+		snapshotHaves = append(snapshotHaves, snap.ID)
+		if snap.DocHash != "" && !seenDocs[snap.DocHash] {
+			seenDocs[snap.DocHash] = true
+			docHaves = append(docHaves, snap.DocHash)
 		}
 	}
-	return snaps, docs, nil
+	wants, err := negotiator.NegotiatePushObjects(ctx, repoID, snapshotHaves, docHaves)
+	if err != nil {
+		return nil, nil, err
+	}
+	wantSnaps, err := negotiatedWantSet(snapshotHaves, wants.Snapshots)
+	if err != nil {
+		return nil, nil, err
+	}
+	wantDocs, err := negotiatedWantSet(docHaves, wants.Docs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	pushSnaps := make([]domain.Snapshot, 0, len(wantSnaps))
+	for _, snap := range snaps {
+		if wantSnaps[snap.ID] {
+			pushSnaps = append(pushSnaps, snap)
+		}
+	}
+	pushDocs, err := s.loadPushDocs(ctx, snaps, wantDocs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pushSnaps, pushDocs, nil
+}
+
+func negotiatedWantSet(haves, wants []domain.ContentHash) (map[domain.ContentHash]bool, error) {
+	offered := make(map[domain.ContentHash]bool, len(haves))
+	for _, hash := range haves {
+		offered[hash] = true
+	}
+	out := make(map[domain.ContentHash]bool, len(wants))
+	for _, hash := range wants {
+		if err := domain.ValidateContentHash(hash); err != nil {
+			return nil, err
+		}
+		if !offered[hash] || out[hash] {
+			return nil, domain.ErrHashMismatch
+		}
+		out[hash] = true
+	}
+	return out, nil
+}
+
+func (s *SyncRepoService) loadPushDocs(ctx context.Context, snaps []domain.Snapshot, wanted map[domain.ContentHash]bool) ([]domain.SessionDoc, error) {
+	var docs []domain.SessionDoc
+	seen := map[domain.ContentHash]bool{}
+	for _, snap := range snaps {
+		hash := snap.DocHash
+		if hash == "" || seen[hash] || (wanted != nil && !wanted[hash]) {
+			continue
+		}
+		doc, err := s.store.GetDoc(ctx, hash)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, doc)
+		seen[hash] = true
+	}
+	return docs, nil
 }
 
 // SyncPendings reflects in-progress context pointers to the server (detached helper path).
@@ -939,9 +1020,14 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 			ahead = append(ahead, r)
 		}
 		if len(ahead) > 0 {
-			if snaps, docs, cerr := s.collectObjects(ctx, repoID, man); cerr == nil {
+			if snaps, cerr := s.collectSnapshots(ctx, repoID, man); cerr == nil {
 				if serr := s.pushSettingsObjects(ctx, repoID, snaps); serr == nil {
-					if perr := s.remote.Push(ctx, repoID, snaps, docs, nil, false, false); perr == nil {
+					pushSnaps, pushDocs, perr := s.selectPushObjects(ctx, repoID, snaps)
+					objectsReady := perr == nil
+					if objectsReady && (len(pushSnaps) > 0 || len(pushDocs) > 0) {
+						objectsReady = s.remote.Push(ctx, repoID, pushSnaps, pushDocs, nil, false, false) == nil
+					}
+					if objectsReady {
 						for _, r := range ahead {
 							if uerr := s.remote.PushUnsync(ctx, repoID, domain.Unsync{
 								RepoID: repoID, Branch: r.Name, Target: r.Target, UpdatedAt: time.Now().UTC(),

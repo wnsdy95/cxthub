@@ -113,6 +113,8 @@ expect "repo1 push after server main exists" "$([ -n "$HEAD_A" ] && echo yes)" y
 [ -z "$HEAD_A" ] && exit 1
 cxt memorize >/dev/null 2>&1
 cxt push >/dev/null 2>&1
+NOOP_PUSH=$(cxt push 2>&1)
+expect "no-op push offers zero snapshots after preflight" "$(echo "$NOOP_PUSH" | grep -c 'pushed 0 snapshot(s)')" 1
 
 echo "── B. repo2 (without pull): independent session B push → hook auto-append"
 git clone -q "$TMP/bare.git" "$TMP/repo2"

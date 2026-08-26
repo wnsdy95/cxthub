@@ -39,7 +39,7 @@ func TestCollectObjectsIncludesReachableStash(t *testing.T) {
 		Refs:          []domain.Ref{{Kind: domain.RefBranch, Name: "main", RepoID: "repo-1", Target: c}},
 		SnapshotIndex: []domain.ContentHash{a, sMid, c, p},
 	}
-	snaps, _, err := svc.collectObjects(ctx, "repo-1", man)
+	snaps, err := svc.collectSnapshots(ctx, "repo-1", man)
 	if err != nil {
 		t.Fatal(err)
 	}
