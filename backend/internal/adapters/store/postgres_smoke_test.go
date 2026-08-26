@@ -151,6 +151,114 @@ func TestPGSmoke(t *testing.T) {
 		t.Fatalf("repo2 snapshot: repo=%s err=%v", got.RepoID, err)
 	}
 
+	// Large legacy memory migration keeps MemoryDigestHash stable while replacing
+	// the global raw JSON with a component manifest. Every existing memory owner
+	// must receive all memory_chunk grants before the shared representation flips.
+	legacyMemory := domain.MemoryDigest{
+		SnapshotID: snapID,
+		Summary:    strings.Repeat("shared-memory-prefix-", 12<<10),
+		KeyFacts:   []string{"identity remains the complete digest hash"},
+		OpenTasks:  []string{},
+		Provider:   domain.ProviderCodex,
+		Fragments: []domain.MemoryFragment{{
+			SourceSnapshot: snapID,
+			Summary:        strings.Repeat("memory-fragment-", 8<<10),
+		}},
+	}
+	legacyMemoryHash, _ := domain.MemoryDigestHash(legacyMemory)
+	legacyMemoryJSON, _ := json.Marshal(legacyMemory)
+	if _, err := st.pool.Exec(ctx, `INSERT INTO blobs (hash,bytes) VALUES ($1,$2)`, string(legacyMemoryHash), legacyMemoryJSON); err != nil {
+		t.Fatalf("legacy memory blob fixture: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO repo_blobs (repo_id,kind,hash) VALUES ($1,'memory',$2)`, string(repoID), string(legacyMemoryHash)); err != nil {
+		t.Fatalf("legacy memory owner fixture: %v", err)
+	}
+	if gotHash, err := st.PutMemory(ctx, repo2, legacyMemory); err != nil || gotHash != legacyMemoryHash {
+		t.Fatalf("memory component migration: hash=%s err=%v", gotHash, err)
+	}
+	var storedMemory []byte
+	if err := st.pool.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(legacyMemoryHash)).Scan(&storedMemory); err != nil {
+		t.Fatalf("read migrated memory manifest: %v", err)
+	}
+	storedMemory, err = docDecompress(storedMemory)
+	if err != nil {
+		t.Fatalf("decode migrated memory manifest: %v", err)
+	}
+	memoryManifest, isMemoryManifest, err := domain.ParseMemoryChunkManifest(storedMemory)
+	if err != nil || !isMemoryManifest || memoryManifest.Format != domain.MemoryChunkFormatV1 {
+		t.Fatalf("memory manifest=%+v is=%v err=%v", memoryManifest, isMemoryManifest, err)
+	}
+	allMemoryChunks := append(append([]domain.ContentHash{}, memoryManifest.SummaryChunks...), memoryManifest.FragmentChunks...)
+	for _, owner := range []domain.ContentHash{repoID, repo2} {
+		got, err := st.GetMemory(ctx, owner, legacyMemoryHash)
+		if err != nil || got.Summary != legacyMemory.Summary {
+			t.Fatalf("memory owner %s lost migrated body: %v", owner, err)
+		}
+		for _, chunkHash := range allMemoryChunks {
+			var count int
+			if err := st.pool.QueryRow(ctx,
+				`SELECT count(*) FROM repo_blobs WHERE repo_id=$1 AND kind='memory_chunk' AND hash=$2`,
+				string(owner), string(chunkHash)).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("memory owner %s lacks component %s: count=%d err=%v", owner, chunkHash, count, err)
+			}
+		}
+	}
+
+	// Concurrent writers lock the top-level memory before components. Both a
+	// legacy migrator and a deduplicating owner must finish without deadlock.
+	raceMemory := legacyMemory
+	raceMemory.Summary = strings.Repeat("memory-lock-order-", 10<<10)
+	raceMemoryHash, _ := domain.MemoryDigestHash(raceMemory)
+	raceMemoryJSON, _ := json.Marshal(raceMemory)
+	if _, err := st.pool.Exec(ctx, `INSERT INTO blobs (hash,bytes) VALUES ($1,$2)`, string(raceMemoryHash), raceMemoryJSON); err != nil {
+		t.Fatalf("memory lock-order blob fixture: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx, `INSERT INTO repo_blobs (repo_id,kind,hash) VALUES ($1,'memory',$2)`, string(repoID), string(raceMemoryHash)); err != nil {
+		t.Fatalf("memory lock-order owner fixture: %v", err)
+	}
+	memoryRaceCtx, cancelMemoryRace := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelMemoryRace()
+	startMemoryRace := make(chan struct{})
+	memoryRaceErrs := make(chan error, 2)
+	for _, owner := range []domain.ContentHash{repoID, repo2} {
+		owner := owner
+		go func() {
+			<-startMemoryRace
+			_, err := st.PutMemory(memoryRaceCtx, owner, raceMemory)
+			memoryRaceErrs <- err
+		}()
+	}
+	close(startMemoryRace)
+	for i := 0; i < 2; i++ {
+		if err := <-memoryRaceErrs; err != nil {
+			t.Fatalf("concurrent memory/component lock ordering: %v", err)
+		}
+	}
+
+	// A corrupt globally deduplicated memory component aborts the complete
+	// transaction, including the newly inserted top-level memory object.
+	corruptMemory := domain.MemoryDigest{
+		SnapshotID: snapID,
+		Summary:    strings.Repeat("corrupt-memory-component-", 8<<10),
+		Provider:   domain.ProviderClaude,
+	}
+	corruptMemoryHash, _ := domain.MemoryDigestHash(corruptMemory)
+	corruptMemoryPlan, ok, err := domain.PlanMemoryChunks(corruptMemory)
+	if err != nil || !ok {
+		t.Fatalf("corrupt memory plan: ok=%v err=%v", ok, err)
+	}
+	badMemoryChunk := corruptMemoryPlan.Order[0]
+	if _, err := st.pool.Exec(ctx, `INSERT INTO blobs (hash,bytes) VALUES ($1,$2)`, string(badMemoryChunk), docCompress([]byte("corrupt memory body"))); err != nil {
+		t.Fatalf("corrupt memory component fixture: %v", err)
+	}
+	if _, err := st.PutMemory(ctx, repoID, corruptMemory); !errors.Is(err, domain.ErrIntegrity) {
+		t.Fatalf("corrupt component PutMemory err=%v, want ErrIntegrity", err)
+	}
+	var failedMemoryCount int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM blobs WHERE hash=$1`, string(corruptMemoryHash)).Scan(&failedMemoryCount); err != nil || failedMemoryCount != 0 {
+		t.Fatalf("failed PutMemory left top-level blob: count=%d err=%v", failedMemoryCount, err)
+	}
+
 	// Rolling v1→v2 dedup: a v2 writer must migrate the global manifest and grant
 	// every old/new doc owner the v2 chunks instead of retaining two representations.
 	v1CIR := domain.CIRDocument{

@@ -653,13 +653,8 @@ func (s *FileStore) Manifest(ctx context.Context, repoID string) (domain.Manifes
 
 // PutMemory stores a MemoryDigest as a content-addressed blob. No-op if it already exists.
 func (s *FileStore) PutMemory(_ context.Context, digest domain.MemoryDigest) (domain.ContentHash, error) {
-	if err := domain.ValidateOptionalContentHash(digest.SnapshotID); err != nil {
+	if err := validateMemoryDigestRefs(digest); err != nil {
 		return "", err
-	}
-	for _, fragment := range digest.Fragments {
-		if err := domain.ValidateContentHash(fragment.SourceSnapshot); err != nil {
-			return "", err
-		}
 	}
 	data, err := json.Marshal(digest)
 	if err != nil {
@@ -672,8 +667,14 @@ func (s *FileStore) PutMemory(_ context.Context, digest domain.MemoryDigest) (do
 			return "", err
 		}
 	} else {
-		if err := writeAtomic(p, data); err != nil {
+		chunked, _, err := s.putMemoryChunked(h, digest)
+		if err != nil {
 			return "", err
+		}
+		if !chunked {
+			if err := writeAtomic(p, data); err != nil {
+				return "", err
+			}
 		}
 	}
 	return h, nil
@@ -691,6 +692,12 @@ func (s *FileStore) GetMemory(_ context.Context, hash domain.ContentHash) (domai
 		}
 		return domain.MemoryDigest{}, err
 	}
+	if chunked, isManifest, chunkErr := s.getMemoryChunked(hash, data); isManifest {
+		if chunkErr != nil {
+			return domain.MemoryDigest{}, chunkErr
+		}
+		return chunked, nil
+	}
 	var d domain.MemoryDigest
 	if err := json.Unmarshal(data, &d); err != nil {
 		return domain.MemoryDigest{}, err
@@ -702,7 +709,7 @@ func (s *FileStore) GetMemory(_ context.Context, hash domain.ContentHash) (domai
 	if got != hash {
 		return domain.MemoryDigest{}, domain.ErrHashMismatch
 	}
-	if err := domain.ValidateOptionalContentHash(d.SnapshotID); err != nil {
+	if err := validateMemoryDigestRefs(d); err != nil {
 		return domain.MemoryDigest{}, err
 	}
 	return d, nil

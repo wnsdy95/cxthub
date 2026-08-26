@@ -131,7 +131,8 @@ func Run(c *Container, args []string) error {
 		return runRemote(ctx, c, cwd, rest)
 
 	case "repack":
-		// Local .cxt doc storage repacked in chunk CAS — recovers duplicate prefixes (prefix) from legacy docs captured each time. Integrity hash invariant and lossless (reassembly verification and replacement).
+		// Repack large transcript and memory objects into their storage-only chunk
+		// CAS forms. Content identities and the wire protocol remain unchanged.
 		if c.Repack == nil {
 			return fmt.Errorf("repack unsupported build")
 		}
@@ -139,7 +140,7 @@ func Run(c *Container, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("repacked %d doc(s), reclaimed %.1f MB\n", n, float64(saved)/1e6)
+		fmt.Printf("repacked %d object(s), reclaimed %.1f MB\n", n, float64(saved)/1e6)
 		return nil
 
 	case "add":

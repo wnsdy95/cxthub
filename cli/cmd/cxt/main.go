@@ -255,7 +255,7 @@ func buildContainer(cfg config) container {
 		PRMerges:        gitctx.NewGitHubPRMergeResolver(),
 		Settings:        remote,
 		SettingsObjects: store,
-		Repack:          store.RepackDocs,
+		Repack:          store.RepackObjects,
 		Identity:        cfg.Identity,
 	}
 
