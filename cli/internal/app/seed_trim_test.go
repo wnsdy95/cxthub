@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -85,6 +86,115 @@ func TestTrimEventsForSeedAnchorsLatestUserInOversizedTurn(t *testing.T) {
 	}
 }
 
+func TestTrimEventsForSeedKeepsAuthoritativeReplacementPrefix(t *testing.T) {
+	prefix := []domain.Event{
+		seedMessage("user", "compacted baseline", 0),
+		{Kind: domain.EventToolCall, Seq: 1, CallID: "baseline-call", ToolName: "shell", Input: map[string]interface{}{}},
+		{Kind: domain.EventCompaction, Seq: 2, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "PINNED-ENC"}},
+	}
+	cir := domain.CIRDocument{Events: append(append([]domain.Event{}, prefix...),
+		seedMessage("user", "old suffix request", 3),
+		seedMessage("assistant", strings.Repeat("oversized suffix ", 30000), 4),
+		seedMessage("user", "recent request", 5),
+		domain.Event{Kind: domain.EventToolResult, Seq: 6, CallID: "baseline-call", Output: "late result"},
+		seedMessage("assistant", "recent answer", 7),
+	)}
+	budget := eventsJSONBytes(prefix) + eventsJSONBytes(cir.Events[5:]) + 128
+
+	got, omitted, kept := trimEventsForSeedKeepingPrefix(cir, len(prefix), budget)
+	if !kept {
+		t.Fatal("replacement prefix unexpectedly fell back to ordinary tail trimming")
+	}
+	if eventsJSONBytes(got.Events) > budget {
+		t.Fatalf("pinned trim exceeds budget: %d > %d", eventsJSONBytes(got.Events), budget)
+	}
+	if len(got.Events) < len(prefix)+3 || got.Events[0].Blocks[0].Text != "compacted baseline" || got.Events[2].Locked == nil || got.Events[2].Locked.Blob != "PINNED-ENC" {
+		t.Fatalf("authoritative replacement prefix was sliced: %+v", got.Events)
+	}
+	if got.Events[len(prefix)].Blocks[0].Text != "recent request" {
+		t.Fatalf("recent suffix did not start at user boundary: %+v", got.Events[len(prefix):])
+	}
+	if len(omitted) != 2 {
+		t.Fatalf("omitted suffix = %+v", omitted)
+	}
+	for _, ev := range got.Events {
+		if ev.Kind == domain.EventToolResult && ev.CallID == "baseline-call" {
+			return
+		}
+	}
+	t.Fatal("tool result paired with a pinned call was removed")
+}
+
+func TestTrimEventsForSeedNeverDropsOversizedLockedCompactionState(t *testing.T) {
+	locked := strings.Repeat("opaque-state-", 4096)
+	prefix := []domain.Event{
+		seedMessage("user", strings.Repeat("old semantic baseline ", 100), 0),
+		{Kind: domain.EventCompaction, Seq: 1, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: locked}},
+	}
+	cir := domain.CIRDocument{Events: append(append([]domain.Event{}, prefix...),
+		seedMessage("user", "recent request", 2),
+		seedMessage("assistant", "recent answer", 3),
+		domain.Event{Kind: domain.EventToolCall, Seq: 4, CallID: "recent-call", ToolName: "shell", Input: map[string]interface{}{"cmd": "pwd"}},
+		domain.Event{Kind: domain.EventToolResult, Seq: 5, CallID: "recent-call", Output: "/work/project"},
+	)}
+	budget := eventsJSONBytes(cir.Events[2:]) + 128
+
+	got, omitted, kept := trimEventsForSeedKeepingPrefix(cir, len(prefix), budget)
+	if kept {
+		t.Fatal("oversized replacement was incorrectly reported as fully pinned")
+	}
+	if len(omitted) == 0 {
+		t.Fatal("oversized replacement did not trim any semantic history")
+	}
+	var foundLocked, foundRecent, foundAnswer, foundCall, foundResult bool
+	semanticBytes := 0
+	for _, ev := range got.Events {
+		if ev.Kind == domain.EventCompaction && ev.Locked != nil && ev.Locked.Blob == locked {
+			foundLocked = true
+			continue
+		}
+		encoded, _ := json.Marshal(ev)
+		semanticBytes += len(encoded)
+		if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && ev.Blocks[0].Text == "recent request" {
+			foundRecent = true
+		}
+		if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && ev.Blocks[0].Text == "recent answer" {
+			foundAnswer = true
+		}
+		if ev.Kind == domain.EventToolCall && ev.CallID == "recent-call" {
+			foundCall = true
+		}
+		if ev.Kind == domain.EventToolResult && ev.CallID == "recent-call" {
+			foundResult = true
+		}
+	}
+	if !foundLocked {
+		t.Fatal("opaque compaction state was sliced by the semantic seed budget")
+	}
+	if !foundRecent {
+		t.Fatal("latest user request was lost while pinning opaque state")
+	}
+	if !foundAnswer || !foundCall || !foundResult {
+		t.Fatalf("recent semantic turn was split while pinning opaque state: answer=%v call=%v result=%v", foundAnswer, foundCall, foundResult)
+	}
+	if semanticBytes > budget {
+		t.Fatalf("semantic replay = %d bytes, want <= %d", semanticBytes, budget)
+	}
+	replay := asCodexCompactedReplay(got)
+	if len(replay.Events) != 1 || replay.Events[0].Kind != domain.EventCompaction || !replay.Events[0].ReplacementComplete {
+		t.Fatalf("bounded context was not wrapped as an authoritative native replay: %+v", replay.Events)
+	}
+	foundLocked = false
+	for _, ev := range replay.Events[0].Replacement {
+		if ev.Kind == domain.EventCompaction && ev.Locked != nil && ev.Locked.Blob == locked {
+			foundLocked = true
+		}
+	}
+	if !foundLocked {
+		t.Fatal("native replay wrapper dropped the pinned opaque state")
+	}
+}
+
 func TestRenderSeedDigestIsBoundedAndKeepsRecentState(t *testing.T) {
 	const budget = 8 << 10
 	digest := domain.MemoryDigest{
@@ -115,5 +225,42 @@ func TestRenderSeedDigestIsBoundedAndKeepsRecentState(t *testing.T) {
 	}
 	if !strings.Contains(got, "earlier summary omitted") {
 		t.Fatal("large summary was not visibly truncated")
+	}
+}
+
+func TestSeedConversationUsesLatestCompactionAndDropsReplayControl(t *testing.T) {
+	cir := domain.CIRDocument{Events: []domain.Event{
+		seedMessage("user", "archival request before compaction", 0),
+		{
+			Kind: domain.EventCompaction, Seq: 1,
+			ReplacementComplete: true,
+			Replacement: []domain.Event{
+				seedMessage("user", "[cxt seed] Branch-switch context: main → old\nlegacy seed", 0),
+				seedMessage("developer", "runtime instructions", 1),
+				seedMessage("user", "<environment_context>\n<cwd>/old</cwd>\n</environment_context>", 2),
+				{Kind: domain.EventMessage, Role: "user", Seq: 3, CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: "provider compact summary"}}},
+				seedMessage("user", "actual request retained", 4),
+				seedMessage("assistant", "actual answer retained", 5),
+				{Kind: domain.EventMessage, Role: "assistant", Seq: 6, AgentMessage: true, AgentAuthor: "/root/reviewer", AgentRecipient: "/root", Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "agent-opaque"}, Blocks: []domain.ContentBlock{{Type: "text", Text: "visible agent result retained"}}},
+				{Kind: domain.EventMessage, Role: "assistant", Seq: 7, AgentMessage: true, AgentAuthor: "/root/hidden", AgentRecipient: "/root", Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "encrypted-only"}},
+				{Kind: domain.EventCompaction, Seq: 8, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "opaque"}},
+			},
+		},
+		seedMessage("user", "request after compaction retained", 2),
+	}}
+
+	got := seedConversationContext(cir)
+	if len(got.Events) != 4 {
+		t.Fatalf("seed conversation events = %+v", got.Events)
+	}
+	texts := []string{got.Events[0].Blocks[0].Text, got.Events[1].Blocks[0].Text, got.Events[2].Blocks[0].Text, got.Events[3].Blocks[0].Text}
+	want := []string{"actual request retained", "actual answer retained", "visible agent result retained", "request after compaction retained"}
+	for i := range want {
+		if texts[i] != want[i] {
+			t.Fatalf("seed conversation[%d] = %q, want %q", i, texts[i], want[i])
+		}
+	}
+	if got.Events[2].AgentMessage || got.Events[2].AgentAuthor != "" || got.Events[2].AgentRecipient != "" || got.Events[2].Locked != nil {
+		t.Fatalf("new branch transplanted provider-local agent state: %+v", got.Events[2])
 	}
 }

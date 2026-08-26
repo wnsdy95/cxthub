@@ -218,8 +218,11 @@ export interface CIRBlock {
 
 export interface CIREvent {
   kind: string;
+  id?: string;
   ts?: string;
   seq?: number;
+/** Explicitly modeled provider-local replay identity (CIR v2). */
+  provider_metadata?: { turn_id?: string; create_time?: number };
   role?: string;
   blocks?: CIRBlock[];
 /** tool_call: Regular/tool name + input (original strings like Edit's old/new preserved) */
@@ -233,6 +236,16 @@ export interface CIREvent {
   redacted_summary?: string;
 /** Summary message created by agent compression (claude isCompactSummary / codex compacted.message) */
   compact_summary?: boolean;
+/** Codex multi-agent message metadata; visible text is rendered as assistant conversation */
+  agent_message?: boolean;
+  agent_author?: string;
+  agent_recipient?: string;
+/** compaction: provider-visible replacement context, kept nested so archival events remain lossless without duplicate rendering */
+  replacement?: CIREvent[];
+/** false means the nested projection is partial and archival replay is authoritative */
+  replacement_complete?: boolean;
+/** reasoning/compaction provider-locked opaque state */
+  locked?: { provider?: string; scheme?: string; blob?: string };
 }
 
 /** Compressed memory distilled from snapshot */
@@ -265,6 +278,7 @@ export interface SessionDoc {
   hash: string;
   cir: {
     envelope: {
+      cir_version?: '1' | '2';
       source_provider?: string;
       source_model?: string;
       captured_at?: string;

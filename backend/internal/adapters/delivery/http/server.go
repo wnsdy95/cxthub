@@ -1025,6 +1025,7 @@ type pullBody struct {
 	DocManifestWants      []domain.ContentHash `json:"doc_manifest_wants"`
 	ChunkWants            []domain.ContentHash `json:"chunk_wants"`
 	ChunkFormatsSupported []string             `json:"chunk_formats_supported"`
+	CIRVersionsSupported  []string             `json:"cir_versions_supported"`
 }
 
 type pullChunksBody struct {
@@ -1045,7 +1046,7 @@ func (s *Server) pullObjects(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.b.Send(r.Context(), inbound.PullSendInput{RepoID: s.repoID(r), SnapshotWants: body.SnapshotWants, DocWants: body.DocWants, DocManifestWants: body.DocManifestWants, ChunkWants: body.ChunkWants, ChunkFormatsSupported: body.ChunkFormatsSupported})
+	out, err := s.b.Send(r.Context(), inbound.PullSendInput{RepoID: s.repoID(r), SnapshotWants: body.SnapshotWants, DocWants: body.DocWants, DocManifestWants: body.DocManifestWants, ChunkWants: body.ChunkWants, ChunkFormatsSupported: body.ChunkFormatsSupported, CIRVersionsSupported: body.CIRVersionsSupported})
 	s.respond(w, out, err)
 }
 
@@ -1158,6 +1159,8 @@ func mapError(err error) (code string, status int) {
 		return "forbidden", http.StatusForbidden
 	case errors.Is(err, domain.ErrGitOriginMismatch):
 		return "git_origin_mismatch", http.StatusConflict
+	case errors.Is(err, domain.ErrUnsupportedCIRVersion):
+		return "unsupported_cir_version", http.StatusConflict
 	case errors.Is(err, domain.ErrConflict):
 		return "conflict", http.StatusConflict
 	case errors.Is(err, domain.ErrValidation):

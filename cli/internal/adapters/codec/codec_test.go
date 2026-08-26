@@ -27,6 +27,23 @@ const codexFixture = `{"timestamp":"2026-06-30T01:00:00Z","type":"session_meta",
 {"timestamp":"2026-06-30T01:00:07Z","type":"event_msg","payload":{"note":"ui only"}}
 {"timestamp":"2026-06-30T01:00:08Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":50000,"cached_input_tokens":40000,"output_tokens":321,"total_tokens":50321},"last_token_usage":{"input_tokens":42000,"cached_input_tokens":40000,"output_tokens":100,"total_tokens":42100},"model_context_window":258400},"rate_limits":{"limit_id":"codex"}}}`
 
+func TestCodexContentUnionWireShape(t *testing.T) {
+	visible, err := json.Marshal(codexContent{Type: "output_text", Text: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(visible) != `{"text":"","type":"output_text"}` {
+		t.Fatalf("empty visible content lost required text: %s", visible)
+	}
+	encrypted, err := json.Marshal(codexContent{Type: "encrypted_content", EncryptedContent: "ENC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encrypted) != `{"encrypted_content":"ENC","type":"encrypted_content"}` {
+		t.Fatalf("encrypted content union is malformed: %s", encrypted)
+	}
+}
+
 // TestClaudeMultiModel fixes model attribution during session transitions:
 // source_models accumulates in order (no duplicates), source_model is the last used (last-wins —
 // previous first-wins caused model switches in the latter part of the session).
@@ -46,9 +63,8 @@ func TestClaudeMultiModel(t *testing.T) {
 	}
 }
 
-// TestClaudeCompactionCount fixes the behavior of counting context compaction boundaries (type=="system"&&subtype=="compact_boundary"):
-// sessionId should remain unchanged (continuing the same file) and the compaction count should be accurate,
-// and the marker itself should not be included as an event (the only signal of a graph compaction marker (◈)).
+// TestClaudeCompactionCount fixes the behavior of counting and preserving
+// context compaction boundaries (type=="system"&&subtype=="compact_boundary").
 func TestClaudeCompactionCount(t *testing.T) {
 	fixture := `{"type":"user","sessionId":"s","timestamp":"2026-07-01T00:00:00Z","message":{"role":"user","content":"go"}}
 {"type":"system","subtype":"compact_boundary","sessionId":"s","timestamp":"2026-07-01T00:01:00Z","compactMetadata":{"trigger":"auto","preTokens":1000000,"postTokens":11000}}
@@ -61,15 +77,22 @@ func TestClaudeCompactionCount(t *testing.T) {
 	if cir.Envelope.CompactionCount != 2 {
 		t.Fatalf("compaction_count expected 2, got %d", cir.Envelope.CompactionCount)
 	}
+	if cir.Envelope.CIRVersion != domain.CIRVersionV2 {
+		t.Fatalf("Claude compaction emitted CIR %q, want v2", cir.Envelope.CIRVersion)
+	}
 	if cir.Envelope.SessionOriginID != "s" {
 		t.Fatalf("compaction should not change sessionId: %q", cir.Envelope.SessionOriginID)
 	}
-	if got := len(cir.Events); got != 2 {
-		t.Fatalf("compact_boundary marker is not an event — expected 2(user,assistant), got %d", got)
+	if got := len(cir.Events); got != 4 || cir.Events[1].Kind != domain.EventCompaction || cir.Events[1].Replacement == nil || !cir.Events[1].ReplacementComplete || cir.Events[3].Kind != domain.EventCompaction || cir.Events[3].Replacement == nil || !cir.Events[3].ReplacementComplete {
+		t.Fatalf("compact boundaries not preserved in archive: %+v", cir.Events)
+	}
+	if got := cir.EffectiveContext().Events; len(got) != 0 {
+		t.Fatalf("latest empty Claude replacement should yield empty active context: %+v", got)
 	}
 }
 
-// TestCodexCompactionCount ensures that the codex compaction boundary (type=="compacted" — empirically verified rollout format) is fixed (matches claude compact_boundary and parity). Markers are not embedded as events.
+// TestCodexCompactionCount ensures that Codex compacted boundaries remain in
+// the archive and the latest replacement, including an empty one, is authoritative.
 func TestCodexCompactionCount(t *testing.T) {
 	fixture := `{"timestamp":"2026-07-01T00:00:00Z","type":"session_meta","payload":{"id":"roll-c","cwd":"/work/proj","model":"gpt-5-codex"}}
 {"timestamp":"2026-07-01T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}
@@ -83,11 +106,210 @@ func TestCodexCompactionCount(t *testing.T) {
 	if cir.Envelope.CompactionCount != 2 {
 		t.Fatalf("compaction_count expected 2, got %d", cir.Envelope.CompactionCount)
 	}
+	if cir.Envelope.CIRVersion != domain.CIRVersionV2 {
+		t.Fatalf("Codex compaction emitted CIR %q, want v2", cir.Envelope.CIRVersion)
+	}
 	if cir.Envelope.SessionOriginID != "roll-c" {
 		t.Fatalf("compaction should not change session id: %q", cir.Envelope.SessionOriginID)
 	}
-	if got := len(cir.Events); got != 2 {
-		t.Fatalf("compacted marker is not an event — expected 2(user,assistant), got %d", got)
+	if got := len(cir.Events); got != 4 || cir.Events[1].Kind != domain.EventCompaction || len(cir.Events[1].Replacement) != 1 || !cir.Events[1].ReplacementComplete || cir.Events[3].Kind != domain.EventCompaction || cir.Events[3].Replacement == nil || !cir.Events[3].ReplacementComplete {
+		t.Fatalf("Codex compaction boundaries not preserved: %+v", cir.Events)
+	}
+	if got := cir.EffectiveContext().Events; len(got) != 0 {
+		t.Fatalf("latest empty Codex replacement should yield empty active context: %+v", got)
+	}
+}
+
+func TestCodexCompactionWithoutExplicitReplacementFailsSafe(t *testing.T) {
+	for name, payload := range map[string]string{
+		"omitted": `{"message":""}`,
+		"null":    `{"message":"","replacement_history":null}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := `{"timestamp":"2026-08-26T00:00:00Z","type":"session_meta","payload":{"id":"roll-missing","cwd":"/work/proj","model":"gpt-5-codex"}}
+{"timestamp":"2026-08-26T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"archive must survive"}]}}
+{"timestamp":"2026-08-26T00:01:00Z","type":"compacted","payload":` + payload + `}
+{"timestamp":"2026-08-26T00:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"suffix must survive"}]}}`
+
+			cir, err := NewCodexCodec().Decode(context.Background(), []byte(fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cir.Envelope.CIRVersion != domain.CIRVersionV2 || len(cir.Events) != 3 {
+				t.Fatalf("decoded document = %+v", cir)
+			}
+			boundary := cir.Events[1]
+			if boundary.Kind != domain.EventCompaction || boundary.Replacement == nil || boundary.ReplacementComplete {
+				t.Fatalf("missing replacement was treated as authoritative: %+v", boundary)
+			}
+			active := cir.EffectiveContext()
+			if len(active.Events) != 3 || active.Events[0].Blocks[0].Text != "archive must survive" || active.Events[2].Blocks[0].Text != "suffix must survive" {
+				t.Fatalf("missing replacement sliced archive: %+v", active.Events)
+			}
+		})
+	}
+}
+
+func TestCodexCompactionReplacementPreservesActiveStateWithoutRehydratingArchive(t *testing.T) {
+	fixture := `{"timestamp":"2026-08-26T00:00:00Z","type":"session_meta","payload":{"id":"roll-active","cwd":"/work/proj","model":"gpt-5-codex"}}
+{"timestamp":"2026-08-26T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"archival request before compaction"}]}}
+{"timestamp":"2026-08-26T00:01:00Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","id":"msg-effective","role":"user","content":[{"type":"input_text","text":"effective summary"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-effective","create_time":1787683260.123456789}},{"type":"message","role":"developer","content":[{"type":"input_text","text":"runtime contract"}]},{"type":"agent_message","id":"ams-review","author":"/root/reviewer","recipient":"/root","content":[{"type":"input_text","text":"review result"},{"type":"encrypted_content","encrypted_content":"ENC-AGENT"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-review"}},{"type":"compaction","id":"cmp-active","encrypted_content":"ENC-COMPACT","internal_chat_message_metadata_passthrough":{"turn_id":"turn-effective"}}]}}
+{"timestamp":"2026-08-26T00:02:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"request after compaction"}]}}`
+	cir, err := NewCodexCodec().Decode(context.Background(), []byte(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cir.Events) != 3 || cir.Events[0].Blocks[0].Text != "archival request before compaction" {
+		t.Fatalf("archive changed: %+v", cir.Events)
+	}
+	boundary := cir.Events[1]
+	if boundary.Kind != domain.EventCompaction || boundary.Replacement == nil || len(boundary.Replacement) != 4 || !boundary.ReplacementComplete {
+		t.Fatalf("replacement boundary = %+v", boundary)
+	}
+	active := cir.EffectiveContext()
+	if len(active.Events) != 5 || active.Events[0].Blocks[0].Text != "effective summary" || active.Events[4].Blocks[0].Text != "request after compaction" {
+		t.Fatalf("effective context = %+v", active.Events)
+	}
+	for _, ev := range active.Events {
+		if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && ev.Blocks[0].Text == "archival request before compaction" {
+			t.Fatal("pre-compaction archival message was rehydrated")
+		}
+	}
+	agent := active.Events[2]
+	if !agent.AgentMessage || agent.AgentAuthor != "/root/reviewer" || agent.AgentRecipient != "/root" || len(agent.Blocks) != 1 || agent.Blocks[0].Text != "review result" || agent.Locked == nil || agent.Locked.Blob != "ENC-AGENT" {
+		t.Fatalf("agent replacement state lost: %+v", agent)
+	}
+	locked := active.Events[3]
+	if locked.Kind != domain.EventCompaction || locked.Locked == nil || locked.Locked.Blob != "ENC-COMPACT" {
+		t.Fatalf("encrypted compaction state lost: %+v", locked)
+	}
+	if active.Events[0].ID != "msg-effective" || active.Events[0].ProviderMetadata == nil || active.Events[0].ProviderMetadata.TurnID != "turn-effective" || active.Events[0].ProviderMetadata.CreateTime == nil || active.Events[0].ProviderMetadata.CreateTime.String() != "1787683260.123456789" {
+		t.Fatalf("message provider metadata lost: %+v", active.Events[0])
+	}
+	if agent.ID != "ams-review" || agent.ProviderMetadata == nil || agent.ProviderMetadata.TurnID != "turn-review" {
+		t.Fatalf("agent provider metadata lost: %+v", agent)
+	}
+	if locked.ID != "cmp-active" || locked.ProviderMetadata == nil || locked.ProviderMetadata.TurnID != "turn-effective" {
+		t.Fatalf("compaction provider metadata lost: %+v", locked)
+	}
+
+	encoded, err := NewCodexCodec().Encode(context.Background(), active, domain.ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"type":"compaction"`) || !strings.Contains(string(encoded), `"id":"cmp-active"`) || !strings.Contains(string(encoded), `"internal_chat_message_metadata_passthrough":{"turn_id":"turn-effective","create_time":1787683260.123456789}`) || !strings.Contains(string(encoded), `"type":"agent_message"`) || !strings.Contains(string(encoded), `"encrypted_content":"ENC-AGENT"`) || strings.Contains(string(encoded), "archival request before compaction") {
+		t.Fatalf("effective replay encoding is wrong:\n%s", encoded)
+	}
+	roundTrip, err := NewCodexCodec().Decode(context.Background(), encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roundTrip.Events) != 1 || roundTrip.Events[0].Kind != domain.EventCompaction || !roundTrip.Events[0].ReplacementComplete {
+		t.Fatalf("active replay did not use a native compacted boundary: %+v", roundTrip.Events)
+	}
+	replayed := roundTrip.EffectiveContext()
+	if len(replayed.Events) != 5 || !replayed.Events[2].AgentMessage || replayed.Events[3].Kind != domain.EventCompaction || replayed.Events[3].Locked == nil {
+		t.Fatalf("active replay round trip = %+v", replayed.Events)
+	}
+}
+
+func TestCodexCompactedReplayEmitsVisibleTranscriptCompanions(t *testing.T) {
+	doc := domain.CIRDocument{
+		Envelope: domain.Envelope{
+			CIRVersion:      domain.CIRVersionV2,
+			SourceProvider:  domain.ProviderCodex,
+			SessionOriginID: "roll-display",
+			CapturedAt:      "2026-08-26T00:00:00Z",
+		},
+		Events: []domain.Event{{
+			Kind: domain.EventCompaction, Ts: "2026-08-26T00:01:00Z",
+			ReplacementComplete: true,
+			Replacement: []domain.Event{
+				{Kind: domain.EventMessage, Role: "user", Ts: "2026-08-26T00:00:01Z", Blocks: []domain.ContentBlock{{Type: "text", Text: "visible request"}}},
+				{Kind: domain.EventMessage, Role: "assistant", Ts: "2026-08-26T00:00:02Z", Blocks: []domain.ContentBlock{{Type: "text", Text: "visible reply"}}},
+				{Kind: domain.EventMessage, Role: "system", Ts: "2026-08-26T00:00:02Z", Blocks: []domain.ContentBlock{{Type: "text", Text: "hidden system runtime"}}},
+				{Kind: domain.EventMessage, Role: "developer", Ts: "2026-08-26T00:00:02Z", Blocks: []domain.ContentBlock{{Type: "text", Text: "hidden developer runtime"}}},
+				{Kind: domain.EventMessage, Role: "assistant", AgentMessage: true, AgentAuthor: "/root/reviewer", AgentRecipient: "/root", Ts: "2026-08-26T00:00:03Z", Blocks: []domain.ContentBlock{{Type: "text", Text: "provider-internal agent message"}}, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "ENC-AGENT"}},
+			},
+		}},
+	}
+
+	wire, err := NewCodexCodec().Encode(context.Background(), doc, domain.ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var display []codexEventMsg
+	for _, rawLine := range strings.Split(strings.TrimSpace(string(wire)), "\n") {
+		var line codexLine
+		if err := json.Unmarshal([]byte(rawLine), &line); err != nil {
+			t.Fatal(err)
+		}
+		if line.Type != "event_msg" {
+			continue
+		}
+		var event codexEventMsg
+		if err := json.Unmarshal(line.Payload, &event); err != nil {
+			t.Fatal(err)
+		}
+		display = append(display, event)
+	}
+	if len(display) != 2 || display[0].Type != "user_message" || display[0].Message != "visible request" || display[1].Type != "agent_message" || display[1].Message != "visible reply" {
+		t.Fatalf("compacted transcript companions = %+v\n%s", display, wire)
+	}
+	if strings.Contains(string(wire), `"message":"provider-internal agent message"`) {
+		t.Fatalf("provider-internal agent item leaked into visible transcript:\n%s", wire)
+	}
+}
+
+func TestCodexUnknownReplacementFallsBackToArchivalReplay(t *testing.T) {
+	fixtures := map[string]string{
+		"unknown item":            `{"type":"future_context_state","payload":{"opaque":"value"}}`,
+		"unknown message content": `{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}`,
+		"unknown item field":      `{"type":"message","role":"user","content":[{"type":"input_text","text":"future"}],"future_semantic_state":{"opaque":true}}`,
+		"unknown content field":   `{"type":"message","role":"user","content":[{"type":"input_text","text":"future","future_annotation":"required"}]}`,
+		"unknown metadata field":  `{"type":"message","role":"user","content":[{"type":"input_text","text":"future"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1","future_scope":"required"}}`,
+		"unpreserved custom tool": `{"type":"custom_tool_call","call_id":"c1","name":"apply_patch","input":"*** Begin Patch"}`,
+	}
+	for name, unknown := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			fixture := `{"timestamp":"2026-08-26T00:00:00Z","type":"session_meta","payload":{"id":"roll-future","cwd":"/work/proj","model":"gpt-5-codex"}}
+{"timestamp":"2026-08-26T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"complete archival request"}]}}
+{"timestamp":"2026-08-26T00:01:00Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"known but partial replacement"}]},` + unknown + `]}}
+{"timestamp":"2026-08-26T00:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"archival suffix"}]}}`
+
+			cir, err := NewCodexCodec().Decode(context.Background(), []byte(fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cir.Events) != 3 || cir.Events[1].Kind != domain.EventCompaction || cir.Events[1].ReplacementComplete {
+				t.Fatalf("unknown replacement was accepted as complete: %+v", cir.Events)
+			}
+			active := cir.EffectiveContext()
+			if len(active.Events) != len(cir.Events) || active.Events[0].Blocks[0].Text != "complete archival request" {
+				t.Fatalf("incomplete projection sliced archival context: %+v", active.Events)
+			}
+			encoded, err := NewCodexCodec().Encode(context.Background(), active, domain.ProviderCodex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := string(encoded)
+			if strings.Contains(wire, `"type":"compacted"`) || !strings.Contains(wire, "complete archival request") || !strings.Contains(wire, "archival suffix") {
+				t.Fatalf("fallback replay emitted a partial compacted marker:\n%s", wire)
+			}
+		})
+	}
+}
+
+func TestCodexCompleteReplacementNeverSilentlyDropsUnsupportedEvent(t *testing.T) {
+	doc := domain.CIRDocument{
+		Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderCodex},
+		Events: []domain.Event{{
+			Kind: domain.EventCompaction, ReplacementComplete: true,
+			Replacement: []domain.Event{{Kind: domain.EventTurn, Role: "user"}},
+		}},
+	}
+	if _, err := NewCodexCodec().Encode(context.Background(), doc, domain.ProviderCodex); err == nil {
+		t.Fatal("unsupported replacement event was silently omitted")
 	}
 }
 

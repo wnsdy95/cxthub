@@ -89,6 +89,25 @@ func TestScrubToolIO(t *testing.T) {
 	}
 }
 
+func TestScrubCompactionReplacementRecursively(t *testing.T) {
+	locked := "opaque-encrypted-compaction-state"
+	doc := domain.CIRDocument{Events: []domain.Event{{
+		Kind:                domain.EventCompaction,
+		ReplacementComplete: true,
+		Replacement: []domain.Event{
+			msgEvent("token: ghp_" + strings.Repeat("a1B2", 9)),
+			{Kind: domain.EventCompaction, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: locked}},
+		},
+	}}}
+	out := Scrub(doc, ScrubStandard)
+	if got := out.Events[0].Replacement[0].Blocks[0].Text; strings.Contains(got, "ghp_") || !strings.Contains(got, "«redacted:github-token»") {
+		t.Fatalf("replacement message was not scrubbed: %q", got)
+	}
+	if got := out.Events[0].Replacement[1].Locked.Blob; got != locked {
+		t.Fatalf("locked compaction state changed: %q", got)
+	}
+}
+
 // TestScrubOff verifies that off mode changes nothing.
 func TestScrubOff(t *testing.T) {
 	doc := domain.CIRDocument{Events: []domain.Event{msgEvent("AKIAIOSFODNN7EXAMPLE")}}

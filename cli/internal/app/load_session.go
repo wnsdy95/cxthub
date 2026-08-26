@@ -105,12 +105,28 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 
 	// full / reconstructed: codec.Encode → materializer.Materialize
 	// Seed budget: Session doc can exceed target model context (empirically: weekly session summary → codex "ran out of room" like empty session).
-	// Recent event tail remains within budget — truncation point is user prompt boundary.
-	seedCIR := cir
+	// Recent semantic events remain within budget — truncation point is a user
+	// prompt boundary. Opaque provider state is never sliced and does not consume
+	// that semantic allowance because no safe textual projection exists for it.
+	// A same-provider replay may therefore exceed the target by the opaque bytes
+	// required to resume the provider's compacted state.
+	// Replay the provider-visible context, not the cumulative archival stream.
+	// Legacy docs without an explicit compaction boundary return unchanged.
+	replacementCount, hasCompleteReplacement := cir.LatestCompactionReplacementCount()
+	preserveCodexReplacement := target == domain.ProviderCodex &&
+		cir.Envelope.SourceProvider == domain.ProviderCodex &&
+		hasCompleteReplacement
+	seedCIR := cir.EffectiveContext()
 	var omitted []domain.Event
+	keptReplacement := preserveCodexReplacement
 	totalBudget, digestBudget := seedBudgets(target)
-	if eventsJSONBytes(cir.Events) > totalBudget {
-		seedCIR, omitted = trimEventsForSeed(cir, totalBudget-digestBudget)
+	if eventsJSONBytes(seedCIR.Events) > totalBudget {
+		conversationBudget := totalBudget - digestBudget
+		if preserveCodexReplacement {
+			seedCIR, omitted, keptReplacement = trimEventsForSeedKeepingPrefix(seedCIR, replacementCount, conversationBudget)
+		} else {
+			seedCIR, omitted = trimEventsForSeed(seedCIR, conversationBudget)
+		}
 	}
 	dropped := len(omitted)
 	if dropped > 0 {
@@ -118,7 +134,11 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 		// Failure is fail-open (tail only).
 		omittedCIR := cir
 		omittedCIR.Events = omitted
-		seedCIR = s.prependTrimDigest(ctx, omittedCIR, seedCIR, snap, target, in.Cwd)
+		if keptReplacement {
+			seedCIR = s.insertTrimDigestAfterPrefix(ctx, omittedCIR, seedCIR, replacementCount, snap, target, in.Cwd)
+		} else {
+			seedCIR = s.prependTrimDigest(ctx, omittedCIR, seedCIR, snap, target, in.Cwd)
+		}
 	}
 	// A restored session belongs to the working tree it is being restored into,
 	// not the machine/path where the source snapshot was captured. Codex active
@@ -126,6 +146,9 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	// relocated clone impossible to capture after resume.
 	if targetCwd := materializationCwd(in.Cwd); targetCwd != "" {
 		seedCIR.Envelope.Cwd = targetCwd
+	}
+	if preserveCodexReplacement {
+		seedCIR = asCodexCompactedReplay(seedCIR)
 	}
 	cdc, okCodec := s.codecs[target]
 	mat, okMat := s.materializers[target]
@@ -144,6 +167,28 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	}
 	// Fallback (compatibility rules): full restoration failure → memory mode downgrade.
 	return s.loadMemory(ctx, cir, snap, target, in.Cwd)
+}
+
+// asCodexCompactedReplay restores Codex's native operation shape. Codex does
+// not write encrypted compaction state as a top-level response_item; the whole
+// effective history lives in compacted.replacement_history. The caller first
+// projects, trims, and summarizes the semantic event stream, then this wrapper
+// makes that bounded stream the authoritative replacement in the new rollout.
+func asCodexCompactedReplay(cir domain.CIRDocument) domain.CIRDocument {
+	replacement := append([]domain.Event{}, cir.Events...)
+	ts := cir.Envelope.CapturedAt
+	if len(replacement) > 0 && replacement[0].Ts != "" {
+		ts = replacement[0].Ts
+	}
+	cir.Events = []domain.Event{{
+		Kind:                domain.EventCompaction,
+		Ts:                  ts,
+		Seq:                 0,
+		Replacement:         replacement,
+		ReplacementComplete: true,
+	}}
+	cir.Envelope.CIRVersion = domain.CIRVersionV2
+	return cir
 }
 
 func materializationCwd(cwd string) string {
@@ -222,7 +267,7 @@ func (s *LoadSessionService) reachesFrom(ctx context.Context, from, anc domain.C
 // not token text, so bytes are conservatively estimated at three bytes/token;
 // the remaining window is reserved for provider system prompts, repository
 // instructions, tool schemas, the next user turn, and model output.
-const seedBudgetBytes = 288 << 10 // absolute maximum (Codex profile)
+const seedBudgetBytes = 288 << 10 // semantic maximum (Codex profile; mandatory opaque state may overflow it)
 const seedDigestBudgetBytes = 72 << 10
 
 func seedBudgets(provider domain.ProviderKind) (total, digest int) {
@@ -261,15 +306,82 @@ func isSeedUserBoundary(ev domain.Event) bool {
 // front of the bounded suffix. Unmatched tool results at that synthetic gap are
 // removed so the provider never receives an output without its call.
 func trimEventsForSeed(cir domain.CIRDocument, budget int) (domain.CIRDocument, []domain.Event) {
+	return trimEventsForSeedWithKnownCalls(cir, budget, nil)
+}
+
+// trimEventsForSeedKeepingPrefix preserves an authoritative provider
+// replacement and trims only the suffix accumulated after compaction. If the
+// replacement itself exceeds the conversation budget, semantic events fall
+// back to the bounded-tail policy while opaque provider compaction state stays
+// pinned outside that text budget.
+func trimEventsForSeedKeepingPrefix(cir domain.CIRDocument, prefixCount, budget int) (domain.CIRDocument, []domain.Event, bool) {
+	if prefixCount == 0 {
+		trimmed, omitted := trimEventsForSeed(cir, budget)
+		return trimmed, omitted, true
+	}
+	if prefixCount < 0 || prefixCount > len(cir.Events) {
+		trimmed, omitted := trimEventsForSeed(cir, budget)
+		return trimmed, omitted, false
+	}
+	prefix := cir.Events[:prefixCount]
+	prefixBytes := eventsJSONBytes(prefix)
+	if prefixBytes >= budget {
+		// Provider-encrypted compaction state cannot be summarized or sliced. It
+		// is mandatory replay state outside the semantic text budget; trim every
+		// representable event around it while preserving its original position.
+		pinned := make(map[int]bool)
+		for i := 0; i < prefixCount; i++ {
+			ev := cir.Events[i]
+			if ev.Kind == domain.EventCompaction && ev.Replacement == nil && ev.Locked != nil &&
+				ev.Locked.Provider == domain.ProviderCodex && ev.Locked.Scheme == "encrypted_content" {
+				pinned[i] = true
+			}
+		}
+		trimmed, omitted := trimEventsForSeedWithPinned(cir, budget, nil, pinned)
+		return trimmed, omitted, false
+	}
+	knownCalls := make(map[string]bool)
+	for _, ev := range prefix {
+		if ev.Kind == domain.EventToolCall && ev.CallID != "" {
+			knownCalls[ev.CallID] = true
+		}
+	}
+	tail := cir
+	tail.Events = cir.Events[prefixCount:]
+	trimmedTail, omitted := trimEventsForSeedWithKnownCalls(tail, budget-prefixBytes, knownCalls)
+	out := cir
+	out.Events = make([]domain.Event, 0, len(prefix)+len(trimmedTail.Events))
+	out.Events = append(out.Events, prefix...)
+	out.Events = append(out.Events, trimmedTail.Events...)
+	if eventsJSONBytes(out.Events) > budget {
+		trimmed, fallbackOmitted := trimEventsForSeed(cir, budget)
+		return trimmed, fallbackOmitted, false
+	}
+	return out, omitted, true
+}
+
+func trimEventsForSeedWithKnownCalls(cir domain.CIRDocument, budget int, knownCalls map[string]bool) (domain.CIRDocument, []domain.Event) {
+	return trimEventsForSeedWithPinned(cir, budget, knownCalls, nil)
+}
+
+func trimEventsForSeedWithPinned(cir domain.CIRDocument, budget int, knownCalls map[string]bool, pinned map[int]bool) (domain.CIRDocument, []domain.Event) {
 	evs := cir.Events
 	if eventsJSONBytes(evs) <= budget {
 		return cir, nil
 	}
+	// Pinned state is mandatory provider replay state, not semantic transcript.
+	// Charging it against this allowance can reduce the semantic budget to zero
+	// and split the newest turn even though that turn itself fits the configured
+	// replay budget.
+	semanticBudget := budget
 	sum := 0
 	cut := len(evs)
 	for i := len(evs) - 1; i >= 0; i-- {
+		if pinned[i] {
+			continue
+		}
 		b, _ := json.Marshal(evs[i])
-		if sum+len(b) > budget {
+		if sum+len(b) > semanticBudget {
 			break
 		}
 		sum += len(b)
@@ -304,11 +416,14 @@ func trimEventsForSeed(cir domain.CIRDocument, budget int) (domain.CIRDocument, 
 		} else {
 			selected[latestUser] = true
 			userBytes, _ := json.Marshal(evs[latestUser])
-			remaining := budget - len(userBytes)
+			remaining := semanticBudget - len(userBytes)
 			suffixCut := len(evs)
 			suffixBytes := 0
 			if remaining > 0 {
 				for i := len(evs) - 1; i > latestUser; i-- {
+					if pinned[i] {
+						continue
+					}
 					b, _ := json.Marshal(evs[i])
 					if suffixBytes+len(b) > remaining {
 						break
@@ -322,10 +437,18 @@ func trimEventsForSeed(cir domain.CIRDocument, budget int) (domain.CIRDocument, 
 			}
 		}
 	}
+	for i := range pinned {
+		if i >= 0 && i < len(selected) {
+			selected[i] = true
+		}
+	}
 
 	// Any bounded suffix can begin after a tool call but before its result.
 	// Keep only results whose call is also present in the selected stream.
-	calls := map[string]bool{}
+	calls := make(map[string]bool, len(knownCalls))
+	for callID := range knownCalls {
+		calls[callID] = true
+	}
 	for i, keep := range selected {
 		if keep && evs[i].Kind == domain.EventToolCall && evs[i].CallID != "" {
 			calls[evs[i].CallID] = true
@@ -504,6 +627,24 @@ func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, see
 	return out
 }
 
+func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, omitted, seed domain.CIRDocument, prefixCount int, snap domain.Snapshot, target domain.ProviderKind, cwd string) domain.CIRDocument {
+	if prefixCount < 0 || prefixCount > len(seed.Events) {
+		return s.prependTrimDigest(ctx, omitted, seed, snap, target, cwd)
+	}
+	prefix := append([]domain.Event{}, seed.Events[:prefixCount]...)
+	tail := seed
+	tail.Events = seed.Events[prefixCount:]
+	tail = s.prependTrimDigest(ctx, omitted, tail, snap, target, cwd)
+	out := seed
+	out.Events = make([]domain.Event, 0, len(prefix)+len(tail.Events))
+	out.Events = append(out.Events, prefix...)
+	out.Events = append(out.Events, tail.Events...)
+	for i := range out.Events {
+		out.Events[i].Seq = i
+	}
+	return out
+}
+
 // seedWorthyFacts retains only KeyFacts that are worth placing in the seed header. The distillation now
 // extracts sentence-form facts from compressed summaries, but legacy stored digests may contain tool-name lists and ingestion markers (empirically observed: "apply_patch", "unknown:Agent", "native memory: …") —
 // excluding whitespace-free single tokens and marker prefixes, only sentence-form facts pass.
@@ -528,7 +669,7 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 			native = &nm
 		}
 	}
-	digest, err := s.distiller.Distill(ctx, cir, native)
+	digest, err := s.distiller.Distill(ctx, cir.EffectiveContext(), native)
 	if err != nil {
 		return inbound.LoadOutput{}, err
 	}

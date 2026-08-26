@@ -54,6 +54,7 @@ type negotiateResp struct {
 	ChunksSupported        bool                 `json:"chunks_supported,omitempty"`
 	BoundedChunksSupported bool                 `json:"bounded_chunks_supported,omitempty"`
 	ChunkFormatsSupported  []string             `json:"chunk_formats_supported,omitempty"`
+	CIRVersionsSupported   []string             `json:"cir_versions_supported,omitempty"`
 	ChunkWants             []domain.ContentHash `json:"chunk_wants,omitempty"`
 }
 
@@ -88,6 +89,7 @@ type pullReq struct {
 	DocManifestWants      []domain.ContentHash `json:"doc_manifest_wants,omitempty"`
 	ChunkWants            []domain.ContentHash `json:"chunk_wants,omitempty"`
 	ChunkFormatsSupported []string             `json:"chunk_formats_supported,omitempty"`
+	CIRVersionsSupported  []string             `json:"cir_versions_supported,omitempty"`
 }
 type pullResp struct {
 	Snapshots              []domain.Snapshot   `json:"snapshots"`
@@ -732,6 +734,21 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 		}
 	}
 	wantSnap, wantDoc, wantChunk := setOf(neg.SnapshotWants), setOf(neg.DocWants), setOf(neg.ChunkWants)
+	for _, doc := range docs {
+		if !wantDoc[doc.Hash] {
+			continue
+		}
+		version := doc.CIR.Envelope.CIRVersion
+		if version == "" {
+			version = domain.CIRVersionV1
+		}
+		if !domain.SupportsCIRVersion(neg.CIRVersionsSupported, version) {
+			// An old server omits this capability and therefore supports v1 only.
+			if version != domain.CIRVersionV1 || len(neg.CIRVersionsSupported) > 0 {
+				return fmt.Errorf("%w: server does not advertise CIR %s support", domain.ErrUnsupportedCIRVersion, version)
+			}
+		}
+	}
 
 	var sendSnaps []domain.Snapshot
 	for _, s := range snapshots {
@@ -885,7 +902,7 @@ func (c *BackendClient) Pull(ctx context.Context, repoID string, docHaves []doma
 		return nil, nil, man.Refs, nil
 	}
 	var snapResp pullResp
-	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{SnapshotWants: man.SnapshotIndex}, &snapResp); err != nil {
+	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{SnapshotWants: man.SnapshotIndex, CIRVersionsSupported: domain.SupportedCIRVersions()}, &snapResp); err != nil {
 		return nil, nil, nil, err
 	}
 	// Delta reception: Does not request doc(docHaves) already in local storage — eliminates waste by re-receiving entire body (snapshot meta is received fully — graft/memory sync).
@@ -927,12 +944,12 @@ func (c *BackendClient) pullDocs(ctx context.Context, repoID string, docWants []
 	// 1) Manifest request (new) — old server ignores fields, returns empty response → fallback to entire body.
 	// New server can return entire body for unplanable docs (mixed response).
 	var manResp pullResp
-	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{DocManifestWants: docWants, ChunkFormatsSupported: []string{chunkcas.FormatV1, chunkcas.FormatV2}}, &manResp); err != nil {
+	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{DocManifestWants: docWants, ChunkFormatsSupported: []string{chunkcas.FormatV1, chunkcas.FormatV2}, CIRVersionsSupported: domain.SupportedCIRVersions()}, &manResp); err != nil {
 		return nil, err
 	}
 	if len(manResp.DocManifests) == 0 && len(manResp.Docs) == 0 {
 		var docResp pullResp
-		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{DocWants: docWants}, &docResp); err != nil {
+		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{DocWants: docWants, CIRVersionsSupported: domain.SupportedCIRVersions()}, &docResp); err != nil {
 			return nil, err
 		}
 		seenDocs := make(map[domain.ContentHash]bool, len(docResp.Docs))
@@ -1048,6 +1065,9 @@ func (c *BackendClient) pullDocs(ctx context.Context, repoID string, docWants []
 		var cir domain.CIRDocument
 		if err := json.Unmarshal(cb, &cir); err != nil {
 			return nil, domain.ErrInvalidCIR
+		}
+		if err := domain.ValidateCIRVersion(cir); err != nil {
+			return nil, err
 		}
 		docs = append(docs, domain.SessionDoc{Hash: m.Hash, CIR: cir})
 	}

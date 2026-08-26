@@ -1,5 +1,5 @@
 /**
- * domain/cir: CIR v1 (Canonical Intermediate Representation) TypeScript mirror.
+ * domain/cir: CIR v1/v2 (Canonical Intermediate Representation) TypeScript mirror.
  *
  * domain model + schemas/cir.schema.json 1:1 mapping.
  * Backend serializes JSON with snake_case field names, so this file declares them the same way.
@@ -26,8 +26,8 @@ export type Role = 'user' | 'assistant' | 'system' | 'developer';
  * Field names follow the snake_case convention from the schema source.
  */
 export interface Envelope {
-/** CIR schema version. Current const "1". */
-  cir_version: '1';
+/** CIR schema version. Compaction and multi-agent fields require v2. */
+  cir_version: '1' | '2';
 /** Original capture provider. */
   source_provider: ProviderKind;
 /** Original model identifier (e.g., "claude-opus-4-8", "gpt-..."). */
@@ -45,6 +45,14 @@ export interface Envelope {
   session_origin_id: string;
 /** Fidelity tier of this CIR document as a whole. */
   fidelity: FidelityTier;
+/** Last observed provider input-context usage. Omitted for legacy captures. */
+  context_tokens?: number;
+/** Cumulative assistant output usage. Omitted for legacy captures. */
+  output_tokens?: number;
+/** Models observed in first-appearance order. */
+  source_models?: string[];
+/** Number of provider context compactions observed in this archive. */
+  compaction_count?: number;
 }
 
 // ── ContentBlock ────────────────────────────────────────────────
@@ -77,6 +85,12 @@ export interface LockedBlob {
   blob: string;
 }
 
+/** Provider-local replay metadata retained only for same-provider full loads. */
+export interface ProviderMetadata {
+  turn_id?: string;
+  create_time?: number;
+}
+
 // ── Event types (tag union) ────────────────────────────────────
 
 /**
@@ -90,6 +104,8 @@ interface EventBase {
   ts?: string;
 /** Normalized order. Basis for ascending sorting. (domain model) */
   seq: number;
+/** Explicitly modeled provider-local replay identity (CIR v2). */
+  provider_metadata?: ProviderMetadata;
 }
 
 /**
@@ -109,6 +125,16 @@ export interface MessageEvent extends EventBase {
   kind: 'message';
   role: Role;
   blocks: ContentBlock[];
+/** Provider-generated context summary marker. */
+  compact_summary?: boolean;
+/** Codex multi-agent message retained in provider active context. */
+  agent_message?: boolean;
+/** Provider-local author identity for an agent message. */
+  agent_author?: string;
+/** Provider-local recipient identity for an agent message. */
+  agent_recipient?: string;
+/** Opaque same-provider state attached to an agent message. */
+  locked?: LockedBlob;
 }
 
 /**
@@ -165,19 +191,41 @@ export interface ReasoningEvent extends EventBase {
 }
 
 /**
- * kind tag union — all event types of CIR v1. (domain model event oneOf)
+ * Archival context-compaction boundary. The replacement is authoritative only
+ * when replacement_complete is true; false makes consumers replay the archive.
+ */
+export interface CompactionBoundaryEvent extends EventBase {
+  kind: 'compaction';
+  replacement: CIREvent[];
+  replacement_complete: boolean;
+  locked?: never;
+}
+
+/** Provider-locked Codex compaction state inside a replacement history. */
+export interface CompactionLockedEvent extends EventBase {
+  kind: 'compaction';
+  locked: LockedBlob;
+  replacement?: never;
+  replacement_complete?: never;
+}
+
+export type CompactionEvent = CompactionBoundaryEvent | CompactionLockedEvent;
+
+/**
+ * kind tag union — all event types of CIR v1/v2. (domain model event oneOf)
  */
 export type CIREvent =
   | TurnEvent
   | MessageEvent
   | ToolCallEvent
   | ToolResultEvent
-  | ReasoningEvent;
+  | ReasoningEvent
+  | CompactionEvent;
 
 // ── CIRDocument (root) ──────────────────────────────────────────
 
 /**
- * CIR v1 root document.
+ * CIR v1/v2 root document.
  * Invariant: events are sorted in ascending order by seq. (domain model / schema root)
  */
 export interface CIRDocument {

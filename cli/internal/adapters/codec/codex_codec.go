@@ -12,7 +12,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
-// CodexCodec implements ProviderCodec for Codex rollout JSONL ↔ CIR v1 conversion (provider compatibility rules).
+// CodexCodec implements ProviderCodec for Codex rollout JSONL ↔ CIR conversion (provider compatibility rules).
 //
 // Decode mapping (response_item.payload → CIR event):
 //   - message{role,content:[{input_text|output_text,text}]} → message(role, blocks:[{text}...])
@@ -76,8 +76,21 @@ type codexSessionMetaOut struct {
 }
 
 type codexContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type             string `json:"type"`
+	Text             string `json:"text,omitempty"`
+	EncryptedContent string `json:"encrypted_content,omitempty"`
+}
+
+func (c codexContent) MarshalJSON() ([]byte, error) {
+	m := map[string]string{"type": c.Type}
+	if c.Type == "encrypted_content" {
+		m["encrypted_content"] = c.EncryptedContent
+	} else {
+		// input_text/output_text require the text member even when its value is
+		// empty. A struct-level omitempty cannot express this union correctly.
+		m["text"] = c.Text
+	}
+	return json.Marshal(m)
 }
 
 type codexAction struct {
@@ -103,8 +116,9 @@ type codexTokenInfo struct {
 
 // codexEventMsg is the portion of event_msg payload we use (token_count).
 type codexEventMsg struct {
-	Type string          `json:"type"`
-	Info *codexTokenInfo `json:"info,omitempty"`
+	Type    string          `json:"type"`
+	Message string          `json:"message,omitempty"`
+	Info    *codexTokenInfo `json:"info,omitempty"`
 }
 
 // codexTurnContext is the portion of the turn_context payload we use (per-turn model).
@@ -113,28 +127,53 @@ type codexTurnContext struct {
 }
 
 type codexResponseItem struct {
-	Type             string          `json:"type"`
-	Role             string          `json:"role,omitempty"`
-	Content          []codexContent  `json:"content,omitempty"`
-	Name             string          `json:"name,omitempty"`
-	Arguments        json.RawMessage `json:"arguments,omitempty"`
-	CallID           string          `json:"call_id,omitempty"`
-	Output           json.RawMessage `json:"output,omitempty"`
-	Input            string          `json:"input,omitempty"`
-	Status           string          `json:"status,omitempty"`
-	EncryptedContent string          `json:"encrypted_content,omitempty"`
-	Summary          []interface{}   `json:"summary,omitempty"`
-	Action           *codexAction    `json:"action,omitempty"`
+	Type             string                   `json:"type"`
+	ID               string                   `json:"id,omitempty"`
+	Role             string                   `json:"role,omitempty"`
+	Content          []codexContent           `json:"content,omitempty"`
+	Name             string                   `json:"name,omitempty"`
+	Arguments        json.RawMessage          `json:"arguments,omitempty"`
+	CallID           string                   `json:"call_id,omitempty"`
+	Output           json.RawMessage          `json:"output,omitempty"`
+	Input            string                   `json:"input,omitempty"`
+	Status           string                   `json:"status,omitempty"`
+	EncryptedContent string                   `json:"encrypted_content,omitempty"`
+	Summary          []interface{}            `json:"summary,omitempty"`
+	Action           *codexAction             `json:"action,omitempty"`
+	Author           string                   `json:"author,omitempty"`
+	Recipient        string                   `json:"recipient,omitempty"`
+	ProviderMetadata *domain.ProviderMetadata `json:"internal_chat_message_metadata_passthrough,omitempty"`
 }
 
 type codexResponseItemHeader struct {
 	Type string `json:"type"`
 }
 
+type codexCompactedPayload struct {
+	Message            string            `json:"message"`
+	ReplacementHistory []json.RawMessage `json:"replacement_history"`
+}
+
+func decodeCodexCompactedPayload(raw json.RawMessage) (codexCompactedPayload, bool, error) {
+	var payload codexCompactedPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return codexCompactedPayload{}, false, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return codexCompactedPayload{}, false, err
+	}
+	history, present := fields["replacement_history"]
+	if !present || bytes.Equal(bytes.TrimSpace(history), []byte("null")) {
+		return payload, false, nil
+	}
+	return payload, true, nil
+}
+
 // Decode converts Codex rollout JSONL bytes to CIRDocument.
 func (c *CodexCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument, error) {
 	doc := domain.CIRDocument{}
-	doc.Envelope.CIRVersion = "1"
+	doc.Envelope.CIRVersion = domain.CIRVersionV1
 	doc.Envelope.SourceProvider = domain.ProviderCodex
 	doc.Envelope.Fidelity = domain.FidelityFull
 
@@ -201,15 +240,31 @@ func (c *CodexCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument, 
 				events = append(events, ev)
 			}
 		case "compacted":
-			// Context compression boundary (empirically: {"type":"compacted","payload":{message,replacement_history}}).
-			// Count occurrences (graph ◈ marker signal, session id invariant), and if message (agent's compressed summary) exists,
-			// include it as CompactSummary message event — top source of memorize digest (Claude isCompactSummary parity). Empirically 0.143 rollout has empty message,
-			// so currently only count increases, but will automatically absorb when format is filled.
+			// Keep both layers: the top-level event stream remains the complete
+			// archival transcript, while replacement_history is nested on an
+			// explicit boundary and becomes the provider-visible replay suffix.
+			// Current Codex rollouts leave message empty and carry an encrypted
+			// compaction response item inside replacement_history, so dropping
+			// the latter would make archival history look like active context.
 			doc.Envelope.CompactionCount++
-			var cp struct {
-				Message string `json:"message"`
+			cp, historyPresent, err := decodeCodexCompactedPayload(ln.Payload)
+			if err != nil {
+				return domain.CIRDocument{}, fmt.Errorf("codex decode compacted: %w", err)
 			}
-			if json.Unmarshal(ln.Payload, &cp) == nil && cp.Message != "" {
+			replacement := []domain.Event{}
+			complete := false
+			if historyPresent {
+				replacement, complete, err = decodeCodexReplacement(cp.ReplacementHistory, ln.Timestamp)
+				if err != nil {
+					return domain.CIRDocument{}, err
+				}
+			}
+			events = append(events, domain.Event{
+				Kind: domain.EventCompaction, Ts: ln.Timestamp,
+				Replacement:         replacement,
+				ReplacementComplete: complete,
+			})
+			if cp.Message != "" {
 				events = append(events, domain.Event{
 					Kind: domain.EventMessage, Role: "user", Ts: ln.Timestamp,
 					Blocks:         []domain.ContentBlock{{Type: "text", Text: cp.Message}},
@@ -224,18 +279,21 @@ func (c *CodexCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument, 
 		return domain.CIRDocument{}, fmt.Errorf("codex decode scan: %w", err)
 	}
 	doc.Events = assignSeq(events)
+	doc.Envelope.CIRVersion = domain.CIRVersionForEvents(doc.Events)
 	return doc, nil
 }
 
 func isCodexConversationItem(itemType string) bool {
 	switch itemType {
 	case "message",
+		"agent_message",
 		"function_call",
 		"custom_tool_call",
 		"function_call_output",
 		"custom_tool_call_output",
 		"web_search_call",
-		"reasoning":
+		"reasoning",
+		"compaction":
 		return true
 	default:
 		return false
@@ -243,7 +301,11 @@ func isCodexConversationItem(itemType string) bool {
 }
 
 func codexItemToEvent(it codexResponseItem, ts string) (domain.Event, bool) {
-	ev := domain.Event{Ts: ts}
+	ev := domain.Event{ID: it.ID, Ts: ts}
+	if it.ProviderMetadata != nil {
+		metadata := *it.ProviderMetadata
+		ev.ProviderMetadata = &metadata
+	}
 	switch it.Type {
 	case "message":
 		ev.Kind = domain.EventMessage
@@ -259,6 +321,29 @@ func codexItemToEvent(it codexResponseItem, ts string) (domain.Event, bool) {
 			blocks = []domain.ContentBlock{{Type: "text", Text: ""}}
 		}
 		ev.Blocks = blocks
+		return ev, true
+	case "agent_message":
+		ev.Kind = domain.EventMessage
+		ev.Role = "assistant"
+		ev.AgentMessage = true
+		ev.AgentAuthor = it.Author
+		ev.AgentRecipient = it.Recipient
+		for _, content := range it.Content {
+			switch content.Type {
+			case "input_text", "output_text":
+				ev.Blocks = append(ev.Blocks, domain.ContentBlock{Type: "text", Text: content.Text})
+			case "encrypted_content":
+				if content.EncryptedContent != "" {
+					ev.Locked = &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: content.EncryptedContent}
+				}
+			}
+		}
+		if ev.Blocks == nil {
+			ev.Blocks = []domain.ContentBlock{}
+		}
+		if len(ev.Blocks) == 0 && ev.Locked == nil {
+			return domain.Event{}, false
+		}
 		return ev, true
 	case "function_call":
 		ev.Kind = domain.EventToolCall
@@ -302,9 +387,250 @@ func codexItemToEvent(it codexResponseItem, ts string) (domain.Event, bool) {
 		// summary_text, so CIR round-trip is stable (original multi-items flattened by \n\n).
 		ev.RedactedSummary = summaryToString(it.Summary)
 		return ev, true
+	case "compaction":
+		if it.EncryptedContent == "" {
+			return domain.Event{}, false
+		}
+		ev.Kind = domain.EventCompaction
+		ev.Locked = &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: it.EncryptedContent}
+		ev.CrossReplayable = false
+		return ev, true
 	default:
 		return domain.Event{}, false
 	}
+}
+
+func decodeCodexReplacement(rawItems []json.RawMessage, ts string) ([]domain.Event, bool, error) {
+	replacement := make([]domain.Event, 0, len(rawItems))
+	complete := true
+	for _, raw := range rawItems {
+		var header codexResponseItemHeader
+		if err := json.Unmarshal(raw, &header); err != nil {
+			// The outer compacted record is still usable as an archival boundary.
+			// Do not fail capture or claim that a partially decoded replacement is
+			// authoritative when a future provider item cannot be classified.
+			complete = false
+			continue
+		}
+		if !isCodexConversationItem(header.Type) {
+			complete = false
+			continue
+		}
+		if !codexReplacementRawItemFullyUnderstood(raw, header.Type) {
+			complete = false
+			continue
+		}
+		var item codexResponseItem
+		if err := json.Unmarshal(raw, &item); err != nil {
+			complete = false
+			continue
+		}
+		if !codexReplacementItemFullyUnderstood(item) {
+			complete = false
+			continue
+		}
+		if ev, ok := codexItemToEvent(item, ts); ok {
+			replacement = append(replacement, ev)
+		} else {
+			complete = false
+		}
+	}
+	return assignSeq(replacement), complete, nil
+}
+
+// codexReplacementRawItemFullyUnderstood closes json.Unmarshal's permissive
+// unknown-field gap. Known replay identity fields are modeled explicitly; any
+// new top-level, content, or metadata field makes the boundary non-authoritative
+// until the codec learns how to preserve it.
+func codexReplacementRawItemFullyUnderstood(raw json.RawMessage, itemType string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	allowed := map[string]bool{
+		"type": true, "id": true, "internal_chat_message_metadata_passthrough": true,
+	}
+	switch itemType {
+	case "message":
+		allowed["role"], allowed["content"] = true, true
+	case "agent_message":
+		allowed["author"], allowed["recipient"], allowed["content"] = true, true, true
+	case "reasoning":
+		allowed["encrypted_content"], allowed["summary"] = true, true
+	case "function_call":
+		allowed["name"], allowed["arguments"], allowed["call_id"], allowed["status"] = true, true, true, true
+	case "function_call_output":
+		allowed["call_id"], allowed["output"] = true, true
+	case "custom_tool_call":
+		allowed["name"], allowed["input"], allowed["call_id"], allowed["status"] = true, true, true, true
+	case "custom_tool_call_output":
+		allowed["call_id"], allowed["output"] = true, true
+	case "web_search_call":
+		allowed["action"], allowed["call_id"], allowed["status"] = true, true, true
+	case "compaction":
+		allowed["encrypted_content"] = true
+	default:
+		return false
+	}
+	for key := range fields {
+		if !allowed[key] {
+			return false
+		}
+	}
+	if metadataRaw, ok := fields["internal_chat_message_metadata_passthrough"]; ok {
+		var metadata map[string]json.RawMessage
+		if err := json.Unmarshal(metadataRaw, &metadata); err != nil || metadata == nil {
+			return false
+		}
+		for key := range metadata {
+			if key != "turn_id" && key != "create_time" {
+				return false
+			}
+		}
+	}
+	if contentRaw, ok := fields["content"]; ok && !codexReplacementContentFullyUnderstood(contentRaw) {
+		return false
+	}
+	if summaryRaw, ok := fields["summary"]; ok && !codexReplacementSummaryWireFullyUnderstood(summaryRaw) {
+		return false
+	}
+	return true
+}
+
+func codexReplacementContentFullyUnderstood(raw json.RawMessage) bool {
+	var content []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return false
+	}
+	for _, entry := range content {
+		var kind string
+		if err := json.Unmarshal(entry["type"], &kind); err != nil {
+			return false
+		}
+		for key := range entry {
+			switch kind {
+			case "input_text", "output_text":
+				if key != "type" && key != "text" {
+					return false
+				}
+			case "encrypted_content":
+				if key != "type" && key != "encrypted_content" {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		switch kind {
+		case "input_text", "output_text":
+			if _, ok := entry["text"]; !ok {
+				return false
+			}
+		case "encrypted_content":
+			if _, ok := entry["encrypted_content"]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func codexReplacementSummaryWireFullyUnderstood(raw json.RawMessage) bool {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		var text string
+		if json.Unmarshal(entry, &text) == nil {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(entry, &fields); err != nil {
+			return false
+		}
+		for key := range fields {
+			if key != "type" && key != "text" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// codexReplacementItemFullyUnderstood is deliberately stricter than normal
+// archival decoding. A replacement is an authoritative projection only when
+// every provider-visible item can be represented without semantic loss. New
+// item or content variants therefore fall back to replaying the full archive.
+func codexReplacementItemFullyUnderstood(item codexResponseItem) bool {
+	switch item.Type {
+	case "message":
+		switch item.Role {
+		case "user", "assistant", "system", "developer":
+		default:
+			return false
+		}
+		for _, content := range item.Content {
+			if content.Type != "input_text" && content.Type != "output_text" {
+				return false
+			}
+		}
+		return true
+	case "agent_message":
+		encrypted := 0
+		for _, content := range item.Content {
+			switch content.Type {
+			case "input_text", "output_text":
+			case "encrypted_content":
+				encrypted++
+				if encrypted > 1 || content.EncryptedContent == "" {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	case "reasoning":
+		return codexSummaryFullyUnderstood(item.Summary)
+	case "function_call", "function_call_output":
+		return true
+	case "custom_tool_call", "custom_tool_call_output":
+		// CIR's legacy tool shape does not retain whether Codex used the custom
+		// item wire variant. Keep the archive, but do not claim that a replacement
+		// containing it is an authoritative lossless projection.
+		return false
+	case "web_search_call":
+		// CIR's normalized web-search event keeps the query but intentionally
+		// omits provider navigation state (open_page/find_in_page URL, pattern,
+		// multi-query arrays). It is useful in the archive but not lossless
+		// enough to make a replacement authoritative.
+		return false
+	case "compaction":
+		return item.EncryptedContent != ""
+	default:
+		return false
+	}
+}
+
+func codexSummaryFullyUnderstood(items []interface{}) bool {
+	for _, item := range items {
+		switch value := item.(type) {
+		case string:
+			continue
+		case map[string]interface{}:
+			kind, _ := value["type"].(string)
+			if kind != "summary_text" {
+				return false
+			}
+			if _, ok := value["text"].(string); !ok {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // parseCodexFunctionArguments accepts the conventional JSON-encoded string and
@@ -363,52 +689,57 @@ func (c *CodexCodec) Encode(_ context.Context, doc domain.CIRDocument, _ domain.
 		}
 	}
 
-	for _, ev := range normalizeCIR(doc).Events {
-		var it codexResponseItem
-		switch ev.Kind {
-		case domain.EventMessage:
-			it.Type = "message"
-			it.Role = ev.Role
-			ctType := "output_text"
-			if ev.Role == "user" || ev.Role == "developer" {
-				ctType = "input_text"
+	events := normalizeCIR(doc).Events
+	if full && needsCodexCompactedWrapper(events) {
+		ts := doc.Envelope.CapturedAt
+		if len(events) > 0 && events[0].Ts != "" {
+			ts = events[0].Ts
+		}
+		events = []domain.Event{{
+			Kind:                domain.EventCompaction,
+			Ts:                  ts,
+			Replacement:         events,
+			ReplacementComplete: true,
+		}}
+	}
+
+	for _, ev := range events {
+		if ev.Kind == domain.EventCompaction && ev.Replacement != nil {
+			if !ev.ReplacementComplete {
+				// EffectiveContext deliberately falls back to the archival stream for
+				// this case. Never emit a partial compacted marker that could make the
+				// provider discard the complete replay we are about to send.
+				continue
 			}
-			for _, b := range ev.Blocks {
-				it.Content = append(it.Content, codexContent{Type: ctType, Text: b.Text})
+			replacement, err := encodeCodexReplacement(ev.Replacement, full)
+			if err != nil {
+				return nil, err
 			}
-		case domain.EventToolCall:
-			name := ev.ProviderToolName
-			if !full || name == "" {
-				name = providerToolName(domain.ProviderCodex, ev.ToolName)
+			payload, err := json.Marshal(codexCompactedPayload{ReplacementHistory: replacement})
+			if err != nil {
+				return nil, fmt.Errorf("codex encode compacted: %w", err)
 			}
-			it.Type = "function_call"
-			it.Name = name
-			it.CallID = ev.CallID
-			it.Arguments, _ = json.Marshal(marshalToolInput(ev.Input))
-			it.Status = ev.Status
-		case domain.EventToolResult:
-			it.Type = "function_call_output"
-			it.CallID = ev.CallID
-			out, _ := json.Marshal(codexToolResultOutput(ev.Output, full))
-			it.Output = out
-		case domain.EventReasoning:
-			if full && ev.Locked != nil && ev.Locked.Scheme == "encrypted_content" {
-				it.Type = "reasoning"
-				it.EncryptedContent = ev.Locked.Blob
-				it.Summary = []interface{}{}
-				if ev.RedactedSummary != "" {
-					it.Summary = []interface{}{map[string]interface{}{"type": "summary_text", "text": ev.RedactedSummary}}
+			if err := enc.Encode(codexLine{Timestamp: ev.Ts, Type: "compacted", Payload: payload}); err != nil {
+				return nil, fmt.Errorf("codex encode compacted: %w", err)
+			}
+			// A compacted replacement is model-visible but response items nested
+			// inside it do not populate the Codex TUI transcript. Re-emit only the
+			// ordinary visible messages as event_msg companions. Provider-internal
+			// agent_message items deliberately remain hidden, matching native
+			// rollouts (their nearby display events are not text-equivalent).
+			for _, replacementEvent := range normalizeEvents(ev.Replacement) {
+				item, ok := codexEventToItem(replacementEvent, full, true)
+				if !ok {
+					return nil, fmt.Errorf("codex encode replacement display: unsupported %s event", replacementEvent.Kind)
 				}
-			} else {
-				// reconstructed: locked inactive. Plain text summary exists as message, omitted if not.
-				if ev.RedactedSummary == "" {
-					continue
+				if err := emitCodexDisplayCompanion(enc, replacementEvent.Ts, item); err != nil {
+					return nil, err
 				}
-				it.Type = "message"
-				it.Role = "assistant"
-				it.Content = []codexContent{{Type: "output_text", Text: ev.RedactedSummary}}
 			}
-		default:
+			continue
+		}
+		it, ok := codexEventToItem(ev, full, false)
+		if !ok {
 			continue
 		}
 		payload, err := json.Marshal(it)
@@ -418,29 +749,8 @@ func (c *CodexCodec) Encode(_ context.Context, doc domain.CIRDocument, _ domain.
 		if err := enc.Encode(codexLine{Timestamp: ev.Ts, Type: "response_item", Payload: payload}); err != nil {
 			return nil, fmt.Errorf("codex encode: %w", err)
 		}
-		// TUI transcript display event_msg companion emission — codex uses model history in response_item,
-		// screen display reads from event_msg (same structure as actual rollout). Without this,
-		// resume works but the screen appears empty. Decode does not consume these types,
-		// maintaining roundtrip invariant (no duplicate events).
-		if it.Type == "message" && len(it.Content) > 0 {
-			text := ""
-			for _, c := range it.Content {
-				text += c.Text
-			}
-			if text != "" {
-				var emPayload []byte
-				if it.Role == "user" {
-					emPayload, _ = json.Marshal(map[string]interface{}{
-						"type": "user_message", "message": text,
-						"images": []string{}, "local_images": []string{}, "text_elements": []string{},
-					})
-				} else {
-					emPayload, _ = json.Marshal(map[string]interface{}{"type": "agent_message", "message": text})
-				}
-				if err := enc.Encode(codexLine{Timestamp: ev.Ts, Type: "event_msg", Payload: emPayload}); err != nil {
-					return nil, fmt.Errorf("codex encode event_msg: %w", err)
-				}
-			}
+		if err := emitCodexDisplayCompanion(enc, ev.Ts, it); err != nil {
+			return nil, err
 		}
 	}
 	// Token statistics reattachment: aggregate values (envelope) into a single token_count event_msg line
@@ -452,14 +762,158 @@ func (c *CodexCodec) Encode(_ context.Context, doc domain.CIRDocument, _ domain.
 		}
 		payload, _ := json.Marshal(codexEventMsg{Type: "token_count", Info: &info})
 		ts := doc.Envelope.CapturedAt
-		if evs := normalizeCIR(doc).Events; len(evs) > 0 && evs[len(evs)-1].Ts != "" {
-			ts = evs[len(evs)-1].Ts
+		if len(events) > 0 && events[len(events)-1].Ts != "" {
+			ts = events[len(events)-1].Ts
 		}
 		if err := enc.Encode(codexLine{Timestamp: ts, Type: "event_msg", Payload: payload}); err != nil {
 			return nil, fmt.Errorf("codex encode token_count: %w", err)
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+// emitCodexDisplayCompanion mirrors the auxiliary records written by Codex for
+// ordinary conversation messages. Model replay reads response items (including
+// compacted.replacement_history), while the TUI reconstructs visible transcript
+// rows from event_msg. Decode intentionally ignores these companions, so they do
+// not duplicate canonical CIR events on the next capture.
+func emitCodexDisplayCompanion(enc *json.Encoder, ts string, item codexResponseItem) error {
+	if item.Type != "message" || len(item.Content) == 0 {
+		return nil
+	}
+	if item.Role != "user" && item.Role != "assistant" {
+		return nil
+	}
+	text := ""
+	for _, content := range item.Content {
+		text += content.Text
+	}
+	if text == "" {
+		return nil
+	}
+
+	var payload []byte
+	if item.Role == "user" {
+		payload, _ = json.Marshal(map[string]interface{}{
+			"type": "user_message", "message": text,
+			"images": []string{}, "local_images": []string{}, "text_elements": []string{},
+		})
+	} else {
+		payload, _ = json.Marshal(map[string]interface{}{"type": "agent_message", "message": text})
+	}
+	if err := enc.Encode(codexLine{Timestamp: ts, Type: "event_msg", Payload: payload}); err != nil {
+		return fmt.Errorf("codex encode event_msg: %w", err)
+	}
+	return nil
+}
+
+func needsCodexCompactedWrapper(events []domain.Event) bool {
+	hasLockedState := false
+	for _, ev := range events {
+		if ev.Kind != domain.EventCompaction {
+			continue
+		}
+		if ev.Replacement != nil {
+			return false
+		}
+		if ev.Locked != nil && ev.Locked.Provider == domain.ProviderCodex && ev.Locked.Scheme == "encrypted_content" {
+			hasLockedState = true
+		}
+	}
+	return hasLockedState
+}
+
+func codexEventToItem(ev domain.Event, full, withinReplacement bool) (codexResponseItem, bool) {
+	var it codexResponseItem
+	switch ev.Kind {
+	case domain.EventMessage:
+		if ev.AgentMessage && full {
+			it.Type = "agent_message"
+			it.Author = ev.AgentAuthor
+			it.Recipient = ev.AgentRecipient
+			for _, block := range ev.Blocks {
+				it.Content = append(it.Content, codexContent{Type: "input_text", Text: block.Text})
+			}
+			if ev.Locked != nil && ev.Locked.Provider == domain.ProviderCodex && ev.Locked.Scheme == "encrypted_content" {
+				it.Content = append(it.Content, codexContent{Type: "encrypted_content", EncryptedContent: ev.Locked.Blob})
+			}
+		} else {
+			it.Type = "message"
+			it.Role = ev.Role
+			contentType := "output_text"
+			if ev.Role == "user" || ev.Role == "developer" || ev.Role == "system" {
+				contentType = "input_text"
+			}
+			for _, block := range ev.Blocks {
+				it.Content = append(it.Content, codexContent{Type: contentType, Text: block.Text})
+			}
+		}
+	case domain.EventToolCall:
+		name := ev.ProviderToolName
+		if !full || name == "" {
+			name = providerToolName(domain.ProviderCodex, ev.ToolName)
+		}
+		it.Type = "function_call"
+		it.Name = name
+		it.CallID = ev.CallID
+		it.Arguments, _ = json.Marshal(marshalToolInput(ev.Input))
+		it.Status = ev.Status
+	case domain.EventToolResult:
+		it.Type = "function_call_output"
+		it.CallID = ev.CallID
+		out, _ := json.Marshal(codexToolResultOutput(ev.Output, full))
+		it.Output = out
+	case domain.EventReasoning:
+		if full && ev.Locked != nil && ev.Locked.Scheme == "encrypted_content" {
+			it.Type = "reasoning"
+			it.EncryptedContent = ev.Locked.Blob
+			it.Summary = []interface{}{}
+			if ev.RedactedSummary != "" {
+				it.Summary = []interface{}{map[string]interface{}{"type": "summary_text", "text": ev.RedactedSummary}}
+			}
+		} else {
+			// Reconstructed: locked state stays inert. Plain summary is replayed
+			// as assistant text when one exists.
+			if ev.RedactedSummary == "" {
+				return codexResponseItem{}, false
+			}
+			it.Type = "message"
+			it.Role = "assistant"
+			it.Content = []codexContent{{Type: "output_text", Text: ev.RedactedSummary}}
+		}
+	case domain.EventCompaction:
+		if !withinReplacement || ev.Replacement != nil || !full || ev.Locked == nil || ev.Locked.Provider != domain.ProviderCodex || ev.Locked.Scheme != "encrypted_content" {
+			return codexResponseItem{}, false
+		}
+		it.Type = "compaction"
+		it.EncryptedContent = ev.Locked.Blob
+	default:
+		return codexResponseItem{}, false
+	}
+	if full {
+		it.ID = ev.ID
+		if ev.ProviderMetadata != nil {
+			metadata := *ev.ProviderMetadata
+			it.ProviderMetadata = &metadata
+		}
+	}
+	return it, true
+}
+
+func encodeCodexReplacement(events []domain.Event, full bool) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, 0, len(events))
+	for _, ev := range normalizeEvents(events) {
+		item, ok := codexEventToItem(ev, full, true)
+		if !ok {
+			return nil, fmt.Errorf("codex encode replacement: unsupported %s event", ev.Kind)
+		}
+		data, err := json.Marshal(item)
+		if err != nil {
+			return nil, fmt.Errorf("codex encode replacement item: %w", err)
+		}
+		out = append(out, data)
+	}
+	return out, nil
 }
 
 func firstNonEmpty(vs ...string) string {

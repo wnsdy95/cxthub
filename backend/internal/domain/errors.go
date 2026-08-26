@@ -28,5 +28,9 @@ var ErrConflict = errors.New("conflict")
 // ErrValidation indicates an input format violation (422). Example: invalid slug username, incorrect visibility.
 var ErrValidation = errors.New("validation")
 
+// ErrUnsupportedCIRVersion requires a peer upgrade before a document can be
+// transferred without changing its content hash.
+var ErrUnsupportedCIRVersion = errors.New("unsupported CIR version")
+
 // ErrGitOriginMismatch indicates an attempt to connect to cxthub repo from a different folder with a different git origin (409 git_origin_mismatch). Onboarding safety measure.
 var ErrGitOriginMismatch = errors.New("git origin mismatch")

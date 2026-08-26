@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,19 +30,19 @@ func HashContent(data []byte) ContentHash {
 // encoding/json sorts map keys in ascending UTF-8 byte order and outputs compactly,
 // ensuring all nested object keys are deterministically sorted.
 func CanonicalBytes(doc CIRDocument) ([]byte, error) {
-	sorted := make([]Event, len(doc.Events))
-	copy(sorted, doc.Events)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Seq < sorted[j].Seq
-	})
-	doc.Events = sorted
+	if err := ValidateCIRVersion(doc); err != nil {
+		return nil, fmt.Errorf("canonical bytes: %w", err)
+	}
+	doc.Events = canonicalEvents(doc.Events)
 
 	first, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("canonical bytes: marshal: %w", err)
 	}
 	var generic interface{}
-	if err := json.Unmarshal(first, &generic); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(first))
+	decoder.UseNumber()
+	if err := decoder.Decode(&generic); err != nil {
 		return nil, fmt.Errorf("canonical bytes: reparse: %w", err)
 	}
 	out, err := json.Marshal(generic)
@@ -49,6 +50,18 @@ func CanonicalBytes(doc CIRDocument) ([]byte, error) {
 		return nil, fmt.Errorf("canonical bytes: remarshal: %w", err)
 	}
 	return out, nil
+}
+
+func canonicalEvents(events []Event) []Event {
+	sorted := make([]Event, len(events))
+	copy(sorted, events)
+	for i := range sorted {
+		if sorted[i].Replacement != nil {
+			sorted[i].Replacement = canonicalEvents(sorted[i].Replacement)
+		}
+	}
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Seq < sorted[j].Seq })
+	return sorted
 }
 
 // ValidateSessionDocHash recalculates the claimed hash from wire as a canonical CIR and validates it.

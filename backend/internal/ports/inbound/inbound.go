@@ -248,9 +248,12 @@ type PushNegotiateOutput struct {
 	// ChunksSupported true = chunk wire support (GCS ignores — operates as-is).
 	ChunksSupported bool `json:"chunks_supported,omitempty"`
 	// BoundedChunksSupported true if chunk bodies are sent as bounded batches to /push/chunks·/pull/chunks. For old servers, the existing push/objects compatibility paths are used.
-	BoundedChunksSupported bool                 `json:"bounded_chunks_supported,omitempty"`
-	ChunkFormatsSupported  []string             `json:"chunk_formats_supported,omitempty"`
-	ChunkWants             []domain.ContentHash `json:"chunk_wants,omitempty"`
+	BoundedChunksSupported bool     `json:"bounded_chunks_supported,omitempty"`
+	ChunkFormatsSupported  []string `json:"chunk_formats_supported,omitempty"`
+	// CIRVersionsSupported advertises document semantics the server can hash and store.
+	// Absence from an old server means CIR v1 only.
+	CIRVersionsSupported []string             `json:"cir_versions_supported,omitempty"`
+	ChunkWants           []domain.ContentHash `json:"chunk_wants,omitempty"`
 }
 
 // PullSendInput (sync protocol Step B Request).
@@ -263,6 +266,8 @@ type PullSendInput struct {
 	ChunkWants       []domain.ContentHash
 	// Empty means a pre-v2 client, which can safely consume v1 only.
 	ChunkFormatsSupported []string
+	// Empty means a pre-negotiation client, which can safely consume CIR v1 only.
+	CIRVersionsSupported []string
 }
 
 // PullSendOutput: Download Target Object (push/objects Request Body Equivalent). (wire: snake_case)

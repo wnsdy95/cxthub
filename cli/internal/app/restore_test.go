@@ -129,6 +129,144 @@ func TestLoadCrossProvider(t *testing.T) {
 	}
 }
 
+func TestLoadFullReplaysCodexReplacementInsteadOfPreCompactionArchive(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	fixture := `{"timestamp":"2026-08-26T00:00:00Z","type":"session_meta","payload":{"id":"roll-load-active","cwd":"/old","model":"gpt-5-codex"}}
+{"timestamp":"2026-08-26T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"archive before compaction must not replay"}]}}
+{"timestamp":"2026-08-26T00:01:00Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"active compacted request"}]},{"type":"compaction","encrypted_content":"ACTIVE-ENC"}]}}
+{"timestamp":"2026-08-26T00:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"active answer"}]}}`
+	cir, err := codec.NewCodexCodec().Decode(ctx, []byte(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: hash, Branch: "main", DocHash: hash, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: hash}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{
+		Ref: "main", TargetProvider: domain.ProviderCodex, Mode: domain.FidelityFull, Cwd: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "archive before compaction must not replay") {
+		t.Fatal("load rehydrated archival pre-compaction history")
+	}
+	if strings.Count(string(raw), `"type":"compacted"`) != 1 || !strings.Contains(string(raw), `"message":""`) {
+		t.Fatalf("Codex replacement was not restored in native compacted shape:\n%s", raw)
+	}
+	if strings.Contains(string(raw), `"type":"response_item","payload":{"type":"compaction"`) {
+		t.Fatalf("encrypted compaction state was flattened into an unsupported top-level response item:\n%s", raw)
+	}
+	for _, want := range []string{"active compacted request", "ACTIVE-ENC", "active answer"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("load lost active replacement %q", want)
+		}
+	}
+	restored, err := codec.NewCodexCodec().Decode(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Events) != 1 || restored.Events[0].Kind != domain.EventCompaction || !restored.Events[0].ReplacementComplete {
+		t.Fatalf("restored archive does not contain one authoritative boundary: %+v", restored.Events)
+	}
+	active := restored.EffectiveContext()
+	if len(active.Events) != 3 || active.Events[1].Kind != domain.EventCompaction || active.Events[1].Locked == nil {
+		t.Fatalf("restored active context = %+v", active.Events)
+	}
+}
+
+func TestLoadFullPinsCodexReplacementWhileTrimmingLongSuffix(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	cir := domain.CIRDocument{
+		Envelope: domain.Envelope{
+			CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderCodex, SourceModel: "gpt-5-codex",
+			CapturedAt: "2026-08-26T00:00:00Z", Cwd: "/old", GitBranch: "main",
+			SessionOriginID: "roll-pinned", Fidelity: domain.FidelityFull, CompactionCount: 1,
+		},
+		Events: []domain.Event{
+			{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "archival history"}}},
+			{
+				Kind: domain.EventCompaction, Seq: 1, ReplacementComplete: true,
+				Replacement: []domain.Event{
+					{Kind: domain.EventMessage, Seq: 0, Role: "developer", Blocks: []domain.ContentBlock{{Type: "text", Text: "pinned runtime contract"}}},
+					{Kind: domain.EventMessage, Seq: 1, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "pinned compacted memory"}}},
+					{Kind: domain.EventCompaction, Seq: 2, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "PINNED-ENC"}},
+				},
+			},
+			{Kind: domain.EventMessage, Seq: 2, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "old suffix request"}}},
+			{Kind: domain.EventMessage, Seq: 3, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("oversized suffix ", 30000)}}},
+			{Kind: domain.EventMessage, Seq: 4, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "recent request retained"}}},
+			{Kind: domain.EventMessage, Seq: 5, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "recent answer retained"}}},
+		},
+	}
+	hash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: hash, Branch: "main", DocHash: hash, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: hash}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{Ref: "main", TargetProvider: domain.ProviderCodex, Mode: domain.FidelityFull, Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.TrimmedEvents == 0 {
+		t.Fatal("oversized post-compaction suffix was not trimmed")
+	}
+	raw, err := os.ReadFile(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > seedBudgetBytes+(32<<10) {
+		t.Fatalf("materialized Codex replay exceeds bounded allowance: %d", len(raw))
+	}
+	for _, want := range []string{"pinned runtime contract", "pinned compacted memory", "PINNED-ENC", "recent request retained", "recent answer retained", seedSummaryPrefix} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("bounded replay lost %q", want)
+		}
+	}
+	restored, err := codec.NewCodexCodec().Decode(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := restored.EffectiveContext()
+	lockedAt, digestAt, recentAt := -1, -1, -1
+	for i, ev := range active.Events {
+		if ev.Kind == domain.EventCompaction && ev.Locked != nil && ev.Locked.Blob == "PINNED-ENC" {
+			lockedAt = i
+		}
+		if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && strings.HasPrefix(ev.Blocks[0].Text, seedSummaryPrefix) {
+			digestAt = i
+		}
+		if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && ev.Blocks[0].Text == "recent request retained" {
+			recentAt = i
+		}
+	}
+	if !(lockedAt >= 0 && lockedAt < digestAt && digestAt < recentAt) {
+		t.Fatalf("replay order is not replacement → digest → recent tail: locked=%d digest=%d recent=%d events=%+v", lockedAt, digestAt, recentAt, active.Events)
+	}
+}
+
 // Memory mode: inject digest into CLAUDE.md.
 func TestLoadMemoryMode(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
