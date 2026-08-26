@@ -841,6 +841,19 @@ func (s *Service) Fsck(ctx context.Context, repoID domain.ContentHash) (inbound.
 			stack = append(stack, r.Target)
 		}
 	}
+	// Pending pointers are first-class roots outside the committed branch DAG.
+	// Treating active/uncommitted sessions as unreachable makes healthy data look
+	// corrupt and obscures real orphan regressions. Dismissed remains a UI-only
+	// state; its data is intentionally preserved and therefore still reachable.
+	pendings, err := s.meta.ListPendings(ctx, repoID)
+	if err != nil {
+		return inbound.FsckReport{}, err
+	}
+	for _, pending := range pendings {
+		if pending.Target != "" {
+			stack = append(stack, pending.Target)
+		}
+	}
 	// Reachability rule single source: domain.Snapshot.ReachabilityParents(Parents ∪ GraftParents).
 	parentsOf := make(map[domain.ContentHash][]domain.ContentHash, len(snaps))
 	for _, sn := range snaps {
@@ -1000,6 +1013,11 @@ func gitOriginLabel(raw string) string {
 func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
 	if err := validateHashes(repoID, d.SnapshotID); err != nil {
 		return "", err
+	}
+	for _, fragment := range d.Fragments {
+		if err := domain.ValidateContentHash(fragment.SourceSnapshot); err != nil {
+			return "", err
+		}
 	}
 	if _, err := s.meta.GetSnapshot(ctx, repoID, d.SnapshotID); err != nil {
 		return "", err // ErrNotFound → 404

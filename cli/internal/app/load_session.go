@@ -78,7 +78,7 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 		return inbound.LoadOutput{}, err
 	}
 	if in.PreferPendingTail {
-		snapID = s.pendingTailOf(ctx, in.RepoID, in.Ref, snapID)
+		snapID = s.pendingTailOf(ctx, in.RepoID, in.Ref, snapID, in.PreferredSessionID)
 	}
 	snap, err := s.store.GetSnapshot(ctx, snapID)
 	if err != nil {
@@ -108,8 +108,9 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	// Recent event tail remains within budget — truncation point is user prompt boundary.
 	seedCIR := cir
 	var omitted []domain.Event
-	if eventsJSONBytes(cir.Events) > seedBudgetBytes {
-		seedCIR, omitted = trimEventsForSeed(cir, seedTailBudgetBytes)
+	totalBudget, digestBudget := seedBudgets(target)
+	if eventsJSONBytes(cir.Events) > totalBudget {
+		seedCIR, omitted = trimEventsForSeed(cir, totalBudget-digestBudget)
 	}
 	dropped := len(omitted)
 	if dropped > 0 {
@@ -158,7 +159,7 @@ func materializationCwd(cwd string) string {
 
 // pendingTailOf returns the latest pending (uncommitted hook capture) snapshot connecting to head.
 // Acceptance conditions: (1) pending.Branch == loaded branch — branching off different branch's uncommitted conversation into same head not allowed (cross-branch leakage). (2) head is ancestor of pending target (parents ∪ graft_parents reachability) — isolate residual other lineages. If none, return head as is. If multiple pending, return with latest UpdatedAt (web "continuing conversation" equivalent).
-func (s *LoadSessionService) pendingTailOf(ctx context.Context, repoID, branch string, head domain.ContentHash) domain.ContentHash {
+func (s *LoadSessionService) pendingTailOf(ctx context.Context, repoID, branch string, head domain.ContentHash, preferredSessionID string) domain.ContentHash {
 	pendings, err := s.store.ListPendings(ctx, repoID)
 	if err != nil {
 		return head
@@ -171,6 +172,14 @@ func (s *LoadSessionService) pendingTailOf(ctx context.Context, repoID, branch s
 		}
 		if _, gerr := s.store.GetSnapshot(ctx, p.Target); gerr != nil {
 			continue
+		}
+		// Session identity outranks branch-head reachability. A PR append can move
+		// the branch from H to B while the live uncommitted session remains P→H.
+		// Requiring P to reach B drops that live conversation on an immediate
+		// restart. This exception is deliberately exact-session only; applying it
+		// to merely recent pending pointers would revive stale terminal sessions.
+		if preferredSessionID != "" && p.SessionID == preferredSessionID {
+			return p.Target
 		}
 		if !s.reachesFrom(ctx, p.Target, head) {
 			continue
@@ -209,15 +218,23 @@ func (s *LoadSessionService) reachesFrom(ctx context.Context, from, anc domain.C
 	return false
 }
 
-// `seedBudgetBytes` is the budget for the event tail of full materialization. Approximately 100k~130k tokens —
-// Claude(200k)/Codex(258k) windows leave room for default instructions and buffer.
-const seedBudgetBytes = 400 << 10
+// Seed budgets are deliberately below provider context windows. Session JSON is
+// not token text, so bytes are conservatively estimated at three bytes/token;
+// the remaining window is reserved for provider system prompts, repository
+// instructions, tool schemas, the next user turn, and model output.
+const seedBudgetBytes = 288 << 10 // absolute maximum (Codex profile)
+const seedDigestBudgetBytes = 72 << 10
 
-// A bounded digest gets a fixed share of the total event budget. Without this
-// reservation, a large inherited digest can dwarf the raw-tail limit and push
-// the materialized session over the target model's context window.
-const seedDigestBudgetBytes = 96 << 10
-const seedTailBudgetBytes = seedBudgetBytes - seedDigestBudgetBytes
+func seedBudgets(provider domain.ProviderKind) (total, digest int) {
+	switch provider {
+	case domain.ProviderCodex:
+		return 288 << 10, 72 << 10 // ~96k estimated input tokens
+	case domain.ProviderClaude:
+		return 192 << 10, 48 << 10 // ~64k estimated input tokens
+	default:
+		return 192 << 10, 48 << 10
+	}
+}
 
 func eventsJSONBytes(evs []domain.Event) int {
 	total := 0
@@ -426,7 +443,10 @@ const seedSummaryPrefix = "[cxt] This session was resumed from a branch context 
 // This preserves decisions, constraints, and open tasks within the seed budget. The compact marker drives
 // the viewer's ◈ rendering and last-write-wins carry-over during memory distillation.
 //
-// Summary source priority: The digest (this snapshot's MemoryHash, or the closest ancestor's if not memorized) is 1st priority — it is copied directly from the memory being uploaded to the DB. In-place head distillation is a supplement to the stored digest, and the two sources are deterministically merged. If both fail, fail-open (seed with only the tail).
+// Summary source priority: The digest on this snapshot, or the deterministic
+// projection of nearest digests across every parent lineage, is first priority.
+// In-place head distillation supplements that project memory. If both fail,
+// fail open with only the recent tail.
 //
 // Deduplication:
 //   - Previous generation seed summary (prefix CompactSummary) in the tail is removed — the new summary takes precedence.
@@ -434,10 +454,11 @@ const seedSummaryPrefix = "[cxt] This session was resumed from a branch context 
 //   - KeyFacts noise such as whitespace-free tool tokens and legacy ingestion markers ("native memory:"/"absorbed from") is excluded from seed content.
 func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) domain.CIRDocument {
 	digest, derr := s.distiller.Distill(ctx, omitted, nil)
+	digest.SnapshotID = snap.ID
 	if derr != nil {
 		digest = domain.MemoryDigest{} // Send the stored digest even if empty
 	}
-	// Prioritize the stored memorize digest (self-snapshot → closest ancestor).
+	// Prioritize the stored memorize digest (self-snapshot → parent projection).
 	stored, hasStored := domain.MemoryDigest{}, false
 	if snap.MemoryHash != "" {
 		if d, gerr := s.store.GetMemory(ctx, snap.MemoryHash); gerr == nil {
@@ -445,7 +466,7 @@ func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, see
 		}
 	}
 	if !hasStored {
-		if d, ok := nearestAncestorDigest(ctx, s.store, snap); ok {
+		if d, ok := ancestorMemoryProjection(ctx, s.store, snap); ok {
 			stored, hasStored = d, true
 		}
 	}
@@ -462,7 +483,8 @@ func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, see
 			digest.Summary = ""
 		}
 	}
-	text := renderSeedDigest(digest, len(omitted.Events), seedDigestBudgetBytes)
+	_, digestBudget := seedBudgets(target)
+	text := renderSeedDigest(digest, len(omitted.Events), digestBudget)
 	ev := domain.Event{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: text}}}
 	// Remove previous generation seed summary (materialized copy limit): Since the new summary inherits its content,
 	// leaving it would cause ◈ blocks to accumulate per generation. Determination is based on prefix text — legacy seed messages (unmarked user) must also be removed.
@@ -510,13 +532,13 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 	if err != nil {
 		return inbound.LoadOutput{}, err
 	}
-	// Heritage continuation (same logic as memorize): Merge the closest ancestor digest to inherit —
-	// appending the context to memory mode loads the previous context's memory even if the context is merged.
-	if prior, ok := nearestAncestorDigest(ctx, s.store, snap); ok {
+	digest.SnapshotID = snap.ID
+	// Heritage continuation (same logic as memorize): merge project memory from
+	// every parent lineage, including overlay grafts.
+	if prior, ok := ancestorMemoryProjection(ctx, s.store, snap); ok {
 		prior = boundCarriedDigest(prior)
 		digest = domain.MergeDigests(prior, digest)
 	}
-	digest.SnapshotID = snap.ID
 	if digest.Provider == "" {
 		digest.Provider = target
 	}

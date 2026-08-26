@@ -3,6 +3,6 @@
 // Hexagonal architecture (ports & adapters); external dependencies are limited to at-rest compression.
 module github.com/wnsdy95/cxthub/cli
 
-go 1.26.5
+go 1.26.6
 
 require github.com/klauspost/compress v1.19.2

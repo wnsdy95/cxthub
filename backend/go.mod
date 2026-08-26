@@ -5,7 +5,7 @@
 // External dependencies are limited to the PostgreSQL adapter (pgx) and at-rest compression.
 module github.com/wnsdy95/cxthub/backend
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0

@@ -33,7 +33,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      placeholder: macOS 15 arm64, Go 1.26.5, FS store
+      placeholder: macOS 15 arm64, Go 1.26.6, FS store
     validations:
       required: true
   - type: textarea

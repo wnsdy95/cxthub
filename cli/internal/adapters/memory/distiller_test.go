@@ -61,6 +61,25 @@ func distillWithSummary(t *testing.T, summary string) domain.MemoryDigest {
 	return d
 }
 
+func TestDistillRejectsAgentSummaryContainingNestedSeed(t *testing.T) {
+	nested := "Agent summary of current work.\n\n[cxt] This session was resumed from a branch context seed. 200 events were omitted.\nold inherited summary"
+	cir := domain.CIRDocument{Envelope: domain.Envelope{SourceProvider: domain.ProviderCodex}, Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: nested}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "Fix the pull continuity regression."}}},
+		{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "The exact-session pending test now passes."}}},
+	}}
+	d, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(d.Summary, "resumed from a branch context seed") || strings.Contains(d.Summary, "old inherited summary") {
+		t.Fatalf("nested seed was re-ingested:\n%s", d.Summary)
+	}
+	if !strings.Contains(d.Summary, "Fix the pull continuity regression.") {
+		t.Fatalf("real recent conversation was lost:\n%s", d.Summary)
+	}
+}
+
 // TestDistillExtractsStructuredFacts fixes distillation extraction:
 // KeyFacts ← "Key Technical Concepts" top-level bullet (last occurrence, emphasis markers removed),
 // OpenTasks ← "Pending Tasks" bullet. Tool name is not mixed with KeyFacts.

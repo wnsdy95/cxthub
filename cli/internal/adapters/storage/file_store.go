@@ -656,6 +656,11 @@ func (s *FileStore) PutMemory(_ context.Context, digest domain.MemoryDigest) (do
 	if err := domain.ValidateOptionalContentHash(digest.SnapshotID); err != nil {
 		return "", err
 	}
+	for _, fragment := range digest.Fragments {
+		if err := domain.ValidateContentHash(fragment.SourceSnapshot); err != nil {
+			return "", err
+		}
+	}
 	data, err := json.Marshal(digest)
 	if err != nil {
 		return "", err

@@ -169,6 +169,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	if err := s.store.PutSnapshot(ctx, snap); err != nil {
 		return inbound.SaveOutput{}, err
 	}
+	capture.RecordSessionAffinity(repo.LocalPath, provider, cir.Envelope.SessionOriginID)
 	if promote {
 		queuePromotion(repo.LocalPath, docHash, msg)
 	}

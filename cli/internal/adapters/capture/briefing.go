@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
@@ -26,8 +27,9 @@ const briefingMaxBytes = 4 << 10
 const briefingTTL = 24 * time.Hour
 
 type briefingFile struct {
-	At   time.Time `json:"at"`
-	Text string    `json:"text"`
+	At    time.Time `json:"at"`
+	Text  string    `json:"text,omitempty"`  // legacy single-entry format
+	Texts []string  `json:"texts,omitempty"` // ordered pull queue
 }
 
 func briefingPath(cwd string) string { return filepath.Join(cwd, ".cxt", "briefing.json") }
@@ -38,10 +40,18 @@ func WriteBriefing(cwd, text string) error {
 	if !cxtEnabled(cwd) || text == "" {
 		return nil
 	}
-	if len(text) > briefingMaxBytes {
-		text = text[:briefingMaxBytes] + "\n…(omitted)"
+	entries := []string{}
+	if data, err := providerfs.ReadRepoFile(cwd, filepath.Join(".cxt", "briefing.json")); err == nil {
+		var old briefingFile
+		if json.Unmarshal(data, &old) == nil && time.Since(old.At) <= briefingTTL {
+			entries = briefingEntries(old)
+		}
 	}
-	b, err := json.Marshal(briefingFile{At: time.Now().UTC(), Text: text})
+	if len(entries) == 0 || entries[len(entries)-1] != text {
+		entries = append(entries, text)
+	}
+	entries = boundBriefingEntries(entries, briefingMaxBytes)
+	b, err := json.Marshal(briefingFile{At: time.Now().UTC(), Texts: entries})
 	if err != nil {
 		return err
 	}
@@ -70,11 +80,40 @@ func ConsumeBriefing(cwd string) (string, bool) {
 		return "", false
 	}
 	var f briefingFile
-	if json.Unmarshal(data, &f) != nil || f.Text == "" {
+	if json.Unmarshal(data, &f) != nil {
 		return "", false
 	}
 	if time.Since(f.At) > briefingTTL {
 		return "", false
 	}
-	return f.Text, true
+	entries := briefingEntries(f)
+	if len(entries) == 0 {
+		return "", false
+	}
+	return strings.Join(entries, "\n\n"), true
+}
+
+func briefingEntries(f briefingFile) []string {
+	if len(f.Texts) > 0 {
+		return append([]string(nil), f.Texts...)
+	}
+	if f.Text != "" {
+		return []string{f.Text}
+	}
+	return nil
+}
+
+func boundBriefingEntries(entries []string, maxBytes int) []string {
+	for len(entries) > 1 && len(strings.Join(entries, "\n\n")) > maxBytes {
+		entries = entries[1:]
+	}
+	if len(entries) == 1 && len(entries[0]) > maxBytes {
+		const marker = "…(earlier text omitted)\n"
+		runes := []rune(entries[0])
+		for len(runes) > 0 && len(string(runes))+len(marker) > maxBytes {
+			runes = runes[1:]
+		}
+		entries[0] = marker + string(runes)
+	}
+	return entries
 }

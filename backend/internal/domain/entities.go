@@ -237,9 +237,21 @@ type Manifest struct {
 //
 // The backend stores only CIR-neutral digests and does not know provider-native formats.
 type MemoryDigest struct {
-	SnapshotID ContentHash  `json:"snapshot_id"`
-	Summary    string       `json:"summary"`
-	KeyFacts   []string     `json:"key_facts"`
-	OpenTasks  []string     `json:"open_tasks"`
-	Provider   ProviderKind `json:"provider"`
+	SnapshotID ContentHash      `json:"snapshot_id"`
+	Summary    string           `json:"summary"`
+	KeyFacts   []string         `json:"key_facts"`
+	OpenTasks  []string         `json:"open_tasks"`
+	Provider   ProviderKind     `json:"provider"`
+	Fragments  []MemoryFragment `json:"fragments,omitempty"`
+}
+
+// MemoryFragment is one snapshot-scoped memory contribution. The backend
+// treats it as CIR-neutral content and preserves it for deterministic client
+// projection across natural and graft parents.
+type MemoryFragment struct {
+	SourceSnapshot     ContentHash `json:"source_snapshot"`
+	Summary            string      `json:"summary,omitempty"`
+	KeyFacts           []string    `json:"key_facts,omitempty"`
+	OpenTasks          []string    `json:"open_tasks,omitempty"`
+	TasksAuthoritative bool        `json:"tasks_authoritative,omitempty"`
 }
