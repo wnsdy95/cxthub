@@ -91,14 +91,14 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	}
 	if mainSnap.ID != "" {
 		if mainSnap.MemoryHash != "" {
-			if d, derr := s.store.GetMemory(ctx, mainSnap.MemoryHash); derr == nil {
+			if d, ok := snapshotMemoryProjection(ctx, s.store, mainSnap); ok {
 				mainMem = &d
 			}
 		}
 		if mainMem == nil && mainDocAvailable {
 			if d, derr := s.distiller.Distill(ctx, mainDoc.CIR, nil); derr == nil {
 				d.SnapshotID = mainSnap.ID
-				if prior, ok := ancestorMemoryProjection(ctx, s.store, mainSnap); ok {
+				if prior, ok := priorMemoryProjection(ctx, s.store, mainSnap); ok {
 					prior = boundCarriedDigest(prior)
 					d = domain.MergeDigests(prior, d)
 				}
@@ -113,10 +113,19 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		return inbound.SeedOutput{}, err
 	}
 	branchMem.SnapshotID = fromSnap.ID
-	if prior, ok := ancestorMemoryProjection(ctx, s.store, fromSnap); ok {
+	branchState, prior, hasBranchPrior, branchProjectionComplete, err := stablePriorMemoryProjection(ctx, s.store, fromSnap.ID)
+	if err != nil {
+		return inbound.SeedOutput{}, err
+	}
+	fromSnap = branchState.snap
+	if hasBranchPrior {
 		prior = boundCarriedDigest(prior)
 		branchMem = domain.MergeDigests(prior, branchMem)
 	}
+	// Preserve the departure snapshot as provenance even when it had no prior
+	// digest. The seed changes SnapshotID below, but inherited fragments must
+	// keep identifying their actual source for future stale-lineage repair.
+	branchMem = domain.MergeDigests(domain.MemoryDigest{}, branchMem)
 
 	// Seed CIR synthesis: [Layer1⊕Layer2 summary message] + [Layer3 bounded
 	// full session]. The summary has a fixed maximum, and the exact encoded
@@ -160,6 +169,16 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
+	snap := domain.Snapshot{
+		ID: docHash, RepoID: repo.ID, Branch: in.NewBranch,
+		Parents: []domain.ContentHash{fromRef.Target}, DocHash: docHash,
+		Provider: provider, Fidelity: domain.FidelityReconstructed,
+		Message:   fmt.Sprintf("seed: %s → %s", in.FromBranch, in.NewBranch),
+		Author:    in.Author,
+		CreatedAt: time.Now().UTC(),
+		SessionID: seedSession,
+		Models:    fromDoc.CIR.Envelope.OrderedModels(),
+	}
 	// The materialized prompt is intentionally bounded, but the branch must not
 	// lose the inherited digest. Attach the merged main + departure-lineage
 	// memory to the seed snapshot so the next memorize/seed operation inherits
@@ -171,6 +190,8 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		seedMemory = domain.MergeDigests(boundCarriedDigest(*mainMem), branchMem)
 	}
 	seedMemory.SnapshotID = docHash
+	seedState := childMemoryProjectionState(snap, branchState)
+	seedMemory.GraftCoverage = memoryGraftCoverageFromState(ctx, s.store, seedState, seedMemory.Fragments, branchProjectionComplete)
 	if seedMemory.Provider == "" {
 		seedMemory.Provider = provider
 	}
@@ -178,16 +199,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
-	snap := domain.Snapshot{
-		ID: docHash, RepoID: repo.ID, Branch: in.NewBranch,
-		Parents: []domain.ContentHash{fromRef.Target}, DocHash: docHash,
-		MemoryHash: memoryHash, Provider: provider, Fidelity: domain.FidelityReconstructed,
-		Message:   fmt.Sprintf("seed: %s → %s", in.FromBranch, in.NewBranch),
-		Author:    in.Author,
-		CreatedAt: time.Now().UTC(),
-		SessionID: seedSession,
-		Models:    fromDoc.CIR.Envelope.OrderedModels(),
-	}
+	snap.MemoryHash = memoryHash
 	if err := s.store.PutSnapshot(ctx, snap); err != nil {
 		return inbound.SeedOutput{}, err
 	}

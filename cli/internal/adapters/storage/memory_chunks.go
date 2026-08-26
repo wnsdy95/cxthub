@@ -21,6 +21,29 @@ func validateMemoryDigestRefs(digest domain.MemoryDigest) error {
 			return err
 		}
 	}
+	if coverage := digest.GraftCoverage; coverage != nil {
+		if coverage.ProjectionVersion == 0 || coverage.GraftSeq > domain.MaxGraftSeq {
+			return domain.ErrHashMismatch
+		}
+		if coverage.ProjectionComplete && coverage.LineageFingerprint == "" {
+			return domain.ErrHashMismatch
+		}
+		if coverage.LineageFingerprint != "" {
+			if err := domain.ValidateContentHash(coverage.LineageFingerprint); err != nil {
+				return err
+			}
+		}
+		for _, parent := range coverage.GraftParents {
+			if err := domain.ValidateContentHash(parent); err != nil {
+				return err
+			}
+		}
+		for _, source := range coverage.PinnedSources {
+			if err := domain.ValidateContentHash(source); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -138,7 +161,7 @@ func (s *FileStore) RepackMemories() (converted int, saved int64, err error) {
 				for _, chunkHash := range append(manifest.SummaryChunks, manifest.FragmentChunks...) {
 					live[chunkHash] = true
 				}
-				if manifest.Format != chunkcas.MemoryFormatV1 {
+				if !chunkcas.SupportedMemoryFormat(manifest.Format) {
 					sweepSafe = false
 				}
 			} else {

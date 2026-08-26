@@ -19,6 +19,14 @@ func TestMemoryComponentPlanRoundtripAndPrefixDedup(t *testing.T) {
 			SourceSnapshot: domain.HashContent([]byte("memory-source")),
 			Summary:        strings.Repeat("fragment", 12<<10),
 		}},
+		GraftCoverage: &domain.MemoryGraftCoverage{
+			ProjectionVersion:  domain.MemoryProjectionVersion,
+			ProjectionComplete: true,
+			LineageFingerprint: domain.HashContent([]byte("lineage-state")),
+			GraftSeq:           2,
+			GraftParents:       []domain.ContentHash{domain.HashContent([]byte("graft-parent"))},
+			PinnedSources:      []domain.ContentHash{domain.HashContent([]byte("pinned-source"))},
+		},
 	}
 	second := first
 	second.SnapshotID = domain.HashContent([]byte("memory-second"))
@@ -32,7 +40,7 @@ func TestMemoryComponentPlanRoundtripAndPrefixDedup(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("PlanMemory(second): ok=%v err=%v", ok, err)
 	}
-	if p1.Manifest.Format != MemoryFormatV1 {
+	if p1.Manifest.Format != MemoryFormatV2 {
 		t.Fatalf("format=%q", p1.Manifest.Format)
 	}
 	for hash, body := range p2.Bodies {
@@ -60,6 +68,18 @@ func TestMemoryComponentPlanRoundtripAndPrefixDedup(t *testing.T) {
 	gotHash, _ := domain.MemoryDigestHash(got)
 	if gotHash != wantHash {
 		t.Fatalf("identity changed: got %s want %s", gotHash, wantHash)
+	}
+}
+
+func TestMemoryComponentPlanKeepsLegacyManifestVersionWithoutCoverage(t *testing.T) {
+	digest := domain.MemoryDigest{
+		SnapshotID: domain.HashContent([]byte("legacy-format")),
+		Summary:    strings.Repeat("legacy", 16<<10),
+		Provider:   domain.ProviderCodex,
+	}
+	plan, ok, err := PlanMemory(digest)
+	if err != nil || !ok || plan.Manifest.Format != MemoryFormatV1 {
+		t.Fatalf("legacy plan: format=%q ok=%v err=%v", plan.Manifest.Format, ok, err)
 	}
 }
 

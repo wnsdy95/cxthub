@@ -36,6 +36,8 @@ export type {
   Ref,
   SessionDoc,
   MemoryDigest,
+  MemoryFragment,
+  MemoryGraftCoverage,
   Manifest,
 } from './entities.js';
 

@@ -1058,6 +1058,29 @@ func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash
 			return "", err
 		}
 	}
+	if coverage := d.GraftCoverage; coverage != nil {
+		if coverage.ProjectionVersion == 0 || coverage.GraftSeq > domain.MaxGraftSeq {
+			return "", fmt.Errorf("%w: invalid memory graft coverage version or sequence", domain.ErrIntegrity)
+		}
+		if coverage.ProjectionComplete && coverage.LineageFingerprint == "" {
+			return "", fmt.Errorf("%w: complete memory projection is missing its lineage fingerprint", domain.ErrIntegrity)
+		}
+		if coverage.LineageFingerprint != "" {
+			if err := domain.ValidateContentHash(coverage.LineageFingerprint); err != nil {
+				return "", err
+			}
+		}
+		for _, parent := range coverage.GraftParents {
+			if err := domain.ValidateContentHash(parent); err != nil {
+				return "", err
+			}
+		}
+		for _, source := range coverage.PinnedSources {
+			if err := domain.ValidateContentHash(source); err != nil {
+				return "", err
+			}
+		}
+	}
 	if _, err := s.meta.GetSnapshot(ctx, repoID, d.SnapshotID); err != nil {
 		return "", err // ErrNotFound → 404
 	}

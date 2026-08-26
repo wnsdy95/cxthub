@@ -101,13 +101,42 @@ export function mapSessionDoc(raw: RawSessionDoc): SessionDoc {
 }
 
 export function mapMemoryDigest(raw: RawMemoryDigest): MemoryDigest {
-  return {
+  const fragmentsRaw = raw['fragments'];
+  const fragments = Array.isArray(fragmentsRaw)
+    ? fragmentsRaw.map((value) => {
+        const fragment = value != null && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+        return {
+          sourceSnapshot: str(fragment, 'source_snapshot'),
+          summary: str(fragment, 'summary'),
+          keyFacts: strArr(fragment, 'key_facts'),
+          openTasks: strArr(fragment, 'open_tasks'),
+          tasksAuthoritative: fragment['tasks_authoritative'] === true,
+        };
+      })
+    : undefined;
+  const coverageRaw = raw['graft_coverage'];
+  const coverage = coverageRaw != null && typeof coverageRaw === 'object'
+    ? coverageRaw as Record<string, unknown>
+    : undefined;
+  const digest: MemoryDigest = {
     snapshotId: str(raw, 'snapshot_id'),
     summary: str(raw, 'summary'),
     keyFacts: strArr(raw, 'key_facts'),
     openTasks: strArr(raw, 'open_tasks'),
     provider: str(raw, 'provider') as ProviderKind,
   };
+  if (fragments) digest.fragments = fragments;
+  if (coverage) {
+    digest.graftCoverage = {
+      projectionVersion: num(coverage, 'projection_version'),
+      projectionComplete: coverage['projection_complete'] === true,
+      lineageFingerprint: str(coverage, 'lineage_fingerprint'),
+      graftSeq: num(coverage, 'graft_seq'),
+      graftParents: strArr(coverage, 'graft_parents'),
+      pinnedSources: strArr(coverage, 'pinned_sources'),
+    };
+  }
+  return digest;
 }
 
 export function mapManifest(raw: RawManifest): Manifest {

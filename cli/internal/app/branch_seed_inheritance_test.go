@@ -130,6 +130,18 @@ func TestBranchSeedFromMainIncludesStoredMemoryAndFullSession(t *testing.T) {
 			t.Fatalf("main conversation event %d = %+v, want %+v", i, got, want)
 		}
 	}
+	seedSnapshot, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedMemory, err := store.GetMemory(ctx, seedSnapshot.MemoryHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	walker := memoryProjectionWalker{fingerprinter: newMemoryProjectionFingerprinter(ctx, store)}
+	if !walker.memoryDigestCoversLineage(seedMemory, seedSnapshot) {
+		t.Fatal("seed coverage omitted the departure parent's attached memory pointer")
+	}
 }
 
 func TestBranchSeedFromMainDistillsMemoryWhenHeadHasNoStoredDigest(t *testing.T) {
@@ -211,6 +223,91 @@ func TestBranchSeedFromOtherLineageIncludesMainMemoryAndLineageSession(t *testin
 	for i, want := range featureEvents {
 		if got := seed.CIR.Events[i+1].Blocks[0].Text; got != want.Blocks[0].Text {
 			t.Fatalf("feature conversation event %d = %q, want %q", i, got, want.Blocks[0].Text)
+		}
+	}
+
+	seedSnapshot, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("get seed snapshot: %v", err)
+	}
+	seedMemory, err := store.GetMemory(ctx, seedSnapshot.MemoryHash)
+	if err != nil {
+		t.Fatalf("get seed memory: %v", err)
+	}
+	if seedMemory.GraftCoverage == nil || !seedMemory.GraftCoverage.ProjectionComplete {
+		t.Fatal("cross-lineage seed did not record memory coverage")
+	}
+	pinned := map[domain.ContentHash]bool{}
+	for _, source := range seedMemory.GraftCoverage.PinnedSources {
+		pinned[source] = true
+	}
+	if !pinned[mainHead] || !pinned[featureHead] || len(pinned) != 2 {
+		t.Fatalf("seed pinned sources = %v, want main %s and memoryless departure %s", seedMemory.GraftCoverage.PinnedSources, mainHead, featureHead)
+	}
+	walker := memoryProjectionWalker{fingerprinter: newMemoryProjectionFingerprinter(ctx, store)}
+	if !walker.memoryDigestCoversLineage(seedMemory, seedSnapshot) {
+		t.Fatal("synthetic seed coverage does not match its stored parent lineage")
+	}
+
+	// The seed coverage is now stale: a graft appears below its natural parent
+	// after the seed memory was attached. Reprojection must add that late branch
+	// without dropping the explicitly imported main memory or the departure
+	// snapshot's on-the-fly distillation.
+	lateGraft := putBranchSeedSnapshot(t, ctx, store, repo.ID, "feature/late", []domain.Event{
+		seedMessage("user", "late graft conversation", 0),
+	}, nil, &domain.MemoryDigest{Summary: "LATE GRAFT MEMORY", Provider: domain.ProviderCodex})
+	featureSnapshot, err := store.GetSnapshot(ctx, featureHead)
+	if err != nil {
+		t.Fatalf("get feature snapshot: %v", err)
+	}
+	featureSnapshot.Grafted = true
+	featureSnapshot.GraftSeq = 1
+	featureSnapshot.GraftParents = []domain.ContentHash{lateGraft}
+	if err := store.PutSnapshot(ctx, featureSnapshot); err != nil {
+		t.Fatalf("add late graft: %v", err)
+	}
+	seedSnapshot, err = store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("reload seed snapshot: %v", err)
+	}
+	projected, ok := snapshotMemoryProjection(ctx, store, seedSnapshot)
+	if !ok {
+		t.Fatal("stale cross-lineage seed memory was not reprojected")
+	}
+	for _, want := range []string{
+		"MAIN PROJECT MEMORY FOR EVERY NEW BRANCH",
+		"feature lineage digest",
+		"LATE GRAFT MEMORY",
+	} {
+		if count := strings.Count(projected.Summary, want); count != 1 {
+			t.Fatalf("reprojected seed summary contains %q %d times, want exactly once: %q", want, count, projected.Summary)
+		}
+	}
+
+	// Memorizing the seed snapshot itself replaces its fresh own contribution,
+	// but must not replace the imported memory owned only by that seed digest.
+	memorizer := NewMemorizeService(
+		branchSeedGit{repo: repo}, nil, nil, nil,
+		stubDistiller{d: domain.MemoryDigest{Summary: "RE-MEMORIZED SEED OWN MEMORY"}}, store,
+	)
+	memorized, err := memorizer.Memorize(ctx, inbound.MemorizeInput{
+		Cwd: repo.LocalPath, Provider: domain.ProviderCodex, Ref: string(out.SnapshotID),
+	})
+	if err != nil {
+		t.Fatalf("re-memorize seed: %v", err)
+	}
+	rememorized, err := store.GetMemory(ctx, memorized.MemoryHash)
+	if err != nil {
+		t.Fatalf("get re-memorized seed: %v", err)
+	}
+	for _, want := range []string{
+		"MAIN PROJECT MEMORY FOR EVERY NEW BRANCH",
+		"feature lineage digest",
+		"LATE GRAFT MEMORY",
+		"RE-MEMORIZED SEED OWN MEMORY",
+	} {
+		if count := strings.Count(rememorized.Summary, want); count != 1 {
+			t.Fatalf("re-memorized seed contains %q %d times, want exactly once: %q", want, count, rememorized.Summary)
 		}
 	}
 }
@@ -334,6 +431,10 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 	}
 	if seedMemory.SnapshotID != out.SnapshotID {
 		t.Fatalf("seed memory snapshot = %s, want %s", seedMemory.SnapshotID, out.SnapshotID)
+	}
+	if seedMemory.GraftCoverage == nil || seedMemory.GraftCoverage.ProjectionVersion != domain.MemoryProjectionVersion || !seedMemory.GraftCoverage.ProjectionComplete ||
+		seedMemory.GraftCoverage.LineageFingerprint == "" || seedMemory.GraftCoverage.GraftSeq != 0 || len(seedMemory.GraftCoverage.GraftParents) != 0 {
+		t.Fatalf("seed memory graft coverage = %+v, want explicit empty register", seedMemory.GraftCoverage)
 	}
 	if !strings.Contains(seedMemory.Summary, fullMainSummary) {
 		t.Fatalf("attached seed memory lost full main digest: got %d bytes, want at least %d", len(seedMemory.Summary), len(fullMainSummary))

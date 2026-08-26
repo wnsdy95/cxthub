@@ -9,18 +9,22 @@ import (
 
 const MemoryChunkTarget = 64 << 10
 
-const MemoryChunkFormatV1 = "cxt-memory-chunks-v1"
+const (
+	MemoryChunkFormatV1 = "cxt-memory-chunks-v1"
+	MemoryChunkFormatV2 = "cxt-memory-chunks-v2"
+)
 
 // MemoryChunkManifest is an at-rest representation. MemoryDigestHash remains
 // the hash of complete wire JSON; storage chunking never changes identity.
 type MemoryChunkManifest struct {
-	Format         string        `json:"format"`
-	SnapshotID     ContentHash   `json:"snapshot_id"`
-	SummaryChunks  []ContentHash `json:"summary_chunks,omitempty"`
-	KeyFacts       []string      `json:"key_facts"`
-	OpenTasks      []string      `json:"open_tasks"`
-	Provider       ProviderKind  `json:"provider"`
-	FragmentChunks []ContentHash `json:"fragment_chunks,omitempty"`
+	Format         string               `json:"format"`
+	SnapshotID     ContentHash          `json:"snapshot_id"`
+	SummaryChunks  []ContentHash        `json:"summary_chunks,omitempty"`
+	KeyFacts       []string             `json:"key_facts"`
+	OpenTasks      []string             `json:"open_tasks"`
+	Provider       ProviderKind         `json:"provider"`
+	FragmentChunks []ContentHash        `json:"fragment_chunks,omitempty"`
+	GraftCoverage  *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
 }
 
 type MemoryChunkPlan struct {
@@ -42,11 +46,12 @@ func PlanMemoryChunks(d MemoryDigest) (plan MemoryChunkPlan, ok bool, err error)
 	}
 	plan = MemoryChunkPlan{
 		Manifest: MemoryChunkManifest{
-			Format:     MemoryChunkFormatV1,
-			SnapshotID: d.SnapshotID,
-			KeyFacts:   d.KeyFacts,
-			OpenTasks:  d.OpenTasks,
-			Provider:   d.Provider,
+			Format:        memoryChunkFormatFor(d),
+			SnapshotID:    d.SnapshotID,
+			KeyFacts:      d.KeyFacts,
+			OpenTasks:     d.OpenTasks,
+			Provider:      d.Provider,
+			GraftCoverage: d.GraftCoverage,
 		},
 		Bodies: map[ContentHash][]byte{},
 	}
@@ -65,6 +70,17 @@ func PlanMemoryChunks(d MemoryDigest) (plan MemoryChunkPlan, ok bool, err error)
 		return MemoryChunkPlan{}, false, ErrIntegrity
 	}
 	return plan, true, nil
+}
+
+func memoryChunkFormatFor(d MemoryDigest) string {
+	if d.GraftCoverage != nil {
+		return MemoryChunkFormatV2
+	}
+	return MemoryChunkFormatV1
+}
+
+func SupportedMemoryChunkFormat(format string) bool {
+	return format == MemoryChunkFormatV1 || format == MemoryChunkFormatV2
 }
 
 func (p *MemoryChunkPlan) addComponent(data []byte) []ContentHash {
@@ -104,7 +120,7 @@ func ParseMemoryChunkManifest(data []byte) (MemoryChunkManifest, bool, error) {
 	if !strings.HasPrefix(probe.Format, "cxt-memory-chunks-") {
 		return MemoryChunkManifest{}, false, nil
 	}
-	if probe.Format != MemoryChunkFormatV1 {
+	if !SupportedMemoryChunkFormat(probe.Format) {
 		return MemoryChunkManifest{}, true, fmt.Errorf("unsupported memory manifest format %q", probe.Format)
 	}
 	var man MemoryChunkManifest
@@ -147,11 +163,12 @@ func AssembleMemoryChunks(man MemoryChunkManifest, bodies map[ContentHash][]byte
 		}
 	}
 	return MemoryDigest{
-		SnapshotID: man.SnapshotID,
-		Summary:    string(summary),
-		KeyFacts:   man.KeyFacts,
-		OpenTasks:  man.OpenTasks,
-		Provider:   man.Provider,
-		Fragments:  fragments,
+		SnapshotID:    man.SnapshotID,
+		Summary:       string(summary),
+		KeyFacts:      man.KeyFacts,
+		OpenTasks:     man.OpenTasks,
+		Provider:      man.Provider,
+		Fragments:     fragments,
+		GraftCoverage: man.GraftCoverage,
 	}, nil
 }

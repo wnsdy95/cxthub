@@ -191,6 +191,27 @@ export interface MemoryDigest {
   openTasks: string[];
 /** Injection target format hint (used for provider format determination). */
   provider: ProviderKind;
+/** Snapshot-scoped contributions used to union natural and graft lineages. */
+  fragments?: MemoryFragment[];
+/** Exact graft register projected when this digest was attached. */
+  graftCoverage?: MemoryGraftCoverage;
+}
+
+export interface MemoryFragment {
+  sourceSnapshot: ContentHash;
+  summary?: string;
+  keyFacts?: string[];
+  openTasks?: string[];
+  tasksAuthoritative?: boolean;
+}
+
+export interface MemoryGraftCoverage {
+  projectionVersion: number;
+  projectionComplete: boolean;
+  lineageFingerprint?: ContentHash;
+  graftSeq: number;
+  graftParents?: ContentHash[];
+  pinnedSources?: ContentHash[];
 }
 
 // ── Manifest ────────────────────────────────────────────────────

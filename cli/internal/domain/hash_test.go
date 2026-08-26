@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +17,26 @@ func testSessionDoc(t *testing.T, text string) SessionDoc {
 		t.Fatal(err)
 	}
 	return SessionDoc{Hash: HashContent(canonical), CIR: cir}
+}
+
+func TestMemoryDigestCoverageWireHashParity(t *testing.T) {
+	h := func(c string) ContentHash { return ContentHash("sha256:" + strings.Repeat(c, 64)) }
+	digest := MemoryDigest{
+		SnapshotID: h("a"), Summary: "summary", KeyFacts: []string{"fact"}, OpenTasks: []string{}, Provider: ProviderCodex,
+		Fragments: []MemoryFragment{{SourceSnapshot: h("b"), Summary: "fragment"}},
+		GraftCoverage: &MemoryGraftCoverage{
+			ProjectionVersion: MemoryProjectionVersion, ProjectionComplete: true, LineageFingerprint: h("c"), GraftSeq: 2,
+			GraftParents: []ContentHash{h("d")}, PinnedSources: []ContentHash{h("e")},
+		},
+	}
+	wire := `{"snapshot_id":"` + string(h("a")) + `","summary":"summary","key_facts":["fact"],"open_tasks":[],"provider":"codex","fragments":[{"source_snapshot":"` + string(h("b")) + `","summary":"fragment"}],"graft_coverage":{"projection_version":1,"projection_complete":true,"lineage_fingerprint":"` + string(h("c")) + `","graft_seq":2,"graft_parents":["` + string(h("d")) + `"],"pinned_sources":["` + string(h("e")) + `"]}}`
+	got, err := MemoryDigestHash(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := HashContent([]byte(wire)); got != want {
+		t.Fatalf("coverage wire hash = %s, want %s", got, want)
+	}
 }
 
 func TestValidateSessionDocHashRecomputesCanonicalContent(t *testing.T) {
