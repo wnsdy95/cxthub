@@ -11,6 +11,15 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
 
+type recordingDistiller struct {
+	seen domain.CIRDocument
+}
+
+func (d *recordingDistiller) Distill(_ context.Context, cir domain.CIRDocument, _ *domain.NativeMemory) (domain.MemoryDigest, error) {
+	d.seen = cir
+	return domain.MemoryDigest{Summary: "recorded active context"}, nil
+}
+
 type projectionMutationStore struct {
 	*storage.FileStore
 	target, graft domain.ContentHash
@@ -417,7 +426,7 @@ func TestMemorizeAttachmentDoesNotReplayConcurrentGraftRegister(t *testing.T) {
 	baseStore := storage.NewFileStore(t.TempDir())
 	repo := domain.Repo{ID: "repo-memory-attach-race", DefaultBranch: "main", LocalPath: t.TempDir()}
 	docHash, err := baseStore.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{
-		Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex},
+		Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1, SourceProvider: domain.ProviderCodex},
 		Events:   []domain.Event{{Kind: domain.EventMessage, Role: "user", Seq: 0}},
 	}})
 	if err != nil {
@@ -458,6 +467,38 @@ func TestMemorizeAttachmentDoesNotReplayConcurrentGraftRegister(t *testing.T) {
 	projected, ok := snapshotMemoryProjection(ctx, baseStore, root)
 	if !ok || !strings.Contains(projected.Summary, "fresh root memory") || !strings.Contains(projected.Summary, "concurrent graft survives attachment") {
 		t.Fatalf("post-race projection = %q", projected.Summary)
+	}
+}
+
+func TestMemorizeDistillsEffectiveContextAfterCompaction(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-memory-effective", DefaultBranch: "main", LocalPath: t.TempDir()}
+	docHash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{
+		Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderCodex},
+		Events: []domain.Event{
+			{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "archival old context"}}},
+			{Kind: domain.EventCompaction, Seq: 1, Replacement: []domain.Event{
+				{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "active replacement context"}}},
+			}, ReplacementComplete: true},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: docHash, DocHash: docHash, RepoID: repo.ID, Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo.ID, Target: docHash}); err != nil {
+		t.Fatal(err)
+	}
+	distiller := &recordingDistiller{}
+	service := NewMemorizeService(branchSeedGit{repo: repo}, nil, nil, nil, distiller, store)
+	if _, err := service.Memorize(ctx, inbound.MemorizeInput{Cwd: repo.LocalPath, Provider: domain.ProviderCodex}); err != nil {
+		t.Fatal(err)
+	}
+	if len(distiller.seen.Events) != 1 || distiller.seen.Events[0].Blocks[0].Text != "active replacement context" {
+		t.Fatalf("memorize distilled archival stream: %+v", distiller.seen.Events)
 	}
 }
 

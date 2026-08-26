@@ -14,11 +14,20 @@ import (
 // normalizeCIR sorts CIR events in ascending order by seq. Used in the CanonicalBytes (hash) preprocessing step. Returns a sorted copy of the input slice without modifying it.
 func normalizeCIR(doc domain.CIRDocument) domain.CIRDocument {
 	out := doc
-	events := make([]domain.Event, len(doc.Events))
-	copy(events, doc.Events)
-	sort.SliceStable(events, func(i, j int) bool { return events[i].Seq < events[j].Seq })
-	out.Events = events
+	out.Events = normalizeEvents(doc.Events)
 	return out
+}
+
+func normalizeEvents(input []domain.Event) []domain.Event {
+	events := make([]domain.Event, len(input))
+	copy(events, input)
+	for i := range events {
+		if events[i].Replacement != nil {
+			events[i].Replacement = normalizeEvents(events[i].Replacement)
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool { return events[i].Seq < events[j].Seq })
+	return events
 }
 
 // assignSeq assigns consecutive seq numbers to the events slice in the order they appear (preserving the original order).

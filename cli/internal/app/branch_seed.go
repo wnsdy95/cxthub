@@ -96,7 +96,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 			}
 		}
 		if mainMem == nil && mainDocAvailable {
-			if d, derr := s.distiller.Distill(ctx, mainDoc.CIR, nil); derr == nil {
+			if d, derr := s.distiller.Distill(ctx, mainDoc.CIR.EffectiveContext(), nil); derr == nil {
 				d.SnapshotID = mainSnap.ID
 				if prior, ok := priorMemoryProjection(ctx, s.store, mainSnap); ok {
 					prior = boundCarriedDigest(prior)
@@ -108,7 +108,8 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	}
 
 	// Layer 2: departure branch on-the-fly distillation (+ ancestor inheritance) — always fresh without relying on stored digest.
-	branchMem, err := s.distiller.Distill(ctx, fromDoc.CIR, nil)
+	branchContext := fromDoc.CIR.EffectiveContext()
+	branchMem, err := s.distiller.Distill(ctx, branchContext, nil)
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
@@ -143,7 +144,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if conversationBudget < 0 {
 		conversationBudget = 0
 	}
-	trimmedConversation, _ := trimEventsForSeed(fromDoc.CIR, conversationBudget)
+	trimmedConversation, _ := trimEventsForSeed(seedConversationContext(branchContext), conversationBudget)
 	events := []domain.Event{summaryEvent}
 	for i, ev := range trimmedConversation.Events {
 		ev.Seq = i + 1
@@ -151,6 +152,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	}
 	cir := domain.CIRDocument{Events: events}
 	cir.Envelope = fromDoc.CIR.Envelope // Inherit model, cwd, etc.
+	cir.Envelope.CIRVersion = domain.CIRVersionForEvents(events)
 	targetCwd := in.Cwd
 	if targetCwd == "" {
 		targetCwd = repo.LocalPath
@@ -230,6 +232,68 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		}
 	}
 	return out, nil
+}
+
+// seedConversationContext keeps only the human/agent conversation needed by a
+// new branch. The summary layer above already carries project memory, so
+// replaying prior synthetic cxt seeds, provider compact summaries, runtime
+// developer/system instructions, harness environment blocks, or an encrypted
+// compaction state would duplicate or invalidate context in the new session.
+// The archival source document is never mutated.
+func seedConversationContext(cir domain.CIRDocument) domain.CIRDocument {
+	out := cir.EffectiveContext()
+	events := make([]domain.Event, 0, len(out.Events))
+	for _, ev := range out.Events {
+		if ev.Kind == domain.EventCompaction {
+			continue
+		}
+		if ev.Kind == domain.EventMessage {
+			if ev.CompactSummary || ev.Role == "system" || ev.Role == "developer" || isSyntheticReplayMessage(ev) {
+				continue
+			}
+			if ev.AgentMessage {
+				// A new branch is a new provider session. Keep the visible agent
+				// result as assistant context, but never transplant provider-local
+				// routing identities or encrypted subagent state across sessions.
+				ev.AgentMessage = false
+				ev.AgentAuthor = ""
+				ev.AgentRecipient = ""
+				ev.Locked = nil
+				if !hasVisibleMessageText(ev) {
+					continue
+				}
+			}
+		}
+		events = append(events, ev)
+	}
+	out.Events = events
+	out.Envelope.CIRVersion = domain.CIRVersionForEvents(events)
+	return out
+}
+
+func hasVisibleMessageText(ev domain.Event) bool {
+	for _, block := range ev.Blocks {
+		if strings.TrimSpace(block.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func isSyntheticReplayMessage(ev domain.Event) bool {
+	if ev.Kind != domain.EventMessage || ev.Role != "user" {
+		return false
+	}
+	for _, block := range ev.Blocks {
+		text := strings.TrimSpace(block.Text)
+		if text == "" {
+			continue
+		}
+		return strings.HasPrefix(text, "[cxt seed] Branch-switch context:") ||
+			strings.HasPrefix(text, seedSummaryPrefix) ||
+			strings.HasPrefix(text, "<environment_context>")
+	}
+	return false
 }
 
 // renderSeedText renders the seed's summary layer (Layer1⊕Layer2) as labeled markdown.

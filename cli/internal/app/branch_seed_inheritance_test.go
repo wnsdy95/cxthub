@@ -538,3 +538,58 @@ func TestBranchSeedCarriedMemoryIsBounded(t *testing.T) {
 		t.Fatal("ancestor full memory object changed — history must stay recoverable")
 	}
 }
+
+func TestRepeatedBranchSeedsDoNotCarryPriorSyntheticPrompts(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-seed-replay-clean", DefaultBranch: "main", LocalPath: t.TempDir()}
+	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", []domain.Event{
+		seedMessage("user", "[cxt seed] Branch-switch context: old → main\nold synthetic prompt", 0),
+		seedMessage("developer", "old runtime instructions", 1),
+		seedMessage("user", "<environment_context>\n<cwd>/old</cwd>\n</environment_context>", 2),
+		seedMessage("user", "real request", 3),
+		seedMessage("assistant", "real answer", 4),
+	}, nil, &domain.MemoryDigest{Summary: "clean project memory", Provider: domain.ProviderCodex})
+	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
+
+	service := NewBranchSeedService(
+		branchSeedGit{repo: repo}, store,
+		stubDistiller{d: domain.MemoryDigest{Summary: "fresh lineage memory"}}, nil, nil,
+	)
+	first, err := service.Seed(ctx, inbound.SeedInput{
+		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/one", Provider: domain.ProviderCodex,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Seed(ctx, inbound.SeedInput{
+		Cwd: repo.LocalPath, FromBranch: "feature/one", NewBranch: "feature/two", Provider: domain.ProviderCodex,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []domain.ContentHash{first.SnapshotID, second.SnapshotID} {
+		doc, err := store.GetDoc(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seedCount := 0
+		for _, ev := range doc.CIR.Events {
+			if ev.Kind != domain.EventMessage || len(ev.Blocks) == 0 {
+				continue
+			}
+			text := ev.Blocks[0].Text
+			if strings.HasPrefix(text, "[cxt seed] Branch-switch context:") {
+				seedCount++
+			}
+			for _, forbidden := range []string{"old synthetic prompt", "old runtime instructions", "<environment_context>"} {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("seed %s carried replay control %q: %q", id, forbidden, text)
+				}
+			}
+		}
+		if seedCount != 1 {
+			t.Fatalf("seed %s contains %d synthetic seed prompts, want its own one", id, seedCount)
+		}
+	}
+}

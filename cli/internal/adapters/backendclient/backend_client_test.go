@@ -285,6 +285,49 @@ func TestRefOnlyPushSkipsObjectNegotiation(t *testing.T) {
 	}
 }
 
+func TestPushRejectsCIRV2BeforeMutatingOldServer(t *testing.T) {
+	repoID := domain.HashContent([]byte("cir-v2-old-server"))
+	cir := domain.CIRDocument{
+		Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderCodex},
+		Events:   []domain.Event{{Kind: domain.EventCompaction, Replacement: []domain.Event{}, ReplacementComplete: true}},
+	}
+	canonical, err := domain.CanonicalBytes(cir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := domain.SessionDoc{Hash: domain.HashContent(canonical), CIR: cir}
+	snap := domain.Snapshot{ID: doc.Hash, RepoID: string(repoID), Branch: "main", DocHash: doc.Hash}
+	objectCalls, refCalls := 0, 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/push/negotiate"):
+			var req negotiateReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			// Pre-CIR-negotiation server: wants the objects but omits capability.
+			_ = json.NewEncoder(w).Encode(negotiateResp{SnapshotWants: req.SnapshotHaves, DocWants: req.DocHaves})
+		case strings.HasSuffix(r.URL.Path, "/push/objects"):
+			objectCalls++
+			_ = json.NewEncoder(w).Encode(map[string]int{})
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/refs/"):
+			refCalls++
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	ref := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: string(repoID), Target: doc.Hash}
+	err = c.Push(context.Background(), string(repoID), []domain.Snapshot{snap}, []domain.SessionDoc{doc}, []domain.Ref{ref}, false, false)
+	if !errors.Is(err, domain.ErrUnsupportedCIRVersion) {
+		t.Fatalf("push error = %v, want unsupported CIR version", err)
+	}
+	if objectCalls != 0 || refCalls != 0 {
+		t.Fatalf("old server was mutated before version rejection: objects=%d refs=%d", objectCalls, refCalls)
+	}
+}
+
 func TestPushFallsBackToFullDocForChunkAwareV1Server(t *testing.T) {
 	repoID := domain.HashContent([]byte("legacy-chunk-push-repo"))
 	doc, plan := makeChunkedClientDoc(t, 2)
@@ -420,6 +463,9 @@ func TestPullFetchesBoundedChunkPrefixesUntilComplete(t *testing.T) {
 			}
 			if !containsString(req.ChunkFormatsSupported, chunkcas.FormatV2) {
 				t.Errorf("client formats=%v", req.ChunkFormatsSupported)
+			}
+			if !domain.SupportsCIRVersion(req.CIRVersionsSupported, domain.CIRVersionV2) {
+				t.Errorf("client CIR versions=%v", req.CIRVersionsSupported)
 			}
 			_ = json.NewEncoder(w).Encode(pullResp{
 				DocManifests:           []chunkedDocWire{{Hash: doc.Hash, Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}},

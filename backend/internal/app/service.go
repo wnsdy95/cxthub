@@ -261,6 +261,7 @@ func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) 
 		ChunksSupported:        true,
 		BoundedChunksSupported: true,
 		ChunkFormatsSupported:  []string{domain.ChunkFormatV1, domain.ChunkFormatV2},
+		CIRVersionsSupported:   domain.SupportedCIRVersions(),
 		ChunkWants:             chunkWants,
 	}, nil
 }
@@ -671,6 +672,7 @@ func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 		return inbound.PullSendOutput{}, err
 	}
 	out := inbound.PullSendOutput{BoundedChunksSupported: true}
+	supportedCIR := requestedCIRVersions(in.CIRVersionsSupported)
 	for _, id := range in.SnapshotWants {
 		snap, err := s.meta.GetSnapshot(ctx, in.RepoID, id)
 		if err != nil {
@@ -681,6 +683,9 @@ func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 	for _, h := range in.DocWants {
 		doc, err := s.blobs.GetDoc(ctx, in.RepoID, h)
 		if err != nil {
+			return inbound.PullSendOutput{}, err
+		}
+		if err := requireSupportedCIRVersion(doc.CIR.Envelope.CIRVersion, supportedCIR); err != nil {
 			return inbound.PullSendOutput{}, err
 		}
 		out.Docs = append(out.Docs, doc)
@@ -698,10 +703,22 @@ func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 				if derr != nil {
 					return inbound.PullSendOutput{}, derr
 				}
+				if err := requireSupportedCIRVersion(doc.CIR.Envelope.CIRVersion, supportedCIR); err != nil {
+					return inbound.PullSendOutput{}, err
+				}
 				out.Docs = append(out.Docs, doc)
 				continue
 			}
 			return inbound.PullSendOutput{}, merr
+		}
+		var envelope struct {
+			CIRVersion string `json:"cir_version"`
+		}
+		if err := json.Unmarshal(man.Envelope, &envelope); err != nil {
+			return inbound.PullSendOutput{}, fmt.Errorf("%w: doc %s has an invalid chunk envelope", domain.ErrIntegrity, h)
+		}
+		if err := requireSupportedCIRVersion(envelope.CIRVersion, supportedCIR); err != nil {
+			return inbound.PullSendOutput{}, err
 		}
 		if supportedFormats[man.Format] {
 			out.DocManifests = append(out.DocManifests, inbound.ChunkedDoc{Hash: h, Format: man.Format, Envelope: man.Envelope, Chunks: man.Chunks})
@@ -727,6 +744,29 @@ func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 		out.ChunkObjects = append(out.ChunkObjects, inbound.ChunkObject{Hash: ch, Data: b})
 	}
 	return out, nil
+}
+
+func requestedCIRVersions(versions []string) map[string]bool {
+	if len(versions) == 0 {
+		return map[string]bool{domain.CIRVersionV1: true}
+	}
+	out := make(map[string]bool, len(versions))
+	for _, version := range versions {
+		if domain.SupportsCIRVersion(domain.SupportedCIRVersions(), version) {
+			out[version] = true
+		}
+	}
+	return out
+}
+
+func requireSupportedCIRVersion(version string, supported map[string]bool) error {
+	if version == "" {
+		version = domain.CIRVersionV1
+	}
+	if supported[version] {
+		return nil
+	}
+	return fmt.Errorf("%w: peer does not advertise CIR %s support", domain.ErrUnsupportedCIRVersion, version)
 }
 
 func requestedChunkFormats(formats []string) map[string]bool {
@@ -2137,13 +2177,18 @@ func eventKey(e domain.CIREvent) string {
 		if len(e.Blocks) > 0 {
 			t = e.Blocks[0].Text
 		}
-		return string(e.Kind) + "|" + string(e.Role) + "|" + t
+		return string(e.Kind) + "|" + string(e.Role) + "|" + e.AgentAuthor + "|" + e.AgentRecipient + "|" + t
 	case domain.EventToolCall:
 		return string(e.Kind) + "|" + e.ToolName + "|" + e.CallID
 	case domain.EventToolResult:
 		return string(e.Kind) + "|" + e.CallID
 	case domain.EventReasoning:
 		return string(e.Kind) + "|" + e.RedactedSummary
+	case domain.EventCompaction:
+		// Compaction boundaries may have identical opaque payload shapes. Their
+		// archival positions are distinct and append-only, so include seq/ts
+		// instead of collapsing every boundary to one diff key.
+		return fmt.Sprintf("%s|%d|%s", e.Kind, e.Seq, e.TS)
 	}
 	return string(e.Kind)
 }
@@ -2155,6 +2200,9 @@ func eventSummary(e domain.CIREvent) string {
 		if len(e.Blocks) > 0 {
 			t = e.Blocks[0].Text
 		}
+		if e.AgentMessage && e.AgentAuthor != "" {
+			return "agent " + e.AgentAuthor + ": " + truncate(t, 60)
+		}
 		return string(e.Role) + ": " + truncate(t, 60)
 	case domain.EventToolCall:
 		return "tool " + e.ToolName
@@ -2162,6 +2210,8 @@ func eventSummary(e domain.CIREvent) string {
 		return "tool result"
 	case domain.EventReasoning:
 		return "reasoning"
+	case domain.EventCompaction:
+		return "context compaction"
 	}
 	return string(e.Kind)
 }

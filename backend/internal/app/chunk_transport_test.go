@@ -70,8 +70,45 @@ func TestBoundedChunkStorePullAndRepoScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !neg.ChunksSupported || !neg.BoundedChunksSupported || len(neg.ChunkWants) != 0 ||
-		!containsString(neg.ChunkFormatsSupported, domain.ChunkFormatV1) || !containsString(neg.ChunkFormatsSupported, domain.ChunkFormatV2) {
+		!containsString(neg.ChunkFormatsSupported, domain.ChunkFormatV1) || !containsString(neg.ChunkFormatsSupported, domain.ChunkFormatV2) ||
+		!containsString(neg.CIRVersionsSupported, domain.CIRVersionV1) || !containsString(neg.CIRVersionsSupported, domain.CIRVersionV2) {
 		t.Fatalf("negotiate after staging = %+v", neg)
+	}
+}
+
+func TestPullCIRV2RequiresExplicitClientCapability(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("cir-v2-pull-capability")
+	bindCommitTestRepo(t, st, repo)
+	cir := domain.CIRDocument{
+		Envelope: domain.CIREnvelope{CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderCodex},
+		Events:   []domain.CIREvent{{Kind: domain.EventCompaction, Replacement: []domain.CIREvent{}, ReplacementComplete: true}},
+	}
+	canonical, err := domain.CanonicalBytes(cir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := domain.HashContent(canonical)
+	if _, err := st.PutDoc(ctx, repo, domain.SessionDoc{Hash: hash, CIR: cir}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, input := range []inbound.PullSendInput{
+		{RepoID: repo, DocWants: []domain.ContentHash{hash}},
+		{RepoID: repo, DocManifestWants: []domain.ContentHash{hash}},
+	} {
+		if _, err := svc.Send(ctx, input); !errors.Is(err, domain.ErrUnsupportedCIRVersion) {
+			t.Fatalf("legacy pull input=%+v error=%v", input, err)
+		}
+	}
+	out, err := svc.Send(ctx, inbound.PullSendInput{
+		RepoID: repo, DocManifestWants: []domain.ContentHash{hash},
+		ChunkFormatsSupported: []string{domain.ChunkFormatV1, domain.ChunkFormatV2},
+		CIRVersionsSupported:  domain.SupportedCIRVersions(),
+	})
+	if err != nil || len(out.DocManifests)+len(out.Docs) != 1 {
+		t.Fatalf("capable CIR v2 pull = %+v, err=%v", out, err)
 	}
 }
 

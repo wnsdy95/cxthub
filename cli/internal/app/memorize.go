@@ -102,7 +102,10 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 			nativePtr = &native
 		}
 	}
-	digest, err := s.distiller.Distill(ctx, doc.CIR, nativePtr)
+	// Distill what the provider can currently see. The complete pre-compaction
+	// transcript stays archived in the immutable doc, but feeding it back into
+	// memory would resurrect context the provider intentionally replaced.
+	digest, err := s.distiller.Distill(ctx, doc.CIR.EffectiveContext(), nativePtr)
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
 	}

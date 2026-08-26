@@ -208,7 +208,7 @@ components:
           $ref: "#/components/schemas/ContentHash"
         cir:
           type: object
-          description: "CIR v1 object. Schema: schemas/cir.schema.json."
+          description: "CIR v1/v2 object. Schema: schemas/cir.schema.json."
           required: [envelope, events]
           additionalProperties: true
 
@@ -1370,6 +1370,12 @@ paths:
                     items:
                       type: string
                       enum: [cxt-doc-chunks-v1, cxt-doc-chunks-v2]
+                  cir_versions_supported:
+                    type: array
+                    description: "CIR document versions accepted by this server. Absence means a pre-negotiation server that accepts CIR v1 only."
+                    items:
+                      type: string
+                      enum: ["1", "2"]
                   chunk_wants:
                     type: array
                     description: "Chunk hashes the server does not have."
@@ -1381,7 +1387,6 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
-
   /repos/{repoID}/push/objects:
     parameters:
       - $ref: "#/components/parameters/repoID"
@@ -1452,6 +1457,12 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          description: "The document uses a CIR version this server does not support. Upgrade the server and retry."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "422":
           description: "Hash mismatch (integrity_violation) or object precedence violation (missing_object)."
           content:
@@ -1559,6 +1570,12 @@ paths:
                   items:
                     type: string
                     enum: [cxt-doc-chunks-v1, cxt-doc-chunks-v2]
+                cir_versions_supported:
+                  type: array
+                  description: "CIR document versions the requesting client can consume. Absence means CIR v1 only."
+                  items:
+                    type: string
+                    enum: ["1", "2"]
                 chunk_wants:
                   type: array
                   deprecated: true
@@ -1602,6 +1619,12 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: "A requested document uses a CIR version the client did not advertise. Upgrade the client and retry."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /repos/{repoID}/pull/chunks:
     parameters:

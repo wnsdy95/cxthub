@@ -96,6 +96,7 @@ jobs:
           npm audit --audit-level=high
           npm run check:i18n
           npm run check:vercel
+          npx tsc --noEmit -p ../tsconfig.json
           npx tsc --noEmit
           npx vite build
 

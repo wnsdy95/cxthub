@@ -68,10 +68,18 @@ func Scrub(cir domain.CIRDocument, tier ScrubTier) domain.CIRDocument {
 	}
 	mask := func(s string) string { return maskString(s, tier) }
 	out := cir
-	evs := make([]domain.Event, len(cir.Events))
-	copy(evs, cir.Events)
+	out.Events = scrubEvents(cir.Events, mask)
+	return out
+}
+
+func scrubEvents(input []domain.Event, mask func(string) string) []domain.Event {
+	evs := make([]domain.Event, len(input))
+	copy(evs, input)
 	for i := range evs {
 		ev := &evs[i]
+		if ev.Replacement != nil {
+			ev.Replacement = scrubEvents(ev.Replacement, mask)
+		}
 		if len(ev.Blocks) > 0 {
 			bs := make([]domain.ContentBlock, len(ev.Blocks))
 			copy(bs, ev.Blocks)
@@ -90,8 +98,7 @@ func Scrub(cir domain.CIRDocument, tier ScrubTier) domain.CIRDocument {
 			ev.Output = maskValue(ev.Output, mask)
 		}
 	}
-	out.Events = evs
-	return out
+	return evs
 }
 
 // ScrubDoc is a common entry point for executing Scrub based on the repoRoot setting (secrets.scrub — off|standard|strict, default standard).

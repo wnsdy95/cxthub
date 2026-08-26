@@ -71,3 +71,33 @@ func TestPlanDocV1CompatibilityStillFallsBack(t *testing.T) {
 		t.Fatal("v1 cannot transport an event above its single-chunk bound")
 	}
 }
+
+func TestPlanDocKeepsCompactionReplacementInsideEventStream(t *testing.T) {
+	cir := domain.CIRDocument{
+		Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV2},
+		Events: []domain.Event{{
+			Kind: domain.EventCompaction, Seq: 0,
+			ReplacementComplete: true,
+			Replacement: []domain.Event{{
+				Kind: domain.EventMessage, Seq: 0, Role: "user",
+				Blocks: []domain.ContentBlock{{Type: "text", Text: "effective context"}},
+			}},
+		}},
+	}
+	canonical, err := domain.CanonicalBytes(cir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, ok := PlanDoc(canonical)
+	if !ok {
+		t.Fatal("compaction replacement broke the envelope/events chunk-CAS shape")
+	}
+	chunks := make([][]byte, 0, len(plan.Order))
+	for _, hash := range plan.Order {
+		chunks = append(chunks, plan.Bodies[hash])
+	}
+	got, err := AssembleChunks(plan.Manifest, chunks, domain.HashContent(canonical))
+	if err != nil || !bytes.Equal(got, canonical) {
+		t.Fatalf("compaction chunk roundtrip err=%v equal=%v", err, bytes.Equal(got, canonical))
+	}
+}

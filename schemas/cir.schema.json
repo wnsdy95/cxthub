@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://wnsdy95.github.io/cxthub/schemas/cir.schema.json",
-  "title": "CIR v1 — Canonical Intermediate Representation",
-  "description": "cxt's provider-independent canonical conversation representation (CIR) v1. Raw Claude and Codex JSONL is decoded into this representation and encoded for the target provider.",
+  "title": "CIR v1/v2 — Canonical Intermediate Representation",
+  "description": "cxt's provider-independent canonical conversation representation. CIR v2 adds explicit compaction replacement context, Codex multi-agent state, and bounded provider replay metadata; v1 remains readable for rolling upgrades.",
   "type": "object",
   "additionalProperties": false,
   "required": ["envelope", "events"],
@@ -14,6 +14,28 @@
       "items": { "$ref": "#/$defs/event" }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "envelope": {
+            "type": "object",
+            "properties": { "cir_version": { "const": "1" } },
+            "required": ["cir_version"]
+          }
+        },
+        "required": ["envelope"]
+      },
+      "then": {
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/v1Event" }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "providerKind": {
       "type": "string",
@@ -28,6 +50,15 @@
     "role": {
       "type": "string",
       "enum": ["user", "assistant", "system", "developer"]
+    },
+    "providerMetadata": {
+      "type": "object",
+      "description": "CIR v2 provider-local replay metadata. Only explicitly modeled fields are accepted; unknown provider fields make a replacement incomplete.",
+      "additionalProperties": false,
+      "properties": {
+        "turn_id": { "type": "string" },
+        "create_time": { "type": "number" }
+      }
     },
     "envelope": {
       "type": "object",
@@ -46,8 +77,8 @@
       "properties": {
         "cir_version": {
           "type": "string",
-          "const": "1",
-          "description": "CIR schema version (fixed at \"1\")."
+          "enum": ["1", "2"],
+          "description": "CIR schema version. Compaction and multi-agent fields require \"2\"."
         },
         "source_provider": { "$ref": "#/$defs/providerKind" },
         "source_model": {
@@ -86,6 +117,11 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "All models seen in the session, in first-appearance order with duplicates removed. source_model is the most recently used representative value."
+        },
+        "compaction_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of provider context compactions observed in this session."
         }
       }
     },
@@ -96,7 +132,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["turn", "message", "tool_call", "tool_result", "reasoning"]
+          "enum": ["turn", "message", "tool_call", "tool_result", "reasoning", "compaction"]
         },
         "id": {
           "type": "string",
@@ -111,18 +147,49 @@
           "type": "integer",
           "minimum": 0,
           "description": "Canonical sort order."
+        },
+        "provider_metadata": {
+          "$ref": "#/$defs/providerMetadata"
         }
       }
     },
     "event": {
+      "type": "object",
       "description": "Event union distinguished by the kind tag.",
+      "unevaluatedProperties": false,
       "allOf": [{ "$ref": "#/$defs/eventBase" }],
       "oneOf": [
         { "$ref": "#/$defs/turnEvent" },
         { "$ref": "#/$defs/messageEvent" },
         { "$ref": "#/$defs/toolCallEvent" },
         { "$ref": "#/$defs/toolResultEvent" },
-        { "$ref": "#/$defs/reasoningEvent" }
+        { "$ref": "#/$defs/reasoningEvent" },
+        { "$ref": "#/$defs/compactionEvent" }
+      ]
+    },
+    "v1Event": {
+      "description": "CIR v1 event shape. It explicitly forbids every v2-only field accepted by the general event union.",
+      "allOf": [
+        { "$ref": "#/$defs/event" },
+        {
+          "not": {
+            "anyOf": [
+              { "properties": { "kind": { "const": "compaction" } }, "required": ["kind"] },
+              { "required": ["replacement"] },
+              { "required": ["replacement_complete"] },
+              { "required": ["agent_message"] },
+              { "required": ["agent_author"] },
+              { "required": ["agent_recipient"] },
+              { "required": ["provider_metadata"] },
+              {
+                "allOf": [
+                  { "properties": { "kind": { "const": "message" } }, "required": ["kind"] },
+                  { "required": ["locked"] }
+                ]
+              }
+            ]
+          }
+        }
       ]
     },
     "contentBlock": {
@@ -157,9 +224,40 @@
         "compact_summary": {
           "type": "boolean",
           "description": "Summary message generated by the agent's own context compression (claude isCompactSummary / codex compacted.message) — top-priority Summary source for memorize digest."
+        },
+        "agent_message": {
+          "type": "boolean",
+          "description": "CIR v2 Codex multi-agent message retained as provider active context."
+        },
+        "agent_author": {
+          "type": "string",
+          "description": "Provider-local author identity for a multi-agent message."
+        },
+        "agent_recipient": {
+          "type": "string",
+          "description": "Provider-local recipient identity for a multi-agent message."
+        },
+        "locked": {
+          "$ref": "#/$defs/lockedBlob",
+          "description": "Opaque same-provider state attached to a multi-agent message."
         }
       },
-      "required": ["kind", "role", "blocks"]
+      "required": ["kind", "role", "blocks"],
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              { "required": ["agent_author"] },
+              { "required": ["agent_recipient"] },
+              { "required": ["locked"] }
+            ]
+          },
+          "then": {
+            "properties": { "agent_message": { "const": true } },
+            "required": ["agent_message"]
+          }
+        }
+      ]
     },
     "toolCallEvent": {
       "type": "object",
@@ -249,6 +347,35 @@
         }
       },
       "required": ["kind", "cross_replayable"]
+    },
+    "compactionEvent": {
+      "type": "object",
+      "description": "CIR v2 context compaction boundary or provider-locked active compaction state. Boundary events carry the provider replacement context while the complete archival stream remains outside it.",
+      "properties": {
+        "kind": { "const": "compaction" },
+        "replacement": {
+          "type": "array",
+          "description": "Provider-visible replacement context at this boundary. An empty array is meaningful.",
+          "items": { "$ref": "#/$defs/event" }
+        },
+        "replacement_complete": {
+          "type": "boolean",
+          "description": "True only when every provider replacement item was understood. False forces consumers to replay the archival stream."
+        },
+        "locked": {
+          "$ref": "#/$defs/lockedBlob",
+          "description": "Opaque provider compaction state. Reinsert only into the same provider."
+        }
+      },
+      "required": ["kind"],
+      "dependentRequired": {
+        "replacement": ["replacement_complete"],
+        "replacement_complete": ["replacement"]
+      },
+      "oneOf": [
+        { "required": ["replacement", "replacement_complete"] },
+        { "required": ["locked"] }
+      ]
     }
   }
 }

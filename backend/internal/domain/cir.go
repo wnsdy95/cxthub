@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// This file defines the server-side domain types for CIR v1 (Canonical Intermediate Representation).
+// This file defines the server-side domain types for CIR (Canonical Intermediate Representation).
 // The schema definition is in schemas/cir.schema.json (completely separate from CLI declarations, wire-compatible).
 //
 // The backend does not know provider (claude/codex) raw formats. It receives CIR and stores the main body blob,
@@ -25,7 +25,7 @@ type CIRDocument struct {
 // can cause deduplication to degrade if the same conversation has different IDs.
 // v1 includes the entire envelope in the body integrity (policy is OQ-5).
 type CIREnvelope struct {
-	CIRVersion      string       `json:"cir_version"` // Fixed "1"
+	CIRVersion      string       `json:"cir_version"` // "1" or "2"
 	SourceProvider  ProviderKind `json:"source_provider"`
 	SourceModel     string       `json:"source_model"`
 	CapturedAt      string       `json:"captured_at"` // RFC3339
@@ -58,6 +58,8 @@ const (
 	EventToolResult EventKind = "tool_result"
 	// EventReasoning = reasoning event.
 	EventReasoning EventKind = "reasoning"
+	// EventCompaction = context compaction boundary or provider-locked active state.
+	EventCompaction EventKind = "compaction"
 )
 
 // Role is the speaker role of a message/turn (cir.schema.json $defs/role).
@@ -82,6 +84,12 @@ type CIREvent struct {
 	ID   string    `json:"id,omitempty"`
 	TS   string    `json:"ts,omitempty"` // RFC3339, optional
 	Seq  int       `json:"seq"`
+	// ProviderMetadata is a normalized provider-local replay identity. The
+	// backend stores it opaquely and canonicalizes it with the event.
+	ProviderMetadata *ProviderMetadata `json:"provider_metadata,omitempty"`
+	// fieldPresence preserves optional zero-valued JSON fields for canonical
+	// round trips and version/union validation. It is never serialized directly.
+	fieldPresence eventFieldPresence
 
 	// turn / message common: speaker role.
 	Role Role `json:"role,omitempty"`
@@ -91,6 +99,17 @@ type CIREvent struct {
 	// CompactSummary — agent compression-generated summary message indicator (CLI parity;
 	// must be mirrored to prevent loss in server storage/serialization paths).
 	CompactSummary bool `json:"compact_summary,omitempty"`
+	// Codex multi-agent message metadata. Visible text stays in Blocks and the
+	// opaque provider state uses Locked for same-provider replay only.
+	AgentMessage   bool   `json:"agent_message,omitempty"`
+	AgentAuthor    string `json:"agent_author,omitempty"`
+	AgentRecipient string `json:"agent_recipient,omitempty"`
+	// compaction boundary: provider effective replacement context. A non-nil
+	// empty slice is meaningful and must survive canonical round trips.
+	Replacement []CIREvent `json:"replacement,omitempty"`
+	// False means an unknown provider replacement item was observed; consumers
+	// must fail safe to the archival stream instead of replaying this partial projection.
+	ReplacementComplete bool `json:"replacement_complete,omitempty"`
 
 	// tool_call: Tool call field.
 	CallID           string         `json:"call_id,omitempty"`
@@ -109,11 +128,14 @@ type CIREvent struct {
 	CrossReplayable *bool       `json:"cross_replayable,omitempty"` // Locked reasoning is always false
 }
 
-// MarshalJSON mirrors the CIR v1 event union emitted by the CLI. The backend
+// MarshalJSON mirrors the CIR event union emitted by the CLI. The backend
 // must preserve this exact shape when recomputing content hashes: required
 // empty arrays/objects are part of canonical bytes and cannot be dropped by
 // struct-level omitempty tags.
 func (e CIREvent) MarshalJSON() ([]byte, error) {
+	if err := e.validateKindFieldPresence(); err != nil {
+		return nil, err
+	}
 	m := map[string]any{
 		"kind": e.Kind,
 		"seq":  e.Seq,
@@ -123,6 +145,9 @@ func (e CIREvent) MarshalJSON() ([]byte, error) {
 	}
 	if e.TS != "" {
 		m["ts"] = e.TS
+	}
+	if e.ProviderMetadata != nil {
+		m["provider_metadata"] = e.ProviderMetadata
 	}
 
 	switch e.Kind {
@@ -137,6 +162,18 @@ func (e CIREvent) MarshalJSON() ([]byte, error) {
 		m["blocks"] = blocks
 		if e.CompactSummary {
 			m["compact_summary"] = true
+		}
+		if e.AgentMessage || e.fieldPresence&eventFieldAgentMessage != 0 {
+			m["agent_message"] = e.AgentMessage
+			if e.AgentAuthor != "" || e.fieldPresence&eventFieldAgentAuthor != 0 {
+				m["agent_author"] = e.AgentAuthor
+			}
+			if e.AgentRecipient != "" || e.fieldPresence&eventFieldAgentRecipient != 0 {
+				m["agent_recipient"] = e.AgentRecipient
+			}
+			if e.Locked != nil {
+				m["locked"] = e.Locked
+			}
 		}
 	case EventToolCall:
 		m["call_id"] = e.CallID
@@ -170,11 +207,114 @@ func (e CIREvent) MarshalJSON() ([]byte, error) {
 			m["redacted_summary"] = e.RedactedSummary
 		}
 		m["cross_replayable"] = false
+	case EventCompaction:
+		if e.Replacement != nil && e.Locked != nil {
+			return nil, fmt.Errorf("cir: compaction event cannot be both a replacement boundary and locked state")
+		}
+		if e.Replacement != nil {
+			m["replacement"] = e.Replacement
+			m["replacement_complete"] = e.ReplacementComplete
+		}
+		if e.Locked != nil {
+			m["locked"] = e.Locked
+		}
+		if e.Replacement == nil && e.Locked == nil {
+			return nil, fmt.Errorf("cir: compaction event needs replacement boundary or locked state")
+		}
 	default:
 		return nil, fmt.Errorf("cir: unknown event kind %q", e.Kind)
 	}
 
 	return json.Marshal(m)
+}
+
+type eventFieldPresence uint16
+
+const (
+	eventFieldProviderMetadata eventFieldPresence = 1 << iota
+	eventFieldAgentMessage
+	eventFieldAgentAuthor
+	eventFieldAgentRecipient
+	eventFieldReplacement
+	eventFieldReplacementComplete
+	eventFieldLocked
+)
+
+const eventV2PresenceMask = eventFieldProviderMetadata |
+	eventFieldAgentMessage |
+	eventFieldAgentAuthor |
+	eventFieldAgentRecipient |
+	eventFieldReplacement |
+	eventFieldReplacementComplete
+
+func eventPresence(fields map[string]json.RawMessage) eventFieldPresence {
+	var present eventFieldPresence
+	for name, bit := range map[string]eventFieldPresence{
+		"provider_metadata":    eventFieldProviderMetadata,
+		"agent_message":        eventFieldAgentMessage,
+		"agent_author":         eventFieldAgentAuthor,
+		"agent_recipient":      eventFieldAgentRecipient,
+		"replacement":          eventFieldReplacement,
+		"replacement_complete": eventFieldReplacementComplete,
+		"locked":               eventFieldLocked,
+	} {
+		if _, ok := fields[name]; ok {
+			present |= bit
+		}
+	}
+	return present
+}
+
+func (e CIREvent) validateKindFieldPresence() error {
+	if e.ProviderMetadata == nil && e.fieldPresence&eventFieldProviderMetadata != 0 {
+		return fmt.Errorf("cir: provider_metadata cannot be null")
+	}
+	if e.Kind != EventCompaction && (e.Replacement != nil || e.ReplacementComplete ||
+		e.fieldPresence&(eventFieldReplacement|eventFieldReplacementComplete) != 0) {
+		return fmt.Errorf("cir: replacement fields require compaction event")
+	}
+	if e.Kind != EventMessage && (e.AgentMessage || e.AgentAuthor != "" || e.AgentRecipient != "" ||
+		e.fieldPresence&(eventFieldAgentMessage|eventFieldAgentAuthor|eventFieldAgentRecipient) != 0) {
+		return fmt.Errorf("cir: agent message fields require message event")
+	}
+	if e.Kind == EventMessage && !e.AgentMessage && (e.AgentAuthor != "" || e.AgentRecipient != "" || e.Locked != nil ||
+		e.fieldPresence&(eventFieldAgentAuthor|eventFieldAgentRecipient|eventFieldLocked) != 0) {
+		return fmt.Errorf("cir: agent metadata requires agent_message true")
+	}
+	if e.Kind != EventMessage && e.Kind != EventReasoning && e.Kind != EventCompaction &&
+		(e.Locked != nil || e.fieldPresence&eventFieldLocked != 0) {
+		return fmt.Errorf("cir: locked state is not valid for %s event", e.Kind)
+	}
+	if e.fieldPresence&eventFieldLocked != 0 && e.Locked == nil {
+		return fmt.Errorf("cir: locked state cannot be null")
+	}
+	return nil
+}
+
+// UnmarshalJSON retains presence for optional zero values. Without this, a v1
+// document could smuggle v2-only fields such as agent_message:false and have
+// them silently disappear during canonicalization.
+func (e *CIREvent) UnmarshalJSON(data []byte) error {
+	type wire CIREvent
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*e = CIREvent(decoded)
+	e.fieldPresence = eventPresence(fields)
+	return nil
+}
+
+// ProviderMetadata mirrors the explicitly supported provider passthrough
+// fields in CIR v2. Keeping this bounded avoids turning arbitrary provider
+// objects into an unversioned escape hatch.
+type ProviderMetadata struct {
+	TurnID     string       `json:"turn_id,omitempty"`
+	CreateTime *json.Number `json:"create_time,omitempty"`
 }
 
 // ContentBlock is a message content block (cir.schema.json $defs/contentBlock).

@@ -25,6 +25,10 @@ var ErrInvalidRef = errors.New("invalid ref")
 // Occurs during codec/capture routing.
 var ErrUnsupportedProvider = errors.New("unsupported provider")
 
+// ErrUnsupportedCIRVersion indicates that a peer or local object uses a CIR
+// version this binary cannot safely interpret.
+var ErrUnsupportedCIRVersion = errors.New("unsupported CIR version")
+
 // ErrUnsupportedFidelity indicates that the requested fidelity mode cannot be satisfied.
 // Example: Occurs during full request in cross-provider.
 // Occurs in LoadSession.

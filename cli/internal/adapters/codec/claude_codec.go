@@ -11,7 +11,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
-// ClaudeCodec is an implementation of ProviderCodec for converting Claude Code JSONL ↔ CIR v1 (provider compatibility rules).
+// ClaudeCodec is an implementation of ProviderCodec for converting Claude Code JSONL ↔ CIR (provider compatibility rules).
 //
 // Decode mapping (block-to-block 1:1 → CIR event):
 //   - assistant block thinking{thinking,signature} → reasoning(locked{scheme:signature,blob:signature}, redacted_summary=thinking, cross_replayable:false)
@@ -80,7 +80,7 @@ type claudeBlock struct {
 // Decode converts Claude JSONL bytes to a CIRDocument.
 func (c *ClaudeCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument, error) {
 	doc := domain.CIRDocument{}
-	doc.Envelope.CIRVersion = "1"
+	doc.Envelope.CIRVersion = domain.CIRVersionV1
 	doc.Envelope.SourceProvider = domain.ProviderClaude
 	doc.Envelope.Fidelity = domain.FidelityFull
 
@@ -105,6 +105,15 @@ func (c *ClaudeCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument,
 		// Sent separately — the only signal graph draws the compression marker (◈).
 		if rec.Type == "system" && rec.Subtype == "compact_boundary" {
 			doc.Envelope.CompactionCount++
+			// Preserve the boundary in the archival stream. Claude writes the
+			// replacement summary as the following isCompactSummary message, so
+			// the effective context is the suffix after this explicit empty
+			// replacement boundary.
+			events = append(events, domain.Event{
+				Kind: domain.EventCompaction, Ts: rec.Timestamp,
+				Replacement:         []domain.Event{},
+				ReplacementComplete: true,
+			})
 		}
 		if rec.Message == nil {
 			continue // queue-operation, summary/compact_boundary (no message) etc. drop
@@ -162,6 +171,7 @@ func (c *ClaudeCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument,
 		return domain.CIRDocument{}, fmt.Errorf("claude decode scan: %w", err)
 	}
 	doc.Events = assignSeq(events)
+	doc.Envelope.CIRVersion = domain.CIRVersionForEvents(doc.Events)
 	return doc, nil
 }
 
@@ -221,6 +231,12 @@ func (c *ClaudeCodec) Encode(_ context.Context, doc domain.CIRDocument, _ domain
 				base.Type = "assistant"
 				base.Message = &claudeMessage{Role: "assistant", Model: model, Content: marshalClaudeTextBlocks([]domain.ContentBlock{{Type: "text", Text: ev.RedactedSummary}})}
 			}
+		case domain.EventCompaction:
+			if ev.Replacement == nil || !ev.ReplacementComplete {
+				continue // provider-locked Codex active state is never cross-injected
+			}
+			base.Type = "system"
+			base.Subtype = "compact_boundary"
 		default:
 			continue // turn is not represented in Claude records
 		}
