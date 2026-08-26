@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
@@ -168,6 +170,9 @@ func TestRepackDocsLegacyBlob(t *testing.T) {
 	if sizeAfter >= sizeBefore {
 		t.Fatalf("disk size did not decrease after repacking: %d → %d (saved=%d)", sizeBefore, sizeAfter, saved)
 	}
+	if saved != sizeBefore-sizeAfter {
+		t.Fatalf("reported reclaimed bytes=%d, actual=%d", saved, sizeBefore-sizeAfter)
+	}
 	for _, h := range []domain.ContentHash{h1, h2} {
 		got, gerr := st.GetDoc(ctx, h)
 		if gerr != nil {
@@ -180,6 +185,73 @@ func TestRepackDocsLegacyBlob(t *testing.T) {
 	// idempotence: running again results in 0 conversions.
 	if n2, _, _ := st.RepackDocs(); n2 != 0 {
 		t.Fatalf("repack idempotence violation: second pass converted %d documents", n2)
+	}
+}
+
+func TestRepackDocsUpgradesV1ManifestToV2(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st := NewFileStore(root)
+	canonical, err := domain.CanonicalBytes(bigDoc(40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := domain.HashContent(canonical)
+	plan, ok := chunkcas.PlanDocV1(canonical)
+	if !ok {
+		t.Fatal("v1 test plan unavailable")
+	}
+	for _, chunkHash := range plan.Order {
+		if err := writeAtomic(st.objectPath("chunks", chunkHash), docCompress(plan.Bodies[chunkHash])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest, _ := json.Marshal(plan.Manifest)
+	if err := writeAtomic(st.objectPath("docs", hash), docCompress(manifest)); err != nil {
+		t.Fatal(err)
+	}
+
+	converted, _, err := st.RepackDocs()
+	if err != nil || converted != 1 {
+		t.Fatalf("v1 repack converted=%d err=%v", converted, err)
+	}
+	raw, err := readCxtFile(st.objectPath("docs", hash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = docDecompress(raw)
+	gotManifest, isManifest := chunkcas.ParseManifest(raw)
+	if !isManifest || gotManifest.Format != chunkcas.FormatV2 {
+		t.Fatalf("manifest=%+v isManifest=%v, want v2", gotManifest, isManifest)
+	}
+	got, err := st.GetDoc(ctx, hash)
+	if err != nil || domain.ValidateSessionDocHash(got) != nil {
+		t.Fatalf("post-upgrade roundtrip err=%v", err)
+	}
+}
+
+func TestRepackDocsPreservesMonolithOnChunkCollision(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st := NewFileStore(root)
+	canonical, _ := domain.CanonicalBytes(bigDoc(40))
+	hash := domain.HashContent(canonical)
+	if err := writeAtomic(st.objectPath("docs", hash), docCompress(canonical)); err != nil {
+		t.Fatal(err)
+	}
+	plan, ok := chunkcas.PlanDoc(canonical)
+	if !ok {
+		t.Fatal("v2 plan unavailable")
+	}
+	if err := writeAtomic(st.objectPath("chunks", plan.Order[0]), docCompress([]byte("wrong body"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.RepackDocs(); err == nil {
+		t.Fatal("chunk collision was not detected")
+	}
+	got, err := st.GetDoc(ctx, hash)
+	if err != nil || domain.ValidateSessionDocHash(got) != nil {
+		t.Fatalf("source monolith was not preserved: %v", err)
 	}
 }
 

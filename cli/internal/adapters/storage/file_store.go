@@ -246,7 +246,7 @@ func (s *FileStore) PutDoc(_ context.Context, doc domain.SessionDoc) (domain.Con
 		}
 		return h, nil
 	}
-	chunked, err := s.putDocChunked(h, cb)
+	chunked, _, err := s.putDocChunked(h, cb)
 	if err != nil {
 		return "", err
 	}

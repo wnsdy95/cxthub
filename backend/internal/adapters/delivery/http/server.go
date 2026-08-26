@@ -1001,10 +1001,11 @@ func (s *Server) joinSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 type pullBody struct {
-	SnapshotWants    []domain.ContentHash `json:"snapshot_wants"`
-	DocWants         []domain.ContentHash `json:"doc_wants"`
-	DocManifestWants []domain.ContentHash `json:"doc_manifest_wants"`
-	ChunkWants       []domain.ContentHash `json:"chunk_wants"`
+	SnapshotWants         []domain.ContentHash `json:"snapshot_wants"`
+	DocWants              []domain.ContentHash `json:"doc_wants"`
+	DocManifestWants      []domain.ContentHash `json:"doc_manifest_wants"`
+	ChunkWants            []domain.ContentHash `json:"chunk_wants"`
+	ChunkFormatsSupported []string             `json:"chunk_formats_supported"`
 }
 
 type pullChunksBody struct {
@@ -1025,7 +1026,7 @@ func (s *Server) pullObjects(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.b.Send(r.Context(), inbound.PullSendInput{RepoID: s.repoID(r), SnapshotWants: body.SnapshotWants, DocWants: body.DocWants, DocManifestWants: body.DocManifestWants, ChunkWants: body.ChunkWants})
+	out, err := s.b.Send(r.Context(), inbound.PullSendInput{RepoID: s.repoID(r), SnapshotWants: body.SnapshotWants, DocWants: body.DocWants, DocManifestWants: body.DocManifestWants, ChunkWants: body.ChunkWants, ChunkFormatsSupported: body.ChunkFormatsSupported})
 	s.respond(w, out, err)
 }
 

@@ -260,6 +260,7 @@ func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) 
 		DocWants:               difference(in.DocHaves, haveDocs),
 		ChunksSupported:        true,
 		BoundedChunksSupported: true,
+		ChunkFormatsSupported:  []string{domain.ChunkFormatV1, domain.ChunkFormatV2},
 		ChunkWants:             chunkWants,
 	}, nil
 }
@@ -364,6 +365,13 @@ func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 			if err := domain.ValidateContentHash(cd.Hash); err != nil {
 				return inbound.CommitOutput{}, err
 			}
+			format := cd.Format
+			if format == "" {
+				format = domain.ChunkFormatV1
+			}
+			if !domain.SupportedChunkFormat(format) {
+				return inbound.CommitOutput{}, fmt.Errorf("%w: chunked doc %s uses unsupported format %q", domain.ErrValidation, cd.Hash, cd.Format)
+			}
 			chunks := make([][]byte, 0, len(cd.Chunks))
 			for _, ch := range cd.Chunks {
 				if err := domain.ValidateContentHash(ch); err != nil {
@@ -378,7 +386,7 @@ func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 				}
 				chunks = append(chunks, b)
 			}
-			cb, aerr := domain.AssembleDocChunks(domain.DocChunkManifest{Format: domain.ChunkFormat, Envelope: cd.Envelope, Chunks: cd.Chunks}, chunks, cd.Hash)
+			cb, aerr := domain.AssembleDocChunks(domain.DocChunkManifest{Format: format, Envelope: cd.Envelope, Chunks: cd.Chunks}, chunks, cd.Hash)
 			if aerr != nil {
 				return inbound.CommitOutput{}, fmt.Errorf("%w: chunked doc %s reassembly mismatch", domain.ErrIntegrity, cd.Hash)
 			}
@@ -681,6 +689,7 @@ func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 	if err := validateHashes(in.DocManifestWants...); err != nil {
 		return inbound.PullSendOutput{}, err
 	}
+	supportedFormats := requestedChunkFormats(in.ChunkFormatsSupported)
 	for _, h := range in.DocManifestWants {
 		man, merr := s.blobs.GetDocManifest(ctx, in.RepoID, h)
 		if merr != nil {
@@ -694,7 +703,18 @@ func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 			}
 			return inbound.PullSendOutput{}, merr
 		}
-		out.DocManifests = append(out.DocManifests, inbound.ChunkedDoc{Hash: h, Envelope: man.Envelope, Chunks: man.Chunks})
+		if supportedFormats[man.Format] {
+			out.DocManifests = append(out.DocManifests, inbound.ChunkedDoc{Hash: h, Format: man.Format, Envelope: man.Envelope, Chunks: man.Chunks})
+			continue
+		}
+		// The stored representation is newer/different from the requesting peer.
+		// Return the complete document instead of materializing a second chunk
+		// format as a side effect of this read-only operation.
+		doc, derr := s.blobs.GetDoc(ctx, in.RepoID, h)
+		if derr != nil {
+			return inbound.PullSendOutput{}, derr
+		}
+		out.Docs = append(out.Docs, doc)
 	}
 	if err := validateHashes(in.ChunkWants...); err != nil {
 		return inbound.PullSendOutput{}, err
@@ -707,6 +727,22 @@ func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 		out.ChunkObjects = append(out.ChunkObjects, inbound.ChunkObject{Hash: ch, Data: b})
 	}
 	return out, nil
+}
+
+func requestedChunkFormats(formats []string) map[string]bool {
+	if len(formats) == 0 {
+		return map[string]bool{domain.ChunkFormatV1: true}
+	}
+	out := make(map[string]bool, len(formats))
+	for _, format := range formats {
+		if domain.SupportedChunkFormat(format) {
+			if format == "" {
+				format = domain.ChunkFormatV1
+			}
+			out[format] = true
+		}
+	}
+	return out
 }
 
 // PromoteSnapshotMessage: hook label → commit message one-way promotion (idempotent).

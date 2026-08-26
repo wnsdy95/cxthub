@@ -222,6 +222,10 @@ components:
       properties:
         hash:
           $ref: "#/components/schemas/ContentHash"
+        format:
+          type: string
+          enum: [cxt-doc-chunks-v1, cxt-doc-chunks-v2]
+          description: "Manifest assembly format. Omitted legacy wire values mean cxt-doc-chunks-v1."
         envelope:
           type: object
           additionalProperties: true
@@ -1227,6 +1231,12 @@ paths:
                   bounded_chunks_supported:
                     type: boolean
                     description: "If true, chunk bodies are sent to /push/chunks and /pull/chunks paths."
+                  chunk_formats_supported:
+                    type: array
+                    description: "Manifest formats accepted by this server. Absence means a pre-v2 server."
+                    items:
+                      type: string
+                      enum: [cxt-doc-chunks-v1, cxt-doc-chunks-v2]
                   chunk_wants:
                     type: array
                     description: "Chunk hashes the server does not have."
@@ -1410,6 +1420,12 @@ paths:
                   description: "Doc hash to receive instead of a full doc manifest."
                   items:
                     $ref: "#/components/schemas/ContentHash"
+                chunk_formats_supported:
+                  type: array
+                  description: "Manifest formats the requesting client can assemble. Absence means v1 only."
+                  items:
+                    type: string
+                    enum: [cxt-doc-chunks-v1, cxt-doc-chunks-v2]
                 chunk_wants:
                   type: array
                   deprecated: true

@@ -5,7 +5,7 @@
 // so only the storage layer is chunked:
 //
 //	repos/<r>/objects/docs/<hash>   = zstd(mani{format, envelope, chunks[]})  ← or legacy zstd(comprehensive)
-//	repos/<r>/objects/chunks/<h_i>  = zstd(event canonical fragments joined by '\n')
+//	repos/<r>/objects/chunks/<h_i>  = zstd(v2 canonical event-stream byte range; v1 remains readable)
 //
 // The integrity hash (DocHash=Snapshot.ID) remains the same as the comprehensive canonical standard — protocol·validation unchanged,
 // legacy comprehensives can be repacked losslessly with the same hash. Pre-write reassembly==original validation (mismatch triggers
@@ -30,24 +30,36 @@ func (s *FSStore) chunkPath(repoID, hash domain.ContentHash) string {
 }
 
 // putDocChunked stores canonical bytes as chunk+manifest (returns false — comprehensive fallback if not possible).
-func (s *FSStore) putDocChunked(repoID, h domain.ContentHash, cb []byte) (bool, error) {
+func (s *FSStore) putDocChunked(repoID, h domain.ContentHash, cb []byte) (bool, int64, error) {
 	plan, ok := domain.PlanDocChunks(cb)
 	if !ok {
-		return false, nil
+		return false, 0, nil
 	}
+	var added int64
 	for _, ch := range plan.Order {
 		p := s.chunkPath(repoID, ch)
-		if !exists(p) {
-			if err := writeAtomic(p, docCompress(plan.Bodies[ch])); err != nil {
-				return false, err
+		if exists(p) {
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				return false, added, err
 			}
+			existing, err := docDecompress(raw)
+			if err != nil || !bytes.Equal(existing, plan.Bodies[ch]) {
+				return false, added, domain.ErrIntegrity
+			}
+		} else {
+			compressed := docCompress(plan.Bodies[ch])
+			if err := writeAtomic(p, compressed); err != nil {
+				return false, added, err
+			}
+			added += int64(len(compressed))
 		}
 	}
 	mb, err := json.Marshal(plan.Manifest)
 	if err != nil {
-		return false, err
+		return false, added, err
 	}
-	return true, writeAtomic(s.docPath(repoID, h), docCompress(mb))
+	return true, added, writeAtomic(s.docPath(repoID, h), docCompress(mb))
 }
 
 // getDocChunked reassembles manifest from chunks. If isManifest=false, it's a legacy comprehensive.
@@ -181,7 +193,7 @@ func (s *FSStore) GetDocManifest(ctx context.Context, repoID, hash domain.Conten
 		}
 		data = cb
 	}
-	ok, perr := s.putDocChunked(repoID, hash, data)
+	ok, _, perr := s.putDocChunked(repoID, hash, data)
 	if perr != nil || !ok {
 		return domain.DocChunkManifest{}, domain.ErrNotFound
 	}
@@ -254,14 +266,24 @@ func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved in
 		if derr != nil {
 			continue
 		}
-		if _, isMan, _ := s.getDocChunked(repoID, hash, data); isMan {
+		if cb, isMan, chunkErr := s.getDocChunked(repoID, hash, data); isMan {
 			var man domain.DocChunkManifest
-			if json.Unmarshal(data, &man) == nil {
+			if json.Unmarshal(data, &man) != nil {
+				continue
+			}
+			if chunkErr != nil {
 				for _, ch := range man.Chunks {
 					live[ch] = true
 				}
+				continue
 			}
-			continue
+			if man.Format == domain.ChunkFormatV2 {
+				for _, ch := range man.Chunks {
+					live[ch] = true
+				}
+				continue
+			}
+			data = cb
 		}
 		if domain.HashContent(data) != hash {
 			// Legacy non-canonical storage (server records before canonical sorting — empirically verified 162/214): raw bytes may differ, but if parsing→canonical recalculation matches the hash, it is a valid doc. Also normalizes storage by repacking into canonical form. If recalculation also mismatches, it is corrupted — fsck's job.
@@ -276,7 +298,7 @@ func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved in
 			data = cb
 		}
 		before := int64(len(raw))
-		ok, perr := s.putDocChunked(repoID, hash, data)
+		ok, added, perr := s.putDocChunked(repoID, hash, data)
 		if perr != nil {
 			return converted, saved, perr
 		}
@@ -289,7 +311,7 @@ func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved in
 				for _, ch := range man.Chunks {
 					live[ch] = true
 				}
-				saved += before - int64(len(mraw))
+				saved += before - int64(len(mraw)) - added
 			}
 		}
 		converted++

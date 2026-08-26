@@ -9,6 +9,7 @@
 #   D. repo2 commits new session C                              → session boundary metadata
 #   E. repo1 runs post-merge                                    → fetch-only, preserving local refs
 #   F. repo1 pushes after both sides moved                      → automatic rebase-graft
+#   K. oversized single event                                  → v2 bounded push/pull + v1 fallback
 #
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
 set -u
@@ -57,6 +58,20 @@ session() { # session <cwd> <label> — write a synthetic Claude JSONL session w
 {"type":"user","cwd":"$1","sessionId":"sess-$2","gitBranch":"main","timestamp":"2026-07-05T00:00:00Z","message":{"role":"user","content":"task $2"}}
 {"type":"assistant","cwd":"$1","sessionId":"sess-$2","gitBranch":"main","timestamp":"2026-07-05T00:00:01Z","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"done $2"}],"usage":{"input_tokens":100,"output_tokens":10}}}
 EOF
+}
+
+large_session() { # large_session <cwd> <label> — one event exceeds the v1 2MiB bound.
+  session "$1" "$2"
+  D="$HOME/.claude/projects/$(python3 -c "import re,sys;print(re.sub(r'[^A-Za-z0-9]','-',sys.argv[1]))" "$1")"
+  python3 - "$D/s-$2.jsonl" <<'PY'
+import json,sys
+path=sys.argv[1]
+rows=[json.loads(line) for line in open(path)]
+rows[0]['message']['content']='x' * ((2 << 20) + (32 << 10))
+with open(path,'w') as f:
+    for row in rows:
+        f.write(json.dumps(row,separators=(',',':'))+'\n')
+PY
 }
 
 echo "── A. repo1: Session A push + memorize"
@@ -338,6 +353,29 @@ cxt setup --no-login >"$TMP/setup2.out" 2>&1
 H2=$(shasum "$HOME/.codex/hooks.json" .claude/settings.json | shasum)
 expect "setup idempotence: hook file unchanged" "$H2" "$H1"
 expect "setup idempotence: already registered reported" "$(grep -c 'already registered' "$TMP/setup2.out")" 2
+
+echo "── K. Chunk CAS v2: oversized event push/pull + old-client fallback"
+git clone -q "$TMP/bare.git" "$TMP/repo4"
+cd "$TMP/repo4"; cxt init >/dev/null 2>&1; cxt remote add origin "$REMOTE" >/dev/null 2>&1
+large_session "$TMP/repo4" BIG
+echo big > big.txt; git add big.txt; git commit -qm big-event >/dev/null 2>&1
+git push -q origin main >"$TMP/big-push.out" 2>&1
+BIG_HEAD=$(main_head)
+BIG_MANIFEST=$(ccurl -sb "$J" -X POST "$B/repos/$RID/pull/objects" -H 'Content-Type: application/json' \
+  -d "{\"doc_manifest_wants\":[\"$BIG_HEAD\"],\"chunk_formats_supported\":[\"cxt-doc-chunks-v1\",\"cxt-doc-chunks-v2\"]}" | python3 -c "
+import json,sys
+r=json.load(sys.stdin); m=(r.get('doc_manifests') or [{}])[0]
+print(f\"{m.get('format','')}:{len(m.get('chunks') or [])}\")
+")
+expect "oversized event stored and served as v2" "$(echo "$BIG_MANIFEST" | cut -d: -f1)" cxt-doc-chunks-v2
+expect "oversized event split into bounded chunks" "$([ "$(echo "$BIG_MANIFEST" | cut -d: -f2)" -gt 1 ] && echo yes)" yes
+OLD_FALLBACK=$(ccurl -sb "$J" -X POST "$B/repos/$RID/pull/objects" -H 'Content-Type: application/json' \
+  -d "{\"doc_manifest_wants\":[\"$BIG_HEAD\"]}" | python3 -c "import json,sys;r=json.load(sys.stdin);print(f\"{len(r.get('docs') or [])}:{len(r.get('doc_manifests') or [])}\")")
+expect "client without v2 capability receives full-doc fallback" "$OLD_FALLBACK" 1:0
+git clone -q "$TMP/bare.git" "$TMP/repo5"
+cd "$TMP/repo5"; cxt init >/dev/null 2>&1; cxt remote add origin "$REMOTE" >/dev/null 2>&1
+cxt pull >/dev/null 2>&1
+expect "fresh client pulls and verifies v2 history" "$(cxt fsck | grep -c 'Missing 0')" 1
 
 echo
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: All passed ✓"; else echo "SYNC E2E: Failures exist ✗"; fi

@@ -787,21 +787,11 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 		return false, err
 	}
 	defer tx.Rollback(ctx)
-	// Chunk CAS base (doc_chunks.go common plan): doc blob is the manifest, event fragments are chunk blobs — prefix of append-only sessions is deduplicated during push. Chunk ownership is isolated in repo_blobs(kind='chunk') (0032). Non-chunkable forms fall back to legacy blob.
+	// Lock order is doc → chunks, matching GetDocManifest. A new manifest row is
+	// invisible until this transaction also stores its chunks and commits.
 	plan, chunked := domain.PlanDocChunks(canonical)
 	payload := docCompress(canonical)
 	if chunked {
-		for _, ch := range plan.Order {
-			if _, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
-				string(ch), docCompress(plan.Bodies[ch])); err != nil {
-				return false, err
-			}
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'chunk',$2) ON CONFLICT DO NOTHING`,
-				string(repoID), string(ch)); err != nil {
-				return false, err
-			}
-		}
 		mb, merr := json.Marshal(plan.Manifest)
 		if merr != nil {
 			return false, merr
@@ -813,21 +803,76 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 	if err != nil {
 		return false, err
 	}
+	created := ct.RowsAffected() > 0
 	// Blob validation: For existing rows that are legacy blobs or manifests, the original/reshuffled content must match the canonical bytes — blocking content injection under the hash (maintaining existing contract).
 	var stored []byte
-	if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(doc.Hash)).Scan(&stored); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1 FOR UPDATE`, string(doc.Hash)).Scan(&stored); err != nil {
 		return false, err
 	}
 	stored, err = docDecompress(stored)
 	if err != nil {
 		return false, fmt.Errorf("%w: stored blob undecodable for doc %s", domain.ErrIntegrity, doc.Hash)
 	}
-	if cb, isMan, cerr := s.reassembleManifestTx(ctx, tx, stored); isMan {
-		if cerr != nil || !bytes.Equal(cb, canonical) {
-			return false, fmt.Errorf("%w: stored manifest disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash)
+	storedMan, isMan := domain.ParseDocChunkManifest(stored)
+	if !created {
+		if cb, _, cerr := s.reassembleManifestTx(ctx, tx, stored, doc.Hash); isMan {
+			if cerr != nil || !bytes.Equal(cb, canonical) {
+				return false, fmt.Errorf("%w: stored manifest disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash)
+			}
+		} else if !bytes.Equal(stored, canonical) {
+			return false, fmt.Errorf("%w: stored blob disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash)
 		}
-	} else if !bytes.Equal(stored, canonical) {
-		return false, fmt.Errorf("%w: stored blob disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash)
+	}
+	if chunked {
+		for _, ch := range plan.Order {
+			if _, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
+				string(ch), docCompress(plan.Bodies[ch])); err != nil {
+				return false, err
+			}
+			var existing []byte
+			if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(ch)).Scan(&existing); err != nil {
+				return false, err
+			}
+			existing, err = docDecompress(existing)
+			if err != nil || !bytes.Equal(existing, plan.Bodies[ch]) {
+				return false, domain.ErrIntegrity
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'chunk',$2) ON CONFLICT DO NOTHING`,
+				string(repoID), string(ch)); err != nil {
+				return false, err
+			}
+		}
+	}
+	if !created && chunked && (!isMan || storedMan.Format != plan.Manifest.Format) {
+		// A global blob can be shared by several repos. Migrate a legacy/v1 body
+		// only after every existing doc owner can read the v2 chunks. The current
+		// writer already owns them from the planning loop above.
+		for _, ch := range plan.Order {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO repo_blobs (repo_id, kind, hash)
+				 SELECT repo_id, 'chunk', $2 FROM repo_blobs WHERE kind='doc' AND hash=$1
+				 ON CONFLICT DO NOTHING`, string(doc.Hash), string(ch)); err != nil {
+				return false, err
+			}
+		}
+		mb, merr := json.Marshal(plan.Manifest)
+		if merr != nil {
+			return false, merr
+		}
+		if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, docCompress(mb), string(doc.Hash)); err != nil {
+			return false, err
+		}
+	} else if isMan {
+		// If the stored representation is newer/different from this writer's plan,
+		// ownership must follow the manifest that readers will actually assemble.
+		for _, ch := range storedMan.Chunks {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'chunk',$2) ON CONFLICT DO NOTHING`,
+				string(repoID), string(ch)); err != nil {
+				return false, err
+			}
+		}
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'doc',$2) ON CONFLICT DO NOTHING`,
@@ -837,20 +882,16 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
-	return ct.RowsAffected() > 0, nil
+	return created, nil
 }
 
 // reassembleManifestTx reassembles canonical bytes from chunks in blobs if the stored blob is a manifest (for PutDoc blob validation — transaction integrity check, unnecessary owner join).
-func (s *PostgresStore) reassembleManifestTx(ctx context.Context, tx pgx.Tx, data []byte) ([]byte, bool, error) {
-	limit := len(data)
-	if limit > 64 {
-		limit = 64
-	}
+func (s *PostgresStore) reassembleManifestTx(ctx context.Context, tx pgx.Tx, data []byte, want domain.ContentHash) ([]byte, bool, error) {
 	man, isMan := domain.ParseDocChunkManifest(data)
 	if !isMan {
 		return nil, false, nil
 	}
-	events := make([][]byte, 0, len(man.Chunks)*8)
+	chunks := make([][]byte, 0, len(man.Chunks))
 	for _, ch := range man.Chunks {
 		var raw []byte
 		if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(ch)).Scan(&raw); err != nil {
@@ -860,9 +901,10 @@ func (s *PostgresStore) reassembleManifestTx(ctx context.Context, tx pgx.Tx, dat
 		if err != nil {
 			return nil, true, err
 		}
-		events = append(events, domain.SplitDocChunk(c)...)
+		chunks = append(chunks, c)
 	}
-	return domain.AssembleCanonicalDoc(man.Envelope, events), true, nil
+	cb, err := domain.AssembleDocChunks(man, chunks, want)
+	return cb, true, err
 }
 
 func (s *PostgresStore) GetDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error) {
@@ -998,10 +1040,15 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	if err := validateHashes(repoID, hash); err != nil {
 		return domain.DocChunkManifest{}, err
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.DocChunkManifest{}, err
+	}
+	defer tx.Rollback(ctx)
 	var raw []byte
-	if err := s.pool.QueryRow(ctx,
+	if err := tx.QueryRow(ctx,
 		`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
-		 WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2`,
+		 WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2 FOR UPDATE OF b`,
 		string(repoID), string(hash)).Scan(&raw); err != nil {
 		return domain.DocChunkManifest{}, mapNoRows(err)
 	}
@@ -1027,21 +1074,35 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	if !ok {
 		return domain.DocChunkManifest{}, domain.ErrNotFound // Plan not possible — legacy response fallback
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return domain.DocChunkManifest{}, err
-	}
-	defer tx.Rollback(ctx)
 	for _, ch := range plan.Order {
 		if _, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
 			string(ch), docCompress(plan.Bodies[ch])); err != nil {
 			return domain.DocChunkManifest{}, err
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'chunk',$2) ON CONFLICT DO NOTHING`,
-			string(repoID), string(ch)); err != nil {
+		var existing []byte
+		if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(ch)).Scan(&existing); err != nil {
 			return domain.DocChunkManifest{}, err
 		}
+		existing, err = docDecompress(existing)
+		if err != nil || !bytes.Equal(existing, plan.Bodies[ch]) {
+			return domain.DocChunkManifest{}, domain.ErrIntegrity
+		}
+		// blobs are globally deduplicated while ownership is repo-scoped. Before
+		// replacing the shared doc body with a manifest, grant every current doc
+		// owner all referenced chunks so another repo cannot lose read access.
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO repo_blobs (repo_id, kind, hash)
+			 SELECT repo_id, 'chunk', $2 FROM repo_blobs WHERE kind='doc' AND hash=$1
+			 ON CONFLICT DO NOTHING`, string(hash), string(ch)); err != nil {
+			return domain.DocChunkManifest{}, err
+		}
+	}
+	manifest, err := json.Marshal(plan.Manifest)
+	if err != nil {
+		return domain.DocChunkManifest{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, docCompress(manifest), string(hash)); err != nil {
+		return domain.DocChunkManifest{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.DocChunkManifest{}, err
