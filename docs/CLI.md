@@ -30,6 +30,15 @@ For installation and first-run setup, see
   - `memory`: inject the distilled memory representation.
 - Git and provider hooks are fail-open: a capture or sync failure is reported
   but does not block the Git or agent operation.
+- Every public command supports `-h` and `--help`. Help and usage errors are
+  resolved before cxt creates adapters, contacts a remote, or changes local
+  context state. Unknown flags and missing flag values are rejected. Value
+  flags also accept `--flag=value` (or `-m=value`) when the value itself starts
+  with a hyphen.
+- `cxt claude` and `cxt codex` pass provider-owned arguments through. Use a
+  `--` separator when the provider itself should receive a help flag, for
+  example `cxt codex -- --help`; without the separator, `--help` describes the
+  cxt wrapper command.
 
 ## Recommended onboarding
 
