@@ -160,14 +160,39 @@ type MemoryDigest struct {
 	TasksAuthoritative bool `json:"-"`
 	// Provider is the injection target provider format hint.
 	Provider ProviderKind `json:"provider"`
+	// Fragments retain provenance for branch-wide memory projection. Summary,
+	// KeyFacts, and OpenTasks remain the rendered compatibility view. Older
+	// digests without fragments are promoted as one immutable legacy fragment.
+	Fragments []MemoryFragment `json:"fragments,omitempty"`
+}
+
+// MemoryFragment is one snapshot's independently distilled contribution.
+// SourceSnapshot plus fragment content is the stable dedup key across natural
+// and graft lineages.
+type MemoryFragment struct {
+	SourceSnapshot     ContentHash `json:"source_snapshot"`
+	Summary            string      `json:"summary,omitempty"`
+	KeyFacts           []string    `json:"key_facts,omitempty"`
+	OpenTasks          []string    `json:"open_tasks,omitempty"`
+	TasksAuthoritative bool        `json:"tasks_authoritative,omitempty"`
 }
 
 // MergeDigests inherits memory (prior) into new distillation (fresh) — deterministic.
 //
 // Memory follows the same logic as raw ancestry: if the snapshot ancestry continues (natural inheritance·append graft irrelevant), memory also continues. Continuous commits in the same session result in deterministic distillation recreating the same items, so dedup absorbs, and new sessions/appends preserve prior items (ancestor precedence).
 func MergeDigests(prior, fresh MemoryDigest) MemoryDigest {
+	if len(memoryFragments(prior)) == 0 && len(memoryFragments(fresh)) == 0 {
+		return mergeLegacyDigests(prior, fresh)
+	}
 	out := fresh
-	if prior.Summary != "" && prior.Summary != fresh.Summary && !strings.Contains(fresh.Summary, prior.Summary) {
+	out.Fragments = mergeMemoryFragments(memoryFragments(prior), memoryFragments(fresh))
+	renderMemoryFragments(&out)
+	return out
+}
+
+func mergeLegacyDigests(prior, fresh MemoryDigest) MemoryDigest {
+	out := fresh
+	if prior.Summary != "" && prior.Summary != fresh.Summary && !strings.Contains(strings.ToLower(fresh.Summary), strings.ToLower(prior.Summary)) {
 		if fresh.Summary == "" {
 			out.Summary = prior.Summary
 		} else {
@@ -176,13 +201,80 @@ func MergeDigests(prior, fresh MemoryDigest) MemoryDigest {
 	}
 	out.KeyFacts = dedupStrings(prior.KeyFacts, fresh.KeyFacts)
 	if fresh.TasksAuthoritative {
-		// The latest summary has authority over the unresolved list — ancestor lists can include completed items, thus being discarded.
-		// (The summary itself is a compaction snapshot, so it can be stale until the next compaction — data freshness limit acceptance.)
 		out.OpenTasks = dedupStrings(fresh.OpenTasks)
 	} else {
 		out.OpenTasks = dedupStrings(prior.OpenTasks, fresh.OpenTasks)
 	}
 	return out
+}
+
+func memoryFragments(d MemoryDigest) []MemoryFragment {
+	if len(d.Fragments) > 0 {
+		return append([]MemoryFragment(nil), d.Fragments...)
+	}
+	if d.SnapshotID == "" || (d.Summary == "" && len(d.KeyFacts) == 0 && len(d.OpenTasks) == 0) {
+		return nil
+	}
+	return []MemoryFragment{{
+		SourceSnapshot: d.SnapshotID, Summary: d.Summary, KeyFacts: d.KeyFacts,
+		OpenTasks: d.OpenTasks, TasksAuthoritative: d.TasksAuthoritative,
+	}}
+}
+
+func mergeMemoryFragments(groups ...[]MemoryFragment) []MemoryFragment {
+	seen := map[string]bool{}
+	var out []MemoryFragment
+	for _, group := range groups {
+		for _, fragment := range group {
+			if fragment.SourceSnapshot == "" {
+				continue
+			}
+			key := memoryFragmentKey(fragment)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, fragment)
+		}
+	}
+	return out
+}
+
+func memoryFragmentKey(fragment MemoryFragment) string {
+	authority := "0"
+	if fragment.TasksAuthoritative {
+		authority = "1"
+	}
+	return string(fragment.SourceSnapshot) + "\x00" + fragment.Summary + "\x00" +
+		strings.Join(fragment.KeyFacts, "\x00") + "\x00" + strings.Join(fragment.OpenTasks, "\x00") + "\x00" + authority
+}
+
+func renderMemoryFragments(out *MemoryDigest) {
+	var summaries []string
+	var facts, tasks []string
+	for _, fragment := range out.Fragments {
+		if summary := strings.TrimSpace(fragment.Summary); summary != "" && !containsString(summaries, summary) {
+			summaries = append(summaries, summary)
+		}
+		facts = dedupStrings(facts, fragment.KeyFacts)
+		if fragment.TasksAuthoritative {
+			tasks = dedupStrings(fragment.OpenTasks)
+		} else {
+			tasks = dedupStrings(tasks, fragment.OpenTasks)
+		}
+	}
+	out.Summary = strings.Join(summaries, "\n\n")
+	out.KeyFacts = facts
+	out.OpenTasks = tasks
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 // dedupStrings merges multiple lists while preserving order (prior list first) and removing duplicates.

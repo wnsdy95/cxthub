@@ -328,6 +328,26 @@ components:
         provider:
           type: string
           enum: [claude, codex, unknown]
+        fragments:
+          type: array
+          description: "Snapshot-scoped memory contributions used for deterministic projection across natural and graft lineages. Legacy digests may omit this field."
+          items:
+            type: object
+            required: [source_snapshot]
+            additionalProperties: false
+            properties:
+              source_snapshot:
+                $ref: "#/components/schemas/ContentHash"
+              summary:
+                type: string
+              key_facts:
+                type: array
+                items: { type: string }
+              open_tasks:
+                type: array
+                items: { type: string }
+              tasks_authoritative:
+                type: boolean
 
     ErrorResponse:
       type: object

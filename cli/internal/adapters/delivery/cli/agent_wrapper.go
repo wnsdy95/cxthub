@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -198,7 +200,10 @@ func seedFromBranch(ctx context.Context, c *Container, cwd, agent string) []stri
 		return nil
 	}
 	// PreferPendingTail: If the last session (pre-commit hook capture) connects to the head, use it as the seed — codex transitions from cxt claude without a commit.
-	out, err := c.Load.Load(ctx, inbound.LoadInput{Ref: branch, Cwd: cwd, TargetProvider: domain.ProviderKind(agent), PreferPendingTail: true})
+	out, err := c.Load.Load(ctx, inbound.LoadInput{
+		Ref: branch, Cwd: cwd, TargetProvider: domain.ProviderKind(agent), PreferPendingTail: true,
+		PreferredSessionID: activeSessionID(ctx, cwd, agent),
+	})
 	if err != nil {
 		return nil // No context in branch (new repo, etc.) — pure execution
 	}
@@ -219,4 +224,44 @@ func seedFromBranch(ctx context.Context, c *Container, cwd, agent string) []stri
 	}
 	fmt.Printf("cxt: %q branch context started as seed (fidelity: %s)%s\n", branch, out.Fidelity, note)
 	return f[1:]
+}
+
+// activeSessionID resolves the same capture-eligible provider file used by hook
+// capture and decodes its native identity. Filename/mtime guesses are not
+// sufficient: multiple terminals can run the same provider in one worktree.
+// Failure is conservative — Load then uses its original reachability rule.
+func activeSessionID(ctx context.Context, cwd, agent string) string {
+	provider := domain.ProviderKind(agent)
+	if affinity := capture.SessionAffinity(cwd, provider); affinity != "" {
+		return affinity
+	}
+	var src interface {
+		LocateActiveSession(context.Context, string) (string, error)
+		ReadSession(context.Context, string) ([]byte, error)
+	}
+	var cdc interface {
+		Decode(context.Context, []byte) (domain.CIRDocument, error)
+	}
+	if agent == string(domain.ProviderCodex) {
+		src = capture.NewCodexCapture()
+		cdc = codec.NewCodexCodec()
+	} else if agent == string(domain.ProviderClaude) {
+		src = capture.NewClaudeCapture()
+		cdc = codec.NewClaudeCodec()
+	} else {
+		return ""
+	}
+	path, err := src.LocateActiveSession(ctx, cwd)
+	if err != nil {
+		return ""
+	}
+	raw, err := src.ReadSession(ctx, path)
+	if err != nil {
+		return ""
+	}
+	cir, err := cdc.Decode(ctx, raw)
+	if err != nil {
+		return ""
+	}
+	return cir.Envelope.SessionOriginID
 }

@@ -78,6 +78,28 @@ func TestFsckReachability(t *testing.T) {
 	}
 }
 
+func TestFsckTreatsPendingAsReachabilityRoot(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("pending-root-repo")
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: hh("base"), RepoID: repo, DocHash: hh("base")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: hh("pending"), RepoID: repo, DocHash: hh("pending"), Parents: []domain.ContentHash{hh("base")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutPending(ctx, repo, domain.Pending{RepoID: repo, SessionID: "session", Branch: "main", Target: hh("pending")}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := svc.Fsck(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Reachable != 2 || len(rep.Unreachable) != 0 {
+		t.Fatalf("pending reachability = %d, unreachable=%v", rep.Reachable, rep.Unreachable)
+	}
+}
+
 // TestFsckDanglingGraftParent: Audit dangling nodes like reachability —
 // edges pointing to nonexistent snapshots in overlay grafts should be reported as corruption (overlay grafts can create exactly this corruption class that the auditor might have missed).
 func TestFsckDanglingGraftParent(t *testing.T) {

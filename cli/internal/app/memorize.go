@@ -103,15 +103,15 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
 	}
-	// Memory follows the same logic as raw — merges closest ancestor digest to inherit (natural grafting irrelevant, memory follows parent links).
+	digest.SnapshotID = snap.ID
+	// Project memory follows every natural/graft lineage and unions provenance
+	// fragments; choosing one globally closest digest loses sibling PR memory.
 	// Filter noisy prior KeyFacts so tool names and ingestion markers do not propagate forever across generations. Keep only sentence-form facts, using the same rules as the seed filter.
-	if prior, ok := nearestAncestorDigest(ctx, s.store, snap); ok {
+	if prior, ok := ancestorMemoryProjection(ctx, s.store, snap); ok {
 		prior.KeyFacts = seedWorthyFacts(prior.KeyFacts)
 		prior = boundCarriedDigest(prior)
 		digest = domain.MergeDigests(prior, digest)
 	}
-	digest.SnapshotID = snap.ID
-
 	memHash, err := s.store.PutMemory(ctx, digest)
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
@@ -127,7 +127,53 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 // Ensure MemorizeService implements inbound.Memorize.
 var _ inbound.Memorize = (*MemorizeService)(nil)
 
-// nearestAncestorDigest finds the MemoryDigest of the nearest ancestor of snap by traversing the reachability parent chain using BFS. If no ancestor is found, ok=false. It walks the raw lineage (parent links) directly, so it doesn't distinguish between natural inheritance, append overlay grafts, or any other logic. The ancestor itself was merged with its parent at the distillation point, so finding the closest one is sufficient (minimal).
+// ancestorMemoryProjection merges the nearest digest from every immediate
+// natural/graft lineage. A single global BFS winner loses memory from sibling
+// PRs. Fragment provenance makes common ancestors idempotent across branches.
+func ancestorMemoryProjection(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool) {
+	var projection domain.MemoryDigest
+	found := false
+	for _, parent := range snap.ReachabilityParents() {
+		digest, ok := nearestDigestFrom(ctx, store, parent)
+		if !ok {
+			continue
+		}
+		if !found {
+			projection = digest
+			found = true
+		} else {
+			projection = domain.MergeDigests(projection, digest)
+		}
+	}
+	return projection, found
+}
+
+func nearestDigestFrom(ctx context.Context, store outbound.SessionStore, start domain.ContentHash) (domain.MemoryDigest, bool) {
+	seen := map[domain.ContentHash]bool{}
+	queue := []domain.ContentHash{start}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ps, err := store.GetSnapshot(ctx, id)
+		if err != nil {
+			continue // Skip local ancestors (partial lineage) — within the available range, the best option
+		}
+		if ps.MemoryHash != "" {
+			if d, derr := store.GetMemory(ctx, ps.MemoryHash); derr == nil {
+				return d, true
+			}
+		}
+		queue = append(queue, ps.ReachabilityParents()...)
+	}
+	return domain.MemoryDigest{}, false
+}
+
+// nearestAncestorDigest is retained for explicit legacy single-nearest callers
+// and compatibility tests. Project inheritance must use ancestorMemoryProjection.
 func nearestAncestorDigest(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool) {
 	seen := map[domain.ContentHash]bool{}
 	queue := append([]domain.ContentHash{}, snap.ReachabilityParents()...)
@@ -140,7 +186,7 @@ func nearestAncestorDigest(ctx context.Context, store outbound.SessionStore, sna
 		seen[id] = true
 		ps, err := store.GetSnapshot(ctx, id)
 		if err != nil {
-			continue // Skip local ancestors (partial lineage) — within the available range, the best option
+			continue
 		}
 		if ps.MemoryHash != "" {
 			if d, derr := store.GetMemory(ctx, ps.MemoryHash); derr == nil {
@@ -172,7 +218,41 @@ func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
 	}
 	d.KeyFacts = boundStringListTail(d.KeyFacts, memoryCarryListBudgetBytes)
 	d.OpenTasks = boundStringListTail(d.OpenTasks, memoryCarryListBudgetBytes)
+	if len(d.Fragments) > 0 {
+		remainingSummary := memoryCarryBudgetBytes
+		remainingFacts := memoryCarryListBudgetBytes
+		remainingTasks := memoryCarryListBudgetBytes
+		kept := make([]domain.MemoryFragment, 0, len(d.Fragments))
+		for i := len(d.Fragments) - 1; i >= 0; i-- {
+			fragment := d.Fragments[i]
+			fragment.Summary = truncateUTF8Tail(fragment.Summary, remainingSummary)
+			fragment.KeyFacts = boundStringListTail(fragment.KeyFacts, remainingFacts)
+			fragment.OpenTasks = boundStringListTail(fragment.OpenTasks, remainingTasks)
+			if fragment.Summary == "" && len(fragment.KeyFacts) == 0 && len(fragment.OpenTasks) == 0 {
+				continue
+			}
+			remainingSummary -= len(fragment.Summary)
+			remainingFacts -= stringListBytes(fragment.KeyFacts)
+			remainingTasks -= stringListBytes(fragment.OpenTasks)
+			kept = append(kept, fragment)
+			if remainingSummary <= 0 && remainingFacts <= 0 && remainingTasks <= 0 {
+				break
+			}
+		}
+		for left, right := 0, len(kept)-1; left < right; left, right = left+1, right-1 {
+			kept[left], kept[right] = kept[right], kept[left]
+		}
+		d.Fragments = kept
+	}
 	return d
+}
+
+func stringListBytes(items []string) int {
+	total := 0
+	for _, item := range items {
+		total += len(item)
+	}
+	return total
 }
 
 func boundStringListTail(items []string, maxBytes int) []string {

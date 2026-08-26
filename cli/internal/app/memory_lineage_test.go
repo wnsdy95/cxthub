@@ -80,6 +80,45 @@ func TestNearestAncestorDigest(t *testing.T) {
 	}
 }
 
+func TestAncestorMemoryProjectionUnionsParallelGraftFragments(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	h := func(c byte) domain.ContentHash {
+		return domain.ContentHash("sha256:" + strings.Repeat(string(c), 64))
+	}
+	base := domain.MemoryDigest{SnapshotID: h('a'), Summary: "shared base"}
+	left := domain.MergeDigests(base, domain.MemoryDigest{SnapshotID: h('b'), Summary: "left PR"})
+	right := domain.MergeDigests(base, domain.MemoryDigest{SnapshotID: h('c'), Summary: "right PR"})
+	leftHash, err := st.PutMemory(ctx, left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightHash, err := st.PutMemory(ctx, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, snap := range []domain.Snapshot{
+		{ID: h('b'), DocHash: h('b'), Branch: "main", MemoryHash: leftHash},
+		{ID: h('c'), DocHash: h('c'), Branch: "main", MemoryHash: rightHash},
+		{ID: h('d'), DocHash: h('d'), Branch: "main", Parents: []domain.ContentHash{h('b')}, GraftParents: []domain.ContentHash{h('c')}, Grafted: true},
+	} {
+		if err := st.PutSnapshot(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	merge, _ := st.GetSnapshot(ctx, h('d'))
+	got, ok := ancestorMemoryProjection(ctx, st, merge)
+	if !ok {
+		t.Fatal("parallel memory projection not found")
+	}
+	if strings.Count(got.Summary, "shared base") != 1 || !strings.Contains(got.Summary, "left PR") || !strings.Contains(got.Summary, "right PR") {
+		t.Fatalf("parallel projection = %q", got.Summary)
+	}
+	if len(got.Fragments) != 3 {
+		t.Fatalf("fragment union = %d, want shared+left+right", len(got.Fragments))
+	}
+}
+
 // TestBoundCarriedDigestKeepsNewestTail (#33 — bounded carry): the forward
 // working set is capped at memoryCarryBudgetBytes keeping the newest tail;
 // under-budget digests pass through unchanged.
@@ -109,6 +148,27 @@ func TestBoundCarriedDigestKeepsNewestTail(t *testing.T) {
 	}
 	if len(got.KeyFacts) != 1 || len(got.OpenTasks) != 1 {
 		t.Fatalf("bullets changed: facts=%v tasks=%v", got.KeyFacts, got.OpenTasks)
+	}
+}
+
+func TestBoundCarriedDigestCapsFragmentProjection(t *testing.T) {
+	var fragments []domain.MemoryFragment
+	for i := 0; i < 8; i++ {
+		fragments = append(fragments, domain.MemoryFragment{
+			SourceSnapshot: domain.ContentHash("sha256:" + strings.Repeat(string(rune('a'+i)), 64)),
+			Summary:        strings.Repeat(string(rune('A'+i)), 80<<10),
+		})
+	}
+	got := boundCarriedDigest(domain.MemoryDigest{Fragments: fragments})
+	total := 0
+	for _, fragment := range got.Fragments {
+		total += len(fragment.Summary)
+	}
+	if total > memoryCarryBudgetBytes {
+		t.Fatalf("fragment projection = %d bytes, want <= %d", total, memoryCarryBudgetBytes)
+	}
+	if len(got.Fragments) == 0 || !strings.Contains(got.Fragments[len(got.Fragments)-1].Summary, "H") {
+		t.Fatal("fragment projection did not retain newest contribution")
 	}
 }
 

@@ -97,7 +97,8 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		}
 		if mainMem == nil && mainDocAvailable {
 			if d, derr := s.distiller.Distill(ctx, mainDoc.CIR, nil); derr == nil {
-				if prior, ok := nearestAncestorDigest(ctx, s.store, mainSnap); ok {
+				d.SnapshotID = mainSnap.ID
+				if prior, ok := ancestorMemoryProjection(ctx, s.store, mainSnap); ok {
 					prior = boundCarriedDigest(prior)
 					d = domain.MergeDigests(prior, d)
 				}
@@ -111,7 +112,8 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
-	if prior, ok := nearestAncestorDigest(ctx, s.store, fromSnap); ok {
+	branchMem.SnapshotID = fromSnap.ID
+	if prior, ok := ancestorMemoryProjection(ctx, s.store, fromSnap); ok {
 		prior = boundCarriedDigest(prior)
 		branchMem = domain.MergeDigests(prior, branchMem)
 	}
@@ -122,12 +124,13 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	// the recent user-boundary-aligned conversation tail.
 	now := time.Now().UTC().Format(time.RFC3339)
 	seedSession := providerfs.NewSessionID()
-	seedText := renderSeedText(in.FromBranch, in.NewBranch, mainMem, branchMem, seedDigestBudgetBytes)
+	totalBudget, digestBudget := seedBudgets(provider)
+	seedText := renderSeedText(in.FromBranch, in.NewBranch, mainMem, branchMem, digestBudget)
 	summaryEvent := domain.Event{
 		Kind: domain.EventMessage, Role: "user", Ts: now, Seq: 0,
 		Blocks: []domain.ContentBlock{{Type: "text", Text: seedText}},
 	}
-	conversationBudget := seedBudgetBytes - eventsJSONBytes([]domain.Event{summaryEvent})
+	conversationBudget := totalBudget - eventsJSONBytes([]domain.Event{summaryEvent})
 	if conversationBudget < 0 {
 		conversationBudget = 0
 	}

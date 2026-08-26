@@ -38,7 +38,7 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 				// are bounded copies of inherited memory, not the agent's cumulative
 				// compression — promoting one here would source memorize from
 				// boilerplate and mislabel it as agent-written (#38).
-				!isSyntheticSeedText(ev.Blocks[0].Text) {
+				!containsSyntheticSeedText(ev.Blocks[0].Text) {
 				compactSummary = ev.Blocks[0].Text // last wins: newest cumulative summary
 			}
 			if ev.Role == "user" {
@@ -162,6 +162,19 @@ func isSyntheticSeedText(text string) bool {
 	return strings.HasPrefix(t, "[cxt seed] Branch-switch context:") ||
 		strings.HasPrefix(t, "[cxt] This session was resumed from a branch context seed.") ||
 		strings.HasPrefix(t, "<environment_context>")
+}
+
+// containsSyntheticSeedText rejects an agent-written compaction summary that
+// has recursively swallowed a cxt seed. Treating it as a new authoritative
+// generation creates summary-of-summary amplification on every resume. The raw
+// recent conversation remains available to the deterministic extractive
+// fallback, while older project memory stays in provenance fragments.
+func containsSyntheticSeedText(text string) bool {
+	if isSyntheticSeedText(text) {
+		return true
+	}
+	return strings.Contains(text, "[cxt] This session was resumed from a branch context seed.") ||
+		strings.Contains(text, "[cxt seed] Branch-switch context:")
 }
 
 func appendRecentDistinct(items []string, text string, limit int) []string {

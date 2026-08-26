@@ -152,7 +152,7 @@ expect "upstream hint output" "$(echo "$HOOKOUT" | grep -ci 'new context')" 1
 # Pull briefing: summarize and store the incoming codeB/codeC range, then consume it once
 # from the next prompt hook as additionalContext (the shared Claude/Codex live-injection channel).
 expect "briefing creation notice output" "$(echo "$HOOKOUT" | grep -c 'briefed to the agent')" 1
-expect "team member commit summary included in briefing" "$(python3 -c "import json;print('codeC' in json.load(open('.cxt/briefing.json'))['text'])" 2>/dev/null)" True
+expect "team member commit summary included in briefing" "$(python3 -c "import json;d=json.load(open('.cxt/briefing.json'));print('codeC' in '\n'.join(d.get('texts') or [d.get('text','')]))" 2>/dev/null)" True
 BRIEF=$(echo "{\"cwd\":\"$TMP/repo1\",\"prompt\":\"go on\"}" | cxt hook --provider claude --event UserPromptSubmit)
 expect "hook emits additionalContext JSON" "$(echo "$BRIEF" | python3 -c "
 import json,sys

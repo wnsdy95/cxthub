@@ -41,13 +41,14 @@ export function unsyncChains(unsyncs: Unsync[], snapshots: Snapshot[], shared: S
   const hold = new Set<string>();
   for (const u of unsyncs) {
     const stack = [u.target];
-    while (stack.length > 0 && hold.size < 500) {
+    while (stack.length > 0) {
       const id = stack.pop() as string;
       if (!id || hold.has(id) || shared.has(id)) continue;
       const s = byId.get(id);
       if (!s) continue;
       hold.add(id);
       for (const p of s.parents ?? []) stack.push(p);
+      for (const g of s.graft_parents ?? []) stack.push(g);
     }
   }
   // 2) Connectivity clustering (union-find, only parent edges within holds).
@@ -65,7 +66,8 @@ export function unsyncChains(unsyncs: Unsync[], snapshots: Snapshot[], shared: S
   };
   for (const id of hold) root.set(id, id);
   for (const id of hold) {
-    for (const p of byId.get(id)?.parents ?? []) {
+    const snap = byId.get(id);
+    for (const p of [...(snap?.parents ?? []), ...(snap?.graft_parents ?? [])]) {
       if (hold.has(p)) root.set(find(id), find(p));
     }
   }

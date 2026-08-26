@@ -156,7 +156,7 @@ Starts the read-only MCP server on standard input/output. It exposes:
 |---|---|
 | `context_list` | List local repository snapshots |
 | `context_fetch` | Fetch snapshot metadata, memory, and recent conversation context |
-| `memory_load` | Load the nearest available memory digest for a ref |
+| `memory_load` | Load the bounded memory projection across all natural and graft parent lineages for a ref |
 | `context_search` | Search synchronized team context through the configured origin |
 
 ### `cxt hook`

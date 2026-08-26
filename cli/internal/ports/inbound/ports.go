@@ -216,6 +216,12 @@ type LoadInput struct {
 	Cwd string
 	// PreferPendingTail true means that when a latest pending (uncommitted hook capture) exists to connect the Ref interpretation result (branch head), it loads that instead — "on" seed continues from the previous session (e.g., the most recent codex task) before the commit.
 	PreferPendingTail bool
+	// PreferredSessionID identifies the provider session that is actually active in
+	// this working tree. When a pull/PR append moves the branch ref sideways, that
+	// session's pending tail is still the continuation authority even though it is
+	// no longer a descendant of the new branch head. Empty keeps the conservative
+	// reachability-only fallback used by explicit loads.
+	PreferredSessionID string
 }
 
 // LoadOutput is the DTO output of LoadSession.Load.
