@@ -251,10 +251,21 @@ func memoryFragmentKey(fragment MemoryFragment) string {
 
 func renderMemoryFragments(out *MemoryDigest) {
 	var summaries []string
+	fallbackInsertAt := -1
+	var fallbackUsers, fallbackAssistants []string
 	var facts, tasks []string
 	for _, fragment := range out.Fragments {
-		if summary := strings.TrimSpace(fragment.Summary); summary != "" && !containsString(summaries, summary) {
-			summaries = append(summaries, summary)
+		if summary := strings.TrimSpace(fragment.Summary); summary != "" {
+			if users, assistants, ok := parseExtractiveFallbackSummary(summary); ok {
+				// Keep the combined projection at the position of the newest
+				// fallback fragment. renderSeedDigest retains the newest tail, so
+				// placing it at the first fallback could evict newer unique items.
+				fallbackInsertAt = len(summaries)
+				fallbackUsers = dedupStrings(fallbackUsers, users)
+				fallbackAssistants = dedupStrings(fallbackAssistants, assistants)
+			} else if !containsString(summaries, summary) {
+				summaries = append(summaries, summary)
+			}
 		}
 		facts = dedupStrings(facts, fragment.KeyFacts)
 		if fragment.TasksAuthoritative {
@@ -263,9 +274,99 @@ func renderMemoryFragments(out *MemoryDigest) {
 			tasks = dedupStrings(tasks, fragment.OpenTasks)
 		}
 	}
+	if fallbackInsertAt >= 0 {
+		summaries = append(summaries, "")
+		copy(summaries[fallbackInsertAt+1:], summaries[fallbackInsertAt:])
+		summaries[fallbackInsertAt] = RenderExtractiveFallbackSummary(fallbackUsers, fallbackAssistants)
+	}
 	out.Summary = strings.Join(summaries, "\n\n")
 	out.KeyFacts = facts
 	out.OpenTasks = tasks
+}
+
+const (
+	extractiveFallbackHeader           = "Conversation digest (extractive fallback; provider compaction summary unavailable):"
+	extractiveFallbackUsersHeader      = "Recent user intent:"
+	extractiveFallbackAssistantsHeader = "Recent assistant outcomes:"
+)
+
+// RenderExtractiveFallbackSummary is the canonical text representation of the
+// deterministic conversation fallback. Keeping the format in the domain lets
+// provenance rendering recognize and combine exact items without fuzzy or
+// model-dependent comparison.
+func RenderExtractiveFallbackSummary(users, assistants []string) string {
+	var b strings.Builder
+	b.WriteString(extractiveFallbackHeader)
+	// Preserve the established storage wire format: the header already carried
+	// one newline before writeExtractiveSection added two more.
+	b.WriteByte('\n')
+	writeExtractiveFallbackSection(&b, extractiveFallbackUsersHeader, users)
+	writeExtractiveFallbackSection(&b, extractiveFallbackAssistantsHeader, assistants)
+	return strings.TrimSpace(b.String())
+}
+
+func writeExtractiveFallbackSection(b *strings.Builder, header string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	b.WriteString("\n\n")
+	b.WriteString(header)
+	b.WriteByte('\n')
+	for _, item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			b.WriteString("- ")
+			b.WriteString(item)
+			b.WriteByte('\n')
+		}
+	}
+}
+
+// parseExtractiveFallbackSummary accepts only the exact deterministic format
+// emitted by RenderExtractiveFallbackSummary. Any unexpected prose or section
+// order is classified as an unstructured/agent-written summary and remains
+// byte-for-byte on the legacy rendering path.
+func parseExtractiveFallbackSummary(summary string) (users, assistants []string, ok bool) {
+	lines := strings.Split(strings.TrimSpace(summary), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != extractiveFallbackHeader {
+		return nil, nil, false
+	}
+	section := 0
+	seenUsers, seenAssistants := false, false
+	for _, raw := range lines[1:] {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		switch line {
+		case extractiveFallbackUsersHeader:
+			if seenUsers || seenAssistants {
+				return nil, nil, false
+			}
+			seenUsers, section = true, 1
+		case extractiveFallbackAssistantsHeader:
+			if seenAssistants {
+				return nil, nil, false
+			}
+			seenAssistants, section = true, 2
+		default:
+			if section == 0 || !strings.HasPrefix(line, "- ") {
+				return nil, nil, false
+			}
+			item := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+			if item == "" {
+				return nil, nil, false
+			}
+			if section == 1 {
+				users = append(users, item)
+			} else {
+				assistants = append(assistants, item)
+			}
+		}
+	}
+	if len(users) == 0 && len(assistants) == 0 {
+		return nil, nil, false
+	}
+	return users, assistants, true
 }
 
 func containsString(items []string, want string) bool {
