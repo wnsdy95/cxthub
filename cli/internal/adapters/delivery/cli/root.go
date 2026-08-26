@@ -66,16 +66,10 @@ type Container struct {
 
 // Run is the CLI entry point. Parses args(=os.Args) to execute the corresponding subcommand.
 func Run(c *Container, args []string) error {
-	if len(args) < 2 {
-		printUsage()
-		return nil
+	if handled, err := PreflightArgs(args); handled || err != nil {
+		return err
 	}
 	cmd := args[1]
-	switch cmd {
-	case "-h", "--help", "help":
-		printUsage()
-		return nil
-	}
 
 	ctx := context.Background()
 	rest := args[2:]
@@ -125,7 +119,7 @@ func Run(c *Container, args []string) error {
 
 	case "claude", "codex":
 		// Agent wrapper (default execution path): fresh start seeds the current branch context, and automatically restarts with the seed session on context switch.
-		return runAgentWrapper(ctx, c, cwd, cmd, rest)
+		return runAgentWrapper(ctx, c, cwd, cmd, providerPassthroughArgs(rest))
 
 	case "remote":
 		return runRemote(ctx, c, cwd, rest)
@@ -790,7 +784,7 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	default:
-		return fmt.Errorf("%q: unknown command. Supported: %s", cmd, strings.Join(publicCommandNames, "|"))
+		return unknownCommandError(cmd)
 	}
 }
 
@@ -941,7 +935,10 @@ func positionals(args []string) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
 		if strings.HasPrefix(args[i], "-") {
-			i++ // skip flag value
+			_, _, inline := splitFlagValue(args[i])
+			if flagConsumesValue(args[i]) && !inline {
+				i++
+			}
 			continue
 		}
 		out = append(out, args[i])
@@ -951,12 +948,8 @@ func positionals(args []string) []string {
 
 // firstPositional returns the first argument that is not a flag (e.g., checkout <ref>).
 func firstPositional(args []string) string {
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], "-") {
-			i++ // skip flag value
-			continue
-		}
-		return args[i]
+	if pos := positionals(args); len(pos) > 0 {
+		return pos[0]
 	}
 	return ""
 }
@@ -1045,8 +1038,15 @@ func modeOr(cwd string, rest []string) string {
 }
 
 func flagVal(args []string, name string) string {
-	for i := 0; i < len(args)-1; i++ {
+	for i := 0; i < len(args); i++ {
+		flagName, inlineValue, inline := splitFlagValue(args[i])
+		if flagName == name && inline {
+			return inlineValue
+		}
 		if args[i] == name {
+			if i+1 >= len(args) {
+				return ""
+			}
 			return args[i+1]
 		}
 	}
@@ -1055,10 +1055,8 @@ func flagVal(args []string, name string) string {
 
 // lastPositional returns the last argument that is not a flag (e.g., repo create <url> returns url).
 func lastPositional(args []string) string {
-	for i := len(args) - 1; i >= 0; i-- {
-		if !strings.HasPrefix(args[i], "-") {
-			return args[i]
-		}
+	if pos := positionals(args); len(pos) > 0 {
+		return pos[len(pos)-1]
 	}
 	return ""
 }

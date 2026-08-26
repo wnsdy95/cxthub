@@ -42,10 +42,6 @@ import (
 var version = "dev"
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
-		fmt.Println("cxt", version)
-		return
-	}
 	if err := run(os.Args); err != nil {
 		fmt.Fprintf(os.Stderr, "cxt: %v\n", err)
 		os.Exit(1)
@@ -54,6 +50,15 @@ func main() {
 
 // run parses arguments and branches to the appropriate entry point.
 func run(args []string) error {
+	// Help and usage errors must return before adapter construction: some
+	// commands materialize provider sessions or contact the remote immediately.
+	if handled, err := delivcli.PreflightArgs(args); handled || err != nil {
+		return err
+	}
+	if args[1] == "version" || args[1] == "--version" {
+		fmt.Println("cxt", version)
+		return nil
+	}
 	// config is the execution settings for the cxt client.
 	// TODO: Replace with actual config file parsing (repoRoot/.cxt/config or XDG).
 	cfg := loadConfig()
