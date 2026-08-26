@@ -220,6 +220,26 @@ type RemoteSync interface {
 	DeleteUnsyncRemote(ctx context.Context, repoID string, branch string) error
 }
 
+// PushObjectWants is the server-proven missing subset of a local push
+// inventory. Snapshot metadata and document bodies are independent objects: a
+// damaged server may have one without the other, so both sets remain explicit.
+type PushObjectWants struct {
+	Snapshots []domain.ContentHash
+	Docs      []domain.ContentHash
+}
+
+// PushObjectNegotiator is an optional preflight capability for RemoteSync.
+// It lets the application advertise only content hashes before opening large
+// cumulative session documents. Chunk hashes are intentionally deferred: once
+// a missing document is selected and opened, RemoteSync.Push performs its
+// normal document/chunk negotiation and resumes any partially staged upload.
+// Remotes without this capability retain the safe legacy behavior of loading
+// and passing the full reachable object set to RemoteSync.Push, whose own
+// negotiation still prevents redundant transfer.
+type PushObjectNegotiator interface {
+	NegotiatePushObjects(ctx context.Context, repoID string, snapshotHaves, docHaves []domain.ContentHash) (PushObjectWants, error)
+}
+
 // MemorySource is a port that absorbs provider native memory (compatibility rules).
 //
 // Absorb if available: Claude MEMORY.md, Codex rollout_summary, etc. Input source for native-first strategy.

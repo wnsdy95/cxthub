@@ -37,6 +37,7 @@ func NewBackendClient(baseURL, token func() string, identity domain.TeamIdentity
 }
 
 var _ outbound.RemoteSync = (*BackendClient)(nil)
+var _ outbound.PushObjectNegotiator = (*BackendClient)(nil)
 
 // --- wire DTO (same snake_case as backend) ---
 
@@ -620,6 +621,56 @@ func (c *BackendClient) RemoteManifest(ctx context.Context, repoID string) (doma
 	return m, nil
 }
 
+// NegotiatePushObjects performs the hash-only first phase before the
+// application opens any cumulative SessionDoc bodies. It uses the existing
+// sync endpoint, so old servers that support Push already support this
+// optimization. A server response must be a unique subset of what the client
+// advertised; arbitrary wants are rejected before they can drive local reads.
+// Missing docs are opened afterward, and Push's second negotiation handles
+// their chunk manifests and resumes partially staged chunk uploads.
+func (c *BackendClient) NegotiatePushObjects(ctx context.Context, repoID string, snapshotHaves, docHaves []domain.ContentHash) (outbound.PushObjectWants, error) {
+	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
+		return outbound.PushObjectWants{}, err
+	}
+	for _, hash := range append(append([]domain.ContentHash(nil), snapshotHaves...), docHaves...) {
+		if err := domain.ValidateContentHash(hash); err != nil {
+			return outbound.PushObjectWants{}, err
+		}
+	}
+	var neg negotiateResp
+	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{
+		SnapshotHaves: snapshotHaves,
+		DocHaves:      docHaves,
+	}, &neg); err != nil {
+		return outbound.PushObjectWants{}, err
+	}
+	if err := validateNegotiatedSubset(snapshotHaves, neg.SnapshotWants); err != nil {
+		return outbound.PushObjectWants{}, err
+	}
+	if err := validateNegotiatedSubset(docHaves, neg.DocWants); err != nil {
+		return outbound.PushObjectWants{}, err
+	}
+	return outbound.PushObjectWants{Snapshots: neg.SnapshotWants, Docs: neg.DocWants}, nil
+}
+
+func validateNegotiatedSubset(haves, wants []domain.ContentHash) error {
+	offered := make(map[domain.ContentHash]bool, len(haves))
+	for _, hash := range haves {
+		offered[hash] = true
+	}
+	seen := make(map[domain.ContentHash]bool, len(wants))
+	for _, hash := range wants {
+		if err := domain.ValidateContentHash(hash); err != nil {
+			return err
+		}
+		if !offered[hash] || seen[hash] {
+			return domain.ErrHashMismatch
+		}
+		seen[hash] = true
+	}
+	return nil
+}
+
 // Push performs three steps: negotiate(A) → objects(B) → refs PUT(C) for uploading only missing parts (sync protocol).
 func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, force, appendDiverged bool) error {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
@@ -675,8 +726,10 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 	}
 
 	var neg negotiateResp
-	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{snapHaves, docHaves, chunkHaves}, &neg); err != nil {
-		return err
+	if len(snapHaves) > 0 || len(docHaves) > 0 {
+		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{snapHaves, docHaves, chunkHaves}, &neg); err != nil {
+			return err
+		}
 	}
 	wantSnap, wantDoc, wantChunk := setOf(neg.SnapshotWants), setOf(neg.DocWants), setOf(neg.ChunkWants)
 

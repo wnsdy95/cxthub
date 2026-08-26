@@ -210,6 +210,81 @@ func TestPushUploadsBoundedChunksBeforeManifestCommit(t *testing.T) {
 	}
 }
 
+func TestNegotiatePushObjectsUsesHashOnlyInventory(t *testing.T) {
+	repoID := domain.HashContent([]byte("lazy-negotiate-repo"))
+	snapshot := domain.HashContent([]byte("lazy-negotiate-snapshot"))
+	doc := domain.HashContent([]byte("lazy-negotiate-doc"))
+	requests := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/repos/"+string(repoID)+"/push/negotiate" {
+			http.NotFound(w, r)
+			return
+		}
+		var req negotiateReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode negotiate: %v", err)
+		}
+		if len(req.SnapshotHaves) != 1 || req.SnapshotHaves[0] != snapshot || len(req.DocHaves) != 1 || req.DocHaves[0] != doc || len(req.ChunkHaves) != 0 {
+			t.Errorf("inventory snapshots=%v docs=%v chunks=%v", req.SnapshotHaves, req.DocHaves, req.ChunkHaves)
+		}
+		_ = json.NewEncoder(w).Encode(negotiateResp{SnapshotWants: []domain.ContentHash{snapshot}, DocWants: []domain.ContentHash{doc}})
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	wants, err := c.NegotiatePushObjects(context.Background(), string(repoID), []domain.ContentHash{snapshot}, []domain.ContentHash{doc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || len(wants.Snapshots) != 1 || wants.Snapshots[0] != snapshot || len(wants.Docs) != 1 || wants.Docs[0] != doc {
+		t.Fatalf("requests=%d wants=%+v", requests, wants)
+	}
+}
+
+func TestNegotiatePushObjectsRejectsWantOutsideInventory(t *testing.T) {
+	repoID := domain.HashContent([]byte("untrusted-negotiate-repo"))
+	offered := domain.HashContent([]byte("offered-snapshot"))
+	unoffered := domain.HashContent([]byte("unoffered-snapshot"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(negotiateResp{SnapshotWants: []domain.ContentHash{unoffered}})
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if _, err := c.NegotiatePushObjects(context.Background(), string(repoID), []domain.ContentHash{offered}, nil); !errors.Is(err, domain.ErrHashMismatch) {
+		t.Fatalf("negotiate error=%v, want hash mismatch", err)
+	}
+}
+
+func TestRefOnlyPushSkipsObjectNegotiation(t *testing.T) {
+	repoID := domain.HashContent([]byte("ref-only-push-repo"))
+	target := domain.HashContent([]byte("ref-only-push-target"))
+	negotiateCalls, refCalls := 0, 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/push/negotiate"):
+			negotiateCalls++
+			http.Error(w, "unexpected object negotiation", http.StatusInternalServerError)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/refs/branch/main"):
+			refCalls++
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	ref := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: string(repoID), Target: target}
+	if err := c.Push(context.Background(), string(repoID), nil, nil, []domain.Ref{ref}, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if negotiateCalls != 0 || refCalls != 1 {
+		t.Fatalf("calls negotiate=%d refs=%d", negotiateCalls, refCalls)
+	}
+}
+
 func TestPushFallsBackToFullDocForChunkAwareV1Server(t *testing.T) {
 	repoID := domain.HashContent([]byte("legacy-chunk-push-repo"))
 	doc, plan := makeChunkedClientDoc(t, 2)

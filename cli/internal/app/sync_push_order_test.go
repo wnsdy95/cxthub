@@ -18,9 +18,11 @@ func (g pushOrderGit) CurrentBranch(context.Context, string) (string, error)    
 
 type pushOrderRemote struct {
 	outbound.RemoteSync
-	events    []string
-	grafted   bool
-	failGraft error
+	events          []string
+	objectSnapshots int
+	objectDocs      int
+	grafted         bool
+	failGraft       error
 }
 
 func (r *pushOrderRemote) RegisterRepo(_ context.Context, repo domain.Repo) (domain.Repo, error) {
@@ -33,6 +35,8 @@ func (r *pushOrderRemote) Push(_ context.Context, _ string, snaps []domain.Snaps
 		if len(refs) > 0 {
 			return errors.New("objects and refs were published in one phase")
 		}
+		r.objectSnapshots += len(snaps)
+		r.objectDocs += len(docs)
 		r.events = append(r.events, "objects")
 	case len(refs) > 0:
 		if !r.grafted {
@@ -102,6 +106,9 @@ func TestPushPublishesObjectsThenGraftsThenRefs(t *testing.T) {
 		if remote.events[i] != want[i] {
 			t.Fatalf("publish order=%v want=%v", remote.events, want)
 		}
+	}
+	if remote.objectSnapshots != 2 || remote.objectDocs != 2 {
+		t.Fatalf("legacy negotiator fallback snapshots=%d docs=%d, want 2/2", remote.objectSnapshots, remote.objectDocs)
 	}
 }
 
