@@ -21,6 +21,12 @@
       "description": "Snapshot IDs held by this store (content hashes). Push/pull computes the remote difference and transfers only missing objects.",
       "items": { "$ref": "#/$defs/contentHash" }
     },
+    "memory_attachments": {
+      "type": "object",
+      "description": "Current causal memory hash keyed by snapshot ID. Omitted by legacy peers that do not advertise attachment state.",
+      "propertyNames": { "$ref": "#/$defs/contentHash" },
+      "additionalProperties": { "$ref": "#/$defs/contentHash" }
+    },
     "version": {
       "type": "integer",
       "minimum": 0,

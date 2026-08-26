@@ -32,6 +32,11 @@ type SessionStore interface {
 	// Returns domain.ErrNotFound if not found.
 	GetSnapshot(ctx context.Context, id domain.ContentHash) (domain.Snapshot, error)
 
+	// CompareAndSwapSnapshotMemory advances the local memory attachment only
+	// when its current pointer still equals expected. Memory blobs are immutable;
+	// this CAS protects the mutable pointer across concurrent CLI processes.
+	CompareAndSwapSnapshotMemory(ctx context.Context, id, expected, next domain.ContentHash) error
+
 	// ReconcileGraftState adopts a snapshot graft register from an authoritative
 	// server read. It replaces only the graft register, leaving immutable
 	// metadata (ID/Parents) unchanged.
@@ -188,10 +193,14 @@ type RemoteSync interface {
 	// RegisterRepo registers repo metadata to the server (idempotently) and returns the server-confirmed record (including workspace_id — binding occurs if the remote URL path matches the workspace).
 	// Call before push to ensure the server holds metadata like remote URL (sync protocol).
 	RegisterRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error)
-	// PushMemory uploads the MemoryDigest attached to the snapshot to the server (idempotently).
+	// PushMemory advances the server's causal memory attachment using the
+	// digest's PreviousMemoryHash as the expected pointer.
 	PushMemory(ctx context.Context, repoID string, digest domain.MemoryDigest) error
 	// PullMemory downloads the MemoryDigest from the snapshot. Returns ErrNotFound if not found.
 	PullMemory(ctx context.Context, repoID string, snapshotID domain.ContentHash) (domain.MemoryDigest, error)
+	// PullMemoryObject downloads one immutable memory object by its own hash so
+	// pull can prove fast-forward ancestry before moving a local pointer.
+	PullMemoryObject(ctx context.Context, repoID string, hash domain.ContentHash) (domain.MemoryDigest, error)
 	// PullSettings downloads the team default settings bundle
 	// (claude|agents|codex). Returns ErrNotFound if not found.
 	PullSettings(ctx context.Context, repoID, kind string) (domain.SettingsBundle, error)

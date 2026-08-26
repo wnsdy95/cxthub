@@ -53,7 +53,9 @@ type Backend interface {
 	ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error)
 	// MemoryDigest: snapshot derivative carried with the raw document (compatibility rules).
 	PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error)
+	PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error)
 	GetMemoryDigest(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error)
+	GetMemoryObject(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error)
 	// About + team default settings bundle (web editing).
 	UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error
 	PutSettings(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
@@ -165,6 +167,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/search", s.guard(domain.RoleViewer, s.search))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}", s.guard(domain.RoleViewer, s.getDoc))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleViewer, s.getMemory))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/memory-objects/{hash}", s.guard(domain.RoleViewer, s.getMemoryObject))
 	// About/team settings/secrets: writes require maintainer or higher plus the action-specific requireRepoAction policy; reads require puller or higher for local team-asset synchronization.
 	mux.HandleFunc("PATCH /api/v1/repos/{repoID}/about", s.guard(domain.RoleMaintainer, s.patchAbout))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/settings/{kind}", s.guard(domain.RolePuller, s.getSettings))
@@ -175,6 +178,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/settings-objects/{hash}", s.guard(domain.RolePuller, s.getSettingsObject))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/settings-objects/{hash}", s.guard(domain.RoleMember, s.putSettingsObject))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleMember, s.putMemory))
+	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putMemoryAttachment))
 	// In-progress context pointer: Write/Delete = context push layer (member), Read = pull/web layer (puller).
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending", s.guard(domain.RolePuller, s.listPending))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/pending/{sessionID}", s.guard(domain.RoleMember, s.putPending))
@@ -793,6 +797,21 @@ func (s *Server) putMemory(w http.ResponseWriter, r *http.Request) {
 	d.SnapshotID = domain.ContentHash(r.PathValue("snapshotID"))
 	hash, err := s.b.PutMemoryDigest(r.Context(), s.repoID(r), d)
 	s.respond(w, map[string]any{"memory_hash": hash}, err)
+}
+
+func (s *Server) putMemoryAttachment(w http.ResponseWriter, r *http.Request) {
+	var d domain.MemoryDigest
+	if !s.decode(w, r, &d) {
+		return
+	}
+	d.SnapshotID = domain.ContentHash(r.PathValue("snapshotID"))
+	hash, err := s.b.PutMemoryDigestCAS(r.Context(), s.repoID(r), d)
+	s.respond(w, map[string]any{"memory_hash": hash}, err)
+}
+
+func (s *Server) getMemoryObject(w http.ResponseWriter, r *http.Request) {
+	out, err := s.b.GetMemoryObject(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")))
+	s.respond(w, out, err)
 }
 
 func (s *Server) getDoc(w http.ResponseWriter, r *http.Request) {

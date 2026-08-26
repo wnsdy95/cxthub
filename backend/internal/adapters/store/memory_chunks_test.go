@@ -140,7 +140,7 @@ func TestFSRepackMemoriesRemovesOnlyPointerBackedMeta(t *testing.T) {
 		if err := st.PutMemoryMeta(ctx, repo, digest); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.SetSnapshotMemory(ctx, repo, digest.SnapshotID, hash); err != nil {
+		if err := st.CompareAndSwapSnapshotMemory(ctx, repo, digest.SnapshotID, "", hash); err != nil {
 			t.Fatal(err)
 		}
 		hashes = append(hashes, hash)

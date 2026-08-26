@@ -116,8 +116,52 @@ func TestPGSmoke(t *testing.T) {
 	if err := st.PutMemoryMeta(ctx, repoID, digest); err != nil {
 		t.Fatalf("memory(nil slice): %v", err)
 	}
-	if err := st.SetSnapshotMemory(ctx, repoID, snapID, memoryHash); err != nil {
+	if err := st.CompareAndSwapSnapshotMemory(ctx, repoID, snapID, "", memoryHash); err != nil {
 		t.Fatalf("attach memory: %v", err)
+	}
+	// Two database clients racing from the same causal parent must serialize on
+	// SELECT ... FOR UPDATE: exactly one advances and the stale writer conflicts.
+	contenderHashes := make([]domain.ContentHash, 0, 2)
+	for _, summary := range []string{"database contender one", "database contender two"} {
+		contender := domain.MemoryDigest{
+			SnapshotID: snapID, PreviousMemoryHash: memoryHash,
+			Summary: summary, Provider: domain.ProviderClaude,
+		}
+		hash, err := st.PutMemory(ctx, repoID, contender)
+		if err != nil {
+			t.Fatalf("contender memory blob: %v", err)
+		}
+		contenderHashes = append(contenderHashes, hash)
+	}
+	startMemoryCAS := make(chan struct{})
+	memoryCASErrs := make(chan error, len(contenderHashes))
+	for _, hash := range contenderHashes {
+		go func(next domain.ContentHash) {
+			<-startMemoryCAS
+			memoryCASErrs <- st.CompareAndSwapSnapshotMemory(ctx, repoID, snapID, memoryHash, next)
+		}(hash)
+	}
+	close(startMemoryCAS)
+	var memoryCASSuccesses, memoryCASConflicts int
+	for range contenderHashes {
+		switch err := <-memoryCASErrs; {
+		case err == nil:
+			memoryCASSuccesses++
+		case errors.Is(err, domain.ErrConflict):
+			memoryCASConflicts++
+		default:
+			t.Fatalf("unexpected concurrent memory CAS error: %v", err)
+		}
+	}
+	if memoryCASSuccesses != 1 || memoryCASConflicts != 1 {
+		t.Fatalf("concurrent memory CAS: successes=%d conflicts=%d", memoryCASSuccesses, memoryCASConflicts)
+	}
+	attached, err := st.GetSnapshot(ctx, repoID, snapID)
+	if err != nil {
+		t.Fatalf("snapshot after concurrent memory CAS: %v", err)
+	}
+	if attached.MemoryHash != contenderHashes[0] && attached.MemoryHash != contenderHashes[1] {
+		t.Fatalf("unexpected concurrent memory winner %s", attached.MemoryHash)
 	}
 
 	// Same Git URL and content hash can coexist in different workspace repos. However, before repo supplies directly, a global CAS blob can only be read by hash.

@@ -12,19 +12,21 @@ const MemoryChunkTarget = 64 << 10
 const (
 	MemoryChunkFormatV1 = "cxt-memory-chunks-v1"
 	MemoryChunkFormatV2 = "cxt-memory-chunks-v2"
+	MemoryChunkFormatV3 = "cxt-memory-chunks-v3"
 )
 
 // MemoryChunkManifest is an at-rest representation. MemoryDigestHash remains
 // the hash of complete wire JSON; storage chunking never changes identity.
 type MemoryChunkManifest struct {
-	Format         string               `json:"format"`
-	SnapshotID     ContentHash          `json:"snapshot_id"`
-	SummaryChunks  []ContentHash        `json:"summary_chunks,omitempty"`
-	KeyFacts       []string             `json:"key_facts"`
-	OpenTasks      []string             `json:"open_tasks"`
-	Provider       ProviderKind         `json:"provider"`
-	FragmentChunks []ContentHash        `json:"fragment_chunks,omitempty"`
-	GraftCoverage  *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
+	Format             string               `json:"format"`
+	SnapshotID         ContentHash          `json:"snapshot_id"`
+	PreviousMemoryHash ContentHash          `json:"previous_memory_hash,omitempty"`
+	SummaryChunks      []ContentHash        `json:"summary_chunks,omitempty"`
+	KeyFacts           []string             `json:"key_facts"`
+	OpenTasks          []string             `json:"open_tasks"`
+	Provider           ProviderKind         `json:"provider"`
+	FragmentChunks     []ContentHash        `json:"fragment_chunks,omitempty"`
+	GraftCoverage      *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
 }
 
 type MemoryChunkPlan struct {
@@ -46,12 +48,13 @@ func PlanMemoryChunks(d MemoryDigest) (plan MemoryChunkPlan, ok bool, err error)
 	}
 	plan = MemoryChunkPlan{
 		Manifest: MemoryChunkManifest{
-			Format:        memoryChunkFormatFor(d),
-			SnapshotID:    d.SnapshotID,
-			KeyFacts:      d.KeyFacts,
-			OpenTasks:     d.OpenTasks,
-			Provider:      d.Provider,
-			GraftCoverage: d.GraftCoverage,
+			Format:             memoryChunkFormatFor(d),
+			SnapshotID:         d.SnapshotID,
+			PreviousMemoryHash: d.PreviousMemoryHash,
+			KeyFacts:           d.KeyFacts,
+			OpenTasks:          d.OpenTasks,
+			Provider:           d.Provider,
+			GraftCoverage:      d.GraftCoverage,
 		},
 		Bodies: map[ContentHash][]byte{},
 	}
@@ -73,6 +76,9 @@ func PlanMemoryChunks(d MemoryDigest) (plan MemoryChunkPlan, ok bool, err error)
 }
 
 func memoryChunkFormatFor(d MemoryDigest) string {
+	if d.PreviousMemoryHash != "" {
+		return MemoryChunkFormatV3
+	}
 	if d.GraftCoverage != nil {
 		return MemoryChunkFormatV2
 	}
@@ -80,7 +86,7 @@ func memoryChunkFormatFor(d MemoryDigest) string {
 }
 
 func SupportedMemoryChunkFormat(format string) bool {
-	return format == MemoryChunkFormatV1 || format == MemoryChunkFormatV2
+	return format == MemoryChunkFormatV1 || format == MemoryChunkFormatV2 || format == MemoryChunkFormatV3
 }
 
 func (p *MemoryChunkPlan) addComponent(data []byte) []ContentHash {
@@ -163,12 +169,13 @@ func AssembleMemoryChunks(man MemoryChunkManifest, bodies map[ContentHash][]byte
 		}
 	}
 	return MemoryDigest{
-		SnapshotID:    man.SnapshotID,
-		Summary:       string(summary),
-		KeyFacts:      man.KeyFacts,
-		OpenTasks:     man.OpenTasks,
-		Provider:      man.Provider,
-		Fragments:     fragments,
-		GraftCoverage: man.GraftCoverage,
+		SnapshotID:         man.SnapshotID,
+		PreviousMemoryHash: man.PreviousMemoryHash,
+		Summary:            string(summary),
+		KeyFacts:           man.KeyFacts,
+		OpenTasks:          man.OpenTasks,
+		Provider:           man.Provider,
+		Fragments:          fragments,
+		GraftCoverage:      man.GraftCoverage,
 	}, nil
 }

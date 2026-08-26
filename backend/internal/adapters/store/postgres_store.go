@@ -514,23 +514,48 @@ func (s *PostgresStore) addGraftParents(ctx context.Context, repoID, id domain.C
 	return tx.Commit(ctx)
 }
 
-// SetSnapshotMemory attaches only the derived memory pointer after memorization is pushed; the ID and body remain immutable.
-func (s *PostgresStore) SetSnapshotMemory(ctx context.Context, repoID, id, memoryHash domain.ContentHash) error {
-	if err := validateHashes(repoID, id, memoryHash); err != nil {
+// CompareAndSwapSnapshotMemory advances the causal memory ref under a row lock.
+func (s *PostgresStore) CompareAndSwapSnapshotMemory(ctx context.Context, repoID, id, expected, next domain.ContentHash) error {
+	if err := validateHashes(repoID, id, next); err != nil {
 		return err
 	}
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE snapshots SET memory_hash=$3
-		 WHERE repo_id=$1 AND id=$2
-		   AND EXISTS (SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='memory' AND hash=$3)`,
-		string(repoID), string(id), string(memoryHash))
+	if err := domain.ValidateOptionalContentHash(expected); err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	defer tx.Rollback(ctx)
+	var current string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(memory_hash,'') FROM snapshots WHERE repo_id=$1 AND id=$2 FOR UPDATE`,
+		string(repoID), string(id)).Scan(&current); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		return err
+	}
+	if domain.ContentHash(current) == next {
+		return tx.Commit(ctx)
+	}
+	if domain.ContentHash(current) != expected {
+		return domain.ErrConflict
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='memory' AND hash=$2)`,
+		string(repoID), string(next)).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
 		return domain.ErrNotFound
 	}
-	return nil
+	if _, err := tx.Exec(ctx, `UPDATE snapshots SET memory_hash=$3 WHERE repo_id=$1 AND id=$2`,
+		string(repoID), string(id), string(next)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) ListSnapshots(ctx context.Context, repoID domain.ContentHash, branch string) ([]domain.Snapshot, error) {
@@ -714,15 +739,16 @@ func (s *PostgresStore) GetManifest(ctx context.Context, repoID domain.ContentHa
 	if err != nil {
 		return domain.Manifest{}, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id FROM snapshots WHERE repo_id=$1`, string(repoID))
+	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(memory_hash,'') FROM snapshots WHERE repo_id=$1`, string(repoID))
 	if err != nil {
 		return domain.Manifest{}, err
 	}
 	defer rows.Close()
 	var index []domain.ContentHash
+	memoryAttachments := map[domain.ContentHash]domain.ContentHash{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var id, memoryHash string
+		if err := rows.Scan(&id, &memoryHash); err != nil {
 			return domain.Manifest{}, err
 		}
 		hash := domain.ContentHash(id)
@@ -730,8 +756,15 @@ func (s *PostgresStore) GetManifest(ctx context.Context, repoID domain.ContentHa
 			return domain.Manifest{}, err
 		}
 		index = append(index, hash)
+		if memoryHash != "" {
+			memory := domain.ContentHash(memoryHash)
+			if err := domain.ValidateContentHash(memory); err != nil {
+				return domain.Manifest{}, err
+			}
+			memoryAttachments[hash] = memory
+		}
 	}
-	return domain.Manifest{RepoID: repoID, Refs: refs, SnapshotIndex: index, Version: len(index)}, rows.Err()
+	return domain.Manifest{RepoID: repoID, Refs: refs, SnapshotIndex: index, MemoryAttachments: memoryAttachments, Version: len(index)}, rows.Err()
 }
 
 // --- Memory Meta ---

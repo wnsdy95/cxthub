@@ -22,7 +22,16 @@ ORIGIN="http://127.0.0.1:$PORT"
 FAIL=0
 SRV_PID=""
 # Reap the server immediately after killing it to avoid shell "Terminated" noise.
-cleanup() { [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null && wait "$SRV_PID" 2>/dev/null; rm -rf "$TMP"; }
+# Preserve the isolated fixture on demand so fail-open Git hook diagnostics are
+# still inspectable after the script exits.
+cleanup() {
+  [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null && wait "$SRV_PID" 2>/dev/null
+  if [ "${CXT_E2E_KEEP_TMP:-0}" = 1 ]; then
+    echo "SYNC E2E fixture preserved: $TMP"
+  else
+    rm -rf "$TMP"
+  fi
+}
 trap cleanup EXIT
 
 expect() { if [ "$2" = "$3" ]; then echo "  ✓ $1"; else echo "  ✗ $1  (got=$2 want=$3)"; FAIL=1; fi; }

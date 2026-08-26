@@ -328,7 +328,9 @@ func (c *BackendClient) RegisterRepo(ctx context.Context, repo domain.Repo) (dom
 	return out, nil
 }
 
-// PushMemory uploads a digest to the server via PUT /repos/{repoID}/memories/{snapshotID} (idempotent).
+// PushMemory advances a causal attachment through the CAS-only endpoint. A
+// distinct path makes rolling upgrades fail before mutation on old servers
+// that do not understand PreviousMemoryHash.
 func (c *BackendClient) PushMemory(ctx context.Context, repoID string, digest domain.MemoryDigest) error {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return err
@@ -336,8 +338,21 @@ func (c *BackendClient) PushMemory(ctx context.Context, repoID string, digest do
 	if err := domain.ValidateContentHash(digest.SnapshotID); err != nil {
 		return err
 	}
-	path := c.reposPath(repoID) + "/memories/" + url.PathEscape(string(digest.SnapshotID))
-	return c.do(ctx, http.MethodPut, path, digest, nil)
+	want, err := domain.MemoryDigestHash(digest)
+	if err != nil {
+		return err
+	}
+	var out struct {
+		MemoryHash domain.ContentHash `json:"memory_hash"`
+	}
+	path := c.reposPath(repoID) + "/memory-attachments/" + url.PathEscape(string(digest.SnapshotID))
+	if err := c.do(ctx, http.MethodPut, path, digest, &out); err != nil {
+		return err
+	}
+	if out.MemoryHash != want {
+		return domain.ErrHashMismatch
+	}
+	return nil
 }
 
 // PullMemory downloads a digest from the server via GET /repos/{repoID}/memories/{snapshotID}.
@@ -350,6 +365,20 @@ func (c *BackendClient) PullMemory(ctx context.Context, repoID string, snapshotI
 	}
 	var d domain.MemoryDigest
 	if err := c.do(ctx, http.MethodGet, c.reposPath(repoID)+"/memories/"+url.PathEscape(string(snapshotID)), nil, &d); err != nil {
+		return domain.MemoryDigest{}, err
+	}
+	return d, nil
+}
+
+func (c *BackendClient) PullMemoryObject(ctx context.Context, repoID string, hash domain.ContentHash) (domain.MemoryDigest, error) {
+	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
+		return domain.MemoryDigest{}, err
+	}
+	if err := domain.ValidateContentHash(hash); err != nil {
+		return domain.MemoryDigest{}, err
+	}
+	var d domain.MemoryDigest
+	if err := c.do(ctx, http.MethodGet, c.reposPath(repoID)+"/memory-objects/"+url.PathEscape(string(hash)), nil, &d); err != nil {
 		return domain.MemoryDigest{}, err
 	}
 	return d, nil
@@ -566,6 +595,27 @@ func (c *BackendClient) RemoteManifest(ctx context.Context, repoID string) (doma
 	var m domain.Manifest
 	if err := c.do(ctx, http.MethodGet, c.reposPath(repoID)+"/manifest", nil, &m); err != nil {
 		return domain.Manifest{}, err
+	}
+	if m.RepoID != repoID {
+		return domain.Manifest{}, domain.ErrHashMismatch
+	}
+	index := make(map[domain.ContentHash]bool, len(m.SnapshotIndex))
+	for _, id := range m.SnapshotIndex {
+		if err := domain.ValidateContentHash(id); err != nil || index[id] {
+			return domain.Manifest{}, domain.ErrHashMismatch
+		}
+		index[id] = true
+	}
+	for snapshotID, memoryHash := range m.MemoryAttachments {
+		if err := domain.ValidateContentHash(snapshotID); err != nil {
+			return domain.Manifest{}, err
+		}
+		if err := domain.ValidateContentHash(memoryHash); err != nil {
+			return domain.Manifest{}, err
+		}
+		if !index[snapshotID] {
+			return domain.Manifest{}, domain.ErrHashMismatch
+		}
 	}
 	return m, nil
 }

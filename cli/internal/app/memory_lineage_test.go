@@ -50,6 +50,18 @@ type graftBeforeMemoryAttachStore struct {
 	mutated       bool
 }
 
+type missingSelectedMemoryStore struct {
+	*storage.FileStore
+	missing domain.ContentHash
+}
+
+func (s *missingSelectedMemoryStore) GetMemory(ctx context.Context, hash domain.ContentHash) (domain.MemoryDigest, error) {
+	if hash == s.missing {
+		return domain.MemoryDigest{}, domain.ErrNotFound
+	}
+	return s.FileStore.GetMemory(ctx, hash)
+}
+
 func (s *graftBeforeMemoryAttachStore) PutMemory(ctx context.Context, digest domain.MemoryDigest) (domain.ContentHash, error) {
 	hash, err := s.FileStore.PutMemory(ctx, digest)
 	if err == nil && !s.mutated {
@@ -542,17 +554,24 @@ func TestMemoryProjectionRetainsReachableFragmentWhenSourceMemoryIsUnavailable(t
 
 	// Simulate a partial/corrupt pull after coverage was recorded. The source is
 	// still a natural parent, but its current derivative memory blob is absent.
-	// That pointer change invalidates root coverage; stale repair must use the
+	// That missing frontier invalidates root coverage; stale repair must use the
 	// fragment already embedded in rootDigest instead of silently losing it.
-	baseSnapshot.MemoryHash = h('f')
-	if err := st.PutSnapshot(ctx, baseSnapshot); err != nil {
-		t.Fatal(err)
-	}
 	root, err = st.GetSnapshot(ctx, root.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, ok, complete := snapshotMemoryProjectionDetailed(ctx, st, root)
+	replacement := domain.MemoryDigest{
+		SnapshotID: h('a'), PreviousMemoryHash: baseHash, Summary: "new but unavailable parent memory",
+	}
+	replacementHash, err := st.PutMemory(ctx, replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CompareAndSwapSnapshotMemory(ctx, h('a'), baseHash, replacementHash); err != nil {
+		t.Fatal(err)
+	}
+	partial := &missingSelectedMemoryStore{FileStore: st, missing: replacementHash}
+	got, ok, complete := snapshotMemoryProjectionDetailed(ctx, partial, root)
 	if !ok || complete || !strings.Contains(got.Summary, "reachable fallback memory") || !strings.Contains(got.Summary, "root memory") {
 		t.Fatalf("partial-memory projection = %q, want reachable fallback + root", got.Summary)
 	}
@@ -758,6 +777,13 @@ func TestMemorizeRecordsExactGraftCoverage(t *testing.T) {
 	}
 	if len(digest.Fragments) != 1 || digest.Fragments[0].SourceSnapshot != docHash {
 		t.Fatalf("memorize provenance = %+v, want current snapshot fragment", digest.Fragments)
+	}
+	second, err := service.Memorize(ctx, inbound.MemorizeInput{Cwd: repo.LocalPath, Provider: domain.ProviderCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.MemoryHash != out.MemoryHash {
+		t.Fatalf("unchanged memorize created a new causal node: first=%s second=%s", out.MemoryHash, second.MemoryHash)
 	}
 }
 

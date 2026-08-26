@@ -47,8 +47,10 @@ type MetadataStore interface {
 	AddGraftParents(ctx context.Context, repoID, id domain.ContentHash, add []domain.ContentHash) error
 	// AddGraftParentsCAS is for client delayed graft events. When adding a new edge, the current seq must exactly match the expected. If the edge already exists, the event is confirmed once at current==expected (seq+1) and only responds to a successful retry at current==expected+1. Other versions are conflicts. Version/cycle checks and writes are atomic boundaries of the store.
 	AddGraftParentsCAS(ctx context.Context, repoID, id domain.ContentHash, add []domain.ContentHash, expected uint64) error
-	// SetSnapshotMemory attaches a memory pointer (memory_hash) to the snapshot — after a snapshot push, reflecting memorize (compatibility rules: raw+memory co-possess). ID remains unchanged.
-	SetSnapshotMemory(ctx context.Context, repoID, id, memoryHash domain.ContentHash) error
+	// CompareAndSwapSnapshotMemory advances the causal memory ref only from the
+	// caller's expected parent. Repeating an already-applied next hash is
+	// idempotent; any other current value is a conflict.
+	CompareAndSwapSnapshotMemory(ctx context.Context, repoID, id, expected, next domain.ContentHash) error
 
 	// Ref / manifest (mutable). Progress is CAS (immutable REF4/C1). UpdateRepoAbout updates About(description/website/topics).
 	UpdateRepoAbout(ctx context.Context, id domain.ContentHash, description, website string, topics []string) error

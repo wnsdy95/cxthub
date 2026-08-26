@@ -1044,13 +1044,28 @@ func gitOriginLabel(raw string) string {
 	return raw
 }
 
-// PutMemoryDigest stores snapshot derivative memory as one authoritative blob
-// and attaches its hash to the snapshot. Older releases also wrote the entire
-// digest to MemoryMeta, doubling every large summary; pointerless metadata is
-// now read-only legacy fallback.
-// The target snapshot must exist first (design: 404/422 if not).
+// PutMemoryDigest is the rolling-upgrade endpoint for legacy clients. It may
+// create an empty attachment or retry the exact current digest, but it cannot
+// replace a non-empty pointer because old clients provide no causal parent.
 func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+	if d.PreviousMemoryHash != "" {
+		return "", fmt.Errorf("%w: causal memory requires the attachment endpoint", domain.ErrValidation)
+	}
+	return s.putMemoryDigest(ctx, repoID, d, "", false)
+}
+
+// PutMemoryDigestCAS advances Snapshot.MemoryHash only from the digest's
+// PreviousMemoryHash. The immutable blob is retained even when the pointer CAS
+// loses, so neither concurrent memory is destroyed.
+func (s *Service) PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+	return s.putMemoryDigest(ctx, repoID, d, d.PreviousMemoryHash, true)
+}
+
+func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest, expected domain.ContentHash, causal bool) (domain.ContentHash, error) {
 	if err := validateHashes(repoID, d.SnapshotID); err != nil {
+		return "", err
+	}
+	if err := domain.ValidateOptionalContentHash(d.PreviousMemoryHash); err != nil {
 		return "", err
 	}
 	for _, fragment := range d.Fragments {
@@ -1084,16 +1099,34 @@ func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash
 	if _, err := s.meta.GetSnapshot(ctx, repoID, d.SnapshotID); err != nil {
 		return "", err // ErrNotFound → 404
 	}
+	if causal && expected != "" {
+		previous, err := s.blobs.GetMemory(ctx, repoID, expected)
+		if err != nil {
+			return "", err
+		}
+		if previous.SnapshotID != d.SnapshotID {
+			return "", fmt.Errorf("%w: memory parent belongs to another snapshot", domain.ErrIntegrity)
+		}
+	}
 	hash, err := s.blobs.PutMemory(ctx, repoID, d)
 	if err != nil {
 		return "", err
 	}
 	// Attaches a derivative pointer to the snapshot metadata — after push, the memorize also holds raw+memory (E clause).
 	// Without this, pull/web cannot recognize memory existence.
-	if err := s.meta.SetSnapshotMemory(ctx, repoID, d.SnapshotID, hash); err != nil {
+	if err := s.meta.CompareAndSwapSnapshotMemory(ctx, repoID, d.SnapshotID, expected, hash); err != nil {
 		return "", err
 	}
 	return hash, nil
+}
+
+// GetMemoryObject reads one immutable attachment object by its own hash. Pull
+// uses this to prove ancestry before moving a local memory ref.
+func (s *Service) GetMemoryObject(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error) {
+	if err := validateHashes(repoID, hash); err != nil {
+		return domain.MemoryDigest{}, err
+	}
+	return s.blobs.GetMemory(ctx, repoID, hash)
 }
 
 // GetMemoryDigest resolves the authoritative MemoryHash pointer. Metadata-only

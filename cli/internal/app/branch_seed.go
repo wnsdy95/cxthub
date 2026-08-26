@@ -190,6 +190,9 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		seedMemory = domain.MergeDigests(boundCarriedDigest(*mainMem), branchMem)
 	}
 	seedMemory.SnapshotID = docHash
+	// A seed is a new snapshot, so its first attachment is a causal root even
+	// when its projected content was imported from another snapshot's memory.
+	seedMemory.PreviousMemoryHash = ""
 	seedState := childMemoryProjectionState(snap, branchState)
 	seedMemory.GraftCoverage = memoryGraftCoverageFromState(ctx, s.store, seedState, seedMemory.Fragments, branchProjectionComplete)
 	if seedMemory.Provider == "" {

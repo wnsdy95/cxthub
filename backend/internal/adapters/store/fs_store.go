@@ -1600,12 +1600,17 @@ func dedupHashParents(id domain.ContentHash, natural, graft []domain.ContentHash
 	return out
 }
 
-// SetSnapshotMemory attaches only the derived memory pointer (push after memorize — ID/Body immutable).
-func (s *FSStore) SetSnapshotMemory(ctx context.Context, repoID, id, memoryHash domain.ContentHash) error {
-	if err := validateHashes(repoID, id, memoryHash); err != nil {
+// CompareAndSwapSnapshotMemory advances only the derived memory pointer. The
+// same per-snapshot lock used by graft/message metadata makes the comparison
+// and write one atomic boundary.
+func (s *FSStore) CompareAndSwapSnapshotMemory(ctx context.Context, repoID, id, expected, next domain.ContentHash) error {
+	if err := validateHashes(repoID, id, next); err != nil {
 		return err
 	}
-	if _, err := s.GetMemory(ctx, repoID, memoryHash); err != nil {
+	if err := domain.ValidateOptionalContentHash(expected); err != nil {
+		return err
+	}
+	if _, err := s.GetMemory(ctx, repoID, next); err != nil {
 		return err
 	}
 	mu := s.snapshotLock(repoID, id)
@@ -1615,10 +1620,13 @@ func (s *FSStore) SetSnapshotMemory(ctx context.Context, repoID, id, memoryHash 
 	if err != nil {
 		return err
 	}
-	if snap.MemoryHash == memoryHash {
+	if snap.MemoryHash == next {
 		return nil
 	}
-	snap.MemoryHash = memoryHash
+	if snap.MemoryHash != expected {
+		return domain.ErrConflict
+	}
+	snap.MemoryHash = next
 	data, err := json.Marshal(snap)
 	if err != nil {
 		return err
@@ -1796,7 +1804,7 @@ func (s *FSStore) refLock(repoID domain.ContentHash, _ domain.RefKind, _ string)
 	return lock.(*sync.Mutex)
 }
 
-// fsSnapshotLocks is a mutex for (dataDir, repoID, snapshotID) units. All paths that modify snapshot files (UpdateSnapshotMessage/AddGraftParents/SetSnapshotMemory) must share it — locking one path leaves a lost-update race with other meta updates (review P1). Separate from refLock because refLock is specific to ref movement, and reusing it for snapshot meta updates blurs the lock's meaning.
+// fsSnapshotLocks is a mutex for (dataDir, repoID, snapshotID) units. All paths that modify snapshot files (UpdateSnapshotMessage/AddGraftParents/CompareAndSwapSnapshotMemory) must share it — locking one path leaves a lost-update race with other meta updates (review P1). Separate from refLock because refLock is specific to ref movement, and reusing it for snapshot meta updates blurs the lock's meaning.
 var fsSnapshotLocks sync.Map
 
 func (s *FSStore) snapshotLock(repoID, id domain.ContentHash) *sync.Mutex {
@@ -1918,6 +1926,7 @@ func (s *FSStore) GetManifest(ctx context.Context, repoID domain.ContentHash) (d
 		return domain.Manifest{}, err
 	}
 	var index []domain.ContentHash
+	memoryAttachments := map[domain.ContentHash]domain.ContentHash{}
 	dir := filepath.Join(s.repoDir(repoID), "snapshots")
 	if entries, err := os.ReadDir(dir); err == nil {
 		for _, e := range entries {
@@ -1928,20 +1937,25 @@ func (s *FSStore) GetManifest(ctx context.Context, repoID domain.ContentHash) (d
 			if !ok {
 				continue
 			}
-			if _, err := s.GetSnapshot(ctx, repoID, id); err != nil {
+			snap, err := s.GetSnapshot(ctx, repoID, id)
+			if err != nil {
 				return domain.Manifest{}, err
 			}
 			index = append(index, id)
+			if snap.MemoryHash != "" {
+				memoryAttachments[id] = snap.MemoryHash
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return domain.Manifest{}, err
 	}
 	return domain.Manifest{
-		RepoID:        repoID,
-		Refs:          refs,
-		SnapshotIndex: index,
-		Version:       len(index),
-		UpdatedAt:     time.Now().UTC(),
+		RepoID:            repoID,
+		Refs:              refs,
+		SnapshotIndex:     index,
+		MemoryAttachments: memoryAttachments,
+		Version:           len(index),
+		UpdatedAt:         time.Now().UTC(),
 	}, nil
 }
 

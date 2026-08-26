@@ -313,8 +313,12 @@ cxt pull [--force]
 
 Downloads objects and refs from `origin`.
 
-- The default keeps local state and reports diverged branches.
-- `--force` adopts remote ref state.
+- The default keeps local state and reports diverged branches or causal memory
+  forks instead of choosing a winner by arrival time.
+- `--force` adopts remote ref state and resolves a memory fork by selecting the
+  remote memory pointer. The losing immutable local memory object and raw
+  session remain stored; run `cxt memorize` again to project that session onto
+  the selected remote lineage.
 
 Review local work before using `--force`.
 

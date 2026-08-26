@@ -303,6 +303,13 @@ components:
           items:
             $ref: "#/components/schemas/ContentHash"
           description: "List of all snapshot IDs held by this store."
+        memory_attachments:
+          type: object
+          description: "Current causal memory hash keyed by snapshot ID. Absent means a legacy peer without attachment-state advertisement."
+          propertyNames:
+            pattern: '^sha256:[0-9a-f]{64}$'
+          additionalProperties:
+            $ref: "#/components/schemas/ContentHash"
         version:
           type: integer
           minimum: 0
@@ -319,6 +326,10 @@ components:
       properties:
         snapshot_id:
           $ref: "#/components/schemas/ContentHash"
+        previous_memory_hash:
+          allOf:
+            - $ref: "#/components/schemas/ContentHash"
+          description: "Causal parent attachment for the same snapshot. Omitted only for an initial or legacy root."
         summary:
           type: string
         key_facts:
@@ -1170,10 +1181,12 @@ paths:
 
     put:
       operationId: putMemory
-      summary: MemoryDigest upload (idempotent)
+      summary: Legacy MemoryDigest create/retry
       description: |
-        Uploads MemoryDigest for the snapshot. Idempotent.
-        Snapshot must exist first (returns 422 missing_object if not).
+        Rolling-upgrade endpoint for clients without causal attachment support.
+        Creates an empty pointer or retries the exact current digest, but never
+        replaces a different non-empty pointer. New clients use
+        /memory-attachments/{snapshotID}.
       tags: [memories]
       requestBody:
         required: true
@@ -1187,17 +1200,109 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MemoryDigest"
+                type: object
+                required: [memory_hash]
+                additionalProperties: false
+                properties:
+                  memory_hash:
+                    $ref: "#/components/schemas/ContentHash"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          description: "A different memory attachment already exists; upgrade and pull before retrying."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "422":
           description: "Snapshot does not exist (missing_object) or integrity error."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /repos/{repoID}/memory-attachments/{snapshotID}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: snapshotID
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/ContentHash"
+    put:
+      operationId: putMemoryAttachment
+      summary: Fast-forward a causal memory attachment
+      description: |
+        Stores the immutable digest, then atomically advances Snapshot.MemoryHash
+        only when its current value equals previous_memory_hash. Repeating an
+        already-applied digest is idempotent. Divergent or stale parents return
+        409 without moving the pointer.
+      tags: [memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryDigest"
+      responses:
+        "200":
+          description: Attachment advanced or already current.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [memory_hash]
+                additionalProperties: false
+                properties:
+                  memory_hash:
+                    $ref: "#/components/schemas/ContentHash"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "Current memory pointer differs from previous_memory_hash."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: "Digest, snapshot, or causal parent integrity validation failed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /repos/{repoID}/memory-objects/{hash}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: hash
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/ContentHash"
+    get:
+      operationId: getMemoryObject
+      summary: Read an immutable memory object by hash
+      description: "Used to prove attachment ancestry before a pull fast-forward."
+      tags: [memories]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryDigest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   # =========================================================================
   # Push Negotiation

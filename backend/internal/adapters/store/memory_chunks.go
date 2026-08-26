@@ -17,6 +17,9 @@ func validateMemoryDigestRefs(digest domain.MemoryDigest) error {
 	if err := domain.ValidateOptionalContentHash(digest.SnapshotID); err != nil {
 		return err
 	}
+	if err := domain.ValidateOptionalContentHash(digest.PreviousMemoryHash); err != nil {
+		return err
+	}
 	for _, fragment := range digest.Fragments {
 		if err := validateHash(fragment.SourceSnapshot); err != nil {
 			return err

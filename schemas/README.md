@@ -7,7 +7,7 @@ cxt keeps `cli/` and `backend/` in separate Go modules with independent domain t
 | File | Role |
 |---|---|
 | `cir.schema.json` | CIR v1, the provider-independent canonical intermediate representation decoded from raw Claude and Codex JSONL. Changes require compatibility review. |
-| `manifest.schema.json` | Manifest v1: repository refs plus the `snapshot_index` catalog used for push/pull have-want negotiation. Changes require compatibility review. |
+| `manifest.schema.json` | Manifest v1: repository refs, `snapshot_index`, and optional causal `memory_attachments` pointers used for push/pull have-want negotiation. Changes require compatibility review. |
 | `openapi.yaml` | OpenAPI 3.1 REST contract shared by CLI, backend, and frontend. Route and field drift tests keep it aligned with the server. |
 | `db/migrations/*.sql` | Ordered PostgreSQL migrations through 0036, covering repository objects, identity/workspaces, pending state, reflog, compaction, graft overlays, transcript/memory chunk storage, and scoped session refs. |
 

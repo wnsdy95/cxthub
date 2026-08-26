@@ -395,3 +395,47 @@ func TestBoundedChunkResponseBodyLimit(t *testing.T) {
 		t.Fatalf("oversized bounded response err=%v", err)
 	}
 }
+
+func TestMemoryClientUsesCausalAttachmentAndObjectEndpoints(t *testing.T) {
+	repoID := domain.HashContent([]byte("memory-client-repo"))
+	snapshotID := domain.HashContent([]byte("memory-client-snapshot"))
+	previous := domain.HashContent([]byte("memory-client-previous"))
+	digest := domain.MemoryDigest{
+		SnapshotID: snapshotID, PreviousMemoryHash: previous, Summary: "causal memory", Provider: domain.ProviderCodex,
+	}
+	digestHash, err := domain.MemoryDigestHash(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var putPath, getPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			putPath = r.URL.Path
+			var got domain.MemoryDigest
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil || got.PreviousMemoryHash != previous {
+				t.Errorf("put digest=%+v err=%v", got, err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]domain.ContentHash{"memory_hash": digestHash})
+		case http.MethodGet:
+			getPath = r.URL.Path
+			_ = json.NewEncoder(w).Encode(digest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if err := c.PushMemory(context.Background(), string(repoID), digest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.PullMemoryObject(context.Background(), string(repoID), digestHash)
+	if err != nil || got.PreviousMemoryHash != previous {
+		t.Fatalf("pull object=%+v err=%v", got, err)
+	}
+	wantPut := "/repos/" + string(repoID) + "/memory-attachments/" + string(snapshotID)
+	wantGet := "/repos/" + string(repoID) + "/memory-objects/" + string(digestHash)
+	if putPath != wantPut || getPath != wantGet {
+		t.Fatalf("paths put=%q get=%q, want %q / %q", putPath, getPath, wantPut, wantGet)
+	}
+}
