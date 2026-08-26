@@ -1,6 +1,7 @@
 // Command cxtd is the central cxt server binary (module boundary: Go, container).
 //
-// The only subcommand is 'serve' (starts an HTTP REST server). Frontend static assets are not served (CDN/Vercel).
+// 'serve' starts the HTTP REST server; 'repack' performs offline-compatible FS
+// object maintenance. Frontend static assets are not served (CDN/Vercel).
 //
 // Store: Default build uses FSStore (file-based, --data directory). `go build -tags postgres` + CXT_POSTGRES_DSN
 // for PostgreSQL adapter (pgx). store.Open(factory) selects based on build tags.
@@ -41,7 +42,8 @@ func isLoopback(addr string) bool {
 
 func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "repack" {
-		// Maintenance: repack legacy monolithic FS-store documents into chunk CAS (lossless and idempotent).
+		// Maintenance: repack legacy FS-store transcript and memory objects into
+		// their chunk CAS forms (lossless and idempotent).
 		// It is safe alongside a live server because replacement is atomic and newly created chunks receive a sweep grace period.
 		dataDir := flagOr(os.Args[2:], "--data", os.Getenv("CXT_DATA"), "./cxt-data")
 		fs, err := store.OpenFSStore(dataDir)
@@ -49,12 +51,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, "cxtd repack:", err)
 			os.Exit(1)
 		}
-		n, saved, err := fs.RepackDocs()
+		n, saved, err := fs.RepackObjects()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "cxtd repack:", err)
 			os.Exit(1)
 		}
-		fmt.Printf("repacked %d doc(s), reclaimed %.1f MB\n", n, float64(saved)/1e6)
+		fmt.Printf("repacked %d object(s), reclaimed %.1f MB\n", n, float64(saved)/1e6)
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] != "serve" {

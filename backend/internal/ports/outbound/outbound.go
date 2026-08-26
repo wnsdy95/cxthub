@@ -83,7 +83,9 @@ type MetadataStore interface {
 	ReadReflog(ctx context.Context, repoID domain.ContentHash) ([]domain.RefLogEntry, error)
 	GetManifest(ctx context.Context, repoID domain.ContentHash) (domain.Manifest, error)
 
-	// Memory meta (derivative; body is BlobStore). Target snapshot must exist (sync protocol).
+	// Legacy MemoryDigest metadata fallback for snapshots created before
+	// Snapshot.MemoryHash became authoritative. New writes attach only the blob
+	// hash; adapters keep these methods to read and safely retire old records.
 	GetMemoryMeta(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error)
 	PutMemoryMeta(ctx context.Context, repoID domain.ContentHash, digest domain.MemoryDigest) error
 }
@@ -115,7 +117,7 @@ type JoinMutation struct {
 //
 // Implementation (impl step): v1 = Postgres BYTEA — blobs(hash PK, bytes BYTEA). hash deduplication (if same hash, existing, skip re-recording = idempotent put). Later replace with S3/MinIO adapter without downtime. Current is stdlib only stub.
 //
-// Storage units: SessionDoc (CIR body) and MemoryDigest body. Both have sha256:<hex> keys. Integrity: Recalculate hash on Get to verify key (sync protocol, verification is in impl).
+// Storage units: SessionDoc (CIR body) and MemoryDigest body. Both have sha256:<hex> keys. Their at-rest bodies may be storage-only chunk manifests, while Get always reconstructs and verifies the complete identity.
 type BlobStore interface {
 	// PutDoc: Store SessionDoc body. content-hash deduplication (Stored=false means already exists).
 	PutDoc(ctx context.Context, repoID domain.ContentHash, doc domain.SessionDoc) (stored bool, err error)

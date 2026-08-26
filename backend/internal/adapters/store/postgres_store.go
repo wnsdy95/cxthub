@@ -1174,7 +1174,7 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 	if err := validateHash(repoID); err != nil {
 		return "", err
 	}
-	if err := domain.ValidateOptionalContentHash(digest.SnapshotID); err != nil {
+	if err := validateMemoryDigestRefs(digest); err != nil {
 		return "", err
 	}
 	data, err := json.Marshal(digest)
@@ -1190,15 +1190,110 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`, string(h), data); err != nil {
+	// Lock order is memory object → memory components. A newly inserted manifest
+	// is invisible until every component and ownership grant commits with it.
+	plan, chunked, err := domain.PlanMemoryChunks(digest)
+	if err != nil {
 		return "", err
 	}
+	payload := data
+	if chunked {
+		payload, err = json.Marshal(plan.Manifest)
+		if err != nil {
+			return "", err
+		}
+	}
+	createdTag, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`, string(h), payload)
+	if err != nil {
+		return "", err
+	}
+	created := createdTag.RowsAffected() > 0
 	var stored []byte
-	if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(h)).Scan(&stored); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1 FOR UPDATE`, string(h)).Scan(&stored); err != nil {
 		return "", err
 	}
-	if !bytes.Equal(stored, data) {
-		return "", fmt.Errorf("%w: stored blob disagrees with memory hash %s", domain.ErrIntegrity, h)
+	stored, err = docDecompress(stored)
+	if err != nil {
+		return "", fmt.Errorf("%w: stored blob undecodable for memory %s", domain.ErrIntegrity, h)
+	}
+	storedManifest, isManifest, parseErr := domain.ParseMemoryChunkManifest(stored)
+	if parseErr != nil {
+		return "", fmt.Errorf("%w: invalid memory manifest %s", domain.ErrIntegrity, h)
+	}
+	if !created {
+		var existing domain.MemoryDigest
+		if isManifest {
+			existing, _, err = s.reassembleMemoryManifestTx(ctx, tx, stored)
+		} else {
+			err = json.Unmarshal(stored, &existing)
+		}
+		if err != nil {
+			return "", fmt.Errorf("%w: stored blob disagrees with memory hash %s", domain.ErrIntegrity, h)
+		}
+		got, hashErr := domain.MemoryDigestHash(existing)
+		if hashErr != nil || got != h {
+			return "", fmt.Errorf("%w: stored blob disagrees with memory hash %s", domain.ErrIntegrity, h)
+		}
+	}
+	if chunked {
+		for _, chunkHash := range plan.Order {
+			body := plan.Bodies[chunkHash]
+			if _, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
+				string(chunkHash), docCompress(body)); err != nil {
+				return "", err
+			}
+			var existing []byte
+			if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(chunkHash)).Scan(&existing); err != nil {
+				return "", err
+			}
+			existing, err = docDecompress(existing)
+			if err != nil || !bytes.Equal(existing, body) {
+				return "", domain.ErrIntegrity
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'memory_chunk',$2) ON CONFLICT DO NOTHING`,
+				string(repoID), string(chunkHash)); err != nil {
+				return "", err
+			}
+		}
+	}
+	if !created && chunked && !isManifest {
+		// The blob is global but readability is repo-scoped. Before replacing a
+		// shared legacy memory with its manifest, grant every current memory owner
+		// every component so rolling multi-repo dedup cannot revoke access.
+		for _, chunkHash := range plan.Order {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO repo_blobs (repo_id, kind, hash)
+				 SELECT repo_id, 'memory_chunk', $2 FROM repo_blobs WHERE kind='memory' AND hash=$1
+				 ON CONFLICT DO NOTHING`, string(h), string(chunkHash)); err != nil {
+				return "", err
+			}
+		}
+		manifest, err := json.Marshal(plan.Manifest)
+		if err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, manifest, string(h)); err != nil {
+			return "", err
+		}
+	} else if isManifest {
+		// A repo deduplicating against an already-manifested global memory must
+		// own the components referenced by the stored representation. Re-grant
+		// every current owner too, healing any interrupted/older migration.
+		all := append(append([]domain.ContentHash{}, storedManifest.SummaryChunks...), storedManifest.FragmentChunks...)
+		for _, chunkHash := range all {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'memory_chunk',$2) ON CONFLICT DO NOTHING`,
+				string(repoID), string(chunkHash)); err != nil {
+				return "", err
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO repo_blobs (repo_id, kind, hash)
+				 SELECT repo_id, 'memory_chunk', $2 FROM repo_blobs WHERE kind='memory' AND hash=$1
+				 ON CONFLICT DO NOTHING`, string(h), string(chunkHash)); err != nil {
+				return "", err
+			}
+		}
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'memory',$2) ON CONFLICT DO NOTHING`,
@@ -1209,6 +1304,31 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 		return "", err
 	}
 	return h, nil
+}
+
+func (s *PostgresStore) reassembleMemoryManifestTx(ctx context.Context, tx pgx.Tx, data []byte) (domain.MemoryDigest, bool, error) {
+	manifest, isManifest, err := domain.ParseMemoryChunkManifest(data)
+	if !isManifest || err != nil {
+		return domain.MemoryDigest{}, isManifest, err
+	}
+	bodies := make(map[domain.ContentHash][]byte, len(manifest.SummaryChunks)+len(manifest.FragmentChunks))
+	all := append(append([]domain.ContentHash{}, manifest.SummaryChunks...), manifest.FragmentChunks...)
+	for _, chunkHash := range all {
+		if _, loaded := bodies[chunkHash]; loaded {
+			continue
+		}
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(chunkHash)).Scan(&raw); err != nil {
+			return domain.MemoryDigest{}, true, err
+		}
+		body, err := docDecompress(raw)
+		if err != nil {
+			return domain.MemoryDigest{}, true, err
+		}
+		bodies[chunkHash] = body
+	}
+	digest, err := domain.AssembleMemoryChunks(manifest, bodies)
+	return digest, true, err
 }
 
 func (s *PostgresStore) GetMemory(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error) {
@@ -1222,6 +1342,49 @@ func (s *PostgresStore) GetMemory(ctx context.Context, repoID, hash domain.Conte
 		string(repoID), string(hash)).Scan(&b); err != nil {
 		return domain.MemoryDigest{}, mapNoRows(err)
 	}
+	b, err := docDecompress(b)
+	if err != nil {
+		return domain.MemoryDigest{}, domain.ErrIntegrity
+	}
+	if manifest, isManifest, parseErr := domain.ParseMemoryChunkManifest(b); isManifest {
+		if parseErr != nil {
+			return domain.MemoryDigest{}, domain.ErrIntegrity
+		}
+		bodies := make(map[domain.ContentHash][]byte, len(manifest.SummaryChunks)+len(manifest.FragmentChunks))
+		all := append(append([]domain.ContentHash{}, manifest.SummaryChunks...), manifest.FragmentChunks...)
+		for _, chunkHash := range all {
+			if _, loaded := bodies[chunkHash]; loaded {
+				continue
+			}
+			var raw []byte
+			if err := s.pool.QueryRow(ctx,
+				`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
+				 WHERE rb.repo_id=$1 AND rb.kind='memory_chunk' AND rb.hash=$2`,
+				string(repoID), string(chunkHash)).Scan(&raw); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return domain.MemoryDigest{}, fmt.Errorf("%w: memory %s missing component %s", domain.ErrIntegrity, hash, chunkHash)
+				}
+				return domain.MemoryDigest{}, err
+			}
+			body, err := docDecompress(raw)
+			if err != nil {
+				return domain.MemoryDigest{}, domain.ErrIntegrity
+			}
+			bodies[chunkHash] = body
+		}
+		digest, err := domain.AssembleMemoryChunks(manifest, bodies)
+		if err != nil {
+			return domain.MemoryDigest{}, err
+		}
+		if err := validateMemoryDigestRefs(digest); err != nil {
+			return domain.MemoryDigest{}, err
+		}
+		got, err := domain.MemoryDigestHash(digest)
+		if err != nil || got != hash {
+			return domain.MemoryDigest{}, fmt.Errorf("%w: memory hash mismatch: got %s want %s", domain.ErrIntegrity, got, hash)
+		}
+		return digest, nil
+	}
 	var d domain.MemoryDigest
 	if err := json.Unmarshal(b, &d); err != nil {
 		return domain.MemoryDigest{}, err
@@ -1232,6 +1395,9 @@ func (s *PostgresStore) GetMemory(ctx context.Context, repoID, hash domain.Conte
 	}
 	if got != hash {
 		return domain.MemoryDigest{}, fmt.Errorf("%w: memory hash mismatch: got %s want %s", domain.ErrIntegrity, got, hash)
+	}
+	if err := validateMemoryDigestRefs(d); err != nil {
+		return domain.MemoryDigest{}, err
 	}
 	return d, nil
 }

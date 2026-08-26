@@ -1044,7 +1044,10 @@ func gitOriginLabel(raw string) string {
 	return raw
 }
 
-// PutMemoryDigest stores snapshot derivative memory (blob + meta, idempotent).
+// PutMemoryDigest stores snapshot derivative memory as one authoritative blob
+// and attaches its hash to the snapshot. Older releases also wrote the entire
+// digest to MemoryMeta, doubling every large summary; pointerless metadata is
+// now read-only legacy fallback.
 // The target snapshot must exist first (design: 404/422 if not).
 func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
 	if err := validateHashes(repoID, d.SnapshotID); err != nil {
@@ -1062,9 +1065,6 @@ func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash
 	if err != nil {
 		return "", err
 	}
-	if err := s.meta.PutMemoryMeta(ctx, repoID, d); err != nil {
-		return "", err
-	}
 	// Attaches a derivative pointer to the snapshot metadata — after push, the memorize also holds raw+memory (E clause).
 	// Without this, pull/web cannot recognize memory existence.
 	if err := s.meta.SetSnapshotMemory(ctx, repoID, d.SnapshotID, hash); err != nil {
@@ -1073,12 +1073,29 @@ func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash
 	return hash, nil
 }
 
-// GetMemoryDigest retrieves the compressed memory of a snapshot.
+// GetMemoryDigest resolves the authoritative MemoryHash pointer. Metadata-only
+// fallback is intentionally limited to legacy snapshots with no pointer: once
+// a pointer exists, hiding a missing/corrupt blob behind stale metadata would
+// turn an integrity failure into a silent rollback.
 func (s *Service) GetMemoryDigest(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error) {
 	if err := validateHashes(repoID, snapshotID); err != nil {
 		return domain.MemoryDigest{}, err
 	}
-	return s.meta.GetMemoryMeta(ctx, repoID, snapshotID)
+	snapshot, err := s.meta.GetSnapshot(ctx, repoID, snapshotID)
+	if err != nil {
+		return domain.MemoryDigest{}, err
+	}
+	if snapshot.MemoryHash == "" {
+		return s.meta.GetMemoryMeta(ctx, repoID, snapshotID)
+	}
+	digest, err := s.blobs.GetMemory(ctx, repoID, snapshot.MemoryHash)
+	if err != nil {
+		return domain.MemoryDigest{}, err
+	}
+	if digest.SnapshotID != snapshotID {
+		return domain.MemoryDigest{}, fmt.Errorf("%w: memory %s targets snapshot %s, want %s", domain.ErrIntegrity, snapshot.MemoryHash, digest.SnapshotID, snapshotID)
+	}
+	return digest, nil
 }
 
 // UpdateAbout updates the repo About (web-only — membership check at call site).

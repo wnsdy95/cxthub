@@ -39,7 +39,9 @@ type Store interface {
 //
 //	dataDir/repos/<repoHex>/repo.json
 //	dataDir/repos/<repoHex>/objects/docs/<docHex>          (SessionDoc.CIR JSON; key = client-provided doc.Hash)
+//	dataDir/repos/<repoHex>/objects/chunks/<chunkHex>      (compressed transcript component)
 //	dataDir/repos/<repoHex>/objects/memories/<hex>         (MemoryDigest JSON)
+//	dataDir/repos/<repoHex>/objects/memory_chunks/<hex>    (compressed memory component)
 //	dataDir/repos/<repoHex>/snapshots/<idHex>              (Snapshot metadata JSON; key = client-provided snap.ID)
 //	dataDir/repos/<repoHex>/refs/heads/<name> · refs/sessions/<name> · refs/tags/<name> · HEAD
 //	dataDir/repos/<repoHex>/memmeta/<snapHex>.json         (MemoryDigest metadata)
@@ -2088,7 +2090,7 @@ func (s *FSStore) PutMemory(_ context.Context, repoID domain.ContentHash, digest
 	if err := validateHash(repoID); err != nil {
 		return "", err
 	}
-	if err := domain.ValidateOptionalContentHash(digest.SnapshotID); err != nil {
+	if err := validateMemoryDigestRefs(digest); err != nil {
 		return "", err
 	}
 	data, err := json.Marshal(digest)
@@ -2105,8 +2107,14 @@ func (s *FSStore) PutMemory(_ context.Context, repoID domain.ContentHash, digest
 			return "", err
 		}
 	} else {
-		if err := writeAtomic(p, data); err != nil {
+		chunked, _, err := s.putMemoryChunked(repoID, h, digest)
+		if err != nil {
 			return "", err
+		}
+		if !chunked {
+			if err := writeAtomic(p, data); err != nil {
+				return "", err
+			}
 		}
 	}
 	return h, nil
@@ -2123,6 +2131,12 @@ func (s *FSStore) GetMemory(_ context.Context, repoID, hash domain.ContentHash) 
 		}
 		return domain.MemoryDigest{}, err
 	}
+	if chunked, isManifest, chunkErr := s.getMemoryChunked(repoID, hash, data); isManifest {
+		if chunkErr != nil {
+			return domain.MemoryDigest{}, chunkErr
+		}
+		return chunked, nil
+	}
 	var d domain.MemoryDigest
 	if err := json.Unmarshal(data, &d); err != nil {
 		return domain.MemoryDigest{}, err
@@ -2134,7 +2148,7 @@ func (s *FSStore) GetMemory(_ context.Context, repoID, hash domain.ContentHash) 
 	if got != hash {
 		return domain.MemoryDigest{}, domain.ErrIntegrity
 	}
-	if err := domain.ValidateOptionalContentHash(d.SnapshotID); err != nil {
+	if err := validateMemoryDigestRefs(d); err != nil {
 		return domain.MemoryDigest{}, err
 	}
 	return d, nil
