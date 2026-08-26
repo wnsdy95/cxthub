@@ -324,24 +324,111 @@ func dedupGraft(id domain.ContentHash, parents, graft []domain.ContentHash) []do
 	return out
 }
 
-func (s *FileStore) PutSnapshot(_ context.Context, snap domain.Snapshot) error {
+const snapshotMutationLockStaleAfter = 10 * time.Minute
+
+// withSnapshotMutationLock serializes every read-modify-write of one snapshot
+// across FileStore instances and CLI processes. Atomic rename protects file
+// contents, but without this queue two terminals can both read the same meta
+// and silently discard each other's derivative updates. The stale takeover is
+// crash recovery only; normal contention waits for the lock owner.
+func (s *FileStore) withSnapshotMutationLock(ctx context.Context, id domain.ContentHash, fn func() error) error {
+	if err := domain.ValidateContentHash(id); err != nil {
+		return err
+	}
+	locksDir := filepath.Join(s.storeDir(), "locks", "snapshots")
+	if err := validateCxtDir(locksDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(locksDir, 0o755); err != nil {
+		return err
+	}
+	if err := validateCxtDir(locksDir); err != nil {
+		return err
+	}
+	lockPath := filepath.Join(locksDir, hexOf(id)+".lock")
+	token := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	ownerPath := filepath.Join(lockPath, "owner")
+	for {
+		err := os.Mkdir(lockPath, 0o700)
+		if err == nil {
+			if err := writeAtomic(ownerPath, []byte(token)); err != nil {
+				_ = os.Remove(lockPath)
+				return err
+			}
+			defer func() {
+				owner, readErr := readCxtFile(ownerPath)
+				if readErr == nil && string(owner) == token {
+					_ = os.Remove(ownerPath)
+					_ = os.Remove(lockPath)
+				}
+			}()
+			return fn()
+		}
+		if !os.IsExist(err) {
+			return err
+		}
+		if info, statErr := os.Lstat(lockPath); statErr == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return domain.ErrHashMismatch
+			}
+			if time.Since(info.ModTime()) > snapshotMutationLockStaleAfter {
+				stalePath := lockPath + ".stale-" + token
+				if os.Rename(lockPath, stalePath) == nil {
+					_ = os.Remove(filepath.Join(stalePath, "owner"))
+					_ = os.Remove(stalePath)
+					continue
+				}
+			}
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *FileStore) PutSnapshot(ctx context.Context, snap domain.Snapshot) error {
 	if err := validateSnapshotRefs(snap); err != nil {
 		return err
 	}
+	if snap.MemoryHash != "" {
+		digest, err := s.GetMemory(ctx, snap.MemoryHash)
+		if err != nil {
+			return err
+		}
+		if digest.SnapshotID != snap.ID {
+			return domain.ErrHashMismatch
+		}
+	}
+	return s.withSnapshotMutationLock(ctx, snap.ID, func() error {
+		return s.putSnapshotLocked(snap)
+	})
+}
+
+func (s *FileStore) putSnapshotLocked(snap domain.Snapshot) error {
 	p := s.objectPath("snapshots", snap.ID)
 	if fileExists(p) {
 		// Immutable object: idempotent. Exception — only derived fields not in ID/content are updated:
-		//   - MemoryHash attachment (derived pointer, compatibility rules): attaches if new value.
 		//   - GraftParents overlay adoption: adds reachability edge during server diverged append merge (Parents original immutable). Not receiving results in local reachability walk divergence from server, leading to incorrect ff determination (replica convergence).
 		existing, err := s.GetSnapshot(context.Background(), snap.ID)
 		if err != nil {
 			return err
 		}
 		changed := false
-		if snap.MemoryHash != "" && existing.MemoryHash != snap.MemoryHash {
-			// The derived pointer is replaceable after re-memorization; the body and ID remain immutable.
+		// MemoryHash has a dedicated causal CAS. Generic snapshot adoption must
+		// never turn an authoritative read or stale local copy into LWW rollback.
+		// A first attachment is still an unambiguous empty→value fast-forward;
+		// the snapshot lock ensures only one concurrent creator can win it.
+		if existing.MemoryHash == "" && snap.MemoryHash != "" {
 			existing.MemoryHash = snap.MemoryHash
 			changed = true
+		} else if existing.MemoryHash != "" && snap.MemoryHash != "" && existing.MemoryHash != snap.MemoryHash {
+			return domain.ErrSyncConflict
 		}
 		if strings.HasPrefix(existing.Message, domain.HookMessagePrefix) &&
 			snap.Message != "" && !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
@@ -419,10 +506,16 @@ func sameHashList(left, right []domain.ContentHash) bool {
 // authoritative GET. Local GraftSeq can be ahead of server due to a pending add,
 // so this cannot be recovered with general PutSnapshot max-seq merge. Caller
 // passes a validated GET response only.
-func (s *FileStore) ReconcileGraftState(_ context.Context, authoritative domain.Snapshot) error {
+func (s *FileStore) ReconcileGraftState(ctx context.Context, authoritative domain.Snapshot) error {
 	if err := validateSnapshotRefs(authoritative); err != nil {
 		return err
 	}
+	return s.withSnapshotMutationLock(ctx, authoritative.ID, func() error {
+		return s.reconcileGraftStateLocked(authoritative)
+	})
+}
+
+func (s *FileStore) reconcileGraftStateLocked(authoritative domain.Snapshot) error {
 	existing, err := s.GetSnapshot(context.Background(), authoritative.ID)
 	if err != nil {
 		return err
@@ -438,6 +531,48 @@ func (s *FileStore) ReconcileGraftState(_ context.Context, authoritative domain.
 		return err
 	}
 	return writeAtomic(s.objectPath("snapshots", existing.ID), b)
+}
+
+// CompareAndSwapSnapshotMemory advances one snapshot's causal memory ref.
+// The blob is written first and immutable, so a failed CAS preserves both
+// contenders and reports an explicit conflict instead of choosing by timing.
+func (s *FileStore) CompareAndSwapSnapshotMemory(ctx context.Context, id, expected, next domain.ContentHash) error {
+	if err := domain.ValidateContentHash(id); err != nil {
+		return err
+	}
+	if err := domain.ValidateOptionalContentHash(expected); err != nil {
+		return err
+	}
+	if err := domain.ValidateOptionalContentHash(next); err != nil {
+		return err
+	}
+	if next != "" {
+		digest, err := s.GetMemory(ctx, next)
+		if err != nil {
+			return err
+		}
+		if digest.SnapshotID != id {
+			return domain.ErrHashMismatch
+		}
+	}
+	return s.withSnapshotMutationLock(ctx, id, func() error {
+		snap, err := s.GetSnapshot(ctx, id)
+		if err != nil {
+			return err
+		}
+		if snap.MemoryHash == next {
+			return nil
+		}
+		if snap.MemoryHash != expected {
+			return domain.ErrSyncConflict
+		}
+		snap.MemoryHash = next
+		data, err := json.Marshal(snap)
+		if err != nil {
+			return err
+		}
+		return writeAtomic(s.objectPath("snapshots", id), data)
+	})
 }
 
 // GetSnapshot retrieves Snapshot metadata by ID. Returns domain.ErrNotFound if not found.
@@ -624,6 +759,7 @@ func (s *FileStore) Manifest(ctx context.Context, repoID string) (domain.Manifes
 		return domain.Manifest{}, err
 	}
 	var index []domain.ContentHash
+	memoryAttachments := map[domain.ContentHash]domain.ContentHash{}
 	dir := filepath.Join(s.storeDir(), "objects", "snapshots")
 	if entries, err := readCxtDir(dir); err == nil {
 		for _, e := range entries {
@@ -634,20 +770,25 @@ func (s *FileStore) Manifest(ctx context.Context, repoID string) (domain.Manifes
 			if !ok {
 				continue
 			}
-			if _, err := s.GetSnapshot(ctx, id); err != nil {
+			snap, err := s.GetSnapshot(ctx, id)
+			if err != nil {
 				return domain.Manifest{}, err
 			}
 			index = append(index, id)
+			if snap.MemoryHash != "" {
+				memoryAttachments[id] = snap.MemoryHash
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return domain.Manifest{}, err
 	}
 	return domain.Manifest{
-		RepoID:        repoID,
-		Refs:          refs,
-		SnapshotIndex: index,
-		Version:       0,
-		UpdatedAt:     time.Now().UTC(),
+		RepoID:            repoID,
+		Refs:              refs,
+		SnapshotIndex:     index,
+		MemoryAttachments: memoryAttachments,
+		Version:           0,
+		UpdatedAt:         time.Now().UTC(),
 	}, nil
 }
 
@@ -883,11 +1024,13 @@ func (s *FileStore) DeletePending(_ context.Context, _ string, sessionID string)
 }
 
 // DeleteSnapshot removes the snapshot metadata object (hook capture leaf GC exclusive — idempotent).
-func (s *FileStore) DeleteSnapshot(_ context.Context, id domain.ContentHash) error {
+func (s *FileStore) DeleteSnapshot(ctx context.Context, id domain.ContentHash) error {
 	if err := domain.ValidateContentHash(id); err != nil {
 		return err
 	}
-	return removeCxtFile(s.objectPath("snapshots", id))
+	return s.withSnapshotMutationLock(ctx, id, func() error {
+		return removeCxtFile(s.objectPath("snapshots", id))
+	})
 }
 
 // DeleteDoc removes the doc body object (hook capture leaf GC exclusive — idempotent).

@@ -199,3 +199,100 @@ func TestMemoryStore(t *testing.T) {
 		t.Fatalf("GetMemory: %v %+v", err, got)
 	}
 }
+
+func TestCompareAndSwapSnapshotMemoryRejectsStaleWriter(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	firstStore := NewFileStore(root)
+	secondStore := NewFileStore(root)
+	id := domain.HashContent([]byte("memory-cas-snapshot"))
+	if err := firstStore.PutSnapshot(ctx, domain.Snapshot{ID: id, DocHash: id, Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	first := domain.MemoryDigest{SnapshotID: id, Summary: "first contender"}
+	second := domain.MemoryDigest{SnapshotID: id, Summary: "second contender"}
+	firstHash, err := firstStore.PutMemory(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := secondStore.PutMemory(ctx, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, contender := range []struct {
+		store *FileStore
+		hash  domain.ContentHash
+	}{{firstStore, firstHash}, {secondStore, secondHash}} {
+		go func(store *FileStore, hash domain.ContentHash) {
+			<-start
+			errs <- store.CompareAndSwapSnapshotMemory(ctx, id, "", hash)
+		}(contender.store, contender.hash)
+	}
+	close(start)
+	var successes, conflicts int
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			successes++
+		case errors.Is(err, domain.ErrSyncConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected CAS error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("CAS results: successes=%d conflicts=%d", successes, conflicts)
+	}
+	got, err := firstStore.GetSnapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MemoryHash != firstHash && got.MemoryHash != secondHash {
+		t.Fatalf("unexpected final memory pointer %s", got.MemoryHash)
+	}
+}
+
+func TestConcurrentSnapshotDedupRejectsDifferentInitialMemories(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	firstStore := NewFileStore(root)
+	secondStore := NewFileStore(root)
+	id := domain.HashContent([]byte("dedup-memory-snapshot"))
+	firstHash, err := firstStore.PutMemory(ctx, domain.MemoryDigest{SnapshotID: id, Summary: "first initial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := secondStore.PutMemory(ctx, domain.MemoryDigest{SnapshotID: id, Summary: "second initial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, contender := range []struct {
+		store *FileStore
+		hash  domain.ContentHash
+	}{{firstStore, firstHash}, {secondStore, secondHash}} {
+		go func(store *FileStore, hash domain.ContentHash) {
+			<-start
+			errs <- store.PutSnapshot(ctx, domain.Snapshot{ID: id, DocHash: id, Branch: "main", MemoryHash: hash})
+		}(contender.store, contender.hash)
+	}
+	close(start)
+	var successes, conflicts int
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			successes++
+		case errors.Is(err, domain.ErrSyncConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected PutSnapshot error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("dedup results: successes=%d conflicts=%d", successes, conflicts)
+	}
+}

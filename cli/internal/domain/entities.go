@@ -154,6 +154,10 @@ type SessionDoc struct {
 type MemoryDigest struct {
 	// SnapshotID is the ContentHash of the target snapshot.
 	SnapshotID ContentHash `json:"snapshot_id"`
+	// PreviousMemoryHash is the causal parent of this attachment for the same
+	// snapshot. Empty means a legacy/initial root. It turns the mutable
+	// Snapshot.MemoryHash pointer into a fast-forward-only content-addressed ref.
+	PreviousMemoryHash ContentHash `json:"previous_memory_hash,omitempty"`
 	// Summary is a human-readable summary body for CLAUDE.md/AGENTS.md injection.
 	Summary string `json:"summary"`
 	// KeyFacts is a flattened list of core decisions/restrictions/file context.
@@ -440,6 +444,9 @@ type Manifest struct {
 	Refs []Ref `json:"refs"`
 	// SnapshotIndex is a list of held snapshot IDs (push/pull negotiation's have set).
 	SnapshotIndex []ContentHash `json:"snapshot_index"`
+	// MemoryAttachments is the server/local current memory ref per snapshot.
+	// Nil means a legacy peer that does not advertise causal attachment state.
+	MemoryAttachments map[ContentHash]ContentHash `json:"memory_attachments,omitempty"`
 	// Version is an optimistic lock monotonically increasing version.
 	Version int `json:"version"`
 	// UpdatedAt is the last time this manifest was updated.

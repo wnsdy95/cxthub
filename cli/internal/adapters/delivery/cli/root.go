@@ -670,6 +670,9 @@ func Run(c *Container, args []string) error {
 		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged})
 		if err != nil {
 			if strings.Contains(err.Error(), "sync conflict") {
+				if strings.Contains(err.Error(), "memory attachment") {
+					return fmt.Errorf("! [rejected] %s (memory fork)\nhint: Run 'cxt pull --force' to adopt the remote memory pointer; immutable local memory and raw sessions are retained.\nhint: Then run 'cxt memorize' and 'cxt push' to project the local session again", strings.TrimPrefix(err.Error(), "sync conflict: "))
+				}
 				return fmt.Errorf("! [rejected] %s (non-fast-forward)\nhint: Remote commit not found in local. Use 'cxt push --append' to rebase (amend) onto remote head,\nor 'cxt pull' followed by push again.\nhint: To force overwrite, use 'cxt push --force' (remote history may be lost)", strings.TrimPrefix(err.Error(), "sync conflict: "))
 			}
 			return err

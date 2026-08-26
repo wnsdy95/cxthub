@@ -125,6 +125,8 @@ export function mapMemoryDigest(raw: RawMemoryDigest): MemoryDigest {
     openTasks: strArr(raw, 'open_tasks'),
     provider: str(raw, 'provider') as ProviderKind,
   };
+  const previousMemoryHash = str(raw, 'previous_memory_hash');
+  if (previousMemoryHash) digest.previousMemoryHash = previousMemoryHash;
   if (fragments) digest.fragments = fragments;
   if (coverage) {
     digest.graftCoverage = {
@@ -142,11 +144,20 @@ export function mapMemoryDigest(raw: RawMemoryDigest): MemoryDigest {
 export function mapManifest(raw: RawManifest): Manifest {
   const refsRaw = raw['refs'];
   const refs = Array.isArray(refsRaw) ? refsRaw.map((r) => mapRef(r as RawRef)) : [];
-  return {
+  const manifest: Manifest = {
     repoId: str(raw, 'repo_id'),
     refs,
     snapshotIndex: strArr(raw, 'snapshot_index'),
     version: num(raw, 'version'),
     updatedAt: str(raw, 'updated_at'),
   };
+  const attachmentsRaw = raw['memory_attachments'];
+  if (attachmentsRaw != null && typeof attachmentsRaw === 'object' && !Array.isArray(attachmentsRaw)) {
+    const attachments: Record<string, string> = {};
+    for (const [snapshotId, memoryHash] of Object.entries(attachmentsRaw as Record<string, unknown>)) {
+      if (typeof memoryHash === 'string') attachments[snapshotId] = memoryHash;
+    }
+    manifest.memoryAttachments = attachments;
+  }
+  return manifest;
 }

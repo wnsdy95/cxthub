@@ -21,6 +21,9 @@ const (
 	// unsupported format instead of dropping the proof and reporting a false
 	// content-hash corruption after reassembly.
 	MemoryFormatV2 = "cxt-memory-chunks-v2"
+	// V3 carries the causal parent of a memory attachment. Older readers must
+	// reject it rather than silently reconstructing a different digest hash.
+	MemoryFormatV3 = "cxt-memory-chunks-v3"
 )
 
 // MemoryManifest is an at-rest representation only. The wire protocol keeps
@@ -28,14 +31,15 @@ const (
 // Potentially large, prefix-sharing components are chunked independently;
 // small structured fields stay inline.
 type MemoryManifest struct {
-	Format         string                      `json:"format"`
-	SnapshotID     domain.ContentHash          `json:"snapshot_id"`
-	SummaryChunks  []domain.ContentHash        `json:"summary_chunks,omitempty"`
-	KeyFacts       []string                    `json:"key_facts"`
-	OpenTasks      []string                    `json:"open_tasks"`
-	Provider       domain.ProviderKind         `json:"provider"`
-	FragmentChunks []domain.ContentHash        `json:"fragment_chunks,omitempty"`
-	GraftCoverage  *domain.MemoryGraftCoverage `json:"graft_coverage,omitempty"`
+	Format             string                      `json:"format"`
+	SnapshotID         domain.ContentHash          `json:"snapshot_id"`
+	PreviousMemoryHash domain.ContentHash          `json:"previous_memory_hash,omitempty"`
+	SummaryChunks      []domain.ContentHash        `json:"summary_chunks,omitempty"`
+	KeyFacts           []string                    `json:"key_facts"`
+	OpenTasks          []string                    `json:"open_tasks"`
+	Provider           domain.ProviderKind         `json:"provider"`
+	FragmentChunks     []domain.ContentHash        `json:"fragment_chunks,omitempty"`
+	GraftCoverage      *domain.MemoryGraftCoverage `json:"graft_coverage,omitempty"`
 }
 
 type MemoryPlan struct {
@@ -60,12 +64,13 @@ func PlanMemory(d domain.MemoryDigest) (plan MemoryPlan, ok bool, err error) {
 	}
 	plan = MemoryPlan{
 		Manifest: MemoryManifest{
-			Format:        memoryFormatFor(d),
-			SnapshotID:    d.SnapshotID,
-			KeyFacts:      d.KeyFacts,
-			OpenTasks:     d.OpenTasks,
-			Provider:      d.Provider,
-			GraftCoverage: d.GraftCoverage,
+			Format:             memoryFormatFor(d),
+			SnapshotID:         d.SnapshotID,
+			PreviousMemoryHash: d.PreviousMemoryHash,
+			KeyFacts:           d.KeyFacts,
+			OpenTasks:          d.OpenTasks,
+			Provider:           d.Provider,
+			GraftCoverage:      d.GraftCoverage,
 		},
 		Bodies: map[domain.ContentHash][]byte{},
 	}
@@ -88,6 +93,9 @@ func PlanMemory(d domain.MemoryDigest) (plan MemoryPlan, ok bool, err error) {
 }
 
 func memoryFormatFor(d domain.MemoryDigest) string {
+	if d.PreviousMemoryHash != "" {
+		return MemoryFormatV3
+	}
 	if d.GraftCoverage != nil {
 		return MemoryFormatV2
 	}
@@ -95,7 +103,7 @@ func memoryFormatFor(d domain.MemoryDigest) string {
 }
 
 func SupportedMemoryFormat(format string) bool {
-	return format == MemoryFormatV1 || format == MemoryFormatV2
+	return format == MemoryFormatV1 || format == MemoryFormatV2 || format == MemoryFormatV3
 }
 
 func (p *MemoryPlan) addComponent(data []byte) []domain.ContentHash {
@@ -184,12 +192,13 @@ func AssembleMemory(man MemoryManifest, bodies map[domain.ContentHash][]byte) (d
 		}
 	}
 	return domain.MemoryDigest{
-		SnapshotID:    man.SnapshotID,
-		Summary:       string(summary),
-		KeyFacts:      man.KeyFacts,
-		OpenTasks:     man.OpenTasks,
-		Provider:      man.Provider,
-		Fragments:     fragments,
-		GraftCoverage: man.GraftCoverage,
+		SnapshotID:         man.SnapshotID,
+		PreviousMemoryHash: man.PreviousMemoryHash,
+		Summary:            string(summary),
+		KeyFacts:           man.KeyFacts,
+		OpenTasks:          man.OpenTasks,
+		Provider:           man.Provider,
+		Fragments:          fragments,
+		GraftCoverage:      man.GraftCoverage,
 	}, nil
 }

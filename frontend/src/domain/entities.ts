@@ -183,6 +183,8 @@ export interface SessionDoc {
 export interface MemoryDigest {
 /** Original snapshot id. */
   snapshotId: ContentHash;
+/** Previous attachment for the same snapshot (causal fast-forward parent). */
+  previousMemoryHash?: ContentHash;
 /** Human-readable summary body (for provider memory injection). */
   summary: string;
 /** Core facts list. */
@@ -230,6 +232,8 @@ export interface Manifest {
   refs: Ref[];
 /** List of owned snapshot IDs (push/pull difference negotiation's have set). */
   snapshotIndex: ContentHash[];
+/** Current causal memory pointer keyed by snapshot ID (absent on legacy peers). */
+  memoryAttachments?: Record<ContentHash, ContentHash>;
 /** Optimistic lock version (monotonically increasing). */
   version: number;
 /** Last update timestamp (RFC3339). */

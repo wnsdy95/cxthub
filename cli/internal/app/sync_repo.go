@@ -290,28 +290,77 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 		return inbound.SyncOutput{}, err
 	}
 
-	// Memory attaches a dedicated API pointer after snapshot creation. First, all local objects are validated to reduce the chance of discovering missing objects after raw/ref push.
-	var memories []domain.MemoryDigest
+	// Memory attaches through a causal CAS endpoint after snapshot creation.
+	// Read the remote pointer catalog before reconstructing any large local
+	// digest. The overwhelmingly common equal-pointer case needs no memory body
+	// read at all; only changed attachments pay for causal-chain validation.
+	var memorySnapshots []domain.Snapshot
 	for _, snap := range snaps {
-		if snap.MemoryHash == "" {
-			continue
+		if snap.MemoryHash != "" {
+			memorySnapshots = append(memorySnapshots, snap)
 		}
-		digest, err := s.store.GetMemory(ctx, snap.MemoryHash)
+	}
+	var remoteMemoryAttachments map[domain.ContentHash]domain.ContentHash
+	remoteMemoryAhead := map[domain.ContentHash]bool{}
+	if len(memorySnapshots) > 0 {
+		remoteManifest, err := s.remote.RemoteManifest(ctx, repoID)
 		if err != nil {
 			return inbound.SyncOutput{}, err
 		}
-		if digest.SnapshotID != snap.ID {
+		if remoteManifest.RepoID != "" && remoteManifest.RepoID != repoID {
 			return inbound.SyncOutput{}, domain.ErrHashMismatch
 		}
-		memories = append(memories, digest)
+		for snapshotID, memoryHash := range remoteManifest.MemoryAttachments {
+			if err := domain.ValidateContentHash(snapshotID); err != nil {
+				return inbound.SyncOutput{}, err
+			}
+			if err := domain.ValidateContentHash(memoryHash); err != nil {
+				return inbound.SyncOutput{}, err
+			}
+		}
+		remoteMemoryAttachments = remoteManifest.MemoryAttachments
+	}
+
+	// Validate every changed local chain before publishing raw objects so a
+	// missing or corrupt predecessor cannot leave a partially advanced ref.
+	var memoryPlans []memoryPushPlan
+	for _, snap := range memorySnapshots {
+		if remoteMemoryAttachments != nil && remoteMemoryAttachments[snap.ID] == snap.MemoryHash {
+			continue
+		}
+		plan, err := s.localMemoryPushPlan(ctx, snap.ID, snap.MemoryHash)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if remoteMemoryAttachments != nil {
+			remoteHash := remoteMemoryAttachments[plan.snapshotID]
+			ahead, err := s.preflightKnownRemoteMemory(ctx, repoID, plan, remoteHash)
+			if err != nil {
+				return inbound.SyncOutput{}, err
+			}
+			remoteMemoryAhead[plan.snapshotID] = ahead
+		}
+		memoryPlans = append(memoryPlans, plan)
 	}
 
 	// Publish order is object → graft overlay → ref. New snapshots arrive without server-owned graft metadata. Publishing refs first would make sibling-session histories that depend on the queued graft appear non-fast-forward. Call RemoteSync.Push twice to make the protocol boundary explicit: objects first, refs last.
 	if err := s.remote.Push(ctx, repoID, snaps, docs, nil, false, false); err != nil {
 		return inbound.SyncOutput{}, err
 	}
-	for _, memory := range memories {
-		if err := s.remote.PushMemory(ctx, repoID, memory); err != nil {
+	for _, plan := range memoryPlans {
+		// Another terminal or machine already advanced this snapshot's memory.
+		// Do not rewind it, and do not let one stale historical attachment block
+		// publishing otherwise independent snapshots and refs.
+		if remoteMemoryAhead[plan.snapshotID] {
+			continue
+		}
+		var err error
+		if remoteMemoryAttachments != nil {
+			err = s.pushMemoryPlanFromKnown(ctx, repoID, plan, remoteMemoryAttachments[plan.snapshotID])
+		} else {
+			err = s.pushMemoryPlan(ctx, repoID, plan)
+		}
+		if err != nil {
 			return inbound.SyncOutput{}, err
 		}
 	}
@@ -1005,38 +1054,104 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, gerr
 		}
 	}
-	// Memory also validates snapshot_id and content hash before staging. If either is missing or corrupted, the entire batch is rejected before writing doc/settings/snapshot.
+	// Memory pointers are mutable refs over immutable causal digest chains.
+	// Stage every object needed to prove a fast-forward before any local write;
+	// unrelated roots are a conflict, never an arrival-order winner.
 	stagedMemories := map[domain.ContentHash]domain.MemoryDigest{}
+	knownMemories := map[domain.ContentHash]domain.MemoryDigest{}
+	existingByID := map[domain.ContentHash]domain.Snapshot{}
+	memoryAdoptions := map[domain.ContentHash]domain.ContentHash{}
 	for _, snap := range snaps {
-		if snap.MemoryHash == "" {
+		existing, existingErr := s.store.GetSnapshot(ctx, snap.ID)
+		switch {
+		case existingErr == nil:
+			existingByID[snap.ID] = existing
+		case errors.Is(existingErr, domain.ErrNotFound):
+		default:
+			return inbound.SyncOutput{}, existingErr
+		}
+		if snap.MemoryHash != "" {
+			local, gerr := s.store.GetMemory(ctx, snap.MemoryHash)
+			switch {
+			case gerr == nil:
+				if err := validateMemoryAttachmentObject(local, snap.MemoryHash, snap.ID); err != nil {
+					return inbound.SyncOutput{}, err
+				}
+				knownMemories[snap.MemoryHash] = local
+			case errors.Is(gerr, domain.ErrNotFound):
+				digest, perr := s.remote.PullMemory(ctx, repoID, snap.ID)
+				if perr != nil {
+					return inbound.SyncOutput{}, perr
+				}
+				if err := validateMemoryAttachmentObject(digest, snap.MemoryHash, snap.ID); err != nil {
+					return inbound.SyncOutput{}, err
+				}
+				stagedMemories[snap.MemoryHash] = digest
+			default:
+				return inbound.SyncOutput{}, gerr
+			}
+		}
+		// A pointer is usable offline only when its immutable ancestry is present,
+		// not merely its tip. This also repairs checkouts produced by older clients
+		// that adopted a remote tip while omitting one of its causal parents.
+		if snap.MemoryHash != "" && (existingErr != nil || existing.MemoryHash == "" || existing.MemoryHash == snap.MemoryHash) {
+			loader := &memoryPullLoader{
+				service: s, ctx: ctx, repoID: repoID, snapshotID: snap.ID, staged: stagedMemories, loaded: knownMemories,
+			}
+			complete, err := memoryAttachmentAncestor(loader, "", snap.MemoryHash)
+			if err != nil {
+				return inbound.SyncOutput{}, err
+			}
+			if !complete {
+				return inbound.SyncOutput{}, fmt.Errorf("%w: incomplete memory attachment chain for snapshot %s", domain.ErrHashMismatch, snap.ID)
+			}
+		}
+		if existingErr != nil || existing.MemoryHash == snap.MemoryHash {
 			continue
 		}
-		local, gerr := s.store.GetMemory(ctx, snap.MemoryHash)
-		switch {
-		case gerr == nil:
-			got, herr := domain.MemoryDigestHash(local)
-			if herr != nil || got != snap.MemoryHash || local.SnapshotID != snap.ID {
-				return inbound.SyncOutput{}, domain.ErrHashMismatch
-			}
-		case errors.Is(gerr, domain.ErrNotFound):
-			digest, perr := s.remote.PullMemory(ctx, repoID, snap.ID)
-			if perr != nil {
-				return inbound.SyncOutput{}, perr
-			}
-			got, herr := domain.MemoryDigestHash(digest)
-			if herr != nil {
-				return inbound.SyncOutput{}, herr
-			}
-			if digest.SnapshotID != snap.ID || got != snap.MemoryHash {
-				return inbound.SyncOutput{}, domain.ErrHashMismatch
-			}
-			if prior, ok := stagedMemories[snap.MemoryHash]; ok && prior.SnapshotID != digest.SnapshotID {
-				return inbound.SyncOutput{}, domain.ErrHashMismatch
-			}
-			stagedMemories[snap.MemoryHash] = digest
-		default:
-			return inbound.SyncOutput{}, gerr
+		if existing.MemoryHash == "" {
+			memoryAdoptions[snap.ID] = ""
+			continue
 		}
+		// A local pointer must always resolve before it can participate in a
+		// merge. Fetching it from the server could hide local corruption.
+		localCurrent, localErr := s.store.GetMemory(ctx, existing.MemoryHash)
+		if localErr != nil {
+			return inbound.SyncOutput{}, localErr
+		}
+		if err := validateMemoryAttachmentObject(localCurrent, existing.MemoryHash, snap.ID); err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if snap.MemoryHash == "" {
+			continue // remote empty is an ancestor of every local chain
+		}
+		loader := &memoryPullLoader{
+			service: s, ctx: ctx, repoID: repoID, snapshotID: snap.ID, staged: stagedMemories, loaded: knownMemories,
+		}
+		remoteBehind, err := memoryAttachmentAncestor(loader, snap.MemoryHash, existing.MemoryHash)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if remoteBehind {
+			continue // local causal descendant remains attached
+		}
+		localBehind, err := memoryAttachmentAncestor(loader, existing.MemoryHash, snap.MemoryHash)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if !localBehind {
+			if in.Force {
+				// Explicit recovery: adopt the remote memory ref while retaining the
+				// losing immutable local digest object. Raw session data is untouched,
+				// so a subsequent memorize can project it again on top of the winner.
+				memoryAdoptions[snap.ID] = existing.MemoryHash
+				continue
+			}
+			return inbound.SyncOutput{}, fmt.Errorf(
+				"%w: divergent memory attachments for snapshot %s", domain.ErrSyncConflict, snap.ID,
+			)
+		}
+		memoryAdoptions[snap.ID] = existing.MemoryHash
 	}
 
 	// Start local write only after all remote objects preflight complete.
@@ -1070,7 +1185,7 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 	// Parent meta mismatch (replica divergence): parents can differ among replicas (legacy empirical verification: 7/7 stash-dedup bug snapshots). Local objects are immutable (PutSnapshot does not overwrite parents), so reject remote version adoption and proceed with batch — total rejection makes known divergence permanent pull failure (availability). Pollution server defense intent maintained: mismatched meta never reflected locally.
 	var conflicts []string
 	for _, snap := range snaps {
-		if existing, gerr := s.store.GetSnapshot(ctx, snap.ID); gerr == nil && !sameParents(existing.Parents, snap.Parents) {
+		if existing, ok := existingByID[snap.ID]; ok && !sameParents(existing.Parents, snap.Parents) {
 			id := string(snap.ID)
 			if len(id) > 17 {
 				id = id[:17]
@@ -1078,8 +1193,20 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			conflicts = append(conflicts, "snapshot/"+id+" (parent metadata — local kept)")
 			continue
 		}
-		if err := s.store.PutSnapshot(ctx, snap); err != nil {
+		storedSnapshot := snap
+		if _, exists := existingByID[snap.ID]; exists {
+			// Existing memory was preflighted above and is merged only through the
+			// dedicated causal CAS. Generic metadata adoption must not reinterpret
+			// an intentional local-ahead keep as a conflicting first attachment.
+			storedSnapshot.MemoryHash = ""
+		}
+		if err := s.store.PutSnapshot(ctx, storedSnapshot); err != nil {
 			return inbound.SyncOutput{}, err
+		}
+		if expected, adopt := memoryAdoptions[snap.ID]; adopt {
+			if err := s.store.CompareAndSwapSnapshotMemory(ctx, snap.ID, expected, snap.MemoryHash); err != nil {
+				return inbound.SyncOutput{}, fmt.Errorf("%w: memory attachment changed during pull for snapshot %s", domain.ErrSyncConflict, snap.ID)
+			}
 		}
 	}
 	// FetchOnly (hook auto-pull): fetch objects only, local refs do not move — context does not force convergence unlike code. Instead, report remote branch ahead hint (pull is user choice).

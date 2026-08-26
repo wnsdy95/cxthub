@@ -55,6 +55,79 @@ func TestMemoryDigestUsesSnapshotPointerWithoutMetaDoubleWrite(t *testing.T) {
 	}
 }
 
+func TestMemoryDigestCASRejectsStaleAndLegacyReplacement(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("memory-cas-repo")
+	snapshotID := hh("memory-cas-snapshot")
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
+		t.Fatal(err)
+	}
+	root := domain.MemoryDigest{SnapshotID: snapshotID, Summary: "root", Provider: domain.ProviderCodex}
+	rootHash, err := svc.PutMemoryDigest(ctx, repo, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PutMemoryDigest(ctx, repo, domain.MemoryDigest{
+		SnapshotID: snapshotID, Summary: "legacy stale replacement", Provider: domain.ProviderCodex,
+	}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("legacy replacement error = %v", err)
+	}
+
+	second := domain.MemoryDigest{
+		SnapshotID: snapshotID, PreviousMemoryHash: rootHash,
+		Summary: "causal second", Provider: domain.ProviderCodex,
+	}
+	secondHash, err := svc.PutMemoryDigestCAS(ctx, repo, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := domain.MemoryDigest{
+		SnapshotID: snapshotID, PreviousMemoryHash: rootHash,
+		Summary: "divergent stale child", Provider: domain.ProviderCodex,
+	}
+	if _, err := svc.PutMemoryDigestCAS(ctx, repo, stale); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale causal replacement error = %v", err)
+	}
+	got, err := st.GetSnapshot(ctx, repo, snapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MemoryHash != secondHash {
+		t.Fatalf("stale write moved pointer: got %s want %s", got.MemoryHash, secondHash)
+	}
+}
+
+func TestMemoryDigestCASRejectsParentFromAnotherSnapshot(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("memory-parent-repo")
+	firstSnapshot := hh("memory-parent-first")
+	secondSnapshot := hh("memory-parent-second")
+	for _, id := range []domain.ContentHash{firstSnapshot, secondSnapshot} {
+		if err := st.PutSnapshot(ctx, domain.Snapshot{ID: id, RepoID: repo, DocHash: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	foreignHash, err := svc.PutMemoryDigest(ctx, repo, domain.MemoryDigest{
+		SnapshotID: firstSnapshot, Summary: "foreign root", Provider: domain.ProviderCodex,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.PutMemoryDigestCAS(ctx, repo, domain.MemoryDigest{
+		SnapshotID: secondSnapshot, PreviousMemoryHash: foreignHash,
+		Summary: "invalid child", Provider: domain.ProviderCodex,
+	})
+	if !errors.Is(err, domain.ErrIntegrity) {
+		t.Fatalf("foreign parent error=%v", err)
+	}
+	got, err := st.GetSnapshot(ctx, repo, secondSnapshot)
+	if err != nil || got.MemoryHash != "" {
+		t.Fatalf("invalid parent moved pointer=%s err=%v", got.MemoryHash, err)
+	}
+}
+
 func TestMemoryDigestAcceptsExplicitIncompleteProjectionWithoutFingerprint(t *testing.T) {
 	svc, st := newFsckSvc(t)
 	ctx := context.Background()
@@ -123,7 +196,7 @@ func TestMemoryDigestFallsBackOnlyForPointerlessLegacySnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := base.SetSnapshotMemory(ctx, repo, snapshotID, hash); err != nil {
+	if err := base.CompareAndSwapSnapshotMemory(ctx, repo, snapshotID, "", hash); err != nil {
 		t.Fatal(err)
 	}
 	failing := &missingMemoryBlob{FSStore: base}

@@ -238,6 +238,7 @@ export interface CIREvent {
 /** Compressed memory distilled from snapshot */
 export interface MemoryDigest {
   snapshot_id: string;
+  previous_memory_hash?: string;
   summary: string;
   key_facts: string[] | null;
   open_tasks: string[] | null;

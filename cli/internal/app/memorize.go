@@ -129,23 +129,45 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 	// computing it before the merge would make those fragments disappear on the
 	// first later graft mutation.
 	digest.GraftCoverage = memoryGraftCoverageFromState(ctx, s.store, projectionState, digest.Fragments, priorComplete)
+	if snap.MemoryHash != "" {
+		current, err := s.store.GetMemory(ctx, snap.MemoryHash)
+		if err != nil {
+			// A causal child cannot safely point at a missing parent. Pull/fsck must
+			// restore or diagnose it before another attachment is created.
+			return inbound.MemorizeOutput{}, err
+		}
+		if sameMemoryDigestPayload(current, digest) {
+			// Verify that another terminal did not move the pointer between the
+			// stable projection and this no-op decision.
+			if err := s.store.CompareAndSwapSnapshotMemory(ctx, snap.ID, snap.MemoryHash, snap.MemoryHash); err != nil {
+				return inbound.MemorizeOutput{}, err
+			}
+			return inbound.MemorizeOutput{SnapshotID: snap.ID, MemoryHash: snap.MemoryHash, Attached: true}, nil
+		}
+	}
+	// Memory attachments form a snapshot-scoped causal chain. The projection
+	// may absorb many graph lineages, but only the previously attached digest on
+	// this exact snapshot is the mutable-ref parent.
+	digest.PreviousMemoryHash = snap.MemoryHash
 	memHash, err := s.store.PutMemory(ctx, digest)
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
 	}
-	// Attach to current branch HEAD snapshot (derivative pointer — ID/body immutable).
-	attachment := snap
-	attachment.MemoryHash = memHash
-	// A concurrent sync may have advanced the mutable graft register since the
-	// stable projection read. Memory attachment must never replay this stale
-	// register; PutSnapshot treats seq=0/no edges as a derivative-only update.
-	attachment.Grafted = false
-	attachment.GraftSeq = 0
-	attachment.GraftParents = nil
-	if err := s.store.PutSnapshot(ctx, attachment); err != nil {
+	// A second terminal may have memorized the same snapshot while distillation
+	// was running. CAS keeps both immutable blobs and rejects the stale pointer
+	// move instead of making the last filesystem rename win.
+	if err := s.store.CompareAndSwapSnapshotMemory(ctx, snap.ID, digest.PreviousMemoryHash, memHash); err != nil {
 		return inbound.MemorizeOutput{}, err
 	}
 	return inbound.MemorizeOutput{SnapshotID: snap.ID, MemoryHash: memHash, Attached: true}, nil
+}
+
+func sameMemoryDigestPayload(left, right domain.MemoryDigest) bool {
+	left.PreviousMemoryHash = ""
+	right.PreviousMemoryHash = ""
+	leftHash, leftErr := domain.MemoryDigestHash(left)
+	rightHash, rightErr := domain.MemoryDigestHash(right)
+	return leftErr == nil && rightErr == nil && leftHash == rightHash
 }
 
 // Ensure MemorizeService implements inbound.Memorize.

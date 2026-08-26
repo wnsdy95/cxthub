@@ -83,6 +83,23 @@ func TestMemoryComponentPlanKeepsLegacyManifestVersionWithoutCoverage(t *testing
 	}
 }
 
+func TestMemoryComponentPlanUsesV3ForCausalParent(t *testing.T) {
+	previous := domain.HashContent([]byte("previous-memory"))
+	digest := domain.MemoryDigest{
+		SnapshotID: domain.HashContent([]byte("causal-format")), PreviousMemoryHash: previous,
+		Summary: strings.Repeat("causal", 16<<10), Provider: domain.ProviderCodex,
+		GraftCoverage: &domain.MemoryGraftCoverage{ProjectionVersion: domain.MemoryProjectionVersion},
+	}
+	plan, ok, err := PlanMemory(digest)
+	if err != nil || !ok || plan.Manifest.Format != MemoryFormatV3 {
+		t.Fatalf("causal plan: format=%q ok=%v err=%v", plan.Manifest.Format, ok, err)
+	}
+	got, err := AssembleMemory(plan.Manifest, plan.Bodies)
+	if err != nil || got.PreviousMemoryHash != previous {
+		t.Fatalf("causal roundtrip: previous=%s err=%v", got.PreviousMemoryHash, err)
+	}
+}
+
 func TestMemoryComponentPlanKeepsSmallDigestMonolithic(t *testing.T) {
 	_, ok, err := PlanMemory(domain.MemoryDigest{Summary: "small", Provider: domain.ProviderClaude})
 	if err != nil || ok {

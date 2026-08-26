@@ -226,11 +226,12 @@ type RefLogEntry struct {
 //   - M2: Version must monotonically increase with each update ( CAS).
 //   - C1: Manifest write must fail without version-CAS (lost-update prevention).
 type Manifest struct {
-	RepoID        ContentHash   `json:"repo_id"`
-	Refs          []Ref         `json:"refs"`
-	SnapshotIndex []ContentHash `json:"snapshot_index"`
-	Version       int           `json:"version"`
-	UpdatedAt     time.Time     `json:"updated_at"`
+	RepoID            ContentHash                 `json:"repo_id"`
+	Refs              []Ref                       `json:"refs"`
+	SnapshotIndex     []ContentHash               `json:"snapshot_index"`
+	MemoryAttachments map[ContentHash]ContentHash `json:"memory_attachments"`
+	Version           int                         `json:"version"`
+	UpdatedAt         time.Time                   `json:"updated_at"`
 }
 
 // MemoryDigest is the distilled memory from a snapshot (derivative, data model table, sync protocol).
@@ -239,13 +240,14 @@ type Manifest struct {
 //
 // The backend stores only CIR-neutral digests and does not know provider-native formats.
 type MemoryDigest struct {
-	SnapshotID    ContentHash          `json:"snapshot_id"`
-	Summary       string               `json:"summary"`
-	KeyFacts      []string             `json:"key_facts"`
-	OpenTasks     []string             `json:"open_tasks"`
-	Provider      ProviderKind         `json:"provider"`
-	Fragments     []MemoryFragment     `json:"fragments,omitempty"`
-	GraftCoverage *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
+	SnapshotID         ContentHash          `json:"snapshot_id"`
+	PreviousMemoryHash ContentHash          `json:"previous_memory_hash,omitempty"`
+	Summary            string               `json:"summary"`
+	KeyFacts           []string             `json:"key_facts"`
+	OpenTasks          []string             `json:"open_tasks"`
+	Provider           ProviderKind         `json:"provider"`
+	Fragments          []MemoryFragment     `json:"fragments,omitempty"`
+	GraftCoverage      *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
 }
 
 // MemoryGraftCoverage is the root graft register and transitive lineage state
