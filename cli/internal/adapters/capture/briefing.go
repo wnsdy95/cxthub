@@ -1,6 +1,6 @@
 package capture
 
-// briefing.go — Team member context injection briefing sidecar (.cxt/briefing.json).
+// briefing.go — terminal-scoped team context injection briefing sidecars.
 //
 // After a git pull (post-merge), if a new team member snapshot summary is recorded from the remote,
 // the next prompt's UserPromptSubmit (or SessionStart) hook consumes it once and injects into the live agent session
@@ -14,10 +14,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 // briefingMaxBytes is the maximum length of the injected text (to prevent prompt pollution).
@@ -32,16 +34,51 @@ type briefingFile struct {
 	Texts []string  `json:"texts,omitempty"` // ordered pull queue
 }
 
-func briefingPath(cwd string) string { return filepath.Join(cwd, ".cxt", "briefing.json") }
+const legacyBriefingRelativePath = ".cxt/briefing.json"
 
-// WriteBriefing records the briefing (overwriting — the latest pull replaces the previous one).
+// briefingRelativePath binds pull context to the terminal that initiated the
+// pull. Multiple agent terminals can share one worktree, so a repository-wide
+// queue lets whichever prompt arrives first steal another session's briefing.
+// Terminal IDs are local opaque values and are stored only as a content hash.
+// Headless wrappers fall back to their supervisor identity; truly unowned
+// invocations retain the legacy path for non-interactive compatibility.
+func briefingRelativePath() string {
+	owner := briefingOwner()
+	if owner == "" {
+		return legacyBriefingRelativePath
+	}
+	key := strings.TrimPrefix(string(domain.HashContent([]byte(owner))), "sha256:")
+	return filepath.Join(".cxt", "briefings", key+".json")
+}
+
+func briefingOwner() string {
+	if terminal := terminalIdentity(); terminal != "" {
+		return "terminal\x00" + terminal
+	}
+	if os.Getenv("CXT_WRAPPED") != "1" {
+		return ""
+	}
+	pid := strings.TrimSpace(os.Getenv("CXT_WRAPPER_PID"))
+	n, err := strconv.Atoi(pid)
+	if err != nil || n <= 1 {
+		return ""
+	}
+	agent := strings.TrimSpace(os.Getenv("CXT_WRAPPED_AGENT"))
+	if agent != string(domain.ProviderClaude) && agent != string(domain.ProviderCodex) {
+		return ""
+	}
+	return "wrapper\x00" + pid + "\x00" + agent
+}
+
+// WriteBriefing queues the briefing for the initiating terminal/wrapper.
 // In an inactive repo (.cxt file absent), it is a no-op (same as opt-in gate).
 func WriteBriefing(cwd, text string) error {
 	if !cxtEnabled(cwd) || text == "" {
 		return nil
 	}
+	relative := briefingRelativePath()
 	entries := []string{}
-	if data, err := providerfs.ReadRepoFile(cwd, filepath.Join(".cxt", "briefing.json")); err == nil {
+	if data, err := providerfs.ReadRepoFile(cwd, relative); err == nil {
 		var old briefingFile
 		if json.Unmarshal(data, &old) == nil && time.Since(old.At) <= briefingTTL {
 			entries = briefingEntries(old)
@@ -55,18 +92,20 @@ func WriteBriefing(cwd, text string) error {
 	if err != nil {
 		return err
 	}
-	return providerfs.WriteRepoFileAtomic(cwd, filepath.Join(".cxt", "briefing.json"), b, 0o644)
+	return providerfs.WriteRepoFileAtomic(cwd, relative, b, 0o644)
 }
 
-// ConsumeBriefing reads and consumes (deletes) the briefing. Returns ("", false) if absent, corrupted, or expired.
+// ConsumeBriefing reads and consumes only the current terminal/wrapper queue.
+// Returns ("", false) if absent, corrupted, expired, or owned by another scope.
 // Atomic rename ensures one-time consumption: even if both claude·codex hooks fire simultaneously in separate processes,
 // only one will succeed in renaming the file (the other will get ENOENT). Previous read-then-delete could lead to duplicate briefing injection (backlog #1 TOCTOU).
 func ConsumeBriefing(cwd string) (string, bool) {
-	source, err := providerfs.PrepareRepoFile(cwd, filepath.Join(".cxt", "briefing.json"), 0o755)
+	relative := briefingRelativePath()
+	source, err := providerfs.PrepareRepoFile(cwd, relative, 0o755)
 	if err != nil {
 		return "", false
 	}
-	claimRel := filepath.Join(".cxt", fmt.Sprintf("briefing.json.claim.%d", os.Getpid()))
+	claimRel := filepath.Join(filepath.Dir(relative), fmt.Sprintf("%s.claim.%d", filepath.Base(relative), os.Getpid()))
 	claim, err := providerfs.PrepareRepoFile(cwd, claimRel, 0o755)
 	if err != nil {
 		return "", false
