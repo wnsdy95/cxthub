@@ -242,6 +242,21 @@ export interface MemoryDigest {
   key_facts: string[] | null;
   open_tasks: string[] | null;
   provider: string;
+  fragments?: Array<{
+    source_snapshot: string;
+    summary?: string;
+    key_facts?: string[];
+    open_tasks?: string[];
+    tasks_authoritative?: boolean;
+  }>;
+  graft_coverage?: {
+    projection_version: number;
+    projection_complete: boolean;
+    lineage_fingerprint?: string;
+    graft_seq: number;
+    graft_parents?: string[];
+    pinned_sources?: string[];
+  };
 }
 
 /** Content-addressed session body (CIR) */

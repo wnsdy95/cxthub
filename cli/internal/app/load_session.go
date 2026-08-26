@@ -461,7 +461,7 @@ func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, see
 	// Prioritize the stored memorize digest (self-snapshot → parent projection).
 	stored, hasStored := domain.MemoryDigest{}, false
 	if snap.MemoryHash != "" {
-		if d, gerr := s.store.GetMemory(ctx, snap.MemoryHash); gerr == nil {
+		if d, ok := snapshotMemoryProjection(ctx, s.store, snap); ok {
 			stored, hasStored = d, true
 		}
 	}
@@ -535,7 +535,7 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 	digest.SnapshotID = snap.ID
 	// Heritage continuation (same logic as memorize): merge project memory from
 	// every parent lineage, including overlay grafts.
-	if prior, ok := ancestorMemoryProjection(ctx, s.store, snap); ok {
+	if prior, ok := priorMemoryProjection(ctx, s.store, snap); ok {
 		prior = boundCarriedDigest(prior)
 		digest = domain.MergeDigests(prior, digest)
 	}

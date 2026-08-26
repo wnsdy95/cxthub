@@ -25,6 +25,14 @@ func TestMemoryDigestUsesSnapshotPointerWithoutMetaDoubleWrite(t *testing.T) {
 		KeyFacts:   []string{"snapshot.memory_hash resolves the body"},
 		OpenTasks:  []string{},
 		Provider:   domain.ProviderCodex,
+		GraftCoverage: &domain.MemoryGraftCoverage{
+			ProjectionVersion:  domain.MemoryProjectionVersion,
+			ProjectionComplete: true,
+			LineageFingerprint: hh("memory-lineage-state"),
+			GraftSeq:           4,
+			GraftParents:       []domain.ContentHash{hh("memory-graft-parent")},
+			PinnedSources:      []domain.ContentHash{hh("memory-pinned-source")},
+		},
 	}
 	hash, err := svc.PutMemoryDigest(ctx, repo, digest)
 	if err != nil {
@@ -38,8 +46,58 @@ func TestMemoryDigestUsesSnapshotPointerWithoutMetaDoubleWrite(t *testing.T) {
 		t.Fatalf("memory pointer=%s want=%s err=%v", snapshot.MemoryHash, hash, err)
 	}
 	got, err := svc.GetMemoryDigest(ctx, repo, snapshotID)
-	if err != nil || got.Summary != digest.Summary {
+	if err != nil || got.Summary != digest.Summary || got.GraftCoverage == nil ||
+		!got.GraftCoverage.ProjectionComplete ||
+		got.GraftCoverage.GraftSeq != digest.GraftCoverage.GraftSeq ||
+		len(got.GraftCoverage.GraftParents) != 1 || got.GraftCoverage.GraftParents[0] != digest.GraftCoverage.GraftParents[0] ||
+		len(got.GraftCoverage.PinnedSources) != 1 || got.GraftCoverage.PinnedSources[0] != digest.GraftCoverage.PinnedSources[0] {
 		t.Fatalf("pointer-backed GetMemoryDigest: %+v err=%v", got, err)
+	}
+}
+
+func TestMemoryDigestAcceptsExplicitIncompleteProjectionWithoutFingerprint(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("incomplete-memory-coverage-repo")
+	snapshotID := hh("incomplete-memory-coverage-snapshot")
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
+		t.Fatal(err)
+	}
+	digest := domain.MemoryDigest{
+		SnapshotID: snapshotID, Summary: "available partial projection", Provider: domain.ProviderCodex,
+		GraftCoverage: &domain.MemoryGraftCoverage{
+			ProjectionVersion: domain.MemoryProjectionVersion,
+			GraftSeq:          1,
+		},
+	}
+	if _, err := svc.PutMemoryDigest(ctx, repo, digest); err != nil {
+		t.Fatalf("explicit incomplete coverage was rejected: %v", err)
+	}
+}
+
+func TestMemoryDigestRejectsInvalidGraftCoverageBeforeStorage(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("invalid-memory-coverage-repo")
+	snapshotID := hh("invalid-memory-coverage-snapshot")
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
+		t.Fatal(err)
+	}
+	for name, coverage := range map[string]*domain.MemoryGraftCoverage{
+		"missing version":       {LineageFingerprint: hh("lineage"), GraftSeq: 1},
+		"missing fingerprint":   {ProjectionVersion: 1, ProjectionComplete: true, GraftSeq: 1},
+		"sequence overflow":     {ProjectionVersion: 1, LineageFingerprint: hh("lineage"), GraftSeq: domain.MaxGraftSeq + 1},
+		"invalid parent":        {ProjectionVersion: 1, LineageFingerprint: hh("lineage"), GraftParents: []domain.ContentHash{"not-a-hash"}},
+		"invalid pinned source": {ProjectionVersion: 1, LineageFingerprint: hh("lineage"), PinnedSources: []domain.ContentHash{"not-a-hash"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.PutMemoryDigest(ctx, repo, domain.MemoryDigest{
+				SnapshotID: snapshotID, Summary: "invalid", Provider: domain.ProviderCodex, GraftCoverage: coverage,
+			})
+			if err == nil {
+				t.Fatal("invalid graft coverage was accepted")
+			}
+		})
 	}
 }
 

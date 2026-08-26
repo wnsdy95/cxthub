@@ -24,6 +24,14 @@ func largeMemory(label string, extra int) domain.MemoryDigest {
 			SourceSnapshot: domain.HashContent([]byte("source-" + label)),
 			Summary:        strings.Repeat("fragment-", 10<<10),
 		}},
+		GraftCoverage: &domain.MemoryGraftCoverage{
+			ProjectionVersion:  domain.MemoryProjectionVersion,
+			ProjectionComplete: true,
+			LineageFingerprint: domain.HashContent([]byte("lineage-" + label)),
+			GraftSeq:           3,
+			GraftParents:       []domain.ContentHash{domain.HashContent([]byte("graft-" + label))},
+			PinnedSources:      []domain.ContentHash{domain.HashContent([]byte("pinned-" + label))},
+		},
 	}
 }
 

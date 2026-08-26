@@ -5,6 +5,8 @@ import "time"
 // MaxGraftSeq is the upper bound of the graft Lamport version that PostgreSQL BIGINT and FS/CLI JSON replicas can share. Wrapping around at the upper bound could cause removed edges to revive as legacy seq=0, so mutations are fail-closed.
 const MaxGraftSeq uint64 = 1<<63 - 1
 
+const MemoryProjectionVersion uint32 = 1
+
 // Repo is the root of the session storage space (data model, sync protocol).
 //
 // One per detected code repository. Namespace root for all branch/snapshot/ref names.
@@ -237,12 +239,26 @@ type Manifest struct {
 //
 // The backend stores only CIR-neutral digests and does not know provider-native formats.
 type MemoryDigest struct {
-	SnapshotID ContentHash      `json:"snapshot_id"`
-	Summary    string           `json:"summary"`
-	KeyFacts   []string         `json:"key_facts"`
-	OpenTasks  []string         `json:"open_tasks"`
-	Provider   ProviderKind     `json:"provider"`
-	Fragments  []MemoryFragment `json:"fragments,omitempty"`
+	SnapshotID    ContentHash          `json:"snapshot_id"`
+	Summary       string               `json:"summary"`
+	KeyFacts      []string             `json:"key_facts"`
+	OpenTasks     []string             `json:"open_tasks"`
+	Provider      ProviderKind         `json:"provider"`
+	Fragments     []MemoryFragment     `json:"fragments,omitempty"`
+	GraftCoverage *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
+}
+
+// MemoryGraftCoverage is the root graft register and transitive lineage state
+// observed when a client projected and attached a digest. ProjectionComplete
+// distinguishes a trusted fingerprint from retained partial data. Nil means
+// legacy/unknown.
+type MemoryGraftCoverage struct {
+	ProjectionVersion  uint32        `json:"projection_version"`
+	ProjectionComplete bool          `json:"projection_complete"`
+	LineageFingerprint ContentHash   `json:"lineage_fingerprint,omitempty"`
+	GraftSeq           uint64        `json:"graft_seq"`
+	GraftParents       []ContentHash `json:"graft_parents,omitempty"`
+	PinnedSources      []ContentHash `json:"pinned_sources,omitempty"`
 }
 
 // MemoryFragment is one snapshot-scoped memory contribution. The backend

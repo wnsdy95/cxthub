@@ -352,6 +352,34 @@ components:
                 items: { type: string }
               tasks_authoritative:
                 type: boolean
+        graft_coverage:
+          type: object
+          description: "Versioned transitive-lineage state recorded when this digest was attached. A complete fingerprint covers natural/graft topology, every reachable graft register, and ancestor memory pointers; incomplete and legacy digests are preserved but conservatively reprojected."
+          required: [projection_version, projection_complete, graft_seq]
+          additionalProperties: false
+          properties:
+            projection_version:
+              type: integer
+              minimum: 1
+              maximum: 4294967295
+            projection_complete:
+              type: boolean
+              description: "True only when every reachable snapshot and memory frontier was readable while projecting. False values are preserved but never trusted as traversal stops."
+            lineage_fingerprint:
+              $ref: "#/components/schemas/ContentHash"
+            graft_seq:
+              type: integer
+              minimum: 0
+              maximum: 9223372036854775807
+            graft_parents:
+              type: array
+              items:
+                $ref: "#/components/schemas/ContentHash"
+            pinned_sources:
+              type: array
+              description: "Fragment source snapshots retained by this digest because they were imported or were not reproducible from the available root parent-memory projection."
+              items:
+                $ref: "#/components/schemas/ContentHash"
 
     ErrorResponse:
       type: object

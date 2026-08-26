@@ -17,6 +17,14 @@ func TestMemoryComponentPlanRoundtripAndPrefixDedup(t *testing.T) {
 			SourceSnapshot: HashContent([]byte("memory-source")),
 			Summary:        strings.Repeat("fragment", 12<<10),
 		}},
+		GraftCoverage: &MemoryGraftCoverage{
+			ProjectionVersion:  MemoryProjectionVersion,
+			ProjectionComplete: true,
+			LineageFingerprint: HashContent([]byte("lineage-state")),
+			GraftSeq:           2,
+			GraftParents:       []ContentHash{HashContent([]byte("graft-parent"))},
+			PinnedSources:      []ContentHash{HashContent([]byte("pinned-source"))},
+		},
 	}
 	second := first
 	second.SnapshotID = HashContent([]byte("memory-second"))
@@ -30,7 +38,7 @@ func TestMemoryComponentPlanRoundtripAndPrefixDedup(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("PlanMemoryChunks(second): ok=%v err=%v", ok, err)
 	}
-	if p1.Manifest.Format != MemoryChunkFormatV1 {
+	if p1.Manifest.Format != MemoryChunkFormatV2 {
 		t.Fatalf("format=%q", p1.Manifest.Format)
 	}
 	for hash, body := range p2.Bodies {
@@ -58,6 +66,18 @@ func TestMemoryComponentPlanRoundtripAndPrefixDedup(t *testing.T) {
 	gotHash, _ := MemoryDigestHash(got)
 	if gotHash != wantHash {
 		t.Fatalf("identity changed: got %s want %s", gotHash, wantHash)
+	}
+}
+
+func TestMemoryComponentPlanKeepsLegacyManifestVersionWithoutCoverage(t *testing.T) {
+	digest := MemoryDigest{
+		SnapshotID: HashContent([]byte("legacy-format")),
+		Summary:    strings.Repeat("legacy", 16<<10),
+		Provider:   ProviderCodex,
+	}
+	plan, ok, err := PlanMemoryChunks(digest)
+	if err != nil || !ok || plan.Manifest.Format != MemoryChunkFormatV1 {
+		t.Fatalf("legacy plan: format=%q ok=%v err=%v", plan.Manifest.Format, ok, err)
 	}
 }
 

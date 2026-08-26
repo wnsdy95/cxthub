@@ -8,6 +8,11 @@ import (
 // MaxGraftSeq is the upper bound of the graft Lamport version that can be represented by the server PostgreSQL BIGINT and the local JSON replica. Wrapping to seq=0 is not allowed.
 const MaxGraftSeq uint64 = 1<<63 - 1
 
+// MemoryProjectionVersion identifies the transitive frontier algorithm whose
+// coverage proof is safe to use as a traversal stop. Unknown future versions
+// remain storable but are conservatively reprojected by this client.
+const MemoryProjectionVersion uint32 = 1
+
 // JSON tags are in snake_case, the same as the backend(cxt-backend) domain and schemas/manifest.schema.json. Although completely separate, they must be compatible over the wire(REST/JSON), so field names are matched (.cxt local storage is in the same format).
 
 // TeamIdentity is a value object that identifies the snapshot author (domain model).
@@ -164,6 +169,26 @@ type MemoryDigest struct {
 	// KeyFacts, and OpenTasks remain the rendered compatibility view. Older
 	// digests without fragments are promoted as one immutable legacy fragment.
 	Fragments []MemoryFragment `json:"fragments,omitempty"`
+	// GraftCoverage records the exact mutable graft register observed when this
+	// digest was attached. Natural parents are immutable and need no coverage
+	// marker, but a nil value is legacy/unknown and cannot prove that the
+	// corrected transitive frontier algorithm covered grafts hidden below them.
+	GraftCoverage *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
+}
+
+// MemoryGraftCoverage describes which transitive lineage a MemoryDigest tried
+// to project. ProjectionComplete=true makes the Merkle fingerprint a trusted
+// proof; false retains pinned/partial data but can never stop traversal. The
+// fingerprint covers natural/graft topology, every reachable graft register,
+// and ancestor memory pointers. The root register remains inline for a cheap
+// rejection before recomputing it.
+type MemoryGraftCoverage struct {
+	ProjectionVersion  uint32        `json:"projection_version"`
+	ProjectionComplete bool          `json:"projection_complete"`
+	LineageFingerprint ContentHash   `json:"lineage_fingerprint,omitempty"`
+	GraftSeq           uint64        `json:"graft_seq"`
+	GraftParents       []ContentHash `json:"graft_parents,omitempty"`
+	PinnedSources      []ContentHash `json:"pinned_sources,omitempty"`
 }
 
 // MemoryFragment is one snapshot's independently distilled contribution.
