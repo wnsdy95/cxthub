@@ -204,6 +204,7 @@ func TestLoadFullPinsCodexReplacementWhileTrimmingLongSuffix(t *testing.T) {
 			{
 				Kind: domain.EventCompaction, Seq: 1, ReplacementComplete: true,
 				Replacement: []domain.Event{
+					{Kind: domain.EventMessage, Seq: 0, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: seedSummaryPrefix + " 1126 events were omitted\n" + strings.Repeat(seedSummaryPrefix+" nested inherited generation\n", 20)}}},
 					{Kind: domain.EventMessage, Seq: 0, Role: "developer", Blocks: []domain.ContentBlock{{Type: "text", Text: "pinned runtime contract"}}},
 					{Kind: domain.EventMessage, Seq: 1, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "pinned compacted memory"}}},
 					{Kind: domain.EventCompaction, Seq: 2, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "PINNED-ENC"}},
@@ -250,20 +251,64 @@ func TestLoadFullPinsCodexReplacementWhileTrimmingLongSuffix(t *testing.T) {
 		t.Fatal(err)
 	}
 	active := restored.EffectiveContext()
-	lockedAt, digestAt, recentAt := -1, -1, -1
+	lockedAt, digestAt, recentAt, digestCount := -1, -1, -1, 0
 	for i, ev := range active.Events {
 		if ev.Kind == domain.EventCompaction && ev.Locked != nil && ev.Locked.Blob == "PINNED-ENC" {
 			lockedAt = i
 		}
 		if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && strings.HasPrefix(ev.Blocks[0].Text, seedSummaryPrefix) {
 			digestAt = i
+			digestCount++
 		}
 		if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && ev.Blocks[0].Text == "recent request retained" {
 			recentAt = i
 		}
 	}
+	if digestCount != 1 {
+		t.Fatalf("active replay contains %d synthetic seed generations, want exactly one", digestCount)
+	}
+	if strings.Count(active.Events[digestAt].Blocks[0].Text, seedSummaryPrefix) != 1 {
+		t.Fatalf("replacement digest recursively contains prior seed generations:\n%s", active.Events[digestAt].Blocks[0].Text)
+	}
 	if !(lockedAt >= 0 && lockedAt < digestAt && digestAt < recentAt) {
 		t.Fatalf("replay order is not replacement → digest → recent tail: locked=%d digest=%d recent=%d events=%+v", lockedAt, digestAt, recentAt, active.Events)
+	}
+
+	// Loading the already-bounded replay again must be idempotent: no new trim
+	// digest and no reintroduction of a prior synthetic generation.
+	replayHash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: restored})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: replayHash, Branch: "main", DocHash: replayHash, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{Ref: string(replayHash), TargetProvider: domain.ProviderCodex, Mode: domain.FidelityFull, Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.TrimmedEvents != 0 {
+		t.Fatalf("already-bounded replay was trimmed again: %d events", second.TrimmedEvents)
+	}
+	secondRaw, err := os.ReadFile(second.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDoc, err := codec.NewCodexCodec().Decode(ctx, secondRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSeedCount := 0
+	for _, ev := range secondDoc.EffectiveContext().Events {
+		if isSeedSummaryEvent(ev) {
+			secondSeedCount++
+			if strings.Count(ev.Blocks[0].Text, seedSummaryPrefix) != 1 {
+				t.Fatalf("second load recursively expanded the seed:\n%s", ev.Blocks[0].Text)
+			}
+		}
+	}
+	if secondSeedCount != 1 {
+		t.Fatalf("second load contains %d synthetic seeds, want one", secondSeedCount)
 	}
 }
 
