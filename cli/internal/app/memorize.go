@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -213,6 +214,13 @@ const memoryCarryListBudgetBytes = 64 << 10
 // >256KiB native memory or newly generated summary would be lossy on its first
 // storage and there would be no full ancestor object to recover it from.
 func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
+	// Legacy memories can contain recursively materialized cxt seed summaries.
+	// They remain immutable on their ancestor snapshots, but must not be copied
+	// into the active projection again. Structured facts/tasks are retained and
+	// the fresh snapshot contributes a clean extractive/provider summary.
+	if hasNestedSeedSummary(d.Summary) {
+		d.Summary = ""
+	}
 	if len(d.Summary) > memoryCarryBudgetBytes {
 		d.Summary = truncateUTF8Tail(d.Summary, memoryCarryBudgetBytes)
 	}
@@ -225,6 +233,9 @@ func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
 		kept := make([]domain.MemoryFragment, 0, len(d.Fragments))
 		for i := len(d.Fragments) - 1; i >= 0; i-- {
 			fragment := d.Fragments[i]
+			if hasNestedSeedSummary(fragment.Summary) {
+				fragment.Summary = ""
+			}
 			fragment.Summary = truncateUTF8Tail(fragment.Summary, remainingSummary)
 			fragment.KeyFacts = boundStringListTail(fragment.KeyFacts, remainingFacts)
 			fragment.OpenTasks = boundStringListTail(fragment.OpenTasks, remainingTasks)
@@ -245,6 +256,11 @@ func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
 		d.Fragments = kept
 	}
 	return d
+}
+
+func hasNestedSeedSummary(summary string) bool {
+	return strings.Contains(summary, seedSummaryPrefix) ||
+		strings.Contains(summary, "[cxt seed] Branch-switch context:")
 }
 
 func stringListBytes(items []string) int {
