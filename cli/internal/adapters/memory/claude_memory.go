@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -34,7 +36,53 @@ func (s *ClaudeMemorySource) ReadNative(_ context.Context, cwd, _ string) (domai
 	if err != nil {
 		return domain.NativeMemory{}, false, nil
 	}
-	return domain.NativeMemory{Provider: domain.ProviderClaude, Source: "claude:MEMORY.md", Text: string(data)}, true, nil
+	text := string(data)
+	return domain.NativeMemory{
+		Provider: domain.ProviderClaude,
+		Source:   "claude:MEMORY.md",
+		Scope:    domain.NativeMemoryScopeWorkingTree,
+		// Claude currently loads the first 200 lines or 25KB of auto memory
+		// (https://code.claude.com/docs/en/memory).
+		// Use lower bounds and complete lines only so a provider-visible suffix
+		// is never removed on an ambiguous boundary.
+		AutoLoadedPrefix: claudeAutoLoadedPrefix(text),
+		Text:             text,
+	}, true, nil
+}
+
+const (
+	claudeAutoMemorySafeLines = 199
+	claudeAutoMemorySafeBytes = 24 << 10
+)
+
+func claudeAutoLoadedPrefix(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if len(text) <= claudeAutoMemorySafeBytes && strings.Count(text, "\n")+1 <= claudeAutoMemorySafeLines {
+		return text
+	}
+	end := len(text)
+	if end > claudeAutoMemorySafeBytes {
+		end = claudeAutoMemorySafeBytes
+	}
+	for end > 0 && !utf8.ValidString(text[:end]) {
+		end--
+	}
+	lines := 0
+	lastCompleteLine := 0
+	for i := 0; i < end; i++ {
+		if text[i] != '\n' {
+			continue
+		}
+		lines++
+		lastCompleteLine = i + 1
+		if lines >= claudeAutoMemorySafeLines {
+			break
+		}
+	}
+	return strings.TrimSpace(text[:lastCompleteLine])
 }
 
 // ClaudeMemorySink implements MemorySink by writing a MemoryDigest to the Claude project instructions file (CLAUDE.md) (compatibility rules).

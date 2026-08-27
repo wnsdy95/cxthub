@@ -189,7 +189,9 @@ func TestDistillPreservesConversationAlongsideNativeMemory(t *testing.T) {
 	}
 }
 
-// TestDistillNoProvenanceMarkerInFacts ensures that the source marker ("native memory: …") does not mix with KeyFacts — the source is not a fact (review P2). Native memory is loaded by the agent at session start, so it has no information value.
+// TestDistillNoProvenanceMarkerInFacts ensures that native-memory source
+// metadata does not mix with KeyFacts. Provenance controls prompt projection;
+// it is not project knowledge.
 func TestDistillNoProvenanceMarkerInFacts(t *testing.T) {
 	cir := domain.CIRDocument{}
 	cir.Envelope.SourceProvider = domain.ProviderClaude
@@ -202,10 +204,19 @@ func TestDistillNoProvenanceMarkerInFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range d.KeyFacts {
-		if strings.HasPrefix(f, "native memory:") {
-			t.Fatalf("source marker mixed with KeyFacts: %q", f)
+	for _, fact := range d.KeyFacts {
+		if strings.HasPrefix(fact, "native memory:") || strings.HasPrefix(fact, "absorbed from") ||
+			strings.HasPrefix(fact, "ingested from") {
+			t.Fatalf("native-memory provenance mixed with structured KeyFacts: %q", fact)
 		}
+	}
+
+	nativeOnly, err := NewRuleDistiller().Distill(context.Background(), domain.CIRDocument{}, native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nativeOnly.KeyFacts) != 0 {
+		t.Fatalf("native-memory provenance mixed with KeyFacts: %v", nativeOnly.KeyFacts)
 	}
 }
 

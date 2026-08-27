@@ -234,7 +234,7 @@ func buildContainer(cfg config) container {
 	listSvc := app.NewListSessionsService(store)
 	memorizeSvc := app.NewMemorizeService(gitCtx, captures, codecs, memSources, distiller, store)
 	syncSvc := app.NewSyncRepoService(store, remote, gitCtx)
-	seedSvc := app.NewBranchSeedService(gitCtx, store, distiller, codecs, materializers)
+	seedSvc := app.NewBranchSeedService(gitCtx, store, distiller, codecs, materializers, memSources)
 	tagSvc := app.NewTagService(gitCtx, store)
 	stashSvc := app.NewStashService(gitCtx, captures, codecs, store, loadSvc)
 

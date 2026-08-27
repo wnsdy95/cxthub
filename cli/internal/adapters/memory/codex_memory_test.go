@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 // TestCodexReadNative verifies the reading of memories_1.sqlite and rollout files from a fake HOME directory, matching cwd to thread_id, reading from SQLite, and assembling NativeMemory.
@@ -72,6 +74,9 @@ func TestCodexReadNative(t *testing.T) {
 	}
 	if native.Source != "codex:memories_1.sqlite" || native.Provider != "codex" {
 		t.Errorf("source/provider mismatch: %+v", native)
+	}
+	if native.Scope != domain.NativeMemoryScopeSession {
+		t.Errorf("scope=%q, want session", native.Scope)
 	}
 
 	// An empty raw_memory is a fallback for rollout_summary.

@@ -89,6 +89,23 @@ func TestMemorySinkAppendsOneManagedBlock(t *testing.T) {
 	}
 }
 
+func TestRenderMemoryMarkdownOmitsLegacyNativeProvenanceFacts(t *testing.T) {
+	got := renderMemoryMarkdown(domain.MemoryDigest{KeyFacts: []string{
+		"native memory: claude:MEMORY.md",
+		"absorbed from claude:MEMORY.md",
+		"ingested from codex:memories_1.sqlite",
+		"Overlay graft parents remain immutable.",
+	}})
+	for _, forbidden := range []string{"native memory:", "absorbed from", "ingested from"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("provider memory contains legacy provenance %q:\n%s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "Overlay graft parents remain immutable.") {
+		t.Fatalf("provider memory lost project fact:\n%s", got)
+	}
+}
+
 func TestMemorySinkRejectsMalformedMarkersWithoutWrite(t *testing.T) {
 	for _, body := range []string{
 		"user\n" + testManagedMemoryBegin + "\nunterminated\n",

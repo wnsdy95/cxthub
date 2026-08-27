@@ -252,6 +252,11 @@ operations without enlarging the provider prompt budget. When current
 conversation events are also replayed verbatim, their extractive memory delta
 is removed only from the prompt projection, so the new session receives each
 turn once while the full digest remains attached to the seed.
+Provider-native baselines follow the same prompt-only rule with an explicit
+scope. For Claude `MEMORY.md`, cxt removes only a conservative complete-line
+prefix (at most 199 lines and 24 KiB) inside Claude's documented startup limit
+and carries any remaining tail. Codex `memories_1.sqlite` memory is retained
+because it belongs to the source thread and the seed receives a new thread ID.
 
 ### `cxt switch`
 
@@ -299,6 +304,11 @@ The mode priority is:
 refreshes one marked region in `CLAUDE.md` or `AGENTS.md`; text and permissions
 outside that region are preserved. Malformed or duplicate cxt markers fail
 closed instead of guessing a destructive replacement range.
+The provider-visible projection does not repeat a working-tree-scoped native
+prefix that is guaranteed to auto-load, but it preserves the un-loaded suffix,
+its conversation delta, and every unrelated lineage fragment. Session-scoped
+native memory is carried into the managed region so a newly materialized
+provider session cannot lose it.
 
 ### `cxt memorize` and `cxt memory`
 

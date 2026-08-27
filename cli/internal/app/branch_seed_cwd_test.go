@@ -75,6 +75,7 @@ func TestBranchSeedUsesTargetWorkingDirectory(t *testing.T) {
 		memory.NewRuleDistiller(),
 		nil,
 		nil,
+		nil,
 	)
 	out, err := service.Seed(ctx, inbound.SeedInput{
 		Cwd:        targetCwd,

@@ -97,6 +97,7 @@ func (s *CodexMemorySource) ReadNative(ctx context.Context, cwd, sessionID strin
 		return domain.NativeMemory{
 			Provider: domain.ProviderCodex,
 			Source:   "codex:memories_1.sqlite",
+			Scope:    domain.NativeMemoryScopeSession,
 			Text:     text,
 		}, true, nil
 	}

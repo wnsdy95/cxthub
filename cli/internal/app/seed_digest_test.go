@@ -25,11 +25,23 @@ func (failingDistiller) Distill(_ context.Context, _ domain.CIRDocument, _ *doma
 	return domain.MemoryDigest{}, errors.New("distillation unavailable")
 }
 
+type recordingNativeDistiller struct {
+	native *domain.NativeMemory
+}
+
+func (d *recordingNativeDistiller) Distill(_ context.Context, _ domain.CIRDocument, native *domain.NativeMemory) (domain.MemoryDigest, error) {
+	d.native = native
+	return domain.MemoryDigest{Summary: "loaded memory"}, nil
+}
+
 type stubMemSource struct{ text string }
 
 func (s stubMemSource) Provider() domain.ProviderKind { return domain.ProviderClaude }
 func (s stubMemSource) ReadNative(_ context.Context, _, _ string) (domain.NativeMemory, bool, error) {
-	return domain.NativeMemory{Source: "claude:MEMORY.md", Text: s.text}, s.text != "", nil
+	return domain.NativeMemory{
+		Provider: domain.ProviderClaude, Source: "claude:MEMORY.md",
+		Scope: domain.NativeMemoryScopeWorkingTree, AutoLoadedPrefix: s.text, Text: s.text,
+	}, s.text != "", nil
 }
 
 type recordingSessionMemSource struct {
@@ -43,13 +55,27 @@ func (s *recordingSessionMemSource) ReadNative(_ context.Context, cwd, sessionID
 	s.calls++
 	s.gotCwd = cwd
 	s.gotSessionID = sessionID
-	return domain.NativeMemory{Source: "codex:rollout_summary", Text: "exact session memory"}, true, nil
+	return domain.NativeMemory{
+		Provider: s.provider, Source: "codex:rollout_summary",
+		Scope: domain.NativeMemoryScopeSession, Text: "exact session memory",
+	}, true, nil
 }
 
 type recordingMemorySink struct{ provider domain.ProviderKind }
 
 func (s recordingMemorySink) Provider() domain.ProviderKind { return s.provider }
 func (s recordingMemorySink) Inject(_ context.Context, _ domain.MemoryDigest, cwd string) (string, error) {
+	return cwd + "/managed-memory", nil
+}
+
+type recordingDigestSink struct {
+	provider domain.ProviderKind
+	digest   domain.MemoryDigest
+}
+
+func (s *recordingDigestSink) Provider() domain.ProviderKind { return s.provider }
+func (s *recordingDigestSink) Inject(_ context.Context, digest domain.MemoryDigest, cwd string) (string, error) {
+	s.digest = digest
 	return cwd + "/managed-memory", nil
 }
 
@@ -106,7 +132,7 @@ func TestMemorizeReadsNativeMemoryForExactProviderSession(t *testing.T) {
 	}
 }
 
-func TestLoadMemoryScopesNativeLookupToSameProviderSession(t *testing.T) {
+func TestLoadMemorySeparatesTargetProjectionLookupFromSourceDistillation(t *testing.T) {
 	ctx := context.Background()
 	cwd := t.TempDir()
 	cir := domain.CIRDocument{Envelope: domain.Envelope{
@@ -117,27 +143,74 @@ func TestLoadMemoryScopesNativeLookupToSameProviderSession(t *testing.T) {
 	snap := domain.Snapshot{ID: domain.HashContent([]byte("load-memory-session-scope"))}
 
 	for _, tc := range []struct {
-		name        string
-		target      domain.ProviderKind
-		wantCalls   int
-		wantSession string
+		name       string
+		target     domain.ProviderKind
+		wantNative bool
 	}{
-		{name: "same provider", target: domain.ProviderCodex, wantCalls: 1, wantSession: "codex-session-exact"},
-		{name: "cross provider", target: domain.ProviderClaude, wantCalls: 0, wantSession: ""},
+		{name: "same provider", target: domain.ProviderCodex, wantNative: true},
+		{name: "cross provider", target: domain.ProviderClaude, wantNative: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := &recordingSessionMemSource{provider: tc.target}
+			distiller := &recordingNativeDistiller{}
 			service := NewLoadSessionService(
 				storage.NewFileStore(t.TempDir()), nil, nil,
 				map[domain.ProviderKind]outbound.MemorySource{tc.target: source},
-				stubDistiller{d: domain.MemoryDigest{Summary: "loaded memory"}},
+				distiller,
 				map[domain.ProviderKind]outbound.MemorySink{tc.target: recordingMemorySink{provider: tc.target}},
 			)
 			if _, err := service.loadMemory(ctx, cir, snap, tc.target, cwd); err != nil {
 				t.Fatal(err)
 			}
-			if source.calls != tc.wantCalls || source.gotSessionID != tc.wantSession {
-				t.Fatalf("native memory lookup calls=%d session=%q, want calls=%d session=%q", source.calls, source.gotSessionID, tc.wantCalls, tc.wantSession)
+			if source.calls != 1 || source.gotSessionID != "codex-session-exact" {
+				t.Fatalf("target projection lookup calls=%d session=%q", source.calls, source.gotSessionID)
+			}
+			if got := distiller.native != nil; got != tc.wantNative {
+				t.Fatalf("native memory passed to source distillation=%v, want %v", got, tc.wantNative)
+			}
+		})
+	}
+}
+
+func TestLoadMemoryProjectsNativeBaselineByScope(t *testing.T) {
+	ctx := context.Background()
+	const currentDecision = "CURRENT MEMORY-MODE DECISION"
+	for _, tc := range []struct {
+		name         string
+		provider     domain.ProviderKind
+		source       outbound.MemorySource
+		nativeText   string
+		wantBaseline bool
+	}{
+		{
+			name: "Claude working-tree memory is already auto-loaded", provider: domain.ProviderClaude,
+			source: stubMemSource{text: "CLAUDE MEMORY MODE BASELINE"}, nativeText: "CLAUDE MEMORY MODE BASELINE",
+		},
+		{
+			name: "Codex thread memory must cross into the new session", provider: domain.ProviderCodex,
+			source: &recordingSessionMemSource{provider: domain.ProviderCodex}, nativeText: "exact session memory", wantBaseline: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cwd := t.TempDir()
+			sink := &recordingDigestSink{provider: tc.provider}
+			service := NewLoadSessionService(
+				storage.NewFileStore(t.TempDir()), nil, nil,
+				map[domain.ProviderKind]outbound.MemorySource{tc.provider: tc.source},
+				memory.NewRuleDistiller(),
+				map[domain.ProviderKind]outbound.MemorySink{tc.provider: sink},
+			)
+			cir := domain.CIRDocument{Envelope: domain.Envelope{
+				SourceProvider: tc.provider, SessionOriginID: "codex-session-exact",
+			}, Events: []domain.Event{seedMessage("user", currentDecision, 0)}}
+			if _, err := service.loadMemory(ctx, cir, domain.Snapshot{}, tc.provider, cwd); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(sink.digest.Summary, tc.nativeText); got != tc.wantBaseline {
+				t.Fatalf("managed memory baseline present=%v, want %v:\n%s", got, tc.wantBaseline, sink.digest.Summary)
+			}
+			if !strings.Contains(sink.digest.Summary, currentDecision) {
+				t.Fatalf("managed memory lost current conversation:\n%s", sink.digest.Summary)
 			}
 		})
 	}
@@ -171,7 +244,7 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 
 	svc := mk(domain.MemoryDigest{
 		Summary:  "did X, decided Y",
-		KeyFacts: []string{"apply_patch", "unknown:Agent", "native memory: claude:MEMORY.md", "absorbed from claude:MEMORY.md", "budget is 400KB per seed"},
+		KeyFacts: []string{"apply_patch", "unknown:Agent", "native memory: claude:MEMORY.md", "absorbed from claude:MEMORY.md", "ingested from codex:memories_1.sqlite", "budget is 400KB per seed"},
 	}, "")
 	out, err := svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
 	if err != nil {
@@ -190,7 +263,7 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 		t.Fatalf("Missing summary body: %q", text)
 	}
 	if strings.Contains(text, "apply_patch") || strings.Contains(text, "unknown:Agent") ||
-		strings.Contains(text, "native memory:") || strings.Contains(text, "absorbed from") {
+		strings.Contains(text, "native memory:") || strings.Contains(text, "absorbed from") || strings.Contains(text, "ingested from") {
 		t.Fatalf("KeyFacts noise included in seed: %q", text)
 	}
 	if !strings.Contains(text, "budget is 400KB per seed") {
@@ -208,6 +281,110 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 	}
 	if strings.Contains(out.Events[0].Blocks[0].Text, "MEMROOT") {
 		t.Fatalf("Native memory text re-injected into seed: %q", out.Events[0].Blocks[0].Text)
+	}
+}
+
+func TestPrependTrimDigestRemovesClaudeNativeBaselineInsideMergedProjection(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	snapshotID := domain.HashContent([]byte("claude-native-current-snapshot"))
+	ancestorID := domain.HashContent([]byte("claude-native-ancestor-snapshot"))
+	const nativeBaseline = "CLAUDE CWD NATIVE BASELINE"
+	ancestor := domain.MemoryDigest{
+		SnapshotID: ancestorID,
+		Summary: domain.AppendExtractiveConversationDelta(nativeBaseline,
+			domain.RenderExtractiveFallbackSummary([]string{"ANCESTOR DECISION MUST REMAIN"}, nil)),
+	}
+	ancestor = domain.MergeDigests(domain.MemoryDigest{}, ancestor)
+	ancestorMemoryHash, err := st.PutMemory(ctx, ancestor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSnapshot(ctx, domain.Snapshot{
+		ID: ancestorID, DocHash: ancestorID, MemoryHash: ancestorMemoryHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored := domain.MemoryDigest{
+		SnapshotID: snapshotID,
+		Fragments: []domain.MemoryFragment{
+			{
+				SourceSnapshot: snapshotID,
+				Summary: domain.AppendExtractiveConversationDelta(nativeBaseline,
+					domain.RenderExtractiveFallbackSummary([]string{"CURRENT RAW TURN"}, nil)),
+			},
+		},
+	}
+	stored = domain.MergeDigests(domain.MemoryDigest{}, stored)
+	memoryHash, err := st.PutMemory(ctx, stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := domain.Snapshot{
+		ID: snapshotID, DocHash: snapshotID, MemoryHash: memoryHash,
+		Parents: []domain.ContentHash{ancestorID},
+	}
+	if err := st.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewLoadSessionService(st, nil, nil,
+		map[domain.ProviderKind]outbound.MemorySource{
+			domain.ProviderClaude: stubMemSource{text: nativeBaseline},
+		},
+		stubDistiller{d: domain.MemoryDigest{Summary: "FRESH OMITTED DECISION"}}, nil,
+	)
+	omitted := domain.CIRDocument{Envelope: domain.Envelope{
+		SourceProvider: domain.ProviderClaude, SessionOriginID: "claude-source-session",
+	}, Events: []domain.Event{seedMessage("user", "old request", 0)}}
+	seed := domain.CIRDocument{Events: []domain.Event{seedMessage("user", "RECENT RAW TURN", 1)}}
+
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderClaude, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt strings.Builder
+	for _, event := range out.Events {
+		for _, block := range event.Blocks {
+			prompt.WriteString(block.Text)
+		}
+	}
+	if strings.Contains(prompt.String(), nativeBaseline) {
+		t.Fatalf("cwd-native baseline was injected even though Claude loads it automatically:\n%s", prompt.String())
+	}
+	for _, want := range []string{"ANCESTOR DECISION MUST REMAIN", "FRESH OMITTED DECISION", "RECENT RAW TURN"} {
+		if !strings.Contains(prompt.String(), want) {
+			t.Fatalf("native baseline projection lost %q:\n%s", want, prompt.String())
+		}
+	}
+	if strings.Contains(prompt.String(), "CURRENT RAW TURN") {
+		t.Fatalf("current source delta was duplicated into the summary:\n%s", prompt.String())
+	}
+}
+
+func TestPrependTrimDigestKeepsCodexThreadNativeMemoryForNewSession(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	source := &recordingSessionMemSource{provider: domain.ProviderCodex}
+	svc := NewLoadSessionService(st, nil, nil,
+		map[domain.ProviderKind]outbound.MemorySource{domain.ProviderCodex: source},
+		stubDistiller{d: domain.MemoryDigest{Summary: "exact session memory"}}, nil,
+	)
+	omitted := domain.CIRDocument{Envelope: domain.Envelope{
+		SourceProvider: domain.ProviderCodex, SessionOriginID: "codex-session-exact",
+	}, Events: []domain.Event{seedMessage("user", "old request", 0)}}
+	seed := domain.CIRDocument{Events: []domain.Event{seedMessage("user", "recent request", 1)}}
+
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, domain.Snapshot{}, domain.ProviderCodex, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.calls != 1 || source.gotSessionID != "codex-session-exact" {
+		t.Fatalf("native lookup calls=%d session=%q", source.calls, source.gotSessionID)
+	}
+	if len(out.Events) == 0 || len(out.Events[0].Blocks) == 0 ||
+		!strings.Contains(out.Events[0].Blocks[0].Text, "exact session memory") {
+		t.Fatalf("thread-scoped Codex memory was dropped before materializing a new thread: %+v", out.Events)
 	}
 }
 

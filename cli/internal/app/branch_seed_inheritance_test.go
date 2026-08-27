@@ -10,6 +10,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 func putBranchSeedSnapshot(
@@ -88,7 +89,7 @@ func TestBranchSeedSummarizesTrimmedPostCompactionConversation(t *testing.T) {
 	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", events, nil, nil)
 	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
 	service := NewBranchSeedService(
-		branchSeedGit{repo: repo}, store, memory.NewRuleDistiller(), nil, nil,
+		branchSeedGit{repo: repo}, store, memory.NewRuleDistiller(), nil, nil, nil,
 	)
 	out, err := service.Seed(ctx, inbound.SeedInput{
 		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/post-compaction-bridge", Provider: domain.ProviderCodex,
@@ -161,7 +162,7 @@ func TestBranchSeedDoesNotDuplicateCurrentConversationInSummary(t *testing.T) {
 	}
 	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", events, nil, &fullMemory)
 	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
-	service := NewBranchSeedService(branchSeedGit{repo: repo}, store, memory.NewRuleDistiller(), nil, nil)
+	service := NewBranchSeedService(branchSeedGit{repo: repo}, store, memory.NewRuleDistiller(), nil, nil, nil)
 
 	out, err := service.Seed(ctx, inbound.SeedInput{
 		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/no-current-dup", Provider: domain.ProviderCodex,
@@ -231,7 +232,7 @@ func TestBranchSeedBridgeFailureDoesNotCreateLossyBranch(t *testing.T) {
 	})
 	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
 	distiller := &failBridgeDistiller{}
-	service := NewBranchSeedService(branchSeedGit{repo: repo}, store, distiller, nil, nil)
+	service := NewBranchSeedService(branchSeedGit{repo: repo}, store, distiller, nil, nil, nil)
 	_, err := service.Seed(ctx, inbound.SeedInput{
 		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/bridge-failure", Provider: domain.ProviderCodex,
 	})
@@ -286,6 +287,7 @@ func TestBranchSeedFromMainIncludesStoredMemoryAndFullSession(t *testing.T) {
 		stubDistiller{d: domain.MemoryDigest{Summary: "fresh main lineage summary"}},
 		nil,
 		nil,
+		nil,
 	)
 	out, err := service.Seed(ctx, inbound.SeedInput{
 		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/main-inheritance", Provider: domain.ProviderCodex,
@@ -331,6 +333,61 @@ func TestBranchSeedFromMainIncludesStoredMemoryAndFullSession(t *testing.T) {
 	}
 }
 
+func TestBranchSeedProjectsClaudeCwdNativeOnlyFromPrompt(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-claude-native-seed", DefaultBranch: "main", LocalPath: t.TempDir()}
+	const nativeBaseline = "CLAUDE AUTO-LOADED PROJECT MEMORY"
+	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", []domain.Event{
+		seedMessage("user", "RAW DEPARTURE REQUEST", 0),
+		seedMessage("assistant", "RAW DEPARTURE RESULT", 1),
+	}, nil, &domain.MemoryDigest{Summary: nativeBaseline})
+	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
+
+	service := NewBranchSeedService(
+		branchSeedGit{repo: repo}, store,
+		stubDistiller{d: domain.MemoryDigest{Summary: "FRESH LINEAGE SUMMARY"}}, nil, nil,
+		map[domain.ProviderKind]outbound.MemorySource{
+			domain.ProviderClaude: stubMemSource{text: nativeBaseline},
+		},
+	)
+	out, err := service.Seed(ctx, inbound.SeedInput{
+		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/claude-native", Provider: domain.ProviderClaude,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedDoc, err := store.GetDoc(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt strings.Builder
+	for _, event := range seedDoc.CIR.Events {
+		for _, block := range event.Blocks {
+			prompt.WriteString(block.Text)
+		}
+	}
+	if strings.Contains(prompt.String(), nativeBaseline) {
+		t.Fatalf("branch prompt duplicated Claude cwd memory:\n%s", prompt.String())
+	}
+	for _, want := range []string{"FRESH LINEAGE SUMMARY", "RAW DEPARTURE REQUEST", "RAW DEPARTURE RESULT"} {
+		if !strings.Contains(prompt.String(), want) {
+			t.Fatalf("branch prompt lost %q:\n%s", want, prompt.String())
+		}
+	}
+	seedSnap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached, err := store.GetMemory(ctx, seedSnap.MemoryHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(attached.Summary, nativeBaseline) {
+		t.Fatalf("prompt-only projection mutated portable seed memory:\n%s", attached.Summary)
+	}
+}
+
 func TestBranchSeedFromMainDistillsMemoryWhenHeadHasNoStoredDigest(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
@@ -344,6 +401,7 @@ func TestBranchSeedFromMainDistillsMemoryWhenHeadHasNoStoredDigest(t *testing.T)
 		branchSeedGit{repo: repo},
 		store,
 		stubDistiller{d: domain.MemoryDigest{Summary: "DISTILLED MAIN COMPACT MEMORY"}},
+		nil,
 		nil,
 		nil,
 	)
@@ -388,6 +446,7 @@ func TestBranchSeedFromOtherLineageIncludesMainMemoryAndLineageSession(t *testin
 		branchSeedGit{repo: repo},
 		store,
 		stubDistiller{d: domain.MemoryDigest{Summary: "feature lineage digest"}},
+		nil,
 		nil,
 		nil,
 	)
@@ -531,6 +590,7 @@ func TestBranchSeedUsesStoredMainMemoryWhenMainDocIsNotLocal(t *testing.T) {
 		stubDistiller{d: domain.MemoryDigest{Summary: "feature digest"}},
 		nil,
 		nil,
+		nil,
 	)
 	out, err := service.Seed(ctx, inbound.SeedInput{
 		Cwd: repo.LocalPath, FromBranch: "feature/source", NewBranch: "feature/partial-main", Provider: domain.ProviderCodex,
@@ -574,6 +634,7 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 		branchSeedGit{repo: repo},
 		store,
 		stubDistiller{d: domain.MemoryDigest{Summary: "bounded lineage summary"}},
+		nil,
 		nil,
 		nil,
 	)
@@ -692,6 +753,7 @@ func TestBranchSeedCarriedMemoryIsBounded(t *testing.T) {
 		stubDistiller{d: domain.MemoryDigest{Summary: "fresh lineage summary"}},
 		nil,
 		nil,
+		nil,
 	)
 	out, err := service.Seed(ctx, inbound.SeedInput{
 		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/cap", Provider: domain.ProviderCodex,
@@ -741,7 +803,7 @@ func TestRepeatedBranchSeedsDoNotCarryPriorSyntheticPrompts(t *testing.T) {
 
 	service := NewBranchSeedService(
 		branchSeedGit{repo: repo}, store,
-		stubDistiller{d: domain.MemoryDigest{Summary: "fresh lineage memory"}}, nil, nil,
+		stubDistiller{d: domain.MemoryDigest{Summary: "fresh lineage memory"}}, nil, nil, nil,
 	)
 	first, err := service.Seed(ctx, inbound.SeedInput{
 		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/one", Provider: domain.ProviderCodex,

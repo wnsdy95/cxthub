@@ -77,7 +77,9 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 		if len(facts) == 0 {
 			facts = tools // unstructured summary (different format) — maintain existing fallback
 		}
-		// Source marker ("native memory: …") is not added to KeyFacts — native memory is loaded by agent at session start (review P2).
+		// Native-memory source metadata is provenance, not project knowledge, so it
+		// is never added to KeyFacts. Prompt projection separately decides whether
+		// the target provider auto-loads that source in a new session.
 		suffix := extractiveConversationDigest(cir.Events[compactSummaryAt+1:])
 		return domain.MemoryDigest{
 			// Provider-written compaction memory is already the authoritative
@@ -93,10 +95,10 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 	}
 	if native != nil {
 		// Native memory is a baseline, not a replacement for work performed in
-		// the current session after that file was loaded.
+		// the current session after that memory was produced. Scope is consumed by
+		// the app layer; the immutable digest keeps the baseline for portability.
 		return domain.MemoryDigest{
 			Summary:  domain.AppendExtractiveConversationDelta(native.Text, extractiveConversationDigest(cir.Events)),
-			KeyFacts: []string{"ingested from " + native.Source},
 			Provider: prov,
 		}, nil
 	}
