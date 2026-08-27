@@ -282,7 +282,10 @@ cxt load [<ref>]
 
 Restores a snapshot without creating a branch. Omitting `<ref>` loads the
 current context head. `--provider` enables supported cross-provider
-materialization.
+materialization. If an oversized conversation must be trimmed, cxt first
+distills the exact omitted span and fails without creating a provider session
+file if that projection is unavailable; it never resumes from an unexplained
+recent tail.
 
 The mode priority is:
 

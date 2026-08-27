@@ -131,13 +131,18 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	dropped := len(omitted)
 	if dropped > 0 {
 		// Omit memory digest of skipped segment at seed start with "CompactSummary" event — context compression equivalent (summary + recent raw). Viewer collapses, distiller 1st priority last-wins (memory ↔ context cycle accumulation block).
-		// Failure is fail-open (tail only).
+		// Distillation is mandatory: materializing a resumable tail without a
+		// representation of the exact omitted span would silently lose context.
 		omittedCIR := cir
 		omittedCIR.Events = omitted
+		var digestErr error
 		if keptReplacement {
-			seedCIR = s.insertTrimDigestAfterPrefix(ctx, omittedCIR, seedCIR, replacementCount, snap, target, in.Cwd)
+			seedCIR, digestErr = s.insertTrimDigestAfterPrefix(ctx, omittedCIR, seedCIR, replacementCount, snap, target, in.Cwd)
 		} else {
-			seedCIR = s.prependTrimDigest(ctx, omittedCIR, seedCIR, snap, target, in.Cwd)
+			seedCIR, digestErr = s.prependTrimDigest(ctx, omittedCIR, seedCIR, snap, target, in.Cwd)
+		}
+		if digestErr != nil {
+			return inbound.LoadOutput{}, fmt.Errorf("distill omitted context: %w", digestErr)
 		}
 	}
 	// A restored session belongs to the working tree it is being restored into,
@@ -568,16 +573,17 @@ const seedSummaryPrefix = "[cxt] This session was resumed from a branch context 
 //
 // Summary source priority: The digest on this snapshot, or the deterministic
 // projection of nearest digests across every parent lineage, is first priority.
-// In-place head distillation supplements that project memory. If both fail,
-// fail open with only the recent tail.
+// In-place omitted-span distillation supplements that project memory. It is
+// mandatory whenever events were trimmed; stored memory cannot prove that it
+// contains the exact current omitted span.
 //
 // Deduplication:
 //   - Previous generation seed summary (prefix CompactSummary) in the tail is removed — the new summary takes precedence.
 //   - If the digest summary matches the original native memory (e.g., MEMORY.md) of the target provider, it is omitted — the agent loads context itself at session start, so context re-injection is redundant.
 //   - KeyFacts noise such as whitespace-free tool tokens and legacy ingestion markers ("native memory:"/"absorbed from") is excluded from seed content.
-func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) domain.CIRDocument {
-	out, _, _ := s.prependTrimDigestWithStatus(ctx, omitted, seed, snap, target, cwd, nil)
-	return out
+func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) (domain.CIRDocument, error) {
+	out, _, _, err := s.prependTrimDigestWithStatus(ctx, omitted, seed, snap, target, cwd, nil)
+	return out, err
 }
 
 // prependTrimDigestWithStatus reports both whether a new bounded digest was
@@ -585,16 +591,16 @@ func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, see
 // retain an old seed unless its meaning came from stored memory or was folded
 // into a normalized projection; otherwise that seed can be the sole surviving
 // representation of earlier context.
-func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string, priorSeeds []domain.Event) (domain.CIRDocument, bool, bool) {
-	digest, derr := s.distiller.Distill(ctx, omitted, nil)
+func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string, priorSeeds []domain.Event) (domain.CIRDocument, bool, bool, error) {
+	digest, err := s.distiller.Distill(ctx, omitted, nil)
+	if err != nil {
+		return seed, false, false, err
+	}
 	digest.SnapshotID = snap.ID
 	if digest.SnapshotID != "" {
 		// Normalize the private version marker into provenance fragments before
 		// rendering provider-visible prompt text.
 		digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
-	}
-	if derr != nil {
-		digest = domain.MemoryDigest{} // Send the stored digest even if empty
 	}
 	// Prioritize the stored memorize digest (self-snapshot → parent projection).
 	stored, hasStored := domain.MemoryDigest{}, false
@@ -624,9 +630,6 @@ func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, om
 		if storedUsable {
 			digest = domain.MergeDigests(stored, digest)
 		}
-	}
-	if derr != nil && !storedUsable {
-		return seed, false, false
 	}
 	seedProjected := false
 	if !storedUsable {
@@ -661,14 +664,14 @@ func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, om
 	}
 	out := seed
 	out.Events = append([]domain.Event{ev}, tail...)
-	return out, true, len(priorSeeds) == 0 || storedUsable || seedProjected
+	return out, true, len(priorSeeds) == 0 || storedUsable || seedProjected, nil
 }
 
 func memoryDigestHasProjection(d domain.MemoryDigest) bool {
 	return strings.TrimSpace(d.Summary) != "" || len(d.KeyFacts) > 0 || len(d.OpenTasks) > 0 || len(d.Fragments) > 0
 }
 
-func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, omitted, seed domain.CIRDocument, prefixCount int, snap domain.Snapshot, target domain.ProviderKind, cwd string) domain.CIRDocument {
+func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, omitted, seed domain.CIRDocument, prefixCount int, snap domain.Snapshot, target domain.ProviderKind, cwd string) (domain.CIRDocument, error) {
 	if prefixCount < 0 || prefixCount > len(seed.Events) {
 		return s.prependTrimDigest(ctx, omitted, seed, snap, target, cwd)
 	}
@@ -682,7 +685,11 @@ func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, om
 	tail := seed
 	tail.Events = seed.Events[prefixCount:]
 	var inserted, replacesPriorSeeds bool
-	tail, inserted, replacesPriorSeeds = s.prependTrimDigestWithStatus(ctx, omitted, tail, snap, target, cwd, priorSeeds)
+	var err error
+	tail, inserted, replacesPriorSeeds, err = s.prependTrimDigestWithStatus(ctx, omitted, tail, snap, target, cwd, priorSeeds)
+	if err != nil {
+		return seed, err
+	}
 	if inserted && replacesPriorSeeds {
 		// A prior cxt seed is semantic projection, not provider-owned replay
 		// state. Keeping it beside the replacement digest recursively embeds
@@ -706,7 +713,7 @@ func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, om
 	for i := range out.Events {
 		out.Events[i].Seq = i
 	}
-	return out
+	return out, nil
 }
 
 // syntheticSeedMemoryProjection makes a bounded carried digest from legacy
