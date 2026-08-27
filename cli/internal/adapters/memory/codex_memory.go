@@ -30,7 +30,7 @@ func (s *CodexMemorySource) Provider() domain.ProviderKind { return domain.Provi
 //
 // Reading uses the sqlite3 CLI (-readonly -json), keeping this module free of an embedded SQLite driver.
 // Absence of sqlite3, absence of DB, or absence of matching row results in found=false (no error) → CIR self-distillation fallback.
-func (s *CodexMemorySource) ReadNative(ctx context.Context, cwd string) (domain.NativeMemory, bool, error) {
+func (s *CodexMemorySource) ReadNative(ctx context.Context, cwd, sessionID string) (domain.NativeMemory, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return domain.NativeMemory{}, false, nil
@@ -54,8 +54,25 @@ func (s *CodexMemorySource) ReadNative(ctx context.Context, cwd string) (domain.
 	if len(ids) == 0 {
 		return domain.NativeMemory{}, false, nil
 	}
+	if sessionID != "" {
+		if !isSafeThreadID(sessionID) {
+			return domain.NativeMemory{}, false, nil
+		}
+		quoted := "'" + sessionID + "'"
+		found := false
+		for _, id := range ids {
+			if id == quoted {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return domain.NativeMemory{}, false, nil
+		}
+		ids = []string{quoted}
+	}
 	query := fmt.Sprintf(
-		"SELECT thread_id, raw_memory, rollout_summary FROM stage1_outputs WHERE thread_id IN (%s) ORDER BY source_updated_at ASC;",
+		"SELECT thread_id, raw_memory, rollout_summary FROM stage1_outputs WHERE thread_id IN (%s) AND (TRIM(raw_memory) <> '' OR TRIM(rollout_summary) <> '') ORDER BY source_updated_at DESC, thread_id DESC LIMIT 1;",
 		strings.Join(ids, ","))
 	out, err := exec.CommandContext(ctx, sqlite, "-readonly", "-json", db, query).Output()
 	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
@@ -69,8 +86,6 @@ func (s *CodexMemorySource) ReadNative(ctx context.Context, cwd string) (domain.
 	if err := json.Unmarshal(out, &rows); err != nil || len(rows) == 0 {
 		return domain.NativeMemory{}, false, nil
 	}
-	var parts []string
-	total := 0
 	for _, r := range rows {
 		text := strings.TrimSpace(r.RawMemory)
 		if text == "" {
@@ -79,19 +94,13 @@ func (s *CodexMemorySource) ReadNative(ctx context.Context, cwd string) (domain.
 		if text == "" {
 			continue
 		}
-		if total += len(text); total > 64<<10 {
-			break // distillation input limit — old excess is discarded (ASC sort, latest is last)
-		}
-		parts = append(parts, text)
+		return domain.NativeMemory{
+			Provider: domain.ProviderCodex,
+			Source:   "codex:memories_1.sqlite",
+			Text:     text,
+		}, true, nil
 	}
-	if len(parts) == 0 {
-		return domain.NativeMemory{}, false, nil
-	}
-	return domain.NativeMemory{
-		Provider: domain.ProviderCodex,
-		Source:   "codex:memories_1.sqlite",
-		Text:     strings.Join(parts, "\n\n---\n\n"),
-	}, true, nil
+	return domain.NativeMemory{}, false, nil
 }
 
 // threadIDFromRollout extracts the thread uuid from a rollout file name.
@@ -127,10 +136,11 @@ func NewCodexMemorySink() *CodexMemorySink { return &CodexMemorySink{} }
 // Provider returns codex.
 func (s *CodexMemorySink) Provider() domain.ProviderKind { return domain.ProviderCodex }
 
-// Inject records the digest to cwd/AGENTS.md and returns the path (includes cxt-managed marker).
+// Inject refreshes the bounded cxt-managed region in cwd/AGENTS.md while
+// preserving user-authored content outside the markers.
 func (s *CodexMemorySink) Inject(_ context.Context, digest domain.MemoryDigest, cwd string) (string, error) {
 	path := filepath.Join(cwd, "AGENTS.md")
-	if err := providerfs.WriteRegularFileAtomic(path, []byte(renderMemoryMarkdown(digest)), 0o644); err != nil {
+	if err := writeManagedMemory(path, digest); err != nil {
 		return "", err
 	}
 	return path, nil

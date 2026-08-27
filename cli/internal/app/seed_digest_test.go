@@ -8,6 +8,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
@@ -26,8 +27,119 @@ func (failingDistiller) Distill(_ context.Context, _ domain.CIRDocument, _ *doma
 type stubMemSource struct{ text string }
 
 func (s stubMemSource) Provider() domain.ProviderKind { return domain.ProviderClaude }
-func (s stubMemSource) ReadNative(_ context.Context, _ string) (domain.NativeMemory, bool, error) {
+func (s stubMemSource) ReadNative(_ context.Context, _, _ string) (domain.NativeMemory, bool, error) {
 	return domain.NativeMemory{Source: "claude:MEMORY.md", Text: s.text}, s.text != "", nil
+}
+
+type recordingSessionMemSource struct {
+	provider             domain.ProviderKind
+	calls                int
+	gotCwd, gotSessionID string
+}
+
+func (s *recordingSessionMemSource) Provider() domain.ProviderKind { return s.provider }
+func (s *recordingSessionMemSource) ReadNative(_ context.Context, cwd, sessionID string) (domain.NativeMemory, bool, error) {
+	s.calls++
+	s.gotCwd = cwd
+	s.gotSessionID = sessionID
+	return domain.NativeMemory{Source: "codex:rollout_summary", Text: "exact session memory"}, true, nil
+}
+
+type recordingMemorySink struct{ provider domain.ProviderKind }
+
+func (s recordingMemorySink) Provider() domain.ProviderKind { return s.provider }
+func (s recordingMemorySink) Inject(_ context.Context, _ domain.MemoryDigest, cwd string) (string, error) {
+	return cwd + "/managed-memory", nil
+}
+
+func TestMemorizeReadsNativeMemoryForExactProviderSession(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	cwd := t.TempDir()
+	repo := domain.Repo{ID: "repo-exact-native-memory", LocalPath: cwd, DefaultBranch: "main"}
+	docHash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{
+		Envelope: domain.Envelope{
+			CIRVersion:      domain.CIRVersionV2,
+			SourceProvider:  domain.ProviderCodex,
+			SessionOriginID: "codex-session-exact",
+		},
+		Events: []domain.Event{{Kind: domain.EventMessage, Role: "user", Seq: 0}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{
+		ID: docHash, DocHash: docHash, RepoID: repo.ID, Branch: "main",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{
+		Kind: domain.RefBranch, Name: "main", RepoID: repo.ID, Target: docHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	source := &recordingSessionMemSource{provider: domain.ProviderCodex}
+	service := NewMemorizeService(
+		branchSeedGit{repo: repo}, nil, nil,
+		map[domain.ProviderKind]outbound.MemorySource{domain.ProviderCodex: source},
+		stubDistiller{d: domain.MemoryDigest{Summary: "fresh exact-session memory"}}, store,
+	)
+	if _, err := service.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd}); err != nil {
+		t.Fatal(err)
+	}
+	if source.calls != 1 || source.gotCwd != cwd || source.gotSessionID != "codex-session-exact" {
+		t.Fatalf("native memory lookup calls=%d cwd=%q session=%q", source.calls, source.gotCwd, source.gotSessionID)
+	}
+	mismatched := &recordingSessionMemSource{provider: domain.ProviderClaude}
+	service = NewMemorizeService(
+		branchSeedGit{repo: repo}, nil, nil,
+		map[domain.ProviderKind]outbound.MemorySource{domain.ProviderClaude: mismatched},
+		stubDistiller{d: domain.MemoryDigest{Summary: "must not be attached"}}, store,
+	)
+	if _, err := service.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: domain.ProviderClaude}); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched provider error=%v", err)
+	}
+	if mismatched.calls != 0 {
+		t.Fatalf("mismatched provider read unrelated native memory %d time(s)", mismatched.calls)
+	}
+}
+
+func TestLoadMemoryScopesNativeLookupToSameProviderSession(t *testing.T) {
+	ctx := context.Background()
+	cwd := t.TempDir()
+	cir := domain.CIRDocument{Envelope: domain.Envelope{
+		CIRVersion:      domain.CIRVersionV2,
+		SourceProvider:  domain.ProviderCodex,
+		SessionOriginID: "codex-session-exact",
+	}}
+	snap := domain.Snapshot{ID: domain.HashContent([]byte("load-memory-session-scope"))}
+
+	for _, tc := range []struct {
+		name        string
+		target      domain.ProviderKind
+		wantCalls   int
+		wantSession string
+	}{
+		{name: "same provider", target: domain.ProviderCodex, wantCalls: 1, wantSession: "codex-session-exact"},
+		{name: "cross provider", target: domain.ProviderClaude, wantCalls: 0, wantSession: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &recordingSessionMemSource{provider: tc.target}
+			service := NewLoadSessionService(
+				storage.NewFileStore(t.TempDir()), nil, nil,
+				map[domain.ProviderKind]outbound.MemorySource{tc.target: source},
+				stubDistiller{d: domain.MemoryDigest{Summary: "loaded memory"}},
+				map[domain.ProviderKind]outbound.MemorySink{tc.target: recordingMemorySink{provider: tc.target}},
+			)
+			if _, err := service.loadMemory(ctx, cir, snap, tc.target, cwd); err != nil {
+				t.Fatal(err)
+			}
+			if source.calls != tc.wantCalls || source.gotSessionID != tc.wantSession {
+				t.Fatalf("native memory lookup calls=%d session=%q, want calls=%d session=%q", source.calls, source.gotSessionID, tc.wantCalls, tc.wantSession)
+			}
+		})
+	}
 }
 
 // TestPrependTrimDigestCompactSummary enforces a cycle-breaking contract for seed summary injection:

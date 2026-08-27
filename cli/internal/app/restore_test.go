@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/session"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -314,11 +316,24 @@ func TestLoadFullPinsCodexReplacementWhileTrimmingLongSuffix(t *testing.T) {
 
 // Memory mode: inject digest into CLAUDE.md.
 func TestLoadMemoryMode(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
 	seedClaudeSnapshot(t, store)
 	cwd := t.TempDir()
+	userInstructions := "# User-owned instructions\nPreserve this exactly."
+	if err := os.WriteFile(filepath.Join(cwd, "CLAUDE.md"), []byte(userInstructions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nativeText := "OLDEST-NATIVE\n" + strings.Repeat("é", 80<<10) + "\nNEWEST-NATIVE"
+	nativePath := filepath.Join(home, ".claude", "projects", providerfs.EncodeCwd(cwd), "memory", "MEMORY.md")
+	if err := os.MkdirAll(filepath.Dir(nativePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nativePath, []byte(nativeText), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{Ref: "main", TargetProvider: domain.ProviderClaude, Mode: domain.FidelityMemory, Cwd: cwd})
 	if err != nil {
@@ -330,9 +345,26 @@ func TestLoadMemoryMode(t *testing.T) {
 	if !strings.HasSuffix(out.WrittenPath, "CLAUDE.md") {
 		t.Fatalf("memory sink should write CLAUDE.md, got %s", out.WrittenPath)
 	}
-	data, _ := os.ReadFile(out.WrittenPath)
-	if !strings.Contains(string(data), "cxt memory") {
-		t.Fatalf("CLAUDE.md should contain injected memory")
+	data, err := os.ReadFile(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), userInstructions) || !strings.Contains(string(data), "cxt memory") || !strings.Contains(string(data), "NEWEST-NATIVE") {
+		t.Fatalf("CLAUDE.md did not preserve user instructions and bounded latest memory")
+	}
+	if len(data) > len(userInstructions)+(64<<10)+2 {
+		t.Fatalf("CLAUDE.md bytes=%d exceeds user content + managed budget", len(data))
+	}
+	info, err := os.Stat(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("CLAUDE.md mode=%v, want 0600", info.Mode().Perm())
+	}
+	storedNative, err := os.ReadFile(nativePath)
+	if err != nil || string(storedNative) != nativeText {
+		t.Fatalf("provider native memory was mutated: bytes=%d err=%v", len(storedNative), err)
 	}
 }
 

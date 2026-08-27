@@ -368,7 +368,8 @@ type CheckoutOutput struct {
 type MemorizeInput struct {
 	// Cwd is the working directory for detecting the active session target for distillation.
 	Cwd string
-	// Provider is the distillation target provider (claude|codex).
+	// Provider is an optional native-memory source hint for legacy snapshots.
+	// For modern snapshots it must match CIR.Envelope.SourceProvider.
 	Provider domain.ProviderKind
 	// Ref is the distillation target snapshot specification (branch name/snapshot ID, default to current branch head).
 	// It is needed in the memorize at the point where head already points to a different location, similar to a checkpoint (branch save just before transition).

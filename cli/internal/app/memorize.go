@@ -20,7 +20,7 @@ import (
 //  1. GitContext.CurrentRepo/CurrentBranch(Cwd) → repoID, branch confirmed.
 //  2. CaptureSource[Provider].LocateActiveSession+ReadSession → raw session.
 //  3. ProviderCodec[Provider].Decode(raw) → CIRDocument.
-//  4. MemorySource[Provider].ReadNative(Cwd) → (native, found). Native priority.
+//  4. MemorySource[Provider].ReadNative(Cwd, SessionOriginID) → (native, found). Native priority.
 //  5. MemoryDistiller.Distill(cir, native) → MemoryDigest (native==nil fallback to CIR distillation).
 //  6. SessionStore.PutMemory(digest) → MemoryHash.
 //  7. Attach MemoryHash to current branch HEAD snapshot (snapshot holds raw+memory, invariant 1).
@@ -60,9 +60,6 @@ func NewMemorizeService(
 // Push carries the attached memory with the raw document (compatibility rules).
 func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput) (inbound.MemorizeOutput, error) {
 	provider := in.Provider
-	if provider == "" {
-		provider = domain.ProviderClaude
-	}
 	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
@@ -94,11 +91,22 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
 	}
+	sourceProvider := doc.CIR.Envelope.SourceProvider
+	if sourceProvider != "" {
+		if provider != "" && provider != sourceProvider {
+			return inbound.MemorizeOutput{}, fmt.Errorf("snapshot provider %q does not match requested memory provider %q", sourceProvider, provider)
+		}
+		provider = sourceProvider
+	} else if provider == "" {
+		// Legacy documents predate SourceProvider. Preserve the original default
+		// only when the snapshot itself cannot identify its native-memory source.
+		provider = domain.ProviderClaude
+	}
 
 	// Absorb native memory (e.g., CLAUDE.md/MEMORY.md) first — fallback to CIR distillation if not present.
 	var nativePtr *domain.NativeMemory
 	if src, ok := s.memSources[provider]; ok {
-		if native, found, nerr := src.ReadNative(ctx, in.Cwd); nerr == nil && found {
+		if native, found, nerr := src.ReadNative(ctx, in.Cwd, doc.CIR.Envelope.SessionOriginID); nerr == nil && found {
 			nativePtr = &native
 		}
 	}

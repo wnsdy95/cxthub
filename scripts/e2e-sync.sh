@@ -312,8 +312,19 @@ expect "Invalid value 422" "$(ccurl -sb "$J" -o /dev/null -w '%{http_code}' -X P
 # CLI consumption: switching an authenticated repo1 to an existing branch uses the server's memory fidelity setting.
 cd "$TMP/repo1"
 git checkout -qb tmp-z >/dev/null 2>&1
+cat > CLAUDE.md <<'EOF'
+# User-owned instructions
+Preserve this text and its file mode.
+EOF
+chmod 600 CLAUDE.md
 git checkout -q main >"$TMP/pref.out" 2>&1
 expect "Switch load uses server personal settings(memory)" "$(grep -c 'fidelity: memory' "$TMP/pref.out")" 1
+cxt load main --provider claude --mode memory >/dev/null 2>&1
+cxt load main --provider claude --mode memory >/dev/null 2>&1
+expect "memory load preserves user instructions" "$(python3 -c "from pathlib import Path; print('yes' if Path('CLAUDE.md').read_text().startswith('# User-owned instructions\nPreserve this text and its file mode.\n') else 'no')")" yes
+expect "memory load refreshes one managed block" "$(grep -c '^<!-- cxt:begin managed memory' CLAUDE.md)" 1
+expect "memory managed block stays within 64 KiB" "$(python3 -c "from pathlib import Path; b=Path('CLAUDE.md').read_bytes(); s=b.index(b'<!-- cxt:begin managed memory'); e=b.index(b'<!-- cxt:end managed memory -->', s)+len(b'<!-- cxt:end managed memory -->')+1; print('yes' if e-s <= 64*1024 else 'no')")" yes
+expect "memory load preserves instruction file mode" "$(python3 -c "from pathlib import Path; print(oct(Path('CLAUDE.md').stat().st_mode & 0o777))")" 0o600
 ccurl -sb "$J" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":""}' >/dev/null
 
 echo "── I. Web fork connection: git branch = align+connect / switch -c = seed priority"
