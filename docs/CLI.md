@@ -243,9 +243,12 @@ ref. Git checkout hooks normally invoke the corresponding behavior
 automatically. A new branch seed carries the main head's compact memory plus
 the departure branch head's session conversation. Conversations that fit are
 preserved in full; larger sessions keep a bounded recent tail starting at a
-user-turn boundary. The prompt copy is bounded independently; the complete
-untruncated merged memory remains attached to the seed snapshot for future
-memorize and branch operations.
+user-turn boundary and distill the exact omitted slice into a bounded bridge.
+That bridge is merged with the inherited compact/project memory, so work after
+an older provider compaction does not disappear between the summary and recent
+tail. The source snapshot remains immutable and reachable; the inherited
+memory plus bridge is attached to the seed for future memorize and branch
+operations without enlarging the provider prompt budget.
 
 ### `cxt switch`
 
