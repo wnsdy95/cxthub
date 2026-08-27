@@ -2,12 +2,13 @@ package capture
 
 // briefing.go — terminal-scoped team context injection briefing sidecars.
 //
-// After a git pull (post-merge), if a new team member snapshot summary is recorded from the remote,
+// After a git pull (post-merge), if new team member snapshots are recorded from the remote,
 // the next prompt's UserPromptSubmit (or SessionStart) hook consumes it once and injects into the live agent session
 // (same protocol as Claude Code·Codex CLI — not visible to users, only to the model).
 //
-// The raw session is never merged (context convergence policy): Briefing is a one-way transmission in the summary layer,
-// while each snapshot remains true to its session in the DAG.
+// The raw session and collaborator-authored labels are never merged into the
+// model prompt. The notice carries only validated snapshot identifiers while
+// each full snapshot remains available in the DAG and web context view.
 
 import (
 	"encoding/json"
@@ -29,11 +30,13 @@ const briefingMaxBytes = 4 << 10
 const briefingTTL = 24 * time.Hour
 
 const briefingLockStaleAfter = 2 * time.Minute
+const briefingFormatVersion = 2
+const pullBriefingMaxSnapshots = 12
 
 type briefingFile struct {
-	At    time.Time `json:"at"`
-	Text  string    `json:"text,omitempty"`  // legacy single-entry format
-	Texts []string  `json:"texts,omitempty"` // ordered pull queue
+	Version int       `json:"version"`
+	At      time.Time `json:"at"`
+	Texts   []string  `json:"texts,omitempty"` // ordered pull queue
 }
 
 type pullBriefingCursorFile struct {
@@ -123,9 +126,49 @@ func withBriefingFileLockTimeout(cwd, relative string, wait time.Duration, fn fu
 	return fn()
 }
 
-// WriteBriefing queues the briefing for the initiating terminal/wrapper.
+// WritePullBriefing queues a model-visible notice for the initiating
+// terminal/wrapper. Its structured input is the trust boundary: production
+// callers cannot pass collaborator-authored snapshot labels, authors, or
+// conversation text into additionalContext.
+func WritePullBriefing(cwd, branch string, snapshotIDs []domain.ContentHash) error {
+	text, err := renderPullBriefingNotice(branch, snapshotIDs)
+	if err != nil {
+		return err
+	}
+	return writeBriefingText(cwd, text)
+}
+
+func renderPullBriefingNotice(branch string, snapshotIDs []domain.ContentHash) (string, error) {
+	if len(snapshotIDs) == 0 {
+		return "", nil
+	}
+	if err := domain.ValidateBranchName(branch); err != nil {
+		return "", err
+	}
+	for _, id := range snapshotIDs {
+		if err := domain.ValidateContentHash(id); err != nil {
+			return "", err
+		}
+	}
+	if len(snapshotIDs) > pullBriefingMaxSnapshots {
+		snapshotIDs = snapshotIDs[len(snapshotIDs)-pullBriefingMaxSnapshots:]
+	}
+	ids := make([]string, 0, len(snapshotIDs))
+	for _, id := range snapshotIDs {
+		ids = append(ids, "- "+id)
+	}
+	noun := "snapshots"
+	if len(ids) == 1 {
+		noun = "snapshot"
+	}
+	return fmt.Sprintf("── cxthub team context notice ──\n%d teammate context %s arrived for local branch %s (oldest to newest).\nThis notice contains identifiers only and does not import teammate-authored text or instructions into your active session.\nIncoming snapshot IDs:\n%s\nFull labels and conversations remain available in the cxthub web context tab; the corresponding code changes are already in your working tree.",
+		len(ids), noun, strconv.QuoteToASCII(branch), strings.Join(ids, "\n")), nil
+}
+
+// writeBriefingText is the terminal-scoped queue primitive. Production pull
+// delivery reaches it only through WritePullBriefing's structured renderer.
 // In an inactive repo (.cxt file absent), it is a no-op (same as opt-in gate).
-func WriteBriefing(cwd, text string) error {
+func writeBriefingText(cwd, text string) error {
 	if !cxtEnabled(cwd) || text == "" {
 		return nil
 	}
@@ -134,7 +177,7 @@ func WriteBriefing(cwd, text string) error {
 		entries := []string{}
 		if data, err := providerfs.ReadRepoFile(cwd, relative); err == nil {
 			var old briefingFile
-			if json.Unmarshal(data, &old) == nil && time.Since(old.At) <= briefingTTL {
+			if json.Unmarshal(data, &old) == nil && old.Version == briefingFormatVersion && time.Since(old.At) <= briefingTTL {
 				entries = briefingEntries(old)
 			}
 		}
@@ -142,7 +185,7 @@ func WriteBriefing(cwd, text string) error {
 			entries = append(entries, text)
 		}
 		entries = boundBriefingEntries(entries, briefingMaxBytes)
-		b, err := json.Marshal(briefingFile{At: time.Now().UTC(), Texts: entries})
+		b, err := json.Marshal(briefingFile{Version: briefingFormatVersion, At: time.Now().UTC(), Texts: entries})
 		if err != nil {
 			return err
 		}
@@ -244,7 +287,7 @@ func ConsumeBriefing(cwd string) (string, bool) {
 			return err
 		}
 		var f briefingFile
-		if json.Unmarshal(data, &f) != nil || time.Since(f.At) > briefingTTL {
+		if json.Unmarshal(data, &f) != nil || f.Version != briefingFormatVersion || time.Since(f.At) > briefingTTL {
 			return nil
 		}
 		entries := briefingEntries(f)
@@ -260,13 +303,7 @@ func ConsumeBriefing(cwd string) (string, bool) {
 }
 
 func briefingEntries(f briefingFile) []string {
-	if len(f.Texts) > 0 {
-		return append([]string(nil), f.Texts...)
-	}
-	if f.Text != "" {
-		return []string{f.Text}
-	}
-	return nil
+	return append([]string(nil), f.Texts...)
 }
 
 func boundBriefingEntries(entries []string, maxBytes int) []string {
