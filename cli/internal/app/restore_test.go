@@ -131,6 +131,117 @@ func TestLoadCrossProvider(t *testing.T) {
 	}
 }
 
+func TestLoadTrimDistillationFailureCreatesNoSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	var events []domain.Event
+	for i := 0; i < 20; i++ {
+		events = append(events,
+			domain.Event{Kind: domain.EventMessage, Seq: len(events), Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "OMITTED LOAD REQUEST " + strings.Repeat("u", 16<<10)}}},
+			domain.Event{Kind: domain.EventMessage, Seq: len(events) + 1, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "OMITTED LOAD RESULT " + strings.Repeat("a", 16<<10)}}},
+		)
+	}
+	cir := domain.CIRDocument{
+		Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1, SourceProvider: domain.ProviderClaude, Cwd: "/source", GitBranch: "main", SessionOriginID: "load-distill-failure"},
+		Events:   events,
+	}
+	hash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: hash, DocHash: hash, Branch: "main", Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: hash}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewLoadSessionService(
+		store,
+		map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()},
+		map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderClaude: session.NewClaudeMaterializer()},
+		nil, failingDistiller{}, nil,
+	)
+	cwd := t.TempDir()
+
+	out, err := svc.Load(ctx, inbound.LoadInput{Ref: "main", TargetProvider: domain.ProviderClaude, Mode: domain.FidelityFull, Cwd: cwd})
+	if err == nil || !strings.Contains(err.Error(), "distill omitted context") {
+		t.Fatalf("Load output=%+v error=%v, want fail-closed distillation error", out, err)
+	}
+	var materialized []string
+	if walkErr := filepath.Walk(filepath.Join(home, ".claude"), func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr == nil && info != nil && !info.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			materialized = append(materialized, path)
+		}
+		return nil
+	}); walkErr != nil && !os.IsNotExist(walkErr) {
+		t.Fatal(walkErr)
+	}
+	if len(materialized) != 0 {
+		t.Fatalf("failed distillation materialized provider sessions: %v", materialized)
+	}
+}
+
+func TestLoadPinnedReplacementDistillationFailureCreatesNoSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	replacement := []domain.Event{
+		{Kind: domain.EventMessage, Seq: 0, Role: "developer", Blocks: []domain.ContentBlock{{Type: "text", Text: "PINNED RUNTIME CONTRACT"}}},
+		{Kind: domain.EventCompaction, Seq: 1, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "PINNED-STATE"}},
+	}
+	events := []domain.Event{
+		{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "archival context"}}},
+		{Kind: domain.EventCompaction, Seq: 1, Replacement: replacement, ReplacementComplete: true},
+	}
+	for i := 0; i < 20; i++ {
+		events = append(events,
+			domain.Event{Kind: domain.EventMessage, Seq: len(events), Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "CODEX OMITTED REQUEST " + strings.Repeat("u", 16<<10)}}},
+			domain.Event{Kind: domain.EventMessage, Seq: len(events) + 1, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "CODEX OMITTED RESULT " + strings.Repeat("a", 16<<10)}}},
+		)
+	}
+	cir := domain.CIRDocument{
+		Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderCodex, Cwd: "/source", GitBranch: "main", SessionOriginID: "pinned-distill-failure", CompactionCount: 1},
+		Events:   events,
+	}
+	hash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: hash, DocHash: hash, Branch: "main", Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: hash}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewLoadSessionService(
+		store,
+		map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderCodex: codec.NewCodexCodec()},
+		map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderCodex: session.NewCodexMaterializer()},
+		nil, failingDistiller{}, nil,
+	)
+	cwd := t.TempDir()
+
+	out, err := svc.Load(ctx, inbound.LoadInput{Ref: "main", TargetProvider: domain.ProviderCodex, Mode: domain.FidelityFull, Cwd: cwd})
+	if err == nil || !strings.Contains(err.Error(), "distill omitted context") {
+		t.Fatalf("Load output=%+v error=%v, want fail-closed pinned distillation error", out, err)
+	}
+	var materialized []string
+	if walkErr := filepath.Walk(filepath.Join(home, ".codex"), func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr == nil && info != nil && !info.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			materialized = append(materialized, path)
+		}
+		return nil
+	}); walkErr != nil && !os.IsNotExist(walkErr) {
+		t.Fatal(walkErr)
+	}
+	if len(materialized) != 0 {
+		t.Fatalf("failed pinned distillation materialized provider sessions: %v", materialized)
+	}
+}
+
 func TestLoadFullReplaysCodexReplacementInsteadOfPreCompactionArchive(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()

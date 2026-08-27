@@ -173,7 +173,10 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 		Summary:  "did X, decided Y",
 		KeyFacts: []string{"apply_patch", "unknown:Agent", "native memory: claude:MEMORY.md", "absorbed from claude:MEMORY.md", "budget is 400KB per seed"},
 	}, "")
-	out := svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(out.Events) != 2 {
 		t.Fatalf("Event count: got %d want 2 (new summary 1 + recent 1 — old [cxt] removed)", len(out.Events))
@@ -199,7 +202,10 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 
 	// (4) Omit summary of native memory text as-is.
 	svc = mk(domain.MemoryDigest{Summary: "MEMROOT\nfacts"}, "MEMROOT\nfacts")
-	out = svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
+	out, err = svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(out.Events[0].Blocks[0].Text, "MEMROOT") {
 		t.Fatalf("Native memory text re-injected into seed: %q", out.Events[0].Blocks[0].Text)
 	}
@@ -218,7 +224,10 @@ func TestPrependTrimDigestPreservesPostCompactionOmittedSpan(t *testing.T) {
 		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD RECENT RAW REQUEST"}}},
 	}}
 
-	out := svc.prependTrimDigest(ctx, omitted, seed, domain.Snapshot{ID: domain.HashContent([]byte("load-omitted-span"))}, domain.ProviderClaude, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, domain.Snapshot{ID: domain.HashContent([]byte("load-omitted-span"))}, domain.ProviderClaude, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(out.Events) != 2 || len(out.Events[0].Blocks) == 0 {
 		t.Fatalf("trimmed seed = %+v", out.Events)
 	}
@@ -264,7 +273,10 @@ func TestPrependTrimDigestDoesNotRepeatStoredCurrentConversation(t *testing.T) {
 	seed := domain.CIRDocument{Events: append([]domain.Event(nil), full.Events[2:]...)}
 	svc := NewLoadSessionService(st, nil, nil, nil, memory.NewRuleDistiller(), nil)
 
-	out := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderClaude, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderClaude, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var prompt strings.Builder
 	for _, event := range out.Events {
 		for _, block := range event.Blocks {
@@ -317,7 +329,10 @@ func TestPrependTrimDigestProjectsStoredMemoryWithoutSeedRecursion(t *testing.T)
 		{Kind: domain.EventMessage, Role: "user", Seq: 1, Blocks: []domain.ContentBlock{{Type: "text", Text: "latest request"}}},
 	}}
 
-	out := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderCodex, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderCodex, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(out.Events) != 2 || len(out.Events[0].Blocks) == 0 {
 		t.Fatalf("projected seed = %+v", out.Events)
 	}
@@ -337,7 +352,7 @@ func TestPrependTrimDigestProjectsStoredMemoryWithoutSeedRecursion(t *testing.T)
 	}
 }
 
-func TestInsertTrimDigestKeepsExistingSeedWhenReplacementFails(t *testing.T) {
+func TestInsertTrimDigestFailsClosedWhenReplacementFails(t *testing.T) {
 	ctx := context.Background()
 	st := storage.NewFileStore(t.TempDir())
 	svc := NewLoadSessionService(st, nil, nil, nil, failingDistiller{}, nil)
@@ -351,9 +366,12 @@ func TestInsertTrimDigestKeepsExistingSeedWhenReplacementFails(t *testing.T) {
 		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "older request"}}},
 	}}
 
-	out := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, domain.Snapshot{}, domain.ProviderCodex, t.TempDir())
+	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, domain.Snapshot{}, domain.ProviderCodex, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "distillation unavailable") {
+		t.Fatalf("insert error=%v, want distillation failure", err)
+	}
 	if len(out.Events) != len(seed.Events) || out.Events[0].Blocks[0].Text != oldSeed {
-		t.Fatalf("failed replacement discarded the existing seed: %+v", out.Events)
+		t.Fatalf("failed projection mutated the existing seed: %+v", out.Events)
 	}
 	if out.Events[1].Locked == nil || out.Events[1].Locked.Blob != "PINNED" {
 		t.Fatalf("failed replacement changed provider state: %+v", out.Events[1])
@@ -380,7 +398,10 @@ func TestInsertTrimDigestProjectsExistingSeedWithoutStoredMemory(t *testing.T) {
 		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "older request"}}},
 	}}
 
-	out := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, domain.Snapshot{ID: snapshotID}, domain.ProviderCodex, t.TempDir())
+	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, domain.Snapshot{ID: snapshotID}, domain.ProviderCodex, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	seedCount := 0
 	seedText := ""
 	for _, ev := range out.Events {
@@ -433,7 +454,10 @@ func TestInsertTrimDigestFallsBackWhenStoredMemorySanitizesEmpty(t *testing.T) {
 	}}
 	snap := domain.Snapshot{ID: snapshotID, DocHash: snapshotID, MemoryHash: memoryHash}
 
-	out := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, snap, domain.ProviderCodex, t.TempDir())
+	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, snap, domain.ProviderCodex, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	seedCount := 0
 	for _, ev := range out.Events {
 		if !isSeedSummaryEvent(ev) {
