@@ -144,6 +144,67 @@ func TestBranchSeedSummarizesTrimmedPostCompactionConversation(t *testing.T) {
 	}
 }
 
+func TestBranchSeedDoesNotDuplicateCurrentConversationInSummary(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-seed-no-current-dup", DefaultBranch: "main", LocalPath: t.TempDir()}
+	events := []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", Seq: 0, CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: "BRANCH PROVIDER BASELINE"}}},
+		seedMessage("user", "BRANCH CURRENT DECISION ONCE", 1),
+		seedMessage("assistant", "BRANCH CURRENT RESULT ONCE", 2),
+	}
+	fullMemory, err := memory.NewRuleDistiller().Distill(context.Background(), domain.CIRDocument{
+		Envelope: domain.Envelope{SourceProvider: domain.ProviderCodex}, Events: events,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", events, nil, &fullMemory)
+	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
+	service := NewBranchSeedService(branchSeedGit{repo: repo}, store, memory.NewRuleDistiller(), nil, nil)
+
+	out, err := service.Seed(ctx, inbound.SeedInput{
+		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/no-current-dup", Provider: domain.ProviderCodex,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := store.GetDoc(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt strings.Builder
+	for _, event := range doc.CIR.Events {
+		for _, block := range event.Blocks {
+			prompt.WriteString(block.Text)
+		}
+	}
+	for _, marker := range []string{"BRANCH CURRENT DECISION ONCE", "BRANCH CURRENT RESULT ONCE"} {
+		if count := strings.Count(prompt.String(), marker); count != 1 {
+			t.Fatalf("branch prompt contains %q %d times, want one verbatim copy:\n%s", marker, count, prompt.String())
+		}
+	}
+	if strings.Contains(prompt.String(), "[cxt conversation delta v1]") {
+		t.Fatalf("private memory marker leaked into branch prompt:\n%s", prompt.String())
+	}
+	seedSnap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedMemory, err := store.GetMemory(ctx, seedSnap.MemoryHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"BRANCH CURRENT DECISION ONCE", "BRANCH CURRENT RESULT ONCE"} {
+		if !strings.Contains(seedMemory.Summary, marker) {
+			t.Fatalf("attached seed memory lost %q:\n%s", marker, seedMemory.Summary)
+		}
+	}
+	if strings.Contains(seedMemory.Summary, "[cxt conversation delta v1]") {
+		t.Fatalf("private memory marker leaked into rendered seed memory:\n%s", seedMemory.Summary)
+	}
+}
+
 type failBridgeDistiller struct{ calls int }
 
 func (d *failBridgeDistiller) Distill(context.Context, domain.CIRDocument, *domain.NativeMemory) (domain.MemoryDigest, error) {

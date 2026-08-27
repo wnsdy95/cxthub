@@ -248,7 +248,10 @@ That bridge is merged with the inherited compact/project memory, so work after
 an older provider compaction does not disappear between the summary and recent
 tail. The source snapshot remains immutable and reachable; the inherited
 memory plus bridge is attached to the seed for future memorize and branch
-operations without enlarging the provider prompt budget.
+operations without enlarging the provider prompt budget. When current
+conversation events are also replayed verbatim, their extractive memory delta
+is removed only from the prompt projection, so the new session receives each
+turn once while the full digest remains attached to the seed.
 
 ### `cxt switch`
 
@@ -306,7 +309,10 @@ With no ref, uses the current branch head. `memory` is an alias for
 `memorize`; there is no `cxt memory save` subcommand. Modern snapshots select
 their recorded source provider automatically. An explicit `--provider` must
 match it; cxt never imports unrelated native memory from another provider or
-terminal into that snapshot.
+terminal into that snapshot. A provider compact summary or native memory is
+kept as the long-term baseline, and meaningful user/assistant turns after that
+baseline are attached as a deterministic bounded conversation delta. Repeated
+baseline text is rendered once across merged lineage fragments.
 
 ## Synchronization
 

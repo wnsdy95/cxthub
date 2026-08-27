@@ -285,14 +285,18 @@ func renderMemoryFragments(out *MemoryDigest) {
 	var facts, tasks []string
 	for _, fragment := range out.Fragments {
 		if summary := strings.TrimSpace(fragment.Summary); summary != "" {
-			if users, assistants, ok := parseExtractiveFallbackSummary(summary); ok {
+			baseline, users, assistants, hasFallback := splitExtractiveFallbackSummary(summary)
+			if baseline != "" && !containsString(summaries, baseline) {
+				summaries = append(summaries, baseline)
+			}
+			if hasFallback {
 				// Keep the combined projection at the position of the newest
 				// fallback fragment. renderSeedDigest retains the newest tail, so
 				// placing it at the first fallback could evict newer unique items.
 				fallbackInsertAt = len(summaries)
 				fallbackUsers = dedupStrings(fallbackUsers, users)
 				fallbackAssistants = dedupStrings(fallbackAssistants, assistants)
-			} else if !containsString(summaries, summary) {
+			} else if baseline == "" && !containsString(summaries, summary) {
 				summaries = append(summaries, summary)
 			}
 		}
@@ -313,11 +317,59 @@ func renderMemoryFragments(out *MemoryDigest) {
 	out.OpenTasks = tasks
 }
 
+// WithoutConversationDeltaFromSource returns a prompt-only projection with
+// the canonical extractive conversation delta removed from one snapshot's
+// contribution. Branch/full replay callers use it when that exact source
+// conversation is also supplied verbatim. Other lineage fragments and the
+// provider/native baseline remain intact; the immutable stored digest is not
+// mutated.
+func WithoutConversationDeltaFromSource(d MemoryDigest, source ContentHash) MemoryDigest {
+	if source == "" {
+		return d
+	}
+	if len(d.Fragments) == 0 {
+		if d.SnapshotID == source {
+			if baseline, _, _, ok := splitExtractiveFallbackSummary(d.Summary); ok {
+				d.Summary = baseline
+			}
+		}
+		return d
+	}
+
+	fragments := append([]MemoryFragment(nil), d.Fragments...)
+	for i := range fragments {
+		if fragments[i].SourceSnapshot != source {
+			continue
+		}
+		if baseline, _, _, ok := splitExtractiveFallbackSummary(fragments[i].Summary); ok {
+			fragments[i].Summary = baseline
+		}
+	}
+	d.Fragments = fragments
+	renderMemoryFragments(&d)
+	return d
+}
+
 const (
 	extractiveFallbackHeader           = "Conversation digest (extractive fallback; provider compaction summary unavailable):"
 	extractiveFallbackUsersHeader      = "Recent user intent:"
 	extractiveFallbackAssistantsHeader = "Recent assistant outcomes:"
+	extractiveFallbackDeltaMarker      = "[cxt conversation delta v1]"
 )
+
+// AppendExtractiveConversationDelta combines a provider/native baseline with
+// the deterministic extractive fallback using a versioned private marker.
+// The marker prevents provider-authored prose that merely resembles the
+// fallback wire format from being removed as a cxt-owned delta later.
+func AppendExtractiveConversationDelta(baseline, delta string) string {
+	if delta == "" {
+		return baseline
+	}
+	if baseline == "" {
+		return delta
+	}
+	return baseline + "\n\n" + extractiveFallbackDeltaMarker + "\n" + delta
+}
 
 // RenderExtractiveFallbackSummary is the canonical text representation of the
 // deterministic conversation fallback. Keeping the format in the domain lets
@@ -396,6 +448,24 @@ func parseExtractiveFallbackSummary(summary string) (users, assistants []string,
 		return nil, nil, false
 	}
 	return users, assistants, true
+}
+
+// splitExtractiveFallbackSummary recognizes both a standalone deterministic
+// fallback and the canonical "provider/native baseline + fallback" shape.
+// Strict parsing keeps arbitrary provider-authored prose byte-for-byte.
+func splitExtractiveFallbackSummary(summary string) (baseline string, users, assistants []string, ok bool) {
+	summary = strings.TrimSpace(summary)
+	if users, assistants, ok = parseExtractiveFallbackSummary(summary); ok {
+		return "", users, assistants, true
+	}
+	marker := "\n\n" + extractiveFallbackDeltaMarker + "\n"
+	if at := strings.LastIndex(summary, marker); at >= 0 {
+		candidate := summary[at+len(marker):]
+		if users, assistants, ok = parseExtractiveFallbackSummary(candidate); ok {
+			return strings.TrimSpace(summary[:at]), users, assistants, true
+		}
+	}
+	return summary, nil, nil, false
 }
 
 func containsString(items []string, want string) bool {

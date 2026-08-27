@@ -12,7 +12,10 @@ import (
 
 // RuleDistiller is the deterministic, rule-based MemoryDistiller implementation (compatibility rules).
 //
-// Native-first with fallback: if native is non-nil, ingest its content; otherwise derive summaries and facts from CIR. The same (cir, native) pair always produces the same digest.
+// A provider compact summary or native memory is the long-term baseline. The
+// meaningful conversation accumulated after that baseline is retained as a
+// deterministic bounded delta. The same (cir, native) pair always produces
+// the same digest.
 type RuleDistiller struct{}
 
 // NewRuleDistiller creates a RuleDistiller.
@@ -20,17 +23,22 @@ func NewRuleDistiller() *RuleDistiller { return &RuleDistiller{} }
 
 // Distill generates a MemoryDigest from CIR(+native). Deterministic.
 //
-// Summary source priority:
-//  1. The agent's latest context-compression summary (Claude isCompactSummary / Codex compacted.message). These summaries are cumulative and provide the highest-quality source.
+// Summary baseline priority:
+//  1. The agent's latest context-compression summary (Claude isCompactSummary / Codex compacted.message).
 //  2. Native memory ingestion (memory file created by the provider CLI).
 //  3. Rules-based self-distillation (statistical summary — fallback).
+//
+// Baselines do not replace later conversation. A bounded extractive delta is
+// appended after the latest valid compaction summary, or after native memory
+// when no valid provider summary exists.
 func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, native *domain.NativeMemory) (domain.MemoryDigest, error) {
 	prov := cir.Envelope.SourceProvider
 	compactSummary := ""
+	compactSummaryAt := -1
 	var userMsgs, asstMsgs int
 	firstUser := ""
 	toolSet := map[string]struct{}{}
-	for _, ev := range cir.Events {
+	for i, ev := range cir.Events {
 		switch ev.Kind {
 		case domain.EventMessage:
 			if ev.CompactSummary && len(ev.Blocks) > 0 && ev.Blocks[0].Text != "" &&
@@ -40,6 +48,7 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 				// boilerplate and mislabel it as agent-written (#38).
 				!containsSyntheticSeedText(ev.Blocks[0].Text) {
 				compactSummary = ev.Blocks[0].Text // last wins: newest cumulative summary
+				compactSummaryAt = i
 			}
 			if ev.Role == "user" {
 				userMsgs++
@@ -69,11 +78,12 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 			facts = tools // unstructured summary (different format) — maintain existing fallback
 		}
 		// Source marker ("native memory: …") is not added to KeyFacts — native memory is loaded by agent at session start (review P2).
+		suffix := extractiveConversationDigest(cir.Events[compactSummaryAt+1:])
 		return domain.MemoryDigest{
 			// Provider-written compaction memory is already the authoritative
 			// distilled state. Keep it byte-for-byte in the immutable digest;
 			// seed and instruction-file renderers apply their own prompt budgets.
-			Summary:  compactSummary,
+			Summary:  domain.AppendExtractiveConversationDelta(compactSummary, suffix),
 			KeyFacts: facts,
 			// When structure extraction succeeds, this list becomes the merge authority (parent completion not inherited).
 			OpenTasks:          tasks,
@@ -82,9 +92,10 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 		}, nil
 	}
 	if native != nil {
-		// Native-first ingestion (no compression summary).
+		// Native memory is a baseline, not a replacement for work performed in
+		// the current session after that file was loaded.
 		return domain.MemoryDigest{
-			Summary:  native.Text,
+			Summary:  domain.AppendExtractiveConversationDelta(native.Text, extractiveConversationDigest(cir.Events)),
 			KeyFacts: []string{"ingested from " + native.Source},
 			Provider: prov,
 		}, nil

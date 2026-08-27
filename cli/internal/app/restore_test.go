@@ -349,8 +349,11 @@ func TestLoadMemoryMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(data), userInstructions) || !strings.Contains(string(data), "cxt memory") || !strings.Contains(string(data), "NEWEST-NATIVE") {
+	if !strings.HasPrefix(string(data), userInstructions) || !strings.Contains(string(data), "cxt memory") || !strings.Contains(string(data), "NEWEST-NATIVE") || !strings.Contains(string(data), "do it") {
 		t.Fatalf("CLAUDE.md did not preserve user instructions and bounded latest memory")
+	}
+	if strings.Contains(string(data), "[cxt conversation delta v1]") {
+		t.Fatal("private memory marker leaked into provider instruction file")
 	}
 	if len(data) > len(userInstructions)+(64<<10)+2 {
 		t.Fatalf("CLAUDE.md bytes=%d exceeds user content + managed budget", len(data))

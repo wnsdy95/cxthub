@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -499,6 +500,43 @@ func TestMemorizeDistillsEffectiveContextAfterCompaction(t *testing.T) {
 	}
 	if len(distiller.seen.Events) != 1 || distiller.seen.Events[0].Blocks[0].Text != "active replacement context" {
 		t.Fatalf("memorize distilled archival stream: %+v", distiller.seen.Events)
+	}
+}
+
+func TestMemorizePersistsPostCompactionConversation(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-memory-post-compact", DefaultBranch: "main", LocalPath: t.TempDir()}
+	docHash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{
+		Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderClaude},
+		Events: []domain.Event{
+			{Kind: domain.EventMessage, Seq: 0, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: "MEMORIZE COMPACT BASELINE"}}},
+			{Kind: domain.EventMessage, Seq: 1, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "MEMORIZE POST-COMPACT DECISION"}}},
+			{Kind: domain.EventMessage, Seq: 2, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "MEMORIZE POST-COMPACT RESULT"}}},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: docHash, DocHash: docHash, RepoID: repo.ID, Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo.ID, Target: docHash}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewMemorizeService(branchSeedGit{repo: repo}, nil, nil, nil, memory.NewRuleDistiller(), store)
+	out, err := service.Memorize(ctx, inbound.MemorizeInput{Cwd: repo.LocalPath, Provider: domain.ProviderClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := store.GetMemory(ctx, out.MemoryHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"MEMORIZE COMPACT BASELINE", "MEMORIZE POST-COMPACT DECISION", "MEMORIZE POST-COMPACT RESULT"} {
+		if !strings.Contains(digest.Summary, want) {
+			t.Fatalf("memorized digest lost %q:\n%s", want, digest.Summary)
+		}
 	}
 }
 
