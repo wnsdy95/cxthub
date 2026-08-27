@@ -38,7 +38,11 @@ For installation and first-run setup, see
 - `cxt claude` and `cxt codex` pass provider-owned arguments through. Use a
   `--` separator when the provider itself should receive a help flag, for
   example `cxt codex -- --help`; without the separator, `--help` describes the
-  cxt wrapper command.
+  cxt wrapper command. The Claude wrapper forwards only auto-memory-relevant
+  launch metadata from isolated inline `--settings`, `--setting-sources`,
+  `--bare`, and `--safe-mode` to cxt hooks; unrelated settings values are never
+  copied into the environment. External or mixed-purpose `--settings` remain
+  provider-owned and make native-memory projection fail closed.
 
 ## Recommended onboarding
 
@@ -255,8 +259,17 @@ turn once while the full digest remains attached to the seed.
 Provider-native baselines follow the same prompt-only rule with an explicit
 scope. For Claude `MEMORY.md`, cxt removes only a conservative complete-line
 prefix (at most 199 lines and 24 KiB) inside Claude's documented startup limit
-and carries any remaining tail. Codex `memories_1.sqlite` memory is retained
-because it belongs to the source thread and the seed receives a new thread ID.
+and carries any remaining tail. Claude auto memory is resolved from the
+canonical Git repository, so linked worktrees and subdirectories share the
+same source. `CLAUDE_CONFIG_DIR`, safe `CLAUDE_CODE_PROJECT_DIR_NAME`, isolated
+user/inline-flag/managed `autoMemoryDirectory`, settings precedence, and
+auto-memory disablement are honored. The supervised wrapper fingerprints every
+observable settings input at launch; if the profile is absent, changes later,
+uses an external or mixed-purpose settings document, invokes a policy helper,
+or uses an unmodeled remote memory store, cxt does not read or remove native
+memory and keeps the portable baseline instead. Codex
+`memories_1.sqlite` memory is retained because it belongs to the source thread
+and the seed receives a new thread ID.
 
 ### `cxt switch`
 
@@ -308,7 +321,10 @@ The provider-visible projection does not repeat a working-tree-scoped native
 prefix that is guaranteed to auto-load, but it preserves the un-loaded suffix,
 its conversation delta, and every unrelated lineage fragment. Session-scoped
 native memory is carried into the managed region so a newly materialized
-provider session cannot lose it.
+provider session cannot lose it. “Guaranteed” is intentionally limited to a
+live `cxt claude` launch profile whose settings fingerprint still matches;
+direct or ambiguous provider launches retain the portable copy rather than
+guessing and slicing context.
 
 ### `cxt memorize` and `cxt memory`
 

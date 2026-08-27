@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -20,20 +21,19 @@ func NewClaudeMemorySource() *ClaudeMemorySource { return &ClaudeMemorySource{} 
 // Provider returns claude.
 func (s *ClaudeMemorySource) Provider() domain.ProviderKind { return domain.ProviderClaude }
 
-// ReadNative reads ~/.claude/projects/<cwd-encoded>/memory/MEMORY.md.
+// ReadNative reads Claude's repository-scoped auto-memory entrypoint.
 // A missing or inaccessible file returns found=false so the caller can fall back to CIR distillation.
-func (s *ClaudeMemorySource) ReadNative(_ context.Context, cwd, _ string) (domain.NativeMemory, bool, error) {
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		abs = cwd
+func (s *ClaudeMemorySource) ReadNative(ctx context.Context, cwd, _ string) (domain.NativeMemory, bool, error) {
+	resolution := resolveClaudeAutoMemory(ctx, cwd)
+	if !resolution.proven || !resolution.enabled || resolution.memoryDir == "" {
+		return domain.NativeMemory{}, false, nil
 	}
-	root, err := providerfs.ClaudeProjectsDir()
+	p := filepath.Join(resolution.memoryDir, "MEMORY.md")
+	data, err := providerfs.ReadRegularFile(p)
 	if err != nil {
 		return domain.NativeMemory{}, false, nil
 	}
-	p := filepath.Join(root, providerfs.EncodeCwd(abs), "memory", "MEMORY.md")
-	data, err := providerfs.ReadRegularFile(p)
-	if err != nil {
+	if strings.TrimSpace(os.Getenv("CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT")) != ClaudeMemoryConfigFingerprint(ctx, cwd) {
 		return domain.NativeMemory{}, false, nil
 	}
 	text := string(data)
