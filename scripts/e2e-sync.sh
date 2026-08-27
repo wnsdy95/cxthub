@@ -292,13 +292,15 @@ expect "isolated session holder killed" "$(kill -0 "$TPID" 2>/dev/null && echo a
 export CLAUDELOG="$TMP/agent.log"
 cat > "$TMP/bin/claude" <<'SH'
 #!/bin/bash
+echo "MEMORY_PROFILE ${CXT_CLAUDE_MEMORY_PROFILE:-missing} ${#CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT} ${CXT_CLAUDE_FLAG_AUTO_MEMORY_DIRECTORY:-default}" >> "$CLAUDELOG"
 echo "AGENT $*" >> "$CLAUDELOG"
 trap 'kill $SP 2>/dev/null; exit 0' TERM
 sleep 30 & SP=$!
 wait $SP
 SH
 chmod +x "$TMP/bin/claude"
-cxt claude >/dev/null 2>&1 &
+CLAUDE_MEMORY_OVERRIDE="$TMP/initial-claude-memory"
+cxt claude --resume "$SEEDID" --settings "{\"autoMemoryDirectory\":\"$CLAUDE_MEMORY_OVERRIDE\"}" >/dev/null 2>&1 &
 WPID=$!
 sleep 1.5
 session "$TMP/repo2" F
@@ -307,6 +309,9 @@ NEWSEEDID=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).
 for i in $(seq 1 20); do grep -q -- "--resume $NEWSEEDID" "$CLAUDELOG" 2>/dev/null && break; sleep 0.5; done
 expect "wrapper automatically restarts as seed (--resume)" "$(grep -c -- "--resume $NEWSEEDID" "$CLAUDELOG")" 1
 expect "restart target = new seed ID" "$(tail -1 "$CLAUDELOG" | grep -c -- "--resume $NEWSEEDID")" 1
+expect "wrapper carries proven Claude memory profile" "$(grep -c '^MEMORY_PROFILE v1 64 ' "$CLAUDELOG")" 2
+expect "initial child carries its custom Claude memory directory" "$(grep -c "^MEMORY_PROFILE v1 64 $CLAUDE_MEMORY_OVERRIDE$" "$CLAUDELOG")" 1
+expect "restarted child drops settings no longer present in its arguments" "$(grep -c '^MEMORY_PROFILE v1 64 default$' "$CLAUDELOG")" 1
 kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; pkill -f "sleep 30" 2>/dev/null
 
 echo "── H. Web personal settings(load_mode): PATCH /me → CLI consumption"

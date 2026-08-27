@@ -429,6 +429,8 @@ func TestLoadFullPinsCodexReplacementWhileTrimmingLongSuffix(t *testing.T) {
 func TestLoadMemoryMode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CXT_CLAUDE_MEMORY_PROFILE", "v1")
+	t.Setenv("CXT_CLAUDE_SETTING_SOURCES", "user,project,local")
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
 	seedClaudeSnapshot(t, store)
@@ -438,13 +440,18 @@ func TestLoadMemoryMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	nativeText := "OLDEST-NATIVE\n" + strings.Repeat("é", 80<<10) + "\nNEWEST-NATIVE"
-	nativePath := filepath.Join(home, ".claude", "projects", providerfs.EncodeCwd(cwd), "memory", "MEMORY.md")
+	resolvedCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativePath := filepath.Join(home, ".claude", "projects", providerfs.EncodeCwd(resolvedCwd), "memory", "MEMORY.md")
 	if err := os.MkdirAll(filepath.Dir(nativePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(nativePath, []byte(nativeText), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT", memory.ClaudeMemoryConfigFingerprint(ctx, cwd))
 
 	out, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{Ref: "main", TargetProvider: domain.ProviderClaude, Mode: domain.FidelityMemory, Cwd: cwd})
 	if err != nil {

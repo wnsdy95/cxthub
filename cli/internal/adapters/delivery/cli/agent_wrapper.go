@@ -20,6 +20,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
+	memoryadapter "github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -62,6 +63,19 @@ func runAgentWrapper(ctx context.Context, c *Container, cwd, agent string, args 
 			fmt.Sprintf("CXT_WRAPPER_PID=%d", os.Getpid()),
 			"CXT_WRAPPED_AGENT="+agent,
 		)
+		var childMemoryEnv []string
+		if agent == "claude" {
+			// Derive the profile from this exact child invocation. A context
+			// transition may replace an old --resume command and drop flags that
+			// are no longer passed; retaining their memory settings could make cxt
+			// remove a baseline Claude will not auto-load.
+			childMemoryEnv = claudeMemoryProfileEnv(cwd, args)
+		}
+		if len(childMemoryEnv) > 0 && childMemoryEnv[0] == "CXT_CLAUDE_MEMORY_PROFILE=v1" {
+			childMemoryEnv = append(childMemoryEnv,
+				"CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT="+memoryadapter.ClaudeMemoryConfigFingerprint(ctx, cwd))
+		}
+		child.Env = append(child.Env, childMemoryEnv...)
 		if err := child.Start(); err != nil {
 			return err
 		}
