@@ -20,7 +20,7 @@ func (s *ClaudeMemorySource) Provider() domain.ProviderKind { return domain.Prov
 
 // ReadNative reads ~/.claude/projects/<cwd-encoded>/memory/MEMORY.md.
 // A missing or inaccessible file returns found=false so the caller can fall back to CIR distillation.
-func (s *ClaudeMemorySource) ReadNative(_ context.Context, cwd string) (domain.NativeMemory, bool, error) {
+func (s *ClaudeMemorySource) ReadNative(_ context.Context, cwd, _ string) (domain.NativeMemory, bool, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		abs = cwd
@@ -46,10 +46,11 @@ func NewClaudeMemorySink() *ClaudeMemorySink { return &ClaudeMemorySink{} }
 // Provider returns claude.
 func (s *ClaudeMemorySink) Provider() domain.ProviderKind { return domain.ProviderClaude }
 
-// Inject writes the digest to cwd/CLAUDE.md and returns the path (including cxt-managed marker).
+// Inject refreshes the bounded cxt-managed region in cwd/CLAUDE.md while
+// preserving user-authored content outside the markers.
 func (s *ClaudeMemorySink) Inject(_ context.Context, digest domain.MemoryDigest, cwd string) (string, error) {
 	path := filepath.Join(cwd, "CLAUDE.md")
-	if err := providerfs.WriteRegularFileAtomic(path, []byte(renderMemoryMarkdown(digest)), 0o644); err != nil {
+	if err := writeManagedMemory(path, digest); err != nil {
 		return "", err
 	}
 	return path, nil

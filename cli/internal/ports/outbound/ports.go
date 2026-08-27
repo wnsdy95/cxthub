@@ -250,9 +250,10 @@ type MemorySource interface {
 	// Provider returns the provider this source is responsible for (claude|codex).
 	Provider() domain.ProviderKind
 
-	// ReadNative reads provider native memory based on the current working directory (cwd).
-	// Returns found=false if not found (no error).
-	ReadNative(ctx context.Context, cwd string) (native domain.NativeMemory, found bool, err error)
+	// ReadNative reads provider native memory for the exact provider session when
+	// sessionID is available. An empty sessionID falls back to the newest memory
+	// associated with cwd. Returns found=false if not found (no error).
+	ReadNative(ctx context.Context, cwd, sessionID string) (native domain.NativeMemory, found bool, err error)
 }
 
 // MemoryDistiller is a port that generates MemoryDigest (summary memory) (compatibility rules).

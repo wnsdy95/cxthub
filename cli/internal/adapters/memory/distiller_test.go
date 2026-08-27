@@ -131,6 +131,16 @@ func TestDistillUnstructuredSummaryFallsBack(t *testing.T) {
 	}
 }
 
+func TestDistillPreservesFullAgentCompactionSummary(t *testing.T) {
+	summary := "OLDEST-COMPACTION-HEAD\n" + strings.Repeat("é", 20_000) + "\nNEWEST-COMPACTION-TAIL"
+	d := distillWithSummary(t, summary)
+
+	if d.Summary != summary {
+		t.Fatalf("agent compaction summary was truncated: bytes=%d want=%d tail=%v",
+			len(d.Summary), len(summary), strings.Contains(d.Summary, "NEWEST-COMPACTION-TAIL"))
+	}
+}
+
 // TestDistillNoProvenanceMarkerInFacts ensures that the source marker ("native memory: …") does not mix with KeyFacts — the source is not a fact (review P2). Native memory is loaded by the agent at session start, so it has no information value.
 func TestDistillNoProvenanceMarkerInFacts(t *testing.T) {
 	cir := domain.CIRDocument{}

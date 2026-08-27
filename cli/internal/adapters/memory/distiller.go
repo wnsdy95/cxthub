@@ -70,7 +70,10 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 		}
 		// Source marker ("native memory: …") is not added to KeyFacts — native memory is loaded by agent at session start (review P2).
 		return domain.MemoryDigest{
-			Summary:  truncate(compactSummary, 16000),
+			// Provider-written compaction memory is already the authoritative
+			// distilled state. Keep it byte-for-byte in the immutable digest;
+			// seed and instruction-file renderers apply their own prompt budgets.
+			Summary:  compactSummary,
 			KeyFacts: facts,
 			// When structure extraction succeeds, this list becomes the merge authority (parent completion not inherited).
 			OpenTasks:          tasks,

@@ -34,7 +34,7 @@ import (
 //     c. LoadOutput{WrittenPath: sessionPath, ResumeCmd, Fidelity: full/reconstructed}
 //     d. **Fallback to memory mode automatically on Materialize failure** (Fidelity downgrade → memory).
 //     memory:
-//     a. MemorySource[TargetProvider].ReadNative(Cwd) → (native, found)
+//     a. For same-provider or legacy replay, MemorySource[TargetProvider].ReadNative(Cwd, SessionOriginID) → (native, found)
 //     b. MemoryDistiller.Distill(cir, native) → MemoryDigest (native==nil fallback to CIR distillation)
 //     c. digest.SnapshotID = snap.ID (app layer injection)
 //     d. MemorySink[TargetProvider].Inject(digest, Cwd) → writtenPath
@@ -627,8 +627,9 @@ func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, om
 		}
 	}
 	// Skip native-memory duplicates when the summary repeats the ingested native memory verbatim.
-	if src, ok := s.memSources[target]; ok && digest.Summary != "" {
-		if nm, found, _ := src.ReadNative(ctx, cwd); found &&
+	if src, ok := s.memSources[target]; ok && digest.Summary != "" &&
+		(omitted.Envelope.SourceProvider == "" || target == omitted.Envelope.SourceProvider) {
+		if nm, found, _ := src.ReadNative(ctx, cwd, omitted.Envelope.SessionOriginID); found &&
 			strings.TrimSpace(digest.Summary) == strings.TrimSpace(nm.Text) {
 			digest.Summary = ""
 		}
@@ -803,8 +804,9 @@ func seedWorthyFacts(facts []string) []string {
 // loadMemory performs memory-form restoration: native-first ingestion → distillation → provider memory file injection.
 func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) (inbound.LoadOutput, error) {
 	var native *domain.NativeMemory
-	if src, ok := s.memSources[target]; ok {
-		if nm, found, _ := src.ReadNative(ctx, cwd); found {
+	if src, ok := s.memSources[target]; ok &&
+		(cir.Envelope.SourceProvider == "" || target == cir.Envelope.SourceProvider) {
+		if nm, found, _ := src.ReadNative(ctx, cwd, cir.Envelope.SessionOriginID); found {
 			native = &nm
 		}
 	}

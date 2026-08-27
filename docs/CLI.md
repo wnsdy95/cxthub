@@ -285,6 +285,12 @@ The mode priority is:
 3. the authenticated account preference from the server; and
 4. `full`.
 
+`memory` keeps the full immutable digest in cxt storage but injects at most a
+64 KiB projection into the target provider's instruction file. cxt appends or
+refreshes one marked region in `CLAUDE.md` or `AGENTS.md`; text and permissions
+outside that region are preserved. Malformed or duplicate cxt markers fail
+closed instead of guessing a destructive replacement range.
+
 ### `cxt memorize` and `cxt memory`
 
 ```text
@@ -294,7 +300,10 @@ cxt memory [<ref>] [--provider <claude|codex>]
 
 Distills a snapshot into reusable memory and attaches it for the next push.
 With no ref, uses the current branch head. `memory` is an alias for
-`memorize`; there is no `cxt memory save` subcommand.
+`memorize`; there is no `cxt memory save` subcommand. Modern snapshots select
+their recorded source provider automatically. An explicit `--provider` must
+match it; cxt never imports unrelated native memory from another provider or
+terminal into that snapshot.
 
 ## Synchronization
 
