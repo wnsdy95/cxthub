@@ -92,6 +92,14 @@ type SessionStore interface {
 	GetMemory(ctx context.Context, hash domain.ContentHash) (domain.MemoryDigest, error)
 }
 
+// RemoteSnapshotStateCursorStore persists optional pull negotiation hints.
+// It is deliberately separate from SessionStore: cursors never alter local
+// snapshot truth, refs, reachability, or push negotiation.
+type RemoteSnapshotStateCursorStore interface {
+	LoadRemoteSnapshotStateCursor(ctx context.Context, repoID string) (map[domain.ContentHash]domain.RemoteSnapshotStateCursorEntry, error)
+	SaveRemoteSnapshotStateCursor(ctx context.Context, repoID string, entries map[domain.ContentHash]domain.RemoteSnapshotStateCursorEntry) error
+}
+
 // ProviderCodec is a codec for provider raw JSONL ↔ CIR bidirectional transformation (domain model).
 //
 // Decode: claude/codex JSONL → CIR (provider-independent).
