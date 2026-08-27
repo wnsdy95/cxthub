@@ -40,7 +40,7 @@ func (s stubMemSource) Provider() domain.ProviderKind { return domain.ProviderCl
 func (s stubMemSource) ReadNative(_ context.Context, _, _ string) (domain.NativeMemory, bool, error) {
 	return domain.NativeMemory{
 		Provider: domain.ProviderClaude, Source: "claude:MEMORY.md",
-		Scope: domain.NativeMemoryScopeWorkingTree, AutoLoadedPrefix: s.text, Text: s.text,
+		Scope: domain.NativeMemoryScopeWorkingTree, Text: s.text,
 	}, s.text != "", nil
 }
 
@@ -183,8 +183,8 @@ func TestLoadMemoryProjectsNativeBaselineByScope(t *testing.T) {
 		wantBaseline bool
 	}{
 		{
-			name: "Claude working-tree memory is already auto-loaded", provider: domain.ProviderClaude,
-			source: stubMemSource{text: "CLAUDE MEMORY MODE BASELINE"}, nativeText: "CLAUDE MEMORY MODE BASELINE",
+			name: "Claude working-tree memory stays portable without runtime attestation", provider: domain.ProviderClaude,
+			source: stubMemSource{text: "CLAUDE MEMORY MODE BASELINE"}, nativeText: "CLAUDE MEMORY MODE BASELINE", wantBaseline: true,
 		},
 		{
 			name: "Codex thread memory must cross into the new session", provider: domain.ProviderCodex,
@@ -220,7 +220,7 @@ func TestLoadMemoryProjectsNativeBaselineByScope(t *testing.T) {
 // (1) Synthetic events are marked with CompactSummary (viewer ◈ collapsible distillation last-wins),
 // (2) Previous generation seed summaries [cxt] are removed (preventing generation accumulation),
 // (3) tool names and ingestion markers in KeyFacts are excluded,
-// (4) Omit summaries if they match native memory text (agent self-load — preventing double injection).
+// (4) Keep native memory portable when the target runtime did not attest an exact load.
 func TestPrependTrimDigestCompactSummary(t *testing.T) {
 	ctx := context.Background()
 	st := storage.NewFileStore(t.TempDir())
@@ -273,18 +273,18 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 		t.Fatalf("Tail preservation failed: %+v", out.Events[1])
 	}
 
-	// (4) Omit summary of native memory text as-is.
+	// (4) Keep native memory text as a portable fallback.
 	svc = mk(domain.MemoryDigest{Summary: "MEMROOT\nfacts"}, "MEMROOT\nfacts")
 	out, err = svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.Events[0].Blocks[0].Text, "MEMROOT") {
-		t.Fatalf("Native memory text re-injected into seed: %q", out.Events[0].Blocks[0].Text)
+	if !strings.Contains(out.Events[0].Blocks[0].Text, "MEMROOT") {
+		t.Fatalf("Portable native memory missing from seed: %q", out.Events[0].Blocks[0].Text)
 	}
 }
 
-func TestPrependTrimDigestRemovesClaudeNativeBaselineInsideMergedProjection(t *testing.T) {
+func TestPrependTrimDigestKeepsOneClaudeNativeBaselineInsideMergedProjection(t *testing.T) {
 	ctx := context.Background()
 	st := storage.NewFileStore(t.TempDir())
 	snapshotID := domain.HashContent([]byte("claude-native-current-snapshot"))
@@ -349,8 +349,8 @@ func TestPrependTrimDigestRemovesClaudeNativeBaselineInsideMergedProjection(t *t
 			prompt.WriteString(block.Text)
 		}
 	}
-	if strings.Contains(prompt.String(), nativeBaseline) {
-		t.Fatalf("cwd-native baseline was injected even though Claude loads it automatically:\n%s", prompt.String())
+	if got := strings.Count(prompt.String(), nativeBaseline); got != 1 {
+		t.Fatalf("portable cwd-native baseline count=%d, want one copy:\n%s", got, prompt.String())
 	}
 	for _, want := range []string{"ANCESTOR DECISION MUST REMAIN", "FRESH OMITTED DECISION", "RECENT RAW TURN"} {
 		if !strings.Contains(prompt.String(), want) {

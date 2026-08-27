@@ -111,33 +111,6 @@ func readClaudeNativeWithoutRefreshingProfile(t *testing.T, cwd string) (string,
 	return native.Text, true
 }
 
-func TestClaudeAutoLoadedPrefixUsesConservativeCompleteLines(t *testing.T) {
-	t.Run("small memory is fully loaded", func(t *testing.T) {
-		const text = "first memory\nsecond memory"
-		if got := claudeAutoLoadedPrefix(text); got != text {
-			t.Fatalf("prefix=%q want full memory", got)
-		}
-	})
-
-	t.Run("line-limited memory retains the unproven tail", func(t *testing.T) {
-		lines := make([]string, 250)
-		for i := range lines {
-			lines[i] = fmt.Sprintf("memory-line-%03d", i)
-		}
-		got := claudeAutoLoadedPrefix(strings.Join(lines, "\n"))
-		if !strings.Contains(got, "memory-line-198") || strings.Contains(got, "memory-line-199") {
-			t.Fatalf("line-safe prefix ended at the wrong boundary: lines=%d tail=%q", strings.Count(got, "\n")+1, got[len(got)-32:])
-		}
-	})
-
-	t.Run("byte-limited memory never cuts a long line", func(t *testing.T) {
-		text := "safe complete line\n" + strings.Repeat("x", 30<<10) + "\nUNLOADED TAIL"
-		if got := claudeAutoLoadedPrefix(text); got != "safe complete line" {
-			t.Fatalf("prefix cut an incomplete line: bytes=%d tail=%q", len(got), got[max(0, len(got)-32):])
-		}
-	})
-}
-
 func TestClaudeProjectKeyMatchesProviderLongUnicodeEncoding(t *testing.T) {
 	root := "/" + strings.Repeat("very-long-segment/", 20) + "😀"
 	want := "-very-long-segment-very-long-segment-very-long-segment-very-long-segment-very-long-segment-very-long-segment-very-long-segment-very-long-segment-very-long-segment-very-long-segment-very-long-segment-v-2g816y"
@@ -188,6 +161,25 @@ func TestClaudeReadNativeUsesRepositoryIdentityAcrossSubdirsAndWorktrees(t *test
 				t.Fatalf("found=%v text=%q, want repository memory", found, got)
 			}
 		})
+	}
+}
+
+func TestClaudeReadNativeDoesNotClaimRuntimeAutoLoadWithoutAttestation(t *testing.T) {
+	_, repo, _ := newClaudeMemoryRepo(t)
+	const baseline = "PORTABLE CLAUDE MEMORY BASELINE"
+	resolution := resolveClaudeAutoMemory(context.Background(), repo)
+	writeClaudeMemory(t, resolution.memoryDir, baseline)
+	t.Setenv("CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT", ClaudeMemoryConfigFingerprint(context.Background(), repo))
+
+	native, found, err := NewClaudeMemorySource().ReadNative(context.Background(), repo, "")
+	if err != nil || !found {
+		t.Fatalf("ReadNative found=%v err=%v", found, err)
+	}
+	if native.Text != baseline {
+		t.Fatalf("native text=%q, want %q", native.Text, baseline)
+	}
+	if native.AutoLoadedPrefix != "" {
+		t.Fatalf("unattested auto-loaded prefix=%q, want empty", native.AutoLoadedPrefix)
 	}
 }
 

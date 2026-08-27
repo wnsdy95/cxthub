@@ -257,17 +257,20 @@ conversation events are also replayed verbatim, their extractive memory delta
 is removed only from the prompt projection, so the new session receives each
 turn once while the full digest remains attached to the seed.
 Provider-native baselines follow the same prompt-only rule with an explicit
-scope. For Claude `MEMORY.md`, cxt removes only a conservative complete-line
-prefix (at most 199 lines and 24 KiB) inside Claude's documented startup limit
-and carries any remaining tail. Claude auto memory is resolved from the
-canonical Git repository, so linked worktrees and subdirectories share the
-same source. `CLAUDE_CONFIG_DIR`, safe `CLAUDE_CODE_PROJECT_DIR_NAME`, isolated
+scope. Claude auto memory is resolved from the canonical Git repository, so
+linked worktrees and subdirectories share the same source.
+`CLAUDE_CONFIG_DIR`, safe `CLAUDE_CODE_PROJECT_DIR_NAME`, isolated
 user/inline-flag/managed `autoMemoryDirectory`, settings precedence, and
 auto-memory disablement are honored. The supervised wrapper fingerprints every
 observable settings input at launch; if the profile is absent, changes later,
 uses an external or mixed-purpose settings document, invokes a policy helper,
-or uses an unmodeled remote memory store, cxt does not read or remove native
-memory and keeps the portable baseline instead. Codex
+or uses an unmodeled remote memory store, cxt does not ingest that native file.
+Even after the file is resolved, cxt does not selectively strip the Claude
+`MEMORY.md` baseline from the normal budgeted projection: configuration cannot
+attest that the target runtime loaded those exact bytes, because model/runtime
+gates and a startup-time file change remain possible. Exact-baseline merge
+deduplication keeps one copy rather than recursively nesting it across seed
+generations. Codex
 `memories_1.sqlite` memory is retained because it belongs to the source thread
 and the seed receives a new thread ID.
 
@@ -317,14 +320,12 @@ The mode priority is:
 refreshes one marked region in `CLAUDE.md` or `AGENTS.md`; text and permissions
 outside that region are preserved. Malformed or duplicate cxt markers fail
 closed instead of guessing a destructive replacement range.
-The provider-visible projection does not repeat a working-tree-scoped native
-prefix that is guaranteed to auto-load, but it preserves the un-loaded suffix,
-its conversation delta, and every unrelated lineage fragment. Session-scoped
-native memory is carried into the managed region so a newly materialized
-provider session cannot lose it. “Guaranteed” is intentionally limited to a
-live `cxt claude` launch profile whose settings fingerprint still matches;
-direct or ambiguous provider launches retain the portable copy rather than
-guessing and slicing context.
+The provider-visible projection may remove a working-tree-scoped native prefix
+only when the provider supplies an exact runtime load attestation. Claude does
+not currently expose one, so its full resolved baseline, conversation delta,
+and every unrelated lineage fragment remain portable. Session-scoped native
+memory is likewise carried into the managed region so a newly materialized
+provider session cannot lose it.
 
 ### `cxt memorize` and `cxt memory`
 
