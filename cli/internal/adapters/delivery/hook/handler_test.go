@@ -81,7 +81,8 @@ func TestHandlerUnknownEventNoop(t *testing.T) {
 func TestHandlerBriefingEmission(t *testing.T) {
 	cwd := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755)
-	if err := capture.WriteBriefing(cwd, "── Team context injection ──\n- kim: Login refactoring [git abc123]"); err != nil {
+	noticeID := domain.HashContent([]byte("handler pull briefing"))
+	if err := capture.WritePullBriefing(cwd, "main", []domain.ContentHash{noticeID}); err != nil {
 		t.Fatal(err)
 	}
 	rs := &recSave{}
@@ -104,7 +105,8 @@ func TestHandlerBriefingEmission(t *testing.T) {
 		t.Fatalf("stdout is not JSON: %v (%q)", err, out1.String())
 	}
 	if decoded.HookSpecificOutput.HookEventName != "UserPromptSubmit" ||
-		!strings.Contains(decoded.HookSpecificOutput.AdditionalContext, "Login refactoring") {
+		!strings.Contains(decoded.HookSpecificOutput.AdditionalContext, string(noticeID)) ||
+		!strings.Contains(decoded.HookSpecificOutput.AdditionalContext, "identifiers only") {
 		t.Fatalf("additionalContext emission error: %+v", decoded)
 	}
 	// 1st run: the second invocation is silent.

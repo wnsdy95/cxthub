@@ -432,6 +432,14 @@ post-rewrite
 
 Existing user hooks are chained and restored on uninstall.
 
+After `git pull` or merge, the post-merge hook fetches new team context without
+moving the active local context ref. The next prompt receives one terminal-
+scoped notice containing only the validated incoming snapshot IDs. Teammate-
+authored commit labels, author fields, and conversation text are not copied
+into the model's `additionalContext`; inspect those untrusted details in the
+web context view. The notice is consumed once, expires after 24 hours, keeps
+the newest 12 visible snapshots, and remains capped at 4 KiB.
+
 ## Configuration
 
 ### `cxt config`

@@ -819,8 +819,9 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	for _, b := range out.RemoteAhead {
 		hookWarn("New context on remote %q — history move is 'cxt pull', session injection is 'cxt load'", b)
 	}
-	// If team member context is injected into the current branch, create a briefing — raw does not merge
-	// (non-convergent policy) but summarizes the next prompt hook as additionalContext to the live session.
+	// If team member context arrived on the current branch, create a one-shot
+	// identifier notice. Raw conversations and collaborator-authored labels do
+	// not enter the live model prompt; they remain available in the web view.
 	branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	for _, b := range out.RemoteAhead {
 		if b == branch && branch != "" && branch != "HEAD" {
@@ -1190,10 +1191,19 @@ func pullBriefingDelta(
 	return visible, true
 }
 
-// writePullBriefing summarizes the team member snapshots received via git pull
-// into a terminal-scoped briefing sidecar and advances a separate durable
-// remote cursor. The active/local context ref remains untouched.
-// The next prompt's UserPromptSubmit hook consumes this once, injecting it into the live agent session (no raw merge — summary layer at commit message and author level).
+func queuePullBriefing(cwd, branch string, delta []domain.Snapshot) error {
+	ids := make([]domain.ContentHash, 0, len(delta))
+	for _, snap := range delta {
+		ids = append(ids, snap.ID)
+	}
+	return capture.WritePullBriefing(cwd, branch, ids)
+}
+
+// writePullBriefing records validated identifiers for team member snapshots
+// received via git pull in a terminal-scoped sidecar and advances a separate
+// durable remote cursor. The active/local context ref remains untouched. The
+// next prompt consumes the notice once; collaborator-authored labels and raw
+// conversations are never copied into additionalContext.
 func writePullBriefing(ctx context.Context, c *Container, cwd, branch string) {
 	if err := capture.WithPullBriefingTransaction(cwd, branch, func() error {
 		ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch)
@@ -1216,29 +1226,16 @@ func writePullBriefing(ctx context.Context, c *Container, cwd, branch string) {
 		if !complete {
 			return nil // fetched graph is incomplete — do not skip an unobserved range
 		}
-		var items []string
-		for _, snap := range delta {
-			who := snap.Author.Name
-			if who == "" {
-				who = snap.Author.Email
-			}
-			if who == "" {
-				who = snap.Provider
-			}
-			items = append(items, fmt.Sprintf("- %s: %s", who, snap.Message))
-		}
-		if len(items) > 0 {
-			text := fmt.Sprintf("── Teammate context arrived (git pull, %s) ──\n%s\n(full conversations are available in the web context tab — the code changes are already in your working tree)",
-				branch, strings.Join(items, "\n"))
-			if err := capture.WriteBriefing(cwd, text); err != nil {
+		if len(delta) > 0 {
+			if err := queuePullBriefing(cwd, branch, delta); err != nil {
 				return err // queue first: a cursor must never skip an undelivered range
 			}
 		}
 		if err := capture.CompareAndSwapPullBriefingCursor(cwd, branch, cursorTarget, ref.Target); err != nil {
 			return err
 		}
-		if len(items) > 0 {
-			fmt.Printf("cxt: %d team member contexts received — will be briefed to the agent in the next prompt\n", len(items))
+		if len(delta) > 0 {
+			fmt.Printf("cxt: %d team member contexts received — will be briefed to the agent in the next prompt\n", len(delta))
 		}
 		return nil
 	}); err != nil && !errors.Is(err, domain.ErrSyncConflict) {
