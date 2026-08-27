@@ -1070,6 +1070,93 @@ func (s *SyncRepoService) isAncestor(ctx context.Context, anc, desc domain.Conte
 	return false
 }
 
+// preparePullSnapshotStates overlays validated remote projection tokens on the
+// local manifest for snapshots whose local metadata intentionally remains
+// ahead. The cursor is only a negotiation hint: the current local state is the
+// guard, and any local mutation makes the cached remote token ineligible.
+func preparePullSnapshotStates(
+	ctx context.Context,
+	store outbound.SessionStore,
+	repoID string,
+	local map[domain.ContentHash]domain.ContentHash,
+) (
+	map[domain.ContentHash]domain.ContentHash,
+	outbound.RemoteSnapshotStateCursorStore,
+	map[domain.ContentHash]domain.RemoteSnapshotStateCursorEntry,
+) {
+	var advertised map[domain.ContentHash]domain.ContentHash
+	if local != nil {
+		advertised = make(map[domain.ContentHash]domain.ContentHash, len(local))
+		for id, state := range local {
+			advertised[id] = state
+		}
+	}
+
+	cursorStore, ok := store.(outbound.RemoteSnapshotStateCursorStore)
+	if !ok {
+		return advertised, nil, nil
+	}
+	active := map[domain.ContentHash]domain.RemoteSnapshotStateCursorEntry{}
+	if local == nil {
+		return advertised, cursorStore, active
+	}
+	loaded, err := cursorStore.LoadRemoteSnapshotStateCursor(ctx, repoID)
+	if err != nil {
+		// This sidecar is a disposable performance hint. Corruption, an old
+		// format, or an unavailable cache must degrade to the normal pull.
+		return advertised, cursorStore, active
+	}
+	for id, entry := range loaded {
+		current, exists := local[id]
+		if !exists || current != entry.LocalState {
+			continue
+		}
+		active[id] = entry
+		advertised[id] = entry.RemoteState
+	}
+	return advertised, cursorStore, active
+}
+
+// updateRemoteSnapshotStateCursor records only remote projections that were
+// returned, validated, and successfully reconciled locally. It runs after all
+// snapshot and memory writes. Cache failures never change pull correctness.
+func (s *SyncRepoService) updateRemoteSnapshotStateCursor(
+	ctx context.Context,
+	repoID string,
+	cursorStore outbound.RemoteSnapshotStateCursorStore,
+	entries map[domain.ContentHash]domain.RemoteSnapshotStateCursorEntry,
+	remoteSnapshots []domain.Snapshot,
+) {
+	if cursorStore == nil {
+		return
+	}
+	if entries == nil {
+		entries = map[domain.ContentHash]domain.RemoteSnapshotStateCursorEntry{}
+	}
+	for _, remote := range remoteSnapshots {
+		delete(entries, remote.ID)
+		remoteState, err := domain.SnapshotStateHash(remote)
+		if err != nil {
+			continue
+		}
+		local, err := s.store.GetSnapshot(ctx, remote.ID)
+		if err != nil {
+			continue
+		}
+		localState, err := domain.SnapshotStateHash(local)
+		if err != nil {
+			continue
+		}
+		if localState != remoteState {
+			entries[remote.ID] = domain.RemoteSnapshotStateCursorEntry{
+				LocalState:  localState,
+				RemoteState: remoteState,
+			}
+		}
+	}
+	_ = cursorStore.SaveRemoteSnapshotStateCursor(ctx, repoID, entries)
+}
+
 // Pull merges the snapshot/doc/ref from the central server into the local repository (fast-forward first).
 func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
 	repoID, err := s.repoID(ctx, in)
@@ -1093,7 +1180,8 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			}
 		}
 	}
-	snaps, docs, refs, err := s.remote.Pull(ctx, repoID, snapshotStates, docHaves)
+	advertisedSnapshotStates, cursorStore, cursorEntries := preparePullSnapshotStates(ctx, s.store, repoID, snapshotStates)
+	snaps, docs, refs, err := s.remote.Pull(ctx, repoID, advertisedSnapshotStates, docHaves)
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
@@ -1294,6 +1382,7 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			}
 		}
 	}
+	s.updateRemoteSnapshotStateCursor(ctx, repoID, cursorStore, cursorEntries, snaps)
 	// FetchOnly (hook auto-pull): fetch objects only, local refs do not move — context does not force convergence unlike code. Instead, report remote branch ahead hint (pull is user choice).
 	if in.FetchOnly {
 		var ahead []string

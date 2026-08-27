@@ -456,6 +456,15 @@ type Manifest struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// RemoteSnapshotStateCursorEntry is a local performance hint for a snapshot
+// whose mutable projection intentionally differs from the last validated
+// server projection. RemoteState may be advertised only while LocalState still
+// matches the current local snapshot token; any local mutation invalidates it.
+type RemoteSnapshotStateCursorEntry struct {
+	LocalState  ContentHash `json:"local_state"`
+	RemoteState ContentHash `json:"remote_state"`
+}
+
 // StashEntry is an item in the stash stack (git stash equivalent).
 // Temporarily stores the active session outside the branch history — snapshot objects are stored content-addressed but
 // do not point to any branch ref (excluding push targets), and stack order is managed by .cxt/stash.json.

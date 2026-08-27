@@ -337,6 +337,11 @@ Downloads objects and refs from `origin`.
   remote memory pointer. The losing immutable local memory object and raw
   session remain stored; run `cxt memorize` again to project that session onto
   the selected remote lineage.
+- If validated server metadata intentionally remains behind a local snapshot,
+  cxt keeps a guarded local cursor so later pulls do not download that same
+  projection forever. The cursor is only a disposable negotiation hint: a
+  local or remote metadata change invalidates it, and it never participates in
+  refs, reachability, or push state.
 
 Review local work before using `--force`.
 
