@@ -588,6 +588,11 @@ func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, see
 func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string, priorSeeds []domain.Event) (domain.CIRDocument, bool, bool) {
 	digest, derr := s.distiller.Distill(ctx, omitted, nil)
 	digest.SnapshotID = snap.ID
+	if digest.SnapshotID != "" {
+		// Normalize the private version marker into provenance fragments before
+		// rendering provider-visible prompt text.
+		digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
+	}
 	if derr != nil {
 		digest = domain.MemoryDigest{} // Send the stored digest even if empty
 	}
@@ -605,6 +610,10 @@ func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, om
 	}
 	storedUsable := false
 	if hasStored {
+		// This snapshot's recent conversation is present in the raw replay tail
+		// (or re-distilled from the exact omitted slice below). Retain provider or
+		// native baseline memory, but do not inject that same source delta twice.
+		stored = domain.WithoutConversationDeltaFromSource(stored, snap.ID)
 		// Stored memory is immutable archival state and can contain a full native
 		// memory or legacy cxt seed generations. Loading it into a provider prompt
 		// is an inherited projection, so apply the same recursion filter and carry
@@ -815,6 +824,7 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 		return inbound.LoadOutput{}, err
 	}
 	digest.SnapshotID = snap.ID
+	digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
 	// Heritage continuation (same logic as memorize): merge project memory from
 	// every parent lineage, including overlay grafts.
 	if prior, ok := priorMemoryProjection(ctx, s.store, snap); ok {

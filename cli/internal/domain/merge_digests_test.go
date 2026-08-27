@@ -79,6 +79,74 @@ func TestMergeDigestsDeduplicatesExtractiveFallbackItems(t *testing.T) {
 	}
 }
 
+func TestMergeDigestsDeduplicatesBaselineAndKeepsConversationDeltas(t *testing.T) {
+	leftID := ContentHash("sha256:" + strings.Repeat("7", 64))
+	rightID := ContentHash("sha256:" + strings.Repeat("8", 64))
+	const baseline = "PROVIDER COMPACT BASELINE REMAINS BYTE STABLE"
+	left := MemoryDigest{
+		SnapshotID: leftID,
+		Summary: AppendExtractiveConversationDelta(baseline, RenderExtractiveFallbackSummary(
+			[]string{"Decision from the left lineage."},
+			[]string{"Result from the left lineage."},
+		)),
+	}
+	right := MemoryDigest{
+		SnapshotID: rightID,
+		Summary: AppendExtractiveConversationDelta(baseline, RenderExtractiveFallbackSummary(
+			[]string{"Decision from the right lineage."},
+			[]string{"Result from the right lineage."},
+		)),
+	}
+
+	got := MergeDigests(left, right)
+	if count := strings.Count(got.Summary, baseline); count != 1 {
+		t.Fatalf("merged baseline count=%d, want 1:\n%s", count, got.Summary)
+	}
+	if count := strings.Count(got.Summary, extractiveFallbackHeader); count != 1 {
+		t.Fatalf("merged extractive header count=%d, want 1:\n%s", count, got.Summary)
+	}
+	for _, want := range []string{
+		"Decision from the left lineage.", "Result from the left lineage.",
+		"Decision from the right lineage.", "Result from the right lineage.",
+	} {
+		if !strings.Contains(got.Summary, want) {
+			t.Fatalf("merged memory lost %q:\n%s", want, got.Summary)
+		}
+	}
+
+	prompt := WithoutConversationDeltaFromSource(got, rightID)
+	for _, kept := range []string{baseline, "Decision from the left lineage.", "Result from the left lineage."} {
+		if !strings.Contains(prompt.Summary, kept) {
+			t.Fatalf("source-filtered prompt lost %q:\n%s", kept, prompt.Summary)
+		}
+	}
+	for _, removed := range []string{"Decision from the right lineage.", "Result from the right lineage."} {
+		if strings.Contains(prompt.Summary, removed) {
+			t.Fatalf("source-filtered prompt retained %q:\n%s", removed, prompt.Summary)
+		}
+		if !strings.Contains(got.Summary, removed) {
+			t.Fatalf("source filtering mutated the immutable input projection: %q", removed)
+		}
+	}
+}
+
+func TestWithoutConversationDeltaLeavesUnstructuredProviderTextUntouched(t *testing.T) {
+	id := ContentHash("sha256:" + strings.Repeat("9", 64))
+	providerFallback := RenderExtractiveFallbackSummary(
+		[]string{"This sentence was authored by the provider."},
+		[]string{"It must remain part of the provider baseline."},
+	)
+	for _, summary := range []string{
+		"Provider prose mentioning " + extractiveFallbackHeader + " without the canonical sections",
+		"Provider-authored baseline\n\n" + providerFallback,
+	} {
+		digest := MemoryDigest{SnapshotID: id, Summary: summary}
+		if got := WithoutConversationDeltaFromSource(digest, id); got.Summary != summary {
+			t.Fatalf("unstructured provider text changed: got %q want %q", got.Summary, summary)
+		}
+	}
+}
+
 func TestMergeDigestsPreservesUniqueSiblingFallbackItems(t *testing.T) {
 	left := MemoryDigest{
 		SnapshotID: ContentHash("sha256:" + strings.Repeat("c", 64)),

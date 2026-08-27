@@ -98,6 +98,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		if mainMem == nil && mainDocAvailable {
 			if d, derr := s.distiller.Distill(ctx, mainDoc.CIR.EffectiveContext(), nil); derr == nil {
 				d.SnapshotID = mainSnap.ID
+				d = domain.MergeDigests(domain.MemoryDigest{}, d)
 				if prior, ok := priorMemoryProjection(ctx, s.store, mainSnap); ok {
 					prior = boundCarriedDigest(prior)
 					d = domain.MergeDigests(prior, d)
@@ -109,11 +110,17 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 
 	// Layer 2: departure branch on-the-fly distillation (+ ancestor inheritance) — always fresh without relying on stored digest.
 	branchContext := fromDoc.CIR.EffectiveContext()
-	branchMem, err := s.distiller.Distill(ctx, branchContext, nil)
+	freshBranchMem, err := s.distiller.Distill(ctx, branchContext, nil)
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
-	branchMem.SnapshotID = fromSnap.ID
+	freshBranchMem.SnapshotID = fromSnap.ID
+	// The source conversation is replayed verbatim below. Keep its compact/native
+	// baseline in the prompt, but not the canonical current-conversation delta.
+	// The full fresh digest is still attached to the seed snapshot.
+	promptFreshBranchMem := domain.WithoutConversationDeltaFromSource(freshBranchMem, fromSnap.ID)
+	branchMem := freshBranchMem
+	promptBranchMem := promptFreshBranchMem
 	branchState, prior, hasBranchPrior, branchProjectionComplete, err := stablePriorMemoryProjection(ctx, s.store, fromSnap.ID)
 	if err != nil {
 		return inbound.SeedOutput{}, err
@@ -122,11 +129,18 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if hasBranchPrior {
 		prior = boundCarriedDigest(prior)
 		branchMem = domain.MergeDigests(prior, branchMem)
+		promptBranchMem = domain.MergeDigests(prior, promptBranchMem)
 	}
 	// Preserve the departure snapshot as provenance even when it had no prior
 	// digest. The seed changes SnapshotID below, but inherited fragments must
 	// keep identifying their actual source for future stale-lineage repair.
 	branchMem = domain.MergeDigests(domain.MemoryDigest{}, branchMem)
+	promptBranchMem = domain.MergeDigests(domain.MemoryDigest{}, promptBranchMem)
+	mainPromptMem := mainMem
+	if mainPromptMem != nil && mainBranch == in.FromBranch {
+		promptCopy := domain.WithoutConversationDeltaFromSource(*mainPromptMem, fromSnap.ID)
+		mainPromptMem = &promptCopy
+	}
 
 	// Seed CIR synthesis: [Layer1⊕Layer2 summary message] + [Layer3 bounded
 	// full session]. Any semantic events cut from Layer3 become a bounded bridge
@@ -137,7 +151,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	seedSession := providerfs.NewSessionID()
 	events, seedBranchMemory, err := s.buildBranchSeedEvents(
 		ctx, provider, in.FromBranch, in.NewBranch, now, fromSnap.ID,
-		mainMem, branchMem, seedConversationContext(branchContext),
+		mainPromptMem, promptBranchMem, branchMem, seedConversationContext(branchContext),
 	)
 	if err != nil {
 		return inbound.SeedOutput{}, err
@@ -237,11 +251,12 @@ func (s *BranchSeedService) buildBranchSeedEvents(
 	from, to, now string,
 	sourceSnapshot domain.ContentHash,
 	mainMemory *domain.MemoryDigest,
-	branchMemory domain.MemoryDigest,
+	promptBranchMemory domain.MemoryDigest,
+	storedBranchMemory domain.MemoryDigest,
 	conversation domain.CIRDocument,
 ) ([]domain.Event, domain.MemoryDigest, error) {
 	totalBudget, digestBudget := seedBudgets(provider)
-	promptMemory := branchMemory
+	promptMemory := promptBranchMemory
 	maxConversationBudget := totalBudget
 	for attempt := 0; attempt <= len(conversation.Events)+1; attempt++ {
 		seedText := renderSeedText(from, to, mainMemory, promptMemory, digestBudget)
@@ -260,7 +275,8 @@ func (s *BranchSeedService) buildBranchSeedEvents(
 		}
 		trimmed, omitted := trimEventsForSeed(conversation, conversationBudget)
 
-		mergedMemory := branchMemory
+		mergedPromptMemory := promptBranchMemory
+		mergedStoredMemory := storedBranchMemory
 		if len(omitted) > 0 {
 			omittedCIR := conversation
 			omittedCIR.Events = append([]domain.Event(nil), omitted...)
@@ -269,13 +285,14 @@ func (s *BranchSeedService) buildBranchSeedEvents(
 				return nil, domain.MemoryDigest{}, err
 			}
 			bridge.SnapshotID = sourceSnapshot
-			mergedMemory = domain.MergeDigests(branchMemory, bridge)
+			mergedPromptMemory = domain.MergeDigests(promptBranchMemory, bridge)
+			mergedStoredMemory = domain.MergeDigests(storedBranchMemory, bridge)
 		}
 
 		// The bridge itself changes the summary size. Re-render before checking
 		// the actual wire-shaped event budget; if it grew, the next pass trims
 		// only more verbatim events and includes them in a new bridge.
-		seedText = renderSeedText(from, to, mainMemory, mergedMemory, digestBudget)
+		seedText = renderSeedText(from, to, mainMemory, mergedPromptMemory, digestBudget)
 		summaryEvent.Blocks[0].Text = seedText
 		events := []domain.Event{summaryEvent}
 		for i, event := range trimmed.Events {
@@ -283,9 +300,9 @@ func (s *BranchSeedService) buildBranchSeedEvents(
 			events = append(events, event)
 		}
 		if eventsJSONBytes(events) <= totalBudget {
-			return events, mergedMemory, nil
+			return events, mergedStoredMemory, nil
 		}
-		promptMemory = mergedMemory
+		promptMemory = mergedPromptMemory
 	}
 	return nil, domain.MemoryDigest{}, fmt.Errorf("branch seed context did not converge within %d bytes", totalBudget)
 }

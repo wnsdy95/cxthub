@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -201,6 +202,85 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 	out = svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
 	if strings.Contains(out.Events[0].Blocks[0].Text, "MEMROOT") {
 		t.Fatalf("Native memory text re-injected into seed: %q", out.Events[0].Blocks[0].Text)
+	}
+}
+
+func TestPrependTrimDigestPreservesPostCompactionOmittedSpan(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	svc := NewLoadSessionService(st, nil, nil, nil, memory.NewRuleDistiller(), nil)
+	omitted := domain.CIRDocument{Envelope: domain.Envelope{SourceProvider: domain.ProviderClaude}, Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD COMPACT BASELINE"}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD OMITTED POST-COMPACT DECISION"}}},
+		{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD OMITTED POST-COMPACT RESULT"}}},
+	}}
+	seed := domain.CIRDocument{Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD RECENT RAW REQUEST"}}},
+	}}
+
+	out := svc.prependTrimDigest(ctx, omitted, seed, domain.Snapshot{ID: domain.HashContent([]byte("load-omitted-span"))}, domain.ProviderClaude, t.TempDir())
+	if len(out.Events) != 2 || len(out.Events[0].Blocks) == 0 {
+		t.Fatalf("trimmed seed = %+v", out.Events)
+	}
+	summary := out.Events[0].Blocks[0].Text
+	for _, want := range []string{"LOAD COMPACT BASELINE", "LOAD OMITTED POST-COMPACT DECISION", "LOAD OMITTED POST-COMPACT RESULT"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("omitted-span digest lost %q:\n%s", want, summary)
+		}
+	}
+	if strings.Contains(summary, "LOAD RECENT RAW REQUEST") || out.Events[1].Blocks[0].Text != "LOAD RECENT RAW REQUEST" {
+		t.Fatalf("recent raw tail was duplicated or changed: %+v", out.Events)
+	}
+	if strings.Contains(summary, "[cxt conversation delta v1]") {
+		t.Fatalf("private memory marker leaked into load prompt:\n%s", summary)
+	}
+}
+
+func TestPrependTrimDigestDoesNotRepeatStoredCurrentConversation(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	id := domain.HashContent([]byte("load-current-delta-source"))
+	full := domain.CIRDocument{Envelope: domain.Envelope{SourceProvider: domain.ProviderClaude}, Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD STORED BASELINE"}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD OLD OMITTED DECISION"}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD CURRENT RAW DECISION ONCE"}}},
+	}}
+	digest, err := memory.NewRuleDistiller().Distill(ctx, full, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest.SnapshotID = id
+	digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
+	memoryHash, err := st.PutMemory(ctx, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := domain.Snapshot{ID: id, DocHash: id, MemoryHash: memoryHash}
+	if err := st.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	omitted := full
+	omitted.Events = append([]domain.Event(nil), full.Events[:2]...)
+	seed := domain.CIRDocument{Events: append([]domain.Event(nil), full.Events[2:]...)}
+	svc := NewLoadSessionService(st, nil, nil, nil, memory.NewRuleDistiller(), nil)
+
+	out := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderClaude, t.TempDir())
+	var prompt strings.Builder
+	for _, event := range out.Events {
+		for _, block := range event.Blocks {
+			prompt.WriteString(block.Text)
+		}
+	}
+	for _, want := range []string{"LOAD STORED BASELINE", "LOAD OLD OMITTED DECISION", "LOAD CURRENT RAW DECISION ONCE"} {
+		if !strings.Contains(prompt.String(), want) {
+			t.Fatalf("load prompt lost %q:\n%s", want, prompt.String())
+		}
+	}
+	if count := strings.Count(prompt.String(), "LOAD CURRENT RAW DECISION ONCE"); count != 1 {
+		t.Fatalf("current raw conversation appears %d times, want one:\n%s", count, prompt.String())
+	}
+	if len(out.Events) < 2 || strings.Contains(out.Events[0].Blocks[0].Text, "LOAD CURRENT RAW DECISION ONCE") {
+		t.Fatalf("stored current delta leaked into summary layer: %+v", out.Events)
 	}
 }
 

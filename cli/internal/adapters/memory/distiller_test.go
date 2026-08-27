@@ -141,6 +141,54 @@ func TestDistillPreservesFullAgentCompactionSummary(t *testing.T) {
 	}
 }
 
+func TestDistillPreservesConversationAfterLatestCompactionSummary(t *testing.T) {
+	cir := domain.CIRDocument{Envelope: domain.Envelope{SourceProvider: domain.ProviderClaude}, Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "ARCHIVAL TURN BEFORE COMPACTION"}}},
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: "PROVIDER COMPACT BASELINE"}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "POST-COMPACTION DECISION"}}},
+		{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "POST-COMPACTION OUTCOME"}}},
+	}}
+
+	d, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"PROVIDER COMPACT BASELINE", "POST-COMPACTION DECISION", "POST-COMPACTION OUTCOME"} {
+		if !strings.Contains(d.Summary, want) {
+			t.Fatalf("distilled memory lost %q:\n%s", want, d.Summary)
+		}
+	}
+	if strings.Contains(d.Summary, "ARCHIVAL TURN BEFORE COMPACTION") {
+		t.Fatalf("distilled memory resurrected context replaced by the provider:\n%s", d.Summary)
+	}
+}
+
+func TestDistillPreservesConversationAlongsideNativeMemory(t *testing.T) {
+	cir := domain.CIRDocument{Envelope: domain.Envelope{SourceProvider: domain.ProviderClaude}, Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "CURRENT SESSION DECISION"}}},
+		{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "CURRENT SESSION RESULT"}}},
+	}}
+	native := &domain.NativeMemory{Source: "claude:MEMORY.md", Text: "NATIVE PROJECT BASELINE"}
+
+	d, err := NewRuleDistiller().Distill(context.Background(), cir, native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"NATIVE PROJECT BASELINE", "CURRENT SESSION DECISION", "CURRENT SESSION RESULT"} {
+		if !strings.Contains(d.Summary, want) {
+			t.Fatalf("distilled native memory lost %q:\n%s", want, d.Summary)
+		}
+	}
+
+	empty, err := NewRuleDistiller().Distill(context.Background(), domain.CIRDocument{}, native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Summary != native.Text {
+		t.Fatalf("native-only memory changed: got %q want %q", empty.Summary, native.Text)
+	}
+}
+
 // TestDistillNoProvenanceMarkerInFacts ensures that the source marker ("native memory: …") does not mix with KeyFacts — the source is not a fact (review P2). Native memory is loaded by the agent at session start, so it has no information value.
 func TestDistillNoProvenanceMarkerInFacts(t *testing.T) {
 	cir := domain.CIRDocument{}
