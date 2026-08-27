@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -22,7 +24,7 @@ func putBranchSeedSnapshot(
 	t.Helper()
 	docHash, err := store.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{
 		Envelope: domain.Envelope{
-			CIRVersion:     "1",
+			CIRVersion:     domain.CIRVersionForEvents(events),
 			SourceProvider: domain.ProviderCodex,
 			GitBranch:      branch,
 			Fidelity:       domain.FidelityFull,
@@ -54,6 +56,130 @@ func putBranchSeedSnapshot(
 		t.Fatalf("put snapshot: %v", err)
 	}
 	return docHash
+}
+
+func TestBranchSeedSummarizesTrimmedPostCompactionConversation(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-post-compaction-bridge", DefaultBranch: "main", LocalPath: t.TempDir()}
+	const (
+		compactBase = "PROVIDER COMPACT BASELINE MUST SURVIVE"
+		middle      = "MIDDLE POST-COMPACTION DECISION MUST SURVIVE"
+		latest      = "LATEST POST-COMPACTION REQUEST MUST SURVIVE"
+	)
+	events := []domain.Event{{
+		Kind: domain.EventMessage, Role: "user", Seq: 0, CompactSummary: true,
+		Blocks: []domain.ContentBlock{{Type: "text", Text: compactBase}},
+	}}
+	for i := 0; i < 20; i++ {
+		user := fmt.Sprintf("post-compaction request %02d %s", i, strings.Repeat("u", 16<<10))
+		if i == 10 {
+			user = middle + " " + strings.Repeat("m", 16<<10)
+		}
+		if i == 19 {
+			user = latest + " " + strings.Repeat("l", 16<<10)
+		}
+		events = append(events,
+			seedMessage("user", user, len(events)),
+			seedMessage("assistant", fmt.Sprintf("post-compaction answer %02d %s", i, strings.Repeat("a", 16<<10)), len(events)+1),
+		)
+	}
+
+	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", events, nil, nil)
+	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
+	service := NewBranchSeedService(
+		branchSeedGit{repo: repo}, store, memory.NewRuleDistiller(), nil, nil,
+	)
+	out, err := service.Seed(ctx, inbound.SeedInput{
+		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/post-compaction-bridge", Provider: domain.ProviderCodex,
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	seed, err := store.GetDoc(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	totalBudget, _ := seedBudgets(domain.ProviderCodex)
+	if got := eventsJSONBytes(seed.CIR.Events); got > totalBudget {
+		t.Fatalf("seed events = %d bytes, want <= %d", got, totalBudget)
+	}
+	var prompt strings.Builder
+	middleIsVerbatim := false
+	for i, event := range seed.CIR.Events {
+		for _, block := range event.Blocks {
+			prompt.WriteString(block.Text)
+			if i > 0 && strings.Contains(block.Text, middle) {
+				middleIsVerbatim = true
+			}
+		}
+	}
+	if middleIsVerbatim {
+		t.Fatal("fixture did not trim the middle post-compaction decision")
+	}
+	if !strings.Contains(seed.CIR.Events[0].Blocks[0].Text, middle) {
+		t.Fatal("trimmed post-compaction decision was not bridged into the summary layer")
+	}
+	if strings.Contains(seed.CIR.Events[0].Blocks[0].Text, latest) {
+		t.Fatal("verbatim latest request was redundantly copied into the bridge summary")
+	}
+	for _, want := range []string{compactBase, middle, latest} {
+		if !strings.Contains(prompt.String(), want) {
+			t.Fatalf("branch seed prompt lost %q", want)
+		}
+	}
+	if count := strings.Count(prompt.String(), latest); count != 1 {
+		t.Fatalf("latest request appears %d times, want one verbatim copy", count)
+	}
+	seedSnapshot, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedMemory, err := store.GetMemory(ctx, seedSnapshot.MemoryHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seedMemory.Summary, middle) {
+		t.Fatal("branch seed memory lost the trimmed post-compaction decision")
+	}
+}
+
+type failBridgeDistiller struct{ calls int }
+
+func (d *failBridgeDistiller) Distill(context.Context, domain.CIRDocument, *domain.NativeMemory) (domain.MemoryDigest, error) {
+	d.calls++
+	if d.calls > 1 {
+		return domain.MemoryDigest{}, fmt.Errorf("bridge distillation failed")
+	}
+	return domain.MemoryDigest{Summary: "fresh branch memory", Provider: domain.ProviderCodex}, nil
+}
+
+func TestBranchSeedBridgeFailureDoesNotCreateLossyBranch(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-bridge-fail-closed", DefaultBranch: "main", LocalPath: t.TempDir()}
+	var events []domain.Event
+	for i := 0; i < 20; i++ {
+		events = append(events,
+			seedMessage("user", strings.Repeat("large request ", 1400), len(events)),
+			seedMessage("assistant", strings.Repeat("large answer ", 1400), len(events)+1),
+		)
+	}
+	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", events, nil, &domain.MemoryDigest{
+		Summary: "stored project memory", Provider: domain.ProviderCodex,
+	})
+	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
+	distiller := &failBridgeDistiller{}
+	service := NewBranchSeedService(branchSeedGit{repo: repo}, store, distiller, nil, nil)
+	_, err := service.Seed(ctx, inbound.SeedInput{
+		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/bridge-failure", Provider: domain.ProviderCodex,
+	})
+	if err == nil || !strings.Contains(err.Error(), "bridge distillation failed") {
+		t.Fatalf("seed error=%v", err)
+	}
+	if _, err := store.GetRef(ctx, repo.ID, domain.RefBranch, "feature/bridge-failure"); err == nil {
+		t.Fatal("lossy branch ref was created after bridge distillation failed")
+	}
 }
 
 func putBranchSeedRef(

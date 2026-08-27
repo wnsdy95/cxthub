@@ -129,26 +129,18 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	branchMem = domain.MergeDigests(domain.MemoryDigest{}, branchMem)
 
 	// Seed CIR synthesis: [Layer1⊕Layer2 summary message] + [Layer3 bounded
-	// full session]. The summary has a fixed maximum, and the exact encoded
-	// summary size is subtracted from the shared seed budget before selecting
-	// the recent user-boundary-aligned conversation tail.
+	// full session]. Any semantic events cut from Layer3 become a bounded bridge
+	// digest before the final prompt is accepted. Without that bridge, a source
+	// with an older provider compaction summary silently loses post-compaction
+	// work between the summary and the retained tail (#84).
 	now := time.Now().UTC().Format(time.RFC3339)
 	seedSession := providerfs.NewSessionID()
-	totalBudget, digestBudget := seedBudgets(provider)
-	seedText := renderSeedText(in.FromBranch, in.NewBranch, mainMem, branchMem, digestBudget)
-	summaryEvent := domain.Event{
-		Kind: domain.EventMessage, Role: "user", Ts: now, Seq: 0,
-		Blocks: []domain.ContentBlock{{Type: "text", Text: seedText}},
-	}
-	conversationBudget := totalBudget - eventsJSONBytes([]domain.Event{summaryEvent})
-	if conversationBudget < 0 {
-		conversationBudget = 0
-	}
-	trimmedConversation, _ := trimEventsForSeed(seedConversationContext(branchContext), conversationBudget)
-	events := []domain.Event{summaryEvent}
-	for i, ev := range trimmedConversation.Events {
-		ev.Seq = i + 1
-		events = append(events, ev)
+	events, seedBranchMemory, err := s.buildBranchSeedEvents(
+		ctx, provider, in.FromBranch, in.NewBranch, now, fromSnap.ID,
+		mainMem, branchMem, seedConversationContext(branchContext),
+	)
+	if err != nil {
+		return inbound.SeedOutput{}, err
 	}
 	cir := domain.CIRDocument{Events: events}
 	cir.Envelope = fromDoc.CIR.Envelope // Inherit model, cwd, etc.
@@ -187,9 +179,9 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	// it rather than re-distilling the truncated summary event. The carried
 	// copy is bounded (#33 — newest tail); older generations stay reachable
 	// through the parent chain's memory objects.
-	seedMemory := branchMem
+	seedMemory := seedBranchMemory
 	if mainMem != nil {
-		seedMemory = domain.MergeDigests(boundCarriedDigest(*mainMem), branchMem)
+		seedMemory = domain.MergeDigests(boundCarriedDigest(*mainMem), seedBranchMemory)
 	}
 	seedMemory.SnapshotID = docHash
 	// A seed is a new snapshot, so its first attachment is a causal root even
@@ -232,6 +224,70 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		}
 	}
 	return out, nil
+}
+
+// buildBranchSeedEvents partitions the source conversation into a bridge
+// distilled from the exact omitted slice and a verbatim recent tail. Rendering the bridge can enlarge
+// the summary event, so the loop only moves the cut forward until the final
+// encoded event list fits; it never re-expands a tail and therefore converges
+// after at most one pass per source event.
+func (s *BranchSeedService) buildBranchSeedEvents(
+	ctx context.Context,
+	provider domain.ProviderKind,
+	from, to, now string,
+	sourceSnapshot domain.ContentHash,
+	mainMemory *domain.MemoryDigest,
+	branchMemory domain.MemoryDigest,
+	conversation domain.CIRDocument,
+) ([]domain.Event, domain.MemoryDigest, error) {
+	totalBudget, digestBudget := seedBudgets(provider)
+	promptMemory := branchMemory
+	maxConversationBudget := totalBudget
+	for attempt := 0; attempt <= len(conversation.Events)+1; attempt++ {
+		seedText := renderSeedText(from, to, mainMemory, promptMemory, digestBudget)
+		summaryEvent := domain.Event{
+			Kind: domain.EventMessage, Role: "user", Ts: now, Seq: 0,
+			Blocks: []domain.ContentBlock{{Type: "text", Text: seedText}},
+		}
+		conversationBudget := totalBudget - eventsJSONBytes([]domain.Event{summaryEvent})
+		if conversationBudget < 0 {
+			conversationBudget = 0
+		}
+		if conversationBudget > maxConversationBudget {
+			conversationBudget = maxConversationBudget
+		} else {
+			maxConversationBudget = conversationBudget
+		}
+		trimmed, omitted := trimEventsForSeed(conversation, conversationBudget)
+
+		mergedMemory := branchMemory
+		if len(omitted) > 0 {
+			omittedCIR := conversation
+			omittedCIR.Events = append([]domain.Event(nil), omitted...)
+			bridge, err := s.distiller.Distill(ctx, omittedCIR, nil)
+			if err != nil {
+				return nil, domain.MemoryDigest{}, err
+			}
+			bridge.SnapshotID = sourceSnapshot
+			mergedMemory = domain.MergeDigests(branchMemory, bridge)
+		}
+
+		// The bridge itself changes the summary size. Re-render before checking
+		// the actual wire-shaped event budget; if it grew, the next pass trims
+		// only more verbatim events and includes them in a new bridge.
+		seedText = renderSeedText(from, to, mainMemory, mergedMemory, digestBudget)
+		summaryEvent.Blocks[0].Text = seedText
+		events := []domain.Event{summaryEvent}
+		for i, event := range trimmed.Events {
+			event.Seq = i + 1
+			events = append(events, event)
+		}
+		if eventsJSONBytes(events) <= totalBudget {
+			return events, mergedMemory, nil
+		}
+		promptMemory = mergedMemory
+	}
+	return nil, domain.MemoryDigest{}, fmt.Errorf("branch seed context did not converge within %d bytes", totalBudget)
 }
 
 // seedConversationContext keeps only the human/agent conversation needed by a
