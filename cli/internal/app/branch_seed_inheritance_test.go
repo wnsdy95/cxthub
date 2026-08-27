@@ -333,7 +333,7 @@ func TestBranchSeedFromMainIncludesStoredMemoryAndFullSession(t *testing.T) {
 	}
 }
 
-func TestBranchSeedProjectsClaudeCwdNativeOnlyFromPrompt(t *testing.T) {
+func TestBranchSeedKeepsClaudeCwdNativeWithoutRuntimeAttestation(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
 	repo := domain.Repo{ID: "repo-claude-native-seed", DefaultBranch: "main", LocalPath: t.TempDir()}
@@ -367,12 +367,21 @@ func TestBranchSeedProjectsClaudeCwdNativeOnlyFromPrompt(t *testing.T) {
 			prompt.WriteString(block.Text)
 		}
 	}
-	if strings.Contains(prompt.String(), nativeBaseline) {
-		t.Fatalf("branch prompt duplicated Claude cwd memory:\n%s", prompt.String())
+	if got := strings.Count(prompt.String(), nativeBaseline); got != 1 {
+		t.Fatalf("portable Claude cwd memory count=%d, want one:\n%s", got, prompt.String())
 	}
 	for _, want := range []string{"FRESH LINEAGE SUMMARY", "RAW DEPARTURE REQUEST", "RAW DEPARTURE RESULT"} {
 		if !strings.Contains(prompt.String(), want) {
 			t.Fatalf("branch prompt lost %q:\n%s", want, prompt.String())
+		}
+	}
+	// The target runtime may disable auto memory after configuration or load a
+	// later file version. The seed must still carry the source baseline.
+	const targetRuntimeMemory = "DIFFERENT TARGET-RUNTIME MEMORY"
+	targetVisible := prompt.String() + targetRuntimeMemory
+	for _, want := range []string{nativeBaseline, targetRuntimeMemory} {
+		if !strings.Contains(targetVisible, want) {
+			t.Fatalf("target context lost %q after runtime memory changed:\n%s", want, targetVisible)
 		}
 	}
 	seedSnap, err := store.GetSnapshot(ctx, out.SnapshotID)
