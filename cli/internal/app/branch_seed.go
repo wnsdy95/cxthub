@@ -27,6 +27,7 @@ type BranchSeedService struct {
 	distiller     outbound.MemoryDistiller
 	codecs        map[domain.ProviderKind]outbound.ProviderCodec
 	materializers map[domain.ProviderKind]outbound.SessionMaterializer
+	memSources    map[domain.ProviderKind]outbound.MemorySource
 }
 
 // NewBranchSeedService creates BranchSeedService and injects dependencies.
@@ -36,8 +37,12 @@ func NewBranchSeedService(
 	distiller outbound.MemoryDistiller,
 	codecs map[domain.ProviderKind]outbound.ProviderCodec,
 	materializers map[domain.ProviderKind]outbound.SessionMaterializer,
+	memSources map[domain.ProviderKind]outbound.MemorySource,
 ) *BranchSeedService {
-	return &BranchSeedService{gitCtx: gitCtx, store: store, distiller: distiller, codecs: codecs, materializers: materializers}
+	return &BranchSeedService{
+		gitCtx: gitCtx, store: store, distiller: distiller,
+		codecs: codecs, materializers: materializers, memSources: memSources,
+	}
 }
 
 var _ inbound.SeedBranch = (*BranchSeedService)(nil)
@@ -64,6 +69,11 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
+	targetCwd := in.Cwd
+	if targetCwd == "" {
+		targetCwd = repo.LocalPath
+	}
+	targetCwd = materializationCwd(targetCwd)
 
 	// Layer 1: main head memory (explicit project understanding), including
 	// when the departure branch itself is main. The post-checkout hook
@@ -141,6 +151,18 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		promptCopy := domain.WithoutConversationDeltaFromSource(*mainPromptMem, fromSnap.ID)
 		mainPromptMem = &promptCopy
 	}
+	// A branch seed is a new provider session. Remove only a baseline that the
+	// target provider guarantees it will independently load for this working
+	// tree. The attached seedMemory below keeps the complete portable digest.
+	if native, ok := readTargetNativeMemory(
+		ctx, s.memSources, provider, targetCwd, fromDoc.CIR.Envelope.SessionOriginID,
+	); ok {
+		if mainPromptMem != nil {
+			projected := projectAutoLoadedNative(*mainPromptMem, native)
+			mainPromptMem = &projected
+		}
+		promptBranchMem = projectAutoLoadedNative(promptBranchMem, native)
+	}
 
 	// Seed CIR synthesis: [Layer1⊕Layer2 summary message] + [Layer3 bounded
 	// full session]. Any semantic events cut from Layer3 become a bounded bridge
@@ -159,11 +181,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	cir := domain.CIRDocument{Events: events}
 	cir.Envelope = fromDoc.CIR.Envelope // Inherit model, cwd, etc.
 	cir.Envelope.CIRVersion = domain.CIRVersionForEvents(events)
-	targetCwd := in.Cwd
-	if targetCwd == "" {
-		targetCwd = repo.LocalPath
-	}
-	if targetCwd = materializationCwd(targetCwd); targetCwd != "" {
+	if targetCwd != "" {
 		cir.Envelope.Cwd = targetCwd
 	}
 	cir.Envelope.GitBranch = in.NewBranch

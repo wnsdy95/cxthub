@@ -147,6 +147,83 @@ func TestWithoutConversationDeltaLeavesUnstructuredProviderTextUntouched(t *test
 	}
 }
 
+func TestWithoutExactSummaryBaselinePreservesDeltasAndUnrelatedFragments(t *testing.T) {
+	leftID := ContentHash("sha256:" + strings.Repeat("1", 64))
+	rightID := ContentHash("sha256:" + strings.Repeat("2", 64))
+	otherID := ContentHash("sha256:" + strings.Repeat("3", 64))
+	const baseline = "EXACT AUTO-LOADED PROVIDER BASELINE"
+	digest := MemoryDigest{Fragments: []MemoryFragment{
+		{
+			SourceSnapshot: leftID,
+			Summary: AppendExtractiveConversationDelta(baseline, RenderExtractiveFallbackSummary(
+				[]string{"Left lineage decision remains."}, nil)),
+		},
+		{
+			SourceSnapshot: rightID,
+			Summary: AppendExtractiveConversationDelta(baseline, RenderExtractiveFallbackSummary(
+				nil, []string{"Right lineage result remains."})),
+		},
+		{SourceSnapshot: otherID, Summary: "UNRELATED PROVIDER BASELINE"},
+	}}
+	digest = MergeDigests(MemoryDigest{}, digest)
+
+	got := WithoutExactSummaryBaseline(digest, baseline)
+	if strings.Contains(got.Summary, baseline) {
+		t.Fatalf("exact auto-loaded baseline remains:\n%s", got.Summary)
+	}
+	for _, want := range []string{
+		"Left lineage decision remains.", "Right lineage result remains.", "UNRELATED PROVIDER BASELINE",
+	} {
+		if !strings.Contains(got.Summary, want) {
+			t.Fatalf("baseline projection lost %q:\n%s", want, got.Summary)
+		}
+	}
+	if !strings.Contains(digest.Summary, baseline) {
+		t.Fatal("prompt projection mutated the stored digest")
+	}
+
+	legacy := MemoryDigest{SnapshotID: leftID, Summary: baseline}
+	if stripped := WithoutExactSummaryBaseline(legacy, baseline); stripped.Summary != "" {
+		t.Fatalf("legacy exact baseline = %q, want empty", stripped.Summary)
+	}
+	containing := MemoryDigest{SnapshotID: leftID, Summary: "prefix " + baseline}
+	if kept := WithoutExactSummaryBaseline(containing, baseline); kept.Summary != containing.Summary {
+		t.Fatalf("non-exact provider text changed: got %q want %q", kept.Summary, containing.Summary)
+	}
+}
+
+func TestWithoutAutoLoadedSummaryPrefixKeepsNativeTail(t *testing.T) {
+	id := ContentHash("sha256:" + strings.Repeat("4", 64))
+	const (
+		loadedPrefix = "AUTO-LOADED LINE ONE\nAUTO-LOADED LINE TWO"
+		nativeTail   = "NATIVE TAIL NOT LOADED BY PROVIDER"
+	)
+	full := loadedPrefix + "\n" + nativeTail
+	digest := MemoryDigest{
+		SnapshotID: id,
+		Summary: AppendExtractiveConversationDelta(full, RenderExtractiveFallbackSummary(
+			[]string{"Conversation delta remains."}, nil)),
+	}
+	digest = MergeDigests(MemoryDigest{}, digest)
+
+	got := WithoutAutoLoadedSummaryPrefix(digest, full, loadedPrefix)
+	if strings.Contains(got.Summary, loadedPrefix) {
+		t.Fatalf("safe auto-loaded prefix remains:\n%s", got.Summary)
+	}
+	for _, want := range []string{nativeTail, "Conversation delta remains."} {
+		if !strings.Contains(got.Summary, want) {
+			t.Fatalf("partial native projection lost %q:\n%s", want, got.Summary)
+		}
+	}
+	if !strings.Contains(digest.Summary, loadedPrefix) {
+		t.Fatal("partial prompt projection mutated stored digest")
+	}
+
+	if unchanged := WithoutAutoLoadedSummaryPrefix(digest, full, "not an exact prefix"); unchanged.Summary != digest.Summary {
+		t.Fatalf("non-prefix projection changed digest: got %q want %q", unchanged.Summary, digest.Summary)
+	}
+}
+
 func TestMergeDigestsPreservesUniqueSiblingFallbackItems(t *testing.T) {
 	left := MemoryDigest{
 		SnapshotID: ContentHash("sha256:" + strings.Repeat("c", 64)),

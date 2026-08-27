@@ -254,13 +254,16 @@ type PushObjectNegotiator interface {
 // MemorySource is a port that absorbs provider native memory (compatibility rules).
 //
 // Absorb if available: Claude MEMORY.md, Codex rollout_summary, etc. Input source for native-first strategy.
+// NativeMemory.Scope states whether that value is automatically available to
+// a new session in the working tree or remains bound to the source session.
 type MemorySource interface {
 	// Provider returns the provider this source is responsible for (claude|codex).
 	Provider() domain.ProviderKind
 
 	// ReadNative reads provider native memory for the exact provider session when
 	// sessionID is available. An empty sessionID falls back to the newest memory
-	// associated with cwd. Returns found=false if not found (no error).
+	// associated with cwd. Implementations must set NativeMemory.Scope. Returns
+	// found=false if not found (no error).
 	ReadNative(ctx context.Context, cwd, sessionID string) (native domain.NativeMemory, found bool, err error)
 }
 

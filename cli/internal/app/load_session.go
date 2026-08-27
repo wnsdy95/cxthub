@@ -579,7 +579,9 @@ const seedSummaryPrefix = "[cxt] This session was resumed from a branch context 
 //
 // Deduplication:
 //   - Previous generation seed summary (prefix CompactSummary) in the tail is removed — the new summary takes precedence.
-//   - If the digest summary matches the original native memory (e.g., MEMORY.md) of the target provider, it is omitted — the agent loads context itself at session start, so context re-injection is redundant.
+//   - An exact working-tree-scoped native baseline (e.g. Claude MEMORY.md) is
+//     omitted from the prompt copy because the target provider loads it again.
+//     Session-scoped memory remains portable across the new provider session ID.
 //   - KeyFacts noise such as whitespace-free tool tokens and legacy ingestion markers ("native memory:"/"absorbed from") is excluded from seed content.
 func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) (domain.CIRDocument, error) {
 	out, _, _, err := s.prependTrimDigestWithStatus(ctx, omitted, seed, snap, target, cwd, nil)
@@ -638,13 +640,10 @@ func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, om
 			seedProjected = true
 		}
 	}
-	// Skip native-memory duplicates when the summary repeats the ingested native memory verbatim.
-	if src, ok := s.memSources[target]; ok && digest.Summary != "" &&
-		(omitted.Envelope.SourceProvider == "" || target == omitted.Envelope.SourceProvider) {
-		if nm, found, _ := src.ReadNative(ctx, cwd, omitted.Envelope.SessionOriginID); found &&
-			strings.TrimSpace(digest.Summary) == strings.TrimSpace(nm.Text) {
-			digest.Summary = ""
-		}
+	// Stored memory remains untouched. Only the provider-visible copy may drop
+	// a baseline that the target guarantees it will load for this working tree.
+	if native, ok := readTargetNativeMemory(ctx, s.memSources, target, cwd, omitted.Envelope.SessionOriginID); ok {
+		digest = projectAutoLoadedNative(digest, native)
 	}
 	_, digestBudget := seedBudgets(target)
 	text := renderSeedDigest(digest, len(omitted.Events), digestBudget)
@@ -808,8 +807,7 @@ func seedWorthyFacts(facts []string) []string {
 	var out []string
 	for _, f := range facts {
 		t := strings.TrimSpace(f)
-		if t == "" || !strings.Contains(t, " ") ||
-			strings.HasPrefix(t, "native memory:") || strings.HasPrefix(t, "absorbed from") {
+		if t == "" || !strings.Contains(t, " ") || domain.IsNativeMemoryProvenanceFact(t) {
 			continue
 		}
 		out = append(out, t)
@@ -819,14 +817,12 @@ func seedWorthyFacts(facts []string) []string {
 
 // loadMemory performs memory-form restoration: native-first ingestion → distillation → provider memory file injection.
 func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) (inbound.LoadOutput, error) {
-	var native *domain.NativeMemory
-	if src, ok := s.memSources[target]; ok &&
-		(cir.Envelope.SourceProvider == "" || target == cir.Envelope.SourceProvider) {
-		if nm, found, _ := src.ReadNative(ctx, cwd, cir.Envelope.SessionOriginID); found {
-			native = &nm
-		}
+	targetNative, _ := readTargetNativeMemory(ctx, s.memSources, target, cwd, cir.Envelope.SessionOriginID)
+	var distillNative *domain.NativeMemory
+	if cir.Envelope.SourceProvider == "" || target == cir.Envelope.SourceProvider {
+		distillNative = targetNative
 	}
-	digest, err := s.distiller.Distill(ctx, cir.EffectiveContext(), native)
+	digest, err := s.distiller.Distill(ctx, cir.EffectiveContext(), distillNative)
 	if err != nil {
 		return inbound.LoadOutput{}, err
 	}
@@ -838,6 +834,7 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 		prior = boundCarriedDigest(prior)
 		digest = domain.MergeDigests(prior, digest)
 	}
+	digest = projectAutoLoadedNative(digest, targetNative)
 	if digest.Provider == "" {
 		digest.Provider = target
 	}

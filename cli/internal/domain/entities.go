@@ -350,6 +350,66 @@ func WithoutConversationDeltaFromSource(d MemoryDigest, source ContentHash) Memo
 	return d
 }
 
+// WithoutExactSummaryBaseline returns a provider-visible copy with one exact
+// baseline removed from every provenance fragment. Canonical conversation
+// deltas attached to that baseline remain, as do unrelated provider text,
+// facts, and tasks. Stored MemoryDigest objects must never use this projection:
+// it is only safe when the target provider independently auto-loads the exact
+// same baseline for the working tree.
+func WithoutExactSummaryBaseline(d MemoryDigest, exact string) MemoryDigest {
+	return WithoutAutoLoadedSummaryPrefix(d, exact, exact)
+}
+
+// WithoutAutoLoadedSummaryPrefix removes a provider-guaranteed prefix from an
+// otherwise exact native baseline. The suffix stays in the provider-visible
+// digest. Callers supply a conservative prefix consisting only of content the
+// target will load independently; fuzzy or partial baseline matches are never
+// accepted.
+func WithoutAutoLoadedSummaryPrefix(d MemoryDigest, full, loadedPrefix string) MemoryDigest {
+	full = strings.TrimSpace(full)
+	loadedPrefix = strings.TrimSpace(loadedPrefix)
+	if full == "" || loadedPrefix == "" || !strings.HasPrefix(full, loadedPrefix) {
+		return d
+	}
+	remaining := strings.TrimSpace(strings.TrimPrefix(full, loadedPrefix))
+	strip := func(summary string) string {
+		baseline, users, assistants, ok := splitExtractiveFallbackSummary(summary)
+		if ok {
+			if strings.TrimSpace(baseline) != full {
+				return summary
+			}
+			delta := RenderExtractiveFallbackSummary(users, assistants)
+			return AppendExtractiveConversationDelta(remaining, delta)
+		}
+		if strings.TrimSpace(summary) == full {
+			return remaining
+		}
+		return summary
+	}
+	if len(d.Fragments) == 0 {
+		d.Summary = strip(d.Summary)
+		return d
+	}
+	fragments := append([]MemoryFragment(nil), d.Fragments...)
+	for i := range fragments {
+		fragments[i].Summary = strip(fragments[i].Summary)
+	}
+	d.Fragments = fragments
+	renderMemoryFragments(&d)
+	return d
+}
+
+// IsNativeMemoryProvenanceFact recognizes source labels emitted by older cxt
+// distillers. They are transport metadata, not project knowledge, and should
+// be excluded only when rendering provider-visible prompts or instruction
+// files. Immutable stored digests retain them for compatibility.
+func IsNativeMemoryProvenanceFact(fact string) bool {
+	fact = strings.ToLower(strings.TrimSpace(fact))
+	return strings.HasPrefix(fact, "native memory:") ||
+		strings.HasPrefix(fact, "absorbed from") ||
+		strings.HasPrefix(fact, "ingested from")
+}
+
 const (
 	extractiveFallbackHeader           = "Conversation digest (extractive fallback; provider compaction summary unavailable):"
 	extractiveFallbackUsersHeader      = "Recent user intent:"
@@ -493,6 +553,17 @@ func dedupStrings(lists ...[]string) []string {
 	return out
 }
 
+// NativeMemoryScope describes whether provider-owned memory follows a working
+// tree or one provider session. The distinction controls prompt projection:
+// only WorkingTree memory is guaranteed to be loaded again in a newly
+// materialized session.
+type NativeMemoryScope string
+
+const (
+	NativeMemoryScopeWorkingTree NativeMemoryScope = "working_tree"
+	NativeMemoryScopeSession     NativeMemoryScope = "session"
+)
+
 // NativeMemory is a native memory value object created by the provider CLI (Section compatibility rules).
 // MemorySource.ReadNative returns the ingestion source used as the native-first input to MemoryDistiller.Distill.
 type NativeMemory struct {
@@ -500,6 +571,13 @@ type NativeMemory struct {
 	Provider ProviderKind `json:"provider"`
 	// Source is the origin identifier. Example: "claude:MEMORY.md", "codex:rollout_summary".
 	Source string `json:"source"`
+	// Scope states whether the provider auto-loads this value for every new
+	// session in the working tree or keeps it bound to the source session.
+	Scope NativeMemoryScope `json:"scope,omitempty"`
+	// AutoLoadedPrefix is a conservative, complete-line prefix guaranteed to be
+	// loaded in a new session. It may be shorter than Text when the provider has
+	// a startup memory limit. Empty means no bytes may be removed from prompts.
+	AutoLoadedPrefix string `json:"auto_loaded_prefix,omitempty"`
 	// Text is the native memory body (narrative text).
 	Text string `json:"text"`
 	// Structured is an optional structured key-value map (optional, can be nil).

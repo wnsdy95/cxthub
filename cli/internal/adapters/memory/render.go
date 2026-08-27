@@ -32,7 +32,13 @@ func renderMemoryMarkdown(d domain.MemoryDigest) string {
 
 	// Structured state receives fixed reservations before narrative. Lists are
 	// selected newest-first but rendered in their original order.
-	facts := renderMemoryListTail("Key facts", d.KeyFacts, available/6)
+	providerFacts := make([]string, 0, len(d.KeyFacts))
+	for _, fact := range d.KeyFacts {
+		if !domain.IsNativeMemoryProvenanceFact(fact) {
+			providerFacts = append(providerFacts, fact)
+		}
+	}
+	facts := renderMemoryListTail("Key facts", providerFacts, available/6)
 	tasks := renderMemoryListTail("Open tasks", d.OpenTasks, available/4)
 	remaining := available - len(facts) - len(tasks)
 	summary := ""

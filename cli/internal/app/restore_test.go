@@ -461,7 +461,10 @@ func TestLoadMemoryMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(string(data), userInstructions) || !strings.Contains(string(data), "cxt memory") || !strings.Contains(string(data), "NEWEST-NATIVE") || !strings.Contains(string(data), "do it") {
-		t.Fatalf("CLAUDE.md did not preserve user instructions and bounded latest memory")
+		t.Fatalf("CLAUDE.md did not preserve user instructions and current conversation")
+	}
+	if strings.Contains(string(data), "OLDEST-NATIVE") {
+		t.Fatalf("CLAUDE.md duplicated the safe cwd-native prefix that Claude already auto-loads")
 	}
 	if strings.Contains(string(data), "[cxt conversation delta v1]") {
 		t.Fatal("private memory marker leaked into provider instruction file")
