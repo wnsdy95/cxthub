@@ -80,11 +80,41 @@ func TestDistillRejectsAgentSummaryContainingNestedSeed(t *testing.T) {
 	}
 }
 
+func TestDistillAcceptsCleanLatestGenerationAfterSyntheticOlderGeneration(t *testing.T) {
+	old := `This session is being continued from a previous conversation.
+
+Summary:
+[cxt] This session was resumed from a branch context seed. 200 events were omitted.
+old inherited summary`
+	latest := `This session is being continued from a previous conversation.
+
+Summary:
+1. Primary Request and Intent:
+   Current provider request.
+2. Key Technical Concepts:
+   - Current provider fact remains.
+7. Pending Tasks:
+   - Current provider task remains.`
+	d := distillWithSummary(t, old+"\n\n"+latest)
+	if strings.Contains(d.Summary, "old inherited summary") || !strings.Contains(d.Summary, "Current provider request") {
+		t.Fatalf("clean latest provider generation was not selected:\n%s", d.Summary)
+	}
+	if !d.TasksAuthoritative || len(d.OpenTasks) != 1 || d.OpenTasks[0] != "Current provider task remains." {
+		t.Fatalf("latest provider structure = authority:%v tasks:%v", d.TasksAuthoritative, d.OpenTasks)
+	}
+}
+
 // TestDistillExtractsStructuredFacts fixes distillation extraction:
 // KeyFacts ← "Key Technical Concepts" top-level bullet (last occurrence, emphasis markers removed),
 // OpenTasks ← "Pending Tasks" bullet. Tool name is not mixed with KeyFacts.
 func TestDistillExtractsStructuredFacts(t *testing.T) {
 	d := distillWithSummary(t, structuredSummary)
+	if count := strings.Count(d.Summary, "This session is being continued from a previous conversation."); count != 1 {
+		t.Fatalf("cumulative provider summary generations = %d, want 1:\n%s", count, d.Summary)
+	}
+	if strings.Contains(d.Summary, "stale fact from older generation") || strings.Contains(d.Summary, "stale task") {
+		t.Fatalf("older cumulative provider generation survived:\n%s", d.Summary)
+	}
 
 	if len(d.KeyFacts) != 2 {
 		t.Fatalf("KeyFacts = %d items %v (want 2 — latest generation top-level bullet only)", len(d.KeyFacts), d.KeyFacts)
