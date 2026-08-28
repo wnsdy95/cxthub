@@ -13,6 +13,7 @@ import { CommitGraph } from './CommitGraph';
 import { AIBar, AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK, modelColor, modelLogo } from './AIBar';
 import { About, TeamSettings, SecretsPanel } from './About';
 import { Markdown } from './Markdown';
+import { MemoryPanel } from './MemoryPanel';
 import { saveBlob } from '../zip';
 import { useT, Rich } from '../i18n';
 
@@ -491,18 +492,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
               )}
             </div>
           )}
-          {memory && (
-            <details className="memory-box">
-              <summary className="label">◆ {t('context.compactMemory')}</summary>
-              <Markdown text={memory.summary} />
-              {(memory.key_facts ?? []).length > 0 && (
-                <ul>{(memory.key_facts ?? []).map((f, i) => <li key={i}>{f}</li>)}</ul>
-              )}
-              {(memory.open_tasks ?? []).length > 0 && (
-                <ul className="tasks">{(memory.open_tasks ?? []).map((t, i) => <li key={i}>☐ {t}</li>)}</ul>
-              )}
-            </details>
-          )}
+          {memory && <MemoryPanel memory={memory} />}
           {docQ.isLoading && <div className="skel" style={{ height: 60 }} />}
           {doc && inheritedCount > 0 && (
             <details className="inherited-block">
