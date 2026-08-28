@@ -76,6 +76,30 @@ func TestPGSmoke(t *testing.T) {
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repoID, WorkspaceID: ws.ID, GitRemoteURL: "https://github.com/acme/shared.git", DefaultBranch: "main"}); err != nil {
 		t.Fatalf("repo: %v", err)
 	}
+	// Pending target CAS and dismissed-field mutation must execute atomically in
+	// the production JSONB adapter, not only in the local FS implementation.
+	oldPending := domain.HashContent([]byte("pg pending old"))
+	newPending := domain.HashContent([]byte("pg pending new"))
+	const pendingSession = "pg-pending-cas"
+	if err := st.PutPending(ctx, repoID, domain.Pending{RepoID: repoID, SessionID: pendingSession, Target: newPending}); err != nil {
+		t.Fatalf("pending fixture: %v", err)
+	}
+	if result, err := st.CompareAndDeletePending(ctx, repoID, pendingSession, oldPending); err != nil || result != domain.PendingDeleteKept {
+		t.Fatalf("stale pending CAS: result=%v err=%v", result, err)
+	}
+	if found, err := st.SetPendingDismissed(ctx, repoID, pendingSession, true); err != nil || !found {
+		t.Fatalf("pending dismiss: found=%v err=%v", found, err)
+	}
+	if previous, err := st.ReplacePending(ctx, repoID, domain.Pending{RepoID: repoID, SessionID: pendingSession, Target: oldPending}); err != nil || previous != newPending {
+		t.Fatalf("pending replacement: previous=%s err=%v", previous, err)
+	}
+	pendings, err := st.ListPendings(ctx, repoID)
+	if err != nil || len(pendings) != 1 || pendings[0].Target != oldPending || !pendings[0].Dismissed {
+		t.Fatalf("pending sticky replacement: %+v err=%v", pendings, err)
+	}
+	if result, err := st.CompareAndDeletePending(ctx, repoID, pendingSession, oldPending); err != nil || result != domain.PendingDeleteDeleted {
+		t.Fatalf("matching pending CAS: result=%v err=%v", result, err)
+	}
 	// Bounded chunk staging: store/mutual exclusion dedup/repo ownership isolation verified by actual PG transaction.
 	chunkBody := []byte("pg smoke bounded chunk")
 	chunkHash := domain.HashContent(chunkBody)

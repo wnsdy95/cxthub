@@ -210,7 +210,7 @@ export function usePendings(repoId: string | null) {
   );
   return q;
 }
-// Push pending pointer — live state that changes with commits/pushes, refetches every 15s.
+// Mutable push-wait pointer; refetch every 15s. It does not prove process liveness.
 export function useUnsyncs(repoId: string | null) {
   const q = useQuery({
     queryKey: ['unsync', repoId],
@@ -223,15 +223,6 @@ export function useUnsyncs(repoId: string | null) {
     'u:' + ((q.data ?? []).map((u) => u.user + '/' + u.branch + '@' + u.target).sort().join(',')),
   );
   return q;
-}
-export function useDeletePending() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: { repoId: string; sessionId: string }) => api.deletePending(v.repoId, v.sessionId),
-    onSuccess: (_d, v) => {
-      void qc.invalidateQueries({ queryKey: ['pending', v.repoId] });
-    },
-  });
 }
 
 // useUndismissPending — re-add dismissed pending sessions to the list (undo dismiss).
@@ -313,7 +304,8 @@ export function useRepoView(repoId: string | null) {
     () => snapshots.filter((s) => !s.message?.startsWith('hook: ') || sharedIds.has(s.id)),
     [snapshots, sharedIds],
   );
-  // Uncommitted = live pending (undismissed) target hook captures that haven't yet reached the shared timeline. Determination is based on the same criteria as the On Hold list (orphanPendings) — target reachability + unsync cluster exclusion. If any criterion is off, the list and graph classify the same session differently.
+  // Uncommitted = undismissed hook captures that have not reached the shared
+  // timeline. This is durable pointer state, not a process-liveness signal.
   const pendings = usePendings(repoId).data;
   const unsyncs = useUnsyncs(repoId).data;
   const uncommittedIds = useMemo(() => {

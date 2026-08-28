@@ -137,8 +137,6 @@ export const api = {
     call<MemoryDigest>('GET', `/repos/${encodeURIComponent(repoId)}/memories/${encodeURIComponent(snapshotId)}`),
   listPending: (repoId: string) => call<Pending[]>('GET', `/repos/${encodeURIComponent(repoId)}/pending`),
   listUnsync: (repoId: string) => call<Unsync[]>('GET', `/repos/${encodeURIComponent(repoId)}/unsync`),
-  deletePending: (repoId: string, sessionId: string) =>
-    call<{ status: string }>('DELETE', `/repos/${encodeURIComponent(repoId)}/pending/${encodeURIComponent(sessionId)}`),
   // Empty object body: Server enforces application/json for this POST (CSRF 2nd defense — form submission blocking).
   undismissPending: (repoId: string, sessionId: string) =>
     call<{ status: string }>(

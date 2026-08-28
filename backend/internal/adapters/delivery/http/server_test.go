@@ -364,6 +364,53 @@ func TestHealthIsPublicAndMinimal(t *testing.T) {
 	}
 }
 
+func TestDeletePendingExpectedTargetCAS(t *testing.T) {
+	st := store.NewFSStore(t.TempDir())
+	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
+	ts := httptest.NewServer(NewServer(svc, idSvc).Handler())
+	defer ts.Close()
+
+	var me struct {
+		Username string `json:"username"`
+	}
+	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK {
+		t.Fatalf("me status=%d", code)
+	}
+	var ws struct {
+		Slug string `json:"slug"`
+	}
+	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/workspaces", map[string]any{"name": "PendingCAS"}, &ws); code != http.StatusOK {
+		t.Fatalf("workspace status=%d", code)
+	}
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	repoID := repoIDForRemoteURLForTest(remoteURL)
+	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
+		"id": repoID, "remote_url": remoteURL, "default_branch": "main",
+	}, nil); code != http.StatusOK {
+		t.Fatalf("repo status=%d", code)
+	}
+	target := domain.HashContent([]byte("pending target"))
+	if err := st.PutSnapshot(context.Background(), domain.Snapshot{
+		ID: target, RepoID: repoID, DocHash: target, Branch: "main", Message: "fixture",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.PutPending(context.Background(), repoID, "session-cas", domain.Pending{Target: target, Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID)) + "/pending/session-cas"
+	var out map[string]string
+	wrong := domain.HashContent([]byte("wrong target"))
+	if code := doJSON(t, http.MethodDelete, base+"?expect="+url.QueryEscape(string(wrong)), nil, &out); code != http.StatusOK || out["status"] != "kept" {
+		t.Fatalf("stale CAS status=%d body=%v", code, out)
+	}
+	out = nil
+	if code := doJSON(t, http.MethodDelete, base+"?expect="+url.QueryEscape(string(target)), nil, &out); code != http.StatusOK || out["status"] != "deleted" {
+		t.Fatalf("matching CAS status=%d body=%v", code, out)
+	}
+}
+
 func TestPushChunksRejectsOversizedJSONBody(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()

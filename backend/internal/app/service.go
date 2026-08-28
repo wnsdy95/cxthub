@@ -492,6 +492,14 @@ func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 // any other move (non-fast-forward/diverged) is rejected with ErrNonFastForward — except for Force.
 // Tags are immutable: Moving to another target is rejected without Force.
 func (s *Service) UpdateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
+	out, err := s.updateRef(ctx, in)
+	if err == nil && in.Ref.Kind == domain.RefBranch {
+		s.reconcileSharedPendingPointers(ctx, in.RepoID)
+	}
+	return out, err
+}
+
+func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.UpdateRefOutput{}, err
 	}
@@ -1262,80 +1270,38 @@ func (s *Service) PutPending(ctx context.Context, repoID domain.ContentHash, ses
 		}
 		return gerr
 	}
-	old := s.pendingTargetOf(ctx, repoID, sessionID)
-	// dismissed is sticky: CLI re-push (SyncPendings) overwriting a pointer without dismissed will not preserve the existing dismissed (user-hidden sessions continue to be hidden).
-	if !p.Dismissed && s.pendingDismissed(ctx, repoID, sessionID) {
-		p.Dismissed = true
-	}
 	p.UpdatedAt = time.Now().UTC()
-	if err := s.meta.PutPending(ctx, repoID, p); err != nil {
+	old, err := s.meta.ReplacePending(ctx, repoID, p)
+	if err != nil {
 		return err
 	}
 	s.gcHookLeaf(ctx, repoID, old, p.Target)
 	return nil
 }
 
-// DismissPending marks an ongoing session as "hidden in the pending list" (data deletion
+// DismissPending marks an uncommitted capture as "hidden in the pending list" (data deletion
 // is not performed — snapshot/doc/session history immutable, target preserved, GC protection
 // remains). No-op if already dismissed.
 func (s *Service) DismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
-	pendings, err := s.meta.ListPendings(ctx, repoID)
-	if err != nil {
-		return err
-	}
-	for _, p := range pendings {
-		if p.SessionID == sessionID {
-			if p.Dismissed {
-				return nil
-			}
-			p.Dismissed = true
-			return s.meta.PutPending(ctx, repoID, p)
-		}
-	}
-	return nil
+	_, err := s.meta.SetPendingDismissed(ctx, repoID, sessionID, true)
+	return err
 }
 
-// UndismissPending re-adds a hidden pending session to the list (inverse of dismiss —
-// only flag cleared, data immutable). Subsequent CLI re-push sticky preservation is naturally
-// cleared (pendingDismissed returns false). No-op if already undismissed.
+// UndismissPending re-adds a hidden pending capture to the list. Only the flag
+// changes; the target remains immutable, and subsequent replacements observe
+// the cleared flag atomically. No-op if already undismissed.
 func (s *Service) UndismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
-	pendings, err := s.meta.ListPendings(ctx, repoID)
-	if err != nil {
-		return err
-	}
-	for _, p := range pendings {
-		if p.SessionID == sessionID {
-			if !p.Dismissed {
-				return nil
-			}
-			p.Dismissed = false
-			return s.meta.PutPending(ctx, repoID, p)
-		}
-	}
-	return nil
+	_, err := s.meta.SetPendingDismissed(ctx, repoID, sessionID, false)
+	return err
 }
 
-// pendingDismissed returns whether the session's current pending is dismissed (false if not).
-func (s *Service) pendingDismissed(ctx context.Context, repoID domain.ContentHash, sessionID string) bool {
-	pendings, err := s.meta.ListPendings(ctx, repoID)
-	if err != nil {
-		return false
-	}
-	for _, p := range pendings {
-		if p.SessionID == sessionID {
-			return p.Dismissed
-		}
-	}
-	return false
-}
-
-// ListPendings returns the entire list of ongoing context pointers for the repo (for web display).
+// ListPendings returns the durable uncommitted capture pointers for the repo.
 func (s *Service) ListPendings(ctx context.Context, repoID domain.ContentHash) ([]domain.Pending, error) {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return nil, err
@@ -1343,7 +1309,9 @@ func (s *Service) ListPendings(ctx context.Context, repoID domain.ContentHash) (
 	return s.meta.ListPendings(ctx, repoID)
 }
 
-// DeletePending releases the in-progress pointer after commit incorporation or manual cleanup. It is idempotent.
+// DeletePending is the legacy unconditional commit-resolution path. Current
+// clients use CompareAndDeletePending so a delayed helper cannot erase a newer
+// capture. It is idempotent.
 // The hook capture leaf of the released pointer is also GC'd (if the commit doc has the same hash, the guard is preserved).
 func (s *Service) DeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
@@ -1355,6 +1323,82 @@ func (s *Service) DeletePending(ctx context.Context, repoID domain.ContentHash, 
 	}
 	s.gcHookLeaf(ctx, repoID, old, "")
 	return nil
+}
+
+// CompareAndDeletePending resolves only the capture the caller observed.
+// Ref-reachable history is never deleted: gcHookLeaf can remove only an
+// unreferenced hook leaf replaced by the commit. A concurrent newer pointer
+// returns false and remains untouched.
+func (s *Service) CompareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (bool, error) {
+	if err := domain.ValidateContentHash(repoID); err != nil {
+		return false, err
+	}
+	if err := domain.ValidateContentHash(expected); err != nil {
+		return false, err
+	}
+	if sessionID == "" || len(sessionID) > 128 {
+		return false, fmt.Errorf("%w: session_id is empty or too long", domain.ErrValidation)
+	}
+	result, err := s.meta.CompareAndDeletePending(ctx, repoID, sessionID, expected)
+	if err != nil {
+		return false, err
+	}
+	if result == domain.PendingDeleteDeleted {
+		s.gcHookLeaf(ctx, repoID, expected, "")
+	}
+	return result.Resolved(), nil
+}
+
+// reconcileSharedPendingPointers is a best-effort mutable-metadata cleanup
+// after branch/join ref movement. A pending target is resolved only when a
+// branch or server-managed session ref reaches it through natural or graft
+// parents. Compare-and-delete protects a newer capture that arrives during the
+// reachability walk.
+func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID domain.ContentHash) {
+	pendings, err := s.meta.ListPendings(ctx, repoID)
+	if err != nil || len(pendings) == 0 {
+		return
+	}
+	refs, err := s.meta.ListRefs(ctx, repoID)
+	if err != nil {
+		return
+	}
+	roots := make([]domain.ContentHash, 0, len(refs))
+	for _, ref := range refs {
+		if (ref.Kind == domain.RefBranch || ref.Kind == domain.RefSession) && ref.Target != "" {
+			roots = append(roots, ref.Target)
+		}
+	}
+	if len(roots) == 0 {
+		return
+	}
+	snaps, err := s.meta.ListSnapshots(ctx, repoID, "")
+	if err != nil {
+		return
+	}
+	parentsOf := make(map[domain.ContentHash][]domain.ContentHash, len(snaps))
+	for _, snap := range snaps {
+		parentsOf[snap.ID] = snap.ReachabilityParents()
+	}
+	shared := make(map[domain.ContentHash]bool, len(snaps))
+	stack := append([]domain.ContentHash(nil), roots...)
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if id == "" || shared[id] {
+			continue
+		}
+		shared[id] = true
+		stack = append(stack, parentsOf[id]...)
+	}
+	for _, p := range pendings {
+		if !shared[p.Target] {
+			continue
+		}
+		// The target is already ref-reachable, so no hook-leaf GC is needed (or
+		// allowed): immutable history remains and only the mutable pointer leaves.
+		_, _ = s.meta.CompareAndDeletePending(ctx, repoID, p.SessionID, p.Target)
+	}
 }
 
 // pendingTargetOf returns the current pending target of the session (empty string if none).
@@ -2044,6 +2088,7 @@ func (s *Service) Join(ctx context.Context, in inbound.JoinInput) (inbound.JoinO
 		return inbound.JoinOutput{}, err
 	}
 	out.Head = newHead
+	s.reconcileSharedPendingPointers(ctx, in.RepoID)
 	return out, nil
 }
 

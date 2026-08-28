@@ -166,7 +166,7 @@ export interface Snapshot {
   compaction_count?: number;
 }
 
-/** Context pointer in progress for each session — latest snapshot (branch ref outside). "Continuing conversation tail" if session is tip commit, otherwise render as "Uncommitted". */
+/** Uncommitted context pointer for each session — latest captured snapshot outside branch refs. This is durable capture state, not proof that a provider process is currently alive. */
 export interface Pending {
   repo_id: string;
   session_id: string;

@@ -165,7 +165,7 @@ func (f fixedBriefingSync) Connect(context.Context, inbound.SyncInput) (inbound.
 	return inbound.ConnectOutput{}, nil
 }
 
-func (f fixedBriefingSync) SyncPendings(context.Context, inbound.SyncInput, []string) (int, error) {
+func (f fixedBriefingSync) SyncPendings(context.Context, inbound.SyncInput, []inbound.PendingResolution) (int, error) {
 	return 0, nil
 }
 
@@ -217,7 +217,7 @@ func (s *promotionBriefingState) Connect(context.Context, inbound.SyncInput) (in
 	return inbound.ConnectOutput{}, nil
 }
 
-func (s *promotionBriefingState) SyncPendings(context.Context, inbound.SyncInput, []string) (int, error) {
+func (s *promotionBriefingState) SyncPendings(context.Context, inbound.SyncInput, []inbound.PendingResolution) (int, error) {
 	return 0, nil
 }
 

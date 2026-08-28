@@ -173,12 +173,10 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	if promote {
 		queuePromotion(repo.LocalPath, docHash, msg)
 	}
-	// Identify the previous hook-capture leaf that sliding capture or commit incorporation will replace, so it can be garbage-collected safely.
-	oldTarget := s.pendingTargetOf(ctx, repo.ID, cir.Envelope.SessionOriginID)
-
 	if in.Pending {
-		// Ongoing context: branch ref immutable — only update pending pointers (overwrite = "continuing conversation" slides to the latest). Commit snapshots delete to resolve.
-		if err := s.store.PutPending(ctx, domain.Pending{
+		// Uncommitted capture: branch ref remains immutable while the per-session
+		// pointer advances to the latest durable snapshot.
+		oldTarget, err := s.store.ReplacePending(ctx, domain.Pending{
 			RepoID:    repo.ID,
 			SessionID: cir.Envelope.SessionOriginID,
 			Branch:    branch,
@@ -186,12 +184,16 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 			Target:    docHash,
 			Author:    in.Author,
 			UpdatedAt: time.Now().UTC(),
-		}); err != nil {
+		})
+		if err != nil {
 			return inbound.SaveOutput{}, err
 		}
 		s.gcHookLeaf(ctx, repo.ID, oldTarget, docHash)
 		return inbound.SaveOutput{SnapshotID: docHash, Branch: branch, SessionID: cir.Envelope.SessionOriginID}, nil
 	}
+	// Identify the exact capture observed by this commit. Resolution below is a
+	// target CAS because a newer capture can arrive while the ref is moving.
+	oldTarget := s.pendingTargetOf(ctx, repo.ID, cir.Envelope.SessionOriginID)
 	// Never move a ref backward. Content-hash dedup may match an existing snapshot already reachable as an ancestor of the current head; in that case, leave the ref in place. This prevents repeated capture of an unchanged session (for example, an old rollout from another provider) from rolling the head back and orphaning intervening commits. Forward dedup still works for a replaceable hook leaf because that leaf is not an ancestor of the head.
 	if refTarget == "" || !s.reachable(ctx, repo.ID, refTarget, docHash) {
 		// Preserve sibling forward reachability (overlay graft): If the previous head is not an ancestor of the new head (multi-session commits — each session snapshot has the same parent, becoming siblings), the ref move orphans the entire previous head lineage (real case 578f170b4a). Server diverged push rule: connect the previous head to the new head's GraftParents (Parents immutable). Server replica propagates the graft queue on push (inventory-only push does not resend existing object metadata — same channel pattern as message promotion).
@@ -208,11 +210,21 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		// HEAD points to the current branch symbolically. Best-effort.
 		_ = s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: branch})
 	}
-	// Commit storage absorbs the session's progress pointer (snapshot = full session up to that point).
-	_ = s.store.DeletePending(ctx, repo.ID, cir.Envelope.SessionOriginID)
+	// Commit storage absorbs exactly the progress pointer observed above. A hook
+	// capture from the same still-running session may arrive while this save is
+	// moving the branch ref; deleting by session identity would erase that newer
+	// continuation. The target CAS preserves it for the next commit.
+	if oldTarget != "" {
+		_, _ = s.store.CompareAndDeletePending(ctx, repo.ID, cir.Envelope.SessionOriginID, oldTarget)
+	}
 	s.gcHookLeaf(ctx, repo.ID, oldTarget, docHash)
 
-	return inbound.SaveOutput{SnapshotID: docHash, Branch: branch, SessionID: cir.Envelope.SessionOriginID}, nil
+	return inbound.SaveOutput{
+		SnapshotID:            docHash,
+		Branch:                branch,
+		SessionID:             cir.Envelope.SessionOriginID,
+		ResolvedPendingTarget: oldTarget,
+	}, nil
 }
 
 // reachable determines if anc is an ancestor (or the same) of from using a local snapshot walk.

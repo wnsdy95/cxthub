@@ -335,7 +335,19 @@ func (s *FileStore) withSnapshotMutationLock(ctx context.Context, id domain.Cont
 	if err := domain.ValidateContentHash(id); err != nil {
 		return err
 	}
-	locksDir := filepath.Join(s.storeDir(), "locks", "snapshots")
+	return s.withMutationLock(ctx, "snapshots", hexOf(id), fn)
+}
+
+func (s *FileStore) withPendingMutationLock(ctx context.Context, sessionID string, fn func() error) error {
+	if sessionID == "" || len(sessionID) > 128 {
+		return domain.ErrHashMismatch
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	return s.withMutationLock(ctx, "pending", hex.EncodeToString(sum[:]), fn)
+}
+
+func (s *FileStore) withMutationLock(ctx context.Context, namespace, key string, fn func() error) error {
+	locksDir := filepath.Join(s.storeDir(), "locks", namespace)
 	if err := validateCxtDir(locksDir); err != nil {
 		return err
 	}
@@ -345,7 +357,7 @@ func (s *FileStore) withSnapshotMutationLock(ctx context.Context, id domain.Cont
 	if err := validateCxtDir(locksDir); err != nil {
 		return err
 	}
-	lockPath := filepath.Join(locksDir, hexOf(id)+".lock")
+	lockPath := filepath.Join(locksDir, key+".lock")
 	token := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 	ownerPath := filepath.Join(lockPath, "owner")
 	for {
@@ -920,7 +932,7 @@ func (s *FileStore) StashList(_ context.Context, _ string) ([]domain.StashEntry,
 	return s.readStash()
 }
 
-// --- in-progress context pointer (.cxt/pending/<sessionID>.json — session-specific upsert) ---
+// --- uncommitted capture pointer (.cxt/pending/<sessionID>.json — session-specific upsert) ---
 
 func (s *FileStore) pendingPath(sessionID string) string {
 	sum := sha256.Sum256([]byte(sessionID))
@@ -940,29 +952,54 @@ func (s *FileStore) legacyPendingPath(sessionID string) string {
 }
 
 // PutPending overwrites the session's pending pointer (hook capture "sliding" = this upsert).
-func (s *FileStore) PutPending(_ context.Context, p domain.Pending) error {
+func (s *FileStore) PutPending(ctx context.Context, p domain.Pending) error {
+	_, err := s.ReplacePending(ctx, p)
+	return err
+}
+
+// ReplacePending atomically returns and replaces the previous target. The
+// cross-process lock makes the returned value the exact predecessor of p,
+// allowing the caller to GC that leaf without leaking an interleaved capture.
+func (s *FileStore) ReplacePending(ctx context.Context, p domain.Pending) (domain.ContentHash, error) {
 	if p.SessionID == "" || len(p.SessionID) > 128 {
-		return errors.New("pending: session_id is required as the pointer key")
+		return "", errors.New("pending: session_id is required as the pointer key")
 	}
 	if err := domain.ValidateContentHash(p.Target); err != nil {
-		return err
+		return "", err
 	}
 	if p.RepoID != "" {
 		if err := domain.ValidateContentHash(domain.ContentHash(p.RepoID)); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if p.Branch != "" {
 		if err := domain.ValidateBranchName(p.Branch); err != nil {
-			return err
+			return "", err
 		}
 	}
-	data, _ := json.MarshalIndent(p, "", "  ")
-	if err := writeAtomic(s.pendingPath(p.SessionID), data); err != nil {
-		return err
-	}
-	_ = removeCxtFile(s.legacyPendingPath(p.SessionID))
-	return nil
+	var previous domain.ContentHash
+	err := s.withPendingMutationLock(ctx, p.SessionID, func() error {
+		current, found, err := s.pendingForSession(p.SessionID)
+		if err != nil {
+			return err
+		}
+		if found {
+			previous = current.Target
+			if current.Dismissed {
+				p.Dismissed = true
+			}
+		}
+		data, err := json.MarshalIndent(p, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := writeAtomic(s.pendingPath(p.SessionID), data); err != nil {
+			return err
+		}
+		_ = removeCxtFile(s.legacyPendingPath(p.SessionID))
+		return nil
+	})
+	return previous, err
 }
 
 // ListPendings returns all pendings in the repo (order not guaranteed — caller must sort).
@@ -1018,16 +1055,72 @@ func (s *FileStore) ListPendings(_ context.Context, _ string) ([]domain.Pending,
 }
 
 // DeletePending removes the session's pending state (no error if not present — idempotent).
-func (s *FileStore) DeletePending(_ context.Context, _ string, sessionID string) error {
-	if sessionID == "" || len(sessionID) > 128 {
-		return domain.ErrHashMismatch
-	}
+func (s *FileStore) DeletePending(ctx context.Context, _ string, sessionID string) error {
+	return s.withPendingMutationLock(ctx, sessionID, func() error {
+		return s.deletePendingFiles(sessionID)
+	})
+}
+
+func (s *FileStore) deletePendingFiles(sessionID string) error {
 	for _, path := range []string{s.pendingPath(sessionID), s.legacyPendingPath(sessionID)} {
 		if err := removeCxtFile(path); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// CompareAndDeletePending removes the expected capture only. PutPending and
+// both deletion paths share one cross-process lock, so a newer hook capture
+// cannot be lost between the comparison and unlink.
+func (s *FileStore) CompareAndDeletePending(ctx context.Context, _ string, sessionID string, expected domain.ContentHash) (bool, error) {
+	if err := domain.ValidateContentHash(expected); err != nil {
+		return false, err
+	}
+	resolved := false
+	err := s.withPendingMutationLock(ctx, sessionID, func() error {
+		current, found, err := s.pendingForSession(sessionID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			resolved = true
+			return nil
+		}
+		if current.Target != expected {
+			return nil
+		}
+		if err := s.deletePendingFiles(sessionID); err != nil {
+			return err
+		}
+		resolved = true
+		return nil
+	})
+	return resolved, err
+}
+
+func (s *FileStore) pendingForSession(sessionID string) (domain.Pending, bool, error) {
+	for _, path := range []string{s.pendingPath(sessionID), s.legacyPendingPath(sessionID)} {
+		data, err := readCxtFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return domain.Pending{}, false, err
+		}
+		var p domain.Pending
+		if err := json.Unmarshal(data, &p); err != nil {
+			return domain.Pending{}, false, err
+		}
+		if p.SessionID != sessionID {
+			return domain.Pending{}, false, domain.ErrHashMismatch
+		}
+		if err := domain.ValidateContentHash(p.Target); err != nil {
+			return domain.Pending{}, false, err
+		}
+		return p, true, nil
+	}
+	return domain.Pending{}, false, nil
 }
 
 // DeleteSnapshot removes the snapshot metadata object (hook capture leaf GC exclusive — idempotent).

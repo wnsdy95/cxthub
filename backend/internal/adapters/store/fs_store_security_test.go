@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -105,6 +106,117 @@ func TestFSStorePointerKeysDoNotCollapse(t *testing.T) {
 	unsyncs, err := st.ListUnsyncs(ctx, repo)
 	if err != nil || len(unsyncs) != 2 {
 		t.Fatalf("unsync collision: len=%d err=%v", len(unsyncs), err)
+	}
+}
+
+func TestFSStoreCompareAndDeletePendingUsesTargetCAS(t *testing.T) {
+	ctx := context.Background()
+	st := NewFSStore(t.TempDir())
+	repo := securityHash("0")
+	oldTarget := securityHash("1")
+	newTarget := securityHash("2")
+	const sessionID = "terminal/cas"
+
+	if err := st.PutPending(ctx, repo, domain.Pending{RepoID: repo, SessionID: sessionID, Target: newTarget}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.CompareAndDeletePending(ctx, repo, sessionID, oldTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != domain.PendingDeleteKept {
+		t.Fatal("stale expected target deleted a newer server pending capture")
+	}
+	pendings, err := st.ListPendings(ctx, repo)
+	if err != nil || len(pendings) != 1 || pendings[0].Target != newTarget {
+		t.Fatalf("newer pending was not preserved: %+v err=%v", pendings, err)
+	}
+
+	result, err = st.CompareAndDeletePending(ctx, repo, sessionID, newTarget)
+	if err != nil || result != domain.PendingDeleteDeleted {
+		t.Fatalf("matching target compare-delete: result=%v err=%v", result, err)
+	}
+	pendings, err = st.ListPendings(ctx, repo)
+	if err != nil || len(pendings) != 0 {
+		t.Fatalf("matching pending remains: %+v err=%v", pendings, err)
+	}
+}
+
+func TestFSStoreReplacePendingReturnsLinearizedPredecessor(t *testing.T) {
+	ctx := context.Background()
+	st := NewFSStore(t.TempDir())
+	repo := securityHash("f")
+	const sessionID = "terminal/replace"
+	initial := securityHash("0")
+	if err := st.PutPending(ctx, repo, domain.Pending{RepoID: repo, SessionID: sessionID, Target: initial}); err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 8
+	oldTargets := make(chan domain.ContentHash, writers)
+	var wg sync.WaitGroup
+	for i := 1; i <= writers; i++ {
+		target := securityHash(string(rune('0' + i)))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			old, err := st.ReplacePending(ctx, repo, domain.Pending{RepoID: repo, SessionID: sessionID, Target: target})
+			if err != nil {
+				t.Errorf("replace %s: %v", target, err)
+				return
+			}
+			oldTargets <- old
+		}()
+	}
+	wg.Wait()
+	close(oldTargets)
+
+	counts := make(map[domain.ContentHash]int, writers+1)
+	for old := range oldTargets {
+		counts[old]++
+	}
+	pendings, err := st.ListPendings(ctx, repo)
+	if err != nil || len(pendings) != 1 {
+		t.Fatalf("final pending: %+v err=%v", pendings, err)
+	}
+	counts[pendings[0].Target]++
+	for i := 0; i <= writers; i++ {
+		target := securityHash(string(rune('0' + i)))
+		if counts[target] != 1 {
+			t.Fatalf("target %s occurs %d times across predecessors+tip; replacement was not linearized", target, counts[target])
+		}
+	}
+}
+
+func TestFSStorePendingDismissMutationPreservesConcurrentTarget(t *testing.T) {
+	ctx := context.Background()
+	st := NewFSStore(t.TempDir())
+	repo := securityHash("0")
+	oldTarget := securityHash("1")
+	newTarget := securityHash("2")
+	const sessionID = "terminal/dismiss"
+
+	if err := st.PutPending(ctx, repo, domain.Pending{RepoID: repo, SessionID: sessionID, Target: oldTarget}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := st.SetPendingDismissed(ctx, repo, sessionID, true); err != nil || !changed {
+		t.Fatalf("dismiss: changed=%v err=%v", changed, err)
+	}
+	// A hook capture arriving after dismiss must advance the target while the
+	// server-owned hidden bit remains sticky.
+	if err := st.PutPending(ctx, repo, domain.Pending{RepoID: repo, SessionID: sessionID, Target: newTarget}); err != nil {
+		t.Fatal(err)
+	}
+	pendings, err := st.ListPendings(ctx, repo)
+	if err != nil || len(pendings) != 1 || pendings[0].Target != newTarget || !pendings[0].Dismissed {
+		t.Fatalf("dismiss/capture merge lost state: %+v err=%v", pendings, err)
+	}
+	if changed, err := st.SetPendingDismissed(ctx, repo, sessionID, false); err != nil || !changed {
+		t.Fatalf("undismiss: changed=%v err=%v", changed, err)
+	}
+	pendings, err = st.ListPendings(ctx, repo)
+	if err != nil || len(pendings) != 1 || pendings[0].Target != newTarget || pendings[0].Dismissed {
+		t.Fatalf("undismiss rewrote capture: %+v err=%v", pendings, err)
 	}
 }
 

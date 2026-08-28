@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Repo, Workspace, CIREvent, Snapshot, Pending } from '../types';
 import { useDoc, useMemory, useMe, useFork, useSnapDiff, useSearch, usePendings, useUnsyncs, useRepoView, useReflog } from '../hooks';
 import { navigate, wsPath } from '../route';
-import { holdCounts } from '../onhold';
+import { holdCounts, sharedReachable } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { mainlineOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { atLeast, canWriteAsset, type Role } from '../roles';
@@ -134,14 +134,17 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   const boundaries = useMemo(() => sessionBoundaries(allSnapshots), [allSnapshots]);
   // Compression boundary (context compression after parent commit) — separate marker from session boundary.
   const compactions = useMemo(() => compactionBoundaries(allSnapshots), [allSnapshots]);
-  // Pending context (in progress): same session as branch tip commit is its "continuation" dialog.
+  // Pending context: a capture from the same session as the branch tip is its
+  // uncommitted continuation. This does not imply that the provider is alive.
   // If there are unsync push commits, it's the unsync tip in the On Hold tab.
   // (Context tab shows only shared timeline — pending work is only indicated by badges). Orphan pending is also handled by On Hold.
   const pendings = usePendings(repo.id).data ?? [];
   const unsyncs = useUnsyncs(repo.id).data ?? [];
+  const sharedPendingTargets = useMemo(() => sharedReachable(refs, allSnapshots), [refs, allSnapshots]);
   const continuing = useMemo(() => {
     const m = new Map<string, Pending>(); // tip snapshot id → pending
     for (const p of pendings) {
+      if (p.dismissed || sharedPendingTargets.has(p.target)) continue;
       const head = refs.find((r) => r.kind === 'branch' && r.name === p.branch)?.target;
       if (!head) continue;
       if (unsyncs.some((u) => u.branch === p.branch && u.target !== head)) continue; // pending commit is ahead
@@ -149,7 +152,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
       if (tip?.session_id && tip.session_id === p.session_id) m.set(tip.id, p);
     }
     return m;
-  }, [pendings, unsyncs, refs, allSnapshots]);
+  }, [pendings, unsyncs, refs, allSnapshots, sharedPendingTargets]);
   // Branch-specific pending count (for tip badges) — same definition as rows in On Hold tab (onhold.ts shared).
   const holdCount = useMemo(() => holdCounts(refs, allSnapshots, unsyncs, pendings), [refs, allSnapshots, unsyncs, pendings]);
   const [snapId, setSnapId] = useState<string | null>(null);
@@ -190,7 +193,8 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   const docQ = useDoc(repo.id, selected?.doc_hash ?? null);
   const doc = docQ.data;
   const memory = useMemory(repo.id, selected?.id ?? null, Boolean(selected?.memory_hash)).data;
-  // Continuation tail: If the selected commit is the tip of the ongoing session, render the commit interval after the pending doc.
+  // Continuation tail: If the selected commit is the tip preceding an
+  // uncommitted capture, render only the events after that commit.
   const tailPending = selected ? continuing.get(selected.id) ?? null : null;
   const tailDoc = useDoc(repo.id, tailPending?.target ?? null).data;
   const tailStart = useMemo(() => {

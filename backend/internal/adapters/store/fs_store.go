@@ -45,7 +45,7 @@ type Store interface {
 //	dataDir/repos/<repoHex>/snapshots/<idHex>              (Snapshot metadata JSON; key = client-provided snap.ID)
 //	dataDir/repos/<repoHex>/refs/heads/<name> · refs/sessions/<name> · refs/tags/<name> · HEAD
 //	dataDir/repos/<repoHex>/memmeta/<snapHex>.json         (MemoryDigest metadata)
-//	dataDir/repos/<repoHex>/pending/<sessionID>.json       (in-progress context pointer)
+//	dataDir/repos/<repoHex>/pending/<sessionID>.json       (uncommitted capture pointer)
 //
 // Content-addressing uses client-provided hash as key (server is consumer of body integrity, data model Q3).
 type FSStore struct {
@@ -352,22 +352,39 @@ func (s *FSStore) legacyPendingPath(repoID domain.ContentHash, sessionID string)
 }
 
 // PutPending updates the session's pending context pointer.
-func (s *FSStore) PutPending(_ context.Context, repoID domain.ContentHash, p domain.Pending) error {
+func (s *FSStore) PutPending(ctx context.Context, repoID domain.ContentHash, p domain.Pending) error {
+	_, err := s.ReplacePending(ctx, repoID, p)
+	return err
+}
+
+func (s *FSStore) ReplacePending(_ context.Context, repoID domain.ContentHash, p domain.Pending) (domain.ContentHash, error) {
 	if err := validateHashes(repoID, p.Target); err != nil {
-		return err
+		return "", err
 	}
 	if p.RepoID != repoID || p.SessionID == "" || len(p.SessionID) > 128 {
-		return domain.ErrIntegrity
+		return "", domain.ErrIntegrity
+	}
+	lock := s.pendingLock(repoID, p.SessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	previous := domain.ContentHash("")
+	if current, found, err := s.pendingForSession(repoID, p.SessionID); err != nil {
+		return "", err
+	} else if found {
+		previous = current.Target
+		if current.Dismissed {
+			p.Dismissed = true
+		}
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := writeAtomic(s.pendingPath(repoID, p.SessionID), data); err != nil {
-		return err
+		return "", err
 	}
 	_ = os.Remove(s.legacyPendingPath(repoID, p.SessionID))
-	return nil
+	return previous, nil
 }
 
 // ListPendings returns the entire list of pending pointers in the repo.
@@ -424,12 +441,101 @@ func (s *FSStore) DeletePending(_ context.Context, repoID domain.ContentHash, se
 	if sessionID == "" || len(sessionID) > 128 {
 		return domain.ErrValidation
 	}
+	lock := s.pendingLock(repoID, sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	return s.deletePendingFiles(repoID, sessionID)
+}
+
+func (s *FSStore) deletePendingFiles(repoID domain.ContentHash, sessionID string) error {
 	for _, path := range []string{s.pendingPath(repoID, sessionID), s.legacyPendingPath(repoID, sessionID)} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+// CompareAndDeletePending removes only the expected capture. The same
+// per-pointer lock is used by PutPending and unconditional deletion, so a
+// concurrent replacement cannot be unlinked after this comparison.
+func (s *FSStore) CompareAndDeletePending(_ context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (domain.PendingDeleteResult, error) {
+	if err := validateHashes(repoID, expected); err != nil {
+		return domain.PendingDeleteKept, err
+	}
+	if sessionID == "" || len(sessionID) > 128 {
+		return domain.PendingDeleteKept, domain.ErrValidation
+	}
+	lock := s.pendingLock(repoID, sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	current, found, err := s.pendingForSession(repoID, sessionID)
+	if err != nil {
+		return domain.PendingDeleteKept, err
+	}
+	if !found {
+		return domain.PendingDeleteAbsent, nil
+	}
+	if current.Target != expected {
+		return domain.PendingDeleteKept, nil
+	}
+	if err := s.deletePendingFiles(repoID, sessionID); err != nil {
+		return domain.PendingDeleteKept, err
+	}
+	return domain.PendingDeleteDeleted, nil
+}
+
+func (s *FSStore) pendingForSession(repoID domain.ContentHash, sessionID string) (domain.Pending, bool, error) {
+	for _, path := range []string{s.pendingPath(repoID, sessionID), s.legacyPendingPath(repoID, sessionID)} {
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return domain.Pending{}, false, err
+		}
+		var p domain.Pending
+		if err := json.Unmarshal(data, &p); err != nil {
+			return domain.Pending{}, false, err
+		}
+		if p.RepoID != repoID || p.SessionID != sessionID {
+			return domain.Pending{}, false, domain.ErrIntegrity
+		}
+		if err := validateHash(p.Target); err != nil {
+			return domain.Pending{}, false, err
+		}
+		return p, true, nil
+	}
+	return domain.Pending{}, false, nil
+}
+
+func (s *FSStore) SetPendingDismissed(_ context.Context, repoID domain.ContentHash, sessionID string, dismissed bool) (bool, error) {
+	if err := validateHash(repoID); err != nil {
+		return false, err
+	}
+	if sessionID == "" || len(sessionID) > 128 {
+		return false, domain.ErrValidation
+	}
+	lock := s.pendingLock(repoID, sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	p, found, err := s.pendingForSession(repoID, sessionID)
+	if err != nil || !found {
+		return false, err
+	}
+	if p.Dismissed == dismissed {
+		return true, nil
+	}
+	p.Dismissed = dismissed
+	data, err := json.Marshal(p)
+	if err != nil {
+		return false, err
+	}
+	if err := writeAtomic(s.pendingPath(repoID, sessionID), data); err != nil {
+		return false, err
+	}
+	_ = os.Remove(s.legacyPendingPath(repoID, sessionID))
+	return true, nil
 }
 
 // fsSafeName converts user input to a file-safe string (path traversal defense).
@@ -1810,6 +1916,14 @@ var fsSnapshotLocks sync.Map
 func (s *FSStore) snapshotLock(repoID, id domain.ContentHash) *sync.Mutex {
 	key := s.dataDir + "\x00" + string(repoID) + "\x00" + string(id)
 	lock, _ := fsSnapshotLocks.LoadOrStore(key, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+var fsPendingLocks sync.Map
+
+func (s *FSStore) pendingLock(repoID domain.ContentHash, sessionID string) *sync.Mutex {
+	key := s.dataDir + "\x00" + string(repoID) + "\x00" + sessionID
+	lock, _ := fsPendingLocks.LoadOrStore(key, &sync.Mutex{})
 	return lock.(*sync.Mutex)
 }
 

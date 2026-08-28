@@ -67,11 +67,16 @@ type SessionStore interface {
 	StashPop(ctx context.Context, repoID string) (domain.StashEntry, error)
 	StashList(ctx context.Context, repoID string) ([]domain.StashEntry, error)
 
-	// Progress context pointer (session-based upsert — hook auto-capture endpoint, branch ref immutable).
+	// Uncommitted capture pointer (session-based upsert; branch ref immutable).
 	PutPending(ctx context.Context, p domain.Pending) error
+	// ReplacePending atomically upserts and returns the exact previous target.
+	// Capture uses it to GC only the leaf actually replaced.
+	ReplacePending(ctx context.Context, p domain.Pending) (domain.ContentHash, error)
 	ListPendings(ctx context.Context, repoID string) ([]domain.Pending, error)
-	// DeletePending removes a session's pending (no error if not present — idempotent).
-	DeletePending(ctx context.Context, repoID, sessionID string) error
+	// CompareAndDeletePending removes only the expected capture. It returns true
+	// when that capture was deleted or the pointer was already absent, and false
+	// when a concurrent newer target must be preserved.
+	CompareAndDeletePending(ctx context.Context, repoID, sessionID string, expected domain.ContentHash) (bool, error)
 
 	// DeleteSnapshot/DeleteDoc remove objects idempotently.
 	// Their only purpose is garbage collection of hook-capture leaves replaced by a later pending capture or commit;
@@ -222,9 +227,9 @@ type RemoteSync interface {
 	PushSettingsObject(ctx context.Context, repoID string, hash domain.ContentHash, bundle domain.SettingsBundle) error
 	PullSettingsObject(ctx context.Context, repoID string, hash domain.ContentHash) (domain.SettingsBundle, error)
 
-	// Synchronize in-progress context pointer (hook auto capture → web display. Resolve by deletion on commit).
+	// Synchronize durable uncommitted capture pointer (hook auto capture → web display; resolve on commit).
 	PushPending(ctx context.Context, repoID string, p domain.Pending) error
-	DeletePendingRemote(ctx context.Context, repoID string, sessionID string) error
+	CompareAndDeletePendingRemote(ctx context.Context, repoID string, sessionID string, expected domain.ContentHash) (bool, error)
 
 	// Push wait (unsync) pointer synchronization (local ahead commit → web On Hold display. git push to resolve).
 	PushUnsync(ctx context.Context, repoID string, u domain.Unsync) error

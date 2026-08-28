@@ -68,6 +68,7 @@ type Backend interface {
 	PutPending(ctx context.Context, repoID domain.ContentHash, sessionID string, p domain.Pending) error
 	ListPendings(ctx context.Context, repoID domain.ContentHash) ([]domain.Pending, error)
 	DeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
+	CompareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (bool, error)
 	DismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
 	UndismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
 	// GitHub PR merged webhook → append base context from head branch to base.
@@ -727,11 +728,20 @@ func (s *Server) deletePending(w http.ResponseWriter, r *http.Request) {
 	if _, handled := s.pendingGuard(w, r, sessionID); handled {
 		return
 	}
+	if expected := domain.ContentHash(r.URL.Query().Get("expect")); expected != "" {
+		deleted, err := s.b.CompareAndDeletePending(r.Context(), s.repoID(r), sessionID, expected)
+		status := "kept"
+		if deleted {
+			status = "deleted"
+		}
+		s.respond(w, map[string]string{"status": status}, err)
+		return
+	}
 	err := s.b.DeletePending(r.Context(), s.repoID(r), sessionID)
 	s.respond(w, map[string]string{"status": "deleted"}, err)
 }
 
-// dismissPending hides the in-progress session from the uncommitted list (no data deletion — dismissed flag).
+// dismissPending hides the capture from the uncommitted list (no data deletion — dismissed flag).
 func (s *Server) dismissPending(w http.ResponseWriter, r *http.Request) {
 	// POST without body can be cross-site submitted via HTML form (unlike PUT/DELETE) —
 	// applies state change common CSRF 2nd defense (application/json enforced) without decode middleware.
