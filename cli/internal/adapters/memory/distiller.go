@@ -41,14 +41,16 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 	for i, ev := range cir.Events {
 		switch ev.Kind {
 		case domain.EventMessage:
-			if ev.CompactSummary && len(ev.Blocks) > 0 && ev.Blocks[0].Text != "" &&
+			if ev.CompactSummary && len(ev.Blocks) > 0 && ev.Blocks[0].Text != "" {
 				// cxt-synthesized seed digests carry the CompactSummary marking but
 				// are bounded copies of inherited memory, not the agent's cumulative
 				// compression — promoting one here would source memorize from
 				// boilerplate and mislabel it as agent-written (#38).
-				!containsSyntheticSeedText(ev.Blocks[0].Text) {
-				compactSummary = ev.Blocks[0].Text // last wins: newest cumulative summary
-				compactSummaryAt = i
+				candidate := domain.LatestProviderCompactionGeneration(ev.Blocks[0].Text)
+				if !containsSyntheticSeedText(candidate) {
+					compactSummary = candidate // last wins: newest cumulative summary
+					compactSummaryAt = i
+				}
 			}
 			if ev.Role == "user" {
 				userMsgs++

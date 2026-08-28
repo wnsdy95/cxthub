@@ -1033,3 +1033,53 @@ func TestBoundCarriedDigestSanitizesFragmentStructuredState(t *testing.T) {
 		t.Fatalf("carry projection mutated stored digest: %#v", prior.Fragments[0])
 	}
 }
+
+func TestBoundCarriedDigestCollapsesMeasuredCumulativeProviderSummary(t *testing.T) {
+	source := domain.ContentHash("sha256:" + strings.Repeat("e", 64))
+	old := providerContinuationForTest + `
+
+Summary:
+1. Primary Request and Intent:
+   Historical context.
+7. Pending Tasks:
+   - Completed legacy task.`
+	latest := providerContinuationForTest + `
+
+Summary:
+1. Primary Request and Intent:
+   Current context.
+7. Pending Tasks:
+   - Another unattested legacy task.
+8. Current Work:
+   Latest result remains.`
+	digest := domain.MemoryDigest{Fragments: []domain.MemoryFragment{{
+		SourceSnapshot: source,
+		Summary:        strings.Repeat(old+"\n\n", 8) + latest,
+		OpenTasks:      []string{"Another unattested legacy task."},
+	}}}
+	digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
+
+	got := boundCarriedDigest(digest)
+	if strings.Count(got.Summary, providerContinuationForTest) != 1 {
+		t.Fatalf("carried cumulative generations survived:\n%s", got.Summary)
+	}
+	for _, removed := range []string{"Completed legacy task", "Another unattested legacy task"} {
+		if strings.Contains(got.Summary, removed) || containsExact(got.OpenTasks, removed+".") {
+			t.Fatalf("unattested task survived %q:\n%+v", removed, got)
+		}
+	}
+	if !strings.Contains(got.Summary, "Latest result remains.") {
+		t.Fatalf("latest provider result was lost:\n%s", got.Summary)
+	}
+}
+
+const providerContinuationForTest = "This session is being continued from a previous conversation."
+
+func containsExact(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}

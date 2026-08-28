@@ -370,6 +370,17 @@ new cxt seed text preserves authoritative task lists and explicit empty task
 tombstones during memoryless recovery; unmarked historical seed sections are
 never promoted to authority retroactively.
 
+Provider compaction summaries can themselves be cumulative and contain prior
+continuation generations verbatim. Fresh distillation keeps only the latest
+recognized generation, while inherited provenance fragments receive the same
+non-mutating prompt projection. Detailed `Pending Tasks` narrative is retained
+only for the latest authoritative task fragment; older or unattested task
+sections remain recoverable from their immutable memory/CIR objects but do not
+enter active context. Distinct sibling summaries are kept, and containment
+deduplication applies only when one canonical provider summary contains the
+other byte-for-byte. Opaque legacy digests without fragment provenance are not
+generation-truncated.
+
 ## Synchronization
 
 ### `cxt push`
