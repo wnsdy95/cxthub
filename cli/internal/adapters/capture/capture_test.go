@@ -66,6 +66,35 @@ func TestClaudeLocateNoSession(t *testing.T) {
 	}
 }
 
+func TestClaudeLocateSessionUsesExactIDInsteadOfNewerSibling(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := "/Users/work/proj"
+	dir := filepath.Join(home, ".claude", "projects", encodeCwd(cwd))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantedID := "11111111-1111-4111-8111-111111111111"
+	wanted := filepath.Join(dir, wantedID+".jsonl")
+	newer := filepath.Join(dir, "22222222-2222-4222-8222-222222222222.jsonl")
+	if err := os.WriteFile(wanted, []byte(`{"type":"user"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newer, []byte(`{"type":"user"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chtimes(wanted, time.Unix(1000, 0), time.Unix(1000, 0))
+	_ = os.Chtimes(newer, time.Unix(2000, 0), time.Unix(2000, 0))
+
+	got, err := NewClaudeCapture().LocateSession(context.Background(), cwd, wantedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != wanted {
+		t.Fatalf("exact session = %q, want %q", got, wanted)
+	}
+}
+
 func TestCodexLocateActiveSession(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -89,5 +118,36 @@ func TestCodexLocateActiveSession(t *testing.T) {
 	}
 	if filepath.Base(got) != filepath.Base(match) {
 		t.Fatalf("expected cwd-matching rollout, got %s", got)
+	}
+}
+
+func TestCodexLocateSessionUsesExactIDAndCwd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := "/Users/work/myrepo"
+	day := filepath.Join(home, ".codex", "sessions", "2026", "06", "30")
+	if err := os.MkdirAll(day, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantedID := "33333333-3333-4333-8333-333333333333"
+	wanted := filepath.Join(day, "rollout-old-"+wantedID+".jsonl")
+	newer := filepath.Join(day, "rollout-new-44444444-4444-4444-8444-444444444444.jsonl")
+	wrongCwd := filepath.Join(day, "rollout-wrong-"+wantedID+".jsonl")
+	for path, sessionCwd := range map[string]string{wanted: cwd, newer: cwd, wrongCwd: "/other"} {
+		line := `{"type":"session_meta","payload":{"cwd":"` + sessionCwd + `"}}` + "\n"
+		if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = os.Chtimes(wanted, time.Unix(1000, 0), time.Unix(1000, 0))
+	_ = os.Chtimes(newer, time.Unix(3000, 0), time.Unix(3000, 0))
+	_ = os.Chtimes(wrongCwd, time.Unix(4000, 0), time.Unix(4000, 0))
+
+	got, err := NewCodexCapture().LocateSession(context.Background(), cwd, wantedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != wanted {
+		t.Fatalf("exact session = %q, want %q", got, wanted)
 	}
 }

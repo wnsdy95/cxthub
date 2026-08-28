@@ -102,6 +102,43 @@ func (c *CodexCaptureSource) LocateActiveSession(_ context.Context, cwd string) 
 	return best, nil
 }
 
+// LocateSession returns the capture-eligible rollout with the exact native ID
+// and cwd. The ID is validated before entering a glob so it cannot alter the
+// search pattern.
+func (c *CodexCaptureSource) LocateSession(_ context.Context, cwd, sessionID string) (string, error) {
+	if !providerfs.ValidSessionID(sessionID) {
+		return "", domain.ErrNoActiveSession
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		abs = cwd
+	}
+	root, err := codexSessionsDir()
+	if err != nil {
+		return "", err
+	}
+	matches, err := filepath.Glob(filepath.Join(root, "*", "*", "*", "rollout-*-"+sessionID+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	candidates := map[string]int64{}
+	for _, path := range matches {
+		info, statErr := os.Lstat(path)
+		if statErr != nil || !info.Mode().IsRegular() || !providerfs.IsProviderSessionPath(path) {
+			continue
+		}
+		if sessionCwd, ok := rolloutCwd(path); !ok || sessionCwd != abs || providerfs.CaptureExcluded(cwd, path, info.Size()) {
+			continue
+		}
+		candidates[path] = info.ModTime().UnixNano()
+	}
+	best := pickLatest(candidates)
+	if best == "" {
+		return "", domain.ErrNoActiveSession
+	}
+	return best, nil
+}
+
 // SessionFilesForCwd returns all rollout session files in this cwd (for branch switch isolation). Unlike LocateActiveSession, it does not apply CaptureExcluded — isolation is unrelated to activity. Files already isolated are renamed with .jsonl.superseded and thus excluded.
 func (c *CodexCaptureSource) SessionFilesForCwd(_ context.Context, cwd string) []string {
 	abs, err := filepath.Abs(cwd)

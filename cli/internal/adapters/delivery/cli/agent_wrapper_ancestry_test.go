@@ -76,6 +76,27 @@ func TestProviderByRecency(t *testing.T) {
 	}
 }
 
+func TestSessionIDFromAgentArgs(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	for name, tt := range map[string]struct {
+		agent string
+		args  []string
+		want  string
+	}{
+		"codex resume":          {agent: "codex", args: []string{"resume", id, "--yolo"}, want: id},
+		"claude resume":         {agent: "claude", args: []string{"--resume", id}, want: id},
+		"claude inline resume":  {agent: "claude", args: []string{"--resume=" + id}, want: id},
+		"fresh session unknown": {agent: "codex", args: []string{"--yolo"}},
+		"invalid id rejected":   {agent: "codex", args: []string{"resume", "../../other"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := sessionIDFromAgentArgs(tt.agent, tt.args); got != tt.want {
+				t.Fatalf("session id = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParsePIDTable(t *testing.T) {
 	table := parsePIDTable([]byte("  50   40\n40 30\ngarbage line here\n 30    1\n\n"))
 	if len(table) != 3 || table[50] != 40 || table[40] != 30 || table[30] != 1 {

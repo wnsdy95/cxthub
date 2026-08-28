@@ -86,10 +86,11 @@ type TagRef interface {
 
 // StashInput is the input DTO for StashSession.Stash.
 type StashInput struct {
-	Cwd      string
-	Provider domain.ProviderKind // if empty, claude
-	Message  string              // empty means Git-style "WIP on <branch>"
-	Author   domain.TeamIdentity
+	Cwd         string
+	Provider    domain.ProviderKind // if empty, claude
+	SessionPath string              // exact wrapper-owned session; empty uses provider discovery
+	Message     string              // empty means Git-style "WIP on <branch>"
+	Author      domain.TeamIdentity
 }
 
 // StashOutput is the result of a stash operation.
