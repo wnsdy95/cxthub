@@ -425,7 +425,6 @@ func TestPortableReplaySeedCarriesExistingSyntheticMemoryBeforeReplacement(t *te
 		"PORTABLE PROVIDER BASELINE",
 		"SOLE SURVIVING PROJECT MEMORY",
 		"Preserve the only prior decision.",
-		"Verify replacement without recursion.",
 	} {
 		if got := strings.Count(text, want); got != 1 {
 			t.Fatalf("portable replacement count(%q)=%d, want one:\n%s", want, got, text)
@@ -433,6 +432,9 @@ func TestPortableReplaySeedCarriesExistingSyntheticMemoryBeforeReplacement(t *te
 	}
 	if got := strings.Count(text, seedSummaryPrefix); got != 1 {
 		t.Fatalf("portable replacement retained %d recursive seed markers, want one:\n%s", got, text)
+	}
+	if strings.Contains(text, "Verify replacement without recursion.") {
+		t.Fatalf("unmarked legacy seed task was re-attested:\n%s", text)
 	}
 }
 
@@ -716,14 +718,46 @@ func TestInsertTrimDigestProjectsExistingSeedWithoutStoredMemory(t *testing.T) {
 		"fresh omitted conversation",
 		"[prior cxt context]",
 		"The sole-memory fallback must retain structured decisions.",
-		"Verify the memoryless replay path.",
 	} {
 		if !strings.Contains(seedText, want) {
 			t.Fatalf("memoryless projection lost %q:\n%s", want, seedText)
 		}
 	}
+	if strings.Contains(seedText, "Verify the memoryless replay path.") {
+		t.Fatalf("memoryless recovery re-attested an unmarked legacy task:\n%s", seedText)
+	}
 	if out.Events[0].Locked == nil || out.Events[0].Locked.Blob != "PINNED" {
 		t.Fatalf("memoryless projection changed provider state: %+v", out.Events)
+	}
+}
+
+func TestSyntheticSeedTaskAuthorityRequiresVersionedHeading(t *testing.T) {
+	legacy := "project memory\n\n" + seedLegacyTasksHeading + "\n- Stale legacy task."
+	_, legacyTasks, legacyAuthority := syntheticSeedStructuredProjection(legacy)
+	if legacyAuthority || len(legacyTasks) != 1 {
+		t.Fatalf("legacy parse authority=%v tasks=%v", legacyAuthority, legacyTasks)
+	}
+
+	digest := domain.MemoryDigest{
+		Summary:            "provider memory",
+		OpenTasks:          []string{"Current attested task."},
+		TasksAuthoritative: true,
+	}
+	rendered := renderSeedDigest(digest, 1, 8<<10)
+	if !strings.Contains(rendered, seedAuthoritativeTasksHeading) {
+		t.Fatalf("rendered authoritative seed lacks versioned heading:\n%s", rendered)
+	}
+	_, tasks, authority := syntheticSeedStructuredProjection(rendered)
+	if !authority || len(tasks) != 1 || tasks[0] != "Current attested task." {
+		t.Fatalf("rendered authority round trip=%v tasks=%v", authority, tasks)
+	}
+
+	empty := digest
+	empty.OpenTasks = nil
+	rendered = renderSeedDigest(empty, 1, 8<<10)
+	_, tasks, authority = syntheticSeedStructuredProjection(rendered)
+	if !authority || len(tasks) != 0 {
+		t.Fatalf("empty authoritative tombstone round trip=%v tasks=%v\n%s", authority, tasks, rendered)
 	}
 }
 

@@ -141,3 +141,30 @@ func TestMCPProtocolRoundTrip(t *testing.T) {
 		t.Fatalf("search disconnected notice abnormal: %s", lines[5])
 	}
 }
+
+func TestMemoryToolOmitsUnattestedStructuredArchiveState(t *testing.T) {
+	srv := testServer()
+	st := srv.store.(fakeStore)
+	st.mems[h("m")] = domain.MemoryDigest{
+		SnapshotID: h("a"),
+		Summary:    "provider summary remains",
+		KeyFacts:   []string{"apply_patch", "The MCP projection keeps this project fact."},
+		OpenTasks:  []string{"Completed fallback task must stay archived."},
+	}
+	srv.store = st
+
+	got, err := srv.toolMemory(context.Background(), "", domain.Repo{ID: "repo-1", DefaultBranch: "main"}, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"apply_patch", "Completed fallback task"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("MCP memory rendered unattested state %q:\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"provider summary remains", "The MCP projection keeps this project fact."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("MCP memory lost %q:\n%s", want, got)
+		}
+	}
+}

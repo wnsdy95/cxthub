@@ -802,6 +802,10 @@ const memoryCarryListBudgetBytes = 64 << 10
 // >256KiB native memory or newly generated summary would be lossy on its first
 // storage and there would be no full ancestor object to recover it from.
 func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
+	// A carried digest becomes future provider context. Keep immutable archive
+	// objects untouched, but do not copy legacy tool facts or unattested task
+	// unions into another active generation.
+	d = domain.PromptStructuredProjection(d)
 	// Legacy memories can contain recursively materialized cxt seed summaries.
 	// They remain immutable on their ancestor snapshots, but must not be copied
 	// into the active projection again. Structured facts/tasks are retained and

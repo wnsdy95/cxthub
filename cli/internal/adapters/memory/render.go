@@ -19,6 +19,7 @@ const (
 // provider-facing projection is bounded so it cannot consume the next session's
 // context window before the user says anything.
 func renderMemoryMarkdown(d domain.MemoryDigest) string {
+	d = domain.PromptStructuredProjection(d)
 	header := managedMemoryBegin + "\n# cxt memory\n\n"
 	footer := ""
 	if d.SnapshotID != "" && domain.ValidateContentHash(d.SnapshotID) == nil {
@@ -32,13 +33,7 @@ func renderMemoryMarkdown(d domain.MemoryDigest) string {
 
 	// Structured state receives fixed reservations before narrative. Lists are
 	// selected newest-first but rendered in their original order.
-	providerFacts := make([]string, 0, len(d.KeyFacts))
-	for _, fact := range d.KeyFacts {
-		if !domain.IsNativeMemoryProvenanceFact(fact) {
-			providerFacts = append(providerFacts, fact)
-		}
-	}
-	facts := renderMemoryListTail("Key facts", providerFacts, available/6)
+	facts := renderMemoryListTail("Key facts", d.KeyFacts, available/6)
 	tasks := renderMemoryListTail("Open tasks", d.OpenTasks, available/4)
 	remaining := available - len(facts) - len(tasks)
 	summary := ""
