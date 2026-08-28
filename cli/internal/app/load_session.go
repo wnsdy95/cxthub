@@ -569,12 +569,23 @@ func renderPortableReplayDigest(digest domain.MemoryDigest, budget int) string {
 }
 
 func renderSeedDigestWithHeader(digest domain.MemoryDigest, header string, budget int) string {
+	digest = domain.PromptStructuredProjection(digest)
 	if len(header) >= budget {
 		return truncateUTF8Prefix(header, budget)
 	}
 
 	facts := renderSeedBulletSection("Key facts:", seedWorthyFacts(digest.KeyFacts), budget/6)
-	tasks := renderSeedBulletSection("Open tasks:", digest.OpenTasks, budget/4)
+	taskHeading := seedLegacyTasksHeading
+	if digest.TasksAuthoritative {
+		taskHeading = seedAuthoritativeTasksHeading
+	}
+	tasks := renderSeedBulletSection(taskHeading, digest.OpenTasks, budget/4)
+	if digest.TasksAuthoritative && tasks == "" && budget/4 > len(taskHeading) {
+		// Preserve an explicit all-tasks-completed tombstone if this prompt is
+		// later the sole recoverable cxt seed. Unmarked legacy headings are never
+		// upgraded to authority.
+		tasks = taskHeading + "\n"
+	}
 	remaining := budget - len(header) - len(facts) - len(tasks)
 
 	summaryBlock := ""
@@ -713,6 +724,11 @@ func replaceSyntheticSeedSummary(events []domain.Event, seed domain.Event, inser
 
 // `seedSummaryPrefix` is the identifier prefix for seed compression summary events — a marker to find and replace (remove) the previous generation summary in the tail when the next seed is generated. It is removed from materialized copies, while the saved doc remains unchanged.
 const seedSummaryPrefix = "[cxt] This session was resumed from a branch context seed."
+
+const (
+	seedLegacyTasksHeading        = "Open tasks:"
+	seedAuthoritativeTasksHeading = "Open tasks: <!-- cxt:tasks-authoritative-v1 -->"
+)
 
 // prependTrimDigest inserts a CompactSummary event for the omitted history before the recent raw tail.
 // This preserves decisions, constraints, and open tasks within the seed budget. The compact marker drives
@@ -918,7 +934,7 @@ func withoutSyntheticSeedStructuredSections(text string) string {
 		case "Key facts:":
 			section = sectionFacts
 			continue
-		case "Open tasks:":
+		case seedLegacyTasksHeading, seedAuthoritativeTasksHeading:
 			section = sectionTasks
 			continue
 		}
@@ -951,8 +967,13 @@ func syntheticSeedStructuredProjection(text string) (facts, tasks []string, task
 			facts = nil // latest rendered section wins
 			section = sectionFacts
 			continue
-		case "Open tasks:":
-			tasks = nil // an empty latest section is authoritative
+		case seedLegacyTasksHeading:
+			tasks = nil // latest legacy section wins, but remains unattested
+			tasksAuthoritative = false
+			section = sectionTasks
+			continue
+		case seedAuthoritativeTasksHeading:
+			tasks = nil // an empty marked section is an explicit tombstone
 			tasksAuthoritative = true
 			section = sectionTasks
 			continue
@@ -982,15 +1003,7 @@ func syntheticSeedStructuredProjection(text string) (facts, tasks []string, task
 // extracts sentence-form facts from compressed summaries, but legacy stored digests may contain tool-name lists and ingestion markers (empirically observed: "apply_patch", "unknown:Agent", "native memory: …") —
 // excluding whitespace-free single tokens and marker prefixes, only sentence-form facts pass.
 func seedWorthyFacts(facts []string) []string {
-	var out []string
-	for _, f := range facts {
-		t := strings.TrimSpace(f)
-		if t == "" || !strings.Contains(t, " ") || domain.IsNativeMemoryProvenanceFact(t) {
-			continue
-		}
-		out = append(out, t)
-	}
-	return out
+	return domain.PromptWorthyMemoryFacts(facts)
 }
 
 // loadMemory performs memory-form restoration: native-first ingestion → distillation → provider memory file injection.

@@ -359,6 +359,17 @@ kept as the long-term baseline, and meaningful user/assistant turns after that
 baseline are attached as a deterministic bounded conversation delta. Repeated
 baseline text is rendered once across merged lineage fragments.
 
+Immutable memory objects retain their original structured fields for audit and
+recovery. Before cxt places those fields in a provider prompt, branch seed,
+managed memory file, MCP response, or a carried generation, it creates a
+non-mutating prompt projection. Legacy tool/provenance entries are omitted, and
+an `open_tasks` list is treated as active work only when it came from a
+provider-structured extraction. Extractive or legacy task lists remain in the
+archive but are not reintroduced as instructions. A versioned hidden marker in
+new cxt seed text preserves authoritative task lists and explicit empty task
+tombstones during memoryless recovery; unmarked historical seed sections are
+never promoted to authority retroactively.
+
 ## Synchronization
 
 ### `cxt push`

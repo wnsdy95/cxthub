@@ -397,6 +397,11 @@ func isSyntheticReplayMessage(ev domain.Event) bool {
 // outgrows the digest budget. Bullets are reserved first and summaries keep
 // their newest tail; exact byte accounting guarantees the result fits maxBytes.
 func renderSeedText(from, to string, mainMem *domain.MemoryDigest, branchMem domain.MemoryDigest, maxBytes int) string {
+	branchMem = domain.PromptStructuredProjection(branchMem)
+	if mainMem != nil {
+		projected := domain.PromptStructuredProjection(*mainMem)
+		mainMem = &projected
+	}
 	header := fmt.Sprintf("[cxt seed] Branch-switch context: %s → %s\n", from, to) +
 		"This session is the seed of a new branch — continue from the summaries and the verbatim recent context below.\n"
 	trailer := "\n## Recent context (verbatim)\nThe events below are the actual conversation right before the switch.\n"

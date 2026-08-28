@@ -106,6 +106,25 @@ func TestRenderMemoryMarkdownOmitsLegacyNativeProvenanceFacts(t *testing.T) {
 	}
 }
 
+func TestRenderMemoryMarkdownOmitsUnattestedTasksAndToolFacts(t *testing.T) {
+	digest := domain.MemoryDigest{
+		Summary:   "provider summary remains",
+		KeyFacts:  []string{"apply_patch", "The managed memory keeps this project fact."},
+		OpenTasks: []string{"Completed fallback task must stay archived."},
+	}
+	got := renderMemoryMarkdown(digest)
+	for _, forbidden := range []string{"apply_patch", "Completed fallback task"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("managed memory rendered unattested state %q:\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"provider summary remains", "The managed memory keeps this project fact."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("managed memory lost %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestMemorySinkRejectsMalformedMarkersWithoutWrite(t *testing.T) {
 	for _, body := range []string{
 		"user\n" + testManagedMemoryBegin + "\nunterminated\n",
@@ -128,16 +147,17 @@ func TestMemorySinkRejectsMalformedMarkersWithoutWrite(t *testing.T) {
 
 func TestRenderedManagedMemoryIsBoundedAndKeepsNewestState(t *testing.T) {
 	digest := domain.MemoryDigest{
-		SnapshotID: domain.HashContent([]byte("managed-memory-snapshot")),
-		Summary:    "OLDEST-SUMMARY\n" + strings.Repeat("é", 80<<10) + "\nNEWEST-SUMMARY",
-		KeyFacts:   []string{strings.Repeat("old-fact ", 12<<10), "NEWEST-FACT"},
-		OpenTasks:  []string{strings.Repeat("old-task ", 12<<10), "NEWEST-TASK"},
+		SnapshotID:         domain.HashContent([]byte("managed-memory-snapshot")),
+		Summary:            "OLDEST-SUMMARY\n" + strings.Repeat("é", 80<<10) + "\nNEWEST-SUMMARY",
+		KeyFacts:           []string{strings.Repeat("old fact ", 12<<10), "NEWEST FACT remains"},
+		OpenTasks:          []string{strings.Repeat("old task ", 12<<10), "NEWEST TASK remains"},
+		TasksAuthoritative: true,
 	}
 	got := renderMemoryMarkdown(digest)
 	if len(got) > 64<<10 || !utf8.ValidString(got) {
 		t.Fatalf("managed memory bytes=%d valid=%v", len(got), utf8.ValidString(got))
 	}
-	for _, want := range []string{"NEWEST-SUMMARY", "NEWEST-FACT", "NEWEST-TASK", string(digest.SnapshotID)} {
+	for _, want := range []string{"NEWEST-SUMMARY", "NEWEST FACT remains", "NEWEST TASK remains", string(digest.SnapshotID)} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("bounded managed memory lost %q", want)
 		}

@@ -198,7 +198,8 @@ func TestTrimEventsForSeedNeverDropsOversizedLockedCompactionState(t *testing.T)
 func TestRenderSeedDigestIsBoundedAndKeepsRecentState(t *testing.T) {
 	const budget = 8 << 10
 	digest := domain.MemoryDigest{
-		Summary: strings.Repeat("résumé history ", 5000) + "\nLATEST DECISION: continue from the public repository.",
+		Summary:            strings.Repeat("résumé history ", 5000) + "\nLATEST DECISION: continue from the public repository.",
+		TasksAuthoritative: true,
 		KeyFacts: []string{
 			"the restored session must use the target working directory",
 		},
@@ -225,6 +226,31 @@ func TestRenderSeedDigestIsBoundedAndKeepsRecentState(t *testing.T) {
 	}
 	if !strings.Contains(got, "earlier summary omitted") {
 		t.Fatal("large summary was not visibly truncated")
+	}
+}
+
+func TestRenderSeedDigestOmitsUnattestedStructuredArchiveState(t *testing.T) {
+	digest := domain.MemoryDigest{
+		SnapshotID: domain.ContentHash("sha256:" + strings.Repeat("e", 64)),
+		Summary:    "provider summary remains visible",
+		KeyFacts: []string{
+			"apply_patch",
+			"The provider prompt keeps this project fact.",
+		},
+		OpenTasks: []string{
+			"Completed fallback task must not be injected.",
+		},
+	}
+	got := renderSeedDigest(digest, 10, 8<<10)
+	for _, forbidden := range []string{"apply_patch", "Completed fallback task"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("seed rendered unattested archive state %q:\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"provider summary remains visible", "The provider prompt keeps this project fact."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("seed lost %q:\n%s", want, got)
+		}
 	}
 }
 

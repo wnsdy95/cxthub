@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -901,9 +902,10 @@ func TestBoundCarriedDigestKeepsNewestTail(t *testing.T) {
 	}
 
 	big := domain.MemoryDigest{
-		Summary:   "OLDEST-GENERATION-HEAD\n" + strings.Repeat("m", 2*memoryCarryBudgetBytes) + "\nNEWEST-GENERATION-TAIL",
-		KeyFacts:  []string{"fact stays"},
-		OpenTasks: []string{"task stays"},
+		Summary:            "OLDEST-GENERATION-HEAD\n" + strings.Repeat("m", 2*memoryCarryBudgetBytes) + "\nNEWEST-GENERATION-TAIL",
+		KeyFacts:           []string{"fact stays"},
+		OpenTasks:          []string{"task stays"},
+		TasksAuthoritative: true,
 	}
 	got := boundCarriedDigest(big)
 	if len(got.Summary) > memoryCarryBudgetBytes {
@@ -952,10 +954,11 @@ func TestBoundCarriedDigestDropsNestedSeedNarrativeButKeepsStructure(t *testing.
 		KeyFacts:   []string{"The immutable parent rule remains in force."},
 		OpenTasks:  []string{"Verify the clean projection."},
 		Fragments: []domain.MemoryFragment{{
-			SourceSnapshot: source,
-			Summary:        "project history\n" + seedSummaryPrefix + " 99 events omitted\nrecursive history",
-			KeyFacts:       []string{"The immutable parent rule remains in force."},
-			OpenTasks:      []string{"Verify the clean projection."},
+			SourceSnapshot:     source,
+			Summary:            "project history\n" + seedSummaryPrefix + " 99 events omitted\nrecursive history",
+			KeyFacts:           []string{"The immutable parent rule remains in force."},
+			OpenTasks:          []string{"Verify the clean projection."},
+			TasksAuthoritative: true,
 		}},
 	}
 	carried := boundCarriedDigest(prior)
@@ -984,14 +987,49 @@ func TestBoundedCarryDoesNotTruncateFreshDigest(t *testing.T) {
 
 func TestBoundCarriedDigestBoundsStructuredListsFromNewestTail(t *testing.T) {
 	d := domain.MemoryDigest{
-		KeyFacts:  []string{"old-fact", strings.Repeat("f", memoryCarryListBudgetBytes), "new-fact"},
-		OpenTasks: []string{"old-task", strings.Repeat("t", memoryCarryListBudgetBytes), "new-task"},
+		KeyFacts:           []string{"old fact remains", strings.Repeat("oversized fact ", memoryCarryListBudgetBytes), "new fact remains"},
+		OpenTasks:          []string{"old task remains", strings.Repeat("oversized task ", memoryCarryListBudgetBytes), "new task remains"},
+		TasksAuthoritative: true,
 	}
 	got := boundCarriedDigest(d)
-	if len(got.KeyFacts) != 1 || got.KeyFacts[0] != "new-fact" {
+	if len(got.KeyFacts) != 1 || got.KeyFacts[0] != "new fact remains" {
 		t.Fatalf("facts carry = %v, want newest tail", got.KeyFacts)
 	}
-	if len(got.OpenTasks) != 1 || got.OpenTasks[0] != "new-task" {
+	if len(got.OpenTasks) != 1 || got.OpenTasks[0] != "new task remains" {
 		t.Fatalf("tasks carry = %v, want newest tail", got.OpenTasks)
+	}
+}
+
+func TestBoundCarriedDigestSanitizesFragmentStructuredState(t *testing.T) {
+	ancestorID := domain.ContentHash("sha256:" + strings.Repeat("c", 64))
+	currentID := domain.ContentHash("sha256:" + strings.Repeat("d", 64))
+	prior := domain.MemoryDigest{Fragments: []domain.MemoryFragment{
+		{
+			SourceSnapshot: ancestorID,
+			Summary:        "archived ancestor summary",
+			KeyFacts:       []string{"apply_patch", "The immutable parent contract remains active."},
+			OpenTasks:      []string{"Already completed fallback task."},
+		},
+		{
+			SourceSnapshot:     currentID,
+			Summary:            "current provider baseline",
+			OpenTasks:          []string{"Verify the authoritative carry projection."},
+			TasksAuthoritative: true,
+		},
+	}}
+	prior = domain.MergeDigests(domain.MemoryDigest{}, prior)
+
+	got := boundCarriedDigest(prior)
+	if !reflect.DeepEqual(got.KeyFacts, []string{"The immutable parent contract remains active."}) {
+		t.Fatalf("carried facts = %v", got.KeyFacts)
+	}
+	if !reflect.DeepEqual(got.OpenTasks, []string{"Verify the authoritative carry projection."}) {
+		t.Fatalf("carried tasks = %v", got.OpenTasks)
+	}
+	if len(got.Fragments[0].OpenTasks) != 0 {
+		t.Fatalf("non-authoritative task survived carry: %#v", got.Fragments[0])
+	}
+	if len(prior.Fragments[0].OpenTasks) != 1 || prior.Fragments[0].KeyFacts[0] != "apply_patch" {
+		t.Fatalf("carry projection mutated stored digest: %#v", prior.Fragments[0])
 	}
 }

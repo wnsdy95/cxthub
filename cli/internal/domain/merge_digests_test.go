@@ -192,6 +192,120 @@ func TestWithoutExactSummaryBaselinePreservesDeltasAndUnrelatedFragments(t *test
 	}
 }
 
+func TestPromptStructuredProjectionKeepsOnlyAttestedPromptState(t *testing.T) {
+	ancestorID := ContentHash("sha256:" + strings.Repeat("4", 64))
+	currentID := ContentHash("sha256:" + strings.Repeat("5", 64))
+	latestID := ContentHash("sha256:" + strings.Repeat("6", 64))
+	digest := MemoryDigest{
+		SnapshotID: latestID,
+		Provider:   ProviderCodex,
+		Fragments: []MemoryFragment{
+			{
+				SourceSnapshot: ancestorID,
+				Summary:        "PROVIDER BASELINE",
+				KeyFacts: []string{
+					"Overlay graft parents remain immutable.",
+					"apply_patch",
+					"native memory: claude:MEMORY.md",
+				},
+				OpenTasks: []string{
+					"Completed task from an extractive fallback.",
+					"<environment_context>runtime state</environment_context>",
+				},
+			},
+			{
+				SourceSnapshot: currentID,
+				Summary:        "CURRENT PROVIDER STATE",
+				KeyFacts:       []string{"The prompt projection must preserve valid project facts."},
+				OpenTasks: []string{
+					"Fix the remaining authoritative task.",
+					"Overlay graft parents remain immutable.",
+					"continue",
+					"[cxt] This session was resumed from a branch context seed.",
+				},
+				TasksAuthoritative: true,
+			},
+			{
+				SourceSnapshot: latestID,
+				KeyFacts:       []string{"A later non-authoritative fact is still useful project knowledge."},
+				OpenTasks:      []string{"A later fallback must not revive stale tasks."},
+			},
+		},
+	}
+	digest = MergeDigests(MemoryDigest{}, digest)
+	original := cloneMemoryDigestForTest(digest)
+
+	got := PromptStructuredProjection(digest)
+	if !reflect.DeepEqual(got.KeyFacts, []string{
+		"Overlay graft parents remain immutable.",
+		"The prompt projection must preserve valid project facts.",
+		"A later non-authoritative fact is still useful project knowledge.",
+	}) {
+		t.Fatalf("prompt facts = %#v", got.KeyFacts)
+	}
+	if !reflect.DeepEqual(got.OpenTasks, []string{"Fix the remaining authoritative task."}) {
+		t.Fatalf("prompt tasks = %#v", got.OpenTasks)
+	}
+	if len(got.Fragments) != 3 || len(got.Fragments[0].OpenTasks) != 0 ||
+		!reflect.DeepEqual(got.Fragments[1].OpenTasks, got.OpenTasks) || len(got.Fragments[2].OpenTasks) != 0 {
+		t.Fatalf("projected fragment tasks = %#v", got.Fragments)
+	}
+	for _, want := range []string{"PROVIDER BASELINE", "CURRENT PROVIDER STATE"} {
+		if !strings.Contains(got.Summary, want) {
+			t.Fatalf("prompt projection lost summary %q:\n%s", want, got.Summary)
+		}
+	}
+	if !reflect.DeepEqual(digest, original) {
+		t.Fatal("prompt projection mutated the stored digest")
+	}
+}
+
+func TestPromptStructuredProjectionPreservesAuthoritativeEmptyTaskTombstone(t *testing.T) {
+	ids := []ContentHash{
+		ContentHash("sha256:" + strings.Repeat("7", 64)),
+		ContentHash("sha256:" + strings.Repeat("8", 64)),
+		ContentHash("sha256:" + strings.Repeat("9", 64)),
+	}
+	digest := MemoryDigest{Fragments: []MemoryFragment{
+		{SourceSnapshot: ids[0], OpenTasks: []string{"Previously active task."}, TasksAuthoritative: true},
+		{SourceSnapshot: ids[1], OpenTasks: []string{"Unattested fallback task."}},
+		{SourceSnapshot: ids[2], TasksAuthoritative: true},
+	}}
+	digest = MergeDigests(MemoryDigest{}, digest)
+
+	got := PromptStructuredProjection(digest)
+	if len(got.OpenTasks) != 0 {
+		t.Fatalf("authoritative empty task state revived ancestors: %v", got.OpenTasks)
+	}
+	if len(got.Fragments) != 3 || !got.Fragments[2].TasksAuthoritative {
+		t.Fatalf("authoritative tombstone lost: %#v", got.Fragments)
+	}
+
+	legacy := MemoryDigest{OpenTasks: []string{"Ambiguous legacy task must stay archived."}}
+	if projected := PromptStructuredProjection(legacy); len(projected.OpenTasks) != 0 {
+		t.Fatalf("ambiguous legacy tasks entered prompt: %v", projected.OpenTasks)
+	}
+	authoritative := MemoryDigest{
+		OpenTasks:          []string{"Current attested task remains."},
+		TasksAuthoritative: true,
+	}
+	if projected := PromptStructuredProjection(authoritative); !reflect.DeepEqual(projected.OpenTasks, authoritative.OpenTasks) {
+		t.Fatalf("attested legacy task projection = %v", projected.OpenTasks)
+	}
+}
+
+func cloneMemoryDigestForTest(d MemoryDigest) MemoryDigest {
+	out := d
+	out.KeyFacts = append([]string(nil), d.KeyFacts...)
+	out.OpenTasks = append([]string(nil), d.OpenTasks...)
+	out.Fragments = append([]MemoryFragment(nil), d.Fragments...)
+	for i := range out.Fragments {
+		out.Fragments[i].KeyFacts = append([]string(nil), d.Fragments[i].KeyFacts...)
+		out.Fragments[i].OpenTasks = append([]string(nil), d.Fragments[i].OpenTasks...)
+	}
+	return out
+}
+
 func TestWithoutAutoLoadedSummaryPrefixKeepsNativeTail(t *testing.T) {
 	id := ContentHash("sha256:" + strings.Repeat("4", 64))
 	const (

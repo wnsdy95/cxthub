@@ -315,6 +315,7 @@ func (s *Server) toolMemory(ctx context.Context, cwd string, repo domain.Repo, r
 	if !ok {
 		return "No memory digest for this sequence (cxt memorize or automatic commit memorize required)", nil
 	}
+	d = domain.PromptStructuredProjection(d)
 	var b strings.Builder
 	fmt.Fprintf(&b, "memory digest (Snapshot %s based)\n\n%s\n", shortHash(d.SnapshotID), truncateRunes(d.Summary, 8000))
 	if len(d.KeyFacts) > 0 {

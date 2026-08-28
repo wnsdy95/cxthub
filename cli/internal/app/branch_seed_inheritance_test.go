@@ -39,6 +39,10 @@ func putBranchSeedSnapshot(
 	if memory != nil {
 		digest := *memory
 		digest.SnapshotID = docHash
+		// Production memorize normalizes fresh structured state into persisted
+		// fragments before PutMemory; keep this fixture on the same wire path so
+		// task authority survives JSON storage.
+		digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
 		memoryHash, err = store.PutMemory(ctx, digest)
 		if err != nil {
 			t.Fatalf("put memory: %v", err)
@@ -274,10 +278,11 @@ func TestBranchSeedFromMainIncludesStoredMemoryAndFullSession(t *testing.T) {
 		seedMessage("assistant", "main session latest answer", 3),
 	)
 	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", headEvents, []domain.ContentHash{parent}, &domain.MemoryDigest{
-		Summary:   "MAIN COMPACT MEMORY: preserve architecture and current decisions.",
-		KeyFacts:  []string{"main compact fact"},
-		OpenTasks: []string{"main compact task"},
-		Provider:  domain.ProviderCodex,
+		Summary:            "MAIN COMPACT MEMORY: preserve architecture and current decisions.",
+		KeyFacts:           []string{"main compact fact"},
+		OpenTasks:          []string{"main compact task"},
+		TasksAuthoritative: true,
+		Provider:           domain.ProviderCodex,
 	})
 	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
 
@@ -708,14 +713,16 @@ func TestBranchSeedMainMemoryAndConversationStayWithinBudget(t *testing.T) {
 // the main summary outgrew the digest budget.
 func TestRenderSeedTextKeepsBulletsAndNewestSummaryTail(t *testing.T) {
 	mainMem := &domain.MemoryDigest{
-		Summary:   "OLDEST-GENERATION-HEAD\n" + strings.Repeat("m", 4*seedDigestBudgetBytes) + "\nNEWEST-MAIN-TAIL",
-		KeyFacts:  []string{"main fact alpha beta"},
-		OpenTasks: []string{"main task gamma delta"},
+		Summary:            "OLDEST-GENERATION-HEAD\n" + strings.Repeat("m", 4*seedDigestBudgetBytes) + "\nNEWEST-MAIN-TAIL",
+		KeyFacts:           []string{"main fact alpha beta"},
+		OpenTasks:          []string{"main task gamma delta"},
+		TasksAuthoritative: true,
 	}
 	branchMem := domain.MemoryDigest{
-		Summary:   "OLD-BRANCH-HEAD\n" + strings.Repeat("b", 2*seedDigestBudgetBytes) + "\nNEWEST-BRANCH-TAIL",
-		KeyFacts:  []string{"branch fact epsilon zeta"},
-		OpenTasks: []string{"branch task eta theta"},
+		Summary:            "OLD-BRANCH-HEAD\n" + strings.Repeat("b", 2*seedDigestBudgetBytes) + "\nNEWEST-BRANCH-TAIL",
+		KeyFacts:           []string{"branch fact epsilon zeta"},
+		OpenTasks:          []string{"branch task eta theta"},
+		TasksAuthoritative: true,
 	}
 	out := renderSeedText("main", "fix/x", mainMem, branchMem, seedDigestBudgetBytes)
 	if len(out) > seedDigestBudgetBytes {
@@ -740,6 +747,25 @@ func TestRenderSeedTextKeepsBulletsAndNewestSummaryTail(t *testing.T) {
 		if strings.Contains(out, unwanted) {
 			t.Fatalf("seed text kept stale summary head %q instead of the newest tail", unwanted)
 		}
+	}
+}
+
+func TestRenderSeedTextOmitsUnattestedTasksFromBothLayers(t *testing.T) {
+	mainMem := &domain.MemoryDigest{
+		Summary:   "main provider state",
+		OpenTasks: []string{"Stale main fallback task."},
+	}
+	branchMem := domain.MemoryDigest{
+		Summary:            "branch provider state",
+		OpenTasks:          []string{"Current branch task remains."},
+		TasksAuthoritative: true,
+	}
+	out := renderSeedText("main", "fix/x", mainMem, branchMem, seedDigestBudgetBytes)
+	if strings.Contains(out, "Stale main fallback task") {
+		t.Fatalf("branch seed injected unattested main task:\n%s", out)
+	}
+	if !strings.Contains(out, "Current branch task remains") {
+		t.Fatalf("branch seed lost authoritative task:\n%s", out)
 	}
 }
 
