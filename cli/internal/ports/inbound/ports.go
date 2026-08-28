@@ -52,13 +52,19 @@ type SyncRepo interface {
 	Pull(ctx context.Context, in SyncInput) (SyncOutput, error)
 	// Connect immediately registers the origin repo with the server (for remote add connection check).
 	Connect(ctx context.Context, in SyncInput) (ConnectOutput, error)
-	// SyncPendings reflects the in-progress context pointer to the server (hook detached helper path).
-	// resolveSessions is a list of sessions to be removed from the remote after commit resolution.
-	SyncPendings(ctx context.Context, in SyncInput, resolveSessions []string) (int, error)
+	// SyncPendings reflects durable uncommitted capture pointers to the server (hook detached helper path).
+	// resolutions carry the exact capture absorbed by a commit, so a detached
+	// helper cannot delete a newer capture from the same still-running session.
+	SyncPendings(ctx context.Context, in SyncInput, resolutions []PendingResolution) (int, error)
 	// ResolveRemoteBranch queries the remote (server) branch ref and prepares it for fetch-only if the target snapshot object is not present locally (for web fork connection). Returns ErrNotFound if not found.
 	ResolveRemoteBranch(ctx context.Context, in SyncInput, branch string) (domain.Ref, error)
 	// AppendBranch appends the server branch ref to the target (lossless graft) — path for merging PR context into a branch. On success, it reconciles the authoritative graft path and mirrors the local ref only if doing so preserves local history. Already reflected (behind) targets are rejected by the server as non_fast_forward — caller treats them as idempotent no-ops.
 	AppendBranch(ctx context.Context, in SyncInput, branch string, target domain.ContentHash) error
+}
+
+type PendingResolution struct {
+	SessionID      string
+	ExpectedTarget domain.ContentHash
 }
 
 // TagInput is the input DTO for TagRef.Tag.
@@ -181,6 +187,10 @@ type SaveOutput struct {
 	Branch string
 	// SessionID is the original session identifier captured (for pending resolution and matching).
 	SessionID string
+	// ResolvedPendingTarget is the exact pending capture absorbed by this save.
+	// Empty means no pending pointer existed. Detached remote cleanup must use
+	// this as its CAS expectation instead of deleting by session identity alone.
+	ResolvedPendingTarget domain.ContentHash
 }
 
 // ForkInput is the input DTO of ForkSession.Fork.

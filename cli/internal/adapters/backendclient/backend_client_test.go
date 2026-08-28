@@ -71,6 +71,31 @@ func TestGraftSnapshotParentsSendsExpectedSequence(t *testing.T) {
 	}
 }
 
+func TestCompareAndDeletePendingRemoteSendsExpectedTarget(t *testing.T) {
+	repo := string(domain.HashContent([]byte("repo")))
+	expected := domain.HashContent([]byte("expected pending"))
+	const sessionID = "session/with slash"
+	var gotMethod, gotPath, gotExpected string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.EscapedPath()
+		gotExpected = r.URL.Query().Get("expect")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "kept"})
+	}))
+	defer ts.Close()
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	deleted, err := c.CompareAndDeletePendingRemote(context.Background(), repo, sessionID, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted {
+		t.Fatal("kept response reported deletion")
+	}
+	if gotMethod != http.MethodDelete || !strings.HasSuffix(gotPath, "/pending/session%2Fwith%20slash") || gotExpected != string(expected) {
+		t.Fatalf("request method=%q path=%q expect=%q", gotMethod, gotPath, gotExpected)
+	}
+}
+
 func TestGetSnapshotRemoteValidatesIdentity(t *testing.T) {
 	repo := string(domain.HashContent([]byte("repo")))
 	id := domain.HashContent([]byte("snapshot"))

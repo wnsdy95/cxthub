@@ -1927,7 +1927,7 @@ paths:
       - $ref: "#/components/parameters/repoID"
     get:
       operationId: listPending
-      summary: List of active context pointers — puller and above (for web display)
+      summary: List of uncommitted context pointers — puller and above (for web display)
       tags: [assets]
       responses:
         "200":
@@ -1956,10 +1956,32 @@ paths:
         "422": { description: "session_id/target missing, or target snapshot non-existent (object push prerequisite — pointer/object non-atomicity fail-closed)" }
     delete:
       operationId: deletePending
-      summary: Idempotently resolve a pointer after commit incorporation or manual cleanup — member and above
+      summary: Resolve a pointer after commit incorporation or reachability reconciliation — member and above
+      description: |
+        Without `expect`, deletion is idempotent and unconditional for legacy
+        commit-resolution callers. With `expect`, the pointer is removed only
+        when its current target matches that content hash; a concurrent newer
+        capture returns `status: kept` and remains intact.
       tags: [assets]
+      parameters:
+        - name: expect
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ContentHash" }
+          description: "Expected pending target for compare-and-delete."
       responses:
-        "200": { description: OK }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+                    enum: [deleted, kept]
 
   /repos/{repoID}/snapshots/{id}/promote:
     parameters:
@@ -2063,7 +2085,7 @@ paths:
       - $ref: "#/components/parameters/sessionID"
     post:
       operationId: dismissPending
-      summary: Hide an in-progress session from the uncommitted list without deleting data (sticky) — member or higher
+      summary: Hide an uncommitted capture from the list without deleting data (sticky) — member or higher
       description: "Sets dismissed=true. Snapshot, document, and session history remain intact, and a later CLI re-push does not make the item visible again."
       tags: [assets]
       responses:

@@ -1532,26 +1532,87 @@ func (s *PostgresStore) GetSettingsBundle(ctx context.Context, repoID domain.Con
 	return b, nil
 }
 
-// PutPending upserts the session's ongoing context pointer.
+// PutPending upserts the session's latest uncommitted capture pointer.
 func (s *PostgresStore) PutPending(ctx context.Context, repoID domain.ContentHash, p domain.Pending) error {
-	if err := validateHashes(repoID, p.Target); err != nil {
-		return err
-	}
-	if p.RepoID != repoID || p.SessionID == "" || len(p.SessionID) > 128 {
-		return domain.ErrIntegrity
-	}
-	data, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-	_, err = s.pool.Exec(ctx,
-		`INSERT INTO pending_contexts (repo_id, session_id, data) VALUES ($1,$2,$3)
-		 ON CONFLICT (repo_id, session_id) DO UPDATE SET data = EXCLUDED.data`,
-		string(repoID), p.SessionID, string(data))
+	_, err := s.ReplacePending(ctx, repoID, p)
 	return err
 }
 
-// ListPendings returns the entire list of ongoing pointers in the repo.
+// ReplacePending linearizes capture replacement on the pointer row and returns
+// its exact predecessor. INSERT ... ON CONFLICT DO NOTHING establishes a row
+// when absent; otherwise SELECT FOR UPDATE serializes replacements, dismiss
+// mutation, and target-CAS deletion without a check-then-act window.
+func (s *PostgresStore) ReplacePending(ctx context.Context, repoID domain.ContentHash, p domain.Pending) (domain.ContentHash, error) {
+	if err := validateHashes(repoID, p.Target); err != nil {
+		return "", err
+	}
+	if p.RepoID != repoID || p.SessionID == "" || len(p.SessionID) > 128 {
+		return "", domain.ErrIntegrity
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		return "", err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for {
+		var raw string
+		err = tx.QueryRow(ctx,
+			`SELECT data FROM pending_contexts
+			 WHERE repo_id=$1 AND session_id=$2 FOR UPDATE`,
+			string(repoID), p.SessionID).Scan(&raw)
+		if err == nil {
+			var current domain.Pending
+			if err := json.Unmarshal([]byte(raw), &current); err != nil {
+				return "", err
+			}
+			if current.RepoID != repoID || current.SessionID != p.SessionID {
+				return "", domain.ErrIntegrity
+			}
+			if err := validateHash(current.Target); err != nil {
+				return "", err
+			}
+			if current.Dismissed {
+				p.Dismissed = true
+				data, err = json.Marshal(p)
+				if err != nil {
+					return "", err
+				}
+			}
+			if _, err := tx.Exec(ctx,
+				`UPDATE pending_contexts SET data=$3 WHERE repo_id=$1 AND session_id=$2`,
+				string(repoID), p.SessionID, string(data)); err != nil {
+				return "", err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return "", err
+			}
+			return current.Target, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO pending_contexts (repo_id, session_id, data)
+			 VALUES ($1,$2,$3) ON CONFLICT (repo_id, session_id) DO NOTHING`,
+			string(repoID), p.SessionID, string(data))
+		if err != nil {
+			return "", err
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return "", nil
+	}
+}
+
+// ListPendings returns all durable uncommitted capture pointers in the repo.
 func (s *PostgresStore) ListPendings(ctx context.Context, repoID domain.ContentHash) ([]domain.Pending, error) {
 	if err := validateHash(repoID); err != nil {
 		return nil, err
@@ -1589,6 +1650,50 @@ func (s *PostgresStore) DeletePending(ctx context.Context, repoID domain.Content
 	}
 	_, err := s.pool.Exec(ctx, `DELETE FROM pending_contexts WHERE repo_id=$1 AND session_id=$2`, string(repoID), sessionID)
 	return err
+}
+
+func (s *PostgresStore) CompareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (domain.PendingDeleteResult, error) {
+	if err := validateHashes(repoID, expected); err != nil {
+		return domain.PendingDeleteKept, err
+	}
+	if sessionID == "" || len(sessionID) > 128 {
+		return domain.PendingDeleteKept, domain.ErrValidation
+	}
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM pending_contexts
+		 WHERE repo_id=$1 AND session_id=$2 AND data->>'target'=$3`,
+		string(repoID), sessionID, string(expected))
+	if err != nil {
+		return domain.PendingDeleteKept, err
+	}
+	if tag.RowsAffected() > 0 {
+		return domain.PendingDeleteDeleted, nil
+	}
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pending_contexts WHERE repo_id=$1 AND session_id=$2)`,
+		string(repoID), sessionID).Scan(&exists); err != nil {
+		return domain.PendingDeleteKept, err
+	}
+	if exists {
+		return domain.PendingDeleteKept, nil
+	}
+	return domain.PendingDeleteAbsent, nil
+}
+
+func (s *PostgresStore) SetPendingDismissed(ctx context.Context, repoID domain.ContentHash, sessionID string, dismissed bool) (bool, error) {
+	if err := validateHash(repoID); err != nil {
+		return false, err
+	}
+	if sessionID == "" || len(sessionID) > 128 {
+		return false, domain.ErrValidation
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE pending_contexts
+		 SET data=jsonb_set(data, '{dismissed}', to_jsonb($3::boolean), true)
+		 WHERE repo_id=$1 AND session_id=$2`,
+		string(repoID), sessionID, dismissed)
+	return tag.RowsAffected() > 0, err
 }
 
 // PutUnsync upserts the push pending pointer.

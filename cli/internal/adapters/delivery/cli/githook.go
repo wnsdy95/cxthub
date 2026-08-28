@@ -92,7 +92,7 @@ func commitProviders(cwd string) []string {
 func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (int, error) {
 	saved := 0
 	var lastErr error
-	var resolved []string
+	var resolved []inbound.PendingResolution
 	for _, p := range commitProviders(cwd) {
 		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: p, Message: message, Author: c.Identity})
 		if err != nil {
@@ -106,8 +106,10 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 		}
 		fmt.Printf("cxt: snapshot %s (%s) on %q\n", shortHash(out.SnapshotID), p, out.Branch)
 		saved++
-		if out.SessionID != "" {
-			resolved = append(resolved, out.SessionID)
+		if out.SessionID != "" && out.ResolvedPendingTarget != "" {
+			resolved = append(resolved, inbound.PendingResolution{
+				SessionID: out.SessionID, ExpectedTarget: out.ResolvedPendingTarget,
+			})
 		}
 		// Auto memorize: attaches the digest to the just saved head snapshot — per provider
 		// each has its own (native sources differ: claude=MEMORY.md, codex=memories sqlite). Mixed commits
@@ -126,7 +128,7 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 }
 
 // spawnPendingSync spawns the pending-sync detached helper (best-effort, no hook delay).
-func spawnPendingSync(cwd string, resolveSessions []string) {
+func spawnPendingSync(cwd string, resolutions []inbound.PendingResolution) {
 	if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
 		return
 	}
@@ -135,8 +137,8 @@ func spawnPendingSync(cwd string, resolveSessions []string) {
 		return
 	}
 	hookArgs := []string{"git-hook", "pending-sync"}
-	for _, sid := range resolveSessions {
-		hookArgs = append(hookArgs, "--resolve", sid)
+	for _, resolution := range resolutions {
+		hookArgs = append(hookArgs, "--resolve", resolution.SessionID, string(resolution.ExpectedTarget))
 	}
 	cmd := exec.Command(exe, hookArgs...)
 	cmd.Dir = cwd
@@ -597,20 +599,27 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		_, _ = snapshotForCommit(ctx, c, cwd, msg)
 
 	case "pending-sync":
-		// Reflects the in-progress context pointer to the server (detached helper — resolves hook capture/commit after spawn).
-		// --resolve <sessionID> deletes the remote pending session associated with the commit.
+		// Reflects uncommitted capture pointers to the server (detached helper — resolves hook capture/commit after spawn).
+		// --resolve <sessionID> <target> conditionally deletes only the remote
+		// pending capture absorbed by the commit.
 		if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
 			return nil
 		}
-		var resolve []string
-		for i := 0; i < len(args)-1; i++ {
+		var resolutions []inbound.PendingResolution
+		for i := 0; i+2 < len(args); i++ {
 			if args[i] == "--resolve" {
-				resolve = append(resolve, args[i+1])
+				expected := domain.ContentHash(args[i+2])
+				if domain.ValidateContentHash(expected) == nil {
+					resolutions = append(resolutions, inbound.PendingResolution{
+						SessionID: args[i+1], ExpectedTarget: expected,
+					})
+				}
+				i += 2
 			}
 		}
 		release := acquireSyncLock(cwd)
 		defer release()
-		if _, err := c.Sync.SyncPendings(ctx, inbound.SyncInput{Cwd: cwd}, resolve); err != nil {
+		if _, err := c.Sync.SyncPendings(ctx, inbound.SyncInput{Cwd: cwd}, resolutions); err != nil {
 			hookWarn("pending sync: %v", err)
 		}
 

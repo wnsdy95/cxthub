@@ -21,6 +21,7 @@ type appendBranchRemote struct {
 	updateRef domain.Ref
 	append    bool
 	updateErr error
+	deleted   map[string]domain.ContentHash
 }
 
 func (r *appendBranchRemote) UpdateRefRemote(
@@ -50,6 +51,14 @@ func (r *appendBranchRemote) GetSnapshotRemote(
 		return domain.Snapshot{}, domain.ErrNotFound
 	}
 	return snap, nil
+}
+
+func (r *appendBranchRemote) CompareAndDeletePendingRemote(_ context.Context, _ string, sessionID string, expected domain.ContentHash) (bool, error) {
+	if r.deleted == nil {
+		r.deleted = make(map[string]domain.ContentHash)
+	}
+	r.deleted[sessionID] = expected
+	return true, nil
 }
 
 type appendBranchFixture struct {
@@ -119,6 +128,11 @@ func newAppendBranchFixture(t *testing.T) appendBranchFixture {
 func TestAppendBranchReconcilesRemoteGraftPathAndAdvancesLocalRef(t *testing.T) {
 	f := newAppendBranchFixture(t)
 	ctx := context.Background()
+	if err := f.store.PutPending(ctx, domain.Pending{
+		RepoID: f.repoID, SessionID: "merged-session", Branch: "main", Target: f.boundary,
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := f.service.AppendBranch(ctx, inbound.SyncInput{RepoID: f.repoID}, "main", f.target); err != nil {
 		t.Fatal(err)
@@ -154,6 +168,13 @@ func TestAppendBranchReconcilesRemoteGraftPathAndAdvancesLocalRef(t *testing.T) 
 	}
 	if target.GraftSeq != 0 {
 		t.Fatalf("unrelated target graft register was overwritten: %+v", target)
+	}
+	if f.remote.deleted["merged-session"] != f.boundary {
+		t.Fatalf("append did not reconcile newly shared pending: %v", f.remote.deleted)
+	}
+	pendings, err := f.store.ListPendings(ctx, f.repoID)
+	if err != nil || len(pendings) != 0 {
+		t.Fatalf("append left reachable local pending: %+v err=%v", pendings, err)
 	}
 }
 

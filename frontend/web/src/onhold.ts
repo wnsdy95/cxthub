@@ -12,7 +12,7 @@ export function sharedReachable(refs: Ref[], snapshots: Snapshot[]): Set<string>
   // session ref preserves residual sessions from partial merges but not git branch membership.
   const queue = refs.filter((r) => r.kind === 'branch' || r.kind === 'session').map((r) => r.target);
   while (queue.length > 0) {
-    const id = queue.shift() as string;
+    const id = queue.pop() as string;
     if (!id || seen.has(id)) continue;
     const s = byId.get(id);
     if (!s) continue;
@@ -92,7 +92,7 @@ export function unsyncChains(unsyncs: Unsync[], snapshots: Snapshot[], shared: S
   });
 }
 
-/** Uncommitted session = Progressing session that hasn't yet reached the shared timeline.
+/** Uncommitted session = durable capture not yet on the shared timeline.
  *  Determined by target reachability, not session essence (previous method hid one tip session and marked committed sessions as uncommitted):
  *    - Target reachable from branch ref = Committed → Excluded.
  *    - Target in unsync cluster chain = On Hold push pending → Excluded.

@@ -65,10 +65,15 @@ type MetadataStore interface {
 	// Commit attachment settings object (content-addressed — target of snapshot's claude_settings/agents_settings).
 	PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash) (domain.SettingsBundle, error)
-	// In-progress context pointer (session-based upsert — CLI hook capture mirror, resolved by deletion on commit).
+	// Durable uncommitted context pointer (session-based upsert — CLI hook capture mirror, resolved on commit).
 	PutPending(ctx context.Context, repoID domain.ContentHash, p domain.Pending) error
+	// ReplacePending atomically upserts and returns the exact previous target so
+	// hook-leaf GC cannot miss or cross concurrent captures.
+	ReplacePending(ctx context.Context, repoID domain.ContentHash, p domain.Pending) (domain.ContentHash, error)
 	ListPendings(ctx context.Context, repoID domain.ContentHash) ([]domain.Pending, error)
 	DeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
+	CompareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (domain.PendingDeleteResult, error)
+	SetPendingDismissed(ctx context.Context, repoID domain.ContentHash, sessionID string, dismissed bool) (bool, error)
 	// Push wait pointer ((user, branch) upsert — resolve local ahead commits, delete on git push).
 	PutUnsync(ctx context.Context, repoID domain.ContentHash, u domain.Unsync) error
 	ListUnsyncs(ctx context.Context, repoID domain.ContentHash) ([]domain.Unsync, error)

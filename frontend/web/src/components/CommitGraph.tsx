@@ -56,7 +56,7 @@ export function CommitGraph({
   badges: Map<string, { name: string; kind: string }[]>;
 /** Branch ref list. If present, unpushed commits outside the shared timeline are lightened and separated by a tear line. */
   refs?: Ref[];
-/** Uncommitted live hook-capture IDs, rendered as hollow dashed nodes with their own divider. */
+/** Uncommitted hook-capture IDs, rendered as hollow dashed nodes with their own divider. */
   uncommitted?: Set<string>;
 /** Default branch name — always fixed at the leftmost lane (0) for this branch chain. */
   pinBranch?: string;
@@ -218,7 +218,8 @@ export function CommitGraph({
       const kids = (childrenOf.get(tip) ?? []).filter((id) => {
         const child = byId.get(id);
         const childBranches = child?.branches?.length ? child.branches : child ? [child.branch] : [];
-        // in-progress hook capture is visible in the uncommitted layer of the graph, but the join commit segment is not. It aligns with the server's active-pending exclusion rule.
+        // An uncommitted hook capture is visible in its own graph layer, but it
+        // is not part of the joinable commit segment.
         return child != null && !(uncommitted?.has(id) ?? false) && childBranches.includes(branch);
       });
       if (kids.length === 0) break;
@@ -471,7 +472,9 @@ export function CommitGraph({
                     <circle cx={x} cy={mid} r={R + 2.5} fill="none" stroke={COMPACT} strokeWidth={1.2} />
                   )}
                   {isUncommitted ? (
-                    // Uncommitted = ongoing hook capture that hasn't been committed — distinguished by a dotted line node. Filled color follows the row background (hover/selection) via CSS(.uncommitted-node).
+                    // Uncommitted = a hook capture not yet linked to a commit.
+                    // A dotted node distinguishes durable capture state without
+                    // claiming that the provider process is still alive.
                     <circle className="uncommitted-node" cx={x} cy={mid} r={R} stroke={laneColor(r.lane)} strokeWidth={1.5} strokeDasharray="2.5 2" />
                   ) : (
                     <circle cx={x} cy={mid} r={R} fill={laneColor(r.lane)} />

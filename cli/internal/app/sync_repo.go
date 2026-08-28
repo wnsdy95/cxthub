@@ -380,19 +380,11 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err := s.remote.Push(ctx, repoID, nil, nil, refs, in.Force, in.Append); err != nil {
 		return inbound.SyncOutput{}, err
 	}
-	// Pending reconciliation (safety net): deletes the remote pending of sessions that have been resolved locally (i.e., committed), allowing the server to follow the local state (best-effort·idempotent).
+	// Reachability is the only safe implicit pending resolution signal. The
+	// expected-target CAS prevents a delayed push from deleting a newer capture
+	// from the same session. Session data and snapshots remain immutable.
 	if locals, lerr := s.store.ListPendings(ctx, repoID); lerr == nil {
-		alive := map[string]bool{}
-		for _, p := range locals {
-			alive[p.SessionID] = true
-		}
-		cleaned := map[string]bool{}
-		for _, snap := range snaps {
-			if sid := snap.SessionID; sid != "" && !alive[sid] && !cleaned[sid] {
-				cleaned[sid] = true
-				_ = s.remote.DeletePendingRemote(ctx, repoID, sid)
-			}
-		}
+		_ = s.reconcileSharedPendings(ctx, repoID, refs, locals)
 	}
 	// Resolve unsync: removes the "push pending" pointer for the branch whose ref has advanced (idempotent).
 	for _, r := range refs {
@@ -723,6 +715,7 @@ func (s *SyncRepoService) AppendBranch(ctx context.Context, in inbound.SyncInput
 	if err := s.remote.UpdateRefRemote(ctx, repoID, ref, true); err != nil {
 		return err
 	}
+	defer s.reconcileCurrentSharedPendings(ctx, repoID)
 
 	cur, err := s.store.GetRef(ctx, repoID, domain.RefBranch, branch)
 	switch {
@@ -887,17 +880,17 @@ func (s *SyncRepoService) loadPushDocs(ctx context.Context, snaps []domain.Snaps
 	return docs, nil
 }
 
-// SyncPendings reflects in-progress context pointers to the server (detached helper path).
+// SyncPendings reflects durable uncommitted capture pointers to the server (detached helper path).
 // After deleting remote pending from resolveSessions (commit resolution propagation), it pushes each local pending's snapshot/doc objects as objects-only and upserts the pointers.
 // Branch refs are not modified (hook path does not move server refs — same spirit as capture path).
-func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput, resolveSessions []string) (int, error) {
+func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput, resolutions []inbound.PendingResolution) (int, error) {
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return 0, err
 	}
-	for _, sid := range resolveSessions {
-		if sid != "" {
-			_ = s.remote.DeletePendingRemote(ctx, repoID, sid) // best-effort·idempotent
+	for _, resolution := range resolutions {
+		if resolution.SessionID != "" && resolution.ExpectedTarget != "" {
+			_, _ = s.remote.CompareAndDeletePendingRemote(ctx, repoID, resolution.SessionID, resolution.ExpectedTarget)
 		}
 	}
 	pendings, err := s.store.ListPendings(ctx, repoID)
@@ -905,6 +898,9 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 		return 0, err
 	}
 	man, merr := s.store.Manifest(ctx, repoID)
+	if merr == nil {
+		pendings = s.reconcileSharedPendings(ctx, repoID, man.Refs, pendings)
+	}
 	remoteMan, rerr := s.remote.RemoteManifest(ctx, repoID)
 	// Known remote set: reachability walk from remote branch/session/tag ref to local objects.
 	// (If remote target is not in local, only what is available — renegotiate dedup is harmless.)
@@ -1041,6 +1037,76 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 		}
 	}
 	return synced, nil
+}
+
+// reconcileSharedPendings resolves mutable pointers whose targets are already
+// part of the shared branch/session DAG. Tags are archival references and do
+// not mean a working session was committed. Remote CAS runs first; on failure
+// the local pointer is retained for retry but excluded from this sync so it is
+// never re-published as uncommitted state.
+func (s *SyncRepoService) reconcileSharedPendings(
+	ctx context.Context,
+	repoID string,
+	refs []domain.Ref,
+	pendings []domain.Pending,
+) []domain.Pending {
+	shared := s.sharedReachable(ctx, refs)
+	for _, p := range pendings {
+		if !shared[p.Target] {
+			continue
+		}
+		if _, err := s.remote.CompareAndDeletePendingRemote(ctx, repoID, p.SessionID, p.Target); err != nil {
+			continue
+		}
+		_, _ = s.store.CompareAndDeletePending(ctx, repoID, p.SessionID, p.Target)
+	}
+	current, err := s.store.ListPendings(ctx, repoID)
+	if err != nil {
+		current = pendings
+	}
+	unresolved := make([]domain.Pending, 0, len(current))
+	for _, p := range current {
+		if !shared[p.Target] {
+			unresolved = append(unresolved, p)
+		}
+	}
+	return unresolved
+}
+
+func (s *SyncRepoService) reconcileCurrentSharedPendings(ctx context.Context, repoID string) {
+	man, err := s.store.Manifest(ctx, repoID)
+	if err != nil {
+		return
+	}
+	pendings, err := s.store.ListPendings(ctx, repoID)
+	if err != nil || len(pendings) == 0 {
+		return
+	}
+	_ = s.reconcileSharedPendings(ctx, repoID, man.Refs, pendings)
+}
+
+func (s *SyncRepoService) sharedReachable(ctx context.Context, refs []domain.Ref) map[domain.ContentHash]bool {
+	shared := make(map[domain.ContentHash]bool)
+	stack := make([]domain.ContentHash, 0, len(refs))
+	for _, ref := range refs {
+		if (ref.Kind == domain.RefBranch || ref.Kind == domain.RefSession) && ref.Target != "" {
+			stack = append(stack, ref.Target)
+		}
+	}
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if id == "" || shared[id] {
+			continue
+		}
+		snap, err := s.store.GetSnapshot(ctx, id)
+		if err != nil {
+			continue
+		}
+		shared[id] = true
+		stack = append(stack, snap.ReachabilityParents()...)
+	}
+	return shared
 }
 
 // isAncestor determines if anc is an ancestor (or the same/empty) of desc using the local snapshot DAG. Used for fast-forward determination in pull (remote snapshots are stored before ref merge).
@@ -1425,6 +1491,11 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		}
 		newRefs = append(newRefs, r)
 	}
+	// Pull may make a formerly uncommitted target reachable from a branch or
+	// session ref. Reconcile immediately so exact-session load cannot revive a
+	// stale tail before the next hook sync or push. Conflicted refs were not
+	// adopted and therefore cannot resolve a pointer here.
+	s.reconcileCurrentSharedPendings(ctx, repoID)
 	return inbound.SyncOutput{Pulled: len(snaps), NewRefs: newRefs, Conflicts: conflicts}, nil
 }
 

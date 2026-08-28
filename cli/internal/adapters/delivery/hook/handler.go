@@ -144,7 +144,7 @@ func (h *Handler) emitBriefing(event, cwd string) {
 	_, _ = fmt.Fprintln(w, string(b))
 }
 
-// spawnPendingSync spawns a detached helper to reflect the in-progress context pointer to the server.
+// spawnPendingSync spawns a detached helper to reflect uncommitted capture pointers to the server.
 // The hook process is latency-sensitive and does not directly use the network.
 // A separate process performs best-effort work, and later capture or push
 // reconciliation recovers failures.

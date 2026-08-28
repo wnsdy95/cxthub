@@ -80,10 +80,25 @@ type Pending struct {
 	Target    ContentHash  `json:"target"`
 	Author    TeamIdentity `json:"author"`
 	UpdatedAt time.Time    `json:"updated_at"`
-	// Dismissed means the user hid this in-progress session from the uncommitted list.
+	// Dismissed means the user hid this durable capture from the uncommitted list.
 	// It does not delete data: snapshot, document, and session history remain intact. The flag is sticky;
 	// PutPending preserves it so SyncPendings cannot make the entry visible again. Only the UI list excludes it.
 	Dismissed bool `json:"dismissed,omitempty"`
+}
+
+// PendingDeleteResult is the storage-level outcome of an expected-target
+// compare-and-delete. Absent is a successful idempotent resolution, while Kept
+// proves that a concurrent newer capture exists and must not be removed.
+type PendingDeleteResult uint8
+
+const (
+	PendingDeleteKept PendingDeleteResult = iota
+	PendingDeleteDeleted
+	PendingDeleteAbsent
+)
+
+func (r PendingDeleteResult) Resolved() bool {
+	return r == PendingDeleteDeleted || r == PendingDeleteAbsent
 }
 
 // Snapshot is the session state at one point in time (a commit). The body identified by ID and its natural

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -84,6 +85,88 @@ func TestFileStorePendingKeysDoNotCollapse(t *testing.T) {
 	pendings, err = store.ListPendings(ctx, "")
 	if err != nil || len(pendings) != 1 || pendings[0].SessionID != "terminal?a" {
 		t.Fatalf("deleting one pending affected another: %+v err=%v", pendings, err)
+	}
+}
+
+func TestFileStoreCompareAndDeletePendingUsesTargetCAS(t *testing.T) {
+	ctx := context.Background()
+	store := NewFileStore(t.TempDir())
+	oldTarget := securityHash("1")
+	newTarget := securityHash("2")
+	const sessionID = "terminal/cas"
+
+	if err := store.PutPending(ctx, domain.Pending{SessionID: sessionID, Target: newTarget}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.CompareAndDeletePending(ctx, "", sessionID, oldTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted {
+		t.Fatal("stale expected target deleted a newer pending capture")
+	}
+	pendings, err := store.ListPendings(ctx, "")
+	if err != nil || len(pendings) != 1 || pendings[0].Target != newTarget {
+		t.Fatalf("newer pending was not preserved: %+v err=%v", pendings, err)
+	}
+
+	deleted, err = store.CompareAndDeletePending(ctx, "", sessionID, newTarget)
+	if err != nil || !deleted {
+		t.Fatalf("matching target compare-delete: deleted=%v err=%v", deleted, err)
+	}
+	pendings, err = store.ListPendings(ctx, "")
+	if err != nil || len(pendings) != 0 {
+		t.Fatalf("matching pending remains: %+v err=%v", pendings, err)
+	}
+
+	deleted, err = store.CompareAndDeletePending(ctx, "", sessionID, newTarget)
+	if err != nil || !deleted {
+		t.Fatalf("absent pending must be an idempotent success: deleted=%v err=%v", deleted, err)
+	}
+}
+
+func TestFileStoreReplacePendingReturnsLinearizedPredecessor(t *testing.T) {
+	ctx := context.Background()
+	store := NewFileStore(t.TempDir())
+	const sessionID = "terminal/replace"
+	initial := securityHash("0")
+	if err := store.PutPending(ctx, domain.Pending{SessionID: sessionID, Target: initial}); err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 8
+	oldTargets := make(chan domain.ContentHash, writers)
+	var wg sync.WaitGroup
+	for i := 1; i <= writers; i++ {
+		target := securityHash(string(rune('0' + i)))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			old, err := store.ReplacePending(ctx, domain.Pending{SessionID: sessionID, Target: target})
+			if err != nil {
+				t.Errorf("replace %s: %v", target, err)
+				return
+			}
+			oldTargets <- old
+		}()
+	}
+	wg.Wait()
+	close(oldTargets)
+
+	counts := make(map[domain.ContentHash]int, writers+1)
+	for old := range oldTargets {
+		counts[old]++
+	}
+	pendings, err := store.ListPendings(ctx, "")
+	if err != nil || len(pendings) != 1 {
+		t.Fatalf("final pending: %+v err=%v", pendings, err)
+	}
+	counts[pendings[0].Target]++
+	for i := 0; i <= writers; i++ {
+		target := securityHash(string(rune('0' + i)))
+		if counts[target] != 1 {
+			t.Fatalf("target %s occurs %d times across predecessors+tip; replacement was not linearized", target, counts[target])
+		}
 	}
 }
 

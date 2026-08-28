@@ -545,7 +545,7 @@ func (c *BackendClient) PullSettingsObject(ctx context.Context, repoID string, h
 	return b, nil
 }
 
-// PushPending upserts a session's ongoing context pointer (PUT — idempotent overwrite).
+// PushPending upserts a session's latest uncommitted capture pointer (PUT — idempotent overwrite).
 func (c *BackendClient) PushPending(ctx context.Context, repoID string, p domain.Pending) error {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return err
@@ -556,12 +556,31 @@ func (c *BackendClient) PushPending(ctx context.Context, repoID string, p domain
 	return c.do(ctx, http.MethodPut, c.reposPath(repoID)+"/pending/"+url.PathEscape(p.SessionID), p, nil)
 }
 
-// DeletePendingRemote removes a session's pending from the server (commit resolution — idempotent).
-func (c *BackendClient) DeletePendingRemote(ctx context.Context, repoID string, sessionID string) error {
+// CompareAndDeletePendingRemote removes only the capture identified by
+// expected. A kept response means another writer already published a newer
+// target and the caller must preserve its local pointer too.
+func (c *BackendClient) CompareAndDeletePendingRemote(ctx context.Context, repoID string, sessionID string, expected domain.ContentHash) (bool, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
-		return err
+		return false, err
 	}
-	return c.do(ctx, http.MethodDelete, c.reposPath(repoID)+"/pending/"+url.PathEscape(sessionID), nil, nil)
+	if err := domain.ValidateContentHash(expected); err != nil {
+		return false, err
+	}
+	var out struct {
+		Status string `json:"status"`
+	}
+	path := c.reposPath(repoID) + "/pending/" + url.PathEscape(sessionID) + "?expect=" + url.QueryEscape(string(expected))
+	if err := c.do(ctx, http.MethodDelete, path, nil, &out); err != nil {
+		return false, err
+	}
+	switch out.Status {
+	case "deleted":
+		return true, nil
+	case "kept":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unexpected pending compare-delete status %q", out.Status)
+	}
 }
 
 // PushUnsync upserts a push pending pointer by branch (PUT — authenticated user key, idempotent).

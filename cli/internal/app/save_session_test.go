@@ -33,6 +33,22 @@ func encodeCwdLocal(p string) string {
 const e2eClaudeSession = `{"type":"user","cwd":"/Users/work/proj","sessionId":"s1","gitBranch":"main","timestamp":"2026-06-30T00:00:00Z","message":{"role":"user","content":"hello"}}
 {"type":"assistant","cwd":"/Users/work/proj","sessionId":"s1","gitBranch":"main","timestamp":"2026-06-30T00:00:01Z","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"hi there"}]}}`
 
+type replaceBeforePendingCASStore struct {
+	outbound.SessionStore
+	replacement domain.Pending
+	expected    domain.ContentHash
+	calls       int
+}
+
+func (s *replaceBeforePendingCASStore) CompareAndDeletePending(ctx context.Context, repoID, sessionID string, expected domain.ContentHash) (bool, error) {
+	s.calls++
+	s.expected = expected
+	if err := s.SessionStore.PutPending(ctx, s.replacement); err != nil {
+		return false, err
+	}
+	return s.SessionStore.CompareAndDeletePending(ctx, repoID, sessionID, expected)
+}
+
 // TestSaveEndToEnd: Capture → Decode → Save snapshot to .cxt to verify actual end-to-end operation.
 func TestSaveEndToEnd(t *testing.T) {
 	home := t.TempDir()
@@ -102,5 +118,58 @@ func TestSaveEndToEnd(t *testing.T) {
 	}
 	if out2.SnapshotID != out.SnapshotID {
 		t.Fatalf("identical session must dedup to same snapshot id")
+	}
+}
+
+func TestSaveCommitPreservesNewerConcurrentPendingCapture(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repoRoot := t.TempDir()
+	cwd := t.TempDir()
+	if err := exec.Command("git", "-C", cwd, "init", "-q", "-b", "main").Run(); err != nil {
+		t.Skipf("git usage not possible: %v", err)
+	}
+
+	sessDir := filepath.Join(home, ".claude", "projects", encodeCwdLocal(cwd))
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessDir, "sess.jsonl"), []byte(e2eClaudeSession), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	base := storage.NewFileStore(repoRoot)
+	store := &replaceBeforePendingCASStore{SessionStore: base}
+	captures := map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}
+	codecs := map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}
+	svc := NewSaveSessionService(gitctx.NewGitContextAdapter(), captures, codecs, store)
+	ctx := context.Background()
+
+	pending, err := svc.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: domain.ProviderClaude, Message: domain.HookMessagePrefix + " test", Pending: true})
+	if err != nil {
+		t.Fatalf("pending save: %v", err)
+	}
+	newerTarget := domain.HashContent([]byte("capture that arrived during commit save"))
+	store.replacement = domain.Pending{
+		RepoID:    string(domain.HashContent([]byte(repoRoot))),
+		SessionID: pending.SessionID,
+		Branch:    pending.Branch,
+		Provider:  domain.ProviderClaude,
+		Target:    newerTarget,
+	}
+
+	committed, err := svc.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: domain.ProviderClaude, Message: "commit"})
+	if err != nil {
+		t.Fatalf("commit save: %v", err)
+	}
+	if store.calls != 1 || store.expected != pending.SnapshotID {
+		t.Fatalf("pending CAS calls=%d expected=%s, want one call for %s", store.calls, store.expected, pending.SnapshotID)
+	}
+	if committed.ResolvedPendingTarget != pending.SnapshotID {
+		t.Fatalf("resolved target=%s, want observed pending %s", committed.ResolvedPendingTarget, pending.SnapshotID)
+	}
+	pendings, err := base.ListPendings(ctx, "")
+	if err != nil || len(pendings) != 1 || pendings[0].Target != newerTarget {
+		t.Fatalf("newer pending capture was not preserved: %+v err=%v", pendings, err)
 	}
 }
