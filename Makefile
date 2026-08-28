@@ -30,9 +30,10 @@ install: ## Install cxt + cxtd using go install (GOPATH/bin)
 	cd backend && $(GO) install ./cmd/cxtd
 
 .PHONY: test
-test: ## Run unit tests for both Go modules
+test: ## Run unit tests for the CLI, backend, and web UI
 	cd cli && $(GO) test ./...
 	cd backend && $(GO) test ./...
+	cd frontend/web && npm test
 
 .PHONY: test-postgres
 test-postgres: ## Compile with the postgres tag and run the PG smoke test when configured

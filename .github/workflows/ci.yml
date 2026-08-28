@@ -89,11 +89,12 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/web/package-lock.json
-      - name: install · i18n check · typecheck · build
+      - name: install · unit test · i18n check · typecheck · build
         working-directory: frontend/web
         run: |
           npm ci
           npm audit --audit-level=high
+          npm test
           npm run check:i18n
           npm run check:vercel
           npx tsc --noEmit -p ../tsconfig.json
