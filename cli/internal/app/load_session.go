@@ -31,8 +31,9 @@ import (
 //     full (or reconstructed):
 //     a. ProviderCodec[TargetProvider].Encode(cir, TargetProvider)
 //     b. SessionMaterializer[TargetProvider].Materialize(cir, Cwd) → (sessionPath, resumeCmd)
-//     c. LoadOutput{WrittenPath: sessionPath, ResumeCmd, Fidelity: full/reconstructed}
-//     d. **Fallback to memory mode automatically on Materialize failure** (Fidelity downgrade → memory).
+//     c. Prepend bounded portable memory not already represented by the replay.
+//     d. LoadOutput{WrittenPath: sessionPath, ResumeCmd, Fidelity: full/reconstructed}
+//     e. **Fallback to memory mode automatically on Materialize failure** (Fidelity downgrade → memory).
 //     memory:
 //     a. For same-provider or legacy replay, MemorySource[TargetProvider].ReadNative(Cwd, SessionOriginID) → (native, found)
 //     b. MemoryDistiller.Distill(cir, native) → MemoryDigest (native==nil fallback to CIR distillation)
@@ -120,7 +121,20 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	var omitted []domain.Event
 	keptReplacement := preserveCodexReplacement
 	totalBudget, digestBudget := seedBudgets(target)
-	if eventsJSONBytes(seedCIR.Events) > totalBudget {
+	portableSeed, hasPortableSeed := s.portableReplaySeed(
+		ctx, seedCIR, snap, target, in.Cwd, digestBudget,
+	)
+	projectedSeedCIR := seedCIR
+	if hasPortableSeed {
+		insertAfter := 0
+		if preserveCodexReplacement {
+			insertAfter = replacementCount
+		}
+		projectedSeedCIR.Events = replaceSyntheticSeedSummary(seedCIR.Events, portableSeed, insertAfter)
+	}
+	requiresTrim := eventsJSONBytes(seedCIR.Events) > totalBudget ||
+		(hasPortableSeed && eventsJSONBytes(projectedSeedCIR.Events) > totalBudget)
+	if requiresTrim {
 		conversationBudget := totalBudget - digestBudget
 		if preserveCodexReplacement {
 			seedCIR, omitted, keptReplacement = trimEventsForSeedKeepingPrefix(seedCIR, replacementCount, conversationBudget)
@@ -144,6 +158,8 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 		if digestErr != nil {
 			return inbound.LoadOutput{}, fmt.Errorf("distill omitted context: %w", digestErr)
 		}
+	} else if hasPortableSeed {
+		seedCIR = projectedSeedCIR
 	}
 	// A restored session belongs to the working tree it is being restored into,
 	// not the machine/path where the source snapshot was captured. Codex active
@@ -544,6 +560,15 @@ func renderSeedBulletSection(title string, items []string, maxBytes int) string 
 
 func renderSeedDigest(digest domain.MemoryDigest, dropped, budget int) string {
 	header := fmt.Sprintf("%s %d events were omitted to fit the context window; below is a bounded memory summary of the omitted span. The recent history follows verbatim.\n", seedSummaryPrefix, dropped)
+	return renderSeedDigestWithHeader(digest, header, budget)
+}
+
+func renderPortableReplayDigest(digest domain.MemoryDigest, budget int) string {
+	header := seedSummaryPrefix + " Portable memory from the source context is included below. The full source conversation follows verbatim.\n"
+	return renderSeedDigestWithHeader(digest, header, budget)
+}
+
+func renderSeedDigestWithHeader(digest domain.MemoryDigest, header string, budget int) string {
 	if len(header) >= budget {
 		return truncateUTF8Prefix(header, budget)
 	}
@@ -560,6 +585,128 @@ func renderSeedDigest(digest domain.MemoryDigest, dropped, budget int) string {
 	out := header + summaryBlock + facts + tasks
 	if len(out) > budget {
 		return truncateUTF8Prefix(out, budget)
+	}
+	return out
+}
+
+// portableReplaySeed projects memory that is not already represented by the
+// verbatim current conversation. A full-fidelity materialization still starts
+// a new provider session, so provider/native baselines and inherited lineage
+// memory must cross that boundary unless the target proves it auto-loads the
+// exact bytes. The immutable stored digest remains untouched.
+func (s *LoadSessionService) portableReplaySeed(
+	ctx context.Context,
+	seed domain.CIRDocument,
+	snap domain.Snapshot,
+	target domain.ProviderKind,
+	cwd string,
+	budget int,
+) (domain.Event, bool) {
+	digest, ok := snapshotMemoryProjection(ctx, s.store, snap)
+	if !ok {
+		return domain.Event{}, false
+	}
+	// Normalize legacy opaque digests before prompt-only projections. Besides
+	// attaching provenance, this removes the private conversation-delta marker
+	// from provider-visible rendering.
+	digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
+	digest = domain.WithoutConversationDeltaFromSource(digest, snap.ID)
+	replayedUsers, replayedAssistants := replayedConversationTexts(seed.Events)
+	digest = domain.WithoutExactReplayedConversationItems(digest, replayedUsers, replayedAssistants)
+	for _, event := range seed.Events {
+		if !event.CompactSummary || isSeedSummaryEvent(event) {
+			continue
+		}
+		for _, block := range event.Blocks {
+			digest = domain.WithoutExactReplayedSummary(digest, block.Text)
+		}
+	}
+	digest = boundCarriedDigest(digest)
+	if carried, found := syntheticSeedMemoryProjection(seed.Events, snap.ID); found {
+		// A materialized seed can be the only remaining representation of older
+		// context even when the snapshot also has a narrower stored digest. Fold
+		// it into the normalized replacement before removing the old event.
+		digest = domain.MergeDigests(carried, digest)
+		digest = boundCarriedDigest(digest)
+	}
+	if native, found := readTargetNativeMemory(
+		ctx, s.memSources, target, cwd, seed.Envelope.SessionOriginID,
+	); found {
+		digest = projectAutoLoadedNative(digest, native)
+	}
+	if !memoryDigestHasProjection(digest) {
+		return domain.Event{}, false
+	}
+	return domain.Event{
+		Kind:           domain.EventMessage,
+		Role:           "user",
+		CompactSummary: true,
+		Blocks: []domain.ContentBlock{{
+			Type: "text",
+			Text: renderPortableReplayDigest(digest, budget),
+		}},
+	}, true
+}
+
+func replayedConversationTexts(events []domain.Event) (users, assistants []string) {
+	for _, event := range events {
+		if event.Kind != domain.EventMessage || event.CompactSummary || isSeedSummaryEvent(event) {
+			continue
+		}
+		parts := make([]string, 0, len(event.Blocks))
+		for _, block := range event.Blocks {
+			if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+				parts = append(parts, strings.TrimSpace(block.Text))
+			}
+		}
+		text := strings.Join(parts, "\n")
+		if text == "" {
+			continue
+		}
+		switch event.Role {
+		case "user":
+			users = append(users, text)
+		case "assistant":
+			assistants = append(assistants, text)
+		}
+	}
+	return users, assistants
+}
+
+func replaceSyntheticSeedSummary(events []domain.Event, seed domain.Event, insertAfter int) []domain.Event {
+	if insertAfter < 0 || insertAfter > len(events) {
+		insertAfter = 0
+	}
+	out := make([]domain.Event, 0, len(events)+1)
+	for i, event := range events {
+		if i == insertAfter {
+			out = append(out, seed)
+		}
+		if isSeedSummaryEvent(event) {
+			continue
+		}
+		out = append(out, event)
+	}
+	if insertAfter == len(events) {
+		out = append(out, seed)
+	}
+	seedAt := -1
+	for i := range out {
+		if out[i].CompactSummary && isSeedSummaryEvent(out[i]) {
+			seedAt = i
+			break
+		}
+	}
+	if seedAt >= 0 {
+		switch {
+		case seedAt+1 < len(out):
+			out[seedAt].Ts = out[seedAt+1].Ts
+		case seedAt > 0:
+			out[seedAt].Ts = out[seedAt-1].Ts
+		}
+	}
+	for i := range out {
+		out[i].Seq = i
 	}
 	return out
 }
@@ -667,7 +814,7 @@ func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, om
 }
 
 func memoryDigestHasProjection(d domain.MemoryDigest) bool {
-	return strings.TrimSpace(d.Summary) != "" || len(d.KeyFacts) > 0 || len(d.OpenTasks) > 0 || len(d.Fragments) > 0
+	return strings.TrimSpace(d.Summary) != "" || len(d.KeyFacts) > 0 || len(d.OpenTasks) > 0
 }
 
 func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, omitted, seed domain.CIRDocument, prefixCount int, snap domain.Snapshot, target domain.ProviderKind, cwd string) (domain.CIRDocument, error) {
@@ -746,6 +893,7 @@ func syntheticSeedMemoryProjection(events []domain.Event, source domain.ContentH
 	}
 	summary := strings.Join(summaries, "\n\n")
 	facts, tasks, tasksAuthoritative := syntheticSeedStructuredProjection(summary)
+	summary = withoutSyntheticSeedStructuredSections(summary)
 	return boundCarriedDigest(domain.MemoryDigest{
 		SnapshotID:         source,
 		Summary:            summary,
@@ -753,6 +901,36 @@ func syntheticSeedMemoryProjection(events []domain.Event, source domain.ContentH
 		OpenTasks:          tasks,
 		TasksAuthoritative: tasksAuthoritative,
 	}), true
+}
+
+func withoutSyntheticSeedStructuredSections(text string) string {
+	const (
+		sectionNone = iota
+		sectionFacts
+		sectionTasks
+	)
+	section := sectionNone
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch trimmed {
+		case "Key facts:":
+			section = sectionFacts
+			continue
+		case "Open tasks:":
+			section = sectionTasks
+			continue
+		}
+		if section != sectionNone {
+			if trimmed == "" || strings.HasPrefix(trimmed, "- ") {
+				continue
+			}
+			section = sectionNone
+		}
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 // syntheticSeedStructuredProjection recovers the newest rendered cxt bullet

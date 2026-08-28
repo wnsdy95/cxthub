@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +95,220 @@ func TestLoadFullSameProvider(t *testing.T) {
 	}
 }
 
+func TestLoadFullUntrimmedCarriesPortableMemoryWithoutDuplicatingConversation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	snapshotID := seedClaudeSnapshot(t, store)
+	const baseline = "PORTABLE PROVIDER BASELINE"
+	memoryHash, err := store.PutMemory(ctx, domain.MemoryDigest{
+		SnapshotID: snapshotID,
+		Summary: domain.AppendExtractiveConversationDelta(baseline,
+			domain.RenderExtractiveFallbackSummary([]string{"do it"}, []string{"working"})),
+		Provider: domain.ProviderClaude,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := store.GetSnapshot(ctx, snapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.MemoryHash = memoryHash
+	if err := store.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewLoadSessionService(
+		store,
+		map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()},
+		map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderClaude: session.NewClaudeMaterializer()},
+		map[domain.ProviderKind]outbound.MemorySource{
+			domain.ProviderClaude: stubMemSource{text: "DIFFERENT TARGET MEMORY"},
+		},
+		memory.NewRuleDistiller(), nil,
+	)
+	out, err := svc.Load(ctx, inbound.LoadInput{
+		Ref: "main", TargetProvider: domain.ProviderClaude, Mode: domain.FidelityFull, Cwd: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.TrimmedEvents != 0 {
+		t.Fatalf("small full replay trimmed %d events, want none", out.TrimmedEvents)
+	}
+	raw, err := os.ReadFile(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := codec.NewClaudeCodec().Decode(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt strings.Builder
+	seedCount := 0
+	for _, ev := range restored.EffectiveContext().Events {
+		if isSeedSummaryEvent(ev) {
+			seedCount++
+		}
+		for _, block := range ev.Blocks {
+			prompt.WriteString(block.Text)
+		}
+	}
+	if got := strings.Count(prompt.String(), baseline); got != 1 {
+		t.Fatalf("portable baseline count=%d, want one:\n%s", got, prompt.String())
+	}
+	if seedCount != 1 {
+		t.Fatalf("portable seed count=%d, want one", seedCount)
+	}
+	for _, current := range []string{"do it", "working"} {
+		if got := strings.Count(prompt.String(), current); got != 1 {
+			t.Fatalf("raw conversation count(%q)=%d, want one:\n%s", current, got, prompt.String())
+		}
+	}
+}
+
+func TestLoadFullUntrimmedDoesNotDuplicateAncestorConversationDelta(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	cir, err := codec.NewClaudeCodec().Decode(ctx, []byte(claudeFixtureWithSig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentID, err := store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ancestorID := domain.HashContent([]byte("ancestor-conversation-already-in-current-replay"))
+	const baseline = "ANCESTOR PORTABLE BASELINE"
+	ancestorMemory, err := store.PutMemory(ctx, domain.MemoryDigest{
+		SnapshotID: ancestorID,
+		Summary: domain.AppendExtractiveConversationDelta(baseline,
+			domain.RenderExtractiveFallbackSummary([]string{"do it"}, []string{"working"})),
+		Provider: domain.ProviderClaude,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{
+		ID: ancestorID, DocHash: ancestorID, Branch: "main", Provider: domain.ProviderClaude,
+		Fidelity: domain.FidelityFull, MemoryHash: ancestorMemory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{
+		ID: currentID, DocHash: currentID, Branch: "main", Provider: domain.ProviderClaude,
+		Fidelity: domain.FidelityFull, Parents: []domain.ContentHash{ancestorID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: currentID}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{
+		Ref: "main", TargetProvider: domain.ProviderClaude, Mode: domain.FidelityFull, Cwd: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := codec.NewClaudeCodec().Decode(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt strings.Builder
+	for _, event := range restored.EffectiveContext().Events {
+		for _, block := range event.Blocks {
+			prompt.WriteString(block.Text)
+		}
+	}
+	for _, want := range []string{baseline, "do it", "working"} {
+		if got := strings.Count(prompt.String(), want); got != 1 {
+			t.Fatalf("ancestor replay count(%q)=%d, want one:\n%s", want, got, prompt.String())
+		}
+	}
+	if strings.Contains(prompt.String(), "[cxt conversation delta v1]") {
+		t.Fatalf("private memory marker leaked into full replay:\n%s", prompt.String())
+	}
+}
+
+func TestLoadFullUntrimmedDoesNotDuplicateReplayedProviderCompaction(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	const compactBaseline = "PROVIDER COMPACTION ALREADY IN RAW REPLAY"
+	cir := domain.CIRDocument{
+		Envelope: domain.Envelope{
+			CIRVersion: domain.CIRVersionV1, SourceProvider: domain.ProviderClaude,
+			Cwd: "/source", GitBranch: "main", SessionOriginID: "compact-source",
+		},
+		Events: []domain.Event{
+			{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: compactBaseline}}},
+			{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "POST COMPACTION REQUEST"}}},
+			{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "POST COMPACTION RESULT"}}},
+		},
+	}
+	snapshotID, err := store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := memory.NewRuleDistiller().Distill(ctx, cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest.SnapshotID = snapshotID
+	digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
+	memoryHash, err := store.PutMemory(ctx, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{
+		ID: snapshotID, DocHash: snapshotID, Branch: "main", Provider: domain.ProviderClaude,
+		Fidelity: domain.FidelityFull, MemoryHash: memoryHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: snapshotID}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{
+		Ref: "main", TargetProvider: domain.ProviderClaude, Mode: domain.FidelityFull, Cwd: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := codec.NewClaudeCodec().Decode(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt strings.Builder
+	seedCount := 0
+	for _, ev := range restored.EffectiveContext().Events {
+		if isSeedSummaryEvent(ev) {
+			seedCount++
+		}
+		for _, block := range ev.Blocks {
+			prompt.WriteString(block.Text)
+		}
+	}
+	if got := strings.Count(prompt.String(), compactBaseline); got != 1 {
+		t.Fatalf("replayed provider compaction count=%d, want one:\n%s", got, prompt.String())
+	}
+	if seedCount != 0 {
+		t.Fatalf("provider compaction alone created %d redundant cxt seeds", seedCount)
+	}
+}
+
 // Cross-provider full request: claude → codex, reconstructed fallback + claude signature masked.
 func TestLoadCrossProvider(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -128,6 +343,132 @@ func TestLoadCrossProvider(t *testing.T) {
 	}
 	if restored.Envelope.Cwd != cwd {
 		t.Fatalf("restored Codex session cwd = %q, want target %q", restored.Envelope.Cwd, cwd)
+	}
+}
+
+func TestLoadCrossProviderUntrimmedCarriesPortableMemory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	snapshotID := seedClaudeSnapshot(t, store)
+	const baseline = "CROSS PROVIDER PORTABLE BASELINE"
+	memoryHash, err := store.PutMemory(ctx, domain.MemoryDigest{
+		SnapshotID: snapshotID,
+		Summary: domain.AppendExtractiveConversationDelta(baseline,
+			domain.RenderExtractiveFallbackSummary([]string{"do it"}, []string{"working"})),
+		Provider: domain.ProviderClaude,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := store.GetSnapshot(ctx, snapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.MemoryHash = memoryHash
+	if err := store.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{
+		Ref: "main", TargetProvider: domain.ProviderCodex, Mode: domain.FidelityFull, Cwd: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Fidelity != domain.FidelityReconstructed || out.TrimmedEvents != 0 {
+		t.Fatalf("cross-provider output=%+v, want untrimmed reconstructed", out)
+	}
+	raw, err := os.ReadFile(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := codec.NewCodexCodec().Decode(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt strings.Builder
+	for _, event := range restored.EffectiveContext().Events {
+		for _, block := range event.Blocks {
+			prompt.WriteString(block.Text)
+		}
+	}
+	for _, want := range []string{baseline, "do it", "working"} {
+		if got := strings.Count(prompt.String(), want); got != 1 {
+			t.Fatalf("cross-provider count(%q)=%d, want one:\n%s", want, got, prompt.String())
+		}
+	}
+}
+
+func TestLoadPortableMemoryTriggersBoundedTurnTrimOnlyWhenCombinedSeedExceedsBudget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	events := make([]domain.Event, 0, 20)
+	for i := 0; i < 10; i++ {
+		events = append(events,
+			domain.Event{Kind: domain.EventMessage, Seq: len(events), Role: "user", Blocks: []domain.ContentBlock{{
+				Type: "text", Text: fmt.Sprintf("BUDGET REQUEST %02d ", i) + strings.Repeat("u", 8<<10),
+			}}},
+			domain.Event{Kind: domain.EventMessage, Seq: len(events) + 1, Role: "assistant", Blocks: []domain.ContentBlock{{
+				Type: "text", Text: fmt.Sprintf("BUDGET RESULT %02d ", i) + strings.Repeat("a", 8<<10),
+			}}},
+		)
+	}
+	cir := domain.CIRDocument{
+		Envelope: domain.Envelope{
+			CIRVersion: domain.CIRVersionV1, SourceProvider: domain.ProviderClaude,
+			Cwd: "/source", GitBranch: "main", SessionOriginID: "portable-budget",
+		},
+		Events: events,
+	}
+	snapshotID, err := store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const baselineMarker = "LARGE PORTABLE BASELINE END"
+	baseline := strings.Repeat("m", 40<<10) + " " + baselineMarker
+	memoryHash, err := store.PutMemory(ctx, domain.MemoryDigest{
+		SnapshotID: snapshotID,
+		Summary: domain.AppendExtractiveConversationDelta(baseline,
+			domain.RenderExtractiveFallbackSummary([]string{"BUDGET REQUEST 09"}, []string{"BUDGET RESULT 09"})),
+		Provider: domain.ProviderClaude,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{
+		ID: snapshotID, DocHash: snapshotID, Branch: "main", Provider: domain.ProviderClaude,
+		Fidelity: domain.FidelityFull, MemoryHash: memoryHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: snapshotID}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := newLoadSvc(store).Load(ctx, inbound.LoadInput{
+		Ref: "main", TargetProvider: domain.ProviderClaude, Mode: domain.FidelityFull, Cwd: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.TrimmedEvents == 0 {
+		t.Fatal("combined replay plus portable memory exceeded the budget without trimming")
+	}
+	raw, err := os.ReadFile(out.WrittenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	totalBudget, _ := seedBudgets(domain.ProviderClaude)
+	if len(raw) > totalBudget+(32<<10) {
+		t.Fatalf("materialized seed=%d bytes, want bounded near %d", len(raw), totalBudget)
+	}
+	if got := strings.Count(string(raw), baselineMarker); got != 1 {
+		t.Fatalf("bounded replay baseline count=%d, want one", got)
+	}
+	if !strings.Contains(string(raw), "BUDGET REQUEST 09") || !strings.Contains(string(raw), "BUDGET RESULT 09") {
+		t.Fatal("bounded replay lost the newest complete turn")
 	}
 }
 
@@ -258,7 +599,16 @@ func TestLoadFullReplaysCodexReplacementInsteadOfPreCompactionArchive(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: hash, Branch: "main", DocHash: hash, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
+	memoryHash, err := store.PutMemory(ctx, domain.MemoryDigest{
+		SnapshotID: hash, Summary: "CODEX PORTABLE MEMORY AFTER REPLACEMENT", Provider: domain.ProviderCodex,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{
+		ID: hash, Branch: "main", DocHash: hash, Provider: domain.ProviderCodex,
+		Fidelity: domain.FidelityFull, MemoryHash: memoryHash,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: hash}); err != nil {
@@ -284,7 +634,7 @@ func TestLoadFullReplaysCodexReplacementInsteadOfPreCompactionArchive(t *testing
 	if strings.Contains(string(raw), `"type":"response_item","payload":{"type":"compaction"`) {
 		t.Fatalf("encrypted compaction state was flattened into an unsupported top-level response item:\n%s", raw)
 	}
-	for _, want := range []string{"active compacted request", "ACTIVE-ENC", "active answer"} {
+	for _, want := range []string{"active compacted request", "ACTIVE-ENC", "CODEX PORTABLE MEMORY AFTER REPLACEMENT", "active answer"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("load lost active replacement %q", want)
 		}
@@ -297,8 +647,30 @@ func TestLoadFullReplaysCodexReplacementInsteadOfPreCompactionArchive(t *testing
 		t.Fatalf("restored archive does not contain one authoritative boundary: %+v", restored.Events)
 	}
 	active := restored.EffectiveContext()
-	if len(active.Events) != 3 || active.Events[1].Kind != domain.EventCompaction || active.Events[1].Locked == nil {
+	if len(active.Events) != 4 {
 		t.Fatalf("restored active context = %+v", active.Events)
+	}
+	requestAt, lockedAt, memoryAt, answerAt := -1, -1, -1, -1
+	for i, event := range active.Events {
+		if event.Kind == domain.EventCompaction && event.Locked != nil && event.Locked.Blob == "ACTIVE-ENC" {
+			lockedAt = i
+		}
+		for _, block := range event.Blocks {
+			switch block.Text {
+			case "active compacted request":
+				requestAt = i
+			case "active answer":
+				answerAt = i
+			default:
+				if strings.Contains(block.Text, "CODEX PORTABLE MEMORY AFTER REPLACEMENT") {
+					memoryAt = i
+				}
+			}
+		}
+	}
+	if !(requestAt >= 0 && requestAt < lockedAt && lockedAt < memoryAt && memoryAt < answerAt) {
+		t.Fatalf("replay order is not replacement → memory → suffix: request=%d locked=%d memory=%d answer=%d events=%+v",
+			requestAt, lockedAt, memoryAt, answerAt, active.Events)
 	}
 }
 

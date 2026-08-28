@@ -34,13 +34,16 @@ func (d *recordingNativeDistiller) Distill(_ context.Context, _ domain.CIRDocume
 	return domain.MemoryDigest{Summary: "loaded memory"}, nil
 }
 
-type stubMemSource struct{ text string }
+type stubMemSource struct {
+	text             string
+	autoLoadedPrefix string
+}
 
 func (s stubMemSource) Provider() domain.ProviderKind { return domain.ProviderClaude }
 func (s stubMemSource) ReadNative(_ context.Context, _, _ string) (domain.NativeMemory, bool, error) {
 	return domain.NativeMemory{
 		Provider: domain.ProviderClaude, Source: "claude:MEMORY.md",
-		Scope: domain.NativeMemoryScopeWorkingTree, Text: s.text,
+		Scope: domain.NativeMemoryScopeWorkingTree, Text: s.text, AutoLoadedPrefix: s.autoLoadedPrefix,
 	}, s.text != "", nil
 }
 
@@ -385,6 +388,124 @@ func TestPrependTrimDigestKeepsCodexThreadNativeMemoryForNewSession(t *testing.T
 	if len(out.Events) == 0 || len(out.Events[0].Blocks) == 0 ||
 		!strings.Contains(out.Events[0].Blocks[0].Text, "exact session memory") {
 		t.Fatalf("thread-scoped Codex memory was dropped before materializing a new thread: %+v", out.Events)
+	}
+}
+
+func TestPortableReplaySeedCarriesExistingSyntheticMemoryBeforeReplacement(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	snapshotID := domain.HashContent([]byte("portable-replay-existing-seed"))
+	memoryHash, err := st.PutMemory(ctx, domain.MemoryDigest{
+		SnapshotID: snapshotID,
+		Summary:    "PORTABLE PROVIDER BASELINE",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := domain.Snapshot{ID: snapshotID, DocHash: snapshotID, MemoryHash: memoryHash}
+	if err := st.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	oldSeed := seedSummaryPrefix + " 50 events were omitted\n" +
+		"SOLE SURVIVING PROJECT MEMORY\n\n" +
+		"Key facts:\n- Preserve the only prior decision.\n\n" +
+		"Open tasks:\n- Verify replacement without recursion."
+	seed := domain.CIRDocument{Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: oldSeed}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "CURRENT RAW REQUEST"}}},
+	}}
+	svc := NewLoadSessionService(st, nil, nil, nil, nil, nil)
+
+	event, ok := svc.portableReplaySeed(ctx, seed, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes)
+	if !ok || len(event.Blocks) == 0 {
+		t.Fatal("portable replay seed was not produced")
+	}
+	text := event.Blocks[0].Text
+	for _, want := range []string{
+		"PORTABLE PROVIDER BASELINE",
+		"SOLE SURVIVING PROJECT MEMORY",
+		"Preserve the only prior decision.",
+		"Verify replacement without recursion.",
+	} {
+		if got := strings.Count(text, want); got != 1 {
+			t.Fatalf("portable replacement count(%q)=%d, want one:\n%s", want, got, text)
+		}
+	}
+	if got := strings.Count(text, seedSummaryPrefix); got != 1 {
+		t.Fatalf("portable replacement retained %d recursive seed markers, want one:\n%s", got, text)
+	}
+}
+
+func TestPortableReplaySeedOmitsExactlyAttestedWorkingTreeBaseline(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	snapshotID := domain.HashContent([]byte("portable-replay-attested-baseline"))
+	const baseline = "EXACTLY ATTESTED WORKING TREE BASELINE"
+	memoryHash, err := st.PutMemory(ctx, domain.MemoryDigest{
+		SnapshotID: snapshotID,
+		Summary:    baseline,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := domain.Snapshot{ID: snapshotID, DocHash: snapshotID, MemoryHash: memoryHash}
+	if err := st.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewLoadSessionService(st, nil, nil,
+		map[domain.ProviderKind]outbound.MemorySource{
+			domain.ProviderClaude: stubMemSource{text: baseline, autoLoadedPrefix: baseline},
+		}, nil, nil,
+	)
+
+	if event, ok := svc.portableReplaySeed(
+		ctx, domain.CIRDocument{}, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes,
+	); ok {
+		t.Fatalf("exact auto-load attestation produced redundant seed: %+v", event)
+	}
+}
+
+func TestPortableReplaySeedKeepsReplayedAuthoritativeTaskTombstone(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	snapshotID := domain.HashContent([]byte("portable-replay-task-tombstone"))
+	const compactSummary = "CURRENT PROVIDER SUMMARY WITH AUTHORITATIVE TASKS"
+	digest := domain.MergeDigests(domain.MemoryDigest{}, domain.MemoryDigest{
+		SnapshotID:         snapshotID,
+		Summary:            compactSummary,
+		TasksAuthoritative: true,
+	})
+	memoryHash, err := st.PutMemory(ctx, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := domain.Snapshot{ID: snapshotID, DocHash: snapshotID, MemoryHash: memoryHash}
+	if err := st.PutSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	oldSeed := seedSummaryPrefix + " old generation\n" +
+		"OLDER PROJECT NARRATIVE MUST REMAIN\n\n" +
+		"Open tasks:\n- Superseded task must not revive."
+	seed := domain.CIRDocument{Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: compactSummary}}},
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: oldSeed}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "CURRENT RAW REQUEST"}}},
+	}}
+	svc := NewLoadSessionService(st, nil, nil, nil, nil, nil)
+
+	event, ok := svc.portableReplaySeed(ctx, seed, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes)
+	if !ok || len(event.Blocks) == 0 {
+		t.Fatal("portable replay seed was not produced")
+	}
+	text := event.Blocks[0].Text
+	if !strings.Contains(text, "OLDER PROJECT NARRATIVE MUST REMAIN") {
+		t.Fatalf("portable replay lost prior narrative:\n%s", text)
+	}
+	if strings.Contains(text, "Superseded task must not revive.") {
+		t.Fatalf("replayed authoritative task tombstone was lost:\n%s", text)
+	}
+	if strings.Contains(text, compactSummary) {
+		t.Fatalf("provider summary already in raw replay was duplicated:\n%s", text)
 	}
 }
 

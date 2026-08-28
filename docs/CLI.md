@@ -306,7 +306,15 @@ current context head. `--provider` enables supported cross-provider
 materialization. If an oversized conversation must be trimmed, cxt first
 distills the exact omitted span and fails without creating a provider session
 file if that projection is unavailable; it never resumes from an unexplained
-recent tail.
+recent tail. A new full or reconstructed provider session also receives the
+bounded portable-memory projection when the conversation itself fits. The
+current snapshot's conversation delta and exact ancestor user/assistant items
+already present in the replay are excluded because those turns follow
+verbatim; conversation from sibling/team lineages that is absent from the raw
+replay remains portable. An exact provider compaction summary already present
+in the replay is not repeated. cxt trims at a user-turn boundary only when the
+combined verbatim conversation and portable projection exceed the provider's
+seed budget.
 
 The mode priority is:
 

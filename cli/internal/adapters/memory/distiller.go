@@ -122,7 +122,6 @@ func (d *RuleDistiller) Distill(_ context.Context, cir domain.CIRDocument, nativ
 
 const (
 	extractiveDigestMaxRunes = 16000
-	extractiveItemMaxRunes   = 2000
 	extractiveItemsPerRole   = 6
 )
 
@@ -190,8 +189,7 @@ func containsSyntheticSeedText(text string) bool {
 }
 
 func appendRecentDistinct(items []string, text string, limit int) []string {
-	text = strings.Join(strings.Fields(text), " ")
-	text = truncate(text, extractiveItemMaxRunes)
+	text = domain.NormalizeExtractiveConversationItem(text)
 	if text == "" || (len(items) > 0 && items[len(items)-1] == text) {
 		return items
 	}

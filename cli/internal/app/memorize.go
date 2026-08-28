@@ -827,7 +827,7 @@ func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
 			fragment.Summary = truncateUTF8Tail(fragment.Summary, remainingSummary)
 			fragment.KeyFacts = boundStringListTail(fragment.KeyFacts, remainingFacts)
 			fragment.OpenTasks = boundStringListTail(fragment.OpenTasks, remainingTasks)
-			if fragment.Summary == "" && len(fragment.KeyFacts) == 0 && len(fragment.OpenTasks) == 0 {
+			if fragment.Summary == "" && len(fragment.KeyFacts) == 0 && len(fragment.OpenTasks) == 0 && !fragment.TasksAuthoritative {
 				continue
 			}
 			remainingSummary -= len(fragment.Summary)
