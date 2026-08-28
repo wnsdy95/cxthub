@@ -849,7 +849,7 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 }
 
 // handleIncomingContexts processes team contexts incoming through code merge/merge/pull/pull --rebase:
-// fetch(only objects) → remote hint → briefing creation → context promotion of merge commit.
+// fetch(only objects) → preserve local baseline → promote merge context → queue the final remote delta.
 // Called from post-merge (merge pull) and post-rewrite (rebase pull — pull.rebase=true team default path).
 // If origin is not registered, do nothing silently.
 func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
@@ -868,22 +868,82 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	for _, b := range out.RemoteAhead {
 		hookWarn("New context on remote %q — history move is 'cxt pull', session injection is 'cxt load'", b)
 	}
-	// If team member context arrived on the current branch, create a one-shot
-	// identifier notice. Raw conversations and collaborator-authored labels do
-	// not enter the live model prompt; they remain available in the web view.
 	branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	localBaseline, baselineOK := localBranchTarget(ctx, c, branch)
+	remoteWasAhead := false
 	for _, b := range out.RemoteAhead {
 		if b == branch && branch != "" && branch != "HEAD" {
-			writePullBriefing(ctx, c, cwd, branch)
+			remoteWasAhead = true
 			break
 		}
 	}
+	if branch == "" || branch == "HEAD" {
+		return
+	}
+	if !baselineOK {
+		hookWarn("incoming context promotion deferred: local %q baseline is unavailable", branch)
+		return
+	}
+	if err := preservePullBriefingBaseline(cwd, branch, localBaseline); err != nil {
+		hookWarn("incoming context promotion deferred: local %q baseline was not saved: %v", branch, err)
+		return
+	}
+	cursorTarget, cursorOK := capture.ReadPullBriefingCursor(cwd, branch)
+	cursorNeedsReconcile := cursorOK && cursorTarget != localBaseline
 	// PR merge context promotion: First resolve host-side squash/rebase/merge
 	// commits back to their source branches. Then retain the generic [git sha]
 	// path for non-GitHub and direct merge histories.
 	shas := incomingCommitSHAs(cwd)
-	appendMergedPRContexts(ctx, c.PRMerges, c.Sync, cwd, branch, gitOut(cwd, "config", "--get", "remote.origin.url"), shas)
-	appendMergedContexts(ctx, c, cwd, branch, shas)
+	prReflected := appendMergedPRContexts(ctx, c.PRMerges, c.Sync, cwd, branch, gitOut(cwd, "config", "--get", "remote.origin.url"), shas)
+	mergeReflected := appendMergedContexts(ctx, c, cwd, branch, shas)
+
+	// Resolve the final remote only after local/hosted promotion. AppendBranch
+	// may already have moved the local ref to that target, so comparing against
+	// the post-promotion local ref would erase the very range being announced.
+	// Keep the pre-promotion local tip as the fallback baseline; the durable
+	// briefing cursor still wins when it is reachable from the final remote.
+	if remoteWasAhead || prReflected || mergeReflected || cursorNeedsReconcile {
+		writePullBriefingFromBaseline(ctx, c, cwd, branch, localBaseline)
+	}
+}
+
+// preservePullBriefingBaseline makes promotion retry-safe. Moving the local
+// ref and then failing to queue its briefing must not make the next hook treat
+// the promoted target as already delivered. An existing cursor is newer
+// delivery state and is never replaced; an absent cursor can safely start at
+// the local tip because that history was already known before this hook.
+func preservePullBriefingBaseline(cwd, branch string, baseline domain.ContentHash) error {
+	if baseline == "" {
+		return nil
+	}
+	if _, ok := capture.ReadPullBriefingCursor(cwd, branch); ok {
+		return nil
+	}
+	if err := capture.CompareAndSwapPullBriefingCursor(cwd, branch, "", baseline); err != nil {
+		if errors.Is(err, domain.ErrSyncConflict) {
+			if _, ok := capture.ReadPullBriefingCursor(cwd, branch); ok {
+				return nil
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+func localBranchTarget(ctx context.Context, c *Container, branch string) (domain.ContentHash, bool) {
+	if c == nil || c.List == nil || branch == "" || branch == "HEAD" {
+		return "", false
+	}
+	all, err := c.List.List(ctx, inbound.ListInput{})
+	if err != nil {
+		return "", false
+	}
+	for _, ref := range all.Refs {
+		if ref.Kind == domain.RefBranch && ref.Name == branch {
+			return ref.Target, true
+		}
+	}
+	return "", true
 }
 
 func incomingCommitSHAs(cwd string) []string {
@@ -915,17 +975,18 @@ func appendMergedPRContexts(
 	syncer mergedPRContextSync,
 	cwd, branch, gitRemoteURL string,
 	shas []string,
-) {
+) bool {
 	if resolver == nil || syncer == nil || branch == "" || branch == "HEAD" || gitRemoteURL == "" || len(shas) == 0 {
-		return
+		return false
 	}
 	pulls, err := resolver.ResolveMergedPullRequests(ctx, gitRemoteURL, branch, shas)
 	if err != nil {
 		hookWarn("GitHub PR context lookup failed (git continues): %v", err)
-		return
+		return false
 	}
 
 	appended := 0
+	reflected := false
 	for _, pull := range pulls {
 		if pull.BaseBranch != branch || pull.HeadBranch == "" || pull.HeadBranch == branch {
 			continue
@@ -942,16 +1003,19 @@ func appendMergedPRContexts(
 		}
 		if aerr := syncer.AppendBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch, ref.Target); aerr != nil {
 			if strings.Contains(aerr.Error(), "non_fast_forward") {
+				reflected = true
 				continue // hosted webhook or another client already promoted it
 			}
 			hookWarn("PR #%d context promotion failed (%s → %s): %v", pull.Number, pull.HeadBranch, branch, aerr)
 			continue
 		}
 		appended++
+		reflected = true
 	}
 	if appended > 0 {
 		fmt.Printf("cxt: promoted %d merged PR context(s) to %q timeline (appended)\n", appended, branch)
 	}
+	return reflected
 }
 
 // appendMergedContexts appends git merge/pull commits and chained context snapshots to the same-named cxt branch.
@@ -960,13 +1024,13 @@ func appendMergedPRContexts(
 // — this hook fills that gap. Append is a lossless operation (overlay) that is idempotent and conflict-free (server CAS,
 // non-ff targets rejected → skip). Provider PR resolution above supplies the
 // squash/rebase path whose original commit links are absent from the base Git history.
-func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string, shas []string) {
+func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string, shas []string) bool {
 	if branch == "" || branch == "HEAD" || len(shas) == 0 {
-		return
+		return false
 	}
 	list, err := c.List.List(ctx, inbound.ListInput{})
 	if err != nil {
-		return
+		return false
 	}
 	rewrites := loadRewrites(cwd)
 	// [git <sha>] link → snapshot. Multiple snapshots for the same commit are the latest (same as refSync).
@@ -1002,7 +1066,7 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 		}
 	}
 	if len(cands) == 0 {
-		return
+		return false
 	}
 	// Remove candidates already reachable from the server branch + ancestors of other candidates (minimize requests).
 	reach := map[domain.ContentHash]bool{}
@@ -1023,9 +1087,17 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	if ref, rerr := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch); rerr == nil && ref.Target != "" {
 		walk(ref.Target)
 	}
+	remoteReach := make(map[domain.ContentHash]bool, len(reach))
+	for id := range reach {
+		remoteReach[id] = true
+	}
+	reflected := false
 	var kept []domain.Snapshot
 	for i := len(cands) - 1; i >= 0; i-- { // newest candidates first — absorb ancestor candidates as cover
 		if reach[cands[i].ID] {
+			if remoteReach[cands[i].ID] {
+				reflected = true
+			}
 			continue
 		}
 		kept = append([]domain.Snapshot{cands[i]}, kept...)
@@ -1035,16 +1107,19 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	for _, sn := range kept { // from oldest — tip = latest merge
 		if aerr := c.Sync.AppendBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch, sn.ID); aerr != nil {
 			if strings.Contains(aerr.Error(), "non_fast_forward") {
+				reflected = true
 				continue // skip if another team member has already promoted (idempotent no-op)
 			}
 			hookWarn("merge context promotion failed(%s): %v", shortHash(sn.ID), aerr)
 			continue
 		}
 		appended++
+		reflected = true
 	}
 	if appended > 0 {
 		fmt.Printf("cxt: promoted %d merge contexts to %q timeline (appended)\n", appended, branch)
 	}
+	return reflected
 }
 
 // --- History Rewrite Mapping (.cxt/rewrites.json) ---
@@ -1248,12 +1323,19 @@ func queuePullBriefing(cwd, branch string, delta []domain.Snapshot) error {
 	return capture.WritePullBriefing(cwd, branch, ids)
 }
 
-// writePullBriefing records validated identifiers for team member snapshots
-// received via git pull in a terminal-scoped sidecar and advances a separate
-// durable remote cursor. The active/local context ref remains untouched. The
-// next prompt consumes the notice once; collaborator-authored labels and raw
+// writePullBriefingFromBaseline records validated identifiers for team member
+// snapshots received via git pull or merge promotion in a terminal-scoped
+// sidecar and advances a separate durable remote cursor. localBaseline must be
+// captured before promotion because AppendBranch can converge the local ref to
+// the final remote target. The active context ref remains untouched. The next
+// prompt consumes the notice once; collaborator-authored labels and raw
 // conversations are never copied into additionalContext.
-func writePullBriefing(ctx context.Context, c *Container, cwd, branch string) {
+func writePullBriefingFromBaseline(
+	ctx context.Context,
+	c *Container,
+	cwd, branch string,
+	localBaseline domain.ContentHash,
+) {
 	if err := capture.WithPullBriefingTransaction(cwd, branch, func() error {
 		ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch)
 		if err != nil || ref.Target == "" {
@@ -1263,15 +1345,8 @@ func writePullBriefing(ctx context.Context, c *Container, cwd, branch string) {
 		if err != nil {
 			return err
 		}
-		var localTarget domain.ContentHash
-		for _, r := range all.Refs {
-			if r.Kind == domain.RefBranch && r.Name == branch {
-				localTarget = r.Target
-				break
-			}
-		}
 		cursorTarget, _ := capture.ReadPullBriefingCursor(cwd, branch)
-		delta, complete := pullBriefingDelta(all.Snapshots, ref.Target, localTarget, cursorTarget)
+		delta, complete := pullBriefingDelta(all.Snapshots, ref.Target, localBaseline, cursorTarget)
 		if !complete {
 			return nil // fetched graph is incomplete — do not skip an unobserved range
 		}
