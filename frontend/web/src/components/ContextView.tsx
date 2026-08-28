@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Repo, Workspace, CIREvent, Snapshot, Pending } from '../types';
 import { useDoc, useMemory, useMe, useFork, useSnapDiff, useSearch, usePendings, useUnsyncs, useRepoView, useReflog } from '../hooks';
 import { navigate, wsPath } from '../route';
-import { holdCounts, sharedReachable } from '../onhold';
+import { holdCounts, reachableSnapshotIds, sharedReachable } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { mainlineOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { atLeast, canWriteAsset, type Role } from '../roles';
@@ -106,22 +106,14 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
     setBranch(pickDefaultBranch(branches, repo.default_branch));
   }, [repo.id, repo.default_branch, branches]);
 
-  // Branch log = git log <branch> meaning: commits reachable from head to parent chain only (label filter is not included — orphan snapshots created by force/reset are only shown in the graph).
+  // Branch log = git log <branch>: every snapshot reachable through natural or
+  // graft-overlay parents. First-parent/mainline styling remains a separate
+  // concern below; snapshots unreachable from the selected ref stay graph-only.
   const snapshots = useMemo(() => {
     const head = refs.find((r) => r.kind === 'branch' && r.name === branch)?.target;
     if (!head) return [];
-    const byId = new Map(allSnapshots.map((s) => [s.id, s]));
-    const seen = new Set<string>();
-    const queue = [head];
-    while (queue.length > 0) {
-      const id = queue.shift() as string;
-      if (seen.has(id)) continue;
-      const s = byId.get(id);
-      if (!s) continue;
-      seen.add(id);
-      for (const p of s.parents ?? []) queue.push(p);
-    }
-    return allSnapshots.filter((s) => seen.has(s.id));
+    const reachable = reachableSnapshotIds([head], allSnapshots);
+    return allSnapshots.filter((s) => reachable.has(s.id));
   }, [refs, branch, allSnapshots]);
   // Selected branch's main lineage (head's first-parent direct ancestor) — distinguishes merge branches (⎘).
   const mainline = useMemo(() => {

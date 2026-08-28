@@ -2,25 +2,33 @@
 // The badge number and the number of rows shown in the tab must match, so a single definition is used.
 import type { Ref, Snapshot, Pending, Unsync } from './types';
 
+/** Snapshot IDs reachable from explicit roots under cxthub's immutable graph
+ *  rule. Natural parents and graft overlay parents are equally valid for
+ *  membership; first-parent presentation is handled separately by graph.ts. */
+export function reachableSnapshotIds(targets: Iterable<string>, snapshots: Snapshot[]): Set<string> {
+  const byId = new Map(snapshots.map((s) => [s.id, s]));
+  const seen = new Set<string>();
+  const stack = [...targets];
+  while (stack.length > 0) {
+    const id = stack.pop() as string;
+    if (!id || seen.has(id)) continue;
+    const s = byId.get(id);
+    if (!s) continue;
+    seen.add(id);
+    for (const p of s.parents ?? []) stack.push(p);
+    for (const g of s.graft_parents ?? []) stack.push(g);
+  }
+  return seen;
+}
+
 /** Shared timeline = a set of snapshots reachable from parent chains in server branch/session refs.
  *  Reachability is the same as on the server: parents ∪ graft_parents — after a graft (diverged append),
  *  the old head chain can only be reached via overlay edges. If not taken, the committed session
  *  will reappear as an uncommitted one, and the graph will show orphaned history before the merge. */
 export function sharedReachable(refs: Ref[], snapshots: Snapshot[]): Set<string> {
-  const byId = new Map(snapshots.map((s) => [s.id, s]));
-  const seen = new Set<string>();
   // session ref preserves residual sessions from partial merges but not git branch membership.
-  const queue = refs.filter((r) => r.kind === 'branch' || r.kind === 'session').map((r) => r.target);
-  while (queue.length > 0) {
-    const id = queue.pop() as string;
-    if (!id || seen.has(id)) continue;
-    const s = byId.get(id);
-    if (!s) continue;
-    seen.add(id);
-    for (const p of s.parents ?? []) queue.push(p);
-    for (const g of s.graft_parents ?? []) queue.push(g);
-  }
-  return seen;
+  const roots = refs.filter((r) => r.kind === 'branch' || r.kind === 'session').map((r) => r.target);
+  return reachableSnapshotIds(roots, snapshots);
 }
 
 /** Push wait cluster — a bunch of unpushed commits linked by chains (parent edges).

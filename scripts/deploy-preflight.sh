@@ -94,11 +94,12 @@ PY
 
   (
     cd frontend/web
+    npm test
     npm run check:i18n
     npm run check:vercel
     npm run typecheck
   )
-  pass "Web i18n, Vercel, and type checks"
+  pass "Web unit, i18n, Vercel, and type checks"
 
   python3 - "$ROOT/schemas/db/migrations" <<'PY'
 import pathlib, re, sys
