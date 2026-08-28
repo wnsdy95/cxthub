@@ -350,6 +350,118 @@ func WithoutConversationDeltaFromSource(d MemoryDigest, source ContentHash) Memo
 	return d
 }
 
+// WithoutExactReplayedConversationItems removes deterministic extractive
+// user/assistant items that are already present verbatim in the materialized
+// replay. Provider/native baselines, structured facts/tasks, and conversation
+// from other lineages that is not in the replay remain portable.
+func WithoutExactReplayedConversationItems(d MemoryDigest, replayedUsers, replayedAssistants []string) MemoryDigest {
+	normalizedSet := func(items []string) map[string]bool {
+		out := make(map[string]bool, len(items))
+		for _, item := range items {
+			if item = NormalizeExtractiveConversationItem(item); item != "" {
+				out[item] = true
+			}
+		}
+		return out
+	}
+	users := normalizedSet(replayedUsers)
+	assistants := normalizedSet(replayedAssistants)
+	filter := func(summary string) string {
+		baseline, fallbackUsers, fallbackAssistants, ok := splitExtractiveFallbackSummary(summary)
+		if !ok {
+			return summary
+		}
+		keptUsers := make([]string, 0, len(fallbackUsers))
+		for _, item := range fallbackUsers {
+			if !users[NormalizeExtractiveConversationItem(item)] {
+				keptUsers = append(keptUsers, item)
+			}
+		}
+		keptAssistants := make([]string, 0, len(fallbackAssistants))
+		for _, item := range fallbackAssistants {
+			if !assistants[NormalizeExtractiveConversationItem(item)] {
+				keptAssistants = append(keptAssistants, item)
+			}
+		}
+		delta := ""
+		if len(keptUsers) > 0 || len(keptAssistants) > 0 {
+			delta = RenderExtractiveFallbackSummary(keptUsers, keptAssistants)
+		}
+		return AppendExtractiveConversationDelta(baseline, delta)
+	}
+	if len(d.Fragments) == 0 {
+		d.Summary = filter(d.Summary)
+		return d
+	}
+	fragments := append([]MemoryFragment(nil), d.Fragments...)
+	for i := range fragments {
+		fragments[i].Summary = filter(fragments[i].Summary)
+	}
+	d.Fragments = fragments
+	renderMemoryFragments(&d)
+	return d
+}
+
+// WithoutExactReplayedSummary removes an exact baseline and its derived
+// facts/tasks from every provenance fragment when the provider summary is
+// already present verbatim in the replay. Canonical conversation deltas stay
+// attached until exact raw-message projection removes only those that are also
+// replayed. Task authority tombstones remain so superseded work cannot revive.
+func WithoutExactReplayedSummary(d MemoryDigest, exact string) MemoryDigest {
+	exact = strings.TrimSpace(exact)
+	if exact == "" {
+		return d
+	}
+	strip := func(summary string) (string, bool) {
+		baseline, _, _, ok := splitExtractiveFallbackSummary(summary)
+		if ok {
+			if strings.TrimSpace(baseline) != exact {
+				return summary, false
+			}
+			_, users, assistants, _ := splitExtractiveFallbackSummary(summary)
+			delta := ""
+			if len(users) > 0 || len(assistants) > 0 {
+				delta = RenderExtractiveFallbackSummary(users, assistants)
+			}
+			return delta, true
+		}
+		if strings.TrimSpace(summary) == exact {
+			return "", true
+		}
+		return summary, false
+	}
+	if len(d.Fragments) == 0 {
+		if summary, matched := strip(d.Summary); matched {
+			authoritative := d.TasksAuthoritative
+			d.Summary = summary
+			d.KeyFacts = nil
+			d.OpenTasks = nil
+			if authoritative && summary == "" && d.SnapshotID != "" {
+				d.Fragments = []MemoryFragment{{
+					SourceSnapshot: d.SnapshotID, TasksAuthoritative: true,
+				}}
+			}
+		}
+		return d
+	}
+
+	fragments := append([]MemoryFragment(nil), d.Fragments...)
+	changed := false
+	for i := range fragments {
+		if summary, matched := strip(fragments[i].Summary); matched {
+			changed = true
+			fragments[i].Summary = summary
+			fragments[i].KeyFacts = nil
+			fragments[i].OpenTasks = nil
+		}
+	}
+	if changed {
+		d.Fragments = fragments
+		renderMemoryFragments(&d)
+	}
+	return d
+}
+
 // WithoutExactSummaryBaseline returns a provider-visible copy with one exact
 // baseline removed from every provenance fragment. Canonical conversation
 // deltas attached to that baseline remain, as do unrelated provider text,
@@ -429,6 +541,20 @@ func AppendExtractiveConversationDelta(baseline, delta string) string {
 		return delta
 	}
 	return baseline + "\n\n" + extractiveFallbackDeltaMarker + "\n" + delta
+}
+
+const extractiveConversationItemMaxRunes = 2000
+
+// NormalizeExtractiveConversationItem is the canonical representation stored
+// in deterministic fallback digests. Replay projection uses the same function
+// so even long raw messages can be removed by exact, not fuzzy, comparison.
+func NormalizeExtractiveConversationItem(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	if len(runes) <= extractiveConversationItemMaxRunes {
+		return text
+	}
+	return string(runes[:extractiveConversationItemMaxRunes]) + "…"
 }
 
 // RenderExtractiveFallbackSummary is the canonical text representation of the

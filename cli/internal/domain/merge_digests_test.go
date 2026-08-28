@@ -224,6 +224,97 @@ func TestWithoutAutoLoadedSummaryPrefixKeepsNativeTail(t *testing.T) {
 	}
 }
 
+func TestWithoutExactReplayedSummaryDropsMatchingBaselinesAndKeepsOtherLineages(t *testing.T) {
+	currentID := ContentHash("sha256:" + strings.Repeat("a", 64))
+	ancestorID := ContentHash("sha256:" + strings.Repeat("b", 64))
+	matchingAncestorID := ContentHash("sha256:" + strings.Repeat("e", 64))
+	const replayed = "PROVIDER COMPACTION ALREADY REPLAYED"
+	digest := MergeDigests(
+		MergeDigests(
+			MemoryDigest{
+				SnapshotID: ancestorID,
+				Summary:    "ANCESTOR MEMORY MUST REMAIN",
+				KeyFacts:   []string{"Ancestor fact remains."},
+				OpenTasks:  []string{"Superseded ancestor task must not revive."},
+			},
+			MemoryDigest{
+				SnapshotID: matchingAncestorID,
+				Summary: AppendExtractiveConversationDelta(replayed,
+					RenderExtractiveFallbackSummary([]string{"teammate request remains"}, []string{"teammate result remains"})),
+			},
+		),
+		MemoryDigest{
+			SnapshotID: currentID,
+			Summary: AppendExtractiveConversationDelta(replayed,
+				RenderExtractiveFallbackSummary([]string{"current request"}, []string{"current result"})),
+			KeyFacts:           []string{"Fact already inside replayed summary."},
+			OpenTasks:          []string{"Task already inside replayed summary."},
+			TasksAuthoritative: true,
+		},
+	)
+
+	got := WithoutExactReplayedSummary(digest, replayed)
+	got = WithoutExactReplayedConversationItems(got, []string{"current request"}, []string{"current result"})
+	for _, removed := range []string{
+		replayed, "current request", "current result",
+		"Fact already inside replayed summary.", "Task already inside replayed summary.",
+	} {
+		if strings.Contains(got.Summary, removed) || containsString(got.KeyFacts, removed) || containsString(got.OpenTasks, removed) {
+			t.Fatalf("replayed current contribution retained %q: %+v", removed, got)
+		}
+	}
+	for _, kept := range []string{
+		"ANCESTOR MEMORY MUST REMAIN", "Ancestor fact remains.",
+		"teammate request remains", "teammate result remains",
+	} {
+		if !strings.Contains(got.Summary, kept) && !containsString(got.KeyFacts, kept) {
+			t.Fatalf("replayed projection lost %q: %+v", kept, got)
+		}
+	}
+	if !strings.Contains(digest.Summary, replayed) || !containsString(digest.KeyFacts, "Fact already inside replayed summary.") {
+		t.Fatalf("projection mutated immutable input: %+v", digest)
+	}
+	if len(got.OpenTasks) != 0 || !got.TasksAuthoritative {
+		t.Fatalf("replayed authoritative task tombstone was lost: %+v", got)
+	}
+}
+
+func TestWithoutExactReplayedConversationItemsKeepsOnlyNonReplayLineageDelta(t *testing.T) {
+	ancestorID := ContentHash("sha256:" + strings.Repeat("c", 64))
+	siblingID := ContentHash("sha256:" + strings.Repeat("d", 64))
+	longRaw := strings.Repeat("L", extractiveConversationItemMaxRunes+100)
+	digest := MergeDigests(
+		MemoryDigest{
+			SnapshotID: ancestorID,
+			Summary: AppendExtractiveConversationDelta("PORTABLE BASELINE",
+				RenderExtractiveFallbackSummary(
+					[]string{"raw request", NormalizeExtractiveConversationItem(longRaw)},
+					[]string{"raw result"},
+				)),
+		},
+		MemoryDigest{
+			SnapshotID: siblingID,
+			Summary: AppendExtractiveConversationDelta("PORTABLE BASELINE",
+				RenderExtractiveFallbackSummary([]string{"teammate request"}, []string{"teammate result"})),
+		},
+	)
+
+	got := WithoutExactReplayedConversationItems(digest, []string{" raw   request ", longRaw}, []string{"raw result"})
+	for _, removed := range []string{"raw request", "raw result", strings.Repeat("L", 64)} {
+		if strings.Contains(got.Summary, removed) {
+			t.Fatalf("replayed conversation item retained %q:\n%s", removed, got.Summary)
+		}
+	}
+	for _, kept := range []string{"PORTABLE BASELINE", "teammate request", "teammate result"} {
+		if !strings.Contains(got.Summary, kept) {
+			t.Fatalf("portable projection lost %q:\n%s", kept, got.Summary)
+		}
+	}
+	if !strings.Contains(digest.Summary, "raw request") {
+		t.Fatalf("projection mutated immutable input: %+v", digest)
+	}
+}
+
 func TestMergeDigestsPreservesUniqueSiblingFallbackItems(t *testing.T) {
 	left := MemoryDigest{
 		SnapshotID: ContentHash("sha256:" + strings.Repeat("c", 64)),
