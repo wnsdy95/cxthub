@@ -215,9 +215,16 @@ message and short SHA link automatically.
 cxt save [-m <message>] [--provider <claude|codex>]
 ```
 
-Creates a manual snapshot for one provider; the default is `claude`. It does
-not consume `cxt add` staging and does not schedule the commit path's detached
-remote pending synchronization.
+Creates a manual snapshot for one provider. An explicit `--provider` wins. If
+it is omitted, cxt follows the provider owned by the live `cxt claude` or
+`cxt codex` wrapper; in a plain shell it chooses the most recently updated
+capture-eligible session in this worktree. Stale inherited wrapper markers are
+ignored. A managed wrapper also binds the command to its exact native session,
+so a newer same-provider session in another terminal cannot be captured by
+accident.
+
+The command does not consume `cxt add` staging and does not schedule the commit
+path's detached remote pending synchronization.
 
 Use `cxt commit` when the capture represents a code commit. Use `cxt save` for
 an explicit standalone checkpoint.
@@ -408,7 +415,7 @@ Tags are synchronized on the next push.
 
 ```text
 cxt stash
-cxt stash push [-m <message>]
+cxt stash push [-m <message>] [--provider <claude|codex>]
 cxt stash list
 cxt stash pop
 ```
@@ -416,6 +423,10 @@ cxt stash pop
 Stores active context separately and restores the branch-head context. `pop`
 restores and removes the newest context stash. Managed Git hooks mirror
 ordinary `git stash` and `git stash pop` operations.
+
+`stash push` uses the same provider selection rule as `cxt save`: explicit
+`--provider`, then a verified live wrapper, then the newest capture-eligible
+session.
 
 ## Team settings and secret masks
 

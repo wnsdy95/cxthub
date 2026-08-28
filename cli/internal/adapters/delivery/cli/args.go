@@ -56,7 +56,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"load":      {usage: "cxt load [<ref>] [--provider claude|codex] [--mode full|reconstructed|memory]", flags: commandFlags([]string{"--provider", "--mode"}, nil)},
 	"push":      {usage: "cxt push [--force|-f|--append]", flags: commandFlags(nil, []string{"--force", "-f", "--append"})},
 	"pull":      {usage: "cxt pull [--force|-f]", flags: commandFlags(nil, []string{"--force", "-f"})},
-	"stash":     {usage: "cxt stash [push [-m <message>]|pop|list]", flags: commandFlags([]string{"-m"}, nil)},
+	"stash":     {usage: "cxt stash [push [-m <message>] [--provider claude|codex]|pop|list]", flags: commandFlags([]string{"-m", "--provider"}, nil)},
 	"memorize":  {usage: "cxt memorize [<ref>] [--provider claude|codex]", flags: commandFlags([]string{"--provider"}, nil)},
 	"memory":    {usage: "cxt memory [<ref>] [--provider claude|codex]", flags: commandFlags([]string{"--provider"}, nil)},
 	"tag":       {usage: "cxt tag [<name> [ref]]"},
@@ -179,6 +179,9 @@ func validateCommandFlags(cmd string, args []string, spec commandArgSpec) error 
 	case "stash":
 		if flagVal(args, "-m") != "" && len(pos) > 0 && pos[0] != "push" {
 			return fmt.Errorf("stash: flag %q is only valid with push\nusage: %s", "-m", spec.usage)
+		}
+		if flagVal(args, "--provider") != "" && len(pos) > 0 && pos[0] != "push" {
+			return fmt.Errorf("stash: flag %q is only valid with push\nusage: %s", "--provider", spec.usage)
 		}
 	}
 	return nil

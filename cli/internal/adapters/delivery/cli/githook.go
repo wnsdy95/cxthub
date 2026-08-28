@@ -385,6 +385,55 @@ func activeProviderForCwd(ctx context.Context, cwd string) domain.ProviderKind {
 	return providerByRecency(mtime(claudePath, claudeErr), mtime(codexPath, codexErr))
 }
 
+type commandCaptureTarget struct {
+	Provider    domain.ProviderKind
+	SessionPath string
+}
+
+// commandCapture resolves both provider and, when an owning wrapper exists,
+// its exact native session. Provider-only selection is insufficient because
+// two terminals can run the same provider in one worktree. Explicit choice of
+// another provider intentionally uses that provider's latest eligible file.
+func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTarget, error) {
+	wrappedProvider, managed := supervisedProvider(ctx, cwd)
+	provider := domain.ProviderKind(explicit)
+	if provider == "" {
+		if managed {
+			provider = wrappedProvider
+		} else {
+			provider = activeProviderForCwd(ctx, cwd)
+		}
+	}
+	target := commandCaptureTarget{Provider: provider}
+	if !managed || provider != wrappedProvider {
+		return target, nil
+	}
+
+	sessionID := strings.TrimSpace(os.Getenv("CXT_WRAPPED_SESSION_ID"))
+	if !providerfs.ValidSessionID(sessionID) {
+		sessionID = capture.SessionAffinity(cwd, provider)
+	}
+	if !providerfs.ValidSessionID(sessionID) {
+		return commandCaptureTarget{}, fmt.Errorf("cannot identify the %s session owned by this cxt wrapper yet", provider)
+	}
+
+	var path string
+	var err error
+	switch provider {
+	case domain.ProviderClaude:
+		path, err = capture.NewClaudeCapture().LocateSession(ctx, cwd, sessionID)
+	case domain.ProviderCodex:
+		path, err = capture.NewCodexCapture().LocateSession(ctx, cwd, sessionID)
+	default:
+		return target, nil // the use case reports an explicit unsupported provider
+	}
+	if err != nil {
+		return commandCaptureTarget{}, fmt.Errorf("cannot locate the %s session %s owned by this cxt wrapper: %w", provider, sessionID, err)
+	}
+	target.SessionPath = path
+	return target, nil
+}
+
 func providerByRecency(claudeNewest, codexNewest int64) domain.ProviderKind {
 	if codexNewest > claudeNewest {
 		return domain.ProviderCodex

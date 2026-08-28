@@ -580,17 +580,17 @@ func Run(c *Container, args []string) error {
 		return runGitHook(ctx, c, cwd, rest)
 
 	case "save":
-		provider := flagVal(rest, "--provider")
-		if provider == "" {
-			provider = domain.ProviderClaude
+		target, err := commandCapture(ctx, cwd, flagVal(rest, "--provider"))
+		if err != nil {
+			return err
 		}
-		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: provider, Message: flagVal(rest, "-m"), Author: c.Identity})
+		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Message: flagVal(rest, "-m"), Author: c.Identity})
 		if err != nil {
 			return err
 		}
 		fmt.Printf("saved snapshot %s on branch %q\n", shortHash(out.SnapshotID), out.Branch)
 		// Automatically memorize the commit path (audit finding #5: consistency across storage paths). Best-effort.
-		if mout, merr := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: provider, Ref: string(out.SnapshotID)}); merr == nil {
+		if mout, merr := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: target.Provider, Ref: string(out.SnapshotID)}); merr == nil {
 			fmt.Printf("memorized → %s (included in next push)\n", shortHash(mout.MemoryHash))
 		}
 		return nil
@@ -697,7 +697,11 @@ func Run(c *Container, args []string) error {
 		// git stash equivalent: save active session and return to branch head (commit chain) context.
 		switch firstPositional(rest) {
 		case "", "push":
-			out, err := c.Stash.Stash(ctx, inbound.StashInput{Cwd: cwd, Message: flagVal(rest, "-m"), Author: c.Identity})
+			target, err := commandCapture(ctx, cwd, flagVal(rest, "--provider"))
+			if err != nil {
+				return err
+			}
+			out, err := c.Stash.Stash(ctx, inbound.StashInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Message: flagVal(rest, "-m"), Author: c.Identity})
 			if err != nil {
 				if err == domain.ErrNoActiveSession {
 					return fmt.Errorf("no active session to stash (Git equivalent: \"No local changes to save\")")
@@ -739,7 +743,7 @@ func Run(c *Container, args []string) error {
 			}
 			return nil
 		default:
-			return fmt.Errorf("usage: cxt stash [push [-m msg]|pop|list]")
+			return fmt.Errorf("usage: cxt stash [push [-m msg] [--provider claude|codex]|pop|list]")
 		}
 
 	case "memorize", "memory":
@@ -994,7 +998,7 @@ usage: cxt <command> [flags]
   push [--force|--append]   synchronize local context to origin
   pull [--force]            synchronize origin context locally
   tag [<name> [ref]]        list or create immutable tags (equivalent to Git tags)
-  stash [push|pop|list]     save or restore a session (equivalent to Git stash)
+  stash [push|pop|list]     save or restore a session (push accepts --provider)
 
   Context commands:
   save [-m msg] [--provider claude|codex]

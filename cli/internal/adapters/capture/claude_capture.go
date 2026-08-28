@@ -77,6 +77,29 @@ func (c *ClaudeCaptureSource) LocateActiveSession(_ context.Context, cwd string)
 	return best, nil
 }
 
+// LocateSession returns the capture-eligible session with the exact native ID
+// in cwd. It is used by a live wrapper to avoid selecting a newer sibling
+// terminal merely because both provider files share the same worktree.
+func (c *ClaudeCaptureSource) LocateSession(_ context.Context, cwd, sessionID string) (string, error) {
+	if !providerfs.ValidSessionID(sessionID) {
+		return "", domain.ErrNoActiveSession
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		abs = cwd
+	}
+	root, err := claudeProjectsDir()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(root, encodeCwd(abs), sessionID+".jsonl")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || !providerfs.IsProviderSessionPath(path) || providerfs.CaptureExcluded(cwd, path, info.Size()) {
+		return "", domain.ErrNoActiveSession
+	}
+	return path, nil
+}
+
 // ReadSession reads the JSONL bytes from the given session file path.
 func (c *ClaudeCaptureSource) ReadSession(_ context.Context, path string) ([]byte, error) {
 	return providerfs.ReadRegularFile(path)

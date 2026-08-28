@@ -2,11 +2,12 @@ package app
 
 import (
 	"context"
-
 	"fmt"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"os"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -67,9 +68,17 @@ func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inboun
 	}
 
 	// 1) Capture active session ("working tree") — if none, like git, "no changes to save".
-	path, err := capt.LocateActiveSession(ctx, in.Cwd)
-	if err != nil {
-		return inbound.StashOutput{}, err // ErrNoActiveSession included
+	path := in.SessionPath
+	if path == "" {
+		path, err = capt.LocateActiveSession(ctx, in.Cwd)
+		if err != nil {
+			return inbound.StashOutput{}, err // ErrNoActiveSession included
+		}
+	} else {
+		info, statErr := os.Stat(path)
+		if statErr != nil || providerfs.CaptureExcluded(in.Cwd, path, info.Size()) {
+			return inbound.StashOutput{}, domain.ErrNoActiveSession
+		}
 	}
 	raw, err := capt.ReadSession(ctx, path)
 	if err != nil {

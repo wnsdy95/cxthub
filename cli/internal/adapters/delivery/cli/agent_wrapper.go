@@ -58,10 +58,12 @@ func runAgentWrapper(ctx context.Context, c *Container, cwd, agent string, args 
 		start := time.Now()
 		child := exec.Command(bin, args...)
 		child.Stdin, child.Stdout, child.Stderr = os.Stdin, os.Stdout, os.Stderr
+		ownedSessionID := sessionIDFromAgentArgs(agent, args)
 		child.Env = append(os.Environ(),
 			"CXT_WRAPPED=1",
 			fmt.Sprintf("CXT_WRAPPER_PID=%d", os.Getpid()),
 			"CXT_WRAPPED_AGENT="+agent,
+			"CXT_WRAPPED_SESSION_ID="+ownedSessionID,
 		)
 		var childMemoryEnv []string
 		if agent == "claude" {
@@ -147,6 +149,41 @@ func resumeArgs(agent, seedID string) []string {
 		return []string{"resume", seedID} // May not be supported in all versions — falls back to new session on failure
 	}
 	return []string{"--resume", seedID}
+}
+
+// sessionIDFromAgentArgs projects only an explicit native resume target into
+// the child environment. Descendant cxt commands can then bind capture to this
+// wrapper's exact session instead of the newest sibling terminal. Empty is
+// intentional for a provider-created fresh session; its first lifecycle hook
+// records terminal affinity.
+func sessionIDFromAgentArgs(agent string, args []string) string {
+	if agent == string(domain.ProviderCodex) {
+		if len(args) >= 2 && args[0] == "resume" && providerfs.ValidSessionID(args[1]) {
+			return args[1]
+		}
+		return ""
+	}
+	if agent != string(domain.ProviderClaude) {
+		return ""
+	}
+	for i, arg := range args {
+		if arg == "--resume" || arg == "-r" {
+			if i+1 < len(args) && providerfs.ValidSessionID(args[i+1]) {
+				return args[i+1]
+			}
+			return ""
+		}
+		for _, prefix := range []string{"--resume=", "-r="} {
+			if strings.HasPrefix(arg, prefix) {
+				id := strings.TrimPrefix(arg, prefix)
+				if providerfs.ValidSessionID(id) {
+					return id
+				}
+				return ""
+			}
+		}
+	}
+	return ""
 }
 
 // Registers the recently materialized session in the agent's session index.

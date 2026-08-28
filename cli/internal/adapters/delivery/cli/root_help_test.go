@@ -161,6 +161,7 @@ func TestSubcommandSpecificFlagRestrictions(t *testing.T) {
 		{"cxt", "remote", "add", "origin", "https://example.test/a/b", "-v"},
 		{"cxt", "secrets", "pull", "--rotate"},
 		{"cxt", "stash", "pop", "-m", "message"},
+		{"cxt", "stash", "list", "--provider", "codex"},
 	}
 	for _, args := range tests {
 		t.Run(strings.Join(args[1:], "/"), func(t *testing.T) {
