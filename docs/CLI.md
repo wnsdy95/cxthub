@@ -487,13 +487,18 @@ post-rewrite
 
 Existing user hooks are chained and restored on uninstall.
 
-After `git pull` or merge, the post-merge hook fetches new team context without
-moving the active local context ref. The next prompt receives one terminal-
-scoped notice containing only the validated incoming snapshot IDs. Teammate-
-authored commit labels, author fields, and conversation text are not copied
-into the model's `additionalContext`; inspect those untrusted details in the
-web context view. The notice is consumed once, expires after 24 hours, keeps
-the newest 12 visible snapshots, and remains capped at 4 KiB.
+After `git pull` or merge, the post-merge hook first fetches new team context
+without moving the active local context ref. A merged branch context is then
+losslessly appended to the base timeline; the local context ref converges only
+when that preserves its history. This does not replace, slice, or copy another
+conversation into the running agent session. The next prompt instead receives
+one terminal-scoped notice containing only the validated incoming snapshot
+IDs. Its range is calculated from a durable pre-promotion baseline, so a local
+PR promotion cannot hide its own delta and a failed delivery remains retryable.
+Teammate-authored commit labels, author fields, and conversation text are not
+copied into the model's `additionalContext`; inspect those untrusted details in
+the web context view. The notice is consumed once, expires after 24 hours,
+keeps the newest 12 visible snapshots, and remains capped at 4 KiB.
 
 ## Configuration
 

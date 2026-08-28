@@ -194,8 +194,9 @@ func writeBriefingText(cwd, text string) error {
 }
 
 // ReadPullBriefingCursor returns the last remote branch tip durably queued for
-// this terminal/wrapper. Corrupt, cross-branch, and invalid-hash files fail
-// closed and are ignored by the caller, which falls back to the local ref.
+// this terminal/wrapper, or the known local baseline reserved immediately
+// before a ref-moving promotion. Corrupt, cross-branch, and invalid-hash files
+// fail closed and are ignored by the caller, which falls back to the local ref.
 func ReadPullBriefingCursor(cwd, branch string) (domain.ContentHash, bool) {
 	if domain.ValidateBranchName(branch) != nil {
 		return "", false
@@ -211,10 +212,12 @@ func ReadPullBriefingCursor(cwd, branch string) (domain.ContentHash, bool) {
 	return cursor.Target, true
 }
 
-// CompareAndSwapPullBriefingCursor advances only after the corresponding queue
-// entry is durable (ordering enforced by the caller). The filesystem lock and
-// expected pointer prevent concurrent post-merge hooks from moving C back to B.
-// A lost race leaves the queue intact and safely re-evaluates on the next pull.
+// CompareAndSwapPullBriefingCursor normally advances only after the
+// corresponding queue entry is durable. It may also initialize an absent
+// cursor to a pre-promotion local baseline, which excludes only history already
+// known to this terminal. The filesystem lock and expected pointer prevent
+// concurrent post-merge hooks from moving C back to B. A lost race leaves the
+// queue intact and safely re-evaluates on the next pull.
 func CompareAndSwapPullBriefingCursor(cwd, branch string, expected, target domain.ContentHash) error {
 	if !cxtEnabled(cwd) {
 		return nil

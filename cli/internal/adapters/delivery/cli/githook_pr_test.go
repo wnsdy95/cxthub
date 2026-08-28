@@ -93,7 +93,7 @@ func TestAppendMergedPRContextsPromotesInResolverOrder(t *testing.T) {
 	}
 
 	shas := []string{"aaa", "bbb", "ccc", "ddd", "eee"}
-	appendMergedPRContexts(
+	reflected := appendMergedPRContexts(
 		context.Background(),
 		resolver,
 		syncer,
@@ -102,6 +102,9 @@ func TestAppendMergedPRContextsPromotesInResolverOrder(t *testing.T) {
 		"git@github.com:acme/project.git",
 		shas,
 	)
+	if !reflected {
+		t.Fatal("successful/already-promoted PR contexts were not reported as reflected")
+	}
 
 	if resolver.remote != "git@github.com:acme/project.git" || resolver.base != "main" {
 		t.Fatalf("resolver inputs = (%q, %q), want Git remote and main", resolver.remote, resolver.base)
@@ -129,7 +132,7 @@ func TestAppendMergedPRContextsResolverFailureIsFailOpen(t *testing.T) {
 
 	resolver := &fakePRMergeResolver{err: errors.New("rate limited")}
 	syncer := &fakeMergedPRSync{}
-	appendMergedPRContexts(
+	reflected := appendMergedPRContexts(
 		context.Background(),
 		resolver,
 		syncer,
@@ -138,8 +141,36 @@ func TestAppendMergedPRContextsResolverFailureIsFailOpen(t *testing.T) {
 		"https://github.com/acme/project",
 		[]string{"aaa"},
 	)
+	if reflected {
+		t.Fatal("resolver failure was reported as reflected")
+	}
 	if len(syncer.appends) != 0 {
 		t.Fatalf("append calls = %#v, want none after resolver failure", syncer.appends)
+	}
+}
+
+func TestAppendMergedPRContextsPromotionFailureIsNotReflected(t *testing.T) {
+	t.Parallel()
+
+	target := domain.ContentHash("sha256:failed")
+	resolver := &fakePRMergeResolver{pulls: []outbound.MergedPullRequest{{
+		Number: 21, BaseBranch: "main", HeadBranch: "feature/fails", MergeCommitSHA: "aaa",
+	}}}
+	syncer := &fakeMergedPRSync{
+		refs:       map[string]domain.Ref{"feature/fails": {Target: target}},
+		appendErrs: map[domain.ContentHash]error{target: errors.New("remote unavailable")},
+	}
+
+	if reflected := appendMergedPRContexts(
+		context.Background(),
+		resolver,
+		syncer,
+		"/repo",
+		"main",
+		"https://github.com/acme/project",
+		[]string{"aaa"},
+	); reflected {
+		t.Fatal("failed PR promotion was reported as reflected")
 	}
 }
 
