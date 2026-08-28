@@ -283,8 +283,10 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .memory-box { border-bottom: 1px solid var(--line); padding: 12px 14px; background: var(--hover); font-size: 0.84rem; }
 .memory-box .label { display: block; margin-bottom: 4px; }
 .memory-box p { margin: 0 0 6px; white-space: pre-wrap; }
+.memory-box .memory-note { margin: 6px 0 12px; color: var(--muted); font-size: 0.72rem; line-height: 1.5; white-space: normal; }
+.memory-section + .memory-section { margin-top: 12px; }
+.memory-section-label { margin: 0 0 4px; color: var(--faint); font-family: var(--mono); font-size: 0.68rem; font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase; }
 .memory-box ul { margin: 0; padding-left: 18px; color: var(--muted); }
-.memory-box ul.tasks { list-style: none; padding-left: 2px; }
 
 /* Graft join point — commit list boundary line "from this row up is new context" (same color as graph root). */
 .seam-divider { display: flex; align-items: center; gap: 8px; padding: 3px 12px; font-family: var(--mono);

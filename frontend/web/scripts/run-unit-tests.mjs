@@ -1,5 +1,6 @@
-import { readdir } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
 
@@ -20,21 +21,24 @@ async function collectTests(dir) {
 const tests = (await collectTests(testsRoot)).sort();
 if (tests.length === 0) throw new Error(`no frontend unit tests found under ${testsRoot}`);
 
-for (const test of tests) {
-  const result = await build({
-    absWorkingDir: projectRoot,
-    entryPoints: [test],
-    bundle: true,
-    format: 'esm',
-    logLevel: 'silent',
-    platform: 'node',
-    target: 'node20',
-    write: false,
-  });
-  const source = result.outputFiles[0]?.text;
-  if (!source) throw new Error(`esbuild produced no output for ${test}`);
-  const encoded = Buffer.from(`${source}\n//# sourceURL=${pathToFileURL(test).href}`).toString('base64');
-  await import(`data:text/javascript;base64,${encoded}`);
+const outputDir = await mkdtemp(path.join(tmpdir(), 'cxt-web-tests-'));
+try {
+  for (const [index, test] of tests.entries()) {
+    const outfile = path.join(outputDir, `${index}-${path.basename(test, '.test.ts')}.cjs`);
+    await build({
+      absWorkingDir: projectRoot,
+      entryPoints: [test],
+      bundle: true,
+      format: 'cjs',
+      logLevel: 'silent',
+      outfile,
+      platform: 'node',
+      target: 'node20',
+    });
+    await import(pathToFileURL(outfile).href);
+  }
+} finally {
+  await rm(outputDir, { force: true, recursive: true });
 }
 
 console.log(`frontend unit tests: ${tests.length} passed`);
