@@ -292,7 +292,8 @@ func TestPGSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot state hash: %v", err)
 	}
-	if len(repoManifest.SnapshotStates) != 1 || repoManifest.SnapshotStates[snapID] != wantState {
+	if len(repoManifest.SnapshotStates) != 3 || repoManifest.SnapshotStates[snapID] != wantState ||
+		repoManifest.SnapshotStates[advancedTarget] == "" || repoManifest.SnapshotStates[nextTarget] == "" {
 		t.Fatalf("manifest snapshot states = %+v, want %s=%s", repoManifest.SnapshotStates, snapID, wantState)
 	}
 	// Two database clients racing from the same causal parent must serialize on
