@@ -266,6 +266,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .ref-badge.branch { color: var(--ok); border-color: rgba(46, 125, 91, 0.35); }
 .ref-badge.tag { color: var(--ink); border-color: var(--faint); }
+.ref-badge.archived { color: var(--faint); border-color: var(--faint); border-style: dashed; }
 /* Current branch tip — branch name is already provided in the dropdown (fill style = current position). */
 .ref-badge.head { background: var(--ok); border-color: var(--ok); color: #fff; }
 /* Pending — session continues even after commits (yellow = progress/change semantic). */
@@ -432,6 +433,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .graph-head { position: relative; height: 44px; }
 .graph-lane-label { position: absolute; bottom: 2px; font-family: var(--mono); font-size: 0.68rem;
   white-space: nowrap; transform: rotate(-35deg); transform-origin: left bottom; }
+.graph-lane-label.archived { font-style: italic; text-decoration: line-through; text-decoration-thickness: 1px; }
 /* Long branch name: default is 6 chars + … truncated, full name shown as background/shadow chip —
    raised above other rail labels to ensure readability. */
 .lane-label-full { display: none; }

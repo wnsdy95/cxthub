@@ -229,6 +229,7 @@ func buildContainer(cfg config) container {
 	initSvc := app.NewInitRepoService(gitCtx, store)
 	saveSvc := app.NewSaveSessionService(gitCtx, captures, codecs, store)
 	forkSvc := app.NewForkSessionService(store)
+	branchLifecycleSvc := app.NewBranchLifecycleService(gitCtx, store)
 	loadSvc := app.NewLoadSessionService(store, codecs, materializers, memSources, distiller, memSinks)
 	checkoutSvc := app.NewCheckoutSessionService(forkSvc, loadSvc, store)
 	listSvc := app.NewListSessionsService(store)
@@ -249,6 +250,7 @@ func buildContainer(cfg config) container {
 		Init:            initSvc,
 		Save:            saveSvc,
 		Fork:            forkSvc,
+		Branches:        branchLifecycleSvc,
 		Checkout:        checkoutSvc,
 		Load:            loadSvc,
 		List:            listSvc,

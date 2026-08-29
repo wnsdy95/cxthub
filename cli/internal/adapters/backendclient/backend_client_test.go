@@ -487,6 +487,156 @@ func TestRefOnlyPushSkipsObjectNegotiation(t *testing.T) {
 	}
 }
 
+func TestRefOnlyPushUsesEmptyBatchToReconcileWhenRemoteIsCurrent(t *testing.T) {
+	repoID := domain.HashContent([]byte("ref-delta-push-repo"))
+	target := domain.HashContent([]byte("ref-delta-push-target"))
+	branch := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: string(repoID), Target: target}
+	lifecycle, err := domain.NewBranchLifecycleRef(string(repoID), "main", target, 1, domain.BranchActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listCalls, batchCalls, refCalls := 0, 0, 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/refs"):
+			listCalls++
+			_ = json.NewEncoder(w).Encode([]domain.Ref{branch, lifecycle})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/refs/batch"):
+			batchCalls++
+			var body batchRefsReq
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode batch: %v", err)
+			}
+			if len(body.Updates) != 0 {
+				t.Errorf("current remote batch updates = %+v", body.Updates)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]int{"applied": 0})
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/refs/"):
+			refCalls++
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if err := c.Push(context.Background(), string(repoID), nil, nil, []domain.Ref{lifecycle, branch}, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if listCalls != 1 || batchCalls != 1 || refCalls != 0 {
+		t.Fatalf("calls list=%d batch=%d refs=%d, want 1/1/0", listCalls, batchCalls, refCalls)
+	}
+}
+
+func TestRefOnlyPushSendsOnlyRefsMissingFromRemote(t *testing.T) {
+	repoID := domain.HashContent([]byte("ref-partial-delta-push-repo"))
+	target := domain.HashContent([]byte("ref-partial-delta-push-target"))
+	branch := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: string(repoID), Target: target}
+	lifecycle, err := domain.NewBranchLifecycleRef(string(repoID), "main", target, 2, domain.BranchArchived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var batch batchRefsReq
+	var putPaths []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/refs"):
+			_ = json.NewEncoder(w).Encode([]domain.Ref{branch})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/refs/batch"):
+			if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+				t.Errorf("decode batch: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]int{"applied": len(batch.Updates)})
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/refs/"):
+			putPaths = append(putPaths, r.URL.Path)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if err := c.Push(context.Background(), string(repoID), nil, nil, []domain.Ref{branch, lifecycle}, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(putPaths) != 0 || len(batch.Updates) != 1 || batch.Updates[0].Ref.Name != lifecycle.Name {
+		t.Fatalf("batch=%+v PUT paths=%v, want only missing lifecycle tag", batch, putPaths)
+	}
+}
+
+func TestRefUpdateBatchesAreBoundedAndKeepEmptyReconciliation(t *testing.T) {
+	updates := make([]batchRefUpdate, maxRefBatchUpdates+1)
+	batches := refUpdateBatches(updates)
+	if len(batches) != 2 || len(batches[0]) != maxRefBatchUpdates || len(batches[1]) != 1 {
+		t.Fatalf("batch sizes = %d/%d/%d", len(batches), len(batches[0]), len(batches[1]))
+	}
+	empty := refUpdateBatches(nil)
+	if len(empty) != 1 || len(empty[0]) != 0 {
+		t.Fatalf("empty reconciliation batches = %+v", empty)
+	}
+}
+
+func TestRefOnlyPushClassifiesArchivedBranchConflict(t *testing.T) {
+	repoID := domain.HashContent([]byte("archived-ref-push-repo"))
+	target := domain.HashContent([]byte("archived-ref-push-target"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{"code": "branch_archived", "message": "pull lifecycle state before restoring"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	ref := domain.Ref{Kind: domain.RefBranch, Name: "feature/deleted", RepoID: string(repoID), Target: target}
+	err := c.Push(context.Background(), string(repoID), nil, nil, []domain.Ref{ref}, false, false)
+	if !errors.Is(err, domain.ErrBranchArchived) {
+		t.Fatalf("push error = %v, want branch archived", err)
+	}
+}
+
+func TestAppendPushDoesNotApplyBranchPolicyToLifecycleTags(t *testing.T) {
+	repoID := domain.HashContent([]byte("lifecycle append policy repo"))
+	target := domain.HashContent([]byte("lifecycle append policy target"))
+	lifecycle, err := domain.NewBranchLifecycleRef(string(repoID), "main", target, 1, domain.BranchActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: string(repoID), Target: target}
+	requests := map[string]putRefReq{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || !strings.Contains(r.URL.Path, "/refs/") {
+			http.NotFound(w, r)
+			return
+		}
+		var body putRefReq
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode %s: %v", r.URL.Path, err)
+		}
+		if strings.Contains(r.URL.Path, "/refs/tag/") {
+			requests["lifecycle"] = body
+		} else if strings.Contains(r.URL.Path, "/refs/branch/") {
+			requests["branch"] = body
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer ts.Close()
+
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if err := c.Push(context.Background(), string(repoID), nil, nil, []domain.Ref{lifecycle, branch}, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := requests["lifecycle"]; got.Append || got.Force {
+		t.Fatalf("lifecycle request inherited branch policy: %+v", got)
+	}
+	if got := requests["branch"]; !got.Append || !got.Force {
+		t.Fatalf("branch request lost push policy: %+v", got)
+	}
+}
+
 func TestPushRejectsCIRV2BeforeMutatingOldServer(t *testing.T) {
 	repoID := domain.HashContent([]byte("cir-v2-old-server"))
 	cir := domain.CIRDocument{

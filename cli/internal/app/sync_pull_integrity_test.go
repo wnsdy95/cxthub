@@ -40,8 +40,8 @@ func TestValidatePullBatchRejectsTamperingAndBrokenGraph(t *testing.T) {
 
 	t.Run("tampered doc", func(t *testing.T) {
 		st := storage.NewFileStore(t.TempDir())
-		bad := doc
-		bad.CIR.Events[0].Blocks[0].Text = "changed"
+		bad := pullDoc(t, "changed")
+		bad.Hash = doc.Hash
 		if err := validatePullBatch(ctx, st, repo, []domain.Snapshot{root}, []domain.SessionDoc{bad}, []domain.Ref{ref}); !errors.Is(err, domain.ErrHashMismatch) {
 			t.Fatalf("error = %v", err)
 		}
@@ -65,6 +65,32 @@ func TestValidatePullBatchRejectsTamperingAndBrokenGraph(t *testing.T) {
 		changed.Parents = []domain.ContentHash{domain.HashContent([]byte("other-parent"))}
 		if err := validatePullBatch(ctx, st, repo, []domain.Snapshot{changed}, []domain.SessionDoc{doc}, []domain.Ref{ref}); !errors.Is(err, domain.ErrHashMismatch) {
 			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("legacy server may retain a branch projection shadowed by archive", func(t *testing.T) {
+		st := storage.NewFileStore(t.TempDir())
+		archive, err := domain.NewBranchLifecycleRef(repo, ref.Name, ref.Target, 1, domain.BranchArchived)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validatePullBatch(ctx, st, repo, []domain.Snapshot{root}, []domain.SessionDoc{doc}, []domain.Ref{archive, ref}); err != nil {
+			t.Fatalf("legacy lifecycle projection rejected: %v", err)
+		}
+	})
+
+	t.Run("same generation active lifecycle permits branch projection", func(t *testing.T) {
+		st := storage.NewFileStore(t.TempDir())
+		archive, err := domain.NewBranchLifecycleRef(repo, ref.Name, ref.Target, 1, domain.BranchArchived)
+		if err != nil {
+			t.Fatal(err)
+		}
+		active, err := domain.NewBranchLifecycleRef(repo, ref.Name, ref.Target, 1, domain.BranchActive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validatePullBatch(ctx, st, repo, []domain.Snapshot{root}, []domain.SessionDoc{doc}, []domain.Ref{archive, active, ref}); err != nil {
+			t.Fatalf("active winner rejected: %v", err)
 		}
 	})
 }

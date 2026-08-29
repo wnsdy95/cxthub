@@ -59,5 +59,21 @@ func resolveRef(ctx context.Context, store outbound.SessionStore, repoID, ref st
 	if !errors.Is(terr, domain.ErrNotFound) {
 		return "", terr
 	}
+	if event, ok, err := branchLifecycleByName(ctx, store, repoID, ref); err != nil {
+		return "", err
+	} else if ok {
+		return event.Target, nil
+	}
 	return "", fmt.Errorf("%w: ref %q — not found in any branch or tag (list: cxt list)", domain.ErrNotFound, ref)
+}
+
+func branchLifecycleByName(ctx context.Context, store outbound.SessionStore, repoID, branch string) (domain.BranchLifecycleEvent, bool, error) {
+	if err := domain.ValidateBranchName(branch); err != nil {
+		return domain.BranchLifecycleEvent{}, false, err
+	}
+	refs, err := store.ListRefs(ctx, repoID)
+	if err != nil {
+		return domain.BranchLifecycleEvent{}, false, err
+	}
+	return domain.LatestBranchLifecycle(refs, branch)
 }

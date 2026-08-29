@@ -134,6 +134,7 @@ func TestSyncPendingsCASResolvesOnlySharedReachableTargets(t *testing.T) {
 	head := mkDoc("head")
 	sessionTarget := mkDoc("session-ref")
 	tagOnly := mkDoc("tag-only")
+	lifecycleTarget := mkDoc("lifecycle-target")
 	unresolved := mkDoc("unresolved")
 	put := func(id domain.ContentHash, parents, grafts []domain.ContentHash) {
 		if err := st.PutSnapshot(ctx, domain.Snapshot{ID: id, DocHash: id, RepoID: repoID, Branch: "main", Parents: parents, GraftParents: grafts}); err != nil {
@@ -145,11 +146,17 @@ func TestSyncPendingsCASResolvesOnlySharedReachableTargets(t *testing.T) {
 	put(head, []domain.ContentHash{natural}, []domain.ContentHash{grafted})
 	put(sessionTarget, nil, nil)
 	put(tagOnly, nil, nil)
+	put(lifecycleTarget, nil, nil)
 	put(unresolved, nil, nil)
+	lifecycleRef, err := domain.NewBranchLifecycleRef(repoID, "feature/archived", lifecycleTarget, 1, domain.BranchArchived)
+	if err != nil {
+		t.Fatal(err)
+	}
 	refs := []domain.Ref{
 		{Kind: domain.RefBranch, Name: "main", RepoID: repoID, Target: head},
 		{Kind: domain.RefSession, Name: "main/session", RepoID: repoID, Target: sessionTarget},
 		{Kind: domain.RefTag, Name: "archive", RepoID: repoID, Target: tagOnly},
+		lifecycleRef,
 	}
 	for _, ref := range refs {
 		if err := st.PutRef(ctx, ref); err != nil {
@@ -161,6 +168,7 @@ func TestSyncPendingsCASResolvesOnlySharedReachableTargets(t *testing.T) {
 		"grafted":    grafted,
 		"session":    sessionTarget,
 		"tag-only":   tagOnly,
+		"lifecycle":  lifecycleTarget,
 		"unresolved": unresolved,
 	} {
 		if err := st.PutPending(ctx, domain.Pending{RepoID: repoID, SessionID: sid, Branch: "main", Target: target, UpdatedAt: time.Now().UTC()}); err != nil {
@@ -173,7 +181,7 @@ func TestSyncPendingsCASResolvesOnlySharedReachableTargets(t *testing.T) {
 	if _, err := svc.SyncPendings(ctx, inbound.SyncInput{RepoID: repoID}, nil); err != nil {
 		t.Fatal(err)
 	}
-	for sid, target := range map[string]domain.ContentHash{"natural": natural, "grafted": grafted, "session": sessionTarget} {
+	for sid, target := range map[string]domain.ContentHash{"natural": natural, "grafted": grafted, "session": sessionTarget, "lifecycle": lifecycleTarget} {
 		if remote.deletedPending[sid] != target {
 			t.Errorf("shared %s CAS delete = %s, want %s", sid, remote.deletedPending[sid], target)
 		}

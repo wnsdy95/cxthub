@@ -1827,7 +1827,7 @@ func (s *FSStore) refFile(repoID domain.ContentHash, kind domain.RefKind, name s
 	}
 }
 
-func (s *FSStore) GetRef(_ context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error) {
+func (s *FSStore) getRefRaw(_ context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error) {
 	if err := validateHash(repoID); err != nil {
 		return domain.Ref{}, err
 	}
@@ -1859,12 +1859,33 @@ func (s *FSStore) GetRef(_ context.Context, repoID domain.ContentHash, kind doma
 	return ref, nil
 }
 
-func (s *FSStore) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
+func (s *FSStore) GetRef(ctx context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error) {
+	ref, err := s.getRefRaw(ctx, repoID, kind, name)
+	if err != nil || (kind != domain.RefBranch && kind != domain.RefHead) {
+		return ref, err
+	}
+	refs, err := s.listRefsRaw(ctx, repoID)
+	if err != nil {
+		return domain.Ref{}, err
+	}
+	projected, err := domain.ProjectBranchLifecycleRefs(refs)
+	if err != nil {
+		return domain.Ref{}, err
+	}
+	for _, candidate := range projected {
+		if candidate.Kind == kind && candidate.Name == name {
+			return candidate, nil
+		}
+	}
+	return domain.Ref{}, domain.ErrNotFound
+}
+
+func (s *FSStore) listRefsRaw(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
 	var out []domain.Ref
-	if head, err := s.GetRef(ctx, repoID, domain.RefHead, domain.HeadRefName); err == nil {
+	if head, err := s.getRefRaw(ctx, repoID, domain.RefHead, domain.HeadRefName); err == nil {
 		out = append(out, head)
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return nil, err
@@ -1888,7 +1909,7 @@ func (s *FSStore) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]do
 			if rerr != nil {
 				return rerr
 			}
-			ref, rerr := s.GetRef(ctx, repoID, kc.kind, filepath.ToSlash(rel))
+			ref, rerr := s.getRefRaw(ctx, repoID, kc.kind, filepath.ToSlash(rel))
 			if rerr != nil {
 				return rerr
 			}
@@ -1900,6 +1921,14 @@ func (s *FSStore) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]do
 		}
 	}
 	return out, nil
+}
+
+func (s *FSStore) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
+	refs, err := s.listRefsRaw(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	return domain.ProjectBranchLifecycleRefs(refs)
 }
 
 var fsRefLocks sync.Map
@@ -1939,6 +1968,37 @@ func (s *FSStore) CompareAndSwapRef(ctx context.Context, repoID domain.ContentHa
 	lock := s.refLock(repoID, next.Kind, next.Name)
 	lock.Lock()
 	defer lock.Unlock()
+	if next.Kind == domain.RefBranch {
+		raw, rawErr := s.getRefRaw(ctx, repoID, domain.RefBranch, next.Name)
+		if rawErr != nil && !errors.Is(rawErr, domain.ErrNotFound) {
+			return rawErr
+		}
+		refs, err := s.listRefsRaw(ctx, repoID)
+		if err != nil {
+			return err
+		}
+		latest, ok, err := domain.LatestBranchLifecycle(refs, next.Name)
+		if err != nil {
+			return err
+		}
+		if ok && latest.State == domain.BranchArchived {
+			if errors.Is(rawErr, domain.ErrNotFound) || latest.Target == raw.Target {
+				return domain.ErrBranchArchived
+			}
+			generation, err := domain.NextBranchLifecycleGeneration(refs, next.Name)
+			if err != nil {
+				return err
+			}
+			active, err := domain.NewBranchLifecycleRef(repoID, next.Name, raw.Target, generation, domain.BranchActive)
+			if err != nil {
+				return err
+			}
+			if err := writeAtomic(s.refFile(repoID, domain.RefTag, active.Name), []byte(string(active.Target)+"\n")); err != nil {
+				return err
+			}
+			s.appendReflog(repoID, domain.RefLogEntry{Kind: domain.RefTag, Name: active.Name, New: active.Target, CreatedAt: time.Now().UTC()})
+		}
+	}
 	if next.Kind == domain.RefHead {
 		content := string(next.Target)
 		if next.Symbolic != "" {
@@ -1959,6 +2019,94 @@ func (s *FSStore) CompareAndSwapRef(ctx context.Context, repoID domain.ContentHa
 	}
 	// reflog: appends-only log on ref movement success (safety net for recovered tips). Best-effort.
 	s.appendReflog(repoID, domain.RefLogEntry{Kind: next.Kind, Name: next.Name, Old: curTarget, New: next.Target, CreatedAt: time.Now().UTC()})
+	return nil
+}
+
+func (s *FSStore) detachHeadFromBranchRaw(ctx context.Context, repoID domain.ContentHash, branch string, target domain.ContentHash) error {
+	head, err := s.getRefRaw(ctx, repoID, domain.RefHead, domain.HeadRefName)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.TrimPrefix(head.Symbolic, "refs/heads/") != branch {
+		return nil
+	}
+	return writeAtomic(s.refFile(repoID, domain.RefHead, domain.HeadRefName), []byte(string(target)+"\n"))
+}
+
+// ApplyBranchLifecycleRef stores an immutable lifecycle event and updates the
+// active branch projection under the same repo-wide ref lock used by CAS. An
+// archive only removes the exact target it observed. If the branch has already
+// advanced, a deterministic next-generation active event preserves that work.
+func (s *FSStore) ApplyBranchLifecycleRef(ctx context.Context, repoID domain.ContentHash, eventRef domain.Ref) error {
+	eventRef.RepoID = repoID
+	if err := domain.ValidateRef(eventRef); err != nil {
+		return err
+	}
+	event, ok, err := domain.ParseBranchLifecycleRef(eventRef)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return domain.ErrValidation
+	}
+	lock := s.refLock(repoID, domain.RefBranch, event.Branch)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if existing, err := s.getRefRaw(ctx, repoID, domain.RefTag, eventRef.Name); err == nil {
+		if existing.Target != eventRef.Target {
+			return domain.ErrRefConflict
+		}
+	} else if errors.Is(err, domain.ErrNotFound) {
+		if err := writeAtomic(s.refFile(repoID, domain.RefTag, eventRef.Name), []byte(string(eventRef.Target)+"\n")); err != nil {
+			return err
+		}
+		s.appendReflog(repoID, domain.RefLogEntry{Kind: domain.RefTag, Name: eventRef.Name, New: eventRef.Target, CreatedAt: time.Now().UTC()})
+	} else {
+		return err
+	}
+
+	refs, err := s.listRefsRaw(ctx, repoID)
+	if err != nil {
+		return err
+	}
+	latest, found, err := domain.LatestBranchLifecycle(refs, event.Branch)
+	if err != nil || !found || latest.Ref.Name != eventRef.Name || latest.State != domain.BranchArchived {
+		return err
+	}
+	branch, err := s.getRefRaw(ctx, repoID, domain.RefBranch, event.Branch)
+	if errors.Is(err, domain.ErrNotFound) {
+		return s.detachHeadFromBranchRaw(ctx, repoID, event.Branch, latest.Target)
+	}
+	if err != nil {
+		return err
+	}
+	if branch.Target == latest.Target {
+		if err := s.detachHeadFromBranchRaw(ctx, repoID, event.Branch, branch.Target); err != nil {
+			return err
+		}
+		if err := removeFileDurable(s.refFile(repoID, domain.RefBranch, event.Branch)); err != nil {
+			return err
+		}
+		s.appendReflog(repoID, domain.RefLogEntry{Kind: domain.RefBranch, Name: event.Branch, Old: branch.Target, CreatedAt: time.Now().UTC()})
+		return nil
+	}
+
+	generation, err := domain.NextBranchLifecycleGeneration(refs, event.Branch)
+	if err != nil {
+		return err
+	}
+	active, err := domain.NewBranchLifecycleRef(repoID, event.Branch, branch.Target, generation, domain.BranchActive)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(s.refFile(repoID, domain.RefTag, active.Name), []byte(string(active.Target)+"\n")); err != nil {
+		return err
+	}
+	s.appendReflog(repoID, domain.RefLogEntry{Kind: domain.RefTag, Name: active.Name, New: active.Target, CreatedAt: time.Now().UTC()})
 	return nil
 }
 

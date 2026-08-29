@@ -378,6 +378,43 @@ sleep 2 # Confirm fork-connect backed off after the seed won.
 expect "helper does not overwrite seed" "$([ "$(cat .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
 git checkout -q main >/dev/null 2>&1
 
+echo "── I. Branch lifecycle: rename transfers context; deletion archives without deleting history"
+RENAME_OUT=$(git branch -m web-fork-x web-fork-renamed 2>&1)
+expect "Git branch rename transfers context projection" "$(echo "$RENAME_OUT" | grep -c 'context moved')" 1
+expect "renamed context keeps its exact target" "$(cat .cxt/refs/heads/web-fork-renamed 2>/dev/null)" "$FORK_FROM"
+expect "renamed source context projection is gone" "$([ ! -e .cxt/refs/heads/web-fork-x ] && echo yes)" yes
+expect "rename keeps all context objects readable" "$(cxt fsck | grep -c 'Missing 0')" 1
+
+DELETE_OUT=$(git branch -D web-fork-renamed 2>&1)
+expect "normal branch deletion invokes context archive" "$(echo "$DELETE_OUT" | grep -c 'context archived')" 1
+expect "deleted Git branch has no active context projection" "$([ ! -e .cxt/refs/heads/web-fork-renamed ] && echo yes)" yes
+expect "archive keeps the target snapshot readable" "$(cxt fsck | grep -c 'Missing 0')" 1
+expect "archive records an immutable lifecycle event" "$(find .cxt/refs/tags/cxt/branch-state/v1 -type f -path '*/archived/*/web-fork-renamed' 2>/dev/null | wc -l | tr -d ' ')" 1
+
+# Detached HEAD used to return before reading deletion transactions. Delete a
+# second branch while detached to exercise the real hook and zeros→zeros Git
+# transaction form, not only the parser unit test.
+git checkout -q --detach HEAD >/dev/null 2>&1
+DETACHED_DELETE_OUT=$(git branch -D web-fork-y 2>&1)
+expect "detached branch deletion still invokes context archive" "$(echo "$DETACHED_DELETE_OUT" | grep -c 'context archived')" 1
+expect "detached deletion removes only the active projection" "$([ ! -e .cxt/refs/heads/web-fork-y ] && echo yes)" yes
+expect "detached archive preserves immutable history" "$(cxt fsck | grep -c 'Missing 0')" 1
+
+# The archive helper pushes asynchronously. The server must converge to no
+# branch projection while retaining the lifecycle tags as reachability roots.
+for i in $(seq 1 40); do
+  SERVER_ARCHIVE_STATE=$(curl -sb "$J" "$B/repos/$RID/refs" | python3 -c "
+import json,sys
+refs=json.load(sys.stdin)
+branches={r['name'] for r in refs if r['kind']=='branch'}
+archives=[r for r in refs if r['kind']=='tag' and '/archived/' in r['name'] and r['name'].startswith('cxt/branch-state/v1/')]
+print('ready' if 'web-fork-x' not in branches and 'web-fork-renamed' not in branches and 'web-fork-y' not in branches and len(archives) >= 3 else 'waiting')
+")
+  [ "$SERVER_ARCHIVE_STATE" = ready ] && break
+  sleep 0.25
+done
+expect "server applies both recoverable archive projections" "$SERVER_ARCHIVE_STATE" ready
+
 echo "── J. cxt setup: onboarding single command (idempotent, merge preservation)"
 mkdir -p "$HOME/.codex"
 cat > "$HOME/.codex/hooks.json" <<'EOF'

@@ -232,7 +232,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if err := s.store.PutSnapshot(ctx, snap); err != nil {
 		return inbound.SeedOutput{}, err
 	}
-	if err := s.store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: in.NewBranch, RepoID: repo.ID, Target: docHash}); err != nil {
+	if _, err := s.store.CreateBranchRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: in.NewBranch, RepoID: repo.ID, Target: docHash}); err != nil {
 		return inbound.SeedOutput{}, err
 	}
 	_ = s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: in.NewBranch})

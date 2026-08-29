@@ -292,9 +292,10 @@ export function CommitGraph({
   // Track label: topmost (latest) node of each track — ref badge (branch name) first, then snapshot label.
   // Pin track (default branch) has fixed label — append promotion after main ref points to the snapshot of the feature birth label, making the left track read as main.
   const laneLabels = useMemo(() => {
-    const labels: (string | null)[] = Array(laneCount).fill(null);
+    type LaneLabel = { text: string; archived: boolean };
+    const labels: (LaneLabel | null)[] = Array(laneCount).fill(null);
     if (pinHead && pinBranch && rows.some((r) => r.lane === 0 && r.snap.id === pinHead)) {
-      labels[0] = pinBranch;
+      labels[0] = { text: pinBranch, archived: false };
     }
     for (const r of rows) {
       if (labels[r.lane] !== null) continue;
@@ -302,25 +303,30 @@ export function CommitGraph({
       const branchBadge =
         (pinBranch ? rowBadges.find((b) => b.kind === 'branch' && b.name === pinBranch && r.lane === 0) : undefined) ??
         rowBadges.find((b) => b.kind === 'branch');
-      labels[r.lane] = branchBadge?.name ?? r.snap.branch ?? '';
+      const archivedBadge = rowBadges.find((b) => b.kind === 'archived');
+      labels[r.lane] = branchBadge
+        ? { text: branchBadge.name, archived: false }
+        : archivedBadge
+          ? { text: t('graph.archivedLane', { branch: archivedBadge.name }), archived: true }
+          : { text: r.snap.branch ?? '', archived: false };
     }
     return labels;
-  }, [rows, laneCount, badges, pinHead, pinBranch]);
+  }, [rows, laneCount, badges, pinHead, pinBranch, t]);
 
   return (
     <div className="graph-wrap">
       {/* Top: branch labels per track (track color, tilt — to prevent overlap) */}
       <div className="graph-head" style={{ width: svgW }}>
         {laneLabels.map((label, i) =>
-          label ? (
+          label?.text ? (
             <span
               key={i}
-              className={`graph-lane-label${label.length > 6 ? ' truncated' : ''}`}
-              style={{ left: cx(i), color: laneColor(i) }}
+              className={`graph-lane-label${label.archived ? ' archived' : ''}${label.text.length > 6 ? ' truncated' : ''}`}
+              style={{ left: cx(i), color: label.archived ? TICK : laneColor(i) }}
             >
               {/* Truncate after 6 characters (to prevent overflow) — show full name as background chip on hover */}
-              <span className="lane-label-short">{label.length > 6 ? label.slice(0, 6) + '…' : label}</span>
-              {label.length > 6 && <span className="lane-label-full">{label}</span>}
+              <span className="lane-label-short">{label.text.length > 6 ? label.text.slice(0, 6) + '…' : label.text}</span>
+              {label.text.length > 6 && <span className="lane-label-full">{label.text}</span>}
             </span>
           ) : null,
         )}
@@ -550,9 +556,13 @@ export function CommitGraph({
           {badges.get(tipRow.snap.id)?.length ? (
             <span className="tip-badges">
               {badges.get(tipRow.snap.id)!.map((b) => (
-                <span key={b.kind + b.name} className={`ref-badge ${b.kind}`}>
-                  {b.kind === 'tag' ? '⌂ ' : ''}
-                  {b.name}
+                <span
+                  key={b.kind + b.name}
+                  className={`ref-badge ${b.kind}`}
+                  title={b.kind === 'archived' ? t('context.archivedBranchTitle') : undefined}
+                >
+                  {b.kind === 'tag' ? '⌂ ' : b.kind === 'archived' ? '⊟ ' : ''}
+                  {b.kind === 'archived' ? t('context.archivedBranchBadge', { branch: b.name }) : b.name}
                 </span>
               ))}
             </span>

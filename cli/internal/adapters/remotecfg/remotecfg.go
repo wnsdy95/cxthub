@@ -433,5 +433,14 @@ func (g *GitContextWithRemote) CurrentBranch(ctx context.Context, cwd string) (s
 	return g.inner.CurrentBranch(ctx, cwd)
 }
 
+func (g *GitContextWithRemote) LocalBranches(ctx context.Context, cwd string) ([]string, error) {
+	inventory, ok := g.inner.(outbound.GitBranchInventory)
+	if !ok {
+		return nil, domain.ErrNotGitRepo
+	}
+	return inventory.LocalBranches(ctx, cwd)
+}
+
 // Ensure interface implementation.
 var _ outbound.GitContext = (*GitContextWithRemote)(nil)
+var _ outbound.GitBranchInventory = (*GitContextWithRemote)(nil)

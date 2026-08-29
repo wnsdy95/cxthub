@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -40,9 +41,15 @@ func (s *CheckoutSessionService) Checkout(ctx context.Context, in inbound.Checko
 	// actual branch ref from From. Tags and direct hashes are detached restores
 	// and must not become symbolic HEAD values.
 	branch := in.NewBranch
+	var missingBranchTarget domain.ContentHash
 	if branch == "" && in.From != "" && in.From != "HEAD" && !strings.HasPrefix(in.From, "sha256:") {
 		if _, branchErr := s.store.GetRef(ctx, in.RepoID, domain.RefBranch, in.From); branchErr == nil {
 			branch = in.From
+		} else if event, ok, lifecycleErr := branchLifecycleByName(ctx, s.store, in.RepoID, in.From); lifecycleErr != nil {
+			return inbound.CheckoutOutput{}, lifecycleErr
+		} else if ok {
+			branch = in.From
+			missingBranchTarget = event.Target
 		}
 	}
 
@@ -66,6 +73,24 @@ func (s *CheckoutSessionService) Checkout(ctx context.Context, in inbound.Checko
 	if err != nil {
 		return inbound.CheckoutOutput{}, err
 	}
+	// Loading is the preflight for an archived (or crash-interrupted active)
+	// branch projection. Record a newer active generation only after the target
+	// provider session was materialized successfully. Otherwise a failed
+	// restore would advertise a branch that cannot actually be resumed.
+	if missingBranchTarget != "" {
+		_, createErr := s.store.CreateBranchRef(ctx, domain.Ref{
+			Kind: domain.RefBranch, Name: branch, RepoID: in.RepoID, Target: missingBranchTarget,
+		})
+		if errors.Is(createErr, domain.ErrBranchExists) {
+			current, currentErr := s.store.GetRef(ctx, in.RepoID, domain.RefBranch, branch)
+			if currentErr == nil && current.Target == missingBranchTarget {
+				createErr = nil // concurrent idempotent restore won
+			}
+		}
+		if createErr != nil {
+			return inbound.CheckoutOutput{}, createErr
+		}
+	}
 	if branch != "" {
 		if err := s.store.PutRef(ctx, domain.Ref{
 			Kind: domain.RefHEAD, Name: "HEAD", RepoID: in.RepoID, Symbolic: branch,
@@ -75,11 +100,12 @@ func (s *CheckoutSessionService) Checkout(ctx context.Context, in inbound.Checko
 	}
 
 	return inbound.CheckoutOutput{
-		Branch:      branch,
-		Head:        snapID,
-		WrittenPath: lo.WrittenPath,
-		ResumeCmd:   lo.ResumeCmd,
-		Fidelity:    lo.Fidelity,
+		Branch:          branch,
+		Head:            snapID,
+		WrittenPath:     lo.WrittenPath,
+		ResumeCmd:       lo.ResumeCmd,
+		Fidelity:        lo.Fidelity,
+		ActivatedBranch: missingBranchTarget != "",
 	}, nil
 }
 

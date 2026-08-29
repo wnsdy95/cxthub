@@ -32,6 +32,12 @@ type UpdateRef interface {
 	UpdateRef(ctx context.Context, in UpdateRefInput) (UpdateRefOutput, error)
 }
 
+// UpdateRefs applies a bounded ref projection batch and reconciles pending
+// reachability exactly once at the request boundary.
+type UpdateRefs interface {
+	UpdateRefs(ctx context.Context, in UpdateRefsInput) (UpdateRefsOutput, error)
+}
+
 // ListSnapshots returns a list of snapshot metadata per branch (sync protocol, ListSnapshots mirror).
 type ListSnapshots interface {
 	List(ctx context.Context, in ListSnapshotsInput) ([]domain.Snapshot, error)
@@ -202,6 +208,20 @@ type UpdateRefInput struct {
 	Append bool
 }
 
+const (
+	MaxRefBatchUpdates  = 4096
+	MaxRefBatchJSONBody = 8 << 20
+)
+
+type UpdateRefsInput struct {
+	RepoID  domain.ContentHash
+	Updates []UpdateRefInput
+}
+
+type UpdateRefsOutput struct {
+	Applied int `json:"applied"`
+}
+
 // RefUpdateResult is the result of ref move determination (sync protocol).
 type RefUpdateResult string
 
@@ -218,12 +238,12 @@ const (
 
 // UpdateRefOutput: verdict + (fork info when diverged) (sync protocol).
 type UpdateRefOutput struct {
-	Result          RefUpdateResult
-	Ref             domain.Ref
-	RequestedTarget domain.ContentHash
-	ServerTarget    domain.ContentHash
-	ForkedRef       *domain.Ref
-	MergeBase       domain.ContentHash
+	Result          RefUpdateResult    `json:"result"`
+	Ref             domain.Ref         `json:"ref"`
+	RequestedTarget domain.ContentHash `json:"requested_target,omitempty"`
+	ServerTarget    domain.ContentHash `json:"server_target,omitempty"`
+	ForkedRef       *domain.Ref        `json:"forked_ref,omitempty"`
+	MergeBase       domain.ContentHash `json:"merge_base,omitempty"`
 }
 
 // ListSnapshotsInput: branch filter (empty for all).

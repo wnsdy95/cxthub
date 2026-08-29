@@ -79,6 +79,8 @@ export const ko = {
     reflog: '⟲ reflog — ref 이동 기록',
     reflogEmpty: '기록 없음',
     memoryBadgeTitle: '저장된 메모리 digest 보유 — 선택하면 이 스냅샷의 원본 기록을 표시합니다',
+    archivedBranchBadge: '보관됨 · {branch}',
+    archivedBranchTitle: '삭제된 Git 브랜치의 컨텍스트 — 이력은 보존되며 cxt branch restore로 복구할 수 있습니다',
     compactSummary: '컨텍스트 압축 요약 (에이전트 생성)',
     cxtSeedSummary: 'cxt 시드 요약 (자동 생성 — 상속 컨텍스트)',
     branchOff: '⎇ 분기 (checkout -b)',
@@ -457,6 +459,7 @@ export const ko = {
     joinAlreadyHead: '이 커밋이 이미 브랜치 head 입니다.',
     uncommitted: '◌ 미커밋 — 아직 commit에 연결되지 않은 훅 캡처',
     uncommittedDivider: '◌ 위는 미커밋 (commit 전)',
+    archivedLane: '보관 · {branch}',
   },
 };
 

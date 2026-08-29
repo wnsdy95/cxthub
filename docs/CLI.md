@@ -300,6 +300,26 @@ cxt fork <ref> --as <branch>
 
 Creates a context branch from a specific ref and restores it.
 
+### `cxt branch archive` / `cxt branch restore`
+
+```text
+cxt branch archive <name>
+cxt branch restore <name>
+  [--provider <claude|codex>]
+  [--mode <full|reconstructed|memory>]
+```
+
+`archive` removes only the active context-branch pointer after the matching
+Git branch has been deleted. It first records an immutable lifecycle tag, so
+all snapshots, conversations, compact memory, and graph ancestry remain
+reachable and syncable. Git's branch-deletion hook performs this automatically;
+the command is also available for repairing historical stale pointers.
+
+`restore` resolves the latest archived target, records a newer active lifecycle
+event, recreates the context pointer, and restores the provider session. A
+stale client cannot recreate an archived pointer by an ordinary push; it must
+observe or explicitly create the newer active generation.
+
 ### `cxt load`
 
 ```text

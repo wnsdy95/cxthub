@@ -60,15 +60,29 @@ func script(hookName, cxtBin string) string {
 input=$(cat)
 # Existing user hook chaining (stdin refilling).
 [ -x "$0.pre-cxt" ] && printf '%%s\n' "$input" | "$0.pre-cxt" "$@"
-[ "$1" = "committed" ] || exit 0
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
 command -v "$CXT" >/dev/null 2>&1 || exit 0
+if [ "$1" = "prepared" ]; then
+  case "$input" in
+  *' 0000000000000000000000000000000000000000 refs/heads/'*|*' 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/'*)
+    printf '%%s\n' "$input" | "$CXT" git-hook ref-prepare || true ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "aborted" ]; then
+  case "$input" in
+  *' 0000000000000000000000000000000000000000 refs/heads/'*|*' 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/'*)
+    printf '%%s\n' "$input" | "$CXT" git-hook ref-abort || true ;;
+  esac
+  exit 0
+fi
+[ "$1" = "committed" ] || exit 0
 case "$input" in
 *refs/stash*) "$CXT" git-hook stash-sync || true ;;
 esac
 case "$input" in
-*refs/heads/*) printf '%%s\n' "$input" | "$CXT" git-hook ref-sync || true ;;
+*refs/heads/*) printf '%%s\n' "$input" | "$CXT" git-hook ref-sync "$PPID" || true ;;
 esac
 exit 0
 `, Marker, shellQuote(cxtBin))

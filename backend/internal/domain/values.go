@@ -141,6 +141,10 @@ func ValidateRefName(kind RefKind, name string) error {
 		}
 		return nil
 	}
+	if kind == RefTag && strings.HasPrefix(name, BranchLifecycleTagPrefix) {
+		_, _, err := parseBranchLifecycleTagName(name)
+		return err
+	}
 	return ValidateBranchName(name)
 }
 

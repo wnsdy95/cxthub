@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,29 @@ func TestEnsureGitignoreRefusesSymlinkTarget(t *testing.T) {
 	got, err := os.ReadFile(outside)
 	if err != nil || string(got) != "keep" {
 		t.Fatalf("outside target changed: %q err=%v", got, err)
+	}
+}
+
+func TestReferenceTransactionScriptCarriesPreparedStateByBranch(t *testing.T) {
+	got := script("reference-transaction", "/usr/local/bin/cxt")
+	check := exec.Command("/bin/sh", "-n")
+	check.Stdin = strings.NewReader(got)
+	if out, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("invalid reference-transaction shell: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		`git-hook ref-prepare`,
+		`git-hook ref-abort`,
+		`git-hook ref-sync "$PPID"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("reference-transaction hook lacks %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{`ref-prepare "$PPID"`, `ref-abort "$PPID"`} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("prepared lifecycle is incorrectly keyed by unstable hook PPID %q:\n%s", forbidden, got)
+		}
 	}
 }
 
