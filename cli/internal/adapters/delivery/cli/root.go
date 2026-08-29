@@ -38,6 +38,7 @@ type Container struct {
 	Init     inbound.InitRepo
 	Save     inbound.SaveSession
 	Fork     inbound.ForkSession
+	Branches inbound.BranchLifecycle
 	Checkout inbound.CheckoutSession
 	Load     inbound.LoadSession
 	List     inbound.ListSessions
@@ -124,6 +125,47 @@ func Run(c *Container, args []string) error {
 	case "remote":
 		return runRemote(ctx, c, cwd, rest)
 
+	case "branch":
+		action := firstPositional(rest)
+		branch := ""
+		pos := positionals(rest)
+		if len(pos) > 1 {
+			branch = pos[1]
+		}
+		switch action {
+		case "archive":
+			if branch == "" {
+				return fmt.Errorf("usage: cxt branch archive <name>")
+			}
+			if gitOut(cwd, "show-ref", "--verify", "refs/heads/"+branch) != "" {
+				return fmt.Errorf("Git branch %q still exists — delete it first, then archive its context", branch)
+			}
+			out, err := c.Branches.Archive(ctx, inbound.BranchArchiveInput{Cwd: cwd, Branch: branch})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("archived context branch %q at %s (history preserved)\n", out.Branch, shortHash(out.Target))
+			spawnBranchStateSync(cwd)
+			return nil
+		case "restore":
+			if branch == "" {
+				return fmt.Errorf("usage: cxt branch restore <name> [--provider claude|codex] [--mode full|reconstructed|memory]")
+			}
+			out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
+				From: branch, TargetProvider: flagVal(rest, "--provider"), Mode: modeOr(cwd, rest), Cwd: cwd,
+			})
+			if err != nil {
+				return err
+			}
+			printRestore(out.Branch, out.Fidelity, out.ResumeCmd, out.WrittenPath)
+			if out.ActivatedBranch {
+				spawnBranchStateSync(cwd)
+			}
+			return nil
+		default:
+			return fmt.Errorf("usage: cxt branch archive|restore <name>")
+		}
+
 	case "repack":
 		// Repack large transcript and memory objects into their storage-only chunk
 		// CAS forms. Content identities and the wire protocol remain unchanged.
@@ -182,6 +224,9 @@ func Run(c *Container, args []string) error {
 			return err
 		}
 		printRestore(out.Branch, out.Fidelity, out.ResumeCmd, out.WrittenPath)
+		if out.ActivatedBranch {
+			spawnBranchStateSync(cwd)
+		}
 		return nil
 
 	case "config":
@@ -621,6 +666,9 @@ func Run(c *Container, args []string) error {
 			return err
 		}
 		printRestore(out.Branch, out.Fidelity, out.ResumeCmd, out.WrittenPath)
+		if out.ActivatedBranch {
+			spawnBranchStateSync(cwd)
+		}
 		return nil
 
 	case "fork":
@@ -960,7 +1008,7 @@ func firstPositional(args []string) string {
 
 var publicCommandNames = []string{
 	"setup", "init", "repo", "claude", "codex", "remote", "repack",
-	"add", "commit", "switch", "config", "login", "logout", "fsck",
+	"branch", "add", "commit", "switch", "config", "login", "logout", "fsck",
 	"reflog", "secrets", "settings", "hooks", "save", "list", "log",
 	"checkout", "fork", "load", "push", "pull", "stash", "memorize",
 	"memory", "tag", "mcp", "hook", "version", "help",
@@ -989,6 +1037,8 @@ usage: cxt <command> [flags]
   remote add origin <url>   connect the server repository URL (the context equivalent of Git origin)
   remote [-v]               list configured remotes
   remote remove <name>      remove a configured remote
+  branch archive <name>     hide a deleted Git branch pointer while preserving all context history
+  branch restore <name>     restore an archived context branch and record a new active generation
   add [claude|codex]        stage providers for the next commit (defaults to both)
   commit [-m msg]           capture the active session (also run automatically by the Git commit hook)
   checkout [<ref>] [-b new] [--provider claude|codex] [--mode full|reconstructed|memory]

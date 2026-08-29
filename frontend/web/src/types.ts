@@ -134,6 +134,7 @@ export interface Ref {
   name: string;
   repo_id: string;
   target: string;
+  symbolic?: string;
 }
 
 /** Context snapshot (= git commit) */

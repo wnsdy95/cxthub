@@ -15,6 +15,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -146,6 +147,197 @@ func spawnPendingSync(cwd string, resolutions []inbound.PendingResolution) {
 	_ = cmd.Start()
 }
 
+func spawnBranchStateSync(cwd string) {
+	if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "git-hook", "branch-state-sync")
+	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	_ = cmd.Start()
+}
+
+// spawnBranchDeletionFinalize defers classification until the Git process has
+// left reference-transaction. During both prepared and committed callbacks a
+// rename's destination ref/reflog is not visible yet, so synchronous handling
+// cannot distinguish rename from deletion. Stdout/stderr are inherited so the
+// ordinary `git branch` command still reports the final context action.
+func spawnBranchDeletionFinalize(cwd, branch, oldOID, gitPID string) {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "git-hook", "branch-deletion-finalize", branch, oldOID, gitPID)
+	cmd.Dir = cwd
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	_ = cmd.Start()
+}
+
+func waitForGitTransaction(gitPID string) {
+	pid, err := strconv.Atoi(gitPID)
+	if err != nil || pid <= 0 {
+		return
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		err := syscall.Kill(pid, 0)
+		if err != nil && !errors.Is(err, syscall.EPERM) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+type branchRefTransaction struct {
+	name, oldOID, newOID, createdOID string
+	deleted                          bool
+}
+
+func zeroGitOID(value string) bool {
+	return (len(value) == 40 || len(value) == 64) && strings.Trim(value, "0") == ""
+}
+
+func validNonZeroGitOID(value string) bool {
+	if (len(value) != 40 && len(value) != 64) || zeroGitOID(value) {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseBranchRefTransaction(line string) branchRefTransaction {
+	fields := strings.Fields(line)
+	if len(fields) != 3 || !strings.HasPrefix(fields[2], "refs/heads/") {
+		return branchRefTransaction{}
+	}
+	out := branchRefTransaction{
+		name: strings.TrimPrefix(fields[2], "refs/heads/"), oldOID: fields[0], newOID: fields[1],
+	}
+	oldZero, newZero := zeroGitOID(out.oldOID), zeroGitOID(out.newOID)
+	switch {
+	case newZero:
+		out.deleted = true
+	case oldZero:
+		out.createdOID = out.newOID
+	}
+	return out
+}
+
+type preparedBranchRefTransaction struct {
+	CreatedAt time.Time `json:"created_at"`
+	Branch    string    `json:"branch"`
+	OldOID    string    `json:"old_oid"`
+}
+
+func branchRefTransactionLedgerPath(branch string) (string, error) {
+	if err := domain.ValidateBranchName(branch); err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(branch))
+	return filepath.Join(".cxt", "ref-transactions", fmt.Sprintf("%x.json", digest)), nil
+}
+
+func recordPreparedBranchRefTransaction(cwd string, lines []string) error {
+	for _, line := range lines {
+		txn := parseBranchRefTransaction(line)
+		if !txn.deleted {
+			continue
+		}
+		path, err := branchRefTransactionLedgerPath(txn.name)
+		if err != nil {
+			return err
+		}
+		oldOID := txn.oldOID
+		if !validNonZeroGitOID(oldOID) {
+			// Git's files ref backend can report zero→zero for deletion. During
+			// prepared the old ref is still authoritative and readable.
+			oldOID = gitOut(cwd, "rev-parse", "--verify", "refs/heads/"+txn.name)
+		}
+		if !validNonZeroGitOID(oldOID) {
+			_ = providerfs.RemoveRepoFile(cwd, path)
+			continue
+		}
+		raw, err := json.Marshal(preparedBranchRefTransaction{
+			CreatedAt: time.Now().UTC(), Branch: txn.name, OldOID: oldOID,
+		})
+		if err != nil {
+			return err
+		}
+		if err := providerfs.WriteRepoFileAtomic(cwd, path, raw, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func consumePreparedBranchRefTransaction(cwd, branch string) string {
+	path, err := branchRefTransactionLedgerPath(branch)
+	if err != nil {
+		return ""
+	}
+	defer providerfs.RemoveRepoFile(cwd, path) // best-effort cleanup after commit or malformed state
+	raw, err := providerfs.ReadRepoFile(cwd, path)
+	if err != nil {
+		return ""
+	}
+	var prepared preparedBranchRefTransaction
+	if json.Unmarshal(raw, &prepared) != nil || prepared.CreatedAt.IsZero() {
+		return ""
+	}
+	age := time.Since(prepared.CreatedAt)
+	if age < -time.Minute || age > 2*time.Minute || prepared.Branch != branch || !validNonZeroGitOID(prepared.OldOID) {
+		return ""
+	}
+	return prepared.OldOID
+}
+
+func clearPreparedBranchRefTransactions(cwd string, lines []string) {
+	for _, line := range lines {
+		txn := parseBranchRefTransaction(line)
+		if !txn.deleted {
+			continue
+		}
+		if path, err := branchRefTransactionLedgerPath(txn.name); err == nil {
+			_ = providerfs.RemoveRepoFile(cwd, path)
+		}
+	}
+}
+
+// renamedBranchForDeletion recognizes Git's branch rename contract. Git emits
+// only deletion of the old ref to reference-transaction, while the new ref is
+// already present and its reflog contains the authoritative rename record.
+// Requiring both that exact record and the deleted OID avoids treating an
+// unrelated create+delete pair as a rename.
+func renamedBranchForDeletion(cwd, oldBranch, oldOID string) string {
+	if !validNonZeroGitOID(oldOID) {
+		return ""
+	}
+	refs := gitOut(cwd, "for-each-ref", "--format=%(refname:lstrip=2)%09%(objectname)", "refs/heads")
+	for _, line := range strings.Split(refs, "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 || fields[1] != oldOID || fields[0] == oldBranch {
+			continue
+		}
+		newBranch := fields[0]
+		want := fmt.Sprintf("Branch: renamed refs/heads/%s to refs/heads/%s", oldBranch, newBranch)
+		got := gitOut(cwd, "reflog", "show", "-1", "--format=%gs", "refs/heads/"+newBranch)
+		if got == want {
+			return newBranch
+		}
+	}
+	return ""
+}
+
 // acquireSyncLock acquires the pending-sync serialization lock (.cxt/sync.lock).
 // Multiple detached helpers spawned on commit/agent stop reduce contention on SyncPendings to recover stale unsyncs (backlog #2 — self-heal with server and flicker removal).
 // Briefly wait and retry to ensure --resolve deletion is not lost, and proceed without lock on deadline exceeded (availability priority — server self-heals by reachability, so safe). O_EXCL + stale argument pattern.
@@ -274,6 +466,9 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
 				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd)
 				fmt.Printf("cxt: %q context prepared  [fidelity: %s]\n", branch, out.Fidelity)
+				if out.ActivatedBranch {
+					spawnBranchStateSync(cwd)
+				}
 				syncSettingsToSnapshot(ctx, c, cwd, out.Head, "git checkout "+branch)
 			} else {
 				prepareErr = err
@@ -589,6 +784,30 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 	event, args := rest[0], rest[1:]
 
 	switch event {
+	case "ref-prepare":
+		var lines []string
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			hookWarn("branch transaction prepare read failed: %v", err)
+			return nil
+		}
+		if err := recordPreparedBranchRefTransaction(cwd, lines); err != nil {
+			hookWarn("branch transaction prepare failed: %v", err)
+		}
+		return nil
+
+	case "ref-abort":
+		var lines []string
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		clearPreparedBranchRefTransactions(cwd, lines)
+		return nil
+
 	case "post-commit":
 		// git commit → context snapshot. Passes the message and SHA directly to link code ↔ context.
 		msg := gitOut(cwd, "log", "-1", "--pretty=%s")
@@ -621,6 +840,61 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		defer release()
 		if _, err := c.Sync.SyncPendings(ctx, inbound.SyncInput{Cwd: cwd}, resolutions); err != nil {
 			hookWarn("pending sync: %v", err)
+		}
+
+	case "branch-state-sync":
+		if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
+			return nil
+		}
+		release := acquireSyncLock(cwd)
+		defer release()
+		if _, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd}); err != nil {
+			hookWarn("branch archive sync: %v", err)
+		}
+
+	case "branch-deletion-finalize":
+		if len(args) < 3 || c.Branches == nil {
+			return nil
+		}
+		name, oldOID, gitPID := args[0], args[1], args[2]
+		if domain.ValidateBranchName(name) != nil {
+			return nil
+		}
+		waitForGitTransaction(gitPID)
+		// A delete+recreate transaction ended with the same Git branch alive.
+		// Its final inventory wins over the intermediate deletion callback.
+		if gitOut(cwd, "show-ref", "--verify", "refs/heads/"+name) != "" {
+			return nil
+		}
+		if !validNonZeroGitOID(oldOID) {
+			// Without the deleted object identity, a committed zeros→zeros event
+			// cannot distinguish a rename from a deletion. Preserve the projection
+			// on uncertainty; a later hook/manual archive can safely retry.
+			hookWarn("context branch %q kept — Git transaction lacked the old object ID needed to distinguish rename from deletion", name)
+			return nil
+		}
+		if renamed := renamedBranchForDeletion(cwd, name, oldOID); renamed != "" {
+			out, err := c.Branches.Rename(ctx, inbound.BranchRenameInput{Cwd: cwd, From: name, To: renamed})
+			switch {
+			case err == nil:
+				fmt.Printf("cxt: git branch %q renamed to %q — context moved at %s (history preserved)\n", name, renamed, shortHash(out.Target))
+				spawnBranchStateSync(cwd)
+			case errors.Is(err, domain.ErrNotFound):
+				// No context pointer existed for the renamed Git branch.
+			default:
+				hookWarn("context branch %q rename to %q failed: %v", name, renamed, err)
+			}
+			return nil
+		}
+		out, err := c.Branches.Archive(ctx, inbound.BranchArchiveInput{Cwd: cwd, Branch: name})
+		switch {
+		case err == nil:
+			fmt.Printf("cxt: git branch %q deleted — context archived at %s (restore: cxt branch restore %s)\n", name, shortHash(out.Target), name)
+			spawnBranchStateSync(cwd)
+		case errors.Is(err, domain.ErrNotFound):
+			// No context pointer existed for this Git branch.
+		default:
+			hookWarn("context branch %q archive failed: %v", name, err)
 		}
 
 	case "post-checkout":
@@ -672,52 +946,48 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		// Responds only if the current branch ref moves to the final state (HEAD).
 		// (Git branch creation/fetch etc. changes are filtered out here).
 		branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-		if branch == "" || branch == "HEAD" {
-			return nil
+		want := ""
+		headFull := ""
+		if branch != "" && branch != "HEAD" {
+			want = "refs/heads/" + branch
+			headFull = gitOut(cwd, "rev-parse", "HEAD")
 		}
-		want := "refs/heads/" + branch
-		headFull := gitOut(cwd, "rev-parse", "HEAD")
 		touched := false
 		type created struct{ name, oid string }
 		var createdRefs []created
-		var deletedRefs []string
-		zeros := strings.Repeat("0", 40)
+		type deleted struct{ name, oid string }
+		var deletedRefs []deleted
 		sc := bufio.NewScanner(os.Stdin)
 		for sc.Scan() {
-			f := strings.Fields(sc.Text())
-			if len(f) != 3 || !strings.HasPrefix(f[2], "refs/heads/") {
+			txn := parseBranchRefTransaction(sc.Text())
+			if txn.name == "" {
 				continue
 			}
-			name := strings.TrimPrefix(f[2], "refs/heads/")
-			if f[0] == zeros && f[1] != zeros {
+			if txn.createdOID != "" {
 				// branch creation (git branch X / checkout -b X) — context branches too.
-				createdRefs = append(createdRefs, created{name: name, oid: f[1]})
+				createdRefs = append(createdRefs, created{name: txn.name, oid: txn.createdOID})
 				continue
 			}
-			if f[0] == zeros && f[1] == zeros {
+			if txn.deleted {
 				// branch deletion (git branch -D / PR merge cleanup). Git reports the committed
-				// phase of the deletion as zeros→zeros (empirically — old oid does not come).
-				// Immutable invariant (P1): context is never deleted or changed — only preservation notice is output.
-				deletedRefs = append(deletedRefs, name)
+				// phase as either zeros→zeros or old→zeros depending on the ref backend.
+				preparedOldOID := consumePreparedBranchRefTransaction(cwd, txn.name)
+				if !validNonZeroGitOID(txn.oldOID) {
+					txn.oldOID = preparedOldOID
+				}
+				deletedRefs = append(deletedRefs, deleted{name: txn.name, oid: txn.oldOID})
 				continue
 			}
-			if f[2] == want && f[1] == headFull {
+			if want != "" && "refs/heads/"+txn.name == want && txn.newOID == headFull {
 				touched = true
 			}
 		}
-		for _, name := range deletedRefs {
-			// Context existence check: branch label snapshot or cxt branch ref (includes fork-only).
-			n := 0
-			if list, lerr := c.List.List(ctx, inbound.ListInput{Branch: name}); lerr == nil {
-				n = len(list.Snapshots)
+		for _, deletedRef := range deletedRefs {
+			gitPID := ""
+			if len(args) > 0 {
+				gitPID = args[0]
 			}
-			refExists := false
-			if _, err := os.Stat(filepath.Join(cwd, ".cxt", "refs", "heads", filepath.FromSlash(name))); err == nil {
-				refExists = true
-			}
-			if n > 0 || refExists {
-				fmt.Printf("cxt: git branch %q deleted — context preserved (restore: cxt checkout %s)\n", name, name)
-			}
+			spawnBranchDeletionFinalize(cwd, deletedRef.name, deletedRef.oid, gitPID)
 		}
 		if !operationInProgress(cwd) {
 			// delayed handling by detached helper: checkout -b/switch -c (transient creation) temporarily

@@ -21,6 +21,38 @@ type ForkSession interface {
 	Fork(ctx context.Context, in ForkInput) (ForkOutput, error)
 }
 
+type BranchArchiveInput struct {
+	Cwd    string
+	RepoID string
+	Branch string
+}
+
+type BranchArchiveOutput struct {
+	Branch string
+	Target domain.ContentHash
+	Event  domain.Ref
+}
+
+type BranchRenameInput struct {
+	Cwd    string
+	RepoID string
+	From   string
+	To     string
+}
+
+type BranchRenameOutput struct {
+	From   string
+	To     string
+	Target domain.ContentHash
+}
+
+// BranchLifecycle manages only mutable branch projections. Archive events are
+// immutable tags, so snapshots and session documents are never deleted.
+type BranchLifecycle interface {
+	Archive(ctx context.Context, in BranchArchiveInput) (BranchArchiveOutput, error)
+	Rename(ctx context.Context, in BranchRenameInput) (BranchRenameOutput, error)
+}
+
 // LoadSession is a use-case port that restores a snapshot to the target provider session file (domain model).
 // Called from MCP session_load / memory_load / CLI cxt load / cxt memory load.
 // Mode=full|reconstructed for full-context restoration, Mode=memory for memory-form summary injection.
@@ -373,6 +405,9 @@ type CheckoutOutput struct {
 	ResumeCmd string
 	// Fidelity is the actual achieved fidelity (may differ from requested Mode).
 	Fidelity domain.FidelityTier
+	// ActivatedBranch reports that checkout restored a missing lifecycle
+	// projection and recorded a newer active generation.
+	ActivatedBranch bool
 }
 
 // MemorizeInput is the input DTO for Memorize.Memorize (compatibility rules).

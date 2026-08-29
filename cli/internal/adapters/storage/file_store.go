@@ -346,6 +346,13 @@ func (s *FileStore) withPendingMutationLock(ctx context.Context, sessionID strin
 	return s.withMutationLock(ctx, "pending", hex.EncodeToString(sum[:]), fn)
 }
 
+// withRefMutationLock serializes all ref projections for this local repo.
+// Branch lifecycle transitions touch one branch plus an immutable tag, so a
+// per-ref lock would still permit a torn archive/create operation.
+func (s *FileStore) withRefMutationLock(ctx context.Context, fn func() error) error {
+	return s.withMutationLock(ctx, "refs", "repo", fn)
+}
+
 func (s *FileStore) withMutationLock(ctx context.Context, namespace, key string, fn func() error) error {
 	locksDir := filepath.Join(s.storeDir(), "locks", namespace)
 	if err := validateCxtDir(locksDir); err != nil {
@@ -644,11 +651,52 @@ func (s *FileStore) ListSnapshots(_ context.Context, _ string, branch string) ([
 	return out, nil
 }
 
-// PutRef upserts a mutable pointer (HEAD/branch/session/tag).
-func (s *FileStore) PutRef(_ context.Context, ref domain.Ref) error {
+// PutRef upserts an existing mutable pointer (HEAD/branch/session/tag). A
+// branch whose latest lifecycle event is archived cannot be recreated through
+// this generic path; CreateBranchRef must record a newer active event first.
+func (s *FileStore) PutRef(ctx context.Context, ref domain.Ref) error {
 	if err := domain.ValidateRef(ref); err != nil {
 		return err
 	}
+	return s.withRefMutationLock(ctx, func() error {
+		if ref.Kind == domain.RefBranch {
+			raw, rawErr := s.getRefRaw(ctx, ref.RepoID, ref.Kind, ref.Name)
+			if rawErr != nil && !errors.Is(rawErr, domain.ErrNotFound) {
+				return rawErr
+			}
+			refs, err := s.listRefsRaw(ctx, ref.RepoID)
+			if err != nil {
+				return err
+			}
+			latest, ok, err := domain.LatestBranchLifecycle(refs, ref.Name)
+			if err != nil {
+				return err
+			}
+			if ok && latest.State == domain.BranchArchived {
+				if errors.Is(rawErr, domain.ErrNotFound) || latest.Target == raw.Target {
+					return domain.ErrBranchArchived
+				}
+				generation, err := domain.NextBranchLifecycleGeneration(refs, ref.Name)
+				if err != nil {
+					return err
+				}
+				active, err := domain.NewBranchLifecycleRef(ref.RepoID, ref.Name, raw.Target, generation, domain.BranchActive)
+				if err != nil {
+					return err
+				}
+				// The raw branch already escaped the archived target. Persist that
+				// evidence before moving it so a crash cannot make later readers
+				// reinterpret the branch as deleted.
+				if err := s.putRefRaw(active); err != nil {
+					return err
+				}
+			}
+		}
+		return s.putRefRaw(ref)
+	})
+}
+
+func (s *FileStore) putRefRaw(ref domain.Ref) error {
 	switch ref.Kind {
 	case domain.RefHEAD:
 		content := string(ref.Target)
@@ -671,8 +719,9 @@ func (s *FileStore) refPath(kind, name string) string {
 	return filepath.Join(s.storeDir(), "refs", kind, filepath.FromSlash(name))
 }
 
-// GetRef retrieves a ref by (repoID, kind, name). Returns domain.ErrNotFound if not found.
-func (s *FileStore) GetRef(_ context.Context, repoID string, kind domain.RefKind, name string) (domain.Ref, error) {
+// getRefRaw reads the physical projection without interpreting lifecycle
+// events. Callers performing a transition already hold the repo ref lock.
+func (s *FileStore) getRefRaw(_ context.Context, repoID string, kind domain.RefKind, name string) (domain.Ref, error) {
 	if err := domain.ValidateRefName(kind, name); err != nil {
 		return domain.Ref{}, err
 	}
@@ -720,10 +769,33 @@ func (s *FileStore) GetRef(_ context.Context, repoID string, kind domain.RefKind
 	}
 }
 
-// ListRefs lists all refs (HEAD + branches + session lines + tags) of a repo.
-func (s *FileStore) ListRefs(ctx context.Context, repoID string) ([]domain.Ref, error) {
+// GetRef retrieves the logical ref projection. An archived branch is absent
+// even if a crash left its old physical file behind after the immutable event
+// was durably written.
+func (s *FileStore) GetRef(ctx context.Context, repoID string, kind domain.RefKind, name string) (domain.Ref, error) {
+	ref, err := s.getRefRaw(ctx, repoID, kind, name)
+	if err != nil || (kind != domain.RefBranch && kind != domain.RefHEAD) {
+		return ref, err
+	}
+	refs, err := s.listRefsRaw(ctx, repoID)
+	if err != nil {
+		return domain.Ref{}, err
+	}
+	projected, err := domain.ProjectBranchLifecycleRefs(refs)
+	if err != nil {
+		return domain.Ref{}, err
+	}
+	for _, candidate := range projected {
+		if candidate.Kind == kind && candidate.Name == name {
+			return candidate, nil
+		}
+	}
+	return domain.Ref{}, domain.ErrNotFound
+}
+
+func (s *FileStore) listRefsRaw(ctx context.Context, repoID string) ([]domain.Ref, error) {
 	var out []domain.Ref
-	if head, err := s.GetRef(ctx, repoID, domain.RefHEAD, "HEAD"); err == nil {
+	if head, err := s.getRefRaw(ctx, repoID, domain.RefHEAD, "HEAD"); err == nil {
 		out = append(out, head)
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return nil, err
@@ -750,7 +822,7 @@ func (s *FileStore) ListRefs(ctx context.Context, repoID string) ([]domain.Ref, 
 			if rerr != nil {
 				return rerr
 			}
-			ref, rerr := s.GetRef(ctx, repoID, kc.kind, filepath.ToSlash(rel))
+			ref, rerr := s.getRefRaw(ctx, repoID, kc.kind, filepath.ToSlash(rel))
 			if rerr != nil {
 				return rerr
 			}
@@ -762,6 +834,243 @@ func (s *FileStore) ListRefs(ctx context.Context, repoID string) ([]domain.Ref, 
 		}
 	}
 	return out, nil
+}
+
+// ListRefs lists the logical HEAD + active branches + sessions + immutable
+// tags. Lifecycle tags remain in the manifest so other replicas can converge.
+func (s *FileStore) ListRefs(ctx context.Context, repoID string) ([]domain.Ref, error) {
+	refs, err := s.listRefsRaw(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	return domain.ProjectBranchLifecycleRefs(refs)
+}
+
+// CreateBranchRef creates (or explicitly restores) a branch and records a
+// newer active lifecycle event in the same cross-process critical section.
+func (s *FileStore) CreateBranchRef(ctx context.Context, ref domain.Ref) (domain.Ref, error) {
+	if err := domain.ValidateRef(ref); err != nil {
+		return domain.Ref{}, err
+	}
+	if ref.Kind != domain.RefBranch {
+		return domain.Ref{}, domain.ErrInvalidRef
+	}
+	var event domain.Ref
+	err := s.withRefMutationLock(ctx, func() error {
+		raw, err := s.getRefRaw(ctx, ref.RepoID, domain.RefBranch, ref.Name)
+		if err == nil {
+			refs, lerr := s.listRefsRaw(ctx, ref.RepoID)
+			if lerr != nil {
+				return lerr
+			}
+			latest, ok, lerr := domain.LatestBranchLifecycle(refs, ref.Name)
+			if lerr != nil {
+				return lerr
+			}
+			if !ok || latest.State != domain.BranchArchived || latest.Target != raw.Target {
+				return domain.ErrBranchExists
+			}
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		refs, err := s.listRefsRaw(ctx, ref.RepoID)
+		if err != nil {
+			return err
+		}
+		generation, err := domain.NextBranchLifecycleGeneration(refs, ref.Name)
+		if err != nil {
+			return err
+		}
+		event, err = domain.NewBranchLifecycleRef(ref.RepoID, ref.Name, ref.Target, generation, domain.BranchActive)
+		if err != nil {
+			return err
+		}
+		if err := s.putRefRaw(event); err != nil {
+			return err
+		}
+		return s.putRefRaw(ref)
+	})
+	return event, err
+}
+
+func (s *FileStore) detachHeadFromBranch(ctx context.Context, repoID, branch string, target domain.ContentHash) error {
+	head, err := s.getRefRaw(ctx, repoID, domain.RefHEAD, domain.HeadRefName)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.TrimPrefix(head.Symbolic, "refs/heads/") != branch {
+		return nil
+	}
+	return s.putRefRaw(domain.Ref{
+		Kind: domain.RefHEAD, Name: domain.HeadRefName, RepoID: repoID, Target: target,
+	})
+}
+
+// ArchiveBranchRef records the current branch target as an immutable event
+// before removing its active projection. Repeating an already-completed
+// archive is idempotent.
+func (s *FileStore) ArchiveBranchRef(ctx context.Context, repoID, branch string) (domain.Ref, error) {
+	if err := domain.ValidateBranchName(branch); err != nil {
+		return domain.Ref{}, err
+	}
+	var event domain.Ref
+	err := s.withRefMutationLock(ctx, func() error {
+		refs, err := s.listRefsRaw(ctx, repoID)
+		if err != nil {
+			return err
+		}
+		latest, hasLatest, err := domain.LatestBranchLifecycle(refs, branch)
+		if err != nil {
+			return err
+		}
+		raw, err := s.getRefRaw(ctx, repoID, domain.RefBranch, branch)
+		if errors.Is(err, domain.ErrNotFound) {
+			if hasLatest && latest.State == domain.BranchArchived {
+				event = latest.Ref
+				return s.detachHeadFromBranch(ctx, repoID, branch, latest.Target)
+			}
+			return domain.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if hasLatest && latest.State == domain.BranchArchived && latest.Target == raw.Target {
+			event = latest.Ref
+			if err := s.detachHeadFromBranch(ctx, repoID, branch, raw.Target); err != nil {
+				return err
+			}
+			return removeCxtFile(s.refPath("heads", branch))
+		}
+		generation, err := domain.NextBranchLifecycleGeneration(refs, branch)
+		if err != nil {
+			return err
+		}
+		event, err = domain.NewBranchLifecycleRef(repoID, branch, raw.Target, generation, domain.BranchArchived)
+		if err != nil {
+			return err
+		}
+		if err := s.putRefRaw(event); err != nil {
+			return err
+		}
+		if err := s.detachHeadFromBranch(ctx, repoID, branch, raw.Target); err != nil {
+			return err
+		}
+		return removeCxtFile(s.refPath("heads", branch))
+	})
+	return event, err
+}
+
+// ApplyBranchLifecycleRef replicates one immutable lifecycle event. If a local
+// Git branch is known to be live, or its context has already advanced past the
+// archived target, a compensating active event preserves that work.
+func (s *FileStore) ApplyBranchLifecycleRef(ctx context.Context, eventRef domain.Ref, preserve bool) error {
+	event, ok, err := domain.ParseBranchLifecycleRef(eventRef)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return domain.ErrInvalidRef
+	}
+	return s.withRefMutationLock(ctx, func() error {
+		if existing, err := s.getRefRaw(ctx, eventRef.RepoID, domain.RefTag, eventRef.Name); err == nil {
+			if existing.Target != eventRef.Target {
+				return domain.ErrHashMismatch
+			}
+		} else if errors.Is(err, domain.ErrNotFound) {
+			if err := s.putRefRaw(eventRef); err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+
+		refs, err := s.listRefsRaw(ctx, eventRef.RepoID)
+		if err != nil {
+			return err
+		}
+		latest, found, err := domain.LatestBranchLifecycle(refs, event.Branch)
+		if err != nil || !found || latest.Ref.Name != eventRef.Name || latest.State != domain.BranchArchived {
+			return err
+		}
+		branch, err := s.getRefRaw(ctx, eventRef.RepoID, domain.RefBranch, event.Branch)
+		if errors.Is(err, domain.ErrNotFound) {
+			return s.detachHeadFromBranch(ctx, eventRef.RepoID, event.Branch, latest.Target)
+		}
+		if err != nil {
+			return err
+		}
+		if branch.Target == latest.Target && !preserve {
+			if err := s.detachHeadFromBranch(ctx, eventRef.RepoID, event.Branch, branch.Target); err != nil {
+				return err
+			}
+			return removeCxtFile(s.refPath("heads", event.Branch))
+		}
+		generation, err := domain.NextBranchLifecycleGeneration(refs, event.Branch)
+		if err != nil {
+			return err
+		}
+		active, err := domain.NewBranchLifecycleRef(eventRef.RepoID, event.Branch, branch.Target, generation, domain.BranchActive)
+		if err != nil {
+			return err
+		}
+		return s.putRefRaw(active)
+	})
+}
+
+// ReconcileBranchLifecycleRefs completes crash-interrupted local projections.
+// The immutable event is the durable intent: an equal branch is removed, a
+// missing branch leaves HEAD detached, and an already-advanced branch records
+// a newer active event before the next push can expose that pointer remotely.
+func (s *FileStore) ReconcileBranchLifecycleRefs(ctx context.Context, repoID string) error {
+	return s.withRefMutationLock(ctx, func() error {
+		refs, err := s.listRefsRaw(ctx, repoID)
+		if err != nil {
+			return err
+		}
+		states, err := domain.BranchLifecycleStates(refs)
+		if err != nil {
+			return err
+		}
+		for branch, latest := range states {
+			if latest.State != domain.BranchArchived {
+				continue
+			}
+			raw, err := s.getRefRaw(ctx, repoID, domain.RefBranch, branch)
+			switch {
+			case errors.Is(err, domain.ErrNotFound):
+				if err := s.detachHeadFromBranch(ctx, repoID, branch, latest.Target); err != nil {
+					return err
+				}
+				continue
+			case err != nil:
+				return err
+			case raw.Target == latest.Target:
+				if err := s.detachHeadFromBranch(ctx, repoID, branch, raw.Target); err != nil {
+					return err
+				}
+				if err := removeCxtFile(s.refPath("heads", branch)); err != nil {
+					return err
+				}
+				continue
+			}
+			generation, err := domain.NextBranchLifecycleGeneration(refs, branch)
+			if err != nil {
+				return err
+			}
+			active, err := domain.NewBranchLifecycleRef(repoID, branch, raw.Target, generation, domain.BranchActive)
+			if err != nil {
+				return err
+			}
+			if err := s.putRefRaw(active); err != nil {
+				return err
+			}
+			refs = append(refs, active)
+		}
+		return nil
+	})
 }
 
 // Manifest returns the catalog (snapshot index + ref list) of a repo.

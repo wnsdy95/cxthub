@@ -85,7 +85,7 @@ components:
 
     Ref:
       type: object
-      description: "Mutable pointer (HEAD/branch/session/tag). domain.Ref serialization. Original format: schemas/manifest.schema.json."
+      description: "Pointer or immutable tag (HEAD/branch/session/tag). Tags under cxt/branch-state/v1/ are reserved branch lifecycle events: modern peers apply them before branch refs, archived generations remove only the mutable branch projection, and snapshot/session history remains reachable. Older peers preserve them as ordinary immutable tags. domain.Ref serialization. Original format: schemas/manifest.schema.json."
       required: [kind, name, repo_id, target]
       additionalProperties: false
       properties:
@@ -93,11 +93,14 @@ components:
           $ref: "#/components/schemas/RefKind"
         name:
           type: string
-          description: "Branch/session/tag name or HEAD (fixed)."
+          description: "Branch/session/tag name or HEAD (fixed). The cxt/branch-state/v1/ tag namespace is reserved for immutable active/archived branch lifecycle events."
         repo_id:
           $ref: "#/components/schemas/ContentHash"
         target:
-          $ref: "#/components/schemas/ContentHash"
+          description: "Referenced snapshot hash, or an empty string for symbolic HEAD."
+          oneOf:
+            - $ref: "#/components/schemas/ContentHash"
+            - const: ""
         symbolic:
           type: string
           description: "Symbolic target (branch name when HEAD points to a branch). Direct reference is an empty string."
@@ -1059,19 +1062,95 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [refs]
-                properties:
-                  refs:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Ref"
+                type: array
+                items:
+                  $ref: "#/components/schemas/Ref"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /repos/{repoID}/refs/batch:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: updateRefs
+      summary: Apply a bounded ref projection batch
+      description: |
+        Applies ordered ref updates with the same policy as the single-ref endpoint,
+        then reconciles pending reachability exactly once. An empty batch is valid
+        and repairs cleanup interrupted after a prior durable ref write.
+      tags: [refs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [updates]
+              additionalProperties: false
+              properties:
+                updates:
+                  type: array
+                  maxItems: 4096
+                  items:
+                    type: object
+                    required: [ref]
+                    additionalProperties: false
+                    properties:
+                      ref:
+                        $ref: "#/components/schemas/Ref"
+                      force:
+                        type: boolean
+                        description: "Force a non-fast-forward branch move. Never applied to lifecycle events."
+                      append:
+                        type: boolean
+                        description: "Losslessly graft a diverged branch behind the server head."
+      responses:
+        "200":
+          description: Batch applied and pending reachability reconciled.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [applied]
+                additionalProperties: false
+                properties:
+                  applied:
+                    type: integer
+                    minimum: 0
+        "400":
+          description: Invalid batch or ref.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Ref conflict, non-fast-forward move, or archived branch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Batch JSON body exceeds the 8 MiB transport limit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Invalid batch size, lifecycle event, or ref value.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   # Implementation note: Actual route is {name...} (allows branch names with slashes). Diverged automatic fork removal —
   # Non-fast-forward is 409 non_fast_forward (only pass with force), diverged is resolved by append (lossless reordering).
@@ -1091,7 +1170,6 @@ paths:
         (`force: true` only), diverged is resolved by a lossless rebase (graft) with `append: true`.
         objects (snapshot+doc) must arrive first via push/objects (object precedence invariant).
         `kind=session` is an internal pointer managed by join. General ref API only allows idempotent echo for the same target, and creation/movement/force are rejected with 403.
-        only allows idempotent echo for the same target, and creation/movement/force are rejected with 403.
       tags: [refs]
       parameters:
         - name: X-Cxt-Identity
@@ -1105,13 +1183,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [ref, expected_target]
               additionalProperties: false
               properties:
-                ref:
-                  $ref: "#/components/schemas/Ref"
-                expected_target:
+                target:
                   $ref: "#/components/schemas/ContentHash"
+                expected_target:
+                  type: string
+                  description: "Optional compare-and-swap target. Empty means use the observed server target."
+                symbolic:
+                  type: string
+                  description: "Symbolic branch name for HEAD; mutually exclusive with target."
                 force:
                   type: boolean
                   description: "Force non-fast-forward move (git push --force). Protected branches are rejected."
@@ -1130,9 +1211,17 @@ paths:
                 properties:
                   result:
                     type: string
-                    enum: [fast_forward, up_to_date]
+                    enum: [fast_forward, up_to_date, forced, appended]
                   ref:
                     $ref: "#/components/schemas/Ref"
+                  requested_target:
+                    $ref: "#/components/schemas/ContentHash"
+                  server_target:
+                    $ref: "#/components/schemas/ContentHash"
+                  forked_ref:
+                    $ref: "#/components/schemas/Ref"
+                  merge_base:
+                    $ref: "#/components/schemas/ContentHash"
         "400":
           description: "Invalid request."
           content:
@@ -1150,6 +1239,7 @@ paths:
             ref Move conflict:
             - `ref_conflict`: expected_target differs from server current value (concurrent update). Retry after pull.
             - `non_fast_forward`: Server is ahead. Rejected without `force` or `append`.
+            - `branch_archived`: a stale branch projection cannot recreate an archived branch; pull lifecycle state or explicitly restore it.
             (diverged automatic fork is removed — replaced by append lossless reordering.)
           content:
             application/json:
@@ -2782,11 +2872,11 @@ tags:
   - name: docs
     description: "content-addressed blob (SessionDoc/CIR). Creation is only allowed via the push/objects path."
   - name: refs
-    description: "mutable pointer (HEAD/branch/session/tag). CAS move."
+    description: "HEAD/branch/session pointers and immutable tags. Ref movement uses CAS; cxt/branch-state/v1 tags carry branch lifecycle events."
   - name: memories
     description: "snapshot attachment MemoryDigest."
   - name: push
-    description: "Push negotiation in three stages (negotiate → objects → ref PUT)."
+    description: "Push negotiation in three stages (negotiate → objects → bounded ref batch, with single-ref fallback for older servers)."
   - name: pull
     description: "Pull negotiation (manifest GET → pull/objects → local ref merge)."
   - name: actions

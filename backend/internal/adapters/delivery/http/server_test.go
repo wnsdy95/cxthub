@@ -518,6 +518,40 @@ func TestPushPullRoundtrip(t *testing.T) {
 		t.Fatalf("ref put code %d", code)
 	}
 
+	// 3b) bounded ref batch: lifecycle event precedes its mutable branch
+	// projection, and a later archive removes only that projection.
+	const batchBranchName = "feature/batch-lifecycle"
+	activeEvent, err := domain.NewBranchLifecycleRef(rid, batchBranchName, h, 1, domain.BranchActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchBranch := domain.Ref{Kind: domain.RefBranch, Name: batchBranchName, RepoID: rid, Target: h}
+	var batchOut inbound.UpdateRefsOutput
+	if code := doJSON(t, "POST", base+"/refs/batch", map[string]any{"updates": []map[string]any{
+		{"ref": activeEvent}, {"ref": batchBranch},
+	}}, &batchOut); code != 200 || batchOut.Applied != 2 {
+		t.Fatalf("ref batch create code=%d out=%+v", code, batchOut)
+	}
+	archiveEvent, err := domain.NewBranchLifecycleRef(rid, batchBranchName, h, 2, domain.BranchArchived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := doJSON(t, "POST", base+"/refs/batch", map[string]any{"updates": []map[string]any{{"ref": archiveEvent}}}, &batchOut); code != 200 || batchOut.Applied != 1 {
+		t.Fatalf("ref batch archive code=%d out=%+v", code, batchOut)
+	}
+	var projectedRefs []domain.Ref
+	if code := doJSON(t, "GET", base+"/refs", nil, &projectedRefs); code != 200 {
+		t.Fatalf("list projected refs code %d", code)
+	}
+	foundArchivedBranch, foundArchiveEvent := false, false
+	for _, ref := range projectedRefs {
+		foundArchivedBranch = foundArchivedBranch || (ref.Kind == domain.RefBranch && ref.Name == batchBranchName)
+		foundArchiveEvent = foundArchiveEvent || ref.Name == archiveEvent.Name
+	}
+	if foundArchivedBranch || !foundArchiveEvent {
+		t.Fatalf("batch archive projection refs=%+v", projectedRefs)
+	}
+
 	// 4) negotiate re-request → no longer want (dedup)
 	var neg2 struct {
 		SnapshotWants []domain.ContentHash `json:"snapshot_wants"`

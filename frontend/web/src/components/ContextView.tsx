@@ -276,9 +276,13 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
                 // (other branch/tag badges keep their names).
                 const isHead = b.kind === 'branch' && b.name === branch;
                 return (
-                  <span key={b.kind + b.name} className={`ref-badge ${isHead ? 'head' : b.kind}`}>
-                    {b.kind === 'tag' ? '⌂ ' : ''}
-                    {isHead ? '⌑ head' : b.name}
+                  <span
+                    key={b.kind + b.name}
+                    className={`ref-badge ${isHead ? 'head' : b.kind}`}
+                    title={b.kind === 'archived' ? t('context.archivedBranchTitle') : undefined}
+                  >
+                    {b.kind === 'tag' ? '⌂ ' : b.kind === 'archived' ? '⊟ ' : ''}
+                    {isHead ? '⌑ head' : b.kind === 'archived' ? t('context.archivedBranchBadge', { branch: b.name }) : b.name}
                   </span>
                 );
               })}

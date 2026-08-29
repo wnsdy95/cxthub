@@ -16,6 +16,10 @@ var ErrNonFastForward = errors.New("non fast-forward")
 // ErrRefConflict indicates a mismatch in ref CAS expected (concurrent update) (409).
 var ErrRefConflict = errors.New("ref conflict")
 
+// ErrBranchArchived prevents a stale replica from recreating a branch pointer
+// after a newer immutable lifecycle event archived it.
+var ErrBranchArchived = errors.New("branch is archived")
+
 // ErrUnauthorized indicates an invalid or missing token (401).
 var ErrUnauthorized = errors.New("unauthorized")
 

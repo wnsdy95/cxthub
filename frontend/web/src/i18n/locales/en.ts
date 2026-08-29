@@ -76,6 +76,8 @@ export const en: Messages = {
     reflog: '⟲ reflog — ref move history',
     reflogEmpty: 'No entries',
     memoryBadgeTitle: 'Has a stored memory digest — select to inspect the snapshot archive',
+    archivedBranchBadge: 'archived · {branch}',
+    archivedBranchTitle: 'Context from a deleted Git branch — history is preserved and can be restored with cxt branch restore',
     compactSummary: 'Context compaction summary (agent-written)',
     cxtSeedSummary: 'cxt seed summary (auto-generated — inherited context)',
     branchOff: '⎇ branch off (checkout -b)',
@@ -454,5 +456,6 @@ export const en: Messages = {
     joinAlreadyHead: 'This commit is already the branch head.',
     uncommitted: '◌ Uncommitted — hook capture not yet linked to a commit',
     uncommittedDivider: '◌ above: uncommitted captures',
+    archivedLane: 'archive · {branch}',
   },
 };

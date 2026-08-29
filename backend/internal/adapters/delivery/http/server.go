@@ -33,6 +33,7 @@ type Backend interface {
 	Commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error)
 	Send(ctx context.Context, in inbound.PullSendInput) (inbound.PullSendOutput, error)
 	UpdateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error)
+	UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (inbound.UpdateRefsOutput, error)
 	List(ctx context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error)
 	Diff(ctx context.Context, in inbound.DiffInput) (inbound.DiffOutput, error)
 	Search(ctx context.Context, in inbound.SearchInput) (inbound.SearchOutput, error)
@@ -160,6 +161,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/manifest", s.guard(domain.RoleViewer, s.getManifest))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/branches", s.guard(domain.RoleViewer, s.listRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/refs", s.guard(domain.RoleViewer, s.listRefs))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/refs/batch", s.guard(domain.RoleMember, s.putRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots", s.guard(domain.RoleViewer, s.listSnapshots))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots/{id}", s.guard(domain.RoleViewer, s.getSnapshot))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/promote", s.guard(domain.RoleMember, s.promoteSnapshot))
@@ -839,6 +841,35 @@ type putRefBody struct {
 	Append bool `json:"append,omitempty"`
 }
 
+type putRefsBody struct {
+	Updates []struct {
+		Ref    domain.Ref `json:"ref"`
+		Force  bool       `json:"force,omitempty"`
+		Append bool       `json:"append,omitempty"`
+	} `json:"updates"`
+}
+
+func (s *Server) putRefs(w http.ResponseWriter, r *http.Request) {
+	var body putRefsBody
+	if !s.decodeLimited(w, r, &body, inbound.MaxRefBatchJSONBody) {
+		return
+	}
+	if len(body.Updates) > inbound.MaxRefBatchUpdates {
+		s.respond(w, nil, fmt.Errorf("%w: at most %d ref updates per batch", domain.ErrValidation, inbound.MaxRefBatchUpdates))
+		return
+	}
+	rid := s.repoID(r)
+	updates := make([]inbound.UpdateRefInput, 0, len(body.Updates))
+	for _, update := range body.Updates {
+		update.Ref.RepoID = rid
+		updates = append(updates, inbound.UpdateRefInput{
+			RepoID: rid, Ref: update.Ref, Force: update.Force, Append: update.Append,
+		})
+	}
+	out, err := s.b.UpdateRefs(r.Context(), inbound.UpdateRefsInput{RepoID: rid, Updates: updates})
+	s.respond(w, out, err)
+}
+
 // undismissPending re-adds dismissed uncommitted sessions to the list (undo dismiss).
 func (s *Server) undismissPending(w http.ResponseWriter, r *http.Request) {
 	if !isJSONBody(r) { // dismiss and same body-less POST CSRF 2nd defense
@@ -1129,7 +1160,7 @@ func (s *Server) decodeLimited(w http.ResponseWriter, r *http.Request, v any, ma
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			s.writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "bounded chunk body exceeds transport limit")
+			s.writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body exceeds transport limit")
 			return false
 		}
 		s.writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -1163,6 +1194,8 @@ func mapError(err error) (code string, status int) {
 		return "non_fast_forward", http.StatusConflict
 	case errors.Is(err, domain.ErrRefConflict):
 		return "ref_conflict", http.StatusConflict
+	case errors.Is(err, domain.ErrBranchArchived):
+		return "branch_archived", http.StatusConflict
 	case errors.Is(err, domain.ErrUnauthorized):
 		return "unauthenticated", http.StatusUnauthorized
 	case errors.Is(err, domain.ErrForbidden):

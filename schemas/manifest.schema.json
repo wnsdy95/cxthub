@@ -52,27 +52,30 @@
     },
     "refKind": {
       "type": "string",
-      "description": "Ref type: head=current checkout symbolic ref, branch=actual Git branch pointer, session=preserved pointer within the same Git branch, tag=immutable label.",
+      "description": "Ref type: head=current checkout symbolic ref, branch=actual Git branch pointer, session=preserved pointer within the same Git branch, tag=immutable label (including reserved cxt/branch-state/v1 lifecycle events).",
       "enum": ["head", "branch", "session", "tag"]
     },
     "ref": {
       "type": "object",
-      "description": "Mutable HEAD/branch/session/tag pointer serialized from domain.Ref.",
+      "description": "HEAD/branch/session pointers or immutable tags serialized from domain.Ref. Reserved cxt/branch-state/v1 tags preserve branch archive/restore events without deleting history.",
       "additionalProperties": false,
       "required": ["kind", "name", "repo_id", "target"],
       "properties": {
         "kind": { "$ref": "#/$defs/refKind" },
         "name": {
           "type": "string",
-          "description": "Ref name. A branch uses the Git branch name, a session uses an internal session name, a tag uses its tag name, and HEAD is fixed at 'HEAD'."
+          "description": "Ref name. A branch uses the Git branch name, a session uses an internal session name, a tag uses its tag name, and HEAD is fixed at 'HEAD'. The cxt/branch-state/v1 tag namespace is reserved."
         },
         "repo_id": {
           "type": "string",
           "description": "Owner repo ID."
         },
         "target": {
-          "$ref": "#/$defs/contentHash",
-          "description": "Referenced Snapshot.ID. It must identify an existing snapshot (referential-integrity invariant)."
+          "description": "Referenced Snapshot.ID, or an empty string for symbolic HEAD.",
+          "oneOf": [
+            { "$ref": "#/$defs/contentHash" },
+            { "const": "" }
+          ]
         },
         "symbolic": {
           "type": "string",

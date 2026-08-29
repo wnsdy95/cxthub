@@ -610,7 +610,7 @@ func (s *PostgresStore) HasSnapshots(ctx context.Context, repoID domain.ContentH
 
 // --- Ref / manifest ---
 
-func (s *PostgresStore) GetRef(ctx context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error) {
+func (s *PostgresStore) getRefRaw(ctx context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error) {
 	if err := validateHash(repoID); err != nil {
 		return domain.Ref{}, err
 	}
@@ -629,7 +629,7 @@ func (s *PostgresStore) GetRef(ctx context.Context, repoID domain.ContentHash, k
 	return ref, nil
 }
 
-func (s *PostgresStore) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
+func (s *PostgresStore) listRefsRaw(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
@@ -652,6 +652,125 @@ func (s *PostgresStore) ListRefs(ctx context.Context, repoID domain.ContentHash)
 	return out, rows.Err()
 }
 
+func projectBranchLifecycleRefs(refs []domain.Ref) ([]domain.Ref, error) {
+	return domain.ProjectBranchLifecycleRefs(refs)
+}
+
+func (s *PostgresStore) GetRef(ctx context.Context, repoID domain.ContentHash, kind domain.RefKind, name string) (domain.Ref, error) {
+	ref, err := s.getRefRaw(ctx, repoID, kind, name)
+	if err != nil {
+		return ref, err
+	}
+	if kind == domain.RefHead {
+		refs, err := s.listRefsRaw(ctx, repoID)
+		if err != nil {
+			return domain.Ref{}, err
+		}
+		projected, err := domain.ProjectBranchLifecycleRefs(refs)
+		if err != nil {
+			return domain.Ref{}, err
+		}
+		for _, candidate := range projected {
+			if candidate.Kind == kind && candidate.Name == name {
+				return candidate, nil
+			}
+		}
+		return domain.Ref{}, domain.ErrNotFound
+	}
+	if kind != domain.RefBranch {
+		return ref, nil
+	}
+	refs, err := listBranchLifecycleRefs(ctx, s.pool, repoID, name)
+	if err != nil {
+		return domain.Ref{}, err
+	}
+	latest, ok, err := domain.LatestBranchLifecycle(refs, name)
+	if err != nil {
+		return domain.Ref{}, err
+	}
+	if ok && latest.State == domain.BranchArchived && latest.Target == ref.Target {
+		return domain.Ref{}, domain.ErrNotFound
+	}
+	return ref, nil
+}
+
+func (s *PostgresStore) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
+	refs, err := s.listRefsRaw(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	return projectBranchLifecycleRefs(refs)
+}
+
+type pgRowsQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func listBranchLifecycleRefs(ctx context.Context, q pgRowsQuerier, repoID domain.ContentHash, branch string) ([]domain.Ref, error) {
+	rows, err := q.Query(ctx,
+		`SELECT kind, name, repo_id, COALESCE(target,''), symbolic
+		 FROM refs
+		 WHERE repo_id=$1 AND kind='tag' AND name LIKE $2
+		   AND right(name, char_length($3::text)+1)='/' || $3::text`,
+		string(repoID), domain.BranchLifecycleTagPrefix+"%", branch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []domain.Ref
+	for rows.Next() {
+		var ref domain.Ref
+		if err := rows.Scan(&ref.Kind, &ref.Name, &ref.RepoID, &ref.Target, &ref.Symbolic); err != nil {
+			return nil, err
+		}
+		if _, ok, err := domain.ParseBranchLifecycleRef(ref); err != nil || !ok {
+			if err != nil {
+				return nil, err
+			}
+			return nil, domain.ErrValidation
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
+func insertBranchLifecycleRefTx(ctx context.Context, tx pgx.Tx, repoID domain.ContentHash, ref domain.Ref) (bool, error) {
+	ct, err := tx.Exec(ctx,
+		`INSERT INTO refs (repo_id, kind, name, target, symbolic) VALUES ($1,'tag',$2,$3,'')
+		 ON CONFLICT (repo_id, kind, name) DO NOTHING`,
+		string(repoID), ref.Name, string(ref.Target))
+	if err != nil {
+		return false, err
+	}
+	if ct.RowsAffected() > 0 {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO reflog (repo_id,kind,name,old,new) VALUES ($1,'tag',$2,'',$3)`,
+			string(repoID), ref.Name, string(ref.Target)); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	var existing string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(target,'') FROM refs WHERE repo_id=$1 AND kind='tag' AND name=$2`,
+		string(repoID), ref.Name).Scan(&existing); err != nil {
+		return false, err
+	}
+	if domain.ContentHash(existing) != ref.Target {
+		return false, domain.ErrRefConflict
+	}
+	return false, nil
+}
+
+func detachHeadFromBranchTx(ctx context.Context, tx pgx.Tx, repoID domain.ContentHash, branch string, target domain.ContentHash) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE refs SET target=$3, symbolic='', version=version+1, updated_at=now()
+		 WHERE repo_id=$1 AND kind='head' AND name='HEAD'
+		   AND (symbolic=$2 OR symbolic='refs/heads/' || $2)`,
+		string(repoID), branch, string(target))
+	return err
+}
+
 // CompareAndSwapRef: moves to next only if expected matches current target (optimistic locking, version++).
 func (s *PostgresStore) CompareAndSwapRef(ctx context.Context, repoID domain.ContentHash, next domain.Ref, expected domain.ContentHash) error {
 	next.RepoID = repoID
@@ -672,6 +791,40 @@ func (s *PostgresStore) CompareAndSwapRef(ctx context.Context, repoID domain.Con
 	if next.Kind == domain.RefBranch || next.Kind == domain.RefSession {
 		if err := lockRepoGraph(ctx, tx, repoID); err != nil {
 			return err
+		}
+	}
+	if next.Kind == domain.RefBranch {
+		refs, err := listBranchLifecycleRefs(ctx, tx, repoID, next.Name)
+		if err != nil {
+			return err
+		}
+		latest, ok, err := domain.LatestBranchLifecycle(refs, next.Name)
+		if err != nil {
+			return err
+		}
+		if ok && latest.State == domain.BranchArchived {
+			var branchTarget string
+			err := tx.QueryRow(ctx,
+				`SELECT COALESCE(target,'') FROM refs
+				 WHERE repo_id=$1 AND kind='branch' AND name=$2 FOR UPDATE`,
+				string(repoID), next.Name).Scan(&branchTarget)
+			if errors.Is(err, pgx.ErrNoRows) || (err == nil && domain.ContentHash(branchTarget) == latest.Target) {
+				return domain.ErrBranchArchived
+			}
+			if err != nil {
+				return err
+			}
+			generation, err := domain.NextBranchLifecycleGeneration(refs, next.Name)
+			if err != nil {
+				return err
+			}
+			active, err := domain.NewBranchLifecycleRef(repoID, next.Name, domain.ContentHash(branchTarget), generation, domain.BranchActive)
+			if err != nil {
+				return err
+			}
+			if _, err := insertBranchLifecycleRefTx(ctx, tx, repoID, active); err != nil {
+				return err
+			}
 		}
 	}
 	if expected == "" {
@@ -704,6 +857,87 @@ func (s *PostgresStore) CompareAndSwapRef(ctx context.Context, repoID domain.Con
 			string(repoID), string(next.Kind), next.Name, string(expected), string(next.Target)); err != nil {
 			return err
 		}
+	}
+	return tx.Commit(ctx)
+}
+
+// ApplyBranchLifecycleRef applies the reserved immutable-tag event and its
+// branch projection in one PostgreSQL transaction.
+func (s *PostgresStore) ApplyBranchLifecycleRef(ctx context.Context, repoID domain.ContentHash, eventRef domain.Ref) error {
+	eventRef.RepoID = repoID
+	if err := domain.ValidateRef(eventRef); err != nil {
+		return err
+	}
+	event, ok, err := domain.ParseBranchLifecycleRef(eventRef)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return domain.ErrValidation
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockRepoGraph(ctx, tx, repoID); err != nil {
+		return err
+	}
+	if _, err := insertBranchLifecycleRefTx(ctx, tx, repoID, eventRef); err != nil {
+		return err
+	}
+	refs, err := listBranchLifecycleRefs(ctx, tx, repoID, event.Branch)
+	if err != nil {
+		return err
+	}
+	latest, found, err := domain.LatestBranchLifecycle(refs, event.Branch)
+	if err != nil {
+		return err
+	}
+	if !found || latest.Ref.Name != eventRef.Name || latest.State != domain.BranchArchived {
+		return tx.Commit(ctx)
+	}
+	var branchTarget string
+	err = tx.QueryRow(ctx,
+		`SELECT COALESCE(target,'') FROM refs
+		 WHERE repo_id=$1 AND kind='branch' AND name=$2 FOR UPDATE`,
+		string(repoID), event.Branch).Scan(&branchTarget)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := detachHeadFromBranchTx(ctx, tx, repoID, event.Branch, latest.Target); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	if domain.ContentHash(branchTarget) == latest.Target {
+		if err := detachHeadFromBranchTx(ctx, tx, repoID, event.Branch, latest.Target); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM refs WHERE repo_id=$1 AND kind='branch' AND name=$2 AND target=$3`,
+			string(repoID), event.Branch, branchTarget); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO reflog (repo_id,kind,name,old,new) VALUES ($1,'branch',$2,$3,'')`,
+			string(repoID), event.Branch, branchTarget); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
+	generation, err := domain.NextBranchLifecycleGeneration(refs, event.Branch)
+	if err != nil {
+		return err
+	}
+	active, err := domain.NewBranchLifecycleRef(repoID, event.Branch, domain.ContentHash(branchTarget), generation, domain.BranchActive)
+	if err != nil {
+		return err
+	}
+	if _, err := insertBranchLifecycleRefTx(ctx, tx, repoID, active); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

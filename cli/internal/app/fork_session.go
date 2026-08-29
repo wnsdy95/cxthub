@@ -19,7 +19,7 @@ import (
 //
 // Fork sequence (local, sync protocol fork mental model):
 //  1. SessionStore.GetSnapshot(FromSnapshot) → existence verification
-//  2. SessionStore.PutRef(Ref{Kind:branch, Name:NewBranch, Target:FromSnapshot})
+//  2. SessionStore.CreateBranchRef(Ref{Kind:branch, Name:NewBranch, Target:FromSnapshot})
 //     → new branch ref creation (no snapshot copy; ref duplication only, O(1))
 //  3. ForkOutput{Branch:NewBranch, Head:FromSnapshot} returned
 //
@@ -48,7 +48,7 @@ func (s *ForkSessionService) Fork(ctx context.Context, in inbound.ForkInput) (in
 	if _, err := s.store.GetSnapshot(ctx, in.FromSnapshot); err != nil {
 		return inbound.ForkOutput{}, err
 	}
-	if err := s.store.PutRef(ctx, domain.Ref{
+	if _, err := s.store.CreateBranchRef(ctx, domain.Ref{
 		Kind:   domain.RefBranch,
 		Name:   in.NewBranch,
 		RepoID: in.RepoID,

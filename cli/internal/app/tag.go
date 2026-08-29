@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -27,6 +28,9 @@ func NewTagService(gitCtx outbound.GitContext, store outbound.SessionStore) *Tag
 func (s *TagService) Tag(ctx context.Context, in inbound.TagInput) (inbound.TagOutput, error) {
 	if in.Name == "" {
 		return inbound.TagOutput{}, fmt.Errorf("tag name is required: cxt tag <name> [ref]")
+	}
+	if strings.HasPrefix(in.Name, domain.BranchLifecycleTagPrefix) {
+		return inbound.TagOutput{}, fmt.Errorf("%w: %s is reserved for branch lifecycle events", domain.ErrInvalidRef, domain.BranchLifecycleTagPrefix)
 	}
 	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
 	if err != nil {
@@ -63,6 +67,11 @@ func (s *TagService) Tags(ctx context.Context, cwd string) ([]domain.Ref, error)
 	var tags []domain.Ref
 	for _, r := range refs {
 		if r.Kind == domain.RefTag {
+			if _, lifecycle, err := domain.ParseBranchLifecycleRef(r); err != nil {
+				return nil, err
+			} else if lifecycle {
+				continue
+			}
 			tags = append(tags, r)
 		}
 	}

@@ -36,6 +36,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"claude":    {usage: "cxt claude [claude-arguments...]", passthrough: true},
 	"codex":     {usage: "cxt codex [codex-arguments...]", passthrough: true},
 	"remote":    {usage: "cxt remote [-v] | add <name> <url> | remove <name>", flags: commandFlags(nil, []string{"-v"})},
+	"branch":    {usage: "cxt branch archive <name> | restore <name> [--provider claude|codex] [--mode full|reconstructed|memory]", flags: commandFlags([]string{"--provider", "--mode"}, nil)},
 	"repack":    {usage: "cxt repack"},
 	"add":       {usage: "cxt add [claude|codex|.]..."},
 	"commit":    {usage: "cxt commit [-m <message>]", flags: commandFlags([]string{"-m"}, nil)},
@@ -168,6 +169,13 @@ func validateCommandFlags(cmd string, args []string, spec commandArgSpec) error 
 
 	pos := positionals(args)
 	switch cmd {
+	case "branch":
+		if len(pos) != 2 || (pos[0] != "archive" && pos[0] != "restore") {
+			return fmt.Errorf("usage: %s", spec.usage)
+		}
+		if pos[0] == "archive" && (flagVal(args, "--provider") != "" || flagVal(args, "--mode") != "") {
+			return fmt.Errorf("branch: restore-only flag used with archive\nusage: %s", spec.usage)
+		}
 	case "remote":
 		if flagPresent(args, "-v") && len(pos) > 0 {
 			return fmt.Errorf("remote: flag %q is only valid when listing remotes\nusage: %s", "-v", spec.usage)

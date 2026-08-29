@@ -493,10 +493,43 @@ func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 // Tags are immutable: Moving to another target is rejected without Force.
 func (s *Service) UpdateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
 	out, err := s.updateRef(ctx, in)
-	if err == nil && in.Ref.Kind == domain.RefBranch {
-		s.reconcileSharedPendingPointers(ctx, in.RepoID)
+	if err == nil {
+		_, lifecycle, _ := domain.ParseBranchLifecycleRef(in.Ref)
+		if in.Ref.Kind == domain.RefBranch || lifecycle {
+			s.reconcileSharedPendingPointers(ctx, in.RepoID)
+		}
 	}
 	return out, err
+}
+
+// UpdateRefs is the request-level ref transaction boundary. Ref projections
+// remain individually CAS-checked, but pending reachability is reconciled once
+// after the complete batch. An empty retry is intentional: it repairs a server
+// crash that occurred after the last ref write but before metadata cleanup.
+func (s *Service) UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (out inbound.UpdateRefsOutput, err error) {
+	if err := domain.ValidateContentHash(in.RepoID); err != nil {
+		return out, err
+	}
+	if len(in.Updates) > inbound.MaxRefBatchUpdates {
+		return out, fmt.Errorf("%w: at most %d ref updates per batch", domain.ErrValidation, inbound.MaxRefBatchUpdates)
+	}
+	defer s.reconcileSharedPendingPointers(ctx, in.RepoID)
+	var rejected []string
+	for _, update := range in.Updates {
+		update.RepoID = in.RepoID
+		if _, updateErr := s.updateRef(ctx, update); updateErr != nil {
+			if errors.Is(updateErr, domain.ErrNonFastForward) {
+				rejected = append(rejected, string(update.Ref.Kind)+"/"+update.Ref.Name)
+				continue
+			}
+			return out, updateErr
+		}
+		out.Applied++
+	}
+	if len(rejected) > 0 {
+		return out, fmt.Errorf("%w: %s", domain.ErrNonFastForward, strings.Join(rejected, ", "))
+	}
+	return out, nil
 }
 
 func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
@@ -517,6 +550,35 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: ref target snapshot %s does not exist", domain.ErrIntegrity, in.Ref.Target)
 		}
 		return inbound.UpdateRefOutput{}, err
+	}
+	if event, lifecycle, err := domain.ParseBranchLifecycleRef(in.Ref); err != nil {
+		return inbound.UpdateRefOutput{}, err
+	} else if lifecycle {
+		if in.Force || in.Append {
+			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: branch lifecycle events are immutable", domain.ErrValidation)
+		}
+		if event.State == domain.BranchArchived {
+			if repo, repoErr := s.meta.GetRepo(ctx, in.RepoID); repoErr == nil &&
+				repo.ProtectDefault && event.Branch == repo.DefaultBranch {
+				return inbound.UpdateRefOutput{}, fmt.Errorf("%w: archiving protected branch %q is forbidden", domain.ErrForbidden, event.Branch)
+			} else if repoErr != nil && !errors.Is(repoErr, domain.ErrNotFound) {
+				return inbound.UpdateRefOutput{}, repoErr
+			}
+		}
+		_, currentErr := s.meta.GetRef(ctx, in.RepoID, domain.RefTag, in.Ref.Name)
+		if currentErr != nil && !errors.Is(currentErr, domain.ErrNotFound) {
+			return inbound.UpdateRefOutput{}, currentErr
+		}
+		if err := s.meta.ApplyBranchLifecycleRef(ctx, in.RepoID, in.Ref); err != nil {
+			return inbound.UpdateRefOutput{}, err
+		}
+		result := inbound.RefFastForward
+		if currentErr == nil {
+			result = inbound.RefUpToDate
+		}
+		return inbound.UpdateRefOutput{
+			Ref: in.Ref, RequestedTarget: in.Ref.Target, ServerTarget: in.Ref.Target, Result: result,
+		}, nil
 	}
 	cur, err := s.meta.GetRef(ctx, in.RepoID, in.Ref.Kind, in.Ref.Name)
 	serverTarget := domain.ContentHash("")
@@ -1351,9 +1413,9 @@ func (s *Service) CompareAndDeletePending(ctx context.Context, repoID domain.Con
 
 // reconcileSharedPendingPointers is a best-effort mutable-metadata cleanup
 // after branch/join ref movement. A pending target is resolved only when a
-// branch or server-managed session ref reaches it through natural or graft
-// parents. Compare-and-delete protects a newer capture that arrives during the
-// reachability walk.
+// branch, server-managed session, or immutable branch-lifecycle root reaches
+// it through natural or graft parents. Compare-and-delete protects a newer
+// capture that arrives during the reachability walk.
 func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID domain.ContentHash) {
 	pendings, err := s.meta.ListPendings(ctx, repoID)
 	if err != nil || len(pendings) == 0 {
@@ -1365,7 +1427,7 @@ func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID dom
 	}
 	roots := make([]domain.ContentHash, 0, len(refs))
 	for _, ref := range refs {
-		if (ref.Kind == domain.RefBranch || ref.Kind == domain.RefSession) && ref.Target != "" {
+		if sharedTimelineRef(ref) {
 			roots = append(roots, ref.Target)
 		}
 	}
@@ -1399,6 +1461,17 @@ func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID dom
 		// allowed): immutable history remains and only the mutable pointer leaves.
 		_, _ = s.meta.CompareAndDeletePending(ctx, repoID, p.SessionID, p.Target)
 	}
+}
+
+func sharedTimelineRef(ref domain.Ref) bool {
+	if ref.Target == "" {
+		return false
+	}
+	if ref.Kind == domain.RefBranch || ref.Kind == domain.RefSession {
+		return true
+	}
+	_, lifecycle, err := domain.ParseBranchLifecycleRef(ref)
+	return err == nil && lifecycle
 }
 
 // pendingTargetOf returns the current pending target of the session (empty string if none).
@@ -1894,11 +1967,11 @@ func (s *Service) Join(ctx context.Context, in inbound.JoinInput) (inbound.JoinO
 		return inbound.JoinOutput{}, err
 	}
 	// Writes the same commit set as the UI. Active pending target is never a join target, and hook leafs not reachable from ref are excluded from descendant/tip calculation.
-	// Conversely, past deduplication leaves hook labels, but if reachable from branch/session ref, it's already a shared commit and included.
+	// Conversely, past deduplication leaves hook labels, but if reachable from a branch/session/lifecycle root, it's already a shared commit and included.
 	shared := map[domain.ContentHash]bool{}
 	targetSessionShared := map[domain.ContentHash]bool{}
 	for _, ref := range refs {
-		if (ref.Kind == domain.RefBranch || ref.Kind == domain.RefSession) && ref.Target != "" {
+		if sharedTimelineRef(ref) {
 			for id := range snapshotReachableSet(byID, ref.Target) {
 				shared[id] = true
 				if ref.Kind == domain.RefSession && strings.HasPrefix(ref.Name, domain.SessionRefPrefix(in.TargetBranch)) {

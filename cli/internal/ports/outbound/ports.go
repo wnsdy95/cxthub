@@ -57,6 +57,19 @@ type SessionStore interface {
 	// ListRefs lists all refs (HEAD/branches/tags) of a repo.
 	ListRefs(ctx context.Context, repoID string) ([]domain.Ref, error)
 
+	// CreateBranchRef creates or explicitly restores a branch while recording a
+	// newer immutable active lifecycle event under the same storage lock.
+	CreateBranchRef(ctx context.Context, ref domain.Ref) (domain.Ref, error)
+	// ArchiveBranchRef records the current branch target before removing only
+	// its mutable active pointer. Session/snapshot data remains immutable.
+	ArchiveBranchRef(ctx context.Context, repoID, branch string) (domain.Ref, error)
+	// ApplyBranchLifecycleRef replicates one immutable lifecycle event. preserve
+	// is true when an actual local Git branch still owns the projection.
+	ApplyBranchLifecycleRef(ctx context.Context, event domain.Ref, preserve bool) error
+	// ReconcileBranchLifecycleRefs completes any lifecycle transition interrupted
+	// after its immutable event became durable but before its branch projection.
+	ReconcileBranchLifecycleRefs(ctx context.Context, repoID string) error
+
 	// Configuration folder snapshot object (content-addressed) — attached to commits and pushed/pulled.
 	PutSettingsObject(ctx context.Context, bundle domain.SettingsBundle) (domain.ContentHash, error)
 	GetSettingsObject(ctx context.Context, hash domain.ContentHash) (domain.SettingsBundle, error)
@@ -155,6 +168,14 @@ type GitContext interface {
 	// CurrentBranch returns the current git branch name of the cwd.
 	// Returns an empty value or fallback if not in a repo.
 	CurrentBranch(ctx context.Context, cwd string) (string, error)
+}
+
+// GitBranchInventory is an optional stronger capability used when applying a
+// remote branch archive. A real local Git branch is continuation authority and
+// must not lose its context projection because another replica deleted its
+// copy of the branch.
+type GitBranchInventory interface {
+	LocalBranches(ctx context.Context, cwd string) ([]string, error)
 }
 
 // MergedPullRequest identifies a Git-host PR whose merge commit entered the

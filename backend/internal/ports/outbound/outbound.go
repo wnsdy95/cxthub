@@ -86,6 +86,9 @@ type MetadataStore interface {
 	ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error)
 	// CompareAndSwapRef: move to next only if expected matches current disk target (optimistic locking).
 	CompareAndSwapRef(ctx context.Context, repoID domain.ContentHash, next domain.Ref, expected domain.ContentHash) error
+	// ApplyBranchLifecycleRef stores one immutable reserved-tag event and
+	// atomically reconciles the active branch projection.
+	ApplyBranchLifecycleRef(ctx context.Context, repoID domain.ContentHash, event domain.Ref) error
 	// ReadReflog: return append-only log of ref movements in latest order (tip recovery safety net, git reflog equivalent).
 	ReadReflog(ctx context.Context, repoID domain.ContentHash) ([]domain.RefLogEntry, error)
 	GetManifest(ctx context.Context, repoID domain.ContentHash) (domain.Manifest, error)

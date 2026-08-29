@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
@@ -13,6 +14,33 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
+
+func orderRefsForPush(refs []domain.Ref) []domain.Ref {
+	ordered := append([]domain.Ref(nil), refs...)
+	isLifecycle := func(ref domain.Ref) bool {
+		_, ok, _ := domain.ParseBranchLifecycleRef(ref)
+		return ok
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, right := isLifecycle(ordered[i]), isLifecycle(ordered[j])
+		if left != right {
+			return left
+		}
+		if left {
+			return ordered[i].Name < ordered[j].Name
+		}
+		return false
+	})
+	return ordered
+}
+
+func sharedTimelineRef(ref domain.Ref) bool {
+	if ref.Kind == domain.RefBranch || ref.Kind == domain.RefSession {
+		return ref.Target != ""
+	}
+	_, lifecycle, _ := domain.ParseBranchLifecycleRef(ref)
+	return lifecycle && ref.Target != ""
+}
 
 // SyncRepoService implements the SyncRepo inbound port as a use-case service.
 //
@@ -186,7 +214,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 	}
 
-	branchRefs := map[string]bool{}
+	branchRefs := map[string]domain.Ref{}
 	seenRefs := map[string]bool{}
 	for _, ref := range refs {
 		if err := domain.ValidateRef(ref); err != nil {
@@ -201,7 +229,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 		seenRefs[key] = true
 		if ref.Kind == domain.RefBranch {
-			branchRefs[ref.Name] = true
+			branchRefs[ref.Name] = ref
 		}
 		if ref.Target != "" {
 			if _, err := getSnapshot(ref.Target); err != nil {
@@ -217,7 +245,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		if len(branch) > len("refs/heads/") && branch[:len("refs/heads/")] == "refs/heads/" {
 			branch = branch[len("refs/heads/"):]
 		}
-		if branchRefs[branch] {
+		if _, ok := branchRefs[branch]; ok {
 			continue
 		}
 		if _, err := store.GetRef(ctx, repoID, domain.RefBranch, branch); err != nil {
@@ -270,6 +298,12 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, rerr
 		}
 	}
+	// Finish any local archive/create transition that crashed after its immutable
+	// lifecycle event was written. Without this repair an advanced raw branch can
+	// remain visible locally yet be rejected forever by an already-archived peer.
+	if err := s.store.ReconcileBranchLifecycleRefs(ctx, repoID); err != nil {
+		return inbound.SyncOutput{}, err
+	}
 	man, err := s.store.Manifest(ctx, repoID)
 	if err != nil {
 		return inbound.SyncOutput{}, err
@@ -289,6 +323,7 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 		r.RepoID = repoID
 		refs = append(refs, r)
 	}
+	refs = orderRefsForPush(refs)
 
 	if err := s.pushSettingsObjects(ctx, repoID, snaps); err != nil {
 		return inbound.SyncOutput{}, err
@@ -1089,7 +1124,7 @@ func (s *SyncRepoService) sharedReachable(ctx context.Context, refs []domain.Ref
 	shared := make(map[domain.ContentHash]bool)
 	stack := make([]domain.ContentHash, 0, len(refs))
 	for _, ref := range refs {
-		if (ref.Kind == domain.RefBranch || ref.Kind == domain.RefSession) && ref.Target != "" {
+		if sharedTimelineRef(ref) {
 			stack = append(stack, ref.Target)
 		}
 	}
@@ -1449,12 +1484,19 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		}
 	}
 	s.updateRemoteSnapshotStateCursor(ctx, repoID, cursorStore, cursorEntries, snaps)
+	remoteLifecycleStates, err := domain.BranchLifecycleStates(refs)
+	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
 	// FetchOnly (hook auto-pull): fetch objects only, local refs do not move — context does not force convergence unlike code. Instead, report remote branch ahead hint (pull is user choice).
 	if in.FetchOnly {
 		var ahead []string
 		for _, r := range refs {
 			if r.Kind != domain.RefBranch || r.Target == "" {
 				continue
+			}
+			if latest, ok := remoteLifecycleStates[r.Name]; ok && latest.State == domain.BranchArchived && latest.Target == r.Target {
+				continue // legacy server residue shadowed by its immutable archive event
 			}
 			local, lerr := s.store.GetRef(ctx, repoID, r.Kind, r.Name)
 			if lerr != nil || local.Target == "" || local.Target == r.Target {
@@ -1467,6 +1509,47 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		return inbound.SyncOutput{Pulled: len(snaps), RemoteAhead: ahead}, nil
 	}
 
+	// Apply immutable branch lifecycle events before ordinary refs. The local
+	// Git ref inventory is authoritative for whether an equal-target branch is
+	// still active on this machine. If inventory cannot be read, stop before ref
+	// mutation: guessing "live" would publish stale active events, while guessing
+	// "deleted" could hide current work. The already-fetched objects remain safe.
+	liveBranches := map[string]bool{}
+	inventoryKnown := false
+	hasArchivedLifecycle := false
+	for _, state := range remoteLifecycleStates {
+		if state.State == domain.BranchArchived {
+			hasArchivedLifecycle = true
+			break
+		}
+	}
+	if hasArchivedLifecycle && in.Cwd != "" {
+		if inventory, ok := s.gitCtx.(outbound.GitBranchInventory); ok {
+			branches, err := inventory.LocalBranches(ctx, in.Cwd)
+			if err != nil {
+				return inbound.SyncOutput{}, fmt.Errorf("list local Git branches before applying archived context refs: %w", err)
+			}
+			inventoryKnown = true
+			for _, branch := range branches {
+				liveBranches[branch] = true
+			}
+		} else {
+			return inbound.SyncOutput{}, fmt.Errorf("%w: local Git branch inventory is unavailable", domain.ErrNotGitRepo)
+		}
+	}
+	for _, ref := range refs {
+		event, lifecycle, err := domain.ParseBranchLifecycleRef(ref)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if !lifecycle {
+			continue
+		}
+		preserve := !inventoryKnown || liveBranches[event.Branch]
+		if err := s.store.ApplyBranchLifecycleRef(ctx, ref, preserve); err != nil {
+			return inbound.SyncOutput{}, err
+		}
+	}
 	// Ref merge — git policy (fast-forward only): move local head only if it is an ancestor of remote head. If diverged, cancel that ref (local kept) and report Conflicts. --force adopts remote.
 	// HEAD is local.
 	var newRefs []domain.Ref
@@ -1474,9 +1557,29 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		if r.Kind == domain.RefHEAD || r.Target == "" {
 			continue
 		}
+		if _, lifecycle, err := domain.ParseBranchLifecycleRef(r); err != nil {
+			return inbound.SyncOutput{}, err
+		} else if lifecycle {
+			newRefs = append(newRefs, r)
+			continue
+		}
+		if r.Kind == domain.RefBranch {
+			if latest, ok := remoteLifecycleStates[r.Name]; ok && latest.State == domain.BranchArchived && latest.Target == r.Target {
+				continue // old peers retain the branch pointer but cannot apply archive projection
+			}
+		}
 		local, lerr := s.store.GetRef(ctx, repoID, r.Kind, r.Name)
+		localMissing := errors.Is(lerr, domain.ErrNotFound)
+		if lerr != nil && !localMissing {
+			return inbound.SyncOutput{}, lerr
+		}
+		remoteArchiveRecovery := false
+		if r.Kind == domain.RefBranch {
+			latest, ok := remoteLifecycleStates[r.Name]
+			remoteArchiveRecovery = ok && latest.State == domain.BranchArchived && latest.Target != r.Target
+		}
 		switch {
-		case lerr != nil || local.Target == "" || local.Target == r.Target:
+		case localMissing || local.Target == "" || local.Target == r.Target:
 			// Local absent or same → reflect as is.
 		case in.Force:
 			// Force: adopt remote state (local snapshot objects preserved — ref pointers only move).
@@ -1486,7 +1589,15 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			conflicts = append(conflicts, string(r.Kind)+"/"+r.Name)
 			continue // cancel — local maintenance (equivalent to git pull --ff-only rejection)
 		}
-		if err := s.store.PutRef(ctx, domain.Ref{Kind: r.Kind, Name: r.Name, RepoID: repoID, Target: r.Target}); err != nil {
+		next := domain.Ref{Kind: r.Kind, Name: r.Name, RepoID: repoID, Target: r.Target}
+		if localMissing && remoteArchiveRecovery {
+			// The remote branch advanced beyond an archive target but its active
+			// compensation was interrupted. Treat the surviving projection as
+			// explicit recovery authority and make that fact durable locally.
+			if _, err := s.store.CreateBranchRef(ctx, next); err != nil {
+				return inbound.SyncOutput{}, err
+			}
+		} else if err := s.store.PutRef(ctx, next); err != nil {
 			return inbound.SyncOutput{}, err
 		}
 		newRefs = append(newRefs, r)

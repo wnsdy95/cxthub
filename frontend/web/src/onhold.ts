@@ -1,6 +1,7 @@
 // On Hold logic — ContextView (badge count) and OnHoldView (tab render) share it.
 // The badge number and the number of rows shown in the tab must match, so a single definition is used.
 import type { Ref, Snapshot, Pending, Unsync } from './types';
+import { parseBranchLifecycleRef } from './branchLifecycle';
 
 /** Snapshot IDs reachable from explicit roots under cxthub's immutable graph
  *  rule. Natural parents and graft overlay parents are equally valid for
@@ -27,7 +28,9 @@ export function reachableSnapshotIds(targets: Iterable<string>, snapshots: Snaps
  *  will reappear as an uncommitted one, and the graph will show orphaned history before the merge. */
 export function sharedReachable(refs: Ref[], snapshots: Snapshot[]): Set<string> {
   // session ref preserves residual sessions from partial merges but not git branch membership.
-  const roots = refs.filter((r) => r.kind === 'branch' || r.kind === 'session').map((r) => r.target);
+  const roots = refs
+    .filter((r) => r.kind === 'branch' || r.kind === 'session' || parseBranchLifecycleRef(r) !== null)
+    .map((r) => r.target);
   return reachableSnapshotIds(roots, snapshots);
 }
 

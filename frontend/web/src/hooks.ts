@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import type { User } from './types';
 import { sharedReachable, unsyncChains } from './onhold';
+import { archivedBranchMarkers, parseBranchLifecycleRef, projectBranchRefs } from './branchLifecycle';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseGoogleIdToken, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 
@@ -127,11 +128,24 @@ export function useRepos(workspaceId: string | null) {
 }
 // Context Browser: Branch List → Commit Log → Body(CIR). Immutable data(doc) is infinite cache.
 export function useRefs(repoId: string | null) {
-  return useQuery({
+  const qc = useQueryClient();
+  const q = useQuery({
     queryKey: ['refs', repoId],
     queryFn: () => api.listRefs(repoId as string),
     enabled: Boolean(repoId),
+    refetchInterval: 15_000,
   });
+  const signature = (q.data ?? [])
+    .map((ref) => `${ref.kind}:${ref.name}@${ref.target}`)
+    .sort()
+    .join(',');
+  const previous = useRef(signature);
+  useEffect(() => {
+    if (previous.current === signature) return;
+    previous.current = signature;
+    void qc.invalidateQueries({ queryKey: ['snapshots', repoId, '*'] });
+  }, [signature, qc, repoId]);
+  return q;
 }
 export function useAllSnapshots(repoId: string | null, enabled: boolean) {
   return useQuery({
@@ -278,7 +292,8 @@ export function useDismissPending() {
 // Ensure "badge count = tab row count" is guaranteed by logic (onhold.ts) and input equality, so
 // exclude stash, hook capture leaves, and badge map must be created here only (review front #2).
 export function useRepoView(repoId: string | null) {
-  const refs = useRefs(repoId).data ?? [];
+  const rawRefs = useRefs(repoId).data ?? [];
+  const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);
   const allData = useAllSnapshots(repoId, true).data;
   const snapshots = useMemo(() => {
     const all = (allData ?? []).filter((s) => s.branch !== '(stash)');
@@ -292,9 +307,15 @@ export function useRepoView(repoId: string | null) {
     const m = new Map<string, { name: string; kind: string }[]>();
     for (const r of refs) {
       if (r.kind !== 'branch' && r.kind !== 'tag') continue;
+      if (parseBranchLifecycleRef(r)) continue;
       const list = m.get(r.target) ?? [];
       list.push({ name: r.name, kind: r.kind });
       m.set(r.target, list);
+    }
+    for (const marker of archivedBranchMarkers(refs)) {
+      const list = m.get(marker.target) ?? [];
+      list.push({ name: marker.branch, kind: 'archived' });
+      m.set(marker.target, list);
     }
     return m;
   }, [refs]);

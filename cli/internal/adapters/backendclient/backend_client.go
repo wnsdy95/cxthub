@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -104,6 +105,7 @@ const (
 	maxChunkWireRawBytes = chunkcas.MaxPortableChunkBytes
 	maxChunkWireObjects  = 32
 	maxChunkWireJSONBody = 4 << 20
+	maxRefBatchUpdates   = 4096
 )
 
 type putRefReq struct {
@@ -113,6 +115,16 @@ type putRefReq struct {
 	Force          bool               `json:"force,omitempty"`
 	// Append grafts diverged push to server head (--append).
 	Append bool `json:"append,omitempty"`
+}
+
+type batchRefUpdate struct {
+	Ref    domain.Ref `json:"ref"`
+	Force  bool       `json:"force,omitempty"`
+	Append bool       `json:"append,omitempty"`
+}
+
+type batchRefsReq struct {
+	Updates []batchRefUpdate `json:"updates"`
 }
 
 // ChunkLocal is local chunk store access (pull delta — does not receive existing chunks).
@@ -658,6 +670,22 @@ func (c *BackendClient) RemoteManifest(ctx context.Context, repoID string) (doma
 	return m, nil
 }
 
+func (c *BackendClient) remoteRefs(ctx context.Context, repoID string) ([]domain.Ref, error) {
+	var refs []domain.Ref
+	if err := c.do(ctx, http.MethodGet, c.reposPath(repoID)+"/refs", nil, &refs); err != nil {
+		return nil, err
+	}
+	for _, ref := range refs {
+		if err := domain.ValidateRef(ref); err != nil {
+			return nil, err
+		}
+		if ref.RepoID != "" && ref.RepoID != repoID {
+			return nil, domain.ErrHashMismatch
+		}
+	}
+	return refs, nil
+}
+
 // NegotiatePushObjects performs the hash-only first phase before the
 // application opens any cumulative SessionDoc bodies. It uses the existing
 // sync endpoint, so old servers that support Push already support this
@@ -836,26 +864,148 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 		}
 	}
 
-	// ref movement (branch/session/tag; HEAD is a local concept). Server determines policy by kind.
-	// Non-fast-forward rejections are collected and reported in git style at the end (other refs continue).
-	var rejected []string
-	for _, ref := range refs {
-		if ref.Kind == domain.RefHEAD || ref.Target == "" {
-			continue
+	// Ref movement (branch/session/tag; HEAD is a local concept). Avoid replaying
+	// immutable lifecycle history and unchanged branch pointers on every push.
+	// A ref-list failure means an old or temporarily unavailable peer, so retain
+	// the previous fail-open behavior and send the complete ref set.
+	refsToPush := pushableRefs(refs)
+	if len(refsToPush) > 0 {
+		if remoteRefs, err := c.remoteRefs(ctx, repoID); err == nil {
+			refsToPush = refsMissingOrChanged(refsToPush, remoteRefs)
 		}
+	}
+
+	updates := make([]batchRefUpdate, 0, len(refsToPush))
+	for _, ref := range refsToPush {
+		_, lifecycle, _ := domain.ParseBranchLifecycleRef(ref)
+		updates = append(updates, batchRefUpdate{
+			Ref: ref, Force: force && !lifecycle,
+			Append: appendDiverged && ref.Kind == domain.RefBranch && !lifecycle,
+		})
+	}
+	batchFallback := false
+	batchRejected := false
+	for _, batch := range refUpdateBatches(updates) {
+		err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/refs/batch", batchRefsReq{Updates: batch}, nil)
+		switch {
+		case err == nil:
+		case batchRefsUnsupported(err):
+			batchFallback = true
+		case strings.Contains(err.Error(), "non_fast_forward"):
+			batchRejected = true
+		default:
+			return classifyRefPushError(err)
+		}
+		if batchFallback {
+			break
+		}
+	}
+	if !batchFallback {
+		if batchRejected {
+			return fmt.Errorf("%w: ref batch", domain.ErrSyncConflict)
+		}
+		return nil
+	}
+
+	// Compatibility fallback for servers predating the batch endpoint. Server
+	// determines update policy by ref kind. Non-fast-forward rejections are
+	// collected and reported in git style at the end (other refs continue).
+	var rejected []string
+	for _, ref := range refsToPush {
+		_, lifecycle, _ := domain.ParseBranchLifecycleRef(ref)
 		path := c.reposPath(repoID) + "/refs/" + string(ref.Kind) + "/" + escapePathName(ref.Name)
-		if err := c.do(ctx, http.MethodPut, path, putRefReq{Target: ref.Target, ExpectedTarget: "", Symbolic: ref.Symbolic, Force: force, Append: appendDiverged}, nil); err != nil {
+		request := putRefReq{
+			Target: ref.Target, ExpectedTarget: "", Symbolic: ref.Symbolic,
+			Force:  force && !lifecycle,
+			Append: appendDiverged && ref.Kind == domain.RefBranch && !lifecycle,
+		}
+		if err := c.do(ctx, http.MethodPut, path, request, nil); err != nil {
+			classified := classifyRefPushError(err)
 			if strings.Contains(err.Error(), "non_fast_forward") {
 				rejected = append(rejected, string(ref.Kind)+"/"+ref.Name)
 				continue
 			}
-			return err
+			return classified
 		}
 	}
 	if len(rejected) > 0 {
 		return fmt.Errorf("%w: %s", domain.ErrSyncConflict, strings.Join(rejected, ", "))
 	}
 	return nil
+}
+
+func pushableRefs(refs []domain.Ref) []domain.Ref {
+	out := make([]domain.Ref, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Kind != domain.RefHEAD && ref.Target != "" {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func refsMissingOrChanged(local, remote []domain.Ref) []domain.Ref {
+	type refKey struct {
+		kind domain.RefKind
+		name string
+	}
+	type remoteState struct {
+		ref       domain.Ref
+		ambiguous bool
+	}
+	remoteByKey := make(map[refKey]remoteState, len(remote))
+	for _, ref := range remote {
+		key := refKey{kind: ref.Kind, name: ref.Name}
+		if previous, ok := remoteByKey[key]; ok {
+			if previous.ref.Target != ref.Target || previous.ref.Symbolic != ref.Symbolic {
+				previous.ambiguous = true
+				remoteByKey[key] = previous
+			}
+			continue
+		}
+		remoteByKey[key] = remoteState{ref: ref}
+	}
+
+	out := make([]domain.Ref, 0, len(local))
+	for _, ref := range local {
+		state, ok := remoteByKey[refKey{kind: ref.Kind, name: ref.Name}]
+		if ok && !state.ambiguous && state.ref.Target == ref.Target && state.ref.Symbolic == ref.Symbolic {
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out
+}
+
+func batchRefsUnsupported(err error) bool {
+	var httpErr *HTTPError
+	return errors.As(err, &httpErr) && (httpErr.Status == http.StatusNotFound || httpErr.Status == http.StatusMethodNotAllowed)
+}
+
+func refUpdateBatches(updates []batchRefUpdate) [][]batchRefUpdate {
+	if len(updates) == 0 {
+		return [][]batchRefUpdate{{}}
+	}
+	out := make([][]batchRefUpdate, 0, (len(updates)+maxRefBatchUpdates-1)/maxRefBatchUpdates)
+	for start := 0; start < len(updates); start += maxRefBatchUpdates {
+		end := start + maxRefBatchUpdates
+		if end > len(updates) {
+			end = len(updates)
+		}
+		out = append(out, updates[start:end])
+	}
+	return out
+}
+
+func classifyRefPushError(err error) error {
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) && httpErr.Code == "branch_archived" {
+		return fmt.Errorf("%w: %s", domain.ErrBranchArchived, httpErr.Message)
+	}
+	if strings.Contains(err.Error(), "non_fast_forward") {
+		return fmt.Errorf("%w: %v", domain.ErrSyncConflict, err)
+	}
+	return err
 }
 
 func containsString(values []string, want string) bool {

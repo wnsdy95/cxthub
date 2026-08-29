@@ -14,6 +14,50 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
+func TestPostgresBranchLifecycleReadProjectionMatchesFS(t *testing.T) {
+	repo := domain.ContentHash("sha256:" + strings.Repeat("1", 64))
+	archivedTarget := domain.ContentHash("sha256:" + strings.Repeat("2", 64))
+	advancedTarget := domain.ContentHash("sha256:" + strings.Repeat("3", 64))
+	archive, err := domain.NewBranchLifecycleRef(repo, "feature/archived", archivedTarget, 1, domain.BranchArchived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		branch     domain.Ref
+		wantBranch bool
+	}{
+		{name: "exact archived residue hidden", branch: domain.Ref{Kind: domain.RefBranch, Name: "feature/archived", RepoID: repo, Target: archivedTarget}},
+		{name: "advanced branch preserved", branch: domain.Ref{Kind: domain.RefBranch, Name: "feature/archived", RepoID: repo, Target: advancedTarget}, wantBranch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := projectBranchLifecycleRefs([]domain.Ref{tc.branch, archive})
+			if err != nil {
+				t.Fatal(err)
+			}
+			branchFound := false
+			for _, ref := range got {
+				branchFound = branchFound || ref.Kind == domain.RefBranch
+			}
+			if branchFound != tc.wantBranch {
+				t.Fatalf("projected refs=%+v wantBranch=%v", got, tc.wantBranch)
+			}
+		})
+	}
+	head := domain.Ref{Kind: domain.RefHead, Name: domain.HeadRefName, RepoID: repo, Symbolic: "feature/archived"}
+	projected, err := projectBranchLifecycleRefs([]domain.Ref{
+		head,
+		{Kind: domain.RefBranch, Name: "feature/archived", RepoID: repo, Target: archivedTarget},
+		archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected) != 2 || projected[0].Kind != domain.RefHead || projected[0].Symbolic != "" || projected[0].Target != archivedTarget {
+		t.Fatalf("projected interrupted HEAD = %+v", projected)
+	}
+}
+
 // TestPGSmoke is a smoke test for actual Postgres — runs only when CXT_TEST_DSN is set.
 // Skipped when unset (local `go test` skips, CI injects service container DSN).
 //
@@ -130,6 +174,99 @@ func TestPGSmoke(t *testing.T) {
 	}
 	if err := st.CompareAndSwapRef(ctx, repoID, domain.Ref{RepoID: repoID, Kind: domain.RefHead, Name: domain.HeadRefName, Symbolic: "main"}, ""); err != nil {
 		t.Fatalf("symbolic HEAD(NULL target): %v", err)
+	}
+	// Branch lifecycle events use the existing immutable-tag wire shape but
+	// apply tag insertion, branch projection deletion, and reflog in one DB
+	// transaction. A stale branch create is rejected until a newer active event.
+	lifecycleBranch := domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: "feature/archived", Target: snapID}
+	if err := st.CompareAndSwapRef(ctx, repoID, lifecycleBranch, ""); err != nil {
+		t.Fatalf("lifecycle branch fixture: %v", err)
+	}
+	archiveEvent, err := domain.NewBranchLifecycleRef(repoID, lifecycleBranch.Name, snapID, 1, domain.BranchArchived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApplyBranchLifecycleRef(ctx, repoID, archiveEvent); err != nil {
+		t.Fatalf("archive lifecycle event: %v", err)
+	}
+	if _, err := st.GetRef(ctx, repoID, domain.RefBranch, lifecycleBranch.Name); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("archived branch remains: %v", err)
+	}
+	lifecycleReflog, err := st.ReadReflog(ctx, repoID)
+	if err != nil {
+		t.Fatalf("lifecycle reflog: %v", err)
+	}
+	archiveLogged, removalLogged := false, false
+	for _, entry := range lifecycleReflog {
+		archiveLogged = archiveLogged || (entry.Kind == domain.RefTag && entry.Name == archiveEvent.Name && entry.New == snapID)
+		removalLogged = removalLogged || (entry.Kind == domain.RefBranch && entry.Name == lifecycleBranch.Name && entry.Old == snapID && entry.New == "")
+	}
+	if !archiveLogged || !removalLogged {
+		t.Fatalf("postgres lifecycle reflog missing tag/removal audit: %+v", lifecycleReflog)
+	}
+	if err := st.CompareAndSwapRef(ctx, repoID, lifecycleBranch, ""); !errors.Is(err, domain.ErrBranchArchived) {
+		t.Fatalf("stale lifecycle branch recreated: %v", err)
+	}
+	activeEvent, err := domain.NewBranchLifecycleRef(repoID, lifecycleBranch.Name, snapID, 2, domain.BranchActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApplyBranchLifecycleRef(ctx, repoID, activeEvent); err != nil {
+		t.Fatalf("active lifecycle event: %v", err)
+	}
+	if err := st.CompareAndSwapRef(ctx, repoID, lifecycleBranch, ""); err != nil {
+		t.Fatalf("explicit lifecycle restore: %v", err)
+	}
+	// Crash recovery parity with the FS adapter: an archive event may become
+	// durable after the physical branch has already advanced. Generic CAS must
+	// first record that advanced target as active instead of permanently
+	// rejecting the branch as archived.
+	makeLifecycleSnapshot := func(branch string) domain.ContentHash {
+		t.Helper()
+		doc := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude, Fidelity: domain.FidelityFull, GitBranch: branch}}
+		body, err := domain.CanonicalBytes(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := domain.HashContent(body)
+		if _, err := st.PutDoc(ctx, repoID, domain.SessionDoc{Hash: id, CIR: doc}); err != nil {
+			t.Fatalf("recovery doc %s: %v", branch, err)
+		}
+		if err := st.PutSnapshot(ctx, domain.Snapshot{ID: id, RepoID: repoID, Branch: branch, DocHash: id, Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull, Message: "lifecycle recovery"}); err != nil {
+			t.Fatalf("recovery snapshot %s: %v", branch, err)
+		}
+		return id
+	}
+	const recoveryBranchName = "feature/cas-recovery"
+	advancedTarget := makeLifecycleSnapshot("feature/cas-recovery-advanced")
+	nextTarget := makeLifecycleSnapshot("feature/cas-recovery-next")
+	recoveryBranch := domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: recoveryBranchName, Target: advancedTarget}
+	if err := st.CompareAndSwapRef(ctx, repoID, recoveryBranch, ""); err != nil {
+		t.Fatalf("recovery branch fixture: %v", err)
+	}
+	recoveryArchive, err := domain.NewBranchLifecycleRef(repoID, recoveryBranchName, snapID, 1, domain.BranchArchived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Store only the immutable event to model a crash before lifecycle
+	// projection/compensation completed.
+	if err := st.CompareAndSwapRef(ctx, repoID, recoveryArchive, ""); err != nil {
+		t.Fatalf("recovery archive fixture: %v", err)
+	}
+	recoveryBranch.Target = nextTarget
+	if err := st.CompareAndSwapRef(ctx, repoID, recoveryBranch, advancedTarget); err != nil {
+		t.Fatalf("move advanced archive residue: %v", err)
+	}
+	if got, err := st.GetRef(ctx, repoID, domain.RefBranch, recoveryBranchName); err != nil || got.Target != nextTarget {
+		t.Fatalf("recovered branch = %+v, %v", got, err)
+	}
+	lifecycleRefs, err := listBranchLifecycleRefs(ctx, st.pool, repoID, recoveryBranchName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestLifecycle, ok, err := domain.LatestBranchLifecycle(lifecycleRefs, recoveryBranchName)
+	if err != nil || !ok || latestLifecycle.State != domain.BranchActive || latestLifecycle.Generation != 2 || latestLifecycle.Target != advancedTarget {
+		t.Fatalf("postgres recovery event = %+v, %v, %v", latestLifecycle, ok, err)
 	}
 	// Set KeyFacts/OpenTasks to nil to take NOT NULL normalization path.
 	digest := domain.MemoryDigest{SnapshotID: snapID, Summary: "m", Provider: domain.ProviderClaude}

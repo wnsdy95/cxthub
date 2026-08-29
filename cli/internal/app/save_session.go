@@ -121,9 +121,13 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 
 	var parents []domain.ContentHash
 	var refTarget domain.ContentHash
-	if ref, gerr := s.store.GetRef(ctx, repo.ID, domain.RefBranch, branch); gerr == nil && ref.Target != "" && ref.Target != docHash {
-		refTarget = ref.Target
-		parents = []domain.ContentHash{ref.Target}
+	branchRefExists := false
+	if ref, gerr := s.store.GetRef(ctx, repo.ID, domain.RefBranch, branch); gerr == nil {
+		branchRefExists = true
+		if ref.Target != "" && ref.Target != docHash {
+			refTarget = ref.Target
+			parents = []domain.ContentHash{ref.Target}
+		}
 	}
 
 	msg := in.Message
@@ -204,8 +208,15 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 				return inbound.SaveOutput{}, fmt.Errorf("preservation of reachability (graft) failed — ref move aborted: %w", gerr)
 			}
 		}
-		if err := s.store.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: branch, RepoID: repo.ID, Target: docHash}); err != nil {
-			return inbound.SaveOutput{}, err
+		branchRef := domain.Ref{Kind: domain.RefBranch, Name: branch, RepoID: repo.ID, Target: docHash}
+		if branchRefExists {
+			if err := s.store.PutRef(ctx, branchRef); err != nil {
+				return inbound.SaveOutput{}, err
+			}
+		} else {
+			if _, err := s.store.CreateBranchRef(ctx, branchRef); err != nil {
+				return inbound.SaveOutput{}, err
+			}
 		}
 		// HEAD points to the current branch symbolically. Best-effort.
 		_ = s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: branch})

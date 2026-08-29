@@ -47,6 +47,11 @@ var ErrNoActiveSession = errors.New("no active session")
 // This error has the same meaning as in git (Invariant F2): it fails silently without moving the existing branch.
 var ErrBranchExists = errors.New("branch already exists")
 
+// ErrBranchArchived prevents a stale replica from recreating a branch pointer
+// after a newer immutable lifecycle event archived it. Creating the branch
+// explicitly records a newer active event before restoring the pointer.
+var ErrBranchArchived = errors.New("branch is archived")
+
 // ErrNotGitRepo indicates the cwd is not part of a git worktree.
 // cxt is a shadow of git — repository information is always read from the local .git,
 // and it fails like git outside a git repository (no path fallback).

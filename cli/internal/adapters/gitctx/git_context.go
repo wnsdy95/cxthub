@@ -92,5 +92,26 @@ func (a *GitContextAdapter) CurrentBranch(ctx context.Context, cwd string) (stri
 	return b, nil
 }
 
+// LocalBranches returns authoritative local refs/heads names, one per line.
+func (a *GitContextAdapter) LocalBranches(ctx context.Context, cwd string) ([]string, error) {
+	out, err := git(ctx, cwd, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	lines := strings.Split(out, "\n")
+	branches := make([]string, 0, len(lines))
+	for _, branch := range lines {
+		branch = strings.TrimSpace(branch)
+		if branch != "" {
+			branches = append(branches, branch)
+		}
+	}
+	return branches, nil
+}
+
 // Ensure GitContextAdapter implements outbound.GitContext.
 var _ outbound.GitContext = (*GitContextAdapter)(nil)
+var _ outbound.GitBranchInventory = (*GitContextAdapter)(nil)
