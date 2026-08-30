@@ -5,6 +5,7 @@
 // Exception: exchangeSession only sends the IDP token in the Authorization header once,
 // and the server sets the session cookie in the Set-Cookie response.
 import type { RefLogEntry, User, PublicUser, Workspace, PublicWorkspace, WorkspacePatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync } from './types';
+import { normalizeActivityResponse } from './activity';
 
 // Default is same-origin relative path (/api/v1). Dev uses Vite proxy, prod assumes same-domain deployment.
 // To serve from a different origin, use an absolute URL with VITE_API_BASE, but cookies must be same-site.
@@ -64,10 +65,9 @@ export const api = {
       'GET',
       `/public/users/${encodeURIComponent(username)}/contributions`,
     ),
-  userActivity: (username: string) =>
-    call<{ months: import('./types').ActivityMonth[] }>(
-      'GET',
-      `/public/users/${encodeURIComponent(username)}/activity`,
+  userActivity: async (username: string) =>
+    normalizeActivityResponse(
+      await call<unknown>('GET', `/public/users/${encodeURIComponent(username)}/activity`),
     ),
   listCliTokens: () =>
     call<{ suffix: string; label?: string; created_at: string; expires_at: string }[] | null>('GET', '/me/cli-tokens'),

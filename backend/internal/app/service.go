@@ -1837,7 +1837,14 @@ func (s *Service) Activity(ctx context.Context, workspaces []domain.Workspace) (
 	path := func(w domain.Workspace) string { return w.OwnerUsername + "/" + w.Slug }
 	out := make([]domain.ActivityMonth, 0, len(months))
 	for _, m := range months {
-		am := domain.ActivityMonth{Month: m}
+		// These fields are required arrays in the public API. A nil Go slice is
+		// encoded as JSON null, which makes otherwise valid commit-only or
+		// creation-only months unsafe for clients to consume as collections.
+		am := domain.ActivityMonth{
+			Month:       m,
+			CommitRepos: make([]domain.ActivityRepo, 0),
+			Created:     make([]domain.ActivityCreated, 0),
+		}
 		for wsID, c := range commits[m] {
 			w := wsByID[wsID]
 			am.CommitTotal += c
