@@ -76,7 +76,7 @@ func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inboun
 		}
 	} else {
 		info, statErr := os.Stat(path)
-		if statErr != nil || providerfs.CaptureExcluded(in.Cwd, path, info.Size()) {
+		if statErr != nil || providerfs.CaptureExcluded(repo.LocalPath, path, info.Size()) {
 			return inbound.StashOutput{}, domain.ErrNoActiveSession
 		}
 	}

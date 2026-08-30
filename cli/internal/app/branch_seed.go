@@ -239,7 +239,13 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 
 	out := inbound.SeedOutput{SnapshotID: docHash, SessionID: seedSession}
 	// Materialization (best-effort): Seed snapshot is committed even on failure — can be restored with cxt checkout.
-	if cdc, ok := s.codecs[provider]; ok {
+	// Desktop apps retain their vendor-owned live session; writing an unowned
+	// resume file for them would create an orphan and is explicitly skipped.
+	if !in.SkipMaterialize {
+		cdc, ok := s.codecs[provider]
+		if !ok {
+			return out, nil
+		}
 		if mat, ok2 := s.materializers[provider]; ok2 {
 			if raw, encErr := cdc.Encode(ctx, cir, provider); encErr == nil {
 				if path, resume, mErr := mat.Materialize(ctx, raw, in.Cwd); mErr == nil {

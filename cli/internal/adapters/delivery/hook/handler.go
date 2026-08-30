@@ -6,8 +6,8 @@
 //
 //	SessionStart(claude/codex):   CaptureCoordinator.MarkBaseline (no commit)
 //	Stop(claude/codex):           CaptureCoordinator.RequestCapture(debounce=true)
-//	SessionEnd(claude):           CaptureCoordinator.RequestCapture(force=true) — force flush
-//	UserPromptSubmit(codex):      CaptureCoordinator.MarkTurn (no commit)
+//	SessionEnd(claude/codex):     CaptureCoordinator.RequestCapture(force=true) — force flush
+//	UserPromptSubmit(claude/codex): CaptureCoordinator.MarkTurn (no commit)
 //
 // Safety Contract (invariants, capture path):
 //   - Always exit 0 (errors reported only to stderr — cmd/cxt hook branch ensures)
@@ -23,10 +23,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -93,21 +95,21 @@ func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 
 	switch event {
 	case "SessionStart":
-		err := h.coord.MarkBaseline(ctx, provider, cwd, path)
-		h.emitBriefing(event, cwd) // pull after new/restart session — remaining briefing delivery (secondary channel)
+		err := h.coord.MarkBaseline(ctx, provider, cwd, path, p.SessionID)
+		h.emitBriefing(event, cwd, p.SessionID) // app branch handoff + pull briefing
 		return err
 	case "UserPromptSubmit":
-		err := h.coord.MarkTurn(ctx, provider, cwd, p.Prompt)
-		h.emitBriefing(event, cwd) // team context identifier notice for next turn (primary channel)
+		err := h.coord.MarkTurn(ctx, provider, cwd, p.SessionID, p.Prompt)
+		h.emitBriefing(event, cwd, p.SessionID) // app branch handoff + team context notice
 		return err
 	case "Stop":
-		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, true, false)
+		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, true, false)
 		if captured {
 			spawnPendingSync(cwd)
 		}
 		return err
 	case "SessionEnd":
-		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, false, true)
+		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, false, true)
 		if captured {
 			spawnPendingSync(cwd)
 		}
@@ -122,11 +124,18 @@ func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 // hookSpecificOutput.additionalContext.
 // This output is not visible to users but is passed only to the model. Empirically verified (0.143):
 // The codex binary contains additionalContext/HookOutputEntry/EventName (sessionStart, userPromptSubmit, etc.) — confirmed as compatible with the Claude Code hook schema.
-func (h *Handler) emitBriefing(event, cwd string) {
-	text, ok := capture.ConsumeBriefing(cwd)
-	if !ok {
+func (h *Handler) emitBriefing(event, cwd, sessionID string) {
+	var entries []string
+	if text, ok := capture.ConsumeSessionHandoff(cwd, sessionID); ok {
+		entries = append(entries, text)
+	}
+	if text, ok := capture.ConsumeBriefing(cwd); ok {
+		entries = append(entries, text)
+	}
+	if len(entries) == 0 {
 		return
 	}
+	text := strings.Join(entries, "\n\n")
 	out := map[string]interface{}{
 		"hookSpecificOutput": map[string]interface{}{
 			"hookEventName":     event,
@@ -149,7 +158,11 @@ func (h *Handler) emitBriefing(event, cwd string) {
 // A separate process performs best-effort work, and later capture or push
 // reconciliation recovers failures.
 func spawnPendingSync(cwd string) {
-	if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
+	repoRoot, enabled := gitctx.ContextRoot(context.Background(), cwd)
+	if !enabled {
+		return
+	}
+	if _, ok := remotecfg.Origin(repoRoot); !ok && os.Getenv("CXT_REMOTE") == "" {
 		return
 	}
 	exe, err := os.Executable()

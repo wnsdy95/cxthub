@@ -310,7 +310,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
                   onChange={(e) => setViewMode(e.target.value as ViewMode)}
                 >
                   <option value="all">{t('context.viewModeAll')}</option>
-                  <option value="prompts">{t('context.viewModePrompts')}</option>
+                  <option value="prompts">{t('common.promptOnly')}</option>
                   <option value="chat">{t('context.viewModeChat')}</option>
                 </select>
                 {/* Shared commit = fork, local predecessor (unpushed ∪ uncommitted) tip = checkout -b (entire chain branch),

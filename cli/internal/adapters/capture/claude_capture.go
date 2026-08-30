@@ -42,6 +42,7 @@ func (c *ClaudeCaptureSource) LocateActiveSession(_ context.Context, cwd string)
 	if err != nil {
 		abs = cwd
 	}
+	stateRoot := repositoryStateRoot(cwd)
 	root, err := claudeProjectsDir()
 	if err != nil {
 		return "", err
@@ -65,7 +66,7 @@ func (c *ClaudeCaptureSource) LocateActiveSession(_ context.Context, cwd string)
 		}
 		p := filepath.Join(dir, e.Name())
 		// Ledger correction: Restored copies and isolated sessions are not active candidates after materialization.
-		if providerfs.CaptureExcluded(cwd, p, info.Size()) {
+		if providerfs.CaptureExcluded(stateRoot, p, info.Size()) {
 			continue
 		}
 		candidates[p] = info.ModTime().UnixNano()
@@ -88,13 +89,14 @@ func (c *ClaudeCaptureSource) LocateSession(_ context.Context, cwd, sessionID st
 	if err != nil {
 		abs = cwd
 	}
+	stateRoot := repositoryStateRoot(cwd)
 	root, err := claudeProjectsDir()
 	if err != nil {
 		return "", err
 	}
 	path := filepath.Join(root, encodeCwd(abs), sessionID+".jsonl")
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || !providerfs.IsProviderSessionPath(path) || providerfs.CaptureExcluded(cwd, path, info.Size()) {
+	if err != nil || !info.Mode().IsRegular() || !providerfs.IsProviderSessionPath(path) || providerfs.CaptureExcluded(stateRoot, path, info.Size()) {
 		return "", domain.ErrNoActiveSession
 	}
 	return path, nil

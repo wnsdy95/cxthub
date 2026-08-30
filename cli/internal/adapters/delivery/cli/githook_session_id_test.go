@@ -83,8 +83,8 @@ func TestTransitionPreflightRejectsBeforeIsolation(t *testing.T) {
 	if transitionPreflightSafe(nil, false, boundary.Boundary{}, true) {
 		t.Fatal("managed transition without a restart target was accepted")
 	}
-	if !transitionPreflightSafe(nil, false, boundary.Boundary{}, false) {
-		t.Fatal("unmanaged transition without prepared recovery was rejected")
+	if transitionPreflightSafe(nil, false, boundary.Boundary{}, false) {
+		t.Fatal("unmanaged app transition entered the provider-file isolation path")
 	}
 }
 
@@ -111,8 +111,8 @@ func TestBoundaryTransitionSafe(t *testing.T) {
 	if boundaryTransitionSafe(boundary.Boundary{}, true) {
 		t.Fatal("wrapper-managed transition without a restart target was accepted")
 	}
-	if !boundaryTransitionSafe(boundary.Boundary{}, false) {
-		t.Fatal("unmanaged superseded-only boundary was rejected")
+	if boundaryTransitionSafe(boundary.Boundary{}, false) {
+		t.Fatal("unmanaged app transition accepted a provider-file boundary")
 	}
 	if boundaryTransitionSafe(boundary.Boundary{
 		SeedPath:  restartable.SeedPath,

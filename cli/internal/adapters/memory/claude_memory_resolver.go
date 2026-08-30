@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 )
 
@@ -164,32 +165,11 @@ func ClaudeMemoryConfigFingerprint(ctx context.Context, cwd string) string {
 func claudeRepositoryRoots(ctx context.Context, cwd string) (identityRoot, worktreeRoot string) {
 	canonical := canonicalClaudePath(cwd)
 	identityRoot, worktreeRoot = canonical, canonical
-
-	if top, err := gitPath(ctx, cwd, "rev-parse", "--show-toplevel"); err == nil && top != "" {
-		worktreeRoot = canonicalClaudePath(top)
-		identityRoot = worktreeRoot
-	}
-	if common, err := gitPath(ctx, cwd, "rev-parse", "--git-common-dir"); err == nil && common != "" {
-		if !filepath.IsAbs(common) {
-			common = filepath.Join(cwd, common)
-		}
-		common = canonicalClaudePath(common)
-		if filepath.Base(common) == ".git" {
-			identityRoot = filepath.Dir(common)
-		} else {
-			identityRoot = common
-		}
+	if roots, err := gitctx.ResolveRepositoryRoots(ctx, cwd); err == nil {
+		identityRoot = roots.SharedRoot
+		worktreeRoot = roots.WorktreeRoot
 	}
 	return identityRoot, worktreeRoot
-}
-
-func gitPath(ctx context.Context, cwd string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 func canonicalClaudePath(path string) string {

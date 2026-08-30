@@ -387,7 +387,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
                 onChange={(e) => setViewMode(e.target.value as ViewMode)}
               >
                 <option value="all">{t('context.viewModeAll')}</option>
-                <option value="prompts">{t('context.viewModePrompts')}</option>
+                <option value="prompts">{t('common.promptOnly')}</option>
                 <option value="chat">{t('context.viewModeChat')}</option>
               </select>
               {doc && (

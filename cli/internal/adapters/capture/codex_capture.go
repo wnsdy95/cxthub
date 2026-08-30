@@ -70,6 +70,7 @@ func (c *CodexCaptureSource) LocateActiveSession(_ context.Context, cwd string) 
 	if err != nil {
 		abs = cwd
 	}
+	stateRoot := repositoryStateRoot(cwd)
 	root, err := codexSessionsDir()
 	if err != nil {
 		return "", err
@@ -85,7 +86,7 @@ func (c *CodexCaptureSource) LocateActiveSession(_ context.Context, cwd string) 
 		}
 		if c, ok := rolloutCwd(path); ok && c == abs {
 			// Ledger correction: Materialized but unprocessed recovery sessions or isolated sessions are not active candidates.
-			if providerfs.CaptureExcluded(cwd, path, info.Size()) {
+			if providerfs.CaptureExcluded(stateRoot, path, info.Size()) {
 				return nil
 			}
 			candidates[path] = info.ModTime().UnixNano()
@@ -113,6 +114,7 @@ func (c *CodexCaptureSource) LocateSession(_ context.Context, cwd, sessionID str
 	if err != nil {
 		abs = cwd
 	}
+	stateRoot := repositoryStateRoot(cwd)
 	root, err := codexSessionsDir()
 	if err != nil {
 		return "", err
@@ -127,7 +129,7 @@ func (c *CodexCaptureSource) LocateSession(_ context.Context, cwd, sessionID str
 		if statErr != nil || !info.Mode().IsRegular() || !providerfs.IsProviderSessionPath(path) {
 			continue
 		}
-		if sessionCwd, ok := rolloutCwd(path); !ok || sessionCwd != abs || providerfs.CaptureExcluded(cwd, path, info.Size()) {
+		if sessionCwd, ok := rolloutCwd(path); !ok || sessionCwd != abs || providerfs.CaptureExcluded(stateRoot, path, info.Size()) {
 			continue
 		}
 		candidates[path] = info.ModTime().UnixNano()

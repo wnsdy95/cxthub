@@ -35,16 +35,13 @@ type cxtHookEntry struct {
 }
 
 // agentHookEvents are the target events for registration by provider (capture path).
-func agentHookEvents(provider string) map[string]string {
-	m := map[string]string{
+func agentHookEvents(_ string) map[string]string {
+	return map[string]string{
 		"SessionStart":     "startup|resume",
 		"UserPromptSubmit": "",
 		"Stop":             "",
+		"SessionEnd":       "",
 	}
-	if provider == "claude" {
-		m["SessionEnd"] = "" // Codex does not have a SessionEnd event.
-	}
-	return m
 }
 
 // mergeAgentHooks merges the cxt item in the hooks settings JSON (preserves existing user hooks).
@@ -165,7 +162,9 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
-	// 5) Agent hooks — claude updates repo settings (git team propagation), codex performs global merge.
+	// 5) Agent hooks — the same lifecycle capture works in Claude Code/Codex
+	// desktop clients as well as their CLIs. Claude settings are project-scoped;
+	// Codex performs a global merge shared by its app and CLI clients.
 	claudePath := filepath.Join(cwd, ".claude", "settings.json")
 	if changed, merr := mergeAgentHooks(claudePath, "claude"); merr != nil {
 		bad("claude hook(%s): %v", claudePath, merr)
@@ -214,7 +213,7 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		}
 	}
 
-	fmt.Println("Complete — start with 'claude' or 'cxt claude' (commits, switches, pushes are git as-is)")
+	fmt.Println("Complete — use Claude Code/Codex in the CLI or supported desktop apps; commits, switches, and pushes remain ordinary git")
 	return nil
 }
 

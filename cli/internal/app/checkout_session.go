@@ -63,20 +63,23 @@ func (s *CheckoutSessionService) Checkout(ctx context.Context, in inbound.Checko
 		}
 	}
 
-	lo, err := s.load.Load(ctx, inbound.LoadInput{
-		RepoID:         in.RepoID,
-		Ref:            string(snapID),
-		TargetProvider: in.TargetProvider,
-		Mode:           in.Mode,
-		Cwd:            in.Cwd,
-	})
-	if err != nil {
-		return inbound.CheckoutOutput{}, err
+	lo := inbound.LoadOutput{}
+	if !in.SkipMaterialize {
+		lo, err = s.load.Load(ctx, inbound.LoadInput{
+			RepoID:         in.RepoID,
+			Ref:            string(snapID),
+			TargetProvider: in.TargetProvider,
+			Mode:           in.Mode,
+			Cwd:            in.Cwd,
+		})
+		if err != nil {
+			return inbound.CheckoutOutput{}, err
+		}
 	}
-	// Loading is the preflight for an archived (or crash-interrupted active)
-	// branch projection. Record a newer active generation only after the target
-	// provider session was materialized successfully. Otherwise a failed
-	// restore would advertise a branch that cannot actually be resumed.
+	// Loading is normally the preflight for an archived (or crash-interrupted)
+	// branch projection. Desktop-app mode deliberately preserves a live session
+	// and separately preflights its bounded hook handoff, so resolving the target
+	// snapshot is sufficient and no provider session file is created.
 	if missingBranchTarget != "" {
 		_, createErr := s.store.CreateBranchRef(ctx, domain.Ref{
 			Kind: domain.RefBranch, Name: branch, RepoID: in.RepoID, Target: missingBranchTarget,

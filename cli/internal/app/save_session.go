@@ -75,7 +75,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	} else {
 		// Explicit path (hook payload) isolation/growing materialization gate applies the same (capture path).
 		fi, serr := os.Stat(path)
-		if serr != nil || providerfs.CaptureExcluded(in.Cwd, path, fi.Size()) {
+		if serr != nil || providerfs.CaptureExcluded(repo.LocalPath, path, fi.Size()) {
 			return inbound.SaveOutput{}, domain.ErrNoActiveSession
 		}
 	}

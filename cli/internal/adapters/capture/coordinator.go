@@ -2,13 +2,16 @@ package capture
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -21,11 +24,11 @@ import (
 //
 // State files (local-only, re-creatable, push non-target — capture path simplified by repo unit):
 //
-//	<repo>/.cxt/capture/<provider>.last    # Last capture time (mtime) — debounce gate
-//	<repo>/.cxt/capture/<provider>.cursor  # {path,size} — growth detection (cheap gate)
-//	<repo>/.cxt/capture/<provider>.turn    # UserPromptSubmit prompt hint (next capture message)
-//	<repo>/.cxt/capture/<provider>.baseline# SessionStart point {path,size,at} — diagnosis/incremental
-//	<repo>/.cxt/capture/<provider>.lock    # O_EXCL lock — serializes concurrent captures
+//	<repo>/.cxt/capture/<provider>-<session-scope>.last
+//	<repo>/.cxt/capture/<provider>-<session-scope>.cursor
+//	<repo>/.cxt/capture/<provider>-<session-scope>.turn
+//	<repo>/.cxt/capture/<provider>-<session-scope>.baseline
+//	<repo>/.cxt/capture/<provider>-<session-scope>.lock
 //
 // Safety contract (invariant, capture path):
 //   - Always exit 0 from hook path calls (errors reported only to stderr — main ensures).
@@ -43,17 +46,35 @@ func NewCaptureCoordinator(save inbound.SaveSession, identity domain.TeamIdentit
 	return &CaptureCoordinator{save: save, identity: identity}
 }
 
-// cxtEnabled determines if the cwd is an active repo (.cxt store exists).
-// Agent hooks are globally registered (especially codex ~/.codex/hooks.json), so they fire in all repos —
-// to maintain the opt-in semantics of git hooks (repo-specific installation), no state files are created in inactive repos and no-op silently.
-func cxtEnabled(cwd string) bool {
-	fi, err := os.Lstat(filepath.Join(cwd, ".cxt"))
-	return err == nil && fi.Mode()&os.ModeSymlink == 0 && fi.IsDir()
+func repositoryStateRoot(cwd string) string {
+	if root, ok := gitctx.ContextRoot(context.Background(), cwd); ok {
+		return root
+	}
+	return cwd
 }
 
 // captureStateDir returns the capture sidecar directory (creates if not exists).
 func captureStateDir(cwd string) (string, error) {
 	return providerfs.EnsureRepoDir(cwd, filepath.Join(".cxt", "capture"), 0o755)
+}
+
+// captureStateBase isolates concurrent desktop/CLI sessions that share one
+// repository and provider. Official hooks supply sessionID; malformed/legacy
+// events fall back to the worktree identity so their event sequence remains
+// internally consistent without exposing either value in a filename.
+func captureStateBase(ctx context.Context, provider domain.ProviderKind, cwd, sessionID string) string {
+	scope := strings.TrimSpace(sessionID)
+	if scope == "" {
+		if roots, err := gitctx.ResolveRepositoryRoots(ctx, cwd); err == nil {
+			scope = roots.WorktreeRoot
+		} else if abs, err := filepath.Abs(cwd); err == nil {
+			scope = abs
+		} else {
+			scope = cwd
+		}
+	}
+	sum := sha256.Sum256([]byte(string(provider) + "\x00" + scope))
+	return fmt.Sprintf("%s-%x", provider, sum[:12])
 }
 
 // captureCursor is a growth detector cursor. No-op if session file hasn't grown beyond the cursor.
@@ -85,15 +106,17 @@ func acquireLock(path string) bool {
 // MarkBaseline records the baseline state at the SessionStart event (capture path). Does not commit.
 // If sessionPath is empty, detects the active session (silently no-op if none found).
 // Clears residual .turn hints from the previous session at the session boundary.
-func (c *CaptureCoordinator) MarkBaseline(ctx context.Context, provider domain.ProviderKind, cwd, sessionPath string) error {
-	if !cxtEnabled(cwd) {
+func (c *CaptureCoordinator) MarkBaseline(ctx context.Context, provider domain.ProviderKind, cwd, sessionPath, sessionID string) error {
+	repoRoot, enabled := gitctx.ContextRoot(ctx, cwd)
+	if !enabled {
 		return nil
 	}
-	dir, err := captureStateDir(cwd)
+	dir, err := captureStateDir(repoRoot)
 	if err != nil {
 		return err
 	}
-	statePath := func(ext string) string { return filepath.Join(dir, string(provider)+ext) }
+	base := captureStateBase(ctx, provider, cwd, sessionID)
+	statePath := func(ext string) string { return filepath.Join(dir, base+ext) }
 	_ = os.Remove(statePath(".turn"))
 	path := sessionPath
 	if path == "" {
@@ -115,11 +138,12 @@ func (c *CaptureCoordinator) MarkBaseline(ctx context.Context, provider domain.P
 
 // MarkTurn records the turn boundary at the UserPromptSubmit event (capture path). Does not commit.
 // The hint (previous user prompt) is used as the Message in the next capture snapshot.
-func (c *CaptureCoordinator) MarkTurn(_ context.Context, provider domain.ProviderKind, cwd, hint string) error {
-	if !cxtEnabled(cwd) {
+func (c *CaptureCoordinator) MarkTurn(ctx context.Context, provider domain.ProviderKind, cwd, sessionID, hint string) error {
+	repoRoot, enabled := gitctx.ContextRoot(ctx, cwd)
+	if !enabled {
 		return nil
 	}
-	dir, err := captureStateDir(cwd)
+	dir, err := captureStateDir(repoRoot)
 	if err != nil {
 		return err
 	}
@@ -133,7 +157,8 @@ func (c *CaptureCoordinator) MarkTurn(_ context.Context, provider domain.Provide
 	if len(hint) > 120 {
 		hint = hint[:120]
 	}
-	return providerfs.WriteRegularFileAtomic(filepath.Join(dir, string(provider)+".turn"), []byte(hint), 0o644)
+	base := captureStateBase(ctx, provider, cwd, sessionID)
+	return providerfs.WriteRegularFileAtomic(filepath.Join(dir, base+".turn"), []byte(hint), 0o644)
 }
 
 // RequestCapture requests a capture (capture path commit/flush path).
@@ -142,15 +167,17 @@ func (c *CaptureCoordinator) MarkTurn(_ context.Context, provider domain.Provide
 // a file lock is always applied. Save performs final content-hash deduplication.
 // The returned captured indicates whether actual storage occurred (gate no-op is false) — caller should
 // only proceed with subsequent work (pending-sync spawn, etc.) if storage happened.
-func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain.ProviderKind, cwd, sessionPath string, debounce, force bool) (captured bool, err error) {
-	if !cxtEnabled(cwd) {
+func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain.ProviderKind, cwd, sessionPath, sessionID string, debounce, force bool) (captured bool, err error) {
+	repoRoot, enabled := gitctx.ContextRoot(ctx, cwd)
+	if !enabled {
 		return false, nil
 	}
-	dir, err := captureStateDir(cwd)
+	dir, err := captureStateDir(repoRoot)
 	if err != nil {
 		return false, err
 	}
-	statePath := func(ext string) string { return filepath.Join(dir, string(provider)+ext) }
+	base := captureStateBase(ctx, provider, cwd, sessionID)
+	statePath := func(ext string) string { return filepath.Join(dir, base+ext) }
 	lock := statePath(".lock")
 	if !acquireLock(lock) {
 		return false, nil
@@ -159,7 +186,7 @@ func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain
 
 	last := statePath(".last")
 	if debounce && !force {
-		if fi, serr := os.Stat(last); serr == nil && time.Since(fi.ModTime()) < remotecfg.CaptureDebounce(cwd) {
+		if fi, serr := os.Stat(last); serr == nil && time.Since(fi.ModTime()) < remotecfg.CaptureDebounce(repoRoot) {
 			return false, nil
 		}
 	}

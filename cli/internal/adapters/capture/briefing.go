@@ -11,6 +11,7 @@ package capture
 // each full snapshot remains available in the DAG and web context view.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -169,13 +171,14 @@ func renderPullBriefingNotice(branch string, snapshotIDs []domain.ContentHash) (
 // delivery reaches it only through WritePullBriefing's structured renderer.
 // In an inactive repo (.cxt file absent), it is a no-op (same as opt-in gate).
 func writeBriefingText(cwd, text string) error {
-	if !cxtEnabled(cwd) || text == "" {
+	repoRoot, enabled := gitctx.ContextRoot(context.Background(), cwd)
+	if !enabled || text == "" {
 		return nil
 	}
 	relative := briefingRelativePath()
-	return withBriefingFileLock(cwd, relative, func() error {
+	return withBriefingFileLock(repoRoot, relative, func() error {
 		entries := []string{}
-		if data, err := providerfs.ReadRepoFile(cwd, relative); err == nil {
+		if data, err := providerfs.ReadRepoFile(repoRoot, relative); err == nil {
 			var old briefingFile
 			if json.Unmarshal(data, &old) == nil && old.Version == briefingFormatVersion && time.Since(old.At) <= briefingTTL {
 				entries = briefingEntries(old)
@@ -189,7 +192,7 @@ func writeBriefingText(cwd, text string) error {
 		if err != nil {
 			return err
 		}
-		return providerfs.WriteRepoFileAtomic(cwd, relative, b, 0o644)
+		return providerfs.WriteRepoFileAtomic(repoRoot, relative, b, 0o644)
 	})
 }
 
@@ -201,7 +204,11 @@ func ReadPullBriefingCursor(cwd, branch string) (domain.ContentHash, bool) {
 	if domain.ValidateBranchName(branch) != nil {
 		return "", false
 	}
-	data, err := providerfs.ReadRepoFile(cwd, pullBriefingCursorRelativePath(branch))
+	repoRoot, enabled := gitctx.ContextRoot(context.Background(), cwd)
+	if !enabled {
+		return "", false
+	}
+	data, err := providerfs.ReadRepoFile(repoRoot, pullBriefingCursorRelativePath(branch))
 	if err != nil {
 		return "", false
 	}
@@ -219,7 +226,8 @@ func ReadPullBriefingCursor(cwd, branch string) (domain.ContentHash, bool) {
 // concurrent post-merge hooks from moving C back to B. A lost race leaves the
 // queue intact and safely re-evaluates on the next pull.
 func CompareAndSwapPullBriefingCursor(cwd, branch string, expected, target domain.ContentHash) error {
-	if !cxtEnabled(cwd) {
+	repoRoot, enabled := gitctx.ContextRoot(context.Background(), cwd)
+	if !enabled {
 		return nil
 	}
 	if err := domain.ValidateBranchName(branch); err != nil {
@@ -232,8 +240,8 @@ func CompareAndSwapPullBriefingCursor(cwd, branch string, expected, target domai
 		return err
 	}
 	relative := pullBriefingCursorRelativePath(branch)
-	return withBriefingFileLock(cwd, relative, func() error {
-		current, _ := ReadPullBriefingCursor(cwd, branch)
+	return withBriefingFileLock(repoRoot, relative, func() error {
+		current, _ := ReadPullBriefingCursor(repoRoot, branch)
 		if current == target {
 			return nil
 		}
@@ -244,7 +252,7 @@ func CompareAndSwapPullBriefingCursor(cwd, branch string, expected, target domai
 		if err != nil {
 			return err
 		}
-		return providerfs.WriteRepoFileAtomic(cwd, relative, b, 0o644)
+		return providerfs.WriteRepoFileAtomic(repoRoot, relative, b, 0o644)
 	})
 }
 
@@ -253,14 +261,15 @@ func CompareAndSwapPullBriefingCursor(cwd, branch string, expected, target domai
 // and cursor retain their own narrower locks because prompt consumption and
 // direct cursor repair do not take this transaction lock.
 func WithPullBriefingTransaction(cwd, branch string, fn func() error) error {
-	if !cxtEnabled(cwd) {
+	repoRoot, enabled := gitctx.ContextRoot(context.Background(), cwd)
+	if !enabled {
 		return nil
 	}
 	if err := domain.ValidateBranchName(branch); err != nil {
 		return err
 	}
 	relative := pullBriefingCursorRelativePath(branch) + ".transaction"
-	return withBriefingFileLockTimeout(cwd, relative, 30*time.Second, fn)
+	return withBriefingFileLockTimeout(repoRoot, relative, 30*time.Second, fn)
 }
 
 // ConsumeBriefing reads and consumes only the current terminal/wrapper queue.
@@ -268,16 +277,20 @@ func WithPullBriefingTransaction(cwd, branch string, fn func() error) error {
 // Atomic rename ensures one-time consumption: even if both claude·codex hooks fire simultaneously in separate processes,
 // only one will succeed in renaming the file (the other will get ENOENT). Previous read-then-delete could lead to duplicate briefing injection (backlog #1 TOCTOU).
 func ConsumeBriefing(cwd string) (string, bool) {
+	repoRoot, enabled := gitctx.ContextRoot(context.Background(), cwd)
+	if !enabled {
+		return "", false
+	}
 	relative := briefingRelativePath()
 	var text string
 	var consumed bool
-	if err := withBriefingFileLock(cwd, relative, func() error {
-		source, err := providerfs.PrepareRepoFile(cwd, relative, 0o755)
+	if err := withBriefingFileLock(repoRoot, relative, func() error {
+		source, err := providerfs.PrepareRepoFile(repoRoot, relative, 0o755)
 		if err != nil {
 			return err
 		}
 		claimRel := filepath.Join(filepath.Dir(relative), fmt.Sprintf("%s.claim.%d", filepath.Base(relative), os.Getpid()))
-		claim, err := providerfs.PrepareRepoFile(cwd, claimRel, 0o755)
+		claim, err := providerfs.PrepareRepoFile(repoRoot, claimRel, 0o755)
 		if err != nil {
 			return err
 		}

@@ -120,6 +120,35 @@ func TestHandlerBriefingEmission(t *testing.T) {
 	}
 }
 
+func TestHandlerEmitsOnlyMatchingAppSessionHandoff(t *testing.T) {
+	cwd := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755)
+	const (
+		first  = "11111111-1111-4111-8111-111111111111"
+		second = "22222222-2222-4222-8222-222222222222"
+	)
+	if err := capture.WriteSessionHandoff(cwd, []string{first}, "FIRST APP BRANCH MEMORY"); err != nil {
+		t.Fatal(err)
+	}
+	if err := capture.WriteSessionHandoff(cwd, []string{second}, "SECOND APP BRANCH MEMORY"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
+	h.stdin = strings.NewReader(`{"session_id":"` + second + `","cwd":"` + cwd + `","prompt":"continue"}`)
+	h.stdout = &out
+	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "SECOND APP BRANCH MEMORY") || strings.Contains(out.String(), "FIRST APP BRANCH MEMORY") {
+		t.Fatalf("wrong app handoff emitted: %s", out.String())
+	}
+	if got, ok := capture.ConsumeSessionHandoff(cwd, first); !ok || got != "FIRST APP BRANCH MEMORY" {
+		t.Fatalf("other app session queue was consumed: %q, %v", got, ok)
+	}
+}
+
 // TestHandlerGarbagePayload ensures it doesn't die on non-JSON stdin ( best-effort).
 func TestHandlerGarbagePayload(t *testing.T) {
 	rs := &recSave{}

@@ -430,6 +430,16 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 
 /* Commit graph (git log --graph) */
 .graph-wrap { margin: 0 0 14px; }
+.graph-status { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; margin: 0 0 6px;
+  color: var(--muted); font-family: var(--mono); font-size: 0.64rem; line-height: 1.35; }
+.graph-status-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.graph-status-item i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink); flex: none; }
+.graph-status-item.unpushed { opacity: 0.55; }
+.graph-status-item.uncommitted { color: #9a6a00; }
+.graph-status-item.uncommitted i { background: var(--bg); border: 1px dashed #d29922; }
+.graph-archive-toggle { border: 0; border-bottom: 1px dashed var(--faint); border-radius: 0; padding: 0;
+  background: transparent; color: var(--faint); font: inherit; cursor: pointer; }
+.graph-archive-toggle:hover { color: var(--ink); border-bottom-color: var(--ink); opacity: 1; }
 .graph-head { position: relative; height: 44px; }
 .graph-lane-label { position: absolute; bottom: 2px; font-family: var(--mono); font-size: 0.68rem;
   white-space: nowrap; transform: rotate(-35deg); transform-origin: left bottom; }

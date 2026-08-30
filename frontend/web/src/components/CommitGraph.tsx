@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Ref, Snapshot } from '../types';
 import { layoutGraph, mainlineOf, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { sharedReachable } from '../onhold';
+import { classifyGraphSnapshots } from '../graphStatus';
 import { useJoinSnapshot } from '../hooks';
 import { useT } from '../i18n';
 
@@ -66,19 +67,29 @@ export function CommitGraph({
   repoId?: string | null;
 }) {
   const t = useT();
+  const [showArchived, setShowArchived] = useState(false);
+  const status = useMemo(
+    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted),
+    [refs, snapshots, uncommitted],
+  );
+  const selectedArchived = selectedId !== null && status.archivedOnly.has(selectedId);
+  const archivedVisible = showArchived || selectedArchived;
+  const visibleSnapshots = useMemo(
+    () => archivedVisible ? snapshots : snapshots.filter((snapshot) => !status.archivedOnly.has(snapshot.id)),
+    [archivedVisible, snapshots, status.archivedOnly],
+  );
+  const graphIdentity = refs?.[0]?.repo_id ?? repoId ?? '';
+  useEffect(() => setShowArchived(false), [graphIdentity]);
   const pinHead = useMemo(
     () => (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
     [refs, pinBranch],
   );
-  const { rows, laneCount } = useMemo(() => layoutGraph(snapshots, pinHead), [snapshots, pinHead]);
+  const { rows, laneCount } = useMemo(() => layoutGraph(visibleSnapshots, pinHead), [visibleSnapshots, pinHead]);
   const svgW = Math.max(laneCount, 1) * LANE_W;
   // Unpushed = branch ref unreachable (outside shared timeline — unsync shadow push·residue included).
   // Determined the same way as onhold (sharedReachable = parents ∪ graft_parents walk).
-  const unpushed = useMemo(() => {
-    if (!refs || refs.length === 0) return new Set<string>();
-    const shared = sharedReachable(refs, snapshots);
-    return new Set(snapshots.filter((s) => !shared.has(s.id)).map((s) => s.id));
-  }, [refs, snapshots]);
+  const unpushed = status.unpushed;
+  const uncommittedIds = status.uncommitted;
 
   // Graft edge identification: "lane expectation parent" set in a grafted snapshot row is maintained to the parent row,
   // allowing consistent matching of all segments (child bot·through·parent top) under the key `${lane}:${expectedHash}`.
@@ -103,7 +114,7 @@ export function CommitGraph({
     return s;
   }, [rows]);
   // Session boundary edge: matches child bot·through·parent top with the same key system (`${lane}:${expectedHash}`).
-  const boundaries = useMemo(() => sessionBoundaries(snapshots), [snapshots]);
+  const boundaries = useMemo(() => sessionBoundaries(visibleSnapshots), [visibleSnapshots]);
   const sessionSeams = useMemo(() => {
     const s = new Set<string>();
     for (const r of rows) {
@@ -113,10 +124,10 @@ export function CommitGraph({
     return s;
   }, [rows, boundaries]);
   // Compression boundary: nodes after context compression (same session — lineage unchanged, only node markers).
-  const compactions = useMemo(() => compactionBoundaries(snapshots), [snapshots]);
+  const compactions = useMemo(() => compactionBoundaries(visibleSnapshots), [visibleSnapshots]);
   // Main lineage (union of all branch refs' first-parents) — shared nodes not here = join paths.
   // Different branches: distinguish "current trunk vs appended branch".
-  const mainlines = useMemo(() => mainlinesOf(refs ?? [], snapshots), [refs, snapshots]);
+  const mainlines = useMemo(() => mainlinesOf(refs ?? [], visibleSnapshots), [refs, visibleSnapshots]);
 
   // ── Drag & Drop Reordering (join) ────────────────────────────────────────────
   // Reorder commits of branch fork (side branch) to behind the branch head.
@@ -220,7 +231,7 @@ export function CommitGraph({
         const childBranches = child?.branches?.length ? child.branches : child ? [child.branch] : [];
         // An uncommitted hook capture is visible in its own graph layer, but it
         // is not part of the joinable commit segment.
-        return child != null && !(uncommitted?.has(id) ?? false) && childBranches.includes(branch);
+        return child != null && !uncommittedIds.has(id) && childBranches.includes(branch);
       });
       if (kids.length === 0) break;
       if (kids.length > 1) {
@@ -245,7 +256,7 @@ export function CommitGraph({
     );
     return { branch, tip, droppable, descendants: segment.size - 1, reason: null as string | null };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragId, byId, refs, snapshots, childrenOf, joinBranch, uncommitted, unpushed]);
+  }, [dragId, byId, refs, snapshots, childrenOf, joinBranch, uncommittedIds, unpushed]);
   const droppable = dragPlan?.droppable ?? new Set<string>();
   function openJoinModal(rowId: string) {
     if (!dragId || !dragPlan || dragPlan.reason || !dragPlan.droppable.has(rowId)) return;
@@ -315,6 +326,40 @@ export function CommitGraph({
 
   return (
     <div className="graph-wrap">
+      <div className="graph-status" aria-label={t('graph.statusLabel')}>
+        <span className="graph-status-item pushed">
+          <i aria-hidden="true" /> {t('graph.pushedCount', { count: status.pushed.size })}
+        </span>
+        <span className="graph-status-item unpushed">
+          <i aria-hidden="true" /> {t('graph.unpushedCount', { count: status.unpushed.size })}
+        </span>
+        <span className="graph-status-item uncommitted">
+          <i aria-hidden="true" /> {t('graph.uncommittedCount', { count: status.uncommitted.size })}
+        </span>
+        {status.archivedOnly.size > 0 && (
+          <button
+            type="button"
+            className="graph-archive-toggle"
+            aria-pressed={archivedVisible}
+            title={t('graph.archivedBranchesTitle', { count: status.archivedBranches })}
+            onClick={() => {
+              if (archivedVisible) {
+                if (selectedArchived) {
+                  const fallback = pinHead ?? snapshots.find((snapshot) => !status.archivedOnly.has(snapshot.id))?.id;
+                  if (fallback) onSelect(fallback);
+                }
+                setShowArchived(false);
+              } else {
+                setShowArchived(true);
+              }
+            }}
+          >
+            {archivedVisible
+              ? t('graph.hideArchived', { count: status.archivedOnly.size })
+              : t('graph.showArchived', { count: status.archivedOnly.size })}
+          </button>
+        )}
+      </div>
       {/* Top: branch labels per track (track color, tilt — to prevent overlap) */}
       <div className="graph-head" style={{ width: svgW }}>
         {laneLabels.map((label, i) =>
@@ -421,13 +466,13 @@ export function CommitGraph({
 
           const sel = r.snap.id === selectedId;
           // 3rd layer distinction: Uncommitted (hook capture, before commit) ⊂ Unreachable, so uncommitted determination takes precedence over push.
-          const isUncommitted = uncommitted?.has(r.snap.id) ?? false;
+          const isUncommitted = uncommittedIds.has(r.snap.id);
           const isUnpushed = !isUncommitted && unpushed.has(r.snap.id);
           const next = rowIdx + 1 < rows.length ? rows[rowIdx + 1].snap.id : null;
           // Uncommitted block bottom boundary (commit history from next row) — exclusive truncation line.
-          const uncommittedEnd = isUncommitted && next !== null && !(uncommitted?.has(next) ?? false);
+          const uncommittedEnd = isUncommitted && next !== null && !uncommittedIds.has(next);
           // Bottom boundary of the push block — distinguished by a truncation line. Uncommitted lines also enter the unpushed set (unreachable), so "is the next line a push commit" must be determined without uncommitted lines — otherwise, uncommitted lines between would be mistaken for the truncation line.
-          const nextIsUnpushedCommit = next !== null && unpushed.has(next) && !(uncommitted?.has(next) ?? false);
+          const nextIsUnpushedCommit = next !== null && unpushed.has(next) && !uncommittedIds.has(next);
           const blockEnd = isUnpushed && next !== null && !nextIsUnpushedCommit;
           // Join branch: shared (pushed) node but not part of any branch's mainline — light tone.
           const isSide = !isUncommitted && !isUnpushed && (refs?.length ?? 0) > 0 && !mainlines.has(r.snap.id);
@@ -440,7 +485,7 @@ export function CommitGraph({
                 onMouseLeave={() => setTip(null)}
                 onFocus={(e) => showTip(r.snap.id, e.currentTarget)}
                 onBlur={() => setTip(null)}
-                aria-label={r.snap.message}
+                aria-label={`${r.snap.message || '(no message)'} · ${isUncommitted ? t('graph.uncommitted') : isUnpushed ? t('graph.unpushed') : status.pushed.has(r.snap.id) ? t('graph.pushed') : t('graph.archivedLane', { branch: r.snap.branch })}`}
                 draggable={joinEnabled && !isUncommitted}
                 onDragStart={(e) => {
                   e.dataTransfer.effectAllowed = 'move';
@@ -547,12 +592,13 @@ export function CommitGraph({
           {(refs?.length ?? 0) > 0 &&
             !mainlines.has(tipRow.snap.id) &&
             !unpushed.has(tipRow.snap.id) &&
-            !(uncommitted?.has(tipRow.snap.id) ?? false) && <em style={{ color: SEAM }}>{t('graph.sideChain')}</em>}
-          {uncommitted?.has(tipRow.snap.id) ? (
+            !uncommittedIds.has(tipRow.snap.id) && <em style={{ color: SEAM }}>{t('graph.sideChain')}</em>}
+          {uncommittedIds.has(tipRow.snap.id) ? (
             <em style={{ color: SEAM }}>{t('graph.uncommitted')}</em>
           ) : (
             unpushed.has(tipRow.snap.id) && <em style={{ color: TICK }}>{t('graph.unpushed')}</em>
           )}
+          {status.pushed.has(tipRow.snap.id) && <em>{t('graph.pushed')}</em>}
           {badges.get(tipRow.snap.id)?.length ? (
             <span className="tip-badges">
               {badges.get(tipRow.snap.id)!.map((b) => (

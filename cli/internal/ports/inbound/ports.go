@@ -318,6 +318,10 @@ type SeedInput struct {
 	Provider domain.ProviderKind
 	// Author is the author of the seed snapshot.
 	Author domain.TeamIdentity
+	// SkipMaterialize commits the branch seed without creating a provider-native
+	// resume file. Desktop apps keep their vendor-owned live session and receive
+	// a bounded context handoff through lifecycle hooks instead.
+	SkipMaterialize bool
 }
 
 // SeedOutput is the DTO for SeedBranch.Seed output.
@@ -330,6 +334,20 @@ type SeedOutput struct {
 	WrittenPath string
 	// ResumeCmd is a command to continue from the seed.
 	ResumeCmd string
+}
+
+// BranchHandoff renders the bounded provider-visible memory used when a
+// desktop app keeps its current session across a Git branch switch. It never
+// returns raw conversation events; complete history remains in the snapshot
+// DAG and can be fetched explicitly through MCP or the web UI.
+type BranchHandoff interface {
+	RenderBranchHandoff(ctx context.Context, in BranchHandoffInput) (string, error)
+}
+
+type BranchHandoffInput struct {
+	FromBranch string
+	ToBranch   string
+	Target     domain.ContentHash
 }
 
 // SyncInput is an input DTO for SyncRepo.Push / SyncRepo.Pull.
@@ -391,6 +409,10 @@ type CheckoutInput struct {
 	Mode domain.FidelityTier
 	// Cwd is the working directory to use for session/memory file operations.
 	Cwd string
+	// SkipMaterialize resolves and activates the context ref without creating a
+	// provider-native session file. Desktop apps retain their live session and
+	// consume a bounded context handoff through lifecycle hooks instead.
+	SkipMaterialize bool
 }
 
 // CheckoutOutput is the DTO for CheckoutSession.Checkout output (compatibility rules).

@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -89,7 +90,9 @@ func run(args []string) error {
 // config is the execution settings for the cxt client.
 // TODO: Replace with actual config file parsing (repoRoot/.cxt/config or XDG).
 type config struct {
-	// RepoRoot is the root of the repo working tree where the .cxt local store is located (scaffold: cwd).
+	// RepoRoot is the shared context root. Linked app worktrees resolve to the
+	// primary working tree while their original cwd remains available to Git and
+	// provider session discovery.
 	RepoRoot string
 	// RemoteEndpoint is the REST base URL of the central server (e.g., https://cxthub.example.com/api/v1).
 	RemoteEndpoint string
@@ -107,13 +110,12 @@ type config struct {
 //	CXT_NAME / CXT_EMAIL / CXT_TEAM   User identifier
 func loadConfig() config {
 	cwd, _ := os.Getwd()
-	// .cxt resides in the same place as .git (working tree root) — runs like git even from a subdirectory.
-	// If not a git repository, cwd is maintained (thereafter CurrentRepo fails with ErrNotGitRepo).
+	// .cxt is repository-wide. Desktop agents commonly create linked worktrees,
+	// whose --show-toplevel differs even though --git-common-dir is shared.
+	// If not a git repository, cwd is maintained (CurrentRepo later fails).
 	repoRoot := cwd
-	if out, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output(); err == nil {
-		if top := strings.TrimSpace(string(out)); top != "" {
-			repoRoot = top
-		}
+	if roots, err := gitctx.ResolveRepositoryRoots(context.Background(), cwd); err == nil {
+		repoRoot = roots.SharedRoot
 	}
 	// User identifier: CXT_NAME/EMAIL takes precedence, otherwise git config user.* (git is the source of truth —
 	// code commits and context commits are attributed to the same author).
@@ -234,6 +236,7 @@ func buildContainer(cfg config) container {
 	checkoutSvc := app.NewCheckoutSessionService(forkSvc, loadSvc, store)
 	listSvc := app.NewListSessionsService(store)
 	memorizeSvc := app.NewMemorizeService(gitCtx, captures, codecs, memSources, distiller, store)
+	handoffSvc := app.NewBranchHandoffService(store)
 	syncSvc := app.NewSyncRepoService(store, remote, gitCtx)
 	seedSvc := app.NewBranchSeedService(gitCtx, store, distiller, codecs, materializers, memSources)
 	tagSvc := app.NewTagService(gitCtx, store)
@@ -259,6 +262,7 @@ func buildContainer(cfg config) container {
 		Seed:            seedSvc,
 		Tag:             tagSvc,
 		Stash:           stashSvc,
+		Handoff:         handoffSvc,
 		PRMerges:        gitctx.NewGitHubPRMergeResolver(),
 		Settings:        remote,
 		SettingsObjects: store,

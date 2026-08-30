@@ -47,6 +47,7 @@ type Container struct {
 	Seed     inbound.SeedBranch
 	Tag      inbound.TagRef
 	Stash    inbound.StashSession
+	Handoff  inbound.BranchHandoff
 	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
 	// can promote the source branch context into the checked-out base timeline.
 	PRMerges outbound.PullRequestMergeResolver

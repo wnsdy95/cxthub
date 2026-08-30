@@ -3,6 +3,7 @@ package capture
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,15 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
+
+func captureGitRun(t *testing.T, cwd string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
 
 // fakeSave records SaveSession calls as a fake.
 type fakeSave struct {
@@ -41,7 +51,7 @@ func newTestCoord(t *testing.T) (*CaptureCoordinator, *fakeSave, string, string)
 func TestRequestCaptureBasic(t *testing.T) {
 	coord, fs, cwd, session := newTestCoord(t)
 	ctx := context.Background()
-	if _, err := coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, true, false); err != nil {
+	if _, err := coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", true, false); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	if len(fs.calls) != 1 {
@@ -54,8 +64,9 @@ func TestRequestCaptureBasic(t *testing.T) {
 	if in.Message != domain.HookMessagePrefix+"checkpoint" {
 		t.Errorf("default message wrong: %q", in.Message)
 	}
+	base := captureStateBase(ctx, domain.ProviderClaude, cwd, "")
 	for _, ext := range []string{".last", ".cursor"} {
-		if _, err := os.Stat(filepath.Join(cwd, ".cxt", "capture", "claude"+ext)); err != nil {
+		if _, err := os.Stat(filepath.Join(cwd, ".cxt", "capture", base+ext)); err != nil {
 			t.Errorf("state file %s missing: %v", ext, err)
 		}
 	}
@@ -64,18 +75,18 @@ func TestRequestCaptureBasic(t *testing.T) {
 func TestRequestCaptureDebounce(t *testing.T) {
 	coord, fs, cwd, session := newTestCoord(t)
 	ctx := context.Background()
-	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, true, false)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", true, false)
 	// Skip if file shrank but not inside Windows.
 	_ = os.WriteFile(session, []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n"), 0o644)
-	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, true, false)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", true, false)
 	if len(fs.calls) != 1 {
 		t.Fatalf("debounce failed: %d saves", len(fs.calls))
 	}
 	// Recapture if outside Windows (.last mtime modified in the past).
-	last := filepath.Join(cwd, ".cxt", "capture", "claude.last")
+	last := filepath.Join(cwd, ".cxt", "capture", captureStateBase(ctx, domain.ProviderClaude, cwd, "")+".last")
 	old := time.Now().Add(-2 * time.Minute)
 	_ = os.Chtimes(last, old, old)
-	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, true, false)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", true, false)
 	if len(fs.calls) != 2 {
 		t.Fatalf("post-window capture failed: %d saves", len(fs.calls))
 	}
@@ -84,15 +95,15 @@ func TestRequestCaptureDebounce(t *testing.T) {
 func TestRequestCaptureGrowthGate(t *testing.T) {
 	coord, fs, cwd, session := newTestCoord(t)
 	ctx := context.Background()
-	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, false, true)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", false, true)
 	// No-op if file didn't shrink (content unchanged → dedup target, I/O savings).
-	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, false, true)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", false, true)
 	if len(fs.calls) != 1 {
 		t.Fatalf("growth gate failed: %d saves", len(fs.calls))
 	}
 	// If true, force ignores debouncing and captures immediately.
 	_ = os.WriteFile(session, []byte("{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n"), 0o644)
-	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, false, true)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", false, true)
 	if len(fs.calls) != 2 {
 		t.Fatalf("force flush failed: %d saves", len(fs.calls))
 	}
@@ -101,14 +112,15 @@ func TestRequestCaptureGrowthGate(t *testing.T) {
 func TestTurnHintConsumed(t *testing.T) {
 	coord, fs, cwd, session := newTestCoord(t)
 	ctx := context.Background()
-	if err := coord.MarkTurn(ctx, domain.ProviderCodex, cwd, "fix the parser bug\nsecond line ignored"); err != nil {
+	if err := coord.MarkTurn(ctx, domain.ProviderCodex, cwd, "", "fix the parser bug\nsecond line ignored"); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = coord.RequestCapture(ctx, domain.ProviderCodex, cwd, session, true, false)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderCodex, cwd, session, "", true, false)
 	if len(fs.calls) != 1 || fs.calls[0].Message != domain.HookMessagePrefix+"fix the parser bug" {
 		t.Fatalf("turn hint not used: %+v", fs.calls)
 	}
-	if _, err := os.Stat(filepath.Join(cwd, ".cxt", "capture", "codex.turn")); !os.IsNotExist(err) {
+	turn := captureStateBase(ctx, domain.ProviderCodex, cwd, "") + ".turn"
+	if _, err := os.Stat(filepath.Join(cwd, ".cxt", "capture", turn)); !os.IsNotExist(err) {
 		t.Error("turn hint not consumed (file remains)")
 	}
 }
@@ -116,14 +128,15 @@ func TestTurnHintConsumed(t *testing.T) {
 func TestMarkBaselineClearsTurn(t *testing.T) {
 	coord, _, cwd, session := newTestCoord(t)
 	ctx := context.Background()
-	_ = coord.MarkTurn(ctx, domain.ProviderClaude, cwd, "stale hint")
-	if err := coord.MarkBaseline(ctx, domain.ProviderClaude, cwd, session); err != nil {
+	_ = coord.MarkTurn(ctx, domain.ProviderClaude, cwd, "", "stale hint")
+	if err := coord.MarkBaseline(ctx, domain.ProviderClaude, cwd, session, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(cwd, ".cxt", "capture", "claude.turn")); !os.IsNotExist(err) {
+	base := captureStateBase(ctx, domain.ProviderClaude, cwd, "")
+	if _, err := os.Stat(filepath.Join(cwd, ".cxt", "capture", base+".turn")); !os.IsNotExist(err) {
 		t.Error("stale turn hint not cleared at session boundary")
 	}
-	b, err := os.ReadFile(filepath.Join(cwd, ".cxt", "capture", "claude.baseline"))
+	b, err := os.ReadFile(filepath.Join(cwd, ".cxt", "capture", base+".baseline"))
 	if err != nil || !strings.Contains(string(b), session) {
 		t.Errorf("baseline not recorded: %v %s", err, b)
 	}
@@ -136,18 +149,18 @@ func TestLockBlocksConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock := filepath.Join(dir, "claude.lock")
+	lock := filepath.Join(dir, captureStateBase(ctx, domain.ProviderClaude, cwd, "")+".lock")
 	if err := os.WriteFile(lock, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, true, false)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", true, false)
 	if len(fs.calls) != 0 {
 		t.Fatalf("fresh lock should block: %d saves", len(fs.calls))
 	}
 	// Stale lock (over 2 minutes) is ignored and captured.
 	old := time.Now().Add(-3 * time.Minute)
 	_ = os.Chtimes(lock, old, old)
-	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, true, false)
+	_, _ = coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", true, false)
 	if len(fs.calls) != 1 {
 		t.Fatalf("stale lock takeover failed: %d saves", len(fs.calls))
 	}
@@ -164,7 +177,7 @@ func TestNoActiveSessionSilent(t *testing.T) {
 	session := filepath.Join(t.TempDir(), "s.jsonl")
 	_ = os.WriteFile(session, []byte("x\n"), 0o644)
 	// Save returns ErrNoActiveSession (isolation gate, etc.) silently no-op.
-	if _, err := coord.RequestCapture(context.Background(), domain.ProviderClaude, cwd, session, true, false); err != nil {
+	if _, err := coord.RequestCapture(context.Background(), domain.ProviderClaude, cwd, session, "", true, false); err != nil {
 		t.Fatalf("expected silent no-op, got %v", err)
 	}
 }
@@ -178,15 +191,101 @@ func TestNotCxtRepoNoop(t *testing.T) {
 	session := filepath.Join(t.TempDir(), "s.jsonl")
 	_ = os.WriteFile(session, []byte("x\n"), 0o644)
 	ctx := context.Background()
-	if _, err := coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, false, true); err != nil {
+	if _, err := coord.RequestCapture(ctx, domain.ProviderClaude, cwd, session, "", false, true); err != nil {
 		t.Fatalf("gate must be silent: %v", err)
 	}
-	_ = coord.MarkBaseline(ctx, domain.ProviderClaude, cwd, session)
-	_ = coord.MarkTurn(ctx, domain.ProviderCodex, cwd, "hint")
+	_ = coord.MarkBaseline(ctx, domain.ProviderClaude, cwd, session, "")
+	_ = coord.MarkTurn(ctx, domain.ProviderCodex, cwd, "", "hint")
 	if len(fs.calls) != 0 {
 		t.Fatal("non-cxt repo must not capture")
 	}
 	if _, err := os.Stat(filepath.Join(cwd, ".cxt")); !os.IsNotExist(err) {
 		t.Fatal("gate must not create .cxt in foreign repos")
+	}
+}
+
+func TestLinkedWorktreeCaptureUsesSharedStore(t *testing.T) {
+	primary := filepath.Join(t.TempDir(), "primary")
+	linked := filepath.Join(t.TempDir(), "desktop-worktree")
+	if err := os.MkdirAll(primary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	captureGitRun(t, primary, "init", "-b", "main")
+	captureGitRun(t, primary, "config", "user.name", "cxt test")
+	captureGitRun(t, primary, "config", "user.email", "cxt@example.test")
+	hooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	captureGitRun(t, primary, "config", "core.hooksPath", hooks)
+	captureGitRun(t, primary, "config", "gc.auto", "0")
+	if err := os.WriteFile(filepath.Join(primary, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureGitRun(t, primary, "add", "tracked.txt")
+	captureGitRun(t, primary, "commit", "-m", "initial")
+	if err := os.Mkdir(filepath.Join(primary, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	captureGitRun(t, primary, "worktree", "add", "-b", "app/session", linked)
+	primary, _ = filepath.EvalSymlinks(primary)
+	linked, _ = filepath.EvalSymlinks(linked)
+
+	session := filepath.Join(t.TempDir(), "app-session.jsonl")
+	if err := os.WriteFile(session, []byte("{\"type\":\"user\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs := &fakeSave{}
+	coord := NewCaptureCoordinator(fs, domain.TeamIdentity{})
+	ctx := context.Background()
+	const sessionID = "desktop-session-one"
+	briefingID := domain.HashContent([]byte("desktop worktree briefing"))
+	if err := WritePullBriefing(linked, "app/session", []domain.ContentHash{briefingID}); err != nil {
+		t.Fatal(err)
+	}
+	if text, ok := ConsumeBriefing(linked); !ok || !strings.Contains(text, string(briefingID)) {
+		t.Fatalf("linked worktree briefing was not delivered from shared store: ok=%v text=%q", ok, text)
+	}
+	if captured, err := coord.RequestCapture(ctx, domain.ProviderCodex, linked, session, sessionID, false, true); err != nil || !captured {
+		t.Fatalf("linked capture captured=%v err=%v", captured, err)
+	}
+	if len(fs.calls) != 1 || fs.calls[0].Cwd != linked || fs.calls[0].SessionPath != session {
+		t.Fatalf("worktree identity was not preserved for save: %+v", fs.calls)
+	}
+	base := captureStateBase(ctx, domain.ProviderCodex, linked, sessionID)
+	if _, err := os.Stat(filepath.Join(primary, ".cxt", "capture", base+".cursor")); err != nil {
+		t.Fatalf("shared capture cursor missing: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(linked, ".cxt")); !os.IsNotExist(err) {
+		t.Fatalf("linked worktree acquired a split .cxt store: %v", err)
+	}
+}
+
+func TestConcurrentAppSessionsHaveIndependentCaptureState(t *testing.T) {
+	coord, fs, cwd, first := newTestCoord(t)
+	second := filepath.Join(t.TempDir(), "second.jsonl")
+	if err := os.WriteFile(second, []byte("{\"type\":\"user\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := coord.MarkTurn(ctx, domain.ProviderCodex, cwd, "app-session-a", "first app prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := coord.MarkTurn(ctx, domain.ProviderCodex, cwd, "app-session-b", "second app prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coord.RequestCapture(ctx, domain.ProviderCodex, cwd, first, "app-session-a", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coord.RequestCapture(ctx, domain.ProviderCodex, cwd, second, "app-session-b", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(fs.calls) != 2 || fs.calls[0].Message != domain.HookMessagePrefix+"first app prompt" || fs.calls[1].Message != domain.HookMessagePrefix+"second app prompt" {
+		t.Fatalf("app session state crossed: %+v", fs.calls)
+	}
+	firstBase := captureStateBase(ctx, domain.ProviderCodex, cwd, "app-session-a")
+	secondBase := captureStateBase(ctx, domain.ProviderCodex, cwd, "app-session-b")
+	if firstBase == secondBase {
+		t.Fatal("distinct app sessions share one capture state prefix")
 	}
 }

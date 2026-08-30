@@ -421,3 +421,30 @@ func TestCheckoutFailureLeavesArchivedBranchInactive(t *testing.T) {
 		t.Fatalf("failed checkout lifecycle = %+v, %v, %v", latest, ok, err)
 	}
 }
+
+func TestDesktopCheckoutSkipsProviderMaterialization(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repoID := string(domain.HashContent([]byte("desktop checkout repo")))
+	target := domain.HashContent([]byte("desktop checkout target"))
+	branch := domain.Ref{Kind: domain.RefBranch, Name: "feature/app", RepoID: repoID, Target: target}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: target, RepoID: repoID, DocHash: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBranchRef(ctx, branch); err != nil {
+		t.Fatal(err)
+	}
+
+	// The injected loader always fails. SkipMaterialize must not call it while
+	// still resolving and activating the exact target ref for app handoff.
+	checkout := NewCheckoutSessionService(NewForkSessionService(store), branchLifecycleFailLoad{}, store)
+	out, err := checkout.Checkout(ctx, inbound.CheckoutInput{
+		RepoID: repoID, From: branch.Name, SkipMaterialize: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Head != target || out.WrittenPath != "" || out.ResumeCmd != "" {
+		t.Fatalf("desktop checkout output = %+v", out)
+	}
+}

@@ -3,7 +3,6 @@ package gitctx
 import (
 	"context"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -37,18 +36,13 @@ func git(ctx context.Context, cwd string, args ...string) (string, error) {
 // The normalized remote URL's ContentHash becomes Repo.ID. falls back to the working tree root/cwd if no remote.
 // git is the source of truth: always reads from the local .git (working tree), and fails outside a git repo (ErrNotGitRepo — no path fallback).
 func (a *GitContextAdapter) CurrentRepo(ctx context.Context, cwd string) (domain.Repo, error) {
-	abs, err := filepath.Abs(cwd)
+	roots, err := ResolveRepositoryRoots(ctx, cwd)
 	if err != nil {
-		abs = cwd
+		return domain.Repo{}, err
 	}
+	top := roots.WorktreeRoot
 
-	// .git is required — finds the worktree root like git does in subdirectories.
-	top, err := git(ctx, abs, "rev-parse", "--show-toplevel")
-	if err != nil || top == "" {
-		return domain.Repo{}, domain.ErrNotGitRepo
-	}
-
-	repo := domain.Repo{LocalPath: top, DefaultBranch: a.defaultBranch(ctx, top)}
+	repo := domain.Repo{LocalPath: roots.SharedRoot, DefaultBranch: a.defaultBranch(ctx, top)}
 	if raw, err := git(ctx, top, "config", "--get", "remote.origin.url"); err == nil && raw != "" {
 		safeRemote := SanitizeRemoteURL(raw)
 		repo.RemoteURL = safeRemote
@@ -60,7 +54,7 @@ func (a *GitContextAdapter) CurrentRepo(ctx context.Context, cwd string) (domain
 		repo.ID = domain.HashContent([]byte(identity))
 	} else {
 		// origin-less git repo: working tree root path as a local-only identifier key (share via cxt remote add).
-		repo.ID = domain.HashContent([]byte(top))
+		repo.ID = domain.HashContent([]byte(roots.SharedRoot))
 	}
 	return repo, nil
 }
