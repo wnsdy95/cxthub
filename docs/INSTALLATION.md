@@ -161,6 +161,28 @@ Code settings are written under the repository's `.claude/` directory. Codex
 hooks are merged into `~/.codex/hooks.json`; Codex may require a one-time `/hooks`
 approval.
 
+Those lifecycle hooks apply to both provider CLIs and supported app surfaces:
+
+- Codex app and Codex IDE sessions that emit Codex lifecycle hooks;
+- Claude Desktop's **Code** tab, which runs the Claude Code engine; and
+- ordinary Claude Code and Codex terminal sessions.
+
+Desktop apps do not need to be launched through `cxt`. Their official hooks
+report the session ID, transcript/rollout path, and working directory. CXTHub
+uses those values to capture each concurrent app session independently. App
+linked worktrees resolve to one shared `.cxt` store in the primary repository,
+while each worktree retains its own active Git branch.
+
+When an app changes branches, CXTHub preserves the live vendor-owned session
+and sends a bounded memory handoff (maximum 16 KiB) once on the next prompt.
+The archived conversation is not copied into the app's active context window.
+The `cxt claude` and `cxt codex` wrappers remain optional for terminal users;
+they additionally support native process restart/resume after a branch switch.
+
+Claude Desktop's general **Chat** tab does not run Claude Code lifecycle hooks,
+so it cannot be passively captured by this integration. Use the Code tab or an
+explicit export/import workflow instead.
+
 To initialize local-only storage without a remote:
 
 ```bash

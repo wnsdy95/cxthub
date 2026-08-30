@@ -120,6 +120,81 @@ func TestHandlerBriefingEmission(t *testing.T) {
 	}
 }
 
+func TestHandlerEmitsOnlyMatchingAppSessionHandoff(t *testing.T) {
+	cwd := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755)
+	const (
+		first  = "11111111-1111-4111-8111-111111111111"
+		second = "22222222-2222-4222-8222-222222222222"
+	)
+	if err := capture.WriteSessionHandoff(cwd, []string{first}, "FIRST APP BRANCH MEMORY"); err != nil {
+		t.Fatal(err)
+	}
+	if err := capture.WriteSessionHandoff(cwd, []string{second}, "SECOND APP BRANCH MEMORY"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
+	h.stdin = strings.NewReader(`{"session_id":"` + second + `","cwd":"` + cwd + `","prompt":"continue"}`)
+	h.stdout = &out
+	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "SECOND APP BRANCH MEMORY") || strings.Contains(out.String(), "FIRST APP BRANCH MEMORY") {
+		t.Fatalf("wrong app handoff emitted: %s", out.String())
+	}
+	if got, ok := capture.ConsumeSessionHandoff(cwd, first); !ok || got != "FIRST APP BRANCH MEMORY" {
+		t.Fatalf("other app session queue was consumed: %q, %v", got, ok)
+	}
+}
+
+func TestHandlerTracksOpaqueAppSessionUntilSessionEnd(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const hookSessionID = "codex-thread-opaque-id"
+	const nativeID = "33333333-3333-4333-8333-333333333333"
+	dir := filepath.Join(home, ".codex", "sessions", "2026", "08", "31")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-2026-08-31T00-00-00-"+nativeID+".jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawPayload, err := json.Marshal(map[string]string{
+		"session_id": hookSessionID, "transcript_path": path, "cwd": cwd, "prompt": "continue",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := string(rawPayload)
+	h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
+	h.stdin = strings.NewReader(payload)
+	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
+		t.Fatal(err)
+	}
+	if got := capture.ActiveAppSessions(cwd); len(got) != 1 || got[0].SessionID != hookSessionID || got[0].Path != path {
+		t.Fatalf("tracked app sessions = %+v", got)
+	}
+
+	end := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
+	end.stdin = strings.NewReader(payload)
+	if err := end.Run(domain.ProviderCodex, "SessionEnd"); err != nil {
+		t.Fatal(err)
+	}
+	if got := capture.ActiveAppSessions(cwd); len(got) != 0 {
+		t.Fatalf("ended app session remains tracked: %+v", got)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("SessionEnd removed provider transcript: %v", err)
+	}
+}
+
 // TestHandlerGarbagePayload ensures it doesn't die on non-JSON stdin ( best-effort).
 func TestHandlerGarbagePayload(t *testing.T) {
 	rs := &recSave{}

@@ -30,6 +30,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -51,8 +52,16 @@ func hookWarn(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "cxt: "+format+"\n", a...)
 }
 
+func cxtRepoRoot(ctx context.Context, cwd string) string {
+	if root, ok := gitctx.ContextRoot(ctx, cwd); ok {
+		return root
+	}
+	return cwd
+}
+
 // syncWarn notifies of push/pull failures in hooks. Authentication issues (401/403) are warned once and then suppressed — local snapshots continue to accumulate, so the next push will pick up any missed changes after login.
 func syncWarn(cwd, op string, err error) {
+	cwd = cxtRepoRoot(context.Background(), cwd)
 	msg := err.Error()
 	is401 := strings.Contains(msg, "401")
 	is403 := strings.Contains(msg, "403")
@@ -73,6 +82,7 @@ func syncWarn(cwd, op string, err error) {
 
 // clearAuthHint deletes the marker on sync success — subsequent auth issues will be re-introduced once.
 func clearAuthHint(cwd string) {
+	cwd = cxtRepoRoot(context.Background(), cwd)
 	_ = providerfs.RemoveRepoFile(cwd, filepath.Join(".cxt", "auth-hint-shown"))
 }
 
@@ -82,7 +92,7 @@ func clearAuthHint(cwd string) {
 // Claude residue, and omit Codex from transition checkpoints. Trying an inactive provider is harmless because
 // Save quietly skips ErrNoActiveSession.
 func commitProviders(cwd string) []string {
-	if staged := remotecfg.StagedProviders(cwd); len(staged) > 0 {
+	if staged := remotecfg.StagedProviders(cxtRepoRoot(context.Background(), cwd)); len(staged) > 0 {
 		return staged
 	}
 	return []string{domain.ProviderClaude, domain.ProviderCodex}
@@ -121,7 +131,7 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 		}
 	}
 	if saved > 0 {
-		_ = remotecfg.SetStagedProviders(cwd, nil) // exhaust staged providers
+		_ = remotecfg.SetStagedProviders(cxtRepoRoot(ctx, cwd), nil) // exhaust staged providers
 		// Absorb the remote pending of the session that was committed + reflect remaining pending (detached — no commit delay).
 		spawnPendingSync(cwd, resolved)
 	}
@@ -130,7 +140,8 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 
 // spawnPendingSync spawns the pending-sync detached helper (best-effort, no hook delay).
 func spawnPendingSync(cwd string, resolutions []inbound.PendingResolution) {
-	if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
+	repoRoot := cxtRepoRoot(context.Background(), cwd)
+	if _, ok := remotecfg.Origin(repoRoot); !ok && os.Getenv("CXT_REMOTE") == "" {
 		return
 	}
 	exe, err := os.Executable()
@@ -148,7 +159,8 @@ func spawnPendingSync(cwd string, resolutions []inbound.PendingResolution) {
 }
 
 func spawnBranchStateSync(cwd string) {
-	if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
+	repoRoot := cxtRepoRoot(context.Background(), cwd)
+	if _, ok := remotecfg.Origin(repoRoot); !ok && os.Getenv("CXT_REMOTE") == "" {
 		return
 	}
 	exe, err := os.Executable()
@@ -248,6 +260,7 @@ func branchRefTransactionLedgerPath(branch string) (string, error) {
 }
 
 func recordPreparedBranchRefTransaction(cwd string, lines []string) error {
+	stateRoot := cxtRepoRoot(context.Background(), cwd)
 	for _, line := range lines {
 		txn := parseBranchRefTransaction(line)
 		if !txn.deleted {
@@ -264,7 +277,7 @@ func recordPreparedBranchRefTransaction(cwd string, lines []string) error {
 			oldOID = gitOut(cwd, "rev-parse", "--verify", "refs/heads/"+txn.name)
 		}
 		if !validNonZeroGitOID(oldOID) {
-			_ = providerfs.RemoveRepoFile(cwd, path)
+			_ = providerfs.RemoveRepoFile(stateRoot, path)
 			continue
 		}
 		raw, err := json.Marshal(preparedBranchRefTransaction{
@@ -273,7 +286,7 @@ func recordPreparedBranchRefTransaction(cwd string, lines []string) error {
 		if err != nil {
 			return err
 		}
-		if err := providerfs.WriteRepoFileAtomic(cwd, path, raw, 0o600); err != nil {
+		if err := providerfs.WriteRepoFileAtomic(stateRoot, path, raw, 0o600); err != nil {
 			return err
 		}
 	}
@@ -281,6 +294,7 @@ func recordPreparedBranchRefTransaction(cwd string, lines []string) error {
 }
 
 func consumePreparedBranchRefTransaction(cwd, branch string) string {
+	cwd = cxtRepoRoot(context.Background(), cwd)
 	path, err := branchRefTransactionLedgerPath(branch)
 	if err != nil {
 		return ""
@@ -302,6 +316,7 @@ func consumePreparedBranchRefTransaction(cwd, branch string) string {
 }
 
 func clearPreparedBranchRefTransactions(cwd string, lines []string) {
+	cwd = cxtRepoRoot(context.Background(), cwd)
 	for _, line := range lines {
 		txn := parseBranchRefTransaction(line)
 		if !txn.deleted {
@@ -384,30 +399,59 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 	// 1) Checkpoint: snapshot and push (best-effort) the live sessions from the previous branch.
 	//    Ensure isolation target file paths here (direct use of capture adapter — hook-specific paths).
 	type liveSession struct {
-		provider string
-		path     string
+		provider      string
+		path          string
+		session       string
+		checkpoint    bool
+		capturedBytes int64
 	}
 	var lives []liveSession
-	for _, p := range commitProviders(cwd) {
+	stateRoot := cxtRepoRoot(ctx, cwd)
+	for _, active := range capture.ActiveAppSessions(cwd) {
+		info, err := os.Lstat(active.Path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		lives = append(lives, liveSession{
+			provider: string(active.Provider), path: active.Path, session: active.SessionID,
+			checkpoint: !providerfs.CaptureExcluded(stateRoot, active.Path, info.Size()),
+		})
+	}
+	// The very first switch can precede the first lifecycle hook. Bootstrap one
+	// newest capture-eligible session; once selected it is registered, so later
+	// switches never fall through to an older archived sibling.
+	if len(lives) == 0 {
 		var src interface {
 			LocateActiveSession(context.Context, string) (string, error)
 		}
-		if p == domain.ProviderCodex {
+		if targetProvider == domain.ProviderCodex {
 			src = capture.NewCodexCapture()
 		} else {
 			src = capture.NewClaudeCapture()
 		}
 		if path, err := src.LocateActiveSession(ctx, cwd); err == nil {
-			lives = append(lives, liveSession{provider: p, path: path})
+			if info, statErr := os.Lstat(path); statErr == nil && info.Mode().IsRegular() {
+				lives = append(lives, liveSession{
+					provider: string(targetProvider), path: path, checkpoint: true,
+				})
+			}
 		}
 	}
 	checkpointed := 0
-	for _, ls := range lives {
+	for i := range lives {
+		ls := &lives[i]
+		if !ls.checkpoint {
+			continue
+		}
 		msg := "checkpoint: switch"
 		if prevBranch != "" && !detached {
 			msg = fmt.Sprintf("checkpoint: %s → %s", prevBranch, branch)
 		}
-		if out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: ls.provider, Message: msg, Author: c.Identity, Branch: prevBranch}); err == nil {
+		if out, err := c.Save.Save(ctx, inbound.SaveInput{
+			Cwd: cwd, Provider: ls.provider, SessionPath: ls.path,
+			Message: msg, Author: c.Identity, Branch: prevBranch,
+		}); err == nil {
+			ls.capturedBytes = out.CapturedBytes
 			fmt.Printf("cxt: checkpoint %s (%s) on %q\n", shortHash(out.SnapshotID), ls.provider, out.Branch)
 			checkpointed++
 			// Memorize checkpoints as well, falling back to an ancestor digest when the tip has none (audit finding #5). HEAD is already the new branch, so identify it explicitly by ref.
@@ -446,6 +490,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 	b := boundary.Boundary{PrevBranch: prevBranch, Branch: branch}
 	prepareExpected := false
 	var prepareErr error
+	var handoffTarget domain.ContentHash
 	existing, lerr := c.List.List(ctx, inbound.ListInput{Branch: branch})
 	if lerr != nil {
 		prepareErr = lerr
@@ -462,10 +507,18 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		if len(existing.Snapshots) > 0 || hasRef {
 			prepareExpected = true
 			// Existing branch: load context of that task (current context is not carried).
-			if out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{From: branch, TargetProvider: targetProvider, Mode: hookLoadMode(cwd), Cwd: cwd}); err == nil {
+			if out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
+				From: branch, TargetProvider: targetProvider, Mode: hookLoadMode(cwd), Cwd: cwd,
+				SkipMaterialize: !wrapperManaged,
+			}); err == nil {
+				handoffTarget = out.Head
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
 				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd)
-				fmt.Printf("cxt: %q context prepared  [fidelity: %s]\n", branch, out.Fidelity)
+				if wrapperManaged {
+					fmt.Printf("cxt: %q context prepared  [fidelity: %s]\n", branch, out.Fidelity)
+				} else {
+					fmt.Printf("cxt: %q app context selected (live session retained)\n", branch)
+				}
 				if out.ActivatedBranch {
 					spawnBranchStateSync(cwd)
 				}
@@ -476,7 +529,11 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		} else if prevBranch != "" && prevBranch != branch {
 			prepareExpected = true
 			// New branch: seed genesis — main memory ⊕ ancestry summary + previous commit raw tail.
-			if out, err := c.Seed.Seed(ctx, inbound.SeedInput{Cwd: cwd, FromBranch: prevBranch, NewBranch: branch, Provider: targetProvider, Author: c.Identity}); err == nil {
+			if out, err := c.Seed.Seed(ctx, inbound.SeedInput{
+				Cwd: cwd, FromBranch: prevBranch, NewBranch: branch, Provider: targetProvider, Author: c.Identity,
+				SkipMaterialize: !wrapperManaged,
+			}); err == nil {
+				handoffTarget = out.SnapshotID
 				b.SeedPath, b.ResumeCmd = out.WrittenPath, out.ResumeCmd
 				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd)
 				fmt.Printf("cxt: seed created → branch %q (snapshot %s)\n", branch, shortHash(out.SnapshotID))
@@ -490,6 +547,59 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 				prepareErr = err
 			}
 		}
+	}
+
+	// Desktop apps own and continue writing their live session. Renaming that
+	// file without an owning cxt wrapper leaves the app writing an unresumable
+	// descriptor and makes later hook transcript paths disappear. Preserve every
+	// app session and queue only a bounded memory projection for its next prompt.
+	if !wrapperManaged {
+		if prepareErr != nil || (prepareExpected && handoffTarget == "") {
+			hookWarn("app context handoff could not be prepared; current session was preserved — fetch explicitly with cxt checkout %s", branch)
+			return nil
+		}
+		if handoffTarget == "" {
+			return nil
+		}
+		if c.Handoff == nil {
+			hookWarn("app context handoff service is unavailable; current session was preserved")
+			return nil
+		}
+		text, err := c.Handoff.RenderBranchHandoff(ctx, inbound.BranchHandoffInput{
+			FromBranch: prevBranch,
+			ToBranch:   branch,
+			Target:     handoffTarget,
+		})
+		if err != nil {
+			hookWarn("app context handoff could not be rendered; current session was preserved: %v", err)
+			return nil
+		}
+		sessionIDs := make([]string, 0, len(lives))
+		for _, live := range lives {
+			if live.session != "" {
+				sessionIDs = append(sessionIDs, live.session)
+			}
+		}
+		if err := capture.WriteSessionHandoff(cwd, sessionIDs, text); err != nil {
+			hookWarn("app context handoff could not be queued; current session was preserved: %v", err)
+			return nil
+		}
+		// The app keeps writing the same native file after the switch. Exclude
+		// the exact prefix already checkpointed above; any byte appended after
+		// that read immediately clears the gate. Without this baseline, merely
+		// entering and leaving a branch would attach the unchanged old
+		// conversation to the target branch and pollute its lineage.
+		for _, live := range lives {
+			_ = capture.TrackAppSession(cwd, domain.ProviderKind(live.provider), live.session, live.path)
+			if live.capturedBytes <= 0 {
+				continue // checkpoint failed; retry rather than hiding uncaptured bytes
+			}
+			if err := providerfs.RecordCaptureBaseline(stateRoot, live.path, live.capturedBytes); err != nil {
+				hookWarn("app session growth baseline was not recorded; the next switch will retry its checkpoint: %v", err)
+			}
+		}
+		fmt.Printf("cxt: app session retained; bounded context for %q will be applied once on the next prompt\n", branch)
+		return nil
 	}
 
 	// 3) Preflight the complete restart target before isolation. In particular,
@@ -750,12 +860,14 @@ func restoredSessionID(path, resumeCmd string) string {
 }
 
 // boundaryTransitionSafe prevents a live wrapper from observing a boundary
-// that cannot restart its child. An unmanaged superseded-only boundary remains
-// recordable for audit and explicit enforcement.
+// that cannot restart its child. Unmanaged desktop/IDE sessions never record
+// boundaries or supersede provider files; they use the hook handoff path.
 func boundaryTransitionSafe(b boundary.Boundary, wrapperManaged bool) bool {
+	if !wrapperManaged {
+		return false
+	}
 	restartable := b.SeedPath != "" && b.ResumeCmd != "" && providerfs.ValidSessionID(b.SeedID)
-	preparedResume := b.SeedPath != "" || b.ResumeCmd != "" || b.SeedID != ""
-	return restartable || (!wrapperManaged && !preparedResume)
+	return restartable
 }
 
 func transitionPreflightSafe(prepareErr error, prepareExpected bool, b boundary.Boundary, wrapperManaged bool) bool {
@@ -765,7 +877,7 @@ func transitionPreflightSafe(prepareErr error, prepareExpected bool, b boundary.
 	if prepareExpected || wrapperManaged {
 		return boundaryTransitionSafe(b, wrapperManaged)
 	}
-	return true
+	return false
 }
 
 func shouldSupersedeSession(path, preparedSeedPath string) bool {
@@ -782,6 +894,7 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		return nil
 	}
 	event, args := rest[0], rest[1:]
+	repoRoot := cxtRepoRoot(ctx, cwd)
 
 	switch event {
 	case "ref-prepare":
@@ -821,7 +934,7 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		// Reflects uncommitted capture pointers to the server (detached helper — resolves hook capture/commit after spawn).
 		// --resolve <sessionID> <target> conditionally deletes only the remote
 		// pending capture absorbed by the commit.
-		if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
+		if _, ok := remotecfg.Origin(repoRoot); !ok && os.Getenv("CXT_REMOTE") == "" {
 			return nil
 		}
 		var resolutions []inbound.PendingResolution
@@ -836,17 +949,17 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 				i += 2
 			}
 		}
-		release := acquireSyncLock(cwd)
+		release := acquireSyncLock(repoRoot)
 		defer release()
 		if _, err := c.Sync.SyncPendings(ctx, inbound.SyncInput{Cwd: cwd}, resolutions); err != nil {
 			hookWarn("pending sync: %v", err)
 		}
 
 	case "branch-state-sync":
-		if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
+		if _, ok := remotecfg.Origin(repoRoot); !ok && os.Getenv("CXT_REMOTE") == "" {
 			return nil
 		}
-		release := acquireSyncLock(cwd)
+		release := acquireSyncLock(repoRoot)
 		defer release()
 		if _, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd}); err != nil {
 			hookWarn("branch archive sync: %v", err)
@@ -1021,7 +1134,7 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		// time, if no seed signal, transient git branch confirmed". transient creation typically completes
 		// early, so the upper bound only delays pure git branch (web fork connections etc.) — fixed slippage (1.2s)
 		// is maintained.
-		ctxRefPath := filepath.Join(cwd, ".cxt", "refs", "heads", filepath.FromSlash(name))
+		ctxRefPath := filepath.Join(repoRoot, ".cxt", "refs", "heads", filepath.FromSlash(name))
 		deadline := time.Now().Add(1500 * time.Millisecond)
 		for {
 			if gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD") == name {
@@ -1405,9 +1518,12 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 // Snapshot message [git <sha>] links are immutable (content-addressed), so they cannot be modified.
 // Similar to git's refs/replace, we accumulate old→new commit mappings in a side table and follow the chain when interpreting links (aaa→bbb→ccc).
 
-func rewritesPath(cwd string) string { return filepath.Join(cwd, ".cxt", "rewrites.json") }
+func rewritesPath(cwd string) string {
+	return filepath.Join(cxtRepoRoot(context.Background(), cwd), ".cxt", "rewrites.json")
+}
 
 func loadRewrites(cwd string) map[string]string {
+	cwd = cxtRepoRoot(context.Background(), cwd)
 	m := map[string]string{}
 	if b, err := providerfs.ReadRepoFile(cwd, filepath.Join(".cxt", "rewrites.json")); err == nil {
 		_ = json.Unmarshal(b, &m)
@@ -1416,6 +1532,7 @@ func loadRewrites(cwd string) map[string]string {
 }
 
 func saveRewrites(cwd string, m map[string]string) error {
+	cwd = cxtRepoRoot(context.Background(), cwd)
 	b, _ := json.MarshalIndent(m, "", "  ")
 	return providerfs.WriteRepoFileAtomic(cwd, filepath.Join(".cxt", "rewrites.json"), b, 0o644)
 }

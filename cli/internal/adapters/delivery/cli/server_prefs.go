@@ -23,11 +23,14 @@ type serverPrefs struct {
 	At       string `json:"at"`
 }
 
-func serverPrefsPath(cwd string) string { return filepath.Join(cwd, ".cxt", "server-prefs.json") }
+func serverPrefsPath(cwd string) string {
+	return filepath.Join(cxtRepoRoot(context.Background(), cwd), ".cxt", "server-prefs.json")
+}
 
 // serverLoadMode returns the load_mode personal setting of the logged-in account ("" = none/unlogged in).
 // Freshness takes precedence: 400ms timeout GET /me → success refreshes cache, failure falls back to cache.
 func serverLoadMode(cwd string) string {
+	stateRoot := cxtRepoRoot(context.Background(), cwd)
 	base, host, err := remoteAPIBase(cwd)
 	if err != nil {
 		return "" // Remote disconnected — no personal settings
@@ -53,14 +56,14 @@ func serverLoadMode(cwd string) string {
 			if json.NewDecoder(resp.Body).Decode(&me) == nil {
 				cache := serverPrefs{LoadMode: me.LoadMode, At: time.Now().UTC().Format(time.RFC3339)}
 				if b, merr := json.Marshal(cache); merr == nil {
-					_ = providerfs.WriteRepoFileAtomic(cwd, filepath.Join(".cxt", "server-prefs.json"), b, 0o644)
+					_ = providerfs.WriteRepoFileAtomic(stateRoot, filepath.Join(".cxt", "server-prefs.json"), b, 0o644)
 				}
 				return me.LoadMode
 			}
 		}
 	}
 	// Offline/timout fallback: last successful value.
-	if b, rerr := providerfs.ReadRepoFile(cwd, filepath.Join(".cxt", "server-prefs.json")); rerr == nil {
+	if b, rerr := providerfs.ReadRepoFile(stateRoot, filepath.Join(".cxt", "server-prefs.json")); rerr == nil {
 		var cache serverPrefs
 		if json.Unmarshal(b, &cache) == nil {
 			return cache.LoadMode

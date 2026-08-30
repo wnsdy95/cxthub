@@ -46,8 +46,8 @@ move together.
 
 ## What CXTHub carries forward
 
-- **Sessions** — capture Claude Code and Codex work through provider and Git
-  hooks.
+- **Sessions** — capture Claude Code and Codex work through official provider
+  lifecycle hooks, from their CLIs and supported desktop/IDE surfaces.
 - **Snapshots** — store normalized context as immutable, content-addressed
   states.
 - **Commit links** — connect the session state to the code change it shaped.
@@ -137,12 +137,28 @@ The complete command and option reference is in
 - `integrations/codex/` contains the Codex MCP, prompt, and hook
   configuration.
 
+`cxt setup` registers lifecycle hooks once. The same hooks capture Codex app
+sessions and Claude Desktop's **Code** tab; no desktop process wrapper is
+needed. Linked app worktrees share the primary repository's `.cxt` store while
+keeping their Git branch identity separate.
+
+On branch switches, desktop apps keep their vendor-owned live session. CXTHub
+selects or creates the destination context and injects at most 16 KiB of
+structured project memory once on the next app prompt. It does not replay the
+archived transcript into the active context window. The optional CLI wrappers
+below add one capability apps do not expose to an external tool: terminating
+and natively resuming the provider process on the new session file.
+
 The CLI can also start either provider with repository context:
 
 ```bash
 cxt claude
 cxt codex
 ```
+
+Claude Desktop's general **Chat** tab is not a Claude Code session and does not
+emit the coding lifecycle hooks CXTHub relies on. It is therefore not passively
+captured; use the Code tab or an explicit export/import path.
 
 ## Privacy is architecture
 

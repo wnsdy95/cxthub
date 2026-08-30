@@ -44,6 +44,11 @@ echo "── build(isolated bin) · server start :$PORT"
 ( cd "$ROOT/cli" && go build -o "$TMP/bin/cxt" ./cmd/cxt ) || { echo "cxt build failed"; exit 1; }
 export PATH="$TMP/bin:$PATH"
 export HOME="$TMP/home"; mkdir -p "$HOME"
+# The fixture must prove wrapper ownership through a real process ancestry.
+# Never inherit a developer shell's cxt wrapper markers: that made this test
+# pass locally while taking the unmanaged desktop-app path in clean CI.
+unset CXT_WRAPPED CXT_WRAPPER_PID CXT_WRAPPED_AGENT CXT_WRAPPED_SESSION_ID
+unset CXT_KEEP_SESSION CXT_CARRY CXT_CLAUDE_MEMORY_PROFILE CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT CXT_CLAUDE_FLAG_AUTO_MEMORY_DIRECTORY
 git config --global user.email e2e@test.local
 git config --global user.name E2E
 git config --global init.defaultBranch main
@@ -230,15 +235,76 @@ print('rebased' if ok and reach else f'bad(parents={ps[:1]},grafted={d.get(\"gra
 ")
 expect "D rebased to previous head + reachability preservation" "$REBASE" rebased
 
-echo "── G. Context switch: checkout -b → checkpoint, isolation, seed, boundary, enforcement, wrapper"
+echo "── G. Context switch: desktop app retention + real wrapper ancestry/restart"
 cd "$TMP/repo2"
 PROJ="$HOME/.claude/projects/$(python3 -c "import re,sys;print(re.sub(r'[^A-Za-z0-9]','-',sys.argv[1]))" "$TMP/repo2")"
-session "$TMP/repo2" E
-git checkout -qb feature-x >"$TMP/sw.out" 2>&1
+APP_SESSION_ID=11111111-1111-4111-8111-111111111111
+APP_SESSION="$PROJ/$APP_SESSION_ID.jsonl"
+mkdir -p "$PROJ"
+cat > "$APP_SESSION" <<EOF
+{"type":"user","cwd":"$TMP/repo2","sessionId":"$APP_SESSION_ID","gitBranch":"main","timestamp":"2026-07-05T00:00:00Z","message":{"role":"user","content":"task E"}}
+{"type":"assistant","cwd":"$TMP/repo2","sessionId":"$APP_SESSION_ID","gitBranch":"main","timestamp":"2026-07-05T00:00:01Z","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"done E"}],"usage":{"input_tokens":100,"output_tokens":10}}}
+EOF
+
+# A plain desktop-app shell has no cxt supervisor. It must checkpoint and seed
+# the cxt DAG, but keep the vendor-owned native session file open and inject
+# only one bounded memory handoff on the next official lifecycle hook.
+APP_JSONL_BEFORE=$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')
+git checkout -qb app-feature-x >"$TMP/app-sw.out" 2>&1
+expect "app switch checkpoints previous branch" "$([ "$(grep -c 'cxt: checkpoint' "$TMP/app-sw.out")" -ge 1 ] && echo yes)" yes
+expect "app switch creates branch seed" "$(grep -c 'seed created' "$TMP/app-sw.out")" 1
+expect "app switch retains native session" "$(grep -c 'app session retained' "$TMP/app-sw.out")" 1
+expect "app switch does not create wrapper boundary" "$([ ! -e .cxt/boundary.json ] && echo yes)" yes
+expect "app switch does not supersede provider files" "$(find "$PROJ" -maxdepth 1 -type f -name '*.superseded' | wc -l | tr -d ' ')" 0
+expect "app switch does not materialize orphan native seed" "$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')" "$APP_JSONL_BEFORE"
+expect "app session file remains at original path" "$([ -f "$APP_SESSION" ] && echo yes)" yes
+APP_HANDOFF=$(echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"continue\"}" | cxt hook --provider claude --event UserPromptSubmit)
+expect "app handoff is one bounded project-memory injection" "$(echo "$APP_HANDOFF" | python3 -c "
+import json,sys
+try:
+    text=json.load(sys.stdin)['hookSpecificOutput']['additionalContext']
+    print('yes' if 'cxthub branch context handoff' in text and len(text.encode()) <= 16*1024 else 'no')
+except Exception: print('no')")" yes
+expect "app handoff is consumed once" "$(find .cxt/handoffs -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" 0
+git checkout -q main >/dev/null 2>&1
+echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"back on main\"}" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
+
+# Resume the same file under an actual cxt wrapper and grow it once. The fake
+# Claude child performs git checkout itself, so the hook's process ancestry is
+# wrapper → provider child → git → cxt hook on every OS/CI runner.
+echo '{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","gitBranch":"main","message":{"role":"user","content":"wrapper continued"}}' >> "$APP_SESSION"
+export CLAUDELOG="$TMP/agent.log"
+export CXT_E2E_REPO="$TMP/repo2"
+export CXT_E2E_SWITCH_OUT="$TMP/sw.out"
+export CXT_E2E_SWITCH_MARK="$TMP/agent-switched"
+export CXT_E2E_AGENT_PID="$TMP/agent.pid"
+cat > "$TMP/bin/claude" <<'SH'
+#!/bin/bash
+echo "MEMORY_PROFILE ${CXT_CLAUDE_MEMORY_PROFILE:-missing} ${#CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT} ${CXT_CLAUDE_FLAG_AUTO_MEMORY_DIRECTORY:-default}" >> "$CLAUDELOG"
+echo "AGENT $*" >> "$CLAUDELOG"
+echo $$ > "$CXT_E2E_AGENT_PID"
+if [ ! -e "$CXT_E2E_SWITCH_MARK" ]; then
+  : > "$CXT_E2E_SWITCH_MARK"
+  cd "$CXT_E2E_REPO" || exit 1
+  git checkout -qb feature-x >"$CXT_E2E_SWITCH_OUT" 2>&1
+  exit $?
+fi
+trap 'kill $SP 2>/dev/null; exit 0' TERM
+sleep 30 & SP=$!
+wait $SP
+SH
+chmod +x "$TMP/bin/claude"
+CLAUDE_MEMORY_OVERRIDE="$TMP/initial-claude-memory"
+cxt claude --resume "$APP_SESSION_ID" --settings "{\"autoMemoryDirectory\":\"$CLAUDE_MEMORY_OVERRIDE\"}" >"$TMP/wrapper.out" 2>&1 &
+WPID=$!
+for i in $(seq 1 40); do
+  [ -f .cxt/boundary.json ] && [ "$(grep -c '^AGENT ' "$CLAUDELOG" 2>/dev/null)" -ge 2 ] && break
+  sleep 0.25
+done
 expect "Checkpoint execution" "$(grep -c 'cxt: checkpoint' "$TMP/sw.out")" 1
 expect "seed creation output" "$(grep -c 'seed created' "$TMP/sw.out")" 1
 expect "boundary signal output" "$(grep -c 'previous session is isolated' "$TMP/sw.out")" 1
-expect "All previous sessions isolated (renamed)" "$(ls "$PROJ"/*.jsonl.superseded 2>/dev/null | wc -l | tr -d ' ')" "$(ls "$PROJ" | grep -c superseded)"
+expect "All previous sessions isolated (renamed)" "$([ "$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl.superseded' | wc -l | tr -d ' ')" -ge 1 ] && echo yes)" yes
 expect "Boundary record" "$([ -f .cxt/boundary.json ] && echo yes)" yes
 SEED=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_path',''))")
 SEEDID=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_id',''))")
@@ -288,48 +354,32 @@ cxt git-hook boundary-enforce >/dev/null 2>&1
 sleep 0.3
 expect "isolated session holder killed" "$(kill -0 "$TPID" 2>/dev/null && echo alive || echo dead)" dead
 
-# Wrapper: cxt claude detects boundary and automatically restarts as a seed.
-export CLAUDELOG="$TMP/agent.log"
-cat > "$TMP/bin/claude" <<'SH'
-#!/bin/bash
-echo "MEMORY_PROFILE ${CXT_CLAUDE_MEMORY_PROFILE:-missing} ${#CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT} ${CXT_CLAUDE_FLAG_AUTO_MEMORY_DIRECTORY:-default}" >> "$CLAUDELOG"
-echo "AGENT $*" >> "$CLAUDELOG"
-trap 'kill $SP 2>/dev/null; exit 0' TERM
-sleep 30 & SP=$!
-wait $SP
-SH
-chmod +x "$TMP/bin/claude"
-CLAUDE_MEMORY_OVERRIDE="$TMP/initial-claude-memory"
-cxt claude --resume "$SEEDID" --settings "{\"autoMemoryDirectory\":\"$CLAUDE_MEMORY_OVERRIDE\"}" >/dev/null 2>&1 &
-WPID=$!
-sleep 1.5
-session "$TMP/repo2" F
-git checkout -qb feature-y >/dev/null 2>&1
-NEWSEEDID=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_id',''))")
-for i in $(seq 1 20); do grep -q -- "--resume $NEWSEEDID" "$CLAUDELOG" 2>/dev/null && break; sleep 0.5; done
-expect "wrapper automatically restarts as seed (--resume)" "$(grep -c -- "--resume $NEWSEEDID" "$CLAUDELOG")" 1
-expect "restart target = new seed ID" "$(tail -1 "$CLAUDELOG" | grep -c -- "--resume $NEWSEEDID")" 1
+# The first fake child already caused the transition. The wrapper must observe
+# that boundary and restart a second child with the newly materialized seed.
+expect "wrapper automatically restarts as seed (--resume)" "$(grep -c -- "--resume $SEEDID" "$CLAUDELOG")" 1
+expect "restart target = new seed ID" "$(tail -1 "$CLAUDELOG" | grep -c -- "--resume $SEEDID")" 1
 expect "wrapper carries proven Claude memory profile" "$(grep -c '^MEMORY_PROFILE v1 64 ' "$CLAUDELOG")" 2
 expect "initial child carries its custom Claude memory directory" "$(grep -c "^MEMORY_PROFILE v1 64 $CLAUDE_MEMORY_OVERRIDE$" "$CLAUDELOG")" 1
 expect "restarted child drops settings no longer present in its arguments" "$(grep -c '^MEMORY_PROFILE v1 64 default$' "$CLAUDELOG")" 1
-kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; pkill -f "sleep 30" 2>/dev/null
+if [ -f "$CXT_E2E_AGENT_PID" ]; then kill "$(cat "$CXT_E2E_AGENT_PID")" 2>/dev/null; fi
+wait "$WPID" 2>/dev/null
 
 echo "── H. Web personal settings(load_mode): PATCH /me → CLI consumption"
 expect "load_mode saved(memory)" "$(ccurl -sb "$J" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":"memory"}' | jget "['load_mode']")" memory
 expect "GET /me reflects" "$(curl -sb "$J" "$B/me" | jget "['load_mode']")" memory
 expect "Invalid value 422" "$(ccurl -sb "$J" -o /dev/null -w '%{http_code}' -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":"bogus"}')" 422
-# CLI consumption: switching an authenticated repo1 to an existing branch uses the server's memory fidelity setting.
+# CLI consumption: an explicit cxt load materializes using the account-wide
+# setting. Plain desktop-app Git switches intentionally do not replace the
+# vendor-owned native session and are covered in section G.
 cd "$TMP/repo1"
-git checkout -qb tmp-z >/dev/null 2>&1
 cat > CLAUDE.md <<'EOF'
 # User-owned instructions
 Preserve this text and its file mode.
 EOF
 chmod 600 CLAUDE.md
-git checkout -q main >"$TMP/pref.out" 2>&1
-expect "Switch load uses server personal settings(memory)" "$(grep -c 'fidelity: memory' "$TMP/pref.out")" 1
-cxt load main --provider claude --mode memory >/dev/null 2>&1
-cxt load main --provider claude --mode memory >/dev/null 2>&1
+cxt load main --provider claude >"$TMP/pref.out" 2>&1
+expect "CLI load uses server personal settings(memory)" "$(grep -c 'fidelity: memory' "$TMP/pref.out")" 1
+cxt load main --provider claude >/dev/null 2>&1
 expect "memory load preserves user instructions" "$(python3 -c "from pathlib import Path; print('yes' if Path('CLAUDE.md').read_text().startswith('# User-owned instructions\nPreserve this text and its file mode.\n') else 'no')")" yes
 expect "memory load refreshes one managed block" "$(grep -c '^<!-- cxt:begin managed memory' CLAUDE.md)" 1
 expect "memory managed block stays within 64 KiB" "$(python3 -c "from pathlib import Path; b=Path('CLAUDE.md').read_bytes(); s=b.index(b'<!-- cxt:begin managed memory'); e=b.index(b'<!-- cxt:end managed memory -->', s)+len(b'<!-- cxt:end managed memory -->')+1; print('yes' if e-s <= 64*1024 else 'no')")" yes
@@ -363,7 +413,7 @@ expect "context ref is connected to fork snapshot" "$(cat .cxt/refs/heads/web-fo
 session "$TMP/repo1" WFX
 git checkout -q web-fork-x >"$TMP/wfx.out" 2>&1
 expect "switch does not create seed" "$(grep -c 'seed created' "$TMP/wfx.out")" 0
-expect "fork context is prepared" "$(grep -c 'context prepared' "$TMP/wfx.out")" 1
+expect "fork context is selected without replacing app session" "$(grep -c 'app context selected' "$TMP/wfx.out")" 1
 expect "ref is still fork snapshot after switch" "$(cat .cxt/refs/heads/web-fork-x)" "$FORK_FROM"
 git checkout -q main >/dev/null 2>&1
 # `switch -c` creates a seed even when a same-named web fork exists: creating while switching

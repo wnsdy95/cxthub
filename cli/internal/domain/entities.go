@@ -31,7 +31,9 @@ type Repo struct {
 	ID string `json:"id"`
 	// RemoteURL is the git remote URL of the code repo (empty if not available).
 	RemoteURL string `json:"remote_url"`
-	// LocalPath is the absolute cwd path on this machine (empty on servers).
+	// LocalPath is the shared local context root on this machine (empty on servers).
+	// Linked Git worktrees use the primary working tree so one repository cannot
+	// split into several .cxt stores.
 	LocalPath string `json:"local_path"`
 	// DefaultBranch is the default branch name (e.g., "main").
 	DefaultBranch string `json:"default_branch"`

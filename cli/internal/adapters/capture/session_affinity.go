@@ -1,12 +1,14 @@
 package capture
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -35,6 +37,13 @@ func affinityPath(provider domain.ProviderKind) string {
 	return filepath.Join(".cxt", "session-affinity", strings.TrimPrefix(string(key), "sha256:")+".json")
 }
 
+func affinityRoot(cwd string) string {
+	if root, ok := gitctx.ContextRoot(context.Background(), cwd); ok {
+		return root
+	}
+	return cwd
+}
+
 // RecordSessionAffinity binds only this local terminal to its provider session.
 // The opaque terminal ID is hashed and never synchronized to the server.
 func RecordSessionAffinity(cwd string, provider domain.ProviderKind, sessionID string) {
@@ -49,7 +58,7 @@ func RecordSessionAffinity(cwd string, provider domain.ProviderKind, sessionID s
 	if err != nil {
 		return
 	}
-	_ = providerfs.WriteRepoFileAtomic(cwd, rel, b, 0o600)
+	_ = providerfs.WriteRepoFileAtomic(affinityRoot(cwd), rel, b, 0o600)
 }
 
 // SessionAffinity returns the last capture from this exact terminal/provider.
@@ -58,7 +67,7 @@ func SessionAffinity(cwd string, provider domain.ProviderKind) string {
 	if rel == "" {
 		return ""
 	}
-	b, err := providerfs.ReadRepoFile(cwd, rel)
+	b, err := providerfs.ReadRepoFile(affinityRoot(cwd), rel)
 	if err != nil {
 		return ""
 	}

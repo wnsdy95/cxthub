@@ -70,6 +70,12 @@ cxt setup https://cxthub.example/alice/platform
 Rerunning the command reports and repairs missing setup steps without replacing
 an existing remote that points somewhere else.
 
+The lifecycle hooks also cover Codex app/IDE sessions and Claude Desktop's
+**Code** tab. Apps are not launched through a cxt wrapper: hook payloads identify
+the exact session and linked worktree, and CXTHub stores all worktrees in the
+primary repository's shared `.cxt`. Concurrent app sessions retain independent
+capture cursors and pending pointers.
+
 ## Repository and authentication
 
 ### `cxt init`
@@ -146,7 +152,9 @@ cxt claude [claude-arguments...]
 ```
 
 Runs Claude Code with branch-context seeding and passes remaining arguments to
-the installed `claude` executable.
+the installed `claude` executable. The wrapper owns process restart/resume on a
+branch switch. It is optional for Claude Desktop's Code tab, where lifecycle
+hooks preserve the live app session and apply one bounded memory handoff.
 
 ### `cxt codex`
 
@@ -155,7 +163,9 @@ cxt codex [codex-arguments...]
 ```
 
 Runs Codex with branch-context seeding and passes remaining arguments to the
-installed `codex` executable.
+installed `codex` executable. The wrapper owns process restart/resume on a
+branch switch. It is optional for Codex app/IDE sessions, where lifecycle hooks
+preserve the live app session and apply one bounded memory handoff.
 
 ### `cxt mcp`
 
@@ -181,6 +191,15 @@ cxt hook --provider <claude|codex> --event <event>
 Provider-integration entry point. `cxt setup` writes these invocations into
 provider hook settings; users normally do not call it directly. Hook failures
 are reported without blocking the provider.
+
+Supported coding-app events are `SessionStart`, `UserPromptSubmit`, `Stop`, and
+`SessionEnd`. A desktop branch switch never renames the vendor-owned active
+session file. Instead, the next start/prompt hook consumes a session-scoped,
+maximum-16-KiB project-memory handoff exactly once. Full transcripts remain in
+the immutable CXTHub DAG and are retrieved explicitly with MCP or the web UI.
+
+Claude Desktop's general Chat tab is outside this hook model and is not
+passively captured.
 
 ## Capture and commit commands
 

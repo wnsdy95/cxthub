@@ -79,6 +79,23 @@ func ValidSessionID(value string) bool {
 	return true
 }
 
+// SessionIDFromPath extracts the canonical provider session UUID from Claude's
+// `<uuid>.jsonl` and Codex's `rollout-...-<uuid>.jsonl` filenames. It never
+// trusts directory components and returns an empty string for malformed names.
+func SessionIDFromPath(value string) string {
+	base := filepath.Base(value)
+	base = strings.TrimSuffix(base, ".superseded")
+	base = strings.TrimSuffix(base, ".jsonl")
+	if len(base) < 36 {
+		return ""
+	}
+	candidate := base[len(base)-36:]
+	if !ValidSessionID(candidate) {
+		return ""
+	}
+	return candidate
+}
+
 // IsProviderSessionPath reports whether value stays inside a resolved Claude
 // or Codex session root and names a regular session JSONL file. A missing leaf
 // is accepted because a superseded session can disappear after the boundary

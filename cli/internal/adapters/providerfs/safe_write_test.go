@@ -162,6 +162,24 @@ func TestValidSessionID(t *testing.T) {
 	}
 }
 
+func TestSessionIDFromPath(t *testing.T) {
+	const id = "12345678-1234-4abc-8def-1234567890ab"
+	for _, path := range []string{
+		"/tmp/" + id + ".jsonl",
+		"/tmp/rollout-2026-08-30T12-00-00-" + id + ".jsonl",
+		"/tmp/" + id + ".jsonl.superseded",
+	} {
+		if got := SessionIDFromPath(path); got != id {
+			t.Fatalf("SessionIDFromPath(%q) = %q, want %q", path, got, id)
+		}
+	}
+	for _, path := range []string{"", "/tmp/not-a-session.jsonl", "/tmp/12345678-1234-4abc-8def-1234567890ab.txt"} {
+		if got := SessionIDFromPath(path); got != "" {
+			t.Fatalf("SessionIDFromPath(%q) = %q, want empty", path, got)
+		}
+	}
+}
+
 func TestIsProviderSessionPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

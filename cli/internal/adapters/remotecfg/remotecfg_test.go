@@ -3,6 +3,7 @@ package remotecfg
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -30,6 +31,51 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 	u, ok := Origin(root)
 	if !ok || u != r["origin"] {
 		t.Fatalf("Origin: got %q, %v", u, ok)
+	}
+}
+
+func TestLinkedWorktreeReadsAndWritesSharedConfig(t *testing.T) {
+	primary := filepath.Join(t.TempDir(), "primary")
+	linked := filepath.Join(t.TempDir(), "linked")
+	if err := os.MkdirAll(primary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := func(cwd string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git(primary, "init", "-b", "main")
+	git(primary, "config", "user.name", "cxt test")
+	git(primary, "config", "user.email", "cxt@example.test")
+	hooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(primary, "config", "core.hooksPath", hooks)
+	git(primary, "config", "gc.auto", "0")
+	git(primary, "commit", "--allow-empty", "-m", "initial")
+	git(primary, "worktree", "add", "-b", "feature/app", linked)
+
+	const first = "https://cxthub.example.com/alice/orders"
+	if err := Save(primary, Remotes{"origin": first}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := Origin(linked); !ok || got != first {
+		t.Fatalf("linked origin = %q, %v", got, ok)
+	}
+	const second = "https://cxthub.example.com/alice/platform"
+	if err := Save(linked, Remotes{"origin": second}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := Origin(primary); !ok || got != second {
+		t.Fatalf("primary origin after linked write = %q, %v", got, ok)
+	}
+	if _, err := os.Lstat(filepath.Join(linked, ".cxt")); !os.IsNotExist(err) {
+		t.Fatalf("linked worktree gained split config: %v", err)
 	}
 }
 

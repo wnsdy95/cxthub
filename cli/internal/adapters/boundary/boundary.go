@@ -9,6 +9,8 @@
 package boundary
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,6 +23,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -36,7 +39,39 @@ type Boundary struct {
 	Superseded []string `json:"superseded,omitempty"` // paths of superseded session files (after renaming)
 }
 
-func boundaryPath(repoRoot string) string { return filepath.Join(repoRoot, ".cxt", "boundary.json") }
+// boundaryLocation keeps immutable/context objects shared by all linked
+// worktrees while scoping the live wrapper transition to the exact worktree.
+// The primary worktree retains the legacy path for compatibility.
+func boundaryLocation(cwd string) (string, string) {
+	root := cwd
+	relative := filepath.Join(".cxt", "boundary.json")
+	roots, err := gitctx.ResolveRepositoryRoots(context.Background(), cwd)
+	if err != nil {
+		return root, relative
+	}
+	if shared, ok := gitctx.ContextRoot(context.Background(), cwd); ok {
+		root = shared
+	} else {
+		root = roots.SharedRoot
+	}
+	if roots.WorktreeRoot != roots.SharedRoot {
+		sum := sha256.Sum256([]byte(roots.WorktreeRoot))
+		relative = filepath.Join(".cxt", "boundaries", fmt.Sprintf("%x.json", sum[:16]))
+	}
+	return root, relative
+}
+
+func boundaryPath(cwd string) string {
+	root, relative := boundaryLocation(cwd)
+	return filepath.Join(root, relative)
+}
+
+func sharedContextRoot(cwd string) string {
+	if root, ok := gitctx.ContextRoot(context.Background(), cwd); ok {
+		return root
+	}
+	return cwd
+}
 
 // Record logs the boundary (keeps only the last transition — wrapper/enforcement care only about the latest boundary).
 func Record(repoRoot string, b Boundary) error {
@@ -53,13 +88,15 @@ func Record(repoRoot string, b Boundary) error {
 	if err != nil {
 		return err
 	}
-	return providerfs.WriteRepoFileAtomic(repoRoot, filepath.Join(".cxt", "boundary.json"), data, 0o644)
+	root, relative := boundaryLocation(repoRoot)
+	return providerfs.WriteRepoFileAtomic(root, relative, data, 0o644)
 }
 
 // Load returns the last boundary (ok=false if none).
 func Load(repoRoot string) (Boundary, bool) {
 	var b Boundary
-	data, err := providerfs.ReadRepoFile(repoRoot, filepath.Join(".cxt", "boundary.json"))
+	root, relative := boundaryLocation(repoRoot)
+	data, err := providerfs.ReadRepoFile(root, relative)
 	if err != nil || json.Unmarshal(data, &b) != nil {
 		return Boundary{}, false
 	}
@@ -113,7 +150,7 @@ func Supersede(repoRoot, path string) string {
 	if err := os.Rename(path, renamed); err != nil {
 		renamed = path // exclusion from ledger remains valid even on rename failure
 	}
-	_ = providerfs.MarkSuperseded(repoRoot, path)
+	_ = providerfs.MarkSuperseded(sharedContextRoot(repoRoot), path)
 	return renamed
 }
 
@@ -126,7 +163,7 @@ func RestoreSuperseded(repoRoot, renamed string) bool {
 	}
 	original := strings.TrimSuffix(renamed, ".superseded")
 	if original == renamed {
-		return providerfs.UnmarkSuperseded(repoRoot, original) == nil
+		return providerfs.UnmarkSuperseded(sharedContextRoot(repoRoot), original) == nil
 	}
 	if _, err := os.Stat(original); err == nil {
 		// A provider recreated the path while its old descriptor pointed at the
@@ -136,7 +173,7 @@ func RestoreSuperseded(repoRoot, renamed string) bool {
 	if err := os.Rename(renamed, original); err != nil {
 		return false
 	}
-	return providerfs.UnmarkSuperseded(repoRoot, original) == nil
+	return providerfs.UnmarkSuperseded(sharedContextRoot(repoRoot), original) == nil
 }
 
 // Notify sends an OS alert (best-effort — macOS osascript / Linux notify-send).

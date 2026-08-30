@@ -2,17 +2,33 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 type branchSeedGit struct {
 	repo domain.Repo
+}
+
+type rejectingBranchSeedMaterializer struct {
+	called bool
+}
+
+func (m *rejectingBranchSeedMaterializer) Provider() domain.ProviderKind {
+	return domain.ProviderCodex
+}
+
+func (m *rejectingBranchSeedMaterializer) Materialize(context.Context, []byte, string) (string, string, error) {
+	m.called = true
+	return "", "", errors.New("desktop app must not materialize a session")
 }
 
 func (g branchSeedGit) CurrentRepo(context.Context, string) (domain.Repo, error) {
@@ -92,5 +108,35 @@ func TestBranchSeedUsesTargetWorkingDirectory(t *testing.T) {
 	}
 	if seed.CIR.Envelope.Cwd != targetCwd {
 		t.Fatalf("seed cwd = %q, want target %q", seed.CIR.Envelope.Cwd, targetCwd)
+	}
+}
+
+func TestDesktopBranchSeedSkipsProviderMaterialization(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "repo-desktop-seed", LocalPath: t.TempDir(), DefaultBranch: "main"}
+	head := putBranchSeedSnapshot(t, ctx, store, repo.ID, "main", []domain.Event{
+		seedMessage("user", "start desktop branch", 0),
+	}, nil, &domain.MemoryDigest{Summary: "desktop project memory"})
+	putBranchSeedRef(t, ctx, store, repo.ID, "main", head)
+
+	materializer := &rejectingBranchSeedMaterializer{}
+	service := NewBranchSeedService(
+		branchSeedGit{repo: repo},
+		store,
+		memory.NewRuleDistiller(),
+		map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderCodex: codec.NewCodexCodec()},
+		map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderCodex: materializer},
+		nil,
+	)
+	out, err := service.Seed(ctx, inbound.SeedInput{
+		Cwd: repo.LocalPath, FromBranch: "main", NewBranch: "feature/desktop", Provider: domain.ProviderCodex,
+		SkipMaterialize: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if materializer.called || out.WrittenPath != "" || out.ResumeCmd != "" {
+		t.Fatalf("desktop seed materialized provider state: called=%v out=%+v", materializer.called, out)
 	}
 }

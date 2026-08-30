@@ -44,7 +44,7 @@ func (s *InitRepoService) Init(ctx context.Context, in inbound.InitInput) (inbou
 	if err := s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: branch}); err != nil {
 		return inbound.InitOutput{}, err
 	}
-	return inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(in.Cwd, ".cxt")}, nil
+	return inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(repo.LocalPath, ".cxt")}, nil
 }
 
 // Ensure InitRepoService implements inbound.InitRepo.
