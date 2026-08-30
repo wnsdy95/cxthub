@@ -289,3 +289,30 @@ func TestConcurrentAppSessionsHaveIndependentCaptureState(t *testing.T) {
 		t.Fatal("distinct app sessions share one capture state prefix")
 	}
 }
+
+func TestSameOpaqueSessionIDIsIndependentAcrossLinkedWorktrees(t *testing.T) {
+	primary := filepath.Join(t.TempDir(), "primary")
+	linked := filepath.Join(t.TempDir(), "linked")
+	if err := os.MkdirAll(primary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	captureGitRun(t, primary, "init", "-b", "main")
+	captureGitRun(t, primary, "config", "user.name", "cxt test")
+	captureGitRun(t, primary, "config", "user.email", "cxt@example.test")
+	hooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	captureGitRun(t, primary, "config", "core.hooksPath", hooks)
+	captureGitRun(t, primary, "config", "gc.auto", "0")
+	captureGitRun(t, primary, "commit", "--allow-empty", "-m", "initial")
+	captureGitRun(t, primary, "worktree", "add", "-b", "feature/app", linked)
+
+	const opaqueID = "provider-may-reuse-this-id"
+	ctx := context.Background()
+	primaryBase := captureStateBase(ctx, domain.ProviderCodex, primary, opaqueID)
+	linkedBase := captureStateBase(ctx, domain.ProviderCodex, linked, opaqueID)
+	if primaryBase == linkedBase {
+		t.Fatalf("same opaque ID crossed worktrees: %q", primaryBase)
+	}
+}

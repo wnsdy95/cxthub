@@ -95,14 +95,17 @@ func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 
 	switch event {
 	case "SessionStart":
+		_ = capture.TrackAppSession(cwd, provider, p.SessionID, path)
 		err := h.coord.MarkBaseline(ctx, provider, cwd, path, p.SessionID)
 		h.emitBriefing(event, cwd, p.SessionID) // app branch handoff + pull briefing
 		return err
 	case "UserPromptSubmit":
+		_ = capture.TrackAppSession(cwd, provider, p.SessionID, path)
 		err := h.coord.MarkTurn(ctx, provider, cwd, p.SessionID, p.Prompt)
 		h.emitBriefing(event, cwd, p.SessionID) // app branch handoff + team context notice
 		return err
 	case "Stop":
+		_ = capture.TrackAppSession(cwd, provider, p.SessionID, path)
 		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, true, false)
 		if captured {
 			spawnPendingSync(cwd)
@@ -110,6 +113,7 @@ func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 		return err
 	case "SessionEnd":
 		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, false, true)
+		capture.EndAppSession(cwd, provider, p.SessionID)
 		if captured {
 			spawnPendingSync(cwd)
 		}

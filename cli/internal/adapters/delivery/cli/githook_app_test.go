@@ -8,14 +8,21 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
 
 type appSwitchSave struct{}
 
-func (appSwitchSave) Save(context.Context, inbound.SaveInput) (inbound.SaveOutput, error) {
-	return inbound.SaveOutput{SnapshotID: domain.HashContent([]byte("app checkpoint")), Branch: "main"}, nil
+func (appSwitchSave) Save(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+	info, err := os.Stat(in.SessionPath)
+	if err != nil {
+		return inbound.SaveOutput{}, err
+	}
+	return inbound.SaveOutput{
+		SnapshotID: domain.HashContent([]byte("app checkpoint")), Branch: "main", CapturedBytes: info.Size(),
+	}, nil
 }
 
 type appSwitchMemorize struct{}
@@ -121,5 +128,14 @@ func TestUnmanagedAppBranchSwitchPreservesProviderSession(t *testing.T) {
 	}
 	if got, ok := capture.ConsumeSessionHandoff(repo, sessionID); !ok || got != "BOUNDED APP HANDOFF" {
 		t.Fatalf("app handoff = %q, %v", got, ok)
+	}
+	if !providerfs.CaptureExcluded(repo, sessionPath, int64(len(raw))) {
+		t.Fatal("unchanged app session was not held at the branch-switch baseline")
+	}
+	if err := os.WriteFile(sessionPath, []byte(raw+"{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if providerfs.CaptureExcluded(repo, sessionPath, int64(len(raw)+3)) {
+		t.Fatal("grown app session remained excluded after the branch switch")
 	}
 }

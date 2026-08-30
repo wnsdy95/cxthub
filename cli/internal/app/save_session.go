@@ -83,6 +83,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	if err != nil {
 		return inbound.SaveOutput{}, err
 	}
+	capturedBytes := int64(len(raw))
 	// Secret masking (.cxtsecrets) — local deterministic replacement before saving (P1 previous step: immutable after saving here).
 	raw, _ = capture.ScrubSecrets(raw, repo.LocalPath)
 	cir, err := cdc.Decode(ctx, raw)
@@ -193,7 +194,9 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 			return inbound.SaveOutput{}, err
 		}
 		s.gcHookLeaf(ctx, repo.ID, oldTarget, docHash)
-		return inbound.SaveOutput{SnapshotID: docHash, Branch: branch, SessionID: cir.Envelope.SessionOriginID}, nil
+		return inbound.SaveOutput{
+			SnapshotID: docHash, Branch: branch, SessionID: cir.Envelope.SessionOriginID, CapturedBytes: capturedBytes,
+		}, nil
 	}
 	// Identify the exact capture observed by this commit. Resolution below is a
 	// target CAS because a newer capture can arrive while the ref is moving.
@@ -234,6 +237,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		SnapshotID:            docHash,
 		Branch:                branch,
 		SessionID:             cir.Envelope.SessionOriginID,
+		CapturedBytes:         capturedBytes,
 		ResolvedPendingTarget: oldTarget,
 	}, nil
 }

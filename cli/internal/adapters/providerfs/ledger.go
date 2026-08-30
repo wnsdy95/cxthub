@@ -7,6 +7,7 @@ package providerfs
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -77,17 +78,33 @@ func saveLedger(repoRoot string, lf ledgerFile) error {
 	return WriteRepoFileAtomic(repoRoot, filepath.Join(".cxt", "session-ledger.json"), b, 0o644)
 }
 
-// RecordMaterialized records a materialized session file in the ledger (based on current size).
+// RecordCaptureBaseline excludes an append-only provider session until it
+// grows beyond the exact byte count already captured. It is used both for
+// cxt-materialized recovery files and for a desktop app session that remains
+// open across a Git branch switch.
+func RecordCaptureBaseline(repoRoot, path string, size int64) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if size < 0 || size > info.Size() {
+		return fmt.Errorf("invalid capture baseline %d for %d-byte session", size, info.Size())
+	}
+	unlock, _ := lockLedger(repoRoot)
+	defer unlock()
+	lf := loadLedger(repoRoot)
+	lf.Sessions[path] = LedgerEntry{Size: size, At: time.Now().UTC().Format(time.RFC3339)}
+	return saveLedger(repoRoot, lf)
+}
+
+// RecordMaterialized records a cxt-created provider session at its current
+// size. Capture resumes only after the provider appends real conversation.
 func RecordMaterialized(repoRoot, path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	unlock, _ := lockLedger(repoRoot)
-	defer unlock()
-	lf := loadLedger(repoRoot)
-	lf.Sessions[path] = LedgerEntry{Size: info.Size(), At: time.Now().UTC().Format(time.RFC3339)}
-	return saveLedger(repoRoot, lf)
+	return RecordCaptureBaseline(repoRoot, path, info.Size())
 }
 
 // MarkSuperseded records session files in an isolated manner (excluding permanent captures).

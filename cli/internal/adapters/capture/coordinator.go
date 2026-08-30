@@ -59,21 +59,18 @@ func captureStateDir(cwd string) (string, error) {
 }
 
 // captureStateBase isolates concurrent desktop/CLI sessions that share one
-// repository and provider. Official hooks supply sessionID; malformed/legacy
-// events fall back to the worktree identity so their event sequence remains
-// internally consistent without exposing either value in a filename.
+// repository and provider. Official session IDs are opaque and are not
+// guaranteed globally unique, so the exact worktree is always part of the
+// scope. Neither value is exposed in a filename.
 func captureStateBase(ctx context.Context, provider domain.ProviderKind, cwd, sessionID string) string {
-	scope := strings.TrimSpace(sessionID)
-	if scope == "" {
-		if roots, err := gitctx.ResolveRepositoryRoots(ctx, cwd); err == nil {
-			scope = roots.WorktreeRoot
-		} else if abs, err := filepath.Abs(cwd); err == nil {
-			scope = abs
-		} else {
-			scope = cwd
-		}
+	worktree := cwd
+	if roots, err := gitctx.ResolveRepositoryRoots(ctx, cwd); err == nil {
+		worktree = roots.WorktreeRoot
+	} else if abs, err := filepath.Abs(cwd); err == nil {
+		worktree = abs
 	}
-	sum := sha256.Sum256([]byte(string(provider) + "\x00" + scope))
+	scope := strings.TrimSpace(sessionID)
+	sum := sha256.Sum256([]byte(string(provider) + "\x00" + filepath.Clean(worktree) + "\x00" + scope))
 	return fmt.Sprintf("%s-%x", provider, sum[:12])
 }
 

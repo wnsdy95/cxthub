@@ -62,12 +62,22 @@ type fileConfig struct {
 }
 
 func configPath(repoRoot string) string {
-	return filepath.Join(repoRoot, ".cxt", "config")
+	return filepath.Join(sharedConfigRoot(repoRoot), ".cxt", "config")
+}
+
+// sharedConfigRoot makes remotes and capture policy repository-wide even when
+// a command still carries the cwd of a linked desktop-app worktree.
+func sharedConfigRoot(repoRoot string) string {
+	if roots, err := gitctx.ResolveRepositoryRoots(context.Background(), repoRoot); err == nil {
+		return roots.SharedRoot
+	}
+	return repoRoot
 }
 
 // loadFile reads the entire .cxt/config. Returns zero value if file does not exist (no error).
 func loadFile(repoRoot string) (fileConfig, error) {
 	var fc fileConfig
+	repoRoot = sharedConfigRoot(repoRoot)
 	b, err := providerfs.ReadRepoFile(repoRoot, filepath.Join(".cxt", "config"))
 	if os.IsNotExist(err) {
 		return fc, nil
@@ -83,6 +93,7 @@ func loadFile(repoRoot string) (fileConfig, error) {
 
 // saveFile writes the entire .cxt/config (.cxt directory is created if it does not exist).
 func saveFile(repoRoot string, fc fileConfig) error {
+	repoRoot = sharedConfigRoot(repoRoot)
 	b, err := json.MarshalIndent(fc, "", "  ")
 	if err != nil {
 		return err

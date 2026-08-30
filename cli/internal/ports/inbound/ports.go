@@ -219,6 +219,11 @@ type SaveOutput struct {
 	Branch string
 	// SessionID is the original session identifier captured (for pending resolution and matching).
 	SessionID string
+	// CapturedBytes is the exact number of provider-session bytes read into this
+	// snapshot. Branch switching uses it as an append-only growth baseline so a
+	// desktop app that stays open is not checkpointed onto the target branch
+	// until the conversation actually grows there.
+	CapturedBytes int64
 	// ResolvedPendingTarget is the exact pending capture absorbed by this save.
 	// Empty means no pending pointer existed. Detached remote cleanup must use
 	// this as its CAS expectation instead of deleting by session identity alone.

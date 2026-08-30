@@ -249,7 +249,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		if mat, ok2 := s.materializers[provider]; ok2 {
 			if raw, encErr := cdc.Encode(ctx, cir, provider); encErr == nil {
 				if path, resume, mErr := mat.Materialize(ctx, raw, in.Cwd); mErr == nil {
-					_ = providerfs.RecordMaterialized(in.Cwd, path)
+					_ = providerfs.RecordMaterialized(repo.LocalPath, path)
 					out.WrittenPath, out.ResumeCmd = path, resume
 					// Materializers rewrite provider-native session IDs to avoid
 					// colliding with the source session. The restart target is the

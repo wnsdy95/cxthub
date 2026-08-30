@@ -25,9 +25,12 @@ type settingsBackup struct {
 	Codex  domain.ContentHash `json:"codex,omitempty"`
 }
 
-func backupsPath(cwd string) string { return filepath.Join(cwd, ".cxt", "settings-backups.json") }
+func backupsPath(cwd string) string {
+	return filepath.Join(cxtRepoRoot(context.Background(), cwd), ".cxt", "settings-backups.json")
+}
 
 func loadBackups(cwd string) []settingsBackup {
+	cwd = cxtRepoRoot(context.Background(), cwd)
 	var out []settingsBackup
 	if b, err := providerfs.ReadRepoFile(cwd, filepath.Join(".cxt", "settings-backups.json")); err == nil {
 		_ = json.Unmarshal(b, &out)
@@ -36,6 +39,7 @@ func loadBackups(cwd string) []settingsBackup {
 }
 
 func saveBackups(cwd string, list []settingsBackup) error {
+	cwd = cxtRepoRoot(context.Background(), cwd)
 	if len(list) > 50 {
 		list = list[:50] // stack limit
 	}
