@@ -2581,11 +2581,13 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [months]
                 properties:
                   months:
                     type: array
                     items:
                       type: object
+                      required: [month, commit_total, commit_repos, created]
                       properties:
                         month: { type: string, description: "YYYY-MM" }
                         commit_total: { type: integer }
@@ -2593,6 +2595,7 @@ paths:
                           type: array
                           items:
                             type: object
+                            required: [name, path, count]
                             properties:
                               name: { type: string }
                               path: { type: string }
@@ -2601,6 +2604,7 @@ paths:
                           type: array
                           items:
                             type: object
+                            required: [name, path, visibility, date]
                             properties:
                               name: { type: string }
                               path: { type: string }

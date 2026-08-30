@@ -5,6 +5,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ActivityMonth } from '../types';
 import { api } from '../api';
+import { normalizeActivityResponse } from '../activity';
 import { navigate } from '../route';
 import { LockIcon } from './Breadcrumb';
 import { useT } from '../i18n';
@@ -92,7 +93,9 @@ export function ActivityFeed({ username }: { username: string }) {
     queryFn: () => api.userActivity(username),
     retry: false,
   });
-  const months = (q.data?.months ?? []).filter((m) => m.commit_total > 0 || m.created.length > 0);
+  // Normalize again at the render boundary so a pre-fix React Query cache
+  // retained across hot reload cannot crash the profile before it refetches.
+  const months = normalizeActivityResponse(q.data).months.filter((m) => m.commit_total > 0 || m.created.length > 0);
   if (months.length === 0) return null;
 
   return (
