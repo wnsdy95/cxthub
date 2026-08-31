@@ -111,7 +111,7 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
 .cols { display: grid; grid-template-columns: 240px 1fr; flex: 1; min-height: 0; }
 
 /* Sidebar — Sticky, remains in place (topbar 52px below viewport height). */
-.side { border-right: 1px solid var(--line); padding: 28px 20px; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden;
+.app-side { border-right: 1px solid var(--line); padding: 28px 20px; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden;
   position: sticky; top: 52px; height: calc(100vh - 52px); align-self: start; }
 .side-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 8px; }
 .count-badge { font-family: var(--mono); font-size: 0.7rem; color: var(--faint); }
@@ -254,7 +254,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 /* Mobile: Replaces app shell (fixed height + internal scroll) with page scroll (stack layout). */
   .app { height: auto; min-height: 100vh; }
   .cols { grid-template-columns: 1fr; }
-  .side { border-right: 0; border-bottom: 1px solid var(--line); padding: 20px; overflow: visible; }
+  .app-side { border-right: 0; border-bottom: 1px solid var(--line); padding: 20px; overflow: visible; }
   .ws-list { flex: initial; min-height: 0; overflow-y: visible; }
   .newws { margin-top: 4px; }
   .main { padding: 28px 20px 48px; overflow-y: visible; }
@@ -809,8 +809,8 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .commit-row.dismissed .commit-msg { flex: 1; }
 
 /* merge lineage — commits outside the mainline (first-parent). Graph opacity 0.6, list light. */
-.commit-row.side { opacity: 0.66; }
-.commit-row.side:hover, .commit-row.side.on { opacity: 1; }
+.commit-row.off-mainline { opacity: 0.66; }
+.commit-row.off-mainline:hover, .commit-row.off-mainline.on { opacity: 1; }
 
 /* compressed memory box — collapsible (default closed). ◆ badge with the same purple series label. */
 details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: revert; }

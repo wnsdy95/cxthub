@@ -150,7 +150,7 @@ export function Dashboard() {
       </header>
 
       <div className="cols">
-        <aside className="side">
+        <aside className="app-side">
           <div className="side-head">
             <span className="label">{t('common.workspaces')}</span>
             <span className="count-badge">{workspaces.length}</span>

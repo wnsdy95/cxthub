@@ -261,7 +261,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
         {pagedCommits.visible.map((s) => (
           <li key={s.id}>
             <button
-              className={`commit-row${s.id === snapId ? ' on' : ''}${mainline.has(s.id) ? '' : ' side'}`}
+              className={`commit-row${s.id === snapId ? ' on' : ''}${mainline.has(s.id) ? '' : ' off-mainline'}`}
               onClick={() => setSnapId(s.id)}
             >
               <code>{short(s.id)}</code>
