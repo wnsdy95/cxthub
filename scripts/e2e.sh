@@ -112,6 +112,7 @@ wait "$GUARD_PID" 2>/dev/null
 GUARD_PID=""
 OUT=$(head -1 "$TMP/guard.out" 2>/dev/null)
 case "$OUT" in *"refusing to bind dev authentication"*) expect "external binding without auth is denied" ok ok ;; *) expect "external binding without auth is denied" "$OUT" "refusal message" ;; esac
+expect "external binding guard touches no storage" "$([ ! -e "$TMP/x" ] && echo yes)" yes
 
 CXT_AUTH=dev "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data" >"$TMP/srv.log" 2>&1 &
 SRV_PID=$!
@@ -119,7 +120,7 @@ for i in $(seq 1 20); do [ "$(code "$B/repos")" = 200 ] && break; sleep 0.3; don
 expect "Server startup (loopback+dev)" "$(code "$B/repos")" 200
 
 login() { # login <email> <name> <jar> — if existing cookies are present, send them for re-login replacement path search
-  ccurl -s -b "$3" -c "$3" -X POST "$B/auth/session" -H "Authorization: Bearer dev:$1|$2" >/dev/null
+  ccurl -s -b "$3" -c "$3" -X POST "$B/auth/session" -H "Authorization: Bearer dev:$1:$2" >/dev/null
 }
 JA="$TMP/a.jar"; JV="$TMP/v.jar"; JP="$TMP/p.jar"; JM="$TMP/m.jar"; JT="$TMP/t.jar"
 login owner@t.io Owner "$JA"
@@ -273,7 +274,7 @@ ORIGIN2="http://127.0.0.1:$PORT2"
 ccurl2() { command curl -H "Origin: $ORIGIN2" -H 'X-Cxt-CSRF: 1' "$@"; }
 ccode2() { code -H "Origin: $ORIGIN2" -H 'X-Cxt-CSRF: 1' "$@"; }
 for i in $(seq 1 20); do [ "$(code "$B2/repos")" = 200 ] && break; sleep 0.3; done
-J2="$TMP/w2.jar"; ccurl2 -s -c "$J2" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:wh@t.io|Wh" >/dev/null
+J2="$TMP/w2.jar"; ccurl2 -s -c "$J2" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:wh@t.io:Wh" >/dev/null
 WS2=$(ccurl2 -sb "$J2" -X POST "$B2/workspaces" -H 'Content-Type: application/json' -d '{"name":"WhTest"}' | jget "['id']")
 OWN2=$(curl -sb "$J2" "$B2/me" | jget "['username']")
 SLUG2=$(curl -sb "$J2" "$B2/workspaces" | jget "[0]['slug']")
@@ -291,7 +292,7 @@ ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/secrets" -H 'Content-Type: application/
 for i in $(seq 1 25); do [ "$(hits)" -ge 2 ] && break; sleep 0.2; done
 expect "Secret update webhook delivery" "$(hits)" 2
 INV2=$(ccurl2 -sb "$J2" -X POST "$B2/workspaces/$WS2/invites" -H 'Content-Type: application/json' -d '{"role":"member"}' | jget "['token']")
-J3="$TMP/w3.jar"; ccurl2 -s -c "$J3" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:joiner@t.io|Joiner" >/dev/null
+J3="$TMP/w3.jar"; ccurl2 -s -c "$J3" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:joiner@t.io:Joiner" >/dev/null
 ccurl2 -sb "$J3" -X POST "$B2/invites/$INV2/accept" >/dev/null
 for i in $(seq 1 25); do [ "$(hits)" -ge 3 ] && break; sleep 0.2; done
 expect "Member join webhook delivery" "$(hits)" 3
@@ -306,7 +307,7 @@ expect "CORS: localhost origin is reflected" "$(curl -s -H 'Origin: http://local
 expect "Content-Type forced 415" "$(ccode -b "$JA" -X POST "$B/workspaces" -H 'Content-Type: text/plain' -d '{"name":"Csrf"}')" 415
 expect "Reserved username 409" "$(ccode -b "$JA" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"username":"api"}')" 409
 expect "device: wrong poll_token 404" "$(S=$(curl -s -X POST "$B/auth/device/start" -H 'Content-Type: application/json' -d '{}'); C=$(echo "$S"|jget "['code']"); code -X POST "$B/auth/device/poll" -H 'Content-Type: application/json' -d "{\"code\":\"$C\",\"poll_token\":\"dpoll_x\"}")" 404
-R429=$(for i in $(seq 1 25); do code -X POST "$B/auth/session" -H "Authorization: Bearer dev:rl@t.io|R"; echo; done | grep -c 429)
+R429=$(for i in $(seq 1 25); do code -X POST "$B/auth/session" -H "Authorization: Bearer dev:rl@t.io:R"; echo; done | grep -c 429)
 expect "login rate limit returns at least one 429 in 25 attempts" "$([ "$R429" -ge 1 ] && echo yes)" yes
 
 echo

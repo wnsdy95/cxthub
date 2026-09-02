@@ -77,6 +77,25 @@ func serve(ctx context.Context, args []string) error {
 	dataDir := flagOr(args, "--data", os.Getenv("CXT_DATA"), "./cxt-data")
 	dsn := os.Getenv("CXT_POSTGRES_DSN")
 
+	// Resolve and validate authentication before opening either storage backend.
+	// In particular, an unsafe dev-auth bind must fail without touching the FS
+	// store or running PostgreSQL migrations first.
+	var verifier outbound.IdentityVerifier
+	authMode := "dev"
+	if os.Getenv("CXT_AUTH") == "firebase" && os.Getenv("CXT_FIREBASE_PROJECT") != "" {
+		verifier = auth.NewFirebaseVerifier(os.Getenv("CXT_FIREBASE_PROJECT"))
+		authMode = "firebase:" + os.Getenv("CXT_FIREBASE_PROJECT")
+	} else {
+		// Dev validator accepts any token — a safety measure to prevent accidental external exposure:
+		// to bind to an address other than loopback, explicitly start with CXT_AUTH=dev.
+		if !isLoopback(addr) && os.Getenv("CXT_AUTH") != "dev" {
+			log.Fatalf("refusing to bind dev authentication to external address %s — "+
+				"set CXT_AUTH=firebase and CXT_FIREBASE_PROJECT, or explicitly opt in with CXT_AUTH=dev", addr)
+		}
+		verifier = auth.NewDevVerifier()
+		log.Printf("warning: dev authentication trusts every token without verification (local development only)")
+	}
+
 	// Outbound adapter: store.Open returns FSStore or PostgresStore according to build tags and DSN.
 	st, err := store.Open(dataDir, dsn)
 	if err != nil {
@@ -104,23 +123,6 @@ func serve(ctx context.Context, args []string) error {
 	engine := gitengine.NewEngine(st) // GitEngine computes DAG reachability from parent metadata.
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), engine, st)
 
-	// Auth validator: CXT_AUTH=firebase + CXT_FIREBASE_PROJECT for Firebase ID token validation,
-	// otherwise local/demo dev validator ("dev:<email>" token).
-	var verifier outbound.IdentityVerifier
-	authMode := "dev"
-	if os.Getenv("CXT_AUTH") == "firebase" && os.Getenv("CXT_FIREBASE_PROJECT") != "" {
-		verifier = auth.NewFirebaseVerifier(os.Getenv("CXT_FIREBASE_PROJECT"))
-		authMode = "firebase:" + os.Getenv("CXT_FIREBASE_PROJECT")
-	} else {
-		// Dev validator accepts any token — a safety measure to prevent accidental external exposure:
-		// to bind to an address other than loopback, explicitly start with CXT_AUTH=dev.
-		if !isLoopback(addr) && os.Getenv("CXT_AUTH") != "dev" {
-			log.Fatalf("refusing to bind dev authentication to external address %s — "+
-				"set CXT_AUTH=firebase and CXT_FIREBASE_PROJECT, or explicitly opt in with CXT_AUTH=dev", addr)
-		}
-		verifier = auth.NewDevVerifier()
-		log.Printf("warning: dev authentication trusts every token without verification (local development only)")
-	}
 	idSvc := app.NewIdentityService(verifier, st)
 
 	api := delivery.NewServer(svc, idSvc)

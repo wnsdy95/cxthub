@@ -34,6 +34,7 @@ try {
       outfile,
       platform: 'node',
       target: 'node20',
+      define: { 'import.meta.env': '{}' },
     });
     await import(pathToFileURL(outfile).href);
   }

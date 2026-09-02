@@ -8,6 +8,12 @@ export interface GraphSnapshotStatus {
   uncommitted: Set<string>;
   archivedOnly: Set<string>;
   archivedBranches: number;
+  archived: Array<{
+    branch: string;
+    target: string;
+    uniqueCount: number;
+    targetAvailable: boolean;
+  }>;
 }
 
 /** Classifies every rendered graph snapshot into one workflow tier. Archived
@@ -35,6 +41,13 @@ export function classifyGraphSnapshots(
   const archivedOnly = new Set(
     [...archivedReachable].filter((id) => ids.has(id) && !activeReachable.has(id)),
   );
+  const archived = markers.map((marker) => ({
+    ...marker,
+    uniqueCount: [...reachableSnapshotIds([marker.target], snapshots)].filter(
+      (id) => ids.has(id) && !activeReachable.has(id),
+    ).length,
+    targetAvailable: ids.has(marker.target),
+  }));
   const uncommitted = new Set(
     [...uncommittedInput].filter((id) => ids.has(id) && !shared.has(id)),
   );
@@ -51,5 +64,5 @@ export function classifyGraphSnapshots(
       )
       .map((snapshot) => snapshot.id),
   );
-  return { pushed, unpushed, uncommitted, archivedOnly, archivedBranches: markers.length };
+  return { pushed, unpushed, uncommitted, archivedOnly, archivedBranches: markers.length, archived };
 }

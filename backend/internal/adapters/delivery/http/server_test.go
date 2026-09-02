@@ -76,7 +76,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 }
 
 func doJSON(t *testing.T, method, url string, body any, out any) int {
-	return doJSONAs(t, "dev:test@t.io|Test", method, url, body, out)
+	return doJSONAs(t, "dev:test@t.io:Test", method, url, body, out)
 }
 
 func doJSONAs(t *testing.T, token, method, url string, body any, out any) int {
@@ -669,9 +669,9 @@ func TestRepoRegistrationIsWorkspaceScopedNotGitURLScoped(t *testing.T) {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
-	const aliceToken = "dev:alice@example.com|Alice"
-	const bobToken = "dev:bob@example.com|Bob"
-	const charlieToken = "dev:charlie@example.com|Charlie"
+	const aliceToken = "dev:alice@example.com:Alice"
+	const bobToken = "dev:bob@example.com:Bob"
+	const charlieToken = "dev:charlie@example.com:Charlie"
 	const gitURL = "git@github.com:acme/shared-orders.git"
 
 	var alice meResponse
@@ -933,7 +933,7 @@ func TestContentTypeGuard(t *testing.T) {
 	defer ts.Close()
 	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded"} {
 		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/workspaces", strings.NewReader(`{"name":"ctx"}`))
-		req.Header.Set("Authorization", "Bearer dev:ct@t.io|CT")
+		req.Header.Set("Authorization", "Bearer dev:ct@t.io:CT")
 		if ct != "" {
 			req.Header.Set("Content-Type", ct)
 		}

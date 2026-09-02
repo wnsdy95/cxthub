@@ -58,7 +58,7 @@ SRV_PID=$!
 for i in $(seq 1 30); do curl -sf -o /dev/null "$B/repos" && break; sleep 0.3; done
 
 J="$TMP/a.jar"
-ccurl -s -c "$J" -X POST "$B/auth/session" -H "Authorization: Bearer dev:o@t.io|O" >/dev/null
+ccurl -s -c "$J" -X POST "$B/auth/session" -H "Authorization: Bearer dev:o@t.io:O" >/dev/null
 ccurl -sb "$J" -X POST "$B/workspaces" -H 'Content-Type: application/json' -d '{"name":"SyncE2E"}' >/dev/null
 OWN=$(curl -sb "$J" "$B/me" | jget "['username']")
 SLUG=$(curl -sb "$J" "$B/workspaces" | jget "[0]['slug']")

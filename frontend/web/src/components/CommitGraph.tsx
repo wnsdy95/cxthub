@@ -1,7 +1,8 @@
 // CommitGraph — GitHub network graph style commit tree.
 // Text-free pure graph: lane colors, top branch labels, node tooltips on hover, viewer integration on click.
 // Lane layout is handled in graph.ts (pure function), this file renders only the SVG.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Ref, Snapshot } from '../types';
 import { layoutGraph, mainlineOf, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { sharedReachable } from '../onhold';
@@ -11,6 +12,7 @@ import { useT } from '../i18n';
 
 const LANE_W = 22; // Lane width
 const ROW_H = 26; // Row height (text-free — compact)
+const HEAD_H = 44; // Sticky lane-label area; kept in sync with .graph-head.
 const R = 4.5; // Node radius
 
 // Cycle lane colors (ink + desaturated colors).
@@ -28,6 +30,19 @@ const TICK = '#8a919e';
 // Compression boundary — nodes where the context window is compressed within the same session. Unlike session boundaries (edge ticks),
 // the sequence does not break, so nodes are marked with a separate ring (different color from graft seam).
 const COMPACT = '#8957e5';
+
+function occupiedLanes(row: {
+  lane: number;
+  incoming: (string | null)[];
+  outgoing: (string | null)[];
+}): number[] {
+  const lanes: number[] = [];
+  const count = Math.max(row.lane + 1, row.incoming.length, row.outgoing.length);
+  for (let lane = 0; lane < count; lane++) {
+    if (lane === row.lane || row.incoming[lane] || row.outgoing[lane]) lanes.push(lane);
+  }
+  return lanes;
+}
 
 // Internal session ref includes branch byte length as a separate component to prevent prefix comparison from misidentifying as a git branch.
 function sessionRefPrefix(branch: string): string {
@@ -300,29 +315,130 @@ export function CommitGraph({
   }, [tip]);
   const tipRow = tip ? rows.find((r) => r.snap.id === tip.id) : null;
 
-  // Track label: topmost (latest) node of each track — ref badge (branch name) first, then snapshot label.
-  // Pin track (default branch) has fixed label — append promotion after main ref points to the snapshot of the feature birth label, making the left track read as main.
-  const laneLabels = useMemo(() => {
-    type LaneLabel = { text: string; archived: boolean };
-    const labels: (LaneLabel | null)[] = Array(laneCount).fill(null);
-    if (pinHead && pinBranch && rows.some((r) => r.lane === 0 && r.snap.id === pinHead)) {
-      labels[0] = { text: pinBranch, archived: false };
-    }
-    for (const r of rows) {
-      if (labels[r.lane] !== null) continue;
-      const rowBadges = badges.get(r.snap.id) ?? [];
+  type LaneLabel = { text: string; archived: boolean };
+  const [laneTip, setLaneTip] = useState<
+    (LaneLabel & { top: number; left?: number; right?: number; below: boolean; color: string }) | null
+  >(null);
+  function showLaneTip(label: LaneLabel, lane: number, element: HTMLElement) {
+    if (label.text.length <= 6) return;
+    const rect = element.getBoundingClientRect();
+    const anchorRight = rect.left > window.innerWidth / 2;
+    const below = rect.top < 48;
+    setLaneTip({
+      ...label,
+      top: below ? rect.bottom + 6 : rect.top - 6,
+      left: anchorRight ? undefined : Math.max(8, rect.left),
+      right: anchorRight ? Math.max(8, window.innerWidth - rect.right) : undefined,
+      below,
+      color: label.archived ? TICK : laneColor(lane),
+    });
+  }
+  useEffect(() => {
+    if (!laneTip) return;
+    const clear = () => setLaneTip(null);
+    window.addEventListener('scroll', clear, true);
+    window.addEventListener('resize', clear);
+    return () => {
+      window.removeEventListener('scroll', clear, true);
+      window.removeEventListener('resize', clear);
+    };
+  }, [laneTip]);
+
+  const labelForSnapshot = useMemo(() => {
+    return (snapshot: Snapshot, lane: number): LaneLabel => {
+      const rowBadges = badges.get(snapshot.id) ?? [];
       const branchBadge =
-        (pinBranch ? rowBadges.find((b) => b.kind === 'branch' && b.name === pinBranch && r.lane === 0) : undefined) ??
-        rowBadges.find((b) => b.kind === 'branch');
-      const archivedBadge = rowBadges.find((b) => b.kind === 'archived');
-      labels[r.lane] = branchBadge
+        (pinBranch && lane === 0
+          ? rowBadges.find((badge) => badge.kind === 'branch' && badge.name === pinBranch)
+          : undefined) ?? rowBadges.find((badge) => badge.kind === 'branch');
+      const archivedBadge = rowBadges.find((badge) => badge.kind === 'archived');
+      return branchBadge
         ? { text: branchBadge.name, archived: false }
         : archivedBadge
           ? { text: t('graph.archivedLane', { branch: archivedBadge.name }), archived: true }
-          : { text: r.snap.branch ?? '', archived: false };
+          : { text: snapshot.branch ?? '', archived: false };
+    };
+  }, [badges, pinBranch, t]);
+
+  // Lane numbers are reusable after a line ends. Preserve the label belonging
+  // to each active segment, then replace it when a later session reuses the
+  // same lane instead of leaking the old branch name down the graph.
+  const laneLabelsByRow = useMemo(() => {
+    let active: (LaneLabel | null)[] = Array(laneCount).fill(null);
+    if (pinHead && pinBranch && rows.some((row) => row.lane === 0 && row.snap.id === pinHead)) {
+      active[0] = { text: pinBranch, archived: false };
+    }
+    return rows.map((row) => {
+      if (active[row.lane] === null || row.incoming[row.lane] !== row.snap.id) {
+        active[row.lane] = labelForSnapshot(row.snap, row.lane);
+      }
+      const current = [...active];
+      for (const lane of row.branchesOut) {
+        const parent = byId.get(row.outgoing[lane] ?? '');
+        current[lane] = parent ? labelForSnapshot(parent, lane) : labelForSnapshot(row.snap, lane);
+      }
+      active = row.outgoing.map((target, lane) => (target ? current[lane] ?? null : null));
+      return current;
+    });
+  }, [rows, laneCount, pinHead, pinBranch, labelForSnapshot, byId]);
+
+  // The labels are a viewport overlay for the graph lines, not a separate
+  // always-on legend. Keep only labels whose lane has a visible node/segment.
+  // Horizontal clipping and movement are handled by placing the label header
+  // in the same scroll canvas as the SVG rows below.
+  const graphViewportRef = useRef<HTMLDivElement>(null);
+  const [visibleRows, setVisibleRows] = useState<Set<number> | null>(null);
+  useEffect(() => {
+    const viewport = graphViewportRef.current;
+    // Do not project row indices from the previous repo/layout onto this one
+    // while the new observer is collecting its first intersections.
+    setVisibleRows(null);
+    if (!viewport || typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const intersectingRows = new Set<number>();
+    const publish = () => {
+      const next = new Set(intersectingRows);
+      setVisibleRows((current) => {
+        if (current && current.size === next.size && [...current].every((row) => next.has(row))) return current;
+        return next;
+      });
+    };
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const rowIndex = Number((entry.target as HTMLElement).dataset.graphRowIndex);
+          if (!Number.isInteger(rowIndex)) continue;
+          if (entry.isIntersecting) intersectingRows.add(rowIndex);
+          else intersectingRows.delete(rowIndex);
+        }
+        publish();
+      },
+      {
+        root: viewport,
+        // A row hidden behind the sticky label header is not graph-visible.
+        rootMargin: `-${HEAD_H}px 0px 0px 0px`,
+        threshold: 0.01,
+      },
+    );
+    viewport.querySelectorAll<HTMLElement>('[data-graph-row-index]').forEach((row) => observer.observe(row));
+    return () => observer.disconnect();
+  }, [rows]);
+  const laneLabels = useMemo(() => {
+    const labels: (LaneLabel | null)[] = Array(laneCount).fill(null);
+    const rowIndices = visibleRows === null
+      ? rows.map((_row, index) => index)
+      : [...visibleRows].sort((left, right) => left - right);
+    for (const rowIndex of rowIndices) {
+      const row = rows[rowIndex];
+      if (!row) continue;
+      for (const lane of occupiedLanes(row)) {
+        if (labels[lane] === null) labels[lane] = laneLabelsByRow[rowIndex]?.[lane] ?? null;
+      }
     }
     return labels;
-  }, [rows, laneCount, badges, pinHead, pinBranch, t]);
+  }, [rows, laneCount, laneLabelsByRow, visibleRows]);
 
   return (
     <div className="graph-wrap">
@@ -336,48 +452,88 @@ export function CommitGraph({
         <span className="graph-status-item uncommitted">
           <i aria-hidden="true" /> {t('graph.uncommittedCount', { count: status.uncommitted.size })}
         </span>
-        {status.archivedOnly.size > 0 && (
-          <button
-            type="button"
-            className="graph-archive-toggle"
-            aria-pressed={archivedVisible}
-            title={t('graph.archivedBranchesTitle', { count: status.archivedBranches })}
-            onClick={() => {
-              if (archivedVisible) {
-                if (selectedArchived) {
-                  const fallback = pinHead ?? snapshots.find((snapshot) => !status.archivedOnly.has(snapshot.id))?.id;
-                  if (fallback) onSelect(fallback);
+      </div>
+      {status.archived.length > 0 && (
+        <details className="graph-archive-panel">
+          <summary title={t('graph.archivedBranchesTitle', { count: status.archivedBranches })}>
+            {t('graph.archivedBranchList', { count: status.archived.length })}
+          </summary>
+          <ul className="graph-archive-list">
+            {status.archived.map((item) => (
+              <li key={`${item.branch}:${item.target}`}>
+                <button
+                  type="button"
+                  className="graph-archive-entry"
+                  disabled={!item.targetAvailable}
+                  aria-label={t('graph.openArchivedBranch', { branch: item.branch })}
+                  onClick={() => {
+                    setShowArchived(true);
+                    onSelect(item.target);
+                  }}
+                >
+                  <span title={item.branch}>⊟ {item.branch}</span>
+                  <code>{item.target.replace(/^sha256:/, '').slice(0, 10)}</code>
+                  <em>
+                    {!item.targetAvailable
+                      ? t('graph.archivedBranchUnavailable')
+                      : item.uniqueCount > 0
+                        ? t('graph.archivedBranchUnique', { count: item.uniqueCount })
+                        : t('graph.archivedBranchShared')}
+                  </em>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {status.archivedOnly.size > 0 && (
+            <button
+              type="button"
+              className="graph-archive-toggle"
+              aria-pressed={archivedVisible}
+              onClick={() => {
+                if (archivedVisible) {
+                  if (selectedArchived) {
+                    const fallback = pinHead ?? snapshots.find((snapshot) => !status.archivedOnly.has(snapshot.id))?.id;
+                    if (fallback) onSelect(fallback);
+                  }
+                  setShowArchived(false);
+                } else {
+                  setShowArchived(true);
                 }
-                setShowArchived(false);
-              } else {
-                setShowArchived(true);
-              }
-            }}
-          >
-            {archivedVisible
-              ? t('graph.hideArchived', { count: status.archivedOnly.size })
-              : t('graph.showArchived', { count: status.archivedOnly.size })}
-          </button>
-        )}
-      </div>
-      {/* Top: branch labels per track (track color, tilt — to prevent overlap) */}
-      <div className="graph-head" style={{ width: svgW }}>
-        {laneLabels.map((label, i) =>
-          label?.text ? (
-            <span
-              key={i}
-              className={`graph-lane-label${label.archived ? ' archived' : ''}${label.text.length > 6 ? ' truncated' : ''}`}
-              style={{ left: cx(i), color: label.archived ? TICK : laneColor(i) }}
+              }}
             >
-              {/* Truncate after 6 characters (to prevent overflow) — show full name as background chip on hover */}
-              <span className="lane-label-short">{label.text.length > 6 ? label.text.slice(0, 6) + '…' : label.text}</span>
-              {label.text.length > 6 && <span className="lane-label-full">{label.text}</span>}
-            </span>
-          ) : null,
-        )}
-      </div>
+              {archivedVisible
+                ? t('graph.hideArchived', { count: status.archivedOnly.size })
+                : t('graph.showArchived', { count: status.archivedOnly.size })}
+            </button>
+          )}
+        </details>
+      )}
+      <div className="graph-viewport" ref={graphViewportRef}>
+        <div className="graph-canvas" style={{ width: svgW }}>
+          {/* Top: branch labels per currently visible track. The header and SVG rows share one scroll canvas. */}
+          <div className="graph-head">
+            {laneLabels.map((label, i) =>
+              label?.text ? (
+                <span
+                  key={i}
+                  data-graph-lane={i}
+                  className={`graph-lane-label${label.archived ? ' archived' : ''}${label.text.length > 6 ? ' truncated' : ''}`}
+                  style={{ left: cx(i), color: label.archived ? TICK : laneColor(i) }}
+                  tabIndex={label.text.length > 6 ? 0 : undefined}
+                  aria-label={label.text.length > 6 ? label.text : undefined}
+                  onMouseEnter={(event) => showLaneTip(label, i, event.currentTarget)}
+                  onMouseLeave={() => setLaneTip(null)}
+                  onFocus={(event) => showLaneTip(label, i, event.currentTarget)}
+                  onBlur={() => setLaneTip(null)}
+                >
+                  {/* Truncate after 6 characters; the unclipped portal tooltip shows the full name on hover/focus. */}
+                  <span className="lane-label-short">{label.text.length > 6 ? label.text.slice(0, 6) + '…' : label.text}</span>
+                </span>
+              ) : null,
+            )}
+          </div>
 
-      <ul className="graph">
+          <ul className="graph">
         {rows.map((r, rowIdx) => {
           const x = cx(r.lane);
           const mid = ROW_H / 2;
@@ -388,7 +544,15 @@ export function CommitGraph({
             // Parent (join target) row upper half: Dark→Rainbow gradient on entry.
             if (seams.has(`${r.lane}:${r.snap.id}`)) {
               defs.push(
-                <linearGradient key="gin" id={`seam-in-${rid}`} x1="0" y1="0" x2="0" y2="1">
+                <linearGradient
+                  key="gin"
+                  id={`seam-in-${rid}`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={x}
+                  y1={0}
+                  x2={x}
+                  y2={mid}
+                >
                   <stop offset="0%" stopColor={SEAM} />
                   <stop offset="100%" stopColor={laneColor(r.lane)} />
                 </linearGradient>,
@@ -404,7 +568,15 @@ export function CommitGraph({
             // Grafted node row lower half: Rainbow→Dark gradient on exit (new context start point).
             if (seams.has(`${r.lane}:${r.outgoing[r.lane]}`)) {
               defs.push(
-                <linearGradient key="gout" id={`seam-out-${rid}`} x1="0" y1="0" x2="0" y2="1">
+                <linearGradient
+                  key="gout"
+                  id={`seam-out-${rid}`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={x}
+                  y1={mid}
+                  x2={x}
+                  y2={ROW_H}
+                >
                   <stop offset="0%" stopColor={laneColor(r.lane)} />
                   <stop offset="100%" stopColor={SEAM} />
                 </linearGradient>,
@@ -479,6 +651,8 @@ export function CommitGraph({
           return (
             <li key={r.snap.id}>
               <button
+                data-graph-row-index={rowIdx}
+                data-graph-node-lane={r.lane}
                 className={`graph-row${sel ? ' on' : ''}${dropRow === r.snap.id ? ' drop-target' : ''}${dragId === r.snap.id ? ' dragging' : ''}${dragId && droppable.has(r.snap.id) ? ' droppable' : ''}`}
                 onClick={() => onSelect(r.snap.id)}
                 onMouseEnter={(e) => showTip(r.snap.id, e.currentTarget)}
@@ -538,7 +712,9 @@ export function CommitGraph({
           );
         })}
         {rows.length === 0 && <li className="ws-empty">{t('graph.noCommits')}</li>}
-      </ul>
+          </ul>
+        </div>
+      </div>
 
       {dragHint && <div className="join-hint">{dragHint}</div>}
 
@@ -615,6 +791,17 @@ export function CommitGraph({
           ) : null}
         </div>
       )}
+      {laneTip &&
+        createPortal(
+          <span
+            className={`graph-lane-tip${laneTip.below ? ' below' : ''}${laneTip.archived ? ' archived' : ''}`}
+            role="tooltip"
+            style={{ top: laneTip.top, left: laneTip.left, right: laneTip.right, color: laneTip.color }}
+          >
+            {laneTip.text}
+          </span>,
+          document.body,
+        )}
     </div>
   );
 }
