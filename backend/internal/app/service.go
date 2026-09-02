@@ -962,7 +962,7 @@ func (s *Service) snapshotBranchMemberships(ctx context.Context, repoID domain.C
 	return members, nil
 }
 
-// Fsck: reference reachability audit (read-only, git fsck equivalent). Creates a reachability set by following parents from all refs and reports dangling snapshots, missing parent references (corruption), and parentless roots. Does not fix anything — parentless roots are treated as normal roots (not artificially attaching parents).
+// Fsck: reference reachability audit (read-only, git fsck equivalent). Creates a reachability set by following parents from all refs and pending sessions, then reports unreferenced snapshots, missing parent references (corruption), and parentless roots. Unreferenced snapshots remain stored and are not necessarily corrupt. Does not fix anything — parentless roots are treated as normal roots (not artificially attaching parents).
 func (s *Service) Fsck(ctx context.Context, repoID domain.ContentHash) (inbound.FsckReport, error) {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return inbound.FsckReport{}, err

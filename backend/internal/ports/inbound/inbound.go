@@ -351,6 +351,6 @@ type FsckReport struct {
 	Total           int                  `json:"total"`            // Total number of snapshots
 	Reachable       int                  `json:"reachable"`        // Number of snapshots reachable from any ref
 	Roots           []domain.ContentHash `json:"roots"`            // Snapshots without parents (normal roots)
-	Unreachable     []domain.ContentHash `json:"unreachable"`      // Snapshots that cannot be reached (dangling/lost)
+	Unreachable     []domain.ContentHash `json:"unreachable"`      // Stored snapshots not reachable from current refs or pending sessions
 	DanglingParents []DanglingParent     `json:"dangling_parents"` // Non-existent parent references (corrupted)
 }

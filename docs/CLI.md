@@ -602,7 +602,10 @@ cxt fsck
 ```
 
 Runs a read-only server audit for reachability, roots, unreachable snapshots,
-and missing parents. Requires a configured remote.
+and missing parents. An unreachable snapshot remains stored but is not
+referenced by a current ref or pending session; this can include superseded
+captures or intentionally detached history. A missing parent is the structural
+integrity error. Requires a configured remote.
 
 ### `cxt reflog`
 
