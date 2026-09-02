@@ -199,19 +199,46 @@ export function About({ repo, canEdit }: { repo: Repo; canEdit: boolean }) {
 
 
 // TeamSettings manages shared .claude/.agents/.codex defaults in the side rail.
-// Pullers can view status and download; the upload control requires canWrite.
-export function TeamSettings({ repoId, canWrite }: { repoId: string; canWrite: boolean }) {
+// Pullers can view status and download. Public workspaces keep the management
+// affordance visible, but deny it before mounting the dialog when canWrite is false.
+export function TeamSettings({
+  repoId,
+  canWrite,
+  showLockedControl = false,
+}: {
+  repoId: string;
+  canWrite: boolean;
+  showLockedControl?: boolean;
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [denied, setDenied] = useState(false);
   return (
     <div className="side-sec">
       <div className="about-head">
         <span className="label">{t('about.teamSettings')}</span>
-        {canWrite && <GearBtn label={t('about.uploadTeamSettings')} onClick={() => setOpen(true)} />}
+        {(canWrite || showLockedControl) && (
+          <GearBtn
+            label={t('about.uploadTeamSettings')}
+            onClick={() => {
+              if (!canWrite) {
+                setDenied(true);
+                return;
+              }
+              setDenied(false);
+              setOpen(true);
+            }}
+          />
+        )}
       </div>
       <SettingsRow repoId={repoId} kind="claude" />
       <SettingsRow repoId={repoId} kind="agents" />
       <SettingsRow repoId={repoId} kind="codex" />
+      {denied && (
+        <p className="err slot-msg" role="alert">
+          {t('about.teamSettingsAccessDenied')}
+        </p>
+      )}
 
       {open && (
         <Portal>
@@ -338,7 +365,15 @@ function SettingsSlot({ repoId, kind }: { repoId: string; kind: 'claude' | 'agen
 // the settings modal. Plaintext, passphrases, and keys never leave the browser. Only a
 // PBKDF2 (600k) + AES-256-GCM envelope reaches the server, and teammates decrypt it with
 // `cxt secrets pull -p <pw>`.
-export function SecretsPanel({ repoId, canWrite }: { repoId: string; canWrite: boolean }) {
+export function SecretsPanel({
+  repoId,
+  canWrite,
+  showLockedControl = false,
+}: {
+  repoId: string;
+  canWrite: boolean;
+  showLockedControl?: boolean;
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [lines, setLines] = useState('');
@@ -486,7 +521,19 @@ export function SecretsPanel({ repoId, canWrite }: { repoId: string; canWrite: b
     <div className="side-sec">
       <div className="about-head">
         <span className="label">.cxtsecrets</span>
-        {canWrite && <GearBtn label={t('about.secretsSettings')} onClick={() => setOpen(true)} />}
+        {(canWrite || showLockedControl) && (
+          <GearBtn
+            label={t('about.secretsSettings')}
+            onClick={() => {
+              if (!canWrite) {
+                setMsg(t('about.secretsSettingsAccessDenied'));
+                return;
+              }
+              setMsg(null);
+              setOpen(true);
+            }}
+          />
+        )}
       </div>
       <div className="settings-slot">
         <div className="settings-slot-info">
@@ -499,7 +546,11 @@ export function SecretsPanel({ repoId, canWrite }: { repoId: string; canWrite: b
           {busy ? '…' : t('about.saveLocal')}
         </button>
       </div>
-      {!open && msg && <p className={msg.startsWith('✓') ? 'hint ok-msg slot-msg' : 'err slot-msg'}>{msg}</p>}
+      {!open && msg && (
+        <p className={msg.startsWith('✓') ? 'hint ok-msg slot-msg' : 'err slot-msg'} role="alert">
+          {msg}
+        </p>
+      )}
 
       {open && (
         <Portal>

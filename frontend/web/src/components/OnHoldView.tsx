@@ -415,10 +415,18 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
       <aside className="ctx-side">
         <About repo={repo} canEdit={canWriteAsset(role, undefined)} />
         {atLeast(role, 'puller') && (
-          <TeamSettings repoId={repo.id} canWrite={canWriteAsset(role, ws?.settings_policy)} />
+          <TeamSettings
+            repoId={repo.id}
+            canWrite={canWriteAsset(role, ws?.settings_policy)}
+            showLockedControl={ws?.visibility === 'public'}
+          />
         )}
         {atLeast(role, 'puller') && (
-          <SecretsPanel repoId={repo.id} canWrite={canWriteAsset(role, ws?.secrets_policy)} />
+          <SecretsPanel
+            repoId={repo.id}
+            canWrite={canWriteAsset(role, ws?.secrets_policy)}
+            showLockedControl={ws?.visibility === 'public'}
+          />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
         <CommitGraph
