@@ -951,6 +951,51 @@ func TestContentTypeGuard(t *testing.T) {
 	}
 }
 
+func TestServerDoesNotExposeLocalLoad(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	for _, token := range []string{"", "dev:load@t.io:Load"} {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/repos/repo-1/load", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body bytes.Buffer
+		_, _ = body.ReadFrom(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("token %q status = %d, want 404", token, resp.StatusCode)
+		}
+		if strings.Contains(body.String(), "not_implemented") {
+			t.Fatalf("removed load capability still advertised: %s", body.String())
+		}
+	}
+
+	// The route is absent, but cookie-authenticated unsafe requests still pass
+	// through the global CSRF boundary before mux dispatch.
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/repos/repo-1/load", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "removed-load-session"})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cookie-authenticated removed load route status = %d, want 403", resp.StatusCode)
+	}
+}
+
 func TestRateLimitDoesNotCountRejectedRequests(t *testing.T) {
 	s := &Server{}
 	accepted := 0
