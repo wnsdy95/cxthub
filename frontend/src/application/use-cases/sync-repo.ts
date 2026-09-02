@@ -1,7 +1,7 @@
 /**
  * application/use-cases/sync-repo: Synchronize with central server for push/pull operations.
  *
- * domain model inbound SyncRepo / MCP sync_push, sync_pull handling.
+ * REST repository synchronization actions.
  * Used in Sync status (secondary) screen.
  *
  * push/pull protocol (sync protocol):

@@ -101,11 +101,28 @@ func TestMCPProtocolRoundTrip(t *testing.T) {
 	if len(lines) != 6 { // notification is unresponsive — ids 1~6
 		t.Fatalf("Response count %d, want 6: %s", len(lines), out.String())
 	}
+	var initResp struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &initResp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(initResp.Result.Instructions, "read-only") ||
+		!strings.Contains(initResp.Result.Instructions, "explicit cxt CLI") {
+		t.Fatalf("initialize instructions do not describe the MCP boundary: %q", initResp.Result.Instructions)
+	}
 	// tools/list has only 4 read-only items.
 	var toolsResp struct {
 		Result struct {
 			Tools []struct {
-				Name string `json:"name"`
+				Name        string `json:"name"`
+				Annotations struct {
+					ReadOnly    bool `json:"readOnlyHint"`
+					Destructive bool `json:"destructiveHint"`
+					Idempotent  bool `json:"idempotentHint"`
+				} `json:"annotations"`
 			} `json:"tools"`
 		} `json:"result"`
 	}
@@ -115,6 +132,9 @@ func TestMCPProtocolRoundTrip(t *testing.T) {
 	names := map[string]bool{}
 	for _, tl := range toolsResp.Result.Tools {
 		names[tl.Name] = true
+		if !tl.Annotations.ReadOnly || tl.Annotations.Destructive || !tl.Annotations.Idempotent {
+			t.Fatalf("tool %s is not annotated as idempotent non-destructive read-only: %+v", tl.Name, tl.Annotations)
+		}
 	}
 	for _, want := range []string{"context_list", "context_fetch", "memory_load", "context_search"} {
 		if !names[want] {
@@ -135,6 +155,9 @@ func TestMCPProtocolRoundTrip(t *testing.T) {
 	// context_fetch with meta + conversation tail.
 	if !strings.Contains(lines[4], "Fix authentication") || !strings.Contains(lines[4], "Memory Summary") {
 		t.Fatalf("context_fetch result abnormal: %s", lines[4])
+	}
+	if count := strings.Count(lines[4], "## Memory Summary"); count != 1 {
+		t.Fatalf("context_fetch memory section count = %d, want 1: %s", count, lines[4])
 	}
 	// search is remote nil → isError content (not protocol error).
 	if !strings.Contains(lines[5], `"isError":true`) || !strings.Contains(lines[5], "disconnected") {

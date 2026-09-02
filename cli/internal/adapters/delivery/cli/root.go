@@ -7,7 +7,8 @@
 // switch / checkout / fork / load / stash / push / pull / memorize(=memory) / tag /
 // config / login / logout / secrets / settings / hooks / claude·codex(agent wrapper) /
 // git-hook(internal).
-// Unimplemented: memory load(memory is always distill). diff is CLI non-target (web "compare" uses server Diff).
+// There is no separate CLI memory-load command: `cxt memorize` writes memory,
+// while MCP memory_load reads it. Diff remains a web/server action.
 package cli
 
 import (

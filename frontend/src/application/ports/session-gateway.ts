@@ -64,7 +64,7 @@ export interface SessionGateway {
   /**
    * List of snapshots and refs for repo/branch.
    * sync protocol GET /api/v1/repos/{repoId}/snapshots?branch= response.
-   * domain model ListSessions / MCP session_list response.
+   * REST snapshot/ref list response.
    */
   listSessions(input: ListInput): Promise<ListOutput>;
 
@@ -98,28 +98,28 @@ export interface SessionGateway {
 /**
  * Calculate the CIR event delta between two snapshots.
  * sync protocol diff POST endpoint response.
- * domain model DiffSnapshots / MCP session_diff response.
+ * REST DiffSnapshots response.
  */
   diff(input: DiffInput): Promise<DiffOutput>;
 
 /**
  * Fork a new branch from a specified snapshot.
  * sync protocol fork POST endpoint handling.
- * domain model ForkSession / MCP session_fork handling.
+ * REST ForkSession action.
  */
   fork(input: ForkInput): Promise<ForkOutput>;
 
 /**
  * Restore a snapshot to the target provider session.
  * sync protocol load POST endpoint handling.
- * domain model LoadSession / MCP session_load handling.
+ * REST LoadSession action.
  */
   load(input: LoadInput): Promise<LoadOutput>;
 
 /**
  * Integrated checkout of fork (optional) + load.
  * If newBranch is specified, fork from from and then load; otherwise, simple load.
- * compatibility rulesheckoutSession / MCP session_checkout handling.
+ * Client checkout action.
  * sync protocol fork POST + load POST are sequentially synthesized.
  */
   checkout(input: CheckoutInput): Promise<CheckoutOutput>;
@@ -127,7 +127,7 @@ export interface SessionGateway {
 /**
  * [CLI exclusive — disabled on web]
  * Activate a session to distill a MemoryDigest and attach it to the current branch.
- * compatibility rules Memorize / MCP memorize / `cxt memorize` handling.
+ * Client memory-distillation action.
  * POST /api/v1/repos/{repoId}/memorize is not defined in openapi.yaml·backend http, so
  * it is not exposed as a web endpoint. The implementation always throws an error.
  */
@@ -136,14 +136,14 @@ export interface SessionGateway {
 /**
  * Push local snapshot/ref to the central server.
  * sync protocol push negotiation (negotiate→objects→refs) handling.
- * domain model SyncRepo.Push / MCP sync_push handling.
+ * REST synchronization push action.
  */
   syncPush(input: SyncInput): Promise<SyncOutput>;
 
 /**
  * Pull central server changes to the local repository.
  * sync protocol pull negotiation (manifest→objects→ref merge) handling.
- * domain model SyncRepo.Pull / MCP sync_pull handling.
+ * REST synchronization pull action.
  */
   syncPull(input: SyncInput): Promise<SyncOutput>;
 }

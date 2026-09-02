@@ -1,13 +1,14 @@
-# cxt — Codex CLI configuration snippet
+# cxt — Codex host configuration snippet
 #
-# Merge the contents of this file into ~/.codex/config.toml to register the cxt MCP server with Codex.
-# Hook registration is automatically merged by cxt setup (MCP registration will be added to setup after server implementation).
+# Merge this block into ~/.codex/config.toml to register the optional read-only
+# cxt MCP server. Codex desktop, CLI, and IDE clients on the same host share it.
+# Hook registration is separate and is merged automatically by cxt setup.
 #
 # Note: ~/.codex/config.toml may contain sections like [mcp_servers.<name>], [plugins."..."], [projects."<path>"].
 # This block adds the cxt item to the [mcp_servers] section.
 
 # ---------------------------------------------------------------------------
-# MCP Server Registration — cxt stdio MCP Server
+# MCP Server Registration — cxt read-only stdio server
 # ---------------------------------------------------------------------------
 # The cxt binary must be in your $PATH (verify with cxt --version).
 [mcp_servers.cxt]
@@ -27,8 +28,8 @@ args    = ["mcp"]
 # # mcp_servers inherit from global settings.
 
 # ---------------------------------------------------------------------------
-# Team Remote Server Configuration (Optional — can also be set via cxt-specific environment variables)
+# Team Remote Server Configuration (Optional)
 # ---------------------------------------------------------------------------
-# To use cxt push/pull, you need the central server address and team token.
-# CLI setup: cxt config set remote.url https://<your-cxt-server>
-#             cxt config set remote.token cxt_team_<opaque>
+# MCP never pushes or pulls. Configure synchronization with the cxt CLI:
+#   cxt remote add origin https://<host>/<username>/<workspace>
+#   cxt login

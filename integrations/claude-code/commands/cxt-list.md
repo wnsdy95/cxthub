@@ -1,47 +1,9 @@
 # /cxt-list
 
-Retrieve the snapshot and ref list of the current repo/branch.
+List saved CXTHub context commits for the current repository.
 
-The MCP tool `session_list` is called.
+**Execution**: MCP read via `context_list`
 
-## Usage
-
-```
-/cxt-list [branch]
-```
-
-- `branch` (optional): Branch to list. Defaults to the current branch.
-
-## MCP Tool Invocation
-
-**Tool Name**: `session_list`
-
-**Input Example**:
-```json
-{
-  "repo_id": "<current repo ID>",
-  "branch": "main"
-}
-```
-
-**Output Example**:
-```json
-{
-  "snapshots": [
-    {
-      "id": "sha256:<hex>",
-      "branch": "main",
-      "message": "fix sync edge case",
-      "author": { "name": "Alice", "email": "alice@example.com", "team": "acme" },
-      "created_at": "2026-06-29T09:10:00Z",
-      "provider": "claude",
-      "fidelity": "full"
-    }
-  ],
-  "refs": [
-    { "kind": "branch", "name": "main", "target": "sha256:<hex>" }
-  ]
-}
-```
-
-CLI Equivalent Command: `cxt list`
+Interpret `$ARGUMENTS` as an optional branch and optional result limit. Call
+`context_list` with only those fields and summarize the result without changing
+local or remote state.

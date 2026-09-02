@@ -15,7 +15,7 @@ import type {
   TeamIdentity,
 } from '../domain/index.js';
 
-// ── ListSessions (domain model ListSessions / MCP session_list) ─────────
+// ── ListSessions (REST session gateway contract) ───────────────────────
 
 /** Snapshot/ref list query input. */
 export interface ListInput {
@@ -33,7 +33,7 @@ export interface ListOutput {
   refs: Ref[];
 }
 
-// ── DiffSnapshots (domain model DiffSnapshots / MCP session_diff) ──────
+// ── DiffSnapshots (REST diff action contract) ──────────────────────────
 
 /** Diff input for two snapshots. */
 export interface DiffInput {
@@ -62,7 +62,7 @@ export interface DiffOutput {
   changes: DiffEntry[];
 }
 
-// ── ForkSession (domain model ForkSession / MCP session_fork) ──────────
+// ── ForkSession (REST fork action contract) ────────────────────────────
 
 /** Fork input. */
 export interface ForkInput {
@@ -84,7 +84,7 @@ export interface ForkOutput {
   head: ContentHash;
 }
 
-// ── LoadSession (domain model LoadSession / MCP session_load) ──────────
+// ── LoadSession (REST load action contract) ────────────────────────────
 
 /** Session load (restore) input. */
 export interface LoadInput {
@@ -114,7 +114,7 @@ export interface LoadOutput {
   resumeCmd: string;
 }
 
-// ── CheckoutSession (compatibility rules / MCP session_checkout) ──
+// ── CheckoutSession (client action contract) ───────────────────────────
 
 /**
  * Checkout input.
@@ -154,7 +154,7 @@ export interface CheckoutOutput {
   fidelity: FidelityTier;
 }
 
-// ── Memorize (compatibility rules / MCP memorize) ─────────────────
+// ── Memorize (client action contract) ──────────────────────────────────
 
 /**
  * memorize input.
@@ -180,7 +180,7 @@ export interface MemorizeOutput {
   attached: boolean;
 }
 
-// ── SyncRepo (domain model SyncRepo / MCP sync_push, sync_pull) ────────
+// ── SyncRepo (REST synchronization contract) ───────────────────────────
 
 /** Push/pull input. */
 export interface SyncInput {

@@ -1796,7 +1796,7 @@ paths:
       summary: Return event delta of two snapshots (DiffSnapshots)
       description: |
         Calculates and returns the event delta of two snapshots (left, right).
-        Common `DiffSnapshots` server action for the Web UI and CLI.
+        `DiffSnapshots` server action used by the Web UI and other HTTP API clients.
       tags: [actions]
       requestBody:
         required: true

@@ -1,7 +1,7 @@
 /**
  * application/use-cases/diff-snapshots: Use case for CIR event delta between two snapshots.
  *
- * domain model inbound DiffSnapshots / MCP session_diff handling.
+ * REST DiffSnapshots action.
  * Used to construct the change list in Diff view (Screen 4).
  *
  * Dependencies: SessionGateway (port), dto.ts.

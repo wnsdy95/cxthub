@@ -106,7 +106,7 @@ export const ApiRoutes = {
 
 /**
  * POST /api/v1/repos/{repoId}/diff — Snapshot CIR event delta.
- * domain model DiffSnapshots / MCP session_diff response.
+ * DiffSnapshots REST response.
  * (frontend architecture Proposed Path)
  */
   diff: (repoId: string): string =>
@@ -114,14 +114,14 @@ export const ApiRoutes = {
 
 /**
  * POST /api/v1/repos/{repoId}/fork — Branch fork from snapshot.
- * domain model ForkSession / MCP session_fork response.
+ * ForkSession REST response.
  */
   fork: (repoId: string): string =>
     `/api/v1/repos/${encodeURIComponent(repoId)}/fork`,
 
 /**
  * POST /api/v1/repos/{repoId}/load — Restore snapshot to target provider session.
- * domain model LoadSession / MCP session_load response.
+ * LoadSession REST response.
  */
   load: (repoId: string): string =>
     `/api/v1/repos/${encodeURIComponent(repoId)}/load`,

@@ -1,7 +1,7 @@
 /**
  * application/use-cases/load-session: Restore use-case targeting the snapshot as the provider session.
  *
- * domain model inbound LoadSession / MCP session_load response.
+ * REST LoadSession action.
  * Used in the screen (Load action — secondary). Corresponds to "checkout" (domain model).
  *
  * Two recovery modes (data model / domain model):

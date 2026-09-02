@@ -7,14 +7,14 @@ import (
 )
 
 // SaveSession is a use-case port that saves the active session of the current cwd as a snapshot (domain model).
-// Called from MCP session_save / CLI cxt save / hook Stop|SessionEnd.
+// Called from CLI cxt save and automatic capture hooks.
 type SaveSession interface {
 	// Save takes SaveInput, creates a snapshot, and returns SaveOutput.
 	Save(ctx context.Context, in SaveInput) (SaveOutput, error)
 }
 
 // ForkSession is a use-case port that forks a new branch from a specified snapshot (domain model).
-// Called from MCP session_fork / CLI cxt fork.
+// Called from CLI cxt fork.
 // Fork = ref clone (O(1)). The original snapshot/ref is immutable (Invariant F1).
 type ForkSession interface {
 	// Fork takes ForkInput, creates a new branch, and returns ForkOutput.
@@ -54,7 +54,7 @@ type BranchLifecycle interface {
 }
 
 // LoadSession is a use-case port that restores a snapshot to the target provider session file (domain model).
-// Called from MCP session_load / memory_load / CLI cxt load / cxt memory load.
+// Called from CLI cxt load/checkout/fork restoration paths.
 // Mode=full|reconstructed for full-context restoration, Mode=memory for memory-form summary injection.
 type LoadSession interface {
 	// Load takes LoadInput, restores the session, and returns LoadOutput.
@@ -63,14 +63,14 @@ type LoadSession interface {
 }
 
 // ListSessions is a use-case port that retrieves the list of snapshots/refs for repo/branch (domain model).
-// Called from MCP session_list / CLI cxt list.
+// Called from CLI cxt list/log. The read-only MCP projection reads the store directly.
 type ListSessions interface {
 	// List takes ListInput and returns the list of snapshots/refs.
 	List(ctx context.Context, in ListInput) (ListOutput, error)
 }
 
 // SyncRepo is a use-case port for syncing with the central server (domain model).
-// Called by MCP sync_push / sync_pull / CLI cxt push / cxt pull.
+// Called by CLI cxt push/pull and automatic synchronization hooks.
 // ConnectOutput is the result of SyncRepo.Connect.
 type ConnectOutput struct {
 	// Repo is a server-confirmed record. Binds to workspace if WorkspaceID != "" (web display).
@@ -164,14 +164,14 @@ type StashSession interface {
 }
 
 // InitRepo is a use-case port for registering the current repo and creating a local .cxt/ store (compatibility rules).
-// Called by MCP repo_init / CLI cxt init / cxt repo create.
+// Called by CLI cxt setup/init/repo create.
 type InitRepo interface {
 	// Init takes an InitInput and registers the repo and creates a .cxt/ store.
 	Init(ctx context.Context, in InitInput) (InitOutput, error)
 }
 
 // CheckoutSession is a use-case port for restoring the target provider session by integrating fork(+load) (compatibility rules).
-// Called by MCP session_checkout / CLI cxt checkout.
+// Called by CLI cxt checkout/switch and Git branch hooks.
 // If NewBranch != "", fork then load (checkout -b), if NewBranch=="" then simple load (checkout).
 type CheckoutSession interface {
 	// Checkout takes a CheckoutInput, restores the session (forking if needed), and returns a CheckoutOutput.
@@ -179,7 +179,7 @@ type CheckoutSession interface {
 }
 
 // Memorize is a use-case port for distilling the active session into a MemoryDigest and attaching it to the current branch (compatibility rules).
-// Called by MCP memorize / memory_save / CLI cxt memorize.
+// Called by CLI cxt memorize and automatic commit capture.
 type Memorize interface {
 	// Memorize takes a MemorizeInput, distills the active session, attaches it, and returns a MemorizeOutput.
 	Memorize(ctx context.Context, in MemorizeInput) (MemorizeOutput, error)
