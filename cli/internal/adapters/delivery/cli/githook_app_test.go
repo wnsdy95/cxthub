@@ -92,6 +92,9 @@ func TestUnmanagedAppBranchSwitchPreservesProviderSession(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	const sessionID = "12345678-1234-4abc-8def-1234567890ab"
 	sessionDir := filepath.Join(home, ".codex", "sessions", "2026", "08", "31")

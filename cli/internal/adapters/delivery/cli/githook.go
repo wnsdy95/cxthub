@@ -31,6 +31,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/githooks"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -894,7 +895,18 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		return nil
 	}
 	event, args := rest[0], rest[1:]
-	repoRoot := cxtRepoRoot(ctx, cwd)
+	// Git hooks can outlive a removed/partial cxt setup. Repair ignore rules for
+	// any existing directory, but never interpret directory presence alone as
+	// permission to capture. cxt init/setup writes .cxt/HEAD before hooks exist.
+	state := gitctx.InspectContextRoot(ctx, cwd)
+	if !state.GitRepository || !state.Exists {
+		return nil
+	}
+	_ = githooks.EnsureIgnored(state.Root)
+	if !state.Initialized {
+		return nil
+	}
+	repoRoot := state.Root
 
 	switch event {
 	case "ref-prepare":

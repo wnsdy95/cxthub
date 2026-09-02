@@ -40,6 +40,9 @@ func TestAppSessionRegistryIsWorktreeScopedAndNonDestructive(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(primary, ".cxt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(primary, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	const primaryID = "claude-app-thread"
 	const linkedID = "codex-app-thread"

@@ -25,6 +25,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/githooks"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
@@ -598,6 +599,13 @@ func Run(c *Container, args []string) error {
 	case "hooks":
 		switch firstPositional(rest) {
 		case "install":
+			state := gitctx.InspectContextRoot(ctx, cwd)
+			if state.GitRepository && state.Exists {
+				_ = githooks.EnsureIgnored(state.Root)
+			}
+			if !state.GitRepository || !state.Initialized {
+				return fmt.Errorf("cxt repository is not initialized — run 'cxt init' first")
+			}
 			installed, err := githooks.Install(cwd)
 			if err != nil {
 				return err

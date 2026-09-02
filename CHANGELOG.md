@@ -7,6 +7,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep global Codex and Claude lifecycle hooks inert in Git repositories that
+  have not run `cxt init` or `cxt setup`.
+- Preserve and quarantine directory-only `.cxt` residue from older hooks while
+  automatically registering `.cxt/` and `.cxtsecrets` in Git ignore files.
+
 ## [0.1.1] - 2026-07-29
 
 ### Changed

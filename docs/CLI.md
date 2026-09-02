@@ -76,6 +76,12 @@ the exact session and linked worktree, and CXTHub stores all worktrees in the
 primary repository's shared `.cxt`. Concurrent app sessions retain independent
 capture cursors and pending pointers.
 
+Codex's provider hook is global, but cxt activation is not. A Git repository is
+capture-enabled only after `cxt init` or `cxt setup` creates `.cxt/HEAD`.
+Directory-only residue from older hooks is kept intact and automatically added
+to both `.gitignore` and `.git/info/exclude`; it is not treated as an initialized
+context store.
+
 ## Repository and authentication
 
 ### `cxt init`
@@ -547,6 +553,8 @@ post-rewrite
 ```
 
 Existing user hooks are chained and restored on uninstall.
+Installation requires an initialized store (`cxt init` or `cxt setup`) and
+repairs both `.gitignore` and `.git/info/exclude` before writing hook scripts.
 
 After `git pull` or merge, the post-merge hook first fetches new team context
 without moving the active local context ref. A merged branch context is then

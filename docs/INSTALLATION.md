@@ -161,6 +161,13 @@ Code settings are written under the repository's `.claude/` directory. Codex
 hooks are merged into `~/.codex/hooks.json`; Codex may require a one-time `/hooks`
 approval.
 
+The Codex hook registration is global, but capture remains repository opt-in.
+Only `cxt init` or `cxt setup` writes the `.cxt/HEAD` activation marker. In any
+other Git repository the hook is a no-op and does not create `.cxt`. If a
+legacy version left a partial `.cxt` directory behind, the next hook preserves
+its contents, adds `.cxt/` and `.cxtsecrets` to `.gitignore` and
+`.git/info/exclude`, and leaves capture disabled until explicit initialization.
+
 Those lifecycle hooks apply to both provider CLIs and supported app surfaces:
 
 - Codex app and Codex IDE sessions that emit Codex lifecycle hooks;

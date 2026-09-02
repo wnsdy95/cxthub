@@ -9,6 +9,7 @@
 #   D. repo2 commits new session C                              → session boundary metadata
 #   E. repo1 runs post-merge                                    → fetch-only, preserving local refs
 #   F. repo1 pushes after both sides moved                      → automatic rebase-graft
+#   J2. global app hooks in unconnected repositories            → no store creation + residue quarantine
 #   K. oversized single event                                  → v2 bounded push/pull + v1 fallback
 #
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
@@ -486,6 +487,20 @@ cxt setup --no-login >"$TMP/setup2.out" 2>&1
 H2=$(shasum "$HOME/.codex/hooks.json" .claude/settings.json | shasum)
 expect "setup idempotence: hook file unchanged" "$H2" "$H1"
 expect "setup idempotence: already registered reported" "$(grep -c 'already registered' "$TMP/setup2.out")" 2
+
+echo "── J2. Global app hook: unconnected no-op + legacy residue quarantine"
+mkdir -p "$TMP/unconnected"; cd "$TMP/unconnected"; git init -q
+printf '%s' "{\"session_id\":\"unconnected\",\"cwd\":\"$TMP/unconnected\",\"prompt\":\"continue\"}" |
+  cxt hook --provider codex --event UserPromptSubmit
+expect "global app hook does not create .cxt before init" "$([ ! -e .cxt ] && echo yes)" yes
+
+mkdir -p "$TMP/residue"; cd "$TMP/residue"; git init -q; mkdir -p .cxt/capture
+printf '%s' "{\"session_id\":\"legacy-residue\",\"cwd\":\"$TMP/residue\",\"prompt\":\"continue\"}" |
+  cxt hook --provider codex --event UserPromptSubmit
+expect "directory-only residue is not promoted to an initialized store" "$([ ! -e .cxt/HEAD ] && echo yes)" yes
+expect "directory-only residue receives tracked ignore protection" "$(grep -c '^\.cxt/$' .gitignore 2>/dev/null)" 1
+expect "directory-only residue receives local ignore protection" "$(git check-ignore .cxt/probe 2>/dev/null | grep -c '^\.cxt/probe$')" 1
+expect "directory-only residue does not grow capture state" "$(find .cxt -type f | wc -l | tr -d ' ')" 0
 
 echo "── K. Chunk CAS v2: oversized event push/pull + old-client fallback"
 git clone -q "$TMP/bare.git" "$TMP/repo4"

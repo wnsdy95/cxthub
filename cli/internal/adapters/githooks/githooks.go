@@ -119,6 +119,9 @@ func Install(repoRoot string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := EnsureIgnored(repoRoot); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -174,6 +177,19 @@ func Uninstall(repoRoot string) error {
 var cxtIgnoreEntries = []string{
 	".cxt/",       // local context store (snapshots, objects, rewrite map, backup stack)
 	".cxtsecrets", // list of secret values (plaintext) — forbidden in git and cxthub
+}
+
+// EnsureIgnored attempts both the repository-shared and local-only ignore
+// defenses. One successful defense is sufficient to keep Git clean (a
+// read-only or symlinked project .gitignore must not disable otherwise-safe
+// hooks). Lifecycle hooks call this for initialized stores and legacy residue.
+func EnsureIgnored(repoRoot string) error {
+	_, gitignoreErr := EnsureGitignore(repoRoot)
+	excludeErr := EnsureExcluded(repoRoot)
+	if gitignoreErr != nil && excludeErr != nil {
+		return fmt.Errorf("update .gitignore: %v; update git exclude: %w", gitignoreErr, excludeErr)
+	}
+	return nil
 }
 
 // EnsureGitignore appends the cxt commit prohibition list to the bottom of .gitignore.

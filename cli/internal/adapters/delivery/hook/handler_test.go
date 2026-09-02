@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,10 +22,85 @@ func (r *recSave) Save(_ context.Context, in inbound.SaveInput) (inbound.SaveOut
 	return inbound.SaveOutput{SnapshotID: "sha256:x", Branch: "main"}, nil
 }
 
+func hookTestGit(t *testing.T, cwd string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func initHookContext(t *testing.T, repo string) {
+	t.Helper()
+	hookTestGit(t, repo, "init", "-b", "main")
+	if err := os.MkdirAll(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlobalAgentHookDoesNotCreateStoreInUnconnectedGitRepository(t *testing.T) {
+	repo := t.TempDir()
+	hookTestGit(t, repo, "init", "-b", "main")
+	rs := &recSave{}
+	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
+	h.stdin = strings.NewReader(`{"session_id":"unconnected","cwd":"` + repo + `","prompt":"continue"}`)
+	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.calls) != 0 {
+		t.Fatalf("unconnected repository captured: %+v", rs.calls)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".cxt")); !os.IsNotExist(err) {
+		t.Fatalf("global agent hook created .cxt: %v", err)
+	}
+}
+
+func TestGlobalAgentHookQuarantinesDirectoryOnlyResidue(t *testing.T) {
+	repo := t.TempDir()
+	hookTestGit(t, repo, "init", "-b", "main")
+	residue := filepath.Join(repo, ".cxt", "capture")
+	if err := os.MkdirAll(residue, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(residue, "legacy.turn")
+	if err := os.WriteFile(legacy, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rs := &recSave{}
+	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
+	h.stdin = strings.NewReader(`{"session_id":"legacy-residue","cwd":"` + repo + `","prompt":"must not capture"}`)
+	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.calls) != 0 {
+		t.Fatalf("directory-only residue captured: %+v", rs.calls)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".cxt", "HEAD")); !os.IsNotExist(err) {
+		t.Fatalf("hook promoted residue into an initialized store: %v", err)
+	}
+	if got, err := os.ReadFile(legacy); err != nil || string(got) != "keep me\n" {
+		t.Fatalf("legacy residue was mutated: %q, %v", got, err)
+	}
+	ignore, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if err != nil || !strings.Contains(string(ignore), ".cxt/") {
+		t.Fatalf(".gitignore was not repaired: %q, %v", ignore, err)
+	}
+	if got := hookTestGit(t, repo, "check-ignore", ".cxt/probe"); got == "" {
+		t.Fatal("legacy .cxt residue remains visible to git")
+	}
+}
+
 // TestHandlerStopWithPayload fixes the flow where Stop capture continues from the transcript path/cwd (capture path — detection omission path).
 func TestHandlerStopWithPayload(t *testing.T) {
 	cwd := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755)
+	initHookContext(t, cwd)
 	session := filepath.Join(t.TempDir(), "s.jsonl")
 	if err := os.WriteFile(session, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -43,7 +119,7 @@ func TestHandlerStopWithPayload(t *testing.T) {
 // TestHandlerPromptHint fixes the flow from UserPromptSubmit to the next capture message hint.
 func TestHandlerPromptHint(t *testing.T) {
 	cwd := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755)
+	initHookContext(t, cwd)
 	session := filepath.Join(t.TempDir(), "s.jsonl")
 	_ = os.WriteFile(session, []byte("{}\n"), 0o644)
 	rs := &recSave{}
@@ -80,7 +156,7 @@ func TestHandlerUnknownEventNoop(t *testing.T) {
 // The UserPromptSubmit hook consumes its scoped briefing queue and outputs hookSpecificOutput JSON to stdout (model transmission channel), and in the second utterance, nothing is output.
 func TestHandlerBriefingEmission(t *testing.T) {
 	cwd := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755)
+	initHookContext(t, cwd)
 	noticeID := domain.HashContent([]byte("handler pull briefing"))
 	if err := capture.WritePullBriefing(cwd, "main", []domain.ContentHash{noticeID}); err != nil {
 		t.Fatal(err)
@@ -122,7 +198,7 @@ func TestHandlerBriefingEmission(t *testing.T) {
 
 func TestHandlerEmitsOnlyMatchingAppSessionHandoff(t *testing.T) {
 	cwd := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755)
+	initHookContext(t, cwd)
 	const (
 		first  = "11111111-1111-4111-8111-111111111111"
 		second = "22222222-2222-4222-8222-222222222222"
@@ -153,9 +229,7 @@ func TestHandlerTracksOpaqueAppSessionUntilSessionEnd(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if err := os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	initHookContext(t, cwd)
 	const hookSessionID = "codex-thread-opaque-id"
 	const nativeID = "33333333-3333-4333-8333-333333333333"
 	dir := filepath.Join(home, ".codex", "sessions", "2026", "08", "31")
