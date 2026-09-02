@@ -805,7 +805,7 @@ paths:
     get:
       operationId: fsck
       summary: Reference reachability audit (read-only, git fsck response)
-      description: "Calculates the reachability set of parents from all refs, reporting unreachable (dangling) references, non-existent parent references (corruption), and parentless roots. Does not modify anything; parentless roots are treated as normal roots."
+      description: "Calculates parent reachability from all refs and pending sessions. Reports stored snapshots not referenced by those current roots, non-existent parent references (corruption), and parentless roots. Unreachable snapshots remain stored and may be superseded captures or intentionally detached history. Does not modify anything; parentless roots are normal roots."
       tags: [repos]
       responses:
         "200":

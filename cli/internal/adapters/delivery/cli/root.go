@@ -376,7 +376,9 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "fsck":
-		// Reference reachability audit (read-only): The server calculates the reachability set for all refs and reports orphans, missing parents, and roots. No changes are made.
+		// Reference reachability audit (read-only): The server calculates the
+		// reachability set for all refs and pending sessions, then reports
+		// unreferenced snapshots, missing parents, and roots. No changes are made.
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
@@ -390,17 +392,7 @@ func Run(c *Container, args []string) error {
 		if ferr != nil {
 			return ferr
 		}
-		fmt.Printf("Snapshots %d · Reach %d · Roots %d · Orphans %d · Missing %d\n",
-			rep.Total, rep.Reachable, len(rep.Roots), len(rep.Unreachable), len(rep.DanglingParents))
-		for _, u := range rep.Unreachable {
-			fmt.Printf("  orphan (unreachable): %s\n", u)
-		}
-		for _, d := range rep.DanglingParents {
-			fmt.Printf("  corrupt (missing parent): %s → %s\n", d.Snapshot, d.Missing)
-		}
-		if len(rep.Unreachable) == 0 && len(rep.DanglingParents) == 0 {
-			fmt.Println("  ✓ No issues — all snapshots are reachable from refs")
-		}
+		fmt.Print(formatFsckReport(rep))
 		return nil
 
 	case "reflog":
@@ -840,6 +832,34 @@ func Run(c *Container, args []string) error {
 	default:
 		return unknownCommandError(cmd)
 	}
+}
+
+// formatFsckReport deliberately distinguishes reachability from integrity.
+// An unreachable object is still stored and may be a superseded capture or
+// intentionally detached history. A missing parent is the structural
+// corruption class that fsck must call out as an error.
+func formatFsckReport(rep backendclient.FsckReport) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Snapshots %d · Reach %d · Roots %d · Unreachable %d · Missing %d\n",
+		rep.Total, rep.Reachable, len(rep.Roots), len(rep.Unreachable), len(rep.DanglingParents))
+	for _, u := range rep.Unreachable {
+		fmt.Fprintf(&b, "  unreachable (unreferenced): %s\n", u)
+	}
+	for _, d := range rep.DanglingParents {
+		fmt.Fprintf(&b, "  corrupt (missing parent): %s → %s\n", d.Snapshot, d.Missing)
+	}
+
+	if len(rep.Unreachable) == 0 && len(rep.DanglingParents) == 0 {
+		fmt.Fprintln(&b, "  ✓ No issues — all snapshots are referenced and no parents are missing")
+		return b.String()
+	}
+	if len(rep.Unreachable) > 0 {
+		fmt.Fprintln(&b, "  note: unreachable snapshots are preserved; they may be superseded captures or intentionally detached history")
+	}
+	if len(rep.DanglingParents) == 0 {
+		fmt.Fprintln(&b, "  ✓ No missing-parent corruption")
+	}
+	return b.String()
 }
 
 // requireRemote checks if the destination is set before push/pull.
