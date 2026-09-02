@@ -83,6 +83,8 @@ export const ko = {
     memoryBadgeTitle: '저장된 메모리 digest 보유 — 선택하면 이 스냅샷의 원본 기록을 표시합니다',
     archivedBranchBadge: '보관됨 · {branch}',
     archivedBranchTitle: '삭제된 Git 브랜치의 컨텍스트 — 이력은 보존되며 cxt branch restore로 복구할 수 있습니다',
+    joinedBranchBadge: '합류됨 · {branch}',
+    joinedBranchTitle: '기본 브랜치에 합류한 Git 브랜치 — Git ref가 삭제되어도 컨텍스트 계보와 브랜치 이름은 그래프에 남습니다',
     compactSummary: '컨텍스트 압축 요약 (에이전트 생성)',
     cxtSeedSummary: 'cxt 시드 요약 (자동 생성 — 상속 컨텍스트)',
     branchOff: '⎇ 분기 (checkout -b)',

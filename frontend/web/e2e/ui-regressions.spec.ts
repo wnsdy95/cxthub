@@ -785,14 +785,18 @@ test('branch labels exist only for visible graph lanes and share horizontal scro
   expect(second.unexpected).toEqual([]);
 });
 
-test('archived branches stay discoverable even when their history is shared with an active branch', async ({ page }) => {
-  const archivedHead = id('9');
+test('PR-joined branch lanes keep their name while truly deleted branches stay archived', async ({ page }) => {
+  const root = id('8');
+  const joinedHead = id('9');
+  const archivedHead = id('7');
   const snapshots = [
     {
       id: pushedHead,
       repo_id: repoId,
       branch: 'main',
-      parents: [],
+      parents: [root],
+      graft_parents: [joinedHead],
+      grafted: true,
       doc_hash: pushedHead,
       provider: 'codex',
       fidelity: 'full',
@@ -800,15 +804,37 @@ test('archived branches stay discoverable even when their history is shared with
       created_at: '2026-08-31T04:00:00Z',
     },
     {
+      id: joinedHead,
+      repo_id: repoId,
+      branch: 'feature/merged',
+      parents: [root],
+      doc_hash: joinedHead,
+      provider: 'claude',
+      fidelity: 'full',
+      message: 'merged branch history',
+      created_at: '2026-08-31T03:30:00Z',
+    },
+    {
       id: archivedHead,
       repo_id: repoId,
-      branch: 'feature/archived-only',
-      parents: [],
+      branch: 'feature/abandoned',
+      parents: [root],
       doc_hash: archivedHead,
       provider: 'claude',
       fidelity: 'full',
       message: 'archived-only history',
       created_at: '2026-08-31T03:00:00Z',
+    },
+    {
+      id: root,
+      repo_id: repoId,
+      branch: 'main',
+      parents: [],
+      doc_hash: root,
+      provider: 'codex',
+      fidelity: 'full',
+      message: 'shared root',
+      created_at: '2026-08-31T02:00:00Z',
     },
   ];
   const lifecycleRef = (branch: string, target: string, generation: number) => ({
@@ -819,27 +845,34 @@ test('archived branches stay discoverable even when their history is shared with
   });
   const refs = [
     { kind: 'branch', name: 'main', repo_id: repoId, target: pushedHead },
-    lifecycleRef('feature/shared-history', pushedHead, 1),
-    lifecycleRef('feature/archived-only', archivedHead, 2),
+    lifecycleRef('feature/merged', joinedHead, 1),
+    lifecycleRef('feature/abandoned', archivedHead, 2),
   ];
   const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs));
 
+  await expect(page.locator('.graph-row')).toHaveCount(3);
+  const joinedRow = page.locator('.graph-row[aria-label^="merged branch history"]');
+  await expect(joinedRow).toBeVisible();
+  const joinedLane = page.locator('.graph-lane-label[aria-label="feature/merged"]');
+  await expect(joinedLane).toBeVisible();
+  await expect(joinedLane).not.toHaveClass(/archived/);
+  await joinedRow.hover();
+  await expect(page.locator('.graph-tip .tip-badges')).toContainText('joined · feature/merged');
+
   const panel = page.locator('.graph-archive-panel');
-  await expect(panel.locator('summary')).toContainText('Archived branches 2');
+  await expect(panel.locator('summary')).toContainText('Archived branches 1');
   await panel.locator('summary').click();
-  const sharedEntry = panel.locator('.graph-archive-entry').filter({ hasText: 'feature/shared-history' });
-  const uniqueEntry = panel.locator('.graph-archive-entry').filter({ hasText: 'feature/archived-only' });
-  await expect(sharedEntry).toContainText('Shared with an active lineage');
+  await expect(panel).not.toContainText('feature/merged');
+  const uniqueEntry = panel.locator('.graph-archive-entry').filter({ hasText: 'feature/abandoned' });
   await expect(uniqueEntry).toContainText('1 unique commit');
-  await expect(page.locator('.graph-row')).toHaveCount(1);
 
   await uniqueEntry.click();
-  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-row')).toHaveCount(4);
   await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^archived-only history/);
   const hide = panel.locator('.graph-archive-toggle');
   await expect(hide).toContainText('Hide 1 archived');
   await hide.click();
-  await expect(page.locator('.graph-row')).toHaveCount(1);
+  await expect(page.locator('.graph-row')).toHaveCount(3);
   await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^active main head/);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);

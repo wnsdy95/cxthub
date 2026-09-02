@@ -99,7 +99,8 @@ type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug' | 'visi
 export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspace | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead } = useRepoView(repo.id);
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead } =
+    useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
   const [branch, setBranch] = useState<string | null>(null);
@@ -279,10 +280,22 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
                   <span
                     key={b.kind + b.name}
                     className={`ref-badge ${isHead ? 'head' : b.kind}`}
-                    title={b.kind === 'archived' ? t('context.archivedBranchTitle') : undefined}
+                    title={
+                      b.kind === 'archived'
+                        ? t('context.archivedBranchTitle')
+                        : b.kind === 'joined'
+                          ? t('context.joinedBranchTitle')
+                          : undefined
+                    }
                   >
-                    {b.kind === 'tag' ? '⌂ ' : b.kind === 'archived' ? '⊟ ' : ''}
-                    {isHead ? '⌑ head' : b.kind === 'archived' ? t('context.archivedBranchBadge', { branch: b.name }) : b.name}
+                    {b.kind === 'tag' ? '⌂ ' : b.kind === 'archived' ? '⊟ ' : b.kind === 'joined' ? '⎘ ' : ''}
+                    {isHead
+                      ? '⌑ head'
+                      : b.kind === 'archived'
+                        ? t('context.archivedBranchBadge', { branch: b.name })
+                        : b.kind === 'joined'
+                          ? t('context.joinedBranchBadge', { branch: b.name })
+                          : b.name}
                   </span>
                 );
               })}

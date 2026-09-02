@@ -7,7 +7,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import type { User } from './types';
 import { sharedReachable, unsyncChains } from './onhold';
-import { archivedBranchMarkers, parseBranchLifecycleRef, projectBranchRefs } from './branchLifecycle';
+import { parseBranchLifecycleRef, projectBranchRefs } from './branchLifecycle';
+import { classifyBranchHistoryMarkers } from './graphStatus';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseGoogleIdToken, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 
@@ -291,7 +292,7 @@ export function useDismissPending() {
 // useRepoView — single assembly point for repo-derived states shared by context/On Hold views.
 // Ensure "badge count = tab row count" is guaranteed by logic (onhold.ts) and input equality, so
 // exclude stash, hook capture leaves, and badge map must be created here only (review front #2).
-export function useRepoView(repoId: string | null) {
+export function useRepoView(repoId: string | null, primaryBranch?: string) {
   const rawRefs = useRefs(repoId).data ?? [];
   const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);
   const allData = useAllSnapshots(repoId, true).data;
@@ -312,13 +313,13 @@ export function useRepoView(repoId: string | null) {
       list.push({ name: r.name, kind: r.kind });
       m.set(r.target, list);
     }
-    for (const marker of archivedBranchMarkers(refs)) {
+    for (const marker of classifyBranchHistoryMarkers(refs, snapshots, primaryBranch)) {
       const list = m.get(marker.target) ?? [];
-      list.push({ name: marker.branch, kind: 'archived' });
+      list.push({ name: marker.branch, kind: marker.kind });
       m.set(marker.target, list);
     }
     return m;
-  }, [refs]);
+  }, [refs, snapshots, primaryBranch]);
   // Hook capture leaves (hook: prefix) are remnants of progress state — typically excluding graph/AI bar. However, hook snapshots reachable from branch refs (absorbed into commits or directly referenced by ref) are part of the history and are displayed. Just removing the label (message prefix) breaks the commit walk, causing the head to disappear from the graph — the pin line to break and its child pending to appear orphaned (stash-dedup trap, same principle: determination based on reachability).
   const sharedIds = useMemo(() => sharedReachable(refs, snapshots), [refs, snapshots]);
   const committedSnapshots = useMemo(
