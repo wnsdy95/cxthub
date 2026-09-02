@@ -104,6 +104,37 @@ async function openGraph(page: Page, responder: ReturnType<typeof publicWorkspac
   return { pageErrors, unexpected };
 }
 
+test('landing renders every captured product view without placeholders', async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, ({ method, pathname }) => {
+    if (method === 'GET' && pathname === '/api/v1/me') {
+      return { status: 401, body: { error: { message: 'anonymous fixture' } } };
+    }
+    return undefined;
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.shot-placeholder')).toHaveCount(0);
+  await expect(page.locator('.product-shot img')).toHaveCount(6);
+  await expect(page.locator('.landing-nav a')).toHaveText(['Auto-capture', 'Product', 'Security']);
+
+  const expected = ['setup.jpg', 'context.jpg', 'onhold.jpg', 'profile.jpg', 'security.jpg', 'permissions.jpg'];
+  const images = page.locator('.product-shot img');
+  for (let i = 0; i < expected.length; i += 1) {
+    const image = images.nth(i);
+    await image.scrollIntoViewIfNeeded();
+    await expect(image).toHaveAttribute('src', new RegExp(`/landing/${expected[i]}$`));
+    await expect.poll(() => image.evaluate((element) => ({
+      complete: (element as HTMLImageElement).complete,
+      width: (element as HTMLImageElement).naturalWidth,
+      height: (element as HTMLImageElement).naturalHeight,
+    }))).toEqual({ complete: true, width: 1200, height: 700 });
+  }
+
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('profile survives nullable activity arrays and keeps the legend inside the calendar', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, ({ method, pathname }) => {
