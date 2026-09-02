@@ -50,6 +50,7 @@ export const en: Messages = {
     commitGraphTotal: 'Commit graph · {count} total',
     close: 'Close',
     accessDenied: 'Access denied',
+    workspaceUnavailable: 'This workspace is unavailable or private.',
     expand: 'Expand',
     collapse: 'Collapse',
   },

@@ -363,6 +363,37 @@ test('anonymous public settings URL renders access denial instead of workspace c
   expect(unexpected).toEqual([]);
 });
 
+test('signed-in non-member stays on the public workspace route and gets settings denial', async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  const publicApi = publicWorkspaceApi([], []);
+  const unexpected = await installApiFixture(page, (request) => {
+    const { method, pathname } = request;
+    if (method === 'GET' && pathname === '/api/v1/me') {
+      return {
+        body: {
+          id: 'outsider-1',
+          email: 'outsider@example.test',
+          name: 'Outsider',
+          username: 'outsider',
+          nickname: 'Outsider',
+          locale: 'en',
+        },
+      };
+    }
+    if (method === 'GET' && pathname === '/api/v1/workspaces') return { body: [] };
+    return publicApi(request);
+  });
+
+  await page.goto('/alice/cxthub/settings');
+  await expect(page).toHaveURL(/\/alice\/cxthub\/settings$/);
+  await expect(page.getByText('Public view', { exact: true })).toBeVisible();
+  await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
+  await expect(page.locator('.app-side')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('profile survives nullable activity arrays and keeps the legend inside the calendar', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, ({ method, pathname }) => {

@@ -23,7 +23,7 @@ export function PublicBrowse({
   username: string;
   slug: string;
   tab?: WsTab;
-  onLogin: () => void;
+  onLogin?: () => void;
 }) {
   const t = useT();
   const wsQ = useQuery<PublicWorkspace>({
@@ -44,11 +44,12 @@ export function PublicBrowse({
   // private or non-existent — Do not leak existence, redirect to login (no setState during render → effect).
   const notFound = !wsQ.isLoading && !ws;
   useEffect(() => {
-    if (notFound) onLogin();
+    if (notFound) onLogin?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notFound]);
 
-  if (wsQ.isLoading || notFound) return <div className="loading">…</div>;
+  if (wsQ.isLoading || (notFound && onLogin)) return <div className="loading">…</div>;
+  if (notFound) return <div className="loading">{t('common.workspaceUnavailable')}</div>;
   if (!ws) return null;
 
   return (
@@ -65,15 +66,17 @@ export function PublicBrowse({
         <div className="who">
           <LocaleSwitcher />
           <span className="vis-chip">{t('common.publicView')}</span>
-          <button
-            className="ghost"
-            onClick={() => {
-              navigate('/');
-              onLogin();
-            }}
-          >
-            {t('common.signIn')}
-          </button>
+          {onLogin && (
+            <button
+              className="ghost"
+              onClick={() => {
+                navigate('/');
+                onLogin();
+              }}
+            >
+              {t('common.signIn')}
+            </button>
+          )}
         </div>
       </header>
 
