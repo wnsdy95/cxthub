@@ -57,6 +57,9 @@ func TestSessionAffinityUsesSharedStoreFromLinkedWorktree(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(primary, ".cxt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(primary, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	const id = "44444444-4444-4444-8444-444444444444"
 	RecordSessionAffinity(primary, domain.ProviderCodex, id)

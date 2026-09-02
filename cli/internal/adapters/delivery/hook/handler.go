@@ -29,6 +29,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/githooks"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -93,6 +94,23 @@ func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 		path = p.RolloutPath
 	}
 
+	// Codex hooks are registered globally, so they run in every repository.
+	// Repair ignore rules for any existing store (including legacy residue),
+	// then require cxt init/setup's durable HEAD marker before writing capture
+	// state. A bare .cxt directory is not user opt-in.
+	switch event {
+	case "SessionStart", "UserPromptSubmit", "Stop", "SessionEnd":
+	default:
+		return nil
+	}
+	state := gitctx.InspectContextRoot(ctx, cwd)
+	if state.GitRepository && state.Exists {
+		_ = githooks.EnsureIgnored(state.Root)
+	}
+	if !state.GitRepository || !state.Initialized {
+		return nil
+	}
+
 	switch event {
 	case "SessionStart":
 		_ = capture.TrackAppSession(cwd, provider, p.SessionID, path)
@@ -118,9 +136,8 @@ func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 			spawnPendingSync(cwd)
 		}
 		return err
-	default:
-		return nil
 	}
+	return nil
 }
 
 // emitBriefing consumes the current terminal's identifier-only team context

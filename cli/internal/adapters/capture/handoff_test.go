@@ -20,6 +20,9 @@ func TestSessionHandoffsAreIsolatedAndConsumedOnce(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".cxt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	const (
 		first  = "11111111-1111-4111-8111-111111111111"
 		second = "22222222-2222-4222-8222-222222222222"
@@ -45,6 +48,9 @@ func TestSessionHandoffWorktreeFallback(t *testing.T) {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	if err := os.MkdirAll(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := WriteSessionHandoff(repo, nil, "fallback memory"); err != nil {

@@ -78,6 +78,52 @@ func TestInstallRefusesSymlinkedHookTarget(t *testing.T) {
 	}
 }
 
+func TestInstallRegistersCxtIgnoreRules(t *testing.T) {
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Skipf("git init unavailable: %v (%s)", err, out)
+	}
+	if _, err := Install(repo); err != nil {
+		t.Fatal(err)
+	}
+	gitignore, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+	if err != nil || !strings.Contains(string(gitignore), ".cxt/") || !strings.Contains(string(gitignore), ".cxtsecrets") {
+		t.Fatalf("tracked ignore rules = %q, %v", gitignore, err)
+	}
+	excludePath, err := exec.Command("git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exclude, err := os.ReadFile(strings.TrimSpace(string(excludePath)))
+	if err != nil || !strings.Contains(string(exclude), ".cxt/") || !strings.Contains(string(exclude), ".cxtsecrets") {
+		t.Fatalf("local exclude rules = %q, %v", exclude, err)
+	}
+}
+
+func TestInstallFallsBackToLocalExcludeForSymlinkedGitignore(t *testing.T) {
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Skipf("git init unavailable: %v (%s)", err, out)
+	}
+	outside := filepath.Join(t.TempDir(), "outside-ignore")
+	if err := os.WriteFile(outside, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repo, ".gitignore")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := Install(repo); err != nil {
+		t.Fatalf("safe local exclude fallback failed: %v", err)
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "keep\n" {
+		t.Fatalf("symlink target changed: %q, %v", got, err)
+	}
+	cmd := exec.Command("git", "-C", repo, "check-ignore", ".cxt/probe")
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), ".cxt/probe") {
+		t.Fatalf("local exclude did not protect .cxt: %v (%s)", err, out)
+	}
+}
+
 func TestHookScriptQuotesExecutablePathForShell(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "injected")

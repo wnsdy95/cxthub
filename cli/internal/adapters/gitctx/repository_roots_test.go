@@ -40,6 +40,9 @@ func TestResolveRepositoryRootsSharesPrimaryContextWithLinkedWorktree(t *testing
 	if err := os.Mkdir(filepath.Join(primary, ".cxt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(primary, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	gitTestRun(t, primary, "worktree", "add", "-b", "app/session", linked)
 	primary = canonicalRoot(primary)
 	linked = canonicalRoot(linked)
@@ -65,6 +68,28 @@ func TestResolveRepositoryRootsSharesPrimaryContextWithLinkedWorktree(t *testing
 	}
 	if repo.LocalPath != primary {
 		t.Fatalf("repo local path=%q, want shared root %q", repo.LocalPath, primary)
+	}
+}
+
+func TestContextRootRequiresInitializedHeadInGitRepository(t *testing.T) {
+	repo := t.TempDir()
+	gitTestRun(t, repo, "init", "-b", "main")
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if root, ok := ExistingContextRoot(context.Background(), repo); !ok || root != canonicalRoot(repo) {
+		t.Fatalf("existing root=%q ok=%v, want residue root %q", root, ok, canonicalRoot(repo))
+	}
+	if root, ok := ContextRoot(context.Background(), repo); ok || root != "" {
+		t.Fatalf("directory-only residue enabled capture: root=%q ok=%v", root, ok)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if root, ok := ContextRoot(context.Background(), repo); !ok || root != canonicalRoot(repo) {
+		t.Fatalf("initialized root=%q ok=%v, want %q", root, ok, canonicalRoot(repo))
 	}
 }
 
