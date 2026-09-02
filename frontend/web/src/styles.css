@@ -32,6 +32,7 @@ code { font-family: var(--mono); }
 .crumb-sep { color: var(--faint); }
 .crumb-ws { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--ink); font-weight: 500; }
 .crumb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34vw; }
+.crumb-repo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28vw; color: var(--ink); font-weight: 600; }
 .crumb-lock { color: var(--muted); flex: none; }
 
 /* Workspace switch dropdown (▾) */
@@ -66,6 +67,21 @@ code { font-family: var(--mono); }
 .auth-card { width: 320px; max-width: 100%; }
 .auth-head { display: flex; align-items: baseline; justify-content: space-between; }
 .mode-chip { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.12em; color: var(--faint); }
+.mcp-consent-card { width: min(520px, 100%); }
+.mcp-consent-card h1 { margin: 28px 0 10px; font-size: clamp(1.35rem, 4vw, 1.9rem); letter-spacing: -0.03em; }
+.mcp-consent-scope { margin: 24px 0 16px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.mcp-consent-scope > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 16px; padding: 14px 16px; }
+.mcp-consent-scope > div + div { border-top: 1px solid var(--line); }
+.mcp-consent-scope dt { color: var(--muted); font: 0.68rem/1.4 var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.mcp-consent-scope dd { min-width: 0; margin: 0; font-size: 0.86rem; line-height: 1.5; }
+.mcp-consent-scope code { display: block; overflow-wrap: anywhere; color: var(--ink); }
+.mcp-consent-warning { color: var(--danger); }
+.mcp-consent-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+@media (max-width: 480px) {
+  .mcp-consent-scope > div { grid-template-columns: 1fr; gap: 6px; }
+  .mcp-consent-actions { flex-direction: column-reverse; }
+  .mcp-consent-actions button { width: 100%; }
+}
 .auth-card .sub { color: var(--muted); font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.12em;
   text-transform: uppercase; margin: 4px 0 24px; }
 /* Login/registration segment toggle */
@@ -652,6 +668,59 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .crumb-user { background: none; border: 0; padding: 0; cursor: pointer; font-family: var(--mono); font-size: 0.9rem; font-weight: 500; color: var(--ink); }
 .crumb-user:hover { text-decoration: underline; }
 
+/* Enterprise namespace profile and administration. Enterprise roles stay
+   visibly separate from Workspace context permissions. */
+.enterprise-logo { border-radius: 22%; }
+.enterprise-badge { align-self: flex-start; font-family: var(--mono); font-size: 0.68rem; font-weight: 700;
+  color: #8250df; border: 1px solid rgba(130, 80, 223, 0.35); background: rgba(130, 80, 223, 0.08);
+  border-radius: 99px; padding: 3px 9px; }
+.enterprise-access-note { margin: 0; padding: 11px 13px; border: 1px solid rgba(130, 80, 223, 0.24);
+  border-radius: 8px; color: var(--muted); background: rgba(130, 80, 223, 0.05); font-size: 0.8rem; line-height: 1.5; }
+.enterprise-tabs { margin-top: 18px; }
+.enterprise-panel { padding-top: 22px; }
+.enterprise-inline-form { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.enterprise-inline-form input { flex: 1; min-width: 0; }
+.enterprise-inline-form select { min-width: 112px; }
+.enterprise-ws-card { position: relative; min-width: 0; }
+.enterprise-ws-card .ws-card { width: 100%; min-height: 112px; }
+.enterprise-ws-card .ws-card:disabled { cursor: default; opacity: 0.72; }
+.enterprise-ws-card .ws-card:disabled:hover { border-color: var(--line); background: transparent; }
+.ws-card-access { color: #b4452c; font-size: 0.72rem; line-height: 1.35; }
+.emergency-btn { position: absolute; right: 10px; bottom: 10px; color: #b4452c; border-color: rgba(180, 69, 44, 0.35); }
+.emergency-form { display: flex; flex-direction: column; gap: 9px; margin-top: 8px; padding: 12px;
+  border: 1px solid rgba(180, 69, 44, 0.35); border-radius: 8px; background: rgba(180, 69, 44, 0.04); }
+.emergency-form strong { color: #b4452c; font-size: 0.82rem; }
+.emergency-form textarea { min-height: 72px; resize: vertical; }
+.emergency-form label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 0.78rem; }
+.emergency-form input[type="number"] { width: 92px; }
+.vis-chip.emergency { color: #b4452c; border-color: rgba(180, 69, 44, 0.45); background: rgba(180, 69, 44, 0.06); }
+.enterprise-member-list, .enterprise-audit-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.enterprise-member-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.enterprise-member-row:first-child, .enterprise-audit-row:first-child { border-top: 0; }
+.enterprise-member-row > div:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.enterprise-member-row code { color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; }
+.enterprise-policy-list { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; }
+.enterprise-policy-list .policy-row input[type="number"] { width: 92px; }
+.enterprise-save { margin-top: 14px; }
+.enterprise-audit-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(120px, auto) auto;
+  align-items: baseline; gap: 4px 14px; padding: 12px 14px; border-top: 1px solid var(--line); font-size: 0.76rem; }
+.enterprise-audit-row code, .enterprise-audit-row time { color: var(--muted); font-size: 0.68rem; }
+.enterprise-audit-row p { grid-column: 1 / -1; margin: 4px 0 0; color: var(--text); }
+.enterprise-settings-form { max-width: 560px; margin-top: 16px; }
+.profile-enterprises { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--line); }
+.enterprise-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.enterprise-list-card { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 11px;
+  border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); text-align: left; }
+.enterprise-list-card:hover { background: var(--hover); border-color: var(--faint); }
+.enterprise-list-card > img, .enterprise-list-card > span:first-child { width: 38px; height: 38px; border-radius: 9px;
+  object-fit: cover; flex: none; display: grid; place-items: center; color: #fff; font-weight: 700; }
+.enterprise-list-card > span:last-child { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.enterprise-list-card strong, .enterprise-list-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enterprise-list-card code { color: var(--muted); font-size: 0.7rem; }
+.enterprise-create-form { margin-top: 14px; padding: 14px; border: 1px dashed var(--line); border-radius: 8px; }
+.enterprise-create-form h3 { margin: 0 0 10px; font-size: 0.86rem; }
+.enterprise-create-form .enterprise-inline-form { margin-bottom: 5px; }
+
 /* Contribution heatmap (commit graph) */
 .contrib { margin-top: 36px; }
 .contrib-head { font-size: 0.9rem; color: var(--text); margin-bottom: 12px; }
@@ -696,7 +765,15 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .act-vis { color: var(--muted); font-size: 0.72rem; border: 1px solid var(--line); border-radius: 99px; padding: 1px 7px; flex: none; }
 .act-date { color: var(--faint); font-size: 0.74rem; margin-left: auto; flex: none; }
 
-@media (max-width: 900px) { .profile-grid { grid-template-columns: 1fr; } .ws-cards { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .profile-grid { grid-template-columns: 1fr; }
+  .ws-cards, .enterprise-list { grid-template-columns: 1fr; }
+  .enterprise-inline-form { align-items: stretch; flex-direction: column; }
+  .enterprise-inline-form > * { width: 100%; }
+  .enterprise-member-row { align-items: flex-start; flex-direction: column; }
+  .enterprise-audit-row { grid-template-columns: 1fr; }
+  .enterprise-audit-row p { grid-column: auto; }
+}
 .ws-head h2 .gear { margin-left: 6px; vertical-align: 1px; }
 .ws-head h2 .ws-card-vis { margin-left: 12px; vertical-align: 4px; }
 .who .gear { opacity: 0.75; }

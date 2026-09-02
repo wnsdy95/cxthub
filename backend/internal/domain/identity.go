@@ -84,7 +84,7 @@ type User struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
 	Name  string `json:"name"`
-	// Username is a global unique handle (slug) — the first segment of the URL path (/<username>/<workspace>).
+	// Username is a global unique personal namespace handle — the first URL segment.
 	// Automatically generated on first login from email localpart (with -2, -3, ... on collision).
 	// Changing it affects URL, CLI remote (rare change — see UpdateProfile).
 	Username string `json:"username"`
@@ -121,6 +121,9 @@ type Workspace struct {
 	Slug string `json:"slug"`
 	// OwnerUsername is the unnormalized owner handle (URL composition — avoids user joins on each query).
 	OwnerUsername string `json:"owner_username"`
+	// OwnerNamespaceID is the personal or enterprise namespace that owns the
+	// URL. OwnerID remains the human workspace creator and permission anchor.
+	OwnerNamespaceID string `json:"owner_namespace_id,omitempty"`
 	// Visibility is the public scope ("" == private). Changes are only possible by the owner.
 	Visibility Visibility `json:"visibility,omitempty"`
 	// PublicRole is the default role granted to non-members (including anonymous users) in a public workspace:
@@ -376,6 +379,11 @@ func ValidateWorkspaceRecord(ws Workspace) error {
 	}
 	if err := ValidateExternalID(ws.OwnerID); err != nil {
 		return err
+	}
+	if ws.OwnerNamespaceID != "" {
+		if err := ValidateNamespaceID(ws.OwnerNamespaceID); err != nil {
+			return err
+		}
 	}
 	if ws.Visibility != "" && ws.Visibility != VisibilityPrivate && ws.Visibility != VisibilityPublic {
 		return fmt.Errorf("%w: invalid workspace visibility", ErrValidation)

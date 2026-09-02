@@ -290,9 +290,16 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, merr := s.id.ListMembers(r.Context(), u.ID, wsID); merr != nil {
-			code, status := mapError(merr)
-			s.writeError(w, status, code, "not a workspace member")
-			return
+			allowed, accessErr := s.id.HasBreakGlassAccess(r.Context(), wsID, u.ID)
+			if accessErr != nil {
+				s.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "break-glass audit unavailable")
+				return
+			}
+			if !allowed {
+				code, status := mapError(merr)
+				s.writeError(w, status, code, "not a workspace member")
+				return
+			}
 		}
 	}
 	filtered := make([]domain.Repo, 0, len(repos))
@@ -402,7 +409,7 @@ func (s *Server) requireRepoRole(w http.ResponseWriter, r *http.Request, min dom
 	u, authed := userFrom(r.Context())
 	if repo.WorkspaceID == "" {
 		s.writeError(w, http.StatusForbidden, "repo_unbound",
-			"repository is not bound to a workspace — verify that <username>/<workspace> in the remote URL matches an existing workspace, then reconnect with cxt setup <url>")
+			"repository is not bound to a workspace — verify that <namespace>/<workspace>/<repository> in the remote URL matches an existing workspace, then reconnect with cxt setup <url>")
 		return false
 	}
 	wsp, werr := s.id.GetWorkspace(r.Context(), repo.WorkspaceID)
@@ -429,6 +436,18 @@ func (s *Server) requireRepoRole(w http.ResponseWriter, r *http.Request, min dom
 	}
 	role, ok := s.id.RoleOf(r.Context(), repo.WorkspaceID, u.ID)
 	if !ok || !role.AtLeast(min) {
+		// Break-glass is a narrow read-only exception. It never satisfies pull,
+		// push, settings, secrets, or any other write-capable role gate.
+		if min == domain.RoleViewer {
+			allowed, accessErr := s.id.HasBreakGlassAccess(r.Context(), repo.WorkspaceID, u.ID)
+			if accessErr != nil {
+				s.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "break-glass audit unavailable")
+				return false
+			}
+			if allowed {
+				return true
+			}
+		}
 		s.writeError(w, http.StatusForbidden, "forbidden", "insufficient role permissions — at least "+string(min)+" required")
 		return false
 	}

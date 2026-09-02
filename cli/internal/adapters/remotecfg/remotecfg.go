@@ -310,39 +310,40 @@ func Origin(repoRoot string) (string, bool) {
 
 // Validate checks the repo URL format.
 //
-// Workspace URL is the repo identity: <host>/<username>/<workspace> (2-segment).
-// Simply paste the workspace URL from the browser (e.g., cxthub.com/alice/backend).
-// Currently, the policy is one repo per workspace — to extend to multi-repos, allow 3-segment (<…>/<repo>), and keep the RepoID=hash(URL) rule.
+// Repository URL is the repo identity:
+// <host>/<namespace>/<workspace>/<repository>. Existing two-segment workspace
+// URLs remain valid legacy identities because RepoID=hash(URL); silently
+// rewriting one would fork its context DAG.
 func Validate(rawURL string) error {
 	_, err := CanonicalURL(rawURL)
 	return err
 }
 
-// CanonicalURL validates and canonicalizes a workspace remote. Credentials,
+// CanonicalURL validates and canonicalizes a repository remote. Credentials,
 // query parameters and fragments are never part of repo identity and must not
 // be persisted in the repository config.
 func CanonicalURL(rawURL string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Opaque != "" {
-		return "", fmt.Errorf("Cannot parse workspace URL")
+		return "", fmt.Errorf("Cannot parse repository URL")
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" {
-		return "", fmt.Errorf("Workspace URL must be an absolute http(s) URL")
+		return "", fmt.Errorf("Repository URL must be an absolute http(s) URL")
 	}
 	if u.User != nil {
-		return "", fmt.Errorf("Workspace URL cannot contain username or password")
+		return "", fmt.Errorf("Repository URL cannot contain username or password")
 	}
 	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return "", fmt.Errorf("Workspace URL cannot contain query or fragment")
+		return "", fmt.Errorf("Repository URL cannot contain query or fragment")
 	}
 	pathValue := strings.TrimSuffix(u.Path, "/")
 	if !strings.HasPrefix(pathValue, "/") {
-		return "", fmt.Errorf("workspace URL must be in the format /<username>/<workspace>")
+		return "", fmt.Errorf("Repository URL must be /<namespace>/<workspace>/<repository> (or a legacy /<namespace>/<workspace> URL)")
 	}
 	segments := strings.Split(strings.TrimPrefix(pathValue, "/"), "/")
-	if len(segments) != 2 || !validWorkspaceSegment(segments[0]) || !validWorkspaceSegment(segments[1]) {
-		return "", fmt.Errorf("Workspace URL must be in the format /<username>/<workspace>")
+	if (len(segments) != 2 && len(segments) != 3) || !validRepositorySegments(segments) {
+		return "", fmt.Errorf("Repository URL must be /<namespace>/<workspace>/<repository> (or a legacy /<namespace>/<workspace> URL)")
 	}
 	u.Host = strings.ToLower(u.Host)
 	u.Path = "/" + strings.Join(segments, "/")
@@ -350,7 +351,16 @@ func CanonicalURL(rawURL string) (string, error) {
 	return u.String(), nil
 }
 
-func validWorkspaceSegment(value string) bool {
+func validRepositorySegments(segments []string) bool {
+	for _, segment := range segments {
+		if !validRepositorySegment(segment) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRepositorySegment(value string) bool {
 	if value == "" || len(value) > 128 {
 		return false
 	}

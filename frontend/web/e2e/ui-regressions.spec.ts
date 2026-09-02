@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { capturePageErrors, installApiFixture, type ApiRequest, type ApiResponse } from './api-fixture';
 
 const repoId = 'repo-1';
@@ -103,6 +104,81 @@ async function openGraph(page: Page, responder: ReturnType<typeof publicWorkspac
   await expect(page.locator('.graph-row').first()).toBeVisible();
   return { pageErrors, unexpected };
 }
+
+test('repository route keeps the selected context DAG across navigation and reload', async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  const repositoryIds = { backend: 'repo-backend', frontend: 'repo-frontend' } as const;
+  const responder = ({ method, pathname, searchParams }: ApiRequest): ApiResponse | undefined => {
+    if (method !== 'GET') return undefined;
+    if (pathname === '/api/v1/me') return { status: 401, body: { error: { message: 'anonymous fixture' } } };
+    if (pathname === '/api/v1/public/workspaces/alice/cxthub') {
+      return {
+        body: {
+          id: workspaceId,
+          name: 'cxthub',
+          slug: 'cxthub',
+          owner_username: 'alice',
+          visibility: 'public',
+          public_role: 'viewer',
+          created_at: '2026-08-01T00:00:00Z',
+        },
+      };
+    }
+    if (pathname === '/api/v1/repos' && searchParams.get('workspace') === workspaceId) {
+      return {
+        body: Object.entries(repositoryIds).map(([name, id]) => ({
+          id,
+          remote_url: `https://cxthub.com/alice/cxthub/${name}`,
+          default_branch: 'main',
+        })),
+      };
+    }
+    for (const [name, repositoryId] of Object.entries(repositoryIds)) {
+      const snapshotId = name === 'backend' ? id('6') : id('7');
+      if (pathname === `/api/v1/repos/${repositoryId}/refs`) {
+        return { body: [{ kind: 'branch', name: 'main', repo_id: repositoryId, target: snapshotId }] };
+      }
+      if (pathname === `/api/v1/repos/${repositoryId}/snapshots`) {
+        return {
+          body: [{
+            id: snapshotId,
+            repo_id: repositoryId,
+            branch: 'main',
+            parents: [],
+            doc_hash: snapshotId,
+            provider: 'codex',
+            fidelity: 'full',
+            message: `${name} context`,
+            created_at: '2026-09-03T00:00:00Z',
+          }],
+        };
+      }
+      if (pathname === `/api/v1/repos/${repositoryId}/pending` || pathname === `/api/v1/repos/${repositoryId}/unsync`) {
+        return { body: [] };
+      }
+      if (pathname.startsWith(`/api/v1/repos/${repositoryId}/docs/`)) {
+        return { body: sessionDoc(snapshotId) };
+      }
+    }
+    return undefined;
+  };
+  const unexpected = await installApiFixture(page, responder);
+
+  await page.goto('/alice/cxthub/frontend');
+  await expect(page.locator('.crumb-repo')).toHaveText('frontend');
+  await expect(page.locator('.commit-msg')).toContainText('frontend context');
+
+  await page.locator('.pub-repos button').filter({ hasText: 'backend' }).click();
+  await expect(page).toHaveURL(/\/alice\/cxthub\/backend$/);
+  await expect(page.locator('.crumb-repo')).toHaveText('backend');
+  await expect(page.locator('.commit-msg')).toContainText('backend context');
+
+  await page.reload();
+  await expect(page.locator('.crumb-repo')).toHaveText('backend');
+  await expect(page.locator('.commit-msg')).toContainText('backend context');
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
 
 test('landing renders every captured product view without placeholders', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
@@ -432,6 +508,10 @@ test('profile survives nullable activity arrays and keeps the legend inside the 
         },
       };
     }
+    if (pathname === '/api/v1/public/enterprises/alice') {
+      return { status: 404, body: { error: { message: 'not an Enterprise namespace' } } };
+    }
+    if (pathname === '/api/v1/enterprises') return { body: [] };
     if (pathname === '/api/v1/public/users/alice/contributions') {
       return { body: { total: 0, days: [] } };
     }
@@ -465,6 +545,111 @@ test('profile survives nullable activity arrays and keeps the legend inside the 
     return { calendarRight: calendarBox.right, legendRight: legendBox.right };
   });
   expect(bounds.legendRight).toBeLessThanOrEqual(bounds.calendarRight + 0.5);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('Enterprise profile keeps administration separate from Workspace context and opens audited emergency read', async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  const enterpriseId = 'ent_11111111111111111111111111111111';
+  const enterpriseWorkspaceId = 'ws_11111111111111111111111111111111';
+  const enterprise = {
+    id: enterpriseId,
+    namespace_id: 'ns_11111111111111111111111111111111',
+    name: 'Acme Engineering',
+    slug: 'acme',
+    created_by: 'owner-1',
+    created_at: '2026-09-03T00:00:00Z',
+  };
+  const workspace = {
+    id: enterpriseWorkspaceId,
+    name: 'Platform',
+    slug: 'platform',
+    owner_id: 'admin-1',
+    owner_namespace_id: enterprise.namespace_id,
+    owner_username: 'acme',
+    visibility: 'private',
+    created_at: '2026-09-03T00:00:00Z',
+  };
+  const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
+    if (method === 'GET' && pathname === '/api/v1/me') {
+      return { body: { id: 'owner-1', email: 'owner@acme.test', name: 'Owner', username: 'owner', locale: 'en' } };
+    }
+    if (method === 'GET' && pathname === '/api/v1/public/users/acme') {
+      return { status: 404, body: { error: { message: 'not a user namespace' } } };
+    }
+    if (method === 'GET' && pathname === '/api/v1/public/enterprises/acme') {
+      return { body: { ...enterprise, workspaces: [] } };
+    }
+    if (method === 'GET' && pathname === '/api/v1/enterprises') return { body: [enterprise] };
+    if (method === 'GET' && pathname === `/api/v1/enterprises/${enterpriseId}`) return { body: enterprise };
+    if (method === 'GET' && pathname === `/api/v1/enterprises/${enterpriseId}/members`) {
+      return {
+        body: [{
+          enterprise_id: enterpriseId,
+          user_id: 'owner-1',
+          role: 'owner',
+          user: { id: 'owner-1', email: 'owner@acme.test', name: 'Owner', username: 'owner' },
+          created_at: '2026-09-03T00:00:00Z',
+        }],
+      };
+    }
+    if (method === 'GET' && pathname === `/api/v1/enterprises/${enterpriseId}/policy`) {
+      return {
+        body: {
+          enterprise_id: enterpriseId,
+          workspace_creation: 'admins',
+          default_workspace_visibility: 'private',
+          allow_public_workspaces: true,
+          break_glass_enabled: true,
+          break_glass_max_minutes: 60,
+          updated_at: '2026-09-03T00:00:00Z',
+        },
+      };
+    }
+    if (method === 'GET' && pathname === `/api/v1/enterprises/${enterpriseId}/workspaces`) return { body: [workspace] };
+    if (method === 'GET' && pathname === '/api/v1/workspaces') return { body: [] };
+    if (method === 'POST' && pathname === `/api/v1/enterprises/${enterpriseId}/break-glass`) {
+      return {
+        body: {
+          id: 'bg_11111111111111111111111111111111',
+          enterprise_id: enterpriseId,
+          workspace_id: enterpriseWorkspaceId,
+          user_id: 'owner-1',
+          reason: 'production incident',
+          created_at: '2026-09-03T00:00:00Z',
+          expires_at: '2026-09-03T00:15:00Z',
+        },
+      };
+    }
+    if (method === 'GET' && pathname === '/api/v1/public/workspaces/acme/platform') return { body: workspace };
+    if (method === 'GET' && pathname === '/api/v1/repos' && searchParams.get('workspace') === enterpriseWorkspaceId) {
+      return { body: [] };
+    }
+    return undefined;
+  });
+
+  await page.goto('/acme');
+  await expect(page.locator('.profile-name')).toHaveText('Acme Engineering');
+  await expect(page.locator('.enterprise-access-note')).toContainText('explicit role on each Workspace');
+  await expect(page.getByRole('tab', { name: 'People' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Audit log' })).toBeVisible();
+  await expect(page.locator('.ws-card')).toBeDisabled();
+  await expect(page.locator('.ws-card-access')).toContainText('explicit Workspace role');
+
+	await page.getByRole('tab', { name: 'People' }).click();
+	const lastOwnerRole = page.getByRole('combobox', { name: "Change Owner's Enterprise role" });
+	await expect(lastOwnerRole).toBeDisabled();
+	await expect(lastOwnerRole).toHaveAttribute('title', 'An Enterprise must always retain at least one Owner.');
+	await expect(page.locator('.enterprise-inline-form select option')).toHaveCount(3);
+	await page.getByRole('tab', { name: 'Workspaces' }).click();
+
+  await page.getByRole('button', { name: 'Emergency read access' }).click();
+  await page.getByPlaceholder('Specific reason recorded in the audit log').fill('production incident');
+  await page.getByRole('button', { name: 'Grant time-limited read access' }).click();
+  await expect(page).toHaveURL(/\/acme\/platform$/);
+  await expect(page.getByText('Emergency read-only', { exact: true })).toBeVisible();
+  await expect(page.locator('.warn-red')).toContainText('every use is audited');
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
@@ -919,5 +1104,93 @@ test('real cxtd wire renders a newly created public profile', async ({ page }, t
   await expect(page.locator('.profile-name')).toHaveText('Browser E2E');
   await expect(page.locator('.ws-card-name').filter({ hasText: workspaceName })).toHaveCount(1);
   await expect(page.locator('.contrib-legend')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and revocation', async ({ page }) => {
+  test.skip(!process.env.CXT_E2E_FULLSTACK, 'full-stack smoke runs in CI or with CXT_E2E_FULLSTACK=1');
+
+  const pageErrors = capturePageErrors(page);
+  const api = page.context().request;
+  const origin = 'http://127.0.0.1:4174';
+  const callback = `${origin}/e2e-mcp-callback`;
+  const verifier = 'v'.repeat(64);
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+
+  const login = await api.post('/api/v1/auth/session', {
+    headers: { Origin: origin, 'X-Cxt-CSRF': '1', Authorization: 'Bearer dev:mcp-e2e@example.test:MCP E2E' },
+  });
+  expect(login.ok()).toBe(true);
+
+  const registration = await api.post('/oauth/register', {
+    data: {
+      client_name: 'Codex App E2E',
+      redirect_uris: [callback],
+      grant_types: ['authorization_code'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+    },
+  });
+  expect(registration.status()).toBe(201);
+  const client = (await registration.json()) as { client_id: string };
+
+  const authorize = new URL('/oauth/authorize', origin);
+  authorize.search = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: callback,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    resource: `${origin}/mcp`,
+    scope: 'context:read',
+    state: 'playwright-state',
+  }).toString();
+  await page.goto(authorize.toString());
+  await expect(page).toHaveURL(/\/connect\/mcp\?request=/);
+  await expect(page.getByRole('heading', { name: 'Connect read-only context to this agent?' })).toBeVisible();
+  await expect(page.locator('.mcp-consent-card')).toContainText('Codex App E2E');
+  await expect(page.locator('.mcp-consent-card')).toContainText(callback);
+  await expect(page.locator('.mcp-consent-card')).toContainText('not verified');
+
+  await page.route(`${callback}**`, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'text/html', body: '<main>OAuth callback received</main>' });
+  });
+  await page.getByRole('button', { name: 'Connect read-only' }).click();
+  await expect(page).toHaveURL(new RegExp(`${callback.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\?`));
+  const callbackURL = new URL(page.url());
+  expect(callbackURL.searchParams.get('state')).toBe('playwright-state');
+  const code = callbackURL.searchParams.get('code');
+  expect(code).toBeTruthy();
+
+  const tokenResponse = await api.post('/oauth/token', {
+    form: {
+      grant_type: 'authorization_code',
+      client_id: client.client_id,
+      redirect_uri: callback,
+      code: code ?? '',
+      code_verifier: verifier,
+      resource: `${origin}/mcp`,
+    },
+  });
+  expect(tokenResponse.ok()).toBe(true);
+  const tokens = (await tokenResponse.json()) as { access_token: string; refresh_token: string; scope: string };
+  expect(tokens.scope).toBe('context:read');
+
+  const mcp = await api.post('/mcp', {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+    data: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'repository_list', arguments: {} } },
+  });
+  expect(mcp.ok()).toBe(true);
+  expect(JSON.stringify(await mcp.json())).toContain('No accessible repositories');
+
+  const revoke = await api.post('/oauth/revoke', {
+    form: { client_id: client.client_id, token: tokens.access_token, token_type_hint: 'access_token' },
+  });
+  expect(revoke.ok()).toBe(true);
+  const afterRevoke = await api.post('/mcp', {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+    data: { jsonrpc: '2.0', id: 2, method: 'ping' },
+  });
+  expect(afterRevoke.status()).toBe(401);
   expect(pageErrors).toEqual([]);
 });

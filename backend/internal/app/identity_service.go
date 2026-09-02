@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,18 +17,20 @@ import (
 // Dependencies: IdentityVerifier (token→User), WorkspaceStore (persistence). Visibility boundary = workspace.
 // Invitations use the "share link/code" model — tokens are reusable until revoked (member addition is idempotent).
 type IdentityService struct {
-	verifier outbound.IdentityVerifier
-	ws       outbound.WorkspaceStore
+	verifier   outbound.IdentityVerifier
+	ws         outbound.WorkspaceStore
+	enterprise outbound.EnterpriseStore
 }
 
 // NewIdentityService creates an IdentityService.
 func NewIdentityService(verifier outbound.IdentityVerifier, ws outbound.WorkspaceStore) *IdentityService {
-	return &IdentityService{verifier: verifier, ws: ws}
+	enterprise, _ := ws.(outbound.EnterpriseStore)
+	return &IdentityService{verifier: verifier, ws: ws, enterprise: enterprise}
 }
 
 // Authenticate validates a token, upserts the user, and returns it (login entry point).
 // For the first login, a unique username (handle) is automatically assigned from the email local part —
-// becomes the first segment of the URL (/<username>/<workspace>).
+// becomes the first segment of the user's personal namespace URL.
 func (s *IdentityService) Authenticate(ctx context.Context, idToken string) (domain.User, error) {
 	u, err := s.verifier.Verify(ctx, idToken)
 	if err != nil {
@@ -45,10 +48,18 @@ func (s *IdentityService) Authenticate(ctx context.Context, idToken string) (dom
 		u.CreatedAt = time.Now().UTC()
 	}
 	if u.Username == "" {
-		u.Username = s.uniqueUsername(ctx, u)
+		u.Username, err = s.uniqueUsername(ctx, u)
+		if err != nil {
+			return domain.User{}, err
+		}
 	}
 	if err := s.ws.UpsertUser(ctx, u); err != nil {
 		return domain.User{}, err
+	}
+	if s.enterprise != nil {
+		if _, err := s.ensurePersonalNamespace(ctx, u); err != nil {
+			return domain.User{}, err
+		}
 	}
 	return u, nil
 }
@@ -57,10 +68,11 @@ func (s *IdentityService) Authenticate(ctx context.Context, idToken string) (dom
 var reservedUsernames = map[string]bool{
 	"api": true, "invite": true, "w": true, "login": true, "settings": true,
 	"assets": true, "public": true, "admin": true, "static": true, "cxt": true,
+	"pricing": true, "connect": true, "oauth": true, "mcp": true,
 }
 
 // uniqueUsername creates a global unique handle from the email local part (or name if none) — collision handling (-2, -3, ...).
-func (s *IdentityService) uniqueUsername(ctx context.Context, u domain.User) string {
+func (s *IdentityService) uniqueUsername(ctx context.Context, u domain.User) (string, error) {
 	seed := u.Email
 	if at := strings.IndexByte(seed, '@'); at > 0 {
 		seed = seed[:at]
@@ -69,25 +81,47 @@ func (s *IdentityService) uniqueUsername(ctx context.Context, u domain.User) str
 		seed = u.Name
 	}
 	base := domain.Slugify(seed, "user")
+	if !domain.ValidNamespaceSlug(base) {
+		base = "user"
+	}
 	cand := base
 	for n := 2; ; n++ {
 		if !reservedUsernames[cand] {
 			other, err := s.ws.GetUserByUsername(ctx, cand)
-			if err != nil || other.ID == u.ID { // unused or owned by self → confirmed
-				return cand
+			userAvailable := errors.Is(err, domain.ErrNotFound) || err == nil && other.ID == u.ID
+			if err != nil && !errors.Is(err, domain.ErrNotFound) {
+				return "", err
+			}
+			namespaceAvailable := true
+			if s.enterprise != nil {
+				claimed, namespaceErr := s.enterprise.GetNamespaceBySlug(ctx, cand)
+				namespaceAvailable = errors.Is(namespaceErr, domain.ErrNotFound) ||
+					namespaceErr == nil && claimed.Kind == domain.NamespaceUser && claimed.UserID == u.ID
+				if namespaceErr != nil && !errors.Is(namespaceErr, domain.ErrNotFound) {
+					return "", namespaceErr
+				}
+			}
+			if userAvailable && namespaceAvailable {
+				return cand, nil
 			}
 		}
-		cand = base + "-" + strconv.Itoa(n)
+		suffix := "-" + strconv.Itoa(n)
+		trimmed := base
+		if len(trimmed)+len(suffix) > 64 {
+			trimmed = strings.TrimRight(trimmed[:64-len(suffix)], "-")
+		}
+		cand = trimmed + suffix
 	}
 }
 
 // UpdateProfile updates account settings. Nil fields are not changed.
 //
 //   - nickname: display alias — free change (empty string = remove).
-//   - username: URL (/<username>/…) first segment, heavy change. slug validation,
-//     global uniqueness check, and concurrent update of OwnerUsername in all owned workspaces.
-//     (existing URL·CLI remote breaks — client must display warning.)
+//   - username: personal Namespace first segment. The previous slug is retained
+//     as an alias so existing URL-derived RepoIDs and CLI remotes keep working.
 func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
+	original := u
+	var personalNamespace domain.Namespace
 	if nickname != nil {
 		u.Nickname = strings.TrimSpace(*nickname)
 	}
@@ -125,6 +159,16 @@ func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, user
 			if other, err := s.ws.GetUserByUsername(ctx, next); err == nil && other.ID != u.ID {
 				return domain.User{}, domain.ErrConflict // handle already in use
 			}
+			if s.enterprise != nil {
+				var err error
+				personalNamespace, err = s.ensurePersonalNamespace(ctx, u)
+				if err != nil {
+					return domain.User{}, err
+				}
+				if claimed, claimErr := s.enterprise.GetNamespaceBySlug(ctx, next); claimErr == nil && claimed.ID != personalNamespace.ID {
+					return domain.User{}, domain.ErrConflict
+				}
+			}
 			u.Username = next
 			usernameChanged = true
 		}
@@ -133,11 +177,23 @@ func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, user
 		return domain.User{}, err
 	}
 	if usernameChanged {
-		// Normalize owner_username because it is the source of truth for the URL path.
+		if s.enterprise != nil {
+			if err := s.enterprise.RenameNamespace(ctx, personalNamespace.ID, u.Username); err != nil {
+				_ = s.ws.UpsertUser(ctx, original)
+				return domain.User{}, err
+			}
+		}
+		// Normalize only personal namespace paths. Enterprise workspaces keep the
+		// company slug even when their human creator renames a personal handle.
 		if list, err := s.ws.ListWorkspacesForUser(ctx, u.ID); err == nil {
 			for _, w := range list {
 				if w.OwnerID != u.ID || w.OwnerUsername == u.Username {
 					continue
+				}
+				if w.OwnerNamespaceID != "" && s.enterprise != nil {
+					if namespace, nerr := s.enterprise.GetNamespace(ctx, w.OwnerNamespaceID); nerr == nil && namespace.Kind == domain.NamespaceEnterprise {
+						continue
+					}
 				}
 				w.OwnerUsername = u.Username
 				_ = s.ws.CreateWorkspace(ctx, w) // upsert meaning (FS/PG common)
@@ -178,6 +234,14 @@ func (s *IdentityService) UpdateWorkspaceSettings(ctx context.Context, userID, w
 		if *p.Visibility != domain.VisibilityPrivate && *p.Visibility != domain.VisibilityPublic {
 			return domain.Workspace{}, domain.ErrValidation
 		}
+		if *p.Visibility == domain.VisibilityPublic && wsp.OwnerNamespaceID != "" && s.enterprise != nil {
+			if namespace, nerr := s.enterprise.GetNamespace(ctx, wsp.OwnerNamespaceID); nerr == nil && namespace.Kind == domain.NamespaceEnterprise {
+				policy, perr := s.enterprise.GetEnterprisePolicy(ctx, namespace.EnterpriseID)
+				if perr != nil || !policy.AllowPublicWorkspaces {
+					return domain.Workspace{}, domain.ErrForbidden
+				}
+			}
+		}
 		wsp.Visibility = *p.Visibility
 	}
 	validPolicy := func(v string) bool { return v == "" || v == "members" || v == "owner" }
@@ -211,10 +275,18 @@ func (s *IdentityService) UpdateWorkspaceSettings(ctx context.Context, userID, w
 			return domain.Workspace{}, domain.ErrValidation
 		}
 		if next != wsp.Slug {
-			// owner unique check (excluding self).
-			if list, lerr := s.ws.ListWorkspacesForUser(ctx, wsp.OwnerID); lerr == nil {
+			// Namespace-unique check (excluding self). Enterprise workspaces may
+			// have different human creators, so owner_id alone is insufficient.
+			var list []domain.Workspace
+			var lerr error
+			if wsp.OwnerNamespaceID != "" && s.enterprise != nil {
+				list, lerr = s.enterprise.ListWorkspacesForNamespace(ctx, wsp.OwnerNamespaceID)
+			} else {
+				list, lerr = s.ws.ListWorkspacesForUser(ctx, wsp.OwnerID)
+			}
+			if lerr == nil {
 				for _, w := range list {
-					if w.OwnerID == wsp.OwnerID && w.ID != wsp.ID && w.Slug == next {
+					if w.ID != wsp.ID && w.Slug == next {
 						return domain.Workspace{}, domain.ErrConflict
 					}
 				}
@@ -232,8 +304,9 @@ func (s *IdentityService) UpdateWorkspaceSettings(ctx context.Context, userID, w
 //
 //   - The new owner is promoted to the owner role, and the original creator remains an owner member (GitHub style —
 //     you can later downgrade or leave).
-//   - OwnerUsername changes, so the workspace URL (/<owner>/<slug>) changes (client will show a warning).
-//   - slug must be unique within the owner; if the new owner already has the same slug, -2, -3, etc. are appended.
+//   - Personal workspaces move to the target's personal Namespace and may get a
+//     collision suffix. Enterprise workspaces remain in their Enterprise
+//     Namespace; only the human permission anchor changes.
 func (s *IdentityService) TransferOwnership(ctx context.Context, actorID, workspaceID, targetID string) (domain.Workspace, error) {
 	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
 	if err != nil {
@@ -252,22 +325,36 @@ func (s *IdentityService) TransferOwnership(ctx context.Context, actorID, worksp
 	if ok, err := s.ws.IsMember(ctx, workspaceID, targetID); err != nil || !ok {
 		return domain.Workspace{}, domain.ErrNotFound // only existing members can transfer
 	}
-	// slug conflict resolution: if the new owner's other owned workspaces conflict, -2, -3, etc. are appended.
-	taken := map[string]bool{}
-	if list, err := s.ws.ListWorkspacesForUser(ctx, targetID); err == nil {
-		for _, w := range list {
-			if w.OwnerID == targetID && w.ID != wsp.ID {
-				taken[w.Slug] = true
-			}
+	enterpriseOwned := false
+	if wsp.OwnerNamespaceID != "" && s.enterprise != nil {
+		if namespace, nerr := s.enterprise.GetNamespace(ctx, wsp.OwnerNamespaceID); nerr == nil {
+			enterpriseOwned = namespace.Kind == domain.NamespaceEnterprise
 		}
 	}
-	slug := wsp.Slug
-	for n := 2; taken[slug]; n++ {
-		slug = wsp.Slug + "-" + strconv.Itoa(n)
-	}
 	wsp.OwnerID = targetID
-	wsp.OwnerUsername = target.Username
-	wsp.Slug = slug
+	if !enterpriseOwned {
+		taken := map[string]bool{}
+		if list, lerr := s.ws.ListWorkspacesForUser(ctx, targetID); lerr == nil {
+			for _, workspace := range list {
+				if workspace.OwnerID == targetID && workspace.ID != wsp.ID {
+					taken[workspace.Slug] = true
+				}
+			}
+		}
+		slug := wsp.Slug
+		for n := 2; taken[slug]; n++ {
+			slug = wsp.Slug + "-" + strconv.Itoa(n)
+		}
+		wsp.OwnerUsername = target.Username
+		wsp.Slug = slug
+		if s.enterprise != nil {
+			namespace, nerr := s.ensurePersonalNamespace(ctx, target)
+			if nerr != nil {
+				return domain.Workspace{}, nerr
+			}
+			wsp.OwnerNamespaceID = namespace.ID
+		}
+	}
 	if err := s.ws.CreateWorkspace(ctx, wsp); err != nil { // upsert
 		return domain.Workspace{}, err
 	}
@@ -370,9 +457,21 @@ func (s *IdentityService) PublicUser(ctx context.Context, username, viewerID str
 		return domain.User{}, nil, err
 	}
 	self := viewerID != "" && viewerID == u.ID
+	personalNamespaceID := ""
+	if s.enterprise != nil {
+		if ns, nsErr := s.enterprise.GetNamespaceBySlug(ctx, u.Username); nsErr == nil && ns.Kind == domain.NamespaceUser && ns.UserID == u.ID {
+			personalNamespaceID = ns.ID
+		}
+	}
 	out := make([]domain.Workspace, 0, len(list))
 	for _, w := range list {
 		if w.OwnerID != u.ID { // profiles list only owned workspaces, not workspaces joined as a member
+			continue
+		}
+		// Enterprise Workspace creation records the human creator as OwnerID so
+		// Workspace authorization has an initial owner. It still belongs on the
+		// Enterprise namespace profile, never on that creator's personal profile.
+		if w.OwnerNamespaceID != "" && w.OwnerNamespaceID != personalNamespaceID {
 			continue
 		}
 		if w.IsPublic() || self {
@@ -385,14 +484,59 @@ func (s *IdentityService) PublicUser(ctx context.Context, username, viewerID str
 	return u, out, nil
 }
 
+func (s *IdentityService) workspaceByNamespacePath(ctx context.Context, namespace, slug string) (domain.Workspace, error) {
+	if s.enterprise != nil {
+		ns, err := s.enterprise.GetNamespaceBySlug(ctx, namespace)
+		if err == nil {
+			return s.ws.GetWorkspaceByNamespacePath(ctx, ns.ID, slug)
+		}
+		if !errors.Is(err, domain.ErrNotFound) {
+			return domain.Workspace{}, err
+		}
+		// The PostgreSQL migration backfills personal Namespaces. Trusted local
+		// FS stores may predate that schema and are healed lazily at the owner's
+		// next login; preserve their existing public URLs until then.
+		if legacy, legacyErr := s.ws.GetWorkspaceByPath(ctx, namespace, slug); legacyErr == nil && legacy.OwnerNamespaceID == "" {
+			return legacy, nil
+		}
+		return domain.Workspace{}, err
+	}
+	return s.ws.GetWorkspaceByPath(ctx, namespace, slug)
+}
+
 // PublicWorkspace interprets a public workspace by URL path (username/slug) — for anonymous viewing.
 // private workspaces return ErrNotFound to avoid leaking existence.
 func (s *IdentityService) PublicWorkspace(ctx context.Context, username, slug string) (domain.Workspace, error) {
-	wsp, err := s.ws.GetWorkspaceByPath(ctx, username, slug)
+	wsp, err := s.workspaceByNamespacePath(ctx, username, slug)
 	if err != nil || !wsp.IsPublic() {
 		return domain.Workspace{}, domain.ErrNotFound
 	}
 	return wsp, nil
+}
+
+// ReadableWorkspace resolves a public path without leaking private Workspace
+// existence. Break-glass is a narrow viewer exception and never creates a
+// durable Workspace membership.
+func (s *IdentityService) ReadableWorkspace(ctx context.Context, namespace, slug, viewerID string) (domain.Workspace, error) {
+	wsp, err := s.workspaceByNamespacePath(ctx, namespace, slug)
+	if err != nil {
+		return domain.Workspace{}, domain.ErrNotFound
+	}
+	if wsp.IsPublic() {
+		return wsp, nil
+	}
+	if viewerID == "" {
+		return domain.Workspace{}, domain.ErrNotFound
+	}
+	if role, ok := s.RoleOf(ctx, wsp.ID, viewerID); ok && role.AtLeast(domain.RoleViewer) {
+		return wsp, nil
+	}
+	if allowed, accessErr := s.HasBreakGlassAccess(ctx, wsp.ID, viewerID); accessErr != nil {
+		return domain.Workspace{}, accessErr
+	} else if allowed {
+		return wsp, nil
+	}
+	return domain.Workspace{}, domain.ErrNotFound
 }
 
 // cliTokenPrefix is the prefix for CLI token sessions (distinguishes from web sessions "sess_" for listing).
@@ -487,11 +631,85 @@ func (s *IdentityService) revokeSession(ctx context.Context, userID, suffix stri
 // cliTokenTTL is the lifespan of a CLI token (time-to-live).
 const cliTokenTTL = 365 * 24 * time.Hour
 
+const (
+	mcpAccessTokenTTL  = time.Hour
+	mcpRefreshTokenTTL = 30 * 24 * time.Hour
+)
+
 // CreateCLIToken issues a CLI token session (issued from web → cxt login <token>).
 // It follows the "sess_" format, which ResolveUser interprets directly. The original token is exposed only once here, and the server stores only a hash (at-rest encryption).
 // The label is the device display name (device flow uses CLI host name, web issuance can be empty).
 func (s *IdentityService) CreateCLIToken(ctx context.Context, userID, label string) (domain.Session, error) {
 	return s.issueSession(ctx, userID, "sess_cli_", "cli", label, cliTokenTTL)
+}
+
+// IssueMCPTokenPair issues a short-lived read-only MCP access token and a
+// client-bound refresh token. Both are stored only by hash through the
+// existing session store. The refresh token deliberately does not use the
+// sess_ prefix, so it cannot be presented to ordinary API/MCP bearer gates.
+func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientID string) (domain.OAuthTokenPair, error) {
+	if _, err := s.ws.GetUser(ctx, userID); err != nil {
+		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
+	}
+	access, err := s.issueSession(ctx, userID, "sess_", "mcp_access", clientID, mcpAccessTokenTTL)
+	if err != nil {
+		return domain.OAuthTokenPair{}, err
+	}
+	refresh, err := s.issueSession(ctx, userID, "refresh_", "mcp_refresh", clientID, mcpRefreshTokenTTL)
+	if err != nil {
+		_ = s.ws.DeleteSession(ctx, domain.HashToken(access.Token))
+		return domain.OAuthTokenPair{}, err
+	}
+	return domain.OAuthTokenPair{
+		AccessToken: access.Token, RefreshToken: refresh.Token,
+		ExpiresIn: int(mcpAccessTokenTTL.Seconds()), Scope: "context:read",
+	}, nil
+}
+
+// RefreshMCPAccessToken validates a client-bound refresh capability and
+// returns a new access/refresh pair while atomically consuming the old refresh
+// capability. Refresh tokens are never accepted by ordinary bearer gates.
+func (s *IdentityService) RefreshMCPAccessToken(ctx context.Context, refreshToken, clientID string) (domain.OAuthTokenPair, error) {
+	if !strings.HasPrefix(refreshToken, "refresh_") || clientID == "" {
+		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
+	}
+	storedToken := domain.HashToken(refreshToken)
+	sess, err := s.ws.ConsumeSession(ctx, storedToken, "mcp_refresh", clientID)
+	if err != nil || !time.Now().UTC().Before(sess.ExpiresAt) {
+		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
+	}
+	if _, err := s.ws.GetUser(ctx, sess.UserID); err != nil {
+		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
+	}
+	pair, err := s.IssueMCPTokenPair(ctx, sess.UserID, clientID)
+	if err != nil {
+		_ = s.ws.CreateSession(ctx, sess) // Preserve retry capability if issuance storage failed.
+		return domain.OAuthTokenPair{}, err
+	}
+	return pair, nil
+}
+
+// RevokeMCPToken invalidates an MCP access or refresh token only when it is
+// bound to the requesting public OAuth client. Invalid, foreign, and already
+// revoked tokens are intentionally idempotent no-ops.
+func (s *IdentityService) RevokeMCPToken(ctx context.Context, token, clientID string) error {
+	if clientID == "" {
+		return domain.ErrUnauthorized
+	}
+	kind := ""
+	switch {
+	case strings.HasPrefix(token, "sess_"):
+		kind = "mcp_access"
+	case strings.HasPrefix(token, "refresh_"):
+		kind = "mcp_refresh"
+	default:
+		return nil
+	}
+	_, err := s.ws.ConsumeSession(ctx, domain.HashToken(token), kind, clientID)
+	if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrUnauthorized) {
+		return nil
+	}
+	return err
 }
 
 // issueSession issues a session: storage is HashToken(original)+hint+kind+label, the returned Token is the original.
@@ -533,13 +751,26 @@ func (s *IdentityService) CreateWorkspace(ctx context.Context, owner domain.User
 		return domain.Workspace{}, domain.ErrValidation
 	}
 	now := time.Now().UTC()
+	var namespaceID string
+	if s.enterprise != nil {
+		namespace, err := s.ensurePersonalNamespace(ctx, owner)
+		if err != nil {
+			return domain.Workspace{}, err
+		}
+		namespaceID = namespace.ID
+	}
+	slug := s.uniqueSlug(ctx, owner.ID, name, "")
+	if namespaceID != "" {
+		slug = s.uniqueNamespaceWorkspaceSlug(ctx, namespaceID, name, "")
+	}
 	wsp := domain.Workspace{
-		ID:            domain.NewID("ws_"),
-		Name:          name,
-		OwnerID:       owner.ID,
-		Slug:          s.uniqueSlug(ctx, owner.ID, name, ""),
-		OwnerUsername: owner.Username,
-		CreatedAt:     now,
+		ID:               domain.NewID("ws_"),
+		Name:             name,
+		OwnerID:          owner.ID,
+		Slug:             slug,
+		OwnerUsername:    owner.Username,
+		OwnerNamespaceID: namespaceID,
+		CreatedAt:        now,
 	}
 	if err := s.ws.CreateWorkspace(ctx, wsp); err != nil {
 		return domain.Workspace{}, err
@@ -594,7 +825,10 @@ func (s *IdentityService) backfillWorkspace(ctx context.Context, w domain.Worksp
 		return w, err
 	}
 	if owner.Username == "" { // Heals legacy users too.
-		owner.Username = s.uniqueUsername(ctx, owner)
+		owner.Username, err = s.uniqueUsername(ctx, owner)
+		if err != nil {
+			return w, err
+		}
 		if err := s.ws.UpsertUser(ctx, owner); err != nil {
 			return w, err
 		}
@@ -602,7 +836,20 @@ func (s *IdentityService) backfillWorkspace(ctx context.Context, w domain.Worksp
 	if w.Slug == "" {
 		w.Slug = s.uniqueSlug(ctx, w.OwnerID, w.Name, w.ID)
 	}
-	w.OwnerUsername = owner.Username
+	personalNamespace := true
+	if w.OwnerNamespaceID != "" && s.enterprise != nil {
+		if namespace, nerr := s.enterprise.GetNamespace(ctx, w.OwnerNamespaceID); nerr == nil && namespace.Kind == domain.NamespaceEnterprise {
+			personalNamespace = false
+		}
+	}
+	if personalNamespace {
+		w.OwnerUsername = owner.Username
+	}
+	if w.OwnerNamespaceID == "" && s.enterprise != nil {
+		if namespace, nerr := s.ensurePersonalNamespace(ctx, owner); nerr == nil {
+			w.OwnerNamespaceID = namespace.ID
+		}
+	}
 	if err := s.ws.CreateWorkspace(ctx, w); err != nil { // Upsert in FS/PG.
 		return w, err
 	}
@@ -763,12 +1010,12 @@ func (s *IdentityService) Logout(ctx context.Context, sessionToken string) error
 
 // ResolveSession interprets a session token as a user. Expired/invalid → domain.ErrUnauthorized.
 // The storage is queried by hash, and legacy plaintext records are promoted to hash records lazily (migration — existing login/CLI tokens do not break).
-func (s *IdentityService) ResolveSession(ctx context.Context, token string) (domain.User, error) {
+func (s *IdentityService) resolveSessionRecord(ctx context.Context, token string) (domain.Session, domain.User, error) {
 	sess, err := s.ws.GetSession(ctx, domain.HashToken(token))
 	if err != nil {
 		legacy, lerr := s.ws.GetSession(ctx, token)
 		if lerr != nil {
-			return domain.User{}, domain.ErrUnauthorized
+			return domain.Session{}, domain.User{}, domain.ErrUnauthorized
 		}
 		// Promotion: plaintext record → hash record (+hint/kind enhancement), plaintext is deleted.
 		upgraded := legacy
@@ -786,13 +1033,21 @@ func (s *IdentityService) ResolveSession(ctx context.Context, token string) (dom
 	}
 	if time.Now().After(sess.ExpiresAt) {
 		_ = s.ws.DeleteSession(ctx, sess.Token)
-		return domain.User{}, domain.ErrUnauthorized
+		return domain.Session{}, domain.User{}, domain.ErrUnauthorized
 	}
 	u, err := s.ws.GetUser(ctx, sess.UserID)
 	if err != nil {
+		return domain.Session{}, domain.User{}, domain.ErrUnauthorized
+	}
+	return sess, u, nil
+}
+
+func (s *IdentityService) ResolveSession(ctx context.Context, token string) (domain.User, error) {
+	sess, user, err := s.resolveSessionRecord(ctx, token)
+	if err != nil || sess.Kind == "mcp_access" || sess.Kind == "mcp_refresh" {
 		return domain.User{}, domain.ErrUnauthorized
 	}
-	return u, nil
+	return user, nil
 }
 
 // ResolveUser interprets a Bearer token as a user: "sess_" prefix indicates a server session, otherwise validates and upserts an IDP token.
@@ -801,8 +1056,31 @@ func (s *IdentityService) ResolveUser(ctx context.Context, bearer string) (domai
 	if bearer == "" {
 		return domain.User{}, domain.ErrUnauthorized
 	}
+	// OAuth refresh capabilities are accepted only by /oauth/token. Sending one
+	// to an API or MCP bearer gate must not fall through to the external IDP.
+	if strings.HasPrefix(bearer, "refresh_") {
+		return domain.User{}, domain.ErrUnauthorized
+	}
 	if strings.HasPrefix(bearer, "sess_") {
-		return s.ResolveSession(ctx, bearer)
+		sess, user, err := s.resolveSessionRecord(ctx, bearer)
+		if err != nil || sess.Kind == "mcp_access" || sess.Kind == "mcp_refresh" {
+			return domain.User{}, domain.ErrUnauthorized
+		}
+		return user, nil
 	}
 	return s.Authenticate(ctx, bearer)
+}
+
+// ResolveMCPUser accepts only short-lived MCP access sessions. It deliberately
+// excludes web, CLI, refresh, and raw IDP tokens so the remote connector has a
+// separate authentication boundary from the mutation-capable REST API.
+func (s *IdentityService) ResolveMCPUser(ctx context.Context, bearer string) (domain.User, error) {
+	if !strings.HasPrefix(bearer, "sess_") {
+		return domain.User{}, domain.ErrUnauthorized
+	}
+	sess, user, err := s.resolveSessionRecord(ctx, bearer)
+	if err != nil || sess.Kind != "mcp_access" {
+		return domain.User{}, domain.ErrUnauthorized
+	}
+	return user, nil
 }

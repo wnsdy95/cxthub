@@ -56,6 +56,14 @@ resource "google_cloud_run_v2_service" "cxtd" {
         value = "https://${var.domain}"
       }
       env {
+        name  = "CXT_PUBLIC_URL"
+        value = "https://${var.domain}"
+      }
+      env {
+        name  = "CXT_REQUIRE_POSTGRES"
+        value = "1"
+      }
+      env {
         name = "CXT_POSTGRES_DSN"
         value_source {
           secret_key_ref {

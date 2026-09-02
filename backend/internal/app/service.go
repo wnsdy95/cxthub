@@ -1714,7 +1714,10 @@ func pathSegs(p string) []string {
 	return strings.Split(p, "/")
 }
 
-// workspaceForURL extracts the first two path segments of a remote URL as (owner_username, slug) and finds the workspace. The server does not create unowned repos.
+// workspaceForURL resolves the namespace/workspace prefix of a repository URL.
+// New repository identities have three segments
+// /<namespace>/<workspace>/<repository>. Existing two-segment identities stay
+// valid because their URL hash is their stable RepoID.
 func (s *Service) workspaceForURL(ctx context.Context, remoteURL string) (string, error) {
 	if s.ws == nil {
 		return "", fmt.Errorf("%w: workspace binding store unavailable", domain.ErrForbidden)
@@ -1731,10 +1734,33 @@ func (s *Service) workspaceForURL(ctx context.Context, remoteURL string) (string
 		return "", fmt.Errorf("%w: repo remote_url scheme must be http or https: %q", domain.ErrValidation, remoteURL)
 	}
 	seg := pathSegs(u.Path)
-	if len(seg) != 2 {
-		return "", fmt.Errorf("%w: repo URL must be <host>/<username>/<workspace> (2-segment): %q", domain.ErrValidation, remoteURL)
+	if len(seg) != 2 && len(seg) != 3 {
+		return "", fmt.Errorf("%w: repo URL must be <host>/<namespace>/<workspace>/<repository> (or a legacy two-segment URL): %q", domain.ErrValidation, remoteURL)
 	}
-	wsp, err := s.ws.GetWorkspaceByPath(ctx, seg[0], seg[1])
+	for _, part := range seg {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("%w: repo URL contains an invalid path segment: %q", domain.ErrValidation, remoteURL)
+		}
+	}
+	var wsp domain.Workspace
+	if namespaces, ok := s.ws.(outbound.EnterpriseStore); ok {
+		if namespace, nerr := namespaces.GetNamespaceBySlug(ctx, seg[0]); nerr == nil {
+			wsp, err = s.ws.GetWorkspaceByNamespacePath(ctx, namespace.ID, seg[1])
+		} else {
+			if !errors.Is(nerr, domain.ErrNotFound) {
+				return "", nerr
+			}
+			// Local FS records created before Namespace support have no registry
+			// row until the owner logs in. A legacy owner/path lookup keeps those
+			// stable RepoIDs usable without allowing an Enterprise collision.
+			wsp, err = s.ws.GetWorkspaceByPath(ctx, seg[0], seg[1])
+			if err == nil && wsp.OwnerNamespaceID != "" {
+				err = nerr
+			}
+		}
+	} else {
+		wsp, err = s.ws.GetWorkspaceByPath(ctx, seg[0], seg[1])
+	}
 	if err != nil {
 		return "", fmt.Errorf("%w: repo remote_url does not match an existing workspace: %q", domain.ErrForbidden, remoteURL)
 	}

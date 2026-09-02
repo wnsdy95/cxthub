@@ -13,6 +13,7 @@ import { AccountSettings } from './Settings';
 import { ContributionGraph } from './ContributionGraph';
 import { ActivityFeed } from './ActivityFeed';
 import { safeAvatarUrl } from '../urls';
+import { EnterpriseProfile, MyEnterprises } from './EnterpriseProfile';
 
 export function UserProfile({ username, onLogin }: { username: string; onLogin?: () => void }) {
   const t = useT();
@@ -23,10 +24,17 @@ export function UserProfile({ username, onLogin }: { username: string; onLogin?:
     queryFn: () => api.publicUser(username),
     retry: false,
   });
+  const enterpriseQ = useQuery({
+    queryKey: ['publicEnterprise', username],
+    queryFn: () => api.publicEnterprise(username),
+    retry: false,
+  });
 
-  if (q.isLoading) return <div className="loading">…</div>;
+  if (q.isLoading || enterpriseQ.isLoading) return <div className="loading">…</div>;
 
   const data = q.data;
+  const enterprise = enterpriseQ.data;
+  const canonicalSlug = data?.user.username ?? enterprise?.slug ?? username;
   return (
     <div className="app">
       <header className="topbar">
@@ -40,10 +48,10 @@ export function UserProfile({ username, onLogin }: { username: string; onLogin?:
             <button
               type="button"
               className="crumb-user"
-              onClick={() => navigate(`/${data?.user.username ?? username}`)}
-              title={data?.user.username ?? username}
+              onClick={() => navigate(`/${canonicalSlug}`)}
+              title={canonicalSlug}
             >
-              {data?.user.username ?? username}
+              {canonicalSlug}
             </button>
           </nav>
         </div>
@@ -65,14 +73,16 @@ export function UserProfile({ username, onLogin }: { username: string; onLogin?:
         </div>
       </header>
 
-      {!data ? (
+      {!data && !enterprise ? (
         <div className="profile">
           <div className="empty-box">
-            {t('profile.userNotFound')} <code>{username}</code>
+            {t('profile.namespaceNotFound')} <code>{username}</code>
           </div>
         </div>
+      ) : enterprise ? (
+        <EnterpriseProfile data={enterprise} />
       ) : (
-        <ProfileBody data={data} isSelf={Boolean(me && me.username === data.user.username)} me={me ?? null} />
+        <ProfileBody data={data!} isSelf={Boolean(me && me.username === data!.user.username)} me={me ?? null} />
       )}
     </div>
   );
@@ -144,6 +154,8 @@ function ProfileBody({
             ))}
           </div>
         )}
+
+        {isSelf && <MyEnterprises />}
 
         <ContributionGraph username={u.username} />
         <ActivityFeed username={u.username} />

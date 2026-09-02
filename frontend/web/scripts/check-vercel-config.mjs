@@ -10,6 +10,14 @@ assert.equal(
   config.rewrites[0].destination,
   'https://cxtd-123456789.asia-northeast3.run.app/api/:path*',
 );
+assert.deepEqual(config.rewrites.slice(1, 4), [
+  { source: '/mcp', destination: 'https://cxtd-123456789.asia-northeast3.run.app/mcp' },
+  { source: '/oauth/:path*', destination: 'https://cxtd-123456789.asia-northeast3.run.app/oauth/:path*' },
+  {
+    source: '/.well-known/:path*',
+    destination: 'https://cxtd-123456789.asia-northeast3.run.app/.well-known/:path*',
+  },
+]);
 assert.equal(
   normalizeApiOrigin(' https://cxtd-123456789.asia-northeast3.run.app/ '),
   'https://cxtd-123456789.asia-northeast3.run.app',

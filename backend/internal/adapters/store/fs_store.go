@@ -29,6 +29,8 @@ type Store interface {
 	outbound.MetadataStore
 	outbound.BlobStore
 	outbound.WorkspaceStore
+	outbound.EnterpriseStore
+	outbound.OAuthStore
 	// ApplyMigrations applies schema migrations idempotently (FS is no-op).
 	ApplyMigrations(ctx context.Context, dir string) (int, error)
 }

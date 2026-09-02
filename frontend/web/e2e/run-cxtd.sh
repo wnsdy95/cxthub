@@ -16,7 +16,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$repo_root/backend"
-CXT_AUTH=dev go run ./cmd/cxtd serve \
+CXT_AUTH=dev CXT_PUBLIC_URL=http://127.0.0.1:4174 go run ./cmd/cxtd serve \
   --addr 127.0.0.1:18907 \
   --data "$data_root/store" &
 server_pid=$!

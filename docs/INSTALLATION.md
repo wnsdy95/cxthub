@@ -139,19 +139,19 @@ Release as the archive and is not a separate publisher signature.
 
 ## Set up a repository
 
-Run `cxt` inside an existing Git repository. For a shared workspace, use its
-two-segment URL:
+Run `cxt` inside an existing Git repository. A Workspace can contain multiple
+Repositories, so use the Repository URL shown in the web UI:
 
 ```bash
 cd /path/to/code-repository
-cxt setup https://<host>/<username>/<workspace>
+cxt setup https://<host>/<namespace>/<workspace>/<repository>
 ```
 
 `cxt setup` is idempotent and performs:
 
 1. local `.cxt` store initialization;
 2. managed Git hook installation;
-3. workspace remote registration;
+3. repository remote registration;
 4. browser-based login;
 5. Claude Code and Codex hook registration when available; and
 6. team settings pull when authenticated.
@@ -190,6 +190,13 @@ Claude Desktop's general **Chat** tab does not run Claude Code lifecycle hooks,
 so it cannot be passively captured by this integration. Use the Code tab or an
 explicit export/import workflow instead.
 
+To let Codex app or Claude app retrieve context already synchronized to the
+server, add `https://<host>/mcp` as a remote MCP/custom connector. This is an
+OAuth-protected Streamable HTTP service backed by `cxtd` and cloud PostgreSQL;
+it is separate from capture hooks and from the optional local `cxt mcp` stdio
+helper. See [MCP connections](MCP.md) for setup, permissions, and deployment
+boundaries.
+
 To initialize local-only storage without a remote:
 
 ```bash
@@ -199,7 +206,7 @@ cxt init
 To skip browser login during setup:
 
 ```bash
-cxt setup https://<host>/<username>/<workspace> --no-login
+cxt setup https://<host>/<namespace>/<workspace>/<repository> --no-login
 ```
 
 See the [CLI reference](CLI.md) for manual setup and all commands.
@@ -317,7 +324,7 @@ then bind development authentication only to loopback:
 Connect a test Git repository with a workspace-shaped URL:
 
 ```bash
-cxt setup http://127.0.0.1:8907/<username>/<workspace> --no-login
+cxt setup http://127.0.0.1:8907/<namespace>/<workspace>/<repository> --no-login
 ```
 
 Development authentication and the filesystem store are for trusted local
@@ -348,16 +355,17 @@ smallest repository-scoped permissions available.
 Open a new shell after installation, source the startup file named by the
 installer, or add the installation directory to `PATH`.
 
-### Workspace URL rejected
+### Repository URL rejected
 
-Use an HTTP or HTTPS URL with exactly two path segments:
+Use an HTTP or HTTPS URL with a Namespace, Workspace, and Repository segment:
 
 ```text
-https://<host>/<username>/<workspace>
+https://<host>/<namespace>/<workspace>/<repository>
 ```
 
-Credentials, query strings, fragments, one-segment paths, and three-segment
-paths are rejected.
+Credentials, query strings, fragments, one-segment paths, and paths deeper
+than three segments are rejected. Existing two-segment remotes are accepted
+only as stable legacy repository identities.
 
 ### No active session to snapshot
 

@@ -256,11 +256,15 @@ type Manifest struct {
 //
 // The backend stores only CIR-neutral digests and does not know provider-native formats.
 type MemoryDigest struct {
-	SnapshotID         ContentHash          `json:"snapshot_id"`
-	PreviousMemoryHash ContentHash          `json:"previous_memory_hash,omitempty"`
-	Summary            string               `json:"summary"`
-	KeyFacts           []string             `json:"key_facts"`
-	OpenTasks          []string             `json:"open_tasks"`
+	SnapshotID         ContentHash `json:"snapshot_id"`
+	PreviousMemoryHash ContentHash `json:"previous_memory_hash,omitempty"`
+	Summary            string      `json:"summary"`
+	KeyFacts           []string    `json:"key_facts"`
+	OpenTasks          []string    `json:"open_tasks"`
+	// TasksAuthoritative is a runtime-only projection signal. The durable wire
+	// contract records authority per fragment, so this field must never affect
+	// a content hash.
+	TasksAuthoritative bool                 `json:"-"`
 	Provider           ProviderKind         `json:"provider"`
 	Fragments          []MemoryFragment     `json:"fragments,omitempty"`
 	GraftCoverage      *MemoryGraftCoverage `json:"graft_coverage,omitempty"`

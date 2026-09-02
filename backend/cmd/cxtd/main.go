@@ -15,11 +15,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	delivery "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/http"
+	deliverymcp "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/mcp"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
@@ -76,6 +78,7 @@ func serve(ctx context.Context, args []string) error {
 	addr := flagOr(args, "--addr", os.Getenv("CXT_ADDR"), ":8080")
 	dataDir := flagOr(args, "--data", os.Getenv("CXT_DATA"), "./cxt-data")
 	dsn := os.Getenv("CXT_POSTGRES_DSN")
+	requirePostgres := envBool(os.Getenv("CXT_REQUIRE_POSTGRES"))
 
 	// Resolve and validate authentication before opening either storage backend.
 	// In particular, an unsafe dev-auth bind must fail without touching the FS
@@ -96,8 +99,10 @@ func serve(ctx context.Context, args []string) error {
 		log.Printf("warning: dev authentication trusts every token without verification (local development only)")
 	}
 
-	// Outbound adapter: store.Open returns FSStore or PostgresStore according to build tags and DSN.
-	st, err := store.Open(dataDir, dsn)
+	// Outbound adapter: local development may use FS, while production sets
+	// CXT_REQUIRE_POSTGRES=1 and fails before serving if the binary, DSN, or
+	// database connection is unavailable.
+	st, err := store.Open(dataDir, dsn, requirePostgres)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
@@ -116,6 +121,8 @@ func serve(ctx context.Context, args []string) error {
 				return fmt.Errorf("apply migrations: %w", merr)
 			}
 			log.Printf("migrations: applied %d (%s)", n, mdir)
+		} else if requirePostgres {
+			return fmt.Errorf("migration directory not found while PostgreSQL storage is enforced — set CXT_MIGRATIONS_DIR")
 		} else {
 			log.Printf("warning: migration directory not found — set CXT_MIGRATIONS_DIR")
 		}
@@ -126,10 +133,36 @@ func serve(ctx context.Context, args []string) error {
 	idSvc := app.NewIdentityService(verifier, st)
 
 	api := delivery.NewServer(svc, idSvc)
+	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_PUBLIC_URL")), "/")
+	if publicURL == "" && isLoopback(addr) {
+		publicURL = loopbackPublicURL(addr)
+	}
+	if publicURL == "" {
+		return fmt.Errorf("CXT_PUBLIC_URL is required when cxtd is not bound to loopback")
+	}
+	mcpServer, err := deliverymcp.NewServer(svc, idSvc, st, publicURL)
+	if err != nil {
+		return fmt.Errorf("configure remote MCP: %w", err)
+	}
+	root := http.NewServeMux()
+	for _, path := range []string{
+		"/mcp",
+		"/.well-known/oauth-protected-resource",
+		"/.well-known/oauth-protected-resource/mcp",
+		"/.well-known/oauth-authorization-server",
+		"/oauth/register",
+		"/oauth/authorize",
+		"/oauth/token",
+		"/oauth/revoke",
+	} {
+		root.Handle(path, mcpServer.Handler())
+	}
+	root.Handle("/api/v1/oauth/requests/", mcpServer.Handler())
+	root.Handle("/", api.Handler())
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.Handler(),
+		Handler:           root,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    1 << 20,
@@ -151,6 +184,32 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	return nil
+}
+
+func loopbackPublicURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	if host == "" || host == "::" {
+		host = "127.0.0.1"
+	}
+	if host == "localhost" {
+		return "http://localhost:" + port
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return "http://" + net.JoinHostPort(ip.String(), port)
+	}
+	return ""
+}
+
+func envBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // flagOr selects the first non-empty value from args --name, envVal, or def.

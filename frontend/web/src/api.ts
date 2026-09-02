@@ -4,7 +4,7 @@
 // All requests include 'credentials: 'include' to automatically send cookies to the browser.
 // Exception: exchangeSession only sends the IDP token in the Authorization header once,
 // and the server sets the session cookie in the Set-Cookie response.
-import type { RefLogEntry, User, PublicUser, Workspace, PublicWorkspace, WorkspacePatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync } from './types';
+import type { RefLogEntry, User, PublicUser, Workspace, PublicWorkspace, WorkspacePatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Enterprise, PublicEnterprise, EnterpriseMembership, EnterprisePolicy, EnterpriseAuditEvent, BreakGlassGrant, EnterpriseRole } from './types';
 import { normalizeActivityResponse } from './activity';
 
 // Default is same-origin relative path (/api/v1). Dev uses Vite proxy, prod assumes same-domain deployment.
@@ -13,6 +13,15 @@ const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
 
 export interface SessionResponse {
   user: User;
+  expires_at: string;
+}
+
+export interface OAuthConsentRequest {
+  id: string;
+  client_name: string;
+  scope: string;
+  resource: string;
+  redirect_uri: string;
   expires_at: string;
 }
 
@@ -47,6 +56,10 @@ export const api = {
   logout: () => call<{ status: string }>('DELETE', '/auth/session'),
   me: () => call<User>('GET', '/me'),
   approveDevice: (code: string) => call<{ status: string }>('POST', '/auth/device/approve', { code }),
+  getOAuthConsent: (requestId: string) =>
+    call<OAuthConsentRequest>('GET', `/oauth/requests/${encodeURIComponent(requestId)}`),
+  decideOAuthConsent: (requestId: string, approve: boolean) =>
+    call<{ redirect_url: string }>('POST', `/oauth/requests/${encodeURIComponent(requestId)}`, { approve }),
 
   // Workspace · Member · Invite
   listWorkspaces: () => call<Workspace[]>('GET', '/workspaces'),
@@ -89,6 +102,46 @@ export const api = {
   createInvite: (wsId: string, email: string, role: string, expiresInDays: number) =>
     call<Invite>('POST', `/workspaces/${encodeURIComponent(wsId)}/invites`, { email, role, expires_in_days: expiresInDays }),
   acceptInvite: (token: string) => call<Workspace>('POST', `/invites/${encodeURIComponent(token)}/accept`),
+
+  // Enterprise administration. Enterprise roles manage this plane only; they
+  // never imply access to a Workspace's repository context.
+  listEnterprises: () => call<Enterprise[]>('GET', '/enterprises'),
+  publicEnterprise: (slug: string) =>
+    call<PublicEnterprise>('GET', `/public/enterprises/${encodeURIComponent(slug)}`),
+  getEnterprise: (enterpriseId: string) =>
+    call<Enterprise>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}`),
+  createEnterprise: (name: string, slug: string) => call<Enterprise>('POST', '/enterprises', { name, slug }),
+  updateEnterprise: (enterpriseId: string, patch: { name?: string; logo?: string }) =>
+    call<Enterprise>('PATCH', `/enterprises/${encodeURIComponent(enterpriseId)}`, patch),
+  listEnterpriseMembers: (enterpriseId: string) =>
+    call<EnterpriseMembership[]>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}/members`),
+  updateEnterpriseMember: (enterpriseId: string, userId: string, role: EnterpriseRole) =>
+    call<{ status: string }>(
+      'PATCH',
+      `/enterprises/${encodeURIComponent(enterpriseId)}/members/${encodeURIComponent(userId)}`,
+      { role },
+    ),
+  removeEnterpriseMember: (enterpriseId: string, userId: string) =>
+    call<{ status: string }>(
+      'DELETE',
+      `/enterprises/${encodeURIComponent(enterpriseId)}/members/${encodeURIComponent(userId)}`,
+    ),
+  getEnterprisePolicy: (enterpriseId: string) =>
+    call<EnterprisePolicy>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}/policy`),
+  updateEnterprisePolicy: (enterpriseId: string, patch: Partial<Omit<EnterprisePolicy, 'enterprise_id' | 'updated_by' | 'updated_at'>>) =>
+    call<EnterprisePolicy>('PATCH', `/enterprises/${encodeURIComponent(enterpriseId)}/policy`, patch),
+  listEnterpriseWorkspaces: (enterpriseId: string) =>
+    call<Workspace[]>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}/workspaces`),
+  createEnterpriseWorkspace: (enterpriseId: string, name: string) =>
+    call<Workspace>('POST', `/enterprises/${encodeURIComponent(enterpriseId)}/workspaces`, { name }),
+  listEnterpriseAudit: (enterpriseId: string) =>
+    call<EnterpriseAuditEvent[]>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}/audit`),
+  createBreakGlassGrant: (enterpriseId: string, workspaceId: string, reason: string, minutes: number) =>
+    call<BreakGlassGrant>('POST', `/enterprises/${encodeURIComponent(enterpriseId)}/break-glass`, {
+      workspace_id: workspaceId,
+      reason,
+      minutes,
+    }),
 
   // Session Browser — repo branch/commit log/context body
   listRepos: (workspaceId: string) => call<Repo[]>('GET', `/repos?workspace=${encodeURIComponent(workspaceId)}`),

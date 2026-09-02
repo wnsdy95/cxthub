@@ -10,7 +10,7 @@ import {
   estimateMonthlyStorageUsd,
   normalizedAverageStorageGiB,
 } from '../src/pricing.ts';
-import { parseRoute } from '../src/route.ts';
+import { parseRoute, repoPath, repositorySlug, wsPath } from '../src/route.ts';
 
 assert.deepEqual(ROLE_CAPABILITIES, [
   { id: 'viewContext', minimumRole: 'viewer' },
@@ -39,6 +39,41 @@ assert.equal((matrix.match(/class="denied"/g) ?? []).length, 10, 'cumulative fiv
 for (const role of ROLES) assert.match(matrix, new RegExp(`<code>${role}</code>`));
 
 assert.deepEqual(parseRoute('/pricing'), { kind: 'pricing' });
+assert.equal(parseRoute('/oauth/client'), null, 'server-owned OAuth path is not interpreted as a Workspace');
+assert.equal(parseRoute('/mcp'), null, 'server-owned MCP path is not interpreted as a user Namespace');
+assert.deepEqual(parseRoute('/connect/mcp'), { kind: 'mcpConsent', request: '' });
+assert.deepEqual(parseRoute('/acme/platform/backend'), {
+  kind: 'ws',
+  username: 'acme',
+  slug: 'platform',
+  repository: 'backend',
+});
+assert.deepEqual(parseRoute('/acme/platform/-/settings'), {
+  kind: 'ws',
+  username: 'acme',
+  slug: 'platform',
+  tab: 'settings',
+});
+assert.deepEqual(parseRoute('/acme/platform/settings'), {
+  kind: 'ws',
+  username: 'acme',
+  slug: 'platform',
+  repository: 'settings',
+  legacyTab: 'settings',
+});
+const workspace = { id: 'ws_1', owner_username: 'acme', slug: 'platform' };
+assert.equal(wsPath(workspace, 'members'), '/acme/platform/-/members');
+assert.equal(repositorySlug({ remote_url: 'https://cxthub.com/acme/platform/backend' }), 'backend');
+assert.equal(repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform/backend' }), '/acme/platform/backend');
+assert.equal(
+  repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform/backend' }, 'onhold'),
+  '/acme/platform/backend/onhold',
+);
+assert.equal(
+  repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform' }),
+  '/acme/platform',
+  'legacy two-segment repository keeps its stable workspace URL',
+);
 assert.equal(STORAGE_PRICING.includedGiB, 10);
 assert.equal(STORAGE_PRICING.overageUsdPerGiBMonth, 0.07);
 assert.equal(normalizedAverageStorageGiB(Number.NaN), 0);

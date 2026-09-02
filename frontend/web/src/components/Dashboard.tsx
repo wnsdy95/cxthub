@@ -2,7 +2,18 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { Invite } from '../types';
 import type { Workspace } from '../types';
 import { useUiStore } from '../store';
-import { wsPath, invitePath, parseRoute, findByRoute, navigate, replacePath } from '../route';
+import {
+  wsPath,
+  repoPath,
+  repositorySlug,
+  invitePath,
+  parseRoute,
+  findByRoute,
+  findRepositoryByRoute,
+  resolvedWorkspaceTab,
+  navigate,
+  replacePath,
+} from '../route';
 import {
   useMe,
   useWorkspaces,
@@ -55,10 +66,10 @@ export function Dashboard() {
   const NAME_RE = /^[A-Za-z]([A-Za-z0-9_-]*[A-Za-z0-9])?$/;
   const nameValid = NAME_RE.test(newName.trim());
 
-  // View the repo context — default is the first repo (usually one per workspace), switch by clicking in the list.
+  // View one repository within the selected workspace. The route wins over
+  // local state so refresh/back/deep links select the same context DAG.
   const [activeRepoId, setActiveRepoId] = useState<string | null>(null);
   const [accessNotice, setAccessNotice] = useState<string | null>(null);
-  const activeRepo = repos.find((r) => r.id === activeRepoId) ?? repos[0] ?? null;
 
   // URL (/<username>/<slug>) → synchronize selection. The URL is the source of truth on entry, refresh, and back navigation.
   // slug → id interpretation requires a list, so the path is kept in state and reinterpreted with the list.
@@ -86,6 +97,10 @@ export function Dashboard() {
     }
   }, [workspacesQ.isSuccess, workspaces, path, selectWs]);
 
+  const route = parseRoute(path);
+  const routedRepo = findRepositoryByRoute(route, repos);
+  const activeRepo = routedRepo ?? repos.find((r) => r.id === activeRepoId) ?? repos[0] ?? null;
+
   // Workspace click = navigate to that path (history is pushed for back action).
   function goWorkspace(w: Workspace) {
     setAccessNotice(null);
@@ -97,12 +112,12 @@ export function Dashboard() {
   // My role — UI gating (security boundary is server requireRepoRole).
   const role = myRole(selected, user?.id, members);
 
-  // Current tab — URL segment (/<u>/<slug>/members) is the truth. Default is context.
-  const route = parseRoute(path);
+  // The URL is the source of truth. Legacy /<u>/<ws>/settings is interpreted
+  // as a tab only if this workspace has no repository literally named settings.
+  const routedTab = resolvedWorkspaceTab(route, repos);
   const tab: 'context' | 'connections' | 'members' | 'onhold' | 'settings' =
-    route?.kind === 'ws' &&
-    (route.tab === 'members' || route.tab === 'connections' || route.tab === 'onhold' || route.tab === 'settings')
-      ? route.tab
+    routedTab === 'members' || routedTab === 'connections' || routedTab === 'onhold' || routedTab === 'settings'
+      ? routedTab
       : 'context';
   function goTab(next: 'context' | 'connections' | 'members' | 'onhold' | 'settings') {
     if (!selected) return;
@@ -111,8 +126,15 @@ export function Dashboard() {
       return;
     }
     setAccessNotice(null);
-    if (next === tab) return;
-    navigate(wsPath(selected, next === 'context' ? undefined : next));
+    if (next === 'context') {
+      navigate(activeRepo ? repoPath(selected, activeRepo) : wsPath(selected));
+      return;
+    }
+    if (next === 'onhold') {
+      if (activeRepo) navigate(repoPath(selected, activeRepo, 'onhold'));
+      return;
+    }
+    navigate(wsPath(selected, next));
   }
 
   function createWorkspace(e: FormEvent) {
@@ -142,6 +164,7 @@ export function Dashboard() {
             <Breadcrumb
               owner={selected.owner_username}
               name={selected.name}
+              repository={activeRepo ? repositorySlug(activeRepo) : undefined}
               isPrivate={selected.visibility !== 'public'}
               workspaces={workspaces}
               currentId={selected.id}
@@ -379,7 +402,7 @@ export function Dashboard() {
                               className={`repo-row${activeRepo?.id === r.id ? ' on' : ''}`}
                               onClick={() => {
                                 setActiveRepoId(r.id);
-                                goTab('context');
+                                navigate(repoPath(selected, r));
                               }}
                               title={t('dashboard.viewRepoContext')}
                             >

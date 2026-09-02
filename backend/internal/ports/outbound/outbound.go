@@ -10,6 +10,7 @@ package outbound
 
 import (
 	"context"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -203,6 +204,9 @@ type WorkspaceStore interface {
 	GetWorkspace(ctx context.Context, id string) (domain.Workspace, error)
 	// GetWorkspaceByPath finds workspace by URL segments (owner_username, slug) — for repo binding.
 	GetWorkspaceByPath(ctx context.Context, ownerUsername, slug string) (domain.Workspace, error)
+	// GetWorkspaceByNamespacePath resolves current and aliased Namespace slugs
+	// without rewriting URL-derived RepoIDs.
+	GetWorkspaceByNamespacePath(ctx context.Context, namespaceID, slug string) (domain.Workspace, error)
 	ListWorkspacesForUser(ctx context.Context, userID string) ([]domain.Workspace, error)
 
 	// Membership. AddMember upserts member (re-adds member to update role).
@@ -220,8 +224,74 @@ type WorkspaceStore interface {
 	// Session (server login session — CLI token also represented as long-lived session)
 	CreateSession(ctx context.Context, s domain.Session) error
 	GetSession(ctx context.Context, token string) (domain.Session, error)
+	// ConsumeSession atomically deletes and returns a session only when kind and
+	// label match. It is used for one-time OAuth refresh-token rotation.
+	ConsumeSession(ctx context.Context, token, kind, label string) (domain.Session, error)
 	DeleteSession(ctx context.Context, token string) error
 	ListSessionsForUser(ctx context.Context, userID string) ([]domain.Session, error)
+}
+
+// OAuthStore persists the public OAuth client registry and short-lived PKCE
+// authorization state used by the remote MCP endpoint. Authorization codes
+// are stored only by hash and consumed atomically exactly once.
+type OAuthStore interface {
+	CreateOAuthClient(ctx context.Context, client domain.OAuthClient) error
+	GetOAuthClient(ctx context.Context, clientID string) (domain.OAuthClient, error)
+	CreateOAuthAuthorizationRequest(ctx context.Context, req domain.OAuthAuthorizationRequest) error
+	GetOAuthAuthorizationRequest(ctx context.Context, requestID string) (domain.OAuthAuthorizationRequest, error)
+	ApproveOAuthAuthorizationRequest(ctx context.Context, requestID, userID, codeHash string, codeExpiresAt time.Time) (domain.OAuthAuthorizationCode, error)
+	DenyOAuthAuthorizationRequest(ctx context.Context, requestID string) (domain.OAuthAuthorizationRequest, error)
+	ConsumeOAuthAuthorizationCode(ctx context.Context, codeHash, clientID, redirectURI, codeChallenge string) (domain.OAuthAuthorizationCode, error)
+}
+
+// EnterpriseStore persists global namespaces, enterprise organization state,
+// policies, audit events, and short-lived break-glass grants. Enterprise roles
+// are intentionally separate from Workspace roles and never imply repository
+// context access.
+type EnterpriseStore interface {
+	CreateNamespace(ctx context.Context, ns domain.Namespace) error
+	GetNamespace(ctx context.Context, id string) (domain.Namespace, error)
+	GetNamespaceBySlug(ctx context.Context, slug string) (domain.Namespace, error)
+	RenameNamespace(ctx context.Context, id, nextSlug string) error
+
+	CreateEnterprise(
+		ctx context.Context,
+		enterprise domain.Enterprise,
+		namespace domain.Namespace,
+		owner domain.EnterpriseMembership,
+		policy domain.EnterprisePolicy,
+		audit domain.EnterpriseAuditEvent,
+	) error
+	GetEnterprise(ctx context.Context, id string) (domain.Enterprise, error)
+	GetEnterpriseBySlug(ctx context.Context, slug string) (domain.Enterprise, error)
+	ListEnterprisesForUser(ctx context.Context, userID string) ([]domain.Enterprise, error)
+	UpdateEnterprise(ctx context.Context, enterprise domain.Enterprise) error
+	UpdateEnterpriseWithAudit(ctx context.Context, enterprise domain.Enterprise, audit domain.EnterpriseAuditEvent) error
+
+	AddEnterpriseMember(ctx context.Context, membership domain.EnterpriseMembership) error
+	RemoveEnterpriseMember(ctx context.Context, enterpriseID, userID string) error
+	AddEnterpriseMemberWithAudit(ctx context.Context, membership domain.EnterpriseMembership, audit domain.EnterpriseAuditEvent) error
+	RemoveEnterpriseMemberWithAudit(ctx context.Context, enterpriseID, userID string, audit domain.EnterpriseAuditEvent) error
+	GetEnterpriseMembership(ctx context.Context, enterpriseID, userID string) (domain.EnterpriseMembership, error)
+	ListEnterpriseMembers(ctx context.Context, enterpriseID string) ([]domain.EnterpriseMembership, error)
+
+	PutEnterprisePolicy(ctx context.Context, policy domain.EnterprisePolicy) error
+	PutEnterprisePolicyWithAudit(ctx context.Context, policy domain.EnterprisePolicy, audit domain.EnterpriseAuditEvent) error
+	GetEnterprisePolicy(ctx context.Context, enterpriseID string) (domain.EnterprisePolicy, error)
+
+	ListWorkspacesForNamespace(ctx context.Context, namespaceID string) ([]domain.Workspace, error)
+	CreateEnterpriseWorkspaceWithAudit(ctx context.Context, workspace domain.Workspace, owner domain.Membership, audit domain.EnterpriseAuditEvent) error
+
+	AppendEnterpriseAudit(ctx context.Context, event domain.EnterpriseAuditEvent) error
+	ListEnterpriseAudit(ctx context.Context, enterpriseID string, limit int) ([]domain.EnterpriseAuditEvent, error)
+
+	CreateBreakGlassGrant(ctx context.Context, grant domain.BreakGlassGrant) error
+	GetActiveBreakGlassGrant(ctx context.Context, enterpriseID, workspaceID, userID string, now time.Time) (domain.BreakGlassGrant, error)
+	// CreateBreakGlassGrantWithAudit makes exceptional access and its creation
+	// audit indivisible. UseActiveBreakGlassGrant appends the use audit before
+	// returning authorization; audit failure must therefore fail closed.
+	CreateBreakGlassGrantWithAudit(ctx context.Context, grant domain.BreakGlassGrant, event domain.EnterpriseAuditEvent) error
+	UseActiveBreakGlassGrant(ctx context.Context, enterpriseID, workspaceID, userID string, now time.Time, event domain.EnterpriseAuditEvent) (domain.BreakGlassGrant, error)
 }
 
 // RefMoveClass is the classification returned by ClassifyRefMove (sync protocol).

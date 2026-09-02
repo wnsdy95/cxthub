@@ -25,6 +25,103 @@ export function useWorkspaces() {
   const authed = useAuthed();
   return useQuery({ queryKey: ['workspaces'], queryFn: api.listWorkspaces, enabled: authed });
 }
+export function useEnterprises() {
+  const authed = useAuthed();
+  return useQuery({ queryKey: ['enterprises'], queryFn: api.listEnterprises, enabled: authed });
+}
+export function useCreateEnterprise() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { name: string; slug: string }) => api.createEnterprise(v.name, v.slug),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['enterprises'] }),
+  });
+}
+export function useUpdateEnterprise() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { enterpriseId: string; patch: { name?: string; logo?: string } }) =>
+      api.updateEnterprise(v.enterpriseId, v.patch),
+    onSuccess: (enterprise) => {
+      qc.setQueryData(['enterprise', enterprise.id], enterprise);
+      void qc.invalidateQueries({ queryKey: ['enterprises'] });
+      void qc.invalidateQueries({ queryKey: ['publicEnterprise', enterprise.slug] });
+    },
+  });
+}
+export function useEnterpriseMembers(enterpriseId: string | null) {
+  return useQuery({
+    queryKey: ['enterprise-members', enterpriseId],
+    queryFn: () => api.listEnterpriseMembers(enterpriseId as string),
+    enabled: Boolean(enterpriseId),
+  });
+}
+export function useUpdateEnterpriseMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { enterpriseId: string; userId: string; role: import('./types').EnterpriseRole }) =>
+      api.updateEnterpriseMember(v.enterpriseId, v.userId, v.role),
+    onSuccess: (_result, v) => void qc.invalidateQueries({ queryKey: ['enterprise-members', v.enterpriseId] }),
+  });
+}
+export function useRemoveEnterpriseMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { enterpriseId: string; userId: string }) => api.removeEnterpriseMember(v.enterpriseId, v.userId),
+    onSuccess: (_result, v) => {
+      void qc.invalidateQueries({ queryKey: ['enterprise-members', v.enterpriseId] });
+      void qc.invalidateQueries({ queryKey: ['enterprises'] });
+    },
+  });
+}
+export function useEnterprisePolicy(enterpriseId: string | null) {
+  return useQuery({
+    queryKey: ['enterprise-policy', enterpriseId],
+    queryFn: () => api.getEnterprisePolicy(enterpriseId as string),
+    enabled: Boolean(enterpriseId),
+  });
+}
+export function useUpdateEnterprisePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: {
+      enterpriseId: string;
+      patch: Partial<Omit<import('./types').EnterprisePolicy, 'enterprise_id' | 'updated_by' | 'updated_at'>>;
+    }) => api.updateEnterprisePolicy(v.enterpriseId, v.patch),
+    onSuccess: (policy) => qc.setQueryData(['enterprise-policy', policy.enterprise_id], policy),
+  });
+}
+export function useEnterpriseWorkspaces(enterpriseId: string | null) {
+  return useQuery({
+    queryKey: ['enterprise-workspaces', enterpriseId],
+    queryFn: () => api.listEnterpriseWorkspaces(enterpriseId as string),
+    enabled: Boolean(enterpriseId),
+  });
+}
+export function useCreateEnterpriseWorkspace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { enterpriseId: string; name: string }) => api.createEnterpriseWorkspace(v.enterpriseId, v.name),
+    onSuccess: (_workspace, v) => {
+      void qc.invalidateQueries({ queryKey: ['enterprise-workspaces', v.enterpriseId] });
+      void qc.invalidateQueries({ queryKey: ['workspaces'] });
+    },
+  });
+}
+export function useEnterpriseAudit(enterpriseId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['enterprise-audit', enterpriseId],
+    queryFn: () => api.listEnterpriseAudit(enterpriseId as string),
+    enabled: enabled && Boolean(enterpriseId),
+  });
+}
+export function useCreateBreakGlassGrant() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { enterpriseId: string; workspaceId: string; reason: string; minutes: number }) =>
+      api.createBreakGlassGrant(v.enterpriseId, v.workspaceId, v.reason, v.minutes),
+    onSuccess: (_grant, v) => void qc.invalidateQueries({ queryKey: ['enterprise-audit', v.enterpriseId] }),
+  });
+}
 // Account settings: nickname is lightweight, while username changes URLs and workspace paths.
 export function useUpdateMe() {
   const qc = useQueryClient();

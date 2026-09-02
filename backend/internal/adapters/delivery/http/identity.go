@@ -37,6 +37,7 @@ type IdentityBackend interface {
 	ListWebSessions(ctx context.Context, userID string) ([]app.CLITokenInfo, error)
 	RevokeWebSession(ctx context.Context, userID, suffix string) error
 	PublicWorkspace(ctx context.Context, username, slug string) (domain.Workspace, error)
+	ReadableWorkspace(ctx context.Context, namespace, slug, viewerID string) (domain.Workspace, error)
 	PublicUser(ctx context.Context, username, viewerID string) (domain.User, []domain.Workspace, error)
 	ListWorkspaces(ctx context.Context, userID string) ([]domain.Workspace, error)
 	Invite(ctx context.Context, userID, workspaceID, email string, role domain.MemberRole, ttl time.Duration) (domain.Invite, error)
@@ -44,6 +45,23 @@ type IdentityBackend interface {
 	AcceptInvite(ctx context.Context, user domain.User, token string) (domain.Workspace, error)
 	ListMembers(ctx context.Context, userID, workspaceID string) ([]domain.Membership, error)
 	RevokeInvite(ctx context.Context, userID, workspaceID, token string) error
+
+	CreateEnterprise(ctx context.Context, creator domain.User, name, slug string) (domain.Enterprise, error)
+	ListEnterprises(ctx context.Context, userID string) ([]domain.Enterprise, error)
+	GetEnterprise(ctx context.Context, enterpriseID string) (domain.Enterprise, error)
+	UpdateEnterpriseProfile(ctx context.Context, actorID, enterpriseID string, name, logo *string) (domain.Enterprise, error)
+	PublicEnterprise(ctx context.Context, slug string) (domain.Enterprise, []domain.Workspace, error)
+	EnterpriseRoleOf(ctx context.Context, enterpriseID, userID string) (domain.EnterpriseRole, bool)
+	ListEnterpriseMembers(ctx context.Context, actorID, enterpriseID string) ([]domain.EnterpriseMembership, error)
+	UpdateEnterpriseMember(ctx context.Context, actorID, enterpriseID, targetID string, role domain.EnterpriseRole) error
+	RemoveEnterpriseMember(ctx context.Context, actorID, enterpriseID, targetID string) error
+	GetEnterprisePolicy(ctx context.Context, actorID, enterpriseID string) (domain.EnterprisePolicy, error)
+	UpdateEnterprisePolicy(ctx context.Context, actorID string, policy domain.EnterprisePolicy) (domain.EnterprisePolicy, error)
+	CreateEnterpriseWorkspace(ctx context.Context, actor domain.User, enterpriseID, name string) (domain.Workspace, error)
+	ListEnterpriseWorkspaces(ctx context.Context, actorID, enterpriseID string) ([]domain.Workspace, error)
+	CreateBreakGlassGrant(ctx context.Context, actorID, enterpriseID, workspaceID, reason string, minutes int) (domain.BreakGlassGrant, error)
+	HasBreakGlassAccess(ctx context.Context, workspaceID, userID string) (bool, error)
+	ListEnterpriseAudit(ctx context.Context, actorID, enterpriseID string, limit int) ([]domain.EnterpriseAuditEvent, error)
 }
 
 type ctxKey int
@@ -201,7 +219,7 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/me/sessions", s.requireUser(s.listWebSessions))
 	mux.HandleFunc("DELETE /api/v1/me/sessions/{suffix}", s.requireUser(s.revokeWebSession))
 	// Anonymous public read: username/slug → public workspace interpretation (private results in 404 — non-existence not exposed).
-	mux.HandleFunc("GET /api/v1/public/workspaces/{username}/{slug}", s.publicWorkspace)
+	mux.HandleFunc("GET /api/v1/public/workspaces/{username}/{slug}", s.optionalUser(s.publicWorkspace))
 	mux.HandleFunc("GET /api/v1/public/users/{username}", s.optionalUser(s.publicUser))
 	mux.HandleFunc("GET /api/v1/public/users/{username}/contributions", s.optionalUser(s.userContributions))
 	mux.HandleFunc("GET /api/v1/public/users/{username}/activity", s.optionalUser(s.userActivity))
@@ -217,6 +235,23 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/workspaces/{wsID}/invites", s.requireUser(s.listInvites))
 	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/invites/{token}/revoke", s.requireUser(s.revokeInvite))
 	mux.HandleFunc("POST /api/v1/invites/{token}/accept", s.requireUser(s.acceptInvite))
+
+	// Enterprise organization plane. Enterprise roles administer namespaces,
+	// people, and policy; repository context still uses Workspace membership.
+	mux.HandleFunc("POST /api/v1/enterprises", s.requireUser(s.createEnterprise))
+	mux.HandleFunc("GET /api/v1/enterprises", s.requireUser(s.listEnterprises))
+	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}", s.requireUser(s.getEnterprise))
+	mux.HandleFunc("PATCH /api/v1/enterprises/{enterpriseID}", s.requireUser(s.patchEnterprise))
+	mux.HandleFunc("GET /api/v1/public/enterprises/{slug}", s.publicEnterprise)
+	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/members", s.requireUser(s.listEnterpriseMembers))
+	mux.HandleFunc("PATCH /api/v1/enterprises/{enterpriseID}/members/{userID}", s.requireUser(s.patchEnterpriseMember))
+	mux.HandleFunc("DELETE /api/v1/enterprises/{enterpriseID}/members/{userID}", s.requireUser(s.deleteEnterpriseMember))
+	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/policy", s.requireUser(s.getEnterprisePolicy))
+	mux.HandleFunc("PATCH /api/v1/enterprises/{enterpriseID}/policy", s.requireUser(s.patchEnterprisePolicy))
+	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/workspaces", s.requireUser(s.listEnterpriseWorkspaces))
+	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/workspaces", s.requireUser(s.createEnterpriseWorkspace))
+	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/audit", s.requireUser(s.listEnterpriseAudit))
+	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/break-glass", s.requireUser(s.createBreakGlassGrant))
 }
 
 // rateLimit is a simple in-memory sliding window that allows limit requests per IP window.
@@ -477,7 +512,8 @@ func publicWorkspaceViewOf(ws domain.Workspace) publicWorkspaceView {
 
 // publicWorkspace is the entry point for anonymous public read access — only public workspaces are interpreted (any other results in 404).
 func (s *Server) publicWorkspace(w http.ResponseWriter, r *http.Request) {
-	out, err := s.id.PublicWorkspace(r.Context(), r.PathValue("username"), r.PathValue("slug"))
+	viewer, _ := userFrom(r.Context())
+	out, err := s.id.ReadableWorkspace(r.Context(), r.PathValue("username"), r.PathValue("slug"), viewer.ID)
 	s.respond(w, publicWorkspaceViewOf(out), err)
 }
 
@@ -638,4 +674,180 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
 	err := s.id.RevokeInvite(r.Context(), u.ID, r.PathValue("wsID"), r.PathValue("token"))
 	s.respond(w, map[string]string{"status": "revoked"}, err)
+}
+
+type publicEnterpriseResponse struct {
+	ID         string                `json:"id"`
+	Name       string                `json:"name"`
+	Slug       string                `json:"slug"`
+	Logo       string                `json:"logo,omitempty"`
+	CreatedAt  time.Time             `json:"created_at"`
+	Workspaces []publicWorkspaceView `json:"workspaces"`
+}
+
+func (s *Server) createEnterprise(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+	user, _ := userFrom(r.Context())
+	enterprise, err := s.id.CreateEnterprise(r.Context(), user, body.Name, body.Slug)
+	s.respond(w, enterprise, err)
+}
+
+func (s *Server) listEnterprises(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	enterprises, err := s.id.ListEnterprises(r.Context(), user.ID)
+	s.respond(w, enterprises, err)
+}
+
+func (s *Server) getEnterprise(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	enterpriseID := r.PathValue("enterpriseID")
+	if _, ok := s.id.EnterpriseRoleOf(r.Context(), enterpriseID, user.ID); !ok {
+		s.respond(w, domain.Enterprise{}, domain.ErrForbidden)
+		return
+	}
+	enterprise, err := s.id.GetEnterprise(r.Context(), enterpriseID)
+	s.respond(w, enterprise, err)
+}
+
+func (s *Server) patchEnterprise(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name *string `json:"name"`
+		Logo *string `json:"logo"`
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+	if body.Name == nil && body.Logo == nil {
+		s.respond(w, domain.Enterprise{}, domain.ErrValidation)
+		return
+	}
+	user, _ := userFrom(r.Context())
+	enterprise, err := s.id.UpdateEnterpriseProfile(r.Context(), user.ID, r.PathValue("enterpriseID"), body.Name, body.Logo)
+	s.respond(w, enterprise, err)
+}
+
+func (s *Server) publicEnterprise(w http.ResponseWriter, r *http.Request) {
+	enterprise, workspaces, err := s.id.PublicEnterprise(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		s.respond(w, publicEnterpriseResponse{}, err)
+		return
+	}
+	publicWorkspaces := make([]publicWorkspaceView, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		publicWorkspaces = append(publicWorkspaces, publicWorkspaceViewOf(workspace))
+	}
+	s.respond(w, publicEnterpriseResponse{
+		ID: enterprise.ID, Name: enterprise.Name, Slug: enterprise.Slug,
+		Logo: enterprise.Logo, CreatedAt: enterprise.CreatedAt, Workspaces: publicWorkspaces,
+	}, nil)
+}
+
+func (s *Server) listEnterpriseMembers(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	members, err := s.id.ListEnterpriseMembers(r.Context(), user.ID, r.PathValue("enterpriseID"))
+	s.respond(w, members, err)
+}
+
+func (s *Server) patchEnterpriseMember(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Role string `json:"role"`
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+	user, _ := userFrom(r.Context())
+	err := s.id.UpdateEnterpriseMember(r.Context(), user.ID, r.PathValue("enterpriseID"), r.PathValue("userID"), domain.EnterpriseRole(body.Role))
+	s.respond(w, map[string]string{"status": "updated"}, err)
+}
+
+func (s *Server) deleteEnterpriseMember(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	err := s.id.RemoveEnterpriseMember(r.Context(), user.ID, r.PathValue("enterpriseID"), r.PathValue("userID"))
+	s.respond(w, map[string]string{"status": "removed"}, err)
+}
+
+func (s *Server) getEnterprisePolicy(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	policy, err := s.id.GetEnterprisePolicy(r.Context(), user.ID, r.PathValue("enterpriseID"))
+	s.respond(w, policy, err)
+}
+
+func (s *Server) patchEnterprisePolicy(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		WorkspaceCreation          *domain.EnterpriseWorkspaceCreation `json:"workspace_creation"`
+		DefaultWorkspaceVisibility *domain.Visibility                  `json:"default_workspace_visibility"`
+		AllowPublicWorkspaces      *bool                               `json:"allow_public_workspaces"`
+		BreakGlassEnabled          *bool                               `json:"break_glass_enabled"`
+		BreakGlassMaxMinutes       *int                                `json:"break_glass_max_minutes"`
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+	user, _ := userFrom(r.Context())
+	policy, err := s.id.GetEnterprisePolicy(r.Context(), user.ID, r.PathValue("enterpriseID"))
+	if err != nil {
+		s.respond(w, domain.EnterprisePolicy{}, err)
+		return
+	}
+	if body.WorkspaceCreation != nil {
+		policy.WorkspaceCreation = *body.WorkspaceCreation
+	}
+	if body.DefaultWorkspaceVisibility != nil {
+		policy.DefaultWorkspaceVisibility = *body.DefaultWorkspaceVisibility
+	}
+	if body.AllowPublicWorkspaces != nil {
+		policy.AllowPublicWorkspaces = *body.AllowPublicWorkspaces
+	}
+	if body.BreakGlassEnabled != nil {
+		policy.BreakGlassEnabled = *body.BreakGlassEnabled
+	}
+	if body.BreakGlassMaxMinutes != nil {
+		policy.BreakGlassMaxMinutes = *body.BreakGlassMaxMinutes
+	}
+	updated, err := s.id.UpdateEnterprisePolicy(r.Context(), user.ID, policy)
+	s.respond(w, updated, err)
+}
+
+func (s *Server) listEnterpriseWorkspaces(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	workspaces, err := s.id.ListEnterpriseWorkspaces(r.Context(), user.ID, r.PathValue("enterpriseID"))
+	s.respond(w, workspaces, err)
+}
+
+func (s *Server) createEnterpriseWorkspace(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+	user, _ := userFrom(r.Context())
+	workspace, err := s.id.CreateEnterpriseWorkspace(r.Context(), user, r.PathValue("enterpriseID"), body.Name)
+	s.respond(w, workspace, err)
+}
+
+func (s *Server) listEnterpriseAudit(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	events, err := s.id.ListEnterpriseAudit(r.Context(), user.ID, r.PathValue("enterpriseID"), 100)
+	s.respond(w, events, err)
+}
+
+func (s *Server) createBreakGlassGrant(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		WorkspaceID string `json:"workspace_id"`
+		Reason      string `json:"reason"`
+		Minutes     int    `json:"minutes"`
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+	user, _ := userFrom(r.Context())
+	grant, err := s.id.CreateBreakGlassGrant(r.Context(), user.ID, r.PathValue("enterpriseID"), body.WorkspaceID, body.Reason, body.Minutes)
+	s.respond(w, grant, err)
 }
