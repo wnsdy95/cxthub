@@ -11,6 +11,28 @@ export const ROLE_RANK: Record<string, number> = { viewer: 1, puller: 2, member:
 
 export const ROLES: Role[] = ['viewer', 'puller', 'member', 'maintainer', 'owner'];
 
+// Cumulative workspace capability baseline. Keep this list aligned with the
+// server's requireRepoRole contract (backend/internal/domain/identity.go).
+// Workspace policies may narrow selected maintainer capabilities to owner,
+// but they never grant a capability below this baseline.
+export type RoleCapability =
+  | 'viewContext'
+  | 'pullTeamAssets'
+  | 'pushContext'
+  | 'manageTeamAssets'
+  | 'administerWorkspace';
+
+export const ROLE_CAPABILITIES: ReadonlyArray<{
+  id: RoleCapability;
+  minimumRole: Role;
+}> = [
+  { id: 'viewContext', minimumRole: 'viewer' },
+  { id: 'pullTeamAssets', minimumRole: 'puller' },
+  { id: 'pushContext', minimumRole: 'member' },
+  { id: 'manageTeamAssets', minimumRole: 'maintainer' },
+  { id: 'administerWorkspace', minimumRole: 'owner' },
+];
+
 /** Role within the workspace. The constructor is always owner, null for non-members. */
 export function myRole(ws: Workspace | null, userId: string | undefined, members: Membership[]): Role | null {
   if (!ws || !userId) return null;

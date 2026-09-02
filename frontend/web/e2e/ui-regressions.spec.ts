@@ -116,7 +116,7 @@ test('landing renders every captured product view without placeholders', async (
   await page.goto('/');
   await expect(page.locator('.shot-placeholder')).toHaveCount(0);
   await expect(page.locator('.product-shot img')).toHaveCount(6);
-  await expect(page.locator('.landing-nav a')).toHaveText(['Auto-capture', 'Product', 'Security']);
+  await expect(page.locator('.landing-nav a')).toHaveText(['Auto-capture', 'Product', 'Security', 'Pricing']);
 
   const expected = ['setup.jpg', 'context.jpg', 'onhold.jpg', 'profile.jpg', 'security.jpg', 'permissions.jpg'];
   const images = page.locator('.product-shot img');
@@ -131,6 +131,103 @@ test('landing renders every captured product view without placeholders', async (
     }))).toEqual({ complete: true, width: 1200, height: 700 });
   }
 
+  await page.locator('.landing-nav a').filter({ hasText: 'Pricing' }).click();
+  await expect(page).toHaveURL(/\/pricing$/);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('pricing publishes the storage-only contract and calculates GitHub-aligned overage', async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, ({ method, pathname }) => {
+    if (method === 'GET' && pathname === '/api/v1/me') {
+      return { status: 401, body: { error: { message: 'anonymous fixture' } } };
+    }
+    return undefined;
+  });
+
+  await page.goto('/pricing');
+  await expect(page).toHaveURL(/\/pricing$/);
+  await expect(page.locator('.pricing-hero h1')).toHaveText('Pay for context, not headcount.');
+  await expect(page.locator('.pricing-free')).toContainText('10 GiB');
+  await expect(page.locator('.pricing-overage')).toContainText('$0.07');
+  await expect(page.locator('.pricing-includes')).toContainText('No per-seat fee');
+  await expect(page.locator('.pricing-notice')).toContainText('No overage is charged');
+
+  const input = page.locator('#pricing-storage');
+  await input.fill('25');
+  await expect(page.locator('.pricing-calc-lines .total')).toContainText('$1.05');
+  await input.fill('10');
+  await expect(page.locator('.pricing-calc-lines .total')).toContainText('$0.00');
+  await expect(page.locator('.pricing-source-links a')).toHaveCount(2);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.pricing-card')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('workspace settings show the cumulative role matrix above permission overrides', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const pageErrors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
+    if (method !== 'GET') return undefined;
+    if (pathname === '/api/v1/me') {
+      return {
+        body: {
+          id: 'user-1',
+          email: 'alice@example.test',
+          name: 'Alice',
+          username: 'alice',
+          nickname: 'Alice',
+          locale: 'en',
+        },
+      };
+    }
+    if (pathname === '/api/v1/workspaces') {
+      return {
+        body: [{
+          id: workspaceId,
+          name: 'cxthub',
+          slug: 'cxthub',
+          owner_id: 'user-1',
+          owner_username: 'alice',
+          visibility: 'private',
+          public_role: 'viewer',
+          created_at: '2026-08-01T00:00:00Z',
+        }],
+      };
+    }
+    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) return { body: [] };
+    if (pathname === '/api/v1/repos' && searchParams.get('workspace') === workspaceId) return { body: [] };
+    return undefined;
+  });
+
+  await page.goto('/alice/cxthub/settings');
+  const matrix = page.locator('.role-capabilities');
+  await expect(matrix).toBeVisible();
+  await expect(matrix.locator('thead code')).toHaveText(['viewer', 'puller', 'member', 'maintainer', 'owner']);
+  await expect(matrix.locator('tbody tr')).toHaveCount(5);
+  await expect(matrix.locator('td.allowed')).toHaveCount(15);
+  await expect(matrix.locator('td.denied')).toHaveCount(10);
+
+  const matrixBeforeControls = await page.locator('.ws-settings-form').evaluate((form) => {
+    const capability = form.querySelector('.role-capabilities');
+    const controls = form.querySelector('.permission-controls');
+    if (!capability || !controls) return false;
+    return Boolean(capability.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  expect(matrixBeforeControls).toBe(true);
+
+  const overflow = await matrix.locator('.role-capabilities-scroll').evaluate((element) => ({
+    client: element.clientWidth,
+    scroll: element.scrollWidth,
+  }));
+  expect(overflow.scroll).toBeGreaterThan(overflow.client);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });

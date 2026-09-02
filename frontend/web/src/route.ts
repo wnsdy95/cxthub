@@ -6,7 +6,7 @@ import type { Workspace } from './types';
 type WorkspaceRoute = Pick<Workspace, 'id' | 'owner_username' | 'slug'>;
 
 // Reserved segments for username (to prevent conflicts with feature routes).
-const RESERVED = new Set(['invite', 'w', 'login', 'settings', 'api', 'assets']);
+const RESERVED = new Set(['invite', 'w', 'login', 'settings', 'pricing', 'api', 'assets']);
 
 // Workspace sub-tab routing (/<username>/<slug>/<tab>). Default is context (no segment).
 export type WsTab = 'members' | 'connections' | 'onhold' | 'settings';
@@ -17,6 +17,7 @@ export type Route =
   | { kind: 'wsid'; id: string } // Legacy /w/<id>
   | { kind: 'invite'; token: string } // /invite/<token>
   | { kind: 'device'; code: string } // /login/device?code=XXX-XXX (CLI pairing approval)
+  | { kind: 'pricing' } // /pricing — public storage pricing
   | null;
 
 // Workspace's canonical path. Fallback to id path if slug is missing (legacy fix).
@@ -44,6 +45,7 @@ export function parseRoute(pathname: string = location.pathname): Route {
       }
     });
   if (seg.length === 0 || seg.length > 3) return null;
+  if (seg[0] === 'pricing' && seg.length === 1) return { kind: 'pricing' };
   if (seg[0] === 'invite' && seg.length === 2) return { kind: 'invite', token: seg[1] };
   if (seg[0] === 'login' && seg[1] === 'device' && seg.length === 2) {
     return { kind: 'device', code: new URLSearchParams(location.search).get('code') ?? '' };
