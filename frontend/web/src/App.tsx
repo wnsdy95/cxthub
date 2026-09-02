@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { wsPath, parseRoute, replacePath } from './route';
-import { useMe, useAcceptInvite } from './hooks';
+import { wsPath, parseRoute, replacePath, findByRoute, type WsTab } from './route';
+import { useMe, useAcceptInvite, useWorkspaces } from './hooks';
 import { useLocale, useT } from './i18n';
 import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
@@ -91,6 +91,7 @@ function Root() {
     if (r?.kind === 'device') return <DeviceApprove code={r.code} />;
     if (r?.kind === 'user') return <UserProfile username={r.username} />;
     if (r?.kind === 'pricing') return <Pricing />;
+    if (r?.kind === 'ws') return <AuthenticatedWorkspace username={r.username} slug={r.slug} tab={r.tab} />;
     // Home (/) shows landing even in login state — clicking logo does not redirect to workspace. (Dashboard mounts only in workspace paths, so automatic redirects do not occur)
     if (r === null) return <Landing />;
   }
@@ -104,4 +105,18 @@ function Root() {
       )}
     </>
   );
+}
+
+function AuthenticatedWorkspace({ username, slug, tab }: { username: string; slug: string; tab?: WsTab }) {
+  const workspaces = useWorkspaces();
+  if (workspaces.isLoading) return <div className="loading">…</div>;
+  if (workspaces.isError) return <Dashboard />;
+
+  const route = { kind: 'ws' as const, username, slug, tab };
+  if (findByRoute(route, workspaces.data ?? [])) return <Dashboard />;
+
+  // A signed-in non-member still uses the public read-only surface. Routing
+  // every authenticated workspace URL through Dashboard would redirect away
+  // before public visibility and access-denial rules can be evaluated.
+  return <PublicBrowse username={username} slug={slug} tab={tab} />;
 }

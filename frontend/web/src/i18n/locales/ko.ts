@@ -53,6 +53,7 @@ export const ko = {
     commitGraphTotal: '커밋 그래프 · 전체 {count}',
     close: '닫기',
     accessDenied: '접근할 수 없음',
+    workspaceUnavailable: '이 워크스페이스는 없거나 비공개입니다.',
     expand: '펼치기',
     collapse: '접기',
   },
