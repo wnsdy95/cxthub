@@ -726,6 +726,146 @@ func TestRepoRegistrationIsWorkspaceScopedNotGitURLScoped(t *testing.T) {
 	}
 }
 
+func TestMultipleRepositoriesCanShareWorkspace(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	var me struct {
+		Username string `json:"username"`
+	}
+	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK {
+		t.Fatalf("me code %d", code)
+	}
+	var ws struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+	}
+	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/workspaces", map[string]any{"name": "Platform"}, &ws); code != http.StatusOK {
+		t.Fatalf("workspace code %d", code)
+	}
+
+	register := func(repository, gitURL string) domain.Repo {
+		t.Helper()
+		remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug + "/" + repository
+		repo := domain.Repo{
+			ID:            repoIDForRemoteURLForTest(remoteURL),
+			RemoteURL:     remoteURL,
+			DefaultBranch: "main",
+			GitRemoteURL:  gitURL,
+		}
+		var got domain.Repo
+		if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", repo, &got); code != http.StatusOK {
+			t.Fatalf("register %s code %d", repository, code)
+		}
+		if got.WorkspaceID != ws.ID {
+			t.Fatalf("%s workspace = %q, want %q", repository, got.WorkspaceID, ws.ID)
+		}
+		return got
+	}
+
+	backendRepo := register("backend", "https://github.com/acme/backend.git")
+	frontendRepo := register("frontend", "https://github.com/acme/frontend.git")
+	if backendRepo.ID == frontendRepo.ID {
+		t.Fatal("repositories in one workspace received the same ID")
+	}
+
+	var repos []domain.Repo
+	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/repos?workspace="+url.QueryEscape(ws.ID), nil, &repos); code != http.StatusOK {
+		t.Fatalf("list repos code %d", code)
+	}
+	if len(repos) != 2 {
+		t.Fatalf("workspace repos = %d, want 2: %+v", len(repos), repos)
+	}
+}
+
+func TestEnterpriseBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	const ownerToken = "dev:enterprise-owner@example.com:Enterprise Owner"
+	const adminToken = "dev:enterprise-admin@example.com:Enterprise Admin"
+	type meResponse struct {
+		ID string `json:"id"`
+	}
+	var owner, admin meResponse
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/me", nil, &owner); code != http.StatusOK {
+		t.Fatalf("owner me code %d", code)
+	}
+	if code := doJSONAs(t, adminToken, http.MethodGet, ts.URL+"/api/v1/me", nil, &admin); code != http.StatusOK {
+		t.Fatalf("admin me code %d", code)
+	}
+
+	var enterprise domain.Enterprise
+	if code := doJSONAs(t, ownerToken, http.MethodPost, ts.URL+"/api/v1/enterprises", map[string]any{
+		"name": "Acme", "slug": "acme",
+	}, &enterprise); code != http.StatusOK {
+		t.Fatalf("create enterprise code %d", code)
+	}
+	memberURL := ts.URL + "/api/v1/enterprises/" + enterprise.ID + "/members/" + url.PathEscape(admin.ID)
+	if code := doJSONAs(t, ownerToken, http.MethodPatch, memberURL, map[string]any{"role": "admin"}, nil); code != http.StatusOK {
+		t.Fatalf("add enterprise admin code %d", code)
+	}
+
+	var workspace domain.Workspace
+	if code := doJSONAs(t, adminToken, http.MethodPost, ts.URL+"/api/v1/enterprises/"+enterprise.ID+"/workspaces", map[string]any{
+		"name": "Platform",
+	}, &workspace); code != http.StatusOK {
+		t.Fatalf("create enterprise workspace code %d", code)
+	}
+	remoteURL := "http://cxthub.test/acme/" + workspace.Slug + "/backend"
+	repoID := repoIDForRemoteURLForTest(remoteURL)
+	if code := doJSONAs(t, adminToken, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
+		"id": repoID, "remote_url": remoteURL, "default_branch": "main",
+	}, nil); code != http.StatusOK {
+		t.Fatalf("register enterprise repo code %d", code)
+	}
+	repoBase := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID))
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusForbidden {
+		t.Fatalf("enterprise owner inherited private context read: code %d", code)
+	}
+	workspacePath := ts.URL + "/api/v1/public/workspaces/acme/" + url.PathEscape(workspace.Slug)
+	if code := doJSONAs(t, ownerToken, http.MethodGet, workspacePath, nil, nil); code != http.StatusNotFound {
+		t.Fatalf("private enterprise Workspace leaked before grant: code %d", code)
+	}
+
+	var grant domain.BreakGlassGrant
+	if code := doJSONAs(t, ownerToken, http.MethodPost, ts.URL+"/api/v1/enterprises/"+enterprise.ID+"/break-glass", map[string]any{
+		"workspace_id": workspace.ID, "reason": "production incident investigation", "minutes": 15,
+	}, &grant); code != http.StatusOK {
+		t.Fatalf("create break-glass code %d", code)
+	}
+	if grant.WorkspaceID != workspace.ID {
+		t.Fatalf("grant workspace = %q, want %q", grant.WorkspaceID, workspace.ID)
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusOK {
+		t.Fatalf("break-glass read code %d", code)
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodGet, workspacePath, nil, nil); code != http.StatusOK {
+		t.Fatalf("break-glass Workspace entry code %d", code)
+	}
+	var repos []domain.Repo
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repos?workspace="+url.QueryEscape(workspace.ID), nil, &repos); code != http.StatusOK || len(repos) != 1 || repos[0].ID != repoID {
+		t.Fatalf("break-glass repository discovery code=%d repos=%+v", code, repos)
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodPut, repoBase+"/refs/branch/main", map[string]any{
+		"target": domain.ContentHash("sha256:" + strings.Repeat("a", 64)),
+	}, nil); code != http.StatusForbidden {
+		t.Fatalf("break-glass write code %d, want 403", code)
+	}
+
+	var audit []domain.EnterpriseAuditEvent
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/enterprises/"+enterprise.ID+"/audit", nil, &audit); code != http.StatusOK {
+		t.Fatalf("audit code %d", code)
+	}
+	used := false
+	for _, event := range audit {
+		used = used || event.Action == "enterprise.break_glass.used"
+	}
+	if !used {
+		t.Fatalf("break-glass use not audited: %+v", audit)
+	}
+}
+
 func TestPublicWorkspaceProjectionRedactsCapabilitiesAndPolicies(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()

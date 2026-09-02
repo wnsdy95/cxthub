@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -32,6 +33,10 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
+	}
 	return &PostgresStore{pool: pool}, nil
 }
 
@@ -40,6 +45,19 @@ var _ Store = (*PostgresStore)(nil)
 func mapNoRows(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound
+	}
+	return err
+}
+
+func mapPGConstraint(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505":
+			return fmt.Errorf("%w: unique storage constraint", domain.ErrConflict)
+		case "23514":
+			return fmt.Errorf("%w: storage check constraint", domain.ErrValidation)
+		}
 	}
 	return err
 }

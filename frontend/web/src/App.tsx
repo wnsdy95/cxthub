@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { wsPath, parseRoute, replacePath, findByRoute, type WsTab } from './route';
+import { wsPath, parseRoute, replacePath, findByRoute } from './route';
 import { useMe, useAcceptInvite, useWorkspaces } from './hooks';
 import { useLocale, useT } from './i18n';
 import { Login } from './components/Login';
@@ -10,6 +10,7 @@ import { UserProfile } from './components/UserProfile';
 import { Landing } from './components/Landing';
 import { Pricing } from './components/Pricing';
 import { DeviceApprove } from './components/DeviceApprove';
+import { MCPConsent } from './components/MCPConsent';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -71,8 +72,9 @@ function Root() {
   if (!authed) {
     // Non-logged in + /<username>/<slug> → public workspace: read-only view (determined by server). /login/device re-renders to approval page after login.
     const r = parseRoute();
+    if (r?.kind === 'mcpConsent') return <Login />;
     if (!forceLogin && r?.kind === 'ws') {
-      return <PublicBrowse username={r.username} slug={r.slug} tab={r.tab} onLogin={() => setForceLogin(true)} />;
+      return <PublicBrowse route={r} onLogin={() => setForceLogin(true)} />;
     }
     if (!forceLogin && r?.kind === 'user') {
       return <UserProfile username={r.username} onLogin={() => setForceLogin(true)} />;
@@ -89,9 +91,10 @@ function Root() {
   {
     const r = parseRoute();
     if (r?.kind === 'device') return <DeviceApprove code={r.code} />;
+    if (r?.kind === 'mcpConsent') return <MCPConsent requestId={r.request} />;
     if (r?.kind === 'user') return <UserProfile username={r.username} />;
     if (r?.kind === 'pricing') return <Pricing />;
-    if (r?.kind === 'ws') return <AuthenticatedWorkspace username={r.username} slug={r.slug} tab={r.tab} />;
+    if (r?.kind === 'ws') return <AuthenticatedWorkspace route={r} />;
     // Home (/) shows landing even in login state — clicking logo does not redirect to workspace. (Dashboard mounts only in workspace paths, so automatic redirects do not occur)
     if (r === null) return <Landing />;
   }
@@ -107,16 +110,15 @@ function Root() {
   );
 }
 
-function AuthenticatedWorkspace({ username, slug, tab }: { username: string; slug: string; tab?: WsTab }) {
+function AuthenticatedWorkspace({ route }: { route: Extract<NonNullable<ReturnType<typeof parseRoute>>, { kind: 'ws' }> }) {
   const workspaces = useWorkspaces();
   if (workspaces.isLoading) return <div className="loading">…</div>;
   if (workspaces.isError) return <Dashboard />;
 
-  const route = { kind: 'ws' as const, username, slug, tab };
   if (findByRoute(route, workspaces.data ?? [])) return <Dashboard />;
 
   // A signed-in non-member still uses the public read-only surface. Routing
   // every authenticated workspace URL through Dashboard would redirect away
   // before public visibility and access-denial rules can be evaluated.
-  return <PublicBrowse username={username} slug={slug} tab={tab} />;
+  return <PublicBrowse route={route} />;
 }

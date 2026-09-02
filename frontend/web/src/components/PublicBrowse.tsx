@@ -5,7 +5,14 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { PublicWorkspace } from '../types';
 import { api } from '../api';
-import { navigate, type WsTab } from '../route';
+import {
+  navigate,
+  repoPath,
+  repositorySlug,
+  findRepositoryByRoute,
+  resolvedWorkspaceTab,
+  type Route,
+} from '../route';
 import { Logo } from './Logo';
 import { LocaleSwitcher } from './LocaleSwitcher';
 import { Breadcrumb } from './Breadcrumb';
@@ -15,17 +22,14 @@ import { sanitizeRemoteUrl } from '../urls';
 import { AccessDenied } from './AccessDenied';
 
 export function PublicBrowse({
-  username,
-  slug,
-  tab,
+  route,
   onLogin,
 }: {
-  username: string;
-  slug: string;
-  tab?: WsTab;
+  route: Extract<NonNullable<Route>, { kind: 'ws' }>;
   onLogin?: () => void;
 }) {
   const t = useT();
+  const { username, slug } = route;
   const wsQ = useQuery<PublicWorkspace>({
     queryKey: ['public-ws', username, slug],
     queryFn: () => api.publicWorkspace(username, slug),
@@ -39,7 +43,9 @@ export function PublicBrowse({
   });
   const repos = reposQ.data ?? [];
   const [activeRepoId, setActiveRepoId] = useState<string | null>(null);
-  const activeRepo = repos.find((r) => r.id === activeRepoId) ?? repos[0] ?? null;
+  const routedRepo = findRepositoryByRoute(route, repos);
+  const activeRepo = routedRepo ?? repos.find((r) => r.id === activeRepoId) ?? repos[0] ?? null;
+  const tab = resolvedWorkspaceTab(route, repos);
 
   // private or non-existent — Do not leak existence, redirect to login (no setState during render → effect).
   const notFound = !wsQ.isLoading && !ws;
@@ -61,11 +67,19 @@ export function PublicBrowse({
               <Logo />
             </div>
           </button>
-          {ws && <Breadcrumb owner={ws.owner_username} name={ws.name} />}
+          {ws && (
+            <Breadcrumb
+              owner={ws.owner_username}
+              name={ws.name}
+              repository={activeRepo ? repositorySlug(activeRepo) : undefined}
+            />
+          )}
         </div>
         <div className="who">
           <LocaleSwitcher />
-          <span className="vis-chip">{t('common.publicView')}</span>
+          <span className={`vis-chip${ws.visibility === 'public' ? '' : ' emergency'}`}>
+            {ws.visibility === 'public' ? t('common.publicView') : t('enterprise.emergencyReadOnly')}
+          </span>
           {onLogin && (
             <button
               className="ghost"
@@ -85,13 +99,16 @@ export function PublicBrowse({
           <div className="ws-head">
             <h2>
               {ws.name}
-              <span className="vis-chip">{t('common.public')}</span>
+              <span className={`vis-chip${ws.visibility === 'public' ? '' : ' emergency'}`}>
+                {ws.visibility === 'public' ? t('common.public') : t('common.private')}
+              </span>
             </h2>
             <p className="ws-meta">
               <code>
                 {ws.owner_username}/{ws.slug}
               </code>
             </p>
+            {ws.visibility !== 'public' && <p className="warn-red">{t('enterprise.emergencySessionNotice')}</p>}
           </div>
 
           {tab !== 'settings' && repos.length > 1 && (
@@ -100,9 +117,12 @@ export function PublicBrowse({
                 <button
                   key={r.id}
                   className={`ghost mini${activeRepo?.id === r.id ? ' on' : ''}`}
-                  onClick={() => setActiveRepoId(r.id)}
+                  onClick={() => {
+                    setActiveRepoId(r.id);
+                    navigate(repoPath(ws, r));
+                  }}
                 >
-                  {sanitizeRemoteUrl(r.remote_url) || r.id.slice(7, 19)}
+                  {repositorySlug(r) || sanitizeRemoteUrl(r.remote_url) || r.id.slice(7, 19)}
                 </button>
               ))}
             </div>

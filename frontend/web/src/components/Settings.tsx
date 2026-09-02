@@ -29,7 +29,7 @@ import { projectBranchRefs } from '../branchLifecycle';
 
 // resizeToDataURL reduces uploaded images to a 256px square JPEG data URL (center crop).
 // Stores the record as is, keeping it small (server limit ~700KB).
-async function resizeToDataURL(file: File, t: ReturnType<typeof useT>, size = 256): Promise<string> {
+export async function resizeToDataURL(file: File, t: ReturnType<typeof useT>, size = 256): Promise<string> {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise<HTMLImageElement>((res, rej) => {

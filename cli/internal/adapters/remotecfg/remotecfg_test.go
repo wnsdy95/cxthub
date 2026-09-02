@@ -94,17 +94,22 @@ func TestSaveRefusesSymlinkedCxtDirectory(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	// Workspace URL = <host>/<username>/<workspace> (2-segment, 1 repo per workspace).
-	valid := []string{"http://127.0.0.1:8907/acme/demo", "https://cxthub.example.com/alice/backend"}
+	// New repositories use <host>/<namespace>/<workspace>/<repository>.
+	// Existing two-segment remotes remain valid because RepoID is derived from
+	// the URL and rewriting one would fork its existing context DAG.
+	valid := []string{
+		"http://127.0.0.1:8907/acme/demo",
+		"https://cxthub.example.com/alice/platform/backend",
+	}
 	for _, u := range valid {
 		if err := Validate(u); err != nil {
 			t.Errorf("Validate(%q) failed: %v", u, err)
 		}
 	}
-	// Reject 1-segment (workspace missing) and 3-segment (multi-repo not yet supported).
+	// Reject missing, over-deep, and malformed identities.
 	invalid := []string{
 		"", "ftp://host/a/b", "http://hostonly", "http://host/", "http://host/only",
-		"http://host/a/b/c", "not a url at all ://", "https://token@host/a/b",
+		"http://host/a/b/c/d", "not a url at all ://", "https://token@host/a/b",
 		"https://host/a/b?token=secret", "https://host/a/b#fragment", "https://host/a//b",
 		"https://host/a/../b",
 	}
@@ -153,6 +158,11 @@ func TestRepoIDConvergence(t *testing.T) {
 	}
 	if d := RepoIDFor("http://host:8907/acme/other"); d == a {
 		t.Fatal("Another repo should not have the same ID")
+	}
+	backend := RepoIDFor("http://host:8907/acme/platform/backend")
+	frontend := RepoIDFor("http://host:8907/acme/platform/frontend")
+	if backend == frontend {
+		t.Fatal("Repositories in the same workspace must have distinct IDs")
 	}
 }
 

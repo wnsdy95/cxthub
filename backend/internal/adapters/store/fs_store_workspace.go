@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -75,6 +76,33 @@ func (s *FSStore) GetSession(_ context.Context, token string) (domain.Session, e
 		}
 	}
 	return sess, err
+}
+
+var fsSessionLocks sync.Map
+
+func (s *FSStore) sessionLock(token string) *sync.Mutex {
+	lock, _ := fsSessionLocks.LoadOrStore(s.dataDir+"\x00"+token, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+func (s *FSStore) ConsumeSession(ctx context.Context, token, kind, label string) (domain.Session, error) {
+	lock := s.sessionLock(token)
+	lock.Lock()
+	defer lock.Unlock()
+	sess, err := s.GetSession(ctx, token)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	if sess.Kind != kind || sess.Label != label {
+		return domain.Session{}, domain.ErrUnauthorized
+	}
+	if err := os.Remove(filepath.Join(s.sessionsDir(), token+".json")); err != nil {
+		if os.IsNotExist(err) {
+			return domain.Session{}, domain.ErrNotFound
+		}
+		return domain.Session{}, err
+	}
+	return sess, nil
 }
 
 func (s *FSStore) DeleteSession(_ context.Context, token string) error {
@@ -239,6 +267,33 @@ func (s *FSStore) GetWorkspaceByPath(_ context.Context, ownerUsername, slug stri
 				return domain.Workspace{}, storedIdentityIntegrity(verr)
 			}
 			return ws, nil
+		}
+	}
+	return domain.Workspace{}, domain.ErrNotFound
+}
+
+func (s *FSStore) GetWorkspaceByNamespacePath(_ context.Context, namespaceID, slug string) (domain.Workspace, error) {
+	if err := domain.ValidateNamespaceID(namespaceID); err != nil {
+		return domain.Workspace{}, err
+	}
+	entries, err := os.ReadDir(s.workspacesDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return domain.Workspace{}, domain.ErrNotFound
+		}
+		return domain.Workspace{}, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		var workspace domain.Workspace
+		if readJSON(filepath.Join(s.workspacesDir(), entry.Name()), &workspace) == nil &&
+			workspace.OwnerNamespaceID == namespaceID && workspace.Slug == slug {
+			if err := domain.ValidateWorkspaceRecord(workspace); err != nil {
+				return domain.Workspace{}, storedIdentityIntegrity(err)
+			}
+			return workspace, nil
 		}
 	}
 	return domain.Workspace{}, domain.ErrNotFound

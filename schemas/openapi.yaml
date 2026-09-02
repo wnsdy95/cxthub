@@ -54,6 +54,9 @@ components:
         - `sess_*` server session token — CLI token(sess_cli_*, POST /me/cli-tokens issuance, 1 year) included.
           CLI stores `cxt login <token>` in ~/.cxt/auth.json(0600, per host).
         - IDP token(Firebase ID token / dev token) — validated for user upsert.
+        OAuth MCP access/refresh capabilities are deliberately excluded from
+        this REST security scheme. They are accepted only by the root `/mcp`
+        resource and `/oauth/token` respectively.
 
   headers:
     X-Cxt-Identity:
@@ -270,7 +273,7 @@ components:
           default: main
         workspace_id:
           type: string
-          description: "Owning workspace (visibility boundary). Server automatically binds to remote_url path /<username>/<workspace>. '' = unowned."
+          description: "Owning workspace (visibility boundary). Server binds the /<namespace>/<workspace> prefix of canonical /<namespace>/<workspace>/<repository> remote URLs. Existing two-segment repository identities remain supported. '' = legacy/unowned."
         git_remote_url:
           type: string
           description: "Code repo's git origin (GitHub etc.) — web 'connected' link, onboarding origin validation criterion."
@@ -426,6 +429,7 @@ components:
                 - git_origin_mismatch
                 - conflict
                 - validation
+                - csrf_rejected
                 - integrity_violation
                 - missing_object
             message:
@@ -433,6 +437,19 @@ components:
             details:
               type: object
               additionalProperties: true
+
+    OAuthConsentRequest:
+      type: object
+      description: "Short-lived, authenticated browser projection of a remote MCP OAuth authorization request. The client name is self-declared and not a verified brand identity."
+      required: [id, client_name, scope, resource, redirect_uri, expires_at]
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        client_name: { type: string, maxLength: 128 }
+        scope: { type: string, const: context:read }
+        resource: { type: string, format: uri }
+        redirect_uri: { type: string, format: uri }
+        expires_at: { type: string, format: date-time }
 
     MemberRole:
       type: string
@@ -471,6 +488,7 @@ components:
         owner_id: { type: string, description: "Creator — role cannot be fixed or removed, can only be changed via transfer" }
         slug: { type: string, description: "Unique URL segment within the owner" }
         owner_username: { type: string }
+        owner_namespace_id: { type: string, description: "Personal or Enterprise namespace that owns the URL. Enterprise role does not imply Workspace access." }
         visibility: { type: string, enum: [private, public] }
         secrets_policy: { type: string, enum: ["", members, owner], description: "'' = members (maintainer and above)" }
         settings_policy: { type: string, enum: ["", members, owner] }
@@ -489,6 +507,69 @@ components:
         role: { $ref: "#/components/schemas/MemberRole" }
         created_at: { type: string, format: date-time }
         user: { $ref: "#/components/schemas/User" }
+
+    Enterprise:
+      type: object
+      description: "Enterprise namespace and administration plane. Membership never implies Workspace context access."
+      required: [id, namespace_id, name, slug, created_by, created_at]
+      properties:
+        id: { type: string }
+        namespace_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        logo: { type: string, description: "Enterprise logo data URL." }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+
+    EnterpriseMembership:
+      type: object
+      required: [enterprise_id, user_id, role, created_at]
+      properties:
+        enterprise_id: { type: string }
+        user_id: { type: string }
+        role: { type: string, enum: [member, admin, owner] }
+        user: { $ref: "#/components/schemas/User" }
+        created_at: { type: string, format: date-time }
+
+    EnterprisePolicy:
+      type: object
+      description: "Policies currently enforced by the service; future SSO/SCIM controls are not decorative fields here."
+      required: [enterprise_id, workspace_creation, default_workspace_visibility, allow_public_workspaces, break_glass_enabled, break_glass_max_minutes]
+      properties:
+        enterprise_id: { type: string }
+        workspace_creation: { type: string, enum: [admins, members] }
+        default_workspace_visibility: { type: string, enum: [private, public] }
+        allow_public_workspaces: { type: boolean }
+        break_glass_enabled: { type: boolean }
+        break_glass_max_minutes: { type: integer, minimum: 5, maximum: 240 }
+        updated_by: { type: string }
+        updated_at: { type: string, format: date-time }
+
+    EnterpriseAuditEvent:
+      type: object
+      required: [id, enterprise_id, actor_id, action, created_at]
+      properties:
+        id: { type: string }
+        enterprise_id: { type: string }
+        actor_id: { type: string }
+        action: { type: string }
+        target_type: { type: string }
+        target_id: { type: string }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+
+    BreakGlassGrant:
+      type: object
+      description: "Owner-only, reason-bound, expiring read access. Never grants a Workspace role or write capability."
+      required: [id, enterprise_id, workspace_id, user_id, reason, created_at, expires_at]
+      properties:
+        id: { type: string }
+        enterprise_id: { type: string }
+        workspace_id: { type: string }
+        user_id: { type: string }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
 
     Invite:
       type: object
@@ -2274,6 +2355,56 @@ paths:
   # =========================================================================
   # Authentication · Account
   # =========================================================================
+  /oauth/requests/{requestID}:
+    parameters:
+      - name: requestID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getMcpOAuthConsentRequest
+      summary: Inspect a pending read-only MCP connector consent request
+      description: "Requires an ordinary web/REST session. MCP access and refresh tokens are rejected. The response exposes the exact redirect URI because dynamically registered client names are self-declared."
+      tags: [identity]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthConsentRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: decideMcpOAuthConsentRequest
+      summary: Approve or deny a pending read-only MCP connector request once
+      description: "Cookie-authenticated browser requests require same-origin Origin, application/json, and X-Cxt-CSRF: 1. Approval creates a five-minute, one-time, hashed-at-rest PKCE code; denial consumes the request without issuing a code."
+      tags: [identity]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approve]
+              additionalProperties: false
+              properties:
+                approve: { type: boolean }
+      responses:
+        "200":
+          description: "Decision accepted. The browser navigates to the exact registered redirect URL."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [redirect_url]
+                additionalProperties: false
+                properties:
+                  redirect_url: { type: string, format: uri }
+        "400": { description: "Malformed consent decision" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /auth/session:
     post:
       operationId: login
@@ -2479,9 +2610,12 @@ paths:
         schema: { type: string }
     get:
       operationId: publicWorkspace
-      summary: Anonymous public read entry point — only public workspaces are interpreted
-      description: "private does not leak existence to avoid 404. Authentication not required."
-      security: []
+      summary: Public or explicitly authorized read-only Workspace projection
+      description: "Anonymous callers see only public Workspaces. Authenticated Workspace members and active Enterprise owner break-glass grants may resolve a private Workspace through the same allowlisted projection; unauthorized private paths remain 404."
+      security:
+        - {}
+        - SessionCookie: []
+        - BearerToken: []
       tags: [workspaces]
       responses:
         "200":
@@ -2849,6 +2983,261 @@ paths:
         "403": { description: "Email specified invite mismatch" }
         "409": { description: "revoked/expired" }
 
+  # =========================================================================
+  # Enterprise namespace · membership · enforced policy · audit
+  # =========================================================================
+  /enterprises:
+    get:
+      operationId: listEnterprises
+      summary: List Enterprises the current user belongs to
+      tags: [enterprises]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Enterprise" }
+    post:
+      operationId: createEnterprise
+      summary: Create an Enterprise and globally unique namespace
+      tags: [enterprises]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                slug: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Enterprise" }
+        "409": { description: "Namespace already claimed by a user or Enterprise." }
+
+  /enterprises/{enterpriseID}:
+    parameters: &enterpriseIDParam
+      - name: enterpriseID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getEnterprise
+      summary: Get an Enterprise I belong to
+      tags: [enterprises]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Enterprise" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    patch:
+      operationId: updateEnterpriseProfile
+      summary: Update Enterprise display name or logo — admin and above
+      description: "The namespace slug is intentionally immutable here; renaming it requires a separate URL migration flow."
+      tags: [enterprises]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                logo: { type: string, description: "Enterprise logo data URL, or an empty string to clear it." }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Enterprise" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /public/enterprises/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: publicEnterprise
+      summary: Public Enterprise profile and public Workspace projection
+      tags: [enterprises]
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /enterprises/{enterpriseID}/members:
+    parameters: *enterpriseIDParam
+    get:
+      operationId: listEnterpriseMembers
+      summary: List Enterprise members
+      tags: [enterprises]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EnterpriseMembership" }
+
+  /enterprises/{enterpriseID}/members/{userID}:
+    parameters:
+      - name: enterpriseID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: userID
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      operationId: updateEnterpriseMember
+      summary: Add or update an Enterprise member
+      description: "Admins may add and remove ordinary members only. Promoting, demoting, or removing an Admin or Owner requires an Owner. At least one Owner must remain."
+      tags: [enterprises]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [member, admin, owner] }
+      responses:
+        "200": { description: updated }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: "The mutation would remove the final Enterprise Owner." }
+    delete:
+      operationId: removeEnterpriseMember
+      summary: Remove an Enterprise member
+      description: "Admins may remove ordinary members only; Owners manage Admins and Owners. At least one Owner must remain."
+      tags: [enterprises]
+      responses:
+        "200": { description: removed }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: "The mutation would remove the final Enterprise Owner." }
+
+  /enterprises/{enterpriseID}/policy:
+    parameters: *enterpriseIDParam
+    get:
+      operationId: getEnterprisePolicy
+      summary: Read enforced Enterprise policies
+      tags: [enterprises]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnterprisePolicy" }
+    patch:
+      operationId: updateEnterprisePolicy
+      summary: Update enforced Enterprise policies (admin or owner)
+      tags: [enterprises]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workspace_creation: { type: string, enum: [admins, members] }
+                default_workspace_visibility: { type: string, enum: [private, public] }
+                allow_public_workspaces: { type: boolean }
+                break_glass_enabled: { type: boolean }
+                break_glass_max_minutes: { type: integer, minimum: 5, maximum: 240 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnterprisePolicy" }
+
+  /enterprises/{enterpriseID}/workspaces:
+    parameters: *enterpriseIDParam
+    get:
+      operationId: listEnterpriseWorkspaces
+      summary: List Workspace metadata in an Enterprise namespace
+      description: "Does not grant access to private Repository context."
+      tags: [enterprises]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Workspace" }
+    post:
+      operationId: createEnterpriseWorkspace
+      summary: Create an unlimited Workspace in the Enterprise namespace
+      tags: [enterprises]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+
+  /enterprises/{enterpriseID}/audit:
+    parameters: *enterpriseIDParam
+    get:
+      operationId: listEnterpriseAudit
+      summary: Read append-only Enterprise audit events (admin or owner)
+      tags: [enterprises]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EnterpriseAuditEvent" }
+
+  /enterprises/{enterpriseID}/break-glass:
+    parameters: *enterpriseIDParam
+    post:
+      operationId: createBreakGlassGrant
+      summary: Create an owner-only, reason-bound, expiring read grant
+      description: "The grant is read-only, never mutates Workspace membership, and every use is audited."
+      tags: [enterprises]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace_id, reason, minutes]
+              properties:
+                workspace_id: { type: string }
+                reason: { type: string, minLength: 3, maxLength: 1000 }
+                minutes: { type: integer, minimum: 1, maximum: 240 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BreakGlassGrant" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
 tags:
   - name: repos
     description: Repo registration and retrieval.
@@ -2876,3 +3265,5 @@ tags:
     description: "authentication (session exchange) · account (username/nickname) · CLI token."
   - name: workspaces
     description: "workspace settings (publicity/policy/GitHub sync) · members (5 roles) · invite · ownership transfer."
+  - name: enterprises
+    description: "Global Enterprise namespace, separate 3-role administration plane, enforced policy, audit, and owner-only break-glass."

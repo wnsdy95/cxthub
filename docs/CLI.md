@@ -17,8 +17,10 @@ For installation and first-run setup, see
 ## Conventions
 
 - Run repository commands inside an existing Git working tree.
-- A workspace remote uses
-  `https://<host>/<username>/<workspace>` with exactly two path segments.
+- A repository remote uses
+  `https://<host>/<namespace>/<workspace>/<repository>`. Existing
+  `/<namespace>/<workspace>` remotes remain valid legacy identities and are
+  never rewritten because the normalized URL determines RepoID.
 - `<ref>` accepts `HEAD`, a branch name, a tag name, or a full
   `sha256:<64-hex-character>` snapshot ID. An omitted ref resolves to the
   current context head where supported.
@@ -56,7 +58,7 @@ Runs the complete, idempotent onboarding sequence:
 
 1. initialize the local `.cxt` store;
 2. install managed Git hooks;
-3. register the workspace remote when supplied;
+3. register the repository remote when supplied;
 4. authenticate through the browser device flow unless `--no-login` is set;
 5. merge Claude Code and Codex lifecycle hooks; and
 6. pull team settings when authenticated.
@@ -179,7 +181,10 @@ preserve the live app session and apply one bounded memory handoff.
 cxt mcp
 ```
 
-Starts the read-only MCP server on standard input/output. It exposes:
+Starts the optional read-only **local** MCP helper on standard input/output. It
+reads the current repository's `.cxt` store and is distinct from the production
+`https://<host>/mcp` connector, which runs in `cxtd` against cloud PostgreSQL.
+See [MCP connections](MCP.md). The local helper exposes:
 
 | Tool | Purpose |
 |---|---|

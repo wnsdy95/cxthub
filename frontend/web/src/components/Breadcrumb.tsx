@@ -30,6 +30,7 @@ function priv(w: Workspace): boolean {
 export function Breadcrumb({
   owner,
   name,
+  repository,
   isPrivate,
   workspaces,
   currentId,
@@ -37,6 +38,7 @@ export function Breadcrumb({
 }: {
   owner: string;
   name: string;
+  repository?: string;
   isPrivate?: boolean;
   workspaces?: Workspace[]; // If provided, opens a workspace switch dropdown (omits login public read).
   currentId?: string;
@@ -149,6 +151,12 @@ export function Breadcrumb({
             </>
           )}
         </div>
+      )}
+      {repository && (
+        <>
+          <span className="crumb-sep">/</span>
+          <span className="crumb-repo" title={repository}>{repository}</span>
+        </>
       )}
     </nav>
   );

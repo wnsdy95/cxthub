@@ -11,6 +11,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { '/api': { target: proxyTarget, changeOrigin: true } },
+    proxy: {
+      '/api': { target: proxyTarget, changeOrigin: true },
+      '/mcp': { target: proxyTarget, changeOrigin: true },
+      '/oauth': { target: proxyTarget, changeOrigin: true },
+      '/.well-known': { target: proxyTarget, changeOrigin: true },
+    },
   },
 });

@@ -131,13 +131,20 @@ postgres_smoke() (
   docker run -d --name "$name" \
     -e POSTGRES_USER=cxt -e POSTGRES_PASSWORD=cxt -e POSTGRES_DB=cxthub_test \
     -p 127.0.0.1::5432 postgres:16 >/dev/null
-  for _ in $(seq 1 60); do
-    if docker exec "$name" pg_isready -U cxt -d cxthub_test >/dev/null 2>&1; then
+  for _ in $(seq 1 120); do
+    # pg_isready reports the temporary init server as accepting connections
+    # before POSTGRES_DB exists, then that server shuts down. Probe the exact
+    # database instead so we cannot escape the loop during that transition.
+    if docker exec "$name" psql -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null 2>&1; then
       break
     fi
     sleep 0.5
   done
-  docker exec "$name" pg_isready -U cxt -d cxthub_test >/dev/null 2>&1 || die "Postgres is not ready"
+  if ! docker exec "$name" psql -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null 2>&1; then
+    docker inspect "$name" --format '{{json .State}}' >&2 || true
+    docker logs "$name" >&2 || true
+    die "Postgres is not ready"
+  fi
   port="$(docker port "$name" 5432/tcp | awk -F: 'NR==1 {print $NF}')"
   [ -n "$port" ] || die "Postgres temporary port not found"
 
@@ -159,9 +166,13 @@ image_smoke() (
 
   docker run -d --name "$name" \
     -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
+    -e CXT_PUBLIC_URL=http://localhost:8907 \
     -p 127.0.0.1::8907 cxtd:preflight --data /tmp/cxt-data >/dev/null
-  port="$(docker port "$name" 8907/tcp | awk -F: 'NR==1 {print $NF}')"
-  [ -n "$port" ] || die "cxtd temporary port not found"
+  port="$(docker port "$name" 8907/tcp 2>/dev/null | awk -F: 'NR==1 {print $NF}' || true)"
+  if [ -z "$port" ]; then
+    docker logs "$name" >&2 || true
+    die "cxtd temporary port not found"
+  fi
   for _ in $(seq 1 60); do
     if curl -fsS "http://127.0.0.1:${port}/api/v1/health" 2>/dev/null \
       | grep -q '"status":"ok"'; then

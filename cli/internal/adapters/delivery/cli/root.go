@@ -113,7 +113,7 @@ func Run(c *Container, args []string) error {
 			}
 		}
 		if _, ok := remotecfg.Origin(cwd); !ok {
-			fmt.Println("hint: to connect to team server → cxt setup https://<host>/<username>/<workspace>")
+			fmt.Println("hint: to connect to team server → cxt setup https://<host>/<namespace>/<workspace>/<repository>")
 		}
 		return nil
 
@@ -896,7 +896,7 @@ func requireRemote(cwd string) error {
 	if os.Getenv("CXT_REMOTE") != "" {
 		return nil
 	}
-	return fmt.Errorf("no origin to push/pull — first connect your workspace URL:\n  cxt remote add origin https://<host>/<username>/<workspace>")
+	return fmt.Errorf("no origin to push/pull — first connect your repository URL:\n  cxt remote add origin https://<host>/<namespace>/<workspace>/<repository>")
 }
 
 // runRemote is a git-like remote management command:
@@ -918,7 +918,7 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 	switch sub {
 	case "add":
 		if len(rest) < 3 {
-			return fmt.Errorf("usage: cxt remote add <name> <url>  (e.g., cxt remote add origin https://cxthub.com/<username>/<workspace>)")
+			return fmt.Errorf("usage: cxt remote add <name> <url>  (e.g., cxt remote add origin https://cxthub.com/<namespace>/<workspace>/<repository>)")
 		}
 		name, rawURL := rest[1], rest[2]
 		canonicalURL, err := remotecfg.CanonicalURL(rawURL)

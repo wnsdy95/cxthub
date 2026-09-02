@@ -4,7 +4,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
-/** Global unique handle — URL segment (/<username>/<workspace>). Changes are heavy (warning needed) */
+/** Global unique personal namespace handle — first URL segment. Changes are heavy (warning needed). */
   username: string;
 /** Display alias — URL agnostic, free to change */
   nickname?: string;
@@ -29,6 +29,8 @@ export interface Workspace {
   id: string;
   name: string;
   owner_id: string;
+/** Namespace that owns the canonical URL. Empty only for legacy records. */
+  owner_namespace_id?: string;
 /** Unique URL segment for owner (automatically generated from name) */
   slug: string;
 /** Owner handle normalization (for URL assembly) */
@@ -61,6 +63,67 @@ export interface PublicWorkspace {
   public_role?: 'viewer' | 'puller';
   archived?: boolean;
   created_at: string;
+}
+
+export type EnterpriseRole = 'member' | 'admin' | 'owner';
+
+export interface Enterprise {
+  id: string;
+  namespace_id: string;
+  name: string;
+  slug: string;
+  logo?: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface PublicEnterprise {
+  id: string;
+  name: string;
+  slug: string;
+  logo?: string;
+  created_at: string;
+  workspaces: PublicWorkspace[];
+}
+
+export interface EnterpriseMembership {
+  enterprise_id: string;
+  user_id: string;
+  role: EnterpriseRole;
+  user?: User;
+  created_at: string;
+}
+
+export interface EnterprisePolicy {
+  enterprise_id: string;
+  workspace_creation: 'admins' | 'members';
+  default_workspace_visibility: 'private' | 'public';
+  allow_public_workspaces: boolean;
+  break_glass_enabled: boolean;
+  break_glass_max_minutes: number;
+  updated_by?: string;
+  updated_at: string;
+}
+
+export interface EnterpriseAuditEvent {
+  id: string;
+  enterprise_id: string;
+  actor_id: string;
+  action: string;
+  target_type?: string;
+  target_id?: string;
+  reason?: string;
+  created_at: string;
+}
+
+export interface BreakGlassGrant {
+  id: string;
+  enterprise_id: string;
+  workspace_id: string;
+  user_id: string;
+  reason: string;
+  created_at: string;
+  expires_at: string;
 }
 
 /** User profile activity feed — monthly commit bundles + workspace creation */

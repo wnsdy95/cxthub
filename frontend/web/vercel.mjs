@@ -51,6 +51,9 @@ normalizeFirebaseWebConfig(process.env);
 export const config = {
   rewrites: [
     { source: '/api/:path*', destination: `${apiOrigin}/api/:path*` },
+    { source: '/mcp', destination: `${apiOrigin}/mcp` },
+    { source: '/oauth/:path*', destination: `${apiOrigin}/oauth/:path*` },
+    { source: '/.well-known/:path*', destination: `${apiOrigin}/.well-known/:path*` },
     { source: '/((?!assets/).*)', destination: '/index.html' },
   ],
   headers: [

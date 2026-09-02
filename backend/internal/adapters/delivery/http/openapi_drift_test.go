@@ -11,7 +11,11 @@ import (
 //
 // Comparison rules: path parameters are considered the same if their names differ (e.g., {repoID}≡{id}≡{}), and the remaining matching in go 1.22's {name...} is normalized to {name}.
 func TestOpenAPIDrift(t *testing.T) {
-	registered := routesFromSource(t, "server.go", "identity.go")
+	// cxtd composes the ordinary REST adapter with the remote MCP adapter. The
+	// latter owns the browser consent API under /api/v1, so the public REST
+	// contract must audit both route sources rather than treating composition-
+	// owned consent paths as phantom documentation.
+	registered := routesFromSource(t, "server.go", "identity.go", "../mcp/server.go")
 	specced := routesFromSpec(t, "../../../../../schemas/openapi.yaml")
 
 	for r := range registered {

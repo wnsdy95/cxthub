@@ -13,11 +13,36 @@ Create these Google Secret Manager secrets before applying Terraform:
 | `cxt-postgres-dsn` | `CXT_POSTGRES_DSN` | PostgreSQL connection string |
 | `cxt-github-webhook-secret` | `CXT_GITHUB_WEBHOOK_SECRET` | Random GitHub webhook HMAC secret |
 
+Cloud Run also sets `CXT_REQUIRE_POSTGRES=1`. Production therefore refuses to
+start if the PostgreSQL build tag, DSN, live database connection, or migration
+directory is missing; it never falls back to the container filesystem.
+It also sets `CXT_PUBLIC_URL=https://<domain>`, which is the OAuth issuer and
+protected-resource origin for the remote read-only MCP connector.
+
 Secret versions are intentionally managed outside Terraform so their plaintext
 does not enter Terraform state. The Terraform stack looks up only secret
 metadata, grants the Cloud Run service account access, and injects `latest`.
 Use `postgres_secret_id` or `github_webhook_secret_id` to override the default
 IDs.
+
+## Remote MCP routing
+
+Codex app and Claude app connect to `https://<domain>/mcp`. Vercel keeps that
+public same-origin URL and proxies these server-owned paths to Cloud Run:
+
+- `/mcp`
+- `/oauth/*`
+- `/.well-known/*`
+- `/api/*`
+
+The web-owned `/connect/mcp` path is intentionally not proxied; it renders the
+login and consent screen. OAuth client/request/code state and access/refresh
+token hashes live in PostgreSQL. The remote server exposes no write tools and
+MCP access tokens are rejected by the ordinary REST authorization boundary.
+The application also keeps a process-wide sliding-window backstop on public
+OAuth and MCP routes without trusting forwarded client-IP headers. Before
+raising Cloud Run above one instance, add distributed per-source rate limits at
+the public gateway; process-local limits do not aggregate across replicas.
 
 Run the read-only readiness check before applying:
 

@@ -18,7 +18,7 @@ func (s *PostgresStore) UpsertUser(ctx context.Context, u domain.User) error {
 		`INSERT INTO users (id, email, name, username, nickname, load_mode, avatar, locale) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		 ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email, name=EXCLUDED.name, username=EXCLUDED.username, nickname=EXCLUDED.nickname, load_mode=EXCLUDED.load_mode, avatar=EXCLUDED.avatar, locale=EXCLUDED.locale`,
 		u.ID, u.Email, u.Name, u.Username, u.Nickname, u.LoadMode, u.Avatar, u.Locale)
-	return err
+	return mapPGConstraint(err)
 }
 
 func (s *PostgresStore) GetUser(ctx context.Context, id string) (domain.User, error) {
@@ -59,14 +59,15 @@ func (s *PostgresStore) CreateWorkspace(ctx context.Context, ws domain.Workspace
 		return err
 	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO workspaces (id, name, owner_id, slug, owner_username, visibility, secrets_policy, settings_policy, gh_visibility_sync, gh_synced_at, archived, webhook_url, public_role)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		`INSERT INTO workspaces (id, name, owner_id, slug, owner_username, owner_namespace_id, visibility, secrets_policy, settings_policy, gh_visibility_sync, gh_synced_at, archived, webhook_url, public_role)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		 ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, slug=EXCLUDED.slug, owner_username=EXCLUDED.owner_username,
+		 owner_namespace_id=EXCLUDED.owner_namespace_id,
 		 visibility=EXCLUDED.visibility, secrets_policy=EXCLUDED.secrets_policy, settings_policy=EXCLUDED.settings_policy,
 		 owner_id=EXCLUDED.owner_id,
 		 gh_visibility_sync=EXCLUDED.gh_visibility_sync, gh_synced_at=EXCLUDED.gh_synced_at,
 		 archived=EXCLUDED.archived, webhook_url=EXCLUDED.webhook_url, public_role=EXCLUDED.public_role`,
-		ws.ID, ws.Name, ws.OwnerID, ws.Slug, ws.OwnerUsername, string(ws.Visibility), ws.SecretsPolicy, ws.SettingsPolicy, ws.GHVisibilitySync, ws.GHSyncedAt, ws.Archived, ws.WebhookURL, ws.PublicRole)
+		ws.ID, ws.Name, ws.OwnerID, ws.Slug, ws.OwnerUsername, pgNullableString(ws.OwnerNamespaceID), string(ws.Visibility), ws.SecretsPolicy, ws.SettingsPolicy, ws.GHVisibilitySync, ws.GHSyncedAt, ws.Archived, ws.WebhookURL, ws.PublicRole)
 	return err
 }
 
@@ -75,8 +76,8 @@ func (s *PostgresStore) GetWorkspace(ctx context.Context, id string) (domain.Wor
 		return domain.Workspace{}, err
 	}
 	var ws domain.Workspace
-	err := s.pool.QueryRow(ctx, `SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at FROM workspaces WHERE id=$1`, id).
-		Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt)
+	err := s.pool.QueryRow(ctx, `SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(owner_namespace_id,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at FROM workspaces WHERE id=$1`, id).
+		Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.OwnerNamespaceID, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt)
 	if err != nil {
 		return domain.Workspace{}, mapNoRows(err)
 	}
@@ -93,9 +94,27 @@ func (s *PostgresStore) GetWorkspace(ctx context.Context, id string) (domain.Wor
 func (s *PostgresStore) GetWorkspaceByPath(ctx context.Context, ownerUsername, slug string) (domain.Workspace, error) {
 	var ws domain.Workspace
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at
+		`SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(owner_namespace_id,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at
 		 FROM workspaces WHERE owner_username=$1 AND slug=$2`, ownerUsername, slug).
-		Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt)
+		Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.OwnerNamespaceID, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt)
+	if err != nil {
+		return domain.Workspace{}, mapNoRows(err)
+	}
+	if err := domain.ValidateWorkspaceRecord(ws); err != nil {
+		return domain.Workspace{}, storedIdentityIntegrity(err)
+	}
+	return ws, nil
+}
+
+func (s *PostgresStore) GetWorkspaceByNamespacePath(ctx context.Context, namespaceID, slug string) (domain.Workspace, error) {
+	if err := domain.ValidateNamespaceID(namespaceID); err != nil {
+		return domain.Workspace{}, err
+	}
+	var ws domain.Workspace
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(owner_namespace_id,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at
+		 FROM workspaces WHERE owner_namespace_id=$1 AND slug=$2`, namespaceID, slug).
+		Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.OwnerNamespaceID, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt)
 	if err != nil {
 		return domain.Workspace{}, mapNoRows(err)
 	}
@@ -110,7 +129,7 @@ func (s *PostgresStore) ListWorkspacesForUser(ctx context.Context, userID string
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT w.id, w.name, w.owner_id, COALESCE(w.slug,''), COALESCE(w.owner_username,''), COALESCE(w.visibility,''), COALESCE(w.secrets_policy,''), COALESCE(w.settings_policy,''), COALESCE(w.gh_visibility_sync,false), w.gh_synced_at, COALESCE(w.archived,false), COALESCE(w.webhook_url,''), COALESCE(w.public_role,''), w.created_at FROM workspaces w
+		`SELECT w.id, w.name, w.owner_id, COALESCE(w.slug,''), COALESCE(w.owner_username,''), COALESCE(w.owner_namespace_id,''), COALESCE(w.visibility,''), COALESCE(w.secrets_policy,''), COALESCE(w.settings_policy,''), COALESCE(w.gh_visibility_sync,false), w.gh_synced_at, COALESCE(w.archived,false), COALESCE(w.webhook_url,''), COALESCE(w.public_role,''), w.created_at FROM workspaces w
 		 JOIN memberships m ON m.workspace_id = w.id WHERE m.user_id=$1 ORDER BY w.created_at`, userID)
 	if err != nil {
 		return nil, err
@@ -119,7 +138,7 @@ func (s *PostgresStore) ListWorkspacesForUser(ctx context.Context, userID string
 	var out []domain.Workspace
 	for rows.Next() {
 		var ws domain.Workspace
-		if err := rows.Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt); err != nil {
+		if err := rows.Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.OwnerNamespaceID, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt); err != nil {
 			return nil, err
 		}
 		if err := domain.ValidateWorkspaceRecord(ws); err != nil {
@@ -273,6 +292,25 @@ func (s *PostgresStore) GetSession(ctx context.Context, token string) (domain.Se
 	}
 	if sess.Token != token {
 		return domain.Session{}, domain.ErrNotFound
+	}
+	if err := domain.ValidateSessionRecord(sess); err != nil {
+		return domain.Session{}, storedIdentityIntegrity(err)
+	}
+	return sess, nil
+}
+
+func (s *PostgresStore) ConsumeSession(ctx context.Context, token, kind, label string) (domain.Session, error) {
+	if err := domain.ValidateStoredSessionToken(token); err != nil {
+		return domain.Session{}, err
+	}
+	var sess domain.Session
+	err := s.pool.QueryRow(ctx,
+		`DELETE FROM sessions WHERE token=$1 AND kind=$2 AND label=$3
+		 RETURNING token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,'')`,
+		token, kind, label).
+		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label)
+	if err != nil {
+		return domain.Session{}, mapNoRows(err)
 	}
 	if err := domain.ValidateSessionRecord(sess); err != nil {
 		return domain.Session{}, storedIdentityIntegrity(err)

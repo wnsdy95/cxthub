@@ -91,6 +91,118 @@ func TestPGSmoke(t *testing.T) {
 	if err := st.UpsertUser(ctx, domain.User{ID: uid, Email: "pgsmoke@t.io", Name: "PG", Username: "pgsmoke"}); err != nil {
 		t.Fatalf("user: %v", err)
 	}
+	// Namespace ownership is globally serialized across the users, namespaces,
+	// and aliases tables. An Enterprise slug must not be claimable as a later
+	// user handle even though ordinary per-table UNIQUE constraints would allow
+	// that cross-table collision.
+	now := time.Now().UTC()
+	enterprise := domain.Enterprise{
+		ID: domain.NewID("ent_"), NamespaceID: domain.NewID("ns_"), Name: "PG Enterprise",
+		Slug: "pg-enterprise", CreatedBy: uid, CreatedAt: now,
+	}
+	enterpriseNamespace := domain.Namespace{
+		ID: enterprise.NamespaceID, Slug: enterprise.Slug, Kind: domain.NamespaceEnterprise,
+		EnterpriseID: enterprise.ID, CreatedAt: now,
+	}
+	enterpriseOwner := domain.EnterpriseMembership{
+		EnterpriseID: enterprise.ID, UserID: uid, Role: domain.EnterpriseOwner, CreatedAt: now,
+	}
+	enterprisePolicy := domain.DefaultEnterprisePolicy(enterprise.ID)
+	enterprisePolicy.UpdatedBy, enterprisePolicy.UpdatedAt = uid, now
+	enterpriseAudit := domain.EnterpriseAuditEvent{
+		ID: domain.NewID("aud_"), EnterpriseID: enterprise.ID, ActorID: uid,
+		Action: "enterprise.created", TargetType: "enterprise", TargetID: enterprise.ID, CreatedAt: now,
+	}
+	if err := st.CreateEnterprise(ctx, enterprise, enterpriseNamespace, enterpriseOwner, enterprisePolicy, enterpriseAudit); err != nil {
+		t.Fatalf("enterprise bootstrap: %v", err)
+	}
+	demotedOnlyOwner := enterpriseOwner
+	demotedOnlyOwner.Role = domain.EnterpriseAdmin
+	if err := st.AddEnterpriseMember(ctx, demotedOnlyOwner); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("PostgreSQL allowed the last Enterprise owner to be demoted: %v", err)
+	}
+	if err := st.RemoveEnterpriseMember(ctx, enterprise.ID, uid); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("PostgreSQL allowed the last Enterprise owner to be removed: %v", err)
+	}
+	if err := st.UpsertUser(ctx, domain.User{ID: "namespace-collision-user", Email: "collision@t.io", Name: "Collision", Username: enterprise.Slug}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cross-table namespace collision = %v, want ErrConflict", err)
+	}
+	blockedEnterprise := domain.Enterprise{
+		ID: domain.NewID("ent_"), NamespaceID: domain.NewID("ns_"), Name: "Blocked Enterprise",
+		Slug: "pgsmoke", CreatedBy: uid, CreatedAt: now,
+	}
+	blockedNamespace := domain.Namespace{
+		ID: blockedEnterprise.NamespaceID, Slug: blockedEnterprise.Slug, Kind: domain.NamespaceEnterprise,
+		EnterpriseID: blockedEnterprise.ID, CreatedAt: now,
+	}
+	blockedOwner := enterpriseOwner
+	blockedOwner.EnterpriseID = blockedEnterprise.ID
+	blockedPolicy := domain.DefaultEnterprisePolicy(blockedEnterprise.ID)
+	blockedPolicy.UpdatedBy, blockedPolicy.UpdatedAt = uid, now
+	blockedAudit := enterpriseAudit
+	blockedAudit.ID, blockedAudit.EnterpriseID, blockedAudit.TargetID = domain.NewID("aud_"), blockedEnterprise.ID, blockedEnterprise.ID
+	if err := st.CreateEnterprise(ctx, blockedEnterprise, blockedNamespace, blockedOwner, blockedPolicy, blockedAudit); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("user-handle Enterprise collision = %v, want ErrConflict", err)
+	}
+
+	// Every Enterprise management mutation and its audit row share one
+	// transaction. Reuse the existing audit primary key to force the audit
+	// insert to fail after the mutation statement, then prove no mutation leaks.
+	profileUpdate := enterprise
+	profileUpdate.Name = "Must Roll Back"
+	profileAudit := enterpriseAudit
+	profileAudit.Action = "enterprise.profile.updated"
+	if err := st.UpdateEnterpriseWithAudit(ctx, profileUpdate, profileAudit); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("profile duplicate-audit failure = %v, want ErrConflict", err)
+	}
+	if got, err := st.GetEnterprise(ctx, enterprise.ID); err != nil || got.Name != enterprise.Name {
+		t.Fatalf("profile mutation survived audit rollback: enterprise=%+v err=%v", got, err)
+	}
+
+	atomicMemberID := "enterprise-atomic-member"
+	if err := st.UpsertUser(ctx, domain.User{ID: atomicMemberID, Email: "enterprise-atomic@t.io", Name: "Atomic Member", Username: atomicMemberID}); err != nil {
+		t.Fatalf("enterprise atomic member fixture: %v", err)
+	}
+	atomicMember := domain.EnterpriseMembership{EnterpriseID: enterprise.ID, UserID: atomicMemberID, Role: domain.EnterpriseMember, CreatedAt: now}
+	memberAudit := enterpriseAudit
+	memberAudit.Action, memberAudit.TargetType, memberAudit.TargetID = "enterprise.member.updated", "user", atomicMemberID
+	if err := st.AddEnterpriseMemberWithAudit(ctx, atomicMember, memberAudit); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("member duplicate-audit failure = %v, want ErrConflict", err)
+	}
+	if _, err := st.GetEnterpriseMembership(ctx, enterprise.ID, atomicMemberID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("member mutation survived audit rollback: %v", err)
+	}
+
+	policyUpdate := enterprisePolicy
+	policyUpdate.WorkspaceCreation = domain.EnterpriseWorkspaceMembers
+	policyUpdate.UpdatedAt = now.Add(time.Second)
+	policyAudit := enterpriseAudit
+	policyAudit.Action, policyAudit.TargetType, policyAudit.TargetID = "enterprise.policy.updated", "enterprise", enterprise.ID
+	if err := st.PutEnterprisePolicyWithAudit(ctx, policyUpdate, policyAudit); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("policy duplicate-audit failure = %v, want ErrConflict", err)
+	}
+	if got, err := st.GetEnterprisePolicy(ctx, enterprise.ID); err != nil || got.WorkspaceCreation != enterprisePolicy.WorkspaceCreation {
+		t.Fatalf("policy mutation survived audit rollback: policy=%+v err=%v", got, err)
+	}
+
+	atomicWorkspace := domain.Workspace{
+		ID: domain.NewID("ws_"), Name: "Atomic rollback", OwnerID: uid,
+		OwnerUsername: enterprise.Slug, OwnerNamespaceID: enterprise.NamespaceID,
+		Slug: "atomic-rollback", Visibility: domain.VisibilityPrivate, CreatedAt: now,
+	}
+	atomicWorkspaceOwner := domain.Membership{WorkspaceID: atomicWorkspace.ID, UserID: uid, Role: domain.RoleOwner, CreatedAt: now}
+	workspaceAudit := enterpriseAudit
+	workspaceAudit.Action, workspaceAudit.TargetType, workspaceAudit.TargetID = "enterprise.workspace.created", "workspace", atomicWorkspace.ID
+	if err := st.CreateEnterpriseWorkspaceWithAudit(ctx, atomicWorkspace, atomicWorkspaceOwner, workspaceAudit); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("Workspace duplicate-audit failure = %v, want ErrConflict", err)
+	}
+	if _, err := st.GetWorkspace(ctx, atomicWorkspace.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Workspace mutation survived audit rollback: %v", err)
+	}
+	if member, err := st.IsMember(ctx, atomicWorkspace.ID, uid); err != nil || member {
+		t.Fatalf("Workspace owner membership survived audit rollback: member=%v err=%v", member, err)
+	}
+
 	ws := domain.Workspace{ID: domain.NewID("ws_"), Name: "PGSmoke", OwnerID: uid, Slug: "pgsmoke", OwnerUsername: "pgsmoke", CreatedAt: time.Now().UTC()}
 	if err := st.CreateWorkspace(ctx, ws); err != nil {
 		t.Fatalf("workspace: %v", err)
@@ -113,6 +225,39 @@ func TestPGSmoke(t *testing.T) {
 	}
 	if got, err := st.GetSession(ctx, sess.Token); err != nil || got.Kind != "web" {
 		t.Fatalf("get session: kind=%q err=%v", got.Kind, err)
+	}
+
+	// Remote MCP OAuth state uses PostgreSQL transactions in production: a
+	// consent request becomes one client/PKCE-bound authorization code and that
+	// code can be consumed exactly once.
+	oauthClient := domain.OAuthClient{
+		ID: domain.NewID("mcp_client_"), Name: "PG MCP smoke",
+		RedirectURIs: []string{"http://127.0.0.1/callback"}, CreatedAt: time.Now().UTC(),
+	}
+	if err := st.CreateOAuthClient(ctx, oauthClient); err != nil {
+		t.Fatalf("oauth client: %v", err)
+	}
+	oauthRequest := domain.OAuthAuthorizationRequest{
+		ID: domain.NewID("oauth_req_"), ClientID: oauthClient.ID, RedirectURI: oauthClient.RedirectURIs[0],
+		CodeChallenge: "pg-smoke-challenge", Resource: "https://cxthub.test/mcp", Scope: "context:read",
+		CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute),
+	}
+	if err := st.CreateOAuthAuthorizationRequest(ctx, oauthRequest); err != nil {
+		t.Fatalf("oauth request: %v", err)
+	}
+	codeHash := domain.HashToken("oauth_code_pg_smoke")
+	code, err := st.ApproveOAuthAuthorizationRequest(ctx, oauthRequest.ID, uid, codeHash, now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("oauth approve: %v", err)
+	}
+	if _, err := st.ConsumeOAuthAuthorizationCode(ctx, code.CodeHash, code.ClientID, code.RedirectURI, "wrong-challenge"); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("oauth wrong PKCE = %v", err)
+	}
+	if _, err := st.ConsumeOAuthAuthorizationCode(ctx, code.CodeHash, code.ClientID, code.RedirectURI, code.CodeChallenge); err != nil {
+		t.Fatalf("oauth consume: %v", err)
+	}
+	if _, err := st.ConsumeOAuthAuthorizationCode(ctx, code.CodeHash, code.ClientID, code.RedirectURI, code.CodeChallenge); !errors.Is(err, domain.ErrUnauthorized) {
+		t.Fatalf("oauth replay = %v", err)
 	}
 
 	// Snapshot → ref(FK) → memory(nil slice → NOT NULL normalization, rehash discovery).

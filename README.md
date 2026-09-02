@@ -56,8 +56,8 @@ move together.
   regardless of which one created it.
 - **Team history** — push and pull shared context through a self-hostable
   `cxtd` remote.
-- **Retrieval** — let compatible agents inspect repository context through the
-  read-only MCP server.
+- **Retrieval** — let Codex, Claude, and compatible agents inspect server-side
+  repository context through the OAuth-protected remote MCP server.
 - **Review** — inspect history, comparisons, pending sessions, and workspace
   state in the web interface.
 
@@ -105,12 +105,12 @@ and the separate `cxtd` server.
 Run these commands inside an existing Git repository:
 
 ```bash
-cxt setup https://<host>/<username>/<workspace>
+cxt setup https://<host>/<namespace>/<workspace>/<repository>
 cxt remote -v
 ```
 
 `cxt setup` initializes the local store, installs Git hooks, registers the
-workspace, starts browser login, merges provider hooks, and pulls team settings.
+repository, starts browser login, merges provider hooks, and pulls team settings.
 It is safe to rerun. Use `cxt init` instead for local-only operation.
 
 Useful manual commands:
@@ -177,8 +177,8 @@ may have entered an agent session or Git history, revoke it immediately. See
 
 | Path | Purpose |
 |---|---|
-| `cli/` | Go `cxt` CLI, capture adapters, codecs, local object store, and MCP server |
-| `backend/` | Go `cxtd` HTTP server with filesystem and PostgreSQL stores |
+| `cli/` | Go `cxt` CLI, capture adapters, codecs, local object store, and optional local stdio MCP helper |
+| `backend/` | Go `cxtd` REST and remote Streamable HTTP MCP server with filesystem and PostgreSQL stores |
 | `frontend/web/` | Sole web runtime: React and TypeScript application, tests, and deployment config |
 | `schemas/` | OpenAPI, JSON Schema, and ordered PostgreSQL migrations |
 | `integrations/` | Claude Code and Codex integration assets |
@@ -217,6 +217,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 - [Installation](docs/INSTALLATION.md)
 - [CLI reference](docs/CLI.md)
+- [MCP connections](docs/MCP.md)
 
 ## Project policy
 

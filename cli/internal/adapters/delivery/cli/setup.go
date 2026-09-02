@@ -143,7 +143,7 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	if hasOrigin {
 		ok("remote origin = %s", origin)
 	} else {
-		warn("remote not registered — workspace connection: cxt setup https://<host>/<username>/<workspace>")
+		warn("remote not registered — repository connection: cxt setup https://<host>/<namespace>/<workspace>/<repository>")
 	}
 
 	// 4) Login (device flow). Keep token if already present.
@@ -192,10 +192,10 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	// 6) Team default settings pull(.claude/.agents/.codex) — only when login and origin exist.
 	if hasOrigin && authTokenPresent(cwd) {
 		if conn, cerr := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd}); cerr == nil {
-			// If URL's /<username>/<workspace>/ does not match the server workspace,
-			// the repo is stored as unowned and will not appear on the web — a silent trap, so a warning.
+			// The server derives WorkspaceID from the URL's namespace/workspace
+			// prefix. A missing binding is a legacy/local state worth surfacing.
 			if conn.Repo.WorkspaceID == "" {
-				warn("repository is not bound to a workspace and will not appear on the web — check <username>/<workspace> in the URL: %s", origin)
+				warn("repository is not bound to a workspace and will not appear on the web — check <namespace>/<workspace>/<repository> in the URL: %s", origin)
 			}
 			applied := 0
 			for _, kind := range []string{"claude", "agents", "codex"} {
