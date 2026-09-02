@@ -1,19 +1,19 @@
 # cxt — Codex host configuration snippet
 #
-# Merge this block into ~/.codex/config.toml to register the optional read-only
-# cxt MCP server. Codex desktop, CLI, and IDE clients on the same host share it.
+# Merge this block into ~/.codex/config.toml to register CXTHub's default
+# cloud-backed read-only MCP server. Codex desktop, CLI, and IDE clients on the
+# same host share it and complete OAuth through the CXTHub web login.
 # Hook registration is separate and is merged automatically by cxt setup.
 #
 # Note: ~/.codex/config.toml may contain sections like [mcp_servers.<name>], [plugins."..."], [projects."<path>"].
 # This block adds the cxt item to the [mcp_servers] section.
 
 # ---------------------------------------------------------------------------
-# MCP Server Registration — cxt read-only stdio server
+# MCP Server Registration — CXTHub remote Streamable HTTP server
 # ---------------------------------------------------------------------------
-# The cxt binary must be in your $PATH (verify with cxt --version).
 [mcp_servers.cxt]
-command = "cxt"
-args    = ["mcp"]
+url  = "https://cxthub.com/mcp"
+auth = "oauth"
 
 # ---------------------------------------------------------------------------
 # [projects] Section Guide (Optional)
@@ -30,6 +30,6 @@ args    = ["mcp"]
 # ---------------------------------------------------------------------------
 # Team Remote Server Configuration (Optional)
 # ---------------------------------------------------------------------------
-# MCP never pushes or pulls. Configure synchronization with the cxt CLI:
-#   cxt remote add origin https://<host>/<username>/<workspace>
+# MCP never pushes or pulls. Configure the local working replica separately:
+#   cxt remote add origin https://<host>/<namespace>/<workspace>/<repository>
 #   cxt login

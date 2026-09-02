@@ -175,15 +175,17 @@ installed `codex` executable. The wrapper owns process restart/resume on a
 branch switch. It is optional for Codex app/IDE sessions, where lifecycle hooks
 preserve the live app session and apply one bounded memory handoff.
 
-### `cxt mcp`
+### `cxt mcp --local`
 
 ```text
-cxt mcp
+cxt mcp --local
 ```
 
-Starts the optional read-only **local** MCP helper on standard input/output. It
-reads the current repository's `.cxt` store and is distinct from the production
-`https://<host>/mcp` connector, which runs in `cxtd` against cloud PostgreSQL.
+Starts the optional read-only **offline-development** MCP helper on standard
+input/output. It reads the current repository's `.cxt` working replica and is
+distinct from the default product connector at `https://cxthub.com/mcp`, which
+runs in `cxtd` against cloud PostgreSQL. Bare `cxt mcp` is rejected so a local
+replica cannot be mistaken for the shared product data source.
 See [MCP connections](MCP.md). The local helper exposes:
 
 | Tool | Purpose |

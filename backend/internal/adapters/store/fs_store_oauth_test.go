@@ -23,7 +23,7 @@ func TestFSOAuthAuthorizationCodeIsBoundAndConsumedOnce(t *testing.T) {
 	}
 	req := domain.OAuthAuthorizationRequest{
 		ID: "oauth_req_123", ClientID: client.ID, RedirectURI: client.RedirectURIs[0], State: "state",
-		CodeChallenge: "challenge", Resource: "https://cxthub.com/mcp", Scope: "context:read",
+		CodeChallenge: "challenge", Resource: "https://cxthub.com/mcp", Scope: "mcp:read",
 		CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute),
 	}
 	if err := st.CreateOAuthAuthorizationRequest(ctx, req); err != nil {
@@ -60,7 +60,7 @@ func TestFSOAuthDenyConsumesConsentRequest(t *testing.T) {
 	}
 	req := domain.OAuthAuthorizationRequest{
 		ID: "oauth_req_456", ClientID: client.ID, RedirectURI: client.RedirectURIs[0], CodeChallenge: "challenge",
-		Resource: "https://cxthub.com/mcp", Scope: "context:read", CreatedAt: now, ExpiresAt: now.Add(time.Minute),
+		Resource: "https://cxthub.com/mcp", Scope: "mcp:read", CreatedAt: now, ExpiresAt: now.Add(time.Minute),
 	}
 	if err := st.CreateOAuthAuthorizationRequest(ctx, req); err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestFSOAuthExpiredRecordsAreRemovedLazily(t *testing.T) {
 	}
 	expired := domain.OAuthAuthorizationRequest{
 		ID: "oauth_req_expired", ClientID: client.ID, RedirectURI: client.RedirectURIs[0], CodeChallenge: "challenge",
-		Resource: "https://cxthub.com/mcp", Scope: "context:read", CreatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute),
+		Resource: "https://cxthub.com/mcp", Scope: "mcp:read", CreatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute),
 	}
 	if err := st.CreateOAuthAuthorizationRequest(ctx, expired); err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestFSOAuthExpiredRecordsAreRemovedLazily(t *testing.T) {
 
 	expiredCode := domain.OAuthAuthorizationCode{
 		CodeHash: "tkh_" + strings.Repeat("a", 64), ClientID: client.ID, RedirectURI: client.RedirectURIs[0], UserID: "user-expiry",
-		CodeChallenge: "challenge", Resource: "https://cxthub.com/mcp", Scope: "context:read",
+		CodeChallenge: "challenge", Resource: "https://cxthub.com/mcp", Scope: "mcp:read",
 		CreatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute),
 	}
 	codePath := oauthRecordPath(st.oauthCodesDir(), expiredCode.CodeHash)

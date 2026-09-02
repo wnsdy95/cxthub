@@ -239,7 +239,7 @@ func TestPGSmoke(t *testing.T) {
 	}
 	oauthRequest := domain.OAuthAuthorizationRequest{
 		ID: domain.NewID("oauth_req_"), ClientID: oauthClient.ID, RedirectURI: oauthClient.RedirectURIs[0],
-		CodeChallenge: "pg-smoke-challenge", Resource: "https://cxthub.test/mcp", Scope: "context:read",
+		CodeChallenge: "pg-smoke-challenge", Resource: "https://cxthub.test/mcp", Scope: "mcp:read",
 		CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute),
 	}
 	if err := st.CreateOAuthAuthorizationRequest(ctx, oauthRequest); err != nil {

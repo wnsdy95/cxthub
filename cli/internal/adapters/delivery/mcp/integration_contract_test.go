@@ -51,6 +51,22 @@ func TestIntegrationAssetsMatchReadOnlyMCPContract(t *testing.T) {
 	}
 
 	root := repoRoot(t)
+	for _, config := range []string{
+		"integrations/codex/config.snippet.toml",
+		"integrations/claude-code/.mcp.json",
+	} {
+		body, err := os.ReadFile(filepath.Join(root, config))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		if !strings.Contains(text, "https://cxthub.com/mcp") {
+			t.Errorf("%s does not use the cloud MCP endpoint", config)
+		}
+		if strings.Contains(text, `args = ["mcp"]`) || strings.Contains(text, `"args": ["mcp"]`) {
+			t.Errorf("%s still makes local stdio the product default", config)
+		}
+	}
 	allowed := make(map[string]bool, len(wantTools))
 	for _, name := range wantTools {
 		allowed[name] = true

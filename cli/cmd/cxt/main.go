@@ -9,7 +9,7 @@
 //
 // Subcommands (domain model, client-specific):
 //
-//	cxt mcp                      → start stdio MCP server
+//	cxt mcp --local              → start the offline-development stdio MCP helper
 //	cxt hook --provider X --event Y → hook event handler (auto capture)
 //	cxt init|repo|save|list|fork|checkout|load|memorize|memory|push|pull → user CLI commands
 package main
@@ -74,6 +74,8 @@ func run(args []string) error {
 	}
 	switch args[1] {
 	case "mcp":
+		// PreflightArgs requires --local before adapter construction. The product
+		// MCP is the OAuth-protected remote cxtd endpoint, not this process.
 		return ctr.mcpServer.Run()
 	case "hook":
 		// hook safety contract (capture path): capture failures must not block agent sessions —
@@ -246,7 +248,8 @@ func buildContainer(cfg config) container {
 	coord := capture.NewCaptureCoordinator(saveSvc, cfg.Identity)
 
 	// --- driving adapters (delivery; client-specific: mcp/hook/cli) ---
-	// MCP is read-only 4-tool (list/fetch/memory/search) — writing is git hook automation.
+	// The explicit --local MCP helper is a read-only offline projection. The
+	// product MCP runs remotely in cxtd against shared cloud storage.
 	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
 	hookHdl := delivhook.NewHandler(coord)
 	clictr := &delivcli.Container{

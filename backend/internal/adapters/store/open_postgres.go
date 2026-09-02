@@ -7,8 +7,9 @@ import (
 	"fmt"
 )
 
-// Open(postgres build): if dsn exists, use PostgresStore, otherwise use FSStore.
-// `go build -tags postgres` + CXT_POSTGRES_DSN to activate.
+// Open(postgres build) uses PostgreSQL when a DSN is present. A missing DSN is
+// allowed only for a loopback development caller that did not require
+// PostgreSQL; cxtd marks every external bind as requirePostgres.
 func Open(dataDir, dsn string, requirePostgres bool) (Store, error) {
 	if dsn == "" {
 		if requirePostgres {

@@ -1,6 +1,9 @@
 // Package mcp contains the stdio MCP server driver (domain model — read-only redefinition as of 2026-07-09).
 //
-// Started by the cxt mcp subcommand, Claude Code / Codex CLI etc. connect to stdio. The tool exposes only **read-only 4** — write (save/push/checkout/memorize) is automated git hooks and calling by an agent at any point could disrupt the thread. The goal is to use cxthub as a "team knowledge base that the agent queries during its session".
+// Started only by the explicit `cxt mcp --local` development command. The
+// product connector is cxtd's OAuth-protected Streamable HTTP endpoint and
+// reads shared cloud storage. This helper reads the current local replica and
+// exposes only four read-only tools for offline development.
 //
 // context_list    → current repo commit (snapshot) list (local store)
 // context_fetch   → metadata + memory summary + recent chat tail for a specific ref/commit
@@ -24,7 +27,8 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
-// ReadStore is the local store read set that MCP requires (consumer-defined — FileStore implements).
+// ReadStore is the local working-replica read set required by the explicit
+// offline helper (consumer-defined — FileStore implements).
 type ReadStore interface {
 	ListSnapshots(ctx context.Context, repoID, branch string) ([]domain.Snapshot, error)
 	GetSnapshot(ctx context.Context, id domain.ContentHash) (domain.Snapshot, error)

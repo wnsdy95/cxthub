@@ -1142,7 +1142,7 @@ test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and re
     code_challenge: challenge,
     code_challenge_method: 'S256',
     resource: `${origin}/mcp`,
-    scope: 'context:read',
+    scope: 'mcp:read',
     state: 'playwright-state',
   }).toString();
   await page.goto(authorize.toString());
@@ -1174,10 +1174,10 @@ test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and re
   });
   expect(tokenResponse.ok()).toBe(true);
   const tokens = (await tokenResponse.json()) as { access_token: string; refresh_token: string; scope: string };
-  expect(tokens.scope).toBe('context:read');
+  expect(tokens.scope).toBe('mcp:read');
 
   const mcp = await api.post('/mcp', {
-    headers: { Authorization: `Bearer ${tokens.access_token}` },
+    headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/json, text/event-stream' },
     data: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'repository_list', arguments: {} } },
   });
   expect(mcp.ok()).toBe(true);
@@ -1188,7 +1188,7 @@ test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and re
   });
   expect(revoke.ok()).toBe(true);
   const afterRevoke = await api.post('/mcp', {
-    headers: { Authorization: `Bearer ${tokens.access_token}` },
+    headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/json, text/event-stream' },
     data: { jsonrpc: '2.0', id: 2, method: 'ping' },
   });
   expect(afterRevoke.status()).toBe(401);

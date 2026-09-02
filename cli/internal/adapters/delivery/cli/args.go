@@ -61,7 +61,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"memorize":  {usage: "cxt memorize [<ref>] [--provider claude|codex]", flags: commandFlags([]string{"--provider"}, nil)},
 	"memory":    {usage: "cxt memory [<ref>] [--provider claude|codex]", flags: commandFlags([]string{"--provider"}, nil)},
 	"tag":       {usage: "cxt tag [<name> [ref]]"},
-	"mcp":       {usage: "cxt mcp"},
+	"mcp":       {usage: "cxt mcp --local", flags: commandFlags(nil, []string{"--local"})},
 	"hook":      {usage: "cxt hook --provider claude|codex --event <event>", flags: commandFlags([]string{"--provider", "--event"}, nil)},
 	"version":   {usage: "cxt version"},
 	"--version": {usage: "cxt --version"},
@@ -169,6 +169,10 @@ func validateCommandFlags(cmd string, args []string, spec commandArgSpec) error 
 
 	pos := positionals(args)
 	switch cmd {
+	case "mcp":
+		if len(pos) != 0 || !flagPresent(args, "--local") {
+			return fmt.Errorf("mcp: the product connector is https://cxthub.com/mcp; the stdio helper requires --local\nusage: %s", spec.usage)
+		}
 	case "branch":
 		if len(pos) != 2 || (pos[0] != "archive" && pos[0] != "restore") {
 			return fmt.Errorf("usage: %s", spec.usage)
