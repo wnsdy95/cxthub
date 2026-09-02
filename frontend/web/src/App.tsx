@@ -8,6 +8,7 @@ import { Dashboard } from './components/Dashboard';
 import { PublicBrowse } from './components/PublicBrowse';
 import { UserProfile } from './components/UserProfile';
 import { Landing } from './components/Landing';
+import { Pricing } from './components/Pricing';
 import { DeviceApprove } from './components/DeviceApprove';
 
 const queryClient = new QueryClient({
@@ -76,6 +77,9 @@ function Root() {
     if (!forceLogin && r?.kind === 'user') {
       return <UserProfile username={r.username} onLogin={() => setForceLogin(true)} />;
     }
+    if (!forceLogin && r?.kind === 'pricing') {
+      return <Pricing onSignIn={() => setForceLogin(true)} />;
+    }
     if (!forceLogin && r === null) {
       // Home (/) — non-logged in: landing (CLI installation + Sign in/up + feature description). Click Login.
       return <Landing onSignIn={() => setForceLogin(true)} />;
@@ -86,6 +90,7 @@ function Root() {
     const r = parseRoute();
     if (r?.kind === 'device') return <DeviceApprove code={r.code} />;
     if (r?.kind === 'user') return <UserProfile username={r.username} />;
+    if (r?.kind === 'pricing') return <Pricing />;
     // Home (/) shows landing even in login state — clicking logo does not redirect to workspace. (Dashboard mounts only in workspace paths, so automatic redirects do not occur)
     if (r === null) return <Landing />;
   }
