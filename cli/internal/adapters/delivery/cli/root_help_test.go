@@ -172,6 +172,16 @@ func TestSubcommandSpecificFlagRestrictions(t *testing.T) {
 	}
 }
 
+func TestLocalMCPRequiresExplicitFlagBeforeComposition(t *testing.T) {
+	if handled, err := PreflightArgs([]string{"cxt", "mcp"}); handled || err == nil ||
+		!strings.Contains(err.Error(), "https://cxthub.com/mcp") || !strings.Contains(err.Error(), "--local") {
+		t.Fatalf("bare cxt mcp = handled %v, err %v", handled, err)
+	}
+	if handled, err := PreflightArgs([]string{"cxt", "mcp", "--local"}); handled || err != nil {
+		t.Fatalf("cxt mcp --local = handled %v, err %v", handled, err)
+	}
+}
+
 func TestHelpCommandTargetsSubcommands(t *testing.T) {
 	if handled, err := PreflightArgs([]string{"cxt", "help", "load"}); err != nil || !handled {
 		t.Fatalf("cxt help load = handled %v, err %v", handled, err)

@@ -79,6 +79,17 @@ func decodeJSON[T any](t *testing.T, body io.Reader) T {
 	return value
 }
 
+func remoteMCPHeaders(token string) map[string]string {
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "application/json, text/event-stream",
+	}
+	if token != "" {
+		headers["Authorization"] = "Bearer " + token
+	}
+	return headers
+}
+
 func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewFSStore(t.TempDir())
@@ -219,7 +230,7 @@ func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
 
 	listCall := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"repository_list","arguments":{}}}`
 	mcpResponse := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(listCall), map[string]string{
-		"Content-Type": "application/json", "Authorization": "Bearer " + tokens.AccessToken,
+		"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Authorization": "Bearer " + tokens.AccessToken,
 	})
 	if mcpResponse.Code != http.StatusOK || !strings.Contains(mcpResponse.Body.String(), "oauth-user/project/app") {
 		t.Fatalf("MCP authorized list = %d: %s", mcpResponse.Code, mcpResponse.Body.String())
@@ -228,7 +239,7 @@ func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
 		t.Fatalf("private non-member repository leaked: %s", mcpResponse.Body.String())
 	}
 	ambiguousMCP := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(listCall+`{}`), map[string]string{
-		"Content-Type": "application/json", "Authorization": "Bearer " + tokens.AccessToken,
+		"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Authorization": "Bearer " + tokens.AccessToken,
 	})
 	if ambiguousMCP.Code != http.StatusBadRequest || !strings.Contains(ambiguousMCP.Body.String(), "invalid JSON-RPC request") {
 		t.Fatalf("MCP with trailing JSON = %d: %s", ambiguousMCP.Code, ambiguousMCP.Body.String())
@@ -260,7 +271,7 @@ func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
 		t.Fatalf("revoke access = %d: %s", revoked.Code, revoked.Body.String())
 	}
 	revokedCall := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(listCall), map[string]string{
-		"Content-Type": "application/json", "Authorization": "Bearer " + refreshedTokens.AccessToken,
+		"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Authorization": "Bearer " + refreshedTokens.AccessToken,
 	})
 	if revokedCall.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked access token MCP call = %d: %s", revokedCall.Code, revokedCall.Body.String())
@@ -301,8 +312,109 @@ func TestOAuthMetadataAdvertisesReadOnlyResourceAndRevocation(t *testing.T) {
 	}
 	metadata := mcpRequest(t, server.Handler(), http.MethodGet, "/.well-known/oauth-authorization-server", nil, nil)
 	if metadata.Code != http.StatusOK || !strings.Contains(metadata.Body.String(), `"revocation_endpoint":"https://cxthub.test/oauth/revoke"`) ||
-		!strings.Contains(metadata.Body.String(), `"context:read"`) {
+		!strings.Contains(metadata.Body.String(), `"mcp:read"`) {
 		t.Fatalf("authorization metadata = %d: %s", metadata.Code, metadata.Body.String())
+	}
+}
+
+func TestTokenExchangeRejectsAuthorizationCodeWithoutMCPReadScope(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewFSStore(t.TempDir())
+	user := domain.User{ID: "legacy-scope-user", Email: "legacy@example.test", Name: "Legacy", Username: "legacy"}
+	if err := st.UpsertUser(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	client := domain.OAuthClient{
+		ID: "legacy-scope-client", Name: "Legacy MCP client",
+		RedirectURIs: []string{"http://127.0.0.1/callback"}, CreatedAt: time.Now().UTC(),
+	}
+	if err := st.CreateOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	verifier := strings.Repeat("v", 64)
+	request := domain.OAuthAuthorizationRequest{
+		ID: "legacy-scope-request", ClientID: client.ID, RedirectURI: client.RedirectURIs[0],
+		CodeChallenge: pkceChallenge(verifier), Resource: "https://cxthub.test/mcp", Scope: "legacy:read",
+		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := st.CreateOAuthAuthorizationRequest(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	rawCode := "legacy-authorization-code"
+	if _, err := st.ApproveOAuthAuthorizationRequest(ctx, request.ID, user.ID, domain.HashToken(rawCode), time.Now().UTC().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	identity := app.NewIdentityService(fixedVerifier{user: user}, st)
+	server, err := NewServer(fakeContextBackend{}, identity, st, "https://cxthub.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{
+		"grant_type": {"authorization_code"}, "client_id": {client.ID},
+		"redirect_uri": {client.RedirectURIs[0]}, "code": {rawCode},
+		"code_verifier": {verifier}, "resource": {"https://cxthub.test/mcp"},
+	}
+	response := mcpRequest(t, server.Handler(), http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()), map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+	})
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_grant") {
+		t.Fatalf("legacy-scope token exchange = %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestStreamableHTTPTransportGuards(t *testing.T) {
+	st := store.NewFSStore(t.TempDir())
+	user := domain.User{ID: "transport-user", Email: "transport@example.test", Name: "Transport", Username: "transport"}
+	id := app.NewIdentityService(fixedVerifier{user: user}, st)
+	if err := st.UpsertUser(context.Background(), user); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := id.IssueMCPTokenPair(context.Background(), user.ID, "transport-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(fakeContextBackend{}, id, st, "https://cxthub.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
+
+	missingAccept := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(payload), map[string]string{
+		"Content-Type": "application/json", "Authorization": "Bearer " + pair.AccessToken,
+	})
+	if missingAccept.Code != http.StatusNotAcceptable {
+		t.Fatalf("missing transport Accept = %d: %s", missingAccept.Code, missingAccept.Body.String())
+	}
+
+	badOriginHeaders := remoteMCPHeaders(pair.AccessToken)
+	badOriginHeaders["Origin"] = "https://attacker.example"
+	badOrigin := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(payload), badOriginHeaders)
+	if badOrigin.Code != http.StatusForbidden {
+		t.Fatalf("foreign MCP Origin = %d: %s", badOrigin.Code, badOrigin.Body.String())
+	}
+
+	badProtocolHeaders := remoteMCPHeaders(pair.AccessToken)
+	badProtocolHeaders["MCP-Protocol-Version"] = "2099-01-01"
+	badProtocol := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(payload), badProtocolHeaders)
+	if badProtocol.Code != http.StatusBadRequest || !strings.Contains(badProtocol.Body.String(), "unsupported MCP-Protocol-Version") {
+		t.Fatalf("unsupported protocol = %d: %s", badProtocol.Code, badProtocol.Body.String())
+	}
+
+	validHeaders := remoteMCPHeaders(pair.AccessToken)
+	validHeaders["Origin"] = "https://cxthub.test"
+	validHeaders["MCP-Protocol-Version"] = latestProtocol
+	valid := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(payload), validHeaders)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid Streamable HTTP request = %d: %s", valid.Code, valid.Body.String())
+	}
+
+	foreignGET := mcpRequest(t, server.Handler(), http.MethodGet, "/mcp", nil, map[string]string{"Origin": "https://attacker.example", "Accept": "text/event-stream"})
+	if foreignGET.Code != http.StatusForbidden {
+		t.Fatalf("foreign MCP GET Origin = %d: %s", foreignGET.Code, foreignGET.Body.String())
+	}
+	validGET := mcpRequest(t, server.Handler(), http.MethodGet, "/mcp", nil, map[string]string{"Accept": "text/event-stream"})
+	if validGET.Code != http.StatusMethodNotAllowed || validGET.Header().Get("Allow") != "POST" {
+		t.Fatalf("stateless MCP GET = %d allow=%q", validGET.Code, validGET.Header().Get("Allow"))
 	}
 }
 

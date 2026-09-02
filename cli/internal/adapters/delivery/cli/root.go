@@ -1059,7 +1059,7 @@ usage: cxt <command> [flags]
   Agent commands:
   claude [args...]          run Claude Code with branch context seeding
   codex [args...]           run Codex with branch context seeding
-  mcp                       start the read-only MCP server on stdio
+  mcp --local               start the offline-development MCP helper on stdio
   hook --provider P --event E
                             process a provider lifecycle event (integration use)
 

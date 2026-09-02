@@ -14,5 +14,6 @@ COPY schemas/db/migrations/ /app/migrations/
 USER nonroot:nonroot
 EXPOSE 8907
 # Production required env vars are injected by terraform (cloudrun.tf): CXT_AUTH/CXT_POSTGRES_DSN/…
-# Binding to 0.0.0.0 is only allowed with CXT_AUTH=firebase (dev auth guard — cmd/cxtd/main.go)
+# Binding to 0.0.0.0 requires both verified auth and PostgreSQL; missing DSN
+# fails before the HTTP listener starts (cmd/cxtd/main.go).
 ENTRYPOINT ["/app/cxtd", "serve", "--addr", "0.0.0.0:8907"]

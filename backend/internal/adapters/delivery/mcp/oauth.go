@@ -164,7 +164,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		scope = readScope
 	}
 	if scope != readScope || len(q.Get("state")) > 512 {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "only context:read is supported")
+		writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "only mcp:read is supported")
 		return
 	}
 	now := time.Now().UTC()
@@ -338,7 +338,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		code, consumeErr := s.oauth.ConsumeOAuthAuthorizationCode(
 			r.Context(), domain.HashToken(r.PostForm.Get("code")), clientID, r.PostForm.Get("redirect_uri"), pkceChallenge(verifier),
 		)
-		if consumeErr != nil || code.Resource != s.resource {
+		if consumeErr != nil || code.Resource != s.resource || code.Scope != readScope {
 			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid, expired, or already used")
 			return
 		}

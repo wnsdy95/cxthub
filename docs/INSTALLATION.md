@@ -191,11 +191,11 @@ so it cannot be passively captured by this integration. Use the Code tab or an
 explicit export/import workflow instead.
 
 To let Codex app or Claude app retrieve context already synchronized to the
-server, add `https://<host>/mcp` as a remote MCP/custom connector. This is an
-OAuth-protected Streamable HTTP service backed by `cxtd` and cloud PostgreSQL;
-it is separate from capture hooks and from the optional local `cxt mcp` stdio
-helper. See [MCP connections](MCP.md) for setup, permissions, and deployment
-boundaries.
+server, use the default product connector at `https://cxthub.com/mcp` (or the
+corresponding self-hosted origin). This is an OAuth-protected Streamable HTTP
+service backed by `cxtd` and cloud PostgreSQL; it is separate from capture hooks
+and from the explicit offline helper `cxt mcp --local`. See
+[MCP connections](MCP.md) for setup, permissions, and deployment boundaries.
 
 To initialize local-only storage without a remote:
 

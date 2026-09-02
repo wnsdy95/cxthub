@@ -43,29 +43,38 @@ Hooks preserve existing configuration and are fail-open.
 Automatic capture is now active. The app does not need to be launched through
 `cxt codex`; hook payloads identify the exact Codex session and worktree.
 
-## Optional read-only MCP
+## Default cloud read-only MCP
 
-Merge this block into `~/.codex/config.toml`, or add the same STDIO server from
-the Codex app's MCP settings:
+Merge this block into `~/.codex/config.toml`, or add the same Streamable HTTP
+URL from the Codex app's MCP settings:
 
 ```toml
 [mcp_servers.cxt]
-command = "cxt"
-args = ["mcp"]
+url = "https://cxthub.com/mcp"
+auth = "oauth"
 ```
 
-Restart the client after changing MCP configuration. `cxt mcp` exposes exactly
-four tools:
+Restart the client, then authenticate the server. Codex desktop, CLI, and IDE
+share this URL-based configuration. The server reads the user's authorized
+repositories from CXTHub's cloud backend rather than the current machine's
+`.cxt` directory.
+
+The remote server exposes repository discovery plus four context tools:
 
 | MCP tool | Purpose |
 |---|---|
-| `context_list` | List local context commits |
+| `repository_list` | List cloud repositories visible to the signed-in user |
+| `context_list` | List context commits in an authorized repository |
 | `context_fetch` | Read metadata, bounded memory, and recent chat for a ref |
 | `memory_load` | Read the bounded memory projection for a ref |
 | `context_search` | Search synchronized team context |
 
-All four tools are marked read-only and non-destructive. There is no MCP tool
+All tools are marked read-only and non-destructive. There is no MCP tool
 for save, fork, checkout, provider-file restoration, memorize, push, or pull.
+
+For explicit offline development only, configure an STDIO server with
+`command = "cxt"` and `args = ["mcp", "--local"]`. That helper reads the local
+working replica and is not the product default.
 
 ## Optional custom prompts
 
@@ -80,7 +89,7 @@ manual mutation happens only in response to an explicit user action.
 ## Desktop behavior
 
 - Codex app sessions are captured by lifecycle and Git hooks after `cxt setup`.
-- The optional MCP server gives the app a read-only view of saved history.
+- The remote MCP server gives the app an OAuth-scoped read-only view of cloud history.
 - On a Git branch switch, the vendor-owned app session remains open and
   receives one bounded project-memory handoff; CXTHub does not replace the live
   rollout file.
@@ -91,8 +100,9 @@ manual mutation happens only in response to an explicit user action.
 
 - `cxt: command not found`: install `cxt` and ensure the app can resolve it from
   its PATH. An absolute command path is also valid in the MCP config.
-- MCP unavailable: run `cxt mcp` in a terminal and inspect Codex MCP settings or
-  `/mcp` after restarting the client.
+- Remote MCP unavailable: inspect `https://cxthub.com/.well-known/oauth-authorization-server`,
+  then use `codex mcp login cxt`. Use `cxt mcp --local` only when deliberately
+  testing the offline helper.
 - Capture unavailable: rerun `cxt setup`, then inspect Codex lifecycle hooks.
 - General ChatGPT web chats do not read local `config.toml`; local MCP applies
   to Codex-hosted desktop, CLI, and IDE clients.

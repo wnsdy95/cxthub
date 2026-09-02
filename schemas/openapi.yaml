@@ -446,7 +446,7 @@ components:
       properties:
         id: { type: string }
         client_name: { type: string, maxLength: 128 }
-        scope: { type: string, const: context:read }
+        scope: { type: string, const: mcp:read }
         resource: { type: string, format: uri }
         redirect_uri: { type: string, format: uri }
         expires_at: { type: string, format: date-time }

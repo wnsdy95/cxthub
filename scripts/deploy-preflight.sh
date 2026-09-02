@@ -160,13 +160,56 @@ image_smoke() (
   need curl
   need docker
   local name="cxt-preflight-app-$$"
+  local missing_name="cxt-preflight-app-missing-dsn-$$"
+  local postgres_name="cxt-preflight-app-pg-$$"
+  local network_name="cxt-preflight-net-$$"
   local port=""
-  cleanup_app() { docker rm -f "$name" >/dev/null 2>&1 || true; }
+  cleanup_app() {
+    docker rm -f "$name" "$missing_name" "$postgres_name" >/dev/null 2>&1 || true
+    docker network rm "$network_name" >/dev/null 2>&1 || true
+  }
   trap cleanup_app EXIT
 
-  docker run -d --name "$name" \
+  docker network create "$network_name" >/dev/null
+
+  docker run -d --name "$missing_name" \
     -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
     -e CXT_PUBLIC_URL=http://localhost:8907 \
+    cxtd:preflight --data /tmp/cxt-data >/dev/null
+  for _ in $(seq 1 40); do
+    [ "$(docker inspect "$missing_name" --format '{{.State.Running}}' 2>/dev/null || true)" = "false" ] && break
+    sleep 0.25
+  done
+  if [ "$(docker inspect "$missing_name" --format '{{.State.Running}}' 2>/dev/null || true)" != "false" ]; then
+    docker logs "$missing_name" >&2 || true
+    die "Production image served externally without PostgreSQL"
+  fi
+  if ! docker logs "$missing_name" 2>&1 | grep -q 'CXT_POSTGRES_DSN is required'; then
+    docker logs "$missing_name" >&2 || true
+    die "Production image did not explain its missing PostgreSQL DSN"
+  fi
+  pass "Production image fails closed without PostgreSQL"
+
+  docker run -d --name "$postgres_name" --network "$network_name" --network-alias postgres \
+    -e POSTGRES_USER=cxt -e POSTGRES_PASSWORD=cxt -e POSTGRES_DB=cxthub_test \
+    postgres:16 >/dev/null
+  for _ in $(seq 1 120); do
+    if docker exec "$postgres_name" psql -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+  if ! docker exec "$postgres_name" psql -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null 2>&1; then
+    docker logs "$postgres_name" >&2 || true
+    die "Production image PostgreSQL is not ready"
+  fi
+
+  docker run -d --name "$name" --network "$network_name" \
+    -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
+    -e CXT_PUBLIC_URL=http://localhost:8907 \
+    -e CXT_REQUIRE_POSTGRES=1 \
+    -e CXT_POSTGRES_DSN='postgres://cxt:cxt@postgres:5432/cxthub_test?sslmode=disable' \
+    -e CXT_MIGRATIONS_DIR=/app/migrations \
     -p 127.0.0.1::8907 cxtd:preflight --data /tmp/cxt-data >/dev/null
   port="$(docker port "$name" 8907/tcp 2>/dev/null | awk -F: 'NR==1 {print $NF}' || true)"
   if [ -z "$port" ]; then
@@ -176,7 +219,7 @@ image_smoke() (
   for _ in $(seq 1 60); do
     if curl -fsS "http://127.0.0.1:${port}/api/v1/health" 2>/dev/null \
       | grep -q '"status":"ok"'; then
-      pass "Production image start/health"
+      pass "Production image starts against PostgreSQL"
       return
     fi
     sleep 0.25

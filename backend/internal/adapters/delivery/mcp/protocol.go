@@ -2,10 +2,23 @@ package mcp
 
 import (
 	"encoding/json"
+	"mime"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
+
+func supportedProtocol(value string) bool {
+	switch value {
+	case "2024-11-05", "2025-03-26", latestProtocol:
+		return true
+	default:
+		return false
+	}
+}
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -19,15 +32,28 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-func (s *Server) mcpMethodNotAllowed(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) mcpMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	if !s.validMCPOrigin(w, r) {
+		return
+	}
 	w.Header().Set("Allow", "POST")
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "stateless MCP endpoint accepts POST only"})
 }
 
 func (s *Server) mcpPost(w http.ResponseWriter, r *http.Request) {
+	if !s.validMCPOrigin(w, r) {
+		return
+	}
 	user, err := s.requestUser(r, false)
 	if err != nil {
 		s.mcpUnauthorized(w)
+		return
+	}
+	if !acceptsMediaType(r.Header.Get("Accept"), "application/json") ||
+		!acceptsMediaType(r.Header.Get("Accept"), "text/event-stream") {
+		writeJSON(w, http.StatusNotAcceptable, map[string]any{
+			"jsonrpc": "2.0", "error": rpcError{Code: -32600, Message: "Accept must include application/json and text/event-stream"}, "id": nil,
+		})
 		return
 	}
 	if !hasMediaType(r, "application/json") {
@@ -43,6 +69,18 @@ func (s *Server) mcpPost(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if req.Method != "initialize" {
+		protocol := strings.TrimSpace(r.Header.Get("MCP-Protocol-Version"))
+		if protocol == "" {
+			protocol = "2025-03-26"
+		}
+		if !supportedProtocol(protocol) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"jsonrpc": "2.0", "error": rpcError{Code: -32600, Message: "unsupported MCP-Protocol-Version"}, "id": requestID(req.ID),
+			})
+			return
+		}
+	}
 	result, rpcErr := s.dispatch(r, user, req)
 	if len(req.ID) == 0 || string(req.ID) == "null" {
 		w.WriteHeader(http.StatusAccepted)
@@ -57,6 +95,52 @@ func (s *Server) mcpPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func requestID(raw json.RawMessage) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return raw
+}
+
+func acceptsMediaType(header, target string) bool {
+	for _, item := range strings.Split(header, ",") {
+		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(item))
+		if err != nil || !strings.EqualFold(mediaType, target) {
+			continue
+		}
+		if q, ok := params["q"]; ok {
+			quality, err := strconv.ParseFloat(q, 64)
+			if err != nil || quality <= 0 {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// MCP clients such as Codex and Claude normally make server-to-server requests
+// and omit Origin. If a browser-originated request does include Origin, require
+// an exact match with CXT_PUBLIC_URL so the HTTP transport cannot be reached by
+// an unrelated website through DNS rebinding or ambient browser credentials.
+func (s *Server) validMCPOrigin(w http.ResponseWriter, r *http.Request) bool {
+	raw := strings.TrimSpace(r.Header.Get("Origin"))
+	if raw == "" {
+		return true
+	}
+	origin, err := url.Parse(raw)
+	public, publicErr := url.Parse(s.publicURL)
+	valid := err == nil && publicErr == nil && origin.User == nil && origin.RawQuery == "" && origin.Fragment == "" &&
+		(origin.Path == "" || origin.Path == "/") && strings.EqualFold(origin.Scheme, public.Scheme) && strings.EqualFold(origin.Host, public.Host)
+	if !valid {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"jsonrpc": "2.0", "error": rpcError{Code: -32000, Message: "Origin is not allowed"}, "id": nil,
+		})
+		return false
+	}
+	return true
+}
+
 func (s *Server) dispatch(r *http.Request, user domain.User, req rpcRequest) (any, *rpcError) {
 	switch req.Method {
 	case "initialize":
@@ -65,8 +149,7 @@ func (s *Server) dispatch(r *http.Request, user domain.User, req rpcRequest) (an
 			ProtocolVersion string `json:"protocolVersion"`
 		}
 		_ = json.Unmarshal(req.Params, &params)
-		switch params.ProtocolVersion {
-		case "2024-11-05", "2025-03-26", latestProtocol:
+		if supportedProtocol(params.ProtocolVersion) {
 			protocol = params.ProtocolVersion
 		}
 		return map[string]any{

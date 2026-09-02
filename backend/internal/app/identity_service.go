@@ -662,7 +662,7 @@ func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientI
 	}
 	return domain.OAuthTokenPair{
 		AccessToken: access.Token, RefreshToken: refresh.Token,
-		ExpiresIn: int(mcpAccessTokenTTL.Seconds()), Scope: "context:read",
+		ExpiresIn: int(mcpAccessTokenTTL.Seconds()), Scope: "mcp:read",
 	}, nil
 }
 

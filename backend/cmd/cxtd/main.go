@@ -3,8 +3,9 @@
 // 'serve' starts the HTTP REST server; 'repack' performs offline-compatible FS
 // object maintenance. Frontend static assets are not served (CDN/Vercel).
 //
-// Store: Default build uses FSStore (file-based, --data directory). `go build -tags postgres` + CXT_POSTGRES_DSN
-// for PostgreSQL adapter (pgx). store.Open(factory) selects based on build tags.
+// Store: a loopback-bound development build may use FSStore. Every externally
+// bound server requires the PostgreSQL build and CXT_POSTGRES_DSN; production
+// can additionally set CXT_REQUIRE_POSTGRES=1 as a fail-closed assertion.
 package main
 
 import (
@@ -40,6 +41,10 @@ func isLoopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func postgresRequired(addr, configured string) bool {
+	return envBool(configured) || !isLoopback(addr)
 }
 
 func main() {
@@ -78,7 +83,7 @@ func serve(ctx context.Context, args []string) error {
 	addr := flagOr(args, "--addr", os.Getenv("CXT_ADDR"), ":8080")
 	dataDir := flagOr(args, "--data", os.Getenv("CXT_DATA"), "./cxt-data")
 	dsn := os.Getenv("CXT_POSTGRES_DSN")
-	requirePostgres := envBool(os.Getenv("CXT_REQUIRE_POSTGRES"))
+	requirePostgres := postgresRequired(addr, os.Getenv("CXT_REQUIRE_POSTGRES"))
 
 	// Resolve and validate authentication before opening either storage backend.
 	// In particular, an unsafe dev-auth bind must fail without touching the FS
@@ -99,8 +104,9 @@ func serve(ctx context.Context, args []string) error {
 		log.Printf("warning: dev authentication trusts every token without verification (local development only)")
 	}
 
-	// Outbound adapter: local development may use FS, while production sets
-	// CXT_REQUIRE_POSTGRES=1 and fails before serving if the binary, DSN, or
+	// Outbound adapter: only loopback development may use FS. External binds
+	// require PostgreSQL even when an operator accidentally omits the explicit
+	// production assertion, and fail before serving if the binary, DSN, or
 	// database connection is unavailable.
 	st, err := store.Open(dataDir, dsn, requirePostgres)
 	if err != nil {
