@@ -179,7 +179,7 @@ may have entered an agent session or Git history, revoke it immediately. See
 |---|---|
 | `cli/` | Go `cxt` CLI, capture adapters, codecs, local object store, and MCP server |
 | `backend/` | Go `cxtd` HTTP server with filesystem and PostgreSQL stores |
-| `frontend/web/` | React and TypeScript web application |
+| `frontend/web/` | Sole web runtime: React and TypeScript application, tests, and deployment config |
 | `schemas/` | OpenAPI, JSON Schema, and ordered PostgreSQL migrations |
 | `integrations/` | Claude Code and Codex integration assets |
 | `deploy/` | Optional self-hosting infrastructure |

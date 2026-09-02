@@ -66,7 +66,8 @@ func sanitizeSCPRemote(raw string) string {
 //
 // "https://GITHUB.COM/wnsdy95/cxthub/cli.git" → "github.com/wnsdy95/cxthub/cli"
 //
-// TODO: Complete URL parsing implementation (SCP format ssh, various git hosts).
+// Standard URL and SCP-style SSH remotes are supported for any host. Invalid
+// credential-bearing inputs fail closed instead of becoming repository IDs.
 func NormalizeRemoteURL(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
 	normalized := SanitizeRemoteURL(rawURL)
