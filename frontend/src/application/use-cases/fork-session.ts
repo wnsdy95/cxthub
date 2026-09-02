@@ -1,7 +1,7 @@
 /**
  * application/use-cases/fork-session: Fork a new branch from a snapshot use-case.
  *
- * domain model inbound ForkSession / MCP session_fork handling.
+ * REST ForkSession action.
  * Used in screen 5 (Fork action). "Fork this session branch to start a new task line from this point" (domain model).
  *
  * fork meaning (data model):

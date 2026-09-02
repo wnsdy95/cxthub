@@ -2,7 +2,7 @@
  * application/use-cases/memorize: Active session distillation → MemoryDigest attachment use-case.
  *
  * [CLI only — not available on web]
- * compatibility rules Memorize / MCP memorize / `cxt memorize` handling.
+ * Client memory-distillation action.
  * POST /api/v1/repos/{repoId}/memorize is not defined in openapi.yaml·backend http, so
  * it is not exposed as a web endpoint. MemorizeInteractor.execute() always throws an error.
  *

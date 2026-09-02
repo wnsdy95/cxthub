@@ -1,75 +1,48 @@
-# cxthub — Claude Code Plugin
+# CXTHub — Claude Code integration
 
-This directory contains assets for the **cxthub** plugin that connects Claude Code (local CLI: `cxt`).
+CXTHub uses three separate integration layers with Claude Code and Claude
+Desktop's **Code** tab:
 
-cxt is a "Git + GitHub" for coding agent sessions. It automatically snapshots Claude Code sessions,
-synchronizes with the central server, and cross-replays with Codex.
+1. lifecycle hooks for automatic capture;
+2. an optional read-only MCP server for history queries; and
+3. explicit `cxt` CLI commands for state-changing manual operations.
 
----
+Claude Desktop's general **Chat** tab is not a Claude Code session. It does not
+emit the lifecycle hooks required for passive capture and is outside this
+integration.
 
-## File Structure
+## Files
 
-```
+```text
 claude-code/
-├── .claude-plugin/
-│   └── plugin.json       # Plugin manifest (name/version/description)
-├── .mcp.json             # cxt MCP server registration (stdio)
-├── hooks/
-│   └── hooks.json        # SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → cxt hook
+├── .claude-plugin/plugin.json
+├── .mcp.json
+├── hooks/hooks.json
 └── commands/
-    ├── cxt-init.md          # /cxt-init         — register repo + initialize .cxt/
-    ├── cxt-save.md          # /cxt-save         — save a session snapshot
-    ├── cxt-list.md          # /cxt-list         — list snapshots and refs
-    ├── cxt-fork.md          # /cxt-fork         — fork a branch without loading
-    ├── cxt-checkout.md      # /cxt-checkout     — combined fork+load or plain checkout
-    ├── cxt-load.md          # /cxt-load         — restore a snapshot without forking
-    ├── cxt-diff.md          # /cxt-diff         — compare two snapshots
-    ├── cxt-memorize.md      # /cxt-memorize     — distill active session → MemoryDigest
-    ├── cxt-memory-load.md   # /cxt-memory-load  — inject a MemoryDigest
-    ├── cxt-push.md          # /cxt-push         — push local state to the team server
-    └── cxt-pull.md          # /cxt-pull         — pull team-server state locally
+    ├── cxt-list.md        # MCP: context_list
+    ├── cxt-fetch.md       # MCP: context_fetch
+    ├── cxt-memory-load.md # MCP: memory_load
+    ├── cxt-search.md      # MCP: context_search
+    └── cxt-*.md           # explicit cxt CLI operations
 ```
 
----
+## Recommended setup
 
-## Prerequisites
-
-- **cxt binary** must be in your `$PATH`.
-  ```sh
-  # Verify
-  cxt --version
-  ```
-- (Optional) Workspace URL connection + login:
-  ```sh
-  cxt remote add origin https://<host>/<username>/<workspace>
-  cxt login    # or cxt login <token> (issued from Web Account Settings)
-  ```
-
----
-
-## Installation Method
-
-### Method 1: Using cxt setup (Recommended)
-
-Run from the repository root:
+Run this once from the repository root:
 
 ```sh
-cxt setup  # repo root — includes agent hooks for full onboarding
+cxt setup
 ```
 
-The script performs the following steps:
-1. Initializes the `.cxt` store (.git next to it, automatically excludes git status).
-2. Installs 6 git hooks (commit·checkout·merge·push·ref·rewrite — fail-open, chaining with existing hooks).
-3. Registers the workspace remote (one URL = server address + repo integrity).
-4. Performs device login (browser approval, no token copy required — `--no-login` to omit).
-5. Merges agent hooks (`cxt hook` entry added to `.claude/settings.json` — preserves existing settings).
-6. Pulls team default setting bundles (`.claude`/`.agents`/`.codex`).
+It initializes the local store, installs Git hooks, and merges Claude lifecycle
+hooks into project settings without replacing existing entries. Those hooks
+capture Claude Code CLI sessions and the Claude Desktop Code tab. MCP is not
+required for capture.
 
-> MCP server installation, slash command copying, and plugin registration are **not** performed.
+## Optional read-only MCP
 
-### Method 2: Manual Installation
+Merge the following project-scoped server into `.mcp.json`:
 
-**MCP Server Registration** — Add the following to the `.mcp.json` file in the project root:
 ```json
 {
   "mcpServers": {
@@ -81,68 +54,39 @@ The script performs the following steps:
 }
 ```
 
-**Hook Registration** — Copy the `hooks/hooks.json` file to the Claude Code plugin hook path, or
-merge the contents of this file into the existing hooks configuration.
+The server exposes exactly four non-destructive tools:
 
-**Slash Command Registration** — Copy the `commands/*.md` files to the Claude Code slash command directory.
-
----
-
-## Operation Mode
-
-### Automatic Capture (Hook)
-
-Claude Code session events automatically trigger the cxt:
-
-| Event | Action |
+| MCP tool | Purpose |
 |---|---|
-| `SessionStart` (startup\|resume) | Baseline marking. No commit. |
-| `UserPromptSubmit` | Pull briefing injection (additionalContext) + turn boundary marking. No commit. |
-| `Stop` | Incremental capture (60-second debounce). Snapshot commit. |
-| `SessionEnd` | Forced flush of last state. Snapshot commit. |
+| `context_list` | List local context commits |
+| `context_fetch` | Read metadata, bounded memory, and recent chat for a ref |
+| `memory_load` | Read the bounded memory projection for a ref |
+| `context_search` | Search synchronized team context |
 
-Hooks always terminate within 10 seconds and return `exit 0`. Capture failures do not interfere with the session.
+There are no MCP tools for save, fork, checkout, provider-file restoration,
+memorize, push, or pull.
 
-### Manual Commands (MCP + Slash)
+## Optional slash commands
 
-Called directly within Claude Code:
+Install `commands/*.md` in a Claude Code slash-command location if desired.
+Read commands call the four MCP tools above. State-changing commands run the
+matching local `cxt` CLI command through the shell only after the user invokes
+the command explicitly.
 
-```
-/cxt-init
-/cxt-save "checkpoint before refactoring"
-/cxt-list
-/cxt-fork experiment-branch
-/cxt-checkout -b experiment-branch --from main
-/cxt-load main --mode full
-/cxt-diff sha256:aaa... sha256:bbb...
-/cxt-memorize
-/cxt-memory-load main
-/cxt-push
-/cxt-pull
-```
+Automatic capture remains hook-owned; agents should not call `cxt save` or
+`cxt push` opportunistically during an unrelated turn.
 
----
+## Desktop behavior
 
-## MCP Tool List (compatibility rules Source of Truth)
-
-| Tool Name | Slash Command | Description |
-|---|---|---|
-| `repo_init` | `/cxt-init` | Register current repo + create `.cxt/` |
-| `session_save` | `/cxt-save` | Save active session snapshot |
-| `session_list` | `/cxt-list` | Query snapshot·ref list |
-| `session_fork` | `/cxt-fork` | Branch from snapshot |
-| `session_checkout` | `/cxt-checkout` | Integrated fork+load or simple checkout |
-| `session_load` | `/cxt-load` | Restore snapshot to session file |
-| `session_diff` | `/cxt-diff` | Delta of two snapshots CIR events |
-| `memorize` | `/cxt-memorize` | Active session distillation → MemoryDigest (`memory_save` alias) |
-| `memory_load` | `/cxt-memory-load` | Inject MemoryDigest into CLAUDE.md |
-| `sync_push` | `/cxt-push` | Local → Central Server push |
-| `sync_pull` | `/cxt-pull` | Central Server → Local pull |
-
----
+- Claude Desktop's Code tab keeps its vendor-owned live session on branch
+  switches and receives one bounded project-memory handoff.
+- Full conversation history remains in the immutable CXTHub DAG and is read
+  with `context_fetch` or the web UI.
+- Claude Desktop's general Chat tab is not passively captured.
 
 ## Troubleshooting
 
-- `cxt: command not found` — `cxt` binary is not in `$PATH`. Retry after building/installing.
-- MCP connection failure — Run `cxt mcp` directly to check the error.
-- Hook not working — Verify the Claude Code hook settings path and ensure `hooks.json` is correctly registered.
+- `cxt: command not found`: install `cxt`, or use its absolute path in
+  `.mcp.json` when the desktop app has a restricted PATH.
+- MCP unavailable: run `cxt mcp` directly and inspect the project `.mcp.json`.
+- Capture unavailable: rerun `cxt setup` and inspect `.claude/settings.json`.

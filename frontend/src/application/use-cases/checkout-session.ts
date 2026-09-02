@@ -1,7 +1,7 @@
 /**
  * application/use-cases/checkout-session: fork (optional) + load integration checkout use-case.
  *
- * compatibility rulesheckoutSession / MCP session_checkout handling.
+ * Client checkout action.
  * `cxt checkout <ref>` (simple load) or `cxt checkout -b <new> [--from <ref>]`
  * (fork then load) both forms are handled.
  *

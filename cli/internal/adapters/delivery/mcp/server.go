@@ -81,6 +81,8 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
+const serverInstructions = "cxt is a read-only context knowledge server. Use context_list, context_fetch, memory_load, and context_search to inspect history. It cannot save, fork, checkout, restore provider files, memorize, push, or pull. Those mutations belong to automatic Git/provider hooks or explicit cxt CLI commands; run a CLI mutation only when the user asks for it."
+
 // Run starts an stdio MCP server (newline-delimited JSON-RPC).
 func (s *Server) Run() error {
 	in, out := s.in, s.out
@@ -126,6 +128,7 @@ func (s *Server) dispatch(req rpcRequest) (interface{}, *rpcError) {
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
 			"serverInfo":      map[string]interface{}{"name": "cxt", "version": "1"},
+			"instructions":    serverInstructions,
 		}, nil
 	case "notifications/initialized", "notifications/cancelled":
 		return nil, nil
@@ -152,6 +155,7 @@ func toolDefs() []map[string]interface{} {
 		{
 			"name":        "context_list",
 			"description": "List of context commits (agent session snapshots) in the current repo. Used to quickly review what work sessions team members have left.",
+			"annotations": map[string]interface{}{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
 			"inputSchema": obj(map[string]interface{}{
 				"branch": map[string]interface{}{"type": "string", "description": "Branch filter (empty for all)"},
 				"limit":  map[string]interface{}{"type": "number", "description": "Maximum number (default 20)"},
@@ -160,6 +164,7 @@ func toolDefs() []map[string]interface{} {
 		{
 			"name":        "context_fetch",
 			"description": "Context for a specific ref (branch name/commit hash/HEAD): metadata + memory summary + recent conversation tail. Use for deep inspection of a specific task context.",
+			"annotations": map[string]interface{}{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
 			"inputSchema": obj(map[string]interface{}{
 				"ref":    map[string]interface{}{"type": "string", "description": "Branch name, sha256:hash, short hash, or HEAD (default: current branch)"},
 				"events": map[string]interface{}{"type": "number", "description": "Number of recent messages to include (default: 12)"},
@@ -168,6 +173,7 @@ func toolDefs() []map[string]interface{} {
 		{
 			"name":        "memory_load",
 			"description": "Compressed memory for a ref (MemoryDigest: agent compaction summary, key decisions, and unresolved tasks). Falls back to the nearest ancestor.",
+			"annotations": map[string]interface{}{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
 			"inputSchema": obj(map[string]interface{}{
 				"ref": map[string]interface{}{"type": "string", "description": "Branch name or commit hash (default: current branch)"},
 			}),
@@ -175,6 +181,7 @@ func toolDefs() []map[string]interface{} {
 		{
 			"name":        "context_search",
 			"description": "Search commit messages and conversation bodies on the team server. Use for team knowledge queries like 'Who touched this bug?'",
+			"annotations": map[string]interface{}{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
 			"inputSchema": obj(map[string]interface{}{
 				"query": map[string]interface{}{"type": "string", "description": "Search term (at least 2 characters)"},
 			}, "query"),

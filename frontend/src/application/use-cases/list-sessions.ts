@@ -1,7 +1,7 @@
 /**
  * application/use-cases/list-sessions: Snapshot/ref list retrieval use-case.
  *
- * domain model inbound ListSessions / MCP session_list response.
+ * REST session-gateway snapshot/ref response.
  * Used in screen 3 (Snapshot timeline) for reverse createdAt order / DAG parent graph construction.
  *
  * Dependencies: SessionGateway (port), dto.ts, domain types.

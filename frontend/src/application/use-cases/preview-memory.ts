@@ -2,8 +2,9 @@
  * application/use-cases/preview-memory: MemoryDigest preview use-case.
  *
  * Screen 6 (Memory Preview) — cxt unique feature. Display distilled memory summary read-only.
- * The web UI supports read-only previews, unlike MCP memory_load, which injects an actual provider memory file.
- * domain model MCP memory_save/memory_load read aspect (Open Question).
+ * The web UI and MCP memory_load both expose read-only projections. Provider-file
+ * injection belongs to the explicit CLI load workflow.
+ * Read-only memory preview projection.
  *
  * Dependencies: SessionGateway (port), domain type.
  */
