@@ -1895,21 +1895,6 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /repos/{repoID}/load:
-    parameters:
-      - $ref: "#/components/parameters/repoID"
-    post:
-      operationId: loadSession
-      summary: (Unavailable) Session loading is local-CLI only — always returns 501
-      description: |
-        Session loading (file materialization and memory injection) is a local filesystem
-        operation and is not performed by the server. This informational endpoint always
-        returns 501; use `cxt load <ref>`. (Audit 2026-07-09: corrected a drift where the
-        specification documented behavior that the server did not implement.)
-      tags: [actions]
-      responses:
-        "501":
-          description: "not implemented — use the local cxt load command"
   /hooks/github:
     post:
       operationId: githubWebhook

@@ -204,10 +204,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/chunks", s.guard(domain.RolePuller, s.pullChunks))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/objects", s.guard(domain.RolePuller, s.pullObjects))
 
-	// Actions (for web UI). Diff is read operation (viewer), Fork is write operation (member). Load is local CLI exclusive (501 error).
+	// Actions exposed by the server. Provider-session restoration remains a local
+	// CLI operation and is deliberately absent from the HTTP surface.
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/diff", s.guard(domain.RoleViewer, s.diff))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/fork", s.guard(domain.RoleMember, s.fork))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/load", s.notImplemented)
 
 	// Authentication · Workspace · Invite (all Firebase/dev tokens required — requireUser middleware).
 	s.registerIdentity(mux)
@@ -1222,10 +1222,6 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, msg string)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{"code": code, "message": msg, "details": map[string]any{}},
 	})
-}
-
-func (s *Server) notImplemented(w http.ResponseWriter, _ *http.Request) {
-	s.writeError(w, http.StatusNotImplemented, "not_implemented", "endpoint not implemented in this slice")
 }
 
 func unsafeMethod(method string) bool {
