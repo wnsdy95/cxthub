@@ -84,8 +84,8 @@ export function CommitGraph({
   const t = useT();
   const [showArchived, setShowArchived] = useState(false);
   const status = useMemo(
-    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted),
-    [refs, snapshots, uncommitted],
+    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted, pinBranch),
+    [refs, snapshots, uncommitted, pinBranch],
   );
   const selectedArchived = selectedId !== null && status.archivedOnly.has(selectedId);
   const archivedVisible = showArchived || selectedArchived;
@@ -352,11 +352,14 @@ export function CommitGraph({
           ? rowBadges.find((badge) => badge.kind === 'branch' && badge.name === pinBranch)
           : undefined) ?? rowBadges.find((badge) => badge.kind === 'branch');
       const archivedBadge = rowBadges.find((badge) => badge.kind === 'archived');
+      const joinedBadge = rowBadges.find((badge) => badge.kind === 'joined');
       return branchBadge
         ? { text: branchBadge.name, archived: false }
-        : archivedBadge
-          ? { text: t('graph.archivedLane', { branch: archivedBadge.name }), archived: true }
-          : { text: snapshot.branch ?? '', archived: false };
+        : joinedBadge
+          ? { text: joinedBadge.name, archived: false }
+          : archivedBadge
+            ? { text: t('graph.archivedLane', { branch: archivedBadge.name }), archived: true }
+            : { text: snapshot.branch ?? '', archived: false };
     };
   }, [badges, pinBranch, t]);
 
@@ -781,10 +784,20 @@ export function CommitGraph({
                 <span
                   key={b.kind + b.name}
                   className={`ref-badge ${b.kind}`}
-                  title={b.kind === 'archived' ? t('context.archivedBranchTitle') : undefined}
+                  title={
+                    b.kind === 'archived'
+                      ? t('context.archivedBranchTitle')
+                      : b.kind === 'joined'
+                        ? t('context.joinedBranchTitle')
+                        : undefined
+                  }
                 >
-                  {b.kind === 'tag' ? '⌂ ' : b.kind === 'archived' ? '⊟ ' : ''}
-                  {b.kind === 'archived' ? t('context.archivedBranchBadge', { branch: b.name }) : b.name}
+                  {b.kind === 'tag' ? '⌂ ' : b.kind === 'archived' ? '⊟ ' : b.kind === 'joined' ? '⎘ ' : ''}
+                  {b.kind === 'archived'
+                    ? t('context.archivedBranchBadge', { branch: b.name })
+                    : b.kind === 'joined'
+                      ? t('context.joinedBranchBadge', { branch: b.name })
+                      : b.name}
                 </span>
               ))}
             </span>

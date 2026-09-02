@@ -80,6 +80,8 @@ export const en: Messages = {
     memoryBadgeTitle: 'Has a stored memory digest — select to inspect the snapshot archive',
     archivedBranchBadge: 'archived · {branch}',
     archivedBranchTitle: 'Context from a deleted Git branch — history is preserved and can be restored with cxt branch restore',
+    joinedBranchBadge: 'joined · {branch}',
+    joinedBranchTitle: 'Git branch joined into the default branch — its context lineage and name remain in the graph after the Git ref is deleted',
     compactSummary: 'Context compaction summary (agent-written)',
     cxtSeedSummary: 'cxt seed summary (auto-generated — inherited context)',
     branchOff: '⎇ branch off (checkout -b)',

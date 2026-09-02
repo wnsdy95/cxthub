@@ -31,6 +31,7 @@ assert.deepEqual([...status.unpushed], [unpushed]);
 assert.deepEqual([...status.uncommitted], [uncommitted]);
 assert.deepEqual([...status.archivedOnly], [archived]);
 assert.equal(status.archivedBranches, 1);
+assert.deepEqual(status.joined, []);
 assert.deepEqual(status.archived, [
   { branch: 'feature/old', target: archived, uniqueCount: 1, targetAvailable: true },
 ]);
@@ -76,8 +77,12 @@ const graftRefs: Ref[] = [
   { kind: 'branch', name: 'main', repo_id: 'repo', target: graftedHead },
   refs[1],
 ];
-const graftStatus = classifyGraphSnapshots(graftRefs, graftSnapshots);
+const graftStatus = classifyGraphSnapshots(graftRefs, graftSnapshots, new Set(), 'main');
 assert.equal(graftStatus.pushed.has(archived), true, 'graft-reachable archived history stays visible');
 assert.equal(graftStatus.archivedOnly.has(archived), false, 'active graft history must not collapse');
-assert.equal(graftStatus.archived[0]?.uniqueCount, 0, 'fully shared archived history remains discoverable');
+assert.deepEqual(graftStatus.joined, [
+  { branch: 'feature/old', target: archived, kind: 'joined' },
+], 'a deleted source ref whose tip is on main is a joined historical branch');
+assert.deepEqual(graftStatus.archived, [], 'joined branches must not appear in the archive panel');
+assert.equal(graftStatus.archivedBranches, 0);
 assert.deepEqual([...graftStatus.unpushed], [localAboveGraft]);
