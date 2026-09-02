@@ -170,7 +170,7 @@ test('pricing publishes the storage-only contract and calculates GitHub-aligned 
   expect(unexpected).toEqual([]);
 });
 
-test('workspace settings show the cumulative role matrix above permission overrides', async ({ page }) => {
+test('members page orders invites, role capabilities, and members without page overflow', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
@@ -201,12 +201,22 @@ test('workspace settings show the cumulative role matrix above permission overri
         }],
       };
     }
-    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) return { body: [] };
+    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) {
+      return {
+        body: [{
+          workspace_id: workspaceId,
+          user_id: 'user-1',
+          role: 'owner',
+          user: { id: 'user-1', name: 'Alice', nickname: 'Alice', email: 'alice@example.test' },
+        }],
+      };
+    }
+    if (pathname === `/api/v1/workspaces/${workspaceId}/invites`) return { body: [] };
     if (pathname === '/api/v1/repos' && searchParams.get('workspace') === workspaceId) return { body: [] };
     return undefined;
   });
 
-  await page.goto('/alice/cxthub/settings');
+  await page.goto('/alice/cxthub/members');
   const matrix = page.locator('.role-capabilities');
   await expect(matrix).toBeVisible();
   await expect(matrix.locator('thead code')).toHaveText(['viewer', 'puller', 'member', 'maintainer', 'owner']);
@@ -214,13 +224,16 @@ test('workspace settings show the cumulative role matrix above permission overri
   await expect(matrix.locator('td.allowed')).toHaveCount(15);
   await expect(matrix.locator('td.denied')).toHaveCount(10);
 
-  const matrixBeforeControls = await page.locator('.ws-settings-form').evaluate((form) => {
-    const capability = form.querySelector('.role-capabilities');
-    const controls = form.querySelector('.permission-controls');
-    if (!capability || !controls) return false;
-    return Boolean(capability.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const correctSectionOrder = await page.locator('main.main').evaluate((main) => {
+    const invites = main.querySelector('.invite-panel');
+    const capabilities = main.querySelector('.role-capabilities');
+    const members = main.querySelector('.members-panel');
+    if (!invites || !capabilities || !members) return false;
+    const follows = Node.DOCUMENT_POSITION_FOLLOWING;
+    return Boolean(invites.compareDocumentPosition(capabilities) & follows)
+      && Boolean(capabilities.compareDocumentPosition(members) & follows);
   });
-  expect(matrixBeforeControls).toBe(true);
+  expect(correctSectionOrder).toBe(true);
 
   const overflow = await matrix.locator('.role-capabilities-scroll').evaluate((element) => ({
     client: element.clientWidth,
@@ -228,6 +241,10 @@ test('workspace settings show the cumulative role matrix above permission overri
   }));
   expect(overflow.scroll).toBeGreaterThan(overflow.client);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await page.goto('/alice/cxthub/settings');
+  await expect(page.locator('.permission-controls')).toBeVisible();
+  await expect(page.locator('.role-capabilities')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });

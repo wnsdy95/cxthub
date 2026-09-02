@@ -26,7 +26,6 @@ import { Portal } from './Portal';
 import { useT, Rich } from '../i18n';
 import { safeAvatarUrl } from '../urls';
 import { projectBranchRefs } from '../branchLifecycle';
-import { RoleCapabilities } from './RoleCapabilities';
 
 // resizeToDataURL reduces uploaded images to a 256px square JPEG data URL (center crop).
 // Stores the record as is, keeping it small (server limit ~700KB).
@@ -611,8 +610,6 @@ export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator:
                   {syncNow.error && <p className="err">{syncNow.error.message}</p>}
                 </div>
               )}
-
-              <RoleCapabilities />
 
               <div className="settings-upload permission-controls">
                 <span className="label">{t('settings.permissions')}</span>
