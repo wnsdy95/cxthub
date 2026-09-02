@@ -224,6 +224,12 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
 .empty-box code { font-size: 0.9em; color: var(--text); }
 .main > .empty-box { margin-top: 10vh; text-align: center; }
 
+.access-denied { display: flex; align-items: flex-start; gap: 12px; max-width: 620px; padding: 16px 18px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--hover); color: var(--text); }
+.access-denied-mark { color: var(--danger); font-family: var(--mono); font-size: 1.05rem; line-height: 1.25; }
+.access-denied strong { display: block; color: var(--ink); font-size: 0.86rem; }
+.access-denied p { margin: 4px 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.5; }
+
 /* Invitation */
 .invite { margin-top: 2px; }
 .invite-row { display: flex; gap: 8px; align-items: stretch; }

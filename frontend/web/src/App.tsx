@@ -72,7 +72,7 @@ function Root() {
     // Non-logged in + /<username>/<slug> → public workspace: read-only view (determined by server). /login/device re-renders to approval page after login.
     const r = parseRoute();
     if (!forceLogin && r?.kind === 'ws') {
-      return <PublicBrowse username={r.username} slug={r.slug} onLogin={() => setForceLogin(true)} />;
+      return <PublicBrowse username={r.username} slug={r.slug} tab={r.tab} onLogin={() => setForceLogin(true)} />;
     }
     if (!forceLogin && r?.kind === 'user') {
       return <UserProfile username={r.username} onLogin={() => setForceLogin(true)} />;

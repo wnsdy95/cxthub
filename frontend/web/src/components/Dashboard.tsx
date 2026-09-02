@@ -27,6 +27,7 @@ import { RoleCapabilities } from './RoleCapabilities';
 import { LockIcon } from './Breadcrumb';
 import { myRole, atLeast, ROLES } from '../roles';
 import { gitWebUrl, sanitizeRemoteUrl } from '../urls';
+import { AccessDenied } from './AccessDenied';
 
 function short(hash: string): string {
   return hash.replace(/^sha256:/, '').slice(0, 12);
@@ -56,6 +57,7 @@ export function Dashboard() {
 
   // View the repo context — default is the first repo (usually one per workspace), switch by clicking in the list.
   const [activeRepoId, setActiveRepoId] = useState<string | null>(null);
+  const [accessNotice, setAccessNotice] = useState<string | null>(null);
   const activeRepo = repos.find((r) => r.id === activeRepoId) ?? repos[0] ?? null;
 
   // URL (/<username>/<slug>) → synchronize selection. The URL is the source of truth on entry, refresh, and back navigation.
@@ -86,6 +88,7 @@ export function Dashboard() {
 
   // Workspace click = navigate to that path (history is pushed for back action).
   function goWorkspace(w: Workspace) {
+    setAccessNotice(null);
     selectWs(w.id);
     navigate(wsPath(w));
   }
@@ -102,7 +105,13 @@ export function Dashboard() {
       ? route.tab
       : 'context';
   function goTab(next: 'context' | 'connections' | 'members' | 'onhold' | 'settings') {
-    if (!selected || next === tab) return;
+    if (!selected) return;
+    if (next === 'settings' && !atLeast(role, 'owner')) {
+      setAccessNotice(t('dashboard.workspaceAccessDenied'));
+      return;
+    }
+    setAccessNotice(null);
+    if (next === tab) return;
     navigate(wsPath(selected, next === 'context' ? undefined : next));
   }
 
@@ -224,13 +233,19 @@ export function Dashboard() {
                   <button className={`tab${tab === 'members' ? ' on' : ''}`} onClick={() => goTab('members')}>
                     {t('dashboard.members')} <span className="count-badge">{members.length}</span>
                   </button>
-                  {user && atLeast(role, 'owner') && (
+                  {(selected.visibility === 'public' || (user && atLeast(role, 'owner'))) && (
                     <button className={`tab${tab === 'settings' ? ' on' : ''}`} onClick={() => goTab('settings')}>
                       {t('dashboard.settings')}
                     </button>
                   )}
                 </nav>
               </div>
+
+              {accessNotice && (
+                <div className="toast" role="alert" onClick={() => setAccessNotice(null)}>
+                  {accessNotice}
+                </div>
+              )}
 
               {tab === 'members' ? (
                 <>
@@ -336,6 +351,14 @@ export function Dashboard() {
                     <h4>{t('dashboard.wsSettings')}</h4>
                   </div>
                   <WorkspaceSettings ws={selected} isCreator={user.id === selected.owner_id} />
+                </section>
+              )}
+              {tab === 'settings' && (!user || !atLeast(role, 'owner')) && (
+                <section className="panel">
+                  <div className="panel-head">
+                    <h4>{t('dashboard.wsSettings')}</h4>
+                  </div>
+                  <AccessDenied message={t('dashboard.workspaceAccessDenied')} />
                 </section>
               )}
 

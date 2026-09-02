@@ -1209,3 +1209,49 @@ func TestWorkspacePolicyLookupFailureBlocksAction(t *testing.T) {
 		t.Fatalf("policy lookup failure code %d, want 404", code)
 	}
 }
+
+func TestPublicPullerCannotManageWorkspaceOrTeamAssets(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	var me struct {
+		Username string `json:"username"`
+	}
+	if code := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK {
+		t.Fatalf("owner lookup code %d", code)
+	}
+	var ws struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+	}
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "PublicAssets"}, &ws); code != http.StatusOK {
+		t.Fatalf("workspace create code %d", code)
+	}
+	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+url.PathEscape(ws.ID), map[string]any{
+		"visibility": "public", "public_role": "puller",
+	}, nil); code != http.StatusOK {
+		t.Fatalf("workspace public patch code %d", code)
+	}
+
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	rid := repoIDForRemoteURLForTest(remoteURL)
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{
+		"id": rid, "remote_url": remoteURL, "default_branch": "main",
+	}, nil); code != http.StatusOK {
+		t.Fatalf("repo create code %d", code)
+	}
+
+	outsider := "dev:outsider@t.io:Outsider"
+	workspaceURL := ts.URL + "/api/v1/workspaces/" + url.PathEscape(ws.ID)
+	if code := doJSONAs(t, outsider, "PATCH", workspaceURL, map[string]any{"name": "Hijacked"}, nil); code != http.StatusForbidden {
+		t.Fatalf("public puller workspace patch code %d, want 403", code)
+	}
+	settingsURL := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid)) + "/settings/claude"
+	if code := doJSONAs(t, outsider, "PUT", settingsURL, map[string]any{"files": []any{}}, nil); code != http.StatusForbidden {
+		t.Fatalf("public puller settings write code %d, want 403", code)
+	}
+	secretsURL := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid)) + "/secrets"
+	if code := doJSONAs(t, outsider, "PUT", secretsURL, map[string]any{"fingerprint": "fp"}, nil); code != http.StatusForbidden {
+		t.Fatalf("public puller secrets write code %d, want 403", code)
+	}
+}

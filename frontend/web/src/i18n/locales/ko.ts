@@ -52,6 +52,7 @@ export const ko = {
     noMessage: '(메시지 없음)',
     commitGraphTotal: '커밋 그래프 · 전체 {count}',
     close: '닫기',
+    accessDenied: '접근할 수 없음',
     expand: '펼치기',
     collapse: '접기',
   },
@@ -204,6 +205,7 @@ export const ko = {
     connectedRepos: '연결된 저장소',
     settings: '설정',
     wsSettings: '워크스페이스 설정',
+    workspaceAccessDenied: '워크스페이스 설정은 owner만 열 수 있습니다.',
     roleChangeAria: '역할 변경',
     ownerCreator: 'owner ·생성자',
     leave: '나가기',
@@ -269,6 +271,8 @@ export const ko = {
     saveChanges: '변경 저장',
     teamSettings: '팀 기본 세팅',
     uploadTeamSettings: '팀 기본 세팅 업로드',
+    teamSettingsAccessDenied:
+      '팀 기본 세팅은 maintainer(관리자) 또는 owner만 설정할 수 있습니다. 워크스페이스 정책에 따라 owner 전용일 수 있습니다.',
     teamGuideIntro: '팀 공용 `.claude/`·`.agents/`·`.codex/` 기본 세팅을 저장소에 올립니다. 팀원은 `cxt settings pull` 한 번으로 로컬에 적용합니다.',
     teamGuide1: '**점 없는 폴더명**으로 선택 — `.claude` 를 `claude` 이름의 폴더로 복사해 올립니다(브라우저가 숨김 폴더를 선택하지 못하기 때문).',
     teamGuide2: '내부 구조는 그대로 보존됩니다. 예: `claude/commands/review.md` → `.claude/commands/review.md`',
@@ -293,6 +297,8 @@ export const ko = {
     noFsApi: '이 브라우저는 폴더 쓰기 미지원 — "cxtsecrets" 로 다운로드됨. repo 루트에 .cxtsecrets 로 옮기거나 cxt secrets pull -p 를 사용하세요',
     configured: '설정됨',
     secretsSettings: '.cxtsecrets 설정',
+    secretsSettingsAccessDenied:
+      '.cxtsecrets는 maintainer(관리자) 또는 owner만 설정할 수 있습니다. 워크스페이스 정책에 따라 owner 전용일 수 있습니다.',
     e2e: '종단간 암호화',
     saveLocal: '로컬에 저장',
     secretsGuideIntro: '컨텍스트 저장 시 자동 마스킹할 시크릿 값 목록입니다. **한 줄에 값 하나**(키 이름이 아니라 값).',

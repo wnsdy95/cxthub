@@ -5,15 +5,26 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { PublicWorkspace } from '../types';
 import { api } from '../api';
-import { navigate } from '../route';
+import { navigate, type WsTab } from '../route';
 import { Logo } from './Logo';
 import { LocaleSwitcher } from './LocaleSwitcher';
 import { Breadcrumb } from './Breadcrumb';
 import { useT } from '../i18n';
 import { ContextView } from './ContextView';
 import { sanitizeRemoteUrl } from '../urls';
+import { AccessDenied } from './AccessDenied';
 
-export function PublicBrowse({ username, slug, onLogin }: { username: string; slug: string; onLogin: () => void }) {
+export function PublicBrowse({
+  username,
+  slug,
+  tab,
+  onLogin,
+}: {
+  username: string;
+  slug: string;
+  tab?: WsTab;
+  onLogin: () => void;
+}) {
   const t = useT();
   const wsQ = useQuery<PublicWorkspace>({
     queryKey: ['public-ws', username, slug],
@@ -80,7 +91,7 @@ export function PublicBrowse({ username, slug, onLogin }: { username: string; sl
             </p>
           </div>
 
-          {repos.length > 1 && (
+          {tab !== 'settings' && repos.length > 1 && (
             <div className="pub-repos">
               {repos.map((r) => (
                 <button
@@ -95,7 +106,9 @@ export function PublicBrowse({ username, slug, onLogin }: { username: string; sl
           )}
 
           <section className="panel">
-            {activeRepo ? (
+            {tab === 'settings' ? (
+              <AccessDenied message={t('dashboard.workspaceAccessDenied')} />
+            ) : activeRepo ? (
               <ContextView repo={activeRepo} ws={ws} role={null} />
             ) : (
               <div className="empty-box">{t('common.noPushedContext')}</div>

@@ -42,7 +42,7 @@ export function commonEventPrefix(a: CIREvent[], b: CIREvent[]): number {
 // → leftmost, z-order also leftmost (behind participants not claiming representation).
 function AIDots({ s }: { s: Snapshot }) {
   // "<synthetic>" is a harness synthetic placeholder — it is not drawn even if it remains in the old version snapshot meta.
-  const models = (s.models ?? []).filter((m) => m !== '<synthetic>');
+  const models = [...new Set((s.models ?? []).filter((m) => m !== '<synthetic>'))];
   const items = models.length
     ? models.map((m) => ({ key: m, logo: modelLogo(m), color: modelColor(m), title: m }))
     : [
@@ -93,7 +93,7 @@ function pickDefaultBranch(names: string[], preferred: string): string | null {
   return names[0] ?? null;
 }
 
-type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug'> &
+type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug' | 'visibility'> &
   Partial<Pick<Workspace, 'settings_policy' | 'secrets_policy'>>;
 
 export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspace | null; role: Role | null }) {
@@ -546,10 +546,18 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
       <aside className="ctx-side">
         <About repo={repo} canEdit={canWriteAsset(role, undefined)} />
         {atLeast(role, 'puller') && (
-          <TeamSettings repoId={repo.id} canWrite={canWriteAsset(role, ws?.settings_policy)} />
+          <TeamSettings
+            repoId={repo.id}
+            canWrite={canWriteAsset(role, ws?.settings_policy)}
+            showLockedControl={ws?.visibility === 'public'}
+          />
         )}
         {atLeast(role, 'puller') && (
-          <SecretsPanel repoId={repo.id} canWrite={canWriteAsset(role, ws?.secrets_policy)} />
+          <SecretsPanel
+            repoId={repo.id}
+            canWrite={canWriteAsset(role, ws?.secrets_policy)}
+            showLockedControl={ws?.visibility === 'public'}
+          />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
         <CommitGraph snapshots={graphSnapshots} selectedId={snapId} onSelect={setSnapId} badges={badges} refs={refs} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />

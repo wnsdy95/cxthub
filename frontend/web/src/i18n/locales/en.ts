@@ -49,6 +49,7 @@ export const en: Messages = {
     noMessage: '(no message)',
     commitGraphTotal: 'Commit graph · {count} total',
     close: 'Close',
+    accessDenied: 'Access denied',
     expand: 'Expand',
     collapse: 'Collapse',
   },
@@ -201,6 +202,7 @@ export const en: Messages = {
     connectedRepos: 'Connected repos',
     settings: 'Settings',
     wsSettings: 'Workspace settings',
+    workspaceAccessDenied: 'Workspace settings require owner access.',
     roleChangeAria: 'Change role',
     ownerCreator: 'owner · creator',
     leave: 'Leave',
@@ -266,6 +268,8 @@ export const en: Messages = {
     saveChanges: 'Save changes',
     teamSettings: 'Team defaults',
     uploadTeamSettings: 'Upload team defaults',
+    teamSettingsAccessDenied:
+      'Team defaults settings require maintainer or owner access. Workspace policy may restrict them to owners.',
     teamGuideIntro: 'Upload shared `.claude/`·`.agents/`·`.codex/` defaults to the repo. Teammates apply them locally with one `cxt settings pull`.',
     teamGuide1: 'Pick a **dot-less folder name** — copy `.claude` into a folder named `claude` and upload that (browsers can’t pick hidden folders).',
     teamGuide2: 'Internal structure is preserved. e.g. `claude/commands/review.md` → `.claude/commands/review.md`',
@@ -290,6 +294,8 @@ export const en: Messages = {
     noFsApi: 'This browser can’t write folders — downloaded as "cxtsecrets". Move it to the repo root as .cxtsecrets, or use cxt secrets pull -p',
     configured: 'Configured',
     secretsSettings: '.cxtsecrets settings',
+    secretsSettingsAccessDenied:
+      '.cxtsecrets settings require maintainer or owner access. Workspace policy may restrict them to owners.',
     e2e: 'End-to-end encrypted',
     saveLocal: 'Save locally',
     secretsGuideIntro: 'Values auto-masked when context is captured. **One value per line** (the value, not the key name).',

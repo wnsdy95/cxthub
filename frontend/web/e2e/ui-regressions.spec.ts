@@ -249,6 +249,120 @@ test('members page orders invites, role capabilities, and members without page o
   expect(unexpected).toEqual([]);
 });
 
+test('public workspace management controls deny non-maintainers without opening dialogs', async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
+    if (method !== 'GET') return undefined;
+    if (pathname === '/api/v1/me') {
+      return {
+        body: {
+          id: 'member-1',
+          email: 'member@example.test',
+          name: 'Member',
+          username: 'member',
+          nickname: 'Member',
+          locale: 'en',
+        },
+      };
+    }
+    if (pathname === '/api/v1/workspaces') {
+      return {
+        body: [{
+          id: workspaceId,
+          name: 'cxthub',
+          slug: 'cxthub',
+          owner_id: 'owner-1',
+          owner_username: 'alice',
+          visibility: 'public',
+          public_role: 'viewer',
+          created_at: '2026-08-01T00:00:00Z',
+        }],
+      };
+    }
+    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) {
+      return {
+        body: [{
+          workspace_id: workspaceId,
+          user_id: 'member-1',
+          role: 'member',
+          user: { id: 'member-1', name: 'Member', nickname: 'Member', email: 'member@example.test' },
+        }],
+      };
+    }
+    if (pathname === '/api/v1/repos' && searchParams.get('workspace') === workspaceId) {
+      return {
+        body: [{
+          id: repoId,
+          remote_url: 'https://github.com/wnsdy95/cxthub.git',
+          default_branch: 'main',
+        }],
+      };
+    }
+    if (pathname === `/api/v1/repos/${repoId}/refs`) {
+      return { body: [{ kind: 'branch', name: 'main', repo_id: repoId, target: pushedHead }] };
+    }
+    if (pathname === `/api/v1/repos/${repoId}/snapshots`) {
+      return {
+        body: [{
+          id: pushedHead,
+          repo_id: repoId,
+          parents: [],
+          graft_parents: [],
+          doc_hash: pushedHead,
+          message: 'shared main head',
+          author: 'Alice',
+          session_id: 'session-1',
+          provider: 'codex',
+          models: ['gpt-5.6-sol'],
+          created_at: '2026-08-31T03:00:00Z',
+        }],
+      };
+    }
+    if (pathname === `/api/v1/repos/${repoId}/pending`) return { body: [] };
+    if (pathname === `/api/v1/repos/${repoId}/unsync`) return { body: [] };
+    if (pathname.startsWith(`/api/v1/repos/${repoId}/settings/`)) return { body: null };
+    if (pathname === `/api/v1/repos/${repoId}/secrets`) return { body: null };
+    if (pathname.startsWith(`/api/v1/repos/${repoId}/docs/`)) {
+      return { body: sessionDoc(decodeURIComponent(pathname.split('/').at(-1) ?? '')) };
+    }
+    return undefined;
+  });
+
+  await page.goto('/alice/cxthub');
+  const settingsTab = page.locator('nav.tabs').getByRole('button', { name: 'Settings', exact: true });
+  await expect(settingsTab).toBeVisible();
+  await settingsTab.click();
+  await expect(page.getByRole('alert')).toContainText('Workspace settings require owner access');
+  await expect(page).toHaveURL(/\/alice\/cxthub$/);
+
+  const teamSection = page.locator('.side-sec').filter({ hasText: 'Team defaults' });
+  await teamSection.getByRole('button', { name: 'Upload team defaults' }).click();
+  await expect(teamSection.getByRole('alert')).toContainText('maintainer or owner');
+  await expect(page.getByRole('dialog', { name: 'Upload team defaults' })).toHaveCount(0);
+
+  const secretsSection = page.locator('.side-sec').filter({ hasText: '.cxtsecrets' });
+  await secretsSection.getByRole('button', { name: '.cxtsecrets settings' }).click();
+  await expect(secretsSection.getByRole('alert')).toContainText('maintainer or owner');
+  await expect(page.getByRole('dialog', { name: '.cxtsecrets settings' })).toHaveCount(0);
+
+  await page.goto('/alice/cxthub/settings');
+  await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
+  await expect(page.locator('.ws-settings-form')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('anonymous public settings URL renders access denial instead of workspace context', async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, publicWorkspaceApi([], []));
+
+  await page.goto('/alice/cxthub/settings');
+  await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
+  await expect(page.locator('.ctx-layout')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('profile survives nullable activity arrays and keeps the legend inside the calendar', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, ({ method, pathname }) => {
