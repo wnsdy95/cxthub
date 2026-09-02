@@ -11,7 +11,7 @@
 //
 //	cxt mcp                      → start stdio MCP server
 //	cxt hook --provider X --event Y → hook event handler (auto capture)
-//	cxt init|repo|save|list|fork|checkout|load|diff|memorize|memory|push|pull → user CLI commands
+//	cxt init|repo|save|list|fork|checkout|load|memorize|memory|push|pull → user CLI commands
 package main
 
 import (
@@ -60,8 +60,9 @@ func run(args []string) error {
 		fmt.Println("cxt", version)
 		return nil
 	}
-	// config is the execution settings for the cxt client.
-	// TODO: Replace with actual config file parsing (repoRoot/.cxt/config or XDG).
+	// Process-level configuration resolves the shared repo root and environment
+	// overrides. Persisted remotes and authentication are loaded lazily by their
+	// adapters in buildContainer.
 	cfg := loadConfig()
 
 	// composition root: creates and wires all adapters and services.
@@ -87,8 +88,7 @@ func run(args []string) error {
 	}
 }
 
-// config is the execution settings for the cxt client.
-// TODO: Replace with actual config file parsing (repoRoot/.cxt/config or XDG).
+// config contains process-level execution settings for the cxt client.
 type config struct {
 	// RepoRoot is the shared context root. Linked app worktrees resolve to the
 	// primary working tree while their original cwd remains available to Git and
@@ -280,8 +280,8 @@ func buildContainer(cfg config) container {
 	}
 }
 
-// parseHookFlags parses the --provider / --event flags of the hook subcommand.
-// Scaffold: minimal implementation (TODO: replace with flag package).
+// parseHookFlags extracts the --provider / --event values after PreflightArgs
+// has validated the hook invocation.
 func parseHookFlags(args []string) (domain.ProviderKind, string) {
 	var provider domain.ProviderKind
 	var event string
