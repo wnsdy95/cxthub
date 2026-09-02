@@ -88,15 +88,15 @@ export function ContributionGraph({ username }: { username: string }) {
               ))}
             </div>
           </div>
-        </div>
-        <div className="contrib-legend">
-          <span>{t('profile.less')}</span>
-          <i className="grass l0" />
-          <i className="grass l1" />
-          <i className="grass l2" />
-          <i className="grass l3" />
-          <i className="grass l4" />
-          <span>{t('profile.more')}</span>
+          <div className="contrib-legend">
+            <span>{t('profile.less')}</span>
+            <i className="grass l0" />
+            <i className="grass l1" />
+            <i className="grass l2" />
+            <i className="grass l3" />
+            <i className="grass l4" />
+            <span>{t('profile.more')}</span>
+          </div>
         </div>
       </div>
     </section>

@@ -440,18 +440,40 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .graph-archive-toggle { border: 0; border-bottom: 1px dashed var(--faint); border-radius: 0; padding: 0;
   background: transparent; color: var(--faint); font: inherit; cursor: pointer; }
 .graph-archive-toggle:hover { color: var(--ink); border-bottom-color: var(--ink); opacity: 1; }
-.graph-head { position: relative; height: 44px; }
+.graph-archive-panel { margin: 0 0 8px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  color: var(--muted); font-family: var(--mono); font-size: 0.64rem; }
+.graph-archive-panel > summary { padding: 5px 7px; cursor: pointer; background: var(--hover); }
+.graph-archive-panel > summary:hover { color: var(--ink); }
+.graph-archive-list { list-style: none; margin: 0; padding: 0; max-height: 156px; overflow-y: auto; }
+.graph-archive-list li + li { border-top: 1px solid var(--line); }
+.graph-archive-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%;
+  padding: 6px 7px; border: 0; border-radius: 0; background: var(--bg); color: var(--muted); text-align: left; }
+.graph-archive-entry:hover { background: var(--hover); color: var(--ink); }
+.graph-archive-entry:disabled { cursor: default; opacity: 0.5; }
+.graph-archive-entry span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-archive-entry code { color: var(--faint); font-size: 0.62rem; }
+.graph-archive-entry em { grid-column: 1 / -1; color: var(--faint); font-style: normal; }
+.graph-archive-panel > .graph-archive-toggle { margin: 0 7px 7px; font-size: 0.62rem; }
+.graph-viewport { max-height: 344px; overflow: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
+.graph-viewport::-webkit-scrollbar { width: 6px; height: 6px; }
+.graph-viewport::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.graph-viewport::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+.graph-canvas { min-width: 100%; }
+.graph-head { position: sticky; top: 0; z-index: 4; height: 44px; background: var(--bg); }
 .graph-lane-label { position: absolute; bottom: 2px; font-family: var(--mono); font-size: 0.68rem;
   white-space: nowrap; transform: rotate(-35deg); transform-origin: left bottom; }
 .graph-lane-label.archived { font-style: italic; text-decoration: line-through; text-decoration-thickness: 1px; }
-/* Long branch name: default is 6 chars + … truncated, full name shown as background/shadow chip —
-   raised above other rail labels to ensure readability. */
-.lane-label-full { display: none; }
-.graph-lane-label.truncated:hover { z-index: 5; cursor: default; }
-.graph-lane-label.truncated:hover .lane-label-short { visibility: hidden; }
-.graph-lane-label.truncated:hover .lane-label-full { display: inline-block; position: absolute; left: 0; bottom: 0;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 2px 7px;
-  box-shadow: 0 3px 10px rgba(20, 24, 29, 0.14); white-space: nowrap; }
+/* Long branch name: the short label stays in the lane. The full name is a
+   body-level portal tooltip, so graph overflow cannot clip it. */
+.graph-lane-label.truncated { cursor: help; }
+.graph-lane-label.truncated:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+.graph-lane-tip { position: fixed; z-index: 80; transform: translateY(-100%); pointer-events: none;
+  max-width: calc(100vw - 16px); padding: 3px 7px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 5px; box-shadow: 0 3px 10px rgba(20, 24, 29, 0.14); font-family: var(--mono);
+  font-size: 0.68rem; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
+.graph-lane-tip.below { transform: none; }
+.graph-lane-tip.archived { font-style: italic; text-decoration: line-through; text-decoration-thickness: 1px; }
 .graph { list-style: none; margin: 0; padding: 0; }
 .graph li { position: relative; }
 .graph-row { display: block; padding: 0 4px; background: transparent; border: 0; border-radius: 4px;
@@ -483,12 +505,8 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .aibar-legend strong { color: var(--ink); font-weight: 600; }
 .aibar-legend em { font-style: normal; color: var(--muted); }
 
-/* Right rail graph: fixed height of 300px + internal scrolling (rail labels fixed at the top) */
-.ctx-side .graph { max-height: 300px; overflow-y: auto; overscroll-behavior: contain;
-  scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
-.ctx-side .graph::-webkit-scrollbar { width: 6px; }
-.ctx-side .graph::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
-.ctx-side .graph::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+/* Right rail graph: the 44px sticky lane header and 300px row viewport share
+   one vertical/horizontal scroll surface so labels track their SVG lanes. */
 
 /* About (GitHub repo About equivalent) — top of the rail */
 .about { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }

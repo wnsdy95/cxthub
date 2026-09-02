@@ -31,6 +31,9 @@ assert.deepEqual([...status.unpushed], [unpushed]);
 assert.deepEqual([...status.uncommitted], [uncommitted]);
 assert.deepEqual([...status.archivedOnly], [archived]);
 assert.equal(status.archivedBranches, 1);
+assert.deepEqual(status.archived, [
+  { branch: 'feature/old', target: archived, uniqueCount: 1, targetAvailable: true },
+]);
 assert.equal(
   status.pushed.size + status.unpushed.size + status.uncommitted.size + status.archivedOnly.size,
   snapshots.length,
@@ -76,4 +79,5 @@ const graftRefs: Ref[] = [
 const graftStatus = classifyGraphSnapshots(graftRefs, graftSnapshots);
 assert.equal(graftStatus.pushed.has(archived), true, 'graft-reachable archived history stays visible');
 assert.equal(graftStatus.archivedOnly.has(archived), false, 'active graft history must not collapse');
+assert.equal(graftStatus.archived[0]?.uniqueCount, 0, 'fully shared archived history remains discoverable');
 assert.deepEqual([...graftStatus.unpushed], [localAboveGraft]);

@@ -78,6 +78,110 @@ export function mainlinesOf(refs: Ref[], snapshots: Snapshot[]): Set<string> {
   return out;
 }
 
+/**
+ * Orders graph rows so every child is rendered before each natural or graft
+ * parent. Snapshot creation time alone cannot provide that guarantee: an
+ * immutable older snapshot may receive a graft to a newer snapshot later.
+ *
+ * Kahn's algorithm is used in the child -> parent direction. When multiple
+ * rows are ready, the newest snapshot wins and the original input position is
+ * the stable tie-breaker. Missing parents do not constrain this partial view.
+ * A backend cycle should be impossible, but any remaining rows are appended
+ * deterministically so corrupt/legacy data cannot make the whole graph vanish.
+ */
+export function orderGraphSnapshots(snapshots: Snapshot[]): Snapshot[] {
+  if (snapshots.length < 2) return [...snapshots];
+
+  const byId = new Map(snapshots.map((snapshot, index) => [snapshot.id, { snapshot, index }]));
+  // Duplicate IDs violate the snapshot-list contract. Preserve the response
+  // verbatim rather than silently dropping rows through the ID map.
+  if (byId.size !== snapshots.length) return [...snapshots];
+
+  const parentIds = new Map<string, string[]>();
+  const remainingChildren = new Map(snapshots.map((snapshot) => [snapshot.id, 0]));
+  for (const snapshot of snapshots) {
+    const parents = [...(snapshot.parents ?? []), ...(snapshot.graft_parents ?? [])].filter(
+      (parent, index, all) => Boolean(parent) && byId.has(parent) && all.indexOf(parent) === index,
+    );
+    parentIds.set(snapshot.id, parents);
+    for (const parent of parents) {
+      remainingChildren.set(parent, (remainingChildren.get(parent) ?? 0) + 1);
+    }
+  }
+
+  const createdAt = snapshots.map((snapshot) => Date.parse(snapshot.created_at));
+  const comesFirst = (left: number, right: number): boolean => {
+    const leftTime = createdAt[left];
+    const rightTime = createdAt[right];
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime > rightTime;
+    }
+    return left < right;
+  };
+
+  // Small binary heap of snapshot input indices, newest/stable item first.
+  const ready: number[] = [];
+  const pushReady = (value: number) => {
+    ready.push(value);
+    let index = ready.length - 1;
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (!comesFirst(ready[index], ready[parent])) break;
+      [ready[index], ready[parent]] = [ready[parent], ready[index]];
+      index = parent;
+    }
+  };
+  const popReady = (): number | undefined => {
+    if (ready.length === 0) return undefined;
+    const first = ready[0];
+    const last = ready.pop() as number;
+    if (ready.length > 0) {
+      ready[0] = last;
+      let index = 0;
+      while (true) {
+        const left = index * 2 + 1;
+        const right = left + 1;
+        let best = index;
+        if (left < ready.length && comesFirst(ready[left], ready[best])) best = left;
+        if (right < ready.length && comesFirst(ready[right], ready[best])) best = right;
+        if (best === index) break;
+        [ready[index], ready[best]] = [ready[best], ready[index]];
+        index = best;
+      }
+    }
+    return first;
+  };
+
+  for (const snapshot of snapshots) {
+    if (remainingChildren.get(snapshot.id) === 0) pushReady(byId.get(snapshot.id)!.index);
+  }
+
+  const ordered: Snapshot[] = [];
+  const emitted = new Set<string>();
+  while (ready.length > 0) {
+    const index = popReady() as number;
+    const snapshot = snapshots[index];
+    ordered.push(snapshot);
+    emitted.add(snapshot.id);
+    for (const parent of parentIds.get(snapshot.id) ?? []) {
+      const next = (remainingChildren.get(parent) ?? 0) - 1;
+      remainingChildren.set(parent, next);
+      if (next === 0) pushReady(byId.get(parent)!.index);
+    }
+  }
+
+  if (ordered.length !== snapshots.length) {
+    const remainder = snapshots
+      .map((snapshot, index) => ({ snapshot, index }))
+      .filter(({ snapshot }) => !emitted.has(snapshot.id))
+      .sort((left, right) =>
+        comesFirst(left.index, right.index) ? -1 : comesFirst(right.index, left.index) ? 1 : 0,
+      );
+    ordered.push(...remainder.map(({ snapshot }) => snapshot));
+  }
+  return ordered;
+}
+
 export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { rows: GraphRow[]; laneCount: number } {
   const lanes: (string | null)[] = [];
   // Default branch fix: pinHead (default branch's head) pinned to the expected value in lane 0 ensures the entire chain is always on the leftmost lane, and newer feature tips receive the right lane. If head is not in the snapshot list (e.g., unpinned), it is not pinned — preventing an empty vertical line from drawing to the end of the graph.
@@ -85,7 +189,7 @@ export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { r
   const rows: GraphRow[] = [];
   let laneCount = 0;
 
-  for (const snap of snapshots) {
+  for (const snap of orderGraphSnapshots(snapshots)) {
     const incoming = [...lanes];
     // 1) Node lane: first lane expected for this commit, or reuse an empty slot or create a new one.
     let lane = lanes.findIndex((h) => h === snap.id);
