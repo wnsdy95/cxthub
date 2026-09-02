@@ -371,7 +371,7 @@ export const en: Messages = {
     permissionsHint: 'Per-action scope (enforced on web & CLI). On the role ladder, writing team assets needs maintainer+; this policy can narrow it to Owner only. Adjust per-user via role changes in the Members tab.',
     roleCapabilitiesTitle: 'Role capabilities',
     roleLadder: 'Cumulative from lower to higher access',
-    roleCapabilitiesHint: 'Every role includes the capabilities to its left. The policies below can narrow maintainer team-asset writes to Owner only, but can never grant access below the baseline role.',
+    roleCapabilitiesHint: 'Every role includes the capabilities to its left. Policies in Workspace Settings can narrow maintainer team-asset writes to Owner only, but can never grant access below the baseline role.',
     roleCapabilitiesTable: 'Workspace capabilities by role',
     capabilityColumn: 'Capability',
     capabilityViewContext: 'View web context',

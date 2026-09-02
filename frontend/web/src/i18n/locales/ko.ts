@@ -374,7 +374,7 @@ export const ko = {
     permissionsHint: '동작별 허용 범위(웹·CLI 공통 강제). 역할 사다리상 팀 자산 쓰기는 maintainer 이상이며, 이 정책으로 Owner 만으로 더 좁힐 수 있습니다. 사용자 단위 조정은 멤버 탭의 역할 변경으로.',
     roleCapabilitiesTitle: '역할별 기본 권한',
     roleLadder: '낮은 권한에서 높은 권한으로 누적',
-    roleCapabilitiesHint: '높은 역할은 왼쪽 역할의 권한을 모두 포함합니다. 아래 권한 정책은 maintainer의 팀 자산 쓰기를 Owner 전용으로 더 좁힐 수 있지만, 기본 역할보다 넓힐 수는 없습니다.',
+    roleCapabilitiesHint: '높은 역할은 왼쪽 역할의 권한을 모두 포함합니다. 워크스페이스 설정의 권한 정책은 maintainer의 팀 자산 쓰기를 Owner 전용으로 더 좁힐 수 있지만, 기본 역할보다 넓힐 수는 없습니다.',
     roleCapabilitiesTable: '워크스페이스 역할별 권한표',
     capabilityColumn: '할 수 있는 일',
     capabilityViewContext: '웹 컨텍스트 열람',

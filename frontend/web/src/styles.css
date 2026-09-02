@@ -555,6 +555,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   border-radius: 6px; padding: 5px 8px; background: transparent; color: var(--text); }
 .role-capabilities { margin-top: 4px; padding: 15px 16px 13px; border: 1px solid var(--line); border-radius: 10px;
   background: color-mix(in srgb, var(--hover) 38%, var(--bg)); min-width: 0; }
+.ws-head + .role-capabilities, .invite-panel + .role-capabilities { margin-top: 24px; }
 .role-capabilities-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .role-ladder { color: var(--muted); font-family: var(--mono); font-size: 0.68rem; white-space: nowrap; }
 .role-ladder span { color: var(--faint); padding: 0 4px; }

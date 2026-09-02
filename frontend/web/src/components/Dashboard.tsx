@@ -23,6 +23,7 @@ import { Breadcrumb } from './Breadcrumb';
 import { ContextView } from './ContextView';
 import { OnHoldView } from './OnHoldView';
 import { AccountSettings, WorkspaceSettings } from './Settings';
+import { RoleCapabilities } from './RoleCapabilities';
 import { LockIcon } from './Breadcrumb';
 import { myRole, atLeast, ROLES } from '../roles';
 import { gitWebUrl, sanitizeRemoteUrl } from '../urls';
@@ -233,7 +234,11 @@ export function Dashboard() {
 
               {tab === 'members' ? (
                 <>
-                  <section className="panel">
+                  {atLeast(role, 'maintainer') && <InvitePanel key={selected.id} wsId={selected.id} />}
+
+                  <RoleCapabilities />
+
+                  <section className="panel members-panel">
                     <div className="panel-head">
                       <h4>
                         {t('dashboard.members')} <span className="count-badge">{members.length}</span>
@@ -287,7 +292,6 @@ export function Dashboard() {
                     )}
                   </section>
 
-                  {atLeast(role, 'maintainer') && <InvitePanel key={selected.id} wsId={selected.id} />}
                 </>
               ) : tab === 'context' ? (
                 <section className="panel">
@@ -441,7 +445,7 @@ function InvitePanel({ wsId }: { wsId: string }) {
   }
 
   return (
-    <section className="panel">
+    <section className="panel invite-panel">
       <div className="panel-head">
         <h4>
           {t('dashboard.invites')} <span className="count-badge">{list.length}</span>
