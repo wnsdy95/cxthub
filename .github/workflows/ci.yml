@@ -22,6 +22,8 @@ jobs:
           cache: false
       - name: Validate the publishable tree
         run: bash scripts/public-preflight.sh tree
+      - name: Verify local dogfood auth resolution
+        run: bash scripts/test-dogfood-daemon.sh
       - name: Validate the complete public history
         if: github.event.repository.private == false
         run: bash scripts/public-preflight.sh full
