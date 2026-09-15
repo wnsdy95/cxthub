@@ -101,6 +101,7 @@ type githubPullRequest struct {
 		} `json:"repo"`
 	} `json:"base"`
 	Head struct {
+		SHA  string `json:"sha"`
 		Ref  string `json:"ref"`
 		Repo *struct {
 			FullName string `json:"full_name"`
@@ -175,6 +176,7 @@ func (r *GitHubPRMergeResolver) ResolveMergedPullRequests(
 				BaseBranch:     pull.Base.Ref,
 				HeadBranch:     pull.Head.Ref,
 				MergeCommitSHA: sha,
+				HeadSHA:        pull.Head.SHA,
 			}
 		}
 		if len(pulls) < 100 {

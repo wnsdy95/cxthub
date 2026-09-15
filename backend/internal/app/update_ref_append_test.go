@@ -96,7 +96,7 @@ func TestUpdateRefAppend(t *testing.T) {
 	// Reject append if missing ancestor snapshot (F's parent G does not exist).
 	f := h('f')
 	put(f, h('9'))
-	if _, err := main(f, false, true); !errors.Is(err, domain.ErrValidation) {
+	if _, err := main(f, false, true); !errors.Is(err, domain.ErrIntegrity) {
 		t.Fatalf("Missing ancestor passed: %v", err)
 	}
 }

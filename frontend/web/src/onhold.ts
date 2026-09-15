@@ -114,8 +114,8 @@ export function orphanPendings(
   refs: Ref[],
   snapshots: Snapshot[],
   clusters: HoldCluster[],
+  shared: ReadonlySet<string> = sharedReachable(refs, snapshots),
 ): Pending[] {
-  const shared = sharedReachable(refs, snapshots);
   const inCluster = new Set<string>();
   for (const c of clusters) for (const s of c.chain) inCluster.add(s.id);
   return pendings
@@ -130,10 +130,10 @@ export function holdCounts(
   snapshots: Snapshot[],
   unsyncs: Unsync[],
   pendings: Pending[],
+  shared: Set<string> = sharedReachable(refs, snapshots),
 ): Map<string, number> {
-  const shared = sharedReachable(refs, snapshots);
   const clusters = unsyncChains(unsyncs, snapshots, shared);
-  const orphans = orphanPendings(pendings, refs, snapshots, clusters);
+  const orphans = orphanPendings(pendings, refs, snapshots, clusters, shared);
   const m = new Map<string, number>();
   const bump = (b: string, n: number) => m.set(b, (m.get(b) ?? 0) + n);
   for (const c of clusters) {

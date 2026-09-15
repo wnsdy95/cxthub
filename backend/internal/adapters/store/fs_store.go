@@ -62,6 +62,9 @@ func NewFSStore(dataDir string) *FSStore {
 	}
 	s := &FSStore{dataDir: dataDir}
 	s.recoveryErr = s.recoverJoinJournals()
+	if s.recoveryErr == nil {
+		s.recoveryErr = s.recoverHistoryJournals()
+	}
 	return s
 }
 
@@ -238,6 +241,11 @@ func (s *FSStore) GetRepo(_ context.Context, id domain.ContentHash) (domain.Repo
 			return domain.Repo{}, err
 		}
 	}
+	protocol, err := s.contextProtocol(id)
+	if err != nil {
+		return domain.Repo{}, err
+	}
+	r.ContextProtocol = protocol
 	r.LocalPath = ""
 	r.RemoteURL = domain.SanitizeRemoteURL(r.RemoteURL)
 	r.GitRemoteURL = domain.SanitizeRemoteURL(r.GitRemoteURL)
@@ -254,6 +262,7 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			return domain.Repo{}, err
 		}
 	}
+	repo.ContextProtocol = 0
 	repo.LocalPath = ""
 	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
 	repo.GitRemoteURL = domain.SanitizeRemoteURL(repo.GitRemoteURL)
@@ -304,6 +313,12 @@ func (s *FSStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHash, de
 // UpdateRepoConfig updates the default branch and protected branch settings (nil = no change).
 func (s *FSStore) UpdateRepoConfig(ctx context.Context, id domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
 	if err := validateHash(id); err != nil {
+		return err
+	}
+	lock := s.refLock(id, domain.RefBranch, "")
+	lock.Lock()
+	defer lock.Unlock()
+	if err := s.recoverHistoryEvent(ctx, id); err != nil {
 		return err
 	}
 	r, err := s.GetRepo(ctx, id)
@@ -967,6 +982,9 @@ func (s *FSStore) addGraftParents(ctx context.Context, repoID, id domain.Content
 	repoMu := s.refLock(repoID, domain.RefBranch, "")
 	repoMu.Lock()
 	defer repoMu.Unlock()
+	if err := s.requireNoPendingJoin(repoID); err != nil {
+		return err
+	}
 	mu := s.snapshotLock(repoID, id)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1089,6 +1107,9 @@ func (s *FSStore) SetGraftParents(ctx context.Context, repoID, id domain.Content
 	repoMu := s.refLock(repoID, domain.RefBranch, "")
 	repoMu.Lock()
 	defer repoMu.Unlock()
+	if err := s.requireNoPendingJoin(repoID); err != nil {
+		return err
+	}
 	mu := s.snapshotLock(repoID, id)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1204,6 +1225,9 @@ func (s *FSStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) error 
 	refMu := s.refLock(m.RepoID, domain.RefBranch, m.Branch)
 	refMu.Lock()
 	defer refMu.Unlock()
+	if err := s.recoverHistoryEvent(ctx, m.RepoID); err != nil {
+		return err
+	}
 	journalPath := s.joinJournalPath(m.RepoID)
 	if _, err := os.Stat(journalPath); err == nil {
 		// The committed/prepared journal from the previous operation is the source of truth for startup recovery. Overwriting it prevents recovery of ref·graft·reflog mid-states, so it fails closed.
@@ -1226,6 +1250,9 @@ func (s *FSStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) error 
 	if err != nil || cur.Target != m.ExpectedHead {
 		return domain.ErrRefConflict
 	}
+	if err := s.validateContextWrite(ctx, m.RepoID, domain.Ref{RepoID: m.RepoID, Kind: domain.RefBranch, Name: m.Branch, BranchID: m.BranchID, Target: m.NewHead}); err != nil {
+		return err
+	}
 	if err := s.requireSnapshots(ctx, m.RepoID, required...); err != nil {
 		return err
 	}
@@ -1234,7 +1261,7 @@ func (s *FSStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) error 
 	}
 	journal := fsJoinJournal{
 		Version: fsJoinJournalVersion, Phase: fsJoinPrepared, RepoID: m.RepoID,
-		Branch: m.Branch, ExpectedHead: m.ExpectedHead, NewHead: m.NewHead,
+		Branch: m.Branch, BranchID: cur.BranchID, ExpectedHead: m.ExpectedHead, NewHead: m.NewHead,
 		ForkName: m.ForkName, ForkTip: m.ForkTip, CreatedAt: time.Now().UTC(),
 	}
 	for _, patch := range m.Grafts {
@@ -1369,6 +1396,7 @@ const (
 )
 
 type fsJoinJournal struct {
+	BranchID     string             `json:"branch_id,omitempty"`
 	Version      int                `json:"version"`
 	Phase        fsJoinPhase        `json:"phase"`
 	RepoID       domain.ContentHash `json:"repo_id"`
@@ -1414,6 +1442,9 @@ func validateFSJoinJournal(j fsJoinJournal, repoDirName string) error {
 	}
 	if validateHashes(j.RepoID, j.ExpectedHead, j.NewHead) != nil || hexOf(j.RepoID) != repoDirName || domain.ValidateBranchName(j.Branch) != nil || j.CreatedAt.IsZero() {
 		return fmt.Errorf("%w: invalid join journal header", domain.ErrIntegrity)
+	}
+	if domain.ValidateRef(domain.Ref{RepoID: j.RepoID, Kind: domain.RefBranch, Name: j.Branch, Target: j.NewHead, BranchID: j.BranchID}) != nil {
+		return domain.ErrIntegrity
 	}
 	if (j.ForkName == "") != (j.ForkTip == "") || (j.ForkExisted && j.ForkName == "") {
 		return fmt.Errorf("%w: incomplete join fork journal", domain.ErrIntegrity)
@@ -1530,7 +1561,7 @@ func (s *FSStore) validateJoinJournalGraphs(ctx context.Context, j fsJoinJournal
 // validateJoinJournalProjection checks if the disk state at the crash point matches one of the before/after states recorded in the journal. Due to atomic rename, the normal intermediate state must be one of the two. Any other value indicates separate corruption or external change, so recovery is not overwritten and it fails closed.
 func (s *FSStore) validateJoinJournalProjection(ctx context.Context, j fsJoinJournal) error {
 	branch, err := s.GetRef(ctx, j.RepoID, domain.RefBranch, j.Branch)
-	if err != nil || (branch.Target != j.ExpectedHead && branch.Target != j.NewHead) {
+	if err != nil || branch.BranchID != j.BranchID || (branch.Target != j.ExpectedHead && branch.Target != j.NewHead) {
 		return fmt.Errorf("%w: join journal branch projection disagrees", domain.ErrIntegrity)
 	}
 	for _, entry := range j.Snapshots {
@@ -1570,7 +1601,7 @@ func (s *FSStore) applyJoinProjection(j fsJoinJournal, forward bool) error {
 				return err
 			}
 		}
-		return writeAtomic(s.refFile(j.RepoID, domain.RefBranch, j.Branch), []byte(string(j.NewHead)+"\n"))
+		return writeAtomic(s.refFile(j.RepoID, domain.RefBranch, j.Branch), encodeRef(domain.Ref{RepoID: j.RepoID, Kind: domain.RefBranch, Name: j.Branch, BranchID: j.BranchID, Target: j.NewHead}))
 	}
 	for i := len(j.Snapshots) - 1; i >= 0; i-- {
 		entry := j.Snapshots[i]
@@ -1588,7 +1619,7 @@ func (s *FSStore) applyJoinProjection(j fsJoinJournal, forward bool) error {
 			return err
 		}
 	}
-	return writeAtomic(s.refFile(j.RepoID, domain.RefBranch, j.Branch), []byte(string(j.ExpectedHead)+"\n"))
+	return writeAtomic(s.refFile(j.RepoID, domain.RefBranch, j.Branch), encodeRef(domain.Ref{RepoID: j.RepoID, Kind: domain.RefBranch, Name: j.Branch, BranchID: j.BranchID, Target: j.ExpectedHead}))
 }
 
 func (s *FSStore) failPreparedJoin(path string, j fsJoinJournal, cause error) error {
@@ -1843,6 +1874,19 @@ func (s *FSStore) getRefRaw(_ context.Context, repoID domain.ContentHash, kind d
 		}
 		return domain.Ref{}, err
 	}
+	if kind == domain.RefBranch && strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
+		var ref domain.Ref
+		if err := json.Unmarshal(data, &ref); err != nil {
+			return ref, err
+		}
+		if ref.RepoID != repoID || ref.Kind != kind || ref.Name != name {
+			return ref, domain.ErrIntegrity
+		}
+		if err := domain.ValidateRef(ref); err != nil {
+			return ref, err
+		}
+		return ref, nil
+	}
 	content := strings.TrimSpace(string(data))
 	ref := domain.Ref{Kind: kind, Name: name, RepoID: repoID}
 	if kind == domain.RefHead {
@@ -1865,6 +1909,13 @@ func (s *FSStore) GetRef(ctx context.Context, repoID domain.ContentHash, kind do
 	ref, err := s.getRefRaw(ctx, repoID, kind, name)
 	if err != nil || (kind != domain.RefBranch && kind != domain.RefHead) {
 		return ref, err
+	}
+	protocol, err := s.contextProtocol(repoID)
+	if err != nil {
+		return domain.Ref{}, err
+	}
+	if protocol == 1 {
+		return ref, nil
 	}
 	refs, err := s.listRefsRaw(ctx, repoID)
 	if err != nil {
@@ -1930,6 +1981,13 @@ func (s *FSStore) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]do
 	if err != nil {
 		return nil, err
 	}
+	protocol, err := s.contextProtocol(repoID)
+	if err != nil {
+		return nil, err
+	}
+	if protocol == 1 {
+		return refs, nil
+	}
 	return domain.ProjectBranchLifecycleRefs(refs)
 }
 
@@ -1970,7 +2028,20 @@ func (s *FSStore) CompareAndSwapRef(ctx context.Context, repoID domain.ContentHa
 	lock := s.refLock(repoID, next.Kind, next.Name)
 	lock.Lock()
 	defer lock.Unlock()
-	if next.Kind == domain.RefBranch {
+	if err := s.requireNoPendingJoin(repoID); err != nil {
+		return err
+	}
+	if err := s.recoverHistoryEvent(ctx, repoID); err != nil {
+		return err
+	}
+	if err := s.validateContextWrite(ctx, repoID, next); err != nil {
+		return err
+	}
+	protocol, err := s.contextProtocol(repoID)
+	if err != nil {
+		return err
+	}
+	if next.Kind == domain.RefBranch && protocol == 0 {
 		raw, rawErr := s.getRefRaw(ctx, repoID, domain.RefBranch, next.Name)
 		if rawErr != nil && !errors.Is(rawErr, domain.ErrNotFound) {
 			return rawErr
@@ -2016,7 +2087,10 @@ func (s *FSStore) CompareAndSwapRef(ctx context.Context, repoID domain.ContentHa
 	if curTarget != expected {
 		return domain.ErrRefConflict
 	}
-	if err := writeAtomic(s.refFile(repoID, next.Kind, next.Name), []byte(string(next.Target)+"\n")); err != nil {
+	if next.Kind == domain.RefBranch && (next.BranchID == "" || (protocol == 0 && next.BranchID == domain.LegacyContextBranchID(string(repoID), next.Name) && cur.BranchID != "")) {
+		next.BranchID = cur.BranchID
+	}
+	if err := writeAtomic(s.refFile(repoID, next.Kind, next.Name), encodeRef(next)); err != nil {
 		return err
 	}
 	// reflog: appends-only log on ref movement success (safety net for recovered tips). Best-effort.
@@ -2057,6 +2131,24 @@ func (s *FSStore) ApplyBranchLifecycleRef(ctx context.Context, repoID domain.Con
 	lock := s.refLock(repoID, domain.RefBranch, event.Branch)
 	lock.Lock()
 	defer lock.Unlock()
+	if err := s.requireNoPendingJoin(repoID); err != nil {
+		return err
+	}
+	if err := s.recoverHistoryEvent(ctx, repoID); err != nil {
+		return err
+	}
+
+	protocol, err := s.contextProtocol(repoID)
+	if err != nil {
+		return err
+	}
+	if protocol == 1 {
+		previous, err := s.getRefRaw(ctx, repoID, domain.RefTag, eventRef.Name)
+		if err == nil && previous.Target == eventRef.Target {
+			return nil
+		}
+		return fmt.Errorf("%w: branch lifecycle requires identity history after repository upgrade", domain.ErrConflict)
+	}
 
 	if existing, err := s.getRefRaw(ctx, repoID, domain.RefTag, eventRef.Name); err == nil {
 		if existing.Target != eventRef.Target {
@@ -2185,6 +2277,10 @@ func (s *FSStore) GetManifest(ctx context.Context, repoID domain.ContentHash) (d
 	if err := validateHash(repoID); err != nil {
 		return domain.Manifest{}, err
 	}
+	protocol, err := s.contextProtocol(repoID)
+	if err != nil {
+		return domain.Manifest{}, err
+	}
 	refs, err := s.ListRefs(ctx, repoID)
 	if err != nil {
 		return domain.Manifest{}, err
@@ -2220,6 +2316,7 @@ func (s *FSStore) GetManifest(ctx context.Context, repoID domain.ContentHash) (d
 		return domain.Manifest{}, err
 	}
 	return domain.Manifest{
+		ContextProtocol:   protocol,
 		RepoID:            repoID,
 		Refs:              refs,
 		SnapshotIndex:     index,

@@ -28,9 +28,10 @@ type BranchArchiveInput struct {
 }
 
 type BranchArchiveOutput struct {
-	Branch string
-	Target domain.ContentHash
-	Event  domain.Ref
+	LocalOnly bool
+	Branch    string
+	Target    domain.ContentHash
+	Event     domain.Ref
 }
 
 type BranchRenameInput struct {
@@ -41,9 +42,10 @@ type BranchRenameInput struct {
 }
 
 type BranchRenameOutput struct {
-	From   string
-	To     string
-	Target domain.ContentHash
+	LocalOnly bool
+	From      string
+	To        string
+	Target    domain.ContentHash
 }
 
 // BranchLifecycle manages only mutable branch projections. Archive events are
@@ -350,6 +352,7 @@ type BranchHandoff interface {
 }
 
 type BranchHandoffInput struct {
+	MemoryHash domain.ContentHash // Explicit memory-only provenance for an orphan root.
 	FromBranch string
 	ToBranch   string
 	Target     domain.ContentHash
