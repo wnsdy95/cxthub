@@ -20,6 +20,7 @@ import {
   useRefs,
   useSecretsEnvelope,
   useUpdateAbout,
+  useEnableContextProtocol,
 } from '../hooks';
 import { GearBtn } from './About';
 import { Portal } from './Portal';
@@ -453,6 +454,7 @@ function RepoBranchSettings({ repo, label }: { repo: Repo; label: string | null 
   const [branch, setBranch] = useState(repo.default_branch);
   const [protect, setProtect] = useState(repo.protect_default ?? false);
   const save = useUpdateAbout();
+  const enableHistory = useEnableContextProtocol();
   // Candidate = list of actual branch refs on the server — not free input; must be chosen from actual remote branches (prevents creating non-existent default branches by typo). Current setting is always included.
   const rawRefs = useRefs(repo.id).data ?? [];
   const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);
@@ -496,6 +498,16 @@ function RepoBranchSettings({ repo, label }: { repo: Repo; label: string | null 
       </button>
       {save.isSuccess && !dirty && <span className="ok-msg">{t('settings.saved')}</span>}
       {save.error && <span className="err">{save.error.message}</span>}
+      <div className="repo-history-protection">
+        <strong>{t('settings.historyProtection')}</strong>
+        {repo.context_protocol === 1 || enableHistory.isSuccess ? <p className="ok-msg">{t('settings.historyProtected')}</p> : <>
+          <p>{t('settings.historyProtectionHint')}</p>
+          <button type="button" className="ghost mini" disabled={enableHistory.isPending} onClick={() => enableHistory.mutate(repo.id)}>
+            {enableHistory.isPending ? t('common.saving') : t('settings.enableHistoryProtection')}
+          </button>
+        </>}
+        {enableHistory.error && <p className="err">{enableHistory.error.message}</p>}
+      </div>
     </div>
   );
 }

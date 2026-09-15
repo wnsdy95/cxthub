@@ -35,16 +35,18 @@ type githubWebhookPromotion struct {
 	gitURL string
 	base   string
 	head   string
+	pr     domain.PullRequestMerge
 }
 
 func (b *githubWebhookBackend) PromoteMergedPR(
 	_ context.Context,
-	gitURL, baseBranch, headBranch string,
+	gitURL string, pr domain.PullRequestMerge,
 ) (int, error) {
 	b.calls = append(b.calls, githubWebhookPromotion{
 		gitURL: gitURL,
-		base:   baseBranch,
-		head:   headBranch,
+		base:   pr.BaseBranch,
+		head:   pr.HeadBranch,
+		pr:     pr,
 	})
 	return b.promoted, b.err
 }
@@ -137,11 +139,11 @@ func githubWebhookRequest(t *testing.T, handler http.Handler, secret, event stri
 func TestGitHubWebhookSecurityAndPromotion(t *testing.T) {
 	const secret = "test-webhook-secret"
 	merged := []byte(`{
-		"action":"closed",
+		"action":"closed", "number":7,
 		"pull_request":{
-			"merged":true,
+			"merged":true, "merge_commit_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			"base":{"ref":"main"},
-			"head":{"ref":"feature/x","repo":{"full_name":"acme/project"}}
+			"head":{"ref":"feature/x","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"acme/project"}}
 		},
 		"repository":{
 			"full_name":"acme/project",
@@ -231,6 +233,7 @@ func TestGitHubWebhookSecurityAndPromotion(t *testing.T) {
 			gitURL: "https://github.com/acme/project.git",
 			base:   "main",
 			head:   "feature/x",
+			pr:     domain.PullRequestMerge{Number: 7, BaseBranch: "main", HeadBranch: "feature/x", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)},
 		}
 		if backend.calls[0] != want {
 			t.Fatalf("promotion call = %#v, want %#v", backend.calls[0], want)
@@ -259,16 +262,27 @@ func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	base, mainTip, featureTip := domain.HashContent([]byte("base")), domain.HashContent([]byte("main")), domain.HashContent([]byte("feature"))
-	for _, snap := range []domain.Snapshot{
-		{ID: base, RepoID: repoID, DocHash: base},
-		{ID: mainTip, RepoID: repoID, DocHash: mainTip, Parents: []domain.ContentHash{base}},
-		{ID: featureTip, RepoID: repoID, DocHash: featureTip, Parents: []domain.ContentHash{base}},
-	} {
-		if err := st.PutSnapshot(context.Background(), snap); err != nil {
+	put := func(text string, parents ...domain.ContentHash) domain.ContentHash {
+		doc := domain.SessionDoc{CIR: domain.CIRDocument{}}
+		doc.CIR.Envelope.CIRVersion = "1"
+		doc.CIR.Envelope.SourceProvider = "claude"
+		doc.CIR.Events = []domain.CIREvent{{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: text}}}}
+		raw, err := domain.CanonicalBytes(doc.CIR)
+		if err != nil {
 			t.Fatal(err)
 		}
+		doc.Hash = domain.HashContent(raw)
+		if _, err := st.PutDoc(context.Background(), repoID, doc); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.PutSnapshot(context.Background(), domain.Snapshot{ID: doc.Hash, RepoID: repoID, DocHash: doc.Hash, Branch: map[bool]string{true: "feature/x", false: "main"}[text == "feature"], Message: "work [git aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]", Parents: parents}); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Hash
 	}
+	base := put("base")
+	mainTip := put("main", base)
+	featureTip := put("feature", base)
 	for name, target := range map[string]domain.ContentHash{"main": mainTip, "feature/x": featureTip} {
 		if err := st.CompareAndSwapRef(context.Background(), repoID, domain.Ref{
 			Kind: domain.RefBranch, Name: name, RepoID: repoID, Target: target,
@@ -278,11 +292,11 @@ func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
 	}
 
 	body := []byte(`{
-		"action":"closed",
+		"action":"closed", "number":7,
 		"pull_request":{
-			"merged":true,
+			"merged":true, "merge_commit_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			"base":{"ref":"main"},
-			"head":{"ref":"feature/x","repo":{"full_name":"acme/project"}}
+			"head":{"ref":"feature/x","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"acme/project"}}
 		},
 		"repository":{
 			"full_name":"acme/project",

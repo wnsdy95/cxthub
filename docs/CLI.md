@@ -106,8 +106,33 @@ or missing. `branch replay` retries committed operations and prepared operations
 with an exact Git reflog witness. Unproven operations remain pending and are
 reported as `needs-git-evidence`; no branch birth is inferred from a name alone.
 Replay queues server synchronization. Run `cxt push` to wait for acknowledgement.
-These commands diagnose and replay verified operations; they do not repair
-corrupt objects. A `repair --from-server` command is not implemented.
+For a prepared orphan operation whose committed callback was lost, inspect the
+operation and run `cxt branch recover <operation-id> --confirm-orphan` in its
+recorded worktree. This works only while HEAD still names that exact unborn
+branch. It records user confirmation as separate evidence, verifies inherited
+memory, and replays the operation. A moved/committed branch is not guessed.
+
+### `cxt repair --from-server`
+
+```bash
+cxt repair --from-server
+# Missing/damaged remote configuration:
+cxt repair --from-server --remote https://cxthub.com/owner/repository
+```
+
+Repair requires the repository identity recorded under the Git common directory.
+It downloads and verifies an isolated server replica first, then restores missing
+or corrupt objects in place. Every replaced predecessor is quarantined under
+`.git/cxt/repairs/<id>/` before atomic replacement. Healthy local-only objects,
+ahead refs, and worktree positions remain intact. It does not rewrite provider
+sessions or send any repair writes to the server. Config can be restored only
+when the supplied URL matches the durable identity.
+
+Interrupted repairs are safe to retry. A corrupt server copy, identity conflict,
+or failed quarantine stops replacement. Local-only damage without another valid
+copy and invalid local transactions remain explicit errors; repair cannot infer
+who caused the damage or reconstruct missing bytes. Run `cxt doctor` afterward,
+then `cxt branch replay` to process verified Git operations.
 
 ### `cxt init`
 
@@ -699,3 +724,16 @@ catalog and return success.
 
 Do not expose tokens, passphrases, or private session content in command output,
 shell history, issue reports, or CI logs.
+
+### Repository branch-history compatibility
+
+Update and sync all CLI replicas before enabling **Branch history protection**
+in repository settings. Once enabled, older clients cannot mutate branch refs.
+New clients send the persisted branch identity and publish verified birth,
+rename and archive history before refs. A same-name/same-hash identity conflict
+requires reconciliation; force-push does not override branch identity.
+
+`.cxt/refs/heads/*` may contain a JSON ref with `branch_id`, not just a hash.
+Use `cxt log`, `cxt branch list`, or `cxt doctor` instead of interpreting the
+replica's internal files as a public interface. Existing plaintext refs remain
+readable; only a first proven cloud identity can be adopted automatically.

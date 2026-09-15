@@ -1339,3 +1339,39 @@ test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and re
   expect(afterRevoke.status()).toBe(401);
   expect(pageErrors).toEqual([]);
 });
+
+test('repository history protection is explicit, survives reload, and reports upgrade conflicts', async ({ page }) => {
+  let protocol = 0;
+  let attempts = 0;
+  const errors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, ({ method, pathname }) => {
+    if (method === 'POST' && pathname === `/api/v1/repos/${repoId}/context-protocol`) {
+      attempts += 1;
+      if (attempts === 1) return { status: 409, body: { error: { message: 'Reused branch needs identity-aware sync before upgrade' } } };
+      protocol = 1;
+      return { body: { context_protocol: 1 } };
+    }
+    if (method !== 'GET') return undefined;
+    if (pathname === `/api/v1/repos/${repoId}/secrets`) return { status: 404, body: { error: { message: 'No secrets configured' } } };
+    if (pathname === '/api/v1/me') return { body: { id: 'owner', username: 'alice', name: 'Alice', locale: 'en' } };
+    if (pathname === '/api/v1/workspaces') return { body: [{ id: workspaceId, owner_id: 'owner', owner_username: 'alice', name: 'cxthub', slug: 'cxthub', visibility: 'private' }] };
+    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) return { body: [{ workspace_id: workspaceId, user_id: 'owner', role: 'owner' }] };
+    if (pathname === '/api/v1/repos') return { body: [{ id: repoId, default_branch: 'main', remote_url: 'https://cxthub.com/alice/cxthub/repo', context_protocol: protocol }] };
+    if (pathname === `/api/v1/repos/${repoId}/refs`) return { body: [{ kind: 'branch', name: 'main', repo_id: repoId, target: pushedHead, ...(protocol ? { branch_id: 'main-identity' } : {}) }] };
+    return undefined;
+  });
+  await page.goto('/alice/cxthub/settings');
+  const panel = page.locator('.repo-history-protection');
+  await expect(panel).toContainText('Update every CLI');
+  expect(attempts).toBe(0);
+  await panel.getByRole('button', { name: 'Enable history protection' }).click();
+  await expect(panel.locator('.err')).toContainText('Reused branch needs');
+  await panel.getByRole('button', { name: 'Enable history protection' }).click();
+  await expect(panel).toContainText('Enabled.');
+  await expect(panel.getByRole('button')).toHaveCount(0);
+  await page.reload();
+  await expect(panel).toContainText('Enabled.');
+  expect(attempts).toBe(2);
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

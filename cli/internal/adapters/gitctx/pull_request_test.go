@@ -116,7 +116,8 @@ func TestGitHubPRMergeResolver(t *testing.T) {
 			{
 				"number": 25, "merged_at": nil, "merge_commit_sha": oldSHA,
 				"base": map[string]any{"ref": "main", "repo": map[string]any{"full_name": "acme/project"}},
-				"head": map[string]any{"ref": "open", "repo": map[string]any{"full_name": "acme/project"}},
+				"head": map[string]any{
+					"sha": strings.Repeat("d", 40), "ref": "open", "repo": map[string]any{"full_name": "acme/project"}},
 			},
 		})
 	}))
@@ -141,7 +142,7 @@ func TestGitHubPRMergeResolver(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("resolved = %#v, want 2 PRs", got)
 	}
-	if got[0].Number != 21 || got[0].HeadBranch != "feature/old" || got[0].MergeCommitSHA != oldSHA {
+	if got[0].HeadSHA != strings.Repeat("d", 40) || got[0].Number != 21 || got[0].HeadBranch != "feature/old" || got[0].MergeCommitSHA != oldSHA {
 		t.Fatalf("first resolved PR = %#v, want oldest incoming PR #21", got[0])
 	}
 	if got[1].Number != 22 || got[1].HeadBranch != "feature/new" || got[1].MergeCommitSHA != newSHA {
@@ -210,6 +211,7 @@ func mergedPullJSON(number int, base, head, sha, headRepo string) map[string]any
 			"repo": map[string]any{"full_name": "acme/project"},
 		},
 		"head": map[string]any{
+			"sha":  strings.Repeat("d", 40),
 			"ref":  head,
 			"repo": map[string]any{"full_name": headRepo},
 		},

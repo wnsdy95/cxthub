@@ -30,6 +30,9 @@ func (s *FSStore) ApplyHistoryEvent(ctx context.Context, e domain.HistoryEvent) 
 	lock := s.refLock(repoID, domain.RefBranch, e.Branch)
 	lock.Lock()
 	defer lock.Unlock()
+	if err := s.requireNoPendingJoin(repoID); err != nil {
+		return err
+	}
 	if err := s.recoverHistoryEvent(ctx, repoID); err != nil {
 		return err
 	}
@@ -65,6 +68,9 @@ func (s *FSStore) ApplyHistoryEvent(ctx context.Context, e domain.HistoryEvent) 
 		if err := domain.ValidateHistoryBranch(events, e); err != nil {
 			return fmt.Errorf("%w: %v", domain.ErrRefConflict, err)
 		}
+	}
+	if err := s.validateProtocolHistory(ctx, e); err != nil {
+		return err
 	}
 	if err := s.validateHistoryProjection(ctx, e, false); err != nil {
 		return err
@@ -163,11 +169,14 @@ func (s *FSStore) recoverHistoryEvent(ctx context.Context, repoID domain.Content
 			return err
 		}
 		if current.Target != e.Target {
-			if err := writeAtomic(s.refFile(repoID, domain.RefBranch, e.Branch), []byte(string(e.Target)+"\n")); err != nil {
+			if err := writeAtomic(s.refFile(repoID, domain.RefBranch, e.Branch), encodeRef(domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: e.Branch, BranchID: e.BranchID, Target: e.Target})); err != nil {
 				return err
 			}
 			s.appendReflog(repoID, domain.RefLogEntry{Kind: domain.RefBranch, Name: e.Branch, Old: e.Source, New: e.Target, CreatedAt: time.Now().UTC()})
 		}
+	}
+	if err := s.applyProtocolHistory(ctx, e); err != nil {
+		return err
 	}
 	return removeFileDurable(s.historyJournal(repoID))
 }

@@ -1427,6 +1427,17 @@ func appendMergedPRContexts(
 		if pull.BaseBranch != branch || pull.HeadBranch == "" || pull.HeadBranch == branch {
 			continue
 		}
+		if exact, ok := syncer.(interface {
+			PromotePullRequest(context.Context, inbound.SyncInput, outbound.MergedPullRequest) error
+		}); ok {
+			if err := exact.PromotePullRequest(ctx, inbound.SyncInput{Cwd: cwd}, pull); err != nil {
+				hookWarn("PR #%d exact context promotion remains pending: %v", pull.Number, err)
+			} else {
+				appended++
+				reflected = true
+			}
+			continue
+		}
 		ref, rerr := resolveSource(ctx, inbound.SyncInput{Cwd: cwd}, pull.HeadBranch)
 		if rerr != nil {
 			if !errors.Is(rerr, domain.ErrNotFound) {

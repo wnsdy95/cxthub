@@ -40,6 +40,13 @@ jget() { python3 -c "import json,sys;print(json.load(sys.stdin)$1)"; }
 ccurl() { command curl -H "Origin: $ORIGIN" -H 'X-Cxt-CSRF: 1' "$@"; }
 main_head() { curl -sb "$J" "$B/repos/$RID/refs" | python3 -c "import json,sys;print(next((r['target'] for r in json.load(sys.stdin) if r['kind']=='branch' and r['name']=='main'),''))"; }
 
+ref_target() { python3 - "$1" <<'PYREF'
+import json,pathlib,sys
+raw=pathlib.Path(sys.argv[1]).read_text().strip()
+print(json.loads(raw)['target'] if raw.startswith('{') else raw)
+PYREF
+}
+
 birth_field() { python3 - "$1" "$2" <<'PYBIRTH'
 import glob,json,sys
 rows=[json.load(open(path)) for path in glob.glob('.cxt/history/*.json')]
@@ -173,8 +180,8 @@ expect "B head inherits A session summary" "$MEM" inherited
 
 echo "── D. repo2: New session C commit → Session boundary meta"
 session "$TMP/repo2" C
-echo c > h.txt; git add h.txt; git commit -qm codeC >/dev/null 2>&1
-git push -q origin main >/dev/null 2>&1
+echo c > h.txt; git add h.txt; git commit -qm codeC >"$TMP/codeC.out" 2>&1
+git push -q origin main >"$TMP/codeC-push.out" 2>&1
 BOUND=$(curl -sb "$J" "$B/repos/$RID/snapshots" | python3 -c "
 import json,sys
 snaps={s['id']:s for s in json.load(sys.stdin)}
@@ -186,10 +193,10 @@ expect "session C↔B boundary detected from session_id" "$BOUND" boundary
 
 echo "── E. repo1: post-merge hook = fetch-only(keep local refs + upstream hint) + pull briefing"
 cd "$TMP/repo1"
-LOCAL_BEFORE=$(cat .cxt/refs/heads/main)
+LOCAL_BEFORE=$(ref_target .cxt/refs/heads/main)
 PULL_TERM=cxt-e2e-pull-terminal
 HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
-expect "fetch-only: keep local main ref" "$(cat .cxt/refs/heads/main)" "$LOCAL_BEFORE"
+expect "fetch-only: keep local main ref" "$(ref_target .cxt/refs/heads/main)" "$LOCAL_BEFORE"
 expect "upstream hint output" "$(echo "$HOOKOUT" | grep -ci 'new context')" 1
 # Pull briefing: store only validated identifiers for the incoming codeB/codeC
 # range, then consume the notice once from the next prompt hook in the
@@ -325,13 +332,14 @@ expect "seed inherits main compact memory" "$(grep -q 'task A' "$SEED" && grep -
 expect "seed inherits main session conversation" "$(grep -q 'task E' "$SEED" && echo yes)" yes
 SEEDMEM=$(python3 -c "
 import json,glob
-tgt=open('.cxt/refs/heads/feature-x').read().strip()
+raw=open('.cxt/refs/heads/feature-x').read().strip()
+tgt=json.loads(raw)['target'] if raw.startswith('{') else raw
 for p in glob.glob('.cxt/objects/snapshots/*'):
     s=json.load(open(p))
     if s['id']==tgt: print(s.get('memory_hash','')); break
 ")
 expect "seed snapshot retains full inherited memory object" "$([ -n "$SEEDMEM" ] && [ -f ".cxt/objects/memories/${SEEDMEM#sha256:}" ] && echo yes)" yes
-expect "new branch keeps the recorded source snapshot" "$(cat .cxt/refs/heads/feature-x)" "$(birth_field feature-x target)"
+expect "new branch keeps the recorded source snapshot" "$(ref_target .cxt/refs/heads/feature-x)" "$(birth_field feature-x target)"
 expect "branch birth pins the inherited memory object" "$(birth_field feature-x memory_hash)" "$SEEDMEM"
 
 # Capture exclusion: a commit before the seed session grows must not capture another session.
@@ -413,13 +421,13 @@ git branch web-fork-x "$FORK_SHA"
 cxt git-hook branch-replay
 FORK_LOCAL=$(birth_field web-fork-x target)
 expect "helper preserves the explicit Git start point [git X]" "$(git rev-parse --short=7 web-fork-x)" "$(git rev-parse --short=7 "$FORK_SHA")"
-expect "context ref is connected to fork snapshot" "$(cat .cxt/refs/heads/web-fork-x 2>/dev/null)" "$FORK_LOCAL"
+expect "context ref is connected to fork snapshot" "$(ref_target .cxt/refs/heads/web-fork-x 2>/dev/null)" "$FORK_LOCAL"
 # Switching should materialize the fork context; a fork-only ref represents an existing branch.
 session "$TMP/repo1" WFX
 git checkout -q web-fork-x >"$TMP/wfx.out" 2>&1
 expect "switch does not create seed" "$(grep -c 'seed created' "$TMP/wfx.out")" 0
 expect "fork context is selected without replacing app session" "$(grep -c 'app context selected' "$TMP/wfx.out")" 1
-expect "ref is still fork snapshot after switch" "$(cat .cxt/refs/heads/web-fork-x)" "$FORK_LOCAL"
+expect "ref is still fork snapshot after switch" "$(ref_target .cxt/refs/heads/web-fork-x)" "$FORK_LOCAL"
 git checkout -q main >/dev/null 2>&1
 # A same-named web fork is not an upstream binding. Local creation records
 # its actual current source; the helper must never move Git to a guessed tip.
@@ -430,15 +438,15 @@ session "$TMP/repo1" WFY
 printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s","prompt":"continue"}\n' "$TMP/repo1" "$D/s-WFY.jsonl" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
 git checkout -qb web-fork-y >"$TMP/wfy.out" 2>&1
 expect "switch -c records its own observed birth" "$(birth_field web-fork-y kind)" birth
-expect "new branch uses its live source context" "$([ "$(cat .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
+expect "new branch uses its live source context" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
 cxt git-hook branch-replay
-expect "replaying birth never overwrites the selected source" "$([ "$(cat .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
+expect "replaying birth never overwrites the selected source" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
 git checkout -q main >/dev/null 2>&1
 
 echo "── I. Branch lifecycle: rename transfers context; deletion archives without deleting history"
 RENAME_OUT=$(git branch -m web-fork-x web-fork-renamed 2>&1)
 expect "Git branch rename transfers context projection" "$(echo "$RENAME_OUT" | grep -c 'context moved')" 1
-expect "renamed context keeps its exact target" "$(cat .cxt/refs/heads/web-fork-renamed 2>/dev/null)" "$FORK_LOCAL"
+expect "renamed context keeps its exact target" "$(ref_target .cxt/refs/heads/web-fork-renamed 2>/dev/null)" "$FORK_LOCAL"
 expect "renamed source context projection is gone" "$([ ! -e .cxt/refs/heads/web-fork-x ] && echo yes)" yes
 expect "rename keeps all context objects readable" "$(cxt fsck | grep -c 'Missing 0')" 1
 

@@ -282,6 +282,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		}
 		branchRef := domain.Ref{Kind: domain.RefBranch, Name: branch, RepoID: repo.ID, Target: docHash}
 		if position != nil {
+			branchRef.BranchID = position.BranchID
 			commitStore, ok := s.store.(outbound.WorkingCommitStore)
 			if !ok {
 				return inbound.SaveOutput{}, fmt.Errorf("working commit store unavailable")

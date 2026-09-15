@@ -18,6 +18,10 @@ func (s *Service) ListHistory(ctx context.Context, repoID domain.ContentHash) ([
 }
 
 func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) error {
+	return s.recordHistory(ctx, event, false)
+}
+
+func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, serverReceipt bool) error {
 	if err := domain.ValidateHistoryEvent(event); err != nil {
 		return fmt.Errorf("%w: %v", domain.ErrValidation, err)
 	}
@@ -40,6 +44,9 @@ func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) 
 			return domain.ErrRefConflict
 		}
 		return nil
+	}
+	if event.Kind == "pr-merge" && !serverReceipt {
+		return fmt.Errorf("%w: PR bindings are issued by PR promotion", domain.ErrForbidden)
 	}
 	repo, err := s.meta.GetRepo(ctx, repoID)
 	if err != nil {

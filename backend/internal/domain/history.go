@@ -11,25 +11,28 @@ import (
 // content. ID is generated once before Git commits, and reused on every retry.
 // Source is conversation ancestry; MemorySource is provenance only (orphan).
 type HistoryEvent struct {
-	ID             string      `json:"id"`
-	RepoID         string      `json:"repo_id"`
-	BranchID       string      `json:"branch_id"`
-	Branch         string      `json:"branch"`
-	Kind           string      `json:"kind"`
-	LocalBranch    string      `json:"local_branch,omitempty"`
-	PreviousBranch string      `json:"previous_branch,omitempty"`
-	BindingParent  string      `json:"binding_parent,omitempty"`
-	NameParent     string      `json:"name_parent,omitempty"`
-	Source         ContentHash `json:"source,omitempty"`
-	Target         ContentHash `json:"target,omitempty"`
-	SharedTarget   ContentHash `json:"shared_target,omitempty"`
-	MemorySource   ContentHash `json:"memory_source,omitempty"`
-	MemoryHash     ContentHash `json:"memory_hash,omitempty"`
-	MemoryPinned   bool        `json:"memory_pinned,omitempty"`
-	GitBefore      string      `json:"git_before,omitempty"`
-	GitAfter       string      `json:"git_after,omitempty"`
-	WorktreeID     string      `json:"worktree_id,omitempty"`
-	CreatedAt      time.Time   `json:"created_at"`
+	RecoveryEvidence string            `json:"recovery_evidence,omitempty"`
+	PR               *PullRequestMerge `json:"pr,omitempty"`
+	SourceBranchID   string            `json:"source_branch_id,omitempty"`
+	ID               string            `json:"id"`
+	RepoID           string            `json:"repo_id"`
+	BranchID         string            `json:"branch_id"`
+	Branch           string            `json:"branch"`
+	Kind             string            `json:"kind"`
+	LocalBranch      string            `json:"local_branch,omitempty"`
+	PreviousBranch   string            `json:"previous_branch,omitempty"`
+	BindingParent    string            `json:"binding_parent,omitempty"`
+	NameParent       string            `json:"name_parent,omitempty"`
+	Source           ContentHash       `json:"source,omitempty"`
+	Target           ContentHash       `json:"target,omitempty"`
+	SharedTarget     ContentHash       `json:"shared_target,omitempty"`
+	MemorySource     ContentHash       `json:"memory_source,omitempty"`
+	MemoryHash       ContentHash       `json:"memory_hash,omitempty"`
+	MemoryPinned     bool              `json:"memory_pinned,omitempty"`
+	GitBefore        string            `json:"git_before,omitempty"`
+	GitAfter         string            `json:"git_after,omitempty"`
+	WorktreeID       string            `json:"worktree_id,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
 }
 
 func ValidateHistoryEvent(e HistoryEvent) error {
@@ -51,9 +54,22 @@ func ValidateHistoryEvent(e HistoryEvent) error {
 		}
 	}
 	switch e.Kind {
-	case "birth", "attach", "orphan", "position", "advance", "rename", "archive":
+	case "birth", "attach", "orphan", "position", "advance", "rename", "archive", "pr-merge":
 	default:
 		return fmt.Errorf("invalid history event kind")
+	}
+	if e.RecoveryEvidence != "" && (e.Kind != "orphan" || e.RecoveryEvidence != "user-confirmed-unborn-head") {
+		return fmt.Errorf("invalid recovery evidence")
+	}
+	if e.Kind == "pr-merge" {
+		if e.PR == nil || e.SourceBranchID == "" || len(e.SourceBranchID) > 128 || e.Source == "" || e.Target != e.Source || e.Branch != e.PR.BaseBranch {
+			return fmt.Errorf("invalid PR context binding")
+		}
+		if err := e.PR.Validate(); err != nil {
+			return err
+		}
+	} else if e.PR != nil || e.SourceBranchID != "" {
+		return fmt.Errorf("unexpected PR metadata")
 	}
 	if e.LocalBranch != "" {
 		if err := ValidateBranchName(e.LocalBranch); err != nil {

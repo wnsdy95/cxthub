@@ -1,7 +1,7 @@
 # Context branches, working positions, and retained history
 
-Status: product behavior accepted on 2026-09-15; implementation and integration verification are in progress.
-The checklist below distinguishes implemented behavior from remaining work. This
+Status: accepted product behavior implemented and integration-tested on 2026-09-16.
+The checklist below records the implemented contract and its verification. This
 document supersedes the earlier proposal to repair every shared-tip alias by
 inserting synthetic birth and merge snapshots.
 
@@ -207,9 +207,9 @@ migration is authorized by this design.
   and preserve the owning snapshot when an orphan inherits ancestor memory.
 - [x] Implement read-only `doctor` and `branch operations`, plus verified
   `branch replay`, before documenting these commands as available.
-- [ ] Implement verified object recovery from a server copy, preserving damaged
-  local evidence. No `repair --from-server` command is currently exposed.
-- [ ] Verify actual Git operations, two worktrees, repeated names, provider failures,
+- [x] Implement verified object recovery from a server copy, preserving damaged
+  local evidence. `repair --from-server` now restores verified cloud objects in place with durable quarantine; local-only damage remains explicitly unresolved.
+- [x] Verify actual Git operations, two worktrees, repeated names, provider failures,
   offline replay, duplicate webhook delivery, and browser keyboard interactions.
 
 Update each item only when its implementation and relevant checks are complete.
@@ -291,27 +291,49 @@ Verification on 2026-09-15, using isolated binaries and repositories:
   retries only evidenced operations and reports those that need Git evidence.
 - Branch-history ordering uses an explicit dependency graph and a priority queue;
   it does not repeatedly shift or rescan the entire remaining event sequence.
-- Name-only PR promotion now rejects source names with recorded rename/archive/
-  reuse history in both webhook and local hook paths. It preserves the data and
-  reports the missing historical binding instead of attaching an unrelated tip.
+- PR promotion uses repository + PR number + full head/merge Git revisions to
+  resolve historical context identity and snapshot. A server receipt and retained
+  roots precede append; webhook and CLI use the same service. Renames/reuse do not
+  change the bound source. Missing/ambiguous evidence blocks promotion; legacy
+  abbreviated Git links alone do not prove an exact historical source.
+- `branch recover <id> --confirm-orphan` records explicit confirmation only in
+  the recorded worktree while the exact HEAD remains unborn. It preserves the
+  distinction between user evidence and a recovered committed callback.
+- `repair --from-server` preflights an isolated cloud replica, quarantines every
+  replaced predecessor, restores verified objects in place, and keeps healthy
+  local-only refs/objects/positions. It never infers missing data or damage intent.
 
-### Remaining work before production rollout
+### Compatibility rollout and final verification (2026-09-16)
 
-1. Bind each PR promotion to repository/PR identity, source Git revision, context
-   identity, and exact snapshot; preserve this binding for delayed/repeated
-   delivery. The new ambiguity guard is protection, not complete automation for
-   reused or renamed source branches.
-2. Complete the compatibility boundary between explicit history identities and
-   older name-only ref/lifecycle writers, including server-created legacy forks.
-   New history continuations are checked, but an ordinary legacy ref update does
-   not carry a branch identity token.
-3. Complete verified object recovery from a cloud copy with backup/quarantine of
-   damaged local material. Missing local-only objects cannot be reconstructed
-   without another valid copy. Inspection cannot establish who caused damage.
-4. Prepared-only orphan operations without a committed callback have no safe
-   Git reflog witness. They stay pending; an explicit evidence/confirmation
-   recovery procedure is still needed for this interruption case.
+Repository settings expose **Branch history protection**. Update every CLI and
+sync each replica before enabling it. The maintainer-only
+`POST /repos/{repoID}/context-protocol` transition is idempotent and irreversible:
 
-Keep this implementation isolated until these boundaries are closed and the
-combined regression suite passes. Passing the current regression cases is not
-proof that every historical or legacy-client transition is supported.
+- Version 0 remains compatible with legacy writers. Existing repositories are
+  not silently upgraded by installation, registration, or a regular push.
+- Version 1 requires a stable `branch_id` for branch ref writes and joins. Birth,
+  rename and archive events project physical refs inside the graph transaction.
+  Name-only writes and newly minted legacy lifecycle tags are rejected.
+- Migration assigns IDs only to confirmed live pointers. Ambiguous reused names
+  block the transition. Legacy replicas may adopt the first proven server
+  identity without moving local snapshots, code positions or pinned memory;
+  this exception never applies to a released/reused name.
+- Filesystem branch refs support identity-bearing JSON as well as legacy hash
+  files. PostgreSQL migration `0040_context_protocol.sql` adds the corresponding
+  repository version and ref identity columns. The CLI directory remains a
+  replica; production storage is PostgreSQL.
+- Diverged append commits overlay changes and the ref in one transaction. A
+  losing append cannot leave an overlay behind. Filesystem recovery also rejects
+  a journal whose branch identity changed.
+
+Final verification includes both Go modules' complete test/vet suites, race
+checks for CLI storage/application/commands and backend storage/application,
+real PostgreSQL migrations and protocol scenarios, web unit/i18n/build checks,
+and 20 browser cases including two real-backend OAuth/profile cases. Sync E2E
+A–O covers actual Git hooks, worktree rewind, tracking aliases, provider handoff,
+protocol activation/name reuse, and damaged-replica recovery with local-only
+work preserved. Duplicate first PR deliveries freeze one exact source receipt.
+
+An unknown historical edge or unsynchronized object without another copy remains
+unknown/unrecoverable. Diagnostics expose that limitation rather than inventing
+an ancestry edge, branch identity, Git witness, or replacement conversation.

@@ -73,6 +73,8 @@ func TestPGSmoke(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
+	defer t.Run("context protocol", func(t *testing.T) { checkContextProtocol(t, st) })
+
 	// Migration idempotency: 1st application (N>0) → 2nd application (0).
 	n1, err := st.ApplyMigrations(ctx, "../../../../schemas/db/migrations")
 	if err != nil {

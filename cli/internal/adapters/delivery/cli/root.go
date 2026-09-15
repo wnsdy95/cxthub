@@ -82,6 +82,12 @@ func Run(c *Container, args []string) error {
 	if cmd == "doctor" || (cmd == "branch" && firstPositional(rest) == "operations") {
 		return RunDiagnostics(ctx, cwd, args[1:], os.Stdout)
 	}
+	if cmd == "branch" && firstPositional(rest) == "recover" {
+		if err := confirmOrphanRecovery(ctx, c, cwd, lastPositional(rest)); err != nil {
+			return err
+		}
+		return replayBranchCommand(ctx, c, cwd)
+	}
 	if cmd == "branch" && firstPositional(rest) == "replay" {
 		return replayBranchCommand(ctx, c, cwd)
 	}
@@ -1117,6 +1123,8 @@ usage: cxt <command> [flags]
   doctor [--json]           inspect the local replica and Git journal without writes
   branch operations         inspect durable local operations (--json available)
   branch replay             retry verified operations and queue server synchronization
+  branch recover <id> --confirm-orphan  recover an explicitly confirmed unborn branch
+  repair --from-server       restore verified server objects, preserving local-only data
   fsck                      audit repository integrity
   reflog                    view the server ref-move log
   repack                    reclaim duplicate prefix storage through chunk CAS

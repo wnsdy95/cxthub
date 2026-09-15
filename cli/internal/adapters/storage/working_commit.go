@@ -22,6 +22,9 @@ func (s *FileStore) CommitWorkingSnapshot(ctx context.Context, ref domain.Ref, e
 		return domain.ErrNotFound
 	}
 	p.WorktreeID = s.worktreeID
+	if ref.BranchID == "" {
+		ref.BranchID = p.BranchID
+	}
 	if p.GitBranch() == s.gitBranch {
 		p.GitCommit = s.gitCommit
 		if event != nil {
@@ -40,6 +43,9 @@ func (s *FileStore) CommitWorkingSnapshot(ctx context.Context, ref domain.Ref, e
 			return err
 		}
 		if current.Target != expected {
+			return domain.ErrSyncConflict
+		}
+		if current.BranchID != "" && current.BranchID != ref.BranchID {
 			return domain.ErrSyncConflict
 		}
 		refs, err := s.listRefsRaw(ctx, ref.RepoID)
@@ -69,6 +75,9 @@ func (s *FileStore) workingCommitPath() string {
 }
 
 func validateWorkingCommit(op workingCommit) error {
+	if op.Ref.BranchID != "" && op.Ref.BranchID != op.Position.BranchID {
+		return domain.ErrHashMismatch
+	}
 	if err := domain.ValidateRef(op.Ref); err != nil {
 		return err
 	}
@@ -144,6 +153,9 @@ func (s *FileStore) recoverWorkingCommit() error {
 		return err
 	}
 	if current.Target != op.Expected && current.Target != op.Ref.Target {
+		return domain.ErrSyncConflict
+	}
+	if current.BranchID != "" && current.BranchID != op.Ref.BranchID && (op.Ref.BranchID != "" || current.BranchID != domain.LegacyContextBranchID(op.Ref.RepoID, op.Ref.Name)) {
 		return domain.ErrSyncConflict
 	}
 	if op.Event != nil {

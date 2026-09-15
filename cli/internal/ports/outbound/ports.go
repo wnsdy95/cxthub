@@ -185,6 +185,7 @@ type MergedPullRequest struct {
 	BaseBranch     string
 	HeadBranch     string
 	MergeCommitSHA string
+	HeadSHA        string
 }
 
 // PullRequestMergeResolver maps incoming Git commits back to merged pull

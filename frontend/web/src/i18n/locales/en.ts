@@ -356,6 +356,11 @@ export const en: Messages = {
     encryptSave: 'Encrypt & save',
   },
   settings: {
+    historyProtection: 'Branch history protection',
+    historyProtected: 'Enabled. Branch writes require a matching context branch identity.',
+    historyProtectionHint: 'Update every CLI and sync each replica before enabling. This permanently blocks older clients from changing branches in this repository.',
+    enableHistoryProtection: 'Enable history protection',
+
     editProfile: 'Edit profile',
     account: 'Account settings',
     avatarPreview: 'Avatar preview',

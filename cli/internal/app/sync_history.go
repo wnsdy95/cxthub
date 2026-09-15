@@ -9,6 +9,15 @@ import (
 	"reflect"
 )
 
+func (s *SyncRepoService) remoteContextProtocol(ctx context.Context, repo string) (int, error) {
+	if remote, ok := s.remote.(interface {
+		ContextProtocol(context.Context, string) (int, error)
+	}); ok {
+		return remote.ContextProtocol(ctx, repo)
+	}
+	return 0, nil
+}
+
 // A name-only PR lookup cannot distinguish an old merged branch from a newer
 // task using its name. Preserve both until an exact PR source binding exists.
 func (s *SyncRepoService) ResolveRemotePRBranch(ctx context.Context, in inbound.SyncInput, branch string) (domain.Ref, error) {
@@ -82,7 +91,7 @@ func (s *SyncRepoService) pushHistory(ctx context.Context, repoID string) error 
 				if !s.isAncestor(ctx, target, e.Source) {
 					return fmt.Errorf("history %s awaits reconciliation with concurrent server work: %w", e.ID, domain.ErrSyncConflict)
 				}
-				base := domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: e.Branch, Target: e.Source}
+				base := domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: e.Branch, BranchID: e.BranchID, Target: e.Source}
 				if err := s.remote.Push(ctx, repoID, nil, nil, []domain.Ref{base}, false, false); err != nil {
 					return err
 				}
@@ -146,4 +155,30 @@ func (s *SyncRepoService) storeRemoteHistory(ctx context.Context, events []domai
 		}
 	}
 	return nil
+}
+
+// PromotePullRequest delegates binding and append to the cloud service, then
+// adopts its exact result without a second name-only server mutation.
+func (s *SyncRepoService) PromotePullRequest(ctx context.Context, in inbound.SyncInput, pr outbound.MergedPullRequest) error {
+	repoID, err := s.repoID(ctx, in)
+	if err != nil {
+		return err
+	}
+	remote, ok := s.remote.(interface {
+		PromotePullRequest(context.Context, string, domain.PullRequestMerge) (domain.Ref, error)
+	})
+	if !ok {
+		return fmt.Errorf("server does not support exact PR promotion")
+	}
+	ref, err := remote.PromotePullRequest(ctx, repoID, domain.PullRequestMerge{Number: pr.Number, BaseBranch: pr.BaseBranch, HeadBranch: pr.HeadBranch, HeadSHA: pr.HeadSHA, MergeSHA: pr.MergeCommitSHA})
+	if err != nil {
+		return err
+	}
+	if ref.RepoID != repoID || ref.Kind != domain.RefBranch || ref.Target == "" {
+		return domain.ErrHashMismatch
+	}
+	if _, err := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); err != nil {
+		return err
+	}
+	return s.convergeAppendedBranch(ctx, repoID, ref)
 }

@@ -1147,3 +1147,6 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .graph-history-scope > span, .graph-history-error { color: var(--muted); font-size: 11px; }
 .graph-births > summary { cursor: pointer; font-size: 12px; }
 .graph-births .graph-history-list { max-height: 260px; overflow: auto; margin-top: 6px; }
+
+.repo-history-protection { flex-basis: 100%; padding-top: 12px; border-top: 1px solid var(--border); }
+.repo-history-protection p { margin: 6px 0; max-width: 65ch; }

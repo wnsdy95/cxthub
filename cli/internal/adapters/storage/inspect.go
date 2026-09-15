@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,12 @@ func (s *FileStore) InspectReplica(ctx context.Context) ReplicaInspection {
 			_, err := s.GetSnapshot(ctx, parent)
 			issue("parent "+string(parent), err)
 		}
+		for _, hash := range []domain.ContentHash{snap.ClaudeSettings, snap.AgentsSettings, snap.CodexSettings} {
+			if hash != "" {
+				_, err := s.GetSettingsObject(ctx, hash)
+				issue("settings "+string(hash), err)
+			}
+		}
 		if snap.MemoryHash != "" {
 			_, err := s.GetMemory(ctx, snap.MemoryHash)
 			issue("memory "+string(snap.MemoryHash), err)
@@ -65,6 +72,62 @@ func (s *FileStore) InspectReplica(ctx context.Context) ReplicaInspection {
 		if e.MemoryHash != "" {
 			_, err := s.GetMemory(ctx, e.MemoryHash)
 			issue("history memory "+string(e.MemoryHash), err)
+		}
+	}
+	for _, kind := range []string{"worktrees", "branch-bindings"} {
+		dir := filepath.Join(s.storeDir(), kind)
+		entries, err := readCxtDir(dir)
+		if os.IsNotExist(err) {
+			continue
+		}
+		issue(kind, err)
+		for _, entry := range entries {
+			if kind == "worktrees" {
+				clone := *s
+				clone.worktreeID = entry.Name()
+				position, err := clone.readPosition()
+				if err == domain.ErrNotFound {
+					continue
+				}
+				issue("worktree "+entry.Name(), err)
+				if err != nil {
+					continue
+				}
+				for _, id := range []domain.ContentHash{position.Snapshot, position.SharedTarget, position.MemorySource} {
+					if id != "" {
+						snap, err := s.GetSnapshot(ctx, id)
+						if err == nil && snap.RepoID != position.RepoID {
+							err = domain.ErrHashMismatch
+						}
+						issue("worktree context "+string(id), err)
+					}
+				}
+				if position.MemoryHash != "" {
+					_, err := s.GetMemory(ctx, position.MemoryHash)
+					issue("worktree memory "+position.MemoryHash, err)
+				}
+				if position.Selection != nil {
+					issue("worktree selection", domain.ValidateHistoryEvent(*position.Selection))
+				}
+			} else {
+				path := filepath.Join(dir, entry.Name())
+				raw, err := readCxtFile(path)
+				issue("local binding "+entry.Name(), err)
+				if err != nil {
+					continue
+				}
+				var record localBranchRecord
+				err = json.Unmarshal(raw, &record)
+				issue("local binding "+entry.Name(), err)
+				if err != nil {
+					continue
+				}
+				_, err = s.readLocalBinding(record.Event.RepoID, record.Event.LocalBranch)
+				issue("local binding "+entry.Name(), err)
+				if path != s.localBranchPath(record.Event.LocalBranch) {
+					issue("local binding path", domain.ErrHashMismatch)
+				}
+			}
 		}
 	}
 	for _, name := range []string{"working-commit.json"} {

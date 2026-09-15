@@ -364,9 +364,10 @@ export function useReflog(repoId: string | null, enabled: boolean) {
 export function useJoinSnapshot() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { repoId: string; branch: string; snapshot: string; includeDescendants?: boolean }) =>
+    mutationFn: (v: { repoId: string; branch: string; branchId?: string; snapshot: string; includeDescendants?: boolean }) =>
       api.joinSnapshot(v.repoId, {
         branch: v.branch,
+        branch_id: v.branchId,
         snapshot: v.snapshot,
         include_descendants: v.includeDescendants ?? false,
       }),
@@ -513,6 +514,17 @@ export function useAcceptInvite() {
   return useMutation({
     mutationFn: (token: string) => api.acceptInvite(token),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
+  });
+}
+
+export function useEnableContextProtocol() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (repoId: string) => api.enableContextProtocol(repoId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['repos'] });
+      void qc.invalidateQueries({ queryKey: ['refs'] });
+    },
   });
 }
 

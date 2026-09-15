@@ -359,6 +359,11 @@ export const ko = {
     encryptSave: '암호화 저장',
   },
   settings: {
+    historyProtection: '브랜치 이력 보호',
+    historyProtected: '사용 중입니다. 같은 브랜치 ID를 가진 요청만 기록을 변경할 수 있습니다.',
+    historyProtectionHint: '모든 CLI를 업데이트하고 각 복제본을 동기화한 뒤 켜세요. 적용하면 이 저장소에서는 구버전 클라이언트의 브랜치 변경이 계속 차단됩니다.',
+    enableHistoryProtection: '이력 보호 켜기',
+
     editProfile: '프로필 편집',
     account: '계정 설정',
     avatarPreview: '프로필 미리보기',

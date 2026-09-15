@@ -26,7 +26,7 @@ import (
 //	repoRoot/.cxt/objects/docs/<hex>       SessionDoc(CIR canonical bytes). Filename = sha256(canonical CIR).
 //	repoRoot/.cxt/objects/snapshots/<hex>  Snapshot metadata JSON. hex = snapshot.ID(=DocHash) in hex.
 //	repoRoot/.cxt/objects/memories/<hex>   MemoryDigest JSON.
-//	repoRoot/.cxt/refs/heads/<branch>      branch ref → target Snapshot.ID text.
+//	repoRoot/.cxt/refs/heads/<branch>      branch ref with stable identity (JSON; legacy hash text supported).
 //	repoRoot/.cxt/refs/sessions/<name>     partial join remaining session pointers.
 //	repoRoot/.cxt/refs/tags/<name>         tag ref → target Snapshot.ID text.
 //	repoRoot/.cxt/HEAD                      symbolic ref (e.g., "ref: refs/heads/main") or direct hash.
@@ -750,7 +750,15 @@ func (s *FileStore) putRefRaw(ref domain.Ref) error {
 		}
 		return writeAtomic(filepath.Join(s.storeDir(), "HEAD"), []byte(content+"\n"))
 	case domain.RefBranch:
-		return writeAtomic(s.refPath("heads", ref.Name), []byte(string(ref.Target)+"\n"))
+		if ref.BranchID == "" {
+			current, err := s.getRefRaw(context.Background(), ref.RepoID, ref.Kind, ref.Name)
+			if err == nil {
+				ref.BranchID = current.BranchID
+			} else if err != domain.ErrNotFound {
+				return err
+			}
+		}
+		return writeAtomic(s.refPath("heads", ref.Name), encodeRef(ref))
 	case domain.RefSession:
 		return writeAtomic(s.refPath("sessions", ref.Name), []byte(string(ref.Target)+"\n"))
 	case domain.RefTag:
@@ -808,6 +816,11 @@ func (s *FileStore) getRefRaw(_ context.Context, repoID string, kind domain.RefK
 			return domain.Ref{}, err
 		}
 		ref := domain.Ref{Kind: kind, Name: name, RepoID: repoID, Target: domain.ContentHash(strings.TrimSpace(string(data)))}
+		if kind == domain.RefBranch && strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
+			if json.Unmarshal(data, &ref) != nil || ref.Kind != kind || ref.Name != name || (repoID != "" && ref.RepoID != repoID) {
+				return domain.Ref{}, domain.ErrHashMismatch
+			}
+		}
 		if err := domain.ValidateRef(ref); err != nil {
 			return domain.Ref{}, err
 		}
@@ -935,6 +948,17 @@ func (s *FileStore) CreateBranchRef(ctx context.Context, ref domain.Ref) (domain
 		}
 		if err := s.putRefRaw(event); err != nil {
 			return err
+		}
+		if ref.BranchID == "" {
+			events, err := s.listHistoryEvents(ref.RepoID)
+			if err != nil {
+				return err
+			}
+			bindings, err := domain.ProjectContextBranches(events)
+			if err != nil {
+				return err
+			}
+			ref.BranchID = bindings.Identity(ref.RepoID, ref.Name)
 		}
 		return s.putRefRaw(ref)
 	})

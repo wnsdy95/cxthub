@@ -7,6 +7,7 @@
   "additionalProperties": false,
   "required": ["repo_id", "refs", "snapshot_index", "version", "updated_at"],
   "properties": {
+    "context_protocol": { "type": "integer", "enum": [0, 1] },
     "repo_id": {
       "type": "string",
       "description": "The ID of the repo this manifest belongs to (normalized remote URL or cwd fallback hash)."
@@ -62,6 +63,7 @@
       "required": ["kind", "name", "repo_id", "target"],
       "properties": {
         "kind": { "$ref": "#/$defs/refKind" },
+        "branch_id": { "type": "string", "maxLength": 128 },
         "name": {
           "type": "string",
           "description": "Ref name. A branch uses the Git branch name, a session uses an internal session name, a tag uses its tag name, and HEAD is fixed at 'HEAD'. The cxt/branch-state/v1 tag namespace is reserved."

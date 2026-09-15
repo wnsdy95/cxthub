@@ -201,6 +201,7 @@ export function CommitGraph({
     snapshot: string;
     branch: string;
     descendants: number;
+    branchId?: string;
     error?: string;
   } | null>(null);
   const byId = useMemo(() => new Map(snapshots.map((s) => [s.id, s])), [snapshots]);
@@ -320,12 +321,12 @@ export function CommitGraph({
   const droppable = dragPlan?.droppable ?? new Set<string>();
   function openJoinModal(rowId: string) {
     if (!dragId || !dragPlan || dragPlan.reason || !dragPlan.droppable.has(rowId)) return;
-    setJoinAsk({ snapshot: dragId, branch: dragPlan.branch, descendants: dragPlan.descendants });
+    setJoinAsk({ snapshot: dragId, branch: dragPlan.branch, branchId: refs?.find((r) => r.kind === 'branch' && r.name === dragPlan.branch)?.branch_id, descendants: dragPlan.descendants });
   }
   function runJoin(includeDescendants: boolean) {
     if (!repoId || !joinAsk) return;
     join.mutate(
-      { repoId, branch: joinAsk.branch, snapshot: joinAsk.snapshot, includeDescendants },
+      { repoId, branch: joinAsk.branch, branchId: joinAsk.branchId, snapshot: joinAsk.snapshot, includeDescendants },
       {
         onSuccess: () => setJoinAsk(null),
         onError: (e) => setJoinAsk({ ...joinAsk, error: e instanceof Error ? e.message : String(e) }),

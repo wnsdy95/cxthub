@@ -110,8 +110,9 @@ type GraftPatch struct {
 
 // JoinMutation is an atomic join change set sent to the store.
 type JoinMutation struct {
-	RepoID domain.ContentHash
-	Branch string
+	BranchID string
+	RepoID   domain.ContentHash
+	Branch   string
 	// Source is the commit X pulled by the user. The store revalidates that the entire Segment is still attached to the target branch or scoped internal session ref, and that the single-leaf condition of first-parent is maintained within the repo graph lock/transaction.
 	Source domain.ContentHash
 	// Segment is the unique first-parent child path calculated by the server from X to tip X…tip.

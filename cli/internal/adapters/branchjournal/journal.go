@@ -203,3 +203,32 @@ func (j *Journal) Save(op Operation) error {
 	}
 	return j.write(filepath.Join("cxt", "operations", op.Event.ID+".json"), raw)
 }
+
+// Repository returns the durable Git-side binding without creating or repairing it.
+func (j *Journal) Repository() (string, error) {
+	raw, err := providerfs.ReadRepoFile(j.gitDir, "cxt/repository")
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(raw))
+	if err := domain.ValidateContentHash(domain.ContentHash(id)); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// StartRepair persists the recovery identity outside the damaged replica.
+func (j *Journal) StartRepair(repoID string) (string, error) {
+	if err := j.Bind(repoID); err != nil {
+		return "", err
+	}
+	id, err := NewID()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join("cxt", "repairs", id, "repository")
+	if err := j.write(path, []byte(repoID+"\n")); err != nil {
+		return "", err
+	}
+	return filepath.Dir(filepath.Join(j.gitDir, path)), nil
+}

@@ -118,6 +118,9 @@ func ValidateBranchName(name string) error {
 
 // ValidateRef is a full validation of local/remote refs. The CLI RepoID is not a path key, so it is allowed to be empty.
 func ValidateRef(ref Ref) error {
+	if len(ref.BranchID) > 128 || strings.ContainsAny(ref.BranchID, "\r\n") {
+		return fmt.Errorf("invalid branch identity")
+	}
 	if err := ValidateRefName(ref.Kind, ref.Name); err != nil {
 		return err
 	}

@@ -174,6 +174,7 @@ export interface Invite {
 }
 
 export interface Repo {
+  context_protocol?: number;
   id: string;
   remote_url: string;
   default_branch: string;
@@ -193,6 +194,7 @@ export interface SettingsUpload {
 
 /** Branch/tag/HEAD pointer */
 export interface Ref {
+  branch_id?: string;
   kind: string;
   name: string;
   repo_id: string;
@@ -378,7 +380,10 @@ export interface HistoryEvent {
   repo_id: string;
   branch_id: string;
   branch: string;
-  kind: 'birth' | 'attach' | 'orphan' | 'position' | 'advance' | 'rename' | 'archive';
+  kind: 'birth' | 'attach' | 'orphan' | 'position' | 'advance' | 'rename' | 'archive' | 'pr-merge';
+  pr?: {number: number; base_branch: string; head_branch: string; head_sha: string; merge_sha: string};
+  source_branch_id?: string;
+  recovery_evidence?: 'user-confirmed-unborn-head';
   source?: string;
   target?: string;
   memory_source?: string;

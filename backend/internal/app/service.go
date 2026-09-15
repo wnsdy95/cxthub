@@ -3,7 +3,9 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -540,6 +542,9 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 	if err := domain.ValidateRef(in.Ref); err != nil {
 		return inbound.UpdateRefOutput{}, err
 	}
+	if err := s.checkContextWrite(ctx, in.RepoID, in.Ref); err != nil {
+		return inbound.UpdateRefOutput{}, err
+	}
 	if in.Ref.Kind == domain.RefTag && strings.HasPrefix(in.Ref.Name, "cxt/history/v1/") {
 		current, err := s.meta.GetRef(ctx, in.RepoID, in.Ref.Kind, in.Ref.Name)
 		if err == nil && current.Target == in.Ref.Target {
@@ -689,46 +694,13 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 // Unlike Force, there is no loss, making it non-target of protected branch policies.
 // Unlike code, context does not force convergence ("pull is user's responsibility"), so push must always succeed on any divergence — the server DB continues to be updated.
 func (s *Service) appendDiverged(ctx context.Context, in inbound.UpdateRefInput, serverTarget domain.ContentHash, out inbound.UpdateRefOutput) (inbound.UpdateRefOutput, error) {
-	serverAnc, err := s.engine.AncestorsClosure(ctx, in.RepoID, []domain.ContentHash{serverTarget})
-	if err != nil {
-		return inbound.UpdateRefOutput{}, err
+	atomic, ok := s.meta.(interface {
+		AppendRef(context.Context, domain.ContentHash, domain.Ref, domain.ContentHash) error
+	})
+	if !ok {
+		return inbound.UpdateRefOutput{}, fmt.Errorf("atomic append storage unavailable")
 	}
-	shared := make(map[domain.ContentHash]bool, len(serverAnc))
-	for _, h := range serverAnc {
-		shared[h] = true
-	}
-	targetAnc, err := s.engine.AncestorsClosure(ctx, in.RepoID, []domain.ContentHash{in.Ref.Target})
-	if err != nil {
-		return inbound.UpdateRefOutput{}, err
-	}
-	var segment []domain.ContentHash
-	for _, h := range targetAnc {
-		if !shared[h] {
-			segment = append(segment, h)
-		}
-	}
-	sort.Slice(segment, func(i, j int) bool { return segment[i] < segment[j] }) // deterministic processing order
-	for _, id := range segment {
-		snap, gerr := s.meta.GetSnapshot(ctx, in.RepoID, id)
-		if gerr != nil {
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: missing snapshot %s in append target lineage", domain.ErrValidation, id)
-		}
-		// Overlay graft: Parents (original) are left unchanged, and the shared history boundary (or irrelevant ancestor root) is grafted with serverTarget (head). This allows the old head to be reached, and (parents ∪ graft_parents), while maintaining the same Parents for local/server replicas to prevent replica parent disagreement (permanent divergence removal).
-		needsGraft := len(snap.Parents) == 0
-		for _, p := range snap.Parents {
-			if shared[p] {
-				needsGraft = true
-				break
-			}
-		}
-		if !needsGraft {
-			continue
-		}
-		if err := s.meta.AddGraftParents(ctx, in.RepoID, id, []domain.ContentHash{serverTarget}); err != nil {
-			return inbound.UpdateRefOutput{}, err
-		}
-	}
-	if err := s.meta.CompareAndSwapRef(ctx, in.RepoID, in.Ref, serverTarget); err != nil {
+	if err := atomic.AppendRef(ctx, in.RepoID, in.Ref, serverTarget); err != nil {
 		return inbound.UpdateRefOutput{}, err
 	}
 	out.Result = inbound.RefAppended
@@ -1969,6 +1941,30 @@ func (s *Service) Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkO
 	if _, err := s.meta.GetSnapshot(ctx, in.RepoID, in.FromSnapshot); err != nil {
 		return inbound.ForkOutput{}, err // parent snapshot pre-exists (REF1)
 	}
+	repo, err := s.meta.GetRepo(ctx, in.RepoID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return inbound.ForkOutput{}, err
+	}
+	if repo.ContextProtocol == 1 {
+		events, err := s.ListHistory(ctx, in.RepoID)
+		if err != nil {
+			return inbound.ForkOutput{}, err
+		}
+		bindings, err := domain.ProjectContextBranches(events)
+		if err != nil {
+			return inbound.ForkOutput{}, err
+		}
+		key := make([]byte, 16)
+		if _, err := rand.Read(key); err != nil {
+			return inbound.ForkOutput{}, err
+		}
+		id := hex.EncodeToString(key)
+		event := domain.HistoryEvent{ID: id, RepoID: string(in.RepoID), BranchID: id, Branch: in.NewBranch, Kind: "birth", Source: in.FromSnapshot, Target: in.FromSnapshot, BindingParent: bindings.Released[in.NewBranch], CreatedAt: time.Now().UTC()}
+		if err := s.RecordHistory(ctx, event); err != nil {
+			return inbound.ForkOutput{}, err
+		}
+		return inbound.ForkOutput{Branch: in.NewBranch, Head: in.FromSnapshot}, nil
+	}
 	ref := domain.Ref{Kind: domain.RefBranch, Name: in.NewBranch, RepoID: in.RepoID, Target: in.FromSnapshot}
 	if err := s.meta.CompareAndSwapRef(ctx, in.RepoID, ref, ""); err != nil {
 		return inbound.ForkOutput{}, err // already exists, ErrRefConflict (F2)
@@ -2194,7 +2190,7 @@ func (s *Service) Join(ctx context.Context, in inbound.JoinInput) (inbound.JoinO
 		forkTip = tip
 	}
 	if err := s.meta.ApplyJoin(ctx, outbound.JoinMutation{
-		RepoID: in.RepoID, Branch: in.TargetBranch, Source: in.Snapshot, Segment: segmentIDs,
+		RepoID: in.RepoID, Branch: in.TargetBranch, BranchID: in.BranchID, Source: in.Snapshot, Segment: segmentIDs,
 		ExpectedHead: head.Target, NewHead: newHead,
 		ForkName: forkName, ForkTip: forkTip, Grafts: patches,
 	}); err != nil {
@@ -2267,61 +2263,6 @@ func (s *Service) joinForkRefName(ctx context.Context, repoID domain.ContentHash
 		return name, nil
 	}
 	return "", fmt.Errorf("%w: fork branch name exhausted for %s", domain.ErrConflict, tip)
-}
-
-// PromoteMergedPR converts GitHub PR merge webhook to context promotion:
-// Find repos whose Git origin (GitRemoteURL) matches, then append the head branch's cxt tip to the base branch using a lossless graft, the same operation as the post-merge hook. The server covers squash and rebase-merge flows where the local [git sha] mapping disappears (audit finding #14). This is a no-op when the head branch has no context. It returns the number of promoted repos.
-func (s *Service) PromoteMergedPR(ctx context.Context, gitURL, baseBranch, headBranch string) (int, error) {
-	if gitURL == "" || baseBranch == "" || headBranch == "" || baseBranch == headBranch {
-		return 0, nil
-	}
-	if err := domain.ValidateBranchName(baseBranch); err != nil {
-		return 0, err
-	}
-	if err := domain.ValidateBranchName(headBranch); err != nil {
-		return 0, err
-	}
-	want := normalizeGitURL(gitURL)
-	repos, err := s.meta.ListRepos(ctx, "default")
-	if err != nil {
-		return 0, err
-	}
-	promoted := 0
-	for _, r := range repos {
-		if r.GitRemoteURL == "" || normalizeGitURL(r.GitRemoteURL) != want {
-			continue
-		}
-		if history, ok := s.meta.(outbound.HistoryStore); ok {
-			events, err := history.ListHistoryEvents(ctx, r.ID)
-			if err != nil {
-				return promoted, err
-			}
-			bindings, err := domain.ProjectContextBranches(events)
-			if err != nil {
-				return promoted, err
-			}
-			if bindings.Released[headBranch] != "" {
-				return promoted, fmt.Errorf("%w: PR source branch %q was renamed, archived, or reused; an exact historical source binding is required", domain.ErrConflict, headBranch)
-			}
-		}
-		headRef, gerr := s.meta.GetRef(ctx, r.ID, domain.RefBranch, headBranch)
-		if gerr != nil || headRef.Target == "" {
-			continue // no head branch context in this repo
-		}
-		ref := domain.Ref{Kind: domain.RefBranch, Name: baseBranch, RepoID: r.ID, Target: headRef.Target}
-		out, uerr := s.UpdateRef(ctx, inbound.UpdateRefInput{RepoID: r.ID, Ref: ref, Append: true})
-		if uerr != nil {
-			// behind (already reflected)/local hook precedence is idempotent no-op — errors only for others.
-			if errors.Is(uerr, domain.ErrNonFastForward) {
-				continue
-			}
-			return promoted, uerr
-		}
-		if out.Result != inbound.RefUpToDate {
-			promoted++
-		}
-	}
-	return promoted, nil
 }
 
 // Diff calculates the CIR event delta (add/remove) between two snapshots based on content keys.

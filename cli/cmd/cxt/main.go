@@ -67,6 +67,9 @@ func run(args []string) error {
 		}
 		return delivcli.RunDiagnostics(context.Background(), cwd, args[1:], os.Stdout)
 	}
+	if args[1] == "repair" {
+		return runRepair(args[2:])
+	}
 	// Process-level configuration resolves the shared repo root and environment
 	// overrides. Persisted remotes and authentication are loaded lazily by their
 	// adapters in buildContainer.
