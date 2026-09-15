@@ -210,7 +210,7 @@ func repositoryProperty() map[string]any {
 }
 
 func toolDefinitions() []map[string]any {
-	return []map[string]any{
+	defs := []map[string]any{
 		{
 			"name": "repository_list", "description": "List a bounded page of CXTHub repositories whose context the signed-in user may read.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
@@ -219,7 +219,7 @@ func toolDefinitions() []map[string]any {
 			}),
 		},
 		{
-			"name": "context_list", "description": "List committed agent-session context snapshots in one repository, newest first.",
+			"name": "context_list", "description": "List all stored context, including retained and pending sessions, with cursor pages. Use current/previous with an explicit context position.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
 				"repository": repositoryProperty(),
 				"branch":     map[string]any{"type": "string", "description": "Optional Git branch filter."},
@@ -227,24 +227,42 @@ func toolDefinitions() []map[string]any {
 			}, "repository"),
 		},
 		{
-			"name": "context_fetch", "description": "Fetch metadata, a bounded memory summary, and a bounded recent conversation tail for a ref.",
+			"name": "context_fetch", "description": "Read an immutable conversation from its first event onward. Follow cursor pages to retrieve every event, including older tool events. Concatenate json_fragment by event_index and byte_offset to reconstruct oversized events.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
 				"repository": repositoryProperty(),
 				"ref":        map[string]any{"type": "string", "description": "Branch, tag, full hash, short hash, or HEAD; defaults to the repository default branch."},
-				"events":     map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Recent readable messages; default 12."},
+				"events":     map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum event fragments per page; default 12. Each response has a byte budget."},
 			}, "repository"),
 		},
 		{
-			"name": "memory_load", "description": "Load the bounded project-memory digest attached to a ref or its nearest reachable ancestor.",
+			"name": "memory_load", "description": "Read the complete memory object using bounded JSON fragments. Use memory_hash from context_history to select an exact historical version; continuation pages stay pinned.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
 				"repository": repositoryProperty(), "ref": map[string]any{"type": "string", "description": "Branch, tag, or hash; defaults to the repository default branch."},
 			}, "repository"),
 		},
 		{
-			"name": "context_search", "description": "Search commit messages and readable conversation text inside one authorized repository.",
+			"name": "context_search", "description": "Search messages and readable events across authorized history, with bounded scanning and continuation pages. A page can contain no hits and still have a next_cursor.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
 				"repository": repositoryProperty(), "query": map[string]any{"type": "string", "minLength": 2, "maxLength": 256},
 			}, "repository", "query"),
 		},
 	}
+	defs = append(defs, map[string]any{"name": "context_history", "description": "Browse recorded branch births, attachments, worktree selections, and retained progress. Unknown historical links are not inferred.", "annotations": readAnnotations(), "inputSchema": schema(map[string]any{"repository": repositoryProperty(), "branch": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}}, "repository")})
+	for _, def := range defs {
+		props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		props["cursor"] = map[string]any{"type": "string", "maxLength": 4096, "description": "Continuation from next_cursor. Keep repository and selection/filter arguments unchanged."}
+		name := def["name"].(string)
+		if name == "context_list" || name == "context_search" {
+			props["scope"] = map[string]any{"type": "string", "enum": []string{"all", "current", "previous", "archived"}, "description": "Default all. Current/previous require position; visibility does not modify the live app."}
+			props["position"] = map[string]any{"type": "string", "description": "Explicit context snapshot or cloud branch used as the working position. The server cannot infer local Git HEAD."}
+		}
+		if name == "memory_load" {
+			props["memory_hash"] = map[string]any{"type": "string", "description": "Exact immutable memory hash belonging to ref, obtained from context_history or context_list."}
+		}
+		if name == "context_search" {
+			props["branch"] = map[string]any{"type": "string"}
+			props["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 100}
+		}
+	}
+	return defs
 }

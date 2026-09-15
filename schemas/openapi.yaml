@@ -92,6 +92,7 @@ components:
       required: [kind, name, repo_id, target]
       additionalProperties: false
       properties:
+        branch_id: { type: string, maxLength: 128, description: "Stable context branch identity; required for branch writes after context_protocol=1." }
         kind:
           $ref: "#/components/schemas/RefKind"
         name:
@@ -122,6 +123,44 @@ components:
           format: email
         team:
           type: string
+
+    PullRequestMerge:
+      type: object
+      required: [number, base_branch, head_branch, head_sha, merge_sha]
+      additionalProperties: false
+      properties:
+        number: { type: integer, minimum: 1 }
+        base_branch: { type: string }
+        head_branch: { type: string }
+        head_sha: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
+        merge_sha: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
+
+    HistoryEvent:
+      type: object
+      required: [id, repo_id, branch_id, branch, kind, created_at]
+      properties:
+        id: { type: string, pattern: '^[0-9a-f]{32}$' }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        branch_id: { type: string, maxLength: 128 }
+        branch: { type: string }
+        local_branch: {type: string, description: Native branch name in the observing replica.}
+        previous_branch: {type: string, description: Previous name for a verified rename.}
+        binding_parent: {type: string, description: Prior identity operation required by this transition.}
+        pr: { $ref: '#/components/schemas/PullRequestMerge' }
+        recovery_evidence: { type: string, enum: [user-confirmed-unborn-head] }
+        source_branch_id: { type: string, maxLength: 128 }
+        name_parent: {type: string, description: Operation that released the rename destination.}
+        kind: { type: string, enum: [birth, attach, orphan, position, advance, rename, archive, pr-merge] }
+        shared_target: { $ref: '#/components/schemas/ContentHash' }
+        source: { $ref: '#/components/schemas/ContentHash' }
+        target: { $ref: '#/components/schemas/ContentHash' }
+        memory_source: { $ref: '#/components/schemas/ContentHash' }
+        memory_hash: { $ref: '#/components/schemas/ContentHash' }
+        memory_pinned: { type: boolean }
+        git_before: { type: string }
+        git_after: { type: string }
+        worktree_id: { type: string }
+        created_at: { type: string, format: date-time }
 
     Snapshot:
       type: object
@@ -259,6 +298,7 @@ components:
       required: [id, remote_url, default_branch]
       additionalProperties: false
       properties:
+        context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Only an explicit upgrade can enable version 1." }
         id:
           $ref: "#/components/schemas/ContentHash"
         remote_url:
@@ -298,6 +338,7 @@ components:
       required: [repo_id, refs, snapshot_index, version, updated_at]
       additionalProperties: false
       properties:
+        context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Only an explicit upgrade can enable version 1." }
         repo_id:
           $ref: "#/components/schemas/ContentHash"
         refs:
@@ -908,6 +949,95 @@ paths:
                       properties:
                         snapshot: { type: string }
                         missing: { type: string }
+  /repos/{repoID}/context-protocol:
+    post:
+      summary: Enable identity-checked context branch writes
+      description: "Maintainer-only, idempotent and irreversible. Requires all writers to send branch_id and use history operations for branch lifecycle. Confirmed live refs are migrated without inventing historical births. Ambiguous reused names block the upgrade."
+      operationId: enableContextProtocol
+      parameters:
+        - $ref: '#/components/parameters/repoID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: Identity protection enabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  context_protocol: { type: integer, const: 1 }
+        '409': { description: Unresolved branch identity or transaction }
+        '403': { description: Maintainer role required }
+
+  /repos/{repoID}/prs/promote:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    post:
+      summary: Bind a merged PR to exact context history and append it to its base
+      description: Requires member access. Names never select the current source tip. Missing or ambiguous Git revision evidence requires source synchronization and retry.
+      operationId: promoteRepositoryPR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PullRequestMerge' }
+      responses:
+        '200': { description: Bound context reflected on the base }
+        '400': { description: Missing full PR identity }
+        '403': { description: Insufficient repository permission }
+        '404': { description: Source context unavailable }
+        '409': { description: Conflicting historical identity or context }
+
+  /repos/{repoID}/history:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: listContextHistory
+      summary: List retained context operations
+      tags: [repos]
+      responses:
+        "200":
+          description: Immutable observed operations in order
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/HistoryEvent' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: recordContextHistory
+      summary: Record context history with durable retention
+      description: |
+        Requires member access and application/json. Reusing an ID with different
+        data conflicts. An advance atomically retains the previous tip and changes
+        the shared branch only if source is still its tip. Protected default
+        branches reject this non-fast-forward continuation. Position events never
+        change the shared branch or another user's worktree.
+      tags: [repos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HistoryEvent' }
+      responses:
+        "200":
+          description: Recorded, or an identical operation was already recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+        "400": { description: Invalid or cross-repository operation }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "409": { description: Shared tip changed or operation ID has different data }
+
   /repos/{repoID}/reflog:
     parameters:
       - $ref: "#/components/parameters/repoID"
@@ -1268,6 +1398,7 @@ paths:
               properties:
                 target:
                   $ref: "#/components/schemas/ContentHash"
+                branch_id: { type: string, maxLength: 128 }
                 expected_target:
                   type: string
                   description: "Optional compare-and-swap target. Empty means use the observed server target."
@@ -2220,6 +2351,7 @@ paths:
               properties:
                 branch: { type: string, description: target branch name (= commit's git branch) }
                 snapshot: { type: string, description: "Commit to reposition (X)" }
+                branch_id: { type: string, maxLength: 128 }
                 include_descendants: { type: boolean, description: true moves the entire first-parent segment }
       responses:
         "200":

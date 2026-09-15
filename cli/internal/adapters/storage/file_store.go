@@ -26,7 +26,7 @@ import (
 //	repoRoot/.cxt/objects/docs/<hex>       SessionDoc(CIR canonical bytes). Filename = sha256(canonical CIR).
 //	repoRoot/.cxt/objects/snapshots/<hex>  Snapshot metadata JSON. hex = snapshot.ID(=DocHash) in hex.
 //	repoRoot/.cxt/objects/memories/<hex>   MemoryDigest JSON.
-//	repoRoot/.cxt/refs/heads/<branch>      branch ref → target Snapshot.ID text.
+//	repoRoot/.cxt/refs/heads/<branch>      branch ref with stable identity (JSON; legacy hash text supported).
 //	repoRoot/.cxt/refs/sessions/<name>     partial join remaining session pointers.
 //	repoRoot/.cxt/refs/tags/<name>         tag ref → target Snapshot.ID text.
 //	repoRoot/.cxt/HEAD                      symbolic ref (e.g., "ref: refs/heads/main") or direct hash.
@@ -37,7 +37,10 @@ import (
 // Write: Immutable objects are written using write-temp + atomic-rename. Mutable refs/HEADs are also atomic-rename.
 type FileStore struct {
 	// repoRoot is the root of the repo working tree where .cxt/ is located (store = repoRoot/.cxt).
-	repoRoot string
+	repoRoot   string
+	worktreeID string
+	gitBranch  string
+	gitCommit  string
 }
 
 // NewFileStore creates a FileStore.
@@ -221,7 +224,41 @@ func writeAtomic(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return syncCxtParents(path)
+}
+
+// Persist both replacement and newly created directories before acknowledging
+// a ref/history write. Syncing only the file is insufficient after power loss.
+func syncCxtParents(path string) error {
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		f, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		err = f.Sync()
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if filepath.Base(dir) == ".cxt" {
+			f, err := os.Open(filepath.Dir(dir))
+			if err != nil {
+				return err
+			}
+			err = f.Sync()
+			_ = f.Close()
+			return err
+		}
+		if filepath.Dir(dir) == dir {
+			return nil
+		}
+	}
 }
 
 // PutDoc stores a SessionDoc by the content hash of its canonical CIR bytes.
@@ -350,7 +387,12 @@ func (s *FileStore) withPendingMutationLock(ctx context.Context, sessionID strin
 // Branch lifecycle transitions touch one branch plus an immutable tag, so a
 // per-ref lock would still permit a torn archive/create operation.
 func (s *FileStore) withRefMutationLock(ctx context.Context, fn func() error) error {
-	return s.withMutationLock(ctx, "refs", "repo", fn)
+	return s.withMutationLock(ctx, "refs", "repo", func() error {
+		if err := s.recoverWorkingCommit(); err != nil {
+			return err
+		}
+		return fn()
+	})
 }
 
 func (s *FileStore) withMutationLock(ctx context.Context, namespace, key string, fn func() error) error {
@@ -699,13 +741,24 @@ func (s *FileStore) PutRef(ctx context.Context, ref domain.Ref) error {
 func (s *FileStore) putRefRaw(ref domain.Ref) error {
 	switch ref.Kind {
 	case domain.RefHEAD:
+		if s.worktreeID != "" {
+			return s.writeWorkingHead(ref)
+		}
 		content := string(ref.Target)
 		if ref.Symbolic != "" {
 			content = "ref: refs/heads/" + strings.TrimPrefix(ref.Symbolic, "refs/heads/")
 		}
 		return writeAtomic(filepath.Join(s.storeDir(), "HEAD"), []byte(content+"\n"))
 	case domain.RefBranch:
-		return writeAtomic(s.refPath("heads", ref.Name), []byte(string(ref.Target)+"\n"))
+		if ref.BranchID == "" {
+			current, err := s.getRefRaw(context.Background(), ref.RepoID, ref.Kind, ref.Name)
+			if err == nil {
+				ref.BranchID = current.BranchID
+			} else if err != domain.ErrNotFound {
+				return err
+			}
+		}
+		return writeAtomic(s.refPath("heads", ref.Name), encodeRef(ref))
 	case domain.RefSession:
 		return writeAtomic(s.refPath("sessions", ref.Name), []byte(string(ref.Target)+"\n"))
 	case domain.RefTag:
@@ -727,6 +780,9 @@ func (s *FileStore) getRefRaw(_ context.Context, repoID string, kind domain.RefK
 	}
 	switch kind {
 	case domain.RefHEAD:
+		if s.worktreeID != "" {
+			return s.readWorkingHead(repoID)
+		}
 		data, err := readCxtFile(filepath.Join(s.storeDir(), "HEAD"))
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -760,6 +816,11 @@ func (s *FileStore) getRefRaw(_ context.Context, repoID string, kind domain.RefK
 			return domain.Ref{}, err
 		}
 		ref := domain.Ref{Kind: kind, Name: name, RepoID: repoID, Target: domain.ContentHash(strings.TrimSpace(string(data)))}
+		if kind == domain.RefBranch && strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
+			if json.Unmarshal(data, &ref) != nil || ref.Kind != kind || ref.Name != name || (repoID != "" && ref.RepoID != repoID) {
+				return domain.Ref{}, domain.ErrHashMismatch
+			}
+		}
 		if err := domain.ValidateRef(ref); err != nil {
 			return domain.Ref{}, err
 		}
@@ -887,6 +948,17 @@ func (s *FileStore) CreateBranchRef(ctx context.Context, ref domain.Ref) (domain
 		}
 		if err := s.putRefRaw(event); err != nil {
 			return err
+		}
+		if ref.BranchID == "" {
+			events, err := s.listHistoryEvents(ref.RepoID)
+			if err != nil {
+				return err
+			}
+			bindings, err := domain.ProjectContextBranches(events)
+			if err != nil {
+				return err
+			}
+			ref.BranchID = bindings.Identity(ref.RepoID, ref.Name)
 		}
 		return s.putRefRaw(ref)
 	})

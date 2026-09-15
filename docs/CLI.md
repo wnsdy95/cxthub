@@ -30,8 +30,10 @@ For installation and first-run setup, see
   - `reconstructed`: rebuild a provider-compatible session from normalized
     context; and
   - `memory`: inject the distilled memory representation.
-- Git and provider hooks are fail-open: a capture or sync failure is reported
-  but does not block the Git or agent operation.
+- Managed Git branch creation requires a durable local creation record before
+  Git commits the ref transaction. Failure to record that evidence blocks
+  creation. Provider capture and network synchronization failures are reported
+  and retried without blocking Git or terminating an agent.
 - Every public command supports `-h` and `--help`. Help and usage errors are
   resolved before cxt creates adapters, contacts a remote, or changes local
   context state. Unknown flags and missing flag values are rejected. Value
@@ -85,6 +87,52 @@ to both `.gitignore` and `.git/info/exclude`; it is not treated as an initialize
 context store.
 
 ## Repository and authentication
+
+### `cxt doctor`
+
+```text
+cxt doctor [--json]
+cxt branch operations [--json]
+cxt branch replay
+```
+
+`doctor` inspects the local replica's snapshot objects, refs, history roots,
+hashes, and pending save/branch transactions. Inspection is read-only and works
+without initializing a missing `.cxt`. Issues produce a nonzero exit status.
+It does not contact the server or assert that local data has been uploaded.
+
+`branch operations` reads the Git-directory journal even if `.cxt` is damaged
+or missing. `branch replay` retries committed operations and prepared operations
+with an exact Git reflog witness. Unproven operations remain pending and are
+reported as `needs-git-evidence`; no branch birth is inferred from a name alone.
+Replay queues server synchronization. Run `cxt push` to wait for acknowledgement.
+For a prepared orphan operation whose committed callback was lost, inspect the
+operation and run `cxt branch recover <operation-id> --confirm-orphan` in its
+recorded worktree. This works only while HEAD still names that exact unborn
+branch. It records user confirmation as separate evidence, verifies inherited
+memory, and replays the operation. A moved/committed branch is not guessed.
+
+### `cxt repair --from-server`
+
+```bash
+cxt repair --from-server
+# Missing/damaged remote configuration:
+cxt repair --from-server --remote https://cxthub.com/owner/repository
+```
+
+Repair requires the repository identity recorded under the Git common directory.
+It downloads and verifies an isolated server replica first, then restores missing
+or corrupt objects in place. Every replaced predecessor is quarantined under
+`.git/cxt/repairs/<id>/` before atomic replacement. Healthy local-only objects,
+ahead refs, and worktree positions remain intact. It does not rewrite provider
+sessions or send any repair writes to the server. Config can be restored only
+when the supplied URL matches the durable identity.
+
+Interrupted repairs are safe to retry. A corrupt server copy, identity conflict,
+or failed quarantine stops replacement. Local-only damage without another valid
+copy and invalid local transactions remain explicit errors; repair cannot infer
+who caused the damage or reconstruct missing bytes. Run `cxt doctor` afterward,
+then `cxt branch replay` to process verified Git operations.
 
 ### `cxt init`
 
@@ -209,7 +257,10 @@ Supported coding-app events are `SessionStart`, `UserPromptSubmit`, `Stop`, and
 `SessionEnd`. A desktop branch switch never renames the vendor-owned active
 session file. Instead, the next start/prompt hook consumes a session-scoped,
 maximum-16-KiB project-memory handoff exactly once. Full transcripts remain in
-the immutable CXTHub DAG and are retrieved explicitly with MCP or the web UI.
+the immutable CXTHub DAG. The web viewer exposes archived conversation; current
+MCP tools provide bounded history results with the limits documented in
+[MCP connections](MCP.md#current-history-retrieval-limits). A per-handoff limit
+does not bound the total input accumulated across many branch switches.
 
 Claude Desktop's general Chat tab is outside this hook model and is not
 passively captured.
@@ -272,6 +323,12 @@ Lists local snapshots, optionally restricted to a branch. `log` is an alias for
 `list`.
 
 ## Restore and branch commands
+
+The accepted behavior for exact code/context positions, orphan memory
+inheritance, retained progress, and retryable branch creation is tracked in
+[Context history](CONTEXT_HISTORY.md), including implementation gaps. A shared
+local object store does not yet provide an independent cxt HEAD for each
+worktree.
 
 ### `cxt checkout`
 
@@ -667,3 +724,16 @@ catalog and return success.
 
 Do not expose tokens, passphrases, or private session content in command output,
 shell history, issue reports, or CI logs.
+
+### Repository branch-history compatibility
+
+Update and sync all CLI replicas before enabling **Branch history protection**
+in repository settings. Once enabled, older clients cannot mutate branch refs.
+New clients send the persisted branch identity and publish verified birth,
+rename and archive history before refs. A same-name/same-hash identity conflict
+requires reconciliation; force-push does not override branch identity.
+
+`.cxt/refs/heads/*` may contain a JSON ref with `branch_id`, not just a hash.
+Use `cxt log`, `cxt branch list`, or `cxt doctor` instead of interpreting the
+replica's internal files as a public interface. Existing plaintext refs remain
+readable; only a first proven cloud identity can be adopted automatically.

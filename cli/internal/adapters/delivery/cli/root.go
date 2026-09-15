@@ -50,6 +50,7 @@ type Container struct {
 	Tag      inbound.TagRef
 	Stash    inbound.StashSession
 	Handoff  inbound.BranchHandoff
+	History  inbound.ContextHistory
 	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
 	// can promote the source branch context into the checked-out base timeline.
 	PRMerges outbound.PullRequestMergeResolver
@@ -78,6 +79,23 @@ func Run(c *Container, args []string) error {
 	ctx := context.Background()
 	rest := args[2:]
 	cwd, _ := os.Getwd()
+	if cmd == "doctor" || (cmd == "branch" && firstPositional(rest) == "operations") {
+		return RunDiagnostics(ctx, cwd, args[1:], os.Stdout)
+	}
+	if cmd == "branch" && firstPositional(rest) == "recover" {
+		if err := confirmOrphanRecovery(ctx, c, cwd, lastPositional(rest)); err != nil {
+			return err
+		}
+		return replayBranchCommand(ctx, c, cwd)
+	}
+	if cmd == "branch" && firstPositional(rest) == "replay" {
+		return replayBranchCommand(ctx, c, cwd)
+	}
+	if cmd != "git-hook" && cmd != "init" && cmd != "setup" && c.History != nil {
+		if err := replayBranchOperations(ctx, c, cwd); err != nil {
+			hookWarn("branch operation remains queued: %v", err)
+		}
+	}
 
 	switch cmd {
 	case "init", "repo": // 'cxt repo create <url>' also routes to init
@@ -147,7 +165,11 @@ func Run(c *Container, args []string) error {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("archived context branch %q at %s (history preserved)\n", out.Branch, shortHash(out.Target))
+			if out.LocalOnly {
+				fmt.Printf("detached local tracking branch %q (server branch retained)\n", out.Branch)
+			} else {
+				fmt.Printf("archived context branch %q at %s (history preserved)\n", out.Branch, shortHash(out.Target))
+			}
 			spawnBranchStateSync(cwd)
 			return nil
 		case "restore":
@@ -1039,7 +1061,7 @@ func firstPositional(args []string) string {
 var publicCommandNames = []string{
 	"setup", "init", "repo", "claude", "codex", "remote", "repack",
 	"branch", "add", "commit", "switch", "config", "login", "logout", "fsck",
-	"reflog", "secrets", "settings", "hooks", "save", "list", "log",
+	"doctor", "reflog", "secrets", "settings", "hooks", "save", "list", "log",
 	"checkout", "fork", "load", "push", "pull", "stash", "memorize",
 	"memory", "tag", "mcp", "hook", "version", "help",
 }
@@ -1098,6 +1120,11 @@ usage: cxt <command> [flags]
                             share .cxtsecrets with end-to-end encryption
   hooks install|uninstall   manage Git hooks manually
   config <key> [value]      inspect or set checkout, load, boundary, capture, or scrub behavior
+  doctor [--json]           inspect the local replica and Git journal without writes
+  branch operations         inspect durable local operations (--json available)
+  branch replay             retry verified operations and queue server synchronization
+  branch recover <id> --confirm-orphan  recover an explicitly confirmed unborn branch
+  repair --from-server       restore verified server objects, preserving local-only data
   fsck                      audit repository integrity
   reflog                    view the server ref-move log
   repack                    reclaim duplicate prefix storage through chunk CAS
