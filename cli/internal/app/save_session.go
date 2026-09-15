@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -97,7 +99,10 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 
 	branch := in.Branch // explicit branch takes precedence over checkpoint, etc.
 	if branch == "" {
-		branch = cir.Envelope.GitBranch
+		branch, _ = s.gitCtx.CurrentBranch(ctx, in.Cwd)
+		if branch == "" || branch == "HEAD" {
+			branch = cir.Envelope.GitBranch
+		}
 	}
 	// "HEAD" is not a detached marker branch name (session records can be recorded at the detached point)
 	// — fallback to the empty value as the current branch in .git.
@@ -123,11 +128,41 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	var parents []domain.ContentHash
 	var refTarget domain.ContentHash
 	branchRefExists := false
+	localBranch := branch
+	if bindings, ok := s.store.(outbound.LocalBranchStore); ok {
+		binding, err := bindings.ResolveLocalBranch(ctx, repo.ID, branch)
+		if err != nil {
+			return inbound.SaveOutput{}, err
+		}
+		if binding.Inactive {
+			return inbound.SaveOutput{}, fmt.Errorf("local branch %q has been detached; replay its new branch creation before capture", localBranch)
+		}
+		branch = binding.Branch
+	}
 	if ref, gerr := s.store.GetRef(ctx, repo.ID, domain.RefBranch, branch); gerr == nil {
 		branchRefExists = true
-		if ref.Target != "" && ref.Target != docHash {
-			refTarget = ref.Target
-			parents = []domain.ContentHash{ref.Target}
+		refTarget = ref.Target
+		if refTarget != "" && refTarget != docHash {
+			parents = []domain.ContentHash{refTarget}
+		}
+	} else if !errors.Is(gerr, domain.ErrNotFound) {
+		return inbound.SaveOutput{}, gerr
+	}
+	var position *domain.WorkingPosition
+	if positions, ok := s.store.(outbound.WorkingPositionStore); ok {
+		p, perr := positions.GetWorkingPosition(ctx)
+		if perr != nil && !errors.Is(perr, domain.ErrNotFound) {
+			return inbound.SaveOutput{}, perr
+		}
+		if perr == nil && p.RepoID == repo.ID && (p.Branch == branch || (p.Branch == "" && in.Branch == "")) {
+			position = &p
+			parents = nil
+			if p.Snapshot != "" && p.Snapshot != docHash {
+				parents = []domain.ContentHash{p.Snapshot}
+			}
+			if p.Rewound && p.Branch != "" && p.SharedTarget != refTarget {
+				return inbound.SaveOutput{}, fmt.Errorf("shared branch advanced after context selection: %w", domain.ErrSyncConflict)
+			}
 		}
 	}
 
@@ -161,6 +196,24 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		SessionID:       cir.Envelope.SessionOriginID,
 		Models:          cir.Envelope.OrderedModels(),
 		CompactionCount: cir.Envelope.CompactionCount,
+	}
+	// A new capture imports the selected immutable memory, including orphan
+	// project memory, without inheriting later conversation or mutable grafts.
+	if position != nil && position.MemoryHash != "" {
+		if _, err := s.store.GetSnapshot(ctx, docHash); errors.Is(err, domain.ErrNotFound) {
+			memory, err := s.store.GetMemory(ctx, position.MemoryHash)
+			if err != nil {
+				return inbound.SaveOutput{}, err
+			}
+			inherited := domain.MergeDigests(memory, domain.MemoryDigest{SnapshotID: docHash, Provider: provider})
+			inherited.PreviousMemoryHash = ""
+			snap.MemoryHash, err = s.store.PutMemory(ctx, inherited)
+			if err != nil {
+				return inbound.SaveOutput{}, err
+			}
+		} else if err != nil {
+			return inbound.SaveOutput{}, err
+		}
 	}
 	// Message promotion detection (dedup hook leaf → commit): PutSnapshot upgrades the local label,
 	// and the server replica follows it into an upgrade queue on push (inventory-only push does not resend existing objects, so metadata updates propagate naturally).
@@ -198,31 +251,85 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 			SnapshotID: docHash, Branch: branch, SessionID: cir.Envelope.SessionOriginID, CapturedBytes: capturedBytes,
 		}, nil
 	}
+	if position != nil && position.Branch == "" {
+		// Detached code has a worktree continuation, never an implicit main write.
+		p := *position
+		p.Snapshot = docHash
+		stored, err := s.store.GetSnapshot(ctx, docHash)
+		if err != nil {
+			return inbound.SaveOutput{}, err
+		}
+		p.MemoryHash = stored.MemoryHash
+		key := sha256.Sum256([]byte(p.WorktreeID + "\x00" + string(position.Snapshot) + "\x00" + string(docHash)))
+		p.Selection = &domain.HistoryEvent{ID: fmt.Sprintf("%x", key[:16]), RepoID: repo.ID, BranchID: p.BranchID, Kind: "position", Source: position.Snapshot, Target: docHash, MemoryHash: p.MemoryHash, GitAfter: p.GitCommit, CreatedAt: stored.CreatedAt}
+		if err := s.store.(outbound.WorkingPositionStore).PutWorkingPosition(ctx, p); err != nil {
+			return inbound.SaveOutput{}, err
+		}
+		return inbound.SaveOutput{SnapshotID: docHash, Branch: "HEAD", SessionID: cir.Envelope.SessionOriginID, CapturedBytes: capturedBytes}, nil
+	}
 	// Identify the exact capture observed by this commit. Resolution below is a
 	// target CAS because a newer capture can arrive while the ref is moving.
 	oldTarget := s.pendingTargetOf(ctx, repo.ID, cir.Envelope.SessionOriginID)
 	// Never move a ref backward. Content-hash dedup may match an existing snapshot already reachable as an ancestor of the current head; in that case, leave the ref in place. This prevents repeated capture of an unchanged session (for example, an old rollout from another provider) from rolling the head back and orphaning intervening commits. Forward dedup still works for a replaceable hook leaf because that leaf is not an ancestor of the head.
-	if refTarget == "" || !s.reachable(ctx, repo.ID, refTarget, docHash) {
+	if refTarget == "" || (position != nil && position.Rewound) || !s.reachable(ctx, repo.ID, refTarget, docHash) {
 		// Preserve sibling forward reachability (overlay graft): If the previous head is not an ancestor of the new head (multi-session commits — each session snapshot has the same parent, becoming siblings), the ref move orphans the entire previous head lineage (real case 578f170b4a). Server diverged push rule: connect the previous head to the new head's GraftParents (Parents immutable). Server replica propagates the graft queue on push (inventory-only push does not resend existing object metadata — same channel pattern as message promotion).
 		//
 		// fail-closed: if graft (local reachability) or queue persistence (server propagation guarantee) fails, the ref is not moved — "branch ref move does not reduce reach set (force exception)" structural enforcement. Best-effort approach can recreate the orphaning with a single disk error. If the ref is not moved, this save is reported as a failure (pending maintained), and the next save is retried. Applied grafts are additive-only, so any residual ones are harmless.
-		if refTarget != "" && refTarget != docHash && !s.reachable(ctx, repo.ID, docHash, refTarget) {
+		if (position == nil || !position.Rewound) && refTarget != "" && refTarget != docHash && !s.reachable(ctx, repo.ID, docHash, refTarget) {
 			if gerr := s.graftLocalAndQueue(ctx, repo.LocalPath, docHash, refTarget); gerr != nil {
 				return inbound.SaveOutput{}, fmt.Errorf("preservation of reachability (graft) failed — ref move aborted: %w", gerr)
 			}
 		}
 		branchRef := domain.Ref{Kind: domain.RefBranch, Name: branch, RepoID: repo.ID, Target: docHash}
-		if branchRefExists {
-			if err := s.store.PutRef(ctx, branchRef); err != nil {
+		if position != nil {
+			commitStore, ok := s.store.(outbound.WorkingCommitStore)
+			if !ok {
+				return inbound.SaveOutput{}, fmt.Errorf("working commit store unavailable")
+			}
+			p := *position
+			stored, err := s.store.GetSnapshot(ctx, docHash)
+			if err != nil {
+				return inbound.SaveOutput{}, err
+			}
+			p.Snapshot = docHash
+			p.SharedTarget = docHash
+			p.MemoryHash = stored.MemoryHash
+			p.Rewound = false
+			p.Orphan = false
+			p.Selection = nil
+			var event *domain.HistoryEvent
+			if position.Rewound && refTarget != "" && refTarget != docHash {
+				selectionID := ""
+				observedAt := stored.CreatedAt
+				if position.Selection != nil {
+					selectionID = position.Selection.ID
+					observedAt = position.Selection.CreatedAt
+				}
+				key := sha256.Sum256([]byte(repo.ID + "\x00" + branch + "\x00" + selectionID + "\x00" + string(refTarget) + "\x00" + string(docHash)))
+				event = &domain.HistoryEvent{ID: fmt.Sprintf("%x", key[:16]), RepoID: repo.ID, BranchID: p.BranchID, Branch: branch, Kind: "advance", Source: refTarget, Target: docHash, MemoryHash: stored.MemoryHash, GitBefore: position.GitCommit, GitAfter: p.GitCommit, WorktreeID: p.WorktreeID, CreatedAt: observedAt}
+			}
+			if err := commitStore.CommitWorkingSnapshot(ctx, branchRef, refTarget, p, event); err != nil {
 				return inbound.SaveOutput{}, err
 			}
 		} else {
-			if _, err := s.store.CreateBranchRef(ctx, branchRef); err != nil {
-				return inbound.SaveOutput{}, err
+			if branchRefExists {
+				if err := s.store.PutRef(ctx, branchRef); err != nil {
+					return inbound.SaveOutput{}, err
+				}
+			} else {
+				if _, err := s.store.CreateBranchRef(ctx, branchRef); err != nil {
+					return inbound.SaveOutput{}, err
+				}
+			}
+			// A departing-branch checkpoint runs after Git has switched. It
+			// must not replace the new worktree's already-selected position.
+			nativeBranch, _ := s.gitCtx.CurrentBranch(ctx, in.Cwd)
+			if in.Branch == "" || nativeBranch == localBranch {
+				if err := s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: branch}); err != nil {
+					return inbound.SaveOutput{}, err
+				}
 			}
 		}
-		// HEAD points to the current branch symbolically. Best-effort.
-		_ = s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: branch})
 	}
 	// Commit storage absorbs exactly the progress pointer observed above. A hook
 	// capture from the same still-running session may arrive while this save is

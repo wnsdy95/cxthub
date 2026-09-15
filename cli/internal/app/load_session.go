@@ -86,6 +86,9 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	if err != nil {
 		return inbound.LoadOutput{}, err
 	}
+	if _, _, err := selectedMemory(ctx, s.store, snapID); err != nil {
+		return inbound.LoadOutput{}, err
+	}
 	doc, err := s.store.GetDoc(ctx, snap.DocHash)
 	if err != nil {
 		return inbound.LoadOutput{}, err
@@ -1013,6 +1016,26 @@ func seedWorthyFacts(facts []string) []string {
 
 // loadMemory performs memory-form restoration: native-first ingestion → distillation → provider memory file injection.
 func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) (inbound.LoadOutput, error) {
+	if digest, pinned, err := selectedMemory(ctx, s.store, snap.ID); pinned || err != nil {
+		if err != nil {
+			return inbound.LoadOutput{}, err
+		}
+		if digest.SnapshotID == "" {
+			// No historical memory existed: reconstruct from that archived CIR
+			// alone. Current native memory belongs to the live app, not this point.
+			digest, err = s.distiller.Distill(ctx, cir.EffectiveContext(), nil)
+			if err != nil {
+				return inbound.LoadOutput{}, err
+			}
+			digest.SnapshotID = snap.ID
+		}
+		sink, ok := s.memSinks[target]
+		if !ok {
+			return inbound.LoadOutput{}, domain.ErrUnsupportedProvider
+		}
+		path, err := sink.Inject(ctx, digest, cwd)
+		return inbound.LoadOutput{WrittenPath: path, Fidelity: domain.FidelityMemory}, err
+	}
 	targetNative, _ := readTargetNativeMemory(ctx, s.memSources, target, cwd, cir.Envelope.SessionOriginID)
 	var distillNative *domain.NativeMemory
 	if cir.Envelope.SourceProvider == "" || target == cir.Envelope.SourceProvider {

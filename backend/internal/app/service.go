@@ -540,6 +540,13 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 	if err := domain.ValidateRef(in.Ref); err != nil {
 		return inbound.UpdateRefOutput{}, err
 	}
+	if in.Ref.Kind == domain.RefTag && strings.HasPrefix(in.Ref.Name, "cxt/history/v1/") {
+		current, err := s.meta.GetRef(ctx, in.RepoID, in.Ref.Kind, in.Ref.Name)
+		if err == nil && current.Target == in.Ref.Target {
+			return inbound.UpdateRefOutput{Ref: in.Ref, ServerTarget: current.Target, RequestedTarget: in.Ref.Target, Result: inbound.RefUpToDate}, nil
+		}
+		return inbound.UpdateRefOutput{}, fmt.Errorf("%w: history retention roots are managed by history operations", domain.ErrForbidden)
+	}
 	if in.Ref.Kind == domain.RefHead && in.Ref.Symbolic != "" {
 		branch := strings.TrimPrefix(in.Ref.Symbolic, "refs/heads/")
 		if _, err := s.meta.GetRef(ctx, in.RepoID, domain.RefBranch, branch); err != nil {
@@ -2283,6 +2290,19 @@ func (s *Service) PromoteMergedPR(ctx context.Context, gitURL, baseBranch, headB
 	for _, r := range repos {
 		if r.GitRemoteURL == "" || normalizeGitURL(r.GitRemoteURL) != want {
 			continue
+		}
+		if history, ok := s.meta.(outbound.HistoryStore); ok {
+			events, err := history.ListHistoryEvents(ctx, r.ID)
+			if err != nil {
+				return promoted, err
+			}
+			bindings, err := domain.ProjectContextBranches(events)
+			if err != nil {
+				return promoted, err
+			}
+			if bindings.Released[headBranch] != "" {
+				return promoted, fmt.Errorf("%w: PR source branch %q was renamed, archived, or reused; an exact historical source binding is required", domain.ErrConflict, headBranch)
+			}
 		}
 		headRef, gerr := s.meta.GetRef(ctx, r.ID, domain.RefBranch, headBranch)
 		if gerr != nil || headRef.Target == "" {

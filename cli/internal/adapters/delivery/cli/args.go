@@ -36,7 +36,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"claude":    {usage: "cxt claude [claude-arguments...]", passthrough: true},
 	"codex":     {usage: "cxt codex [codex-arguments...]", passthrough: true},
 	"remote":    {usage: "cxt remote [-v] | add <name> <url> | remove <name>", flags: commandFlags(nil, []string{"-v"})},
-	"branch":    {usage: "cxt branch archive <name> | restore <name> [--provider claude|codex] [--mode full|reconstructed|memory]", flags: commandFlags([]string{"--provider", "--mode"}, nil)},
+	"branch":    {usage: "cxt branch operations [--json] | replay | archive <name> | restore <name> [--provider claude|codex] [--mode full|reconstructed|memory]", flags: commandFlags([]string{"--provider", "--mode"}, []string{"--json"})},
 	"repack":    {usage: "cxt repack"},
 	"add":       {usage: "cxt add [claude|codex|.]..."},
 	"commit":    {usage: "cxt commit [-m <message>]", flags: commandFlags([]string{"-m"}, nil)},
@@ -45,6 +45,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"login":     {usage: "cxt login [token] | -t <token>", flags: commandFlags([]string{"-t"}, nil)},
 	"logout":    {usage: "cxt logout"},
 	"fsck":      {usage: "cxt fsck"},
+	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"reflog":    {usage: "cxt reflog"},
 	"secrets":   {usage: "cxt secrets push|pull [-p <passphrase>] [--remember] [--rotate]", flags: commandFlags([]string{"-p"}, []string{"--remember", "--rotate"})},
 	"settings":  {usage: "cxt settings pull|list|restore [n]"},
@@ -173,7 +174,20 @@ func validateCommandFlags(cmd string, args []string, spec commandArgSpec) error 
 		if len(pos) != 0 || !flagPresent(args, "--local") {
 			return fmt.Errorf("mcp: the product connector is https://cxthub.com/mcp; the stdio helper requires --local\nusage: %s", spec.usage)
 		}
+	case "doctor":
+		if len(pos) != 0 {
+			return fmt.Errorf("usage: %s", spec.usage)
+		}
 	case "branch":
+		if len(pos) == 1 && (pos[0] == "operations" || pos[0] == "replay") {
+			if flagVal(args, "--provider") != "" || flagVal(args, "--mode") != "" || (pos[0] == "replay" && flagPresent(args, "--json")) {
+				return fmt.Errorf("usage: %s", spec.usage)
+			}
+			return nil
+		}
+		if flagPresent(args, "--json") {
+			return fmt.Errorf("branch: --json is only valid with operations")
+		}
 		if len(pos) != 2 || (pos[0] != "archive" && pos[0] != "restore") {
 			return fmt.Errorf("usage: %s", spec.usage)
 		}

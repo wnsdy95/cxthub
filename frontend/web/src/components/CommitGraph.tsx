@@ -3,10 +3,11 @@
 // Lane layout is handled in graph.ts (pure function), this file renders only the SVG.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { Ref, Snapshot } from '../types';
+import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
 import { layoutGraph, mainlineOf, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { sharedReachable } from '../onhold';
 import { classifyGraphSnapshots } from '../graphStatus';
+import { previousProgressGroups, hiddenProgressIds, historicalSnapshotIds, historyBranchHeads } from '../contextHistory';
 import { useJoinSnapshot } from '../hooks';
 import { useT } from '../i18n';
 
@@ -14,6 +15,8 @@ const LANE_W = 22; // Lane width
 const ROW_H = 26; // Row height (text-free — compact)
 const HEAD_H = 44; // Sticky lane-label area; kept in sync with .graph-head.
 const R = 4.5; // Node radius
+const EMPTY_REFLOG: RefLogEntry[] = [];
+const EMPTY_HISTORY: HistoryEvent[] = [];
 
 // Cycle lane colors (ink + desaturated colors).
 const LANE_COLORS = ['#16181d', '#2e7d5b', '#8250df', '#b4452c', '#0969da', '#bf8700'];
@@ -61,6 +64,9 @@ export function CommitGraph({
   onSelect,
   badges,
   refs,
+  reflog = EMPTY_REFLOG,
+  history = EMPTY_HISTORY,
+  historyError = false,
   uncommitted,
   pinBranch,
   joinBranch,
@@ -72,6 +78,10 @@ export function CommitGraph({
   badges: Map<string, { name: string; kind: string }[]>;
 /** Branch ref list. If present, unpushed commits outside the shared timeline are lightened and separated by a tear line. */
   refs?: Ref[];
+/** Server ref movements; missing evidence never creates a historical path. */
+  reflog?: RefLogEntry[];
+  history?: HistoryEvent[];
+  historyError?: boolean;
 /** Uncommitted hook-capture IDs, rendered as hollow dashed nodes with their own divider. */
   uncommitted?: Set<string>;
 /** Default branch name — always fixed at the leftmost lane (0) for this branch chain. */
@@ -83,23 +93,58 @@ export function CommitGraph({
 }) {
   const t = useT();
   const [showArchived, setShowArchived] = useState(false);
+  const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
+  const [positionId, setPositionId] = useState('');
+  const positions = useMemo(() => history.filter((event) => event.kind === 'position' && event.target
+    && snapshots.some((snapshot) => snapshot.id === event.target)).slice().reverse(), [history, snapshots]);
+  const positionEvent = positions.find((event) => event.id === positionId);
+  const historyHeads = useMemo(() => historyBranchHeads(history), [history]);
+  const positionHead = positionEvent ? historyHeads.get(positionEvent.branch_id) : undefined;
+  const position = positionEvent ? { branch: positionHead?.branch ?? positionEvent.branch, branch_id: positionEvent.branch_id, snapshot: positionEvent.target! } : undefined;
+  const historicalIds = useMemo(() => historicalSnapshotIds(reflog, snapshots, history), [reflog, snapshots, history]);
+  const historyGroups = useMemo(() => previousProgressGroups(refs ?? [], snapshots, reflog, history, position), [refs, snapshots, reflog, history, position?.branch, position?.branch_id, position?.snapshot]);
+  // A selection made elsewhere in the viewer must reveal its recorded path.
+  const expandedKeys = useMemo(() => {
+    const next = new Set(expandedHistory);
+    if (selectedId && hiddenProgressIds(historyGroups, next).has(selectedId)) {
+      const group = historyGroups.find((item) => item.before === selectedId)
+        ?? historyGroups.find((item) => item.collapsibleIds.has(selectedId));
+      if (group) next.add(group.key);
+    }
+    return next;
+  }, [expandedHistory, historyGroups, selectedId]);
+  const hiddenHistory = useMemo(() => hiddenProgressIds(historyGroups, expandedKeys), [historyGroups, expandedKeys]);
+  const revealedHistory = useMemo(() => new Set(historyGroups
+    .filter((group) => expandedKeys.has(group.key)).flatMap((group) => [...group.snapshotIds])), [historyGroups, expandedKeys]);
   const status = useMemo(
-    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted, pinBranch),
-    [refs, snapshots, uncommitted, pinBranch],
+    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted, pinBranch, historicalIds),
+    [refs, snapshots, uncommitted, pinBranch, historicalIds],
   );
   const selectedArchived = selectedId !== null && status.archivedOnly.has(selectedId);
   const archivedVisible = showArchived || selectedArchived;
   const visibleSnapshots = useMemo(
-    () => archivedVisible ? snapshots : snapshots.filter((snapshot) => !status.archivedOnly.has(snapshot.id)),
-    [archivedVisible, snapshots, status.archivedOnly],
+    () => snapshots.filter((snapshot) => !hiddenHistory.has(snapshot.id)
+      && (archivedVisible || !status.archivedOnly.has(snapshot.id) || revealedHistory.has(snapshot.id))),
+    [archivedVisible, snapshots, status.archivedOnly, hiddenHistory, revealedHistory],
   );
   const graphIdentity = refs?.[0]?.repo_id ?? repoId ?? '';
-  useEffect(() => setShowArchived(false), [graphIdentity]);
+  useEffect(() => { setShowArchived(false); setExpandedHistory(new Set()); setPositionId(''); }, [graphIdentity]);
   const pinHead = useMemo(
-    () => (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
-    [refs, pinBranch],
+    () => position && positionHead?.kind !== 'archive' && position.branch === pinBranch ? position.snapshot : (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
+    [refs, pinBranch, position?.branch, position?.snapshot, positionHead?.kind],
   );
   const { rows, laneCount } = useMemo(() => layoutGraph(visibleSnapshots, pinHead), [visibleSnapshots, pinHead]);
+  function toggleHistory(key: string) {
+    const next = new Set(expandedKeys);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    const hidden = hiddenProgressIds(historyGroups, next);
+    if (selectedId && hidden.has(selectedId)) {
+      const fallback = pinHead ?? visibleSnapshots.find((snapshot) => !hidden.has(snapshot.id))?.id;
+      if (fallback) onSelect(fallback);
+    }
+    setExpandedHistory(next);
+  }
   const svgW = Math.max(laneCount, 1) * LANE_W;
   // Unpushed = branch ref unreachable (outside shared timeline — unsync shadow push·residue included).
   // Determined the same way as onhold (sharedReachable = parents ∪ graft_parents walk).
@@ -445,6 +490,39 @@ export function CommitGraph({
 
   return (
     <div className="graph-wrap">
+      {historyError && <p role="status" className="graph-history-error">{t('graph.historyUnavailable')}</p>}
+      {positions.length > 0 && <div className="graph-history-scope">
+        <label>{t('graph.browsePosition')}
+          <select aria-label={t('graph.browsePosition')} value={positionEvent?.id ?? ''} onChange={(event) => {
+            const next = positions.find((item) => item.id === event.target.value);
+            setPositionId(next?.id ?? '');
+            setExpandedHistory(new Set());
+            const target = next?.target ?? refs?.find((ref) => ref.kind === 'branch' && ref.name === pinBranch)?.target;
+            if (target) onSelect(target);
+          }}>
+            <option value="">{t('graph.serverBranchPositions')}</option>
+            {positions.map((event) => <option key={event.id} value={event.id}>
+              {event.branch || 'HEAD'} · {event.git_after?.slice(0, 7) || event.target?.replace(/^sha256:/, '').slice(0, 7)} · {when(event.created_at)} · {event.worktree_id?.slice(0, 6)}
+            </option>)}
+          </select>
+        </label>
+        {positionEvent && <span>{t('graph.browsePositionHint')}</span>}
+      </div>}
+      {history.some((event) => event.kind === 'birth' || event.kind === 'attach' || event.kind === 'orphan' || event.kind === 'rename' || event.kind === 'archive') &&
+        <details className="graph-history-panel graph-births">
+          <summary>{t('graph.branchOperations')}</summary>
+          <ul className="graph-history-list">
+            {history.filter((event) => event.kind === 'birth' || event.kind === 'attach' || event.kind === 'orphan' || event.kind === 'rename' || event.kind === 'archive').slice().reverse().map((event) => <li key={event.id}>
+              <span className="graph-history-branch" title={`${event.branch} · ${event.branch_id}`}>{event.kind === 'rename' ? `${event.previous_branch} → ${event.branch}` : event.local_branch && event.local_branch !== event.branch ? `${event.local_branch} → ${event.branch}` : event.branch}</span>
+              <span>{event.kind === 'rename' ? t('graph.branchRenamed') : event.kind === 'archive' ? t('graph.branchArchived') : event.kind === 'orphan' ? t('graph.orphanBirth') : event.kind === 'attach' ? t('graph.branchAttached') : t('graph.branchBorn')}</span>
+              <time dateTime={event.created_at}>{when(event.created_at)}</time>
+              {event.target && snapshots.some((snapshot) => snapshot.id === event.target) && <div className="graph-history-actions"><button type="button" className="graph-history-view" onClick={() => onSelect(event.target!)}>
+                {t('graph.viewBranchSource')} · {event.target.replace(/^sha256:/, '').slice(0, 7)}
+              </button></div>}
+              {event.kind === 'orphan' && event.memory_hash && <span>{t('graph.inheritedProjectMemory')}</span>}
+            </li>)}
+          </ul>
+        </details>}
       <div className="graph-status" aria-label={t('graph.statusLabel')}>
         <span className="graph-status-item pushed">
           <i aria-hidden="true" /> {t('graph.pushedCount', { count: status.pushed.size })}
@@ -456,6 +534,38 @@ export function CommitGraph({
           <i aria-hidden="true" /> {t('graph.uncommittedCount', { count: status.uncommitted.size })}
         </span>
       </div>
+      {historyGroups.length > 0 && (
+        <section className="graph-history-panel" aria-label={t('graph.previousProgress')}>
+          <div className="graph-history-heading">{t('graph.previousProgress')} · {t('graph.previousProgressCount', {
+            count: new Set(historyGroups.flatMap((group) => [...group.snapshotIds])).size,
+          })}</div>
+          <ul className="graph-history-list">
+            {historyGroups.map((group) => (
+              <li key={group.key}>
+                <span className="graph-history-branch" title={group.branch}>{group.branch}</span>
+                <span className="graph-history-position" title={`${group.before} → ${group.after}`}>
+                  <code>{group.before.replace(/^sha256:/, '').slice(0, 7)}</code> → <code>{group.after.replace(/^sha256:/, '').slice(0, 7)}</code>
+                </span>
+                <time dateTime={group.createdAt}>{when(group.createdAt)}</time>
+                <div className="graph-history-actions">
+                  {group.collapsibleIds.size > 0 ? (
+                    <button type="button" className="graph-history-toggle" aria-expanded={expandedKeys.has(group.key)}
+                      onClick={() => toggleHistory(group.key)}>
+                      {expandedKeys.has(group.key)
+                        ? t('graph.collapsePrevious', { count: group.collapsibleIds.size })
+                        : t('graph.expandPrevious', { count: group.collapsibleIds.size })}
+                    </button>
+                  ) : <span>{t('graph.previousProgressShared')}</span>}
+                  <button type="button" className="graph-history-view" onClick={() => {
+                    setExpandedHistory(new Set([...expandedKeys, group.key]));
+                    onSelect(group.before);
+                  }}>{t('graph.viewPrevious')}</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {status.archived.length > 0 && (
         <details className="graph-archive-panel">
           <summary title={t('graph.archivedBranchesTitle', { count: status.archivedBranches })}>
@@ -495,7 +605,7 @@ export function CommitGraph({
               onClick={() => {
                 if (archivedVisible) {
                   if (selectedArchived) {
-                    const fallback = pinHead ?? snapshots.find((snapshot) => !status.archivedOnly.has(snapshot.id))?.id;
+                    const fallback = pinHead ?? visibleSnapshots.find((snapshot) => !status.archivedOnly.has(snapshot.id))?.id;
                     if (fallback) onSelect(fallback);
                   }
                   setShowArchived(false);

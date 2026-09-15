@@ -303,3 +303,11 @@ const (
 	MoveNonFastForward RefMoveClass = "non_fast_forward" // next is an ancestor of old (behind)
 	MoveDiverged       RefMoveClass = "diverged"         // common ancestor exists but not descendants → fork
 )
+
+// HistoryStore publishes observed context operations with durable retention.
+// An advance performs its ref CAS in the same storage transaction. Other
+// operations retain evidence without changing a collaborator's working cursor.
+type HistoryStore interface {
+	ApplyHistoryEvent(context.Context, domain.HistoryEvent) error
+	ListHistoryEvents(context.Context, domain.ContentHash) ([]domain.HistoryEvent, error)
+}

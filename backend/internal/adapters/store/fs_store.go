@@ -62,6 +62,9 @@ func NewFSStore(dataDir string) *FSStore {
 	}
 	s := &FSStore{dataDir: dataDir}
 	s.recoveryErr = s.recoverJoinJournals()
+	if s.recoveryErr == nil {
+		s.recoveryErr = s.recoverHistoryJournals()
+	}
 	return s
 }
 
@@ -304,6 +307,12 @@ func (s *FSStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHash, de
 // UpdateRepoConfig updates the default branch and protected branch settings (nil = no change).
 func (s *FSStore) UpdateRepoConfig(ctx context.Context, id domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
 	if err := validateHash(id); err != nil {
+		return err
+	}
+	lock := s.refLock(id, domain.RefBranch, "")
+	lock.Lock()
+	defer lock.Unlock()
+	if err := s.recoverHistoryEvent(ctx, id); err != nil {
 		return err
 	}
 	r, err := s.GetRepo(ctx, id)
@@ -1204,6 +1213,9 @@ func (s *FSStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) error 
 	refMu := s.refLock(m.RepoID, domain.RefBranch, m.Branch)
 	refMu.Lock()
 	defer refMu.Unlock()
+	if err := s.recoverHistoryEvent(ctx, m.RepoID); err != nil {
+		return err
+	}
 	journalPath := s.joinJournalPath(m.RepoID)
 	if _, err := os.Stat(journalPath); err == nil {
 		// The committed/prepared journal from the previous operation is the source of truth for startup recovery. Overwriting it prevents recovery of ref·graft·reflog mid-states, so it fails closed.
@@ -1970,6 +1982,9 @@ func (s *FSStore) CompareAndSwapRef(ctx context.Context, repoID domain.ContentHa
 	lock := s.refLock(repoID, next.Kind, next.Name)
 	lock.Lock()
 	defer lock.Unlock()
+	if err := s.recoverHistoryEvent(ctx, repoID); err != nil {
+		return err
+	}
 	if next.Kind == domain.RefBranch {
 		raw, rawErr := s.getRefRaw(ctx, repoID, domain.RefBranch, next.Name)
 		if rawErr != nil && !errors.Is(rawErr, domain.ErrNotFound) {
@@ -2057,6 +2072,9 @@ func (s *FSStore) ApplyBranchLifecycleRef(ctx context.Context, repoID domain.Con
 	lock := s.refLock(repoID, domain.RefBranch, event.Branch)
 	lock.Lock()
 	defer lock.Unlock()
+	if err := s.recoverHistoryEvent(ctx, repoID); err != nil {
+		return err
+	}
 
 	if existing, err := s.getRefRaw(ctx, repoID, domain.RefTag, eventRef.Name); err == nil {
 		if existing.Target != eventRef.Target {

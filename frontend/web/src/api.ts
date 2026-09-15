@@ -198,6 +198,7 @@ export const api = {
       {},
     ),
   reflog: (repoId: string) => call<RefLogEntry[]>('GET', `/repos/${encodeURIComponent(repoId)}/reflog`),
+  history: (repoId: string) => call<import('./types').HistoryEvent[]>('GET', `/repos/${encodeURIComponent(repoId)}/history`),
   // Rebase session fork of the same git branch behind its head (graft + ref move, no rewrite).
   joinSnapshot: (repoId: string, body: { branch: string; snapshot: string; include_descendants?: boolean }) =>
     call<{ branch: string; head: string; fork_branch?: string }>('POST', `/repos/${encodeURIComponent(repoId)}/join`, body),

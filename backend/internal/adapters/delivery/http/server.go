@@ -49,6 +49,8 @@ type Backend interface {
 	GetRepo(ctx context.Context, id domain.ContentHash) (domain.Repo, error)
 	Fsck(ctx context.Context, repoID domain.ContentHash) (inbound.FsckReport, error)
 	Reflog(ctx context.Context, repoID domain.ContentHash) ([]domain.RefLogEntry, error)
+	ListHistory(ctx context.Context, repoID domain.ContentHash) ([]domain.HistoryEvent, error)
+	RecordHistory(ctx context.Context, event domain.HistoryEvent) error
 	GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error)
 	GetDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error)
 	ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error)
@@ -158,6 +160,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}", s.guard(domain.RoleViewer, s.getRepo))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/fsck", s.guard(domain.RoleViewer, s.fsck))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/reflog", s.guard(domain.RoleViewer, s.reflog))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/history", s.guard(domain.RoleViewer, s.listHistory))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/history", s.guard(domain.RoleMember, s.recordHistory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/manifest", s.guard(domain.RoleViewer, s.getManifest))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/branches", s.guard(domain.RoleViewer, s.listRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/refs", s.guard(domain.RoleViewer, s.listRefs))

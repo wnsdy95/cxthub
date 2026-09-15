@@ -366,3 +366,26 @@ export interface RefLogEntry {
   new: string;
   created_at: string;
 }
+
+/** Immutable server-confirmed context operations, independent of conversation events. */
+export interface HistoryEvent {
+  shared_target?: string;
+  local_branch?: string;
+  previous_branch?: string;
+  binding_parent?: string;
+  name_parent?: string;
+  id: string;
+  repo_id: string;
+  branch_id: string;
+  branch: string;
+  kind: 'birth' | 'attach' | 'orphan' | 'position' | 'advance' | 'rename' | 'archive';
+  source?: string;
+  target?: string;
+  memory_source?: string;
+  memory_hash?: string;
+  memory_pinned?: boolean;
+  git_before?: string;
+  git_after?: string;
+  worktree_id?: string;
+  created_at: string;
+}

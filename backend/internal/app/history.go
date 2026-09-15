@@ -1,0 +1,87 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
+)
+
+func (s *Service) ListHistory(ctx context.Context, repoID domain.ContentHash) ([]domain.HistoryEvent, error) {
+	store, ok := s.meta.(outbound.HistoryStore)
+	if !ok {
+		return nil, fmt.Errorf("context history storage unavailable")
+	}
+	return store.ListHistoryEvents(ctx, repoID)
+}
+
+func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) error {
+	if err := domain.ValidateHistoryEvent(event); err != nil {
+		return fmt.Errorf("%w: %v", domain.ErrValidation, err)
+	}
+	repoID := domain.ContentHash(event.RepoID)
+	store, ok := s.meta.(outbound.HistoryStore)
+	if !ok {
+		return fmt.Errorf("context history storage unavailable")
+	}
+	// An acknowledged immutable event remains acknowledged if policy or the
+	// branch changes later. A retry must never reapply the old ref movement.
+	accepted, err := store.ListHistoryEvents(ctx, repoID)
+	if err != nil {
+		return err
+	}
+	for _, old := range accepted {
+		if old.ID != event.ID {
+			continue
+		}
+		if !reflect.DeepEqual(old, event) {
+			return domain.ErrRefConflict
+		}
+		return nil
+	}
+	repo, err := s.meta.GetRepo(ctx, repoID)
+	if err != nil {
+		return err
+	}
+	for _, id := range []domain.ContentHash{event.Source, event.Target, event.SharedTarget, event.MemorySource} {
+		if id == "" {
+			continue
+		}
+		snap, err := s.meta.GetSnapshot(ctx, repoID, id)
+		if err != nil {
+			return err
+		}
+		doc, err := s.blobs.GetDoc(ctx, repoID, snap.DocHash)
+		if err != nil {
+			return err
+		}
+		if err = s.engine.VerifyIntegrity(ctx, snap, doc); err != nil {
+			return err
+		}
+	}
+	if event.MemoryHash != "" {
+		memory, err := s.blobs.GetMemory(ctx, repoID, event.MemoryHash)
+		if err != nil {
+			return err
+		}
+		if memory.SnapshotID != event.Source && memory.SnapshotID != event.Target && memory.SnapshotID != event.MemorySource {
+			return domain.ErrIntegrity
+		}
+	}
+	protectedName := event.Branch
+	if event.Kind == "rename" {
+		protectedName = event.PreviousBranch
+	}
+	if (event.Kind == "advance" || event.Kind == "rename" || event.Kind == "archive") && repo.ProtectDefault && protectedName == repo.DefaultBranch {
+		return fmt.Errorf("%w: %s cannot modify protected branch %q", domain.ErrForbidden, event.Kind, protectedName)
+	}
+	if err := store.ApplyHistoryEvent(ctx, event); err != nil {
+		return err
+	}
+	if event.Kind == "advance" {
+		s.notifyRefUpdate(ctx, repoID, domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: event.Branch, Target: event.Target}, true, false)
+	}
+	return nil
+}

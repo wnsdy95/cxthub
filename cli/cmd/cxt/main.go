@@ -60,6 +60,13 @@ func run(args []string) error {
 		fmt.Println("cxt", version)
 		return nil
 	}
+	if args[1] == "doctor" || (args[1] == "branch" && len(args) > 2 && args[2] == "operations") {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		return delivcli.RunDiagnostics(context.Background(), cwd, args[1:], os.Stdout)
+	}
 	// Process-level configuration resolves the shared repo root and environment
 	// overrides. Persisted remotes and authentication are loaded lazily by their
 	// adapters in buildContainer.
@@ -95,7 +102,10 @@ type config struct {
 	// RepoRoot is the shared context root. Linked app worktrees resolve to the
 	// primary working tree while their original cwd remains available to Git and
 	// provider session discovery.
-	RepoRoot string
+	RepoRoot  string
+	GitDir    string
+	GitBranch string
+	GitCommit string
 	// RemoteEndpoint is the REST base URL of the central server (e.g., https://cxthub.example.com/api/v1).
 	RemoteEndpoint string
 	// RemoteToken is the team bearer token (Authorization: Bearer cxt_team_<opaque>).
@@ -138,6 +148,9 @@ func loadConfig() config {
 	}
 	return config{
 		RepoRoot:       repoRoot,
+		GitDir:         configGitValue(cwd, "rev-parse", "--absolute-git-dir"),
+		GitBranch:      configGitValue(cwd, "symbolic-ref", "--short", "HEAD"),
+		GitCommit:      configGitValue(cwd, "rev-parse", "--verify", "HEAD"),
 		RemoteEndpoint: os.Getenv("CXT_REMOTE"),
 		RemoteToken:    os.Getenv("CXT_TOKEN"),
 		Identity: domain.TeamIdentity{
@@ -146,6 +159,14 @@ func loadConfig() config {
 			Team:  os.Getenv("CXT_TEAM"),
 		},
 	}
+}
+
+func configGitValue(cwd string, args ...string) string {
+	out, err := exec.Command("git", append([]string{"-C", cwd}, args...)...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // container is the bundle of all services/handlers created in the composition root.
@@ -163,7 +184,7 @@ type container struct {
 func buildContainer(cfg config) container {
 	// --- driven adapters (outbound implementations) ---
 	// Local store: repo root .cxt/ content-addressed file store (client-only).
-	store := storage.NewFileStore(cfg.RepoRoot)
+	store := storage.NewWorktreeFileStore(cfg.RepoRoot, cfg.GitDir, cfg.GitBranch, cfg.GitCommit)
 	// Remote sync: central server REST client (net/http stdlib). Server role is backend module.
 	// Like git, origin remote URL is the destination — server address is derived from URL at request time.
 	// (Immediate registration after remote add also works), otherwise CXT_REMOTE env fallback.
@@ -266,6 +287,7 @@ func buildContainer(cfg config) container {
 		Tag:             tagSvc,
 		Stash:           stashSvc,
 		Handoff:         handoffSvc,
+		History:         app.NewContextHistoryService(store, store),
 		PRMerges:        gitctx.NewGitHubPRMergeResolver(),
 		Settings:        remote,
 		SettingsObjects: store,

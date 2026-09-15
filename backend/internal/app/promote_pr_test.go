@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -52,5 +55,24 @@ func TestPromoteMergedPR(t *testing.T) {
 	// Irrelevant repo URL is no-op.
 	if n3, _ := svc.PromoteMergedPR(ctx, "https://github.com/other/repo", "main", "feature/x"); n3 != 0 {
 		t.Fatalf("irrelevant URL promotion: %d", n3)
+	}
+	// The same name later represents different work. A delayed webhook must
+	// not attach it just because its current ref still uses the old PR name.
+	birth := domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(repo), BranchID: "first", Branch: "feature/x", Kind: "birth", Source: f2, Target: f2, CreatedAt: time.Now().UTC()}
+	if err := st.ApplyHistoryEvent(ctx, birth); err != nil {
+		t.Fatal(err)
+	}
+	rename := birth
+	rename.ID, rename.Kind, rename.Branch, rename.PreviousBranch, rename.BindingParent = strings.Repeat("2", 32), "rename", "feature/renamed", birth.Branch, birth.ID
+	if err := st.ApplyHistoryEvent(ctx, rename); err != nil {
+		t.Fatal(err)
+	}
+	reuse := birth
+	reuse.ID, reuse.BranchID, reuse.BindingParent = strings.Repeat("3", 32), "second", rename.ID
+	if err := st.ApplyHistoryEvent(ctx, reuse); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := svc.PromoteMergedPR(ctx, "https://github.com/acme/proj.git", "main", "feature/x"); n != 0 || !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("ambiguous PR promoted: %d %v", n, err)
 	}
 }

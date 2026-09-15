@@ -767,4 +767,99 @@ func TestPGSmoke(t *testing.T) {
 	if _, err := st.GetDoc(ctx, repoID, corruptHash); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("failed PutDoc left a visible doc: %v", err)
 	}
+	// Production history publication must preserve roots and ref CAS together.
+	historyBranch := "history-smoke"
+	if err := st.CompareAndSwapRef(ctx, repoID, domain.Ref{Kind: domain.RefBranch, Name: historyBranch, Target: snapID}, ""); err != nil {
+		t.Fatal(err)
+	}
+	hcir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude, GitBranch: historyBranch}}
+	hraw, _ := domain.CanonicalBytes(hcir)
+	htarget := domain.HashContent(hraw)
+	if _, err := st.PutDoc(ctx, repoID, domain.SessionDoc{Hash: htarget, CIR: hcir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: htarget, DocHash: htarget, RepoID: repoID, Branch: historyBranch, Provider: domain.ProviderClaude, Fidelity: domain.FidelityFull}); err != nil {
+		t.Fatal(err)
+	}
+	he := domain.HistoryEvent{ID: strings.Repeat("e", 32), RepoID: string(repoID), BranchID: "pg-history", Branch: historyBranch, Kind: "advance", Source: snapID, Target: htarget, CreatedAt: time.Now().UTC()}
+	if err := st.ApplyHistoryEvent(ctx, he); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApplyHistoryEvent(ctx, he); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := st.GetRef(ctx, repoID, domain.RefTag, "cxt/history/v1/"+he.ID+"/source")
+	if err != nil || retained.Target != snapID {
+		t.Fatalf("history retention: %+v %v", retained, err)
+	}
+	he.ID = strings.Repeat("f", 32)
+	if err := st.ApplyHistoryEvent(ctx, he); !errors.Is(err, domain.ErrRefConflict) {
+		t.Fatalf("stale history CAS: %v", err)
+	}
+	events, err := st.ListHistoryEvents(ctx, repoID)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("failed CAS published history: %+v %v", events, err)
+	}
+	protected := true
+	if err := st.UpdateRepoConfig(ctx, repoID, &historyBranch, &protected); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApplyHistoryEvent(ctx, events[0]); err != nil {
+		t.Fatalf("acknowledged retry after protection: %v", err)
+	}
+	he.Source, he.Target = htarget, snapID
+	if err := st.ApplyHistoryEvent(ctx, he); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("history bypassed branch protection: %v", err)
+	}
+	head, err := st.GetRef(ctx, repoID, domain.RefBranch, historyBranch)
+	if err != nil || head.Target != htarget {
+		t.Fatalf("rejected advance changed branch: %+v %v", head, err)
+	}
+	for _, kind := range []string{"rename", "archive"} {
+		op := domain.HistoryEvent{ID: strings.Repeat("9", 32), RepoID: string(repoID), BranchID: domain.LegacyContextBranchID(string(repoID), historyBranch), Branch: historyBranch, Kind: kind, Source: htarget, Target: htarget, CreatedAt: time.Now().UTC()}
+		if kind == "rename" {
+			op.PreviousBranch, op.Branch = historyBranch, "renamed-protected"
+		}
+		if err := st.ApplyHistoryEvent(ctx, op); !errors.Is(err, domain.ErrForbidden) {
+			t.Fatalf("%s bypassed protection: %v", kind, err)
+		}
+	}
+	birth := domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(repoID), BranchID: "pg-original", Branch: "pg-old", Kind: "birth", Source: snapID, Target: snapID, CreatedAt: time.Now().UTC()}
+	if err := st.ApplyHistoryEvent(ctx, birth); err != nil {
+		t.Fatal(err)
+	}
+	competing := birth
+	competing.ID, competing.BranchID = strings.Repeat("2", 32), "pg-competing"
+	if err := st.ApplyHistoryEvent(ctx, competing); !errors.Is(err, domain.ErrRefConflict) {
+		t.Fatalf("same-name birth accepted: %v", err)
+	}
+	rename := birth
+	rename.ID, rename.Kind, rename.Branch, rename.PreviousBranch, rename.BindingParent = strings.Repeat("3", 32), "rename", "pg-new", "pg-old", birth.ID
+	if err := st.ApplyHistoryEvent(ctx, rename); err != nil {
+		t.Fatal(err)
+	}
+	competing.BindingParent = rename.ID
+	if err := st.ApplyHistoryEvent(ctx, competing); err != nil {
+		t.Fatalf("released name cannot be reused: %v", err)
+	}
+	if err := st.ApplyHistoryEvent(ctx, rename); err != nil {
+		t.Fatalf("acknowledged rename retry: %v", err)
+	}
+	identityEvents, err := st.ListHistoryEvents(ctx, repoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := domain.ProjectContextBranches(identityEvents)
+	if err != nil || state.Active["pg-new"].ID != birth.BranchID || state.Active["pg-old"].ID != competing.BranchID {
+		t.Fatalf("PG identities diverged: %+v %v", state, err)
+	}
+	if err := st.CompareAndSwapRef(ctx, repoID, domain.Ref{Kind: domain.RefBranch, Name: competing.Branch, Target: snapID}, ""); err != nil {
+		t.Fatal(err)
+	}
+	wrong := competing
+	wrong.ID, wrong.BranchID, wrong.Kind, wrong.Target = strings.Repeat("4", 32), birth.BranchID, "advance", htarget
+	if err := st.ApplyHistoryEvent(ctx, wrong); !errors.Is(err, domain.ErrRefConflict) {
+		t.Fatalf("wrong identity accepted at matching tip: %v", err)
+	}
+
 }

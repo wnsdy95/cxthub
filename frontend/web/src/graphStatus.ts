@@ -52,9 +52,11 @@ export function classifyGraphSnapshots(
   snapshots: Snapshot[],
   uncommittedInput: ReadonlySet<string> = new Set<string>(),
   primaryBranch?: string,
+  historicalIds: ReadonlySet<string> = new Set<string>(),
 ): GraphSnapshotStatus {
   const ids = new Set(snapshots.map((snapshot) => snapshot.id));
   const shared = sharedReachable(refs, snapshots);
+  for (const id of historicalIds) if (ids.has(id)) shared.add(id);
   const historyMarkers = classifyBranchHistoryMarkers(refs, snapshots, primaryBranch);
   const joined = historyMarkers.filter((marker) => marker.kind === 'joined');
   const archivedMarkers = historyMarkers.filter((marker) => marker.kind === 'archived');

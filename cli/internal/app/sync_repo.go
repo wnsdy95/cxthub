@@ -320,6 +320,9 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 
 	var refs []domain.Ref
 	for _, r := range man.Refs {
+		if r.Kind == domain.RefHEAD {
+			continue
+		} // Worktree selection is never a shared server HEAD.
 		r.RepoID = repoID
 		refs = append(refs, r)
 	}
@@ -411,6 +414,9 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 		if err := s.flushGrafts(ctx, repoRoot, repoID); err != nil {
 			return inbound.SyncOutput{}, err
 		}
+	}
+	if err := s.pushHistory(ctx, repoID); err != nil {
+		return inbound.SyncOutput{}, err
 	}
 	if err := s.remote.Push(ctx, repoID, nil, nil, refs, in.Force, in.Append); err != nil {
 		return inbound.SyncOutput{}, err
@@ -603,6 +609,9 @@ func (s *SyncRepoService) ResolveRemoteBranch(ctx context.Context, in inbound.Sy
 	for _, r := range man.Refs {
 		if r.Kind != domain.RefBranch || r.Name != branch || r.Target == "" {
 			continue
+		}
+		if _, perr := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); perr != nil {
+			return domain.Ref{}, perr
 		}
 		if _, gerr := s.store.GetSnapshot(ctx, r.Target); gerr != nil {
 			if _, perr := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); perr != nil {
@@ -1289,6 +1298,10 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 	if err := validatePullBatch(ctx, s.store, repoID, snaps, docs, refs); err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	history, err := s.readRemoteHistory(ctx, repoID)
+	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
 
 	// The settings object pointed to by the snapshot is validated before kind/hash storage. An infected remote cannot change the local application path for bundle.Kind or inject another object under the requested hash.
 	type settingsWant struct {
@@ -1428,6 +1441,32 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		memoryAdoptions[snap.ID] = existing.MemoryHash
 	}
 
+	// Pin history memory by immutable hash, even when it is older than the
+	// currently advertised snapshot attachment.
+	for _, event := range history {
+		if event.MemoryHash == "" {
+			continue
+		}
+		if _, ok := stagedMemories[event.MemoryHash]; ok {
+			continue
+		}
+		memory, err := s.store.GetMemory(ctx, event.MemoryHash)
+		if errors.Is(err, domain.ErrNotFound) {
+			memory, err = s.remote.PullMemoryObject(ctx, repoID, event.MemoryHash)
+			if err == nil {
+				stagedMemories[event.MemoryHash] = memory
+			}
+		}
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if err := validateMemoryAttachmentObject(memory, event.MemoryHash, memory.SnapshotID); err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if memory.SnapshotID != event.Source && memory.SnapshotID != event.Target && memory.SnapshotID != event.MemorySource {
+			return inbound.SyncOutput{}, domain.ErrHashMismatch
+		}
+	}
 	// Start local write only after all remote objects preflight complete.
 	for _, d := range docs {
 		stored, err := s.store.PutDoc(ctx, d)
@@ -1484,6 +1523,9 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		}
 	}
 	s.updateRemoteSnapshotStateCursor(ctx, repoID, cursorStore, cursorEntries, snaps)
+	if err := s.storeRemoteHistory(ctx, history); err != nil {
+		return inbound.SyncOutput{}, err
+	}
 	remoteLifecycleStates, err := domain.BranchLifecycleStates(refs)
 	if err != nil {
 		return inbound.SyncOutput{}, err

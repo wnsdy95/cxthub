@@ -123,6 +123,30 @@ components:
         team:
           type: string
 
+    HistoryEvent:
+      type: object
+      required: [id, repo_id, branch_id, branch, kind, created_at]
+      properties:
+        id: { type: string, pattern: '^[0-9a-f]{32}$' }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        branch_id: { type: string, maxLength: 128 }
+        branch: { type: string }
+        local_branch: {type: string, description: Native branch name in the observing replica.}
+        previous_branch: {type: string, description: Previous name for a verified rename.}
+        binding_parent: {type: string, description: Prior identity operation required by this transition.}
+        name_parent: {type: string, description: Operation that released the rename destination.}
+        kind: { type: string, enum: [birth, attach, orphan, position, advance, rename, archive] }
+        shared_target: { $ref: '#/components/schemas/ContentHash' }
+        source: { $ref: '#/components/schemas/ContentHash' }
+        target: { $ref: '#/components/schemas/ContentHash' }
+        memory_source: { $ref: '#/components/schemas/ContentHash' }
+        memory_hash: { $ref: '#/components/schemas/ContentHash' }
+        memory_pinned: { type: boolean }
+        git_before: { type: string }
+        git_after: { type: string }
+        worktree_id: { type: string }
+        created_at: { type: string, format: date-time }
+
     Snapshot:
       type: object
       description: |
@@ -908,6 +932,52 @@ paths:
                       properties:
                         snapshot: { type: string }
                         missing: { type: string }
+  /repos/{repoID}/history:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: listContextHistory
+      summary: List retained context operations
+      tags: [repos]
+      responses:
+        "200":
+          description: Immutable observed operations in order
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/HistoryEvent' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: recordContextHistory
+      summary: Record context history with durable retention
+      description: |
+        Requires member access and application/json. Reusing an ID with different
+        data conflicts. An advance atomically retains the previous tip and changes
+        the shared branch only if source is still its tip. Protected default
+        branches reject this non-fast-forward continuation. Position events never
+        change the shared branch or another user's worktree.
+      tags: [repos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HistoryEvent' }
+      responses:
+        "200":
+          description: Recorded, or an identical operation was already recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+        "400": { description: Invalid or cross-repository operation }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "409": { description: Shared tip changed or operation ID has different data }
+
   /repos/{repoID}/reflog:
     parameters:
       - $ref: "#/components/parameters/repoID"

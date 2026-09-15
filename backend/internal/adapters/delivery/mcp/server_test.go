@@ -422,8 +422,8 @@ func webSessionCookie(token string) string { return sessionCookieName + "=" + to
 
 func TestRemoteMCPToolsAreReadOnly(t *testing.T) {
 	tools := toolDefinitions()
-	if len(tools) != 5 {
-		t.Fatalf("tool count = %d, want 5 read-only tools", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("tool count = %d, want 6 read-only tools", len(tools))
 	}
 	for _, tool := range tools {
 		annotations := tool["annotations"].(map[string]any)

@@ -37,7 +37,10 @@ import (
 // Write: Immutable objects are written using write-temp + atomic-rename. Mutable refs/HEADs are also atomic-rename.
 type FileStore struct {
 	// repoRoot is the root of the repo working tree where .cxt/ is located (store = repoRoot/.cxt).
-	repoRoot string
+	repoRoot   string
+	worktreeID string
+	gitBranch  string
+	gitCommit  string
 }
 
 // NewFileStore creates a FileStore.
@@ -221,7 +224,41 @@ func writeAtomic(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return syncCxtParents(path)
+}
+
+// Persist both replacement and newly created directories before acknowledging
+// a ref/history write. Syncing only the file is insufficient after power loss.
+func syncCxtParents(path string) error {
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		f, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		err = f.Sync()
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if filepath.Base(dir) == ".cxt" {
+			f, err := os.Open(filepath.Dir(dir))
+			if err != nil {
+				return err
+			}
+			err = f.Sync()
+			_ = f.Close()
+			return err
+		}
+		if filepath.Dir(dir) == dir {
+			return nil
+		}
+	}
 }
 
 // PutDoc stores a SessionDoc by the content hash of its canonical CIR bytes.
@@ -350,7 +387,12 @@ func (s *FileStore) withPendingMutationLock(ctx context.Context, sessionID strin
 // Branch lifecycle transitions touch one branch plus an immutable tag, so a
 // per-ref lock would still permit a torn archive/create operation.
 func (s *FileStore) withRefMutationLock(ctx context.Context, fn func() error) error {
-	return s.withMutationLock(ctx, "refs", "repo", fn)
+	return s.withMutationLock(ctx, "refs", "repo", func() error {
+		if err := s.recoverWorkingCommit(); err != nil {
+			return err
+		}
+		return fn()
+	})
 }
 
 func (s *FileStore) withMutationLock(ctx context.Context, namespace, key string, fn func() error) error {
@@ -699,6 +741,9 @@ func (s *FileStore) PutRef(ctx context.Context, ref domain.Ref) error {
 func (s *FileStore) putRefRaw(ref domain.Ref) error {
 	switch ref.Kind {
 	case domain.RefHEAD:
+		if s.worktreeID != "" {
+			return s.writeWorkingHead(ref)
+		}
 		content := string(ref.Target)
 		if ref.Symbolic != "" {
 			content = "ref: refs/heads/" + strings.TrimPrefix(ref.Symbolic, "refs/heads/")
@@ -727,6 +772,9 @@ func (s *FileStore) getRefRaw(_ context.Context, repoID string, kind domain.RefK
 	}
 	switch kind {
 	case domain.RefHEAD:
+		if s.worktreeID != "" {
+			return s.readWorkingHead(repoID)
+		}
 		data, err := readCxtFile(filepath.Join(s.storeDir(), "HEAD"))
 		if err != nil {
 			if os.IsNotExist(err) {
