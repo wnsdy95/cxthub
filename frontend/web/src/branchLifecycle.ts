@@ -60,13 +60,13 @@ export function projectBranchRefs(refs: Ref[]): Ref[] {
     const ref = { ...input };
     if (ref.kind === 'branch') {
       const latest = states.get(ref.name);
-      if (latest?.state === 'archived' && latest.target === ref.target) continue;
+      if (!ref.branch_id && latest?.state === 'archived' && latest.target === ref.target) continue;
     }
     if (ref.kind === 'head' && ref.symbolic) {
       const branch = ref.symbolic.replace(/^refs\/heads\//, '');
       const latest = states.get(branch);
       const raw = branches.get(branch);
-      if (latest?.state === 'archived' && (!raw || raw.target === latest.target)) {
+      if (!raw?.branch_id && latest?.state === 'archived' && (!raw || raw.target === latest.target)) {
         ref.symbolic = '';
         ref.target = latest.target;
       }

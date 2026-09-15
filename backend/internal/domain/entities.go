@@ -19,10 +19,11 @@ const MemoryProjectionVersion uint32 = 1
 // The server trusts the ID as a multi-tenant isolation key (output is CLI responsibility).
 // LocalPath is always an empty string on the server (local-only field, sync protocol).
 type Repo struct {
-	ID            ContentHash `json:"id"`
-	RemoteURL     string      `json:"remote_url"`
-	LocalPath     string      `json:"local_path"`
-	DefaultBranch string      `json:"default_branch"`
+	ContextProtocol int         `json:"context_protocol,omitempty"`
+	ID              ContentHash `json:"id"`
+	RemoteURL       string      `json:"remote_url"`
+	LocalPath       string      `json:"local_path"`
+	DefaultBranch   string      `json:"default_branch"`
 	// WorkspaceID is the containing workspace (visibility boundary). During push it is
 	// derived from /<owner_username>/<workspace-slug>/… in RemoteURL. "" means unowned (legacy).
 	WorkspaceID string `json:"workspace_id,omitempty"`
@@ -214,6 +215,7 @@ type Branch struct {
 //   - REF3: there is exactly one head ref per repo, Name="HEAD".
 //   - REF4: branch tip advancement is only allowed via fast-forward or explicit (fork/conflict handling). Arbitrary rewind is forbidden.
 type Ref struct {
+	BranchID string      `json:"branch_id,omitempty"`
 	Kind     RefKind     `json:"kind"`
 	Name     string      `json:"name"`
 	RepoID   ContentHash `json:"repo_id"`
@@ -241,6 +243,7 @@ type RefLogEntry struct {
 //   - M2: Version must monotonically increase with each update ( CAS).
 //   - C1: Manifest write must fail without version-CAS (lost-update prevention).
 type Manifest struct {
+	ContextProtocol   int                         `json:"context_protocol,omitempty"`
 	RepoID            ContentHash                 `json:"repo_id"`
 	Refs              []Ref                       `json:"refs"`
 	SnapshotIndex     []ContentHash               `json:"snapshot_index"`

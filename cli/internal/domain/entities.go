@@ -27,6 +27,7 @@ type TeamIdentity struct {
 
 // Repo is the root of the session storage space (domain model). One Repo per code repository.
 type Repo struct {
+	ContextProtocol int `json:"context_protocol,omitempty"`
 	// ID is the normalized remote URL or ContentHash of cwd fallback.
 	ID string `json:"id"`
 	// RemoteURL is the git remote URL of the code repo (empty if not available).
@@ -130,6 +131,7 @@ func (s Snapshot) ReachabilityParents() []ContentHash {
 
 // Ref is a mutable pointer (HEAD/branch/session/tag unified representation, domain model).
 type Ref struct {
+	BranchID string `json:"branch_id,omitempty"`
 	// Kind is the ref type (head|branch|session|tag).
 	Kind RefKind `json:"kind"`
 	// Name is the ref name (HEAD is fixed as "HEAD"; others are slash-hierarchy names).
@@ -714,6 +716,7 @@ type NativeMemory struct {
 
 // Manifest is a repo unit metadata index (snapshot/ref list catalog, domain model).
 type Manifest struct {
+	ContextProtocol int `json:"context_protocol,omitempty"`
 	// RepoID is the ID of the containing repo.
 	RepoID string `json:"repo_id"`
 	// Refs is a list of all mutable pointers (HEAD/branch/session/tag).

@@ -481,6 +481,20 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .graph-archive-entry code { color: var(--faint); font-size: 0.62rem; }
 .graph-archive-entry em { grid-column: 1 / -1; color: var(--faint); font-style: normal; }
 .graph-archive-panel > .graph-archive-toggle { margin: 0 7px 7px; font-size: 0.62rem; }
+.graph-history-panel { margin: 0 0 8px; padding: 0; border: 1px solid var(--line); border-radius: 6px;
+  overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 0.64rem; }
+.graph-history-heading { padding: 5px 7px; background: var(--hover); }
+.graph-history-list { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
+.graph-history-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 7px; }
+.graph-history-list li + li { border-top: 1px solid var(--line); }
+.graph-history-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-history-position, .graph-history-actions { grid-column: 1 / -1; }
+.graph-history-list time { grid-column: 2; grid-row: 1; color: var(--faint); }
+.graph-history-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
+.graph-history-actions button { padding: 2px 0; border: 0; border-bottom: 1px dashed var(--faint); border-radius: 0;
+  background: transparent; color: var(--muted); font: inherit; }
+.graph-history-actions button:hover { color: var(--ink); border-color: var(--ink); }
+.graph-history-actions button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .graph-viewport { max-height: 344px; overflow: auto; overscroll-behavior: contain;
   scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
 .graph-viewport::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -1126,3 +1140,13 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .msg-body .md { font-size: inherit; }
 .msg-body .md p { margin: 0 0 6px; word-break: break-word; }
 .msg-body .md p:last-child { margin-bottom: 0; }
+
+.graph-history-scope { display: grid; gap: 6px; margin-bottom: 10px; font-size: 12px; }
+.graph-history-scope label { display: grid; gap: 4px; }
+.graph-history-scope select { width: 100%; min-width: 0; max-width: 100%; padding: 5px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+.graph-history-scope > span, .graph-history-error { color: var(--muted); font-size: 11px; }
+.graph-births > summary { cursor: pointer; font-size: 12px; }
+.graph-births .graph-history-list { max-height: 260px; overflow: auto; margin-top: 6px; }
+
+.repo-history-protection { flex-basis: 100%; padding-top: 12px; border-top: 1px solid var(--border); }
+.repo-history-protection p { margin: 6px 0; max-width: 65ch; }

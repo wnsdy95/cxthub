@@ -93,12 +93,13 @@ func TestSaveEndToEnd(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repoRoot, ".cxt", "objects", "docs", hexID)); err != nil {
 		t.Fatalf("doc object not stored: %v", err)
 	}
-	refData, err := os.ReadFile(filepath.Join(repoRoot, ".cxt", "refs", "heads", "main"))
+	saved, err := store.GetSnapshot(ctx, out.SnapshotID)
 	if err != nil {
-		t.Fatalf("branch ref not written: %v", err)
+		t.Fatal(err)
 	}
-	if strings.TrimSpace(string(refData)) != string(out.SnapshotID) {
-		t.Fatalf("ref target mismatch: %q vs %q", strings.TrimSpace(string(refData)), out.SnapshotID)
+	ref, err := store.GetRef(ctx, saved.RepoID, domain.RefBranch, "main")
+	if err != nil || ref.Target != out.SnapshotID {
+		t.Fatalf("ref target mismatch: %+v / %v", ref, err)
 	}
 
 	// 5) list by query

@@ -117,6 +117,7 @@ Thumbs.db
 /docs/*.md
 !/docs/BRANCHING.md
 !/docs/CLI.md
+!/docs/CONTEXT_HISTORY.md
 !/docs/INSTALLATION.md
 !/docs/MCP.md
 !/docs/RELEASING.md

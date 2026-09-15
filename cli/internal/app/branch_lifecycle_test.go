@@ -3,13 +3,74 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
+
+func TestRenameAndNameReusePreserveDistinctContextIdentities(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := string(domain.HashContent([]byte("identity repo")))
+	id, err := store.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: id, DocHash: id, RepoID: repo}); err != nil {
+		t.Fatal(err)
+	}
+	birth := domain.HistoryEvent{ID: strings.Repeat("a", 32), BranchID: "original", RepoID: repo, Branch: "feature/old", Kind: "birth", Source: id, Target: id, CreatedAt: time.Now().UTC()}
+	if err := store.PutHistoryEvent(ctx, birth); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateBranchRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: birth.Branch, RepoID: repo, Target: id}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewBranchLifecycleService(branchLifecycleGit{repo: domain.Repo{ID: repo}}, store)
+	for i := 0; i < 2; i++ {
+		if _, err := svc.Rename(ctx, inbound.BranchRenameInput{RepoID: repo, From: "feature/old", To: "feature/new"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.ListHistoryEvents(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := domain.ProjectContextBranches(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || state.Active["feature/new"].ID != "original" {
+		t.Fatalf("rename identity/replay: %+v %+v", events, state)
+	}
+	reused := birth
+	reused.ID, reused.BranchID = strings.Repeat("b", 32), "reused"
+	reused.BindingParent = state.Released["feature/old"]
+	if err := NewContextHistoryService(store, store).RecordHistory(ctx, reused); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = store.ListHistoryEvents(ctx, repo)
+	state, err = domain.ProjectContextBranches(events)
+	if err != nil || state.Active["feature/old"].ID != "reused" || state.Active["feature/new"].ID != "original" {
+		t.Fatalf("name reuse: %+v %v", state, err)
+	}
+	if _, err := store.CreateBranchRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "feature/old", RepoID: repo, Target: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Rename(ctx, inbound.BranchRenameInput{RepoID: repo, From: "feature/old", To: "feature/new"}); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = store.ListHistoryEvents(ctx, repo)
+	state, err = domain.ProjectContextBranches(events)
+	if err != nil || state.Active["feature/new"].ID != "reused" || !state.ByID["original"].Archived {
+		t.Fatalf("same-hash replacement collapsed identities: %+v %v", state, err)
+	}
+}
 
 type branchLifecycleGit struct{ repo domain.Repo }
 
@@ -386,6 +447,43 @@ func TestCheckoutByArchivedBranchNameRestoresActiveProjection(t *testing.T) {
 	latest, ok, err := domain.LatestBranchLifecycle(refs, branch.Name)
 	if err != nil || !ok || latest.State != domain.BranchActive || latest.Generation != 3 {
 		t.Fatalf("restore lifecycle = %+v, %v, %v", latest, ok, err)
+	}
+}
+
+func TestRestoreCreatesNewIdentityAndPreservesArchivedIdentity(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	repo := string(domain.HashContent([]byte("restore identity")))
+	id, err := st.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: id, DocHash: id, RepoID: repo}); err != nil {
+		t.Fatal(err)
+	}
+	birth := domain.HistoryEvent{ID: strings.Repeat("a", 32), RepoID: repo, BranchID: "original", Branch: "restored", Kind: "birth", Source: id, Target: id, CreatedAt: time.Now().UTC()}
+	if err := st.PutHistoryEvent(ctx, birth); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateBranchRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: birth.Branch, RepoID: repo, Target: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewBranchLifecycleService(nil, st).Archive(ctx, inbound.BranchArchiveInput{RepoID: repo, Branch: birth.Branch}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewCheckoutSessionService(NewForkSessionService(st), branchLifecycleLoad{}, st)
+	for i := 0; i < 2; i++ {
+		if _, err := svc.Checkout(ctx, inbound.CheckoutInput{RepoID: repo, From: birth.Branch}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := st.ListHistoryEvents(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := domain.ProjectContextBranches(events)
+	if err != nil || !state.ByID[birth.BranchID].Archived || state.Active[birth.Branch].ID == birth.BranchID || len(state.ByID) != 2 {
+		t.Fatalf("restore rewrote identity: %+v %v", state, err)
 	}
 }
 

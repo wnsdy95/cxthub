@@ -3,6 +3,10 @@
 CXTHub follows a trunk-based GitHub Flow. `main` is the only long-lived
 development branch and should remain releasable.
 
+This page describes how contributors develop CXTHub. Product behavior for
+users' Git branches, context working positions, retained history, and graph
+visibility is specified in [Context history](CONTEXT_HISTORY.md).
+
 ## Branch names
 
 Create short-lived branches from the latest `main`:

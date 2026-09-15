@@ -76,6 +76,7 @@ type JoinSnapshot interface {
 // If IncludeDescendants is true, head advances to the server-calculated tip (entire branch), otherwise, it advances only to X,
 // and remaining descendants are preserved as internal session refs branching from X.
 type JoinInput struct {
+	BranchID           string
 	RepoID             domain.ContentHash
 	TargetBranch       string
 	Snapshot           domain.ContentHash

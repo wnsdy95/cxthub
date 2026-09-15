@@ -5,4 +5,4 @@ module github.com/wnsdy95/cxthub/cli
 
 go 1.26.6
 
-require github.com/klauspost/compress v1.19.2
+require github.com/klauspost/compress v1.20.0

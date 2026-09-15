@@ -392,7 +392,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		hookWarn("keep-session — context switch omitted (current session maintained)")
 		return nil
 	}
-	branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	branch := gitOut(cwd, "symbolic-ref", "--short", "HEAD")
 	prevBranch := gitOut(cwd, "rev-parse", "--abbrev-ref", "@{-1}")
 	detached := branch == "" || branch == "HEAD"
 	targetProvider, wrapperManaged := supervisedProvider(ctx, cwd)
@@ -485,6 +485,28 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		return nil
 	}
 
+	if c.History != nil {
+		if p, err := c.History.CurrentPosition(ctx); err == nil && p.Orphan {
+			if c.Handoff != nil && p.MemoryHash != "" {
+				text, err := c.Handoff.RenderBranchHandoff(ctx, inbound.BranchHandoffInput{FromBranch: prevBranch, ToBranch: branch, MemoryHash: p.MemoryHash})
+				if err != nil {
+					return err
+				}
+				ids := []string{}
+				for _, live := range lives {
+					if live.session != "" {
+						ids = append(ids, live.session)
+					}
+				}
+				if err := capture.WriteSessionHandoff(cwd, ids, text); err != nil {
+					return err
+				}
+			}
+			fmt.Println("cxt: orphan context selected; project memory retained without conversation ancestry")
+			return nil
+		}
+	}
+
 	// 2) Prepare recovery/seed before mutating any provider session file. A
 	// failed or memory-only materialization must leave the current session
 	// captureable; isolation is the commit step of this transition.
@@ -508,8 +530,14 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		if len(existing.Snapshots) > 0 || hasRef {
 			prepareExpected = true
 			// Existing branch: load context of that task (current context is not carried).
+			from := branch
+			if c.History != nil {
+				if p, err := c.History.CurrentPosition(ctx); err == nil && p.GitBranch() == branch && p.Snapshot != "" {
+					from = string(p.Snapshot)
+				}
+			}
 			if out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
-				From: branch, TargetProvider: targetProvider, Mode: hookLoadMode(cwd), Cwd: cwd,
+				From: from, TargetProvider: targetProvider, Mode: hookLoadMode(cwd), Cwd: cwd,
 				SkipMaterialize: !wrapperManaged,
 			}); err == nil {
 				handoffTarget = out.Head
@@ -895,6 +923,28 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		return nil
 	}
 	event, args := rest[0], rest[1:]
+	// The durable birth vote must run before the replica-presence guard: a
+	// registered but damaged .cxt is an error, not an unconnected repository.
+	if event == "branch-transaction" {
+		return runBranchTransaction(ctx, c, cwd, args)
+	}
+	if event == "branch-replay" {
+		if len(args) > 0 && args[0] != "" {
+			var pid int
+			_, _ = fmt.Sscanf(args[0], "%d", &pid)
+			for pid > 0 && syscall.Kill(pid, 0) == nil {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
+		}
+		if err := replayBranchOperations(ctx, c, cwd); err != nil {
+			hookWarn("branch operation remains queued: %v", err)
+		}
+		return nil
+	}
 	// Git hooks can outlive a removed/partial cxt setup. Repair ignore rules for
 	// any existing directory, but never interpret directory presence alone as
 	// permission to capture. cxt init/setup writes .cxt/HEAD before hooks exist.
@@ -907,6 +957,14 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		return nil
 	}
 	repoRoot := state.Root
+	if event == "post-checkout" || event == "pre-push" || event == "post-commit" {
+		if err := replayBranchOperations(ctx, c, cwd); err != nil {
+			hookWarn("branch operation remains queued: %v", err)
+			if event == "post-checkout" {
+				return nil
+			}
+		}
+	}
 
 	switch event {
 	case "ref-prepare":
@@ -1002,7 +1060,11 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 			out, err := c.Branches.Rename(ctx, inbound.BranchRenameInput{Cwd: cwd, From: name, To: renamed})
 			switch {
 			case err == nil:
-				fmt.Printf("cxt: git branch %q renamed to %q — context moved at %s (history preserved)\n", name, renamed, shortHash(out.Target))
+				if out.LocalOnly {
+					fmt.Printf("cxt: local tracking branch %q renamed to %q (server branch retained)\n", name, renamed)
+				} else {
+					fmt.Printf("cxt: git branch %q renamed to %q — context moved at %s (history preserved)\n", name, renamed, shortHash(out.Target))
+				}
 				spawnBranchStateSync(cwd)
 			case errors.Is(err, domain.ErrNotFound):
 				// No context pointer existed for the renamed Git branch.
@@ -1014,7 +1076,11 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		out, err := c.Branches.Archive(ctx, inbound.BranchArchiveInput{Cwd: cwd, Branch: name})
 		switch {
 		case err == nil:
-			fmt.Printf("cxt: git branch %q deleted — context archived at %s (restore: cxt branch restore %s)\n", name, shortHash(out.Target), name)
+			if out.LocalOnly {
+				fmt.Printf("cxt: local tracking branch %q detached (server branch retained)\n", name)
+			} else {
+				fmt.Printf("cxt: git branch %q deleted — context archived at %s (restore: cxt branch restore %s)\n", name, shortHash(out.Target), name)
+			}
 			spawnBranchStateSync(cwd)
 		case errors.Is(err, domain.ErrNotFound):
 			// No context pointer existed for this Git branch.
@@ -1026,6 +1092,11 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		// args: <prev-HEAD> <new-HEAD> <flag>. flag=1 for branch checkout (0 for file checkout — ignored).
 		if len(args) < 3 || args[2] != "1" {
 			return nil
+		}
+		if c.History != nil {
+			if err := selectCodePosition(ctx, c, cwd); err != nil {
+				return err
+			}
 		}
 		return contextSwitch(ctx, c, cwd)
 
@@ -1114,62 +1185,17 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 			}
 			spawnBranchDeletionFinalize(cwd, deletedRef.name, deletedRef.oid, gitPID)
 		}
-		if !operationInProgress(cwd) {
-			// delayed handling by detached helper: checkout -b/switch -c (transient creation) temporarily
-			// leaves HEAD on that branch, so the helper exits to adhere to the seed principle (always seed),
-			// and only performs web fork connections/local branches without switching.
-			for _, cr := range createdRefs {
-				spawnForkConnect(cwd, cr.name, cr.oid)
-			}
-		}
+		// Births are processed from the prepared journal, independently of the
+		// current HEAD, provider handoff, and wall-clock timing.
+		_ = createdRefs
 		if !touched {
 			return nil
 		}
 		refSync(ctx, c, cwd)
 
 	case "fork-connect":
-		// context branch (detached helper) for git branch <name> (transient creation).
-		// priority: ④ remote with same name (web fork) connects/sorts, else local [git sha] branch.
-		if len(args) < 1 {
-			return nil
-		}
-		name := args[0]
-		oid := ""
-		if len(args) > 1 {
-			oid = args[1]
-		}
-		// transient creation (checkout -b/switch -c) completes sibling post-checkout (seed) soon.
-		// polls for seed signal (HEAD==name or .cxt ref creation), exits immediately upon signal — fast machines
-		// complete in ~50ms, slower machines wait until deadline (fixed 1.2s issue with seed-preemption in backlog #3).
-		// this helper is detached (setsid), so it doesn't block git commands. a pure git branch (no switch) waits
-		// until deadline, then proceeds to local branch (normal path). the deadline is an upper bound for "this
-		// time, if no seed signal, transient git branch confirmed". transient creation typically completes
-		// early, so the upper bound only delays pure git branch (web fork connections etc.) — fixed slippage (1.2s)
-		// is maintained.
-		ctxRefPath := filepath.Join(repoRoot, ".cxt", "refs", "heads", filepath.FromSlash(name))
-		deadline := time.Now().Add(1500 * time.Millisecond)
-		for {
-			if gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD") == name {
-				return nil // checkout -b/switch -c — seed principle respected
-			}
-			if _, err := os.Stat(ctxRefPath); err == nil {
-				return nil // context branch already exists (seed/existing) — idempotent
-			}
-			if time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if gitOut(cwd, "rev-parse", "--verify", "refs/heads/"+name) == "" {
-			return nil // branch disappeared in between
-		}
-		if _, ok := remotecfg.Origin(cwd); ok || os.Getenv("CXT_REMOTE") != "" {
-			if ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, name); err == nil && ref.Target != "" {
-				connectWebFork(ctx, c, cwd, name, ref.Target)
-				return nil
-			}
-		}
-		forkContextForBranch(ctx, c, cwd, name, oid)
+		// Compatibility with already-spawned old helpers: replay durable evidence.
+		return replayBranchOperations(ctx, c, cwd)
 
 	case "post-rewrite":
 		// rebase/amend complete. stdin: "<old-sha> <new-sha>" mapping — accumulated in side table,
@@ -1391,11 +1417,28 @@ func appendMergedPRContexts(
 
 	appended := 0
 	reflected := false
+	resolveSource := syncer.ResolveRemoteBranch
+	if verified, ok := syncer.(interface {
+		ResolveRemotePRBranch(context.Context, inbound.SyncInput, string) (domain.Ref, error)
+	}); ok {
+		resolveSource = verified.ResolveRemotePRBranch
+	}
 	for _, pull := range pulls {
 		if pull.BaseBranch != branch || pull.HeadBranch == "" || pull.HeadBranch == branch {
 			continue
 		}
-		ref, rerr := syncer.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, pull.HeadBranch)
+		if exact, ok := syncer.(interface {
+			PromotePullRequest(context.Context, inbound.SyncInput, outbound.MergedPullRequest) error
+		}); ok {
+			if err := exact.PromotePullRequest(ctx, inbound.SyncInput{Cwd: cwd}, pull); err != nil {
+				hookWarn("PR #%d exact context promotion remains pending: %v", pull.Number, err)
+			} else {
+				appended++
+				reflected = true
+			}
+			continue
+		}
+		ref, rerr := resolveSource(ctx, inbound.SyncInput{Cwd: cwd}, pull.HeadBranch)
 		if rerr != nil {
 			if !errors.Is(rerr, domain.ErrNotFound) {
 				hookWarn("PR #%d context branch %q lookup failed: %v", pull.Number, pull.HeadBranch, rerr)
@@ -1592,6 +1635,12 @@ func operationInProgress(cwd string) bool {
 // When the code moves to a different point with commands like reset --hard, the context follows.
 // If no matching snapshot is found (e.g., due to a broken commit), it quietly does nothing.
 func refSync(ctx context.Context, c *Container, cwd string) {
+	if c.History != nil {
+		if err := selectCodePosition(ctx, c, cwd); err != nil {
+			hookWarn("working context was not selected: %v", err)
+		}
+		return
+	}
 	if operationInProgress(cwd) {
 		return
 	}
@@ -1615,6 +1664,14 @@ func refSync(ctx context.Context, c *Container, cwd string) {
 		}
 		resolved := resolveRewritten(rewrites, m[1])
 		if strings.HasPrefix(headFull, resolved) || strings.HasPrefix(resolved, headFull) {
+			if c.History != nil {
+				if err := c.History.SelectPosition(ctx, domain.WorkingPosition{RepoID: snap.RepoID, Branch: branch, GitCommit: headFull, Snapshot: snap.ID}); err != nil {
+					hookWarn("context position was not selected: %v", err)
+					return
+				}
+				fmt.Printf("cxt: selected code/context position %s / %s (later history retained)\n", headFull[:7], shortHash(snap.ID))
+				return // selection does not recreate or truncate a vendor-owned live session
+			}
 			out, lerr := c.Load.Load(ctx, inbound.LoadInput{Ref: string(snap.ID), Cwd: cwd})
 			if lerr != nil {
 				return
@@ -1773,103 +1830,4 @@ func writePullBriefingFromBaseline(
 	}); err != nil && !errors.Is(err, domain.ErrSyncConflict) {
 		hookWarn("pull briefing cursor was not saved: %v", err)
 	}
-}
-
-// spawnForkConnect spawns the fork-connect detached helper (ref-sync runs a git command in the middle of speech,
-// so the ref is not modified there — delayed post-processing by the detached process).
-func spawnForkConnect(cwd, branch, oid string) {
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	cmd := exec.Command(exe, "git-hook", "fork-connect", branch, oid)
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	_ = cmd.Start()
-}
-
-// connectWebFork connects a web fork branch locally (user agreement: the fork's base is a git commit).
-//
-// Fork snapshot [git X] parsing → git branch -f <name> X (aligns code to the fork point)
-//
-//	→ local context ref <name> = fork snapshot (context follows)
-//
-// Subsequent git switch <name> materializes the existing-branch path with this context — code=X, context=S@X.
-// If X is not in local git (e.g., someone's On Hold fork), the connection is deferred and a notice is given.
-func connectWebFork(ctx context.Context, c *Container, cwd, branch string, target domain.ContentHash) {
-	all, err := c.List.List(ctx, inbound.ListInput{})
-	if err != nil {
-		return
-	}
-	var snap *domain.Snapshot
-	for i := range all.Snapshots {
-		if all.Snapshots[i].ID == target {
-			snap = &all.Snapshots[i]
-			break
-		}
-	}
-	if snap == nil {
-		return // fetch failure etc. — try again later
-	}
-	m := gitLinkRe.FindStringSubmatch(snap.Message)
-	if m == nil {
-		hookWarn("Web fork %q connection deferred — no [git sha] link in fork snapshot (save manually at the snapshot point)", branch)
-		return
-	}
-	sha := resolveRewritten(loadRewrites(cwd), m[1])
-	if gitOut(cwd, "cat-file", "-t", sha) != "commit" {
-		hookWarn("Web fork %q connection deferred — fork commit [git %s] not found locally (push to git and then fetch)", branch, sha)
-		return
-	}
-	if out, gerr := exec.Command("git", "-C", cwd, "branch", "-f", branch, sha).CombinedOutput(); gerr != nil {
-		hookWarn("Web fork %q code alignment failed: %s", branch, strings.TrimSpace(string(out)))
-		return
-	}
-	if _, ferr := c.Fork.Fork(ctx, inbound.ForkInput{RepoID: snap.RepoID, FromSnapshot: target, NewBranch: branch, Author: c.Identity}); ferr != nil {
-		hookWarn("Web fork %q context connection failed: %v", branch, ferr)
-		return
-	}
-	fmt.Printf("cxt: Web fork %q connected — branch aligned to fork point [git %s], context %s\n", branch, sha, shortHash(target))
-	boundary.Notify("cxt Web fork connection", fmt.Sprintf("%s → [git %s] aligned — start with git switch %s", branch, sha, branch))
-}
-
-func forkContextForBranch(ctx context.Context, c *Container, cwd, branch, commitOID string) {
-	rewrites := loadRewrites(cwd)
-	all, err := c.List.List(ctx, inbound.ListInput{})
-	if err != nil || len(all.Snapshots) == 0 {
-		return
-	}
-	var from domain.ContentHash
-	var repoID string
-	for _, snap := range all.Snapshots {
-		if snap.Branch == domain.StashBranchLabel {
-			continue
-		}
-		m := gitLinkRe.FindStringSubmatch(snap.Message)
-		if m == nil {
-			continue
-		}
-		resolved := resolveRewritten(rewrites, m[1])
-		if strings.HasPrefix(commitOID, resolved) || strings.HasPrefix(resolved, commitOID) {
-			from, repoID = snap.ID, snap.RepoID
-			break
-		}
-	}
-	if from == "" {
-		// fallback: current branch's latest context (same HEAD as general git branch X case).
-		cur := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-		if cur == "" || cur == "HEAD" {
-			return
-		}
-		list, lerr := c.List.List(ctx, inbound.ListInput{Branch: cur})
-		if lerr != nil || len(list.Snapshots) == 0 {
-			return
-		}
-		from, repoID = list.Snapshots[0].ID, list.Snapshots[0].RepoID
-	}
-	out, ferr := c.Fork.Fork(ctx, inbound.ForkInput{RepoID: repoID, FromSnapshot: from, NewBranch: branch, Author: c.Identity})
-	if ferr != nil {
-		return // already exists (ErrBranchExists) — silently preserve like git
-	}
-	fmt.Printf("cxt: context branch %q created (head %s)\n", out.Branch, shortHash(out.Head))
 }

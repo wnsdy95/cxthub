@@ -49,6 +49,9 @@ type Backend interface {
 	GetRepo(ctx context.Context, id domain.ContentHash) (domain.Repo, error)
 	Fsck(ctx context.Context, repoID domain.ContentHash) (inbound.FsckReport, error)
 	Reflog(ctx context.Context, repoID domain.ContentHash) ([]domain.RefLogEntry, error)
+	ListHistory(ctx context.Context, repoID domain.ContentHash) ([]domain.HistoryEvent, error)
+	RecordHistory(ctx context.Context, event domain.HistoryEvent) error
+	EnableContextProtocol(context.Context, domain.ContentHash) error
 	GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error)
 	GetDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error)
 	ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error)
@@ -73,7 +76,8 @@ type Backend interface {
 	DismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
 	UndismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error
 	// GitHub PR merged webhook → append base context from head branch to base.
-	PromoteMergedPR(ctx context.Context, gitURL, baseBranch, headBranch string) (int, error)
+	PromoteMergedPR(ctx context.Context, gitURL string, pr domain.PullRequestMerge) (int, error)
+	PromoteRepositoryPR(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge) (inbound.UpdateRefOutput, error)
 	// Push pending (unsync) pointer ((user, branch) key — resolved by deletion on git push, for On Hold display).
 	PutUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string, u domain.Unsync) error
 	ListUnsyncs(ctx context.Context, repoID domain.ContentHash) ([]domain.Unsync, error)
@@ -158,6 +162,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}", s.guard(domain.RoleViewer, s.getRepo))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/fsck", s.guard(domain.RoleViewer, s.fsck))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/reflog", s.guard(domain.RoleViewer, s.reflog))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/context-protocol", s.guard(domain.RoleMaintainer, s.enableContextProtocol))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/history", s.guard(domain.RoleViewer, s.listHistory))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promote", s.guard(domain.RoleMember, s.promoteRepositoryPR))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/history", s.guard(domain.RoleMember, s.recordHistory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/manifest", s.guard(domain.RoleViewer, s.getManifest))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/branches", s.guard(domain.RoleViewer, s.listRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/refs", s.guard(domain.RoleViewer, s.listRefs))
@@ -851,6 +859,7 @@ func (s *Server) getDoc(w http.ResponseWriter, r *http.Request) {
 }
 
 type putRefBody struct {
+	BranchID       string             `json:"branch_id,omitempty"`
 	Target         domain.ContentHash `json:"target"`
 	ExpectedTarget domain.ContentHash `json:"expected_target"`
 	Symbolic       string             `json:"symbolic"`
@@ -930,13 +939,16 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload struct {
+		Number      int    `json:"number"`
 		Action      string `json:"action"`
 		PullRequest struct {
-			Merged bool `json:"merged"`
-			Base   struct {
+			MergeSHA string `json:"merge_commit_sha"`
+			Merged   bool   `json:"merged"`
+			Base     struct {
 				Ref string `json:"ref"`
 			} `json:"base"`
 			Head struct {
+				SHA  string `json:"sha"`
 				Ref  string `json:"ref"`
 				Repo struct {
 					FullName string `json:"full_name"`
@@ -968,7 +980,7 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	if gitURL == "" {
 		gitURL = payload.Repository.HTMLURL
 	}
-	n, perr := s.b.PromoteMergedPR(r.Context(), gitURL, payload.PullRequest.Base.Ref, payload.PullRequest.Head.Ref)
+	n, perr := s.b.PromoteMergedPR(r.Context(), gitURL, domain.PullRequestMerge{Number: payload.Number, BaseBranch: payload.PullRequest.Base.Ref, HeadBranch: payload.PullRequest.Head.Ref, HeadSHA: payload.PullRequest.Head.SHA, MergeSHA: payload.PullRequest.MergeSHA})
 	s.respond(w, map[string]interface{}{"status": "ok", "promoted": n}, perr)
 }
 
@@ -984,6 +996,7 @@ func (s *Server) putRef(w http.ResponseWriter, r *http.Request) {
 		RepoID:   rid,
 		Target:   body.Target,
 		Symbolic: body.Symbolic,
+		BranchID: body.BranchID,
 	}
 	out, err := s.b.UpdateRef(r.Context(), inbound.UpdateRefInput{RepoID: rid, Ref: ref, ExpectedTarget: body.ExpectedTarget, Force: body.Force, Append: body.Append})
 	s.respond(w, out, err)
@@ -1065,6 +1078,7 @@ func (s *Server) graftSnapshot(w http.ResponseWriter, r *http.Request) {
 // joinSnapshot repositions session forks of the same git branch behind the branch head.
 func (s *Server) joinSnapshot(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		BranchID           string             `json:"branch_id,omitempty"`
 		Branch             string             `json:"branch"`
 		Snapshot           domain.ContentHash `json:"snapshot"`
 		IncludeDescendants bool               `json:"include_descendants"`
@@ -1073,7 +1087,7 @@ func (s *Server) joinSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.b.Join(r.Context(), inbound.JoinInput{
-		RepoID: s.repoID(r), TargetBranch: body.Branch, Snapshot: body.Snapshot,
+		RepoID: s.repoID(r), TargetBranch: body.Branch, BranchID: body.BranchID, Snapshot: body.Snapshot,
 		IncludeDescendants: body.IncludeDescendants,
 	})
 	s.respond(w, out, err)

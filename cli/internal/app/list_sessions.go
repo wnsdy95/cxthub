@@ -27,6 +27,15 @@ func NewListSessionsService(store outbound.SessionStore) *ListSessionsService {
 
 // List retrieves the snapshot and ref lists for a repo/branch.
 func (s *ListSessionsService) List(ctx context.Context, in inbound.ListInput) (inbound.ListOutput, error) {
+	if in.Branch != "" {
+		if bindings, ok := s.store.(outbound.LocalBranchStore); ok {
+			binding, err := bindings.ResolveLocalBranch(ctx, in.RepoID, in.Branch)
+			if err != nil {
+				return inbound.ListOutput{}, err
+			}
+			in.Branch = binding.Branch
+		}
+	}
 	snaps, err := s.store.ListSnapshots(ctx, in.RepoID, in.Branch)
 	if err != nil {
 		return inbound.ListOutput{}, err
