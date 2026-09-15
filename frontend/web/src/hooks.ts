@@ -9,6 +9,7 @@ import type { User } from './types';
 import { sharedReachable, unsyncChains } from './onhold';
 import { parseBranchLifecycleRef, projectBranchRefs } from './branchLifecycle';
 import { classifyBranchHistoryMarkers } from './graphStatus';
+import { historicalSnapshotIds } from './contextHistory';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseGoogleIdToken, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 
@@ -242,6 +243,7 @@ export function useRefs(repoId: string | null) {
     if (previous.current === signature) return;
     previous.current = signature;
     void qc.invalidateQueries({ queryKey: ['snapshots', repoId, '*'] });
+    void qc.invalidateQueries({ queryKey: ['reflog', repoId] });
   }, [signature, qc, repoId]);
   return q;
 }
@@ -348,7 +350,7 @@ export function useUndismissPending() {
   });
 }
 
-// useReflog — track ref movements (git reflog equivalent). Query only when the collapsible panel is open.
+// Ref movements supply graph history evidence as well as the reflog panel.
 export function useReflog(repoId: string | null, enabled: boolean) {
   return useQuery({
     queryKey: ['reflog', repoId],
@@ -362,9 +364,10 @@ export function useReflog(repoId: string | null, enabled: boolean) {
 export function useJoinSnapshot() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { repoId: string; branch: string; snapshot: string; includeDescendants?: boolean }) =>
+    mutationFn: (v: { repoId: string; branch: string; branchId?: string; snapshot: string; includeDescendants?: boolean }) =>
       api.joinSnapshot(v.repoId, {
         branch: v.branch,
+        branch_id: v.branchId,
         snapshot: v.snapshot,
         include_descendants: v.includeDescendants ?? false,
       }),
@@ -393,19 +396,23 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
   const rawRefs = useRefs(repoId).data ?? [];
   const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);
   const allData = useAllSnapshots(repoId, true).data;
+  const reflog = useReflog(repoId, true).data ?? [];
+  const historyQuery = useQuery({ queryKey: ['history', repoId], queryFn: () => api.history(repoId!), enabled: Boolean(repoId), refetchInterval: 10_000 });
+  const history = historyQuery.data ?? [];
+  const historicalIds = useMemo(() => historicalSnapshotIds(reflog, allData ?? [], history), [reflog, allData, history]);
   const snapshots = useMemo(() => {
     const all = (allData ?? []).filter((s) => s.branch !== '(stash)');
     // Excluding stashes is based on reachability criteria — a "(stash)" label object may exist on the server (stash-dedup trap). Just removing the label breaks the commit walk, pushing the entire history to the tip.
     const stashed = (allData ?? []).filter((s) => s.branch === '(stash)');
     if (stashed.length === 0) return all;
     const reachable = sharedReachable(refs, allData ?? []);
-    return (allData ?? []).filter((s) => s.branch !== '(stash)' || reachable.has(s.id));
-  }, [allData, refs]);
+    return (allData ?? []).filter((s) => s.branch !== '(stash)' || reachable.has(s.id) || historicalIds.has(s.id));
+  }, [allData, refs, historicalIds]);
   const badges = useMemo(() => {
     const m = new Map<string, { name: string; kind: string }[]>();
     for (const r of refs) {
       if (r.kind !== 'branch' && r.kind !== 'tag') continue;
-      if (parseBranchLifecycleRef(r)) continue;
+      if (parseBranchLifecycleRef(r) || r.name.startsWith('cxt/history/v1/')) continue;
       const list = m.get(r.target) ?? [];
       list.push({ name: r.name, kind: r.kind });
       m.set(r.target, list);
@@ -418,7 +425,11 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
     return m;
   }, [refs, snapshots, primaryBranch]);
   // Hook capture leaves (hook: prefix) are remnants of progress state — typically excluding graph/AI bar. However, hook snapshots reachable from branch refs (absorbed into commits or directly referenced by ref) are part of the history and are displayed. Just removing the label (message prefix) breaks the commit walk, causing the head to disappear from the graph — the pin line to break and its child pending to appear orphaned (stash-dedup trap, same principle: determination based on reachability).
-  const sharedIds = useMemo(() => sharedReachable(refs, snapshots), [refs, snapshots]);
+  const sharedIds = useMemo(() => {
+    const ids = sharedReachable(refs, snapshots);
+    for (const id of historicalIds) ids.add(id);
+    return ids;
+  }, [refs, snapshots, historicalIds]);
   const committedSnapshots = useMemo(
     () => snapshots.filter((s) => !s.message?.startsWith('hook: ') || sharedIds.has(s.id)),
     [snapshots, sharedIds],
@@ -463,7 +474,7 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
     const tips = new Set([...ids].filter((id) => !hasChildAhead.has(id)));
     return { ids, tips };
   }, [sharedIds, graphSnapshots]);
-  return { refs, snapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead };
+  return { refs, snapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError: historyQuery.isError };
 }
 
 // ── Mutation ──────────────────────────────────────────
@@ -503,6 +514,17 @@ export function useAcceptInvite() {
   return useMutation({
     mutationFn: (token: string) => api.acceptInvite(token),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
+  });
+}
+
+export function useEnableContextProtocol() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (repoId: string) => api.enableContextProtocol(repoId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['repos'] });
+      void qc.invalidateQueries({ queryKey: ['refs'] });
+    },
   });
 }
 

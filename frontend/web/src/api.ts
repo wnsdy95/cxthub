@@ -198,8 +198,10 @@ export const api = {
       {},
     ),
   reflog: (repoId: string) => call<RefLogEntry[]>('GET', `/repos/${encodeURIComponent(repoId)}/reflog`),
+  history: (repoId: string) => call<import('./types').HistoryEvent[]>('GET', `/repos/${encodeURIComponent(repoId)}/history`),
+  enableContextProtocol: (repoId: string) => call<{ context_protocol: number }>('POST', `/repos/${encodeURIComponent(repoId)}/context-protocol`, {}),
   // Rebase session fork of the same git branch behind its head (graft + ref move, no rewrite).
-  joinSnapshot: (repoId: string, body: { branch: string; snapshot: string; include_descendants?: boolean }) =>
+  joinSnapshot: (repoId: string, body: { branch: string; branch_id?: string; snapshot: string; include_descendants?: boolean }) =>
     call<{ branch: string; head: string; fork_branch?: string }>('POST', `/repos/${encodeURIComponent(repoId)}/join`, body),
   dismissPending: (repoId: string, sessionId: string) =>
     call<{ status: string }>('POST', `/repos/${encodeURIComponent(repoId)}/pending/${encodeURIComponent(sessionId)}/dismiss`, {}),

@@ -180,6 +180,9 @@ func ValidateBranchName(name string) error {
 
 // ValidateRef performs complete ref validation at backend store and service boundaries.
 func ValidateRef(ref Ref) error {
+	if len(ref.BranchID) > 128 || strings.ContainsAny(ref.BranchID, "\r\n") {
+		return fmt.Errorf("invalid branch identity")
+	}
 	if err := ValidateContentHash(ref.RepoID); err != nil {
 		return err
 	}

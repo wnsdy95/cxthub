@@ -6,18 +6,20 @@
 //	pre-push      → cxt git-hook pre-push       (git push = context push)
 //
 // Design principles:
-//   - fail-open: cxt fails gracefully without blocking git operations (always exit 0).
+//   - cxt failures are fail-open; a pre-existing user hook's failure is preserved.
 //   - preserve existing hooks: user hooks are moved to <name>.pre-cxt and run first (chaining).
 //   - idempotent: reinstalling is safe, overwriting with a marker for ownership verification.
 package githooks
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 )
 
@@ -59,32 +61,54 @@ func script(hookName, cxtBin string) string {
 %s (managed by cxt — remove with 'cxt hooks uninstall')
 input=$(cat)
 # Existing user hook chaining (stdin refilling).
-[ -x "$0.pre-cxt" ] && printf '%%s\n' "$input" | "$0.pre-cxt" "$@"
+user_status=0
+if [ -x "$0.pre-cxt" ]; then
+  printf '%%s\n' "$input" | "$0.pre-cxt" "$@" || user_status=$?
+fi
+if [ "$1" = "prepared" ] && [ "$user_status" -ne 0 ]; then exit "$user_status"; fi
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
-command -v "$CXT" >/dev/null 2>&1 || exit 0
+if ! command -v "$CXT" >/dev/null 2>&1; then
+  common=$(git rev-parse --git-common-dir 2>/dev/null)
+  root=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [ "$1" = "prepared" ] && { [ -e "$common/cxt/enabled" ] || [ -e "$root/.cxt/HEAD" ]; }; then
+    birth=$(printf '%%s\n' "$input" | awk '$1 ~ /^0+$/ && (length($1)==40 || length($1)==64) && $3 ~ /^refs\/heads\// && $2 !~ /^0+$/ { print "yes" }')
+    symbolic=$(printf '%%s\n' "$input" | awk '$1 ~ /^0+$/ && $3=="HEAD" && $2 ~ /^ref:refs\/heads\// { print substr($2,5) }')
+    if [ -n "$birth" ] || { [ -n "$symbolic" ] && ! git show-ref --verify --quiet "$symbolic"; }; then
+      echo "CXTHub stopped branch creation: cxt executable is unavailable; restore the installed CLI and retry." >&2
+      exit 1
+    fi
+  fi
+  exit "$user_status"
+fi
+case "$input" in
+*refs/heads/*)
+  printf '%%s\n' "$input" | "$CXT" git-hook branch-transaction "$1" "$PPID"
+  cxt_status=$?
+  if [ "$1" = "prepared" ] && [ "$cxt_status" -ne 0 ]; then exit "$cxt_status"; fi ;;
+esac
 if [ "$1" = "prepared" ]; then
   case "$input" in
   *' 0000000000000000000000000000000000000000 refs/heads/'*|*' 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/'*)
     printf '%%s\n' "$input" | "$CXT" git-hook ref-prepare || true ;;
   esac
-  exit 0
+  exit "$user_status"
 fi
 if [ "$1" = "aborted" ]; then
   case "$input" in
   *' 0000000000000000000000000000000000000000 refs/heads/'*|*' 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/'*)
     printf '%%s\n' "$input" | "$CXT" git-hook ref-abort || true ;;
   esac
-  exit 0
+  exit "$user_status"
 fi
-[ "$1" = "committed" ] || exit 0
+[ "$1" = "committed" ] || exit "$user_status"
 case "$input" in
 *refs/stash*) "$CXT" git-hook stash-sync || true ;;
 esac
 case "$input" in
 *refs/heads/*) printf '%%s\n' "$input" | "$CXT" git-hook ref-sync "$PPID" || true ;;
 esac
-exit 0
+exit "$user_status"
 `, Marker, shellQuote(cxtBin))
 	}
 	// post-rewrite receives old→new commit mapping from stdin — refilled on capture and chaining sides of cxt.
@@ -92,24 +116,31 @@ exit 0
 		return fmt.Sprintf(`#!/bin/sh
 %s (managed by cxt — 'cxt hooks uninstall' to remove)
 input=$(cat)
-[ -x "$0.pre-cxt" ] && printf '%%s\n' "$input" | "$0.pre-cxt" "$@"
+user_status=0
+if [ -x "$0.pre-cxt" ]; then
+  printf '%%s\n' "$input" | "$0.pre-cxt" "$@" || user_status=$?
+fi
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
-command -v "$CXT" >/dev/null 2>&1 || exit 0
+command -v "$CXT" >/dev/null 2>&1 || exit "$user_status"
 printf '%%s\n' "$input" | "$CXT" git-hook post-rewrite "$@" || true
-exit 0
+exit "$user_status"
 `, Marker, shellQuote(cxtBin))
 	}
 	return fmt.Sprintf(`#!/bin/sh
 %s (managed by cxt — 'cxt hooks uninstall' to remove)
 # Existing user hooks are executed first (chaining).
-[ -x "$0.pre-cxt" ] && "$0.pre-cxt" "$@"
+user_status=0
+if [ -x "$0.pre-cxt" ]; then
+  "$0.pre-cxt" "$@" || user_status=$?
+fi
+if [ "%s" = "pre-push" ] && [ "$user_status" -ne 0 ]; then exit "$user_status"; fi
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
-command -v "$CXT" >/dev/null 2>&1 || exit 0
+command -v "$CXT" >/dev/null 2>&1 || exit "$user_status"
 "$CXT" git-hook %s "$@" || true
-exit 0
-`, Marker, shellQuote(cxtBin), hookName)
+exit "$user_status"
+`, Marker, hookName, shellQuote(cxtBin), hookName)
 }
 
 // Install installs 4 git hooks and returns a list of installed hook names.
@@ -144,6 +175,17 @@ func Install(repoRoot string) ([]string, error) {
 			return installed, err
 		}
 		installed = append(installed, name)
+	}
+	// Registration survives loss of the working replica. Do not create it for
+	// directory-only residue left by an old global hook.
+	if _, err := providerfs.ReadRepoFile(repoRoot, ".cxt/HEAD"); err == nil {
+		journal, err := branchjournal.Open(context.Background(), repoRoot)
+		if err != nil {
+			return installed, err
+		}
+		if err := journal.Enable(); err != nil {
+			return installed, err
+		}
 	}
 	return installed, nil
 }

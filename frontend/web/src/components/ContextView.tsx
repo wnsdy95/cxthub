@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Repo, Workspace, CIREvent, Snapshot, Pending } from '../types';
 import { useDoc, useMemory, useMe, useFork, useSnapDiff, useSearch, usePendings, useUnsyncs, useRepoView, useReflog } from '../hooks';
 import { navigate, wsPath } from '../route';
-import { holdCounts, reachableSnapshotIds, sharedReachable } from '../onhold';
+import { holdCounts, reachableSnapshotIds } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { mainlineOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { atLeast, canWriteAsset, type Role } from '../roles';
@@ -99,7 +99,7 @@ type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug' | 'visi
 export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspace | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead } =
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
@@ -134,7 +134,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   // (Context tab shows only shared timeline — pending work is only indicated by badges). Orphan pending is also handled by On Hold.
   const pendings = usePendings(repo.id).data ?? [];
   const unsyncs = useUnsyncs(repo.id).data ?? [];
-  const sharedPendingTargets = useMemo(() => sharedReachable(refs, allSnapshots), [refs, allSnapshots]);
+  const sharedPendingTargets = sharedIds;
   const continuing = useMemo(() => {
     const m = new Map<string, Pending>(); // tip snapshot id → pending
     for (const p of pendings) {
@@ -148,7 +148,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
     return m;
   }, [pendings, unsyncs, refs, allSnapshots, sharedPendingTargets]);
   // Branch-specific pending count (for tip badges) — same definition as rows in On Hold tab (onhold.ts shared).
-  const holdCount = useMemo(() => holdCounts(refs, allSnapshots, unsyncs, pendings), [refs, allSnapshots, unsyncs, pendings]);
+  const holdCount = useMemo(() => holdCounts(refs, allSnapshots, unsyncs, pendings, sharedIds), [refs, allSnapshots, unsyncs, pendings, sharedIds]);
   const [snapId, setSnapId] = useState<string | null>(null);
   // Auto-selection is conservative: keep current selection if it exists in the full list (user click respected),
   // otherwise set to branch head. (Orphan commits selected in the graph are also kept).
@@ -573,7 +573,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} onSelect={setSnapId} badges={badges} refs={refs} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
+        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} onSelect={setSnapId} badges={badges} refs={refs} reflog={reflog} history={history} historyError={historyError} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
         <ReflogPanel repoId={repo.id} />
         <AIBar snapshots={committedSnapshots} />
       </aside>

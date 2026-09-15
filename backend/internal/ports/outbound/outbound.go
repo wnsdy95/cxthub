@@ -110,8 +110,9 @@ type GraftPatch struct {
 
 // JoinMutation is an atomic join change set sent to the store.
 type JoinMutation struct {
-	RepoID domain.ContentHash
-	Branch string
+	BranchID string
+	RepoID   domain.ContentHash
+	Branch   string
 	// Source is the commit X pulled by the user. The store revalidates that the entire Segment is still attached to the target branch or scoped internal session ref, and that the single-leaf condition of first-parent is maintained within the repo graph lock/transaction.
 	Source domain.ContentHash
 	// Segment is the unique first-parent child path calculated by the server from X to tip X…tip.
@@ -303,3 +304,11 @@ const (
 	MoveNonFastForward RefMoveClass = "non_fast_forward" // next is an ancestor of old (behind)
 	MoveDiverged       RefMoveClass = "diverged"         // common ancestor exists but not descendants → fork
 )
+
+// HistoryStore publishes observed context operations with durable retention.
+// An advance performs its ref CAS in the same storage transaction. Other
+// operations retain evidence without changing a collaborator's working cursor.
+type HistoryStore interface {
+	ApplyHistoryEvent(context.Context, domain.HistoryEvent) error
+	ListHistoryEvents(context.Context, domain.ContentHash) ([]domain.HistoryEvent, error)
+}
