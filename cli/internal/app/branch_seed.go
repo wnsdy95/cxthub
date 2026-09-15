@@ -57,6 +57,13 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
+	if bindings, ok := s.store.(outbound.LocalBranchStore); ok {
+		binding, err := bindings.ResolveLocalBranch(ctx, repo.ID, in.FromBranch)
+		if err != nil {
+			return inbound.SeedOutput{}, err
+		}
+		in.FromBranch = binding.Branch
+	}
 	fromRef, err := s.store.GetRef(ctx, repo.ID, domain.RefBranch, in.FromBranch)
 	if err != nil || fromRef.Target == "" {
 		return inbound.SeedOutput{}, domain.ErrNotFound // no context for departure branch

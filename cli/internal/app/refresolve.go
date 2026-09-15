@@ -45,7 +45,18 @@ func resolveRef(ctx context.Context, store outbound.SessionStore, repoID, ref st
 		}
 		return "", fmt.Errorf("%w: HEAD not found (no saved context)", domain.ErrNotFound)
 	}
-	b, berr := store.GetRef(ctx, repoID, domain.RefBranch, ref)
+	branch := ref
+	if bindings, ok := store.(outbound.LocalBranchStore); ok {
+		binding, err := bindings.ResolveLocalBranch(ctx, repoID, ref)
+		if err != nil {
+			return "", err
+		}
+		if binding.Inactive {
+			return "", fmt.Errorf("local branch %q is no longer bound", ref)
+		}
+		branch = binding.Branch
+	}
+	b, berr := store.GetRef(ctx, repoID, domain.RefBranch, branch)
 	if berr == nil {
 		return b.Target, nil
 	}

@@ -92,8 +92,8 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 		return domain.Repo{}, err
 	}
 	var r domain.Repo
-	err := s.pool.QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false) FROM repos WHERE id=$1`, string(id)).
-		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.WorkspaceID, &r.GitRemoteURL, &r.ProtectDefault)
+	err := s.pool.QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE id=$1`, string(id)).
+		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.WorkspaceID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol)
 	if err != nil {
 		return domain.Repo{}, mapNoRows(err)
 	}
@@ -138,7 +138,7 @@ func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.R
 }
 
 func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false) FROM repos WHERE team=$1`, team)
+	rows, err := s.pool.Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE team=$1`, team)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Re
 	var out []domain.Repo
 	for rows.Next() {
 		var r domain.Repo
-		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.WorkspaceID, &r.GitRemoteURL, &r.ProtectDefault); err != nil {
+		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.WorkspaceID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol); err != nil {
 			return nil, err
 		}
 		if err := validateHash(r.ID); err != nil {
@@ -636,8 +636,8 @@ func (s *PostgresStore) getRefRaw(ctx context.Context, repoID domain.ContentHash
 		return domain.Ref{}, err
 	}
 	var ref domain.Ref
-	err := s.pool.QueryRow(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic FROM refs WHERE repo_id=$1 AND kind=$2 AND name=$3`,
-		string(repoID), string(kind), name).Scan(&ref.Kind, &ref.Name, &ref.RepoID, &ref.Target, &ref.Symbolic)
+	err := s.pool.QueryRow(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id FROM refs WHERE repo_id=$1 AND kind=$2 AND name=$3`,
+		string(repoID), string(kind), name).Scan(&ref.Kind, &ref.Name, &ref.RepoID, &ref.Target, &ref.Symbolic, &ref.BranchID)
 	if err != nil {
 		return domain.Ref{}, mapNoRows(err)
 	}
@@ -651,7 +651,7 @@ func (s *PostgresStore) listRefsRaw(ctx context.Context, repoID domain.ContentHa
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic FROM refs WHERE repo_id=$1`, string(repoID))
+	rows, err := s.pool.Query(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id FROM refs WHERE repo_id=$1`, string(repoID))
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +659,7 @@ func (s *PostgresStore) listRefsRaw(ctx context.Context, repoID domain.ContentHa
 	var out []domain.Ref
 	for rows.Next() {
 		var ref domain.Ref
-		if err := rows.Scan(&ref.Kind, &ref.Name, &ref.RepoID, &ref.Target, &ref.Symbolic); err != nil {
+		if err := rows.Scan(&ref.Kind, &ref.Name, &ref.RepoID, &ref.Target, &ref.Symbolic, &ref.BranchID); err != nil {
 			return nil, err
 		}
 		if err := domain.ValidateRef(ref); err != nil {
@@ -678,6 +678,13 @@ func (s *PostgresStore) GetRef(ctx context.Context, repoID domain.ContentHash, k
 	ref, err := s.getRefRaw(ctx, repoID, kind, name)
 	if err != nil {
 		return ref, err
+	}
+	repo, err := s.GetRepo(ctx, repoID)
+	if err != nil {
+		return domain.Ref{}, err
+	}
+	if repo.ContextProtocol == 1 {
+		return ref, nil
 	}
 	if kind == domain.RefHead {
 		refs, err := s.listRefsRaw(ctx, repoID)
@@ -717,6 +724,13 @@ func (s *PostgresStore) ListRefs(ctx context.Context, repoID domain.ContentHash)
 	if err != nil {
 		return nil, err
 	}
+	repo, err := s.GetRepo(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	if repo.ContextProtocol == 1 {
+		return refs, nil
+	}
 	return projectBranchLifecycleRefs(refs)
 }
 
@@ -726,7 +740,7 @@ type pgRowsQuerier interface {
 
 func listBranchLifecycleRefs(ctx context.Context, q pgRowsQuerier, repoID domain.ContentHash, branch string) ([]domain.Ref, error) {
 	rows, err := q.Query(ctx,
-		`SELECT kind, name, repo_id, COALESCE(target,''), symbolic
+		`SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id
 		 FROM refs
 		 WHERE repo_id=$1 AND kind='tag' AND name LIKE $2
 		   AND right(name, char_length($3::text)+1)='/' || $3::text`,
@@ -738,7 +752,7 @@ func listBranchLifecycleRefs(ctx context.Context, q pgRowsQuerier, repoID domain
 	var refs []domain.Ref
 	for rows.Next() {
 		var ref domain.Ref
-		if err := rows.Scan(&ref.Kind, &ref.Name, &ref.RepoID, &ref.Target, &ref.Symbolic); err != nil {
+		if err := rows.Scan(&ref.Kind, &ref.Name, &ref.RepoID, &ref.Target, &ref.Symbolic, &ref.BranchID); err != nil {
 			return nil, err
 		}
 		if _, ok, err := domain.ParseBranchLifecycleRef(ref); err != nil || !ok {
@@ -811,7 +825,14 @@ func (s *PostgresStore) CompareAndSwapRef(ctx context.Context, repoID domain.Con
 			return err
 		}
 	}
-	if next.Kind == domain.RefBranch {
+	if err := validateContextWritePG(ctx, tx, repoID, next); err != nil {
+		return err
+	}
+	var protocol int
+	if err := tx.QueryRow(ctx, `SELECT context_protocol FROM repos WHERE id=$1`, string(repoID)).Scan(&protocol); err != nil {
+		return mapNoRows(err)
+	}
+	if next.Kind == domain.RefBranch && protocol == 0 {
 		refs, err := listBranchLifecycleRefs(ctx, tx, repoID, next.Name)
 		if err != nil {
 			return err
@@ -845,12 +866,22 @@ func (s *PostgresStore) CompareAndSwapRef(ctx context.Context, repoID domain.Con
 			}
 		}
 	}
+	if protocol == 0 && next.Kind == domain.RefBranch && next.BranchID == domain.LegacyContextBranchID(string(repoID), next.Name) && expected != "" {
+		var currentID string
+		err := tx.QueryRow(ctx, `SELECT branch_id FROM refs WHERE repo_id=$1 AND kind='branch' AND name=$2`, string(repoID), next.Name).Scan(&currentID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if currentID != "" {
+			next.BranchID = currentID
+		}
+	}
 	if expected == "" {
 		// New creation (only if it does not exist).
 		ct, err := tx.Exec(ctx,
-			`INSERT INTO refs (repo_id, kind, name, target, symbolic) VALUES ($1,$2,$3,NULLIF($4,''),$5)
+			`INSERT INTO refs (repo_id, kind, name, target, symbolic,branch_id) VALUES ($1,$2,$3,NULLIF($4,''),$5,$6)
 			 ON CONFLICT (repo_id, kind, name) DO NOTHING`,
-			string(repoID), string(next.Kind), next.Name, string(next.Target), next.Symbolic)
+			string(repoID), string(next.Kind), next.Name, string(next.Target), next.Symbolic, next.BranchID)
 		if err != nil {
 			return err
 		}
@@ -859,9 +890,9 @@ func (s *PostgresStore) CompareAndSwapRef(ctx context.Context, repoID domain.Con
 		}
 	} else {
 		ct, err := tx.Exec(ctx,
-			`UPDATE refs SET target=NULLIF($1,''), symbolic=$2, version=version+1, updated_at=now()
+			`UPDATE refs SET target=NULLIF($1,''), symbolic=$2, branch_id=COALESCE(NULLIF($7,''),branch_id),version=version+1, updated_at=now()
 			 WHERE repo_id=$3 AND kind=$4 AND name=$5 AND target IS NOT DISTINCT FROM NULLIF($6,'')`,
-			string(next.Target), next.Symbolic, string(repoID), string(next.Kind), next.Name, string(expected))
+			string(next.Target), next.Symbolic, string(repoID), string(next.Kind), next.Name, string(expected), next.BranchID)
 		if err != nil {
 			return err
 		}
@@ -901,6 +932,18 @@ func (s *PostgresStore) ApplyBranchLifecycleRef(ctx context.Context, repoID doma
 	if err := lockRepoGraph(ctx, tx, repoID); err != nil {
 		return err
 	}
+	var protocol int
+	if err := tx.QueryRow(ctx, `SELECT context_protocol FROM repos WHERE id=$1`, string(repoID)).Scan(&protocol); err != nil {
+		return mapNoRows(err)
+	}
+	if protocol == 1 {
+		var target string
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(target,'') FROM refs WHERE repo_id=$1 AND kind='tag' AND name=$2`, string(repoID), eventRef.Name).Scan(&target); err == nil && target == string(eventRef.Target) {
+			return nil
+		}
+		return fmt.Errorf("%w: branch lifecycle requires identity history after repository upgrade", domain.ErrConflict)
+	}
+
 	if _, err := insertBranchLifecycleRefTx(ctx, tx, repoID, eventRef); err != nil {
 		return err
 	}
@@ -987,6 +1030,11 @@ func (s *PostgresStore) GetManifest(ctx context.Context, repoID domain.ContentHa
 	if err := validateHash(repoID); err != nil {
 		return domain.Manifest{}, err
 	}
+	repo, err := s.GetRepo(ctx, repoID)
+	if err != nil {
+		return domain.Manifest{}, err
+	}
+	protocol := repo.ContextProtocol
 	refs, err := s.ListRefs(ctx, repoID)
 	if err != nil {
 		return domain.Manifest{}, err
@@ -1036,7 +1084,7 @@ func (s *PostgresStore) GetManifest(ctx context.Context, repoID domain.ContentHa
 		}
 		snapshotStates[snap.ID] = state
 	}
-	return domain.Manifest{RepoID: repoID, Refs: refs, SnapshotIndex: index, MemoryAttachments: memoryAttachments, SnapshotStates: snapshotStates, Version: len(index)}, rows.Err()
+	return domain.Manifest{ContextProtocol: protocol, RepoID: repoID, Refs: refs, SnapshotIndex: index, MemoryAttachments: memoryAttachments, SnapshotStates: snapshotStates, Version: len(index)}, rows.Err()
 }
 
 // --- Memory Meta ---
@@ -2163,6 +2211,9 @@ func (s *PostgresStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) 
 	}
 	if current == nil || *current != string(m.ExpectedHead) {
 		return domain.ErrRefConflict
+	}
+	if err := validateContextWritePG(ctx, tx, m.RepoID, domain.Ref{RepoID: m.RepoID, Kind: domain.RefBranch, Name: m.Branch, BranchID: m.BranchID, Target: m.NewHead}); err != nil {
+		return err
 	}
 	if err := requireSnapshotIDsPG(ctx, tx, m.RepoID, required...); err != nil {
 		return err

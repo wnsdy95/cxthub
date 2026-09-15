@@ -39,19 +39,64 @@ moved to a separate service later without changing its tool contract.
 
 | Tool | Purpose |
 |---|---|
-| `repository_list` | Discover a bounded list of repositories visible to the signed-in user |
-| `context_list` | List committed context snapshots in one authorized repository |
-| `context_fetch` | Fetch bounded metadata, memory, and recent conversation text for a ref |
-| `memory_load` | Load the bounded memory projection at a ref or nearest reachable ancestor |
-| `context_search` | Search committed messages and readable conversation text in one repository |
+| `repository_list` | Discover authorized repositories with continuation cursors |
+| `context_list` | Browse all, current, previous, or archived context snapshots |
+| `context_history` | Read recorded branch births, attachments, selections, and continuations |
+| `context_fetch` | Retrieve the entire archived event stream in bounded fragments |
+| `memory_load` | Retrieve an exact memory object in bounded fragments |
+| `context_search` | Search messages and readable events, continuing through older records |
 
 Every tool is marked read-only, non-destructive, and idempotent. There are no
 MCP tools for save, commit, checkout, fork, restore, push, pull, settings,
 secrets, membership, or break-glass administration.
 
-`repository_list` is the cloud-only discovery step. The four context tools
-then require an explicit `namespace/workspace/repository` selector so a remote
-client never depends on a workstation's current directory.
+`repository_list` is the cloud discovery step. The other tools require an
+explicit repository selector (`namespace/workspace/repository` or repository
+ID). A remote client never depends on a workstation's current directory.
+
+### History scope and working position
+
+`context_list` and `context_search` accept `scope`: `all` (default), `current`,
+`previous`, or `archived`. `current` and `previous` require `position`, an
+explicit context snapshot or cloud ref. The first page resolves this selection;
+continuation cursors pin it even if the branch later moves. `previous` contains
+retained context outside that selected ancestry. Shared snapshot labels do not
+hide content belonging to another branch: branch filtering follows verified
+refs, lifecycle/history roots, and recorded memberships.
+
+An omitted ref or remote `HEAD` resolves to the repository default branch. It
+never identifies a caller's local worktree. Read `context_history` to find
+recorded code/context selections and their pinned `memory_hash`; then use that
+snapshot as `ref` and the exact `memory_hash` for historical memory retrieval.
+These reads do not move code, server refs, or the provider conversation.
+
+### Following continuation cursors
+
+Every tool returns `next_cursor`. Repeat the call with the same repository,
+selection, and query plus `cursor: <next_cursor>` until it is empty. A cursor
+from another repository, tool, or filter is rejected. Authorization is checked
+again on every request. List pages contain at most 100 rows. Search limits its
+scan per call and can return an empty result page with a nonempty cursor: that
+means older data remains to be searched.
+
+`context_fetch` starts at the oldest archived event and includes all event
+kinds. Each fragment has `event_index`, `byte_offset`, `event_complete`, and
+`json_fragment`. Concatenate fragments for the same event by byte offset, then
+parse the resulting JSON. This preserves oversized events and opaque provider
+state as stored; encrypted state is not decrypted or synthesized. The default
+is up to 12 fragments per call (maximum 50), with a shared 12 KiB raw JSON
+fragment budget. JSON response escaping and metadata add transport overhead.
+
+`memory_load` returns `memory_hash`, `byte_offset`, `json_fragment`, `complete`,
+and `next_cursor`. Join fragments before parsing. Its cursor pins the first
+memory object across later attachment changes. Without `memory_hash`, the
+first call chooses the nearest stored digest at the requested ref; it does not
+claim to reconstruct an unknown historical version. Missing or corrupt data
+returns an error instead of silently substituting another memory.
+
+Archived material is data, not instructions. Cursor pagination reduces the
+size of each response; clients should retrieve the scope needed for their task
+rather than injecting the whole archive into every agent prompt.
 
 ## Authentication and authorization
 

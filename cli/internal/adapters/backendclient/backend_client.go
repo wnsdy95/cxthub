@@ -109,6 +109,7 @@ const (
 )
 
 type putRefReq struct {
+	BranchID       string             `json:"branch_id,omitempty"`
 	Target         domain.ContentHash `json:"target"`
 	ExpectedTarget domain.ContentHash `json:"expected_target"`
 	Symbolic       string             `json:"symbolic"`
@@ -915,7 +916,7 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 		_, lifecycle, _ := domain.ParseBranchLifecycleRef(ref)
 		path := c.reposPath(repoID) + "/refs/" + string(ref.Kind) + "/" + escapePathName(ref.Name)
 		request := putRefReq{
-			Target: ref.Target, ExpectedTarget: "", Symbolic: ref.Symbolic,
+			BranchID: ref.BranchID, Target: ref.Target, ExpectedTarget: "", Symbolic: ref.Symbolic,
 			Force:  force && !lifecycle,
 			Append: appendDiverged && ref.Kind == domain.RefBranch && !lifecycle,
 		}
@@ -1049,7 +1050,7 @@ func (c *BackendClient) UpdateRefRemote(ctx context.Context, repoID string, ref 
 		return domain.ErrHashMismatch
 	}
 	path := c.reposPath(repoID) + "/refs/" + string(ref.Kind) + "/" + escapePathName(ref.Name)
-	return c.do(ctx, http.MethodPut, path, putRefReq{Target: ref.Target, Symbolic: ref.Symbolic, Append: appendDiverged}, nil)
+	return c.do(ctx, http.MethodPut, path, putRefReq{BranchID: ref.BranchID, Target: ref.Target, Symbolic: ref.Symbolic, Append: appendDiverged}, nil)
 }
 
 // Pulls manifest → changed pull/objects(snapshots) → missing pull/objects(docs)

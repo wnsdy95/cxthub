@@ -43,7 +43,15 @@ func (s *CheckoutSessionService) Checkout(ctx context.Context, in inbound.Checko
 	branch := in.NewBranch
 	var missingBranchTarget domain.ContentHash
 	if branch == "" && in.From != "" && in.From != "HEAD" && !strings.HasPrefix(in.From, "sha256:") {
-		if _, branchErr := s.store.GetRef(ctx, in.RepoID, domain.RefBranch, in.From); branchErr == nil {
+		canonical := in.From
+		if bindings, ok := s.store.(outbound.LocalBranchStore); ok {
+			binding, err := bindings.ResolveLocalBranch(ctx, in.RepoID, in.From)
+			if err != nil {
+				return inbound.CheckoutOutput{}, err
+			}
+			canonical = binding.Branch
+		}
+		if _, branchErr := s.store.GetRef(ctx, in.RepoID, domain.RefBranch, canonical); branchErr == nil {
 			branch = in.From
 		} else if event, ok, lifecycleErr := branchLifecycleByName(ctx, s.store, in.RepoID, in.From); lifecycleErr != nil {
 			return inbound.CheckoutOutput{}, lifecycleErr
@@ -81,6 +89,9 @@ func (s *CheckoutSessionService) Checkout(ctx context.Context, in inbound.Checko
 	// and separately preflights its bounded hook handoff, so resolving the target
 	// snapshot is sufficient and no provider session file is created.
 	if missingBranchTarget != "" {
+		if err := recordRestoredBranch(ctx, s.store, in.RepoID, branch, missingBranchTarget); err != nil {
+			return inbound.CheckoutOutput{}, err
+		}
 		_, createErr := s.store.CreateBranchRef(ctx, domain.Ref{
 			Kind: domain.RefBranch, Name: branch, RepoID: in.RepoID, Target: missingBranchTarget,
 		})

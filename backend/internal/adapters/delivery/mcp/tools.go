@@ -19,6 +19,10 @@ type toolArgs struct {
 	Ref        string `json:"ref"`
 	Events     int    `json:"events"`
 	Query      string `json:"query"`
+	Cursor     string `json:"cursor"`
+	Scope      string `json:"scope"`
+	Position   string `json:"position"`
+	MemoryHash string `json:"memory_hash"`
 }
 
 const (
@@ -34,7 +38,7 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 		}
 	}
 	if name == "repository_list" {
-		return s.toolRepositoryList(ctx, user, args.Query, args.Limit)
+		return s.repositoryPage(ctx, user, args)
 	}
 	if strings.TrimSpace(args.Repository) == "" {
 		return "", fmt.Errorf("repository is required; call repository_list first")
@@ -45,13 +49,15 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 	}
 	switch name {
 	case "context_list":
-		return s.toolContextList(ctx, repo, args.Branch, args.Limit)
+		return s.contextPage(ctx, repo, args)
 	case "context_fetch":
-		return s.toolContextFetch(ctx, repo, args.Ref, args.Events)
+		return s.eventPage(ctx, repo, args)
 	case "memory_load":
-		return s.toolMemoryLoad(ctx, repo, args.Ref)
+		return s.memoryPage(ctx, repo, args)
+	case "context_history":
+		return s.historyPage(ctx, repo, args)
 	case "context_search":
-		return s.toolContextSearch(ctx, repo, args.Query)
+		return s.searchPage(ctx, repo, args)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
@@ -270,12 +276,14 @@ func (s *Server) nearestDigest(ctx context.Context, repoID domain.ContentHash, s
 		seen[id] = true
 		snapshot, err := s.context.GetSnapshot(ctx, repoID, id)
 		if err != nil {
-			continue
+			return domain.MemoryDigest{}, false, err
 		}
 		if snapshot.MemoryHash != "" {
-			if digest, err := s.context.GetMemoryObject(ctx, repoID, snapshot.MemoryHash); err == nil {
-				return digest, true, nil
+			digest, err := s.context.GetMemoryObject(ctx, repoID, snapshot.MemoryHash)
+			if err != nil {
+				return domain.MemoryDigest{}, false, err
 			}
+			return digest, true, nil
 		}
 		queue = append(queue, snapshot.ReachabilityParents()...)
 	}

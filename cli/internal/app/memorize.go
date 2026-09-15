@@ -153,6 +153,9 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 			if err := s.store.CompareAndSwapSnapshotMemory(ctx, snap.ID, snap.MemoryHash, snap.MemoryHash); err != nil {
 				return inbound.MemorizeOutput{}, err
 			}
+			if err := recordWorkingMemory(ctx, s.store, snap.ID, snap.MemoryHash); err != nil {
+				return inbound.MemorizeOutput{}, err
+			}
 			return inbound.MemorizeOutput{SnapshotID: snap.ID, MemoryHash: snap.MemoryHash, Attached: true}, nil
 		}
 	}
@@ -170,7 +173,17 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 	if err := s.store.CompareAndSwapSnapshotMemory(ctx, snap.ID, digest.PreviousMemoryHash, memHash); err != nil {
 		return inbound.MemorizeOutput{}, err
 	}
+	if err := recordWorkingMemory(ctx, s.store, snap.ID, memHash); err != nil {
+		return inbound.MemorizeOutput{}, err
+	}
 	return inbound.MemorizeOutput{SnapshotID: snap.ID, MemoryHash: memHash, Attached: true}, nil
+}
+
+func recordWorkingMemory(ctx context.Context, store outbound.SessionStore, snapshot, memory domain.ContentHash) error {
+	if positions, ok := store.(outbound.WorkingMemoryStore); ok {
+		return positions.RecordWorkingMemory(ctx, snapshot, memory)
+	}
+	return nil
 }
 
 func sameMemoryDigestPayload(left, right domain.MemoryDigest) bool {
@@ -204,6 +217,9 @@ func snapshotMemoryProjection(ctx context.Context, store outbound.SessionStore, 
 }
 
 func snapshotMemoryProjectionDetailed(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool, bool) {
+	if memory, pinned, err := selectedMemory(ctx, store, snap.ID); pinned || err != nil {
+		return memory, pinned && err == nil && memory.SnapshotID != "", err == nil
+	}
 	return memoryProjectionFromDetailed(ctx, store, snap.ID)
 }
 
@@ -219,6 +235,9 @@ func priorMemoryProjection(ctx context.Context, store outbound.SessionStore, sna
 }
 
 func priorMemoryProjectionDetailed(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool, bool) {
+	if memory, pinned, err := selectedMemory(ctx, store, snap.ID); pinned || err != nil {
+		return memory, pinned && err == nil && memory.SnapshotID != "", err == nil
+	}
 	if snap.MemoryHash == "" {
 		return ancestorMemoryProjectionDetailed(ctx, store, snap)
 	}

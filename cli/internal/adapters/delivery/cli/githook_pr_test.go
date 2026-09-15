@@ -44,6 +44,23 @@ type fakeMergedPRSync struct {
 	appends     []appendCall
 }
 
+type guardedPRSync struct {
+	fakeMergedPRSync
+	checked bool
+}
+
+func (f *guardedPRSync) ResolveRemotePRBranch(context.Context, inbound.SyncInput, string) (domain.Ref, error) {
+	f.checked = true
+	return domain.Ref{}, domain.ErrSyncConflict
+}
+func TestMergedPRUsesHistoricalIdentityGuardBeforeAppend(t *testing.T) {
+	syncer := &guardedPRSync{fakeMergedPRSync: fakeMergedPRSync{refs: map[string]domain.Ref{"reused": {Target: domain.HashContent([]byte("unrelated new task"))}}}}
+	resolver := &fakePRMergeResolver{pulls: []outbound.MergedPullRequest{{Number: 1, BaseBranch: "main", HeadBranch: "reused"}}}
+	if appendMergedPRContexts(context.Background(), resolver, syncer, t.TempDir(), "main", "https://github.com/test/repo", []string{"code"}) || !syncer.checked || len(syncer.appends) != 0 {
+		t.Fatal("ambiguous PR bypassed identity guard")
+	}
+}
+
 func (f *fakeMergedPRSync) ResolveRemoteBranch(
 	_ context.Context,
 	_ inbound.SyncInput,

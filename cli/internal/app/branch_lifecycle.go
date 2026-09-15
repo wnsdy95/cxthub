@@ -30,6 +30,30 @@ func (s *BranchLifecycleService) Archive(ctx context.Context, in inbound.BranchA
 		}
 		repoID = repo.ID
 	}
+	if bindings, ok := s.store.(outbound.LocalBranchStore); ok {
+		binding, err := bindings.ResolveLocalBranch(ctx, repoID, in.Branch)
+		if err != nil {
+			return inbound.BranchArchiveOutput{}, err
+		}
+		if binding.Tracking {
+			ref, err := s.store.GetRef(ctx, repoID, domain.RefBranch, binding.Branch)
+			if err != nil {
+				return inbound.BranchArchiveOutput{}, err
+			}
+			if err := bindings.UnbindLocalBranch(ctx, repoID, in.Branch); err != nil {
+				return inbound.BranchArchiveOutput{}, err
+			}
+			return inbound.BranchArchiveOutput{Branch: in.Branch, Target: ref.Target, LocalOnly: true}, nil
+		}
+	}
+	ref, err := s.store.GetRef(ctx, repoID, domain.RefBranch, in.Branch)
+	if err == nil {
+		if err := recordBranchTransition(ctx, s.store, repoID, in.Branch, "", ref.Target); err != nil {
+			return inbound.BranchArchiveOutput{}, err
+		}
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return inbound.BranchArchiveOutput{}, err
+	}
 	event, err := s.store.ArchiveBranchRef(ctx, repoID, in.Branch)
 	if err != nil {
 		return inbound.BranchArchiveOutput{}, err
@@ -68,6 +92,22 @@ func (s *BranchLifecycleService) Rename(ctx context.Context, in inbound.BranchRe
 		repoID = repo.ID
 	}
 
+	if bindings, ok := s.store.(outbound.LocalBranchStore); ok {
+		binding, err := bindings.ResolveLocalBranch(ctx, repoID, in.From)
+		if err != nil {
+			return inbound.BranchRenameOutput{}, err
+		}
+		if binding.Tracking {
+			ref, err := s.store.GetRef(ctx, repoID, domain.RefBranch, binding.Branch)
+			if err != nil {
+				return inbound.BranchRenameOutput{}, err
+			}
+			if err := bindings.RenameLocalBranch(ctx, repoID, in.From, in.To); err != nil {
+				return inbound.BranchRenameOutput{}, err
+			}
+			return inbound.BranchRenameOutput{From: in.From, To: in.To, Target: ref.Target, LocalOnly: true}, nil
+		}
+	}
 	source, err := s.store.GetRef(ctx, repoID, domain.RefBranch, in.From)
 	sourceArchived := false
 	if errors.Is(err, domain.ErrNotFound) {
@@ -89,14 +129,33 @@ func (s *BranchLifecycleService) Rename(ctx context.Context, in inbound.BranchRe
 	}
 
 	destination, destErr := s.store.GetRef(ctx, repoID, domain.RefBranch, in.To)
+	differentIdentity := false
+	if history, ok := s.store.(outbound.HistoryStore); ok && destErr == nil {
+		events, err := history.ListHistoryEvents(ctx, repoID)
+		if err != nil {
+			return inbound.BranchRenameOutput{}, err
+		}
+		bindings, err := domain.ProjectContextBranches(events)
+		if err != nil {
+			return inbound.BranchRenameOutput{}, err
+		}
+		from, to := bindings.Active[in.From], bindings.Active[in.To]
+		differentIdentity = from.ID != "" && to.ID != "" && from.ID != to.ID
+	}
 	switch {
-	case destErr == nil && destination.Target != source.Target:
+	case destErr == nil && (destination.Target != source.Target || differentIdentity):
+		if err := recordBranchTransition(ctx, s.store, repoID, in.To, "", destination.Target); err != nil {
+			return inbound.BranchRenameOutput{}, err
+		}
 		if _, err := s.store.ArchiveBranchRef(ctx, repoID, in.To); err != nil {
 			return inbound.BranchRenameOutput{}, err
 		}
 		destErr = domain.ErrNotFound
 	case destErr != nil && !errors.Is(destErr, domain.ErrNotFound):
 		return inbound.BranchRenameOutput{}, destErr
+	}
+	if err := recordBranchTransition(ctx, s.store, repoID, in.From, in.To, source.Target); err != nil {
+		return inbound.BranchRenameOutput{}, err
 	}
 	if errors.Is(destErr, domain.ErrNotFound) {
 		_, createErr := s.store.CreateBranchRef(ctx, domain.Ref{
@@ -109,6 +168,11 @@ func (s *BranchLifecycleService) Rename(ctx context.Context, in inbound.BranchRe
 			}
 		} else if createErr != nil {
 			return inbound.BranchRenameOutput{}, createErr
+		}
+	}
+	if positions, ok := s.store.(outbound.WorkingBranchRenameStore); ok {
+		if err := positions.RenameWorkingBranch(ctx, repoID, in.From, in.To); err != nil {
+			return inbound.BranchRenameOutput{}, err
 		}
 	}
 	if !sourceArchived {

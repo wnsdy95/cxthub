@@ -23,7 +23,7 @@ import { AIBar } from './AIBar';
 import { CommitGraph } from './CommitGraph';
 import { About, TeamSettings, SecretsPanel } from './About';
 import { EventStream, short, when, commonEventPrefix, type ViewMode } from './ContextView';
-import { sharedReachable, unsyncChains, orphanPendings } from '../onhold';
+import { unsyncChains, orphanPendings } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { useT, Rich } from '../i18n';
 
@@ -32,7 +32,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   const me = useMe().data;
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead } =
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const pendings = usePendings(repo.id).data ?? [];
   const unsyncs = useUnsyncs(repo.id).data ?? [];
@@ -56,9 +56,9 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
   // Determination is a common definition in onhold.ts — must match the context tab badge count.
-  const shared = useMemo(() => sharedReachable(refs, allSnapshots), [refs, allSnapshots]);
+  const shared = sharedIds;
   const chains = useMemo(() => unsyncChains(unsyncs, allSnapshots, shared), [unsyncs, allSnapshots, shared]);
-  const orphans = useMemo(() => orphanPendings(pendings, refs, allSnapshots, chains), [pendings, refs, allSnapshots, chains]);
+  const orphans = useMemo(() => orphanPendings(pendings, refs, allSnapshots, chains, shared), [pendings, refs, allSnapshots, chains, shared]);
 
   // Branch/member filters — pending items can span multiple branches/authors, default is all.
   const [branchSel, setBranchSel] = useState<string>('*');
@@ -439,6 +439,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
           }}
           badges={badges}
           refs={refs}
+          reflog={reflog} history={history} historyError={historyError}
           uncommitted={uncommittedIds}
           pinBranch={repo.default_branch || 'main'}
           repoId={atLeast(role, 'member') ? repo.id : null}

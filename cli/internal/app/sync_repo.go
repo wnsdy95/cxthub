@@ -320,10 +320,35 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 
 	var refs []domain.Ref
 	for _, r := range man.Refs {
+		if r.Kind == domain.RefHEAD {
+			continue
+		} // Worktree selection is never a shared server HEAD.
 		r.RepoID = repoID
 		refs = append(refs, r)
 	}
 	refs = orderRefsForPush(refs)
+	contextProtocol, err := s.remoteContextProtocol(ctx, repoID)
+	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
+	if contextProtocol < 0 || contextProtocol > 1 {
+		return inbound.SyncOutput{}, domain.ErrSyncConflict
+	}
+	if contextProtocol == 1 {
+		kept := refs[:0]
+		for _, ref := range refs {
+			if _, lifecycle, err := domain.ParseBranchLifecycleRef(ref); err != nil {
+				return inbound.SyncOutput{}, err
+			} else if lifecycle {
+				continue
+			}
+			if ref.Kind == domain.RefBranch && ref.BranchID == "" {
+				ref.BranchID = domain.LegacyContextBranchID(repoID, ref.Name)
+			}
+			kept = append(kept, ref)
+		}
+		refs = kept
+	}
 
 	if err := s.pushSettingsObjects(ctx, repoID, snaps); err != nil {
 		return inbound.SyncOutput{}, err
@@ -411,6 +436,9 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 		if err := s.flushGrafts(ctx, repoRoot, repoID); err != nil {
 			return inbound.SyncOutput{}, err
 		}
+	}
+	if err := s.pushHistory(ctx, repoID); err != nil {
+		return inbound.SyncOutput{}, err
 	}
 	if err := s.remote.Push(ctx, repoID, nil, nil, refs, in.Force, in.Append); err != nil {
 		return inbound.SyncOutput{}, err
@@ -604,6 +632,9 @@ func (s *SyncRepoService) ResolveRemoteBranch(ctx context.Context, in inbound.Sy
 		if r.Kind != domain.RefBranch || r.Name != branch || r.Target == "" {
 			continue
 		}
+		if _, perr := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); perr != nil {
+			return domain.Ref{}, perr
+		}
 		if _, gerr := s.store.GetSnapshot(ctx, r.Target); gerr != nil {
 			if _, perr := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); perr != nil {
 				return domain.Ref{}, perr
@@ -747,9 +778,22 @@ func (s *SyncRepoService) AppendBranch(ctx context.Context, in inbound.SyncInput
 		return err
 	}
 	ref := domain.Ref{Kind: domain.RefBranch, Name: branch, RepoID: repoID, Target: target}
+	local, err := s.store.GetRef(ctx, repoID, domain.RefBranch, branch)
+	if err != nil {
+		return err
+	}
+	ref.BranchID = local.BranchID
+	if ref.BranchID == "" {
+		ref.BranchID = domain.LegacyContextBranchID(repoID, branch)
+	}
 	if err := s.remote.UpdateRefRemote(ctx, repoID, ref, true); err != nil {
 		return err
 	}
+	return s.convergeAppendedBranch(ctx, repoID, ref)
+}
+
+func (s *SyncRepoService) convergeAppendedBranch(ctx context.Context, repoID string, ref domain.Ref) error {
+	branch, target := ref.Name, ref.Target
 	defer s.reconcileCurrentSharedPendings(ctx, repoID)
 
 	cur, err := s.store.GetRef(ctx, repoID, domain.RefBranch, branch)
@@ -758,6 +802,8 @@ func (s *SyncRepoService) AppendBranch(ctx context.Context, in inbound.SyncInput
 		return s.store.PutRef(ctx, ref)
 	case err != nil:
 		return err
+	case cur.BranchID != "" && ref.BranchID != "" && cur.BranchID != ref.BranchID:
+		return domain.ErrSyncConflict
 	case cur.Target == "":
 		return s.store.PutRef(ctx, ref)
 	case cur.Target == target:
@@ -1282,11 +1328,22 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		}
 	}
 	advertisedSnapshotStates, cursorStore, cursorEntries := preparePullSnapshotStates(ctx, s.store, repoID, snapshotStates)
+	contextProtocol, err := s.remoteContextProtocol(ctx, repoID)
+	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
+	if contextProtocol < 0 || contextProtocol > 1 {
+		return inbound.SyncOutput{}, domain.ErrSyncConflict
+	}
 	snaps, docs, refs, err := s.remote.Pull(ctx, repoID, advertisedSnapshotStates, docHaves)
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
 	if err := validatePullBatch(ctx, s.store, repoID, snaps, docs, refs); err != nil {
+		return inbound.SyncOutput{}, err
+	}
+	history, err := s.readRemoteHistory(ctx, repoID)
+	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
 
@@ -1428,6 +1485,32 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		memoryAdoptions[snap.ID] = existing.MemoryHash
 	}
 
+	// Pin history memory by immutable hash, even when it is older than the
+	// currently advertised snapshot attachment.
+	for _, event := range history {
+		if event.MemoryHash == "" {
+			continue
+		}
+		if _, ok := stagedMemories[event.MemoryHash]; ok {
+			continue
+		}
+		memory, err := s.store.GetMemory(ctx, event.MemoryHash)
+		if errors.Is(err, domain.ErrNotFound) {
+			memory, err = s.remote.PullMemoryObject(ctx, repoID, event.MemoryHash)
+			if err == nil {
+				stagedMemories[event.MemoryHash] = memory
+			}
+		}
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if err := validateMemoryAttachmentObject(memory, event.MemoryHash, memory.SnapshotID); err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if memory.SnapshotID != event.Source && memory.SnapshotID != event.Target && memory.SnapshotID != event.MemorySource {
+			return inbound.SyncOutput{}, domain.ErrHashMismatch
+		}
+	}
 	// Start local write only after all remote objects preflight complete.
 	for _, d := range docs {
 		stored, err := s.store.PutDoc(ctx, d)
@@ -1484,6 +1567,18 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		}
 	}
 	s.updateRemoteSnapshotStateCursor(ctx, repoID, cursorStore, cursorEntries, snaps)
+	if err := s.storeRemoteHistory(ctx, history); err != nil {
+		return inbound.SyncOutput{}, err
+	}
+	if adopter, ok := s.store.(interface {
+		AdoptLegacyBranchIdentity(context.Context, string, domain.Ref) error
+	}); ok {
+		for _, ref := range refs {
+			if err := adopter.AdoptLegacyBranchIdentity(ctx, repoID, ref); err != nil {
+				return inbound.SyncOutput{}, err
+			}
+		}
+	}
 	remoteLifecycleStates, err := domain.BranchLifecycleStates(refs)
 	if err != nil {
 		return inbound.SyncOutput{}, err
@@ -1495,7 +1590,7 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			if r.Kind != domain.RefBranch || r.Target == "" {
 				continue
 			}
-			if latest, ok := remoteLifecycleStates[r.Name]; ok && latest.State == domain.BranchArchived && latest.Target == r.Target {
+			if latest, ok := remoteLifecycleStates[r.Name]; r.BranchID == "" && ok && latest.State == domain.BranchArchived && latest.Target == r.Target {
 				continue // legacy server residue shadowed by its immutable archive event
 			}
 			local, lerr := s.store.GetRef(ctx, repoID, r.Kind, r.Name)
@@ -1523,7 +1618,7 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			break
 		}
 	}
-	if hasArchivedLifecycle && in.Cwd != "" {
+	if hasArchivedLifecycle && in.Cwd != "" && contextProtocol == 0 {
 		if inventory, ok := s.gitCtx.(outbound.GitBranchInventory); ok {
 			branches, err := inventory.LocalBranches(ctx, in.Cwd)
 			if err != nil {
@@ -1545,6 +1640,12 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		if !lifecycle {
 			continue
 		}
+		if contextProtocol == 1 {
+			if err := s.store.PutRef(ctx, ref); err != nil {
+				return inbound.SyncOutput{}, err
+			}
+			continue
+		}
 		preserve := !inventoryKnown || liveBranches[event.Branch]
 		if err := s.store.ApplyBranchLifecycleRef(ctx, ref, preserve); err != nil {
 			return inbound.SyncOutput{}, err
@@ -1563,8 +1664,8 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			newRefs = append(newRefs, r)
 			continue
 		}
-		if r.Kind == domain.RefBranch {
-			if latest, ok := remoteLifecycleStates[r.Name]; ok && latest.State == domain.BranchArchived && latest.Target == r.Target {
+		if r.Kind == domain.RefBranch && r.BranchID == "" {
+			if latest, ok := remoteLifecycleStates[r.Name]; r.BranchID == "" && ok && latest.State == domain.BranchArchived && latest.Target == r.Target {
 				continue // old peers retain the branch pointer but cannot apply archive projection
 			}
 		}
@@ -1579,6 +1680,9 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			remoteArchiveRecovery = ok && latest.State == domain.BranchArchived && latest.Target != r.Target
 		}
 		switch {
+		case !localMissing && r.Kind == domain.RefBranch && local.BranchID != "" && r.BranchID != "" && local.BranchID != r.BranchID:
+			conflicts = append(conflicts, string(r.Kind)+"/"+r.Name+" (identity changed)")
+			continue
 		case localMissing || local.Target == "" || local.Target == r.Target:
 			// Local absent or same → reflect as is.
 		case in.Force:
@@ -1589,7 +1693,7 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 			conflicts = append(conflicts, string(r.Kind)+"/"+r.Name)
 			continue // cancel — local maintenance (equivalent to git pull --ff-only rejection)
 		}
-		next := domain.Ref{Kind: r.Kind, Name: r.Name, RepoID: repoID, Target: r.Target}
+		next := domain.Ref{Kind: r.Kind, Name: r.Name, RepoID: repoID, Target: r.Target, BranchID: r.BranchID}
 		if localMissing && remoteArchiveRecovery {
 			// The remote branch advanced beyond an archive target but its active
 			// compensation was interrupted. Treat the surviving projection as

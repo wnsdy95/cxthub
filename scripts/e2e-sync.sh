@@ -40,6 +40,22 @@ jget() { python3 -c "import json,sys;print(json.load(sys.stdin)$1)"; }
 ccurl() { command curl -H "Origin: $ORIGIN" -H 'X-Cxt-CSRF: 1' "$@"; }
 main_head() { curl -sb "$J" "$B/repos/$RID/refs" | python3 -c "import json,sys;print(next((r['target'] for r in json.load(sys.stdin) if r['kind']=='branch' and r['name']=='main'),''))"; }
 
+ref_target() { python3 - "$1" <<'PYREF'
+import json,pathlib,sys
+raw=pathlib.Path(sys.argv[1]).read_text().strip()
+print(json.loads(raw)['target'] if raw.startswith('{') else raw)
+PYREF
+}
+
+birth_field() { python3 - "$1" "$2" <<'PYBIRTH'
+import glob,json,sys
+rows=[json.load(open(path)) for path in glob.glob('.cxt/history/*.json')]
+rows=[r for r in rows if r['branch']==sys.argv[1] and r['kind'] in ('birth','attach','orphan')]
+rows.sort(key=lambda r:(r['created_at'],r['id']))
+print(rows[-1].get(sys.argv[2],'') if rows else '')
+PYBIRTH
+}
+
 echo "── build(isolated bin) · server start :$PORT"
 ( cd "$ROOT/backend" && go build -o "$TMP/bin/cxtd" ./cmd/cxtd ) || { echo "cxtd build failed"; exit 1; }
 ( cd "$ROOT/cli" && go build -o "$TMP/bin/cxt" ./cmd/cxt ) || { echo "cxt build failed"; exit 1; }
@@ -164,8 +180,8 @@ expect "B head inherits A session summary" "$MEM" inherited
 
 echo "── D. repo2: New session C commit → Session boundary meta"
 session "$TMP/repo2" C
-echo c > h.txt; git add h.txt; git commit -qm codeC >/dev/null 2>&1
-git push -q origin main >/dev/null 2>&1
+echo c > h.txt; git add h.txt; git commit -qm codeC >"$TMP/codeC.out" 2>&1
+git push -q origin main >"$TMP/codeC-push.out" 2>&1
 BOUND=$(curl -sb "$J" "$B/repos/$RID/snapshots" | python3 -c "
 import json,sys
 snaps={s['id']:s for s in json.load(sys.stdin)}
@@ -177,10 +193,10 @@ expect "session C↔B boundary detected from session_id" "$BOUND" boundary
 
 echo "── E. repo1: post-merge hook = fetch-only(keep local refs + upstream hint) + pull briefing"
 cd "$TMP/repo1"
-LOCAL_BEFORE=$(cat .cxt/refs/heads/main)
+LOCAL_BEFORE=$(ref_target .cxt/refs/heads/main)
 PULL_TERM=cxt-e2e-pull-terminal
 HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
-expect "fetch-only: keep local main ref" "$(cat .cxt/refs/heads/main)" "$LOCAL_BEFORE"
+expect "fetch-only: keep local main ref" "$(ref_target .cxt/refs/heads/main)" "$LOCAL_BEFORE"
 expect "upstream hint output" "$(echo "$HOOKOUT" | grep -ci 'new context')" 1
 # Pull briefing: store only validated identifiers for the incoming codeB/codeC
 # range, then consume the notice once from the next prompt hook in the
@@ -213,19 +229,19 @@ m=json.load(sys.stdin); print('complete' if len(m.get('snapshot_states') or {})=
 ")
 expect "manifest advertises complete snapshot state catalog" "$MANIFEST_STATE" complete
 
-echo "── F. repo1: both-moved diverge push → automatic rebase-graft"
+echo "── F. repo1: code pull selects remote context; next commit preserves both histories"
 HEAD_PREV=$(main_head)
 git pull -q origin main >/dev/null 2>&1 # code sync (context ref is fetch-only)
 session "$TMP/repo1" D
 echo d > i.txt; git add i.txt; git commit -qm codeD >/dev/null 2>&1
 git push -q origin main >"$TMP/p4.out" 2>&1
-expect "hook reports automatic append" "$(grep -c 'appended' "$TMP/p4.out")" 1
+expect "selected continuation push succeeds" "$([ "$(grep -c 'remains pending\|ref_conflict' "$TMP/p4.out")" = 0 ] && echo yes)" yes
 REBASE=$(curl -sb "$J" "$B/repos/$RID/snapshots" | python3 -c "
 import json,sys
 snaps={s['id']:s for s in json.load(sys.stdin)}
 d=snaps.get('$(main_head)',{})
 ps=(d.get('parents') or []) + (d.get('graft_parents') or [])
-ok = '$HEAD_PREV' in ps and d.get('grafted')
+ok = '$HEAD_PREV' in ps
 seen=set(); q=[d.get('id','')]; reach=False
 while q:
     c=q.pop()
@@ -234,7 +250,7 @@ while q:
     seen.add(c); q.extend((snaps[c].get('parents') or []) + (snaps[c].get('graft_parents') or []))
 print('rebased' if ok and reach else f'bad(parents={ps[:1]},grafted={d.get(\"grafted\")},reach={reach})')
 ")
-expect "D rebased to previous head + reachability preservation" "$REBASE" rebased
+expect "D continues selected context and retains earlier local work" "$REBASE" rebased
 
 echo "── G. Context switch: desktop app retention + real wrapper ancestry/restart"
 cd "$TMP/repo2"
@@ -247,13 +263,13 @@ cat > "$APP_SESSION" <<EOF
 {"type":"assistant","cwd":"$TMP/repo2","sessionId":"$APP_SESSION_ID","gitBranch":"main","timestamp":"2026-07-05T00:00:01Z","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"done E"}],"usage":{"input_tokens":100,"output_tokens":10}}}
 EOF
 
-# A plain desktop-app shell has no cxt supervisor. It must checkpoint and seed
-# the cxt DAG, but keep the vendor-owned native session file open and inject
+# A plain desktop-app shell has no cxt supervisor. It must checkpoint and record
+# the branch birth independently of the conversation, but keep the vendor-owned native session file open and inject
 # only one bounded memory handoff on the next official lifecycle hook.
 APP_JSONL_BEFORE=$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')
 git checkout -qb app-feature-x >"$TMP/app-sw.out" 2>&1
 expect "app switch checkpoints previous branch" "$([ "$(grep -c 'cxt: checkpoint' "$TMP/app-sw.out")" -ge 1 ] && echo yes)" yes
-expect "app switch creates branch seed" "$(grep -c 'seed created' "$TMP/app-sw.out")" 1
+expect "app switch records a durable branch birth" "$(birth_field app-feature-x kind)" birth
 expect "app switch retains native session" "$(grep -c 'app session retained' "$TMP/app-sw.out")" 1
 expect "app switch does not create wrapper boundary" "$([ ! -e .cxt/boundary.json ] && echo yes)" yes
 expect "app switch does not supersede provider files" "$(find "$PROJ" -maxdepth 1 -type f -name '*.superseded' | wc -l | tr -d ' ')" 0
@@ -303,7 +319,7 @@ for i in $(seq 1 40); do
   sleep 0.25
 done
 expect "Checkpoint execution" "$(grep -c 'cxt: checkpoint' "$TMP/sw.out")" 1
-expect "seed creation output" "$(grep -c 'seed created' "$TMP/sw.out")" 1
+expect "wrapper switch records a durable branch birth" "$(birth_field feature-x kind)" birth
 expect "boundary signal output" "$(grep -c 'previous session is isolated' "$TMP/sw.out")" 1
 expect "All previous sessions isolated (renamed)" "$([ "$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl.superseded' | wc -l | tr -d ' ')" -ge 1 ] && echo yes)" yes
 expect "Boundary record" "$([ -f .cxt/boundary.json ] && echo yes)" yes
@@ -312,24 +328,19 @@ SEEDID=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get
 RESUMEID=$(python3 -c "import json;cmd=json.load(open('.cxt/boundary.json')).get('resume_cmd','').split();print(cmd[-1] if cmd else '')")
 expect "seed materialization" "$([ -n "$SEED" ] && [ -f "$SEED" ] && echo yes)" yes
 expect "boundary seed ID matches materialized resume target" "$RESUMEID" "$SEEDID"
-expect "seed inherits main compact memory" "$(grep -q 'Project understanding (main)' "$SEED" && echo yes)" yes
+expect "seed inherits main compact memory" "$(grep -q 'task A' "$SEED" && grep -q 'task B' "$SEED" && grep -q 'task C' "$SEED" && echo yes)" yes
 expect "seed inherits main session conversation" "$(grep -q 'task E' "$SEED" && echo yes)" yes
 SEEDMEM=$(python3 -c "
 import json,glob
-tgt=open('.cxt/refs/heads/feature-x').read().strip()
+raw=open('.cxt/refs/heads/feature-x').read().strip()
+tgt=json.loads(raw)['target'] if raw.startswith('{') else raw
 for p in glob.glob('.cxt/objects/snapshots/*'):
     s=json.load(open(p))
     if s['id']==tgt: print(s.get('memory_hash','')); break
 ")
 expect "seed snapshot retains full inherited memory object" "$([ -n "$SEEDMEM" ] && [ -f ".cxt/objects/memories/${SEEDMEM#sha256:}" ] && echo yes)" yes
-SEEDMSG=$(python3 -c "
-import json,glob
-tgt=open('.cxt/refs/heads/feature-x').read().strip()
-for p in glob.glob('.cxt/objects/snapshots/*'):
-    s=json.load(open(p))
-    if s['id']==tgt: print(s['message'][:5]); break
-")
-expect "seed is first snapshot of feature-x" "$SEEDMSG" "seed:"
+expect "new branch keeps the recorded source snapshot" "$(ref_target .cxt/refs/heads/feature-x)" "$(birth_field feature-x target)"
+expect "branch birth pins the inherited memory object" "$(birth_field feature-x memory_hash)" "$SEEDMEM"
 
 # Capture exclusion: a commit before the seed session grows must not capture another session.
 echo x > x.txt; git add x.txt; git commit -qm nocap >"$TMP/nc.out" 2>&1
@@ -387,7 +398,7 @@ expect "memory managed block stays within 64 KiB" "$(python3 -c "from pathlib im
 expect "memory load preserves instruction file mode" "$(python3 -c "from pathlib import Path; print(oct(Path('CLAUDE.md').stat().st_mode & 0o777))")" 0o600
 ccurl -sb "$J" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":""}' >/dev/null
 
-echo "── I. Web fork connection: git branch = align+connect / switch -c = seed priority"
+echo "── I. Explicit Git start points and branch births preserve code authority"
 cd "$TMP/repo1"
 git checkout -q main >/dev/null 2>&1
 # Choose the newest snapshot whose [git sha] exists in repo1. The head may be a checkpoint
@@ -406,33 +417,36 @@ ccurl -sb "$J" -X POST "$B/repos/$RID/fork" -H 'Content-Type: application/json' 
   -d "{\"from\":\"$FORK_FROM\",\"new_branch\":\"web-fork-x\",\"author\":{\"name\":\"E2E\",\"email\":\"e2e@test.local\",\"team\":\"\"}}" >/dev/null
 # Create an unpushed commit so HEAD(Y) advances beyond fork point(X).
 echo z > z.txt; git add z.txt; git commit -qm ahead >/dev/null 2>&1
-git branch web-fork-x
-sleep 4 # Wait for detached fork-connect seed polling (≤1.5s) and the remote lookup.
-expect "branch is aligned to fork point [git X]" "$(git rev-parse --short=7 web-fork-x)" "$(git rev-parse --short=7 "$FORK_SHA")"
-expect "context ref is connected to fork snapshot" "$(cat .cxt/refs/heads/web-fork-x 2>/dev/null)" "$FORK_FROM"
+git branch web-fork-x "$FORK_SHA"
+cxt git-hook branch-replay
+FORK_LOCAL=$(birth_field web-fork-x target)
+expect "helper preserves the explicit Git start point [git X]" "$(git rev-parse --short=7 web-fork-x)" "$(git rev-parse --short=7 "$FORK_SHA")"
+expect "context ref is connected to fork snapshot" "$(ref_target .cxt/refs/heads/web-fork-x 2>/dev/null)" "$FORK_LOCAL"
 # Switching should materialize the fork context; a fork-only ref represents an existing branch.
 session "$TMP/repo1" WFX
 git checkout -q web-fork-x >"$TMP/wfx.out" 2>&1
 expect "switch does not create seed" "$(grep -c 'seed created' "$TMP/wfx.out")" 0
 expect "fork context is selected without replacing app session" "$(grep -c 'app context selected' "$TMP/wfx.out")" 1
-expect "ref is still fork snapshot after switch" "$(cat .cxt/refs/heads/web-fork-x)" "$FORK_FROM"
+expect "ref is still fork snapshot after switch" "$(ref_target .cxt/refs/heads/web-fork-x)" "$FORK_LOCAL"
 git checkout -q main >/dev/null 2>&1
-# `switch -c` creates a seed even when a same-named web fork exists: creating while switching
-# means the user is branching from their current work.
+# A same-named web fork is not an upstream binding. Local creation records
+# its actual current source; the helper must never move Git to a guessed tip.
 ccurl -sb "$J" -X POST "$B/repos/$RID/fork" -H 'Content-Type: application/json' \
   -d "{\"from\":\"$FORK_FROM\",\"new_branch\":\"web-fork-y\",\"author\":{\"name\":\"E2E\",\"email\":\"e2e@test.local\",\"team\":\"\"}}" >/dev/null
 session "$TMP/repo1" WFY
+# A real app reports the new conversation through its official prompt hook.
+printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s","prompt":"continue"}\n' "$TMP/repo1" "$D/s-WFY.jsonl" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
 git checkout -qb web-fork-y >"$TMP/wfy.out" 2>&1
-expect "switch -c prioritizes seed" "$(grep -c 'seed created' "$TMP/wfy.out")" 1
-expect "ref points to the seed snapshot, not the web fork" "$([ "$(cat .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
-sleep 2 # Confirm fork-connect backed off after the seed won.
-expect "helper does not overwrite seed" "$([ "$(cat .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
+expect "switch -c records its own observed birth" "$(birth_field web-fork-y kind)" birth
+expect "new branch uses its live source context" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
+cxt git-hook branch-replay
+expect "replaying birth never overwrites the selected source" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
 git checkout -q main >/dev/null 2>&1
 
 echo "── I. Branch lifecycle: rename transfers context; deletion archives without deleting history"
 RENAME_OUT=$(git branch -m web-fork-x web-fork-renamed 2>&1)
 expect "Git branch rename transfers context projection" "$(echo "$RENAME_OUT" | grep -c 'context moved')" 1
-expect "renamed context keeps its exact target" "$(cat .cxt/refs/heads/web-fork-renamed 2>/dev/null)" "$FORK_FROM"
+expect "renamed context keeps its exact target" "$(ref_target .cxt/refs/heads/web-fork-renamed 2>/dev/null)" "$FORK_LOCAL"
 expect "renamed source context projection is gone" "$([ ! -e .cxt/refs/heads/web-fork-x ] && echo yes)" yes
 expect "rename keeps all context objects readable" "$(cxt fsck | grep -c 'Missing 0')" 1
 
@@ -526,5 +540,7 @@ cxt pull >/dev/null 2>&1
 expect "fresh client pulls and verifies v2 history" "$(cxt fsck | grep -c 'Missing 0')" 1
 
 echo
+source "$ROOT/scripts/e2e-context-history.inc.sh"
+
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: All passed ✓"; else echo "SYNC E2E: Failures exist ✗"; fi
 exit "$FAIL"

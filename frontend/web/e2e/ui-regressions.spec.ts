@@ -43,7 +43,7 @@ function sessionDoc(hash: string) {
   };
 }
 
-function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unknown[] = [], unsync: unknown[] = []) {
+function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unknown[] = [], unsync: unknown[] = [], reflog: unknown[] = [], history: unknown[] = []) {
   return ({ method, pathname, searchParams }: ApiRequest): ApiResponse | undefined => {
     if (method !== 'GET') return undefined;
     if (pathname === '/api/v1/me') {
@@ -79,6 +79,8 @@ function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unkn
     if (pathname === `/api/v1/repos/${repoId}/snapshots`) return { body: snapshots };
     if (pathname === `/api/v1/repos/${repoId}/pending`) return { body: pending };
     if (pathname === `/api/v1/repos/${repoId}/unsync`) return { body: unsync };
+    if (pathname === `/api/v1/repos/${repoId}/reflog`) return { body: reflog };
+    if (pathname === `/api/v1/repos/${repoId}/history`) return { body: history };
     if (pathname.startsWith(`/api/v1/repos/${repoId}/docs/`)) {
       return { body: sessionDoc(decodeURIComponent(pathname.split('/').at(-1) ?? '')) };
     }
@@ -153,7 +155,7 @@ test('repository route keeps the selected context DAG across navigation and relo
           }],
         };
       }
-      if (pathname === `/api/v1/repos/${repositoryId}/pending` || pathname === `/api/v1/repos/${repositoryId}/unsync`) {
+      if (pathname === `/api/v1/repos/${repositoryId}/pending` || pathname === `/api/v1/repos/${repositoryId}/unsync` || pathname === `/api/v1/repos/${repositoryId}/reflog` || pathname === `/api/v1/repos/${repositoryId}/history`) {
         return { body: [] };
       }
       if (pathname.startsWith(`/api/v1/repos/${repositoryId}/docs/`)) {
@@ -396,6 +398,7 @@ test('public workspace management controls deny non-maintainers without opening 
     }
     if (pathname === `/api/v1/repos/${repoId}/pending`) return { body: [] };
     if (pathname === `/api/v1/repos/${repoId}/unsync`) return { body: [] };
+    if (pathname === `/api/v1/repos/${repoId}/reflog` || pathname === `/api/v1/repos/${repoId}/history`) return { body: [] };
     if (pathname.startsWith(`/api/v1/repos/${repoId}/settings/`)) return { body: null };
     if (pathname === `/api/v1/repos/${repoId}/secrets`) return { body: null };
     if (pathname.startsWith(`/api/v1/repos/${repoId}/docs/`)) {
@@ -970,6 +973,144 @@ test('branch labels exist only for visible graph lanes and share horizontal scro
   expect(second.unexpected).toEqual([]);
 });
 
+test('previous progress folds independently and preserves shared paths and sync status', async ({ page }, testInfo) => {
+  const root = id('1'), shared = id('2'), previous = id('3'), current = id('4'), other = id('5');
+  const snapshots = [
+    { id: current, parents: [root], message: 'current work' },
+    { id: previous, parents: [shared], message: 'hook: first previous tip' },
+    { id: other, parents: [shared], message: 'second previous tip' },
+    { id: shared, parents: [root], message: 'shared previous ancestor' },
+    { id: root, parents: [], message: 'common root' },
+  ].map((snapshot, index) => ({
+    ...snapshot, repo_id: repoId, doc_hash: snapshot.id, branch: snapshot.id === shared ? '(stash)' : 'main', provider: 'codex', fidelity: 'full',
+    created_at: `2026-09-15T0${5 - index}:00:00Z`,
+  }));
+  const refs = [{ kind: 'branch', name: 'main', repo_id: repoId, target: current }];
+  const reflog = [
+    { kind: 'branch', name: 'main', old: previous, new: root, created_at: '2026-09-15T03:00:00Z' },
+    { kind: 'branch', name: 'main', old: other, new: root, created_at: '2026-09-15T04:00:00Z' },
+  ];
+  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], reflog));
+  const panel = page.locator('.graph-history-panel');
+  await expect(panel).toContainText('3 saved snapshots');
+  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-status-item.pushed')).toHaveText('Pushed 5');
+  await expect(page.locator('.graph-status-item.unpushed')).toHaveText('Not pushed 0');
+  const first = panel.locator('.graph-history-toggle').nth(0);
+  const second = panel.locator('.graph-history-toggle').nth(1);
+  await first.focus();
+  await page.keyboard.press('Enter');
+  await expect(first).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.graph-row')).toHaveCount(4);
+  await expect(page.locator('.graph-row[aria-label^="shared previous ancestor"]')).toBeVisible();
+  await expect(page.locator('.graph-row[aria-label^="second previous tip"]')).toHaveCount(0);
+  await second.click();
+  await expect(page.locator('.graph-row')).toHaveCount(5);
+  await page.screenshot({ path: testInfo.outputPath('previous-progress.png'), fullPage: true });
+  await first.click();
+  await expect(page.locator('.graph-row')).toHaveCount(4);
+  await expect(page.locator('.graph-row[aria-label^="shared previous ancestor"]')).toBeVisible();
+  await panel.locator('.graph-history-view').nth(1).click();
+  await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^second previous tip/);
+  await second.focus();
+  await page.keyboard.press('Space');
+  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^current work/);
+  // Reading a folded tip reveals it; folding remains a local display operation.
+  await panel.locator('.graph-history-view').nth(0).click();
+  await expect(page.locator('.graph-row')).toHaveCount(4);
+  await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^hook: first previous tip/);
+  await first.click();
+  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-row[aria-label^="common root"]')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]); // fixture permits GET only: no ref/pending writes.
+});
+
+test('previous progress used by a teammate remains visible', async ({ page }) => {
+  const root = id('1'), previous = id('2'), current = id('3');
+  const snapshots = [
+    { id: current, parents: [root], message: 'current main' },
+    { id: previous, parents: [root], message: 'teammate work' },
+    { id: root, parents: [], message: 'shared root' },
+  ].map((snapshot) => ({
+    ...snapshot, repo_id: repoId, doc_hash: snapshot.id, branch: 'main', provider: 'codex', fidelity: 'full',
+    created_at: '2026-09-15T00:00:00Z',
+  }));
+  const refs = [
+    { kind: 'branch', name: 'main', repo_id: repoId, target: current },
+    { kind: 'branch', name: 'teammate', repo_id: repoId, target: previous },
+  ];
+  const reflog = [{ kind: 'branch', name: 'main', old: previous, new: root, created_at: '2026-09-15T01:00:00Z' }];
+  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], reflog));
+  await expect(page.locator('.graph-history-panel')).toContainText('On an active path');
+  await expect(page.locator('.graph-history-toggle')).toHaveCount(0);
+  await expect(page.locator('.graph-row')).toHaveCount(3);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('server history exposes births and explicit past positions without write requests', async ({ page }, testInfo) => {
+  const root = id('1'), later = id('2'), current = id('3');
+  const snapshots = [
+    { id: current, parents: [root], message: 'current continuation' },
+    { id: later, parents: [root], message: 'retained later work' },
+    { id: root, parents: [], message: 'selected old code' },
+  ].map((snapshot) => ({ ...snapshot, doc_hash: snapshot.id, repo_id: repoId, branch: 'main', provider: 'codex', fidelity: 'full', created_at: '2026-09-15T00:00:00Z' }));
+  const refs = [{ kind: 'branch', name: 'main', repo_id: repoId, target: current },
+    { kind: 'tag', name: 'cxt/history/v1/advance/source', repo_id: repoId, target: later }];
+  const common = { repo_id: repoId, branch: 'main', branch_id: 'main-identity', created_at: '2026-09-15T01:00:00Z' };
+  const history = [
+    { ...common, id: 'born', branch: 'feature/new', branch_id: 'new-identity', kind: 'birth', source: root, target: root },
+    { ...common, id: 'position', kind: 'position', source: later, target: root, git_after: 'a'.repeat(40), worktree_id: 'b'.repeat(32) },
+    { ...common, id: 'advance', kind: 'advance', source: later, target: current },
+  ];
+  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], history));
+  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-status-item.pushed')).toHaveText('Pushed 3');
+  await page.locator('.graph-births summary').click();
+  await expect(page.locator('.graph-births')).toContainText('feature/new');
+  await page.getByLabel('View from', { exact: true }).selectOption('position');
+  await expect(page.locator('.graph-row')).toHaveCount(1);
+  await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^selected old code/);
+  await expect(page.locator('.graph-history-scope')).toContainText('Browsing only');
+  await page.screenshot({ path: testInfo.outputPath('recorded-context-position.png'), fullPage: true });
+  for (const button of await page.locator('.graph-history-toggle').all()) await button.click();
+  await expect(page.locator('.graph-row')).toHaveCount(3);
+  await page.getByLabel('View from', { exact: true }).selectOption('');
+  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^current continuation/);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('renamed history stays with its identity when the old name is reused', async ({ page }) => {
+  const root = id('1'), later = id('2'), current = id('3');
+  const snapshots = [
+    { id: current, parents: [root], message: 'current continuation' },
+    { id: later, parents: [root], message: 'retained old-name work' },
+    { id: root, parents: [], message: 'original code' },
+  ].map(s => ({ ...s, doc_hash: s.id, repo_id: repoId, branch: 'old', provider: 'codex', fidelity: 'full', created_at: '2026-09-15T00:00:00Z' }));
+  const refs = [{ kind: 'branch', name: 'main', repo_id: repoId, target: current }, { kind: 'branch', name: 'old', repo_id: repoId, target: root }];
+  const common = { repo_id: repoId, branch: 'old', branch_id: 'original-task', created_at: '2026-09-15T01:00:00Z' };
+  const history = [
+    { ...common, id: 'reuse', kind: 'birth', branch_id: 'new-task', source: root, target: root, binding_parent: 'rename' },
+    { ...common, id: 'rename', kind: 'rename', branch: 'main', previous_branch: 'old', binding_parent: 'birth', source: current, target: current },
+    { ...common, id: 'position', kind: 'position', source: root, target: root },
+    { ...common, id: 'advance', kind: 'advance', source: later, target: current },
+    { ...common, id: 'birth', kind: 'birth', source: root, target: root },
+  ];
+  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], history));
+  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('section.graph-history-panel .graph-history-branch')).toHaveText('main');
+  await page.getByLabel('View from', { exact: true }).selectOption('position');
+  await expect(page.locator('.graph-row')).toHaveCount(1);
+  for (const button of await page.locator('.graph-history-toggle').all()) await button.click();
+  await expect(page.locator('.graph-row')).toHaveCount(3);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('PR-joined branch lanes keep their name while truly deleted branches stay archived', async ({ page }) => {
   const root = id('8');
   const joinedHead = id('9');
@@ -1181,7 +1322,11 @@ test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and re
     data: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'repository_list', arguments: {} } },
   });
   expect(mcp.ok()).toBe(true);
-  expect(JSON.stringify(await mcp.json())).toContain('No accessible repositories');
+  const listing = await mcp.json();
+  expect(listing.result.isError).not.toBe(true);
+  const catalogue = JSON.parse(listing.result.content[0].text);
+  expect(catalogue.repositories).toEqual([]);
+  expect(catalogue.next_cursor).toBe('');
 
   const revoke = await api.post('/oauth/revoke', {
     form: { client_id: client.client_id, token: tokens.access_token, token_type_hint: 'access_token' },
@@ -1193,4 +1338,40 @@ test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and re
   });
   expect(afterRevoke.status()).toBe(401);
   expect(pageErrors).toEqual([]);
+});
+
+test('repository history protection is explicit, survives reload, and reports upgrade conflicts', async ({ page }) => {
+  let protocol = 0;
+  let attempts = 0;
+  const errors = capturePageErrors(page);
+  const unexpected = await installApiFixture(page, ({ method, pathname }) => {
+    if (method === 'POST' && pathname === `/api/v1/repos/${repoId}/context-protocol`) {
+      attempts += 1;
+      if (attempts === 1) return { status: 409, body: { error: { message: 'Reused branch needs identity-aware sync before upgrade' } } };
+      protocol = 1;
+      return { body: { context_protocol: 1 } };
+    }
+    if (method !== 'GET') return undefined;
+    if (pathname === `/api/v1/repos/${repoId}/secrets`) return { status: 404, body: { error: { message: 'No secrets configured' } } };
+    if (pathname === '/api/v1/me') return { body: { id: 'owner', username: 'alice', name: 'Alice', locale: 'en' } };
+    if (pathname === '/api/v1/workspaces') return { body: [{ id: workspaceId, owner_id: 'owner', owner_username: 'alice', name: 'cxthub', slug: 'cxthub', visibility: 'private' }] };
+    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) return { body: [{ workspace_id: workspaceId, user_id: 'owner', role: 'owner' }] };
+    if (pathname === '/api/v1/repos') return { body: [{ id: repoId, default_branch: 'main', remote_url: 'https://cxthub.com/alice/cxthub/repo', context_protocol: protocol }] };
+    if (pathname === `/api/v1/repos/${repoId}/refs`) return { body: [{ kind: 'branch', name: 'main', repo_id: repoId, target: pushedHead, ...(protocol ? { branch_id: 'main-identity' } : {}) }] };
+    return undefined;
+  });
+  await page.goto('/alice/cxthub/settings');
+  const panel = page.locator('.repo-history-protection');
+  await expect(panel).toContainText('Update every CLI');
+  expect(attempts).toBe(0);
+  await panel.getByRole('button', { name: 'Enable history protection' }).click();
+  await expect(panel.locator('.err')).toContainText('Reused branch needs');
+  await panel.getByRole('button', { name: 'Enable history protection' }).click();
+  await expect(panel).toContainText('Enabled.');
+  await expect(panel.getByRole('button')).toHaveCount(0);
+  await page.reload();
+  await expect(panel).toContainText('Enabled.');
+  expect(attempts).toBe(2);
+  expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
 });
