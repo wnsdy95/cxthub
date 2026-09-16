@@ -303,7 +303,7 @@ test('members page orders invites, role capabilities, and members without page o
     return undefined;
   });
 
-  await page.goto('/alice/cxthub/members');
+  await page.goto('/alice/cxthub?tab=members');
   const matrix = page.locator('.role-capabilities');
   await expect(matrix).toBeVisible();
   await expect(matrix.locator('thead code')).toHaveText(['viewer', 'puller', 'member', 'maintainer', 'owner']);
@@ -329,9 +329,27 @@ test('members page orders invites, role capabilities, and members without page o
   expect(overflow.scroll).toBeGreaterThan(overflow.client);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
-  await page.goto('/alice/cxthub/settings');
+  await page.reload();
+  await expect(matrix).toBeVisible();
+  await page.locator('.tabs').getByRole('button', { name: /^Connected/ }).click();
+  await expect(page).toHaveURL(/\/alice\/cxthub\?tab=connections$/);
+  await expect(page.locator('.tab.on')).toContainText('Connected');
+  await page.goBack();
+  await expect(page).toHaveURL(/\/alice\/cxthub\?tab=members$/);
+  await expect(matrix).toBeVisible();
+  await page.goForward();
+  await expect(page.locator('.tab.on')).toContainText('Connected');
+  await page.locator('.tabs').getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page).toHaveURL(/\/alice\/cxthub\?tab=settings$/);
+  await expect(page.locator('.permission-controls')).toBeVisible();
+  await page.reload();
   await expect(page.locator('.permission-controls')).toBeVisible();
   await expect(page.locator('.role-capabilities')).toHaveCount(0);
+  await page.locator('.tabs').getByRole('button', { name: /^Members/ }).click();
+  await expect(page).toHaveURL(/\/alice\/cxthub\?tab=members$/);
+  await expect(matrix).toBeVisible();
+  await page.locator('.tabs').getByRole('button', { name: 'Context', exact: true }).click();
+  await expect(page).toHaveURL(/\/alice\/cxthub$/);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
@@ -433,7 +451,7 @@ test('public workspace management controls deny non-maintainers without opening 
   await expect(secretsSection.getByRole('alert')).toContainText('maintainer or owner');
   await expect(page.getByRole('dialog', { name: '.cxtsecrets settings' })).toHaveCount(0);
 
-  await page.goto('/alice/cxthub/settings');
+  await page.goto('/alice/cxthub?tab=settings');
   await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
   await expect(page.locator('.ws-settings-form')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -444,7 +462,7 @@ test('anonymous public settings URL renders access denial instead of workspace c
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, publicWorkspaceApi([], []));
 
-  await page.goto('/alice/cxthub/settings');
+  await page.goto('/alice/cxthub?tab=settings');
   await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
   await expect(page.locator('.ctx-layout')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -472,8 +490,8 @@ test('signed-in non-member stays on the public workspace route and gets settings
     return publicApi(request);
   });
 
-  await page.goto('/alice/cxthub/settings');
-  await expect(page).toHaveURL(/\/alice\/cxthub\/settings$/);
+  await page.goto('/alice/cxthub?tab=settings');
+  await expect(page).toHaveURL(/\/alice\/cxthub\?tab=settings$/);
   await expect(page.getByText('Public view', { exact: true })).toBeVisible();
   await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
   await expect(page.locator('.app-side')).toHaveCount(0);

@@ -73,6 +73,7 @@ export const en: Messages = {
     profileOf: "{name}'s profile",
     language: 'Language',
     home: 'Home',
+    pageNotFound: 'Page not found.',
     publicView: 'Public view',
     noPushedContext: 'No pushed context yet.',
     itemsPerPage: '{n} / page',

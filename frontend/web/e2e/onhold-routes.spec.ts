@@ -8,7 +8,7 @@ for (const selected of ['legacy', 'named']) {
     const held = `sha256:${'2'.repeat(64)}`;
     const base = '/alice/cxthub';
     const contextPath = selected === 'legacy' ? base : `${base}/onhold`;
-    const holdPath = selected === 'legacy' ? `${base}?tab=onhold` : `${base}/onhold/onhold`;
+    const holdPath = `${contextPath}?tab=onhold`;
     const unexpected = await installApiFixture(page, ({ method, pathname }) => {
       if (method !== 'GET') return undefined;
       if (pathname === '/api/v1/me') return { body: { id: 'member', username: 'alice', locale: 'en' } };
@@ -60,9 +60,34 @@ for (const selected of ['legacy', 'named']) {
 
     if (selected === 'legacy') {
       await page.goto(`${base}/-/onhold`);
-      await expect(page.locator('.tab.on')).toHaveText('On Hold');
-      await expect(page.locator('.commit-row').first()).toContainText('legacy held snapshot');
+      await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+      await expect(page.locator('.tabs')).toHaveCount(0);
     }
+    expect(errors).toEqual([]);
+    expect(unexpected).toEqual([]);
+  });
+}
+
+for (const signedIn of [true, false]) {
+  test(`retired separator URLs do not load workspace data (${signedIn ? 'signed in' : 'anonymous'})`, async ({ page }) => {
+    const errors = capturePageErrors(page);
+    const unexpected = await installApiFixture(page, ({ method, pathname }) => {
+      if (method === 'GET' && pathname === '/api/v1/me') {
+        return signedIn
+          ? { body: { id: 'owner', username: 'alice', locale: 'en' } }
+          : { status: 401, body: { error: { message: 'anonymous fixture' } } };
+      }
+      return undefined;
+    });
+    for (const tab of ['settings', 'members', 'connections', 'onhold']) {
+      const path = `/alice/cxthub/-/${tab}?tab=${tab}`;
+      await page.goto(path);
+      await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+      await expect(page).toHaveURL(new URL(path, 'http://127.0.0.1:4174').href);
+      await expect(page.locator('.tabs')).toHaveCount(0);
+    }
+    await page.reload();
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
     expect(errors).toEqual([]);
     expect(unexpected).toEqual([]);
   });

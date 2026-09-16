@@ -1,9 +1,9 @@
 // History API routing:
 //   /<namespace>/<workspace>                       workspace overview / legacy repo
-//   /<namespace>/<workspace>?tab=onhold            legacy repository on-hold view
+//   /<namespace>/<workspace>?tab=<tab>             workspace tab / legacy repo on hold
 //   /<namespace>/<workspace>/<repository>          repository context
-//   /<namespace>/<workspace>/<repository>/onhold   repository on-hold view
-//   /<namespace>/<workspace>/-/<tab>                workspace management
+//   /<namespace>/<workspace>/<repository>?tab=onhold repository on-hold view
+// The former /-/ tab namespace is retired and resolves to not-found.
 // (Switch from hash routing: dev is vite SPA fallback by default, production requires rewrite rules)
 // Click → pushState, refresh/entry → server returns index.html then path resolution, back → popstate.
 import type { Repo, Workspace } from './types';
@@ -28,12 +28,10 @@ const RESERVED = new Set([
   'mcp',
 ]);
 
-// Workspace/repository sub-view. Management tabs use /-/ to avoid colliding
-// with repositories legitimately named "settings", "members", and so on.
+// Tabs live in the query so repository names such as "settings" stay addressable.
 export type WsTab = 'members' | 'connections' | 'onhold' | 'settings';
 
-const WORKSPACE_TABS = new Set<WsTab>(['members', 'connections', 'settings']);
-const LEGACY_TABS = new Set<WsTab>(['members', 'connections', 'onhold', 'settings']);
+const TABS = new Set<WsTab>(['members', 'connections', 'onhold', 'settings']);
 
 export type Route =
   | {
@@ -46,18 +44,18 @@ export type Route =
       legacyTab?: WsTab;
     }
   | { kind: 'user'; username: string } // /<username> (GitHub style profile)
-  | { kind: 'wsid'; id: string; repository?: ''; tab?: 'onhold' } // Legacy /w/<id>
+  | { kind: 'wsid'; id: string; repository?: ''; tab?: WsTab } // Legacy /w/<id>
   | { kind: 'invite'; token: string } // /invite/<token>
   | { kind: 'device'; code: string } // /login/device?code=XXX-XXX (CLI pairing approval)
   | { kind: 'mcpConsent'; request: string } // /connect/mcp?request=... (remote MCP OAuth consent)
   | { kind: 'pricing' } // /pricing — public storage pricing
+  | { kind: 'notFound' } // Retired routes must not mount a workspace view.
   | null;
 
 // Workspace's canonical path. Fallback to id path if slug is missing (legacy fix).
 export function wsPath(w: WorkspaceRoute, tab?: WsTab): string {
   const base = w.owner_username && w.slug ? `/${w.owner_username}/${w.slug}` : `/w/${w.id}`;
-  if (tab === 'onhold') return `${base}?tab=onhold`;
-  return tab ? `${base}/-/${tab}` : base;
+  return tab ? `${base}?tab=${tab}` : base;
 }
 
 /** Repository URL segment. Empty means a legacy two-segment repository. */
@@ -80,7 +78,7 @@ export function repoPath(
   const repository = repositorySlug(repo);
   if (!repository) return wsPath(w, tab);
   const path = `${base}/${encodeURIComponent(repository)}`;
-  return tab ? `${path}/${tab}` : path;
+  return tab ? `${path}?tab=${tab}` : path;
 }
 
 // Invitation link path.
@@ -104,6 +102,7 @@ export function parseRoute(
         return x;
       }
     });
+  if (seg.length >= 3 && seg[2] === '-') return { kind: 'notFound' };
   if (seg.length === 0 || seg.length > 4) return null;
   if (seg[0] === 'pricing' && seg.length === 1) return { kind: 'pricing' };
   if (seg[0] === 'invite' && seg.length === 2) return { kind: 'invite', token: seg[1] };
@@ -113,28 +112,25 @@ export function parseRoute(
   if (seg[0] === 'connect' && seg[1] === 'mcp' && seg.length === 2) {
     return { kind: 'mcpConsent', request: new URLSearchParams(search).get('request') ?? '' };
   }
-  // A query selects the legacy repository without consuming a repository slug.
-  // The empty slug pins that repository even if it is not first in the list.
-  const legacyView = new URLSearchParams(search).get('tab') === 'onhold'
-    ? { repository: '' as const, tab: 'onhold' as const }
-    : {};
-  if (seg[0] === 'w' && seg.length === 2) return { kind: 'wsid', id: seg[1], ...legacyView };
+  // Query tabs do not consume repository slugs. For legacy On Hold, the empty
+  // slug pins that repository even if it is not first in the list.
+  const rawTab = new URLSearchParams(search).get('tab') as WsTab;
+  const tab = TABS.has(rawTab) ? rawTab : undefined;
+  const workspaceView = tab ? { tab, ...(tab === 'onhold' ? { repository: '' as const } : {}) } : {};
+  if (seg[0] === 'w' && seg.length === 2) return { kind: 'wsid', id: seg[1], ...workspaceView };
   if (RESERVED.has(seg[0])) return null;
   if (seg.length === 1) return { kind: 'user', username: seg[0] }; // /<username> profile
-  if (seg.length === 2) return { kind: 'ws', username: seg[0], slug: seg[1], ...legacyView };
-  // Preserve bookmarks emitted by the old legacy repository link builder.
-  if (seg.length === 4 && seg[2] === '-' && seg[3] === 'onhold') {
-    return { kind: 'ws', username: seg[0], slug: seg[1], repository: '', tab: 'onhold' };
-  }
-  if (seg.length === 4 && seg[2] === '-' && WORKSPACE_TABS.has(seg[3] as WsTab)) {
-    return { kind: 'ws', username: seg[0], slug: seg[1], tab: seg[3] as WsTab };
-  }
-  if (seg.length === 4 && seg[2] !== '-' && seg[3] === 'onhold') {
+  if (seg.length === 2) return { kind: 'ws', username: seg[0], slug: seg[1], ...workspaceView };
+  if (seg.length === 4 && seg[3] === 'onhold') {
     return { kind: 'ws', username: seg[0], slug: seg[1], repository: seg[2], tab: 'onhold' };
   }
-  if (seg.length !== 3 || seg[2] === '-') return null;
-  const legacyTab = LEGACY_TABS.has(seg[2] as WsTab) ? (seg[2] as WsTab) : undefined;
-  return { kind: 'ws', username: seg[0], slug: seg[1], repository: seg[2], ...(legacyTab ? { legacyTab } : {}) };
+  if (seg.length !== 3) return null;
+  const legacyTab = TABS.has(seg[2] as WsTab) ? (seg[2] as WsTab) : undefined;
+  return {
+    kind: 'ws', username: seg[0], slug: seg[1], repository: seg[2],
+    ...(legacyTab ? { legacyTab } : {}),
+    ...(tab === 'onhold' ? { tab } : {}),
+  };
 }
 
 // Finds the workspace corresponding to the route in the list.

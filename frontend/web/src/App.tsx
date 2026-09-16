@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { wsPath, parseRoute, replacePath, findByRoute } from './route';
+import { wsPath, parseRoute, replacePath, findByRoute, navigate } from './route';
 import { useMe, useAcceptInvite, useWorkspaces } from './hooks';
 import { useLocale, useT } from './i18n';
 import { Login } from './components/Login';
@@ -69,6 +69,17 @@ function Root() {
 
   // Boot loader only during initial session check. Without isFetched, background re-fetches (status='pending' on no data) will unmount the entire subtree, causing a remount loop.
   if (me.isLoading && !me.isFetched) return <div className="loading">…</div>;
+  if (parseRoute()?.kind === 'notFound') {
+    return (
+      <main className="loading">
+        <section style={{ textAlign: 'center' }}>
+          <h1>404</h1>
+          <p>{t('common.pageNotFound')}</p>
+          <button onClick={() => navigate('/')}>{t('common.home')}</button>
+        </section>
+      </main>
+    );
+  }
   if (!authed) {
     // Non-logged in + /<username>/<slug> → public workspace: read-only view (determined by server). /login/device re-renders to approval page after login.
     const r = parseRoute();
