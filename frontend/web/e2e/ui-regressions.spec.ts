@@ -1443,3 +1443,20 @@ test('branch birth and completed join keep feature off the main lane', async ({ 
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+
+test('same-snapshot PR completion closes the branch without a ref movement', async ({ page }) => {
+  const snapshots = [{id: pushedHead, repo_id: repoId, branch: 'main', parents: [], doc_hash: pushedHead, provider: 'codex', fidelity: 'full', message: 'shared archive', created_at: '2026-09-16T00:00:00Z'}];
+  const refs = ['main', 'feature/no-context-change'].map(name => ({repo_id: repoId, kind: 'branch', name, target: pushedHead}));
+  const birth = {id: 'birth', repo_id: repoId, branch_id: 'feature-id', branch: 'feature/no-context-change', kind: 'birth', source: pushedHead, target: pushedHead, created_at: '2026-09-16T00:00:01Z'};
+  const completed = {...birth, id: 'completed', kind: 'pr-merge', branch: 'main', branch_id: 'main-id', source_branch_id: 'feature-id', shared_target: pushedHead, pr_completed: true,
+    pr: {number: 1, base_branch: 'main', head_branch: birth.branch, head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40)}, created_at: '2026-09-16T00:00:02Z'};
+  const {pageErrors, unexpected} = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], [birth, completed]));
+  await expect(page.locator('[data-graph-event="merge"]')).toHaveCount(1);
+  await expect(page.locator('[data-graph-event="merge"]')).toHaveAttribute('data-graph-node-lane', '0');
+  await expect(page.locator('[data-graph-event="birth"]')).not.toHaveAttribute('data-graph-node-lane', '0');
+  const lane = await page.locator('[data-graph-event="birth"]').getAttribute('data-graph-node-lane');
+  await expect(page.locator(`.graph-lane-label[data-graph-lane="${lane}"]`)).toHaveAttribute('aria-label', birth.branch);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

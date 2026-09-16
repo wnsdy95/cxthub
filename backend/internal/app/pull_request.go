@@ -136,14 +136,61 @@ func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.Content
 		if yes, err := s.engine.IsAncestor(ctx, repoID, receipt.Source, current.Target); err != nil {
 			return zero, err
 		} else if yes {
-			return inbound.UpdateRefOutput{Ref: current, ServerTarget: current.Target, RequestedTarget: receipt.Source, Result: inbound.RefUpToDate}, nil
+			return s.completePRPromotion(ctx, receipt, current.Target, inbound.UpdateRefOutput{Ref: current, ServerTarget: current.Target, RequestedTarget: receipt.Source, Result: inbound.RefUpToDate})
 		}
 		out, err := s.UpdateRef(ctx, inbound.UpdateRefInput{RepoID: repoID, Ref: domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: baseName, BranchID: receipt.BranchID, Target: receipt.Source}, ExpectedTarget: current.Target, Append: true})
+		if err == nil {
+			return s.completePRPromotion(ctx, receipt, current.Target, out)
+		}
 		if !errors.Is(err, domain.ErrRefConflict) {
 			return out, err
 		}
 	}
 	return zero, domain.ErrRefConflict
+}
+
+// Binding and completion are separate immutable events. If recording completion
+// fails after append, the next delivery verifies reachability and retries it.
+// This also proves joins that leave the base ref unchanged.
+func (s *Service) completePRPromotion(ctx context.Context, receipt domain.HistoryEvent, before domain.ContentHash, out inbound.UpdateRefOutput) (inbound.UpdateRefOutput, error) {
+	key := sha256.Sum256([]byte(receipt.ID + ":completed"))
+	id := fmt.Sprintf("%x", key[:16])
+	accepted := func() (bool, error) {
+		rows, err := s.ListHistory(ctx, domain.ContentHash(receipt.RepoID))
+		if err != nil {
+			return false, err
+		}
+		for _, e := range rows {
+			if e.ID != id {
+				continue
+			}
+			if e.Kind != "pr-merge" || !e.PRCompleted || e.PR == nil || *e.PR != *receipt.PR || e.Source != receipt.Source || e.SourceBranchID != receipt.SourceBranchID || e.BranchID != receipt.BranchID {
+				return false, domain.ErrRefConflict
+			}
+			return true, nil
+		}
+		return false, nil
+	}
+	if exists, err := accepted(); exists || err != nil {
+		return out, err
+	}
+	completed := receipt
+	completed.ID = id
+	completed.PRCompleted = true
+	completed.SharedTarget = before
+	completed.Target = out.Ref.Target
+	completed.Branch = out.Ref.Name
+	completed.CreatedAt = time.Now().UTC()
+	if err := s.recordHistory(ctx, completed, true); err != nil {
+		if !errors.Is(err, domain.ErrRefConflict) {
+			return out, err
+		}
+		if exists, readErr := accepted(); exists || readErr != nil {
+			return out, readErr
+		}
+		return out, err
+	}
+	return out, nil
 }
 
 var legacyPRGitLink = regexp.MustCompile(`\[git ([0-9a-f]{40}|[0-9a-f]{64})\]`)

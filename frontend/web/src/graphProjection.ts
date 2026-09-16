@@ -32,13 +32,22 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     if (h.kind !== 'pr-merge' && h.target) addTip(h.target, h.branch);
   }
   let projectedHead = pinHead;
-  const merges: Array<{ id: string; before: string; source: string; branch: string; from: string; at: string; identity?: string }> = [];
+  const merges: Array<{ id: string; before: string; after: string; source: string; branch: string; from: string; at: string; identity?: string }> = [];
+  const completed = history.filter(h => h.kind === 'pr-merge' && h.pr_completed && h.pr && h.source && h.target && h.shared_target
+    && byId.has(h.source) && byId.has(h.target) && byId.has(h.shared_target)
+    && reachableSnapshotIds([h.target], snapshots).has(h.source)
+    && reachableSnapshotIds([h.target], snapshots).has(h.shared_target));
+  for (const h of completed) {
+    merges.push({id: `graph:merge:${h.id}`, before: h.shared_target!, after: h.target!, source: h.source!, branch: h.branch,
+      from: h.pr!.head_branch, at: h.created_at, identity: h.source_branch_id});
+  }
   // Chronological ref order is evidence order. Reject ambiguous names, backward
   // moves and missing endpoints instead of inferring them from snapshot.branch.
   for (const move of reflog) {
     if (move.kind !== 'branch' || !move.old || !move.new || move.old === move.new || !byId.has(move.old) || !byId.has(move.new)) continue;
     if (!reachableSnapshotIds([move.new], snapshots).has(move.old)) continue;
-    const receipts = history.filter(h => h.kind === 'pr-merge' && h.branch === move.name && h.source === move.new && h.shared_target === move.old && h.pr && time(h.created_at) <= time(move.created_at));
+    const receipts = history.filter(h => h.kind === 'pr-merge' && !h.pr_completed && h.branch === move.name && h.source === move.new && h.shared_target === move.old && h.pr && time(h.created_at) <= time(move.created_at));
+    if (completed.some(h => h.branch === move.name && h.shared_target === move.old && h.target === move.new)) continue;
     const candidates = [...(branchTips.get(move.new) ?? [])].filter(name => name !== move.name);
     const incoming = reachableSnapshotIds([move.new], snapshots);
     const previous = reachableSnapshotIds([move.old], snapshots);
@@ -48,7 +57,7 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     if (receipts.length !== 1 && !hasAppendEdge) continue;
     const from = receipts.length === 1 ? receipts[0].pr!.head_branch : candidates.length === 1 ? candidates[0] : undefined;
     if (!from) continue;
-    merges.push({ id: `graph:merge:${move.created_at}:${move.name}:${move.old}:${move.new}`, before: move.old, source: move.new, branch: move.name, from, at: move.created_at, identity: receipts[0]?.source_branch_id });
+    merges.push({ id: `graph:merge:${move.created_at}:${move.name}:${move.old}:${move.new}`, before: move.old, after: move.new, source: move.new, branch: move.name, from, at: move.created_at, identity: receipts[0]?.source_branch_id });
   }
   merges.sort((a,b) => time(a.at) - time(b.at) || a.id.localeCompare(b.id));
   const mergeForTip = new Map<string, string>();
@@ -59,8 +68,8 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     const node: Snapshot = { ...source, id: merge.id, branch: merge.branch, parents: [previous, merge.source], graft_parents: [], grafted: false,
       created_at: merge.at, message: `${merge.from} → ${merge.branch}`, memory_hash: undefined, session_id: undefined };
     nodes.set(merge.id, { ...node, parents: node.parents ?? [], graft_parents: [] });
-    events.set(merge.id, { kind: 'merge', branch: merge.branch, sourceBranch: merge.from, snapshot: merge.source, evidence: 'ref-move' });
-    mergeForTip.set(`${merge.branch}:${merge.source}`, merge.id);
+    events.set(merge.id, { kind: 'merge', branch: merge.branch, sourceBranch: merge.from, snapshot: merge.source, evidence: completed.find(h => `graph:merge:${h.id}` === merge.id)?.id ?? 'ref-move' });
+    mergeForTip.set(`${merge.branch}:${merge.after}`, merge.id);
     // The verified ref move already represents this append edge. Drawing its
     // storage graft too would invert main and feature paths a second time.
     const segment = reachableSnapshotIds([merge.source], snapshots);
@@ -73,9 +82,9 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     for (const n of nodes.values()) {
       const membership = history.some(h => h.kind === 'advance' && h.branch === merge.branch && h.target === n.id);
       if (n.id === merge.id || events.has(n.id) || segment.has(n.id) || (!membership && n.branch !== merge.branch)) continue;
-      n.parents = n.parents.map(p => p === merge.source ? merge.id : p);
+      n.parents = n.parents.map(p => p === merge.after ? merge.id : p);
     }
-    if (pinBranch === merge.branch && pinHead === merge.source) projectedHead = merge.id;
+    if (pinBranch === merge.branch && pinHead === merge.after) projectedHead = merge.id;
   }
   for (const birth of births.values()) {
     const source = byId.get(birth.source!)!;

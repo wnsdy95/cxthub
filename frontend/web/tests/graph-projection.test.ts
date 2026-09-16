@@ -56,3 +56,22 @@ assert.deepEqual(op.snapshots.find(s=>s.id==='orphan-tip')?.parents,['graph:birt
 const connected=layoutGraph([snap('merge','main',['left','right'],3),snap('other','topic',['right'],4),snap('left','main',[],1),snap('right','topic',[],0)],'merge');
 const mr=connected.rows.find(r=>r.snap.id==='merge')!;
 assert.ok(mr.branchesOut.some(lane=>mr.outgoing[lane]==='right'));
+
+// A server completion proves the no-op join even without any ref movement.
+const done:HistoryEvent={...pending,id:'done',pr_completed:true,source:'root',target:'root',shared_target:'root'};
+const sameRefs=refs.map(r=>({...r,target:'root'}));
+const complete=projectBranchGraph([snapshots[0]],sameRefs,[birth,done],[],'root','main');
+const cm=[...complete.events].find(([,e])=>e.kind==='merge')![0];
+assert.deepEqual(complete.snapshots.find(s=>s.id===cm)?.parents,['root','graph:birth:birth']);
+assert.equal(complete.pinHead,cm);
+const cr=layoutGraph(complete.snapshots,complete.pinHead).rows;
+assert.equal(cr.find(r=>r.snap.id===cm)?.lane,0);
+assert.notEqual(cr.find(r=>r.snap.id==='graph:birth:birth')?.lane,0);
+// One successful append with both a ref movement and completion draws one join.
+const appended={...pending,id:'appended',pr_completed:true,created_at:at(6)};
+assert.equal([...projectBranchGraph(snapshots,refs,[birth,advance,pending,appended],[log],'tip','main').events.values()].filter(e=>e.kind==='merge').length,1);
+// Already-contained source may differ from the unchanged main tip.
+const contained={...done,source:'root',target:'tip',shared_target:'tip'};
+const containedProjection=projectBranchGraph(ordinary,refs,[birth,contained],[],'tip','main');
+const containedMerge=[...containedProjection.events].find(([,e])=>e.kind==='merge')![0];
+assert.deepEqual(containedProjection.snapshots.find(s=>s.id===containedMerge)?.parents,['tip','graph:birth:birth']);

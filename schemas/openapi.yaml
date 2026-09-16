@@ -149,6 +149,7 @@ components:
         pr: { $ref: '#/components/schemas/PullRequestMerge' }
         recovery_evidence: { type: string, enum: [user-confirmed-unborn-head] }
         source_branch_id: { type: string, maxLength: 128 }
+        pr_completed: { type: boolean, description: Separate server receipt confirming successful context promotion, including no-op joins. }
         name_parent: {type: string, description: Operation that released the rename destination.}
         kind: { type: string, enum: [birth, attach, orphan, position, advance, rename, archive, pr-merge] }
         shared_target: { $ref: '#/components/schemas/ContentHash' }

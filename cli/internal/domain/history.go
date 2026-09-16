@@ -11,6 +11,8 @@ import (
 // content. ID is generated once before Git commits, and reused on every retry.
 // Source is conversation ancestry; MemorySource is provenance only (orphan).
 type HistoryEvent struct {
+	// PRCompleted marks a separate server receipt issued only after successful promotion.
+	PRCompleted      bool              `json:"pr_completed,omitempty"`
 	RecoveryEvidence string            `json:"recovery_evidence,omitempty"`
 	PR               *PullRequestMerge `json:"pr,omitempty"`
 	SourceBranchID   string            `json:"source_branch_id,omitempty"`
@@ -62,13 +64,13 @@ func ValidateHistoryEvent(e HistoryEvent) error {
 		return fmt.Errorf("invalid recovery evidence")
 	}
 	if e.Kind == "pr-merge" {
-		if e.PR == nil || e.SourceBranchID == "" || len(e.SourceBranchID) > 128 || e.Source == "" || e.Target != e.Source || e.Branch != e.PR.BaseBranch {
+		if e.PR == nil || e.SourceBranchID == "" || len(e.SourceBranchID) > 128 || e.Source == "" || e.Target == "" || (!e.PRCompleted && (e.Target != e.Source || e.Branch != e.PR.BaseBranch)) {
 			return fmt.Errorf("invalid PR context binding")
 		}
 		if err := e.PR.Validate(); err != nil {
 			return err
 		}
-	} else if e.PR != nil || e.SourceBranchID != "" {
+	} else if e.PR != nil || e.SourceBranchID != "" || e.PRCompleted {
 		return fmt.Errorf("unexpected PR metadata")
 	}
 	if e.LocalBranch != "" {

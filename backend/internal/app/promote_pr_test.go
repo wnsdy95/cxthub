@@ -96,7 +96,7 @@ func TestPRBindingSurvivesRenameReuseAndConcurrentReplay(t *testing.T) {
 	}
 	count := 0
 	for _, e := range events {
-		if e.Kind == "pr-merge" {
+		if e.Kind == "pr-merge" && !e.PRCompleted {
 			count++
 			if e.Source != f || e.SourceBranchID != "original" {
 				t.Fatalf("bad receipt: %+v", e)
@@ -196,7 +196,7 @@ func TestPRConcurrentFirstDeliveryFreezesExactCommit(t *testing.T) {
 	}
 	count := 0
 	for _, row := range rows {
-		if row.Kind == "pr-merge" {
+		if row.Kind == "pr-merge" && !row.PRCompleted {
 			count++
 		}
 	}
@@ -207,5 +207,76 @@ func TestPRConcurrentFirstDeliveryFreezesExactCommit(t *testing.T) {
 	pr.HeadSHA = strings.Repeat("c", 40)
 	if _, err := svc.PromoteMergedPR(ctx, "https://github.com/acme/race", pr); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("missing association silently acknowledged: %v", err)
+	}
+}
+
+// Publication can fail after a successful no-op promotion. Retry must publish
+// one completion without modifying either the source binding or the ref.
+type failingCompletionStore struct {
+	*store.FSStore
+	fail bool
+}
+
+func (s *failingCompletionStore) ApplyHistoryEvent(ctx context.Context, e domain.HistoryEvent) error {
+	if s.fail && e.PRCompleted {
+		return errors.New("completion unavailable")
+	}
+	return s.FSStore.ApplyHistoryEvent(ctx, e)
+}
+func TestPRNoOpCompletionRetriesWithoutRefMove(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("same-hash-pr")
+	st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/a/b"})
+	m := prSnapshot(t, st, repo, "shared content")
+	st.CompareAndSwapRef(ctx, repo, domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "main", Target: m}, "")
+	pr := domain.PullRequestMerge{Number: 2, BaseBranch: "main", HeadBranch: "feature/x", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)}
+	birth := domain.HistoryEvent{ID: strings.Repeat("6", 32), RepoID: string(repo), BranchID: "same-work", Branch: pr.HeadBranch, Kind: "birth", Source: m, Target: m, GitAfter: pr.HeadSHA, CreatedAt: time.Now().UTC()}
+	if err := svc.RecordHistory(ctx, birth); err != nil {
+		t.Fatal(err)
+	}
+	failing := &failingCompletionStore{FSStore: st, fail: true}
+	svc.meta = failing
+	if _, err := svc.PromoteRepositoryPR(ctx, repo, pr); err == nil {
+		t.Fatal("completion failure was acknowledged")
+	}
+	rows, _ := svc.ListHistory(ctx, repo)
+	for _, e := range rows {
+		if e.PRCompleted {
+			t.Fatal("failed completion was published")
+		}
+	}
+	failing.fail = false
+	for i := 0; i < 2; i++ {
+		if _, err := svc.PromoteRepositoryPR(ctx, repo, pr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, _ = svc.ListHistory(ctx, repo)
+	bindings, completed := 0, 0
+	for _, e := range rows {
+		if e.Kind != "pr-merge" {
+			continue
+		}
+		if !e.PRCompleted {
+			bindings++
+			continue
+		}
+		completed++
+		if e.Source != m || e.Target != m || e.SharedTarget != m || e.SourceBranchID != birth.BranchID {
+			t.Fatalf("completion=%+v", e)
+		}
+		forged := e
+		forged.ID = strings.Repeat("7", 32)
+		if err := svc.RecordHistory(ctx, forged); !errors.Is(err, domain.ErrForbidden) {
+			t.Fatalf("forged completion accepted: %v", err)
+		}
+	}
+	if bindings != 1 || completed != 1 {
+		t.Fatalf("bindings=%d completed=%d", bindings, completed)
+	}
+	ref, _ := st.GetRef(ctx, repo, domain.RefBranch, "main")
+	if ref.Target != m {
+		t.Fatal("no-op changed ref")
 	}
 }

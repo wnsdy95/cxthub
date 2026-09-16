@@ -357,3 +357,22 @@ Existing archive and previous-progress controls still apply to conversation
 rows. Proven operation nodes are distinguishable from snapshots and do not
 inflate pushed/unpushed/uncommitted counts. Unknown legacy births/joins stay
 unknown; the UI does not fabricate them from conversation labels.
+
+
+### Completed PR joins without a ref move
+
+A PR source binding is recorded before promotion and is not proof of success.
+After the server verifies that the source is reachable from the base (including
+an already-contained or same-snapshot source), it records a separate immutable
+`pr-merge` event with `pr_completed: true`. Its `source` is the bound PR context,
+`shared_target` is the observed base before the successful attempt, and `target`
+is the resulting base context. The operation ID derives from the binding ID;
+repeated deliveries publish one completion. A failed completion write is retried
+without rewriting the binding, archive, or ref.
+
+The graph uses this server completion to draw a join even when no ref moved.
+It deduplicates a matching reflog join and retains the source identity's birth
+and lane. Pending bindings alone still never draw completed joins. Deploy the
+matching CLI with the server so pulled history preserves completion metadata.
+Older bindings acquire completion records when verified PR promotion is replayed;
+the renderer does not infer completion from an old binding alone.
