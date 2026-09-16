@@ -32,6 +32,7 @@ type Store interface {
 	outbound.EnterpriseStore
 	outbound.OAuthStore
 	outbound.PRJobStore
+	outbound.RuntimeStore
 	// ApplyMigrations applies schema migrations idempotently (FS is no-op).
 	ApplyMigrations(ctx context.Context, dir string) (int, error)
 }

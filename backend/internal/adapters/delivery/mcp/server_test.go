@@ -90,6 +90,20 @@ func remoteMCPHeaders(token string) map[string]string {
 	return headers
 }
 
+func TestMCPAllowanceSharedAcrossServerInstances(t *testing.T) {
+	dir := t.TempDir()
+	a := &requestGate{limit: 1, window: time.Minute, store: store.NewFSStore(dir), key: "mcp:test"}
+	b := &requestGate{limit: 1, window: time.Minute, store: store.NewFSStore(dir), key: "mcp:test"}
+	s := &Server{}
+	for i, g := range []*requestGate{a, b} {
+		w := httptest.NewRecorder()
+		s.mcpRateLimit(g, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })(w, httptest.NewRequest("POST", "/mcp", nil))
+		if want := []int{204, 429}[i]; w.Code != want {
+			t.Fatalf("instance %d: %d want %d", i, w.Code, want)
+		}
+	}
+}
+
 func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewFSStore(t.TempDir())
@@ -122,6 +136,13 @@ func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
 	server, err := NewServer(backend, id, st, "https://cxthub.test")
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	for _, selector := range []string{string(repoID), "oauth-user/project/app", "https://cxthub.test/oauth-user/project/app"} {
+		resolved, err := server.resolveRepository(ctx, user, selector)
+		if err != nil || resolved.ID != repoID {
+			t.Fatalf("repository selector %q: %v", selector, err)
+		}
 	}
 
 	// A client may request only authorization_code; refresh support is a server

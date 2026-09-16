@@ -3,10 +3,10 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/app"
@@ -254,40 +254,28 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/break-glass", s.requireUser(s.createBreakGlassGrant))
 }
 
-// rateLimit is a simple in-memory sliding window that allows limit requests per IP window.
-// It's used for indiscriminate brute force/spam defense at the login entry point (in a distributed environment, the front-end LB/gateway handles this).
+// rateLimit uses a shared GCRA allowance. Proxy forwarding headers are never
+// trusted implicitly; deployments should additionally enforce source limits at the edge.
 func (s *Server) rateLimit(limit int, window time.Duration, fn http.HandlerFunc) http.HandlerFunc {
-	var mu sync.Mutex
-	hits := map[string][]time.Time{}
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.runtime == nil {
+			s.writeError(w, 503, "unavailable", "shared request allowance unavailable")
+			return
+		}
 		ip := r.RemoteAddr
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		if host, _, err := net.SplitHostPort(ip); err == nil {
 			ip = host
 		}
-		now := time.Now()
-		mu.Lock()
-		recent := hits[ip][:0]
-		for _, t := range hits[ip] {
-			if now.Sub(t) < window {
-				recent = append(recent, t)
-			}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		allowed, err := s.runtime.AllowRequest(ctx, "http:"+r.URL.Path+":"+domain.HashToken(ip), limit, window, time.Time{})
+		if err != nil {
+			s.writeError(w, 503, "unavailable", "request allowance unavailable")
+			return
 		}
-		over := len(recent) >= limit
-		if over {
-			hits[ip] = recent
-		} else {
-			hits[ip] = append(recent, now)
-		}
-		if len(hits) > 10000 { // memory limit — clean up old IPs
-			for k, v := range hits {
-				if len(v) == 0 || now.Sub(v[len(v)-1]) > window {
-					delete(hits, k)
-				}
-			}
-		}
-		mu.Unlock()
-		if over {
-			s.writeError(w, http.StatusTooManyRequests, "rate_limited", "Too many requests — please retry later")
+		if !allowed {
+			w.Header().Set("Retry-After", fmt.Sprint(max(1, int(window.Seconds()))))
+			s.writeError(w, 429, "rate_limited", "Too many requests — please retry later")
 			return
 		}
 		fn(w, r)

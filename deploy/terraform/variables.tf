@@ -122,3 +122,13 @@ variable "github_repository" {
     error_message = "github_repository must be in owner/repository format."
   }
 }
+
+variable "max_instances" {
+  description = "cxtd replica cap. Validate staging load, gateway limits, and aggregate database connections before increasing."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.max_instances >= 1 && var.max_instances <= 20 && floor(var.max_instances) == var.max_instances
+    error_message = "max_instances must be an integer from 1 to 20."
+  }
+}

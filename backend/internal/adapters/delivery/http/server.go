@@ -23,6 +23,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // Backend is a set of server actions required by REST handlers (app.Service implements).
@@ -92,12 +93,11 @@ type Backend interface {
 type Server struct {
 	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (workspace ID set).
 	syncInflight sync.Map
-	// device represents the current state of the CLI pairing (device flow) in progress (device_flow.go).
-	device devicePairings
-	b      Backend
-	id     IdentityBackend
-	cookie cookieCfg // session cookie attributes (env injected; tuned per deployment topology)
-	cors   []string  // allowed Origin whitelist (empty reflects requested Origin — dev convenience)
+	runtime      outbound.RuntimeStore
+	b            Backend
+	id           IdentityBackend
+	cookie       cookieCfg // session cookie attributes (env injected; tuned per deployment topology)
+	cors         []string  // allowed Origin whitelist (empty reflects requested Origin — dev convenience)
 }
 
 // cookieCfg are security attributes for session cookies (HttpOnly). Tokens are passed as cookies that JS cannot read.
@@ -110,7 +110,11 @@ type cookieCfg struct {
 // NewServer creates a Server by injecting Backend and IdentityBackend.
 // Cookie/CORS settings are read from environment variables (CXT_COOKIE_*, CXT_CORS_ORIGINS).
 func NewServer(b Backend, id IdentityBackend) *Server {
-	return &Server{b: b, id: id, cookie: loadCookieCfg(), cors: splitCSV(os.Getenv("CXT_CORS_ORIGINS"))}
+	var runtime outbound.RuntimeStore
+	if provider, ok := id.(interface{ RuntimeStore() outbound.RuntimeStore }); ok {
+		runtime = provider.RuntimeStore()
+	}
+	return &Server{b: b, id: id, runtime: runtime, cookie: loadCookieCfg(), cors: splitCSV(os.Getenv("CXT_CORS_ORIGINS"))}
 }
 
 // loadCookieCfg reads cookie attributes from CXT_COOKIE_SECURE / _SAMESITE / _DOMAIN.

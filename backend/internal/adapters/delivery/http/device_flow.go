@@ -1,10 +1,11 @@
 package http
 
 import (
+	"context"
 	"crypto/rand"
+	"errors"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -18,26 +19,12 @@ import (
 //	          → user approves on web (login required)
 //	          → CLI polling (poll) → token issuance and one-time delivery upon approval confirmation
 //
-// Security: Separates approval authority (short code) and receipt authority (long poll_token) — even if the code is guessed, a token cannot be received without the poll_token. The code is one-time use + 5-minute TTL. Pairing status is in-memory (temporary state — CLI will receive expiration notice upon server restart and can retry).
+// Security: Separates approval authority (short code) and receipt authority (long poll_token) — even if the code is guessed, a token cannot be received without the poll_token. The code is one-time use + 5-minute TTL. Pairing state is shared and expires in the database; any server instance may handle each step.
 
 const (
 	devicePairTTL      = 5 * time.Minute
 	devicePollInterval = 3 // seconds — CLI polling interval guidance
 )
-
-// pairing is the ongoing device flow.
-type pairing struct {
-	pollHash  string // hash of the receipt secret (original is not stored in memory)
-	userID    string // approved user ("" = pending)
-	label     string // device display name sent by CLI (hostname — appended to issued token)
-	expiresAt time.Time
-}
-
-// devicePairings is the server's pairing status (code → pairing).
-type devicePairings struct {
-	mu sync.Mutex
-	m  map[string]*pairing
-}
 
 // newDeviceCode generates a short code for humans: excludes confusing characters (0/O/1/I, vowels) 6 characters, XXX-XXX.
 func newDeviceCode() string {
@@ -63,24 +50,31 @@ func (s *Server) deviceStart(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeLoose(r, &body) // for backward compatibility with old CLI (no body)
 	poll := domain.NewID("dpoll_")
-	code := newDeviceCode()
-	if code == "" {
-		s.writeError(w, http.StatusInternalServerError, "internal", "code generation failed")
+	if s.runtime == nil {
+		s.writeError(w, 503, "unavailable", "shared device state unavailable")
 		return
 	}
-	now := time.Now()
-	s.device.mu.Lock()
-	if s.device.m == nil {
-		s.device.m = map[string]*pairing{}
+	label := []rune(strings.TrimSpace(body.Label))
+	if len(label) > 64 {
+		label = label[:64]
 	}
-	// lazy cleanup (expired codes) — pairing is minimal and specific, so this is sufficient.
-	for k, p := range s.device.m {
-		if now.After(p.expiresAt) {
-			delete(s.device.m, k)
+	var code string
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		code = newDeviceCode()
+		if code == "" {
+			s.writeError(w, 500, "internal", "code generation failed")
+			return
+		}
+		err = s.runtime.CreateDevicePairing(r.Context(), domain.DevicePairing{Code: code, PollHash: domain.HashToken(poll), Label: string(label), ExpiresAt: time.Now().UTC().Add(devicePairTTL)})
+		if !errors.Is(err, domain.ErrConflict) {
+			break
 		}
 	}
-	s.device.m[code] = &pairing{pollHash: domain.HashToken(poll), label: strings.TrimSpace(body.Label), expiresAt: now.Add(devicePairTTL)}
-	s.device.mu.Unlock()
+	if err != nil {
+		s.writeError(w, 503, "unavailable", "device state unavailable")
+		return
+	}
 
 	s.respond(w, map[string]any{
 		"code":       code,
@@ -100,17 +94,15 @@ func (s *Server) deviceApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	code := strings.ToUpper(strings.TrimSpace(body.Code))
 	u, _ := userFrom(r.Context())
-	s.device.mu.Lock()
-	p := s.device.m[code]
-	valid := p != nil && time.Now().Before(p.expiresAt)
-	if valid {
-		p.userID = u.ID
-	}
-	s.device.mu.Unlock()
-	if !valid {
-		s.writeError(w, http.StatusNotFound, "not_found", "code expired or does not exist — run cxt login again in your terminal")
+	if s.runtime == nil {
+		s.writeError(w, 503, "unavailable", "shared device state unavailable")
 		return
 	}
+	if err := s.runtime.ApproveDevicePairing(r.Context(), code, u.ID, time.Now().UTC()); err != nil {
+		s.respond(w, nil, err)
+		return
+	}
+
 	s.respond(w, map[string]string{"status": "approved"}, nil)
 }
 
@@ -124,27 +116,21 @@ func (s *Server) devicePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := strings.ToUpper(strings.TrimSpace(body.Code))
-	s.device.mu.Lock()
-	p := s.device.m[code]
-	// Consolidates existence, expiration, and reception permissions into a single 404 (information non-disclosure).
-	if p == nil || time.Now().After(p.expiresAt) || domain.HashToken(body.PollToken) != p.pollHash {
-		s.device.mu.Unlock()
-		s.writeError(w, http.StatusNotFound, "not_found", "Expired or invalid pairing")
-		return
-	}
-	if p.userID == "" {
-		s.device.mu.Unlock()
-		s.respond(w, map[string]string{"status": "pending"}, nil)
-		return
-	}
-	userID, label := p.userID, p.label
-	delete(s.device.m, code) // One-time — expires immediately upon reception
-	s.device.mu.Unlock()
 
-	sess, err := s.id.CreateCLIToken(r.Context(), userID, label)
+	service, ok := s.id.(interface {
+		RedeemDevicePairing(context.Context, string, string) (domain.Session, bool, error)
+	})
+	if !ok {
+		s.writeError(w, 503, "unavailable", "shared device state unavailable")
+		return
+	}
+	sess, approved, err := service.RedeemDevicePairing(r.Context(), code, domain.HashToken(body.PollToken))
 	if err != nil {
-		code, status := mapError(err)
-		s.writeError(w, status, code, err.Error())
+		s.respond(w, nil, err)
+		return
+	}
+	if !approved {
+		s.respond(w, map[string]string{"status": "pending"}, nil)
 		return
 	}
 	s.respond(w, map[string]any{"status": "approved", "token": sess.Token, "expires_at": sess.ExpiresAt}, nil)

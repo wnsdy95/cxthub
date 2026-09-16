@@ -121,7 +121,7 @@ func (s *Server) visibleRepositories(ctx context.Context, user domain.User) ([]d
 
 func (s *Server) resolveRepository(ctx context.Context, user domain.User, selector string) (domain.Repo, error) {
 	selector = strings.Trim(strings.TrimSpace(selector), "/")
-	if parsed, err := url.Parse(selector); err == nil && parsed.IsAbs() {
+	if parsed, err := url.Parse(selector); err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" {
 		selector = strings.Trim(parsed.Path, "/")
 	}
 	repos, err := s.visibleRepositories(ctx, user)

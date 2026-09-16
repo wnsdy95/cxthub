@@ -1168,7 +1168,7 @@ func TestServerDoesNotExposeLocalLoad(t *testing.T) {
 }
 
 func TestRateLimitDoesNotCountRejectedRequests(t *testing.T) {
-	s := &Server{}
+	s := &Server{runtime: store.NewFSStore(t.TempDir())}
 	accepted := 0
 	h := s.rateLimit(2, time.Minute, func(w http.ResponseWriter, _ *http.Request) {
 		accepted++
