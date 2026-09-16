@@ -49,10 +49,7 @@ assert.deepEqual(parseRoute('/acme/platform/backend'), {
   repository: 'backend',
 });
 assert.deepEqual(parseRoute('/acme/platform/-/settings'), {
-  kind: 'ws',
-  username: 'acme',
-  slug: 'platform',
-  tab: 'settings',
+  kind: 'notFound',
 });
 assert.deepEqual(parseRoute('/acme/platform/settings'), {
   kind: 'ws',
@@ -62,12 +59,12 @@ assert.deepEqual(parseRoute('/acme/platform/settings'), {
   legacyTab: 'settings',
 });
 const workspace = { id: 'ws_1', owner_username: 'acme', slug: 'platform' };
-assert.equal(wsPath(workspace, 'members'), '/acme/platform/-/members');
+assert.equal(wsPath(workspace, 'members'), '/acme/platform?tab=members');
 assert.equal(repositorySlug({ remote_url: 'https://cxthub.com/acme/platform/backend' }), 'backend');
 assert.equal(repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform/backend' }), '/acme/platform/backend');
 assert.equal(
   repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform/backend' }, 'onhold'),
-  '/acme/platform/backend/onhold',
+  '/acme/platform/backend?tab=onhold',
 );
 assert.equal(
   repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform' }),

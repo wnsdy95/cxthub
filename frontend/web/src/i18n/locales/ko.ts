@@ -76,6 +76,7 @@ export const ko = {
     profileOf: '{name} 프로필',
     language: '언어',
     home: '홈',
+    pageNotFound: '페이지를 찾을 수 없습니다.',
     publicView: '공개 열람',
     noPushedContext: '아직 push 된 컨텍스트가 없습니다.',
     itemsPerPage: '{n}개씩',

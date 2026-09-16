@@ -60,6 +60,15 @@ implies `-c` in Git, so those flags cannot define opposite identity policies.
 
 ## Graph and history browser
 
+Workspace tabs use `/<namespace>/<workspace>?tab=members`, `?tab=connections`,
+`?tab=settings`, and `?tab=onhold`. A named repository uses
+`/<namespace>/<workspace>/<repository>?tab=onhold`; the context tab uses the
+repository URL without a tab query. Repository names such as `settings` remain
+valid because tab selection is separate from the path. The former `/-/` tab
+URLs render a not-found screen and do not redirect or load workspace views.
+Tab URLs do not grant access; the backend's existing role checks remain the
+authorization boundary.
+
 For existing progress `A -> B -> C`, selecting code/context A and later saving
 D produces two real paths:
 
