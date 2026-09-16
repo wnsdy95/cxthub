@@ -731,6 +731,9 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
+		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
+			return fmt.Errorf("rewritten context associations remain pending: %w", err)
+		}
 		force := flagPresent(rest, "--force") || flagPresent(rest, "-f")
 		appendDiverged := flagPresent(rest, "--append")
 		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged})

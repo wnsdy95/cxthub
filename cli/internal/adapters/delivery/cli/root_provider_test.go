@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,6 +56,42 @@ func (noOpMemorize) Memorize(_ context.Context, in inbound.MemorizeInput) (inbou
 		SnapshotID: domain.ContentHash(in.Ref),
 		MemoryHash: domain.HashContent([]byte("memory")),
 	}, nil
+}
+
+func TestAppCommitUsesExactSessionAcrossRelatedWorktrees(t *testing.T) {
+	cwd, _, _, _, _ := historyFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CXT_WRAPPED", "")
+	id := "11111111-1111-4111-8111-111111111111"
+	t.Setenv("CODEX_THREAD_ID", id)
+	owned := writeCodexRollout(t, home, cwd, id, time.Now())
+	if err := capture.TrackAppSession(cwd, domain.ProviderCodex, id, owned); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	runLifecycleGit(t, cwd, "worktree", "add", "-b", "feature", linked)
+	newer := "22222222-2222-4222-8222-222222222222"
+	writeCodexRollout(t, home, linked, newer, time.Now().Add(time.Minute))
+	save := &recordingSave{}
+	if _, err := snapshotForCommit(context.Background(), &Container{Save: save, Memorize: noOpMemorize{}}, linked, "test commit"); err != nil {
+		t.Fatal(err)
+	}
+	if save.in.SessionPath != owned || save.in.Cwd != linked {
+		t.Fatalf("command used wrong session/worktree: %+v", save.in)
+	}
+	if got := capture.ActiveAppSessions(linked); len(got) != 0 {
+		t.Fatal("cross-worktree command widened background session discovery")
+	}
+	other, _, _, _, _ := historyFixture(t)
+	if _, err := capture.LocateRegisteredAppSession(other, domain.ProviderCodex, id); err == nil {
+		t.Fatal("captured a session from a different Git repository")
+	}
+	t.Setenv("CODEX_THREAD_ID", "33333333-3333-4333-8333-333333333333")
+	target, err := commandCapture(context.Background(), linked, "codex")
+	if !errors.Is(err, domain.ErrNoActiveSession) || target.SessionPath != "" {
+		t.Fatalf("unknown ID captured sibling session: %+v %v", target, err)
+	}
 }
 
 func TestSaveAndStashImplicitProviderFollowOwningWrapper(t *testing.T) {
@@ -123,6 +160,8 @@ func TestStashExplicitProviderOverridesOwningWrapper(t *testing.T) {
 }
 
 func TestSaveStaleWrapperFallsBackToNewestCaptureEligibleProvider(t *testing.T) {
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CODEX_SESSION_ID", "")
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 	home := t.TempDir()

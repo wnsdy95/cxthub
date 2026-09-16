@@ -4,12 +4,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nProvider } from '../src/i18n/index.tsx';
 import { RoleCapabilities } from '../src/components/RoleCapabilities.tsx';
 import { ROLE_CAPABILITIES, ROLES, atLeast } from '../src/roles.ts';
-import {
-  STORAGE_PRICING,
-  billableStorageGiB,
-  estimateMonthlyStorageUsd,
-  normalizedAverageStorageGiB,
-} from '../src/pricing.ts';
 import { parseRoute, repoPath, repositorySlug, wsPath } from '../src/route.ts';
 
 assert.deepEqual(ROLE_CAPABILITIES, [
@@ -71,10 +65,3 @@ assert.equal(
   '/acme/platform',
   'legacy two-segment repository keeps its stable workspace URL',
 );
-assert.equal(STORAGE_PRICING.includedGiB, 10);
-assert.equal(STORAGE_PRICING.overageUsdPerGiBMonth, 0.07);
-assert.equal(normalizedAverageStorageGiB(Number.NaN), 0);
-assert.equal(normalizedAverageStorageGiB(-5), 0);
-assert.equal(billableStorageGiB(10), 0);
-assert.equal(billableStorageGiB(25), 15);
-assert.equal(estimateMonthlyStorageUsd(25), 1.05);

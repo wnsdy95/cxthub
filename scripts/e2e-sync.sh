@@ -15,6 +15,9 @@
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
 set -u
 
+# A fixture must not claim the host desktop app's real command session.
+unset CODEX_THREAD_ID CODEX_SESSION_ID
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 PORT=$((19100 + RANDOM % 800))

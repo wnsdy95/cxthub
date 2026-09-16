@@ -128,6 +128,34 @@ func EndAppSession(cwd string, provider domain.ProviderKind, sessionID string) {
 // the branch-switch ownership source for desktop/IDE apps; old provider files
 // outside this registry are archive candidates, not live conversations.
 func ActiveAppSessions(cwd string) []AppSession {
+	return activeAppSessions(cwd, false)
+}
+
+// LocateRegisteredAppSession is for a command with an explicit native session
+// identity (app environment or owning wrapper). Cross-worktree capture is
+// allowed only within the same Git repository. Background discovery and branch
+// switching continue to use the exact-worktree ActiveAppSessions boundary.
+func LocateRegisteredAppSession(cwd string, provider domain.ProviderKind, sessionID string) (string, error) {
+	if !validHookSessionID(sessionID) {
+		return "", domain.ErrNoActiveSession
+	}
+	path := ""
+	for _, session := range activeAppSessions(cwd, true) {
+		if session.Provider != provider || session.SessionID != sessionID {
+			continue
+		}
+		if path != "" && path != session.Path {
+			return "", fmt.Errorf("ambiguous registered provider session")
+		}
+		path = session.Path
+	}
+	if path == "" {
+		return "", domain.ErrNoActiveSession
+	}
+	return path, nil
+}
+
+func activeAppSessions(cwd string, relatedWorktrees bool) []AppSession {
 	ctx := context.Background()
 	root, worktree, enabled := appSessionRoots(ctx, cwd)
 	if !enabled {
@@ -167,7 +195,35 @@ func ActiveAppSessions(cwd string) []AppSession {
 			continue
 		}
 		if state.Worktree != worktree {
-			continue
+			if !relatedWorktrees {
+				continue
+			}
+			roots, err := gitctx.ResolveRepositoryRoots(ctx, state.Worktree)
+			if err != nil || roots.SharedRoot != root {
+				continue
+			}
+		}
+		if relatedWorktrees {
+			var path string
+			var err error
+			if state.Provider == domain.ProviderCodex {
+				// Native cwd may use a symlink spelling (e.g. /var vs /private/var).
+				// Verify the canonical worktree before using its native spelling.
+				nativeCwd, ok := rolloutCwd(state.Path)
+				if !ok {
+					continue
+				}
+				nativeRoot, nativeWorktree, enabled := appSessionRoots(ctx, nativeCwd)
+				if !enabled || nativeRoot != root || nativeWorktree != state.Worktree {
+					continue
+				}
+				path, err = NewCodexCapture().LocateSession(ctx, nativeCwd, state.SessionID)
+			} else {
+				path, err = NewClaudeCapture().LocateSession(ctx, state.Worktree, state.SessionID)
+			}
+			if err != nil || path != state.Path {
+				continue
+			}
 		}
 		out = append(out, AppSession{Provider: state.Provider, SessionID: state.SessionID, Path: state.Path})
 	}
