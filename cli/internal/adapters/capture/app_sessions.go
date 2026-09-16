@@ -1,14 +1,18 @@
 package capture
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -34,6 +38,8 @@ type appSessionFile struct {
 	Version   int                 `json:"version"`
 	Provider  domain.ProviderKind `json:"provider"`
 	SessionID string              `json:"session_id"`
+	NativeID  string              `json:"native_id,omitempty"`
+	NativeCwd string              `json:"native_cwd,omitempty"`
 	Path      string              `json:"path"`
 	Worktree  string              `json:"worktree"`
 	UpdatedAt time.Time           `json:"updated_at"`
@@ -78,6 +84,170 @@ func validAppSessionPath(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+var ErrSessionIdentityMismatch = errors.New("provider session identity mismatch")
+
+type codexSessionHeader struct {
+	Type    string `json:"type"`
+	Payload struct {
+		ID  string `json:"id"`
+		Cwd string `json:"cwd"`
+	} `json:"payload"`
+}
+
+// Read only the native header, even for a long-lived, very large rollout.
+func readCodexSessionHeader(path string) (codexSessionHeader, error) {
+	var header codexSessionHeader
+	f, err := providerfs.OpenRegularFile(path)
+	if err != nil {
+		return header, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(io.LimitReader(f, 1<<20))
+	sc.Buffer(make([]byte, 4096), 1<<20)
+	if !sc.Scan() {
+		return header, fmt.Errorf("missing Codex session header")
+	}
+	if err := json.Unmarshal(sc.Bytes(), &header); err != nil {
+		return header, err
+	}
+	if header.Type != "session_meta" || !validHookSessionID(header.Payload.ID) || header.Payload.Cwd == "" {
+		return header, fmt.Errorf("incomplete Codex session metadata")
+	}
+	return header, nil
+}
+
+func sameNativeSessionID(a, b string) bool {
+	if providerfs.ValidSessionID(a) && providerfs.ValidSessionID(b) {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// ValidateHookSession rejects inherited parent IDs paired with child paths
+// before any registry, capture state, or briefing can be changed. A native
+// filename and any header identity must agree. Opaque hook IDs are aliases;
+// an existing alias must keep its original native file/identity.
+func ValidateHookSession(cwd string, provider domain.ProviderKind, sessionID, path string) error {
+	if sessionID == "" || path == "" {
+		return nil
+	}
+	if !validHookSessionID(sessionID) || !validAppSessionPath(path) {
+		return fmt.Errorf("%w: invalid %s session identity/path", ErrSessionIdentityMismatch, provider)
+	}
+	var root string
+	var err error
+	switch provider {
+	case domain.ProviderCodex:
+		root, err = codexSessionsDir()
+	case domain.ProviderClaude:
+		root, err = claudeProjectsDir()
+	default:
+		return domain.ErrUnsupportedProvider
+	}
+	if err != nil {
+		return err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("%w: path belongs to another provider", ErrSessionIdentityMismatch)
+	}
+	filenameID := providerfs.SessionIDFromPath(path)
+	if providerfs.ValidSessionID(sessionID) && filenameID != "" && !sameNativeSessionID(filenameID, sessionID) {
+		return fmt.Errorf("%w: %s hook ID %q does not match native filename ID %q", ErrSessionIdentityMismatch, provider, sessionID, filenameID)
+	}
+	if provider == domain.ProviderCodex {
+		header, err := readCodexSessionHeader(path)
+		if err != nil {
+			return fmt.Errorf("validate Codex session header: %w", err)
+		}
+		if (providerfs.ValidSessionID(sessionID) && !sameNativeSessionID(header.Payload.ID, sessionID)) || (filenameID != "" && !sameNativeSessionID(header.Payload.ID, filenameID)) {
+			return fmt.Errorf("%w: Codex hook ID %q does not match native metadata ID %q", ErrSessionIdentityMismatch, sessionID, header.Payload.ID)
+		}
+		_, nativeWorktree, _ := appSessionRoots(context.Background(), header.Payload.Cwd)
+		_, hookWorktree, _ := appSessionRoots(context.Background(), cwd)
+		if nativeWorktree == "" || nativeWorktree != hookWorktree {
+			return fmt.Errorf("%w: Codex native cwd does not match hook worktree", ErrSessionIdentityMismatch)
+		}
+		return validateAliasBinding(cwd, provider, sessionID, path, header.Payload.ID)
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return err
+	}
+	real, _ := filepath.EvalSymlinks(abs)
+	_, worktree, _ := appSessionRoots(context.Background(), cwd)
+	if rel != providerfs.EncodeCwd(abs) && rel != providerfs.EncodeCwd(real) && (worktree == "" || rel != providerfs.EncodeCwd(worktree)) {
+		return fmt.Errorf("%w: Claude native project path does not match hook worktree", ErrSessionIdentityMismatch)
+	}
+	// Claude has no dedicated session header; early records may be file-history
+	// metadata. A canonical filename is sufficient until a sessionId appears.
+	f, err := providerfs.OpenRegularFile(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(io.LimitReader(f, 1<<20))
+	sc.Buffer(make([]byte, 4096), 1<<20)
+	for n := 0; n < 32 && sc.Scan(); n++ {
+		var row struct {
+			SessionID string `json:"sessionId"`
+			Cwd       string `json:"cwd"`
+		}
+		if json.Unmarshal(sc.Bytes(), &row) == nil && row.SessionID != "" {
+			if (providerfs.ValidSessionID(sessionID) && !sameNativeSessionID(row.SessionID, sessionID)) || (filenameID != "" && !sameNativeSessionID(row.SessionID, filenameID)) {
+				return fmt.Errorf("%w: Claude hook ID %q does not match native record ID %q", ErrSessionIdentityMismatch, sessionID, row.SessionID)
+			}
+			if row.Cwd != "" {
+				_, nativeWorktree, _ := appSessionRoots(context.Background(), row.Cwd)
+				if nativeWorktree == "" || nativeWorktree != worktree {
+					return fmt.Errorf("%w: Claude native cwd does not match hook worktree", ErrSessionIdentityMismatch)
+				}
+			}
+			return validateAliasBinding(cwd, provider, sessionID, path, row.SessionID)
+		}
+	}
+	if filenameID == "" && providerfs.ValidSessionID(sessionID) {
+		return fmt.Errorf("%w: no native Claude identity", ErrSessionIdentityMismatch)
+	}
+	if filenameID == "" {
+		filenameID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	}
+	return validateAliasBinding(cwd, provider, sessionID, path, filenameID)
+}
+
+func validateAliasBinding(cwd string, provider domain.ProviderKind, sessionID, path, nativeID string) error {
+	if providerfs.ValidSessionID(sessionID) {
+		return nil
+	}
+	root, worktree, enabled := appSessionRoots(context.Background(), cwd)
+	if !enabled {
+		return nil
+	}
+	raw, err := providerfs.ReadRepoFile(root, appSessionRelativePath(provider, worktree, sessionID))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var prior appSessionFile
+	if json.Unmarshal(raw, &prior) != nil || prior.Provider != provider || prior.SessionID != sessionID || prior.Worktree != worktree {
+		return fmt.Errorf("%w: invalid registered opaque alias", ErrSessionIdentityMismatch)
+	}
+	if prior.Path != path || (prior.NativeID != "" && !sameNativeSessionID(prior.NativeID, nativeID)) {
+		return fmt.Errorf("%w: opaque hook alias %q is already bound to another native session", ErrSessionIdentityMismatch, sessionID)
+	}
+	return nil
+}
+
 // TrackAppSession records only identity/path/liveness metadata from an
 // official provider hook. An empty path refreshes an existing entry but never
 // invents a filesystem location.
@@ -91,6 +261,21 @@ func TrackAppSession(cwd string, provider domain.ProviderKind, sessionID, path s
 		return nil
 	}
 	relative := appSessionRelativePath(provider, worktree, sessionID)
+	// Serialize first registration and refresh so concurrent hooks cannot both
+	// establish different native bindings for the same opaque alias.
+	lockPath, err := providerfs.PrepareRepoFile(root, filepath.Join(".cxt", "app-sessions", "registry.lock"), 0700)
+	if err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("app session registry is busy; retry hook: %w", err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	path = strings.TrimSpace(path)
 	if path == "" {
 		if raw, err := providerfs.ReadRepoFile(root, relative); err == nil {
@@ -103,9 +288,45 @@ func TrackAppSession(cwd string, provider domain.ProviderKind, sessionID, path s
 	if !validAppSessionPath(path) {
 		return nil
 	}
+	if err := ValidateHookSession(cwd, provider, sessionID, path); err != nil {
+		return err
+	}
+	nativeID := providerfs.SessionIDFromPath(path)
+	if provider == domain.ProviderCodex {
+		header, err := readCodexSessionHeader(path)
+		if err != nil {
+			return err
+		}
+		nativeID = header.Payload.ID
+	}
+	if provider == domain.ProviderClaude && nativeID == "" {
+		f, err := providerfs.OpenRegularFile(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		sc := bufio.NewScanner(io.LimitReader(f, 1<<20))
+		sc.Buffer(make([]byte, 4096), 1<<20)
+		for n := 0; n < 32 && sc.Scan(); n++ {
+			var row struct {
+				SessionID string `json:"sessionId"`
+			}
+			if json.Unmarshal(sc.Bytes(), &row) == nil && row.SessionID != "" {
+				nativeID = row.SessionID
+				break
+			}
+		}
+	}
+	if nativeID == "" {
+		nativeID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	}
+	nativeCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return err
+	}
 	payload, err := json.Marshal(appSessionFile{
 		Version: appSessionVersion, Provider: provider, SessionID: sessionID,
-		Path: path, Worktree: worktree, UpdatedAt: time.Now().UTC(),
+		Path: path, Worktree: worktree, NativeCwd: nativeCwd, NativeID: nativeID, UpdatedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		return err
@@ -155,6 +376,65 @@ func LocateRegisteredAppSession(cwd string, provider domain.ProviderKind, sessio
 	return path, nil
 }
 
+// LocateCodexCommandSession is only for a command carrying an explicit native
+// ID. Search that filename across dates, verify its header ID and repository,
+// and reject ambiguity. Background discovery remains worktree-scoped.
+func LocateCodexCommandSession(ctx context.Context, cwd, sessionID string) (string, error) {
+	if !providerfs.ValidSessionID(sessionID) {
+		return "", domain.ErrNoActiveSession
+	}
+	commandRoots, err := gitctx.ResolveRepositoryRoots(ctx, cwd)
+	if err != nil {
+		return "", err
+	}
+	root, err := codexSessionsDir()
+	if err != nil {
+		return "", err
+	}
+	matches, err := filepath.Glob(filepath.Join(root, "*", "*", "*", "rollout-*-"+sessionID+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	selected := ""
+	for _, path := range matches {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if !validAppSessionPath(path) {
+			continue
+		}
+		header, err := readCodexSessionHeader(path)
+		if err != nil {
+			return "", fmt.Errorf("verify exact Codex session %q: %w", sessionID, err)
+		}
+		if !sameNativeSessionID(header.Payload.ID, sessionID) {
+			return "", fmt.Errorf("%w: Codex filename ID %q does not match native metadata ID %q", ErrSessionIdentityMismatch, sessionID, header.Payload.ID)
+		}
+		nativeRoots, err := gitctx.ResolveRepositoryRoots(ctx, header.Payload.Cwd)
+		if err != nil || nativeRoots.SharedRoot != commandRoots.SharedRoot {
+			continue
+		}
+		if err := ValidateHookSession(header.Payload.Cwd, domain.ProviderCodex, sessionID, path); err != nil {
+			return "", err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", err
+		}
+		if providerfs.CaptureExcluded(commandRoots.SharedRoot, path, info.Size()) {
+			continue
+		}
+		if selected != "" && selected != path {
+			return "", fmt.Errorf("ambiguous exact Codex session %q in shared Git repository", sessionID)
+		}
+		selected = path
+	}
+	if selected == "" {
+		return "", domain.ErrNoActiveSession
+	}
+	return selected, nil
+}
+
 func activeAppSessions(cwd string, relatedWorktrees bool) []AppSession {
 	ctx := context.Background()
 	root, worktree, enabled := appSessionRoots(ctx, cwd)
@@ -192,6 +472,16 @@ func activeAppSessions(cwd string, relatedWorktrees bool) []AppSession {
 			validAppSessionPath(state.Path)
 		if !valid {
 			_ = providerfs.RemoveRepoFile(root, relative)
+			continue
+		}
+		// Older clients could store a parent ID with a child's transcript. Do
+		// not expose or refresh it; a correctly identified hook can replace it.
+		nativeCwd := state.NativeCwd
+		if nativeCwd == "" {
+			nativeCwd = state.Worktree
+		}
+		_, nativeWorktree, _ := appSessionRoots(ctx, nativeCwd)
+		if nativeWorktree != state.Worktree || ValidateHookSession(nativeCwd, state.Provider, state.SessionID, state.Path) != nil {
 			continue
 		}
 		if state.Worktree != worktree {

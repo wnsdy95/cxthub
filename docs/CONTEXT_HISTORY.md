@@ -244,8 +244,9 @@ cases are separate full-stack checks and are not evidence for rewind retention.
 ### Current implementation evidence
 
 - A Git-directory journal records creation votes before Git commits and replays
-  committed operations or a verified appended reflog creation. Unprovable
-  prepared operations remain queued. Empty replay cannot bind a repository
+  operations with a durable committed callback. A later same-name/same-OID
+  reflog entry cannot identify which transaction completed; prepared-only
+  operations remain unconfirmed. Empty replay cannot bind a repository
   before remote setup, and a reused/mismatched repository identity is rejected.
 - Available active provider bytes are checkpointed before a current-code birth.
   Provider capture failure preserves the verified saved baseline and does not
@@ -479,10 +480,132 @@ The original natural parent stayed intact; append retained the previous main
 through a graft edge. The live app conversation was never restarted or loaded
 from this historical prefix.
 
-For new commits, command capture now honors an exact registered Codex app thread
-ID across linked worktrees of the same Git repository. An owning cxt wrapper
+For new commits, command capture honors an exact Codex app thread ID across
+linked worktrees of the same Git repository. A registered pointer is checked
+against the native file; an explicit command ID can also find its native file
+by matching internal ID and repository ownership when that pointer is absent or
+invalid. An owning cxt wrapper
 can likewise resolve its registered Claude/Codex session across those worktrees.
 A command with a native thread ID that cannot be resolved does not substitute
 a newer sibling session. Automatic background capture and branch-switch ownership remain scoped to one
 worktree. No cross-worktree recency fallback is introduced, and native ID/path
 checks plus the capture-exclusion ledger still apply.
+
+## Linkage reliability audit (2026-09-16, #175)
+
+The completion criterion is recovery from an interrupted operation, not just a
+successful first run. A graph edge must follow durable, exact Git/context
+observations. Timestamps, current branch names, and the most recent unrelated
+provider file cannot substitute for missing provenance.
+
+Rewrite replay now drains every worktree journal in the shared replica, retaining
+the original repository, branch identity and worktree on every observation. It
+also flushes journal directory entries to disk. Removing or leaving the original
+worktree does not prevent a subsequent push elsewhere from publishing its stored
+mappings. A damaged journal stops replay with an error rather than becoming an
+empty successful result.
+
+A squash can map several original commits to one Git revision. A previously
+published rewrite alias does not count as a new native capture and cannot hide
+other aliases after an interruption. All proven source observations are retained;
+the server may choose a tip only if its ancestry contains all candidates.
+Concurrent writers adopt the first immutable observation only when every field
+other than the retry timestamp agrees. An unrelated storage failure still fails
+and leaves the durable journal available for the next process.
+
+Regression coverage includes partially published squash mappings, concurrent replay
+callers reading the same state, failed history persistence followed by a new
+service instance, and replay from a different worktree. These tests do not imply
+that a deleted native conversation without another copy can be reconstructed.
+
+### Explicit source finalization
+
+A `position`, branch birth, current branch ref, or `[git ...]` message does not
+prove that capture has finished. The CLI publishes a separate immutable
+`publish` observation only for a completed capture pass. It binds the exact Git
+revision, repository, branch identity, worktree and selected source snapshot.
+The server requires its matching ordinary source observation before accepting
+this finalization. Ordinary history uploads precede finalization regardless of
+wall-clock order. Publication never changes the selected project memory.
+When a push already contains several completed captures for one source revision,
+the verified descendant containing all candidates is published first. This
+prevents a worker from binding an older candidate halfway through that upload.
+Incomparable candidates require reconciliation before publication.
+
+PR resolution uses finalized sources only. A source still being uploaded remains
+`source_context_pending`; it cannot be acknowledged from the first provider or
+first rewrite alias to arrive. Squash finalization waits for every original
+revision's completion and a single proven descendant containing all candidates.
+Unfinalized legacy history is retained and readable, but is not silently upgraded
+into proof of a complete capture. Existing completed PR receipts keep their
+original meaning. Uncompleted old bindings wait for matching finalization, and a
+different finalized source requires explicit reconciliation.
+
+A completed receipt is terminal: replay returns the current base without
+re-appending the original source. This preserves a later rewind or continuation,
+including when the prior process wrote the completion receipt but failed to mark
+its queue job complete. Later captures do not retroactively enlarge an already
+completed PR's scope.
+
+A source that remains unfinalized for eight attempts moves to visible
+`attention / source_finalization_required`, releasing later queued PRs. It is
+not marked completed or deleted. Arrival of the matching publication wakes it
+automatically; periodic reconciliation also covers a restart or a publication
+racing the transition into attention. Other conflicts still require review.
+
+The server verifies the CLI's exact source association; it cannot inspect a
+user's private native transcript or establish that a dishonest client supplied
+all of it. Missing copies and ambiguous Git transaction completion remain visible
+failures, not guessed edges. Upgrade the backend before enabling publication in
+the matching CLI, then upgrade every client sharing that repository. Old clients
+without source finalization leave new promotions waiting and cannot fetch history
+containing this new event kind. Do not roll the backend back to a resolver that
+accepts ordinary observations while publication-enabled clients are writing.
+
+### Capture and retry boundaries
+
+Before the first provider save, the CLI durably records a capture pass with its
+Git revision, branch identity, worktree, initial context and expected providers.
+Each provider outcome is recorded separately. The final source must be one of
+this pass's own outputs (or its frozen initial context) and contain every output
+in its ancestry. A concurrent pass cannot lend its mutable working position as
+proof that this pass finished. Losing an explicitly selected transcript is a
+capture failure, not evidence that the provider was unused.
+
+On restart, complete stored outcomes with exact Git observations can finish
+publication without reopening a live transcript. A pass interrupted before an
+outcome was persisted remains pending and reports its journal path; later
+unrelated work cannot prove what that missing outcome was. Other complete
+branches can still sync. Corrupt journals fail validation. Rebase's intermediate
+detached commits do not capture a fresh conversation onto the default branch;
+their completed original observations travel through the rewrite journal.
+Intermediate `post-rewrite amend` callbacks during squash are also provisional.
+Only a journal explicitly marked by a complete rewrite boundary can finalize
+the new Git revision. Legacy journals without this flag preserve associations
+but cannot attest completion.
+
+Normal push also retries pending-session pointers after their objects arrive.
+Final-session flush waits for an existing capture within its deadline; a failed
+flush retains app-session liveness for a later attempt. That registry has a
+24-hour lifetime, so this is not an indefinite background recovery guarantee.
+Superseded hook data is collected only after provider/session identity and the
+entire event prefix are verified; stale, shorter, divergent and referenced
+captures remain stored.
+
+Hook identity is validated before liveness registration, capture bookkeeping or
+briefing consumption. A claimed session ID paired with another session's native
+file is rejected without overwriting the existing pointer. This covers child
+task hooks carrying an inherited parent ID. Command-only exact-ID discovery uses
+native metadata and the shared Git repository, never a newer sibling transcript;
+background discovery still requires its exact worktree registration.
+
+Branch creation replay requires the durable committed transaction callback.
+A later reflog entry with the same name and Git hash is insufficient to identify
+an earlier prepared operation. Committed operations remain replayable after the
+original worktree is moved or removed, using the shared Git repository. Tracking
+resolution uses the originating Git admin directory, including `config.worktree`.
+If that directory was pruned before a binding was resolved, the operation stays
+queued; the replaying worktree's different upstream is not substituted. An
+unchanged owner snapshot that is an ancestor of the verified current head keeps
+that head and its memory selection as the birth baseline. Failure to inspect Git
+is an error, not a successful claim that the branch disappeared.

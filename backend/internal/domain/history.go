@@ -56,7 +56,7 @@ func ValidateHistoryEvent(e HistoryEvent) error {
 		}
 	}
 	switch e.Kind {
-	case "birth", "attach", "orphan", "position", "advance", "rename", "archive", "pr-merge":
+	case "birth", "attach", "orphan", "position", "publish", "advance", "rename", "archive", "pr-merge":
 	default:
 		return fmt.Errorf("invalid history event kind")
 	}
@@ -128,6 +128,9 @@ func ValidateHistoryEvent(e HistoryEvent) error {
 	}
 	if e.Kind == "advance" && (e.Source == "" || e.Target == "") {
 		return fmt.Errorf("continuation requires both previous and current context")
+	}
+	if e.Kind == "publish" && (e.Source == "" || e.Source != e.Target || e.GitAfter == "" || e.GitAfter != strings.ToLower(e.GitAfter) || strings.Trim(e.GitAfter, "0") == "") {
+		return fmt.Errorf("publication requires one finalized context and a full nonzero Git revision")
 	}
 	if e.Kind == "orphan" && (e.Source != "" || e.Target != "") {
 		return fmt.Errorf("orphan creation cannot inherit conversation ancestry")

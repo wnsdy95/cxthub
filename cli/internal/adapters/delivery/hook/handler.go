@@ -81,7 +81,10 @@ func (h *Handler) readPayload() hookPayload {
 func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+	return h.run(ctx, provider, event)
+}
 
+func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event string) error {
 	p := h.readPayload()
 	cwd := p.Cwd
 	if cwd == "" {
@@ -104,34 +107,55 @@ func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 		return nil
 	}
 	state := gitctx.InspectContextRoot(ctx, cwd)
+	if state.Initialized {
+		// Payload IDs may be inherited by provider child processes. Never infer
+		// a corrected ID from their path or let a mismatch touch parent state.
+		if err := capture.ValidateHookSession(cwd, provider, p.SessionID, path); err != nil {
+			return err
+		}
+	}
 	if state.GitRepository && state.Exists {
 		_ = githooks.EnsureIgnored(state.Root)
 	}
 	if !state.GitRepository || !state.Initialized {
 		return nil
 	}
+	if path == "" && p.SessionID != "" {
+		// Correct discovery can replace an older poisoned pointer. This stays
+		// within the hook's exact worktree and never uses command-only fallback.
+		if resolved, err := capture.LocateCaptureSession(ctx, provider, cwd, p.SessionID); err == nil {
+			path = resolved
+		} else if event == "SessionEnd" {
+			return err
+		}
+	}
+	if err := capture.TrackAppSession(cwd, provider, p.SessionID, path); err != nil {
+		return err
+	}
 
 	switch event {
 	case "SessionStart":
-		_ = capture.TrackAppSession(cwd, provider, p.SessionID, path)
 		err := h.coord.MarkBaseline(ctx, provider, cwd, path, p.SessionID)
 		h.emitBriefing(event, cwd, p.SessionID) // app branch handoff + pull briefing
 		return err
 	case "UserPromptSubmit":
-		_ = capture.TrackAppSession(cwd, provider, p.SessionID, path)
 		err := h.coord.MarkTurn(ctx, provider, cwd, p.SessionID, p.Prompt)
 		h.emitBriefing(event, cwd, p.SessionID) // app branch handoff + team context notice
 		return err
 	case "Stop":
-		_ = capture.TrackAppSession(cwd, provider, p.SessionID, path)
 		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, true, false)
 		if captured {
 			spawnPendingSync(cwd)
 		}
 		return err
 	case "SessionEnd":
+		// Resolve and persist the exact transcript before waiting on another
+		// capture. If the deadline or save fails, later hooks/checkpoints can
+		// retry using the retained on-disk liveness pointer.
 		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, false, true)
-		capture.EndAppSession(cwd, provider, p.SessionID)
+		if err == nil {
+			capture.EndAppSession(cwd, provider, p.SessionID)
+		}
 		if captured {
 			spawnPendingSync(cwd)
 		}

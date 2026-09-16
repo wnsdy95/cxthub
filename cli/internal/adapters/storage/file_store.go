@@ -1365,6 +1365,11 @@ func (s *FileStore) ReplacePending(ctx context.Context, p domain.Pending) (domai
 			return err
 		}
 		if found {
+			// SessionID remains the API key across branches/worktrees. A
+			// different provider cannot supersede that native session.
+			if current.Provider != p.Provider {
+				return fmt.Errorf("%w: pending session %q belongs to provider %q, not %q", domain.ErrSyncConflict, p.SessionID, current.Provider, p.Provider)
+			}
 			previous = current.Target
 			if current.Dismissed {
 				p.Dismissed = true

@@ -39,6 +39,7 @@ export const en: Messages = {
     completed: 'Completed',
     attention: 'Needs attention',
     source: 'Waiting for the exact source context to sync.',
+    finalization: 'Capture completion is unverified. Other PRs can proceed; this PR resumes when its completed source syncs.',
     integrity: 'Source integrity check failed. Repair the source before retrying.',
     conflict: 'Branch identity or history conflicts. Resolve the conflict before retrying.',
     missing: 'The repository or base branch is unavailable.',

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -172,5 +173,56 @@ func TestSaveCommitPreservesNewerConcurrentPendingCapture(t *testing.T) {
 	pendings, err := base.ListPendings(ctx, "")
 	if err != nil || len(pendings) != 1 || pendings[0].Target != newerTarget {
 		t.Fatalf("newer pending capture was not preserved: %+v err=%v", pendings, err)
+	}
+}
+
+func TestSaveRejectsCrossProviderNativeSessionCollision(t *testing.T) {
+	for _, pending := range []bool{true, false} {
+		t.Run(map[bool]string{true: "capture", false: "commit"}[pending], func(t *testing.T) {
+			ctx := context.Background()
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			cwd := t.TempDir()
+			if err := exec.Command("git", "-C", cwd, "init", "-q", "-b", "main").Run(); err != nil {
+				t.Fatal(err)
+			}
+			claudePath, codexPath := filepath.Join(home, "claude.jsonl"), filepath.Join(home, "codex.jsonl")
+			codexRaw := `{"timestamp":"2026-06-30T01:00:00Z","type":"session_meta","payload":{"id":"s1","cwd":"/work/proj","model":"gpt-5-codex"}}
+{"timestamp":"2026-06-30T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"independent Codex conversation"}]}}`
+			for path, raw := range map[string]string{claudePath: e2eClaudeSession, codexPath: codexRaw} {
+				if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st := storage.NewFileStore(cwd)
+			svc := NewSaveSessionService(gitctx.NewGitContextAdapter(),
+				map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture(), domain.ProviderCodex: capture.NewCodexCapture()},
+				map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec(), domain.ProviderCodex: codec.NewCodexCodec()}, st)
+			first, err := svc.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: domain.ProviderClaude, SessionPath: claudePath, Pending: true, Message: domain.HookMessagePrefix + " capture"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first.SessionID != "s1" {
+				t.Fatalf("fixture native session ID=%q", first.SessionID)
+			}
+			_, err = svc.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: domain.ProviderCodex, SessionPath: codexPath, Pending: pending, Message: domain.HookMessagePrefix + " capture"})
+			if !errors.Is(err, domain.ErrSyncConflict) {
+				t.Errorf("cross-provider save was accepted: %v", err)
+			}
+			got, err := st.ListPendings(ctx, "")
+			if err != nil || len(got) != 1 || got[0].Target != first.SnapshotID || got[0].Provider != domain.ProviderClaude {
+				t.Errorf("original pointer lost: %+v err=%v", got, err)
+			}
+			if _, err := st.GetSnapshot(ctx, first.SnapshotID); err != nil {
+				t.Errorf("original snapshot lost: %v", err)
+			}
+			if _, err := st.GetDoc(ctx, first.SnapshotID); err != nil {
+				t.Errorf("original document lost: %v", err)
+			}
+			refs, err := st.ListRefs(ctx, "")
+			if err != nil || len(refs) != 0 {
+				t.Errorf("collision published refs: %+v err=%v", refs, err)
+			}
+		})
 	}
 }

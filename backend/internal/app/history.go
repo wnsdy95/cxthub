@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -47,10 +48,22 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		if !reflect.DeepEqual(old, event) {
 			return domain.ErrRefConflict
 		}
-		return nil
+		return s.wakePublishedPRJobs(ctx, event)
 	}
 	if event.Kind == "pr-merge" && !serverReceipt {
 		return fmt.Errorf("%w: PR bindings are issued by PR promotion", domain.ErrForbidden)
+	}
+	if event.Kind == "publish" {
+		proven := false
+		for _, old := range accepted {
+			if domain.IsPublicationProof(event, old) {
+				proven = true
+				break
+			}
+		}
+		if !proven {
+			return fmt.Errorf("%w: publication requires an accepted exact source observation", domain.ErrConflict)
+		}
 	}
 	repo, err := s.meta.GetRepo(ctx, repoID)
 	if err != nil {
@@ -101,6 +114,15 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 	}
 	if event.Kind == "advance" {
 		s.notifyRefUpdate(ctx, repoID, domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: event.Branch, Target: event.Target}, true, false)
+	}
+	return s.wakePublishedPRJobs(ctx, event)
+}
+
+func (s *Service) wakePublishedPRJobs(ctx context.Context, event domain.HistoryEvent) error {
+	if event.Kind == "publish" {
+		if jobs, ok := s.meta.(outbound.PRJobStore); ok {
+			return jobs.WakePRSourceJobs(ctx, domain.ContentHash(event.RepoID), time.Now().UTC())
+		}
 	}
 	return nil
 }

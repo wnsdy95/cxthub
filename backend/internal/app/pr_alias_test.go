@@ -34,6 +34,7 @@ func TestPRTrackingAliasUsesExactHeadAndCanonicalIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	publishPRSource(t, svc, position)
 	for i := 0; i < 2; i++ {
 		if _, err := svc.PromoteRepositoryPR(ctx, repo, pr); err != nil {
 			t.Fatal(err)
@@ -78,7 +79,7 @@ func TestPRTrackingAliasRejectsUnprovenOrAmbiguousAssociations(t *testing.T) {
 	pr := domain.PullRequestMerge{Number: 1, BaseBranch: "main", HeadBranch: "local-alias", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)}
 	attach := domain.HistoryEvent{Kind: "attach", Branch: "team/task", BranchID: "task", LocalBranch: pr.HeadBranch, WorktreeID: strings.Repeat("1", 32), CreatedAt: time.Now().UTC()}
 	position := attach
-	position.Kind, position.Target, position.GitAfter = "position", source, pr.HeadSHA
+	position.Kind, position.Source, position.Target, position.GitAfter = "position", source, source, pr.HeadSHA
 	position.CreatedAt = attach.CreatedAt.Add(time.Second)
 	for _, tc := range []struct {
 		name string
@@ -94,18 +95,58 @@ func TestPRTrackingAliasRejectsUnprovenOrAmbiguousAssociations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			changed := position
 			tc.edit(&changed)
-			if _, _, err := svc.resolvePRSource(ctx, repo, pr, []domain.HistoryEvent{attach, changed}); err == nil {
+			if _, _, err := svc.resolvePRSource(ctx, repo, pr, []domain.HistoryEvent{attach, changed, prPublication(changed)}); err == nil {
 				t.Fatal("unproven source accepted")
 			}
 		})
 	}
-	if _, _, err := svc.resolvePRSource(ctx, repo, pr, []domain.HistoryEvent{position}); err == nil {
+	if _, _, err := svc.resolvePRSource(ctx, repo, pr, []domain.HistoryEvent{position, prPublication(position)}); err == nil {
 		t.Fatal("unattached alias accepted")
 	}
 	otherAttach, otherPosition := attach, position
 	otherAttach.BranchID, otherPosition.BranchID = "other-task", "other-task"
 	otherAttach.WorktreeID, otherPosition.WorktreeID = strings.Repeat("2", 32), strings.Repeat("2", 32)
-	if _, _, err := svc.resolvePRSource(ctx, repo, pr, []domain.HistoryEvent{attach, position, otherAttach, otherPosition}); !errors.Is(err, domain.ErrConflict) {
+	if _, _, err := svc.resolvePRSource(ctx, repo, pr, []domain.HistoryEvent{attach, position, prPublication(position), otherAttach, otherPosition, prPublication(otherPosition)}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("ambiguous source identity accepted: %v", err)
+	}
+}
+
+func TestPRTrackingAliasPublicationUsesOrdinaryProofTime(t *testing.T) {
+	for _, beforeAttachment := range []bool{false, true} {
+		t.Run(map[bool]string{false: "publication clock rollback", true: "late publication cannot authorize early proof"}[beforeAttachment], func(t *testing.T) {
+			ctx := context.Background()
+			svc, st := newFsckSvc(t)
+			repo := hh(t.Name())
+			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/alias"}); err != nil {
+				t.Fatal(err)
+			}
+			base := prSnapshot(t, st, repo, "base")
+			source := prSnapshot(t, st, repo, "alias source", base)
+			if err := st.CompareAndSwapRef(ctx, repo, domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "main", Target: base}, ""); err != nil {
+				t.Fatal(err)
+			}
+			pr := domain.PullRequestMerge{Number: 175, BaseBranch: "main", HeadBranch: "native-alias", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)}
+			attach := domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(repo), BranchID: domain.LegacyContextBranchID(string(repo), "main"), Branch: "main", LocalBranch: pr.HeadBranch, Kind: "attach", WorktreeID: strings.Repeat("5", 32), Source: base, Target: base, CreatedAt: time.Unix(100, 0).UTC()}
+			proof := attach
+			proof.ID, proof.Kind, proof.Source, proof.Target, proof.GitAfter, proof.CreatedAt = strings.Repeat("2", 32), "position", source, source, pr.HeadSHA, time.Unix(110, 0).UTC()
+			publication := prPublication(proof)
+			publication.CreatedAt = time.Unix(50, 0).UTC()
+			if beforeAttachment {
+				proof.CreatedAt, publication.CreatedAt = time.Unix(50, 0).UTC(), time.Unix(120, 0).UTC()
+			}
+			for _, e := range []domain.HistoryEvent{attach, proof, publication} {
+				if err := svc.RecordHistory(ctx, e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, err := svc.PromoteRepositoryPR(ctx, repo, pr)
+			if beforeAttachment {
+				if !errors.Is(err, domain.ErrPRSourcePending) {
+					t.Fatalf("later publication authorized pre-attachment source: %v", err)
+				}
+			} else if err != nil || out.Ref.Target != source {
+				t.Fatalf("accepted exact alias lost after clock rollback: %+v %v", out, err)
+			}
+		})
 	}
 }

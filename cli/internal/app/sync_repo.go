@@ -446,8 +446,29 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 	// Reachability is the only safe implicit pending resolution signal. The
 	// expected-target CAS prevents a delayed push from deleting a newer capture
 	// from the same session. Session data and snapshots remain immutable.
-	if locals, lerr := s.store.ListPendings(ctx, repoID); lerr == nil {
-		_ = s.reconcileSharedPendings(ctx, repoID, refs, locals)
+	locals, pendingErr := s.store.ListPendings(ctx, repoID)
+	var unresolved []domain.Pending
+	if pendingErr == nil {
+		unresolved = s.reconcileSharedPendings(ctx, repoID, refs, locals)
+	}
+	// A detached helper may have uploaded the objects but failed to publish
+	// their pointer. Ordinary sync owns that retry too. Every snapshot offered
+	// above now has its objects on the server, including negotiated haves; do
+	// not reopen cumulative documents just to retry a small pointer request.
+	ready := make(map[domain.ContentHash]bool, len(snaps))
+	for _, snap := range snaps {
+		ready[snap.ID] = true
+	}
+	for _, p := range unresolved {
+		if !ready[p.Target] {
+			// A capture created after the manifest was read needs its objects
+			// uploaded by the next sync. Keep its durable local pointer.
+			continue
+		}
+		p.RepoID = repoID
+		if err := s.remote.PushPending(ctx, repoID, p); err != nil {
+			pendingErr = errors.Join(pendingErr, fmt.Errorf("publish pending session %q (retained locally for retry): %w", p.SessionID, err))
+		}
 	}
 	// Resolve unsync: removes the "push pending" pointer for the branch whose ref has advanced (idempotent).
 	for _, r := range refs {
@@ -456,9 +477,9 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 		}
 	}
 	if err := s.flushPRDeliveries(ctx, repoID); err != nil {
-		return inbound.SyncOutput{}, err
+		return inbound.SyncOutput{}, errors.Join(pendingErr, err)
 	}
-	return inbound.SyncOutput{Pushed: len(pushSnaps), NewRefs: refs}, nil
+	return inbound.SyncOutput{Pushed: len(pushSnaps), NewRefs: refs}, pendingErr
 }
 
 // flushPromotions flushes the <repoRoot>/.cxt/promotions.json queue to the server, removing successful items.

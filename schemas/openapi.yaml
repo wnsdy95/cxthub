@@ -188,6 +188,14 @@ components:
 
     HistoryEvent:
       type: object
+      description: |
+        Immutable retained history. A publish event finalizes a captured source:
+        source and target must be the same nonempty snapshot, and git_after must
+        be a full lowercase nonzero Git object ID. An ordinary observation with
+        the same repository, branch identity/name, local branch, worktree, Git
+        revision and target must already be accepted. Publication retains the
+        source without moving branch refs. New PR bindings require publication;
+        raw observations and legacy message links do not finalize a source.
       required: [id, repo_id, branch_id, branch, kind, created_at]
       properties:
         id: { type: string, pattern: '^[0-9a-f]{32}$' }
@@ -204,7 +212,7 @@ components:
         source_branch_id: { type: string, maxLength: 128 }
         pr_completed: { type: boolean, description: Separate server receipt confirming successful context promotion, including no-op joins. }
         name_parent: {type: string, description: Operation that released the rename destination.}
-        kind: { type: string, enum: [birth, attach, orphan, position, advance, rename, archive, pr-merge] }
+        kind: { type: string, enum: [birth, attach, orphan, position, publish, advance, rename, archive, pr-merge] }
         shared_target: { $ref: '#/components/schemas/ContentHash' }
         source: { $ref: '#/components/schemas/ContentHash' }
         target: { $ref: '#/components/schemas/ContentHash' }

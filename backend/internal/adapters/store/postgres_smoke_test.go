@@ -77,6 +77,9 @@ func TestPGSmoke(t *testing.T) {
 	defer t.Run("storage accounting", func(t *testing.T) { checkStorageAccountingPG(t, st) })
 	defer t.Run("shared runtime", func(t *testing.T) { checkRuntime(t, st) })
 	defer t.Run("durable PR jobs", func(t *testing.T) { checkPRJobs(t, st) })
+	defer t.Run("PR source wake", func(t *testing.T) { checkPRSourceWake(t, st) })
+	defer t.Run("PR reawakened serialization", func(t *testing.T) { checkPRReawakenedSerialization(t, st) })
+	defer t.Run("PR concurrent wake and claim", func(t *testing.T) { checkPGPRClaimWakeRace(t, st) })
 	defer t.Run("context protocol", func(t *testing.T) { checkContextProtocol(t, st) })
 
 	// Migration idempotency: 1st application (N>0) → 2nd application (0).
@@ -277,8 +280,14 @@ func TestPGSmoke(t *testing.T) {
 	oldPending := domain.HashContent([]byte("pg pending old"))
 	newPending := domain.HashContent([]byte("pg pending new"))
 	const pendingSession = "pg-pending-cas"
-	if err := st.PutPending(ctx, repoID, domain.Pending{RepoID: repoID, SessionID: pendingSession, Target: newPending}); err != nil {
+	if err := st.PutPending(ctx, repoID, domain.Pending{RepoID: repoID, SessionID: pendingSession, Provider: domain.ProviderClaude, Branch: "main", Target: newPending}); err != nil {
 		t.Fatalf("pending fixture: %v", err)
+	}
+	if previous, err := st.ReplacePending(ctx, repoID, domain.Pending{RepoID: repoID, SessionID: pendingSession, Provider: domain.ProviderCodex, Target: oldPending}); !errors.Is(err, domain.ErrConflict) || previous != "" {
+		t.Fatalf("pending provider collision accepted: previous=%s err=%v", previous, err)
+	}
+	if kept, err := st.ListPendings(ctx, repoID); err != nil || len(kept) != 1 || kept[0].Target != newPending || kept[0].Provider != domain.ProviderClaude {
+		t.Fatalf("pending provider collision changed original: %+v err=%v", kept, err)
 	}
 	if result, err := st.CompareAndDeletePending(ctx, repoID, pendingSession, oldPending); err != nil || result != domain.PendingDeleteKept {
 		t.Fatalf("stale pending CAS: result=%v err=%v", result, err)
@@ -286,11 +295,11 @@ func TestPGSmoke(t *testing.T) {
 	if found, err := st.SetPendingDismissed(ctx, repoID, pendingSession, true); err != nil || !found {
 		t.Fatalf("pending dismiss: found=%v err=%v", found, err)
 	}
-	if previous, err := st.ReplacePending(ctx, repoID, domain.Pending{RepoID: repoID, SessionID: pendingSession, Target: oldPending}); err != nil || previous != newPending {
+	if previous, err := st.ReplacePending(ctx, repoID, domain.Pending{RepoID: repoID, SessionID: pendingSession, Provider: domain.ProviderClaude, Branch: "feature/other-worktree", Target: oldPending}); err != nil || previous != newPending {
 		t.Fatalf("pending replacement: previous=%s err=%v", previous, err)
 	}
 	pendings, err := st.ListPendings(ctx, repoID)
-	if err != nil || len(pendings) != 1 || pendings[0].Target != oldPending || !pendings[0].Dismissed {
+	if err != nil || len(pendings) != 1 || pendings[0].Target != oldPending || !pendings[0].Dismissed || pendings[0].Branch != "feature/other-worktree" {
 		t.Fatalf("pending sticky replacement: %+v err=%v", pendings, err)
 	}
 	if result, err := st.CompareAndDeletePending(ctx, repoID, pendingSession, oldPending); err != nil || result != domain.PendingDeleteDeleted {

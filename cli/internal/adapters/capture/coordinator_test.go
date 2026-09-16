@@ -2,6 +2,8 @@ package capture
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -317,5 +319,116 @@ func TestSameOpaqueSessionIDIsIndependentAcrossLinkedWorktrees(t *testing.T) {
 	linkedBase := captureStateBase(ctx, domain.ProviderCodex, linked, opaqueID)
 	if primaryBase == linkedBase {
 		t.Fatalf("same opaque ID crossed worktrees: %q", primaryBase)
+	}
+}
+
+func writeCoordinatorSession(t *testing.T, home, cwd string, provider domain.ProviderKind, sessionID string, modified time.Time) string {
+	t.Helper()
+	path := filepath.Join(home, ".claude", "projects", encodeCwd(cwd), sessionID+".jsonl")
+	if provider == domain.ProviderCodex {
+		path = filepath.Join(home, ".codex", "sessions", "2026", "09", "16", "rollout-test-"+sessionID+".jsonl")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"id": sessionID, "cwd": cwd}, "sessionId": sessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestCoordinatorDiscoveryHonorsSessionIdentity(t *testing.T) {
+	const wantedID = "11111111-1111-4111-8111-111111111111"
+	const siblingID = "22222222-2222-4222-8222-222222222222"
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		for _, scenario := range []string{"exact", "missing", "opaque-unresolved", "opaque-registered", "no-id"} {
+			t.Run(string(provider)+"/"+scenario, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				coord, fs, cwd, _ := newTestCoord(t)
+				wanted := writeCoordinatorSession(t, home, cwd, provider, wantedID, time.Unix(1000, 0))
+				sibling := writeCoordinatorSession(t, home, cwd, provider, siblingID, time.Unix(2000, 0))
+				sessionID, expected := wantedID, wanted
+				switch scenario {
+				case "missing":
+					sessionID = "33333333-3333-4333-8333-333333333333"
+				case "opaque-unresolved":
+					sessionID = "opaque-hook-id"
+				case "opaque-registered":
+					sessionID = "opaque-hook-id"
+					if err := TrackAppSession(cwd, provider, sessionID, wanted); err != nil {
+						t.Fatal(err)
+					}
+				case "no-id":
+					sessionID, expected = "", sibling
+				}
+				ctx := context.Background()
+				baselineErr := coord.MarkBaseline(ctx, provider, cwd, "", sessionID)
+				captured, captureErr := coord.RequestCapture(ctx, provider, cwd, "", sessionID, false, true)
+				base := filepath.Join(cwd, ".cxt", "capture", captureStateBase(ctx, provider, cwd, sessionID))
+				if scenario == "missing" || scenario == "opaque-unresolved" {
+					for _, err := range []error{baselineErr, captureErr} {
+						if !errors.Is(err, domain.ErrNoActiveSession) || !strings.Contains(err.Error(), sessionID) {
+							t.Fatalf("unresolved identity must be explicit, got %v", err)
+						}
+					}
+					if captured || len(fs.calls) != 0 {
+						t.Fatalf("unresolved identity captured a sibling: captured=%v calls=%+v", captured, fs.calls)
+					}
+					for _, suffix := range []string{".baseline", ".cursor", ".last"} {
+						if _, err := os.Stat(base + suffix); !os.IsNotExist(err) {
+							t.Fatalf("unresolved identity advanced %s: %v", suffix, err)
+						}
+					}
+					return
+				}
+				if baselineErr != nil || captureErr != nil || !captured {
+					t.Fatalf("baseline=%v capture=%v captured=%v", baselineErr, captureErr, captured)
+				}
+				if len(fs.calls) != 1 || fs.calls[0].SessionPath != expected {
+					t.Fatalf("capture calls=%+v, want path %q", fs.calls, expected)
+				}
+				for _, suffix := range []string{".baseline", ".cursor"} {
+					data, err := os.ReadFile(base + suffix)
+					var state captureCursor
+					if err != nil || json.Unmarshal(data, &state) != nil || state.Path != expected {
+						t.Fatalf("wrong %s: %s (read error: %v)", suffix, data, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestForcedCaptureLockHonorsDeadlineAndCanRetry(t *testing.T) {
+	coord, fs, cwd, session := newTestCoord(t)
+	dir, err := captureStateDir(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sessionID = "final-session"
+	lock := filepath.Join(dir, captureStateBase(context.Background(), domain.ProviderCodex, cwd, sessionID)+".lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	captured, err := coord.RequestCapture(ctx, domain.ProviderCodex, cwd, session, sessionID, false, true)
+	if captured || !errors.Is(err, context.DeadlineExceeded) || len(fs.calls) != 0 {
+		t.Fatalf("blocked force capture: captured=%v err=%v calls=%+v", captured, err, fs.calls)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatalf("waiting capture removed another writer's lock: %v", err)
+	}
+	retry := NewCaptureCoordinator(fs, domain.TeamIdentity{})
+	if captured, err := retry.RequestCapture(context.Background(), domain.ProviderCodex, cwd, session, sessionID, false, true); err != nil || !captured {
+		t.Fatalf("retry: captured=%v err=%v", captured, err)
 	}
 }

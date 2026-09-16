@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -115,11 +116,19 @@ func runBranchTransaction(ctx context.Context, c *Container, cwd string, args []
 				return err
 			}
 			var op *branchjournal.Operation
-			for i := len(ops) - 1; i >= 0; i-- {
-				candidate := &ops[i]
-				if candidate.Event.Branch == branch && candidate.Event.GitAfter == oid && candidate.Worktree == cwd && candidate.GitPID == gitPID && (candidate.Phase == "prepared" || candidate.Phase == "committed") {
-					op = candidate
-					break
+			// Every prepared callback starts a new transaction. A PID can be
+			// reused, and one Git process can perform several ref transactions.
+			// A terminal callback must identify exactly one outstanding vote;
+			// timestamps cannot disambiguate callbacks after PID reuse.
+			if phase != "prepared" {
+				for i := len(ops) - 1; i >= 0; i-- {
+					candidate := &ops[i]
+					if candidate.GitRef == "refs/heads/"+branch && candidate.Event.GitAfter == oid && candidate.Worktree == cwd && candidate.GitPID == gitPID && (candidate.Phase == "prepared" || candidate.Phase == "committed") {
+						if op != nil {
+							return fmt.Errorf("ambiguous Git transaction for %s (PID %s); recorded votes remain unchanged", branch, gitPID)
+						}
+						op = candidate
+					}
 				}
 			}
 			if phase == "prepared" && op == nil {
@@ -235,7 +244,7 @@ func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid st
 		return e, err
 	}
 	if oid == e.GitBefore || orphan {
-		if latest := checkpointBranchSource(ctx, c, cwd, current, branch); latest != "" {
+		if latest := checkpointBranchSource(ctx, c, cwd, current, branch, e); latest != "" && latest != e.Source {
 			e.Source, e.Target, e.MemoryHash = latest, latest, ""
 			e.MemorySource = ""
 			e.MemoryPinned = false
@@ -254,48 +263,124 @@ func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid st
 
 // Freeze available live bytes before Git commits the branch birth. This step
 // does no network I/O and never materializes or terminates a provider session.
-func checkpointBranchSource(ctx context.Context, c *Container, cwd, from, to string) domain.ContentHash {
+func checkpointBranchSource(ctx context.Context, c *Container, cwd, from, to string, baseline domain.HistoryEvent) domain.ContentHash {
 	if c.Save == nil || from == "" {
 		return ""
 	}
-	type source struct{ provider, path string }
-	var sources []source
-	for _, active := range capture.ActiveAppSessions(cwd) {
-		sources = append(sources, source{string(active.Provider), active.Path})
+	target, err := branchCheckpointTarget(ctx, cwd)
+	if err != nil {
+		if !errors.Is(err, domain.ErrNoActiveSession) {
+			hookWarn("branch source session unavailable; using verified saved context: %v", err)
+		}
+		return ""
 	}
-	if len(sources) == 0 {
-		provider, _ := supervisedProvider(ctx, cwd)
-		var locator interface {
-			LocateActiveSession(context.Context, string) (string, error)
-		}
-		if provider == domain.ProviderCodex {
-			locator = capture.NewCodexCapture()
-		} else {
-			locator = capture.NewClaudeCapture()
-		}
-		if path, err := locator.LocateActiveSession(ctx, cwd); err == nil {
-			sources = append(sources, source{string(provider), path})
-		}
+	info, err := os.Lstat(target.SessionPath)
+	if err != nil || !info.Mode().IsRegular() || providerfs.CaptureExcluded(cxtRepoRoot(ctx, cwd), target.SessionPath, info.Size()) {
+		return ""
 	}
-	var latest domain.ContentHash
-	for _, source := range sources {
-		info, err := os.Lstat(source.path)
-		if err != nil || !info.Mode().IsRegular() || providerfs.CaptureExcluded(cxtRepoRoot(ctx, cwd), source.path, info.Size()) {
-			continue
-		}
-		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: source.provider, SessionPath: source.path, Branch: from, Author: c.Identity, Message: "checkpoint: branch " + from + " → " + to})
+	out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Branch: from, Author: c.Identity, Message: "checkpoint: branch " + from + " → " + to})
+	if err != nil {
+		hookWarn("branch source capture unavailable; using verified saved context: %v", err)
+		return ""
+	}
+	if baseline.Source != "" && baseline.Source != out.SnapshotID {
+		// Save reports the captured document even when deduplication preserves
+		// a newer selected head. Do not turn that unchanged ancestor into the
+		// branch's source or replace the verified baseline's pinned memory.
+		ancestor, err := branchCheckpointAncestor(ctx, c, baseline, out.SnapshotID)
 		if err != nil {
-			hookWarn("branch source capture unavailable; using verified saved context: %v", err)
+			hookWarn("branch checkpoint ancestry unavailable; using verified saved context: %v", err)
+			return ""
+		}
+		if ancestor {
+			return baseline.Source
+		}
+	}
+	if c.Memorize != nil {
+		if _, err := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: target.Provider, Ref: string(out.SnapshotID)}); err != nil {
+			hookWarn("branch source memory capture unavailable: %v", err)
+		}
+	}
+	return out.SnapshotID
+}
+
+func branchCheckpointAncestor(ctx context.Context, c *Container, baseline domain.HistoryEvent, captured domain.ContentHash) (bool, error) {
+	all, err := c.List.List(ctx, inbound.ListInput{RepoID: baseline.RepoID})
+	if err != nil {
+		return false, err
+	}
+	snapshots := make(map[domain.ContentHash]domain.Snapshot, len(all.Snapshots))
+	for _, snapshot := range all.Snapshots {
+		snapshots[snapshot.ID] = snapshot
+	}
+	seen := map[domain.ContentHash]bool{}
+	queue := []domain.ContentHash{baseline.Source}
+	for len(queue) > 0 {
+		id := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		if seen[id] {
 			continue
 		}
-		latest = out.SnapshotID
-		if c.Memorize != nil {
-			if _, err := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: source.provider, Ref: string(latest)}); err != nil {
-				hookWarn("branch source memory capture unavailable: %v", err)
+		seen[id] = true
+		snapshot, ok := snapshots[id]
+		if !ok || snapshot.RepoID != baseline.RepoID {
+			return false, fmt.Errorf("unverified checkpoint ancestor %s", id)
+		}
+		if id == captured {
+			return true, nil
+		}
+		queue = append(queue, snapshot.ReachabilityParents()...)
+	}
+	return false, nil
+}
+
+func branchCheckpointTarget(ctx context.Context, cwd string) (commandCaptureTarget, error) {
+	provider, managed := supervisedProvider(ctx, cwd)
+	active := capture.ActiveAppSessions(cwd)
+	if managed || strings.TrimSpace(os.Getenv("CODEX_THREAD_ID")) != "" || strings.TrimSpace(os.Getenv("CODEX_SESSION_ID")) != "" {
+		// An identified owner takes precedence over every registered sibling.
+		// Failure must not fall through to an unidentified registry entry or
+		// to file recency.
+		id := strings.TrimSpace(os.Getenv("CODEX_THREAD_ID"))
+		if id == "" {
+			id = strings.TrimSpace(os.Getenv("CODEX_SESSION_ID"))
+		}
+		if managed {
+			id = strings.TrimSpace(os.Getenv("CXT_WRAPPED_SESSION_ID"))
+			if !providerfs.ValidSessionID(id) {
+				id = capture.SessionAffinity(cwd, provider)
+			}
+		} else {
+			provider = domain.ProviderCodex
+		}
+		// The official hook already mapped this exact owner to a safe path in
+		// this worktree. Preserve its native cwd spelling: Git canonicalizes
+		// symlinks, while Claude's session directory encodes the original cwd.
+		if providerfs.ValidSessionID(id) {
+			for _, session := range active {
+				if session.Provider == provider && session.SessionID == id {
+					return commandCaptureTarget{Provider: provider, SessionPath: session.Path}, nil
+				}
 			}
 		}
+		target, err := commandCapture(ctx, cwd, "")
+		if err != nil {
+			return commandCaptureTarget{}, err
+		}
+		if target.SessionPath == "" {
+			return commandCaptureTarget{}, fmt.Errorf("command has no verified native session")
+		}
+		return target, nil
 	}
-	return latest
+	if len(active) == 0 {
+		return commandCaptureTarget{}, domain.ErrNoActiveSession
+	}
+	if len(active) != 1 {
+		return commandCaptureTarget{}, fmt.Errorf("multiple registered sessions; branch command has no exact owner")
+	}
+	// Hook identities can be opaque. With one live entry in this exact
+	// worktree, use its verified path rather than reconstructing a UUID path.
+	return commandCaptureTarget{Provider: active[0].Provider, SessionPath: active[0].Path}, nil
 }
 
 // Replay uses the durable prepared record and observed Git state. A timeout or
@@ -343,7 +428,8 @@ func replayBranchOperations(ctx context.Context, c *Container, cwd string) error
 				return err
 			}
 			if !committed {
-				blocked[op.GitRef] = true
+				// Keep uncertainty in the journal. It is not a birth and must not
+				// borrow evidence from, or block, an independently committed vote.
 				continue
 			}
 		}
@@ -353,7 +439,7 @@ func replayBranchOperations(ctx context.Context, c *Container, cwd string) error
 		event := op.Event
 		var resolutionErr error
 		if !op.Resolved {
-			event, resolutionErr = resolveBranchOperation(ctx, c, op)
+			event, resolutionErr = resolveBranchOperation(ctx, c, cwd, op)
 		}
 		err = j.Transaction(ctx, func() error {
 			current, err := j.List()
@@ -366,6 +452,17 @@ func replayBranchOperations(ctx context.Context, c *Container, cwd string) error
 				}
 				if saved.Phase == "applied" || saved.Phase == "aborted" {
 					return nil
+				}
+				// Branch refs belong to the verified shared repository, even if
+				// the original worktree has moved or no longer exists. Verify the
+				// read before persisting a resolution or acknowledging the operation.
+				exists, err := branchRefExists(ctx, cwd, saved.GitRef)
+				if err != nil {
+					saved.LastError = err.Error()
+					if saveErr := j.Save(saved); saveErr != nil {
+						return saveErr
+					}
+					return err
 				}
 				if !saved.Resolved {
 					if resolutionErr != nil {
@@ -382,7 +479,6 @@ func replayBranchOperations(ctx context.Context, c *Container, cwd string) error
 						return err
 					}
 				}
-				exists := gitOut(saved.Worktree, "rev-parse", "--verify", saved.GitRef) != ""
 				if err := applyBranchOperation(ctx, c, cwd, saved, exists); err != nil {
 					saved.LastError = err.Error()
 					if saveErr := j.Save(saved); saveErr != nil {
@@ -413,14 +509,31 @@ func replayBranchOperations(ctx context.Context, c *Container, cwd string) error
 	return errors.Join(failures...)
 }
 
-func resolveBranchOperation(ctx context.Context, c *Container, op branchjournal.Operation) (domain.HistoryEvent, error) {
+func resolveBranchOperation(ctx context.Context, c *Container, cwd string, op branchjournal.Operation) (domain.HistoryEvent, error) {
 	e := op.Event
-	upstream := gitOut(op.Worktree, "for-each-ref", "--format=%(upstream)", op.GitRef)
+	gitDir, err := branchOperationGitDir(ctx, cwd, op)
+	if err != nil {
+		return e, err
+	}
+	upstream, err := branchGitOutput(ctx, cwd, "--git-dir="+gitDir, "for-each-ref", "--format=%(upstream)", op.GitRef)
+	if err != nil {
+		return e, err
+	}
 	if upstream != "" && e.Kind != "orphan" {
-		remoteName := gitOut(op.Worktree, "config", "--get", "branch."+e.Branch+".remote")
-		remoteBranch := strings.TrimPrefix(gitOut(op.Worktree, "config", "--get", "branch."+e.Branch+".merge"), "refs/heads/")
+		remoteName, err := branchGitOutput(ctx, cwd, "--git-dir="+gitDir, "config", "--get", "branch."+e.Branch+".remote")
+		if err != nil {
+			return e, err
+		}
+		merge, err := branchGitOutput(ctx, cwd, "--git-dir="+gitDir, "config", "--get", "branch."+e.Branch+".merge")
+		if err != nil {
+			return e, err
+		}
+		remoteBranch := strings.TrimPrefix(merge, "refs/heads/")
 		if remoteName != "" && remoteName != "." && remoteBranch != "" {
-			ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: op.Worktree}, remoteBranch)
+			if c.Sync == nil {
+				return e, fmt.Errorf("tracking context attachment awaits sync service")
+			}
+			ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, remoteBranch)
 			if err != nil {
 				return e, fmt.Errorf("tracking context attachment awaits server: %w", err)
 			}
@@ -445,7 +558,7 @@ func resolveBranchOperation(ctx context.Context, c *Container, op branchjournal.
 			if err != nil {
 				return e, err
 			}
-			selected := contextSelectionAtCode(op.Worktree, e.GitAfter, remoteBranch, all.Snapshots, history)
+			selected := contextSelectionAtCode(cwd, e.GitAfter, remoteBranch, all.Snapshots, history)
 			if selected.Snapshot != "" {
 				e.Source, e.Target = selected.Snapshot, selected.Snapshot
 				e.MemoryHash, e.MemorySource, e.MemoryPinned = selected.MemoryHash, selected.MemorySource, selected.MemoryPinned
@@ -455,6 +568,38 @@ func resolveBranchOperation(ctx context.Context, c *Container, op branchjournal.
 		}
 	}
 	return c.History.ValidateHistorySource(ctx, e)
+}
+
+// Worktree IDs were frozen from Git's absolute admin directory before birth.
+// That directory survives a worktree move and owns config.worktree. The
+// replaying worktree is only a route to shared refs, never a source of binding
+// configuration. Once the origin admin directory is pruned, an unresolved
+// binding cannot be reconstructed safely from another worktree's settings.
+func branchOperationGitDir(ctx context.Context, cwd string, op branchjournal.Operation) (string, error) {
+	common, err := branchGitOutput(ctx, cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	matches := func(path string) bool {
+		id := sha256.Sum256([]byte(path))
+		return fmt.Sprintf("%x", id[:16]) == op.Event.WorktreeID
+	}
+	if matches(common) {
+		return common, nil
+	}
+	entries, err := os.ReadDir(filepath.Join(common, "worktrees"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			path := filepath.Join(common, "worktrees", entry.Name())
+			if matches(path) {
+				return path, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("origin worktree Git configuration is unavailable for %s; branch binding remains queued", op.Event.WorktreeID)
 }
 
 func applyBranchOperation(ctx context.Context, c *Container, cwd string, op branchjournal.Operation, branchExists bool) error {
@@ -509,26 +654,39 @@ func readBranchLog(cwd, branch string) ([]byte, error) {
 }
 
 func hasBranchCommitWitness(op branchjournal.Operation) (bool, error) {
-	// A committed callback is authoritative. When it was lost, a new reflog
-	// creation after the prepared prefix proves completion; HEAD alone does not.
-	if op.Event.Kind == "orphan" {
-		return false, nil
-	}
-	log, err := readBranchLog(op.Worktree, op.Event.Branch)
+	// A reflog prefix and zero→OID entry do not identify the transaction that
+	// wrote them. The original process may have died before committing and a
+	// later creation may reuse both name and OID. Without a durable committed
+	// callback (or explicit orphan recovery), prepared records stay unconfirmed.
+	return op.Phase == "committed" || op.Phase == "applied", nil
+}
+
+func branchRefExists(ctx context.Context, cwd, ref string) (bool, error) {
+	// show-ref --verify --quiet returns the same status for missing and broken
+	// loose refs. for-each-ref distinguishes an absent ref from unreadable ones
+	// through stderr, which branchGitOutput deliberately refuses to discard.
+	refs, err := branchGitOutput(ctx, cwd, "for-each-ref", "--format=%(refname)", ref)
 	if err != nil {
 		return false, err
 	}
-	if op.LogBytes < 0 || op.LogBytes > len(log) || op.LogHash == "" {
-		return false, nil
-	}
-	if domain.HashContent(log[:op.LogBytes]) != op.LogHash {
-		return false, nil
-	}
-	for _, line := range strings.Split(string(log[op.LogBytes:]), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && isZeroGitOID(fields[0]) && fields[1] == op.Event.GitAfter {
+	for _, name := range strings.Fields(refs) {
+		if name == ref {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func branchGitOutput(ctx context.Context, cwd string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("cannot inspect Git branch state: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if stderr.Len() != 0 {
+		return "", fmt.Errorf("cannot verify Git branch state: %s", strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(string(out)), nil
 }

@@ -229,10 +229,10 @@ func Run(c *Container, args []string) error {
 		// git commit response: snapshots the active session of the staged (or default) provider.
 		msg := flagVal(rest, "-m")
 		n, lastErr := snapshotForCommit(ctx, c, cwd, msg)
+		if lastErr != nil {
+			return lastErr
+		}
 		if n == 0 {
-			if lastErr != nil {
-				return lastErr // e.g., not a git repository — pass the cause unchanged
-			}
 			return fmt.Errorf("no active session to snapshot (agent session must have run in this directory)")
 		}
 		return nil

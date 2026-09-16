@@ -105,25 +105,63 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 	saved := 0
 	var lastErr error
 	var resolved []inbound.PendingResolution
-	for _, p := range commitProviders(cwd) {
+	providers := commitProviders(cwd)
+	pass, err := beginCommitCapture(ctx, c, cwd, providers)
+	if err != nil {
+		return 0, err
+	}
+	root := cxtRepoRoot(ctx, cwd)
+	for i, p := range providers {
+		claimed := p == domain.ProviderCodex && (providerfs.ValidSessionID(os.Getenv("CODEX_THREAD_ID")) || providerfs.ValidSessionID(os.Getenv("CODEX_SESSION_ID")))
+		if owner, managed := supervisedProvider(ctx, cwd); managed && owner == p {
+			claimed = true
+		}
 		target, err := commandCapture(ctx, cwd, string(p))
 		if err != nil {
-			if errors.Is(err, domain.ErrNoActiveSession) {
-				continue
+			state := "failed"
+			if errors.Is(err, domain.ErrNoActiveSession) && !claimed {
+				state = "absent"
+			} else {
+				lastErr = err
+				hookWarn("%s command session could not be selected: %v", p, err)
 			}
-			lastErr = err
-			hookWarn("%s command session could not be selected: %v", p, err)
+			if werr := pass.recordOutcome(root, i, "", state, inbound.SaveOutput{}, err); werr != nil {
+				lastErr = errors.Join(err, werr)
+				break
+			}
 			continue
+		}
+		if pass != nil {
+			if err := pass.checkGit(cwd); err != nil {
+				lastErr = err
+				break
+			}
 		}
 		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: p, SessionPath: target.SessionPath, Message: message, Author: c.Identity})
 		if err != nil {
-			// No active session is normal (unused agent commit) — skip silently.
-			if err == domain.ErrNoActiveSession {
-				continue
+			state := "failed"
+			// Only an unclaimed discovery with no selected path can mean an
+			// unused provider. Losing an owned transcript is a failed capture.
+			if errors.Is(err, domain.ErrNoActiveSession) && target.SessionPath == "" && !claimed {
+				state = "absent"
+			} else {
+				lastErr = fmt.Errorf("%s selected session capture failed: %w", p, err)
+				hookWarn("%v", lastErr)
 			}
-			lastErr = err
-			hookWarn("%s session snapshot failed: %v", p, err)
+			if werr := pass.recordOutcome(root, i, target.SessionPath, state, inbound.SaveOutput{}, err); werr != nil {
+				lastErr = errors.Join(err, werr)
+				break
+			}
 			continue
+		}
+		if pass != nil && (out.Branch != pass.Proof.Branch || domain.ValidateContentHash(out.SnapshotID) != nil) {
+			lastErr = fmt.Errorf("%s Save result does not match the frozen capture branch", p)
+			lastErr = errors.Join(lastErr, pass.recordOutcome(root, i, target.SessionPath, "failed", out, lastErr))
+			break
+		}
+		if err := pass.recordOutcome(root, i, target.SessionPath, "saved", out, nil); err != nil {
+			lastErr = err
+			break
 		}
 		fmt.Printf("cxt: snapshot %s (%s) on %q\n", shortHash(out.SnapshotID), p, out.Branch)
 		saved++
@@ -140,8 +178,19 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 			fmt.Printf("cxt: memorized (%s) → %s (included in next push)\n", p, shortHash(mout.MemoryHash))
 		}
 	}
+	if lastErr == nil {
+		lastErr = recordCommitPublication(ctx, c, cwd, pass)
+		if lastErr != nil {
+			hookWarn("commit context finalization remains pending: %v", lastErr)
+		}
+	}
+	if lastErr != nil && pass != nil && !pass.Complete {
+		lastErr = pass.pending(lastErr)
+	}
 	if saved > 0 {
-		_ = remotecfg.SetStagedProviders(cxtRepoRoot(ctx, cwd), nil) // exhaust staged providers
+		if lastErr == nil {
+			_ = remotecfg.SetStagedProviders(cxtRepoRoot(ctx, cwd), nil)
+		}
 		// Absorb the remote pending of the session that was committed + reflect remaining pending (detached — no commit delay).
 		spawnPendingSync(cwd, resolved)
 	}
@@ -744,7 +793,7 @@ func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTa
 	appPath := ""
 	if !managed && (explicit == "" || explicit == string(domain.ProviderCodex)) {
 		// Codex app commands carry the native thread ID even when their working
-		// directory is a linked worktree. An exact registered session is required;
+		// directory is a linked worktree. An exact native session is required;
 		// never select an arbitrary recent conversation from another worktree.
 		id := strings.TrimSpace(os.Getenv("CODEX_THREAD_ID"))
 		if id == "" {
@@ -757,6 +806,19 @@ func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTa
 				// Before the first app hook, exact cwd lookup is still safe. An
 				// unknown ID must never fall back to another terminal's latest file.
 				appPath, err = capture.NewCodexCapture().LocateSession(ctx, cwd, id)
+			}
+			if err == nil || errors.Is(err, domain.ErrNoActiveSession) {
+				// Verify every exact command result, including pre-registry cwd
+				// discovery, or recover an unregistered related-worktree session.
+				// A matching filename alone is not a native identity.
+				verified, verifyErr := capture.LocateCodexCommandSession(ctx, cwd, id)
+				if verifyErr != nil {
+					err = verifyErr
+				} else if err == nil && verified != appPath {
+					err = fmt.Errorf("ambiguous exact Codex command session")
+				} else {
+					appPath, err = verified, nil
+				}
 			}
 			if err != nil {
 				return commandCaptureTarget{}, err
@@ -1032,6 +1094,12 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		return nil
 
 	case "post-commit":
+		// Rebase/squash creates intermediate detached commits. Their context
+		// comes from original finalized records through post-rewrite, never a
+		// fresh capture that could fall back to the default branch.
+		if operationInProgress(cwd) && gitOut(cwd, "symbolic-ref", "--quiet", "HEAD") == "" {
+			return nil
+		}
 		// git commit → context snapshot. Passes the message and SHA directly to link code ↔ context.
 		msg := gitOut(cwd, "log", "-1", "--pretty=%s")
 		sha := gitOut(cwd, "rev-parse", "--short", "HEAD")
@@ -1260,8 +1328,13 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 				added++
 			}
 		}
+		if err := sc.Err(); err != nil {
+			hookWarn("rewrite mapping was not read completely: %v", err)
+			return nil
+		}
 		if added > 0 {
-			if err := recordRewriteHistory(ctx, c, cwd, observed); err != nil {
+			final := kind == "rebase" || !operationInProgress(cwd)
+			if err := recordRewriteBatch(ctx, c, cwd, observed, final); err != nil {
 				hookWarn("rewrite history journal failure: %v", err)
 				return nil
 			}

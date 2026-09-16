@@ -89,6 +89,9 @@ func contextSelectionAtCode(cwd, oid, branch string, snaps []domain.Snapshot, hi
 		// because the associated snapshot may no longer be on the shared tip path.
 		for i := len(history) - 1; i >= 0; i-- {
 			e := history[i]
+			if e.Kind == "publish" {
+				continue
+			} // Delivery completion never changes memory selection.
 			matches := e.Branch == branch
 			if identity != "" {
 				matches = e.BranchID == identity

@@ -15,10 +15,12 @@ import (
 
 type deleteFailStore struct {
 	*store.FSStore
-	deleteDocCalls int
+	deleteSnapshotCalls int
+	deleteDocCalls      int
 }
 
 func (s *deleteFailStore) DeleteSnapshot(context.Context, domain.ContentHash, domain.ContentHash) error {
+	s.deleteSnapshotCalls++
 	return errors.New("injected snapshot delete failure")
 }
 
@@ -129,7 +131,7 @@ func TestFsckDanglingGraftParent(t *testing.T) {
 }
 
 // TestGCHookLeafReachabilityGuard: GC does not delete hook leaves under ref ancestors (invariant R).
-// Conversely, hook leaves that cannot be reached by any ref are still deleted.
+// An unreachable leaf is collected only after a verified prefix extension.
 func TestGCHookLeafReachabilityGuard(t *testing.T) {
 	svc, st := newFsckSvc(t)
 	ctx := context.Background()
@@ -139,21 +141,24 @@ func TestGCHookLeafReachabilityGuard(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Hook leaf L above commit C is stacked and main→C. L is an ancestor of main (not directly the target).
-	must(st.PutSnapshot(ctx, domain.Snapshot{ID: hh("l"), RepoID: repo, Message: "hook: session", DocHash: hh("l")}))
-	must(st.PutSnapshot(ctx, domain.Snapshot{ID: hh("c"), RepoID: repo, Parents: []domain.ContentHash{hh("l")}, Message: "commit [git abc]", DocHash: hh("c")}))
+	leaf := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderClaude, "first"))
+	next := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderClaude, "first", "continued"))
+	// The old capture is an ancestor of main, not directly its target.
+	must(st.PutSnapshot(ctx, domain.Snapshot{ID: hh("c"), RepoID: repo, Parents: []domain.ContentHash{leaf.ID}, Message: "commit [git abc]", DocHash: hh("c")}))
 	must(st.CompareAndSwapRef(ctx, repo, domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo, Target: hh("c")}, ""))
 
-	svc.gcHookLeaf(ctx, repo, hh("l"), hh("c")) // Reachable → Must be preserved
-	if _, err := st.GetSnapshot(ctx, repo, hh("l")); err != nil {
-		t.Fatalf("Reachable hook leaf deleted (invariant R violation): %v", err)
-	}
+	svc.gcHookLeaf(ctx, repo, leaf.ID, next.ID)
+	assertPendingGCCapture(t, st, leaf)
 
-	// Contrast: Any unreachable hook leaf is deleted.
-	must(st.PutSnapshot(ctx, domain.Snapshot{ID: hh("m"), RepoID: repo, Message: "hook: orphan", DocHash: hh("m")}))
-	svc.gcHookLeaf(ctx, repo, hh("m"), hh("c"))
-	if _, err := st.GetSnapshot(ctx, repo, hh("m")); err == nil {
-		t.Fatal("Unreachable hook leaf not deleted")
+	orphanDoc := pendingGCCIR(domain.ProviderClaude, "first")
+	orphanDoc.Envelope.Cwd = "/work/another-worktree"
+	orphan := putPendingGCCapture(t, st, repo, orphanDoc)
+	svc.gcHookLeaf(ctx, repo, orphan.ID, next.ID)
+	if _, err := st.GetSnapshot(ctx, repo, orphan.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Unreachable superseded hook leaf not deleted: %v", err)
+	}
+	if _, err := st.GetDoc(ctx, repo, orphan.DocHash); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Superseded doc not deleted: %v", err)
 	}
 }
 
@@ -163,13 +168,12 @@ func TestGCHookLeafKeepsDocWhenSnapshotDeleteFails(t *testing.T) {
 	st := &deleteFailStore{FSStore: base}
 	svc := NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(base), base)
 	repo := hh("gc-delete-race")
-	old := hh("gc-delete-old")
-	if err := base.PutSnapshot(ctx, domain.Snapshot{ID: old, RepoID: repo, Message: "hook: pending", DocHash: old}); err != nil {
-		t.Fatal(err)
-	}
+	old := putPendingGCCapture(t, base, repo, pendingGCCIR(domain.ProviderClaude, "first"))
+	next := putPendingGCCapture(t, base, repo, pendingGCCIR(domain.ProviderClaude, "first", "continued"))
 
-	svc.gcHookLeaf(ctx, repo, old, hh("replacement"))
-	if st.deleteDocCalls != 0 {
-		t.Fatalf("doc deletion ran after snapshot deletion failed: %d calls", st.deleteDocCalls)
+	svc.gcHookLeaf(ctx, repo, old.ID, next.ID)
+	if st.deleteSnapshotCalls != 1 || st.deleteDocCalls != 0 {
+		t.Fatalf("snapshot/doc delete calls=%d/%d, want 1/0", st.deleteSnapshotCalls, st.deleteDocCalls)
 	}
+	assertPendingGCCapture(t, base, old)
 }

@@ -265,6 +265,10 @@ cat > "$APP_SESSION" <<EOF
 {"type":"user","cwd":"$TMP/repo2","sessionId":"$APP_SESSION_ID","gitBranch":"main","timestamp":"2026-07-05T00:00:00Z","message":{"role":"user","content":"task E"}}
 {"type":"assistant","cwd":"$TMP/repo2","sessionId":"$APP_SESSION_ID","gitBranch":"main","timestamp":"2026-07-05T00:00:01Z","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"done E"}],"usage":{"input_tokens":100,"output_tokens":10}}}
 EOF
+# Birth capture requires an observed live owner. An archived newer transcript
+# must not become the source just because it was modified most recently.
+printf '{"cwd":"%s","session_id":"%s","transcript_path":"%s","prompt":"task E"}\n' "$TMP/repo2" "$APP_SESSION_ID" "$APP_SESSION" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
+session "$TMP/repo2" UNOWNED
 
 # A plain desktop-app shell has no cxt supervisor. It must checkpoint and record
 # the branch birth independently of the conversation, but keep the vendor-owned native session file open and inject
@@ -273,6 +277,8 @@ APP_JSONL_BEFORE=$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr
 git checkout -qb app-feature-x >"$TMP/app-sw.out" 2>&1
 expect "app switch checkpoints previous branch" "$([ "$(grep -c 'cxt: checkpoint' "$TMP/app-sw.out")" -ge 1 ] && echo yes)" yes
 expect "app switch records a durable branch birth" "$(birth_field app-feature-x kind)" birth
+APP_BIRTH_TARGET=$(birth_field app-feature-x target)
+expect "app birth captures its registered session" "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("session_id",""))' ".cxt/objects/snapshots/${APP_BIRTH_TARGET#sha256:}")" "$APP_SESSION_ID"
 expect "app switch retains native session" "$(grep -c 'app session retained' "$TMP/app-sw.out")" 1
 expect "app switch does not create wrapper boundary" "$([ ! -e .cxt/boundary.json ] && echo yes)" yes
 expect "app switch does not supersede provider files" "$(find "$PROJ" -maxdepth 1 -type f -name '*.superseded' | wc -l | tr -d ' ')" 0
@@ -333,6 +339,7 @@ expect "seed materialization" "$([ -n "$SEED" ] && [ -f "$SEED" ] && echo yes)" 
 expect "boundary seed ID matches materialized resume target" "$RESUMEID" "$SEEDID"
 expect "seed inherits main compact memory" "$(grep -q 'task A' "$SEED" && grep -q 'task B' "$SEED" && grep -q 'task C' "$SEED" && echo yes)" yes
 expect "seed inherits main session conversation" "$(grep -q 'task E' "$SEED" && echo yes)" yes
+expect "seed excludes the unregistered sibling conversation" "$(grep -q 'task UNOWNED' "$SEED" && echo yes || echo no)" no
 SEEDMEM=$(python3 -c "
 import json,glob
 raw=open('.cxt/refs/heads/feature-x').read().strip()
@@ -441,6 +448,8 @@ session "$TMP/repo1" WFY
 printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s","prompt":"continue"}\n' "$TMP/repo1" "$D/s-WFY.jsonl" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
 git checkout -qb web-fork-y >"$TMP/wfy.out" 2>&1
 expect "switch -c records its own observed birth" "$(birth_field web-fork-y kind)" birth
+WFY_BIRTH_TARGET=$(birth_field web-fork-y target)
+expect "branch birth captures the exact official hook session" "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("session_id",""))' ".cxt/objects/snapshots/${WFY_BIRTH_TARGET#sha256:}")" sess-WFY
 expect "new branch uses its live source context" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
 cxt git-hook branch-replay
 expect "replaying birth never overwrites the selected source" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
@@ -544,6 +553,7 @@ expect "fresh client pulls and verifies v2 history" "$(cxt fsck | grep -c 'Missi
 
 echo
 source "$ROOT/scripts/e2e-context-history.inc.sh"
+source "$ROOT/scripts/e2e-publication.inc.sh"
 
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: All passed ✓"; else echo "SYNC E2E: Failures exist ✗"; fi
 exit "$FAIL"

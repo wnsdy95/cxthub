@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -172,6 +171,23 @@ func (s *Service) promoteBoundPR(ctx context.Context, repoID domain.ContentHash,
 		if err != nil {
 			return zero, err
 		}
+		// A completion acknowledges the operation, not an obligation to keep its
+		// source reachable forever. Replaying it must preserve a later rewind or
+		// continuation, including recovery after a failed job-status write.
+		if completed, err := hasPRCompletion(latest, receipt); err != nil {
+			return zero, err
+		} else if completed {
+			return inbound.UpdateRefOutput{Ref: current, ServerTarget: current.Target, RequestedTarget: receipt.Source, Result: inbound.RefUpToDate}, nil
+		}
+		// An old pending binding is not a completion or a publication witness.
+		// Keep its immutable source, but require finalization before applying it.
+		source, identity, err := s.resolvePRSource(ctx, repoID, pr, latest)
+		if err != nil {
+			return zero, err
+		}
+		if source != receipt.Source || identity != receipt.SourceBranchID {
+			return zero, fmt.Errorf("%w: finalized PR source differs from its stored binding", domain.ErrConflict)
+		}
 		if yes, err := s.engine.IsAncestor(ctx, repoID, receipt.Source, current.Target); err != nil {
 			return zero, err
 		} else if yes {
@@ -188,6 +204,21 @@ func (s *Service) promoteBoundPR(ctx context.Context, repoID domain.ContentHash,
 	return zero, domain.ErrRefConflict
 }
 
+func hasPRCompletion(rows []domain.HistoryEvent, receipt domain.HistoryEvent) (bool, error) {
+	key := sha256.Sum256([]byte(receipt.ID + ":completed"))
+	id := fmt.Sprintf("%x", key[:16])
+	for _, e := range rows {
+		if e.ID != id {
+			continue
+		}
+		if e.Kind != "pr-merge" || !e.PRCompleted || e.PR == nil || *e.PR != *receipt.PR || e.Source != receipt.Source || e.SourceBranchID != receipt.SourceBranchID || e.BranchID != receipt.BranchID {
+			return false, domain.ErrRefConflict
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 // Binding and completion are separate immutable events. If recording completion
 // fails after append, the next delivery verifies reachability and retries it.
 // This also proves joins that leave the base ref unchanged.
@@ -199,16 +230,7 @@ func (s *Service) completePRPromotion(ctx context.Context, receipt domain.Histor
 		if err != nil {
 			return false, err
 		}
-		for _, e := range rows {
-			if e.ID != id {
-				continue
-			}
-			if e.Kind != "pr-merge" || !e.PRCompleted || e.PR == nil || *e.PR != *receipt.PR || e.Source != receipt.Source || e.SourceBranchID != receipt.SourceBranchID || e.BranchID != receipt.BranchID {
-				return false, domain.ErrRefConflict
-			}
-			return true, nil
-		}
-		return false, nil
+		return hasPRCompletion(rows, receipt)
 	}
 	if exists, err := accepted(); exists || err != nil {
 		return out, err
@@ -232,12 +254,10 @@ func (s *Service) completePRPromotion(ctx context.Context, receipt domain.Histor
 	return out, nil
 }
 
-var legacyPRGitLink = regexp.MustCompile(`\[git ([0-9a-f]{40}|[0-9a-f]{64})\]`)
-
 func (s *Service) resolvePRSource(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, events []domain.HistoryEvent) (domain.ContentHash, string, error) {
 	candidates := map[domain.ContentHash]string{}
 	for _, e := range events {
-		if e.Kind == "pr-merge" || e.GitAfter != pr.HeadSHA || e.Target == "" || !matchesPRSourceBranch(e, pr.HeadBranch, events) {
+		if e.Kind != "publish" || e.GitAfter != pr.HeadSHA || e.Target == "" || !domain.MatchesPRSourcePublication(e, pr.HeadBranch, events) {
 			continue
 		}
 		if old, ok := candidates[e.Target]; ok && old != e.BranchID {
@@ -246,44 +266,7 @@ func (s *Service) resolvePRSource(ctx context.Context, repoID domain.ContentHash
 		candidates[e.Target] = e.BranchID
 	}
 	if len(candidates) == 0 {
-		projection, err := domain.ProjectContextBranches(events)
-		if err != nil {
-			return "", "", err
-		}
-		// Legacy labels are usable only before an explicit identity/release exists.
-		// Only full Git links prove the revision. Parallel candidates must form
-		// one proven ancestry chain below.
-		if _, known := projection.Active[pr.HeadBranch]; !known && projection.Released[pr.HeadBranch] == "" {
-			snaps, err := s.meta.ListSnapshots(ctx, repoID, "")
-			if err != nil {
-				return "", "", err
-			}
-			for _, snap := range snaps {
-				if snap.Branch != pr.HeadBranch {
-					continue
-				}
-				match := legacyPRGitLink.FindStringSubmatch(snap.Message)
-				if len(match) == 2 && pr.HeadSHA == match[1] {
-					candidates[snap.ID] = domain.LegacyContextBranchID(string(repoID), pr.HeadBranch)
-				}
-			}
-		}
-	}
-	if len(candidates) == 0 {
-		p, err := domain.ProjectContextBranches(events)
-		if err != nil {
-			return "", "", err
-		}
-		_, known := p.Active[pr.HeadBranch]
-		if _, err := s.meta.GetRef(ctx, repoID, domain.RefBranch, pr.HeadBranch); err == nil {
-			known = true
-		} else if !errors.Is(err, domain.ErrNotFound) {
-			return "", "", err
-		}
-		if known || p.Released[pr.HeadBranch] != "" {
-			return "", "", fmt.Errorf("%w: PR #%d source revision has no exact context association; sync its history and retry", errors.Join(domain.ErrConflict, domain.ErrPRSourcePending), pr.Number)
-		}
-		return "", "", fmt.Errorf("%w: no recorded context at PR #%d head %s; sync the source history and retry", errors.Join(domain.ErrNotFound, domain.ErrPRSourcePending), pr.Number, pr.HeadSHA)
+		return "", "", fmt.Errorf("%w: PR #%d head %s has no finalized source publication", errors.Join(domain.ErrConflict, domain.ErrPRSourcePending), pr.Number, pr.HeadSHA)
 	}
 	identity := ""
 	for _, branchID := range candidates {
@@ -309,25 +292,4 @@ func (s *Service) resolvePRSource(ctx context.Context, repoID domain.ContentHash
 		}
 	}
 	return "", "", fmt.Errorf("%w: PR revision has divergent context tips; reconcile them before promotion", domain.ErrConflict)
-}
-
-// A tracking alias publishes under the shared context branch while LocalBranch
-// records the native Git name. Use that exact observation only with an existing
-// attachment of the same worktree and context identity. Names may have changed
-// since attachment; neither today's ref nor a same-named branch proves the source.
-func matchesPRSourceBranch(e domain.HistoryEvent, head string, events []domain.HistoryEvent) bool {
-	if e.Branch == head {
-		return true
-	}
-	if e.LocalBranch != head || e.WorktreeID == "" {
-		return false
-	}
-	for _, attached := range events {
-		if attached.Kind == "attach" && attached.LocalBranch != "" &&
-			attached.WorktreeID == e.WorktreeID && attached.BranchID == e.BranchID &&
-			!attached.CreatedAt.After(e.CreatedAt) {
-			return true
-		}
-	}
-	return false
 }

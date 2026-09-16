@@ -41,6 +41,7 @@ func TestPRJobSurvivesRestartAndLateSource(t *testing.T) {
 	if err := st.ApplyHistoryEvent(ctx, e); err != nil {
 		t.Fatal(err)
 	}
+	publishPRSource(t, svc, e)
 	if err := svc.RetryPRPromotion(ctx, repo, jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +114,7 @@ func TestQueuedPRFollowsBaseIdentityAcrossRenameAndReuse(t *testing.T) {
 	if err := st.ApplyHistoryEvent(ctx, source); err != nil {
 		t.Fatal(err)
 	}
+	publishPRSource(t, svc, source)
 	replay, err := svc.SubmitPRPromotion(ctx, repo, pr)
 	if err != nil || replay.BaseBranchID != job.BaseBranchID {
 		t.Fatalf("rebound queued job: %+v %v", replay, err)
