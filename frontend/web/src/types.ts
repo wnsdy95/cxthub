@@ -371,6 +371,7 @@ export interface RefLogEntry {
 
 /** Immutable server-confirmed context operations, independent of conversation events. */
 export interface HistoryEvent {
+  pr_completed?: boolean;
   shared_target?: string;
   local_branch?: string;
   previous_branch?: string;
