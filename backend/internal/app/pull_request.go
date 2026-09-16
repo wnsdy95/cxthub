@@ -45,6 +45,7 @@ func (s *Service) PromoteMergedPR(ctx context.Context, gitURL string, pr domain.
 // resumes the same snapshot. Appending is idempotent and preserves the base DAG.
 func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge) (inbound.UpdateRefOutput, error) {
 	var zero inbound.UpdateRefOutput
+	verified := make(historyVerification)
 	if err := pr.Validate(); err != nil {
 		return zero, fmt.Errorf("%w: %v", domain.ErrValidation, err)
 	}
@@ -88,7 +89,7 @@ func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.Content
 			return zero, err
 		}
 		receipt = domain.HistoryEvent{ID: id, RepoID: string(repoID), BranchID: baseID, Branch: pr.BaseBranch, Kind: "pr-merge", Source: source, Target: source, SharedTarget: base.Target, SourceBranchID: identity, PR: &pr, CreatedAt: time.Now().UTC()}
-		if err := s.recordHistory(ctx, receipt, true); err != nil {
+		if err := s.recordHistory(ctx, receipt, true, verified); err != nil {
 			// Concurrent delivery may have published the immutable receipt first.
 			if !errors.Is(err, domain.ErrRefConflict) {
 				return zero, err
@@ -136,11 +137,11 @@ func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.Content
 		if yes, err := s.engine.IsAncestor(ctx, repoID, receipt.Source, current.Target); err != nil {
 			return zero, err
 		} else if yes {
-			return s.completePRPromotion(ctx, receipt, current.Target, inbound.UpdateRefOutput{Ref: current, ServerTarget: current.Target, RequestedTarget: receipt.Source, Result: inbound.RefUpToDate})
+			return s.completePRPromotion(ctx, receipt, current.Target, inbound.UpdateRefOutput{Ref: current, ServerTarget: current.Target, RequestedTarget: receipt.Source, Result: inbound.RefUpToDate}, verified)
 		}
 		out, err := s.UpdateRef(ctx, inbound.UpdateRefInput{RepoID: repoID, Ref: domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: baseName, BranchID: receipt.BranchID, Target: receipt.Source}, ExpectedTarget: current.Target, Append: true})
 		if err == nil {
-			return s.completePRPromotion(ctx, receipt, current.Target, out)
+			return s.completePRPromotion(ctx, receipt, current.Target, out, verified)
 		}
 		if !errors.Is(err, domain.ErrRefConflict) {
 			return out, err
@@ -152,7 +153,7 @@ func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.Content
 // Binding and completion are separate immutable events. If recording completion
 // fails after append, the next delivery verifies reachability and retries it.
 // This also proves joins that leave the base ref unchanged.
-func (s *Service) completePRPromotion(ctx context.Context, receipt domain.HistoryEvent, before domain.ContentHash, out inbound.UpdateRefOutput) (inbound.UpdateRefOutput, error) {
+func (s *Service) completePRPromotion(ctx context.Context, receipt domain.HistoryEvent, before domain.ContentHash, out inbound.UpdateRefOutput, verified historyVerification) (inbound.UpdateRefOutput, error) {
 	key := sha256.Sum256([]byte(receipt.ID + ":completed"))
 	id := fmt.Sprintf("%x", key[:16])
 	accepted := func() (bool, error) {
@@ -181,7 +182,7 @@ func (s *Service) completePRPromotion(ctx context.Context, receipt domain.Histor
 	completed.Target = out.Ref.Target
 	completed.Branch = out.Ref.Name
 	completed.CreatedAt = time.Now().UTC()
-	if err := s.recordHistory(ctx, completed, true); err != nil {
+	if err := s.recordHistory(ctx, completed, true, verified); err != nil {
 		if !errors.Is(err, domain.ErrRefConflict) {
 			return out, err
 		}

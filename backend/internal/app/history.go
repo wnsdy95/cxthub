@@ -18,10 +18,14 @@ func (s *Service) ListHistory(ctx context.Context, repoID domain.ContentHash) ([
 }
 
 func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) error {
-	return s.recordHistory(ctx, event, false)
+	return s.recordHistory(ctx, event, false, nil)
 }
 
-func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, serverReceipt bool) error {
+// A verification set lives for one operation, not on the service or store.
+// Keys include repository ownership and both immutable snapshot/document IDs.
+type historyVerification map[[3]domain.ContentHash]struct{}
+
+func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, serverReceipt bool, verified historyVerification) error {
 	if err := domain.ValidateHistoryEvent(event); err != nil {
 		return fmt.Errorf("%w: %v", domain.ErrValidation, err)
 	}
@@ -52,6 +56,9 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 	if err != nil {
 		return err
 	}
+	if verified == nil {
+		verified = make(historyVerification)
+	}
 	for _, id := range []domain.ContentHash{event.Source, event.Target, event.SharedTarget, event.MemorySource} {
 		if id == "" {
 			continue
@@ -60,6 +67,10 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		if err != nil {
 			return err
 		}
+		key := [3]domain.ContentHash{repoID, snap.ID, snap.DocHash}
+		if _, ok := verified[key]; ok {
+			continue
+		}
 		doc, err := s.blobs.GetDoc(ctx, repoID, snap.DocHash)
 		if err != nil {
 			return err
@@ -67,6 +78,7 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		if err = s.engine.VerifyIntegrity(ctx, snap, doc); err != nil {
 			return err
 		}
+		verified[key] = struct{}{}
 	}
 	if event.MemoryHash != "" {
 		memory, err := s.blobs.GetMemory(ctx, repoID, event.MemoryHash)
