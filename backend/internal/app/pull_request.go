@@ -198,7 +198,7 @@ var legacyPRGitLink = regexp.MustCompile(`\[git ([0-9a-f]{40}|[0-9a-f]{64})\]`)
 func (s *Service) resolvePRSource(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, events []domain.HistoryEvent) (domain.ContentHash, string, error) {
 	candidates := map[domain.ContentHash]string{}
 	for _, e := range events {
-		if e.Kind == "pr-merge" || e.Branch != pr.HeadBranch || e.GitAfter != pr.HeadSHA || e.Target == "" {
+		if e.Kind == "pr-merge" || e.GitAfter != pr.HeadSHA || e.Target == "" || !matchesPRSourceBranch(e, pr.HeadBranch, events) {
 			continue
 		}
 		if old, ok := candidates[e.Target]; ok && old != e.BranchID {
@@ -270,4 +270,25 @@ func (s *Service) resolvePRSource(ctx context.Context, repoID domain.ContentHash
 		}
 	}
 	return "", "", fmt.Errorf("%w: PR revision has divergent context tips; reconcile them before promotion", domain.ErrConflict)
+}
+
+// A tracking alias publishes under the shared context branch while LocalBranch
+// records the native Git name. Use that exact observation only with an existing
+// attachment of the same worktree and context identity. Names may have changed
+// since attachment; neither today's ref nor a same-named branch proves the source.
+func matchesPRSourceBranch(e domain.HistoryEvent, head string, events []domain.HistoryEvent) bool {
+	if e.Branch == head {
+		return true
+	}
+	if e.LocalBranch != head || e.WorktreeID == "" {
+		return false
+	}
+	for _, attached := range events {
+		if attached.Kind == "attach" && attached.LocalBranch != "" &&
+			attached.WorktreeID == e.WorktreeID && attached.BranchID == e.BranchID &&
+			!attached.CreatedAt.After(e.CreatedAt) {
+			return true
+		}
+	}
+	return false
 }

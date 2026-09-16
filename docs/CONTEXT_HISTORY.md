@@ -376,3 +376,11 @@ and lane. Pending bindings alone still never draw completed joins. Deploy the
 matching CLI with the server so pulled history preserves completion metadata.
 Older bindings acquire completion records when verified PR promotion is replayed;
 the renderer does not infer completion from an old binding alone.
+
+PR source resolution also recognizes tracking aliases. The observation must
+match the PR's exact Git head and native `local_branch`, with a prior attachment
+of the same worktree to the same context identity. This retains the canonical
+shared branch even if the native alias or canonical branch was renamed. A
+missing attachment, mismatched worktree, or competing source identity does not
+authorize a guessed source. Current refs are never a substitute for this
+recorded association.
