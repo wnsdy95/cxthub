@@ -1,7 +1,7 @@
 // ContextView — GitHub repo view context browser.
 // Automatically displays the latest context of the default branch (main/master),
 // and provides a branch dropdown + commit log (click to show context at that point in time).
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Repo, Workspace, CIREvent, Snapshot, Pending } from '../types';
 import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, usePendings, useUnsyncs, useRepoView, useReflog } from '../hooks';
 import { navigate, wsPath } from '../route';
@@ -210,13 +210,32 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
     finally { setDownloading(false); }
   }
 
+  const mainRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = mainRef.current;
+    if (!element) return;
+    let frame = 0;
+    const measure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        element.style.setProperty('--context-top', `${Math.max(68, element.getBoundingClientRect().top)}px`);
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (element.parentElement) observer.observe(element.parentElement);
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, { passive: true });
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure); };
+  }, [branches.length > 0]);
+
   if (branches.length === 0) {
     return <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>;
   }
 
   return (
     <div className="ctx ctx-cols">
-      <div className="ctx-main">
+      <div className="ctx-main" ref={mainRef} tabIndex={0} role="region" aria-label={t('dashboard.context')}>
       <div className="ctx-bar">
         <select aria-label={t('common.branch')} value={branch ?? ''} onChange={(e) => setBranch(e.target.value)}>
           {branches.map((b) => (
@@ -267,7 +286,14 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
             <button
               className={`commit-row${s.id === snapId ? ' on' : ''}${mainline.has(s.id) ? '' : ' off-mainline'}`}
               onClick={() => setSnapId(s.id)}
+              onKeyDown={e => {
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                  e.preventDefault();
+                  e.currentTarget.querySelector('.commit-scroll')?.scrollBy({ left: e.key === 'ArrowLeft' ? -160 : 160 });
+                }
+              }}
             >
+              <span className="commit-scroll">
               <code>{short(s.id)}</code>
               <span className="commit-msg">{s.message || t('common.noMessage')}</span>
               {!mainline.has(s.id) && (
@@ -328,10 +354,11 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
                   </span>
                 ) : null;
               })()}
-              <AIDots s={s} />
-              <em>
-                {s.author?.name || s.author?.email || s.provider} · {when(s.created_at)}
-              </em>
+              </span>
+              <span className="commit-meta">
+                <AIDots s={s} />
+                <em><span>{s.author?.name || s.author?.email || s.provider}</span><time dateTime={s.created_at}>{when(s.created_at)}</time></em>
+              </span>
             </button>
             {/* Graft join point: this line starts a new context (does not inherit from the previous session) */}
             {s.grafted && <div className="seam-divider">{t('context.graftDivider')}</div>}
@@ -509,12 +536,10 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
             </div>
           )}
           {downloadError && <p role="alert" className="err">{downloadError}</p>}
-          {selected.memory_hash && <details open={memoryOpen} onToggle={e => setMemoryOpen(e.currentTarget.open)}>
-            <summary>{t('context.storedMemory')}</summary>
+          {selected.memory_hash && <MemoryPanel memory={memory} open={memoryOpen} onToggle={setMemoryOpen}>
             {memoryOpen && memoryQ.isLoading && <div className="skel" style={{ height: 60 }} />}
             {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
-            {memory && <MemoryPanel memory={memory} />}
-          </details>}
+          </MemoryPanel>}
           {doc && inheritedCount > 0 && (
             <details className="inherited-block" open={inheritedOpen} onToggle={e => setInheritedOpen(e.currentTarget.open)}>
               <summary>↰ {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}</summary>

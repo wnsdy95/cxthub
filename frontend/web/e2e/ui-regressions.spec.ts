@@ -1473,3 +1473,73 @@ test('PR delivery distinguishes waiting and completed jobs without viewer retry 
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+test('context has one lazy memory toggle, scrollable badges and independent center/graph scrolling', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  const snapshots = Array.from({ length: 40 }, (_, n) => ({
+    id: `sha256:${n.toString(16).padStart(64, '0')}`, repo_id: repoId, branch: 'main',
+    parents: n === 39 ? [] : [`sha256:${(n + 1).toString(16).padStart(64, '0')}`],
+    doc_hash: `sha256:${n.toString(16).padStart(64, '0')}`, memory_hash: id('f'),
+    provider: 'codex', fidelity: 'full', message: `Context fixture ${n}`, models: ['gpt-5.6-sol'],
+    author: { name: 'Alice', email: 'alice@example.test', team: '' }, created_at: '2026-09-16T04:00:00Z',
+  }));
+  const refs = ['main', ...Array.from({ length: 18 }, (_, n) => `feature/long-branch-name-${n}`)].map(name => ({ kind: 'branch', name, repo_id: repoId, target: snapshots[0].id }));
+  const base = publicWorkspaceApi(snapshots, refs);
+  let memoryReads = 0;
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (request.pathname.includes('/memories/')) memoryReads++;
+    if (request.pathname.endsWith('/events')) return { body: {
+      hash: snapshots[0].doc_hash, envelope: sessionDoc(snapshots[0].id).cir.envelope,
+      events: Array.from({ length: 40 }, (_, seq) => ({ kind: 'message', role: 'user', seq, blocks: [{ type: 'text', text: `Long conversation ${seq}\n` + 'Archived conversation line.\n'.repeat(8) }] })),
+      total: 40, offset: 0, next: -1, inherited: 0,
+    } };
+    return base(request);
+  });
+  const center = page.locator('.ctx-main');
+  const graph = page.locator('.graph-viewport');
+  const row = page.locator('.commit-row').first();
+  const scrolling = row.locator('.commit-scroll');
+  await expect.poll(() => scrolling.evaluate(e => e.scrollWidth > e.clientWidth)).toBe(true);
+  const metaBefore = await row.locator('.commit-meta').boundingBox();
+  await row.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => scrolling.evaluate(e => e.scrollLeft)).toBeGreaterThan(0);
+  expect((await row.locator('.commit-meta').boundingBox())?.x).toBe(metaBefore?.x);
+  await expect(row.locator('time')).toBeVisible();
+  await expect(row.locator('.commit-meta')).toContainText('Alice');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  const outerBefore = await page.evaluate(() => window.scrollY);
+  await center.hover();
+  await page.mouse.wheel(0, 280);
+  await expect.poll(() => center.evaluate(e => e.scrollTop)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollY)).toBe(outerBefore);
+  expect(await graph.evaluate(e => e.scrollTop)).toBe(0);
+  const centerBefore = await center.evaluate(e => e.scrollTop);
+  await graph.hover();
+  await page.mouse.wheel(0, 240);
+  await expect.poll(() => graph.evaluate(e => e.scrollTop)).toBeGreaterThan(0);
+  expect(await center.evaluate(e => e.scrollTop)).toBe(centerBefore);
+  await page.locator('.ctx-side').hover({ position: { x: 12, y: 12 } });
+  await page.mouse.wheel(0, 200);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(outerBefore);
+  expect(await center.evaluate(e => e.scrollTop)).toBe(centerBefore);
+
+  expect(memoryReads).toBe(0);
+  const memory = page.locator('.memory-box');
+  await expect(memory).toHaveCount(1);
+  expect(await memory.evaluate(e => e.parentElement?.closest('details') === null)).toBe(true);
+  await memory.locator('summary').click();
+  await expect(memory).toContainText('fixture memory');
+  expect(memoryReads).toBe(1);
+  await memory.locator('summary').click();
+  await memory.locator('summary').click();
+  await expect(memory).toContainText('fixture memory');
+  expect(memoryReads).toBe(1);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => center.evaluate(e => getComputedStyle(e).overflowY)).toBe('visible');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

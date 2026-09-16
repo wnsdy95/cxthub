@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { MemoryDigest } from '../types';
 import { useT } from '../i18n';
 import { Markdown } from './Markdown';
@@ -7,14 +8,16 @@ import { Markdown } from './Markdown';
  * This is deliberately not called the active provider prompt: load/seed applies
  * provider-native deduplication, authority projection, and byte budgets later.
  */
-export function MemoryPanel({ memory }: { memory: MemoryDigest }) {
+export function MemoryPanel({ memory, open, onToggle, children }: { memory?: MemoryDigest; open?: boolean; onToggle?: (open: boolean) => void; children?: ReactNode }) {
   const t = useT();
-  const facts = memory.key_facts ?? [];
-  const tasks = memory.open_tasks ?? [];
+  const facts = memory?.key_facts ?? [];
+  const tasks = memory?.open_tasks ?? [];
 
   return (
-    <details className="memory-box" data-memory-representation="archival">
+    <details className="memory-box" data-memory-representation="archival" open={open} onToggle={onToggle ? e => onToggle(e.currentTarget.open) : undefined}>
       <summary className="label">◆ {t('context.compactMemory')}</summary>
+      {children}
+      {memory && open !== false && <>
       <p className="memory-note">{t('context.memoryArchiveNote')}</p>
       {memory.summary.trim() && (
         <section className="memory-section">
@@ -34,6 +37,7 @@ export function MemoryPanel({ memory }: { memory: MemoryDigest }) {
           <ul className="tasks">{tasks.map((task, i) => <li key={i}>{task}</li>)}</ul>
         </section>
       )}
+      </>}
     </details>
   );
 }
