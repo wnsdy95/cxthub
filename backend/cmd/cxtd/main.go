@@ -48,6 +48,15 @@ func postgresRequired(addr, configured string) bool {
 }
 
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "index" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		if err := buildReadIndexes(ctx, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "cxtd index:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) >= 2 && os.Args[1] == "repack" {
 		// Maintenance: repack legacy FS-store transcript and memory objects into
 		// their chunk CAS forms (lossless and idempotent).
@@ -67,7 +76,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] != "serve" {
-		fmt.Fprintln(os.Stderr, "usage: cxtd serve [--addr :8080] [--data ./cxt-data] | cxtd repack [--data ./cxt-data]")
+		fmt.Fprintln(os.Stderr, "usage: cxtd serve [--addr :8080] [--data ./cxt-data] | cxtd repack [--data ./cxt-data] | cxtd index [--data ./cxt-data] [--migrations ./schemas/db/migrations]")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -229,4 +238,37 @@ func flagOr(args []string, name, envVal, def string) string {
 		return envVal
 	}
 	return def
+}
+
+// index is a restartable maintenance job for existing archives; new writes index
+// themselves. Production uses the same PostgreSQL DSN and migration contract.
+func buildReadIndexes(ctx context.Context, args []string) error {
+	dsn := os.Getenv("CXT_POSTGRES_DSN")
+	st, err := store.Open(flagOr(args, "--data", os.Getenv("CXT_DATA"), "./cxt-data"), dsn, envBool(os.Getenv("CXT_REQUIRE_POSTGRES")))
+	if err != nil {
+		return err
+	}
+	if dsn != "" {
+		mdir := flagOr(args, "--migrations", os.Getenv("CXT_MIGRATIONS_DIR"), "./schemas/db/migrations")
+		if _, err := st.ApplyMigrations(ctx, mdir); err != nil {
+			return err
+		}
+	}
+	indexer, ok := st.(interface {
+		BackfillReadIndexes(context.Context, func(int)) error
+	})
+	if !ok {
+		return fmt.Errorf("read index maintenance unavailable")
+	}
+	n := 0
+	err = indexer.BackfillReadIndexes(ctx, func(done int) {
+		n = done
+		if n%25 == 0 {
+			log.Printf("read indexes: %d documents checked", n)
+		}
+	})
+	if err == nil {
+		log.Printf("read indexes ready: %d documents checked", n)
+	}
+	return err
 }

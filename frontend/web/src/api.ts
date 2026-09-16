@@ -25,13 +25,14 @@ export interface OAuthConsentRequest {
   expires_at: string;
 }
 
-async function call<T>(method: string, path: string, body?: unknown, idpToken?: string): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, idpToken?: string, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {};
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') headers['X-Cxt-CSRF'] = '1';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idpToken) headers['Authorization'] = `Bearer ${idpToken}`; // Only used for exchangeSession
   const res = await fetch(BASE + path, {
     method,
+    signal,
     headers,
     credentials: 'include', // HttpOnly session cookie exchange
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -48,6 +49,16 @@ async function call<T>(method: string, path: string, body?: unknown, idpToken?: 
   }
   const text = await res.text();
   return (text ? JSON.parse(text) : null) as T;
+}
+
+export interface DocEventPage {
+  hash: string;
+  envelope: SessionDoc['cir']['envelope'];
+  events: SessionDoc['cir']['events'];
+  total: number;
+  offset: number;
+  next: number;
+  inherited: number;
 }
 
 export const api = {
@@ -150,6 +161,8 @@ export const api = {
     call<Snapshot[]>('GET', `/repos/${encodeURIComponent(repoId)}/snapshots?branch=${encodeURIComponent(branch)}`),
   getDoc: (repoId: string, hash: string) =>
     call<SessionDoc>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}`),
+  getDocEvents: (repoId: string, hash: string, base: string | undefined, offset: number, signal?: AbortSignal) =>
+    call<DocEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?offset=${offset}&limit=50${base ? `&base=${encodeURIComponent(base)}` : ''}`, undefined, undefined, signal),
   // Fork/Diff — Server API(sync protocol). Fork requires member (write), diff requires viewer (read).
   fork: (repoId: string, from: string, newBranch: string, author: { name: string; email: string }) =>
     call<{ branch: string; head: string }>('POST', `/repos/${encodeURIComponent(repoId)}/fork`, {
@@ -159,11 +172,11 @@ export const api = {
     }),
   diff: (repoId: string, left: string, right: string) =>
     call<{ changes: DiffEntry[] | null }>('POST', `/repos/${encodeURIComponent(repoId)}/diff`, { left, right }),
-  // Search — Commit message/author + chat body (server scan, viewer required)
-  search: (repoId: string, q: string) =>
+  // Search — Commit metadata and indexed conversation text (viewer required)
+  search: (repoId: string, q: string, signal?: AbortSignal) =>
     call<{ hits: SearchHit[] | null; truncated: boolean }>(
       'GET',
-      `/repos/${encodeURIComponent(repoId)}/search?q=${encodeURIComponent(q)}`,
+      `/repos/${encodeURIComponent(repoId)}/search?q=${encodeURIComponent(q)}`, undefined, undefined, signal,
     ),
   updateAbout: (
     repoId: string,

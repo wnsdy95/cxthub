@@ -177,6 +177,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/join", s.guard(domain.RoleMember, s.joinSnapshot))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/search", s.guard(domain.RoleViewer, s.search))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}", s.guard(domain.RoleViewer, s.getDoc))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/events", s.guard(domain.RoleViewer, s.getDocEvents))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleViewer, s.getMemory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memory-objects/{hash}", s.guard(domain.RoleViewer, s.getMemoryObject))
 	// About/team settings/secrets: writes require maintainer or higher plus the action-specific requireRepoAction policy; reads require puller or higher for local team-asset synchronization.

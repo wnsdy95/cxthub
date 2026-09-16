@@ -198,6 +198,44 @@ ordered migrations before accepting traffic.
 Filesystem storage remains available only to a loopback-bound development
 server and tests. It must not be treated as a production fallback.
 
+## Indexed reads and existing-data rollout
+
+Event offsets and searchable text are derived from hash-verified canonical
+archives. Fetch reads only the required 512 KiB storage chunks; the 12 KiB MCP
+fragment budget also applies when a single event is very large. Canonical event
+fragments have versioned cursors. A cursor issued by the previous serializer
+must be restarted without `cursor` after upgrading, so byte offsets from two
+encodings cannot silently mix.
+
+Migration `0041_doc_read_index.sql` adds PostgreSQL event locations and a
+`pg_trgm` GIN index. Identical inherited events share searchable text. Repository
+ownership is checked on every read and search; deleting the last owning document
+also deletes its derived search text. Searches remain literal, case-insensitive
+substring matches (including Korean, identifiers, `%`, `_`, and backslashes),
+not vector similarity. This addresses archive scanning without adding a second
+database or an embedding dependency. GraphQL is not required for range reads.
+
+New documents create their read index on write. Before routing production
+traffic to a large existing archive, run this restartable maintenance command
+with the same PostgreSQL build, database secret, and migration directory as the
+server:
+
+```bash
+cxtd index --migrations ./schemas/db/migrations
+```
+
+It reads `CXT_POSTGRES_DSN` from the environment and never prints it. For a local
+loopback development store, use `cxtd index --data ./cxt-data`. Missing indexes
+are built lazily for compatibility, so the first read of an unindexed legacy
+document may still be slow. The archive and its content hashes remain unchanged.
+
+The web viewer uses `GET /repos/{repoID}/docs/{hash}/events` (50 events by default,
+100 maximum, 512 KiB except for one intact oversized event). `base` selects the
+exact inherited prefix and `offset=-1` skips it. Inherited history and memory
+load when expanded; complete raw downloads remain available explicitly.
+React Query owns page caching and cancellation. Zustand continues to own client
+selection state, without duplicating server documents.
+
 ## HTTP transport contract
 
 The endpoint follows MCP Streamable HTTP protocol version `2025-06-18` and

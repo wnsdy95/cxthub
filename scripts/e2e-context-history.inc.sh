@@ -113,15 +113,39 @@ expect "reused name has a distinct identity at the same snapshot" "$([ "$(birth_
 expect "stale identity cannot write the reused branch" "$(ccurl -sb "$J" -X PUT "$B/repos/$PROTOCOL_RID/refs/branch/protected-work" -H 'Content-Type: application/json' -d "{\"branch_id\":\"$PROTOCOL_ID\",\"target\":\"$PROTOCOL_MAIN\"}" -o /dev/null -w '%{http_code}')" 409
 
 echo "── O. Damaged replica repair preserves evidence and unpushed work"
-cp -R "$TMP/protocol-client" "$TMP/repair-client"
+# Clone durable Git state and pull a verified context replica. Copying a live
+# .cxt directory can copy a transient mkdir lock owned by a background ref-sync
+# process; the copied owner can never remove that lock in the new directory.
+git clone -q "$TMP/protocol-client" "$TMP/repair-client"
 cd "$TMP/repair-client"
+git remote set-url origin "$TMP/bare.git"
+if ! cxt init >"$TMP/repair-init.out" 2>&1 || ! cxt remote add origin "$PROTOCOL_REMOTE" >>"$TMP/repair-init.out" 2>&1 || ! cxt pull >>"$TMP/repair-init.out" 2>&1; then
+  cat "$TMP/repair-init.out"; FAIL=1; return
+fi
+# Record a real local branch operation so the repair fixture has the same
+# independent Git-journal identity witness as the original protocol client.
+if ! git branch repair-evidence >"$TMP/repair-witness.out" 2>&1 || ! cxt branch replay >>"$TMP/repair-witness.out" 2>&1; then
+  cat "$TMP/repair-witness.out"; FAIL=1; return
+fi
+# Linux CI emits Go goroutines if this small fixture ever stalls again. This
+# deadline is test diagnostics only; production repair/capture timeouts stay unchanged.
+repair_command() {
+  if command -v timeout >/dev/null 2>&1; then
+    GOTRACEBACK=all timeout --signal=QUIT --kill-after=5s 60s "$@"
+  else
+    "$@"
+  fi
+}
+echo "  repair fixture: capture local-only work"
 session "$TMP/repair-client" LOCAL_ONLY
-if ! cxt save --provider claude -m local-only >"$TMP/repair-save.out" 2>&1; then cat "$TMP/repair-save.out"; FAIL=1; return; fi
+if ! repair_command cxt save --provider claude -m local-only >"$TMP/repair-save.out" 2>&1; then cat "$TMP/repair-save.out"; FAIL=1; return; fi
 REPAIR_LOCAL=$(ref_target .cxt/refs/heads/main)
 printf 'corrupted document fixture\n' > ".cxt/objects/docs/${PROTOCOL_MAIN#sha256:}"
 printf 'broken config fixture\n' > .cxt/config
-cxt doctor --json >"$TMP/doctor-before.json" 2>&1
-if ! cxt repair --from-server --remote "$PROTOCOL_REMOTE" >"$TMP/repair.out" 2>&1; then cat "$TMP/repair.out"; FAIL=1; return; fi
+echo "  repair fixture: inspect damaged replica"
+repair_command cxt doctor --json >"$TMP/doctor-before.json" 2>&1
+echo "  repair fixture: restore verified server objects"
+if ! repair_command cxt repair --from-server --remote "$PROTOCOL_REMOTE" >"$TMP/repair.out" 2>&1; then cat "$TMP/repair.out"; FAIL=1; return; fi
 expect "repair keeps unpushed local main" "$(ref_target .cxt/refs/heads/main)" "$REPAIR_LOCAL"
 expect "repair verified all referenced replica objects" "$(cxt doctor --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["issues"] or []))')" 0
 expect "damaged bytes were quarantined exactly" "$(python3 - "$PROTOCOL_MAIN" <<'PYQUARANTINE'
@@ -131,6 +155,6 @@ files=list(root.glob('*/.cxt/objects/docs/'+sys.argv[1].removeprefix('sha256:')+
 print('yes' if any(p.read_bytes()==b'corrupted document fixture\n' for p in files) else 'no')
 PYQUARANTINE
 )" yes
-if ! cxt repair --from-server >"$TMP/repair-retry.out" 2>&1; then cat "$TMP/repair-retry.out"; FAIL=1; return; fi
+if ! repair_command cxt repair --from-server >"$TMP/repair-retry.out" 2>&1; then cat "$TMP/repair-retry.out"; FAIL=1; return; fi
 expect "repair retry keeps the local-only snapshot" "$(ref_target .cxt/refs/heads/main)" "$REPAIR_LOCAL"
 expect "repair rejects a conflicting repository URL" "$(cxt repair --from-server --remote "$REMOTE/another" >"$TMP/repair-wrong.out" 2>&1; echo $?)" 1

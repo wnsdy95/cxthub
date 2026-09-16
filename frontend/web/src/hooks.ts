@@ -3,7 +3,7 @@
 // Authentication status is represented by the `me` query: success (200) → logged in, failure (401) → logged out.
 // Tokens are stored in HttpOnly cookies, which JS cannot read, so cookie validity is determined by the single judge, the `me` query on the server.
 import { useEffect, useMemo, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import type { User } from './types';
 import { sharedReachable, unsyncChains } from './onhold';
@@ -275,7 +275,7 @@ export function useSnapDiff(repoId: string | null, left: string | null, right: s
 export function useSearch(repoId: string | null, q: string) {
   return useQuery({
     queryKey: ['search', repoId, q],
-    queryFn: () => api.search(repoId as string, q),
+    queryFn: ({ signal }) => api.search(repoId as string, q, signal),
     enabled: Boolean(repoId) && q.trim().length >= 2,
   });
 }
@@ -288,6 +288,18 @@ export function useMemory(repoId: string | null, snapshotId: string | null, enab
     staleTime: Infinity,
   });
 }
+export function useDocPages(repoId: string | null, hash: string | null, base?: string, start = -1) {
+  return useInfiniteQuery({
+    queryKey: ['doc-events', repoId, hash, base ?? '', start],
+    queryFn: ({ pageParam, signal }) => api.getDocEvents(repoId!, hash!, base, pageParam, signal),
+    initialPageParam: start,
+    getNextPageParam: (last) => last.next < 0 ? undefined : last.next,
+    enabled: Boolean(repoId && hash),
+    staleTime: Infinity,
+    gcTime: 5 * 60_000,
+  });
+}
+
 export function useDoc(repoId: string | null, hash: string | null) {
   return useQuery({
     queryKey: ['doc', repoId, hash],

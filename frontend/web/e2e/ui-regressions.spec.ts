@@ -43,6 +43,15 @@ function sessionDoc(hash: string) {
   };
 }
 
+function docResponse(pathname: string, searchParams = new URLSearchParams()) {
+  const paged = pathname.endsWith('/events');
+  const hash = decodeURIComponent(pathname.split('/').at(paged ? -2 : -1) ?? '');
+  const doc = sessionDoc(hash);
+  if (!paged) return { body: doc };
+  const offset = Math.max(0, Number(searchParams.get('offset') ?? 0));
+  return { body: { hash, envelope: doc.cir.envelope, events: doc.cir.events.slice(offset), total: doc.cir.events.length, offset, next: -1, inherited: 0 } };
+}
+
 function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unknown[] = [], unsync: unknown[] = [], reflog: unknown[] = [], history: unknown[] = []) {
   return ({ method, pathname, searchParams }: ApiRequest): ApiResponse | undefined => {
     if (method !== 'GET') return undefined;
@@ -82,7 +91,7 @@ function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unkn
     if (pathname === `/api/v1/repos/${repoId}/reflog`) return { body: reflog };
     if (pathname === `/api/v1/repos/${repoId}/history`) return { body: history };
     if (pathname.startsWith(`/api/v1/repos/${repoId}/docs/`)) {
-      return { body: sessionDoc(decodeURIComponent(pathname.split('/').at(-1) ?? '')) };
+      return docResponse(pathname, searchParams);
     }
     if (pathname.startsWith(`/api/v1/repos/${repoId}/memories/`)) {
       return {
@@ -159,7 +168,7 @@ test('repository route keeps the selected context DAG across navigation and relo
         return { body: [] };
       }
       if (pathname.startsWith(`/api/v1/repos/${repositoryId}/docs/`)) {
-        return { body: sessionDoc(snapshotId) };
+        return docResponse(pathname, searchParams);
       }
     }
     return undefined;
@@ -402,7 +411,7 @@ test('public workspace management controls deny non-maintainers without opening 
     if (pathname.startsWith(`/api/v1/repos/${repoId}/settings/`)) return { body: null };
     if (pathname === `/api/v1/repos/${repoId}/secrets`) return { body: null };
     if (pathname.startsWith(`/api/v1/repos/${repoId}/docs/`)) {
-      return { body: sessionDoc(decodeURIComponent(pathname.split('/').at(-1) ?? '')) };
+      return docResponse(pathname, searchParams);
     }
     return undefined;
   });
@@ -1066,19 +1075,19 @@ test('server history exposes births and explicit past positions without write re
     { ...common, id: 'advance', kind: 'advance', source: later, target: current },
   ];
   const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], history));
-  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(2);
   await expect(page.locator('.graph-status-item.pushed')).toHaveText('Pushed 3');
   await page.locator('.graph-births summary').click();
   await expect(page.locator('.graph-births')).toContainText('feature/new');
   await page.getByLabel('View from', { exact: true }).selectOption('position');
-  await expect(page.locator('.graph-row')).toHaveCount(1);
+  await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(1);
   await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^selected old code/);
   await expect(page.locator('.graph-history-scope')).toContainText('Browsing only');
   await page.screenshot({ path: testInfo.outputPath('recorded-context-position.png'), fullPage: true });
   for (const button of await page.locator('.graph-history-toggle').all()) await button.click();
-  await expect(page.locator('.graph-row')).toHaveCount(3);
+  await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(3);
   await page.getByLabel('View from', { exact: true }).selectOption('');
-  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(2);
   await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^current continuation/);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
@@ -1101,12 +1110,12 @@ test('renamed history stays with its identity when the old name is reused', asyn
     { ...common, id: 'birth', kind: 'birth', source: root, target: root },
   ];
   const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], history));
-  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(2);
   await expect(page.locator('section.graph-history-panel .graph-history-branch')).toHaveText('main');
   await page.getByLabel('View from', { exact: true }).selectOption('position');
-  await expect(page.locator('.graph-row')).toHaveCount(1);
+  await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(1);
   for (const button of await page.locator('.graph-history-toggle').all()) await button.click();
-  await expect(page.locator('.graph-row')).toHaveCount(3);
+  await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(3);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
@@ -1373,5 +1382,64 @@ test('repository history protection is explicit, survives reload, and reports up
   await expect(panel).toContainText('Enabled.');
   expect(attempts).toBe(2);
   expect(errors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('context loads bounded pages and only reads inherited events when expanded', async ({ page }) => {
+  const snapshots = [
+    { id: pushedHead, repo_id: repoId, branch: 'main', parents: [graftTarget], doc_hash: pushedHead, provider: 'codex', fidelity: 'full', message: 'paged head', created_at: '2026-09-16T00:01:00Z' },
+    { id: graftTarget, repo_id: repoId, branch: 'main', parents: [], doc_hash: graftTarget, provider: 'codex', fidelity: 'full', message: 'parent', created_at: '2026-09-16T00:00:00Z' },
+  ];
+  const base = publicWorkspaceApi(snapshots, [{ repo_id: repoId, kind: 'branch', name: 'main', target: pushedHead }]);
+  const reads: string[] = [];
+  const responder = (request: ApiRequest): ApiResponse | undefined => {
+    if (request.pathname.includes('/docs/')) {
+      reads.push(request.pathname + '?' + request.searchParams);
+      if (!request.pathname.endsWith('/events')) return { status: 500, body: { error: { message: 'whole document read is forbidden in viewer' } } };
+      const offset = Number(request.searchParams.get('offset')) === -1 ? 100 : Number(request.searchParams.get('offset'));
+      const end = Math.min(offset + 50, 220);
+      return { body: { hash: pushedHead, envelope: sessionDoc(pushedHead).cir.envelope, events: Array.from({ length: end - offset }, (_, n) => ({ seq: offset+n, kind: 'message', role: 'user', blocks: [{ type: 'text', text: `Event ${offset+n} — ${offset < 100 ? 'inherited' : 'current'}` }] })), total: 220, inherited: 100, offset, next: end === 220 ? -1 : end } };
+    }
+    return base(request);
+  };
+  const { pageErrors, unexpected } = await openGraph(page, responder);
+  await expect(page.getByText('Event 100 — current', { exact: true })).toBeVisible();
+  await expect(page.getByText('Event 0 — inherited', { exact: true })).toHaveCount(0);
+  expect(reads).toHaveLength(1);
+  expect(reads[0]).toContain('base=');
+  await page.locator('.doc-load-more').click();
+  await expect(page.getByText('Event 199 — current', { exact: true })).toBeVisible();
+  await page.locator('.doc-load-more').click();
+  await expect(page.getByText('Event 219 — current', { exact: true })).toBeVisible();
+  await expect(page.locator('.doc-load-more')).toHaveCount(0);
+  await page.locator('.inherited-block > summary').click();
+  await expect(page.getByText('Event 0 — inherited', { exact: true })).toBeVisible();
+  expect(reads.every(url => url.includes('/events?'))).toBe(true);
+  expect(reads.some(url => url.includes(`/docs/${encodeURIComponent(graftTarget)}/events`))).toBe(false);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('branch birth and completed join keep feature off the main lane', async ({ page }, testInfo) => {
+  const at = (n: number) => `2026-09-16T00:00:0${n}Z`;
+  const make = (hash: string, branch: string, parents: string[], n: number, graft: string[] = []) => ({ id: hash, repo_id: repoId, branch, parents, graft_parents: graft, grafted: graft.length > 0, doc_hash: hash, provider: 'codex', fidelity: 'full', message: `archive-${branch}-${n}`, created_at: at(n) });
+  const snapshots = [make(appendedRoot, 'main', [], 0), make(graftTarget, 'main', [appendedRoot], 2), make(unpushedHead, 'feature/login', [appendedRoot], 3, [graftTarget]), make(pushedHead, 'feature/login', [unpushedHead], 4)];
+  const refs = [{ repo_id: repoId, kind: 'branch', name: 'main', target: pushedHead }, { repo_id: repoId, kind: 'branch', name: 'feature/login', target: pushedHead }];
+  const birth = { id: 'birth', repo_id: repoId, branch_id: 'feature-identity', branch: 'feature/login', kind: 'birth', source: appendedRoot, target: appendedRoot, created_at: at(1) };
+  const advance = { ...birth, id: 'advance', kind: 'advance', target: unpushedHead, created_at: at(3) };
+  const reflog = [{ kind: 'branch', name: 'main', old: graftTarget, new: pushedHead, created_at: at(5) }];
+  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], reflog, [birth, advance]));
+  const merge = page.locator('[data-graph-event="merge"]');
+  const born = page.locator('[data-graph-event="birth"]');
+  await expect(merge).toHaveAttribute('data-graph-node-lane', '0');
+  await expect(born).not.toHaveAttribute('data-graph-node-lane', '0');
+  const featureLane = await born.getAttribute('data-graph-node-lane');
+  await expect(page.locator(`.graph-lane-label[data-graph-lane="${featureLane}"]`)).toHaveAttribute('aria-label', 'feature/login');
+  await page.locator('.graph-wrap').screenshot({ path: testInfo.outputPath('branch-events.png') });
+  await expect(page.getByRole('button', { name: /archive-feature\/login-4 ·/ })).toHaveAttribute('data-graph-node-lane', featureLane!);
+  await merge.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Visible fixture prompt', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });

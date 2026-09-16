@@ -12,6 +12,9 @@ func (s *Server) searchPage(ctx context.Context, repo domain.Repo, a toolArgs) (
 	if len([]rune(query)) < 2 || len([]rune(query)) > 256 {
 		return "", fmt.Errorf("query must contain 2 to 256 characters")
 	}
+	if reader, ok := s.context.(indexedContextReader); ok {
+		return s.indexedSearchPage(ctx, repo, a, reader)
+	}
 	cur, err := cursorFor(string(repo.ID), "context_search", a)
 	if err != nil {
 		return "", err
