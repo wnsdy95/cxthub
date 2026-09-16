@@ -391,3 +391,32 @@ for duplicate fields and the promotion's completion receipt. Failed checks are
 never reused, metadata ownership is still read for each reference, and separate
 requests start a fresh verification set. This avoids repeated large-archive work without trusting a process-wide cache
 or increasing client timeouts.
+
+## Durable PR delivery
+
+Verified webhooks and authenticated repository requests persist a job before
+source lookup. Jobs freeze the PR tuple, Git origin, and base branch identity.
+Missing exact source history remains waiting; identity/integrity failures require
+attention. Retries never substitute the current head of a same-named branch.
+
+PostgreSQL workers claim the oldest unfinished job per repository using row
+locks and leases. Execution is bounded to 90 seconds with a two-minute lease;
+expired claims recover after restart, and claim versions fence stale completion
+writes. Retry delay grows to 256 seconds. Temporary failures stop after 20 attempts;
+late-source waiting remains eligible until the source arrives. An earlier waiting
+job holds later jobs in that repository to preserve acceptance order.
+
+Processing is at least once. Immutable source/completion receipts and existing ref
+CAS make repeated execution idempotent. Delivery status is separate from graph
+history: queued requests never fabricate a completed merge edge.
+
+Git hooks also persist the incoming Git commit range before PR discovery.
+Ranges are retained across ORIG_HEAD changes and processed in batches of 200,
+up to four batches per invocation, without dropping older commits.
+
+The CLI records an exact PR request before network delivery, and push/pull resend
+unaccepted requests. Server acceptance releases local delivery responsibility;
+subsequent pulls read the resulting server history. The compatibility synchronous
+promotion endpoint also persists first. Viewer access may inspect the latest 100
+jobs; member access may submit or retry. The UI shows waiting, retrying, processing,
+completed, and attention states with safe reason codes.

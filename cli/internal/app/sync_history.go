@@ -164,6 +164,14 @@ func (s *SyncRepoService) PromotePullRequest(ctx context.Context, in inbound.Syn
 	if err != nil {
 		return err
 	}
+	local, ok := s.store.(outbound.PRDeliveryStore)
+	if !ok {
+		return fmt.Errorf("durable PR delivery storage unavailable")
+	}
+	request := domain.PullRequestMerge{Number: pr.Number, BaseBranch: pr.BaseBranch, HeadBranch: pr.HeadBranch, HeadSHA: pr.HeadSHA, MergeSHA: pr.MergeCommitSHA}
+	if err := local.QueuePRDelivery(ctx, repoID, request); err != nil {
+		return fmt.Errorf("persist PR delivery before sending: %w", err)
+	}
 	remote, ok := s.remote.(interface {
 		PromotePullRequest(context.Context, string, domain.PullRequestMerge) (domain.Ref, error)
 	})
@@ -176,6 +184,9 @@ func (s *SyncRepoService) PromotePullRequest(ctx context.Context, in inbound.Syn
 	}
 	if ref.RepoID != repoID || ref.Kind != domain.RefBranch || ref.Target == "" {
 		return domain.ErrHashMismatch
+	}
+	if err := local.AcceptPRDelivery(ctx, repoID, request); err != nil {
+		return err
 	}
 	if _, err := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); err != nil {
 		return err

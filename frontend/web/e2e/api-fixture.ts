@@ -23,7 +23,7 @@ export async function installApiFixture(page: Page, responder: ApiResponder): Pr
       method: request.method(),
       pathname: url.pathname,
       searchParams: url.searchParams,
-    });
+    }) ?? (request.method() === 'GET' && /^\/api\/v1\/repos\/[^/]+\/prs\/promotions$/.test(url.pathname) ? { body: [] } : undefined);
     if (!response) {
       unexpected.push(key);
       await route.fulfill({

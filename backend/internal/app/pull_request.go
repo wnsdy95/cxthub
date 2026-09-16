@@ -28,9 +28,6 @@ func (s *Service) PromoteMergedPR(ctx context.Context, gitURL string, pr domain.
 			continue
 		}
 		out, err := s.PromoteRepositoryPR(ctx, repo.ID, pr)
-		if errors.Is(err, domain.ErrNotFound) {
-			continue
-		}
 		if err != nil {
 			return n, err
 		}
@@ -41,9 +38,35 @@ func (s *Service) PromoteMergedPR(ctx context.Context, gitURL string, pr domain.
 	return n, nil
 }
 
+func (s *Service) SubmitMergedPR(ctx context.Context, gitURL string, pr domain.PullRequestMerge) (int, error) {
+	if err := pr.Validate(); err != nil {
+		return 0, fmt.Errorf("%w: %v", domain.ErrValidation, err)
+	}
+	repos, err := s.meta.ListRepos(ctx, "default")
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, repo := range repos {
+		if gitURL == "" || repo.GitRemoteURL == "" || normalizeGitURL(gitURL) != normalizeGitURL(repo.GitRemoteURL) {
+			continue
+		}
+		_, err := s.SubmitPRPromotion(ctx, repo.ID, pr)
+		if err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
 // The receipt is published before append, so a crash or another delivery always
 // resumes the same snapshot. Appending is idempotent and preserves the base DAG.
 func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge) (inbound.UpdateRefOutput, error) {
+	return s.promoteBoundPR(ctx, repoID, pr, "")
+}
+
+func (s *Service) promoteBoundPR(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, expectedBaseID string) (inbound.UpdateRefOutput, error) {
 	var zero inbound.UpdateRefOutput
 	verified := make(historyVerification)
 	if err := pr.Validate(); err != nil {
@@ -78,13 +101,25 @@ func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.Content
 		if err != nil {
 			return zero, err
 		}
+		baseName := pr.BaseBranch
 		baseID := domain.LegacyContextBranchID(string(repoID), pr.BaseBranch)
 		if b, ok := bindings.Active[pr.BaseBranch]; ok {
 			baseID = b.ID
-		} else if bindings.Released[pr.BaseBranch] != "" {
+		} else if expectedBaseID == "" && bindings.Released[pr.BaseBranch] != "" {
 			return zero, fmt.Errorf("%w: PR base no longer exists", domain.ErrConflict)
 		}
-		base, err := s.meta.GetRef(ctx, repoID, domain.RefBranch, pr.BaseBranch)
+		if expectedBaseID != "" {
+			if b, ok := bindings.ByID[expectedBaseID]; ok {
+				if b.Archived {
+					return zero, fmt.Errorf("%w: PR base is archived", domain.ErrConflict)
+				}
+				baseName = b.Name
+				baseID = b.ID
+			} else if baseID != expectedBaseID {
+				return zero, fmt.Errorf("%w: PR base identity changed", domain.ErrConflict)
+			}
+		}
+		base, err := s.meta.GetRef(ctx, repoID, domain.RefBranch, baseName)
 		if err != nil {
 			return zero, err
 		}
@@ -106,6 +141,9 @@ func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.Content
 				}
 			}
 		}
+	}
+	if expectedBaseID != "" && receipt.BranchID != expectedBaseID {
+		return zero, fmt.Errorf("%w: stored PR base differs from delivery", domain.ErrConflict)
 	}
 	if receipt.Kind != "pr-merge" || receipt.PR == nil || *receipt.PR != pr {
 		return zero, fmt.Errorf("%w: PR identity differs from its stored binding", domain.ErrConflict)
@@ -243,9 +281,9 @@ func (s *Service) resolvePRSource(ctx context.Context, repoID domain.ContentHash
 			return "", "", err
 		}
 		if known || p.Released[pr.HeadBranch] != "" {
-			return "", "", fmt.Errorf("%w: PR #%d source revision has no exact context association; sync its history and retry", domain.ErrConflict, pr.Number)
+			return "", "", fmt.Errorf("%w: PR #%d source revision has no exact context association; sync its history and retry", errors.Join(domain.ErrConflict, domain.ErrPRSourcePending), pr.Number)
 		}
-		return "", "", fmt.Errorf("%w: no recorded context at PR #%d head %s; sync the source history and retry", domain.ErrNotFound, pr.Number, pr.HeadSHA)
+		return "", "", fmt.Errorf("%w: no recorded context at PR #%d head %s; sync the source history and retry", errors.Join(domain.ErrNotFound, domain.ErrPRSourcePending), pr.Number, pr.HeadSHA)
 	}
 	identity := ""
 	for _, branchID := range candidates {

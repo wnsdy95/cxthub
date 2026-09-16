@@ -242,8 +242,8 @@ func TestGitHubWebhookSecurityAndPromotion(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 			t.Fatalf("decode response: %v", err)
 		}
-		if response["status"] != "ok" || response["promoted"] != float64(1) {
-			t.Fatalf("response = %#v, want status ok and promoted 1", response)
+		if response["status"] != "accepted" || response["queued"] != float64(1) {
+			t.Fatalf("response = %#v, want status accepted and queued 1", response)
 		}
 	})
 }
@@ -310,20 +310,20 @@ func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
 			t.Fatalf("attempt %d status = %d, body=%s", attempt, rec.Code, rec.Body.String())
 		}
 		var response struct {
-			Promoted int `json:"promoted"`
+			Queued int `json:"queued"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
 		want := 1
-		if attempt == 2 {
-			want = 0
-		}
-		if response.Promoted != want {
-			t.Fatalf("attempt %d promoted = %d, want %d", attempt, response.Promoted, want)
+		if response.Queued != want {
+			t.Fatalf("attempt %d promoted = %d, want %d", attempt, response.Queued, want)
 		}
 	}
 
+	if err := svc.ProcessPRPromotions(context.Background(), 8); err != nil {
+		t.Fatal(err)
+	}
 	mainRef, err := st.GetRef(context.Background(), repoID, domain.RefBranch, "main")
 	if err != nil || mainRef.Target != featureTip {
 		t.Fatalf("main ref = (%s, %v), want feature tip %s", mainRef.Target, err, featureTip)
@@ -1424,5 +1424,45 @@ func TestPublicPullerCannotManageWorkspaceOrTeamAssets(t *testing.T) {
 	secretsURL := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid)) + "/secrets"
 	if code := doJSONAs(t, outsider, "PUT", secretsURL, map[string]any{"fingerprint": "fp"}, nil); code != http.StatusForbidden {
 		t.Fatalf("public puller secrets write code %d, want 403", code)
+	}
+}
+
+func TestPRJobRepositoryAuthorization(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+	var me struct {
+		Username string `json:"username"`
+	}
+	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
+	var ws struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+	}
+	if status := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "PRJobs"}, &ws); status != 200 {
+		t.Fatal(status)
+	}
+	remote := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	rid := repoIDForRemoteURLForTest(remote)
+	if status := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remote, "git_remote_url": "https://github.com/acme/queue", "default_branch": "main"}, nil); status != 200 {
+		t.Fatal(status)
+	}
+	endpoint := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid)) + "/prs/promotions"
+	outsider := "dev:other@t.io:Other"
+	for _, method := range []string{"GET", "POST"} {
+		if code := doJSONAs(t, outsider, method, endpoint, map[string]any{}, nil); code != 403 {
+			t.Fatalf("outsider %s=%d", method, code)
+		}
+	}
+	if code := doJSON(t, "GET", endpoint, nil, nil); code != 200 {
+		t.Fatalf("owner list=%d", code)
+	}
+	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+ws.ID, map[string]any{"visibility": "public", "public_role": "viewer"}, nil); code != 200 {
+		t.Fatal(code)
+	}
+	if code := doJSONAs(t, "", "GET", endpoint, nil, nil); code != 200 {
+		t.Fatalf("public read=%d", code)
+	}
+	if code := doJSONAs(t, "", "POST", endpoint+"/unknown/retry", map[string]any{}, nil); code != 401 && code != 403 {
+		t.Fatalf("public retry=%d", code)
 	}
 }

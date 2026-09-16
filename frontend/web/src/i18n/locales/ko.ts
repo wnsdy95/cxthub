@@ -6,6 +6,26 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+  promotion: {
+    policy: '워크스페이스가 보관됐거나 정책상 합류가 허용되지 않습니다.',
+    title: 'PR 컨텍스트 합류',
+    waiting: '대기',
+    retrying: '재시도 예정',
+    running: '처리 중',
+    completed: '완료',
+    attention: '확인 필요',
+    source: '정확한 원본 컨텍스트가 동기화되기를 기다립니다.',
+    integrity: '원본 무결성 검사에 실패했습니다. 원본을 복구한 뒤 재시도하세요.',
+    conflict: '브랜치 식별자 또는 기록이 충돌합니다. 충돌을 해결한 뒤 재시도하세요.',
+    missing: '저장소 또는 대상 브랜치를 찾을 수 없습니다.',
+    temporary: '일시적인 오류로 자동 재시도합니다.',
+    exhausted: '반복된 오류로 자동 재시도를 중단했습니다.',
+    invalid: '저장된 요청이 올바르지 않습니다.',
+    loadError: 'PR 합류 상태를 불러오지 못했습니다.',
+    pending: '{count}건 대기',
+    retry: '지금 재시도',
+  },
+
   common: {
     save: '저장',
     saving: '저장 중…',

@@ -3,6 +3,26 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+  promotion: {
+    policy: 'The workspace is archived or its policy prevents this operation.',
+    title: 'PR context delivery',
+    waiting: 'Waiting',
+    retrying: 'Retry scheduled',
+    running: 'Processing',
+    completed: 'Completed',
+    attention: 'Needs attention',
+    source: 'Waiting for the exact source context to sync.',
+    integrity: 'Source integrity check failed. Repair the source before retrying.',
+    conflict: 'Branch identity or history conflicts. Resolve the conflict before retrying.',
+    missing: 'The repository or base branch is unavailable.',
+    temporary: 'Temporary failure. Retrying automatically.',
+    exhausted: 'Automatic retries stopped after repeated failures.',
+    invalid: 'The recorded request is invalid.',
+    loadError: 'Could not load PR delivery status.',
+    pending: '{count} pending',
+    retry: 'Retry now',
+  },
+
   common: {
     save: 'Save',
     saving: 'Saving…',
