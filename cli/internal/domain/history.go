@@ -56,9 +56,12 @@ func ValidateHistoryEvent(e HistoryEvent) error {
 		}
 	}
 	switch e.Kind {
-	case "birth", "attach", "orphan", "position", "advance", "rename", "archive", "pr-merge":
+	case "birth", "attach", "orphan", "position", "publish", "advance", "rename", "archive", "pr-merge":
 	default:
 		return fmt.Errorf("invalid history event kind")
+	}
+	if e.Kind == "publish" && (e.Target == "" || e.Source != e.Target || e.GitAfter == "" || e.GitAfter != strings.ToLower(e.GitAfter) || strings.Trim(e.GitAfter, "0") == "") {
+		return fmt.Errorf("publication requires an exact Git revision and source target")
 	}
 	if e.RecoveryEvidence != "" && (e.Kind != "orphan" || e.RecoveryEvidence != "user-confirmed-unborn-head") {
 		return fmt.Errorf("invalid recovery evidence")

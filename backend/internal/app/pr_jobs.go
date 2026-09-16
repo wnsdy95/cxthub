@@ -13,6 +13,7 @@ import (
 )
 
 const prJobLease = 2 * time.Minute
+const prSourcePendingAttempts = 8
 
 func (s *Service) prJobs() (outbound.PRJobStore, error) {
 	st, ok := s.meta.(outbound.PRJobStore)
@@ -134,6 +135,10 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 		case errors.Is(runErr, domain.ErrPRSourcePending):
 			j.State = "waiting"
 			j.Reason = "source_context_pending"
+			if j.Attempts >= prSourcePendingAttempts {
+				j.State = "attention"
+				j.Reason = "source_finalization_required"
+			}
 		case errors.Is(runErr, domain.ErrIntegrity):
 			j.State = "attention"
 			j.Reason = "integrity_check_failed"
@@ -174,6 +179,11 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 func (s *Service) ProcessPRPromotions(ctx context.Context, limit int) error {
 	st, err := s.prJobs()
 	if err != nil {
+		return err
+	}
+	// Reconcile persisted witnesses after a crash or a publication racing the
+	// worker's transition into attention. No new delivery is required to wake it.
+	if err := st.WakePRSourceJobs(ctx, "", time.Now().UTC()); err != nil {
 		return err
 	}
 	for i := 0; i < limit; i++ {

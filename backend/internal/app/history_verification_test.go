@@ -40,7 +40,11 @@ func TestPRPromotionVerifiesEachImmutableArchiveOnce(t *testing.T) {
 			}
 			st.CompareAndSwapRef(ctx, repo, domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "main", Target: base}, "")
 			pr := domain.PullRequestMerge{Number: 1, BaseBranch: "main", HeadBranch: "feature/x", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)}
-			st.ApplyHistoryEvent(ctx, domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(repo), BranchID: "feature", Branch: pr.HeadBranch, Kind: "birth", Source: base, Target: source, GitAfter: pr.HeadSHA, CreatedAt: time.Now().UTC()})
+			observation := domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(repo), BranchID: "feature", Branch: pr.HeadBranch, Kind: "birth", Source: base, Target: source, GitAfter: pr.HeadSHA, CreatedAt: time.Now().UTC()}
+			if err := svc.RecordHistory(ctx, observation); err != nil {
+				t.Fatal(err)
+			}
+			publishPRSource(t, svc, observation)
 			blobs := &countingHistoryBlobs{BlobStore: st, reads: map[domain.ContentHash]int{}}
 			svc.blobs = blobs
 			if _, err := svc.PromoteRepositoryPR(ctx, repo, pr); err != nil {

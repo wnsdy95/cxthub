@@ -52,6 +52,7 @@ func TestPRBindingSurvivesRenameReuseAndConcurrentReplay(t *testing.T) {
 	if err := st.ApplyHistoryEvent(ctx, birth); err != nil {
 		t.Fatal(err)
 	}
+	publishPRSource(t, svc, birth)
 	renamed := birth
 	renamed.ID = strings.Repeat("2", 32)
 	renamed.Kind = "rename"
@@ -130,12 +131,13 @@ func TestPRBindingRejectsAmbiguousSourceAndUntrustedReceipt(t *testing.T) {
 		if err := st.ApplyHistoryEvent(ctx, e); err != nil {
 			t.Fatal(err)
 		}
+		publishPRSource(t, svc, e)
 	}
 	if _, err := svc.PromoteRepositoryPR(ctx, repo, pr); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("ambiguous source: %v", err)
 	}
 	events, _ := svc.ListHistory(ctx, repo)
-	if len(events) != 2 {
+	if len(events) != 4 {
 		t.Fatal("failed resolution published receipt")
 	}
 	forged := domain.HistoryEvent{ID: strings.Repeat("9", 32), RepoID: string(repo), BranchID: "main", Branch: "main", Kind: "pr-merge", Source: a, Target: a, SourceBranchID: "work", PR: &pr, CreatedAt: time.Now().UTC()}
@@ -172,6 +174,7 @@ func TestPRConcurrentFirstDeliveryFreezesExactCommit(t *testing.T) {
 	if err := svc.RecordHistory(ctx, pos); err != nil {
 		t.Fatal(err)
 	}
+	publishPRSource(t, svc, pos)
 	if err := svc.EnableContextProtocol(ctx, repo); err != nil {
 		t.Fatal(err)
 	}
@@ -235,6 +238,7 @@ func TestPRNoOpCompletionRetriesWithoutRefMove(t *testing.T) {
 	if err := svc.RecordHistory(ctx, birth); err != nil {
 		t.Fatal(err)
 	}
+	publishPRSource(t, svc, birth)
 	failing := &failingCompletionStore{FSStore: st, fail: true}
 	svc.meta = failing
 	if _, err := svc.PromoteRepositoryPR(ctx, repo, pr); err == nil {

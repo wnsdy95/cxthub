@@ -203,6 +203,32 @@ func WriteRepoFileAtomic(repoRoot, relative string, data []byte, perm os.FileMod
 	return WriteRegularFileAtomic(path, data, perm)
 }
 
+// WriteRepoFileDurable also flushes the rename and newly created parent
+// directories. A journal must survive power loss, not only process termination.
+func WriteRepoFileDurable(repoRoot, relative string, data []byte, perm os.FileMode) error {
+	if err := WriteRepoFileAtomic(repoRoot, relative, data, perm); err != nil {
+		return err
+	}
+	root, err := filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		return err
+	}
+	for dir := filepath.Dir(filepath.Join(root, relative)); ; dir = filepath.Dir(dir) {
+		f, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		err = f.Sync()
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+		if dir == root {
+			return nil
+		}
+	}
+}
+
 // RemoveRepoFile removes a repository-relative regular file without following
 // repository-controlled symlinks. Missing files are treated as success.
 func RemoveRepoFile(repoRoot, relative string) error {

@@ -100,9 +100,20 @@ func (s *FSStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash, id st
 	if err != nil {
 		return domain.PRPromotionJob{}, err
 	}
+	running := map[domain.ContentHash]string{}
+	for _, j := range jobs {
+		if j.State == "running" {
+			running[j.RepoID] = j.ID
+		}
+	}
 	blocked := map[domain.ContentHash]bool{}
 	for _, j := range jobs {
 		if j.State == "completed" || j.State == "attention" {
+			continue
+		}
+		// A woken older job cannot overlap a newer running job. Recover an
+		// expired running lease before resuming FIFO among waiting jobs.
+		if active := running[j.RepoID]; active != "" && active != j.ID {
 			continue
 		}
 		if blocked[j.RepoID] {
@@ -167,4 +178,38 @@ func (s *FSStore) GetPRJob(ctx context.Context, repo domain.ContentHash, id stri
 		err = domain.ErrNotFound
 	}
 	return j, err
+}
+
+func (s *FSStore) WakePRSourceJobs(ctx context.Context, repo domain.ContentHash, now time.Time) error {
+	l := s.oauthLock()
+	l.Lock()
+	defer l.Unlock()
+	jobs, err := s.listPRJobsRaw()
+	if err != nil {
+		return err
+	}
+	history := map[domain.ContentHash][]domain.HistoryEvent{}
+	for _, j := range jobs {
+		if j.State != "attention" || j.Reason != "source_finalization_required" || (repo != "" && j.RepoID != repo) {
+			continue
+		}
+		events, ok := history[j.RepoID]
+		if !ok {
+			events, err = s.ListHistoryEvents(ctx, j.RepoID)
+			if err != nil {
+				return err
+			}
+			history[j.RepoID] = events
+		}
+		if !hasPRSourcePublication(j, events) {
+			continue
+		}
+		j.State, j.Reason, j.Attempts = "waiting", "", 0
+		j.NextAttempt, j.UpdatedAt, j.LeaseUntil = now, now, time.Time{}
+		j.Version++
+		if err := s.writePRJob(j); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -1288,7 +1289,7 @@ func (s *Service) PutSettings(ctx context.Context, repoID domain.ContentHash, bu
 }
 
 // PutPending upserts the session-specific context pointer (CLI hook capture mirror). The sessionID is authoritative — the body's session/repo is overwritten (push's RepoID normalization equivalent).
-// It garbage collects the previous hook capture leaf that was replaced by sliding (prevents graph dangling branches and storage accumulation).
+// The previous hook leaf is collected only if the replacement verifiably contains its complete event prefix.
 func (s *Service) PutPending(ctx context.Context, repoID domain.ContentHash, sessionID string, p domain.Pending) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
@@ -1353,7 +1354,7 @@ func (s *Service) ListPendings(ctx context.Context, repoID domain.ContentHash) (
 // DeletePending is the legacy unconditional commit-resolution path. Current
 // clients use CompareAndDeletePending so a delayed helper cannot erase a newer
 // capture. It is idempotent.
-// The hook capture leaf of the released pointer is also GC'd (if the commit doc has the same hash, the guard is preserved).
+// Releasing a pointer supplies no verified successor, so its capture is retained.
 func (s *Service) DeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
@@ -1367,9 +1368,8 @@ func (s *Service) DeletePending(ctx context.Context, repoID domain.ContentHash, 
 }
 
 // CompareAndDeletePending resolves only the capture the caller observed.
-// Ref-reachable history is never deleted: gcHookLeaf can remove only an
-// unreferenced hook leaf replaced by the commit. A concurrent newer pointer
-// returns false and remains untouched.
+// This pointer-only operation retains capture data; it supplies no verified
+// successor for GC. A concurrent newer pointer returns false and remains untouched.
 func (s *Service) CompareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (bool, error) {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return false, err
@@ -1467,16 +1467,39 @@ func (s *Service) pendingTargetOf(ctx context.Context, repoID domain.ContentHash
 	return ""
 }
 
-// gcHookLeaf removes the hook capture leaf snapshot (+doc) replaced by sliding or release.
-// Only removes if all guards pass: hook prefix message · does not point to any ref · not the target of another pending
-// · different from the new object. Hook leaves are always leaves, so they cannot be targets in the commit history.
+// gcHookLeaf removes an unreferenced hook leaf only when a verified successor
+// contains its complete event prefix. Pointer replacement order does not prove
+// supersession: an offline client can publish an older or divergent capture.
+// Branch and cwd are not identity; the same native session can move worktrees.
 func (s *Service) gcHookLeaf(ctx context.Context, repoID domain.ContentHash, old, current domain.ContentHash) {
-	if old == "" || old == current {
+	if old == "" || current == "" || old == current {
 		return
 	}
 	snap, err := s.meta.GetSnapshot(ctx, repoID, old)
 	if err != nil || !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
 		return
+	}
+	replacement, err := s.meta.GetSnapshot(ctx, repoID, current)
+	if err != nil || snap.Provider == "" || snap.SessionID == "" ||
+		replacement.Provider != snap.Provider || replacement.SessionID != snap.SessionID {
+		return
+	}
+	oldDoc, err := s.blobs.GetDoc(ctx, repoID, snap.DocHash)
+	if err != nil {
+		return
+	}
+	newDoc, err := s.blobs.GetDoc(ctx, repoID, replacement.DocHash)
+	if err != nil || oldDoc.CIR.Envelope.SourceProvider != snap.Provider ||
+		newDoc.CIR.Envelope.SourceProvider != snap.Provider ||
+		oldDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
+		newDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
+		len(newDoc.CIR.Events) < len(oldDoc.CIR.Events) {
+		return
+	}
+	for i, event := range oldDoc.CIR.Events {
+		if !reflect.DeepEqual(event, newDoc.CIR.Events[i]) {
+			return
+		}
 	}
 	refs, err := s.meta.ListRefs(ctx, repoID)
 	if err != nil {
@@ -1492,6 +1515,14 @@ func (s *Service) gcHookLeaf(ctx context.Context, repoID domain.ContentHash, old
 	}
 	parentsOf := make(map[domain.ContentHash][]domain.ContentHash, len(snaps))
 	for _, sn := range snaps {
+		for _, parent := range sn.ReachabilityParents() {
+			if parent == old {
+				return // even an unreferenced child still needs this object
+			}
+		}
+		if sn.ID != old && sn.DocHash == snap.DocHash {
+			return // another snapshot still owns the document
+		}
 		parentsOf[sn.ID] = sn.ReachabilityParents()
 	}
 	seen := map[domain.ContentHash]bool{}

@@ -1878,6 +1878,9 @@ func (s *PostgresStore) ReplacePending(ctx context.Context, repoID domain.Conten
 			if current.RepoID != repoID || current.SessionID != p.SessionID {
 				return "", domain.ErrIntegrity
 			}
+			if current.Provider != p.Provider {
+				return "", fmt.Errorf("%w: pending session %q belongs to provider %q, not %q", domain.ErrConflict, p.SessionID, current.Provider, p.Provider)
+			}
 			if err := validateHash(current.Target); err != nil {
 				return "", err
 			}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -269,7 +270,10 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	}
 	// Identify the exact capture observed by this commit. Resolution below is a
 	// target CAS because a newer capture can arrive while the ref is moving.
-	oldTarget := s.pendingTargetOf(ctx, repo.ID, cir.Envelope.SessionOriginID)
+	oldTarget, err := s.pendingTargetOf(ctx, repo.ID, cir.Envelope.SessionOriginID, provider)
+	if err != nil {
+		return inbound.SaveOutput{}, err
+	}
 	// Never move a ref backward. Content-hash dedup may match an existing snapshot already reachable as an ancestor of the current head; in that case, leave the ref in place. This prevents repeated capture of an unchanged session (for example, an old rollout from another provider) from rolling the head back and orphaning intervening commits. Forward dedup still works for a replaceable hook leaf because that leaf is not an ancestor of the head.
 	if refTarget == "" || (position != nil && position.Rewound) || !s.reachable(ctx, repo.ID, refTarget, docHash) {
 		// Preserve sibling forward reachability (overlay graft): If the previous head is not an ancestor of the new head (multi-session commits — each session snapshot has the same parent, becoming siblings), the ref move orphans the entire previous head lineage (real case 578f170b4a). Server diverged push rule: connect the previous head to the new head's GraftParents (Parents immutable). Server replica propagates the graft queue on push (inventory-only push does not resend existing object metadata — same channel pattern as message promotion).
@@ -383,26 +387,29 @@ func (s *SaveSessionService) reachable(ctx context.Context, repoID string, from,
 }
 
 // pendingTargetOf returns the current pending target of the session (empty if none).
-func (s *SaveSessionService) pendingTargetOf(ctx context.Context, repoID, sessionID string) domain.ContentHash {
+func (s *SaveSessionService) pendingTargetOf(ctx context.Context, repoID, sessionID string, provider domain.ProviderKind) (domain.ContentHash, error) {
 	if sessionID == "" {
-		return ""
+		return "", nil
 	}
 	pendings, err := s.store.ListPendings(ctx, repoID)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	for _, p := range pendings {
 		if p.SessionID == sessionID {
-			return p.Target
+			if p.Provider != provider {
+				return "", fmt.Errorf("%w: pending session %q belongs to provider %q, not %q", domain.ErrSyncConflict, sessionID, p.Provider, provider)
+			}
+			return p.Target, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // gcHookLeaf removes hook-capture leaf snapshots and documents replaced by sliding capture or commit incorporation.
-// Hook leaves are always leaf nodes (no children), so they are safe to remove when all guards pass:
-// hook prefix Message · ref not reachable (direct target + ancestor walk, same rule as server gcHookLeaf) · not another pending's target · differs from new object.
-// (Commit history is never a target — hygiene to prevent dangling branches in the graph.)
+// A replacement must contain the old session's complete event prefix. Identity
+// alone is insufficient: a stale or divergent capture can reuse the native ID.
+// Branch and cwd are not identity; the same native session can move worktrees.
 func (s *SaveSessionService) gcHookLeaf(ctx context.Context, repoID string, old, current domain.ContentHash) {
 	if old == "" || old == current {
 		return
@@ -410,6 +417,28 @@ func (s *SaveSessionService) gcHookLeaf(ctx context.Context, repoID string, old,
 	snap, err := s.store.GetSnapshot(ctx, old)
 	if err != nil || !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
 		return
+	}
+	replacement, err := s.store.GetSnapshot(ctx, current)
+	if err != nil || snap.Provider == "" || snap.SessionID == "" ||
+		replacement.Provider != snap.Provider || replacement.SessionID != snap.SessionID {
+		return
+	}
+	oldDoc, err := s.store.GetDoc(ctx, snap.DocHash)
+	if err != nil {
+		return
+	}
+	newDoc, err := s.store.GetDoc(ctx, replacement.DocHash)
+	if err != nil || oldDoc.CIR.Envelope.SourceProvider != snap.Provider ||
+		newDoc.CIR.Envelope.SourceProvider != snap.Provider ||
+		oldDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
+		newDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
+		len(newDoc.CIR.Events) < len(oldDoc.CIR.Events) {
+		return
+	}
+	for i, event := range oldDoc.CIR.Events {
+		if !reflect.DeepEqual(event, newDoc.CIR.Events[i]) {
+			return
+		}
 	}
 	refs, err := s.store.ListRefs(ctx, repoID)
 	if err != nil {
@@ -422,6 +451,14 @@ func (s *SaveSessionService) gcHookLeaf(ctx context.Context, repoID string, old,
 	}
 	byID := make(map[domain.ContentHash]domain.Snapshot, len(all))
 	for _, sn := range all {
+		for _, parent := range sn.ReachabilityParents() {
+			if parent == old {
+				return // even an unreferenced child still needs this object
+			}
+		}
+		if sn.ID != old && sn.DocHash == snap.DocHash {
+			return // another snapshot still owns the document
+		}
 		byID[sn.ID] = sn
 	}
 	seen := map[domain.ContentHash]bool{}
@@ -454,7 +491,9 @@ func (s *SaveSessionService) gcHookLeaf(ctx context.Context, repoID string, old,
 			return
 		}
 	}
-	_ = s.store.DeleteSnapshot(ctx, old)
+	if err := s.store.DeleteSnapshot(ctx, old); err != nil {
+		return
+	}
 	_ = s.store.DeleteDoc(ctx, snap.DocHash)
 }
 

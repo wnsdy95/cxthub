@@ -100,8 +100,56 @@ func acquireLock(path string) bool {
 	return false
 }
 
+// Forced captures must observe the cursor after the current writer finishes:
+// that writer may already have read the transcript before its final tail arrived.
+func acquireCaptureLock(ctx context.Context, path string, force bool) (bool, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if acquireLock(path) {
+			return true, nil
+		}
+		if !force {
+			return false, nil
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, fmt.Errorf("waiting for final capture: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+// LocateCaptureSession resolves an explicit session identity without falling
+// through to a newer sibling. Hooks can use the result to retain a liveness
+// pointer before attempting a final capture.
+func LocateCaptureSession(ctx context.Context, provider domain.ProviderKind, cwd, sessionID string) (string, error) {
+	src, err := sourceFor(provider)
+	if err != nil {
+		return "", err
+	}
+	if sessionID == "" {
+		return src.LocateActiveSession(ctx, cwd)
+	}
+	// Hook IDs can be opaque rather than native UUIDs. Only a registration in
+	// this exact worktree can bind such an ID to a transcript.
+	for _, session := range ActiveAppSessions(cwd) {
+		if session.Provider == provider && session.SessionID == sessionID {
+			return session.Path, nil
+		}
+	}
+	path, err := src.LocateSession(ctx, cwd, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s capture session %q: %w", provider, sessionID, err)
+	}
+	return path, nil
+}
+
 // MarkBaseline records the baseline state at the SessionStart event (capture path). Does not commit.
-// If sessionPath is empty, detects the active session (silently no-op if none found).
+// If sessionPath is empty, resolves sessionID, or detects the active session if no ID was supplied.
 // Clears residual .turn hints from the previous session at the session boundary.
 func (c *CaptureCoordinator) MarkBaseline(ctx context.Context, provider domain.ProviderKind, cwd, sessionPath, sessionID string) error {
 	repoRoot, enabled := gitctx.ContextRoot(ctx, cwd)
@@ -117,12 +165,11 @@ func (c *CaptureCoordinator) MarkBaseline(ctx context.Context, provider domain.P
 	_ = os.Remove(statePath(".turn"))
 	path := sessionPath
 	if path == "" {
-		src, err := sourceFor(provider)
-		if err != nil {
-			return nil
-		}
-		if path, err = src.LocateActiveSession(ctx, cwd); err != nil {
-			return nil // ErrNoActiveSession included — no baseline (next capture is full read)
+		if path, err = LocateCaptureSession(ctx, provider, cwd, sessionID); err != nil {
+			if sessionID == "" && errors.Is(err, domain.ErrNoActiveSession) {
+				return nil // no baseline (next capture is full read)
+			}
+			return err
 		}
 	}
 	var size int64
@@ -161,11 +208,16 @@ func (c *CaptureCoordinator) MarkTurn(ctx context.Context, provider domain.Provi
 // RequestCapture requests a capture (capture path commit/flush path).
 // If debounce=true, applies the marker file mtime gate ( leading + mtime gate),
 // and if force=true (SessionEnd flush/manual), ignores debouncing. Growth gate ( cheap gate) and
-// a file lock is always applied. Save performs final content-hash deduplication.
+// a file lock is always applied. Forced requests wait for the lock until ctx
+// expires, returning an error so callers can retain retry state on failure.
+// Save performs final content-hash deduplication.
 // The returned captured indicates whether actual storage occurred (gate no-op is false) — caller should
 // only proceed with subsequent work (pending-sync spawn, etc.) if storage happened.
 func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain.ProviderKind, cwd, sessionPath, sessionID string, debounce, force bool) (captured bool, err error) {
 	repoRoot, enabled := gitctx.ContextRoot(ctx, cwd)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if !enabled {
 		return false, nil
 	}
@@ -176,8 +228,9 @@ func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain
 	base := captureStateBase(ctx, provider, cwd, sessionID)
 	statePath := func(ext string) string { return filepath.Join(dir, base+ext) }
 	lock := statePath(".lock")
-	if !acquireLock(lock) {
-		return false, nil
+	locked, err := acquireCaptureLock(ctx, lock, force)
+	if err != nil || !locked {
+		return false, err
 	}
 	defer os.Remove(lock)
 
@@ -190,12 +243,9 @@ func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain
 
 	path := sessionPath
 	if path == "" {
-		src, serr := sourceFor(provider)
-		if serr != nil {
-			return false, serr
-		}
-		if path, serr = src.LocateActiveSession(ctx, cwd); serr != nil {
-			if errors.Is(serr, domain.ErrNoActiveSession) {
+		var serr error
+		if path, serr = LocateCaptureSession(ctx, provider, cwd, sessionID); serr != nil {
+			if sessionID == "" && errors.Is(serr, domain.ErrNoActiveSession) {
 				return false, nil // inactive session: no-op
 			}
 			return false, serr
@@ -203,6 +253,9 @@ func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain
 	}
 	fi, serr := os.Stat(path)
 	if serr != nil {
+		if force {
+			return false, fmt.Errorf("stat final capture transcript: %w", serr)
+		}
 		return false, nil // session file lost — no-op
 	}
 	size := fi.Size()
@@ -253,6 +306,7 @@ func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain
 // uses the same adapter as the registry of the assembly root, but for shallow discovery of hook paths).
 func sourceFor(provider domain.ProviderKind) (interface {
 	LocateActiveSession(context.Context, string) (string, error)
+	LocateSession(context.Context, string, string) (string, error)
 }, error) {
 	switch provider {
 	case domain.ProviderClaude:

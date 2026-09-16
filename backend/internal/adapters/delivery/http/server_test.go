@@ -283,6 +283,15 @@ func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
 	base := put("base")
 	mainTip := put("main", base)
 	featureTip := put("feature", base)
+	observation := domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(repoID), BranchID: "feature", Branch: "feature/x", Kind: "position", Source: featureTip, Target: featureTip, GitAfter: strings.Repeat("a", 40), CreatedAt: time.Now().UTC()}
+	if err := svc.RecordHistory(context.Background(), observation); err != nil {
+		t.Fatal(err)
+	}
+	publication := observation
+	publication.ID, publication.Kind = strings.Repeat("2", 32), "publish"
+	if err := svc.RecordHistory(context.Background(), publication); err != nil {
+		t.Fatal(err)
+	}
 	for name, target := range map[string]domain.ContentHash{"main": mainTip, "feature/x": featureTip} {
 		if err := st.CompareAndSwapRef(context.Background(), repoID, domain.Ref{
 			Kind: domain.RefBranch, Name: name, RepoID: repoID, Target: target,

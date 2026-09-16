@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -271,11 +274,195 @@ func TestHandlerTracksOpaqueAppSessionUntilSessionEnd(t *testing.T) {
 
 // TestHandlerGarbagePayload ensures it doesn't die on non-JSON stdin ( best-effort).
 func TestHandlerGarbagePayload(t *testing.T) {
+	t.Chdir(t.TempDir())
 	rs := &recSave{}
 	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
 	h.stdin = strings.NewReader("not json at all")
 	// cwd fallback is os.Getwd — must be a no-op silently if there's no active session.
 	if err := h.Run(domain.ProviderClaude, "SessionEnd"); err != nil {
 		t.Fatalf("garbage payload must not error: %v", err)
+	}
+}
+
+type hookSaveFunc func(context.Context, inbound.SaveInput) (inbound.SaveOutput, error)
+
+func (f hookSaveFunc) Save(ctx context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+	return f(ctx, in)
+}
+
+func TestSessionEndCapturesTailAfterConcurrentStop(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "wait-for-writer"
+		if deadline {
+			name = "deadline-retains-retry"
+		}
+		t.Run(name, func(t *testing.T) {
+			home, cwd := t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CXT_REMOTE", "")
+			initHookContext(t, cwd)
+			const sessionID = "opaque-final-session"
+			session := filepath.Join(home, ".codex", "sessions", "2026", "09", "16", "rollout-test-11111111-1111-4111-8111-111111111111.jsonl")
+			if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			const initial = "{\"type\":\"user\"}\n"
+			const tail = "{\"type\":\"assistant\",\"text\":\"final answer\"}\n"
+			if err := os.WriteFile(session, []byte(initial), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			firstRead, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			var mu sync.Mutex
+			var snapshots []string
+			saver := hookSaveFunc(func(ctx context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+				raw, err := os.ReadFile(in.SessionPath)
+				if err != nil {
+					return inbound.SaveOutput{}, err
+				}
+				mu.Lock()
+				snapshots = append(snapshots, string(raw))
+				first := len(snapshots) == 1
+				mu.Unlock()
+				if first {
+					close(firstRead)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return inbound.SaveOutput{}, ctx.Err()
+					}
+				}
+				return inbound.SaveOutput{SnapshotID: "sha256:tail", Branch: "main"}, nil
+			})
+			newHandler := func(path string) *Handler {
+				payload, err := json.Marshal(hookPayload{SessionID: sessionID, RolloutPath: path, Cwd: cwd})
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Separate coordinators model separate hook processes sharing only disk state.
+				h := NewHandler(capture.NewCaptureCoordinator(saver, domain.TeamIdentity{}))
+				h.stdin = bytes.NewReader(payload)
+				return h
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			var wg sync.WaitGroup
+			t.Cleanup(func() { cancel(); unblock(); wg.Wait() })
+			stopDone := make(chan error, 1)
+			stop := newHandler(session)
+			wg.Go(func() { stopDone <- stop.run(ctx, domain.ProviderCodex, "Stop") })
+			select {
+			case <-firstRead:
+			case <-ctx.Done():
+				t.Fatal("Stop did not read its initial snapshot")
+			}
+			// Append only after the older capture read its bytes, while it still owns the lock.
+			f, err := os.OpenFile(session, os.O_APPEND|os.O_WRONLY, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.WriteString(tail)
+			closeErr := f.Close()
+			if err != nil || closeErr != nil {
+				t.Fatalf("append tail: %v, close: %v", err, closeErr)
+			}
+			endCtx := ctx
+			if deadline {
+				var endCancel context.CancelFunc
+				endCtx, endCancel = context.WithTimeout(ctx, 150*time.Millisecond)
+				defer endCancel()
+			}
+			endDone := make(chan error, 1)
+			end := newHandler("") // a pathless final hook must retain the opaque ID's exact binding
+			wg.Go(func() { endDone <- end.run(endCtx, domain.ProviderCodex, "SessionEnd") })
+			if deadline {
+				if err := <-endDone; !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("contended final capture must report deadline, got %v", err)
+				}
+			} else {
+				select {
+				case err := <-endDone:
+					t.Fatalf("SessionEnd returned before the older writer released its lock: %v", err)
+				case <-time.After(150 * time.Millisecond):
+				}
+			}
+			if active := capture.ActiveAppSessions(cwd); len(active) != 1 || active[0].SessionID != sessionID || active[0].Path != session {
+				t.Fatalf("final capture lost its durable retry pointer: %+v", active)
+			}
+			unblock()
+			if err := <-stopDone; err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+			if deadline {
+				// A new handler/coordinator recovers the path entirely from disk.
+				if err := newHandler("").run(ctx, domain.ProviderCodex, "SessionEnd"); err != nil {
+					t.Fatalf("retry: %v", err)
+				}
+			} else if err := <-endDone; err != nil {
+				t.Fatalf("SessionEnd: %v", err)
+			}
+			mu.Lock()
+			got := append([]string(nil), snapshots...)
+			mu.Unlock()
+			if len(got) != 2 || got[0] != initial || got[1] != initial+tail {
+				t.Fatalf("final tail was not captured: %q", got)
+			}
+			if active := capture.ActiveAppSessions(cwd); len(active) != 0 {
+				t.Fatalf("successful final capture left liveness behind: %+v", active)
+			}
+			if raw, err := os.ReadFile(session); err != nil || string(raw) != initial+tail {
+				t.Fatalf("capture changed provider transcript: %q, %v", raw, err)
+			}
+		})
+	}
+}
+
+func TestSessionEndSaveFailureRetainsNewlyResolvedSession(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CXT_REMOTE", "")
+	initHookContext(t, cwd)
+	const sessionID = "11111111-1111-4111-8111-111111111111"
+	session := filepath.Join(home, ".codex", "sessions", "2026", "09", "16", "rollout-test-"+sessionID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"cwd": cwd}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(session, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(hookPayload{SessionID: sessionID, Cwd: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("save unavailable")
+	fail := hookSaveFunc(func(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+		if in.SessionPath != session {
+			t.Fatalf("wrong final transcript: %q", in.SessionPath)
+		}
+		return inbound.SaveOutput{}, wantErr
+	})
+	h := NewHandler(capture.NewCaptureCoordinator(fail, domain.TeamIdentity{}))
+	h.stdin = bytes.NewReader(payload)
+	if err := h.Run(domain.ProviderCodex, "SessionEnd"); !errors.Is(err, wantErr) {
+		t.Fatalf("final capture error = %v, want %v", err, wantErr)
+	}
+	if active := capture.ActiveAppSessions(cwd); len(active) != 1 || active[0].SessionID != sessionID || active[0].Path != session {
+		t.Fatalf("failed final capture did not retain its resolved transcript: %+v", active)
+	}
+	saved := &recSave{}
+	retry := NewHandler(capture.NewCaptureCoordinator(saved, domain.TeamIdentity{}))
+	retry.stdin = bytes.NewReader(payload)
+	if err := retry.Run(domain.ProviderCodex, "SessionEnd"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if len(saved.calls) != 1 || saved.calls[0].SessionPath != session {
+		t.Fatalf("retry calls = %+v", saved.calls)
+	}
+	if active := capture.ActiveAppSessions(cwd); len(active) != 0 {
+		t.Fatalf("successful retry left liveness behind: %+v", active)
 	}
 }

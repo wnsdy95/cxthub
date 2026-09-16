@@ -16,4 +16,8 @@ type PRJobStore interface {
 	ClaimPRJob(context.Context, domain.ContentHash, string, time.Time, time.Duration) (domain.PRPromotionJob, error)
 	FinishPRJob(context.Context, domain.PRPromotionJob) error
 	RetryPRJob(context.Context, domain.ContentHash, string, time.Time) error
+	// WakePRSourceJobs requeues only source_finalization_required jobs with an
+	// exact persisted publication. Empty repo reconciles all repositories. This
+	// scans eligible jobs independently of the UI's ListPRJobs pagination.
+	WakePRSourceJobs(context.Context, domain.ContentHash, time.Time) error
 }

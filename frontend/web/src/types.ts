@@ -381,7 +381,7 @@ export interface HistoryEvent {
   repo_id: string;
   branch_id: string;
   branch: string;
-  kind: 'birth' | 'attach' | 'orphan' | 'position' | 'advance' | 'rename' | 'archive' | 'pr-merge';
+  kind: 'birth' | 'attach' | 'orphan' | 'position' | 'publish' | 'advance' | 'rename' | 'archive' | 'pr-merge';
   pr?: {number: number; base_branch: string; head_branch: string; head_sha: string; merge_sha: string};
   source_branch_id?: string;
   recovery_evidence?: 'user-confirmed-unborn-head';

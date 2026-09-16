@@ -81,7 +81,10 @@ func (h *Handler) readPayload() hookPayload {
 func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+	return h.run(ctx, provider, event)
+}
 
+func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event string) error {
 	p := h.readPayload()
 	cwd := p.Cwd
 	if cwd == "" {
@@ -130,8 +133,23 @@ func (h *Handler) Run(provider domain.ProviderKind, event string) error {
 		}
 		return err
 	case "SessionEnd":
+		// Resolve and persist the exact transcript before waiting on another
+		// capture. If the deadline or save fails, later hooks/checkpoints can
+		// retry using the retained on-disk liveness pointer.
+		if path == "" && p.SessionID != "" {
+			var err error
+			path, err = capture.LocateCaptureSession(ctx, provider, cwd, p.SessionID)
+			if err != nil {
+				return err
+			}
+		}
+		if err := capture.TrackAppSession(cwd, provider, p.SessionID, path); err != nil {
+			return err
+		}
 		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, false, true)
-		capture.EndAppSession(cwd, provider, p.SessionID)
+		if err == nil {
+			capture.EndAppSession(cwd, provider, p.SessionID)
+		}
 		if captured {
 			spawnPendingSync(cwd)
 		}

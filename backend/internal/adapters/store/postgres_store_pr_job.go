@@ -56,6 +56,15 @@ func (s *PostgresStore) ListPRJobs(ctx context.Context, repo domain.ContentHash)
 	}
 	return out, rows.Err()
 }
+
+const claimPRJobSQL = `SELECT j.payload FROM pr_promotion_jobs j
+ WHERE ($1='' OR j.repo_id=$1) AND ($2='' OR j.id=$2)
+ AND j.state IN ('waiting','retrying','running') AND j.next_attempt<=$3
+ AND (j.state<>'running' OR j.lease_until<=$3)
+ AND NOT EXISTS(SELECT 1 FROM pr_promotion_jobs p WHERE p.repo_id=j.repo_id AND p.id<>j.id AND p.state='running')
+ AND (j.state='running' OR NOT EXISTS(SELECT 1 FROM pr_promotion_jobs p WHERE p.repo_id=j.repo_id AND p.state IN ('waiting','retrying','running') AND (p.created_at,p.id)<(j.created_at,j.id)))
+ ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`
+
 func (s *PostgresStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash, id string, now time.Time, lease time.Duration) (domain.PRPromotionJob, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -63,12 +72,27 @@ func (s *PostgresStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash,
 	}
 	defer tx.Rollback(ctx)
 	var b []byte
-	err = tx.QueryRow(ctx, `SELECT j.payload FROM pr_promotion_jobs j WHERE ($1='' OR j.repo_id=$1) AND ($2='' OR j.id=$2) AND j.state IN ('waiting','retrying','running') AND j.next_attempt<=$3 AND (j.state<>'running' OR j.lease_until<=$3)
- AND NOT EXISTS(SELECT 1 FROM pr_promotion_jobs p WHERE p.repo_id=j.repo_id AND p.state IN ('waiting','retrying','running') AND (p.created_at,p.id)<(j.created_at,j.id)) ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`, repo, id, now).Scan(&b)
+	err = tx.QueryRow(ctx, claimPRJobSQL, repo, id, now).Scan(&b)
 	if err != nil {
 		return domain.PRPromotionJob{}, mapNoRows(err)
 	}
 	var j domain.PRPromotionJob
+	if err = json.Unmarshal(b, &j); err != nil {
+		return j, err
+	}
+	// Wake/retry can make an older row eligible while another claimant selected
+	// a newer row. Serialize claims by repository, then recheck using a fresh
+	// READ COMMITTED snapshot. Locking just the selected job cannot fence that race.
+	var locked bool
+	if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, "cxthub-pr-claim:"+string(j.RepoID)).Scan(&locked); err != nil {
+		return j, err
+	}
+	if !locked {
+		return domain.PRPromotionJob{}, domain.ErrNotFound
+	}
+	if err = tx.QueryRow(ctx, claimPRJobSQL, j.RepoID, j.ID, now).Scan(&b); err != nil {
+		return domain.PRPromotionJob{}, mapNoRows(err)
+	}
 	if err = json.Unmarshal(b, &j); err != nil {
 		return j, err
 	}
@@ -147,4 +171,64 @@ func (s *PostgresStore) GetPRJob(ctx context.Context, repo domain.ContentHash, i
 	}
 	err = json.Unmarshal(b, &j)
 	return j, err
+}
+
+func (s *PostgresStore) WakePRSourceJobs(ctx context.Context, repo domain.ContentHash, now time.Time) error {
+	// Filter by durable exact revisions, not the UI's latest-100 list. The Go
+	// predicate below also checks ordinary alias proof and its attachment.
+	rows, err := s.pool.Query(ctx, `SELECT j.payload FROM pr_promotion_jobs j
+ WHERE ($1='' OR j.repo_id=$1) AND j.state='attention' AND j.payload->>'reason'='source_finalization_required'
+ AND EXISTS(SELECT 1 FROM context_history h WHERE h.repo_id=j.repo_id AND h.event->>'kind'='publish'
+   AND h.event->>'git_after'=j.payload->'pr'->>'head_sha'
+   AND (h.event->>'branch'=j.payload->'pr'->>'head_branch' OR h.event->>'local_branch'=j.payload->'pr'->>'head_branch'))`, repo)
+	if err != nil {
+		return err
+	}
+	var jobs []domain.PRPromotionJob
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var j domain.PRPromotionJob
+		if err := json.Unmarshal(raw, &j); err != nil {
+			rows.Close()
+			return err
+		}
+		jobs = append(jobs, j)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	history := map[domain.ContentHash][]domain.HistoryEvent{}
+	for _, j := range jobs {
+		events, ok := history[j.RepoID]
+		if !ok {
+			events, err = s.ListHistoryEvents(ctx, j.RepoID)
+			if err != nil {
+				return err
+			}
+			history[j.RepoID] = events
+		}
+		if !hasPRSourcePublication(j, events) {
+			continue
+		}
+		version := j.Version
+		j.State, j.Reason, j.Attempts = "waiting", "", 0
+		j.NextAttempt, j.UpdatedAt, j.LeaseUntil = now, now, time.Time{}
+		j.Version++
+		raw, err := json.Marshal(j)
+		if err != nil {
+			return err
+		}
+		// A concurrent retry/claim/finish must never be replaced by this wake.
+		if _, err := s.pool.Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6,version=$7
+ WHERE repo_id=$1 AND id=$2 AND version=$8 AND state='attention' AND payload->>'reason'='source_finalization_required'`,
+			j.RepoID, j.ID, raw, j.State, j.NextAttempt, j.LeaseUntil, j.Version, version); err != nil {
+			return err
+		}
+	}
+	return nil
 }
