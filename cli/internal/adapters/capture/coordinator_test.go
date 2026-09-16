@@ -331,7 +331,7 @@ func writeCoordinatorSession(t *testing.T, home, cwd string, provider domain.Pro
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"cwd": cwd}})
+	data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"id": sessionID, "cwd": cwd}, "sessionId": sessionID})
 	if err != nil {
 		t.Fatal(err)
 	}

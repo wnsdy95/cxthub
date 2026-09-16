@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
@@ -44,6 +46,173 @@ func initHookContext(t *testing.T, repo string) {
 	}
 	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func writeHookSession(t *testing.T, cwd string, provider domain.ProviderKind, id string) string {
+	t.Helper()
+	path := filepath.Join(os.Getenv("HOME"), ".claude", "projects", providerfs.EncodeCwd(cwd), id+".jsonl")
+	data := fmt.Sprintf("{\"type\":\"user\",\"sessionId\":%q,\"cwd\":%q}\n", id, cwd)
+	if provider == domain.ProviderCodex {
+		path = filepath.Join(os.Getenv("HOME"), ".codex", "sessions", "2026", "08", "26", "rollout-test-"+id+".jsonl")
+		data = fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":%q}}\n", id, cwd)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestHandlerRejectsMismatchedSessionBeforeAllSideEffects(t *testing.T) {
+	const parent = "11111111-1111-4111-8111-111111111111"
+	const child = "22222222-2222-4222-8222-222222222222"
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"} {
+			t.Run(string(provider)+"/"+event, func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				cwd := t.TempDir()
+				initHookContext(t, cwd)
+				good := writeHookSession(t, cwd, provider, parent)
+				bad := writeHookSession(t, cwd, provider, child)
+				if err := capture.TrackAppSession(cwd, provider, parent, good); err != nil {
+					t.Fatal(err)
+				}
+				if err := capture.WriteSessionHandoff(cwd, []string{parent}, "parent memory"); err != nil {
+					t.Fatal(err)
+				}
+				saver := &recSave{}
+				var output bytes.Buffer
+				h := NewHandler(capture.NewCaptureCoordinator(saver, domain.TeamIdentity{}))
+				payload, _ := json.Marshal(hookPayload{SessionID: parent, TranscriptPath: bad, Cwd: cwd, Prompt: "child prompt"})
+				h.stdin, h.stdout = bytes.NewReader(payload), &output
+				if err := h.Run(provider, event); !errors.Is(err, capture.ErrSessionIdentityMismatch) {
+					t.Fatalf("mismatched hook: %v", err)
+				}
+				if len(saver.calls) != 0 || output.Len() != 0 {
+					t.Fatalf("mismatched hook captured or emitted briefing")
+				}
+				if _, err := os.Stat(filepath.Join(cwd, ".cxt", "capture")); !os.IsNotExist(err) {
+					t.Fatalf("mismatched hook changed capture state: %v", err)
+				}
+				if sessions := capture.ActiveAppSessions(cwd); len(sessions) != 1 || sessions[0].Path != good {
+					t.Fatalf("parent pointer changed: %+v", sessions)
+				}
+				if message, ok := capture.ConsumeSessionHandoff(cwd, parent); !ok || message != "parent memory" {
+					t.Fatalf("parent briefing consumed: %q %v", message, ok)
+				}
+			})
+		}
+	}
+}
+
+func TestHandlerCorrectHookRepairsPoisonedPointer(t *testing.T) {
+	const parent = "11111111-1111-4111-8111-111111111111"
+	const child = "22222222-2222-4222-8222-222222222222"
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		t.Run(string(provider), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("CODEX_THREAD_ID", parent) // inherited environment must not relabel payloads
+			cwd := t.TempDir()
+			initHookContext(t, cwd)
+			good := writeHookSession(t, cwd, provider, parent)
+			bad := writeHookSession(t, cwd, provider, child)
+			if err := capture.TrackAppSession(cwd, provider, parent, good); err != nil {
+				t.Fatal(err)
+			}
+			files, _ := filepath.Glob(filepath.Join(cwd, ".cxt", "app-sessions", "*.json"))
+			raw, err := os.ReadFile(files[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Reproduce an old client's corruption only in this disposable fixture.
+			var state map[string]any
+			if err := json.Unmarshal(raw, &state); err != nil {
+				t.Fatal(err)
+			}
+			state["path"] = bad
+			raw, _ = json.Marshal(state)
+			if err := os.WriteFile(files[0], raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if sessions := capture.ActiveAppSessions(cwd); len(sessions) != 0 {
+				t.Fatalf("poisoned pointer exposed: %+v", sessions)
+			}
+			h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
+			// A pathless real hook discovers the exact parent and replaces the pointer.
+			payload, _ := json.Marshal(hookPayload{SessionID: parent, Cwd: cwd, Prompt: "parent prompt"})
+			h.stdin = bytes.NewReader(payload)
+			if err := h.Run(provider, "UserPromptSubmit"); err != nil {
+				t.Fatal(err)
+			}
+			if sessions := capture.ActiveAppSessions(cwd); len(sessions) != 1 || sessions[0].Path != good {
+				t.Fatalf("correct hook did not repair pointer: %+v", sessions)
+			}
+			payload, _ = json.Marshal(hookPayload{SessionID: child, TranscriptPath: bad, Cwd: cwd, Prompt: "child prompt"})
+			h.stdin = bytes.NewReader(payload)
+			if err := h.Run(provider, "UserPromptSubmit"); err != nil {
+				t.Fatal(err)
+			}
+			if sessions := capture.ActiveAppSessions(cwd); len(sessions) != 2 {
+				t.Fatalf("inherited environment relabeled child: %+v", sessions)
+			}
+		})
+	}
+}
+
+func TestHandlerOpaqueAliasRejectsRebindBeforePromptOrBriefing(t *testing.T) {
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		t.Run(string(provider), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			cwd := t.TempDir()
+			initHookContext(t, cwd)
+			const alias = "opaque-hook-id"
+			good := writeHookSession(t, cwd, provider, "11111111-1111-4111-8111-111111111111")
+			bad := writeHookSession(t, cwd, provider, "22222222-2222-4222-8222-222222222222")
+			if err := capture.TrackAppSession(cwd, provider, alias, good); err != nil {
+				t.Fatal(err)
+			}
+			if err := capture.WriteSessionHandoff(cwd, []string{alias}, "opaque parent memory"); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			h := NewHandler(nil) // Any prompt/baseline/capture effect would panic.
+			payload, _ := json.Marshal(hookPayload{SessionID: alias, TranscriptPath: bad, Cwd: cwd, Prompt: "wrong child"})
+			h.stdin, h.stdout = bytes.NewReader(payload), &out
+			if err := h.Run(provider, "UserPromptSubmit"); !errors.Is(err, capture.ErrSessionIdentityMismatch) {
+				t.Fatalf("alias rebind accepted: %v", err)
+			}
+			if out.Len() != 0 {
+				t.Fatal("rejected alias emitted briefing")
+			}
+			if text, ok := capture.ConsumeSessionHandoff(cwd, alias); !ok || text != "opaque parent memory" {
+				t.Fatal("rejected alias consumed briefing")
+			}
+		})
+	}
+}
+
+func TestHandlerRejectsNativeSessionFromAnotherWorktree(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		t.Run(string(provider), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			native, other := t.TempDir(), t.TempDir()
+			initHookContext(t, native)
+			initHookContext(t, other)
+			path := writeHookSession(t, native, provider, id)
+			h := NewHandler(nil)
+			payload, _ := json.Marshal(hookPayload{SessionID: id, TranscriptPath: path, Cwd: other, Prompt: "wrong repo"})
+			h.stdin = bytes.NewReader(payload)
+			if err := h.Run(provider, "UserPromptSubmit"); !errors.Is(err, capture.ErrSessionIdentityMismatch) {
+				t.Fatalf("cross-worktree hook accepted: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(other, ".cxt", "app-sessions")); !os.IsNotExist(err) {
+				t.Fatalf("foreign hook wrote registry: %v", err)
+			}
+		})
 	}
 }
 
@@ -104,13 +273,12 @@ func TestGlobalAgentHookQuarantinesDirectoryOnlyResidue(t *testing.T) {
 func TestHandlerStopWithPayload(t *testing.T) {
 	cwd := t.TempDir()
 	initHookContext(t, cwd)
-	session := filepath.Join(t.TempDir(), "s.jsonl")
-	if err := os.WriteFile(session, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("HOME", t.TempDir())
+	const id = "11111111-1111-4111-8111-111111111111"
+	session := writeHookSession(t, cwd, domain.ProviderClaude, id)
 	rs := &recSave{}
 	h := NewHandler(capture.NewCaptureCoordinator(rs, domain.TeamIdentity{}))
-	h.stdin = strings.NewReader(`{"session_id":"s1","transcript_path":"` + session + `","cwd":"` + cwd + `"}`)
+	h.stdin = strings.NewReader(`{"session_id":"` + id + `","transcript_path":"` + session + `","cwd":"` + cwd + `"}`)
 	if err := h.Run(domain.ProviderClaude, "Stop"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -240,7 +408,7 @@ func TestHandlerTracksOpaqueAppSessionUntilSessionEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "rollout-2026-08-31T00-00-00-"+nativeID+".jsonl")
-	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":%q}}\n", nativeID, cwd)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	rawPayload, err := json.Marshal(map[string]string{
@@ -306,7 +474,7 @@ func TestSessionEndCapturesTailAfterConcurrentStop(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			const initial = "{\"type\":\"user\"}\n"
+			initial := fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":%q}}\n", "11111111-1111-4111-8111-111111111111", cwd)
 			const tail = "{\"type\":\"assistant\",\"text\":\"final answer\"}\n"
 			if err := os.WriteFile(session, []byte(initial), 0o600); err != nil {
 				t.Fatal(err)
@@ -427,7 +595,7 @@ func TestSessionEndSaveFailureRetainsNewlyResolvedSession(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"cwd": cwd}})
+	data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"id": sessionID, "cwd": cwd}})
 	if err != nil {
 		t.Fatal(err)
 	}

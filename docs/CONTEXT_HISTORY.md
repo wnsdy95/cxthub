@@ -480,8 +480,11 @@ The original natural parent stayed intact; append retained the previous main
 through a graft edge. The live app conversation was never restarted or loaded
 from this historical prefix.
 
-For new commits, command capture now honors an exact registered Codex app thread
-ID across linked worktrees of the same Git repository. An owning cxt wrapper
+For new commits, command capture honors an exact Codex app thread ID across
+linked worktrees of the same Git repository. A registered pointer is checked
+against the native file; an explicit command ID can also find its native file
+by matching internal ID and repository ownership when that pointer is absent or
+invalid. An owning cxt wrapper
 can likewise resolve its registered Claude/Codex session across those worktrees.
 A command with a native thread ID that cannot be resolved does not substitute
 a newer sibling session. Automatic background capture and branch-switch ownership remain scoped to one
@@ -588,6 +591,13 @@ flush retains app-session liveness for a later attempt. That registry has a
 Superseded hook data is collected only after provider/session identity and the
 entire event prefix are verified; stale, shorter, divergent and referenced
 captures remain stored.
+
+Hook identity is validated before liveness registration, capture bookkeeping or
+briefing consumption. A claimed session ID paired with another session's native
+file is rejected without overwriting the existing pointer. This covers child
+task hooks carrying an inherited parent ID. Command-only exact-ID discovery uses
+native metadata and the shared Git repository, never a newer sibling transcript;
+background discovery still requires its exact worktree registration.
 
 Branch creation replay requires the durable committed transaction callback.
 A later reflog entry with the same name and Git hash is insufficient to identify

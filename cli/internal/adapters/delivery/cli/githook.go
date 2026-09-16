@@ -793,7 +793,7 @@ func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTa
 	appPath := ""
 	if !managed && (explicit == "" || explicit == string(domain.ProviderCodex)) {
 		// Codex app commands carry the native thread ID even when their working
-		// directory is a linked worktree. An exact registered session is required;
+		// directory is a linked worktree. An exact native session is required;
 		// never select an arbitrary recent conversation from another worktree.
 		id := strings.TrimSpace(os.Getenv("CODEX_THREAD_ID"))
 		if id == "" {
@@ -806,6 +806,19 @@ func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTa
 				// Before the first app hook, exact cwd lookup is still safe. An
 				// unknown ID must never fall back to another terminal's latest file.
 				appPath, err = capture.NewCodexCapture().LocateSession(ctx, cwd, id)
+			}
+			if err == nil || errors.Is(err, domain.ErrNoActiveSession) {
+				// Verify every exact command result, including pre-registry cwd
+				// discovery, or recover an unregistered related-worktree session.
+				// A matching filename alone is not a native identity.
+				verified, verifyErr := capture.LocateCodexCommandSession(ctx, cwd, id)
+				if verifyErr != nil {
+					err = verifyErr
+				} else if err == nil && verified != appPath {
+					err = fmt.Errorf("ambiguous exact Codex command session")
+				} else {
+					appPath, err = verified, nil
+				}
 			}
 			if err != nil {
 				return commandCaptureTarget{}, err

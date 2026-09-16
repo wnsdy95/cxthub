@@ -1,14 +1,90 @@
 package capture
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
+
+func TestTrackAppSessionRejectsMismatchBeforeReplacingGoodPointer(t *testing.T) {
+	const parent = "11111111-1111-4111-8111-111111111111"
+	const child = "22222222-2222-4222-8222-222222222222"
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		for _, mismatch := range []string{"filename", "metadata", "cwd"} {
+			t.Run(string(provider)+"/"+mismatch, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				_, _, cwd, _ := newTestCoord(t)
+				good := writeCoordinatorSession(t, home, cwd, provider, parent, time.Now())
+				bad := writeCoordinatorSession(t, home, cwd, provider, child, time.Now())
+				if err := TrackAppSession(cwd, provider, parent, good); err != nil {
+					t.Fatal(err)
+				}
+				root, worktree, _ := appSessionRoots(context.Background(), cwd)
+				registry := filepath.Join(root, appSessionRelativePath(provider, worktree, parent))
+				before, err := os.ReadFile(registry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mismatch == "metadata" {
+					// Filename claims parent, native record still identifies child.
+					raw, err := os.ReadFile(bad)
+					if err != nil {
+						t.Fatal(err)
+					}
+					bad = filepath.Join(filepath.Dir(good), "copy-"+parent+".jsonl")
+					if err := os.WriteFile(bad, raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+				} else if mismatch == "cwd" {
+					_, _, other, _ := newTestCoord(t)
+					bad = writeCoordinatorSession(t, home, other, provider, parent, time.Now())
+				}
+				if err := TrackAppSession(cwd, provider, parent, bad); !errors.Is(err, ErrSessionIdentityMismatch) {
+					t.Fatalf("mismatch accepted: %v", err)
+				}
+				after, err := os.ReadFile(registry)
+				if err != nil || string(before) != string(after) {
+					t.Fatalf("good registry was replaced: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestOpaqueAppSessionAliasCannotRebind(t *testing.T) {
+	const alias = "opaque-hook-id"
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		t.Run(string(provider), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			_, _, cwd, _ := newTestCoord(t)
+			good := writeCoordinatorSession(t, home, cwd, provider, "11111111-1111-4111-8111-111111111111", time.Now())
+			bad := writeCoordinatorSession(t, home, cwd, provider, "22222222-2222-4222-8222-222222222222", time.Now())
+			if err := TrackAppSession(cwd, provider, alias, good); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{good, ""} {
+				if err := TrackAppSession(cwd, provider, alias, path); err != nil {
+					t.Fatalf("valid alias refresh: %v", err)
+				}
+			}
+			if err := TrackAppSession(cwd, provider, alias, bad); !errors.Is(err, ErrSessionIdentityMismatch) {
+				t.Fatalf("opaque alias rebound: %v", err)
+			}
+			if sessions := ActiveAppSessions(cwd); len(sessions) != 1 || sessions[0].Path != good || sessions[0].SessionID != alias {
+				t.Fatalf("alias lost binding: %+v", sessions)
+			}
+		})
+	}
+}
 
 func TestAppSessionRegistryIsWorktreeScopedAndNonDestructive(t *testing.T) {
 	home := t.TempDir()

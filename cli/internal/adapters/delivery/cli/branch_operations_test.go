@@ -575,9 +575,10 @@ func TestBranchBirthCheckpointUsesOfficialHookPath(t *testing.T) {
 			if err := os.Symlink(cwd, nativeCwd); err != nil {
 				t.Fatal(err)
 			}
+			nativeID := "11111111-1111-4111-8111-111111111111"
 			id := "hook-session-opaque"
 			if wrapper {
-				id = "11111111-1111-4111-8111-111111111111"
+				id = nativeID
 				t.Setenv("CXT_WRAPPED", "1")
 				t.Setenv("CXT_WRAPPED_AGENT", "claude")
 				t.Setenv("CXT_WRAPPER_PID", strconv.Itoa(os.Getppid()))
@@ -587,8 +588,9 @@ func TestBranchBirthCheckpointUsesOfficialHookPath(t *testing.T) {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			owned := filepath.Join(dir, id+".jsonl")
-			if err := os.WriteFile(owned, []byte(`{"type":"user"}`), 0o600); err != nil {
+			owned := filepath.Join(dir, nativeID+".jsonl")
+			raw := fmt.Sprintf(`{"type":"user","sessionId":%q,"cwd":%q,"message":{"role":"user","content":"owned session"}}`+"\n", nativeID, nativeCwd)
+			if err := os.WriteFile(owned, []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if err := capture.TrackAppSession(nativeCwd, domain.ProviderClaude, id, owned); err != nil {
