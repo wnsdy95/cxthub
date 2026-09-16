@@ -1,8 +1,7 @@
 # Cloud Run — cxtd(API daemon). Containers are built using deploy/Dockerfile and pushed to Artifact Registry.
 #
-# ⚠ Keep exactly one instance (min=max=1): device-flow pairing and rate limits are in memory,
-#   so polling can hit the wrong instance when scaled out. Before increasing this limit,
-#   move pairing state into the store as described in the deployment configuration under Scaling path.
+# Pairing, OAuth, and request allowances use shared PostgreSQL state.
+# Raise the default cap only after staging load and database pool validation.
 
 resource "google_artifact_registry_repository" "cxthub" {
   repository_id = "cxthub"
@@ -28,8 +27,8 @@ resource "google_cloud_run_v2_service" "cxtd" {
     service_account = google_service_account.cxtd.email
 
     scaling {
-      min_instance_count = 1 # Avoid cold starts for the in-memory pairing flow.
-      max_instance_count = 1 # Externalize pairing state before scaling out.
+      min_instance_count = 1 # Keep one warm instance.
+      max_instance_count = var.max_instances
     }
 
     containers {

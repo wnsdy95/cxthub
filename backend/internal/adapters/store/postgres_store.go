@@ -40,6 +40,9 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 	return &PostgresStore{pool: pool}, nil
 }
 
+// Close releases this instance's connection pool.
+func (s *PostgresStore) Close() { s.pool.Close() }
+
 var _ Store = (*PostgresStore)(nil)
 
 func mapNoRows(err error) error {

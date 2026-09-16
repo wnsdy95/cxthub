@@ -41,10 +41,32 @@ The web-owned `/connect/mcp` path is intentionally not proxied; it renders the
 login and consent screen. OAuth client/request/code state and access/refresh
 token hashes live in PostgreSQL. The remote server exposes no write tools and
 MCP access tokens are rejected by the ordinary REST authorization boundary.
-The application also keeps a process-wide sliding-window backstop on public
-OAuth and MCP routes without trusting forwarded client-IP headers. Before
-raising Cloud Run above one instance, add distributed per-source rate limits at
-the public gateway; process-local limits do not aggregate across replicas.
+Device pairing and request allowances also live in PostgreSQL. Pairing consumption
+and CLI token insertion commit atomically. Rate admission uses a shared GCRA
+bucket (configured burst size and continuous refill); rejection does not extend
+the bucket. Store failures return 503 instead of disabling the limit. Expired
+rows are pruned in bounded batches. FS mode is for one development host only.
+
+`max_instances` defaults to 1 until staging is measured. Before raising it, verify
+the database connection budget across all replicas and enforce per-source limits
+at the gateway. Application gates deliberately do not trust forwarded IP headers;
+HTTP peer limits behind a proxy may group multiple users. MCP/OAuth additionally
+have aggregate shared limits. These remain protection backstops, not tenant quotas.
+
+Reproduce the two-instance PostgreSQL load probe on a **disposable test database**:
+
+```bash
+cd backend
+CXT_LOAD_DSN='<test database DSN>' go test -tags postgres ./internal/adapters/delivery/http -run TestPostgresMultiInstanceLoad -count=1 -v -timeout=10m
+```
+
+The probe creates its own user/repository, a 100 MiB conversation and 1,000 small
+snapshots, then uses 16 concurrent readers across independent server/pool pairs.
+It records REST/MCP p50/p95/p99 and maximum response bytes, verifies authorization
+and paging, and restarts one endpoint during login pairing. It is opt-in and
+writes fixtures; never point it at production. Local results are not evidence of
+Cloud Run latency. Repeat on staging with its real network and database tier,
+then load the public gateway separately before increasing the replica cap.
 
 Run the read-only readiness check before applying:
 
