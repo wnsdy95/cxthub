@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -18,6 +19,17 @@ type workingCommit struct {
 }
 
 func (s *FileStore) CommitWorkingSnapshot(ctx context.Context, ref domain.Ref, expected domain.ContentHash, p domain.WorkingPosition, event *domain.HistoryEvent) error {
+	return s.commitWorkingSnapshot(ctx, ref, expected, nil, p, event)
+}
+
+func (s *FileStore) CommitWorkingSnapshotIfCurrent(ctx context.Context, ref domain.Ref, expected domain.ContentHash, expectedPosition, p domain.WorkingPosition, event *domain.HistoryEvent) error {
+	if s.worktreeID == "" || expectedPosition.WorktreeID != s.worktreeID || expectedPosition.RepoID != p.RepoID || expectedPosition.Branch != p.Branch || expectedPosition.BranchID != p.BranchID || expectedPosition.GitBranch() != p.GitBranch() {
+		return domain.ErrSyncConflict
+	}
+	return s.commitWorkingSnapshot(ctx, ref, expected, &expectedPosition, p, event)
+}
+
+func (s *FileStore) commitWorkingSnapshot(ctx context.Context, ref domain.Ref, expected domain.ContentHash, expectedPosition *domain.WorkingPosition, p domain.WorkingPosition, event *domain.HistoryEvent) error {
 	if s.worktreeID == "" {
 		return domain.ErrNotFound
 	}
@@ -38,6 +50,18 @@ func (s *FileStore) CommitWorkingSnapshot(ctx context.Context, ref domain.Ref, e
 		return err
 	}
 	return s.withRefMutationLock(ctx, func() error {
+		if expectedPosition != nil {
+			currentPosition, err := s.readPosition()
+			if err == domain.ErrNotFound {
+				return domain.ErrSyncConflict
+			}
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(currentPosition, *expectedPosition) {
+				return domain.ErrSyncConflict
+			}
+		}
 		current, err := s.getRefRaw(ctx, ref.RepoID, ref.Kind, ref.Name)
 		if err != nil && err != domain.ErrNotFound {
 			return err
@@ -59,6 +83,9 @@ func (s *FileStore) CommitWorkingSnapshot(ctx context.Context, ref domain.Ref, e
 		if ok && latest.State == domain.BranchArchived {
 			return domain.ErrBranchArchived
 		}
+		// The expected selection is consumed here, before the durable journal.
+		// Recovery completes an accepted operation before any subsequent writer
+		// can enter this lock, including when its position was already written.
 		raw, err := json.Marshal(op)
 		if err != nil {
 			return err

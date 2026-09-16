@@ -102,6 +102,9 @@ func commitProviders(cwd string) []string {
 // snapshotForCommit snapshots active sessions by provider (common for commits/hooks).
 // Returns: number of successful snapshots.
 func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (int, error) {
+	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
+		return 0, err
+	}
 	saved := 0
 	var lastErr error
 	var resolved []inbound.PendingResolution
@@ -1453,6 +1456,9 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	shas := incomingCommitSHAs(cwd)
 	prReflected := replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, gitOut(cwd, "config", "--get", "remote.origin.url"), shas)
 	mergeReflected := appendMergedContexts(ctx, c, cwd, branch, shas)
+	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
+		hookWarn("completed PR context position remains pending: %v", err)
+	}
 
 	// Resolve the final remote only after local/hosted promotion. AppendBranch
 	// may already have moved the local ref to that target, so comparing against

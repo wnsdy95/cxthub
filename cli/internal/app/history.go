@@ -130,31 +130,11 @@ func (s *ContextHistoryService) SelectPosition(ctx context.Context, p domain.Wor
 	if !ok {
 		return fmt.Errorf("working position store unavailable")
 	}
-	events, err := s.history.ListHistoryEvents(ctx, p.RepoID)
+	var err error
+	p, err = s.preparePosition(ctx, p, nil)
 	if err != nil {
 		return err
 	}
-	branches, err := domain.ProjectContextBranches(events)
-	if err != nil {
-		return err
-	}
-	p.BranchID = branches.Identity(p.RepoID, p.Branch)
-	verified, err := s.ValidateHistorySource(ctx, domain.HistoryEvent{ID: "00000000000000000000000000000000", RepoID: p.RepoID, BranchID: p.BranchID, Branch: p.Branch, Kind: "position", Source: p.Snapshot, MemorySource: p.MemorySource, MemoryHash: p.MemoryHash, MemoryPinned: p.MemoryPinned, GitAfter: p.GitCommit, CreatedAt: time.Now().UTC()})
-	if err != nil {
-		return err
-	}
-	p.MemoryHash, p.MemorySource = verified.MemoryHash, verified.MemorySource
-	if ref, err := s.store.GetRef(ctx, p.RepoID, domain.RefBranch, p.Branch); err == nil {
-		p.SharedTarget = ref.Target
-	} else if !errors.Is(err, domain.ErrNotFound) && p.Branch != "" {
-		return err
-	}
-	forward, err := historyContains(ctx, s.store, p.Snapshot, p.SharedTarget)
-	if err != nil {
-		return err
-	}
-	p.MemoryPinned = true
-	p.Rewound = p.Orphan || p.Branch == "" || !forward
 	old, err := positions.GetWorkingPosition(ctx)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return err
@@ -165,9 +145,52 @@ func (s *ContextHistoryService) SelectPosition(ctx context.Context, p domain.Wor
 	if err == nil && old.RepoID == p.RepoID && old.Branch == p.Branch && old.GitBranch() == p.GitBranch() && old.GitCommit == p.GitCommit && old.Snapshot == p.Snapshot && old.Orphan == p.Orphan {
 		return nil // Do not repin mutable memory or create a second selection on replay.
 	}
+	p, err = positionSelection(old, p)
+	if err != nil {
+		return err
+	}
+	return positions.PutWorkingPosition(ctx, p)
+}
+
+// preparePosition shares content/memory validation with conditional selection.
+// A supplied ref is the caller's observation, never a fresh implicit baseline.
+func (s *ContextHistoryService) preparePosition(ctx context.Context, p domain.WorkingPosition, observed *domain.Ref) (domain.WorkingPosition, error) {
+	events, err := s.history.ListHistoryEvents(ctx, p.RepoID)
+	if err != nil {
+		return p, err
+	}
+	branches, err := domain.ProjectContextBranches(events)
+	if err != nil {
+		return p, err
+	}
+	p.BranchID = branches.Identity(p.RepoID, p.Branch)
+	verified, err := s.ValidateHistorySource(ctx, domain.HistoryEvent{ID: "00000000000000000000000000000000", RepoID: p.RepoID, BranchID: p.BranchID, Branch: p.Branch, Kind: "position", Source: p.Snapshot, MemorySource: p.MemorySource, MemoryHash: p.MemoryHash, MemoryPinned: p.MemoryPinned, GitAfter: p.GitCommit, CreatedAt: time.Now().UTC()})
+	if err != nil {
+		return p, err
+	}
+	p.MemoryHash, p.MemorySource = verified.MemoryHash, verified.MemorySource
+	if observed != nil {
+		p.SharedTarget = observed.Target
+	} else {
+		if ref, err := s.store.GetRef(ctx, p.RepoID, domain.RefBranch, p.Branch); err == nil {
+			p.SharedTarget = ref.Target
+		} else if !errors.Is(err, domain.ErrNotFound) && p.Branch != "" {
+			return p, err
+		}
+	}
+	forward, err := historyContains(ctx, s.store, p.Snapshot, p.SharedTarget)
+	if err != nil {
+		return p, err
+	}
+	p.MemoryPinned = true
+	p.Rewound = p.Orphan || p.Branch == "" || !forward
+	return p, nil
+}
+
+func positionSelection(old, p domain.WorkingPosition) (domain.WorkingPosition, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		return err
+		return p, err
 	}
 	e := domain.HistoryEvent{ID: hex.EncodeToString(id[:]), RepoID: p.RepoID, BranchID: p.BranchID, Branch: p.Branch, Kind: "position", MemoryPinned: true, Source: old.Snapshot, Target: p.Snapshot, MemoryHash: p.MemoryHash, MemorySource: p.MemorySource, GitBefore: old.GitCommit, GitAfter: p.GitCommit, CreatedAt: time.Now().UTC()}
 	e.LocalBranch = p.LocalBranch
@@ -176,8 +199,7 @@ func (s *ContextHistoryService) SelectPosition(ctx context.Context, p domain.Wor
 		e.GitBefore = ""
 	}
 	p.Selection = &e
-
-	return positions.PutWorkingPosition(ctx, p)
+	return p, nil
 }
 
 func historyContains(ctx context.Context, store outbound.SessionStore, from, ancestor domain.ContentHash) (bool, error) {

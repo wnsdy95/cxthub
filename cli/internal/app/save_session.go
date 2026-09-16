@@ -161,7 +161,9 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 			if p.Snapshot != "" && p.Snapshot != docHash {
 				parents = []domain.ContentHash{p.Snapshot}
 			}
-			if p.Rewound && p.Branch != "" && p.SharedTarget != refTarget {
+			// Pending captures retain private bytes against the selected ancestry;
+			// they never publish a shared branch or replace the worktree position.
+			if !in.Pending && p.Rewound && p.Branch != "" && p.SharedTarget != refTarget {
 				return inbound.SaveOutput{}, fmt.Errorf("shared branch advanced after context selection: %w", domain.ErrSyncConflict)
 			}
 		}
@@ -313,7 +315,12 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 				key := sha256.Sum256([]byte(repo.ID + "\x00" + branch + "\x00" + selectionID + "\x00" + string(refTarget) + "\x00" + string(docHash)))
 				event = &domain.HistoryEvent{ID: fmt.Sprintf("%x", key[:16]), RepoID: repo.ID, BranchID: p.BranchID, Branch: branch, Kind: "advance", Source: refTarget, Target: docHash, MemoryHash: stored.MemoryHash, GitBefore: position.GitCommit, GitAfter: p.GitCommit, WorktreeID: p.WorktreeID, CreatedAt: observedAt}
 			}
-			if err := commitStore.CommitWorkingSnapshot(ctx, branchRef, refTarget, p, event); err != nil {
+			if conditional, ok := s.store.(outbound.WorkingCommitCASStore); ok {
+				err = conditional.CommitWorkingSnapshotIfCurrent(ctx, branchRef, refTarget, *position, p, event)
+			} else {
+				err = commitStore.CommitWorkingSnapshot(ctx, branchRef, refTarget, p, event)
+			}
+			if err != nil {
 				return inbound.SaveOutput{}, err
 			}
 		} else {

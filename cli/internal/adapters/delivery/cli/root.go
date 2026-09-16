@@ -649,6 +649,9 @@ func Run(c *Container, args []string) error {
 		return runGitHook(ctx, c, cwd, rest)
 
 	case "save":
+		if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
+			return err
+		}
 		target, err := commandCapture(ctx, cwd, flagVal(rest, "--provider"))
 		if err != nil {
 			return err
@@ -766,7 +769,7 @@ func Run(c *Container, args []string) error {
 		if len(out.Conflicts) > 0 {
 			return fmt.Errorf("! [conflict] %s — merge canceled (local kept)\nhint: To adopt remote state, use 'cxt pull --force'", strings.Join(out.Conflicts, ", "))
 		}
-		return nil
+		return reconcileCompletedPRPosition(ctx, c, cwd)
 
 	case "stash":
 		// git stash equivalent: save active session and return to branch head (commit chain) context.

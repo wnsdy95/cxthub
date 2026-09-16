@@ -547,6 +547,36 @@ including when the prior process wrote the completion receipt but failed to mark
 its queue job complete. Later captures do not retroactively enlarge an already
 completed PR's scope.
 
+### Working position after promotion (#177)
+
+The complete incoming path includes the next capture: Git pull, completed PR
+promotion, worktree selection, then context commit. A completed receipt associates
+its exact merge Git revision with its frozen **source** snapshot. Its resulting
+target may already contain later base work and is not the code-time source.
+
+Git's reference transaction can select an older known context before post-merge
+fetches this receipt. After delivery, and again before the next capture, the CLI
+can refresh that provisional selection only when all of these remain true:
+
+- The same named worktree, local binding, logical branch and Git revision match.
+- Its recorded code move was forward, and the shared baseline has since changed.
+- The completed PR belongs to that exact merge revision and branch identity.
+- The local shared ref is exactly the completed source, containing the previous
+  selected snapshot. A later shared tip is not silently adopted.
+- Both the complete old position and the shared ref still match under the local
+  mutation lock. A competing capture, memory repin or selection wins its CAS.
+
+Backward resets, explicit same-code selections, detached work, other worktrees
+and newer captures are preserved. The operation changes no shared ref or live
+provider conversation. Retrying the hook or capturing after an interrupted hook
+uses the same checks; it does not require editing `.cxt` data manually.
+
+Project memory comes from pinned ordinary observations for the exact source
+snapshot, source branch identity and PR head Git revision. Multiple versions must
+have a provable causal memory successor. Conflicting versions remain an error;
+timestamps, publication's empty memory fields and mutable snapshot attachments
+do not resolve them. Explicitly pinned empty memory remains meaningful.
+
 A source that remains unfinalized for eight attempts moves to visible
 `attention / source_finalization_required`, releasing later queued PRs. It is
 not marked completed or deleted. Arrival of the matching publication wakes it
