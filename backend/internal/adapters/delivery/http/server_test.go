@@ -520,6 +520,23 @@ func TestPushPullRoundtrip(t *testing.T) {
 	if code := doJSON(t, "POST", base+"/push/objects", map[string]any{"snapshots": []domain.Snapshot{snap}, "docs": []domain.SessionDoc{doc}}, nil); code != 200 {
 		t.Fatalf("objects code %d", code)
 	}
+	// Paging uses the same repository viewer guard as the full archive route.
+	eventURL := base + "/docs/" + url.PathEscape(string(h)) + "/events"
+	var eventPage domain.DocEventPage
+	if code := doJSON(t, "GET", eventURL+"?offset=0&limit=1", nil, &eventPage); code != 200 || len(eventPage.Events) != 1 || eventPage.Total != 1 || eventPage.Next != -1 {
+		t.Fatalf("event page: %d %+v", code, eventPage)
+	}
+	for _, suffix := range []string{"?offset=-2", "?offset=bad", "?offset=2", "?limit=101", "?base=bad"} {
+		if code := doJSON(t, "GET", eventURL+suffix, nil, nil); code != 422 {
+			t.Fatalf("range %s: %d", suffix, code)
+		}
+	}
+	if code := doJSONAs(t, "", "GET", eventURL, nil, nil); code != 401 {
+		t.Fatalf("anonymous event page: %d", code)
+	}
+	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "GET", eventURL, nil, nil); code != 403 {
+		t.Fatalf("foreign event page: %d", code)
+	}
 	// expected_seq is a necessary CAS to prevent the delayed queue from reviving the supersede of join.
 	if code := doJSON(t, "POST", base+"/snapshots/"+url.PathEscape(string(h))+"/graft", map[string]any{
 		"parents": []domain.ContentHash{h},

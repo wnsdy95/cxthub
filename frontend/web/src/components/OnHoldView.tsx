@@ -1,3 +1,4 @@
+import { DocEvents } from './DocEvents';
 // OnHoldView — still pending tasks tab that hasn't reached the shared timeline (pushed branch ref).
 // Contains two types:
 //   1) Unsync commits (unsync): Commits made locally but not yet pushed — a chain of commits — context tab and
@@ -8,7 +9,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Repo, Workspace, Pending } from '../types';
 import {
-  useDoc,
   usePendings,
   useUnsyncs,
   useDismissPending,
@@ -22,7 +22,7 @@ import { AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK } from './AIBar';
 import { AIBar } from './AIBar';
 import { CommitGraph } from './CommitGraph';
 import { About, TeamSettings, SecretsPanel } from './About';
-import { EventStream, short, when, commonEventPrefix, type ViewMode } from './ContextView';
+import { short, when, type ViewMode } from './ContextView';
 import { unsyncChains, orphanPendings } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { useT, Rich } from '../i18n';
@@ -122,17 +122,13 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   // Hidden targets: session-specific fallback selection or if the selected snapshot is the target of an uncommitted session.
   const dismissablePending: Pending | null =
     selectedPending ?? (selected ? orphans.find((p) => p.target === selected.id) ?? null : null);
-  const doc = useDoc(repo.id, selected?.doc_hash ?? selectedPending?.target ?? null).data;
+  const selectedHash = selected?.doc_hash ?? selectedPending?.target ?? null;
   // Pending tail from the unsync tip (only when the selected commit is that tip).
   const tailPending = useMemo(() => {
     if (!selected?.session_id) return null;
     return pendings.find((p) => p.session_id === selected.session_id && p.target !== selected.id) ?? null;
   }, [selected, pendings]);
-  const tailDoc = useDoc(repo.id, tailPending?.target ?? null).data;
-  const tailStart = useMemo(() => {
-    if (!doc || !tailDoc) return 0;
-    return commonEventPrefix(tailDoc.cir.events, doc.cir.events);
-  }, [doc, tailDoc]);
+
   const [viewMode, setViewMode] = useState<ViewMode>('all');
   // Fork (checkout): can create a new branch from unpushed commits — the fork base is a git commit,
   // so running git branch <name> locally aligns the branch with this commit and connects this context.
@@ -384,29 +380,14 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
                 {forkMut.error && <span className="err">{forkMut.error.message}</span>}
               </div>
             )}
-            {doc ? (
+            {selectedHash && (
               <>
-                <EventStream
-                  key={`hold-${selected?.id ?? selectedPending!.target}`}
-                  events={doc.cir.events}
-                  mode={viewMode}
-                />
-                {selected && tailPending && tailDoc && tailDoc.cir.events.length > tailStart && (
-                  <>
-                    <div className="session-divider pending-divider">
-                      {t('onhold.continuingConvo', { when: when(tailPending.updated_at) })}
-                    </div>
-                    <EventStream
-                      key={`hold-tail-${tailPending.target}`}
-                      events={tailDoc.cir.events.slice(tailStart)}
-                      offset={tailStart}
-                      mode={viewMode}
-                    />
-                  </>
-                )}
+                <DocEvents repoId={repo.id} hash={selectedHash!} mode={viewMode} />
+                {selected && tailPending && <>
+                  <div className="session-divider pending-divider">{t('onhold.continuingConvo', { when: when(tailPending.updated_at) })}</div>
+                  <DocEvents repoId={repo.id} hash={tailPending.target} base={selected.doc_hash} mode={viewMode} />
+                </>}
               </>
-            ) : (
-              <div className="skel" style={{ height: 60 }} />
             )}
           </div>
         )}

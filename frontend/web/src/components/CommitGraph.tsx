@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
 import { layoutGraph, mainlineOf, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
+import { projectBranchGraph } from '../graphProjection';
 import { sharedReachable } from '../onhold';
 import { classifyGraphSnapshots } from '../graphStatus';
 import { previousProgressGroups, hiddenProgressIds, historicalSnapshotIds, historyBranchHeads } from '../contextHistory';
@@ -133,7 +134,8 @@ export function CommitGraph({
     () => position && positionHead?.kind !== 'archive' && position.branch === pinBranch ? position.snapshot : (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
     [refs, pinBranch, position?.branch, position?.snapshot, positionHead?.kind],
   );
-  const { rows, laneCount } = useMemo(() => layoutGraph(visibleSnapshots, pinHead), [visibleSnapshots, pinHead]);
+  const projection = useMemo(() => projectBranchGraph(visibleSnapshots, refs ?? [], history, reflog, pinHead, pinBranch), [visibleSnapshots, refs, history, reflog, pinHead, pinBranch]);
+  const { rows, laneCount } = useMemo(() => layoutGraph(projection.snapshots, projection.pinHead), [projection]);
   function toggleHistory(key: string) {
     const next = new Set(expandedKeys);
     if (next.has(key)) next.delete(key);
@@ -187,7 +189,7 @@ export function CommitGraph({
   const compactions = useMemo(() => compactionBoundaries(visibleSnapshots), [visibleSnapshots]);
   // Main lineage (union of all branch refs' first-parents) — shared nodes not here = join paths.
   // Different branches: distinguish "current trunk vs appended branch".
-  const mainlines = useMemo(() => mainlinesOf(refs ?? [], visibleSnapshots), [refs, visibleSnapshots]);
+  const mainlines = useMemo(() => mainlinesOf(projection.refs, projection.snapshots), [projection]);
 
   // ── Drag & Drop Reordering (join) ────────────────────────────────────────────
   // Reorder commits of branch fork (side branch) to behind the branch head.
@@ -204,7 +206,7 @@ export function CommitGraph({
     branchId?: string;
     error?: string;
   } | null>(null);
-  const byId = useMemo(() => new Map(snapshots.map((s) => [s.id, s])), [snapshots]);
+  const byId = useMemo(() => new Map(projection.snapshots.map((s) => [s.id, s])), [projection]);
   // Child map based on first-parent (session branch calculation — merge/graft edges exclude inheritance).
   const childrenOf = useMemo(() => {
     const m = new Map<string, string[]>();
@@ -392,6 +394,8 @@ export function CommitGraph({
 
   const labelForSnapshot = useMemo(() => {
     return (snapshot: Snapshot, lane: number): LaneLabel => {
+      const graphEvent = projection.events.get(snapshot.id);
+      if (graphEvent) return { text: graphEvent.branch, archived: false };
       const rowBadges = badges.get(snapshot.id) ?? [];
       const branchBadge =
         (pinBranch && lane === 0
@@ -407,14 +411,14 @@ export function CommitGraph({
             ? { text: t('graph.archivedLane', { branch: archivedBadge.name }), archived: true }
             : { text: snapshot.branch ?? '', archived: false };
     };
-  }, [badges, pinBranch, t]);
+  }, [badges, pinBranch, t, projection]);
 
   // Lane numbers are reusable after a line ends. Preserve the label belonging
   // to each active segment, then replace it when a later session reuses the
   // same lane instead of leaking the old branch name down the graph.
   const laneLabelsByRow = useMemo(() => {
     let active: (LaneLabel | null)[] = Array(laneCount).fill(null);
-    if (pinHead && pinBranch && rows.some((row) => row.lane === 0 && row.snap.id === pinHead)) {
+    if (pinHead && pinBranch && rows.some((row) => row.lane === 0 && row.snap.id === projection.pinHead)) {
       active[0] = { text: pinBranch, archived: false };
     }
     return rows.map((row) => {
@@ -424,12 +428,15 @@ export function CommitGraph({
       const current = [...active];
       for (const lane of row.branchesOut) {
         const parent = byId.get(row.outgoing[lane] ?? '');
-        current[lane] = parent ? labelForSnapshot(parent, lane) : labelForSnapshot(row.snap, lane);
+        const event = projection.events.get(row.snap.id);
+        current[lane] = event?.kind === 'merge' && event.sourceBranch
+          ? { text: event.sourceBranch, archived: false }
+          : parent ? labelForSnapshot(parent, lane) : labelForSnapshot(row.snap, lane);
       }
       active = row.outgoing.map((target, lane) => (target ? current[lane] ?? null : null));
       return current;
     });
-  }, [rows, laneCount, pinHead, pinBranch, labelForSnapshot, byId]);
+  }, [rows, laneCount, pinHead, pinBranch, labelForSnapshot, byId, projection]);
 
   // The labels are a viewport overlay for the graph lines, not a separate
   // always-on legend. Keep only labels whose lane has a visible node/segment.
@@ -750,7 +757,9 @@ export function CommitGraph({
             }
           }
 
-          const sel = r.snap.id === selectedId;
+          const graphEvent = projection.events.get(r.snap.id);
+          const selectId = graphEvent?.snapshot ?? r.snap.id;
+          const sel = !graphEvent && r.snap.id === selectedId;
           // 3rd layer distinction: Uncommitted (hook capture, before commit) ⊂ Unreachable, so uncommitted determination takes precedence over push.
           const isUncommitted = uncommittedIds.has(r.snap.id);
           const isUnpushed = !isUncommitted && unpushed.has(r.snap.id);
@@ -761,20 +770,22 @@ export function CommitGraph({
           const nextIsUnpushedCommit = next !== null && unpushed.has(next) && !uncommittedIds.has(next);
           const blockEnd = isUnpushed && next !== null && !nextIsUnpushedCommit;
           // Join branch: shared (pushed) node but not part of any branch's mainline — light tone.
-          const isSide = !isUncommitted && !isUnpushed && (refs?.length ?? 0) > 0 && !mainlines.has(r.snap.id);
+          const isSide = !graphEvent && !isUncommitted && !isUnpushed && (refs?.length ?? 0) > 0 && !mainlines.has(r.snap.id);
           return (
             <li key={r.snap.id}>
               <button
                 data-graph-row-index={rowIdx}
                 data-graph-node-lane={r.lane}
+                data-graph-event={graphEvent?.kind}
+                data-graph-branch={graphEvent?.branch ?? r.snap.branch}
                 className={`graph-row${sel ? ' on' : ''}${dropRow === r.snap.id ? ' drop-target' : ''}${dragId === r.snap.id ? ' dragging' : ''}${dragId && droppable.has(r.snap.id) ? ' droppable' : ''}`}
-                onClick={() => onSelect(r.snap.id)}
+                onClick={() => onSelect(selectId)}
                 onMouseEnter={(e) => showTip(r.snap.id, e.currentTarget)}
                 onMouseLeave={() => setTip(null)}
                 onFocus={(e) => showTip(r.snap.id, e.currentTarget)}
                 onBlur={() => setTip(null)}
-                aria-label={`${r.snap.message || '(no message)'} · ${isUncommitted ? t('graph.uncommitted') : isUnpushed ? t('graph.unpushed') : status.pushed.has(r.snap.id) ? t('graph.pushed') : t('graph.archivedLane', { branch: r.snap.branch })}`}
-                draggable={joinEnabled && !isUncommitted}
+                aria-label={graphEvent ? `${graphEvent.branch} · ${graphEvent.kind === 'birth' ? t(graphEvent.orphan ? 'graph.orphanBirth' : 'graph.branchBorn') : t('graph.branchMerged', { branch: graphEvent.sourceBranch ?? '' })}` : `${r.snap.message || '(no message)'} · ${isUncommitted ? t('graph.uncommitted') : isUnpushed ? t('graph.unpushed') : status.pushed.has(r.snap.id) ? t('graph.pushed') : t('graph.archivedLane', { branch: r.snap.branch })}`}
+                draggable={joinEnabled && !isUncommitted && !graphEvent}
                 onDragStart={(e) => {
                   e.dataTransfer.effectAllowed = 'move';
                   e.dataTransfer.setData('text/plain', r.snap.id);
@@ -810,7 +821,9 @@ export function CommitGraph({
                   {compactions.has(r.snap.id) && (
                     <circle cx={x} cy={mid} r={R + 2.5} fill="none" stroke={COMPACT} strokeWidth={1.2} />
                   )}
-                  {isUncommitted ? (
+                  {graphEvent ? (
+                    <rect className="branch-event-node" x={x-R} y={mid-R} width={R*2} height={R*2} transform={`rotate(45 ${x} ${mid})`} fill={graphEvent.kind === 'merge' ? laneColor(r.lane) : 'var(--bg)'} stroke={laneColor(r.lane)} strokeWidth={1.5} />
+                  ) : isUncommitted ? (
                     // Uncommitted = a hook capture not yet linked to a commit.
                     // A dotted node distinguishes durable capture state without
                     // claiming that the provider process is still alive.
@@ -871,15 +884,19 @@ export function CommitGraph({
 
       {tip && tipRow && (
         <div className="graph-tip" style={{ left: tip.left, top: tip.top, width: TIP_W }}>
-          <code>{tipRow.snap.id.replace(/^sha256:/, '').slice(0, 10)}</code> {tipRow.snap.message || '(no message)'}
+          {projection.events.has(tipRow.snap.id) ? <strong>{tipRow.snap.branch} · {projection.events.get(tipRow.snap.id)!.kind === 'birth'
+            ? t(projection.events.get(tipRow.snap.id)!.orphan ? 'graph.orphanBirth' : 'graph.branchBorn')
+            : t('graph.branchMerged', { branch: projection.events.get(tipRow.snap.id)!.sourceBranch ?? '' })}</strong>
+            : <><code>{tipRow.snap.id.replace(/^sha256:/, '').slice(0, 10)}</code> {tipRow.snap.message || '(no message)'}</>}
           <em>
             {tipRow.snap.author?.name || tipRow.snap.author?.email || '?'} · {tipRow.snap.branch} · {tipRow.snap.provider} ·{' '}
             {when(tipRow.snap.created_at)}
           </em>
+          {projection.events.has(tipRow.snap.id) && <em>{t('graph.eventOpensSnapshot')}</em>}
           {tipRow.snap.grafted && <em style={{ color: '#d29922' }}>{t('graph.appended')}</em>}
           {boundaries.has(tipRow.snap.id) && <em>{t('graph.newSession')}</em>}
           {compactions.has(tipRow.snap.id) && <em style={{ color: COMPACT }}>{t('graph.compaction')}</em>}
-          {(refs?.length ?? 0) > 0 &&
+          {!projection.events.has(tipRow.snap.id) && (refs?.length ?? 0) > 0 &&
             !mainlines.has(tipRow.snap.id) &&
             !unpushed.has(tipRow.snap.id) &&
             !uncommittedIds.has(tipRow.snap.id) && <em style={{ color: SEAM }}>{t('graph.sideChain')}</em>}

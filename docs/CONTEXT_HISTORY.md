@@ -337,3 +337,23 @@ work preserved. Duplicate first PR deliveries freeze one exact source receipt.
 An unknown historical edge or unsynchronized object without another copy remains
 unknown/unrecoverable. Diagnostics expose that limitation rather than inventing
 an ancestry edge, branch identity, Git witness, or replacement conversation.
+
+### Branch graph event projection
+
+The graph includes separate event nodes for recorded branch births and proven
+joins, even when a birth shares its source snapshot hash. A completed PR receipt
+must match a real branch ref movement. Without a receipt, a join requires both
+an existing append edge and an unambiguous source branch. A pending receipt,
+shared current hash, or ordinary fast-forward alone does not prove a merge.
+
+At a join, main continues along its previous main history; the source branch
+remains on a side lane between its recorded birth and join. These event nodes
+are a read projection: clicks open the archived conversation at that event;
+no synthetic snapshot or rewritten parent is stored. Rename and name reuse
+retain distinct birth identities. Orphan branches begin without conversation
+parents. An unborn orphan without a capture remains in the operations list.
+
+Existing archive and previous-progress controls still apply to conversation
+rows. Proven operation nodes are distinguishable from snapshots and do not
+inflate pushed/unpushed/uncommitted counts. Unknown legacy births/joins stay
+unknown; the UI does not fabricate them from conversation labels.

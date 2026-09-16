@@ -11,11 +11,8 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
-// Search — Team tool's "Where did they say that?" requirement. The server scans snapshot metadata (commit messages, authors) and
-// doc (CIR) conversation bodies. It performs a linear scan without an index, but it is sufficient for dogfood scale,
-// and each doc is read only once (to prevent rescan of shared docs by inheritance). Events are globally deduplicated —
-// to prevent inheritance prefixes from hitting child snapshots repeatedly, and each event is attributed to the
-// "first occurrence" (oldest) snapshot. Early termination (Truncated) on reaching the limit.
+// Search reads metadata and indexed readable events. Identical inherited events
+// are attributed to their oldest snapshot; archival tool bodies are not searched.
 
 const (
 	searchDefaultLimit = 50
@@ -25,8 +22,8 @@ const (
 
 func (s *Service) Search(ctx context.Context, in inbound.SearchInput) (inbound.SearchOutput, error) {
 	q := strings.ToLower(strings.TrimSpace(in.Query))
-	if len([]rune(q)) < 2 {
-		return inbound.SearchOutput{}, fmt.Errorf("%w: Search term must be at least 2 characters", domain.ErrValidation)
+	if len([]rune(q)) < 2 || len([]rune(q)) > 256 {
+		return inbound.SearchOutput{}, fmt.Errorf("%w: Search term must contain 2 to 256 characters", domain.ErrValidation)
 	}
 	limit := in.Limit
 	if limit <= 0 || limit > searchMaxLimit {
@@ -62,32 +59,36 @@ func (s *Service) Search(ctx context.Context, in inbound.SearchInput) (inbound.S
 	}
 
 	// 2) Conversation body (message/turn text blocks + reasoning summary) match.
+	candidates, err := s.MatchingDocHashes(ctx, in.RepoID, q)
+	if err != nil {
+		return out, err
+	}
 	docSeen := map[domain.ContentHash]bool{}
 	evSeen := map[string]bool{}
 	for _, sn := range snaps {
-		if sn.DocHash == "" || docSeen[sn.DocHash] {
+		if sn.DocHash == "" || docSeen[sn.DocHash] || (candidates != nil && !candidates[sn.DocHash]) {
 			continue
 		}
 		docSeen[sn.DocHash] = true
-		doc, derr := s.blobs.GetDoc(ctx, in.RepoID, sn.DocHash)
-		if derr != nil {
-			continue // Skip partial data — Search is best-effort.
-		}
-		for _, ev := range doc.CIR.Events {
-			text := searchableText(ev)
-			if text == "" || !strings.Contains(strings.ToLower(text), q) {
-				continue
+		after := -1
+		for {
+			hits, err := s.SearchDocEvents(ctx, in.RepoID, sn.DocHash, q, after, 200)
+			if err != nil {
+				return out, err
 			}
-			if key := eventKey(ev); evSeen[key] {
-				continue
-			} else {
+			for _, hit := range hits {
+				after = hit.Index
+				key := string(hit.Hash)
+				if evSeen[key] {
+					continue
+				}
 				evSeen[key] = true
+				if !add(inbound.SearchHit{SnapshotID: sn.ID, Branch: sn.Branch, Kind: "event", Role: hit.Role, Seq: hit.Seq, Snippet: searchSnippet(hit.Text, q), CreatedAt: sn.CreatedAt.UTC().Format(time.RFC3339)}) {
+					return out, nil
+				}
 			}
-			if !add(inbound.SearchHit{
-				SnapshotID: sn.ID, Branch: sn.Branch, Kind: "event", Role: string(ev.Role), Seq: ev.Seq,
-				Snippet: searchSnippet(text, q), CreatedAt: sn.CreatedAt.UTC().Format(time.RFC3339),
-			}) {
-				return out, nil
+			if len(hits) < 200 {
+				break
 			}
 		}
 	}

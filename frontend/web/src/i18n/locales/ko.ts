@@ -58,6 +58,11 @@ export const ko = {
     collapse: '접기',
   },
   context: {
+    retryRead: '다시 불러오기',
+    loadingEvents: '대화 불러오는 중…',
+    moreEvents: '이어서 불러오기',
+    storedMemory: '저장된 메모리 보기',
+
     branchCommits: '{branch} 커밋 {count}',
     searchPlaceholder: '검색 — 커밋 메시지·대화 내용',
     searchAria: '컨텍스트 검색',
@@ -579,6 +584,8 @@ export const ko = {
     owner: 'owner — 공동 소유',
   },
   graph: {
+    branchMerged: '{branch} 합류',
+    eventOpensSnapshot: '이 시점의 대화 기록 열기',
     noCommits: '커밋 없음',
     statusLabel: '컨텍스트 동기화 상태',
     historyUnavailable: '컨텍스트 기록을 불러오지 못했습니다. 보존된 경로 일부가 표시되지 않을 수 있습니다.',

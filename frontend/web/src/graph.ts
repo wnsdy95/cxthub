@@ -218,7 +218,8 @@ export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { r
     } else {
       lanes[lane] = parents[0];
       for (const p of parents.slice(1)) {
-        if (lanes.includes(p)) continue; // converge on the lane that is already waiting for this parent
+        const existing = lanes.indexOf(p);
+        if (existing !== -1) { branchesOut.push(existing); continue; } // draw the joining edge even when its lane already exists
         let k = lanes.findIndex((h) => h === null);
         if (k === -1) k = lanes.length;
         lanes[k] = p;

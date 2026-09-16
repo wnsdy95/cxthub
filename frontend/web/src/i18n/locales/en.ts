@@ -55,6 +55,11 @@ export const en: Messages = {
     collapse: 'Collapse',
   },
   context: {
+    retryRead: 'Retry',
+    loadingEvents: 'Loading conversation…',
+    moreEvents: 'Load more',
+    storedMemory: 'View saved memory',
+
     branchCommits: '{branch} · {count} commits',
     searchPlaceholder: 'Search — commit messages & chat',
     searchAria: 'Search context',
@@ -576,6 +581,8 @@ export const en: Messages = {
     owner: 'owner — co-owner',
   },
   graph: {
+    branchMerged: 'Merged {branch}',
+    eventOpensSnapshot: 'Open the conversation at this event',
     noCommits: 'No commits',
     statusLabel: 'Context sync status',
     historyUnavailable: 'Context history could not be loaded. Some retained paths may be unavailable.',

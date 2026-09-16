@@ -741,11 +741,12 @@ func (s *FSStore) DeleteDoc(_ context.Context, repoID, hash domain.ContentHash) 
 	if err := validateHashes(repoID, hash); err != nil {
 		return err
 	}
-	err := os.Remove(s.docPath(repoID, hash))
-	if os.IsNotExist(err) {
-		return nil
+	for _, path := range []string{s.docPath(repoID, hash), s.readIndexPath(repoID, hash), s.readIndexPath(repoID, hash) + ".search", s.readIndexPath(repoID, hash) + ".filter"} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
-	return err
+	return nil
 }
 
 // GetSettingsBundle retrieves the settings bundle. Returns ErrNotFound if not found.
@@ -2404,6 +2405,9 @@ func (s *FSStore) PutDoc(_ context.Context, repoID domain.ContentHash, doc domai
 		if err := writeAtomic(p, docCompress(data)); err != nil {
 			return false, err
 		}
+	}
+	if err := s.putReadIndex(repoID, doc); err != nil {
+		return false, err
 	}
 	return true, nil
 }

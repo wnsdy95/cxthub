@@ -267,6 +267,7 @@ func TestPGSmoke(t *testing.T) {
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repoID, WorkspaceID: ws.ID, GitRemoteURL: "https://github.com/acme/shared.git", DefaultBranch: "main"}); err != nil {
 		t.Fatalf("repo: %v", err)
 	}
+	t.Run("indexed event reads", func(t *testing.T) { checkReadIndexPG(t, st, repoID) })
 	// Pending target CAS and dismissed-field mutation must execute atomically in
 	// the production JSONB adapter, not only in the local FS implementation.
 	oldPending := domain.HashContent([]byte("pg pending old"))

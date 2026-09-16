@@ -3,7 +3,7 @@
 // and provides a branch dropdown + commit log (click to show context at that point in time).
 import { useEffect, useMemo, useState } from 'react';
 import type { Repo, Workspace, CIREvent, Snapshot, Pending } from '../types';
-import { useDoc, useMemory, useMe, useFork, useSnapDiff, useSearch, usePendings, useUnsyncs, useRepoView, useReflog } from '../hooks';
+import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, usePendings, useUnsyncs, useRepoView, useReflog } from '../hooks';
 import { navigate, wsPath } from '../route';
 import { holdCounts, reachableSnapshotIds } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
@@ -15,6 +15,8 @@ import { About, TeamSettings, SecretsPanel } from './About';
 import { Markdown } from './Markdown';
 import { MemoryPanel } from './MemoryPanel';
 import { saveBlob } from '../zip';
+import { api } from '../api';
+import { DocEvents } from './DocEvents';
 import { useT, Rich } from '../i18n';
 
 export function short(hash: string): string {
@@ -168,7 +170,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   // Diff — The commit clicked on "Compare" becomes the base, and shows the CIR event delta with the selected commit from the subsequent list (API POST /diff — doc hash pairs). Maintained until the base is cleared.
   const [compareBase, setCompareBase] = useState<Snapshot | null>(null);
 
-  // Search — Commit message/author + conversation body (server scan). Debounced by 300ms, query after, select snapshot on result click (branch agnostic — searchable across all snapshots).
+  // Search — Commit metadata and indexed conversation text. Debounced by 300ms, query after, select snapshot on result click (branch agnostic — searchable across all snapshots).
   const [q, setQ] = useState('');
   const [dq, setDq] = useState('');
   useEffect(() => {
@@ -184,28 +186,28 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
     compareBase && selected && compareBase.id !== selected.id ? compareBase.doc_hash : null,
     compareBase && selected && compareBase.id !== selected.id ? selected.doc_hash : null,
   );
-  const docQ = useDoc(repo.id, selected?.doc_hash ?? null);
-  const doc = docQ.data;
-  const memory = useMemory(repo.id, selected?.id ?? null, Boolean(selected?.memory_hash)).data;
-  // Continuation tail: If the selected commit is the tip preceding an
-  // uncommitted capture, render only the events after that commit.
+  const parent = useMemo(() => allSnapshots.find(s => s.id === selected?.parents?.[0]) ?? null, [allSnapshots, selected]);
+  const docQ = useDocPages(repo.id, selected?.doc_hash ?? null, parent?.doc_hash);
+  const page = docQ.data?.pages[0];
+  const doc = page ? { cir: { envelope: page.envelope, events: page.events } } : undefined;
+  const inheritedCount = page?.inherited ?? 0;
+  const [inheritedOpen, setInheritedOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); setDownloadError(''); }, [selected?.id]);
+  const memoryQ = useMemory(repo.id, selected?.id ?? null, memoryOpen && Boolean(selected?.memory_hash));
+  const memory = memoryQ.data;
   const tailPending = selected ? continuing.get(selected.id) ?? null : null;
-  const tailDoc = useDoc(repo.id, tailPending?.target ?? null).data;
-  const tailStart = useMemo(() => {
-    if (!doc || !tailDoc) return 0;
-    return commonEventPrefix(tailDoc.cir.events, doc.cir.events);
-  }, [doc, tailDoc]);
-
-  // Context continuation determination — The CIR of the continuation session includes the parent doc as a prefix, so it hides sections that match from the beginning of the parent doc and events (similar UX to collapsing email quotes). Only the first parent is considered (most snapshots have a single parent; merges are treated as new events safely).
-  const parent = useMemo(() => {
-    const pid = selected?.parents?.[0];
-    return pid ? allSnapshots.find((s) => s.id === pid) ?? null : null;
-  }, [selected, allSnapshots]);
-  const parentDoc = useDoc(repo.id, parent?.doc_hash ?? null).data;
-  const inheritedCount = useMemo(() => {
-    if (!doc || !parentDoc) return 0;
-    return commonEventPrefix(doc.cir.events, parentDoc.cir.events);
-  }, [doc, parentDoc]);
+  async function downloadRaw() {
+    if (!selected) return;
+    setDownloading(true); setDownloadError('');
+    try {
+      const full = await api.getDoc(repo.id, selected.doc_hash);
+      saveBlob(new Blob([JSON.stringify(full.cir, null, 2)], { type: 'application/json' }), `${short(selected.id)}-context.json`);
+    } catch (err) { setDownloadError((err as Error).message); }
+    finally { setDownloading(false); }
+  }
 
   if (branches.length === 0) {
     return <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>;
@@ -407,12 +409,8 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
                 <button
                   className="dl-btn"
                   title={t('context.rawTitle')}
-                  onClick={() =>
-                    saveBlob(
-                      new Blob([JSON.stringify(doc.cir, null, 2)], { type: 'application/json' }),
-                      `${short(selected.id)}-context.json`,
-                    )
-                  }
+                  disabled={downloading}
+                  onClick={() => void downloadRaw()}
                 >
                   ↓ raw
                 </button>
@@ -509,48 +507,27 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
               )}
             </div>
           )}
-          {memory && <MemoryPanel memory={memory} />}
-          {docQ.isLoading && <div className="skel" style={{ height: 60 }} />}
+          {downloadError && <p role="alert" className="err">{downloadError}</p>}
+          {selected.memory_hash && <details open={memoryOpen} onToggle={e => setMemoryOpen(e.currentTarget.open)}>
+            <summary>{t('context.storedMemory')}</summary>
+            {memoryOpen && memoryQ.isLoading && <div className="skel" style={{ height: 60 }} />}
+            {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
+            {memory && <MemoryPanel memory={memory} />}
+          </details>}
           {doc && inheritedCount > 0 && (
-            <details className="inherited-block">
-              <summary>
-                ↰ {t('context.inherited', { count: inheritedCount })}
-                {parent && (
-                  <>
-                    {' '}
-                    {t('context.inheritedFrom', { hash: short(parent.id) })}
-                  </>
-                )}
-              </summary>
-              <EventStream key={`inh-${selected.id}`} events={doc.cir.events.slice(0, inheritedCount)} mode={viewMode} />
+            <details className="inherited-block" open={inheritedOpen} onToggle={e => setInheritedOpen(e.currentTarget.open)}>
+              <summary>↰ {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}</summary>
+              {inheritedOpen && <DocEvents repoId={repo.id} hash={selected.doc_hash} start={0} end={inheritedCount} mode={viewMode} />}
             </details>
           )}
-          {doc && (
-            <EventStream
-              key={`main-${selected.id}`}
-              events={doc.cir.events.slice(inheritedCount)}
-              offset={inheritedCount}
-              mode={viewMode}
-            />
-          )}
-          {doc && doc.cir.events.length > 0 && doc.cir.events.length === inheritedCount && (
-            <p className="empty-box">{t('context.allInherited')}</p>
-          )}
-          {doc && doc.cir.events.length === 0 && <p className="empty-box">{t('context.noEvents')}</p>}
-          {/* Continuing pending conversation from the same session; the next commit will absorb it. */}
-          {doc && tailPending && tailDoc && tailDoc.cir.events.length > tailStart && (
-            <>
-              <div className="session-divider pending-divider">
-                {t('onhold.continuingConvo', { when: when(tailPending.updated_at) })}
-              </div>
-              <EventStream
-                key={`tail-${selected.id}-${tailPending.target}`}
-                events={tailDoc.cir.events.slice(tailStart)}
-                offset={tailStart}
-                mode={viewMode}
-              />
-            </>
-          )}
+          <DocEvents key={`main-${selected.id}`} repoId={repo.id} hash={selected.doc_hash} base={parent?.doc_hash} mode={viewMode} />
+          {page && page.total > 0 && page.total === inheritedCount && <p className="empty-box">{t('context.allInherited')}</p>}
+          {page?.total === 0 && <p className="empty-box">{t('context.noEvents')}</p>}
+          {doc && tailPending && <>
+            <div className="session-divider pending-divider">{t('onhold.continuingConvo', { when: when(tailPending.updated_at) })}</div>
+            <DocEvents repoId={repo.id} hash={tailPending.target} base={selected.doc_hash} mode={viewMode} />
+          </>}
+
         </div>
       )}
       </div>

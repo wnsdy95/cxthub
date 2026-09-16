@@ -1232,6 +1232,9 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 		string(repoID), string(doc.Hash)); err != nil {
 		return false, err
 	}
+	if err := putReadIndexPG(ctx, tx, doc); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
