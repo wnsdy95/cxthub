@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Repo, Workspace, CIREvent, Snapshot, Pending } from '../types';
 import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, usePendings, useUnsyncs, useRepoView, useReflog } from '../hooks';
-import { navigate, wsPath } from '../route';
+import { navigate, repoPath } from '../route';
 import { holdCounts, reachableSnapshotIds } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { mainlineOf, sessionBoundaries, compactionBoundaries } from '../graph';
@@ -347,7 +347,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
                     title={t('context.viewInOnHold')}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (ws) navigate(wsPath(ws, 'onhold'));
+                      if (ws) navigate(repoPath(ws, repo, 'onhold'));
                     }}
                   >
                     {t('context.holdBadge', { count: rowHold })}

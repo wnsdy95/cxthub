@@ -1,5 +1,6 @@
 // History API routing:
 //   /<namespace>/<workspace>                       workspace overview / legacy repo
+//   /<namespace>/<workspace>?tab=onhold            legacy repository on-hold view
 //   /<namespace>/<workspace>/<repository>          repository context
 //   /<namespace>/<workspace>/<repository>/onhold   repository on-hold view
 //   /<namespace>/<workspace>/-/<tab>                workspace management
@@ -45,7 +46,7 @@ export type Route =
       legacyTab?: WsTab;
     }
   | { kind: 'user'; username: string } // /<username> (GitHub style profile)
-  | { kind: 'wsid'; id: string } // Legacy /w/<id>
+  | { kind: 'wsid'; id: string; repository?: ''; tab?: 'onhold' } // Legacy /w/<id>
   | { kind: 'invite'; token: string } // /invite/<token>
   | { kind: 'device'; code: string } // /login/device?code=XXX-XXX (CLI pairing approval)
   | { kind: 'mcpConsent'; request: string } // /connect/mcp?request=... (remote MCP OAuth consent)
@@ -55,6 +56,7 @@ export type Route =
 // Workspace's canonical path. Fallback to id path if slug is missing (legacy fix).
 export function wsPath(w: WorkspaceRoute, tab?: WsTab): string {
   const base = w.owner_username && w.slug ? `/${w.owner_username}/${w.slug}` : `/w/${w.id}`;
+  if (tab === 'onhold') return `${base}?tab=onhold`;
   return tab ? `${base}/-/${tab}` : base;
 }
 
@@ -76,7 +78,7 @@ export function repoPath(
 ): string {
   const base = wsPath(w);
   const repository = repositorySlug(repo);
-  if (!repository) return tab ? `${base}/-/onhold` : base;
+  if (!repository) return wsPath(w, tab);
   const path = `${base}/${encodeURIComponent(repository)}`;
   return tab ? `${path}/${tab}` : path;
 }
@@ -111,10 +113,19 @@ export function parseRoute(
   if (seg[0] === 'connect' && seg[1] === 'mcp' && seg.length === 2) {
     return { kind: 'mcpConsent', request: new URLSearchParams(search).get('request') ?? '' };
   }
-  if (seg[0] === 'w' && seg.length === 2) return { kind: 'wsid', id: seg[1] };
+  // A query selects the legacy repository without consuming a repository slug.
+  // The empty slug pins that repository even if it is not first in the list.
+  const legacyView = new URLSearchParams(search).get('tab') === 'onhold'
+    ? { repository: '' as const, tab: 'onhold' as const }
+    : {};
+  if (seg[0] === 'w' && seg.length === 2) return { kind: 'wsid', id: seg[1], ...legacyView };
   if (RESERVED.has(seg[0])) return null;
   if (seg.length === 1) return { kind: 'user', username: seg[0] }; // /<username> profile
-  if (seg.length === 2) return { kind: 'ws', username: seg[0], slug: seg[1] };
+  if (seg.length === 2) return { kind: 'ws', username: seg[0], slug: seg[1], ...legacyView };
+  // Preserve bookmarks emitted by the old legacy repository link builder.
+  if (seg.length === 4 && seg[2] === '-' && seg[3] === 'onhold') {
+    return { kind: 'ws', username: seg[0], slug: seg[1], repository: '', tab: 'onhold' };
+  }
   if (seg.length === 4 && seg[2] === '-' && WORKSPACE_TABS.has(seg[3] as WsTab)) {
     return { kind: 'ws', username: seg[0], slug: seg[1], tab: seg[3] as WsTab };
   }
@@ -135,8 +146,9 @@ export function findByRoute(route: Route, list: Workspace[]): Workspace | undefi
 }
 
 export function findRepositoryByRoute(route: Route, list: Repo[]): Repo | undefined {
-  if (!route || route.kind !== 'ws' || !route.repository) return undefined;
-  return list.find((repo) => repositorySlug(repo) === route.repository);
+  if (!route || (route.kind !== 'ws' && route.kind !== 'wsid')) return undefined;
+  if (route.repository === undefined && route.tab) return undefined;
+  return list.find((repo) => repositorySlug(repo) === (route.repository ?? ''));
 }
 
 /**
@@ -144,9 +156,9 @@ export function findRepositoryByRoute(route: Route, list: Repo[]): Repo | undefi
  * match always wins, so a repository named "settings" remains addressable.
  */
 export function resolvedWorkspaceTab(route: Route, repos: Repo[]): WsTab | undefined {
-  if (!route || route.kind !== 'ws') return undefined;
+  if (!route || (route.kind !== 'ws' && route.kind !== 'wsid')) return undefined;
   if (route.tab) return route.tab;
-  if (route.legacyTab && !findRepositoryByRoute(route, repos)) return route.legacyTab;
+  if (route.kind === 'ws' && route.legacyTab && !findRepositoryByRoute(route, repos)) return route.legacyTab;
   return undefined;
 }
 
