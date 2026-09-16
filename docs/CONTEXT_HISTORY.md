@@ -384,3 +384,10 @@ shared branch even if the native alias or canonical branch was renamed. A
 missing attachment, mismatched worktree, or competing source identity does not
 authorize a guessed source. Current refs are never a substitute for this
 recorded association.
+
+Integrity verification is scoped to one operation. Each distinct owned
+snapshot/document pair is fully reconstructed and hash-checked once, then reused
+for duplicate fields and the promotion's completion receipt. Failed checks are
+never reused, metadata ownership is still read for each reference, and separate
+requests start a fresh verification set. This avoids repeated large-archive work without trusting a process-wide cache
+or increasing client timeouts.
