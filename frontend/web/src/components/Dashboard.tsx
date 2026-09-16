@@ -74,14 +74,14 @@ export function Dashboard() {
   // URL (/<username>/<slug>) → synchronize selection. The URL is the source of truth on entry, refresh, and back navigation.
   // slug → id interpretation requires a list, so the path is kept in state and reinterpreted with the list.
   // (navigate/replacePath synthesizes popstate events, so a single listener is sufficient).
-  const [path, setPath] = useState(location.pathname);
+  const [path, setPath] = useState(() => ({ pathname: location.pathname, search: location.search }));
   useEffect(() => {
-    const onChange = () => setPath(location.pathname);
+    const onChange = () => setPath({ pathname: location.pathname, search: location.search });
     window.addEventListener('popstate', onChange);
     return () => window.removeEventListener('popstate', onChange);
   }, []);
   useEffect(() => {
-    const found = findByRoute(parseRoute(path), workspaces);
+    const found = findByRoute(parseRoute(path.pathname, path.search), workspaces);
     if (found) selectWs(found.id);
   }, [path, workspaces, selectWs]);
 
@@ -89,7 +89,7 @@ export function Dashboard() {
   // Invite paths (/invite/…) are handled by App on accept→redirect, so don't interfere here.
   useEffect(() => {
     if (!workspacesQ.isSuccess || workspaces.length === 0) return;
-    const route = parseRoute(path);
+    const route = parseRoute(path.pathname, path.search);
     if (route?.kind === 'invite') return;
     if (!findByRoute(route, workspaces)) {
       selectWs(workspaces[0].id);
@@ -97,7 +97,7 @@ export function Dashboard() {
     }
   }, [workspacesQ.isSuccess, workspaces, path, selectWs]);
 
-  const route = parseRoute(path);
+  const route = parseRoute(path.pathname, path.search);
   const routedRepo = findRepositoryByRoute(route, repos);
   const activeRepo = routedRepo ?? repos.find((r) => r.id === activeRepoId) ?? repos[0] ?? null;
 

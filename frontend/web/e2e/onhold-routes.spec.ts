@@ -1,0 +1,69 @@
+import { expect, test } from '@playwright/test';
+import { capturePageErrors, installApiFixture } from './api-fixture';
+
+for (const selected of ['legacy', 'named']) {
+  test(`On Hold preserves ${selected} repository across tabs, badges and browser history`, async ({ page }) => {
+    const errors = capturePageErrors(page);
+    const head = `sha256:${'1'.repeat(64)}`;
+    const held = `sha256:${'2'.repeat(64)}`;
+    const base = '/alice/cxthub';
+    const contextPath = selected === 'legacy' ? base : `${base}/onhold`;
+    const holdPath = selected === 'legacy' ? `${base}?tab=onhold` : `${base}/onhold/onhold`;
+    const unexpected = await installApiFixture(page, ({ method, pathname }) => {
+      if (method !== 'GET') return undefined;
+      if (pathname === '/api/v1/me') return { body: { id: 'member', username: 'alice', locale: 'en' } };
+      if (pathname === '/api/v1/workspaces') return { body: [{ id: 'ws', name: 'cxthub', slug: 'cxthub', owner_username: 'alice', visibility: 'private' }] };
+      if (pathname === '/api/v1/workspaces/ws/members') return { body: [{ workspace_id: 'ws', user_id: 'member', role: 'member' }] };
+      // The named repository is deliberately first: a legacy deep link must
+      // select its own DAG, not whichever repository the API happens to return.
+      if (pathname === '/api/v1/repos') return { body: [
+        { id: 'named', default_branch: 'main', remote_url: `https://cxthub.com${base}/onhold` },
+        { id: 'legacy', default_branch: 'main', remote_url: `https://cxthub.com${base}` },
+      ] };
+      const match = pathname.match(/^\/api\/v1\/repos\/(legacy|named)\/(.+)$/);
+      if (!match) return undefined;
+      const [, repo, resource] = match;
+      if (resource === 'refs') return { body: [{ kind: 'branch', name: 'main', repo_id: repo, target: head }] };
+      if (resource === 'snapshots') return { body: [head, held].map((hash, index) => ({
+        id: hash, doc_hash: hash, repo_id: repo, parents: index ? [head] : [], branch: 'main',
+        message: `${repo} ${index ? 'held' : 'shared'} snapshot`, provider: 'codex',
+        created_at: `2026-09-16T0${index}:00:00Z`, author: { name: 'Alice', email: 'alice@example.test' },
+      })) };
+      if (resource === 'unsync') return { body: [{ repo_id: repo, branch: 'main', user: 'alice', target: held, updated_at: '2026-09-16T01:00:00Z' }] };
+      if (['pending', 'history', 'reflog'].includes(resource)) return { body: [] };
+      if (resource.startsWith('settings/') || resource === 'secrets') return { body: null };
+      if (resource.startsWith('docs/') && resource.endsWith('/events')) return { body: {
+        hash: resource.split('/')[1], envelope: { cir_version: '2', source_provider: 'codex' },
+        events: [{ kind: 'message', role: 'user', seq: 1, blocks: [{ type: 'text', text: `${repo} conversation` }] }],
+        total: 1, offset: 0, next: -1, inherited: 0,
+      } };
+      return undefined;
+    });
+
+    await page.goto(contextPath);
+    await expect(page.locator('.commit-row').first()).toContainText(`${selected} shared snapshot`);
+    await page.getByRole('button', { name: 'On Hold', exact: true }).click();
+    await expect(page).toHaveURL(new URL(holdPath, 'http://127.0.0.1:4174').href);
+    await expect(page.locator('.tab.on')).toHaveText('On Hold');
+    await expect(page.locator('.commit-row').first()).toContainText(`${selected} held snapshot`);
+    await page.reload();
+    await expect(page.locator('.commit-row').first()).toContainText(`${selected} held snapshot`);
+    await page.goBack();
+    await expect(page.locator('.commit-row').first()).toContainText(`${selected} shared snapshot`);
+    await page.goForward();
+    await expect(page.locator('.tab.on')).toHaveText('On Hold');
+    await page.getByRole('button', { name: 'Context', exact: true }).click();
+    await expect(page).toHaveURL(new URL(contextPath, 'http://127.0.0.1:4174').href);
+    await page.locator('.commit-row .pending.link').click();
+    await expect(page).toHaveURL(new URL(holdPath, 'http://127.0.0.1:4174').href);
+    await expect(page.locator('.commit-row').first()).toContainText(`${selected} held snapshot`);
+
+    if (selected === 'legacy') {
+      await page.goto(`${base}/-/onhold`);
+      await expect(page.locator('.tab.on')).toHaveText('On Hold');
+      await expect(page.locator('.commit-row').first()).toContainText('legacy held snapshot');
+    }
+    expect(errors).toEqual([]);
+    expect(unexpected).toEqual([]);
+  });
+}
