@@ -135,8 +135,8 @@ func (s *PostgresStore) ConfigureStoragePolicy(ctx context.Context, ns, operatio
 	return tx.Commit(ctx)
 }
 
-// Independent workers claim distinct account rows; retry after interruption is
-// safe because reconciliation records only differences from stored payloads.
+// Claim a bounded lease before recomputing. A canceled/failed reconciliation
+// retains its retry delay, so one expensive namespace cannot starve the rest.
 func (s *PostgresStore) ReconcileNextStorageUsage(ctx context.Context) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -147,15 +147,18 @@ func (s *PostgresStore) ReconcileNextStorageUsage(ctx context.Context) (bool, er
 		return false, err
 	}
 	var ns string
-	err = tx.QueryRow(ctx, `SELECT namespace_id FROM storage_accounts WHERE reconciled_at IS NULL OR reconciled_at<clock_timestamp()-interval '24 hours' ORDER BY reconciled_at NULLS FIRST,namespace_id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&ns)
+	err = tx.QueryRow(ctx, `SELECT namespace_id FROM storage_accounts WHERE reconcile_after<=clock_timestamp() ORDER BY reconcile_after,namespace_id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&ns)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, tx.Commit(ctx)
 	}
 	if err != nil {
 		return false, err
 	}
-	if _, err = tx.Exec(ctx, `SELECT cxt_storage_reconcile($1)`, ns); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE storage_accounts SET reconcile_after=clock_timestamp()+interval '5 minutes' WHERE namespace_id=$1`, ns); err != nil {
 		return false, err
 	}
-	return true, tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, s.ReconcileStorageUsage(ctx, ns)
 }

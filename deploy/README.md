@@ -164,7 +164,9 @@ partial first months begin at the first recorded measurement. Invoice settlement
 and payment-webhook processing are not enabled by this foundation.
 
 A bounded worker reconciles the oldest accounts daily against retained payloads;
-interruption is safe to retry. Owners may also request reconciliation, at most
+interruption is safe to retry. A claimed account keeps a five-minute retry delay
+when its recount fails, allowing other accounts to proceed. Owners may also
+request reconciliation, at most
 twice per minute, from Storage usage. Enterprise Admins can inspect aggregate
 usage without gaining private repository access; only Owners can request a
 recount. Personal usage appears in account settings. Filesystem development

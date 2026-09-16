@@ -9,6 +9,7 @@ CREATE TABLE storage_accounts (
  grace_bytes bigint NOT NULL DEFAULT 0 CHECK(grace_bytes>=0),
  grace_until timestamptz,
  reconciled_at timestamptz,
+ reconcile_after timestamptz NOT NULL DEFAULT '-infinity',
  current_bytes bigint NOT NULL DEFAULT 0 CHECK(current_bytes>=0),
  policy_revision bigint NOT NULL DEFAULT 0,
  changed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -162,7 +163,7 @@ BEGIN
  INSERT INTO storage_usage_ledger(namespace_id,delta_bytes,bytes_after,included_bytes,payg,plan,reason,occurred_at)
  VALUES(ns,actual-a.current_bytes,actual,a.included_bytes,a.payg,a.plan,'reconcile.balance',stamp);
  END IF;
- UPDATE storage_accounts SET reconciled_at=clock_timestamp() WHERE namespace_id=ns;
+ UPDATE storage_accounts SET reconciled_at=clock_timestamp(),reconcile_after=clock_timestamp()+interval '24 hours' WHERE namespace_id=ns;
 END $$;
 CREATE FUNCTION cxt_storage_ownership_change() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE ns text;
