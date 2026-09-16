@@ -106,7 +106,16 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 	var lastErr error
 	var resolved []inbound.PendingResolution
 	for _, p := range commitProviders(cwd) {
-		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: p, Message: message, Author: c.Identity})
+		target, err := commandCapture(ctx, cwd, string(p))
+		if err != nil {
+			if errors.Is(err, domain.ErrNoActiveSession) {
+				continue
+			}
+			lastErr = err
+			hookWarn("%s command session could not be selected: %v", p, err)
+			continue
+		}
+		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: p, SessionPath: target.SessionPath, Message: message, Author: c.Identity})
 		if err != nil {
 			// No active session is normal (unused agent commit) — skip silently.
 			if err == domain.ErrNoActiveSession {
@@ -732,15 +741,43 @@ type commandCaptureTarget struct {
 // another provider intentionally uses that provider's latest eligible file.
 func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTarget, error) {
 	wrappedProvider, managed := supervisedProvider(ctx, cwd)
+	appPath := ""
+	if !managed && (explicit == "" || explicit == string(domain.ProviderCodex)) {
+		// Codex app commands carry the native thread ID even when their working
+		// directory is a linked worktree. An exact registered session is required;
+		// never select an arbitrary recent conversation from another worktree.
+		id := strings.TrimSpace(os.Getenv("CODEX_THREAD_ID"))
+		if id == "" {
+			id = strings.TrimSpace(os.Getenv("CODEX_SESSION_ID"))
+		}
+		if providerfs.ValidSessionID(id) {
+			var err error
+			appPath, err = capture.LocateRegisteredAppSession(cwd, domain.ProviderCodex, id)
+			if errors.Is(err, domain.ErrNoActiveSession) {
+				// Before the first app hook, exact cwd lookup is still safe. An
+				// unknown ID must never fall back to another terminal's latest file.
+				appPath, err = capture.NewCodexCapture().LocateSession(ctx, cwd, id)
+			}
+			if err != nil {
+				return commandCaptureTarget{}, err
+			}
+		}
+	}
 	provider := domain.ProviderKind(explicit)
 	if provider == "" {
 		if managed {
 			provider = wrappedProvider
+		} else if appPath != "" {
+			provider = domain.ProviderCodex
 		} else {
 			provider = activeProviderForCwd(ctx, cwd)
 		}
 	}
 	target := commandCaptureTarget{Provider: provider}
+	if !managed && provider == domain.ProviderCodex && appPath != "" {
+		target.SessionPath = appPath
+		return target, nil
+	}
 	if !managed || provider != wrappedProvider {
 		return target, nil
 	}
@@ -762,6 +799,9 @@ func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTa
 		path, err = capture.NewCodexCapture().LocateSession(ctx, cwd, sessionID)
 	default:
 		return target, nil // the use case reports an explicit unsupported provider
+	}
+	if errors.Is(err, domain.ErrNoActiveSession) {
+		path, err = capture.LocateRegisteredAppSession(cwd, provider, sessionID)
 	}
 	if err != nil {
 		return commandCaptureTarget{}, fmt.Errorf("cannot locate the %s session %s owned by this cxt wrapper: %w", provider, sessionID, err)
@@ -1109,6 +1149,10 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		}
 
 	case "pre-push":
+		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
+			hookWarn("rewritten context associations remain pending: %v", err)
+			return nil
+		}
 		// git push → cxt push. If origin is not registered, only provides instructions (code push continues).
 		if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
 			hookWarn("Context not pushed — connect with cxt remote add origin <url>")
@@ -1217,9 +1261,13 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		if added > 0 {
 			if err := saveRewrites(cwd, rewrites); err != nil {
 				hookWarn("rewrite log failure: %v", err)
+				return nil
 			} else {
 				fmt.Printf("cxt: %s — recorded %d commit rewrites ([git <sha>] links preserved)\n", kind, added)
 			}
+		}
+		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
+			hookWarn("rewritten context associations remain pending: %v", err)
 		}
 		refSync(ctx, c, cwd)
 		// git pull --rebase (pull.rebase=true team default) goes here instead of post-merge —

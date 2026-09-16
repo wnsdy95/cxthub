@@ -226,7 +226,7 @@ test('landing renders every captured product view without placeholders', async (
   expect(unexpected).toEqual([]);
 });
 
-test('pricing publishes the storage-only contract and calculates GitHub-aligned overage', async ({ page }) => {
+test('pricing offers free access without a billable allowance or calculator', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, ({ method, pathname }) => {
     if (method === 'GET' && pathname === '/api/v1/me') {
@@ -237,21 +237,17 @@ test('pricing publishes the storage-only contract and calculates GitHub-aligned 
 
   await page.goto('/pricing');
   await expect(page).toHaveURL(/\/pricing$/);
-  await expect(page.locator('.pricing-hero h1')).toHaveText('Pay for context, not headcount.');
-  await expect(page.locator('.pricing-free')).toContainText('10 GiB');
-  await expect(page.locator('.pricing-overage')).toContainText('$0.07');
-  await expect(page.locator('.pricing-includes')).toContainText('No per-seat fee');
-  await expect(page.locator('.pricing-notice')).toContainText('No overage is charged');
-
-  const input = page.locator('#pricing-storage');
-  await input.fill('25');
-  await expect(page.locator('.pricing-calc-lines .total')).toContainText('$1.05');
-  await input.fill('10');
-  await expect(page.locator('.pricing-calc-lines .total')).toContainText('$0.00');
-  await expect(page.locator('.pricing-source-links a')).toHaveCount(2);
+  await expect(page.locator('.pricing-hero h1')).toHaveText('Build with context. Start free.');
+  await expect(page.locator('.pricing-free')).toContainText('$0');
+  await expect(page.locator('.pricing-includes')).toContainText('No storage overage charges');
+  await expect(page.locator('.pricing-notice')).toContainText('They do not create a bill.');
+  await expect(page.locator('#future-plans-title')).toHaveText('Designed around how you work');
+  await expect(page.locator('#pricing-storage')).toHaveCount(0);
+  await expect(page.locator('.pricing-overage')).toHaveCount(0);
+  await expect(page.getByText('$0.07', { exact: false })).toHaveCount(0);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator('.pricing-card')).toBeVisible();
+  await expect(page.locator('.pricing-card').first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);

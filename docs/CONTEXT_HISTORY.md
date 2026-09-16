@@ -429,3 +429,56 @@ subsequent pulls read the resulting server history. The compatibility synchronou
 promotion endpoint also persists first. Viewer access may inspect the latest 100
 jobs; member access may submit or retry. The UI shows waiting, retrying, processing,
 completed, and attention states with safe reason codes.
+
+## Git rewrite recovery
+
+`post-rewrite` preserves exact full Git object mappings locally. Context history
+now also publishes immutable `position` observations for those mappings, retaining
+the original branch identity, worktree, snapshot, and pinned memory. This path
+runs while rebase is finishing, independently of provider capture and the normal
+position selector's in-progress guard. `git push` and `cxt push` replay it before
+syncing history to the server, so PR resolution can find the rewritten head.
+
+Replay never replaces the current branch tip or fabricates a capture. Original
+events remain intact. Short hashes, cyclic mappings, unrelated worktrees, and
+reused branch identities are not accepted as equivalent source evidence. An
+already-recorded observation at the new revision takes precedence over a delayed
+replay. Historical journal recovery must run from the affected worktree; selecting
+an arbitrary recent session is not recovery.
+
+### PR #164 incident recovery (2026-09-16)
+
+The original explanation, “no source association exists,” was incomplete. The
+source worktree recorded context at Git `79609b5bbbe282b612daa60bde0ac5423a5495c8`,
+and the Git rewrite journal mapped it to PR head
+`d1e75ca6d69934f742038adccd080082ea12bc95`. That mapping was not published in
+server history. The selected context was an inherited snapshot; the new
+development conversation ran in the primary worktree and was not captured by
+the source worktree's cwd-scoped provider discovery.
+
+Recovery used the retained native session prefix through the recorded commit
+invocation at `2026-09-16T09:19:14.038Z`. The tool invocation names the exact source
+worktree and Git commit command; the old-to-new revision is independently present
+in the Git reflog and rewrite journal. No later conversation was imported.
+The resulting archived snapshot is
+`sha256:e7233fc24a1c07064043bc9b964ae4e58472af7459f26fd02dc316dc764f2208`.
+Its creation and association dates are the actual recovery time, and its message
+identifies the historical cutoff. The original selection remains its parent.
+
+Metadata backups, prefix checksum, recovery result, and the one-off recovery
+program are retained locally in `.cxt/recovery/pr164/`; native session data is not
+part of the source repository. Recovery adds immutable archive/history records
+without changing the live provider session, its pending pointer, or Git refs.
+
+The server accepted the recovered source and completed PR #164 on 2026-09-16.
+The original natural parent stayed intact; append retained the previous main
+through a graft edge. The live app conversation was never restarted or loaded
+from this historical prefix.
+
+For new commits, command capture now honors an exact registered Codex app thread
+ID across linked worktrees of the same Git repository. An owning cxt wrapper
+can likewise resolve its registered Claude/Codex session across those worktrees.
+A command with a native thread ID that cannot be resolved does not substitute
+a newer sibling session. Automatic background capture and branch-switch ownership remain scoped to one
+worktree. No cross-worktree recency fallback is introduced, and native ID/path
+checks plus the capture-exclusion ledger still apply.

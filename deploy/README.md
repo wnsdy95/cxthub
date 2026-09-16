@@ -126,12 +126,16 @@ usage. Deleting a branch or hiding a session does not remove the retained bytes.
 No billing process deletes context.
 
 Existing and new namespaces start in **metering** state with no activated price
-or quota. This does not grant a paid plan or charge a customer. Commercial
-Free/Team allowances, base prices, payment consent, and payment-provider setup
-must be settled before provisioning production entitlements. Enterprise policy
-validation fixes its included allowance at 50 GiB and enables excess metering;
-Workspace count is unrestricted, while payload limits apply across all its
-Workspaces. No customer REST or MCP route can assign or upgrade a plan.
+or quota. **Current operation is free:** keep this default and do not provision
+production commercial entitlements. Accounting does not create an invoice and
+free-period usage must not be billed later. Free/Team/Enterprise are draft plan
+names; prices and allowances will follow customer usage research. The earlier
+storage-price proposals are preserved only in [Pricing status](../docs/PRICING.md).
+
+The inactive entitlement foundation below is available for development tests
+and a future, separately approved paid rollout. Its Enterprise candidate includes
+50 GiB and excess metering. Workspace count is unrestricted; request and payload
+limits still apply. Customer REST and MCP routes cannot assign or upgrade plans.
 
 Operators use a separate tool with the deployment database credential. A policy
 file has `plan`, `included_bytes`, `pay_as_you_go`, `max_bytes`, `grace_bytes`, and
