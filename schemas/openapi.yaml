@@ -124,6 +124,39 @@ components:
         team:
           type: string
 
+    StoragePolicy:
+      type: object
+      properties:
+        plan: { type: string, enum: ['', free, team, enterprise] }
+        included_bytes: { type: integer, format: int64 }
+        pay_as_you_go: { type: boolean }
+        max_bytes: { type: [integer, 'null'], format: int64 }
+        grace_bytes: { type: integer, format: int64 }
+        grace_until: { type: [string, 'null'], format: date-time }
+    StorageUsage:
+      type: object
+      properties:
+        namespace_id: { type: string }
+        policy: { $ref: '#/components/schemas/StoragePolicy' }
+        policy_revision: { type: integer, format: int64 }
+        current_bytes: { type: integer, format: int64 }
+        excess_bytes: { type: integer, format: int64 }
+        state: { type: string, enum: [metering, active, warning, overage, grace, read_only] }
+        metered_since: { type: [string, 'null'], format: date-time }
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+        overage_byte_hours: { type: string, description: Exact decimal usage integral; not an invoice amount. }
+        entries:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            properties:
+              sequence: { type: integer, format: int64 }
+              delta_bytes: { type: integer, format: int64 }
+              bytes_after: { type: integer, format: int64 }
+              reason: { type: string }
+              occurred_at: { type: string, format: date-time }
     PRPromotionJob:
       type: object
       required: [id, repo_id, pr, state, attempts, version, created_at, updated_at, next_attempt, lease_until]
@@ -2730,6 +2763,76 @@ paths:
                   expires_at: { type: string, format: date-time }
         "404": { description: "Expired/Invalid pairing (including permission mismatch — Information not exposed)" }
 
+  /me/storage:
+    get:
+      summary: Read namespace retained storage and monthly excess usage
+      description: Personal owner or Enterprise Admin/Owner only. No private context is returned.
+      parameters:
+        - in: query
+          name: month
+          schema: { type: string, pattern: '^\d{4}-\d{2}$' }
+          description: UTC calendar month, default current month.
+      responses:
+        '200':
+          description: Current retained bytes, effective entitlement, and at most 50 usage changes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StorageUsage' }
+        '403': { description: Not the account owner or an Enterprise administrator. }
+        '503': { description: Storage reporting unavailable; PostgreSQL required. }
+  /me/storage/reconcile:
+    post:
+      summary: Reconcile namespace usage from retained payloads
+      description: Personal owner or Enterprise Owner only; requires application/json. Does not delete data. Rate limited to two requests per minute.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Reconciliation completed; corrections appended if needed. }
+        '403': { description: Owner authority required. }
+        '429': { description: Retry later. }
+        '503': { description: Storage reporting unavailable. }
+  /namespaces/{namespaceID}/storage:
+    parameters:
+      - in: path
+        name: namespaceID
+        required: true
+        schema: { type: string }
+    get:
+      summary: Read namespace retained storage and monthly excess usage
+      description: Personal owner or Enterprise Admin/Owner only. No private context is returned.
+      parameters:
+        - in: query
+          name: month
+          schema: { type: string, pattern: '^\d{4}-\d{2}$' }
+          description: UTC calendar month, default current month.
+      responses:
+        '200':
+          description: Current retained bytes, effective entitlement, and at most 50 usage changes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StorageUsage' }
+        '403': { description: Not the account owner or an Enterprise administrator. }
+        '503': { description: Storage reporting unavailable; PostgreSQL required. }
+  /namespaces/{namespaceID}/storage/reconcile:
+    parameters:
+      - in: path
+        name: namespaceID
+        required: true
+        schema: { type: string }
+    post:
+      summary: Reconcile namespace usage from retained payloads
+      description: Personal owner or Enterprise Owner only; requires application/json. Does not delete data. Rate limited to two requests per minute.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Reconciliation completed; corrections appended if needed. }
+        '403': { description: Owner authority required. }
+        '429': { description: Retry later. }
+        '503': { description: Storage reporting unavailable. }
   /me:
     get:
       operationId: me

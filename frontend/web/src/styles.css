@@ -1172,3 +1172,14 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .pr-promotions button { font-size: .75rem; padding: 3px 6px; }
 
 .ctx-main .dl-btns { flex-wrap: wrap; max-width: 100%; }
+.storage-usage { min-width: 0; padding: 14px 0; }
+.storage-totals { display: flex; flex-wrap: wrap; gap: 24px; }
+.storage-totals dt { color: var(--muted); font-size: .78rem; }
+.storage-totals dd { margin: 4px 0; font-size: 1.2rem; font-weight: 600; }
+.storage-state { color: var(--ok); }
+.storage-state.warning, .storage-state.grace, .storage-state.overage { color: #ad7300; }
+.storage-state.read_only { color: #c44141; }
+.storage-state.metering { color: var(--muted); }
+.storage-ledger { list-style: none; padding: 0; max-height: 320px; overflow-y: auto; }
+.storage-ledger li { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: .78rem; }
+.storage-ledger strong { margin-left: auto; }

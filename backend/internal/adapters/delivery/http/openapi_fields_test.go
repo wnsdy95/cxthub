@@ -18,6 +18,8 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		typ    reflect.Type
 	}{
 		{"Snapshot", reflect.TypeOf(domain.Snapshot{})},
+		{"StoragePolicy", reflect.TypeOf(domain.StoragePolicy{})},
+		{"StorageUsage", reflect.TypeOf(domain.StorageUsage{})},
 		{"Repo", reflect.TypeOf(domain.Repo{})},
 		{"User", reflect.TypeOf(domain.User{})},
 	}

@@ -1233,6 +1233,10 @@ func (s *Server) respond(w http.ResponseWriter, v any, err error) {
 
 func mapError(err error) (code string, status int) {
 	switch {
+	case errors.Is(err, domain.ErrStorageLimit):
+		return "storage_limit", http.StatusConflict
+	case errors.Is(err, domain.ErrUsageUnavailable):
+		return "usage_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrNotFound):
 		return "not_found", http.StatusNotFound
 	case errors.Is(err, domain.ErrIntegrity):

@@ -406,3 +406,17 @@ export interface PRPromotionJob {
  updated_at: string;
  next_attempt: string;
 }
+
+export interface StorageUsageReport {
+  namespace_id: string;
+  policy: { plan: '' | 'free' | 'team' | 'enterprise'; included_bytes: number; pay_as_you_go: boolean; max_bytes: number | null; grace_bytes: number; grace_until: string | null };
+  policy_revision: number;
+  current_bytes: number;
+  excess_bytes: number;
+  state: 'metering' | 'active' | 'warning' | 'overage' | 'grace' | 'read_only';
+  metered_since: string | null;
+  period_start: string;
+  period_end: string;
+  overage_byte_hours: string;
+  entries: { sequence: number; delta_bytes: number; bytes_after: number; reason: string; occurred_at: string }[];
+}

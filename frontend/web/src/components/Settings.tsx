@@ -1,3 +1,4 @@
+import { PersonalStorageUsage } from './StorageUsage';
 // Settings — Account settings (top bar ⚙) and workspace settings (title bar ⚙, owner-only).
 //
 // Account: nickname (light alias, free to change) / username (part of URL — heavy change, red warning).
@@ -183,6 +184,7 @@ export function AccountSettings({ user, trigger = 'gear' }: { user: User; trigge
                 <Rich>{t('settings.loadModeHint')}</Rich>
               </p>
 
+              <PersonalStorageUsage />
               <CliTokenSection />
               <WebSessionSection />
 

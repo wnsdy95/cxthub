@@ -1,3 +1,4 @@
+import { StorageUsage } from './StorageUsage';
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
@@ -33,7 +34,7 @@ import { avatarColor } from './Avatar';
 import { LockIcon } from './Breadcrumb';
 import { resizeToDataURL } from './Settings';
 
-type EnterpriseTab = 'workspaces' | 'people' | 'policies' | 'audit' | 'settings';
+type EnterpriseTab = 'workspaces' | 'people' | 'policies' | 'audit' | 'settings' | 'storage';
 
 function roleRank(role: EnterpriseRole | undefined): number {
   return role === 'owner' ? 3 : role === 'admin' ? 2 : role === 'member' ? 1 : 0;
@@ -60,7 +61,7 @@ export function EnterpriseProfile({ data }: { data: PublicEnterprise }) {
   useEffect(() => {
     if (!joined && tab !== 'workspaces') setTab('workspaces');
     if (tab === 'audit' && !canAdmin) setTab('workspaces');
-    if (tab === 'settings' && !canAdmin) setTab('workspaces');
+    if ((tab === 'settings' || tab === 'storage') && !canAdmin) setTab('workspaces');
   }, [joined, canAdmin, tab]);
 
   return (
@@ -111,6 +112,7 @@ export function EnterpriseProfile({ data }: { data: PublicEnterprise }) {
                 {t('enterprise.audit')}
               </EnterpriseTabButton>
             )}
+            {canAdmin && <EnterpriseTabButton active={tab === 'storage'} onClick={() => setTab('storage')}>{t('storage.title')}</EnterpriseTabButton>}
             {canAdmin && (
               <EnterpriseTabButton active={tab === 'settings'} onClick={() => setTab('settings')}>
                 {t('enterprise.settings')}
@@ -130,6 +132,7 @@ export function EnterpriseProfile({ data }: { data: PublicEnterprise }) {
           )}
           {tab === 'policies' && joined && <EnterprisePolicies enterpriseId={joined.id} canAdmin={canAdmin} />}
           {tab === 'audit' && joined && canAdmin && <EnterpriseAudit enterpriseId={joined.id} />}
+          {tab === 'storage' && joined && canAdmin && <StorageUsage namespace={joined.namespace_id} canReconcile={role === 'owner'} />}
           {tab === 'settings' && joined && canAdmin && (
             <EnterpriseSettings enterprise={enterprise as Enterprise} />
           )}
