@@ -395,3 +395,14 @@ export interface HistoryEvent {
   worktree_id?: string;
   created_at: string;
 }
+
+export interface PRPromotionJob {
+ id: string;
+ repo_id: string;
+ pr: { number: number; base_branch: string; head_branch: string; head_sha: string; merge_sha: string };
+ state: 'waiting' | 'retrying' | 'running' | 'completed' | 'attention';
+ attempts: number;
+ reason?: string;
+ updated_at: string;
+ next_attempt: string;
+}

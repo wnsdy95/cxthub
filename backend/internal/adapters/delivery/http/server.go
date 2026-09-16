@@ -164,6 +164,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/reflog", s.guard(domain.RoleViewer, s.reflog))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/context-protocol", s.guard(domain.RoleMaintainer, s.enableContextProtocol))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/history", s.guard(domain.RoleViewer, s.listHistory))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promotions", s.guard(domain.RoleMember, s.submitPRPromotion))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/prs/promotions", s.guard(domain.RoleViewer, s.listPRPromotions))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promotions/{jobID}/retry", s.guard(domain.RoleMember, s.retryPRPromotion))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promote", s.guard(domain.RoleMember, s.promoteRepositoryPR))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/history", s.guard(domain.RoleMember, s.recordHistory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/manifest", s.guard(domain.RoleViewer, s.getManifest))
@@ -981,8 +984,14 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	if gitURL == "" {
 		gitURL = payload.Repository.HTMLURL
 	}
-	n, perr := s.b.PromoteMergedPR(r.Context(), gitURL, domain.PullRequestMerge{Number: payload.Number, BaseBranch: payload.PullRequest.Base.Ref, HeadBranch: payload.PullRequest.Head.Ref, HeadSHA: payload.PullRequest.Head.SHA, MergeSHA: payload.PullRequest.MergeSHA})
-	s.respond(w, map[string]interface{}{"status": "ok", "promoted": n}, perr)
+	promote := s.b.PromoteMergedPR
+	if durable, ok := s.b.(interface {
+		SubmitMergedPR(context.Context, string, domain.PullRequestMerge) (int, error)
+	}); ok {
+		promote = durable.SubmitMergedPR
+	}
+	n, perr := promote(r.Context(), gitURL, domain.PullRequestMerge{Number: payload.Number, BaseBranch: payload.PullRequest.Base.Ref, HeadBranch: payload.PullRequest.Head.Ref, HeadSHA: payload.PullRequest.Head.SHA, MergeSHA: payload.PullRequest.MergeSHA})
+	s.respond(w, map[string]interface{}{"status": "accepted", "queued": n}, perr)
 }
 
 func (s *Server) putRef(w http.ResponseWriter, r *http.Request) {

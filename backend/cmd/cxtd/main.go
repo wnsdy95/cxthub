@@ -195,6 +195,7 @@ func serve(ctx context.Context, args []string) error {
 		backend = "postgres"
 	}
 	fmt.Fprintf(os.Stderr, "cxtd: listening on %s (store=%s, auth=%s, data=%s)\n", addr, backend, authMode, dataDir)
+	go svc.RunPRPromotionWorker(ctx)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}

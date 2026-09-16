@@ -1150,3 +1150,10 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 
 .repo-history-protection { flex-basis: 100%; padding-top: 12px; border-top: 1px solid var(--border); }
 .repo-history-protection p { margin: 6px 0; max-width: 65ch; }
+
+.pr-promotions { margin-bottom: 16px; font-size: .78rem; }
+.pr-promotions summary { cursor: pointer; }
+.pr-promotions ul { list-style: none; padding: 0; }
+.pr-promotions li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.pr-promotions li > span { display: block; color: var(--muted); }
+.pr-promotions button { font-size: .75rem; padding: 3px 6px; }

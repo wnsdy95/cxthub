@@ -455,6 +455,9 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 			_ = s.remote.DeleteUnsyncRemote(ctx, repoID, r.Name)
 		}
 	}
+	if err := s.flushPRDeliveries(ctx, repoID); err != nil {
+		return inbound.SyncOutput{}, err
+	}
 	return inbound.SyncOutput{Pushed: len(pushSnaps), NewRefs: refs}, nil
 }
 
@@ -1311,6 +1314,9 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 		return inbound.SyncOutput{}, err
 	}
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
+		return inbound.SyncOutput{}, err
+	}
+	if err := s.flushPRDeliveries(ctx, repoID); err != nil {
 		return inbound.SyncOutput{}, err
 	}
 	// Delta pull advertises the verified local metadata and document inventory.

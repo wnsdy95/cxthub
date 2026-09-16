@@ -1324,7 +1324,7 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	// commits back to their source branches. Then retain the generic [git sha]
 	// path for non-GitHub and direct merge histories.
 	shas := incomingCommitSHAs(cwd)
-	prReflected := appendMergedPRContexts(ctx, c.PRMerges, c.Sync, cwd, branch, gitOut(cwd, "config", "--get", "remote.origin.url"), shas)
+	prReflected := replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, gitOut(cwd, "config", "--get", "remote.origin.url"), shas)
 	mergeReflected := appendMergedContexts(ctx, c, cwd, branch, shas)
 
 	// Resolve the final remote only after local/hosted promotion. AppendBranch
@@ -1385,9 +1385,7 @@ func incomingCommitSHAs(cwd string) []string {
 		return nil
 	}
 	shas := strings.Fields(raw) // oldest first
-	if len(shas) > 200 {
-		shas = shas[len(shas)-200:] // large merge defense — last 200 only
-	}
+	// Network work is bounded by durable discovery batches; do not discard old commits.
 	return shas
 }
 
@@ -1406,15 +1404,27 @@ func appendMergedPRContexts(
 	cwd, branch, gitRemoteURL string,
 	shas []string,
 ) bool {
+	reflected, _ := processMergedPRContexts(ctx, resolver, syncer, cwd, branch, gitRemoteURL, shas)
+	return reflected
+}
+
+func processMergedPRContexts(
+	ctx context.Context,
+	resolver outbound.PullRequestMergeResolver,
+	syncer mergedPRContextSync,
+	cwd, branch, gitRemoteURL string,
+	shas []string,
+) (bool, bool) {
 	if resolver == nil || syncer == nil || branch == "" || branch == "HEAD" || gitRemoteURL == "" || len(shas) == 0 {
-		return false
+		return false, false
 	}
 	pulls, err := resolver.ResolveMergedPullRequests(ctx, gitRemoteURL, branch, shas)
 	if err != nil {
 		hookWarn("GitHub PR context lookup failed (git continues): %v", err)
-		return false
+		return false, false
 	}
 
+	complete := true
 	appended := 0
 	reflected := false
 	resolveSource := syncer.ResolveRemoteBranch
@@ -1431,6 +1441,7 @@ func appendMergedPRContexts(
 			PromotePullRequest(context.Context, inbound.SyncInput, outbound.MergedPullRequest) error
 		}); ok {
 			if err := exact.PromotePullRequest(ctx, inbound.SyncInput{Cwd: cwd}, pull); err != nil {
+				complete = false
 				hookWarn("PR #%d exact context promotion remains pending: %v", pull.Number, err)
 			} else {
 				appended++
@@ -1440,6 +1451,7 @@ func appendMergedPRContexts(
 		}
 		ref, rerr := resolveSource(ctx, inbound.SyncInput{Cwd: cwd}, pull.HeadBranch)
 		if rerr != nil {
+			complete = false
 			if !errors.Is(rerr, domain.ErrNotFound) {
 				hookWarn("PR #%d context branch %q lookup failed: %v", pull.Number, pull.HeadBranch, rerr)
 			}
@@ -1453,6 +1465,7 @@ func appendMergedPRContexts(
 				reflected = true
 				continue // hosted webhook or another client already promoted it
 			}
+			complete = false
 			hookWarn("PR #%d context promotion failed (%s → %s): %v", pull.Number, pull.HeadBranch, branch, aerr)
 			continue
 		}
@@ -1462,7 +1475,7 @@ func appendMergedPRContexts(
 	if appended > 0 {
 		fmt.Printf("cxt: promoted %d merged PR context(s) to %q timeline (appended)\n", appended, branch)
 	}
-	return reflected
+	return reflected, complete
 }
 
 // appendMergedContexts appends git merge/pull commits and chained context snapshots to the same-named cxt branch.

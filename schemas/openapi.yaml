@@ -124,6 +124,24 @@ components:
         team:
           type: string
 
+    PRPromotionJob:
+      type: object
+      required: [id, repo_id, pr, state, attempts, version, created_at, updated_at, next_attempt, lease_until]
+      properties:
+        id: { type: string }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        base_branch_id: { type: string }
+        git_origin: { type: string }
+        pr: { $ref: '#/components/schemas/PullRequestMerge' }
+        state: { type: string, enum: [waiting, retrying, running, completed, attention] }
+        attempts: { type: integer }
+        version: { type: integer }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        next_attempt: { type: string, format: date-time }
+        lease_until: { type: string, format: date-time }
+
     PullRequestMerge:
       type: object
       required: [number, base_branch, head_branch, head_sha, merge_sha]
@@ -146,6 +164,8 @@ components:
         local_branch: {type: string, description: Native branch name in the observing replica.}
         previous_branch: {type: string, description: Previous name for a verified rename.}
         binding_parent: {type: string, description: Prior identity operation required by this transition.}
+        base_branch_id: { type: string }
+        git_origin: { type: string }
         pr: { $ref: '#/components/schemas/PullRequestMerge' }
         recovery_evidence: { type: string, enum: [user-confirmed-unborn-head] }
         source_branch_id: { type: string, maxLength: 128 }
@@ -985,6 +1005,49 @@ paths:
                   context_protocol: { type: integer, const: 1 }
         '409': { description: Unresolved branch identity or transaction }
         '403': { description: Maintainer role required }
+
+  /repos/{repoID}/prs/promotions:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: listPRPromotions
+      summary: List the latest 100 durable PR jobs (viewer access)
+      responses:
+        '200':
+          description: Latest delivery states, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PRPromotionJob' }
+    post:
+      operationId: submitPRPromotion
+      summary: Durably accept a PR for processing (member access)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PullRequestMerge' }
+      responses:
+        '200':
+          description: Request persisted; completion is reported in job state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PRPromotionJob' }
+        '409': { description: PR identity conflicts with a previously accepted request }
+  /repos/{repoID}/prs/promotions/{jobID}/retry:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - in: path
+        name: jobID
+        required: true
+        schema: { type: string }
+    post:
+      operationId: retryPRPromotion
+      summary: Requeue a stopped PR job (member access; application/json required)
+      responses:
+        '200': { description: Queued or already completed }
+        '409': { description: Another worker holds an active lease }
 
   /repos/{repoID}/prs/promote:
     parameters:
@@ -2148,7 +2211,7 @@ paths:
       operationId: githubWebhook
       summary: Receive GitHub webhook (merged PR → context promotion) with HMAC verification
       description: |
-        On a closed and merged `pull_request`, append the head branch's cxt tip to the base
+        On a closed and merged `pull_request`, durably queue the exact head revision for the base
         branch with a lossless graft. This provides server-side coverage when squash or
         rebase merges remove the local [git sha] mapping. Repositories are matched by
         normalized Git origin (GitRemoteURL). Instead of user authentication, the endpoint
@@ -2156,7 +2219,7 @@ paths:
         returns 404 when the secret is unset and the receiver is disabled.
       tags: [actions]
       responses:
-        "200": { description: "ok with promotion count, or ignored" }
+        "200": { description: "accepted with queued repository count (including duplicate deliveries), or ignored" }
         "401": { description: "signature mismatch" }
         "404": { description: "receiver disabled because the secret is unset" }
   /repos/{repoID}/about:

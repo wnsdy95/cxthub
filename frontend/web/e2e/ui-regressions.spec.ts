@@ -1460,3 +1460,16 @@ test('same-snapshot PR completion closes the branch without a ref movement', asy
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+test('PR delivery distinguishes waiting and completed jobs without viewer retry authority', async ({ page }) => {
+  const snapshot = { id: pushedHead, repo_id: repoId, doc_hash: pushedHead, branch: 'main', parents: [], provider: 'codex', created_at: '2026-09-16T01:00:00Z' };
+  const base = publicWorkspaceApi([snapshot], [{ kind: 'branch', name: 'main', target: pushedHead }]);
+  const state = { id: 'job-1', repo_id: repoId, pr: { number: 42, base_branch: 'main', head_branch: 'feature/late' }, state: 'waiting', reason: 'source_context_pending', attempts: 1 };
+  const { pageErrors, unexpected } = await openGraph(page, request => request.pathname.endsWith('/prs/promotions') ? { body: [state] } : base(request));
+  await expect(page.locator('.pr-promotions > summary')).toContainText('1 pending');
+  await page.locator('.pr-promotions > summary').click();
+  await expect(page.locator('.pr-promotions')).toContainText('Waiting for the exact source context');
+  await expect(page.locator('.pr-promotions button')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

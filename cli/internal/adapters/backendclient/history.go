@@ -71,3 +71,23 @@ func (c *BackendClient) ContextProtocol(ctx context.Context, repoID string) (int
 	}
 	return repo.ContextProtocol, nil
 }
+
+func (c *BackendClient) SubmitPRPromotion(ctx context.Context, repo string, pr domain.PullRequestMerge) error {
+	if err := domain.ValidateContentHash(domain.ContentHash(repo)); err != nil {
+		return err
+	}
+	if err := pr.Validate(); err != nil {
+		return err
+	}
+	var accepted struct {
+		Repo domain.ContentHash      `json:"repo_id"`
+		PR   domain.PullRequestMerge `json:"pr"`
+	}
+	if err := c.do(ctx, http.MethodPost, c.reposPath(repo)+"/prs/promotions", pr, &accepted); err != nil {
+		return err
+	}
+	if string(accepted.Repo) != repo || accepted.PR != pr {
+		return domain.ErrHashMismatch
+	}
+	return nil
+}

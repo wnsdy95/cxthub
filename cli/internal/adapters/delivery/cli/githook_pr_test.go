@@ -191,7 +191,7 @@ func TestAppendMergedPRContextsPromotionFailureIsNotReflected(t *testing.T) {
 	}
 }
 
-func TestIncomingCommitSHAsOldestFirstAndBounded(t *testing.T) {
+func TestIncomingCommitSHAsRetainsAllForDurableBatches(t *testing.T) {
 	t.Parallel()
 
 	repo := t.TempDir()
@@ -216,13 +216,12 @@ func TestIncomingCommitSHAsOldestFirstAndBounded(t *testing.T) {
 	runGitForTest(t, repo, "update-ref", "ORIG_HEAD", all[0])
 
 	got := incomingCommitSHAs(repo)
-	if len(got) != 200 {
-		t.Fatalf("incoming SHAs = %d, want bounded 200", len(got))
+	if len(got) != 201 {
+		t.Fatalf("incoming SHAs = %d, want all 201", len(got))
 	}
-	// ORIG_HEAD is excluded, leaving 201 commits; the oldest one is dropped by
-	// the 200-entry defense.
-	if got[0] != all[2] || got[len(got)-1] != all[len(all)-1] {
-		t.Fatalf("bounded order = %s…%s, want %s…%s", got[0], got[len(got)-1], all[2], all[len(all)-1])
+	// ORIG_HEAD is excluded; durable batches retain all 201 commits.
+	if got[0] != all[1] || got[len(got)-1] != all[len(all)-1] {
+		t.Fatalf("bounded order = %s…%s, want %s…%s", got[0], got[len(got)-1], all[1], all[len(all)-1])
 	}
 }
 
@@ -231,5 +230,22 @@ func runGitForTest(t *testing.T, cwd string, args ...string) {
 	cmd := exec.Command("git", append([]string{"-C", filepath.Clean(cwd)}, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func TestPRDiscoveryRetainsFailedRangeAcrossLaterPull(t *testing.T) {
+	root := t.TempDir()
+	resolver := &fakePRMergeResolver{err: errors.New("offline")}
+	syncer := &fakeMergedPRSync{}
+	replayPRDiscovery(context.Background(), resolver, syncer, root, "main", "https://github.com/acme/repo", []string{"old-merge"})
+	resolver.err = nil
+	replayPRDiscovery(context.Background(), resolver, syncer, root, "main", "https://github.com/acme/repo", nil)
+	if len(resolver.shas) != 1 || resolver.shas[0] != "old-merge" {
+		t.Fatalf("lost discovery range: %v", resolver.shas)
+	}
+	resolver.shas = nil
+	replayPRDiscovery(context.Background(), resolver, syncer, root, "main", "https://github.com/acme/repo", nil)
+	if len(resolver.shas) != 0 {
+		t.Fatalf("discovery not acknowledged: %v", resolver.shas)
 	}
 }

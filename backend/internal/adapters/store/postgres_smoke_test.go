@@ -73,6 +73,7 @@ func TestPGSmoke(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
+	defer t.Run("durable PR jobs", func(t *testing.T) { checkPRJobs(t, st) })
 	defer t.Run("context protocol", func(t *testing.T) { checkContextProtocol(t, st) })
 
 	// Migration idempotency: 1st application (N>0) → 2nd application (0).
