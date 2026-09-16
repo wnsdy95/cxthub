@@ -10,62 +10,135 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
-// Replay the exact post-rewrite journal as ordinary code/context observations.
-// This must run even while Git still has rebase state: selectCodePosition skips
-// that interval. Original events, snapshots, and branch refs remain immutable.
-// Push repeats this step so a failed local write does not strand PR delivery.
-func replayRewriteHistory(ctx context.Context, c *Container, cwd string) error {
-	if c.History == nil {
+type rewriteBatch struct {
+	RepoID     string            `json:"repo_id"`
+	BranchID   string            `json:"branch_id"`
+	WorktreeID string            `json:"worktree_id"`
+	Rewrites   map[string]string `json:"rewrites"`
+}
+
+func rewriteJournalDir(worktree string) string {
+	return filepath.Join(".cxt", "worktrees", worktree, "rewrite-journal")
+}
+
+// Unlike the legacy repository-wide label map, each immutable batch identifies
+// the exact worktree and logical branch that observed this Git rewrite.
+func recordRewriteHistory(ctx context.Context, c *Container, cwd string, rewrites map[string]string) error {
+	if c.History == nil || len(rewrites) == 0 {
 		return nil
 	}
-	raw, err := providerfs.ReadRepoFile(cxtRepoRoot(ctx, cwd), filepath.Join(".cxt", "rewrites.json"))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var rewrites map[string]string
-	if err := json.Unmarshal(raw, &rewrites); err != nil {
-		return fmt.Errorf("invalid rewrite journal: %w", err)
-	}
-	repo, err := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
-	if err != nil {
-		return err
-	}
-	events, err := c.History.ListHistory(ctx, repo.ID)
-	if err != nil {
-		return err
-	}
-	position, err := c.History.CurrentPosition(ctx)
+	p, err := c.History.CurrentPosition(ctx)
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if position.RepoID != repo.ID || position.WorktreeID == "" || position.BranchID == "" {
+	if p.WorktreeID == "" || p.BranchID == "" {
 		return nil
 	}
-	// Only exact object identities from Git's journal are evidence. A global
-	// rewrite map is not a reason to substitute today's branch tip or reuse a
-	// released name: each event retains its original logical branch identity.
-	observations, err := rewrittenHistory(events, rewrites, position.BranchID, position.WorktreeID, time.Now().UTC())
+	batch := rewriteBatch{p.RepoID, p.BranchID, p.WorktreeID, rewrites}
+	for old, next := range rewrites {
+		if !validNonZeroGitOID(old) || !validNonZeroGitOID(next) || len(old) != len(next) || old == next {
+			return fmt.Errorf("invalid full Git rewrite mapping")
+		}
+	}
+	raw, err := json.Marshal(batch)
 	if err != nil {
 		return err
 	}
-	for _, e := range observations {
-		if _, err := c.History.ValidateHistorySource(ctx, e); err != nil {
+	name := fmt.Sprintf("%x.json", sha256.Sum256(raw))
+	rel := filepath.Join(rewriteJournalDir(p.WorktreeID), name)
+	root := cxtRepoRoot(ctx, cwd)
+	if prior, err := providerfs.ReadRepoFile(root, rel); err == nil {
+		if string(prior) != string(raw) {
+			return domain.ErrHashMismatch
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return providerfs.WriteRepoFileAtomic(root, rel, raw, 0600)
+}
+
+// Replay must run even while rebase state exists. It only records observations;
+// original snapshots, branch refs, and the worktree's selection stay untouched.
+// Push retries a batch after an interrupted history write.
+func replayRewriteHistory(ctx context.Context, c *Container, cwd string) error {
+	if c.History == nil {
+		return nil
+	}
+	p, err := c.History.CurrentPosition(ctx)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if p.WorktreeID == "" {
+		return nil
+	}
+	root := cxtRepoRoot(ctx, cwd)
+	rel := rewriteJournalDir(p.WorktreeID)
+	dir, err := providerfs.EnsureRepoDir(root, rel, 0700)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var batches []rewriteBatch
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := providerfs.ReadRepoFile(root, filepath.Join(rel, entry.Name()))
+		if err != nil {
 			return err
 		}
-		if err := c.History.RecordHistory(ctx, e); err != nil {
-			return err
+		var batch rewriteBatch
+		if err := json.Unmarshal(raw, &batch); err != nil {
+			return fmt.Errorf("invalid rewrite journal: %w", err)
+		}
+		if batch.RepoID != p.RepoID || batch.WorktreeID != p.WorktreeID || batch.BranchID == "" || entry.Name() != fmt.Sprintf("%x.json", sha256.Sum256(raw)) {
+			return domain.ErrHashMismatch
+		}
+		batches = append(batches, batch)
+	}
+	if len(batches) == 0 {
+		return nil
+	}
+	events, err := c.History.ListHistory(ctx, p.RepoID)
+	if err != nil {
+		return err
+	}
+	// Batch filenames are hashes, not clocks. Bounded passes resolve a chain
+	// even when B→C sorts before A→B; replay identity prevents duplicate writes.
+	for pass := 0; pass < len(batches); pass++ {
+		changed := false
+		for _, batch := range batches {
+			observations, err := rewrittenHistory(events, batch.Rewrites, batch.BranchID, batch.WorktreeID, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			for _, e := range observations {
+				if _, err := c.History.ValidateHistorySource(ctx, e); err != nil {
+					return err
+				}
+				if err := c.History.RecordHistory(ctx, e); err != nil {
+					return err
+				}
+				events = append(events, e)
+				changed = true
+			}
+		}
+		if !changed {
+			break
 		}
 	}
 	return nil

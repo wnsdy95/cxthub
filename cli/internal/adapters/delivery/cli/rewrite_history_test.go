@@ -72,7 +72,7 @@ func TestRewriteReplayDuringRebaseWithoutProvider(t *testing.T) {
 	before, _ := c.History.CurrentPosition(ctx)
 	runLifecycleGit(t, cwd, "commit", "--allow-empty", "-qm", "rewritten")
 	newOID := gitOut(cwd, "rev-parse", "HEAD")
-	if err := saveRewrites(cwd, map[string]string{old: newOID}); err != nil {
+	if err := recordRewriteHistory(ctx, c, cwd, map[string]string{old: newOID}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(cwd, ".git", "rebase-merge"), 0700); err != nil {
@@ -88,8 +88,19 @@ func TestRewriteReplayDuringRebaseWithoutProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A shared legacy map from another worktree must not create a binding.
+	if err := saveRewrites(cwd, map[string]string{newOID: strings.Repeat("e", 40)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := replayRewriteHistory(ctx, c, cwd); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = store.ListHistoryEvents(ctx, repo)
 	count := 0
 	for _, e := range events {
+		if e.GitAfter == strings.Repeat("e", 40) {
+			t.Fatal("shared map escaped its worktree")
+		}
 		if e.GitAfter == newOID {
 			count++
 			if e.Target != target || e.GitBefore != old {

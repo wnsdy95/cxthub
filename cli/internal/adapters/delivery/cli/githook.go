@@ -1249,16 +1249,22 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 			kind = args[0]
 		}
 		rewrites := loadRewrites(cwd)
+		observed := map[string]string{}
 		added := 0
 		sc := bufio.NewScanner(os.Stdin)
 		for sc.Scan() {
 			f := strings.Fields(sc.Text())
 			if len(f) >= 2 && f[0] != f[1] {
 				rewrites[f[0]] = f[1]
+				observed[f[0]] = f[1]
 				added++
 			}
 		}
 		if added > 0 {
+			if err := recordRewriteHistory(ctx, c, cwd, observed); err != nil {
+				hookWarn("rewrite history journal failure: %v", err)
+				return nil
+			}
 			if err := saveRewrites(cwd, rewrites); err != nil {
 				hookWarn("rewrite log failure: %v", err)
 				return nil

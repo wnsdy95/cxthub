@@ -432,7 +432,10 @@ completed, and attention states with safe reason codes.
 
 ## Git rewrite recovery
 
-`post-rewrite` preserves exact full Git object mappings locally. Context history
+`post-rewrite` preserves exact full Git object mappings in immutable batches under
+`.cxt/worktrees/<id>/rewrite-journal/`, bound to the observing branch identity.
+The legacy repository-wide rewrite map is not authoritative for server source
+bindings. Context history
 now also publishes immutable `position` observations for those mappings, retaining
 the original branch identity, worktree, snapshot, and pinned memory. This path
 runs while rebase is finishing, independently of provider capture and the normal
@@ -443,7 +446,8 @@ Replay never replaces the current branch tip or fabricates a capture. Original
 events remain intact. Short hashes, cyclic mappings, unrelated worktrees, and
 reused branch identities are not accepted as equivalent source evidence. An
 already-recorded observation at the new revision takes precedence over a delayed
-replay. Historical journal recovery must run from the affected worktree; selecting
+replay. Historical recovery of pre-journal data requires independent evidence from the
+affected worktree; selecting
 an arbitrary recent session is not recovery.
 
 ### PR #164 incident recovery (2026-09-16)
