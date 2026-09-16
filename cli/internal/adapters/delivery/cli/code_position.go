@@ -25,7 +25,7 @@ func selectCodePosition(ctx context.Context, c *Container, cwd string) error {
 		return err
 	}
 	if err == nil && old.GitBranch() == branch && old.GitCommit == oid {
-		return nil
+		return reconcileCompletedPRPosition(ctx, c, cwd)
 	}
 	repo, err := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
 	if err != nil {
@@ -59,6 +59,10 @@ func selectCodePosition(ctx context.Context, c *Container, cwd string) error {
 		return err
 	}
 	selected := contextSelectionAtCode(cwd, oid, branch, all.Snapshots, history)
+	selected, err = resolveCompletedPRMemory(ctx, c, branch, binding.BranchID, selected, history)
+	if err != nil {
+		return err
+	}
 	id := selected.Snapshot
 	if id == "" && len(all.Snapshots) > 0 {
 		return fmt.Errorf("no recorded context on the ancestry of Git %s; current context preserved", oid)
@@ -85,6 +89,7 @@ func contextSelectionAtCode(cwd, oid, branch string, snaps []domain.Snapshot, hi
 		var best domain.ContentHash
 		var selected domain.WorkingPosition
 		var observed time.Time
+		explicit := false
 		// Prefer a recorded target on this logical branch; include history roots
 		// because the associated snapshot may no longer be on the shared tip path.
 		for i := len(history) - 1; i >= 0; i-- {
@@ -100,12 +105,16 @@ func contextSelectionAtCode(cwd, oid, branch string, snaps []domain.Snapshot, hi
 				best = e.Target
 				selected = domain.WorkingPosition{Snapshot: e.Target, MemoryHash: e.MemoryHash, MemorySource: e.MemorySource, MemoryPinned: e.MemoryPinned}
 				observed = e.CreatedAt
+				explicit = e.Kind == "advance" || (e.Kind == "position" && e.GitBefore == code)
 			}
 		}
-		if best != "" {
+		if explicit {
 			return selected
 		}
 		for _, sameBranch := range []bool{true, false} {
+			if best != "" {
+				break
+			} // Ordinary observations take precedence over legacy labels.
 			for _, snap := range snaps {
 				if (snap.Branch == branch) != sameBranch {
 					continue
@@ -121,9 +130,22 @@ func contextSelectionAtCode(cwd, oid, branch string, snaps []domain.Snapshot, hi
 					observed = snap.CreatedAt
 				}
 			}
-			if best != "" {
-				return selected
+		}
+		joined, err := completedPRSelection(code, branch, identity, history)
+		if err != nil {
+			return domain.WorkingPosition{}
+		}
+		if joined.Snapshot != "" {
+			if best == "" || (best != joined.Snapshot && snapshotContains(snaps, joined.Snapshot, best)) {
+				selected, best = joined, joined.Snapshot
+			} else if best == joined.Snapshot && !selected.MemoryPinned {
+				selected = joined // Legacy labels cannot override the PR's recorded memory.
+			} else if !snapshotContains(snaps, best, joined.Snapshot) {
+				return domain.WorkingPosition{} // Conflicting evidence cannot be resolved by timestamps.
 			}
+		}
+		if best != "" {
+			return selected
 		}
 	}
 	return domain.WorkingPosition{}

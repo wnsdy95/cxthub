@@ -14,3 +14,11 @@ type ContextHistory interface {
 	ResolveLocalBranch(context.Context, string, string) (domain.LocalBranchBinding, error)
 	BindLocalBranch(context.Context, domain.HistoryEvent) error
 }
+
+// ContextHistoryReconciler is optional. The caller proves that a recorded code
+// transition authorizes next; this port validates the selection and applies it
+// only while the complete worktree position and shared branch ref remain exact.
+// It neither discovers a target from the newest ref nor changes branch refs.
+type ContextHistoryReconciler interface {
+	SelectPositionIfCurrent(context.Context, domain.WorkingPosition, domain.WorkingPosition, domain.Ref) error
+}

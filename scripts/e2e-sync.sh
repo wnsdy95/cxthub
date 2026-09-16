@@ -13,6 +13,8 @@
 #   K. oversized single event                                  → v2 bounded push/pull + v1 fallback
 #
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
+# CXT_E2E_PUBLICATION_ONLY=1 runs just the promotion/next-commit regression.
+# CXT_E2E_CXT_BIN=/absolute/path tests a saved baseline CLI against that scenario.
 set -u
 
 # A fixture must not claim the host desktop app's real command session.
@@ -61,7 +63,11 @@ PYBIRTH
 
 echo "── build(isolated bin) · server start :$PORT"
 ( cd "$ROOT/backend" && go build -o "$TMP/bin/cxtd" ./cmd/cxtd ) || { echo "cxtd build failed"; exit 1; }
-( cd "$ROOT/cli" && go build -o "$TMP/bin/cxt" ./cmd/cxt ) || { echo "cxt build failed"; exit 1; }
+if [ -n "${CXT_E2E_CXT_BIN:-}" ]; then
+  cp "$CXT_E2E_CXT_BIN" "$TMP/bin/cxt" || exit 1
+else
+  ( cd "$ROOT/cli" && go build -o "$TMP/bin/cxt" ./cmd/cxt ) || { echo "cxt build failed"; exit 1; }
+fi
 export PATH="$TMP/bin:$PATH"
 export HOME="$TMP/home"; mkdir -p "$HOME"
 # The fixture must prove wrapper ownership through a real process ancestry.
@@ -123,6 +129,11 @@ done
 expect "device flow code output" "$([ -n "$DCODE" ] && echo yes)" yes
 ccurl -sb "$J" -X POST "$B/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE\"}" >/dev/null
 wait "$LPID"
+if [ "${CXT_E2E_PUBLICATION_ONLY:-0}" = 1 ]; then
+  source "$ROOT/scripts/e2e-publication.inc.sh"
+  if [ "$FAIL" = 0 ]; then echo "PUBLICATION E2E: All passed ✓"; else echo "PUBLICATION E2E: Failures exist ✗"; fi
+  exit "$FAIL"
+fi
 session "$TMP/repo1" A
 echo a > f.txt; git add f.txt; git commit -qm codeA >/dev/null 2>&1
 git push -q -u origin main >"$TMP/p1.out" 2>&1

@@ -181,6 +181,9 @@ func runBranchTransaction(ctx context.Context, c *Container, cwd string, args []
 }
 
 func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid string, orphan bool) (domain.HistoryEvent, error) {
+	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
+		return domain.HistoryEvent{}, err
+	}
 	id, err := branchjournal.NewID()
 	if err != nil {
 		return domain.HistoryEvent{}, err
@@ -229,7 +232,11 @@ func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid st
 		if err != nil {
 			return e, err
 		}
-		selected := contextSelectionAtCode(cwd, oid, current, all.Snapshots, history)
+		selected := contextSelectionAtCode(cwd, oid, currentBinding.Branch, all.Snapshots, history)
+		selected, err = resolveCompletedPRMemory(ctx, c, currentBinding.Branch, currentBinding.BranchID, selected, history)
+		if err != nil {
+			return e, err
+		}
 		e.Source, e.MemoryHash, e.MemoryPinned = selected.Snapshot, selected.MemoryHash, selected.MemoryPinned
 		e.MemorySource = selected.MemorySource
 		if e.Source == "" && len(all.Snapshots) > 0 {
@@ -559,6 +566,10 @@ func resolveBranchOperation(ctx context.Context, c *Container, cwd string, op br
 				return e, err
 			}
 			selected := contextSelectionAtCode(cwd, e.GitAfter, remoteBranch, all.Snapshots, history)
+			selected, err = resolveCompletedPRMemory(ctx, c, remoteBranch, e.BranchID, selected, history)
+			if err != nil {
+				return e, err
+			}
 			if selected.Snapshot != "" {
 				e.Source, e.Target = selected.Snapshot, selected.Snapshot
 				e.MemoryHash, e.MemorySource, e.MemoryPinned = selected.MemoryHash, selected.MemorySource, selected.MemoryPinned
