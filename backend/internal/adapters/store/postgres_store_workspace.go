@@ -56,7 +56,7 @@ func (s *PostgresStore) GetUserByUsername(ctx context.Context, username string) 
 
 func (s *PostgresStore) CreateWorkspace(ctx context.Context, ws domain.Workspace) error {
 	if err := domain.ValidateWorkspaceRecord(ws); err != nil {
-		return err
+		return storageWriteError(err)
 	}
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO workspaces (id, name, owner_id, slug, owner_username, owner_namespace_id, visibility, secrets_policy, settings_policy, gh_visibility_sync, gh_synced_at, archived, webhook_url, public_role)
@@ -68,7 +68,7 @@ func (s *PostgresStore) CreateWorkspace(ctx context.Context, ws domain.Workspace
 		 gh_visibility_sync=EXCLUDED.gh_visibility_sync, gh_synced_at=EXCLUDED.gh_synced_at,
 		 archived=EXCLUDED.archived, webhook_url=EXCLUDED.webhook_url, public_role=EXCLUDED.public_role`,
 		ws.ID, ws.Name, ws.OwnerID, ws.Slug, ws.OwnerUsername, pgNullableString(ws.OwnerNamespaceID), string(ws.Visibility), ws.SecretsPolicy, ws.SettingsPolicy, ws.GHVisibilitySync, ws.GHSyncedAt, ws.Archived, ws.WebhookURL, ws.PublicRole)
-	return err
+	return storageWriteError(err)
 }
 
 func (s *PostgresStore) GetWorkspace(ctx context.Context, id string) (domain.Workspace, error) {

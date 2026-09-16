@@ -583,7 +583,15 @@ test('Enterprise profile keeps administration separate from Workspace context an
     visibility: 'private',
     created_at: '2026-09-03T00:00:00Z',
   };
+  let usageReads = 0;
+  let reconciled = false;
   const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
+    if (pathname === `/api/v1/namespaces/${enterprise.namespace_id}/storage` && method === 'GET') {
+      usageReads++;
+      return { body: { namespace_id: enterprise.namespace_id, policy: { plan: 'enterprise', included_bytes: 50 * 2 ** 30, pay_as_you_go: true, max_bytes: 55 * 2 ** 30, grace_bytes: 0, grace_until: null }, policy_revision: 1,
+        current_bytes: (reconciled ? 49 : 56) * 2 ** 30, excess_bytes: (reconciled ? 0 : 6) * 2 ** 30, state: reconciled ? 'active' : 'read_only', metered_since: '2026-09-01T00:00:00Z', period_start: '2026-09-01T00:00:00Z', period_end: '2026-09-16T00:00:00Z', overage_byte_hours: '1073741824', entries: [] } };
+    }
+    if (pathname === `/api/v1/namespaces/${enterprise.namespace_id}/storage/reconcile` && method === 'POST') { reconciled = true; return { body: { reconciled: true } }; }
     if (method === 'GET' && pathname === '/api/v1/me') {
       return { body: { id: 'owner-1', email: 'owner@acme.test', name: 'Owner', username: 'owner', locale: 'en' } };
     }
@@ -648,6 +656,17 @@ test('Enterprise profile keeps administration separate from Workspace context an
   await expect(page.getByRole('tab', { name: 'Audit log' })).toBeVisible();
   await expect(page.locator('.ws-card')).toBeDisabled();
   await expect(page.locator('.ws-card-access')).toContainText('explicit Workspace role');
+
+  expect(usageReads).toBe(0);
+  await page.getByRole('tab', { name: 'Storage usage' }).click();
+  await expect(page.locator('.storage-state')).toHaveText('Storage limit reached');
+  await expect(page.locator('.storage-totals')).toContainText('50 GiB');
+  await expect(page.locator('.storage-totals')).toContainText('56 GiB');
+  await expect(page.locator('.storage-usage')).toContainText('Existing history remains readable');
+  await page.getByRole('button', { name: 'Reconcile from stored data' }).click();
+  await expect(page.locator('.storage-state')).toHaveText('Within allowance');
+  await expect(page.locator('.storage-totals')).toContainText('49 GiB');
+  expect(usageReads).toBeGreaterThan(1);
 
 	await page.getByRole('tab', { name: 'People' }).click();
 	const lastOwnerRole = page.getByRole('combobox', { name: "Change Owner's Enterprise role" });

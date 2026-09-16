@@ -4,7 +4,7 @@
 // All requests include 'credentials: 'include' to automatically send cookies to the browser.
 // Exception: exchangeSession only sends the IDP token in the Authorization header once,
 // and the server sets the session cookie in the Set-Cookie response.
-import type { RefLogEntry, User, PublicUser, Workspace, PublicWorkspace, WorkspacePatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Enterprise, PublicEnterprise, EnterpriseMembership, EnterprisePolicy, EnterpriseAuditEvent, BreakGlassGrant, EnterpriseRole } from './types';
+import type { StorageUsageReport, RefLogEntry, User, PublicUser, Workspace, PublicWorkspace, WorkspacePatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Enterprise, PublicEnterprise, EnterpriseMembership, EnterprisePolicy, EnterpriseAuditEvent, BreakGlassGrant, EnterpriseRole } from './types';
 import { normalizeActivityResponse } from './activity';
 
 // Default is same-origin relative path (/api/v1). Dev uses Vite proxy, prod assumes same-domain deployment.
@@ -62,6 +62,8 @@ export interface DocEventPage {
 }
 
 export const api = {
+  storageUsage: (namespace: string, month: string, signal?: AbortSignal) => call<StorageUsageReport>('GET', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage?month=${encodeURIComponent(month)}`, undefined, undefined, signal),
+  reconcileStorage: (namespace: string) => call<{ reconciled: boolean }>('POST', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage/reconcile`, {}),
   prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
   retryPRPromotion: (repoId: string, id: string) => call('POST', `/repos/${encodeURIComponent(repoId)}/prs/promotions/${encodeURIComponent(id)}/retry`, {}),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.

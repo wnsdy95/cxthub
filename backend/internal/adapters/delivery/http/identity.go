@@ -212,6 +212,10 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/auth/session", s.requireUser(s.logout))
 
 	mux.HandleFunc("GET /api/v1/me", s.requireUser(s.me))
+	mux.HandleFunc("GET /api/v1/me/storage", s.requireUser(s.getStorageUsage))
+	mux.HandleFunc("POST /api/v1/me/storage/reconcile", s.requireUser(s.rateLimit(2, time.Minute, s.reconcileStorageUsage)))
+	mux.HandleFunc("GET /api/v1/namespaces/{namespaceID}/storage", s.requireUser(s.getStorageUsage))
+	mux.HandleFunc("POST /api/v1/namespaces/{namespaceID}/storage/reconcile", s.requireUser(s.rateLimit(2, time.Minute, s.reconcileStorageUsage)))
 	mux.HandleFunc("PATCH /api/v1/me", s.requireUser(s.updateMe))
 	mux.HandleFunc("POST /api/v1/me/cli-tokens", s.requireUser(s.createCLIToken))
 	mux.HandleFunc("GET /api/v1/me/cli-tokens", s.requireUser(s.listCLITokens))

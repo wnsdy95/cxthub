@@ -115,11 +115,11 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 
 func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
 	if err := validateHash(repo.ID); err != nil {
-		return domain.Repo{}, err
+		return domain.Repo{}, storageWriteError(err)
 	}
 	if repo.DefaultBranch != "" {
 		if err := domain.ValidateBranchName(repo.DefaultBranch); err != nil {
-			return domain.Repo{}, err
+			return domain.Repo{}, storageWriteError(err)
 		}
 	}
 	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
@@ -135,7 +135,7 @@ func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.R
 		   git_remote_url = COALESCE(NULLIF(EXCLUDED.git_remote_url,''), repos.git_remote_url)`,
 		string(repo.ID), repo.RemoteURL, db, "default", repo.WorkspaceID, repo.GitRemoteURL)
 	if err != nil {
-		return domain.Repo{}, err
+		return domain.Repo{}, storageWriteError(err)
 	}
 	return s.GetRepo(ctx, repo.ID)
 }
@@ -1238,7 +1238,7 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 	if err := putReadIndexPG(ctx, tx, doc); err != nil {
 		return false, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := storageWriteError(tx.Commit(ctx)); err != nil {
 		return false, err
 	}
 	return created, nil
@@ -1346,7 +1346,7 @@ func (s *PostgresStore) PutChunks(ctx context.Context, repoID domain.ContentHash
 			deduped++
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := storageWriteError(tx.Commit(ctx)); err != nil {
 		return 0, 0, err
 	}
 	return stored, deduped, nil
@@ -1463,7 +1463,7 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, docCompress(manifest), string(hash)); err != nil {
 		return domain.DocChunkManifest{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := storageWriteError(tx.Commit(ctx)); err != nil {
 		return domain.DocChunkManifest{}, err
 	}
 	return plan.Manifest, nil
@@ -1659,7 +1659,7 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 		string(repoID), string(h)); err != nil {
 		return "", err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := storageWriteError(tx.Commit(ctx)); err != nil {
 		return "", err
 	}
 	return h, nil
@@ -1799,20 +1799,20 @@ func (s *PostgresStore) UpdateRepoConfig(ctx context.Context, id domain.ContentH
 // PutSettingsBundle upserts the settings bundle.
 func (s *PostgresStore) PutSettingsBundle(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error {
 	if err := validateHash(repoID); err != nil {
-		return err
+		return storageWriteError(err)
 	}
 	if err := domain.ValidateSettingsBundle(bundle.Kind, "", bundle); err != nil {
-		return err
+		return storageWriteError(err)
 	}
 	data, err := json.Marshal(bundle)
 	if err != nil {
-		return err
+		return storageWriteError(err)
 	}
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO repo_settings (repo_id, kind, data) VALUES ($1,$2,$3)
 		 ON CONFLICT (repo_id, kind) DO UPDATE SET data = EXCLUDED.data`,
 		string(repoID), bundle.Kind, string(data))
-	return err
+	return storageWriteError(err)
 }
 
 // GetSettingsBundle retrieves the settings bundle.
@@ -2362,25 +2362,25 @@ func (s *PostgresStore) DeleteDoc(ctx context.Context, repoID domain.ContentHash
 		string(hash)); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return storageWriteError(tx.Commit(ctx))
 }
 
 // PutSettingsObject stores the commit attachment settings object (idempotent).
 func (s *PostgresStore) PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error {
 	if err := validateHashes(repoID, hash); err != nil {
-		return err
+		return storageWriteError(err)
 	}
 	if err := domain.ValidateSettingsBundle(bundle.Kind, hash, bundle); err != nil {
-		return err
+		return storageWriteError(err)
 	}
 	data, err := json.Marshal(bundle)
 	if err != nil {
-		return err
+		return storageWriteError(err)
 	}
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO settings_objects (repo_id, hash, data) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
 		string(repoID), string(hash), string(data))
-	return err
+	return storageWriteError(err)
 }
 
 // GetSettingsObject retrieves the settings object.
@@ -2406,13 +2406,13 @@ func (s *PostgresStore) GetSettingsObject(ctx context.Context, repoID domain.Con
 // PutSecretsEnvelope / GetSecretsEnvelope store opaque end-to-end encrypted secret payloads.
 func (s *PostgresStore) PutSecretsEnvelope(ctx context.Context, repoID domain.ContentHash, raw []byte) error {
 	if err := validateHash(repoID); err != nil {
-		return err
+		return storageWriteError(err)
 	}
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO repo_secrets (repo_id, data) VALUES ($1,$2)
 		 ON CONFLICT (repo_id) DO UPDATE SET data = EXCLUDED.data`,
 		string(repoID), string(raw))
-	return err
+	return storageWriteError(err)
 }
 
 func (s *PostgresStore) GetSecretsEnvelope(ctx context.Context, repoID domain.ContentHash) ([]byte, error) {

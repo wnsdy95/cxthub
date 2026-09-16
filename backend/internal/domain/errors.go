@@ -38,3 +38,7 @@ var ErrUnsupportedCIRVersion = errors.New("unsupported CIR version")
 
 // ErrGitOriginMismatch indicates an attempt to connect to cxthub repo from a different folder with a different git origin (409 git_origin_mismatch). Onboarding safety measure.
 var ErrGitOriginMismatch = errors.New("git origin mismatch")
+
+// ErrStorageLimit rejects net growth while preserving existing read access.
+var ErrStorageLimit = errors.New("storage limit reached; existing context remains readable")
+var ErrUsageUnavailable = errors.New("storage reporting is unavailable")

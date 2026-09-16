@@ -6,6 +6,33 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+  storage: {
+    title: "저장 공간 사용량",
+    loading: "사용량을 불러오는 중…",
+    unavailable: "이 서버에서 사용량을 불러올 수 없습니다.",
+    retry: "사용량 다시 불러오기",
+    current: "현재 보관량",
+    included: "포함 용량",
+    excess: "현재 초과 용량",
+    month: "조회 월 (UTC)",
+    hours: "이달 초과 사용량 · GiB·시간",
+    metering: "사용량 측정 중 · 요금제 미활성",
+    active: "정상",
+    warning: "포함 용량에 근접",
+    overage: "초과 사용량 기록 중",
+    grace: "유예 기간",
+    read_only: "저장 한도 도달",
+    limited: "새 데이터를 저장하려면 용량 한도 또는 요금제를 조정하세요. 기존 기록은 계속 조회할 수 있습니다.",
+    definition: "계정 또는 Enterprise 안에서 중복을 제외한 보관 데이터 크기입니다. 압축된 컨텍스트·메모리, 설정, 암호화된 시크릿을 포함하며 검색 인덱스와 DB 내부 공간은 제외합니다.",
+    since: "측정 시작: {date}. 이전 기간의 사용량은 추정하지 않습니다.",
+    reconcile: "저장 데이터로 재검산",
+    reconciling: "재검산 중…",
+    ledger: "사용량 변경 기록 · 최근 50건",
+    change: "저장량 변경",
+    correction: "재검산 조정",
+    policy: "요금제 정책 변경",
+    measured: "시간에 따라 누적한 초과 사용량입니다. 결제 금액은 별도 요금 정책으로 계산됩니다.",
+  },
   promotion: {
     policy: '워크스페이스가 보관됐거나 정책상 합류가 허용되지 않습니다.',
     title: 'PR 컨텍스트 합류',

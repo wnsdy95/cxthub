@@ -3,6 +3,33 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+  storage: {
+    title: "Storage usage",
+    loading: "Loading usage…",
+    unavailable: "Storage reporting is unavailable on this server.",
+    retry: "Reload usage",
+    current: "Retained storage",
+    included: "Included storage",
+    excess: "Current excess",
+    month: "Month (UTC)",
+    hours: "Monthly excess · GiB-hours",
+    metering: "Metering · plan not activated",
+    active: "Within allowance",
+    warning: "Approaching included storage",
+    overage: "Metering excess storage",
+    grace: "Grace period",
+    read_only: "Storage limit reached",
+    limited: "Adjust the storage limit or plan to save new data. Existing history remains readable.",
+    definition: "Retained payload bytes, deduplicated within this account or Enterprise. Includes compressed context and memory, settings, and encrypted secrets. Excludes search indexes and database overhead.",
+    since: "Metering began {date}. Earlier consumption is not estimated.",
+    reconcile: "Reconcile from stored data",
+    reconciling: "Reconciling…",
+    ledger: "Usage changes · latest 50",
+    change: "Storage changed",
+    correction: "Reconciliation adjustment",
+    policy: "Plan policy changed",
+    measured: "Time-weighted excess storage. Charges depend on the separately configured pricing policy.",
+  },
   promotion: {
     policy: 'The workspace is archived or its policy prevents this operation.',
     title: 'PR context delivery',

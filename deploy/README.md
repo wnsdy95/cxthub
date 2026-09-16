@@ -115,3 +115,57 @@ GitHub token; private repositories may explicitly provide
 The receiver returns `404` when `CXT_GITHUB_WEBHOOK_SECRET` is absent and
 `401` when `X-Hub-Signature-256` does not match. Never configure a webhook
 without the shared secret.
+
+## Storage metering and plan provisioning
+
+Migration 0044 starts namespace-scoped storage accounting. The meter counts
+compressed retained CAS bytes once per namespace, plus serialized settings and
+encrypted secrets. Retained uploads without a snapshot still count. It excludes
+derived indexes, SQL/TOAST overhead, and bandwidth; it is not total database disk
+usage. Deleting a branch or hiding a session does not remove the retained bytes.
+No billing process deletes context.
+
+Existing and new namespaces start in **metering** state with no activated price
+or quota. This does not grant a paid plan or charge a customer. Commercial
+Free/Team allowances, base prices, payment consent, and payment-provider setup
+must be settled before provisioning production entitlements. Enterprise policy
+validation fixes its included allowance at 50 GiB and enables excess metering;
+Workspace count is unrestricted, while payload limits apply across all its
+Workspaces. No customer REST or MCP route can assign or upgrade a plan.
+
+Operators use a separate tool with the deployment database credential. A policy
+file has `plan`, `included_bytes`, `pay_as_you_go`, `max_bytes`, `grace_bytes`, and
+`grace_until`. Null `max_bytes` permits uncapped PAYG; otherwise it is an absolute
+stored-byte cap. Free cannot enable PAYG. `grace_until` and `grace_bytes` provide a
+bounded exception to the cap. No prices are inferred from these entitlements.
+
+```bash
+cd backend
+# CXT_POSTGRES_DSN must be supplied securely in the operator environment.
+go run -tags postgres ./cmd/cxt-admin -namespace ns_<id> -policy /secure/policy.json
+# Review the output, then use its policy revision. Reuse the same operation ID
+# and payload when retrying after an uncertain outcome.
+go run -tags postgres ./cmd/cxt-admin -namespace ns_<id> -policy /secure/policy.json \
+  -apply -expect 0 -operation provision-<stable-id> -actor operator@example.test \
+  -reason 'Approved subscription activation'
+```
+
+Policy changes are compare-and-swap guarded and append to an immutable audit
+record. Lowering a quota preserves stored objects and may make the account
+read-only. New writes are checked against final net growth at transaction commit,
+so concurrent uploads and temporary manifest conversion cannot bypass a cap.
+Idempotent uploads and all reads remain available. Reducing retained storage or
+raising a cap automatically restores write capacity.
+
+Usage changes and policy baselines form an append-only ledger. Monthly excess is
+the integral of `max(bytes - included_bytes, 0)` over elapsed hours while PAYG is
+active. Reports expose the decimal byte-hours, not a rounded invoice amount;
+partial first months begin at the first recorded measurement. Invoice settlement
+and payment-webhook processing are not enabled by this foundation.
+
+A bounded worker reconciles the oldest accounts daily against retained payloads;
+interruption is safe to retry. Owners may also request reconciliation, at most
+twice per minute, from Storage usage. Enterprise Admins can inspect aggregate
+usage without gaining private repository access; only Owners can request a
+recount. Personal usage appears in account settings. Filesystem development
+servers report usage as unavailable; authoritative billing requires PostgreSQL.
