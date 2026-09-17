@@ -19,7 +19,7 @@ func (s *Service) ListHistory(ctx context.Context, repoID domain.ContentHash) ([
 }
 
 func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) error {
-	return s.recordHistory(ctx, event, false, nil)
+	return repositoryWriteError(ctx, s, domain.ContentHash(event.RepoID), func(ctx context.Context) error { return s.recordHistory(ctx, event, false, nil) })
 }
 
 // A verification set lives for one operation, not on the service or store.

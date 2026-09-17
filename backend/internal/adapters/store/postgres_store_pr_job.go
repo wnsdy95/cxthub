@@ -18,12 +18,12 @@ func (s *PostgresStore) EnqueuePRJob(ctx context.Context, j domain.PRPromotionJo
 	if err != nil {
 		return j, err
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO pr_promotion_jobs(repo_id,id,payload,state,created_at,next_attempt,lease_until) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, j.RepoID, j.ID, b, j.State, j.CreatedAt, j.NextAttempt, j.LeaseUntil)
+	_, err = s.db(ctx).Exec(ctx, `INSERT INTO pr_promotion_jobs(repo_id,id,payload,state,created_at,next_attempt,lease_until) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, j.RepoID, j.ID, b, j.State, j.CreatedAt, j.NextAttempt, j.LeaseUntil)
 	if err != nil {
 		return j, err
 	}
 	var raw []byte
-	err = s.pool.QueryRow(ctx, `SELECT payload FROM pr_promotion_jobs WHERE repo_id=$1 AND id=$2`, j.RepoID, j.ID).Scan(&raw)
+	err = s.db(ctx).QueryRow(ctx, `SELECT payload FROM pr_promotion_jobs WHERE repo_id=$1 AND id=$2`, j.RepoID, j.ID).Scan(&raw)
 	if err != nil {
 		return j, mapNoRows(err)
 	}
@@ -37,7 +37,7 @@ func (s *PostgresStore) EnqueuePRJob(ctx context.Context, j domain.PRPromotionJo
 	return old, nil
 }
 func (s *PostgresStore) ListPRJobs(ctx context.Context, repo domain.ContentHash) ([]domain.PRPromotionJob, error) {
-	rows, err := s.pool.Query(ctx, `SELECT payload FROM pr_promotion_jobs WHERE repo_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100`, repo)
+	rows, err := s.db(ctx).Query(ctx, `SELECT payload FROM pr_promotion_jobs WHERE repo_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100`, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ const claimPRJobSQL = `SELECT j.payload FROM pr_promotion_jobs j
  ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`
 
 func (s *PostgresStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash, id string, now time.Time, lease time.Duration) (domain.PRPromotionJob, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return domain.PRPromotionJob{}, err
 	}
@@ -116,7 +116,7 @@ func (s *PostgresStore) FinishPRJob(ctx context.Context, j domain.PRPromotionJob
 	if err != nil {
 		return err
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6 WHERE repo_id=$1 AND id=$2 AND version=$7 AND state='running'`, j.RepoID, j.ID, b, j.State, j.NextAttempt, j.LeaseUntil, j.Version)
+	tag, err := s.db(ctx).Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6 WHERE repo_id=$1 AND id=$2 AND version=$7 AND state='running'`, j.RepoID, j.ID, b, j.State, j.NextAttempt, j.LeaseUntil, j.Version)
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (s *PostgresStore) FinishPRJob(ctx context.Context, j domain.PRPromotionJob
 	return nil
 }
 func (s *PostgresStore) RetryPRJob(ctx context.Context, repo domain.ContentHash, id string, now time.Time) error {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (s *PostgresStore) RetryPRJob(ctx context.Context, repo domain.ContentHash,
 func (s *PostgresStore) GetPRJob(ctx context.Context, repo domain.ContentHash, id string) (domain.PRPromotionJob, error) {
 	var j domain.PRPromotionJob
 	var b []byte
-	err := s.pool.QueryRow(ctx, `SELECT payload FROM pr_promotion_jobs WHERE repo_id=$1 AND id=$2`, repo, id).Scan(&b)
+	err := s.db(ctx).QueryRow(ctx, `SELECT payload FROM pr_promotion_jobs WHERE repo_id=$1 AND id=$2`, repo, id).Scan(&b)
 	if err != nil {
 		return j, mapNoRows(err)
 	}
@@ -176,7 +176,7 @@ func (s *PostgresStore) GetPRJob(ctx context.Context, repo domain.ContentHash, i
 func (s *PostgresStore) WakePRSourceJobs(ctx context.Context, repo domain.ContentHash, now time.Time) error {
 	// Filter by durable exact revisions, not the UI's latest-100 list. The Go
 	// predicate below also checks ordinary alias proof and its attachment.
-	rows, err := s.pool.Query(ctx, `SELECT j.payload FROM pr_promotion_jobs j
+	rows, err := s.db(ctx).Query(ctx, `SELECT j.payload FROM pr_promotion_jobs j
  WHERE ($1='' OR j.repo_id=$1) AND j.state='attention' AND j.payload->>'reason'='source_finalization_required'
  AND EXISTS(SELECT 1 FROM context_history h WHERE h.repo_id=j.repo_id AND h.event->>'kind'='publish'
    AND h.event->>'git_after'=j.payload->'pr'->>'head_sha'
@@ -224,7 +224,7 @@ func (s *PostgresStore) WakePRSourceJobs(ctx context.Context, repo domain.Conten
 			return err
 		}
 		// A concurrent retry/claim/finish must never be replaced by this wake.
-		if _, err := s.pool.Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6,version=$7
+		if _, err := s.db(ctx).Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6,version=$7
  WHERE repo_id=$1 AND id=$2 AND version=$8 AND state='attention' AND payload->>'reason'='source_finalization_required'`,
 			j.RepoID, j.ID, raw, j.State, j.NextAttempt, j.LeaseUntil, j.Version, version); err != nil {
 			return err

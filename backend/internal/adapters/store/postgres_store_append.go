@@ -18,7 +18,7 @@ func (s *PostgresStore) AppendRef(ctx context.Context, repoID domain.ContentHash
 	if err := domain.ValidateContentHash(expected); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}

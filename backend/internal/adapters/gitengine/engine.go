@@ -6,6 +6,8 @@ package gitengine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -21,15 +23,22 @@ func NewEngine(meta outbound.MetadataStore) *Engine { return &Engine{meta: meta}
 
 var _ outbound.GitEngine = (*Engine)(nil)
 
-// parentsOf returns the reachability parent list of a snapshot (empty slice if non-existent).
+// parentsOf returns reachability parents. Missing nodes and failed reads must
+// not turn an incomplete graph into an apparently valid root.
 // Rules are domain.Snapshot.ReachabilityParents(Parents ∪ GraftParents) — single source of truth — all ancestors
 // walk(IsAncestor/MergeBase/AncestorsClosure/ClassifyRefMove) collectively reflect graft reachability.
-func (e *Engine) parentsOf(ctx context.Context, repoID, id domain.ContentHash) []domain.ContentHash {
+func (e *Engine) parentsOf(ctx context.Context, repoID, id domain.ContentHash) ([]domain.ContentHash, error) {
+	if id == "" {
+		return nil, nil
+	}
 	snap, err := e.meta.GetSnapshot(ctx, repoID, id)
 	if err != nil {
-		return nil
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil, fmt.Errorf("%w: missing graph snapshot %s: %w", domain.ErrIntegrity, id, err)
+		}
+		return nil, err
 	}
-	return snap.ReachabilityParents()
+	return snap.ReachabilityParents(), nil
 }
 
 // IsAncestor determines if ancestor is an ancestor (or equal to) descendant using BFS.
@@ -49,13 +58,17 @@ func (e *Engine) IsAncestor(ctx context.Context, repoID, ancestor, descendant do
 			continue
 		}
 		seen[cur] = true
-		queue = append(queue, e.parentsOf(ctx, repoID, cur)...)
+		parents, err := e.parentsOf(ctx, repoID, cur)
+		if err != nil {
+			return false, err
+		}
+		queue = append(queue, parents...)
 	}
 	return false, nil
 }
 
 // ancestorsSet returns the set of id itself and all ancestors.
-func (e *Engine) ancestorsSet(ctx context.Context, repoID domain.ContentHash, id domain.ContentHash) map[domain.ContentHash]bool {
+func (e *Engine) ancestorsSet(ctx context.Context, repoID domain.ContentHash, id domain.ContentHash) (map[domain.ContentHash]bool, error) {
 	set := map[domain.ContentHash]bool{}
 	queue := []domain.ContentHash{id}
 	for len(queue) > 0 {
@@ -65,14 +78,21 @@ func (e *Engine) ancestorsSet(ctx context.Context, repoID domain.ContentHash, id
 			continue
 		}
 		set[cur] = true
-		queue = append(queue, e.parentsOf(ctx, repoID, cur)...)
+		parents, err := e.parentsOf(ctx, repoID, cur)
+		if err != nil {
+			return nil, err
+		}
+		queue = append(queue, parents...)
 	}
-	return set
+	return set, nil
 }
 
 // MergeBase returns the LCA of two snapshots (b's ancestor that first appears in a's ancestor set). Empty if "".
 func (e *Engine) MergeBase(ctx context.Context, repoID, a, b domain.ContentHash) (domain.ContentHash, error) {
-	aset := e.ancestorsSet(ctx, repoID, a)
+	aset, err := e.ancestorsSet(ctx, repoID, a)
+	if err != nil {
+		return "", err
+	}
 	seen := map[domain.ContentHash]bool{}
 	queue := []domain.ContentHash{b}
 	for len(queue) > 0 {
@@ -85,7 +105,11 @@ func (e *Engine) MergeBase(ctx context.Context, repoID, a, b domain.ContentHash)
 		if aset[cur] {
 			return cur, nil
 		}
-		queue = append(queue, e.parentsOf(ctx, repoID, cur)...)
+		parents, err := e.parentsOf(ctx, repoID, cur)
+		if err != nil {
+			return "", err
+		}
+		queue = append(queue, parents...)
 	}
 	return "", nil
 }
@@ -94,7 +118,11 @@ func (e *Engine) MergeBase(ctx context.Context, repoID, a, b domain.ContentHash)
 func (e *Engine) AncestorsClosure(ctx context.Context, repoID domain.ContentHash, ids []domain.ContentHash) ([]domain.ContentHash, error) {
 	set := map[domain.ContentHash]bool{}
 	for _, id := range ids {
-		for h := range e.ancestorsSet(ctx, repoID, id) {
+		ancestors, err := e.ancestorsSet(ctx, repoID, id)
+		if err != nil {
+			return nil, err
+		}
+		for h := range ancestors {
 			set[h] = true
 		}
 	}
@@ -113,10 +141,14 @@ func (e *Engine) ClassifyRefMove(ctx context.Context, repoID, old, next domain.C
 	if old == next {
 		return outbound.MoveUpToDate, nil
 	}
-	if ff, _ := e.IsAncestor(ctx, repoID, old, next); ff {
+	if ff, err := e.IsAncestor(ctx, repoID, old, next); err != nil {
+		return "", err
+	} else if ff {
 		return outbound.MoveFastForward, nil // next is a descendant of old
 	}
-	if behind, _ := e.IsAncestor(ctx, repoID, next, old); behind {
+	if behind, err := e.IsAncestor(ctx, repoID, next, old); err != nil {
+		return "", err
+	} else if behind {
 		return outbound.MoveNonFastForward, nil // next is an ancestor of old (behind)
 	}
 	return outbound.MoveDiverged, nil

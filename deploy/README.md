@@ -13,6 +13,11 @@ Create these Google Secret Manager secrets before applying Terraform:
 | `cxt-postgres-dsn` | `CXT_POSTGRES_DSN` | PostgreSQL connection string |
 | `cxt-github-webhook-secret` | `CXT_GITHUB_WEBHOOK_SECRET` | Random GitHub webhook HMAC secret |
 
+The [collaboration transaction contract](../docs/COLLABORATION_TRANSACTIONS.md)
+defines atomic writes, graph read snapshots, retry behavior and failover limits.
+All server instances must run the transaction-aware version before relying on
+multi-step atomic promotion across the fleet.
+
 Every externally bound `cxtd` process requires PostgreSQL. Cloud Run also sets
 `CXT_REQUIRE_POSTGRES=1` as an explicit deployment assertion. Production
 therefore refuses to start if the PostgreSQL build tag, DSN, live database

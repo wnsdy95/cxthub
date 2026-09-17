@@ -9,7 +9,7 @@ import (
 )
 
 func (s *PostgresStore) CreateDevicePairing(ctx context.Context, p domain.DevicePairing) error {
-	tag, err := s.pool.Exec(ctx, `INSERT INTO device_pairings(code,poll_hash,label,expires_at) VALUES($1,$2,$3,$4) ON CONFLICT(code) DO UPDATE SET poll_hash=EXCLUDED.poll_hash,user_id='',label=EXCLUDED.label,expires_at=EXCLUDED.expires_at WHERE device_pairings.expires_at<=clock_timestamp()`, p.Code, p.PollHash, p.Label, p.ExpiresAt)
+	tag, err := s.db(ctx).Exec(ctx, `INSERT INTO device_pairings(code,poll_hash,label,expires_at) VALUES($1,$2,$3,$4) ON CONFLICT(code) DO UPDATE SET poll_hash=EXCLUDED.poll_hash,user_id='',label=EXCLUDED.label,expires_at=EXCLUDED.expires_at WHERE device_pairings.expires_at<=clock_timestamp()`, p.Code, p.PollHash, p.Label, p.ExpiresAt)
 	if err != nil {
 		return err
 	}
@@ -20,11 +20,11 @@ func (s *PostgresStore) CreateDevicePairing(ctx context.Context, p domain.Device
 }
 func (s *PostgresStore) GetDevicePairing(ctx context.Context, code, poll string, now time.Time) (domain.DevicePairing, error) {
 	var p domain.DevicePairing
-	err := s.pool.QueryRow(ctx, `SELECT code,poll_hash,user_id,label,expires_at FROM device_pairings WHERE code=$1 AND poll_hash=$2 AND expires_at>$3`, code, poll, now).Scan(&p.Code, &p.PollHash, &p.UserID, &p.Label, &p.ExpiresAt)
+	err := s.db(ctx).QueryRow(ctx, `SELECT code,poll_hash,user_id,label,expires_at FROM device_pairings WHERE code=$1 AND poll_hash=$2 AND expires_at>$3`, code, poll, now).Scan(&p.Code, &p.PollHash, &p.UserID, &p.Label, &p.ExpiresAt)
 	return p, mapNoRows(err)
 }
 func (s *PostgresStore) ApproveDevicePairing(ctx context.Context, code, user string, now time.Time) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE device_pairings SET user_id=$2 WHERE code=$1 AND expires_at>$3 AND (user_id='' OR user_id=$2)`, code, user, now)
+	tag, err := s.db(ctx).Exec(ctx, `UPDATE device_pairings SET user_id=$2 WHERE code=$1 AND expires_at>$3 AND (user_id='' OR user_id=$2)`, code, user, now)
 	if err != nil {
 		return err
 	}
@@ -37,7 +37,7 @@ func (s *PostgresStore) RedeemDevicePairing(ctx context.Context, code, poll stri
 	if err := domain.ValidateSessionRecord(sess); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func (s *PostgresStore) AllowRequest(ctx context.Context, key string, limit int,
 	}
 	// One row update is the shared atomic admission point. Use the database clock
 	// in production so clocks on different instances cannot create extra allowance.
-	tag, err := s.pool.Exec(ctx, `WITH config AS (SELECT COALESCE($4::timestamptz,clock_timestamp()) AS now,$2::double precision*interval '1 microsecond' AS step,$3::double precision*interval '1 microsecond' AS quota_window)
+	tag, err := s.db(ctx).Exec(ctx, `WITH config AS (SELECT COALESCE($4::timestamptz,clock_timestamp()) AS now,$2::double precision*interval '1 microsecond' AS step,$3::double precision*interval '1 microsecond' AS quota_window)
  INSERT INTO request_allowances(key,available_at,expires_at) SELECT $1,now+step,now+quota_window FROM config
  ON CONFLICT(key) DO UPDATE SET available_at=greatest(request_allowances.available_at,(SELECT now FROM config))+(SELECT step FROM config), expires_at=(SELECT now+quota_window FROM config)
  WHERE request_allowances.available_at<=(SELECT now+quota_window-step FROM config)`, key, (window / time.Duration(limit)).Microseconds(), window.Microseconds(), clock)
@@ -73,7 +73,7 @@ func (s *PostgresStore) AllowRequest(ctx context.Context, key string, limit int,
 }
 func (s *PostgresStore) PruneRuntimeState(ctx context.Context, now time.Time) error {
 	for _, q := range []string{`DELETE FROM device_pairings WHERE code IN (SELECT code FROM device_pairings WHERE expires_at<=$1 LIMIT 1000)`, `DELETE FROM request_allowances WHERE key IN (SELECT key FROM request_allowances WHERE expires_at<=$1 LIMIT 1000)`} {
-		if _, err := s.pool.Exec(ctx, q, now); err != nil {
+		if _, err := s.db(ctx).Exec(ctx, q, now); err != nil {
 			return err
 		}
 	}

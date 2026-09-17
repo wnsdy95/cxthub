@@ -58,7 +58,7 @@ func (s *PostgresStore) EnableContextProtocol(ctx context.Context, repo domain.C
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}

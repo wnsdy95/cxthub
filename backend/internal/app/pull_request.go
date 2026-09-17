@@ -65,7 +65,7 @@ func (s *Service) PromoteRepositoryPR(ctx context.Context, repoID domain.Content
 	return s.promoteBoundPR(ctx, repoID, pr, "")
 }
 
-func (s *Service) promoteBoundPR(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, expectedBaseID string) (inbound.UpdateRefOutput, error) {
+func (s *Service) promoteBoundPRInTransaction(ctx context.Context, repoID domain.ContentHash, pr domain.PullRequestMerge, expectedBaseID string) (inbound.UpdateRefOutput, error) {
 	var zero inbound.UpdateRefOutput
 	verified := make(historyVerification)
 	if err := pr.Validate(); err != nil {

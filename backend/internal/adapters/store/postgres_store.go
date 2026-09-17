@@ -3,8 +3,7 @@
 // PostgresStore is an implementation of outbound.MetadataStore + BlobStore for PostgreSQL (pgx).
 //
 // Compiled with `go build -tags postgres` (default build is FSStore). Schema source:
-// schemas/db/migrations/0001_init.sql. Runtime validation requires an actual Postgres instance
-// (no DB server in this environment for compile-time validation; runtime validation in deployment).
+// schemas/db/migrations/0001_init.sql. CI validates transactions against real PostgreSQL.
 package store
 
 import (
@@ -29,13 +28,30 @@ type PostgresStore struct {
 
 // NewPostgresStore connects to a pgx pool using a dsn.
 func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	// Never acknowledge writes before durable WAL flush, even if a role/DSN
+	// supplies asynchronous commit. Preserve the stronger replay acknowledgement.
+	if config.ConnConfig.RuntimeParams["synchronous_commit"] != "remote_apply" {
+		config.ConnConfig.RuntimeParams["synchronous_commit"] = "on"
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
+	}
+	var durable bool
+	if err := pool.QueryRow(ctx, `SELECT current_setting('fsync')='on' AND current_setting('full_page_writes')='on'`).Scan(&durable); err != nil || !durable {
+		pool.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("PostgreSQL requires fsync=on and full_page_writes=on for durable context storage")
 	}
 	return &PostgresStore{pool: pool}, nil
 }
@@ -95,7 +111,7 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 		return domain.Repo{}, err
 	}
 	var r domain.Repo
-	err := s.pool.QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE id=$1`, string(id)).
+	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE id=$1`, string(id)).
 		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.WorkspaceID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol)
 	if err != nil {
 		return domain.Repo{}, mapNoRows(err)
@@ -128,11 +144,11 @@ func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.R
 	if db == "" {
 		db = "main"
 	}
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`INSERT INTO repos (id, remote_url, default_branch, team, workspace_id, git_remote_url) VALUES ($1,$2,$3,$4,NULLIF($5,''),$6)
 		 ON CONFLICT (id) DO UPDATE SET workspace_id = COALESCE(repos.workspace_id, EXCLUDED.workspace_id),
-		   default_branch = EXCLUDED.default_branch,
-		   git_remote_url = COALESCE(NULLIF(EXCLUDED.git_remote_url,''), repos.git_remote_url)`,
+		   default_branch = repos.default_branch,
+		   git_remote_url = COALESCE(NULLIF(repos.git_remote_url,''), EXCLUDED.git_remote_url)`,
 		string(repo.ID), repo.RemoteURL, db, "default", repo.WorkspaceID, repo.GitRemoteURL)
 	if err != nil {
 		return domain.Repo{}, storageWriteError(err)
@@ -141,7 +157,7 @@ func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.R
 }
 
 func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE team=$1`, team)
+	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE team=$1`, team)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +219,7 @@ func (s *PostgresStore) GetSnapshot(ctx context.Context, repoID, id domain.Conte
 	if err := validateHashes(repoID, id); err != nil {
 		return domain.Snapshot{}, err
 	}
-	row := s.pool.QueryRow(ctx, `SELECT `+snapCols+` FROM snapshots WHERE repo_id=$1 AND id=$2`, string(repoID), string(id))
+	row := s.db(ctx).QueryRow(ctx, `SELECT `+snapCols+` FROM snapshots WHERE repo_id=$1 AND id=$2`, string(repoID), string(id))
 	snap, err := scanSnapshot(row)
 	if err != nil {
 		return domain.Snapshot{}, mapNoRows(err)
@@ -215,7 +231,7 @@ func (s *PostgresStore) PutSnapshot(ctx context.Context, snap domain.Snapshot) e
 	if err := validateSnapshotRefs(snap); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -460,7 +476,7 @@ func (s *PostgresStore) addGraftParents(ctx context.Context, repoID, id domain.C
 	if err := validateHashes(add...); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -543,7 +559,7 @@ func (s *PostgresStore) CompareAndSwapSnapshotMemory(ctx context.Context, repoID
 	if err := domain.ValidateOptionalContentHash(expected); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -590,7 +606,7 @@ func (s *PostgresStore) ListSnapshots(ctx context.Context, repoID domain.Content
 		args = append(args, branch)
 	}
 	q += ` ORDER BY created_at DESC`
-	rows, err := s.pool.Query(ctx, q, args...)
+	rows, err := s.db(ctx).Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -613,7 +629,7 @@ func (s *PostgresStore) HasSnapshots(ctx context.Context, repoID domain.ContentH
 	if err := validateHashes(ids...); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id FROM snapshots WHERE repo_id=$1 AND id = ANY($2)`, string(repoID), strs(ids))
+	rows, err := s.db(ctx).Query(ctx, `SELECT id FROM snapshots WHERE repo_id=$1 AND id = ANY($2)`, string(repoID), strs(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +655,7 @@ func (s *PostgresStore) getRefRaw(ctx context.Context, repoID domain.ContentHash
 		return domain.Ref{}, err
 	}
 	var ref domain.Ref
-	err := s.pool.QueryRow(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id FROM refs WHERE repo_id=$1 AND kind=$2 AND name=$3`,
+	err := s.db(ctx).QueryRow(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id FROM refs WHERE repo_id=$1 AND kind=$2 AND name=$3`,
 		string(repoID), string(kind), name).Scan(&ref.Kind, &ref.Name, &ref.RepoID, &ref.Target, &ref.Symbolic, &ref.BranchID)
 	if err != nil {
 		return domain.Ref{}, mapNoRows(err)
@@ -654,7 +670,7 @@ func (s *PostgresStore) listRefsRaw(ctx context.Context, repoID domain.ContentHa
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id FROM refs WHERE repo_id=$1`, string(repoID))
+	rows, err := s.db(ctx).Query(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id FROM refs WHERE repo_id=$1`, string(repoID))
 	if err != nil {
 		return nil, err
 	}
@@ -708,7 +724,7 @@ func (s *PostgresStore) GetRef(ctx context.Context, repoID domain.ContentHash, k
 	if kind != domain.RefBranch {
 		return ref, nil
 	}
-	refs, err := listBranchLifecycleRefs(ctx, s.pool, repoID, name)
+	refs, err := listBranchLifecycleRefs(ctx, s.db(ctx), repoID, name)
 	if err != nil {
 		return domain.Ref{}, err
 	}
@@ -815,7 +831,7 @@ func (s *PostgresStore) CompareAndSwapRef(ctx context.Context, repoID domain.Con
 	if err := domain.ValidateOptionalContentHash(expected); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -927,7 +943,7 @@ func (s *PostgresStore) ApplyBranchLifecycleRef(ctx context.Context, repoID doma
 	if !ok {
 		return domain.ErrValidation
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -1011,7 +1027,7 @@ func (s *PostgresStore) ReadReflog(ctx context.Context, repoID domain.ContentHas
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db(ctx).Query(ctx,
 		`SELECT kind, name, old, new, created_at FROM reflog WHERE repo_id=$1 ORDER BY id DESC`,
 		string(repoID))
 	if err != nil {
@@ -1042,7 +1058,7 @@ func (s *PostgresStore) GetManifest(ctx context.Context, repoID domain.ContentHa
 	if err != nil {
 		return domain.Manifest{}, err
 	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db(ctx).Query(ctx, `
 		SELECT id, branch, COALESCE(memory_hash,''), message, grafted,
 		       COALESCE(graft_parents,'{}'), COALESCE(graft_seq,0)
 		  FROM snapshots WHERE repo_id=$1`, string(repoID))
@@ -1097,7 +1113,7 @@ func (s *PostgresStore) GetMemoryMeta(ctx context.Context, repoID, snapshotID do
 		return domain.MemoryDigest{}, err
 	}
 	var d domain.MemoryDigest
-	err := s.pool.QueryRow(ctx, `SELECT snapshot_id, summary, key_facts, open_tasks, provider FROM memories WHERE repo_id=$1 AND snapshot_id=$2`, string(repoID), string(snapshotID)).
+	err := s.db(ctx).QueryRow(ctx, `SELECT snapshot_id, summary, key_facts, open_tasks, provider FROM memories WHERE repo_id=$1 AND snapshot_id=$2`, string(repoID), string(snapshotID)).
 		Scan(&d.SnapshotID, &d.Summary, &d.KeyFacts, &d.OpenTasks, &d.Provider)
 	if err != nil {
 		return domain.MemoryDigest{}, mapNoRows(err)
@@ -1118,7 +1134,7 @@ func (s *PostgresStore) PutMemoryMeta(ctx context.Context, repoID domain.Content
 	if openTasks == nil {
 		openTasks = []string{}
 	}
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`INSERT INTO memories (repo_id, snapshot_id, summary, key_facts, open_tasks, provider) VALUES ($1,$2,$3,$4,$5,$6)
 		 ON CONFLICT (repo_id, snapshot_id) DO UPDATE SET summary=EXCLUDED.summary, key_facts=EXCLUDED.key_facts, open_tasks=EXCLUDED.open_tasks`,
 		string(repoID), string(digest.SnapshotID), digest.Summary, keyFacts, openTasks, string(digest.Provider))
@@ -1138,7 +1154,7 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 	if err != nil {
 		return false, err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -1271,7 +1287,7 @@ func (s *PostgresStore) GetDoc(ctx context.Context, repoID, hash domain.ContentH
 		return domain.SessionDoc{}, err
 	}
 	var b []byte
-	if err := s.pool.QueryRow(ctx,
+	if err := s.db(ctx).QueryRow(ctx,
 		`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
 		 WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2`,
 		string(repoID), string(hash)).Scan(&b); err != nil {
@@ -1308,7 +1324,7 @@ func (s *PostgresStore) PutChunks(ctx context.Context, repoID domain.ContentHash
 	if err := validateHash(repoID); err != nil {
 		return 0, 0, err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1360,7 +1376,7 @@ func (s *PostgresStore) HasChunks(ctx context.Context, repoID domain.ContentHash
 	if err := validateHashes(hs...); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db(ctx).Query(ctx,
 		`SELECT hash FROM repo_blobs WHERE repo_id=$1 AND kind='chunk' AND hash = ANY($2)`,
 		string(repoID), strs(hs))
 	if err != nil {
@@ -1384,7 +1400,7 @@ func (s *PostgresStore) GetChunk(ctx context.Context, repoID, hash domain.Conten
 		return nil, err
 	}
 	var raw []byte
-	if err := s.pool.QueryRow(ctx,
+	if err := s.db(ctx).QueryRow(ctx,
 		`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
 		 WHERE rb.repo_id=$1 AND rb.kind='chunk' AND rb.hash=$2`,
 		string(repoID), string(hash)).Scan(&raw); err != nil {
@@ -1399,7 +1415,7 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	if err := validateHashes(repoID, hash); err != nil {
 		return domain.DocChunkManifest{}, err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return domain.DocChunkManifest{}, err
 	}
@@ -1485,7 +1501,7 @@ func (s *PostgresStore) getDocChunkedPG(ctx context.Context, repoID, hash domain
 			return nil, true, domain.ErrIntegrity
 		}
 		var raw []byte
-		if err := s.pool.QueryRow(ctx,
+		if err := s.db(ctx).QueryRow(ctx,
 			`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
 			 WHERE rb.repo_id=$1 AND rb.kind='chunk' AND rb.hash=$2`,
 			string(repoID), string(ch)).Scan(&raw); err != nil {
@@ -1511,7 +1527,7 @@ func (s *PostgresStore) HasDocs(ctx context.Context, repoID domain.ContentHash, 
 	if err := validateHashes(hs...); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db(ctx).Query(ctx,
 		`SELECT hash FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash = ANY($2)`,
 		string(repoID), strs(hs))
 	if err != nil {
@@ -1544,7 +1560,7 @@ func (s *PostgresStore) PutMemory(ctx context.Context, repoID domain.ContentHash
 	if err != nil {
 		return "", err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -1695,7 +1711,7 @@ func (s *PostgresStore) GetMemory(ctx context.Context, repoID, hash domain.Conte
 		return domain.MemoryDigest{}, err
 	}
 	var b []byte
-	if err := s.pool.QueryRow(ctx,
+	if err := s.db(ctx).QueryRow(ctx,
 		`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
 		 WHERE rb.repo_id=$1 AND rb.kind='memory' AND rb.hash=$2`,
 		string(repoID), string(hash)).Scan(&b); err != nil {
@@ -1716,7 +1732,7 @@ func (s *PostgresStore) GetMemory(ctx context.Context, repoID, hash domain.Conte
 				continue
 			}
 			var raw []byte
-			if err := s.pool.QueryRow(ctx,
+			if err := s.db(ctx).QueryRow(ctx,
 				`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
 				 WHERE rb.repo_id=$1 AND rb.kind='memory_chunk' AND rb.hash=$2`,
 				string(repoID), string(chunkHash)).Scan(&raw); err != nil {
@@ -1767,7 +1783,7 @@ func (s *PostgresStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHa
 		return err
 	}
 	tj, _ := json.Marshal(topics)
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`UPDATE repos SET description=$2, website=$3, topics=$4 WHERE id=$1`,
 		string(id), description, website, string(tj))
 	return err
@@ -1784,12 +1800,12 @@ func (s *PostgresStore) UpdateRepoConfig(ctx context.Context, id domain.ContentH
 		}
 	}
 	if defaultBranch != nil && *defaultBranch != "" {
-		if _, err := s.pool.Exec(ctx, `UPDATE repos SET default_branch=$2 WHERE id=$1`, string(id), *defaultBranch); err != nil {
+		if _, err := s.db(ctx).Exec(ctx, `UPDATE repos SET default_branch=$2 WHERE id=$1`, string(id), *defaultBranch); err != nil {
 			return err
 		}
 	}
 	if protectDefault != nil {
-		if _, err := s.pool.Exec(ctx, `UPDATE repos SET protect_default=$2 WHERE id=$1`, string(id), *protectDefault); err != nil {
+		if _, err := s.db(ctx).Exec(ctx, `UPDATE repos SET protect_default=$2 WHERE id=$1`, string(id), *protectDefault); err != nil {
 			return err
 		}
 	}
@@ -1808,7 +1824,7 @@ func (s *PostgresStore) PutSettingsBundle(ctx context.Context, repoID domain.Con
 	if err != nil {
 		return storageWriteError(err)
 	}
-	_, err = s.pool.Exec(ctx,
+	_, err = s.db(ctx).Exec(ctx,
 		`INSERT INTO repo_settings (repo_id, kind, data) VALUES ($1,$2,$3)
 		 ON CONFLICT (repo_id, kind) DO UPDATE SET data = EXCLUDED.data`,
 		string(repoID), bundle.Kind, string(data))
@@ -1824,7 +1840,7 @@ func (s *PostgresStore) GetSettingsBundle(ctx context.Context, repoID domain.Con
 		return domain.SettingsBundle{}, err
 	}
 	var raw string
-	err := s.pool.QueryRow(ctx, `SELECT data FROM repo_settings WHERE repo_id=$1 AND kind=$2`, string(repoID), kind).Scan(&raw)
+	err := s.db(ctx).QueryRow(ctx, `SELECT data FROM repo_settings WHERE repo_id=$1 AND kind=$2`, string(repoID), kind).Scan(&raw)
 	if err != nil {
 		return domain.SettingsBundle{}, mapNoRows(err)
 	}
@@ -1859,7 +1875,7 @@ func (s *PostgresStore) ReplacePending(ctx context.Context, repoID domain.Conten
 	if err != nil {
 		return "", err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -1926,7 +1942,7 @@ func (s *PostgresStore) ListPendings(ctx context.Context, repoID domain.ContentH
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT data FROM pending_contexts WHERE repo_id=$1`, string(repoID))
+	rows, err := s.db(ctx).Query(ctx, `SELECT data FROM pending_contexts WHERE repo_id=$1`, string(repoID))
 	if err != nil {
 		return nil, err
 	}
@@ -1957,7 +1973,7 @@ func (s *PostgresStore) DeletePending(ctx context.Context, repoID domain.Content
 	if sessionID == "" || len(sessionID) > 128 {
 		return domain.ErrValidation
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM pending_contexts WHERE repo_id=$1 AND session_id=$2`, string(repoID), sessionID)
+	_, err := s.db(ctx).Exec(ctx, `DELETE FROM pending_contexts WHERE repo_id=$1 AND session_id=$2`, string(repoID), sessionID)
 	return err
 }
 
@@ -1968,7 +1984,7 @@ func (s *PostgresStore) CompareAndDeletePending(ctx context.Context, repoID doma
 	if sessionID == "" || len(sessionID) > 128 {
 		return domain.PendingDeleteKept, domain.ErrValidation
 	}
-	tag, err := s.pool.Exec(ctx,
+	tag, err := s.db(ctx).Exec(ctx,
 		`DELETE FROM pending_contexts
 		 WHERE repo_id=$1 AND session_id=$2 AND data->>'target'=$3`,
 		string(repoID), sessionID, string(expected))
@@ -1979,7 +1995,7 @@ func (s *PostgresStore) CompareAndDeletePending(ctx context.Context, repoID doma
 		return domain.PendingDeleteDeleted, nil
 	}
 	var exists bool
-	if err := s.pool.QueryRow(ctx,
+	if err := s.db(ctx).QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM pending_contexts WHERE repo_id=$1 AND session_id=$2)`,
 		string(repoID), sessionID).Scan(&exists); err != nil {
 		return domain.PendingDeleteKept, err
@@ -1997,7 +2013,7 @@ func (s *PostgresStore) SetPendingDismissed(ctx context.Context, repoID domain.C
 	if sessionID == "" || len(sessionID) > 128 {
 		return false, domain.ErrValidation
 	}
-	tag, err := s.pool.Exec(ctx,
+	tag, err := s.db(ctx).Exec(ctx,
 		`UPDATE pending_contexts
 		 SET data=jsonb_set(data, '{dismissed}', to_jsonb($3::boolean), true)
 		 WHERE repo_id=$1 AND session_id=$2`,
@@ -2020,7 +2036,7 @@ func (s *PostgresStore) PutUnsync(ctx context.Context, repoID domain.ContentHash
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx,
+	_, err = s.db(ctx).Exec(ctx,
 		`INSERT INTO unsync_contexts (repo_id, username, branch, data) VALUES ($1,$2,$3,$4)
 		 ON CONFLICT (repo_id, username, branch) DO UPDATE SET data = EXCLUDED.data`,
 		string(repoID), u.User, u.Branch, string(data))
@@ -2032,7 +2048,7 @@ func (s *PostgresStore) ListUnsyncs(ctx context.Context, repoID domain.ContentHa
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT data FROM unsync_contexts WHERE repo_id=$1`, string(repoID))
+	rows, err := s.db(ctx).Query(ctx, `SELECT data FROM unsync_contexts WHERE repo_id=$1`, string(repoID))
 	if err != nil {
 		return nil, err
 	}
@@ -2069,7 +2085,7 @@ func (s *PostgresStore) DeleteUnsync(ctx context.Context, repoID domain.ContentH
 	if user == "" || len(user) > 128 {
 		return domain.ErrValidation
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM unsync_contexts WHERE repo_id=$1 AND username=$2 AND branch=$3`,
+	_, err := s.db(ctx).Exec(ctx, `DELETE FROM unsync_contexts WHERE repo_id=$1 AND username=$2 AND branch=$3`,
 		string(repoID), user, branch)
 	return err
 }
@@ -2079,7 +2095,7 @@ func (s *PostgresStore) DeleteSnapshot(ctx context.Context, repoID, id domain.Co
 	if err := validateHashes(repoID, id); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM snapshots WHERE repo_id=$1 AND id=$2`, string(repoID), string(id))
+	_, err := s.db(ctx).Exec(ctx, `DELETE FROM snapshots WHERE repo_id=$1 AND id=$2`, string(repoID), string(id))
 	return err
 }
 
@@ -2094,7 +2110,7 @@ func (s *PostgresStore) SetGraftParents(ctx context.Context, repoID, id domain.C
 	if err := validateHashes(parents...); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -2204,7 +2220,7 @@ func (s *PostgresStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) 
 	if err := validateJoinMutationPlan(m); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -2322,7 +2338,7 @@ func (s *PostgresStore) UpdateSnapshotMessage(ctx context.Context, repoID, id do
 	if err := validateHashes(repoID, id); err != nil {
 		return err
 	}
-	ct, err := s.pool.Exec(ctx,
+	ct, err := s.db(ctx).Exec(ctx,
 		`UPDATE snapshots SET message=$3 WHERE repo_id=$1 AND id=$2
 		   AND (message LIKE $4 || '%' OR message=$3)`,
 		string(repoID), string(id), message, domain.HookMessagePrefix)
@@ -2331,7 +2347,7 @@ func (s *PostgresStore) UpdateSnapshotMessage(ctx context.Context, repoID, id do
 	}
 	if ct.RowsAffected() == 0 {
 		var exists bool
-		if qerr := s.pool.QueryRow(ctx,
+		if qerr := s.db(ctx).QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM snapshots WHERE repo_id=$1 AND id=$2)`,
 			string(repoID), string(id)).Scan(&exists); qerr != nil {
 			return qerr
@@ -2348,7 +2364,7 @@ func (s *PostgresStore) DeleteDoc(ctx context.Context, repoID domain.ContentHash
 	if err := validateHashes(repoID, hash); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -2380,7 +2396,7 @@ func (s *PostgresStore) PutSettingsObject(ctx context.Context, repoID domain.Con
 	if err != nil {
 		return storageWriteError(err)
 	}
-	_, err = s.pool.Exec(ctx,
+	_, err = s.db(ctx).Exec(ctx,
 		`INSERT INTO settings_objects (repo_id, hash, data) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
 		string(repoID), string(hash), string(data))
 	return storageWriteError(err)
@@ -2392,7 +2408,7 @@ func (s *PostgresStore) GetSettingsObject(ctx context.Context, repoID domain.Con
 		return domain.SettingsBundle{}, err
 	}
 	var raw string
-	err := s.pool.QueryRow(ctx, `SELECT data FROM settings_objects WHERE repo_id=$1 AND hash=$2`, string(repoID), string(hash)).Scan(&raw)
+	err := s.db(ctx).QueryRow(ctx, `SELECT data FROM settings_objects WHERE repo_id=$1 AND hash=$2`, string(repoID), string(hash)).Scan(&raw)
 	if err != nil {
 		return domain.SettingsBundle{}, mapNoRows(err)
 	}
@@ -2411,11 +2427,13 @@ func (s *PostgresStore) PutSecretsEnvelope(ctx context.Context, repoID domain.Co
 	if err := validateHash(repoID); err != nil {
 		return storageWriteError(err)
 	}
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO repo_secrets (repo_id, data) VALUES ($1,$2)
+	return s.WithinRepository(ctx, repoID, func(ctx context.Context) error {
+		_, err := s.db(ctx).Exec(ctx,
+			`INSERT INTO repo_secrets (repo_id, data) VALUES ($1,$2)
 		 ON CONFLICT (repo_id) DO UPDATE SET data = EXCLUDED.data`,
-		string(repoID), string(raw))
-	return storageWriteError(err)
+			string(repoID), string(raw))
+		return storageWriteError(err)
+	})
 }
 
 func (s *PostgresStore) GetSecretsEnvelope(ctx context.Context, repoID domain.ContentHash) ([]byte, error) {
@@ -2423,7 +2441,7 @@ func (s *PostgresStore) GetSecretsEnvelope(ctx context.Context, repoID domain.Co
 		return nil, err
 	}
 	var raw string
-	err := s.pool.QueryRow(ctx, `SELECT data FROM repo_secrets WHERE repo_id=$1`, string(repoID)).Scan(&raw)
+	err := s.db(ctx).QueryRow(ctx, `SELECT data FROM repo_secrets WHERE repo_id=$1`, string(repoID)).Scan(&raw)
 	if err != nil {
 		return nil, mapNoRows(err)
 	}

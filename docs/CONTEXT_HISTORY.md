@@ -60,6 +60,9 @@ implies `-c` in Git, so those flags cannot define opposite identity policies.
 
 ## Graph and history browser
 
+The server transaction and consistent graph-read guarantees are specified in
+[Collaboration transactions](COLLABORATION_TRANSACTIONS.md).
+
 Workspace tabs use `/<namespace>/<workspace>?tab=members`, `?tab=connections`,
 `?tab=settings`, and `?tab=onhold`. A named repository uses
 `/<namespace>/<workspace>/<repository>?tab=onhold`; the context tab uses the

@@ -256,6 +256,9 @@ func (s *FSStore) GetRepo(_ context.Context, id domain.ContentHash) (domain.Repo
 
 // PutRepo is idempotent: if it already exists, it returns the existing record (sync protocol). Exception: for unowned (workspace_id="") records, it fills in a delayed binding if a new binding arrives.
 func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
+	lock := s.refLock(repo.ID, domain.RefBranch, "")
+	lock.Lock()
+	defer lock.Unlock()
 	if err := validateHash(repo.ID); err != nil {
 		return domain.Repo{}, err
 	}
@@ -274,12 +277,13 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			existing.WorkspaceID = repo.WorkspaceID
 			changed = true
 		}
-		// default_branch/git_remote_url updates make the latest pushed value the source of truth for local Git metadata.
-		if repo.DefaultBranch != "" && repo.DefaultBranch != existing.DefaultBranch {
+		// Registration may fill an unknown origin, but cannot replace established
+		// identity or reset an owner-configured default branch.
+		if repo.DefaultBranch != "" && existing.DefaultBranch == "" {
 			existing.DefaultBranch = repo.DefaultBranch
 			changed = true
 		}
-		if repo.GitRemoteURL != "" && repo.GitRemoteURL != existing.GitRemoteURL {
+		if repo.GitRemoteURL != "" && existing.GitRemoteURL == "" {
 			existing.GitRemoteURL = repo.GitRemoteURL
 			changed = true
 		}
@@ -290,6 +294,8 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 			}
 		}
 		return existing, nil
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return domain.Repo{}, err
 	}
 	data, _ := json.Marshal(repo)
 	if err := writeAtomic(filepath.Join(s.repoDir(repo.ID), "repo.json"), data); err != nil {
@@ -784,6 +790,9 @@ func (s *FSStore) PutSecretsEnvelope(_ context.Context, repoID domain.ContentHas
 	if err := validateHash(repoID); err != nil {
 		return err
 	}
+	lock := s.refLock(repoID, domain.RefBranch, "")
+	lock.Lock()
+	defer lock.Unlock()
 	return writeAtomic(filepath.Join(s.repoDir(repoID), "secrets.enc.json"), raw)
 }
 

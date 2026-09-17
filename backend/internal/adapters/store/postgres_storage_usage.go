@@ -23,7 +23,7 @@ func (s *PostgresStore) ReconcileStorageUsage(ctx context.Context, ns string) er
 	if domain.ValidateNamespaceID(ns) != nil {
 		return domain.ErrValidation
 	}
-	_, err := s.pool.Exec(ctx, `SELECT cxt_storage_reconcile($1)`, ns)
+	_, err := s.db(ctx).Exec(ctx, `SELECT cxt_storage_reconcile($1)`, ns)
 	return err
 }
 func (s *PostgresStore) ReadStorageUsage(ctx context.Context, ns string, start, end time.Time) (domain.StorageUsage, error) {
@@ -31,7 +31,7 @@ func (s *PostgresStore) ReadStorageUsage(ctx context.Context, ns string, start, 
 	if domain.ValidateNamespaceID(ns) != nil || !end.After(start) || end.Sub(start) > 32*24*time.Hour {
 		return u, domain.ErrValidation
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := s.db(ctx).BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return u, err
 	}
@@ -87,7 +87,7 @@ func (s *PostgresStore) ConfigureStoragePolicy(ctx context.Context, ns, operatio
 		Expected      int64
 		Actor, Reason string
 	}{p, expected, actor, reason})
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (s *PostgresStore) ConfigureStoragePolicy(ctx context.Context, ns, operatio
 // Claim a bounded lease before recomputing. A canceled/failed reconciliation
 // retains its retry delay, so one expensive namespace cannot starve the rest.
 func (s *PostgresStore) ReconcileNextStorageUsage(ctx context.Context) (bool, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return false, err
 	}

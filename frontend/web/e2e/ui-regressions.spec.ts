@@ -1792,6 +1792,37 @@ test('graph distinguishes snapshot failure from empty history and recovers on re
   expect(unexpected).toEqual([]);
 });
 
+test('graph advances only from a complete repository view', async ({ page }) => {
+  await page.clock.install();
+  const root = auditSnapshot(appendedRoot, 'main', [], 'root', 0);
+  const tip = auditSnapshot(pushedHead, 'main', [appendedRoot], 'committed together', 1);
+  let advance = false;
+  let viewCalls = 0;
+  const base = publicWorkspaceApi([root], [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot }]);
+  const { pageErrors, unexpected } = await openGraph(page, req => {
+    if (req.pathname.endsWith('/view')) {
+      viewCalls++;
+      return { body: {
+        refs: [{ kind: 'branch', repo_id: repoId, name: 'main', target: advance ? pushedHead : appendedRoot }],
+        snapshots: advance ? [tip, root] : [root],
+        reflog: [], history: [], pending: [], unsync: [],
+      } };
+    }
+    // Legacy component endpoints intentionally remain at the old generation.
+    return base(req);
+  });
+  await expect(page.locator('.graph-row')).toHaveCount(1);
+  const previousCalls = viewCalls;
+  advance = true;
+  await page.clock.fastForward(11_000);
+  await expect.poll(() => viewCalls).toBeGreaterThan(previousCalls);
+  await expect(page.locator('.graph-row')).toHaveCount(2);
+  await expect(page.locator(`.graph-row[data-graph-snapshot="${pushedHead}"]`)).toBeVisible();
+  await expect(page.locator('.graph-wrap').getByRole('alert')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('tag preservation and unused branch archive do not fabricate publication or a merge', async ({ page }) => {
   const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0), auditSnapshot(graftTarget, 'feature', [appendedRoot], 'tagged history', 1)];
   const refs = [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot },

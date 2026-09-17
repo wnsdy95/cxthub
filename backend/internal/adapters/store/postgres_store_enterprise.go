@@ -31,7 +31,7 @@ func (s *PostgresStore) CreateNamespace(ctx context.Context, ns domain.Namespace
 	if err := domain.ValidateNamespaceRecord(ns); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return mapPGConstraint(err)
 	}
@@ -72,7 +72,7 @@ func (s *PostgresStore) GetNamespace(ctx context.Context, id string) (domain.Nam
 		return domain.Namespace{}, err
 	}
 	var ns domain.Namespace
-	err := s.pool.QueryRow(ctx,
+	err := s.db(ctx).QueryRow(ctx,
 		`SELECT id, slug, kind, COALESCE(user_id,''), COALESCE(enterprise_id,''), created_at FROM namespaces WHERE id=$1`, id).
 		Scan(&ns.ID, &ns.Slug, &ns.Kind, &ns.UserID, &ns.EnterpriseID, &ns.CreatedAt)
 	if err != nil {
@@ -89,7 +89,7 @@ func (s *PostgresStore) GetNamespaceBySlug(ctx context.Context, slug string) (do
 		return domain.Namespace{}, domain.ErrValidation
 	}
 	var ns domain.Namespace
-	err := s.pool.QueryRow(ctx,
+	err := s.db(ctx).QueryRow(ctx,
 		`SELECT n.id,n.slug,n.kind,COALESCE(n.user_id,''),COALESCE(n.enterprise_id,''),n.created_at
 		 FROM namespaces n WHERE n.slug=$1
 		 UNION ALL
@@ -113,7 +113,7 @@ func (s *PostgresStore) RenameNamespace(ctx context.Context, id, nextSlug string
 	if !domain.ValidNamespaceSlug(nextSlug) {
 		return domain.ErrValidation
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func (s *PostgresStore) CreateEnterprise(
 	if err := domain.ValidateEnterpriseAuditEvent(audit); err != nil || audit.EnterpriseID != ent.ID {
 		return domain.ErrValidation
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -240,14 +240,14 @@ func (s *PostgresStore) GetEnterprise(ctx context.Context, id string) (domain.En
 	if err := domain.ValidateEnterpriseID(id); err != nil {
 		return domain.Enterprise{}, err
 	}
-	return scanEnterprise(s.pool.QueryRow(ctx, enterpriseSelect+` WHERE id=$1`, id))
+	return scanEnterprise(s.db(ctx).QueryRow(ctx, enterpriseSelect+` WHERE id=$1`, id))
 }
 
 func (s *PostgresStore) GetEnterpriseBySlug(ctx context.Context, slug string) (domain.Enterprise, error) {
 	if !domain.ValidNamespaceSlug(slug) {
 		return domain.Enterprise{}, domain.ErrValidation
 	}
-	return scanEnterprise(s.pool.QueryRow(ctx,
+	return scanEnterprise(s.db(ctx).QueryRow(ctx,
 		enterpriseSelect+` WHERE namespace_id=(
 			SELECT id FROM namespaces WHERE slug=$1
 			UNION ALL
@@ -260,7 +260,7 @@ func (s *PostgresStore) UpdateEnterprise(ctx context.Context, ent domain.Enterpr
 	if err := domain.ValidateEnterpriseRecord(ent); err != nil {
 		return err
 	}
-	result, err := s.pool.Exec(ctx,
+	result, err := s.db(ctx).Exec(ctx,
 		`UPDATE enterprises SET name=$1,logo=$2
 		 WHERE id=$3 AND namespace_id=$4 AND slug=$5 AND created_by=$6 AND created_at=$7`,
 		ent.Name, ent.Logo, ent.ID, ent.NamespaceID, ent.Slug, ent.CreatedBy, ent.CreatedAt)
@@ -280,7 +280,7 @@ func (s *PostgresStore) UpdateEnterpriseWithAudit(ctx context.Context, ent domai
 	if err := validateEnterpriseMutationAudit(event, ent.ID, "enterprise.profile.updated", "enterprise", ent.ID); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -305,7 +305,7 @@ func (s *PostgresStore) ListEnterprisesForUser(ctx context.Context, userID strin
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db(ctx).Query(ctx,
 		`SELECT e.id,e.namespace_id,e.name,e.slug,COALESCE(e.logo,''),e.created_by,e.created_at
 		 FROM enterprises e JOIN enterprise_memberships m ON m.enterprise_id=e.id
 		 WHERE m.user_id=$1 ORDER BY e.slug`, userID)
@@ -328,7 +328,7 @@ func (s *PostgresStore) AddEnterpriseMember(ctx context.Context, member domain.E
 	if err := domain.ValidateEnterpriseMembershipRecord(member); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`INSERT INTO enterprise_memberships (enterprise_id,user_id,role,created_at) VALUES ($1,$2,$3,$4)
 		 ON CONFLICT (enterprise_id,user_id) DO UPDATE SET role=EXCLUDED.role`,
 		member.EnterpriseID, member.UserID, string(member.Role), member.CreatedAt)
@@ -342,7 +342,7 @@ func (s *PostgresStore) AddEnterpriseMemberWithAudit(ctx context.Context, member
 	if err := validateEnterpriseMutationAudit(event, member.EnterpriseID, "enterprise.member.updated", "user", member.UserID); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -366,7 +366,7 @@ func (s *PostgresStore) RemoveEnterpriseMember(ctx context.Context, enterpriseID
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `DELETE FROM enterprise_memberships WHERE enterprise_id=$1 AND user_id=$2`, enterpriseID, userID)
+	_, err := s.db(ctx).Exec(ctx, `DELETE FROM enterprise_memberships WHERE enterprise_id=$1 AND user_id=$2`, enterpriseID, userID)
 	return mapPGConstraint(err)
 }
 
@@ -374,7 +374,7 @@ func (s *PostgresStore) RemoveEnterpriseMemberWithAudit(ctx context.Context, ent
 	if err := validateEnterpriseMutationAudit(event, enterpriseID, "enterprise.member.removed", "user", userID); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -400,7 +400,7 @@ func (s *PostgresStore) GetEnterpriseMembership(ctx context.Context, enterpriseI
 		return domain.EnterpriseMembership{}, err
 	}
 	var member domain.EnterpriseMembership
-	err := s.pool.QueryRow(ctx,
+	err := s.db(ctx).QueryRow(ctx,
 		`SELECT enterprise_id,user_id,role,created_at FROM enterprise_memberships WHERE enterprise_id=$1 AND user_id=$2`,
 		enterpriseID, userID).Scan(&member.EnterpriseID, &member.UserID, &member.Role, &member.CreatedAt)
 	if err != nil {
@@ -416,7 +416,7 @@ func (s *PostgresStore) ListEnterpriseMembers(ctx context.Context, enterpriseID 
 	if err := domain.ValidateEnterpriseID(enterpriseID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db(ctx).Query(ctx,
 		`SELECT m.enterprise_id,m.user_id,m.role,m.created_at,u.email,u.name,COALESCE(u.username,''),COALESCE(u.nickname,''),COALESCE(u.avatar,'')
 		 FROM enterprise_memberships m JOIN users u ON u.id=m.user_id
 		 WHERE m.enterprise_id=$1 ORDER BY m.created_at`, enterpriseID)
@@ -448,7 +448,7 @@ func (s *PostgresStore) PutEnterprisePolicy(ctx context.Context, policy domain.E
 	if err := domain.ValidateEnterprisePolicy(policy); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`INSERT INTO enterprise_policies (enterprise_id,workspace_creation,default_workspace_visibility,allow_public_workspaces,break_glass_enabled,break_glass_max_minutes,updated_by,updated_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		 ON CONFLICT (enterprise_id) DO UPDATE SET workspace_creation=EXCLUDED.workspace_creation,
@@ -467,7 +467,7 @@ func (s *PostgresStore) PutEnterprisePolicyWithAudit(ctx context.Context, policy
 	if err := validateEnterpriseMutationAudit(event, policy.EnterpriseID, "enterprise.policy.updated", "enterprise", policy.EnterpriseID); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -494,7 +494,7 @@ func (s *PostgresStore) GetEnterprisePolicy(ctx context.Context, enterpriseID st
 		return domain.EnterprisePolicy{}, err
 	}
 	var policy domain.EnterprisePolicy
-	err := s.pool.QueryRow(ctx,
+	err := s.db(ctx).QueryRow(ctx,
 		`SELECT enterprise_id,workspace_creation,default_workspace_visibility,allow_public_workspaces,break_glass_enabled,break_glass_max_minutes,COALESCE(updated_by,''),updated_at
 		 FROM enterprise_policies WHERE enterprise_id=$1`, enterpriseID).
 		Scan(&policy.EnterpriseID, &policy.WorkspaceCreation, &policy.DefaultWorkspaceVisibility, &policy.AllowPublicWorkspaces,
@@ -512,7 +512,7 @@ func (s *PostgresStore) ListWorkspacesForNamespace(ctx context.Context, namespac
 	if err := domain.ValidateNamespaceID(namespaceID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db(ctx).Query(ctx,
 		`SELECT id,name,owner_id,COALESCE(slug,''),COALESCE(owner_username,''),COALESCE(owner_namespace_id,''),COALESCE(visibility,''),COALESCE(secrets_policy,''),COALESCE(settings_policy,''),COALESCE(gh_visibility_sync,false),gh_synced_at,COALESCE(archived,false),COALESCE(webhook_url,''),COALESCE(public_role,''),created_at
 		 FROM workspaces WHERE owner_namespace_id=$1 ORDER BY created_at`, namespaceID)
 	if err != nil {
@@ -540,7 +540,7 @@ func (s *PostgresStore) CreateEnterpriseWorkspaceWithAudit(ctx context.Context, 
 	if err := validateEnterpriseWorkspaceMutation(workspace, owner, event); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -577,7 +577,7 @@ func (s *PostgresStore) AppendEnterpriseAudit(ctx context.Context, event domain.
 	if err := domain.ValidateEnterpriseAuditEvent(event); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`INSERT INTO enterprise_audit_events (id,enterprise_id,actor_id,action,target_type,target_id,reason,created_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING`,
 		event.ID, event.EnterpriseID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt)
@@ -591,7 +591,7 @@ func (s *PostgresStore) ListEnterpriseAudit(ctx context.Context, enterpriseID st
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db(ctx).Query(ctx,
 		`SELECT id,enterprise_id,actor_id,action,target_type,target_id,reason,created_at
 		 FROM enterprise_audit_events WHERE enterprise_id=$1 ORDER BY created_at DESC LIMIT $2`, enterpriseID, limit)
 	if err != nil {
@@ -616,7 +616,7 @@ func (s *PostgresStore) CreateBreakGlassGrant(ctx context.Context, grant domain.
 	if err := domain.ValidateBreakGlassGrant(grant); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`INSERT INTO enterprise_break_glass_grants (id,enterprise_id,workspace_id,user_id,reason,created_at,expires_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		grant.ID, grant.EnterpriseID, grant.WorkspaceID, grant.UserID, grant.Reason, grant.CreatedAt, grant.ExpiresAt)
@@ -630,7 +630,7 @@ func (s *PostgresStore) CreateBreakGlassGrantWithAudit(ctx context.Context, gran
 	if err := domain.ValidateEnterpriseAuditEvent(event); err != nil || event.EnterpriseID != grant.EnterpriseID || event.ActorID != grant.UserID || event.Action != "enterprise.break_glass.created" {
 		return domain.ErrValidation
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -661,7 +661,7 @@ func (s *PostgresStore) GetActiveBreakGlassGrant(ctx context.Context, enterprise
 		return domain.BreakGlassGrant{}, err
 	}
 	var grant domain.BreakGlassGrant
-	err := s.pool.QueryRow(ctx,
+	err := s.db(ctx).QueryRow(ctx,
 		`SELECT id,enterprise_id,workspace_id,user_id,reason,created_at,expires_at
 		 FROM enterprise_break_glass_grants
 		 WHERE enterprise_id=$1 AND workspace_id=$2 AND user_id=$3 AND expires_at>$4
@@ -686,7 +686,7 @@ func (s *PostgresStore) UseActiveBreakGlassGrant(ctx context.Context, enterprise
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return domain.BreakGlassGrant{}, err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return domain.BreakGlassGrant{}, err
 	}

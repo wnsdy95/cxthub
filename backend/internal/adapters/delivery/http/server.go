@@ -28,6 +28,7 @@ import (
 
 // Backend is a set of server actions required by REST handlers (app.Service implements).
 type Backend interface {
+	GetRepositoryView(context.Context, domain.ContentHash) (domain.RepositoryView, error)
 	Negotiate(ctx context.Context, in inbound.PushNegotiateInput) (inbound.PushNegotiateOutput, error)
 	StoreChunks(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error)
 	PullChunks(ctx context.Context, in inbound.PullChunksInput) (inbound.PullChunksOutput, error)
@@ -66,6 +67,7 @@ type Backend interface {
 	PutSettings(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettings(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
 	PutSecrets(ctx context.Context, repoID domain.ContentHash, raw []byte) error
+	PutSecretsCAS(ctx context.Context, repoID domain.ContentHash, raw, expected []byte) error
 	GetSecrets(ctx context.Context, repoID domain.ContentHash) ([]byte, error)
 	PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettingsObjectByHash(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash) (domain.SettingsBundle, error)
@@ -177,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/branches", s.guard(domain.RoleViewer, s.listRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/refs", s.guard(domain.RoleViewer, s.listRefs))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/refs/batch", s.guard(domain.RoleMember, s.putRefs))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/view", s.guard(domain.RoleViewer, s.repositoryView))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots", s.guard(domain.RoleViewer, s.listSnapshots))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots/{id}", s.guard(domain.RoleViewer, s.getSnapshot))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/promote", s.guard(domain.RoleMember, s.promoteSnapshot))
@@ -648,7 +651,11 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.b.PutSecrets(r.Context(), s.repoID(r), raw); err != nil {
+	if err := s.b.PutSecretsCAS(r.Context(), s.repoID(r), raw, existing); err != nil {
+		if errors.Is(err, domain.ErrRefConflict) {
+			s.writeError(w, http.StatusConflict, "rotate_conflict", "secrets changed during this request — fetch the latest envelope and retry")
+			return
+		}
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
 		return

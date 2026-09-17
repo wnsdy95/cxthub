@@ -46,7 +46,7 @@ func (s *Service) notifyRefUpdate(ctx context.Context, repoID domain.ContentHash
 		verb += "(force)"
 	}
 	text := fmt.Sprintf("cxthub: %s — branch %q %s → %s", name, ref.Name, verb, shortHash(ref.Target))
-	go postWebhook(wsp.WebhookURL, text)
+	afterRepositoryCommit(ctx, func() { go postWebhook(wsp.WebhookURL, text) })
 }
 
 // notifyWorkspace sends text to the workspace webhook (only if configured, best-effort).

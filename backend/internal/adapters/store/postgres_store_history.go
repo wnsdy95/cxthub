@@ -17,7 +17,7 @@ func (s *PostgresStore) ApplyHistoryEvent(ctx context.Context, e domain.HistoryE
 	if err := domain.ValidateHistoryEvent(e); err != nil {
 		return err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -149,7 +149,7 @@ func (s *PostgresStore) ApplyHistoryEvent(ctx context.Context, e domain.HistoryE
 }
 
 func (s *PostgresStore) ListHistoryEvents(ctx context.Context, repoID domain.ContentHash) ([]domain.HistoryEvent, error) {
-	rows, err := s.pool.Query(ctx, `SELECT event FROM context_history WHERE repo_id=$1 ORDER BY received_at,id`, string(repoID))
+	rows, err := s.db(ctx).Query(ctx, `SELECT event FROM context_history WHERE repo_id=$1 ORDER BY received_at,id`, string(repoID))
 	if err != nil {
 		return nil, err
 	}

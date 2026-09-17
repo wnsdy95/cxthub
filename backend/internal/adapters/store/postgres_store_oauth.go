@@ -19,7 +19,7 @@ func (s *PostgresStore) CreateOAuthClient(ctx context.Context, client domain.OAu
 	if err := domain.ValidateOAuthClientRecord(client); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at) VALUES ($1,$2,$3,$4)`,
 		client.ID, client.Name, client.RedirectURIs, client.CreatedAt)
 	return err
@@ -30,7 +30,7 @@ func (s *PostgresStore) GetOAuthClient(ctx context.Context, clientID string) (do
 		return domain.OAuthClient{}, err
 	}
 	var client domain.OAuthClient
-	err := s.pool.QueryRow(ctx,
+	err := s.db(ctx).QueryRow(ctx,
 		`SELECT client_id, client_name, redirect_uris, created_at FROM oauth_clients WHERE client_id=$1`, clientID).
 		Scan(&client.ID, &client.Name, &client.RedirectURIs, &client.CreatedAt)
 	if err != nil {
@@ -46,7 +46,7 @@ func (s *PostgresStore) CreateOAuthAuthorizationRequest(ctx context.Context, req
 	if err := domain.ValidateOAuthAuthorizationRequestRecord(req); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx,
+	_, err := s.db(ctx).Exec(ctx,
 		`WITH expired AS (
 		   DELETE FROM oauth_authorization_requests WHERE expires_at <= now()
 		 )
@@ -73,7 +73,7 @@ func (s *PostgresStore) GetOAuthAuthorizationRequest(ctx context.Context, reques
 	if err := domain.ValidateExternalID(requestID); err != nil {
 		return domain.OAuthAuthorizationRequest{}, err
 	}
-	return scanOAuthRequest(s.pool.QueryRow(ctx,
+	return scanOAuthRequest(s.db(ctx).QueryRow(ctx,
 		`SELECT id, client_id, redirect_uri, state, code_challenge, resource, scope, created_at, expires_at
 		 FROM oauth_authorization_requests WHERE id=$1`, requestID))
 }
@@ -82,7 +82,7 @@ func (s *PostgresStore) ApproveOAuthAuthorizationRequest(ctx context.Context, re
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return domain.OAuthAuthorizationCode{}, err
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.db(ctx).BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return domain.OAuthAuthorizationCode{}, err
 	}
@@ -122,7 +122,7 @@ func (s *PostgresStore) ApproveOAuthAuthorizationRequest(ctx context.Context, re
 }
 
 func (s *PostgresStore) DenyOAuthAuthorizationRequest(ctx context.Context, requestID string) (domain.OAuthAuthorizationRequest, error) {
-	return scanOAuthRequest(s.pool.QueryRow(ctx,
+	return scanOAuthRequest(s.db(ctx).QueryRow(ctx,
 		`DELETE FROM oauth_authorization_requests WHERE id=$1 AND expires_at > now()
 		 RETURNING id, client_id, redirect_uri, state, code_challenge, resource, scope, created_at, expires_at`, requestID))
 }
@@ -140,7 +140,7 @@ func scanOAuthCode(row pgx.Row) (domain.OAuthAuthorizationCode, error) {
 }
 
 func (s *PostgresStore) ConsumeOAuthAuthorizationCode(ctx context.Context, codeHash, clientID, redirectURI, codeChallenge string) (domain.OAuthAuthorizationCode, error) {
-	code, err := scanOAuthCode(s.pool.QueryRow(ctx,
+	code, err := scanOAuthCode(s.db(ctx).QueryRow(ctx,
 		`DELETE FROM oauth_authorization_codes
 		 WHERE code_hash=$1 AND client_id=$2 AND redirect_uri=$3 AND code_challenge=$4 AND expires_at > now()
 		 RETURNING code_hash, client_id, redirect_uri, user_id, code_challenge, resource, scope, created_at, expires_at`,

@@ -420,3 +420,13 @@ export interface StorageUsageReport {
   overage_byte_hours: string;
   entries: { sequence: number; delta_bytes: number; bytes_after: number; reason: string; occurred_at: string }[];
 }
+
+/** A complete graph generation, read in one backend transaction. */
+export interface RepositoryView {
+  refs: Ref[];
+  snapshots: Snapshot[];
+  reflog: RefLogEntry[];
+  history: HistoryEvent[];
+  pending: Pending[];
+  unsync: Unsync[];
+}
