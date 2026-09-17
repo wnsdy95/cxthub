@@ -200,23 +200,23 @@ var _ inbound.Memorize = (*MemorizeService)(nil)
 // ancestorMemoryProjection projects every nearest memory frontier behind the
 // snapshot. A digest is a valid traversal stop only when it proves coverage of
 // the memory-bearing snapshot's current mutable graft register.
-func ancestorMemoryProjection(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool) {
+func ancestorMemoryProjection(ctx context.Context, store MemoryReader, snap domain.Snapshot) (domain.MemoryDigest, bool) {
 	digest, found, _ := ancestorMemoryProjectionDetailed(ctx, store, snap)
 	return digest, found
 }
 
-func ancestorMemoryProjectionDetailed(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool, bool) {
+func ancestorMemoryProjectionDetailed(ctx context.Context, store MemoryReader, snap domain.Snapshot) (domain.MemoryDigest, bool, bool) {
 	return memoryProjectionFromDetailed(ctx, store, snap.ReachabilityParents()...)
 }
 
 // snapshotMemoryProjection resolves a snapshot's own digest together with any
 // graft lineages added or superseded after that digest was attached.
-func snapshotMemoryProjection(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool) {
+func snapshotMemoryProjection(ctx context.Context, store MemoryReader, snap domain.Snapshot) (domain.MemoryDigest, bool) {
 	digest, found, _ := snapshotMemoryProjectionDetailed(ctx, store, snap)
 	return digest, found
 }
 
-func snapshotMemoryProjectionDetailed(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool, bool) {
+func snapshotMemoryProjectionDetailed(ctx context.Context, store MemoryReader, snap domain.Snapshot) (domain.MemoryDigest, bool, bool) {
 	if memory, pinned, err := selectedMemory(ctx, store, snap.ID); pinned || err != nil {
 		return memory, pinned && err == nil && memory.SnapshotID != "", err == nil
 	}
@@ -229,12 +229,12 @@ func snapshotMemoryProjectionDetailed(ctx context.Context, store outbound.Sessio
 // reading ancestors alone is lossy when the same seed/head is memorized again.
 // Legacy cumulative digests have no provenance to separate own from inherited
 // content and retain the historical ancestor-only behavior.
-func priorMemoryProjection(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool) {
+func priorMemoryProjection(ctx context.Context, store MemoryReader, snap domain.Snapshot) (domain.MemoryDigest, bool) {
 	digest, found, _ := priorMemoryProjectionDetailed(ctx, store, snap)
 	return digest, found
 }
 
-func priorMemoryProjectionDetailed(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool, bool) {
+func priorMemoryProjectionDetailed(ctx context.Context, store MemoryReader, snap domain.Snapshot) (domain.MemoryDigest, bool, bool) {
 	if memory, pinned, err := selectedMemory(ctx, store, snap.ID); pinned || err != nil {
 		return memory, pinned && err == nil && memory.SnapshotID != "", err == nil
 	}
@@ -266,13 +266,13 @@ func priorMemoryProjectionDetailed(ctx context.Context, store outbound.SessionSt
 	return domain.MergeDigests(domain.MemoryDigest{}, prior), true, complete
 }
 
-func nearestDigestFrom(ctx context.Context, store outbound.SessionStore, start domain.ContentHash) (domain.MemoryDigest, bool) {
+func nearestDigestFrom(ctx context.Context, store MemoryReader, start domain.ContentHash) (domain.MemoryDigest, bool) {
 	return memoryProjectionFrom(ctx, store, start)
 }
 
 type memoryProjectionWalker struct {
 	ctx            context.Context
-	store          outbound.SessionStore
+	store          MemoryReader
 	seen           map[domain.ContentHash]bool
 	supplementSeen map[domain.ContentHash]bool
 	fingerprinter  *memoryProjectionFingerprinter
@@ -281,12 +281,12 @@ type memoryProjectionWalker struct {
 	complete       bool
 }
 
-func memoryProjectionFrom(ctx context.Context, store outbound.SessionStore, starts ...domain.ContentHash) (domain.MemoryDigest, bool) {
+func memoryProjectionFrom(ctx context.Context, store MemoryReader, starts ...domain.ContentHash) (domain.MemoryDigest, bool) {
 	digest, found, _ := memoryProjectionFromDetailed(ctx, store, starts...)
 	return digest, found
 }
 
-func memoryProjectionFromDetailed(ctx context.Context, store outbound.SessionStore, starts ...domain.ContentHash) (domain.MemoryDigest, bool, bool) {
+func memoryProjectionFromDetailed(ctx context.Context, store MemoryReader, starts ...domain.ContentHash) (domain.MemoryDigest, bool, bool) {
 	walker := memoryProjectionWalker{
 		ctx: ctx, store: store,
 		seen: map[domain.ContentHash]bool{}, supplementSeen: map[domain.ContentHash]bool{},
@@ -449,7 +449,7 @@ func (w *memoryProjectionWalker) memoryDigestCoversLineage(digest domain.MemoryD
 
 func memoryGraftCoverage(
 	ctx context.Context,
-	store outbound.SessionStore,
+	store MemoryReader,
 	snap domain.Snapshot,
 	fragments []domain.MemoryFragment,
 	projectionComplete bool,
@@ -465,7 +465,7 @@ func memoryGraftCoverage(
 
 func memoryGraftCoverageFromState(
 	ctx context.Context,
-	store outbound.SessionStore,
+	store MemoryReader,
 	state memoryProjectionReadState,
 	fragments []domain.MemoryFragment,
 	projectionComplete bool,
@@ -505,7 +505,7 @@ type memoryProjectionReadState struct {
 	fingerprinter   *memoryProjectionFingerprinter
 }
 
-func readMemoryProjectionState(ctx context.Context, store outbound.SessionStore, id domain.ContentHash) (memoryProjectionReadState, error) {
+func readMemoryProjectionState(ctx context.Context, store MemoryReader, id domain.ContentHash) (memoryProjectionReadState, error) {
 	snap, err := store.GetSnapshot(ctx, id)
 	if err != nil {
 		return memoryProjectionReadState{}, err
@@ -579,7 +579,7 @@ const memoryProjectionReadAttempts = 3
 // after projection and retry optimistically on movement.
 func stablePriorMemoryProjection(
 	ctx context.Context,
-	store outbound.SessionStore,
+	store MemoryReader,
 	id domain.ContentHash,
 ) (memoryProjectionReadState, domain.MemoryDigest, bool, bool, error) {
 	for attempt := 0; attempt < memoryProjectionReadAttempts; attempt++ {
@@ -620,13 +620,13 @@ type memoryProjectionFingerprintResult struct {
 
 type memoryProjectionFingerprinter struct {
 	ctx       context.Context
-	store     outbound.SessionStore
+	store     MemoryReader
 	memo      map[domain.ContentHash]memoryProjectionFingerprintResult
 	visiting  map[domain.ContentHash]bool
 	reachable map[domain.ContentHash]bool
 }
 
-func newMemoryProjectionFingerprinter(ctx context.Context, store outbound.SessionStore) *memoryProjectionFingerprinter {
+func newMemoryProjectionFingerprinter(ctx context.Context, store MemoryReader) *memoryProjectionFingerprinter {
 	return &memoryProjectionFingerprinter{
 		ctx: ctx, store: store,
 		memo:     map[domain.ContentHash]memoryProjectionFingerprintResult{},
@@ -765,7 +765,7 @@ func (w *memoryProjectionWalker) retainedMemoryContribution(digest domain.Memory
 
 func memorySourceReproducible(
 	ctx context.Context,
-	store outbound.SessionStore,
+	store MemoryReader,
 	reachable map[domain.ContentHash]bool,
 	source domain.ContentHash,
 ) bool {
@@ -782,7 +782,7 @@ func memorySourceReproducible(
 
 // nearestAncestorDigest is retained for explicit legacy single-nearest callers
 // and compatibility tests. Project inheritance must use ancestorMemoryProjection.
-func nearestAncestorDigest(ctx context.Context, store outbound.SessionStore, snap domain.Snapshot) (domain.MemoryDigest, bool) {
+func nearestAncestorDigest(ctx context.Context, store MemoryReader, snap domain.Snapshot) (domain.MemoryDigest, bool) {
 	seen := map[domain.ContentHash]bool{}
 	queue := append([]domain.ContentHash{}, snap.ReachabilityParents()...)
 	for len(queue) > 0 {

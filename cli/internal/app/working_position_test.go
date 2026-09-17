@@ -268,7 +268,7 @@ func TestHistoricalSelectionPinsMemoryAcrossLaterMetadataUpdates(t *testing.T) {
 				t.Fatal(err)
 			}
 			snap.MemoryHash = newer
-			for _, projection := range []func(context.Context, outbound.SessionStore, domain.Snapshot) (domain.MemoryDigest, bool, bool){snapshotMemoryProjectionDetailed, priorMemoryProjectionDetailed} {
+			for _, projection := range []func(context.Context, MemoryReader, domain.Snapshot) (domain.MemoryDigest, bool, bool){snapshotMemoryProjectionDetailed, priorMemoryProjectionDetailed} {
 				got, found, complete := projection(ctx, store, snap)
 				if !complete || found == initiallyEmpty || strings.Contains(got.Summary, "future") {
 					t.Fatalf("historical memory contaminated: %+v found=%v complete=%v", got, found, complete)

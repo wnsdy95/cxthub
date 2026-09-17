@@ -64,8 +64,10 @@ func (f fakeStore) GetRef(_ context.Context, _ string, kind domain.RefKind, name
 func h(c string) domain.ContentHash { return domain.ContentHash("sha256:" + strings.Repeat(c, 64)) }
 
 func testServer() *Server {
+	digest := domain.MemoryDigest{SnapshotID: h("a"), Summary: "Authentication refactoring session summary", KeyFacts: []string{"JWT expiration 30 minutes"}}
+	memoryHash, _ := domain.MemoryDigestHash(digest)
 	snap := domain.Snapshot{
-		ID: h("a"), RepoID: "repo-1", Branch: "main", DocHash: h("a"), MemoryHash: h("m"),
+		ID: h("a"), RepoID: "repo-1", Branch: "main", DocHash: h("a"), MemoryHash: memoryHash,
 		Message: "feat: auth refactoring", Author: domain.TeamIdentity{Name: "alice"}, CreatedAt: time.Now(),
 	}
 	st := fakeStore{
@@ -74,7 +76,7 @@ func testServer() *Server {
 			{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "Fix authentication"}}},
 			{Kind: domain.EventMessage, Role: "assistant", Blocks: []domain.ContentBlock{{Type: "text", Text: "Fixed"}}},
 		}}}},
-		mems: map[domain.ContentHash]domain.MemoryDigest{h("m"): {SnapshotID: h("a"), Summary: "Authentication refactoring session summary", KeyFacts: []string{"JWT expiration 30 minutes"}}},
+		mems: map[domain.ContentHash]domain.MemoryDigest{memoryHash: digest},
 		refs: map[string]domain.Ref{"branch/main": {Kind: domain.RefBranch, Name: "main", Target: h("a")}},
 	}
 	return NewServer(fakeGit{}, st, nil)
@@ -168,12 +170,17 @@ func TestMCPProtocolRoundTrip(t *testing.T) {
 func TestMemoryToolOmitsUnattestedStructuredArchiveState(t *testing.T) {
 	srv := testServer()
 	st := srv.store.(fakeStore)
-	st.mems[h("m")] = domain.MemoryDigest{
+	digest := domain.MemoryDigest{
 		SnapshotID: h("a"),
 		Summary:    "provider summary remains",
 		KeyFacts:   []string{"apply_patch", "The MCP projection keeps this project fact."},
 		OpenTasks:  []string{"Completed fallback task must stay archived."},
 	}
+	hash, _ := domain.MemoryDigestHash(digest)
+	st.mems[hash] = digest
+	snap := st.snaps[h("a")]
+	snap.MemoryHash = hash
+	st.snaps[snap.ID] = snap
 	srv.store = st
 
 	got, err := srv.toolMemory(context.Background(), "", domain.Repo{ID: "repo-1", DefaultBranch: "main"}, "main")
@@ -189,5 +196,31 @@ func TestMemoryToolOmitsUnattestedStructuredArchiveState(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("MCP memory lost %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestLocalMemoryProjectsMergeAndReportsMissingLineage(t *testing.T) {
+	server := testServer()
+	st := server.store.(fakeStore)
+	d := domain.MemoryDigest{SnapshotID: h("b"), Summary: "PREVIOUS MAIN DECISION"}
+	hash, _ := domain.MemoryDigestHash(d)
+	st.mems[hash] = d
+	st.snaps[h("b")] = domain.Snapshot{ID: h("b"), MemoryHash: hash}
+	snap := st.snaps[h("a")]
+	snap.GraftParents = []domain.ContentHash{h("b")}
+	snap.GraftSeq = 1
+	st.snaps[snap.ID] = snap
+	got, err := server.toolMemory(context.Background(), "", domain.Repo{ID: "repo-1"}, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"PREVIOUS MAIN DECISION", "Authentication refactoring session summary"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("local MCP omitted %q: %s", want, got)
+		}
+	}
+	delete(st.snaps, h("b"))
+	if _, err := server.toolMemory(context.Background(), "", domain.Repo{ID: "repo-1"}, "main"); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("partial replica hid memory loss: %v", err)
 	}
 }

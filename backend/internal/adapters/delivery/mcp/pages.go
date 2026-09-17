@@ -53,7 +53,7 @@ func cursorFor(repo, tool string, a toolArgs) (pageCursor, error) {
 		return expected, fmt.Errorf("invalid cursor")
 	}
 	var cur pageCursor
-	if json.Unmarshal(raw, &cur) != nil || cur.Version != 1 || cur.Repository != repo || cur.Tool != tool || cur.Filter != filter || cur.Index < 0 || cur.Offset < 0 {
+	if json.Unmarshal(raw, &cur) != nil || (cur.Version != 1 && !(tool == "memory_load" && cur.Version == 2)) || cur.Repository != repo || cur.Tool != tool || cur.Filter != filter || cur.Index < 0 || cur.Offset < 0 {
 		return expected, fmt.Errorf("cursor does not match this repository, tool, or selection")
 	}
 	for _, id := range []domain.ContentHash{cur.Snapshot, cur.Memory, cur.Scan, cur.Projection} {
@@ -457,8 +457,21 @@ func (s *Server) memoryPage(ctx context.Context, repo domain.Repo, a toolArgs) (
 	if cur.Memory == "" && a.MemoryHash != "" {
 		cur.Memory = domain.ContentHash(a.MemoryHash)
 	}
+	if a.Cursor != "" {
+		if cur.Version == 2 {
+			if cur.Projection == "" || cur.Memory != "" || cur.FragmentFormat != "memory-project-v1" || a.Mode == "stored" || a.MemoryHash != "" {
+				return "", fmt.Errorf("unsupported memory projection cursor; restart without cursor")
+			}
+		} else if cur.Memory == "" || cur.Projection != "" || a.Mode == "project" {
+			return "", fmt.Errorf("invalid stored memory cursor")
+		}
+	}
 	project := a.Mode != "stored" && a.MemoryHash == "" && cur.Memory == ""
 	if project {
+		// Older replicas reject v2 instead of interpreting a projection offset as
+		// an offset into the nearest stored object during a rolling deployment.
+		cur.Version = 2
+		cur.FragmentFormat = "memory-project-v1"
 		result, projectionErr := s.context.GetMemoryProjection(ctx, repo.ID, snap.ID)
 		if projectionErr != nil {
 			return "", projectionErr

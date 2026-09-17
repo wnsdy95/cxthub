@@ -7,7 +7,7 @@
 //
 // context_list    → current repo commit (snapshot) list (local store)
 // context_fetch   → metadata + memory summary + recent chat tail for a specific ref/commit
-// memory_load     → MemoryDigest of ref (or closest ancestor if none exists)
+// memory_load     → projected natural/graft memory (exact pinned memory on rewind)
 // context_search  → team server search (commit message · chat body — origin required)
 //
 // Transmission: stdio, newline-delimited JSON-RPC 2.0 (MCP as of 2024-11-05). stderr is for logs only.
@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wnsdy95/cxthub/cli/internal/app"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
@@ -176,7 +177,7 @@ func toolDefs() []map[string]interface{} {
 		},
 		{
 			"name":        "memory_load",
-			"description": "Compressed memory for a ref (MemoryDigest: agent compaction summary, key decisions, and unresolved tasks). Falls back to the nearest ancestor.",
+			"description": "Project memory across natural and merged lineage. A selected historical rewind retains its exact memory. Incomplete local replicas require pull or cloud MCP.",
 			"annotations": map[string]interface{}{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true},
 			"inputSchema": obj(map[string]interface{}{
 				"ref": map[string]interface{}{"type": "string", "description": "Branch name or commit hash (default: current branch)"},
@@ -322,11 +323,14 @@ func (s *Server) toolMemory(ctx context.Context, cwd string, repo domain.Repo, r
 	if err != nil {
 		return "", err
 	}
-	d, ok := s.nearestDigest(ctx, snap)
+	d, ok, err := app.ReadProjectedMemory(ctx, s.store, snap.ID)
+	if err != nil {
+		return "", err
+	}
 	if !ok {
 		return "No memory digest for this sequence (cxt memorize or automatic commit memorize required)", nil
 	}
-	d = domain.PromptStructuredProjection(d)
+	d = domain.PromptStructuredProjection(domain.MergeDigests(domain.MemoryDigest{}, d))
 	var b strings.Builder
 	fmt.Fprintf(&b, "memory digest (Snapshot %s based)\n\n%s\n", shortHash(d.SnapshotID), truncateRunes(d.Summary, 8000))
 	if len(d.KeyFacts) > 0 {

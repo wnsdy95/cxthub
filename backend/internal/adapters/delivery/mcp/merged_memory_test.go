@@ -83,6 +83,19 @@ func TestProjectedMemoryPagesAreStatelessAndRejectDependencyChanges(t *testing.T
 	if firstCursor == "" {
 		t.Fatal("pagination not exercised")
 	}
+	cursor, err := cursorFor(string(repo.ID), "memory_load", toolArgs{Ref: string(source), Cursor: firstCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor.Version != 2 || cursor.FragmentFormat != "memory-project-v1" {
+		t.Fatal("older replicas could misread a projection cursor as stored memory")
+	}
+	bad := cursor
+	bad.FragmentFormat = "future-format"
+	if _, err := (&Server{context: f}).memoryPage(context.Background(), repo, toolArgs{Ref: string(source), Cursor: encodeCursor(bad)}); err == nil {
+		t.Fatal("mixed projection rendering versions")
+	}
+
 	changed := memory
 	changed.Summary = "new ancestor revision"
 	newHash, _ := domain.MemoryDigestHash(changed)

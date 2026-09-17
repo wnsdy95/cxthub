@@ -70,6 +70,11 @@ func TestMergedMemoryFlowsToBothProvidersWithoutRewritingHistory(t *testing.T) {
 				}
 			}
 			assertMerged(sink.digest.Summary)
+			offline, found, readErr := ReadProjectedMemory(ctx, selected, feature)
+			if readErr != nil || !found {
+				t.Fatalf("offline projection: %v", readErr)
+			}
+			assertMerged(offline.Summary)
 			replay, ok := load.portableReplaySeed(ctx, doc.CIR, snap, provider, repo.LocalPath, 96<<10)
 			if !ok {
 				t.Fatal("portable replay lost memory")
@@ -93,6 +98,10 @@ func TestMergedMemoryFlowsToBothProvidersWithoutRewritingHistory(t *testing.T) {
 			}
 			// Rewinding uses the exact memory observed at that old code position.
 			selected.position.Rewound = true
+			offline, found, readErr = ReadProjectedMemory(ctx, selected, feature)
+			if readErr != nil || !found || offline.Summary != "FEATURE DECISION" {
+				t.Fatalf("offline rewind leaked later merge: %q %v", offline.Summary, readErr)
+			}
 			if _, err := load.loadMemory(ctx, doc.CIR, snap, provider, repo.LocalPath); err != nil {
 				t.Fatal(err)
 			}
