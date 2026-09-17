@@ -262,7 +262,10 @@ export function useFork() {
   return useMutation({
     mutationFn: (v: { repoId: string; from: string; newBranch: string; author: { name: string; email: string } }) =>
       api.fork(v.repoId, v.from, v.newBranch, v.author),
-    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['refs', v.repoId] }),
+    onSuccess: (_r, v) => {
+      void qc.invalidateQueries({ queryKey: ['refs', v.repoId] });
+      void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
+    },
   });
 }
 export function useSnapDiff(repoId: string | null, left: string | null, right: string | null) {
@@ -359,6 +362,7 @@ export function useUndismissPending() {
     mutationFn: (v: { repoId: string; sessionId: string }) => api.undismissPending(v.repoId, v.sessionId),
     onSuccess: (_d, v) => {
       void qc.invalidateQueries({ queryKey: ['pending', v.repoId] });
+      void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
     },
   });
 }
@@ -386,6 +390,7 @@ export function useJoinSnapshot() {
       }),
     onSuccess: (_d, v) => {
       void qc.invalidateQueries({ queryKey: ['snapshots', v.repoId, '*'] });
+      void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
       void qc.invalidateQueries({ queryKey: ['refs', v.repoId] });
     },
   });
@@ -398,6 +403,7 @@ export function useDismissPending() {
     mutationFn: (v: { repoId: string; sessionId: string }) => api.dismissPending(v.repoId, v.sessionId),
     onSuccess: (_d, v) => {
       void qc.invalidateQueries({ queryKey: ['pending', v.repoId] });
+      void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
     },
   });
 }
@@ -406,15 +412,19 @@ export function useDismissPending() {
 // Ensure "badge count = tab row count" is guaranteed by logic (onhold.ts) and input equality, so
 // exclude stash, hook capture leaves, and badge map must be created here only (review front #2).
 export function useRepoView(repoId: string | null, primaryBranch?: string) {
-  const refsQuery = useRefs(repoId);
-  const rawRefs = refsQuery.data ?? [];
+  const viewQuery = useQuery({
+    queryKey: ['repo-view', repoId],
+    queryFn: () => api.repositoryView(repoId!),
+    enabled: Boolean(repoId),
+    refetchInterval: 10_000,
+  });
+  const rawRefs = viewQuery.data?.refs ?? [];
   const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);
-  const snapshotsQuery = useAllSnapshots(repoId, true);
-  const allData = snapshotsQuery.data;
-  const reflogQuery = useReflog(repoId, true);
-  const reflog = reflogQuery.data ?? [];
-  const historyQuery = useQuery({ queryKey: ['history', repoId], queryFn: () => api.history(repoId!), enabled: Boolean(repoId), refetchInterval: 10_000 });
-  const history = historyQuery.data ?? [];
+  const allData = viewQuery.data?.snapshots;
+  const reflog = viewQuery.data?.reflog ?? [];
+  const history = viewQuery.data?.history ?? [];
+  const pendings = viewQuery.data?.pending ?? [];
+  const unsyncs = viewQuery.data?.unsync ?? [];
   const historicalIds = useMemo(() => historicalSnapshotIds(reflog, allData ?? [], history), [reflog, allData, history]);
   const snapshots = useMemo(() => {
     const all = (allData ?? []).filter((s) => s.branch !== '(stash)');
@@ -452,14 +462,11 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
   );
   // Uncommitted = undismissed hook captures that have not reached the shared
   // timeline. This is durable pointer state, not a process-liveness signal.
-  const pendingQuery = usePendings(repoId);
-  const unsyncQuery = useUnsyncs(repoId);
   const { graphSnapshots, uncommittedIds } = useMemo(() => repositoryGraph(snapshots, refs, history, sharedIds,
-    pendingQuery.data ?? [], unsyncQuery.data ?? []), [snapshots, refs, history, sharedIds, pendingQuery.data, unsyncQuery.data]);
-  const graphQueries = [refsQuery, snapshotsQuery, reflogQuery, historyQuery, pendingQuery, unsyncQuery];
-  const graphLoading = graphQueries.some(q => q.isPending);
-  const graphError = graphQueries.find(q => q.isError)?.error?.message;
-  const retryGraph = () => { for (const query of graphQueries) void query.refetch(); };
+    pendings, unsyncs), [snapshots, refs, history, sharedIds, pendings, unsyncs]);
+  const graphLoading = viewQuery.isPending;
+  const graphError = viewQuery.error?.message;
+  const retryGraph = () => { void viewQuery.refetch(); };
   // Local predecessors (push-pending ∪ uncommitted) set and its tip (topmost — a leaf with no children). checkout -b semantics: branches have meaning only at the tip — when a new branch ref points to the tip, push commits + uncommitted state as a chain (splitting the chain).
   const localAhead = useMemo(() => {
     const shared = sharedIds;
@@ -475,7 +482,7 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
     return { ids, tips };
   }, [sharedIds, graphSnapshots]);
   return { refs, snapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history,
-    historyError: historyQuery.isError, graphLoading, graphError, retryGraph };
+    pendings, unsyncs, historyError: viewQuery.isError, graphLoading, graphError, retryGraph };
 }
 
 // ── Mutation ──────────────────────────────────────────
@@ -525,6 +532,7 @@ export function useEnableContextProtocol() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['repos'] });
       void qc.invalidateQueries({ queryKey: ['refs'] });
+      void qc.invalidateQueries({ queryKey: ['repo-view'] });
     },
   });
 }

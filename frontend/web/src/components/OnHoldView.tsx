@@ -9,8 +9,6 @@ import { DocEvents } from './DocEvents';
 import { useEffect, useMemo, useState } from 'react';
 import type { Repo, Workspace, Pending } from '../types';
 import {
-  usePendings,
-  useUnsyncs,
   useDismissPending,
   useUndismissPending,
   useMe,
@@ -33,10 +31,8 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   const me = useMe().data;
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph } =
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
     useRepoView(repo.id, repo.default_branch || 'main');
-  const pendings = usePendings(repo.id).data ?? [];
-  const unsyncs = useUnsyncs(repo.id).data ?? [];
   const dismissPending = useDismissPending();
   const undismissPending = useUndismissPending();
   // Chain collapse/expand — convenience feature, no data impact. Header always visible, no recovery issues.

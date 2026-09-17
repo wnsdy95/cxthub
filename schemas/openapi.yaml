@@ -1218,6 +1218,42 @@ paths:
   # =========================================================================
   # Snapshots
   # =========================================================================
+  /repos/{repoID}/view:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: getRepositoryView
+      summary: Read a complete committed graph generation
+      description: Requires viewer access. PostgreSQL reads all fields in one repeatable-read transaction. A failed component fails the entire request.
+      tags: [snapshots]
+      responses:
+        "200":
+          description: Graph metadata without document bodies
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [refs, snapshots, reflog, history, pending, unsync]
+                properties:
+                  refs: { type: array, items: { $ref: '#/components/schemas/Ref' } }
+                  snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+                  reflog:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string }
+                        name: { type: string }
+                        old: { type: string }
+                        new: { type: string }
+                        created_at: { type: string, format: date-time }
+                  history: { type: array, items: { $ref: '#/components/schemas/HistoryEvent' } }
+                  pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
+                  unsync: { type: array, items: { $ref: '#/components/schemas/Unsync' } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
   /repos/{repoID}/snapshots:
     parameters:
       - $ref: "#/components/parameters/repoID"

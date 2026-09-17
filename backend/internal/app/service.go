@@ -348,7 +348,7 @@ func (s *Service) PullChunks(ctx context.Context, in inbound.PullChunksInput) (i
 }
 
 // Commit: stores docs in the order of blobs → snapshots (W1). Full integrity verification followed by content-addressed deduplication.
-func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error) {
+func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error) {
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.CommitOutput{}, err
 	}
@@ -479,8 +479,10 @@ func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 	for _, snap := range normalizedSnaps {
 		if _, err := s.meta.GetSnapshot(ctx, in.RepoID, snap.ID); err == nil {
 			out.DedupedSnapshots++
-		} else {
+		} else if errors.Is(err, domain.ErrNotFound) {
 			out.StoredSnapshots++
+		} else {
+			return inbound.CommitOutput{}, err
 		}
 		if err := s.meta.PutSnapshot(ctx, snap); err != nil {
 			return inbound.CommitOutput{}, err
@@ -494,29 +496,32 @@ func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 // Similar to git policy: Branches are allowed to move only in a fast-forward manner (fast-forward), and
 // any other move (non-fast-forward/diverged) is rejected with ErrNonFastForward — except for Force.
 // Tags are immutable: Moving to another target is rejected without Force.
-func (s *Service) UpdateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
+func (s *Service) updateRefWithPending(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
 	out, err := s.updateRef(ctx, in)
 	if err == nil {
 		_, lifecycle, _ := domain.ParseBranchLifecycleRef(in.Ref)
 		if in.Ref.Kind == domain.RefBranch || lifecycle {
-			s.reconcileSharedPendingPointers(ctx, in.RepoID)
+			err = s.reconcileSharedPendingPointers(ctx, in.RepoID)
 		}
 	}
 	return out, err
 }
 
-// UpdateRefs is the request-level ref transaction boundary. Ref projections
-// remain individually CAS-checked, but pending reachability is reconciled once
-// after the complete batch. An empty retry is intentional: it repairs a server
+// UpdateRefs keeps CAS checks and pending reconciliation inside the enclosing
+// repository transaction on PostgreSQL. An empty retry is intentional: it repairs a server
 // crash that occurred after the last ref write but before metadata cleanup.
-func (s *Service) UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (out inbound.UpdateRefsOutput, err error) {
+func (s *Service) updateRefs(ctx context.Context, in inbound.UpdateRefsInput) (out inbound.UpdateRefsOutput, err error) {
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return out, err
 	}
 	if len(in.Updates) > inbound.MaxRefBatchUpdates {
 		return out, fmt.Errorf("%w: at most %d ref updates per batch", domain.ErrValidation, inbound.MaxRefBatchUpdates)
 	}
-	defer s.reconcileSharedPendingPointers(ctx, in.RepoID)
+	defer func() {
+		if err == nil {
+			err = s.reconcileSharedPendingPointers(ctx, in.RepoID)
+		}
+	}()
 	var rejected []string
 	for _, update := range in.Updates {
 		update.RepoID = in.RepoID
@@ -536,6 +541,9 @@ func (s *Service) UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (o
 }
 
 func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
+	if err := domain.ValidateOptionalContentHash(in.ExpectedTarget); err != nil {
+		return inbound.UpdateRefOutput{}, err
+	}
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.UpdateRefOutput{}, err
 	}
@@ -601,6 +609,11 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 		return inbound.UpdateRefOutput{}, err
 	}
 	out := inbound.UpdateRefOutput{Ref: in.Ref, RequestedTarget: in.Ref.Target, ServerTarget: serverTarget}
+	// Honor the caller's observation, including force requests. Retrying an
+	// already-applied target is safe; a stale client cannot replace newer work.
+	if in.ExpectedTarget != "" && serverTarget != in.ExpectedTarget && serverTarget != in.Ref.Target {
+		return inbound.UpdateRefOutput{}, domain.ErrRefConflict
+	}
 
 	if in.Ref.Kind == domain.RefHead {
 		if err := s.meta.CompareAndSwapRef(ctx, in.RepoID, in.Ref, serverTarget); err != nil {
@@ -625,8 +638,11 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 		// Protected branch: Basic branch rejects --force moves (record is P1 immutable —
 		// this is a separate policy to block pointer force moves, akin to GitHub's protected branch handling).
 		if in.Ref.Kind == domain.RefBranch {
-			if repo, rerr := s.meta.GetRepo(ctx, in.RepoID); rerr == nil &&
-				repo.ProtectDefault && in.Ref.Name == repo.DefaultBranch {
+			repo, rerr := s.meta.GetRepo(ctx, in.RepoID)
+			if rerr != nil {
+				return inbound.UpdateRefOutput{}, rerr
+			}
+			if repo.ProtectDefault && in.Ref.Name == repo.DefaultBranch {
 				return inbound.UpdateRefOutput{}, fmt.Errorf("%w: --force move is forbidden on protected branch %q", domain.ErrForbidden, in.Ref.Name)
 			}
 		}
@@ -711,7 +727,7 @@ func (s *Service) appendDiverged(ctx context.Context, in inbound.UpdateRefInput,
 }
 
 // Send: reply to pull request with missing objects (snapshot meta + doc) (read-only).
-func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.PullSendOutput, error) {
+func (s *Service) send(ctx context.Context, in inbound.PullSendInput) (inbound.PullSendOutput, error) {
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.PullSendOutput{}, err
 	}
@@ -859,7 +875,7 @@ func (s *Service) PromoteSnapshotMessage(ctx context.Context, repoID, id domain.
 // GraftSnapshotParents adds reachability overlay edges to snapshots (Parents immutable, idempotent).
 // Path to propagate reachability preservation of client sibling advances (multi-session commits) to server replicas —
 // inventory-only push does not resend metadata updates of existing objects. Each graft parent must be a real snapshot in the repo (to prevent reachability pollution with arbitrary hashes).
-func (s *Service) GraftSnapshotParents(ctx context.Context, repoID, id domain.ContentHash, parents []domain.ContentHash, expectedSeq uint64) error {
+func (s *Service) graftSnapshotParents(ctx context.Context, repoID, id domain.ContentHash, parents []domain.ContentHash, expectedSeq uint64) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -887,7 +903,7 @@ func (s *Service) GraftSnapshotParents(ctx context.Context, repoID, id domain.Co
 }
 
 // List: branch-specific snapshot metadata list.
-func (s *Service) List(ctx context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error) {
+func (s *Service) list(ctx context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error) {
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return nil, err
 	}
@@ -943,7 +959,7 @@ func (s *Service) snapshotBranchMemberships(ctx context.Context, repoID domain.C
 }
 
 // Fsck: reference reachability audit (read-only, git fsck equivalent). Creates a reachability set by following parents from all refs and pending sessions, then reports unreferenced snapshots, missing parent references (corruption), and parentless roots. Unreferenced snapshots remain stored and are not necessarily corrupt. Does not fix anything — parentless roots are treated as normal roots (not artificially attaching parents).
-func (s *Service) Fsck(ctx context.Context, repoID domain.ContentHash) (inbound.FsckReport, error) {
+func (s *Service) fsck(ctx context.Context, repoID domain.ContentHash) (inbound.FsckReport, error) {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return inbound.FsckReport{}, err
 	}
@@ -1037,13 +1053,13 @@ func (s *Service) Authenticate(ctx context.Context, in inbound.AuthInput) (inbou
 
 // --- HTTP read pass-through (auxiliary methods for inbound ports) ---
 
-func (s *Service) GetManifest(ctx context.Context, repoID domain.ContentHash) (domain.Manifest, error) {
+func (s *Service) getManifest(ctx context.Context, repoID domain.ContentHash) (domain.Manifest, error) {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return domain.Manifest{}, err
 	}
 	return s.meta.GetManifest(ctx, repoID)
 }
-func (s *Service) EnsureRepo(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error) {
+func (s *Service) ensureRepo(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error) {
 	if err := domain.ValidateContentHash(repo.ID); err != nil {
 		return domain.Repo{}, err
 	}
@@ -1075,7 +1091,11 @@ func (s *Service) EnsureRepo(ctx context.Context, actorID string, repo domain.Re
 
 	// Git origin verification (onboarding safety measure): If another team member has already connected to the same cxthub URL (same RepoID), and the git origin of the code repo is confirmed, the git origin of the newly connecting local folder must also be the same. If different, it is rejected — "A folder not connected to git in that workspace" is prevented from being attached to the same cxthub URL (same origin: URL is the destination, origin is the substance).
 	// The first connector confirms the origin (empty → filled), and thereafter, that value holds authority.
-	if existing, err := s.meta.GetRepo(ctx, repo.ID); err == nil && existing.GitRemoteURL != "" {
+	existing, err := s.meta.GetRepo(ctx, repo.ID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return domain.Repo{}, err
+	}
+	if err == nil && existing.GitRemoteURL != "" {
 		if normalizeGitURL(repo.GitRemoteURL) != normalizeGitURL(existing.GitRemoteURL) {
 			return domain.Repo{}, fmt.Errorf(
 				"%w: The git origin (%s) of this folder is different from the git (%s) connected to this workspace repo — try again in the corresponding code repo",
@@ -1223,7 +1243,7 @@ func (s *Service) GetMemoryObject(ctx context.Context, repoID, hash domain.Conte
 // fallback is intentionally limited to legacy snapshots with no pointer: once
 // a pointer exists, hiding a missing/corrupt blob behind stale metadata would
 // turn an integrity failure into a silent rollback.
-func (s *Service) GetMemoryDigest(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error) {
+func (s *Service) getMemoryDigest(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error) {
 	if err := validateHashes(repoID, snapshotID); err != nil {
 		return domain.MemoryDigest{}, err
 	}
@@ -1290,7 +1310,7 @@ func (s *Service) PutSettings(ctx context.Context, repoID domain.ContentHash, bu
 
 // PutPending upserts the session-specific context pointer (CLI hook capture mirror). The sessionID is authoritative — the body's session/repo is overwritten (push's RepoID normalization equivalent).
 // The previous hook leaf is collected only if the replacement verifiably contains its complete event prefix.
-func (s *Service) PutPending(ctx context.Context, repoID domain.ContentHash, sessionID string, p domain.Pending) error {
+func (s *Service) putPending(ctx context.Context, repoID domain.ContentHash, sessionID string, p domain.Pending) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1390,19 +1410,22 @@ func (s *Service) CompareAndDeletePending(ctx context.Context, repoID domain.Con
 	return result.Resolved(), nil
 }
 
-// reconcileSharedPendingPointers is a best-effort mutable-metadata cleanup
-// after branch/join ref movement. A pending target is resolved only when a
+// reconcileSharedPendingPointers resolves mutable pending metadata inside the
+// repository transaction after branch/join ref movement. A pending target is resolved only when a
 // branch, server-managed session, or immutable branch-lifecycle root reaches
 // it through natural or graft parents. Compare-and-delete protects a newer
 // capture that arrives during the reachability walk.
-func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID domain.ContentHash) {
+func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID domain.ContentHash) error {
 	pendings, err := s.meta.ListPendings(ctx, repoID)
-	if err != nil || len(pendings) == 0 {
-		return
+	if err != nil {
+		return err
+	}
+	if len(pendings) == 0 {
+		return nil
 	}
 	refs, err := s.meta.ListRefs(ctx, repoID)
 	if err != nil {
-		return
+		return err
 	}
 	roots := make([]domain.ContentHash, 0, len(refs))
 	for _, ref := range refs {
@@ -1411,11 +1434,11 @@ func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID dom
 		}
 	}
 	if len(roots) == 0 {
-		return
+		return nil
 	}
 	snaps, err := s.meta.ListSnapshots(ctx, repoID, "")
 	if err != nil {
-		return
+		return err
 	}
 	parentsOf := make(map[domain.ContentHash][]domain.ContentHash, len(snaps))
 	for _, snap := range snaps {
@@ -1438,8 +1461,11 @@ func (s *Service) reconcileSharedPendingPointers(ctx context.Context, repoID dom
 		}
 		// The target is already ref-reachable, so no hook-leaf GC is needed (or
 		// allowed): immutable history remains and only the mutable pointer leaves.
-		_, _ = s.meta.CompareAndDeletePending(ctx, repoID, p.SessionID, p.Target)
+		if _, err := s.meta.CompareAndDeletePending(ctx, repoID, p.SessionID, p.Target); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func sharedTimelineRef(ref domain.Ref) bool {
@@ -1562,7 +1588,7 @@ func (s *Service) gcHookLeaf(ctx context.Context, repoID domain.ContentHash, old
 // PutUnsync updates (user, branch) push wait pointers (shadow sync mirror).
 // user/branch are authoritative — overwrites body value. If ref is already target,
 // it's effectively synced, so instead of upsert, it resolves (deletes).
-func (s *Service) PutUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string, u domain.Unsync) error {
+func (s *Service) putUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string, u domain.Unsync) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1661,6 +1687,18 @@ func validateSecretsEnvelope(raw []byte) error {
 // PutSecrets stores a secret ciphertext envelope. Server never decrypts (E2E),
 // but client validates format to prevent team members from forcing abnormal KDF cost or AES-GCM parameters.
 func (s *Service) PutSecrets(ctx context.Context, repoID domain.ContentHash, raw []byte) error {
+	return s.putSecrets(ctx, repoID, raw, func() error { return s.meta.PutSecretsEnvelope(ctx, repoID, raw) })
+}
+
+func (s *Service) PutSecretsCAS(ctx context.Context, repoID domain.ContentHash, raw, expected []byte) error {
+	st, ok := s.meta.(outbound.SecretsCASStore)
+	if !ok {
+		return fmt.Errorf("atomic secrets storage unavailable")
+	}
+	return s.putSecrets(ctx, repoID, raw, func() error { return st.CompareAndSwapSecrets(ctx, repoID, expected, raw) })
+}
+
+func (s *Service) putSecrets(ctx context.Context, repoID domain.ContentHash, raw []byte, write func() error) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1670,7 +1708,7 @@ func (s *Service) PutSecrets(ctx context.Context, repoID domain.ContentHash, raw
 	if err := validateSecretsEnvelope(raw); err != nil {
 		return err
 	}
-	if err := s.meta.PutSecretsEnvelope(ctx, repoID, raw); err != nil {
+	if err := write(); err != nil {
 		return err
 	}
 	s.notifySecretsChanged(ctx, repoID) // best-effort notification — no impact on save success
@@ -1948,13 +1986,13 @@ func (s *Service) GetSnapshot(ctx context.Context, repoID, id domain.ContentHash
 	}
 	return s.meta.GetSnapshot(ctx, repoID, id)
 }
-func (s *Service) GetDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error) {
+func (s *Service) getDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error) {
 	if err := validateHashes(repoID, hash); err != nil {
 		return domain.SessionDoc{}, err
 	}
 	return s.blobs.GetDoc(ctx, repoID, hash)
 }
-func (s *Service) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
+func (s *Service) listRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return nil, err
 	}
@@ -1962,7 +2000,7 @@ func (s *Service) ListRefs(ctx context.Context, repoID domain.ContentHash) ([]do
 }
 
 // Fork creates a new branch ref with tip FromSnapshot (O(1), original unchanged F1).
-func (s *Service) Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error) {
+func (s *Service) fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error) {
 	if err := validateHashes(in.RepoID, in.FromSnapshot); err != nil {
 		return inbound.ForkOutput{}, err
 	}
@@ -2011,7 +2049,7 @@ func (s *Service) Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkO
 //  3. Existing graft in-flow edge superseded, X grafts to H, optional session ref, branch ref CAS to one ApplyJoin change set
 //
 // PostgreSQL uses transaction+row lock, FS uses durable intent journal+replay for mid-failure recovery. Supersede recorded before new edge in FS prevents circularity even in mid-state.
-func (s *Service) Join(ctx context.Context, in inbound.JoinInput) (inbound.JoinOutput, error) {
+func (s *Service) join(ctx context.Context, in inbound.JoinInput) (inbound.JoinOutput, error) {
 	if err := validateHashes(in.RepoID, in.Snapshot); err != nil {
 		return inbound.JoinOutput{}, err
 	}
@@ -2228,8 +2266,7 @@ func (s *Service) Join(ctx context.Context, in inbound.JoinInput) (inbound.JoinO
 		return inbound.JoinOutput{}, err
 	}
 	out.Head = newHead
-	s.reconcileSharedPendingPointers(ctx, in.RepoID)
-	return out, nil
+	return out, s.reconcileSharedPendingPointers(ctx, in.RepoID)
 }
 
 func snapshotReachableSet(byID map[domain.ContentHash]domain.Snapshot, head domain.ContentHash) map[domain.ContentHash]bool {

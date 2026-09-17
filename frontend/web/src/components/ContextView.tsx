@@ -3,7 +3,7 @@
 // and provides a branch dropdown + commit log (click to show context at that point in time).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Repo, Workspace, CIREvent, Snapshot, Pending } from '../types';
-import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, usePendings, useUnsyncs, useRepoView, useReflog } from '../hooks';
+import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, useRepoView, useReflog } from '../hooks';
 import { navigate, repoPath } from '../route';
 import { holdCounts, reachableSnapshotIds } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
@@ -103,7 +103,7 @@ type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug' | 'visi
 export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspace | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph } =
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
@@ -142,8 +142,6 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   // uncommitted continuation. This does not imply that the provider is alive.
   // If there are unsync push commits, it's the unsync tip in the On Hold tab.
   // (Context tab shows only shared timeline — pending work is only indicated by badges). Orphan pending is also handled by On Hold.
-  const pendings = usePendings(repo.id).data ?? [];
-  const unsyncs = useUnsyncs(repo.id).data ?? [];
   const sharedPendingTargets = sharedIds;
   const continuing = useMemo(() => {
     const m = new Map<string, Pending>(); // tip snapshot id → pending
@@ -237,7 +235,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
     return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure); };
   }, [branches.length > 0]);
 
-  if (branches.length === 0) {
+  if (branches.length === 0 && !graphLoading && !graphError) {
     return <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>;
   }
 

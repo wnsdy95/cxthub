@@ -55,7 +55,7 @@ func (s *PostgresStore) DocReadIndex(ctx context.Context, repo, hash domain.Cont
 		return idx, err
 	}
 	var owned, ready bool
-	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2),EXISTS(SELECT 1 FROM doc_read_indexes WHERE hash=$2)`, string(repo), string(hash)).Scan(&owned, &ready); err != nil {
+	if err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2),EXISTS(SELECT 1 FROM doc_read_indexes WHERE hash=$2)`, string(repo), string(hash)).Scan(&owned, &ready); err != nil {
 		return idx, err
 	}
 	if !owned {
@@ -73,7 +73,7 @@ func (s *PostgresStore) DocReadIndex(ctx context.Context, repo, hash domain.Cont
 		}
 	}
 	var env []byte
-	if err := s.pool.QueryRow(ctx, `SELECT version,envelope FROM doc_read_indexes WHERE hash=$1`, string(hash)).Scan(&idx.Version, &env); err != nil {
+	if err := s.db(ctx).QueryRow(ctx, `SELECT version,envelope FROM doc_read_indexes WHERE hash=$1`, string(hash)).Scan(&idx.Version, &env); err != nil {
 		return idx, mapNoRows(err)
 	}
 	idx.Hash = hash
@@ -83,7 +83,7 @@ func (s *PostgresStore) DocReadIndex(ctx context.Context, repo, hash domain.Cont
 	if err := json.Unmarshal(env, &idx.Envelope); err != nil {
 		return idx, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT ordinal,byte_offset,byte_length,event_hash,seq,role FROM doc_read_events WHERE doc_hash=$1 ORDER BY ordinal`, string(hash))
+	rows, err := s.db(ctx).Query(ctx, `SELECT ordinal,byte_offset,byte_length,event_hash,seq,role FROM doc_read_events WHERE doc_hash=$1 ORDER BY ordinal`, string(hash))
 	if err != nil {
 		return idx, err
 	}
@@ -104,7 +104,7 @@ func (s *PostgresStore) SearchDocEvents(ctx context.Context, repo, hash domain.C
 		return nil, err
 	}
 	var owned, ready bool
-	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2), EXISTS(SELECT 1 FROM doc_read_indexes WHERE hash=$2)`, string(repo), string(hash)).Scan(&owned, &ready); err != nil {
+	if err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2), EXISTS(SELECT 1 FROM doc_read_indexes WHERE hash=$2)`, string(repo), string(hash)).Scan(&owned, &ready); err != nil {
 		return nil, err
 	}
 	if !owned {
@@ -116,7 +116,7 @@ func (s *PostgresStore) SearchDocEvents(ctx context.Context, repo, hash domain.C
 		}
 	}
 	pattern := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(q) + "%"
-	rows, err := s.pool.Query(ctx, `SELECT e.ordinal,e.event_hash,e.seq,e.role,t.search_text FROM doc_read_events e
+	rows, err := s.db(ctx).Query(ctx, `SELECT e.ordinal,e.event_hash,e.seq,e.role,t.search_text FROM doc_read_events e
 	JOIN doc_search_events t ON t.hash=e.event_hash
 	JOIN repo_blobs rb ON rb.hash=e.doc_hash AND rb.kind='doc' AND rb.repo_id=$1
 	WHERE e.doc_hash=$2 AND e.ordinal>$3 AND t.search_lower LIKE $4 ESCAPE '\' ORDER BY e.ordinal LIMIT $5`, string(repo), string(hash), after, pattern, limit)
@@ -138,7 +138,7 @@ func (s *PostgresStore) SearchDocEvents(ctx context.Context, repo, hash domain.C
 func (s *PostgresStore) BackfillReadIndexes(ctx context.Context, progress func(int)) error {
 	// Close the ownership query before writing; do not occupy a connection while
 	// reconstructing a large legacy body. The hash order makes runs resumable.
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (rb.hash) rb.repo_id,rb.hash FROM repo_blobs rb LEFT JOIN doc_read_indexes i ON i.hash=rb.hash WHERE rb.kind='doc' AND i.hash IS NULL ORDER BY rb.hash,rb.repo_id`)
+	rows, err := s.db(ctx).Query(ctx, `SELECT DISTINCT ON (rb.hash) rb.repo_id,rb.hash FROM repo_blobs rb LEFT JOIN doc_read_indexes i ON i.hash=rb.hash WHERE rb.kind='doc' AND i.hash IS NULL ORDER BY rb.hash,rb.repo_id`)
 	if err != nil {
 		return err
 	}
@@ -173,7 +173,7 @@ func (s *PostgresStore) MatchingDocHashes(ctx context.Context, repo domain.Conte
 		return nil, err
 	}
 	pattern := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(q) + "%"
-	rows, err := s.pool.Query(ctx, `WITH matching AS MATERIALIZED (SELECT hash FROM doc_search_events WHERE search_lower LIKE $2 ESCAPE '\')
+	rows, err := s.db(ctx).Query(ctx, `WITH matching AS MATERIALIZED (SELECT hash FROM doc_search_events WHERE search_lower LIKE $2 ESCAPE '\')
 	SELECT DISTINCT e.doc_hash FROM matching m JOIN doc_read_events e ON e.event_hash=m.hash JOIN repo_blobs rb ON rb.hash=e.doc_hash AND rb.kind='doc' AND rb.repo_id=$1
 	UNION SELECT rb.hash FROM repo_blobs rb LEFT JOIN doc_read_indexes i ON i.hash=rb.hash WHERE rb.repo_id=$1 AND rb.kind='doc' AND i.hash IS NULL`, string(repo), pattern)
 	if err != nil {

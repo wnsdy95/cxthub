@@ -21,7 +21,7 @@ type serviceProjectionSource struct {
 	outbound.BlobStore
 }
 
-func (s *Service) GetMemoryProjection(ctx context.Context, repoID, id domain.ContentHash) (domain.MemoryProjection, error) {
+func (s *Service) getMemoryProjection(ctx context.Context, repoID, id domain.ContentHash) (domain.MemoryProjection, error) {
 	return ProjectMemory(ctx, serviceProjectionSource{s.meta, s.blobs}, repoID, id)
 }
 

@@ -395,7 +395,7 @@ func (s *FileStore) withRefMutationLock(ctx context.Context, fn func() error) er
 	})
 }
 
-func (s *FileStore) withMutationLock(ctx context.Context, namespace, key string, fn func() error) error {
+func (s *FileStore) withLegacyMutationLock(ctx context.Context, namespace, key string, fn func() error) error {
 	locksDir := filepath.Join(s.storeDir(), "locks", namespace)
 	if err := validateCxtDir(locksDir); err != nil {
 		return err
@@ -432,7 +432,7 @@ func (s *FileStore) withMutationLock(ctx context.Context, namespace, key string,
 			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 				return domain.ErrHashMismatch
 			}
-			if time.Since(info.ModTime()) > snapshotMutationLockStaleAfter {
+			if deadMutationOwner(ownerPath) || (time.Since(info.ModTime()) > snapshotMutationLockStaleAfter && !liveMutationOwner(ownerPath)) {
 				stalePath := lockPath + ".stale-" + token
 				if os.Rename(lockPath, stalePath) == nil {
 					_ = os.Remove(filepath.Join(stalePath, "owner"))

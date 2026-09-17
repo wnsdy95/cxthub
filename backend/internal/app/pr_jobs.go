@@ -22,7 +22,7 @@ func (s *Service) prJobs() (outbound.PRJobStore, error) {
 	}
 	return st, nil
 }
-func (s *Service) SubmitPRPromotion(ctx context.Context, repo domain.ContentHash, pr domain.PullRequestMerge) (domain.PRPromotionJob, error) {
+func (s *Service) submitPRPromotion(ctx context.Context, repo domain.ContentHash, pr domain.PullRequestMerge) (domain.PRPromotionJob, error) {
 	if err := pr.Validate(); err != nil {
 		return domain.PRPromotionJob{}, fmt.Errorf("%w: %v", domain.ErrValidation, err)
 	}
@@ -106,65 +106,80 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 	defer cancel()
 	var out inbound.UpdateRefOutput
 	var runErr error
-	repo, err := s.meta.GetRepo(work, j.RepoID)
-	if err != nil {
-		runErr = err
-	} else if normalizeGitURL(repo.GitRemoteURL) != j.GitOrigin {
-		runErr = fmt.Errorf("%w: repository origin changed", domain.ErrConflict)
-	} else {
-		if repo.WorkspaceID != "" && s.ws != nil {
-			workspace, err := s.ws.GetWorkspace(work, repo.WorkspaceID)
-			if err != nil {
-				runErr = err
-			} else if workspace.Archived {
-				runErr = domain.ErrForbidden
+	runErr = repositoryWriteError(work, s, j.RepoID, func(work context.Context) error {
+		runErr = nil // a retry after a database abort starts from fresh state
+		if fence, ok := s.meta.(outbound.PRJobFence); ok {
+			if err := fence.FencePRJob(work, j); err != nil {
+				return err
 			}
 		}
-		if runErr == nil {
-			out, runErr = s.promoteBoundPR(work, j.RepoID, j.PR, j.BaseBranchID)
+		repo, err := s.meta.GetRepo(work, j.RepoID)
+		if err != nil {
+			runErr = err
+		} else if normalizeGitURL(repo.GitRemoteURL) != j.GitOrigin {
+			runErr = fmt.Errorf("%w: repository origin changed", domain.ErrConflict)
+		} else {
+			if repo.WorkspaceID != "" && s.ws != nil {
+				workspace, err := s.ws.GetWorkspace(work, repo.WorkspaceID)
+				if err != nil {
+					runErr = err
+				} else if workspace.Archived {
+					runErr = domain.ErrForbidden
+				}
+			}
+			if runErr == nil {
+				out, runErr = s.promoteBoundPR(work, j.RepoID, j.PR, j.BaseBranchID)
+			}
 		}
+		if runErr != nil {
+			return runErr
+		}
+		completed := j
+		completed.State, completed.Reason = "completed", ""
+		completed.UpdatedAt, completed.LeaseUntil = time.Now().UTC(), time.Time{}
+		st, _ := s.prJobs()
+		return st.FinishPRJob(work, completed)
+	})
+	if runErr == nil {
+		return out, nil
 	}
 	now := time.Now().UTC()
 	j.UpdatedAt = now
 	j.LeaseUntil = time.Time{}
 	j.Reason = ""
-	if runErr == nil {
-		j.State = "completed"
-	} else {
-		switch {
-		case errors.Is(runErr, domain.ErrPRSourcePending):
-			j.State = "waiting"
-			j.Reason = "source_context_pending"
-			if j.Attempts >= prSourcePendingAttempts {
-				j.State = "attention"
-				j.Reason = "source_finalization_required"
-			}
-		case errors.Is(runErr, domain.ErrIntegrity):
+	switch {
+	case errors.Is(runErr, domain.ErrPRSourcePending):
+		j.State = "waiting"
+		j.Reason = "source_context_pending"
+		if j.Attempts >= prSourcePendingAttempts {
 			j.State = "attention"
-			j.Reason = "integrity_check_failed"
-		case errors.Is(runErr, domain.ErrForbidden):
-			j.State = "attention"
-			j.Reason = "policy_changed"
-		case errors.Is(runErr, domain.ErrValidation):
-			j.State = "attention"
-			j.Reason = "invalid_request"
-		case errors.Is(runErr, domain.ErrConflict) && !errors.Is(runErr, domain.ErrRefConflict):
-			j.State = "attention"
-			j.Reason = "identity_or_history_conflict"
-		case errors.Is(runErr, domain.ErrNotFound):
-			j.State = "attention"
-			j.Reason = "repository_or_base_missing"
-		default:
-			j.State = "retrying"
-			j.Reason = "temporary_failure"
-			if j.Attempts >= 20 {
-				j.State = "attention"
-				j.Reason = "retry_limit_reached"
-			}
+			j.Reason = "source_finalization_required"
 		}
-		delay := time.Second << min(j.Attempts, 8)
-		j.NextAttempt = now.Add(delay)
+	case errors.Is(runErr, domain.ErrIntegrity):
+		j.State = "attention"
+		j.Reason = "integrity_check_failed"
+	case errors.Is(runErr, domain.ErrForbidden):
+		j.State = "attention"
+		j.Reason = "policy_changed"
+	case errors.Is(runErr, domain.ErrValidation):
+		j.State = "attention"
+		j.Reason = "invalid_request"
+	case errors.Is(runErr, domain.ErrConflict) && !errors.Is(runErr, domain.ErrRefConflict):
+		j.State = "attention"
+		j.Reason = "identity_or_history_conflict"
+	case errors.Is(runErr, domain.ErrNotFound):
+		j.State = "attention"
+		j.Reason = "repository_or_base_missing"
+	default:
+		j.State = "retrying"
+		j.Reason = "temporary_failure"
+		if j.Attempts >= 20 {
+			j.State = "attention"
+			j.Reason = "retry_limit_reached"
+		}
 	}
+	delay := time.Second << min(j.Attempts, 8)
+	j.NextAttempt = now.Add(delay)
 	// A canceled request must still release its lease/persist retry state.
 	finishCtx, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
