@@ -493,6 +493,7 @@ func TestRemoteMemoryOutputIsBounded(t *testing.T) {
 	for i := range facts {
 		facts[i] = fmt.Sprintf("project fact %02d", i)
 	}
+	memoryHash, _ = domain.MemoryDigestHash(domain.MemoryDigest{SnapshotID: snapshotID, Summary: "bounded", KeyFacts: facts})
 	backend := fakeContextBackend{
 		snapshots: map[domain.ContentHash][]domain.Snapshot{
 			repoID: {{ID: snapshotID, RepoID: repoID, DocHash: snapshotID, MemoryHash: memoryHash}},
@@ -534,4 +535,17 @@ func TestRemoteRepositoryListOutputIsBoundedAndFilterable(t *testing.T) {
 	if _, err := formatRepositoryList(repositories, strings.Repeat("q", 129), 10); err == nil {
 		t.Fatal("oversized repository query was accepted")
 	}
+}
+
+// Exercise the same application projection used by the production composition root.
+type fakeProjectionSource struct{ fakeContextBackend }
+
+func (f fakeProjectionSource) ListSnapshots(ctx context.Context, repo domain.ContentHash, _ string) ([]domain.Snapshot, error) {
+	return f.snapshots[repo], nil
+}
+func (f fakeProjectionSource) GetMemory(ctx context.Context, repo, hash domain.ContentHash) (domain.MemoryDigest, error) {
+	return f.GetMemoryObject(ctx, repo, hash)
+}
+func (f fakeContextBackend) GetMemoryProjection(ctx context.Context, repo, id domain.ContentHash) (domain.MemoryProjection, error) {
+	return app.ProjectMemory(ctx, fakeProjectionSource{f}, repo, id)
 }

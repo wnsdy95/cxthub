@@ -273,7 +273,7 @@ func (s *ContextHistoryService) BindLocalBranch(ctx context.Context, e domain.Hi
 // A selected historical position pins the memory object, including an empty
 // memory. Following the snapshot's current mutable pointer would import later
 // work into an earlier code position.
-func selectedMemory(ctx context.Context, store outbound.SessionStore, id domain.ContentHash) (domain.MemoryDigest, bool, error) {
+func selectedMemory(ctx context.Context, store MemoryReader, id domain.ContentHash) (domain.MemoryDigest, bool, error) {
 	positions, ok := store.(outbound.WorkingPositionStore)
 	if !ok {
 		return domain.MemoryDigest{}, false, nil

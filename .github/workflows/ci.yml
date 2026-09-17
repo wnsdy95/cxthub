@@ -65,7 +65,9 @@ jobs:
         working-directory: backend
         env:
           CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
-        run: go test -tags postgres ./internal/adapters/store/ -run TestPGSmoke -v
+        run: |
+          go test -tags postgres ./internal/adapters/store/ -run TestPGSmoke -v
+          go test -tags postgres ./internal/app/ -run TestPGMemoryProjection -v
 
   cli:
     runs-on: ubuntu-latest

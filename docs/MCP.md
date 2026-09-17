@@ -43,7 +43,7 @@ moved to a separate service later without changing its tool contract.
 | `context_list` | Browse all, current, previous, or archived context snapshots |
 | `context_history` | Read recorded branch births, attachments, selections, and continuations |
 | `context_fetch` | Retrieve the entire archived event stream in bounded fragments |
-| `memory_load` | Retrieve an exact memory object in bounded fragments |
+| `memory_load` | Project merged memory or retrieve an exact archived object in bounded fragments |
 | `context_search` | Search messages and readable events, continuing through older records |
 
 Every tool is marked read-only, non-destructive, and idempotent. There are no
@@ -87,12 +87,52 @@ state as stored; encrypted state is not decrypted or synthesized. The default
 is up to 12 fragments per call (maximum 50), with a shared 12 KiB raw JSON
 fragment budget. JSON response escaping and metadata add transport overhead.
 
-`memory_load` returns `memory_hash`, `byte_offset`, `json_fragment`, `complete`,
-and `next_cursor`. Join fragments before parsing. Its cursor pins the first
-memory object across later attachment changes. Without `memory_hash`, the
-first call chooses the nearest stored digest at the requested ref; it does not
-claim to reconstruct an unknown historical version. Missing or corrupt data
-returns an error instead of silently substituting another memory.
+`memory_load` defaults to `mode: "project"`. It reconstructs knowledge across
+all current natural and graft parents, including the previous main immediately
+after PR promotion. The source snapshot's saved memory is never rewritten.
+Fragments retain provenance; removed grafts are excluded unless explicitly
+pinned imports, and opaque legacy cumulative digests are not repeatedly stacked.
+As in CLI prompt loading, provider cumulative generations and byte-contained
+summary duplicates are collapsed, transport noise is removed from facts, and
+unattested task lists are excluded from active project knowledge. These are
+read projections: stored mode preserves every original byte and task list.
+
+Both modes return `byte_offset`, `json_fragment`, `complete`, and `next_cursor`;
+join fragments before parsing. Project mode returns `projection_hash` (derived
+JSON identity) and `lineage_hash` (dependency version), **not** a stored
+`memory_hash`. Its cursor pins the selected snapshot and dependency version.
+If an ancestor attachment or graft changes between pages, the tool returns
+`memory projection changed; restart memory_load without cursor`. Discard those
+partial fragments and restart; never concatenate different projections. Reads
+are stateless across server replicas. Versioned projection cursors make older
+replicas reject them during rolling upgrades instead of reading an offset from
+an unrelated stored object. A moving branch ref does not move an
+existing cursor's selected snapshot.
+
+Use `mode: "stored"` for the nearest immutable saved digest, or pass an exact
+`memory_hash` together with its owning snapshot `ref` from `context_history`.
+An explicit hash implies stored mode; combining it with project mode is an
+error. Stored cursors pin the original blob across later attachment changes;
+pre-upgrade stored cursors remain readable. A past code position must use its
+recorded memory hash, since a snapshot's current grafts may include later work.
+Stored snapshot/hash REST endpoints keep their original exact-object meaning.
+
+Projection reads verify complete topology and the hashes of consumed objects;
+missing/corrupt dependencies fail instead of reporting partial memory as
+complete. Reads retry up to three times on concurrent mutation and are bounded
+at 4,096 reachable snapshots and 64 MiB of consumed memory JSON. Larger requests
+must select a narrower ref; stored reads remain available. Metadata is fetched
+in batches and immutable objects are cached only within each request.
+
+Merged conversations remain separate immutable documents. To explore them,
+use `context_list` with `scope: "current", position: "main"`, then
+`context_fetch` on each desired snapshot. This does not concatenate teammates'
+transcripts into the active app conversation. CLI loading and new branch seeds
+use the same provenance rules with their existing bounded prompt budgets;
+rewinding still reads the exact historical attachment. The explicit offline
+`cxt mcp --local` helper uses this same CLI lineage projection and reports an
+incomplete replica instead of silently returning one available memory. The
+cloud endpoint remains the default product connector.
 
 Archived material is data, not instructions. Cursor pagination reduces the
 size of each response; clients should retrieve the scope needed for their task

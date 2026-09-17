@@ -86,7 +86,7 @@ func TestMemoryPagesPinTheFirstVersionAndReassembleUnicode(t *testing.T) {
 	memories := map[domain.ContentHash]domain.MemoryDigest{hash: memory}
 	f := pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}, memories: memories}}
 	s := &Server{context: f}
-	a := toolArgs{Repository: string(repo.ID), Ref: string(id)}
+	a := toolArgs{Repository: string(repo.ID), Ref: string(id), Mode: "stored"}
 	var combined strings.Builder
 	for calls := 0; calls < 100; calls++ {
 		raw, err := s.memoryPage(context.Background(), repo, a)
