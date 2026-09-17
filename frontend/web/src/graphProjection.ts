@@ -37,6 +37,31 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     && byId.has(h.source) && byId.has(h.target) && byId.has(h.shared_target)
     && reachableSnapshotIds([h.target], snapshots).has(h.source)
     && reachableSnapshotIds([h.target], snapshots).has(h.shared_target));
+  // A normal capture need not move a rewound ref, so it may never emit advance.
+  // Publication and verified completion attest the exact source identity even
+  // after its ref is archived. A worktree position is only a selection and must
+  // not turn somebody else's history into this branch's work.
+  const branchRoots = new Map<string, Set<string>>();
+  const addRoot = (identity: string | undefined, target: string | undefined) => {
+    if (!identity || !target || !byId.has(target)) return;
+    const roots = branchRoots.get(identity) ?? new Set<string>();
+    roots.add(target);
+    branchRoots.set(identity, roots);
+  };
+  for (const h of history) {
+    if (h.kind === 'advance' || h.kind === 'publish') addRoot(h.branch_id, h.target);
+  }
+  for (const h of completed) addRoot(h.source_branch_id, h.source);
+  // Content-addressed captures may be shared by multiple identities. Gather
+  // claims against the original edges first; input order must not pick an owner.
+  const birthClaims = new Map<string, Map<string, Set<string>>>();
+  const claimBirth = (child: string, parent: string, birth: string) => {
+    const parents = birthClaims.get(child) ?? new Map<string, Set<string>>();
+    const claims = parents.get(parent) ?? new Set<string>();
+    claims.add(birth);
+    parents.set(parent, claims);
+    birthClaims.set(child, parents);
+  };
   for (const h of completed) {
     merges.push({id: `graph:merge:${h.id}`, before: h.shared_target!, after: h.target!, source: h.source!, branch: h.branch,
       from: h.pr!.head_branch, at: h.created_at, identity: h.source_branch_id});
@@ -93,16 +118,15 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
       created_at: birth.created_at, memory_hash: undefined, session_id: undefined });
     events.set(id, { kind: 'birth', branch: birth.branch, snapshot: source.id, evidence: birth.id });
     const own = new Set<string>();
-    const stack = history.filter(h => h.branch_id === birth.branch_id && h.kind === 'advance').flatMap(h => h.target ? [h.target] : []);
+    const stack = [...(branchRoots.get(birth.branch_id) ?? [])];
     while (stack.length) {
       const target = stack.pop()!;
       if (target === source.id || own.has(target)) continue;
       own.add(target);
       stack.push(...(byId.get(target)?.parents ?? []));
     }
-    for (const n of nodes.values()) {
-      if (n.id === id || events.has(n.id)) continue;
-      if (own.has(n.id) && n.id !== source.id) n.parents = n.parents.map(p => p === source.id ? id : p);
+    for (const target of own) {
+      if (byId.get(target)?.parents?.includes(source.id)) claimBirth(target, source.id, id);
     }
     for (const merge of merges) {
       if (merge.source === source.id && (merge.identity === birth.branch_id || (!merge.identity && merge.from === birth.branch && [...births.values()].filter(b => b.branch === birth.branch && time(b.created_at) <= time(merge.at)).length === 1)) && time(merge.at) >= time(birth.created_at)) {
@@ -112,14 +136,26 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     }
   }
   for (const birth of history.filter(h => h.kind === 'orphan')) {
-    const own = history.filter(h => h.branch_id === birth.branch_id && h.kind === 'advance').flatMap(h => h.target && byId.has(h.target) ? [h.target] : []);
-    const template = own.map(id => byId.get(id)!).find(s => !(s.parents?.length));
+    // Only a directly evidenced root can start this orphan. A later publication
+    // may follow an explicitly selected old path; its ancestors are not births.
+    const roots = [...(branchRoots.get(birth.branch_id) ?? [])]
+      .map(id => byId.get(id)!).filter(s => !(s.parents?.length));
+    const template = roots[0];
     if (!template) continue; // an unborn branch with no capture stays in the operations list
     const id = `graph:birth:${birth.id}`;
     nodes.set(id, { ...template, id, branch: birth.branch, parents: [], graft_parents: [], grafted: false,
       created_at: birth.created_at, message: birth.branch, memory_hash: undefined, session_id: undefined });
-    nodes.get(template.id)!.parents = [id];
+    for (const root of roots) claimBirth(root.id, '', id);
     events.set(id, { kind: 'birth', branch: birth.branch, snapshot: template.id, orphan: true, evidence: birth.id });
+  }
+  for (const [child, parents] of birthClaims) {
+    const node = nodes.get(child)!;
+    for (const [parent, claims] of parents) {
+      if (claims.size !== 1) continue;
+      const birth = [...claims][0];
+      if (parent) node.parents = node.parents.map(p => p === parent ? birth : p);
+      else if (!node.parents.length) node.parents = [birth];
+    }
   }
   const projectedRefs = refs.map(ref => ref.kind === 'branch' && mergeForTip.has(`${ref.name}:${ref.target}`)
     ? { ...ref, target: mergeForTip.get(`${ref.name}:${ref.target}`)! } : ref);
