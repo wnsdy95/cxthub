@@ -235,7 +235,7 @@ func toolDefinitions() []map[string]any {
 			}, "repository"),
 		},
 		{
-			"name": "memory_load", "description": "Read the complete memory object using bounded JSON fragments. Use memory_hash from context_history to select an exact historical version; continuation pages stay pinned.",
+			"name": "memory_load", "description": "Read current project memory across natural and merged lineage by default. Use mode=stored or memory_hash for an exact saved object. Follow bounded JSON fragment pages; if projection dependencies change, restart without cursor.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
 				"repository": repositoryProperty(), "ref": map[string]any{"type": "string", "description": "Branch, tag, or hash; defaults to the repository default branch."},
 			}, "repository"),
@@ -257,6 +257,7 @@ func toolDefinitions() []map[string]any {
 			props["position"] = map[string]any{"type": "string", "description": "Explicit context snapshot or cloud branch used as the working position. The server cannot infer local Git HEAD."}
 		}
 		if name == "memory_load" {
+			props["mode"] = map[string]any{"type": "string", "enum": []string{"project", "stored"}, "description": "Default project merges current lineage. Stored reads an immutable nearest attachment; memory_hash also selects stored. Historical rewind requires its exact memory_hash."}
 			props["memory_hash"] = map[string]any{"type": "string", "description": "Exact immutable memory hash belonging to ref, obtained from context_history or context_list."}
 		}
 		if name == "context_search" {

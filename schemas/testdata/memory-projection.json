@@ -1,0 +1,27 @@
+[
+ {"name":"parallel PR immediately appended","root":"b","snapshots":[
+  {"id":"origin","summary":"origin"},
+  {"id":"a","parents":["origin"],"fragments":[{"source":"a","summary":"A decision"}]},
+  {"id":"b","parents":["origin"],"grafts":["a"],"fragments":[{"source":"origin","summary":"origin"},{"source":"b","summary":"B decision"}]}],
+  "want":["origin","A decision","B decision"]},
+ {"name":"graft below opaque legacy descendant","root":"descendant","snapshots":[
+  {"id":"a","summary":"joined A"}, {"id":"boundary","grafts":["a"]},
+  {"id":"descendant","parents":["boundary"],"summary":"legacy descendant"}],
+  "want":["joined A","legacy descendant"]},
+ {"name":"removed graft is excluded but pinned import survives","root":"b","snapshots":[
+  {"id":"old","summary":"REMOVED"},{"id":"a","summary":"replacement"},
+  {"id":"b","grafts":["a"],"pinned":["import"],"fragments":[{"source":"old","summary":"REMOVED"},{"source":"import","summary":"IMPORTED"},{"source":"b","summary":"B decision"}]}],
+  "want":["replacement","IMPORTED","B decision"],"absent":["REMOVED"]},
+ {"name":"repeated merge preserves each sibling once","root":"c","snapshots":[
+  {"id":"a","summary":"A decision"},
+  {"id":"b","grafts":["a"],"fragments":[{"source":"b","summary":"B decision"}]},
+  {"id":"c","grafts":["a","b"],"fragments":[{"source":"c","summary":"C decision"}]}],
+  "want":["A decision","B decision","C decision"]},
+ {"name":"available inherited contribution with no source attachment","root":"b","snapshots":[
+  {"id":"a"},{"id":"b","parents":["a"],"fragments":[{"source":"a","summary":"inherited fallback"},{"source":"b","summary":"B decision"}]}],
+  "want":["inherited fallback","B decision"]},
+ {"name":"opaque narrative containment keeps structured supplements","root":"b","snapshots":[
+  {"id":"a","summary":"A decision","facts":["A fact"],"tasks":["A task"]},
+  {"id":"b","grafts":["a"],"summary":"A decision then B decision","facts":["B fact"]}],
+  "want":["A decision","B decision"],"facts":["A fact","B fact"],"tasks":["A task"]}
+]
