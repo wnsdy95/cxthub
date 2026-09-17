@@ -33,7 +33,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   const me = useMe().data;
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError } =
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const pendings = usePendings(repo.id).data ?? [];
   const unsyncs = useUnsyncs(repo.id).data ?? [];
@@ -425,7 +425,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
           onSelect={openSnapshot}
           badges={badges}
           refs={refs}
-          reflog={reflog} history={history} historyError={historyError}
+          reflog={reflog} history={history} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph}
           uncommitted={uncommittedIds}
           pinBranch={repo.default_branch || 'main'}
           repoId={atLeast(role, 'member') ? repo.id : null}

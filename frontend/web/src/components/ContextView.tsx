@@ -103,14 +103,20 @@ type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug' | 'visi
 export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspace | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError } =
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
-  const [branch, setBranch] = useState<string | null>(null);
+  const [branchSelection, setBranchSelection] = useState<{ repo: string; name: string | null; id?: string }>();
+  const selectedBranch = branchSelection?.repo === repo.id ? refs.find(r => r.kind === 'branch'
+    && (branchSelection.id ? r.branch_id === branchSelection.id : r.name === branchSelection.name)) : undefined;
+  const branch = selectedBranch?.name ?? pickDefaultBranch(branches, repo.default_branch);
+  function setBranch(name: string | null) {
+    setBranchSelection({ repo: repo.id, name, id: refs.find(r => r.kind === 'branch' && r.name === name)?.branch_id });
+  }
   useEffect(() => {
-    setBranch(pickDefaultBranch(branches, repo.default_branch));
-  }, [repo.id, repo.default_branch, branches]);
+    if (!graphLoading && !selectedBranch && branch) setBranch(branch);
+  }, [repo.id, selectedBranch, branch, graphLoading]);
 
   // Branch log = git log <branch>: every snapshot reachable through natural or
   // graft-overlay parents. First-parent/mainline styling remains a separate
@@ -581,7 +587,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} historyError={historyError} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
+        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
         <ReflogPanel repoId={repo.id} />
         <AIBar snapshots={committedSnapshots} />
       </aside>

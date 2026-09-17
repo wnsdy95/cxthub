@@ -2,6 +2,7 @@ import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from './types';
 import { parseBranchLifecycleRef } from './branchLifecycle';
 import { reachableSnapshotIds } from './onhold';
 import { completedBranchEvidence, conversationParents } from './graphEvidence';
+import { graphBranchBindings } from './contextHistory';
 
 export interface GraphEvent {
   id: string;
@@ -20,6 +21,11 @@ export interface GraphEvent {
 export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: HistoryEvent[], reflog: RefLogEntry[], pinHead?: string | null, pinBranch?: string) {
   const time = (value: string) => Date.parse(value);
   const byId = new Map(snapshots.map(s => [s.id, s]));
+  const bindings = graphBranchBindings(refs, history);
+  const scopeOf = (name: string) => bindings.refKey(refs.find(r => r.kind === 'branch' && r.name === name)
+    ?? { kind: 'branch', name, target: '', repo_id: '' });
+  const branchReach = new Map(refs.filter(r => r.kind === 'branch')
+    .map(r => [bindings.refKey(r), reachableSnapshotIds([r.target], snapshots)]));
   const nodes = new Map(snapshots.map(s => [s.id, { ...s, parents: [...(s.parents ?? [])], graft_parents: [...(s.graft_parents ?? [])] }]));
   const events = new Map<string, GraphEvent>();
   // Separately typed display edges: same branch identity from birth to a
@@ -42,7 +48,7 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     if (h.kind !== 'pr-merge' && h.target) addTip(h.target, h.branch);
   }
   let projectedHead = pinHead;
-  const merges: Array<{ id: string; before: string; after: string; source: string; branch: string; from: string; at: string; identity?: string }> = [];
+  const merges: Array<{ id: string; before: string; after: string; source: string; branch: string; scope: string; from: string; at: string; identity?: string }> = [];
   const completed = history.filter(h => h.kind === 'pr-merge' && h.pr_completed && h.pr && h.source && h.target && h.shared_target
     && byId.has(h.source) && byId.has(h.target) && byId.has(h.shared_target)
     && reachableSnapshotIds([h.target], snapshots).has(h.source)
@@ -73,17 +79,18 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     birthClaims.set(child, parents);
   };
   for (const h of completed) {
-    merges.push({id: `graph:merge:${h.id}`, before: h.shared_target!, after: h.target!, source: h.source!, branch: h.branch,
+    merges.push({id: `graph:merge:${h.id}`, before: h.shared_target!, after: h.target!, source: h.source!, branch: bindings.label(h.branch_id, h.branch), scope: h.branch_id,
       from: h.pr!.head_branch, at: h.created_at, identity: h.source_branch_id});
   }
   // Chronological ref order is evidence order. Reject ambiguous names, backward
   // moves and missing endpoints instead of inferring them from snapshot.branch.
   for (const move of reflog) {
+    if (bindings.snapshotKey(move.name) === undefined) continue; // legacy name cannot identify a reused generation
     if (move.kind !== 'branch' || !move.old || !move.new || move.old === move.new || !byId.has(move.old) || !byId.has(move.new)) continue;
     if (!reachableSnapshotIds([move.new], snapshots).has(move.old)) continue;
     const receipts = history.filter(h => h.kind === 'pr-merge' && !h.pr_completed && h.branch === move.name && h.source === move.new && h.shared_target === move.old && h.pr && time(h.created_at) <= time(move.created_at));
     if (receipts.length > 1) continue;
-    if (completed.some(h => h.branch === move.name && h.shared_target === move.old && h.target === move.new)) continue;
+    if (completed.some(h => h.branch_id === scopeOf(move.name) && h.shared_target === move.old && h.target === move.new)) continue;
     const candidates = [...(branchTips.get(move.new) ?? [])].filter(name => name !== move.name);
     const incoming = reachableSnapshotIds([move.new], snapshots);
     const previous = reachableSnapshotIds([move.old], snapshots);
@@ -98,21 +105,35 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     if (receipts.length !== 1 && (!hasAppendEdge || byId.get(move.new)?.branch === move.name || ownPublication)) continue;
     const from = receipts.length === 1 ? receipts[0].pr!.head_branch : candidates.length === 1 ? candidates[0] : undefined;
     if (!from) continue;
-    merges.push({ id: `graph:merge:${move.created_at}:${move.name}:${move.old}:${move.new}`, before: move.old, after: move.new, source: move.new, branch: move.name, from, at: move.created_at, identity: receipts[0]?.source_branch_id });
+    merges.push({ id: `graph:merge:${move.created_at}:${move.name}:${move.old}:${move.new}`, before: move.old, after: move.new, source: move.new, branch: move.name, scope: scopeOf(move.name), from, at: move.created_at, identity: receipts[0]?.source_branch_id });
   }
   merges.sort((a,b) => time(a.at) - time(b.at) || a.id.localeCompare(b.id));
   const mergeForTip = new Map<string, string>();
+  const inactiveMerges = new Set<string>();
   for (const merge of merges) {
     if (events.has(merge.id)) continue;
     const source = byId.get(merge.source)!;
-    const previous = mergeForTip.get(`${merge.branch}:${merge.before}`) ?? merge.before;
-    const replacedTip = mergeForTip.get(`${merge.branch}:${merge.after}`);
+    const previousCandidate = mergeForTip.get(`${merge.scope}:${merge.before}`);
+    const previous = previousCandidate && !inactiveMerges.has(previousCandidate) ? previousCandidate : merge.before;
+    const replacedTip = mergeForTip.get(`${merge.scope}:${merge.after}`);
     const node: Snapshot = { ...source, id: merge.id, branch: merge.branch, parents: [previous, merge.source], graft_parents: [], grafted: false,
       created_at: merge.at, message: `${merge.from} → ${merge.branch}`, memory_hash: undefined, session_id: undefined };
     nodes.set(merge.id, { ...node, parents: node.parents ?? [], graft_parents: [] });
     const receipt = completed.find(h => `graph:merge:${h.id}` === merge.id);
     events.set(merge.id, { id: merge.id, kind: 'merge', branch: merge.branch, sourceBranch: merge.from, snapshot: merge.source, evidence: receipt?.id ?? 'ref-move', prNumber: receipt?.pr?.number });
-    mergeForTip.set(`${merge.branch}:${merge.after}`, merge.id);
+    mergeForTip.set(`${merge.scope}:${merge.after}`, merge.id);
+    // Explicit movements away from this lineage supersede its placement.
+    // Compare server operation times here, never provider snapshot timestamps.
+    const movements = [
+      ...history.filter(h => h.kind === 'advance' && h.branch_id === merge.scope)
+        .map(h => ({ old: h.source, next: h.target, at: h.created_at })),
+      ...reflog.filter(r => r.kind === 'branch' && scopeOf(r.name) === merge.scope)
+        .map(r => ({ old: r.old, next: r.new, at: r.created_at })),
+    ];
+    const withdrawn = movements.some(m => m.old && m.next && time(m.at) > time(merge.at)
+      && reachableSnapshotIds([m.old], snapshots).has(merge.after)
+      && !reachableSnapshotIds([m.next], snapshots).has(m.old));
+    if (withdrawn) inactiveMerges.add(merge.id);
     // The verified ref move already represents this append edge. Drawing its
     // storage graft too would invert main and feature paths a second time.
     const segment = reachableSnapshotIds([merge.source], snapshots);
@@ -128,17 +149,19 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
       }
     }
     for (const n of nodes.values()) {
-      const membership = history.some(h => h.kind === 'advance' && h.branch === merge.branch && h.target === n.id);
-      if (n.id === merge.id || events.has(n.id) || segment.has(n.id) || (!membership && n.branch !== merge.branch)) continue;
-      // Retained progress from before a later completion must not move behind
-      // it when the destination has since rewound to this same stored tip.
-      if (!(time(n.created_at) >= time(merge.at))) continue;
+      const membership = history.some(h => (h.kind === 'advance' || h.kind === 'publish') && h.branch_id === merge.scope && h.target === n.id);
+      if (n.id === merge.id || events.has(n.id) || segment.has(n.id)
+        || (!membership && bindings.snapshotKey(n.branch ?? '') !== merge.scope)) continue;
+      // The active destination path supplies ancestry evidence even when a
+      // provider clock precedes the server completion. Unproven retained paths
+      // keep their original parents; wall-clock order must not assign them.
+      if (withdrawn || !branchReach.get(merge.scope)?.has(n.id)) continue;
       // Several completed PRs can leave the stored ref unchanged. Children
       // already redirected to its earlier projection must follow the latest
       // operation, or later joins become detached tips beside main.
       n.parents = n.parents.map(p => p === merge.after || p === replacedTip ? merge.id : p);
     }
-    if (pinBranch === merge.branch && pinHead === merge.after) projectedHead = merge.id;
+    if (!withdrawn && pinBranch && scopeOf(pinBranch) === merge.scope && pinHead === merge.after) projectedHead = merge.id;
   }
   for (const birth of births.values()) {
     const source = byId.get(birth.source!)!;
@@ -207,7 +230,9 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     node.parents = [previous, birthId, ...node.parents.slice(1).filter(p => !alreadyIncluded || p !== merge.source)];
     lifecycleEdges.set(mergeId, new Set([birthId]));
   }
-  const projectedRefs = refs.map(ref => ref.kind === 'branch' && mergeForTip.has(`${ref.name}:${ref.target}`)
-    ? { ...ref, target: mergeForTip.get(`${ref.name}:${ref.target}`)! } : ref);
+  const projectedRefs = refs.map(ref => {
+    const target = ref.kind === 'branch' ? mergeForTip.get(`${bindings.refKey(ref)}:${ref.target}`) : undefined;
+    return target && !inactiveMerges.has(target) ? { ...ref, target } : ref;
+  });
   return { snapshots: [...nodes.values()], events, lifecycleEdges, pinHead: projectedHead, refs: projectedRefs };
 }
