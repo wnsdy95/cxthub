@@ -541,6 +541,10 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .graph-merge-records li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; overflow-wrap: anywhere; }
 .graph-merge-records li > span { font-size: 0.75rem; color: var(--muted); }
 .graph-svg { display: block; }
+.graph-lifecycle-legend { margin: 8px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.graph-status-divider { position: relative; height: 20px; display: flex; align-items: center; }
+.graph-status-divider > svg { position: absolute; top: 0; left: 4px; pointer-events: none; }
+.graph-status-divider > div { position: relative; width: 100%; }
 .graph-svg line, .graph-svg path { stroke-width: 1.6; }
 /* Node hover tooltip — viewport fixed coordinates (JS flips/clamps calculations) */
 .graph-tip { position: fixed; transform: translateY(-50%); z-index: 50;

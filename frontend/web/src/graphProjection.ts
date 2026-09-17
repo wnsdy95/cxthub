@@ -1,7 +1,7 @@
 import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from './types';
 import { parseBranchLifecycleRef } from './branchLifecycle';
 import { reachableSnapshotIds } from './onhold';
-import { conversationParents } from './graphEvidence';
+import { completedBranchEvidence, conversationParents } from './graphEvidence';
 
 export interface GraphEvent {
   id: string;
@@ -22,7 +22,14 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
   const byId = new Map(snapshots.map(s => [s.id, s]));
   const nodes = new Map(snapshots.map(s => [s.id, { ...s, parents: [...(s.parents ?? [])], graft_parents: [...(s.graft_parents ?? [])] }]));
   const events = new Map<string, GraphEvent>();
+  // Separately typed display edges: same branch identity from birth to a
+  // verified PR completion. They never attest conversation ancestry.
+  const lifecycleEdges = new Map<string, Set<string>>();
   const births = new Map<string, HistoryEvent>();
+  const birthCounts = new Map<string, number>();
+  for (const h of history) {
+    if (h.kind === 'birth' || h.kind === 'orphan') birthCounts.set(h.branch_id, (birthCounts.get(h.branch_id) ?? 0) + 1);
+  }
   const branchTips = new Map<string, Set<string>>();
   const addTip = (id: string, name: string) => { const names = branchTips.get(id) ?? new Set<string>(); names.add(name); branchTips.set(id, names); };
   for (const ref of refs) {
@@ -31,7 +38,7 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     else if (ref.kind === 'branch') addTip(ref.target, ref.name);
   }
   for (const h of history) {
-    if (h.kind === 'birth' && h.source && h.source === h.target && byId.has(h.source)) births.set(h.branch_id, h);
+    if (h.kind === 'birth' && birthCounts.get(h.branch_id) === 1 && h.source && h.source === h.target && byId.has(h.source)) births.set(h.branch_id, h);
     if (h.kind !== 'pr-merge' && h.target) addTip(h.target, h.branch);
   }
   let projectedHead = pinHead;
@@ -75,6 +82,7 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     if (move.kind !== 'branch' || !move.old || !move.new || move.old === move.new || !byId.has(move.old) || !byId.has(move.new)) continue;
     if (!reachableSnapshotIds([move.new], snapshots).has(move.old)) continue;
     const receipts = history.filter(h => h.kind === 'pr-merge' && !h.pr_completed && h.branch === move.name && h.source === move.new && h.shared_target === move.old && h.pr && time(h.created_at) <= time(move.created_at));
+    if (receipts.length > 1) continue;
     if (completed.some(h => h.branch === move.name && h.shared_target === move.old && h.target === move.new)) continue;
     const candidates = [...(branchTips.get(move.new) ?? [])].filter(name => name !== move.name);
     const incoming = reachableSnapshotIds([move.new], snapshots);
@@ -82,7 +90,12 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     const hasAppendEdge = [...incoming].some(id => !previous.has(id) && byId.get(id)?.graft_parents?.includes(move.old));
     // A current shared hash can also be a later fork point. Without a bound PR
     // receipt, only a stored append edge proves this was a join.
-    if (receipts.length !== 1 && !hasAppendEdge) continue;
+    // Publishing a branch's own capture can carry an append of earlier main.
+    // A later main ref/position at that hash does not prove a reverse PR into
+    // the source branch. Legacy inference needs a distinct originating branch.
+    const ownPublication = history.some(h => (h.kind === 'publish' || h.kind === 'advance')
+      && h.branch === move.name && h.target === move.new && time(h.created_at) <= time(move.created_at));
+    if (receipts.length !== 1 && (!hasAppendEdge || byId.get(move.new)?.branch === move.name || ownPublication)) continue;
     const from = receipts.length === 1 ? receipts[0].pr!.head_branch : candidates.length === 1 ? candidates[0] : undefined;
     if (!from) continue;
     merges.push({ id: `graph:merge:${move.created_at}:${move.name}:${move.old}:${move.new}`, before: move.old, after: move.new, source: move.new, branch: move.name, from, at: move.created_at, identity: receipts[0]?.source_branch_id });
@@ -107,7 +120,12 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     for (const id of segment) {
       if (previousIDs.has(id)) continue;
       const n = nodes.get(id);
-      if (n) n.graft_parents = n.graft_parents.filter(p => p !== merge.before);
+      if (n?.graft_parents.length) {
+        n.graft_parents = n.graft_parents.filter(p => p !== merge.before);
+        // Removing the represented overlay must not reclassify the remaining
+        // natural parent as a legacy destructive-graft seam in the renderer.
+        if (!n.graft_parents.length) n.grafted = false;
+      }
     }
     for (const n of nodes.values()) {
       const membership = history.some(h => h.kind === 'advance' && h.branch === merge.branch && h.target === n.id);
@@ -148,7 +166,7 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
       }
     }
   }
-  for (const birth of history.filter(h => h.kind === 'orphan')) {
+  for (const birth of history.filter(h => h.kind === 'orphan' && birthCounts.get(h.branch_id) === 1)) {
     // Only a directly evidenced root can start this orphan. A later publication
     // may follow an explicitly selected old path; its ancestors are not births.
     const roots = [...(branchRoots.get(birth.branch_id) ?? [])]
@@ -170,7 +188,26 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
       else if (!node.parents.length) node.parents = [birth];
     }
   }
+  for (const { merge, birth, merged } of completedBranchEvidence(snapshots, history)) {
+    if (!merged || !birth || birth.kind !== 'birth' || !(time(birth.created_at) <= time(merge.created_at))) continue;
+    const birthId = `graph:birth:${birth.id}`;
+    const mergeId = `graph:merge:${merge.id}`;
+    const node = nodes.get(mergeId);
+    if (!node || !nodes.has(birthId)) continue;
+    const projected = [...nodes.values()];
+    // Normal captures already join their own birth. Shared/legacy captures
+    // may not: connect the confirmed operations, never change their parents.
+    if (reachableSnapshotIds([merge.source!], projected).has(birthId) || node.parents.includes(birthId)) continue;
+    // Inconsistent historical evidence must not create a display cycle.
+    if (reachableSnapshotIds([birthId], projected).has(mergeId)) continue;
+    const previous = node.parents[0];
+    // A no-op PR's source is already on main. Repeating that source edge would
+    // obscure the branch identity, especially when several PRs share a hash.
+    const alreadyIncluded = reachableSnapshotIds([previous], projected).has(merge.source!);
+    node.parents = [previous, birthId, ...node.parents.slice(1).filter(p => !alreadyIncluded || p !== merge.source)];
+    lifecycleEdges.set(mergeId, new Set([birthId]));
+  }
   const projectedRefs = refs.map(ref => ref.kind === 'branch' && mergeForTip.has(`${ref.name}:${ref.target}`)
     ? { ...ref, target: mergeForTip.get(`${ref.name}:${ref.target}`)! } : ref);
-  return { snapshots: [...nodes.values()], events, pinHead: projectedHead, refs: projectedRefs };
+  return { snapshots: [...nodes.values()], events, lifecycleEdges, pinHead: projectedHead, refs: projectedRefs };
 }

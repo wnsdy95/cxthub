@@ -35,6 +35,7 @@ const TICK = '#8a919e';
 // Compression boundary — nodes where the context window is compressed within the same session. Unlike session boundaries (edge ticks),
 // the sequence does not break, so nodes are marked with a separate ring (different color from graft seam).
 const COMPACT = '#8957e5';
+const LIFECYCLE_DASH = '6 3';
 
 function occupiedLanes(row: {
   lane: number;
@@ -179,6 +180,17 @@ export function CommitGraph({
     }
     return s;
   }, [rows]);
+  const lifecycleSegments = useMemo(() => {
+    const segments = new Set<string>();
+    for (const row of rows) {
+      const targets = projection.lifecycleEdges.get(row.snap.id);
+      for (const lane of row.branchesOut) {
+        const target = row.outgoing[lane];
+        if (target && targets?.has(target)) segments.add(`${lane}:${target}`);
+      }
+    }
+    return segments;
+  }, [rows, projection]);
   // Session boundary edge: matches child bot·through·parent top with the same key system (`${lane}:${expectedHash}`).
   const boundaries = useMemo(() => sessionBoundaries(visibleSnapshots), [visibleSnapshots]);
   const sessionSeams = useMemo(() => {
@@ -654,6 +666,7 @@ export function CommitGraph({
           )}
         </details>
       )}
+      {projection.lifecycleEdges.size > 0 && <p className="graph-lifecycle-legend">{t('graph.lifecycleLine')}</p>}
       <div className="graph-viewport" ref={graphViewportRef}>
         <div className="graph-canvas" style={{ width: svgW }}>
           {/* Top: branch labels per currently visible track. The header and SVG rows share one scroll canvas. */}
@@ -688,7 +701,9 @@ export function CommitGraph({
           const defs: JSX.Element[] = [];
           if (r.incoming[r.lane] === r.snap.id) {
             // Parent (join target) row upper half: Dark→Rainbow gradient on entry.
-            if (seams.has(`${r.lane}:${r.snap.id}`)) {
+            if (lifecycleSegments.has(`${r.lane}:${r.snap.id}`)) {
+              segs.push(<line key="top" data-graph-edge="lifecycle" x1={x} y1={0} x2={x} y2={mid} stroke={laneColor(r.lane)} strokeDasharray={LIFECYCLE_DASH} />);
+            } else if (seams.has(`${r.lane}:${r.snap.id}`)) {
               defs.push(
                 <linearGradient
                   key="gin"
@@ -741,24 +756,29 @@ export function CommitGraph({
           for (const j of r.mergesIn) {
             const seam = seams.has(`${j}:${r.snap.id}`);
             const sess = sessionSeams.has(`${j}:${r.snap.id}`);
+            const lifecycle = lifecycleSegments.has(`${j}:${r.snap.id}`);
             segs.push(
               <path
                 key={`in${j}`}
+                data-graph-edge={lifecycle ? 'lifecycle' : undefined}
                 d={`M ${cx(j)} 0 C ${cx(j)} ${mid} ${x} ${mid * 0.4} ${x} ${mid}`}
                 stroke={seam ? SEAM : laneColor(j)}
-                strokeDasharray={seam ? SEAM_DASH : sess ? SESSION_DASH : undefined}
+                strokeDasharray={lifecycle ? LIFECYCLE_DASH : seam ? SEAM_DASH : sess ? SESSION_DASH : undefined}
                 fill="none"
               />,
             );
           }
           for (const k of r.branchesOut) {
             const seamOut = seams.has(`${k}:${r.outgoing[k]}`); // Overlay graft edge exit curve
+            const lifecycle = lifecycleSegments.has(`${k}:${r.outgoing[k]}`);
             segs.push(
               <path
                 key={`out${k}`}
+                data-graph-edge={lifecycle ? 'lifecycle' : undefined}
+                data-graph-parent={r.outgoing[k]}
                 d={`M ${x} ${mid} C ${cx(k)} ${mid * 1.6} ${cx(k)} ${mid} ${cx(k)} ${ROW_H}`}
                 stroke={seamOut ? SEAM : laneColor(k)}
-                strokeDasharray={seamOut ? SEAM_DASH : undefined}
+                strokeDasharray={lifecycle ? LIFECYCLE_DASH : seamOut ? SEAM_DASH : undefined}
                 fill="none"
               />,
             );
@@ -768,15 +788,17 @@ export function CommitGraph({
             if (r.incoming[j] && r.incoming[j] === r.outgoing[j]) {
               const seam = seams.has(`${j}:${r.incoming[j]}`);
               const sess = sessionSeams.has(`${j}:${r.incoming[j]}`);
+              const lifecycle = lifecycleSegments.has(`${j}:${r.incoming[j]}`);
               segs.push(
                 <line
                   key={`p${j}`}
+                  data-graph-edge={lifecycle ? 'lifecycle' : undefined}
                   x1={cx(j)}
                   y1={0}
                   x2={cx(j)}
                   y2={ROW_H}
                   stroke={seam ? SEAM : laneColor(j)}
-                  strokeDasharray={seam ? SEAM_DASH : sess ? SESSION_DASH : undefined}
+                  strokeDasharray={lifecycle ? LIFECYCLE_DASH : seam ? SEAM_DASH : sess ? SESSION_DASH : undefined}
                 />,
               );
             }
@@ -800,6 +822,7 @@ export function CommitGraph({
             <li key={r.snap.id}>
               <button
                 data-graph-row-index={rowIdx}
+                data-graph-id={r.snap.id}
                 data-graph-node-lane={r.lane}
                 data-graph-event={graphEvent?.kind}
                 data-graph-snapshot={selectId}
@@ -860,8 +883,23 @@ export function CommitGraph({
                   )}
                 </svg>
               </button>
-              {uncommittedEnd && <div className="uncommitted-divider">{t('graph.uncommittedDivider')}</div>}
-              {blockEnd && <div className="unpushed-divider">{t('graph.unpushedDivider')}</div>}
+              {(uncommittedEnd || blockEnd) && <div className="graph-status-divider" data-graph-divider={r.snap.id}>
+                <svg width={svgW} height={20} className="graph-svg" aria-hidden="true">
+                  {r.outgoing.map((target, lane) => {
+                    if (!target) return null;
+                    const key = `${lane}:${target}`;
+                    const lifecycle = lifecycleSegments.has(key);
+                    const seam = seams.has(key);
+                    return <line key={lane} data-graph-edge={lifecycle ? 'lifecycle' : undefined}
+                      x1={cx(lane)} y1={0} x2={cx(lane)} y2={20}
+                      stroke={seam ? SEAM : laneColor(lane)}
+                      strokeDasharray={lifecycle ? LIFECYCLE_DASH : seam ? SEAM_DASH : sessionSeams.has(key) ? SESSION_DASH : undefined} />;
+                  })}
+                </svg>
+                <div className={uncommittedEnd ? 'uncommitted-divider' : 'unpushed-divider'}>
+                  {t(uncommittedEnd ? 'graph.uncommittedDivider' : 'graph.unpushedDivider')}
+                </div>
+              </div>}
             </li>
           );
         })}
@@ -921,6 +959,8 @@ export function CommitGraph({
           </em>
           {projection.events.has(tipRow.snap.id) && <em>{t('graph.eventOpensSnapshot')}
             {projection.events.get(tipRow.snap.id)?.prNumber ? ` · PR #${projection.events.get(tipRow.snap.id)!.prNumber}` : ''}</em>}
+          {(projection.lifecycleEdges.has(tipRow.snap.id) || [...projection.lifecycleEdges.values()].some(ids => ids.has(tipRow.snap.id)))
+            && <em>{t('graph.lifecycleLine')}</em>}
           {tipRow.snap.grafted && <em style={{ color: '#d29922' }}>{t('graph.appended')}</em>}
           {boundaries.has(tipRow.snap.id) && <em>{t('graph.newSession')}</em>}
           {compactions.has(tipRow.snap.id) && <em style={{ color: COMPACT }}>{t('graph.compaction')}</em>}
