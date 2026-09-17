@@ -108,7 +108,7 @@ setting `synchronous_commit=on` alone does not provision replicas. See PostgreSQ
 
 CI runs real PostgreSQL tests, including repeated Go race-detector runs:
 
-- Two separate server pools, six parallel PRs with duplicate deliveries, and a
+- Two separate server pools limited to two connections each, six parallel PRs with duplicate deliveries, and a
   concurrent ordinary push: every source remains reachable, one completion per PR.
 - Invalid second ref update, failed second snapshot, failed completion receipt,
   and failed job completion: no partial publication.

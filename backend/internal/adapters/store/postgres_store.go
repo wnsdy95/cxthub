@@ -724,7 +724,7 @@ func (s *PostgresStore) GetRef(ctx context.Context, repoID domain.ContentHash, k
 	if kind != domain.RefBranch {
 		return ref, nil
 	}
-	refs, err := listBranchLifecycleRefs(ctx, s.pool, repoID, name)
+	refs, err := listBranchLifecycleRefs(ctx, s.db(ctx), repoID, name)
 	if err != nil {
 		return domain.Ref{}, err
 	}

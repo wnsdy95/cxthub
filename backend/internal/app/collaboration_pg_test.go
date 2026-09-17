@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -20,12 +21,30 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
-func collaborationPG(t *testing.T) (*Service, *store.PostgresStore, domain.ContentHash) {
+func collaborationDSN(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("CXT_TEST_DSN")
 	if dsn == "" {
 		t.Skip("CXT_TEST_DSN unset")
 	}
+	// Saturate a small pool on every machine. A store helper escaping the
+	// transaction would otherwise appear correct with many spare connections.
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := u.Query()
+		q.Set("pool_max_conns", "2")
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	return dsn + " pool_max_conns=2"
+}
+
+func collaborationPG(t *testing.T) (*Service, *store.PostgresStore, domain.ContentHash) {
+	t.Helper()
+	dsn := collaborationDSN(t)
 	ctx := context.Background()
 	st, err := store.NewPostgresStore(ctx, dsn)
 	if err != nil {
@@ -56,8 +75,9 @@ func collaborationPR(t *testing.T, svc *Service, st *store.PostgresStore, repo d
 
 func TestPGCollaborationConcurrentPRsAndPushes(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx := context.Background()
-	peer, err := store.NewPostgresStore(ctx, os.Getenv("CXT_TEST_DSN"))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	peer, err := store.NewPostgresStore(ctx, collaborationDSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
