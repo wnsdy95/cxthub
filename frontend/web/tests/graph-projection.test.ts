@@ -119,6 +119,7 @@ for (const history of [autoHistory, [...autoHistory].reverse(), autoHistory.filt
     assert.notEqual(source.lane, 0);
   }
 }
+
 assert.equal(JSON.stringify([autoSnapshots, autoHistory, autoRefs]), beforeAuto);
 // Viewing somebody else's snapshot is not proof of branch ownership.
 const onlySelected = autoHistory.filter(e => e.kind === 'birth' || e.kind === 'position');
@@ -147,3 +148,36 @@ const selectedOrphan = projectBranchGraph([snap('root','main',[],0), snap('orpha
   [], [orphan, {...orphan, id:'selection', kind:'position', target:'root'}, orphanPublished], []);
 assert.deepEqual(selectedOrphan.snapshots.find(s=>s.id==='root')?.parents, []);
 assert.deepEqual(selectedOrphan.snapshots.find(s=>s.id==='orphan-tip')?.parents, ['root']);
+
+// Repeated completions at one stored main tip form a continuous operation
+// chain. A subsequent main capture must not bypass the second and third PR.
+const repeatedHistory: HistoryEvent[] = [];
+for (let n = 1; n <= 3; n++) {
+  const b = {...birth, id:`repeat-birth-${n}`, branch_id:`repeat-${n}`, branch:`feature/${n}`};
+  repeatedHistory.push(b, {...done, id:`repeat-merge-${n}`, source_branch_id:b.branch_id,
+    pr:{...done.pr!, number:n, head_branch:b.branch}, created_at:at(n+1)});
+}
+for (const history of [repeatedHistory, [...repeatedHistory].reverse()]) {
+  const repeat = projectBranchGraph([snap('root','main',[],0), snap('current','main',['root'],6)],
+    [{repo_id:'repo',kind:'branch',name:'main',target:'current'}], history, [], 'current','main');
+  const map = new Map(repeat.snapshots.map(s=>[s.id,s]));
+  assert.equal(map.get('current')!.parents![0], 'graph:merge:repeat-merge-3');
+  assert.equal(map.get('graph:merge:repeat-merge-3')!.parents![0], 'graph:merge:repeat-merge-2');
+  assert.equal(map.get('graph:merge:repeat-merge-2')!.parents![0], 'graph:merge:repeat-merge-1');
+  const layout = layoutGraph(repeat.snapshots,repeat.pinHead).rows;
+  for (const row of layout.filter(r=>r.snap.id.startsWith('graph:merge:'))) {
+    assert.equal(row.lane,0);
+    assert.equal(row.incoming[0], row.snap.id, 'every completed PR stays attached to main');
+  }
+}
+
+// A capture between two same-tip completions belongs to the earlier operation,
+// even if main later rewinds and another PR completes at the old stored tip.
+const historical = projectBranchGraph([snap('root','main',[],0), snap('between','main',['root'],2.5), snap('current','main',['root'],6)],
+  [{repo_id:'repo',kind:'branch',name:'main',target:'current'}], repeatedHistory, [], 'current','main');
+assert.deepEqual(historical.snapshots.find(s=>s.id==='between')?.parents, ['graph:merge:repeat-merge-1']);
+// Legacy destructive grafts retain an append seam in parents[0]; it cannot
+// establish that the incoming conversation began at this birth.
+const legacyBirth = projectBranchGraph([snap('root','main',[],0), {...snap('legacy','feature',['root'],3), grafted:true}],
+  [], [birth, {...advance, target:'legacy'}], []);
+assert.deepEqual(legacyBirth.snapshots.find(s=>s.id==='legacy')?.parents, ['root']);

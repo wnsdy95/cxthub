@@ -10,6 +10,7 @@ import { usePaged, PageControl } from './Pagination';
 import { mainlineOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { atLeast, canWriteAsset, type Role } from '../roles';
 import { CommitGraph } from './CommitGraph';
+import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
 import { AIBar, AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK, modelColor, modelLogo } from './AIBar';
 import { About, TeamSettings, SecretsPanel } from './About';
 import { Markdown } from './Markdown';
@@ -153,6 +154,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   // Branch-specific pending count (for tip badges) — same definition as rows in On Hold tab (onhold.ts shared).
   const holdCount = useMemo(() => holdCounts(refs, allSnapshots, unsyncs, pendings, sharedIds), [refs, allSnapshots, unsyncs, pendings, sharedIds]);
   const [snapId, setSnapId] = useState<string | null>(null);
+  const { viewerRef, openSnapshot, selectedEvent } = useContextSelection(repo.id, snapId, setSnapId);
   // Auto-selection is conservative: keep current selection if it exists in the full list (user click respected),
   // otherwise set to branch head. (Orphan commits selected in the graph are also kept).
   useEffect(() => {
@@ -264,7 +266,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
                 <button
                   key={`${hit.snapshot_id}-${hit.kind}-${hit.seq ?? i}`}
                   className={`search-hit${hit.snapshot_id === snapId ? ' on' : ''}`}
-                  onClick={() => setSnapId(hit.snapshot_id)}
+                  onClick={() => openSnapshot(hit.snapshot_id)}
                 >
                   <span className={`hit-kind ${hit.kind}`}>{hit.kind === 'commit' ? t('context.hitCommit') : hit.role || t('context.hitConvo')}</span>
                   <code>{short(hit.snapshot_id)}</code>
@@ -285,7 +287,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
           <li key={s.id}>
             <button
               className={`commit-row${s.id === snapId ? ' on' : ''}${mainline.has(s.id) ? '' : ' off-mainline'}`}
-              onClick={() => setSnapId(s.id)}
+              onClick={() => openSnapshot(s.id)}
               onKeyDown={e => {
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                   e.preventDefault();
@@ -374,8 +376,10 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
       {selected && (
         <div
           className="viewer"
+          ref={viewerRef}
           style={{ ['--assistant-ink' as string]: PROVIDER_INK[selected.provider] ?? 'var(--text)' } as React.CSSProperties}
         >
+          <ContextSelectionNotice event={selectedEvent} />
           <div className="viewer-head">
             <code>{short(selected.id)}</code> {selected.message}
             {selected.grafted && <span className="ref-badge seam">⎘ appended</span>}
@@ -577,7 +581,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} onSelect={setSnapId} badges={badges} refs={refs} reflog={reflog} history={history} historyError={historyError} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
+        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} historyError={historyError} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
         <ReflogPanel repoId={repo.id} />
         <AIBar snapshots={committedSnapshots} />
       </aside>

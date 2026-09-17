@@ -99,6 +99,42 @@ Keep these dimensions independent:
 - Pushed vs unpushed vs uncommitted: synchronization/commit state.
 - Expanded vs collapsed: graph display state only.
 
+### Graph activation and branch evidence
+
+Activating a snapshot, branch creation, or PR merge reveals the corresponding
+context viewer in the center pane. Repeating the same selection also reveals
+it. Loading the selected document may require a second scroll adjustment;
+manual reading cancels that adjustment. Background refreshes never move the
+reader. A creation/merge operation can reference an existing snapshot, so its
+selected marker and viewer explanation remain distinct from snapshot identity.
+
+The PR merge records panel separates two independent facts:
+
+- **Merge completion:** a server completion and available ancestry prove that
+  both the source and prior destination remain in the resulting history.
+- **Conversation lineage:** the source may reach its recorded creation point
+  through natural parents, reuse that exact snapshot, reach it only through
+  an append, or have no demonstrated path to it. Missing snapshots or an absent
+  creation identity make the relationship unknown. An explicit orphan birth
+  proves a request to start a new conversation root.
+
+Legacy destructive graft seams in `parents[0]` count as append edges for this
+classification. If natural ancestry is incomplete, an available append path
+does not establish that it is the only path to the creation point.
+
+A completed PR does not prove that every development turn was captured. An
+unchanged source is not evidence of missing turns either. An append can preserve
+earlier main without proving that the incoming conversation began there. The
+viewer must report those limitations instead of inferring either an intentional
+rewind or a new conversation-parent edge. Stored parents and memory remain intact.
+
+Several PRs may complete at the same destination snapshot without moving its
+ref. Their projected operation nodes form a continuous chain; later main
+captures connect to the latest operation already recorded when they were
+created. Retained captures from before a later completion keep their earlier
+operation association after a rewind. These are verified
+operation markers, not newly persisted conversation snapshots.
+
 The first implementation adds a Previous progress panel alongside the existing
 archived-branches panel. It uses server branch ref movement records and the
 currently available snapshots to find paths outside the current branch ancestry.

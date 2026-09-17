@@ -21,6 +21,7 @@ import { atLeast, canWriteAsset, type Role } from '../roles';
 import { AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK } from './AIBar';
 import { AIBar } from './AIBar';
 import { CommitGraph } from './CommitGraph';
+import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
 import { About, TeamSettings, SecretsPanel } from './About';
 import { short, when, type ViewMode } from './ContextView';
 import { unsyncChains, orphanPendings } from '../onhold';
@@ -116,6 +117,10 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
 
   const [selSnap, setSelSnap] = useState<string | null>(null);
   const [selPending, setSelPending] = useState<string | null>(null);
+  const { viewerRef, openSnapshot, selectedEvent } = useContextSelection(repo.id, selSnap, (id) => {
+    setSelPending(null);
+    setSelSnap(id);
+  });
   const selected = selSnap ? byId.get(selSnap) ?? null : null;
   const selectedPending: Pending | null =
     (selPending ? orphans.find((p) => p.session_id === selPending) : null) ?? null;
@@ -292,8 +297,10 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
         {(selected || selectedPending) && (
           <div
             className="viewer"
+            ref={viewerRef}
             style={{ ['--assistant-ink' as string]: PROVIDER_INK[(selected?.provider ?? selectedPending?.provider) as string] ?? 'var(--text)' } as React.CSSProperties}
           >
+            <ContextSelectionNotice event={selectedEvent} />
             <div className="viewer-head">
               <code>{short(selected?.id ?? selectedPending!.target)}</code>{' '}
               {selected
@@ -414,10 +421,8 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
         <CommitGraph
           snapshots={graphSnapshots}
           selectedId={selSnap}
-          onSelect={(id) => {
-            setSelPending(null);
-            setSelSnap(id);
-          }}
+          selectedEventId={selectedEvent?.id}
+          onSelect={openSnapshot}
           badges={badges}
           refs={refs}
           reflog={reflog} history={history} historyError={historyError}
