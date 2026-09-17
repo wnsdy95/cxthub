@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { capturePageErrors, installApiFixture, type ApiRequest, type ApiResponse } from './api-fixture';
+import { expectRenderedGraphPath } from './graph-paths';
 
 const repoId = 'repo-1';
 const workspaceId = 'workspace-1';
@@ -836,6 +837,11 @@ test('graph exposes pushed, unpushed, and uncommitted as three browser-visible t
     .locator('.graph-row[aria-label^="hook: active desktop session"] svg')
     .getAttribute('opacity');
   expect(opacity).toBe('0.42');
+  await expectRenderedGraphPath(page, uncommittedHead, unpushedHead);
+  await expectRenderedGraphPath(page, unpushedHead, pushedHead);
+  // Regression control: the old divider gap must fail the same path check.
+  await page.locator('.graph-status-divider svg').first().evaluate(el=>el.remove());
+  await expect(expectRenderedGraphPath(page, uncommittedHead, unpushedHead)).rejects.toThrow('Rendered path');
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
@@ -1551,19 +1557,28 @@ test('graph activation reveals context and distinguishes events at the same snap
 
 test('consecutive same-tip PR joins stay on main while unexplained birth gaps stay explicit', async ({ page }) => {
   const snapshot = (hash:string,parents:string[],n:number) => ({id:hash,repo_id:repoId,branch:'main',parents,doc_hash:hash,provider:'codex',message:`state-${n}`,created_at:`2026-09-16T00:00:0${n}Z`});
-  const snapshots = [snapshot(appendedRoot,[],0),snapshot(graftTarget,[appendedRoot],1),snapshot(pushedHead,[graftTarget],6)];
+  const snapshots = [snapshot(appendedRoot,[],0),snapshot(graftTarget,[appendedRoot],1),snapshot(pushedHead,[graftTarget],6),
+    {...snapshot(uncommittedHead,[],3.5),message:'hook: other pending session'},snapshot(unpushedHead,[],2.5)];
   const history = [1,2,3].flatMap(n=>{
     const b = {id:`birth-${n}`,repo_id:repoId,branch_id:`topic-${n}`,branch:`feature/${n}`,kind:'birth',source:graftTarget,target:graftTarget,created_at:`2026-09-16T00:00:01Z`};
     return [b,{...b,id:`merge-${n}`,kind:'pr-merge',branch:'main',branch_id:'main',source_branch_id:b.branch_id,source:appendedRoot,target:graftTarget,shared_target:graftTarget,pr_completed:true,
       pr:{number:n,base_branch:'main',head_branch:b.branch,head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:`2026-09-16T00:00:0${n+1}Z`}];
   });
-  const {pageErrors,unexpected} = await openGraph(page,publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],[],[],[],history));
+  const pending = [{repo_id:repoId,session_id:'unrelated-session',branch:'main',provider:'codex',target:uncommittedHead,updated_at:'2026-09-16T00:00:03.5Z'}];
+  const unsync = [{repo_id:repoId,user:'alice',branch:'main',target:unpushedHead,updated_at:'2026-09-16T00:00:02.5Z'}];
+  const {pageErrors,unexpected} = await openGraph(page,publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],pending,unsync,[],history));
+  await expect(page.locator('.graph-status-divider')).toHaveCount(2);
   const merges = page.locator('[data-graph-event="merge"]');
   await expect(merges).toHaveCount(3);
   for (const row of await merges.all()) await expect(row).toHaveAttribute('data-graph-node-lane','0');
   await page.locator('.graph-merge-records summary').click();
   await expect(page.locator('[data-branch-lineage="disconnected"]')).toHaveCount(3);
-  await expect(page.locator('.graph-merge-records')).toContainText('no connecting line is inferred');
+  await expect(page.locator('.graph-merge-records')).toContainText('no conversation ancestry is inferred');
+  await expect(page.locator('.graph-lifecycle-legend')).toContainText('do not establish conversation continuity');
+  for (const n of [1,2,3]) {
+    await expectRenderedGraphPath(page, `graph:merge:merge-${n}`, `graph:birth:birth-${n}`, true);
+    await expectRenderedGraphPath(page, `graph:birth:birth-${n}`, graftTarget);
+  }
   await page.getByRole('button',{name:'View merged context',exact:true}).first().click();
   await expect(page.locator('.viewer-head code')).toHaveText('aaaaaaaaaa');
   await expect(page.locator('.context-selection-notice')).toContainText('PR #3');
@@ -1677,7 +1692,11 @@ test('archived automatic publications retain continuous birth, source and merge 
         pr:{number:n,head_branch:branch,base_branch:'main',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)}},
       {...birth,id:`archive-${branch}`,kind:'archive',binding_parent:birth.id,source,target:source,created_at:at(9)});
   }
-  const {pageErrors,unexpected} = await openGraph(page, publicWorkspaceApi(snapshots,refs,[],[],[],history));
+  const reflog = [
+    {kind:'branch',name:'feature/left',old:appendedRoot,new:unpushedHead,created_at:at(3)},
+    {kind:'branch',name:'feature/right',old:appendedRoot,new:pushedHead,created_at:at(6)},
+  ];
+  const {pageErrors,unexpected} = await openGraph(page, publicWorkspaceApi(snapshots,refs,[],[],reflog,history));
   await expect(page.locator('[data-graph-event="merge"]')).toHaveCount(2);
   for (const branch of ['feature/left','feature/right']) {
     const born = page.locator(`[data-graph-event="birth"][data-graph-branch="${branch}"]`);
@@ -1701,6 +1720,10 @@ test('archived automatic publications retain continuous birth, source and merge 
       });
     },{start,end,lane});
     expect(continuity).toBe(true);
+    const sourceId = await source.getAttribute('data-graph-snapshot');
+    await expectRenderedGraphPath(page, `graph:merge:merge-${branch}`, sourceId!);
+    await expectRenderedGraphPath(page, sourceId!, `graph:birth:birth-${branch}`);
+    await expectRenderedGraphPath(page, `graph:birth:birth-${branch}`, appendedRoot);
   }
   await page.locator('.graph-wrap').screenshot({path:testInfo.outputPath('published-branch-paths.png')});
   expect(pageErrors).toEqual([]);

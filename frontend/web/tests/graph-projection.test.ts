@@ -24,6 +24,7 @@ assert.equal(row('tip').lane,row('feature').lane);
 assert.equal(row('feature').lane,row(born).lane,'branch line reaches its recorded birth');
 assert.deepEqual(row(born).snap.parents,['root']);
 assert.deepEqual(row(merge).snap.parents,['base','tip']);
+assert.equal(row('feature').snap.grafted,false,'represented overlay must not turn the natural birth edge into a legacy graft');
 assert.equal(JSON.stringify(snapshots),original,'projection cannot rewrite archive parents');
 
 const same=projectBranchGraph([snapshots[0]], [{repo_id:'repo',kind:'branch',name:'feature',target:'root'}], [birth], [],'root','main');
@@ -181,3 +182,62 @@ assert.deepEqual(historical.snapshots.find(s=>s.id==='between')?.parents, ['grap
 const legacyBirth = projectBranchGraph([snap('root','main',[],0), {...snap('legacy','feature',['root'],3), grafted:true}],
   [], [birth, {...advance, target:'legacy'}], []);
 assert.deepEqual(legacyBirth.snapshots.find(s=>s.id==='legacy')?.parents, ['root']);
+
+// An ordinary feature publication with a graft must not invent feature <- main
+// merely because main later points to the same capture after its real PR.
+const ownPublish = [snap('root','main',[],0), snap('source','feature',['root'],3,['root'])];
+const ownRefs: Ref[] = [{repo_id:'repo',kind:'branch',name:'main',target:'source'}, {repo_id:'repo',kind:'branch',name:'feature',target:'source'}];
+const ownDone = {...done,id:'own-done',source:'source',target:'source',shared_target:'root',created_at:at(5)};
+const ownMove = {...log,name:'feature',old:'root',new:'source',created_at:at(4)};
+const ownGraph = projectBranchGraph(ownPublish,ownRefs,[birth,ownDone],[ownMove],'source','main');
+assert.deepEqual([...ownGraph.events.values()].filter(e=>e.kind==='merge').map(e=>[e.branch,e.sourceBranch]), [['main','feature']]);
+const deduplicated = ownPublish.map(s=>({...s,branch:'main'}));
+const published = {...birth,id:'own-publication',kind:'publish' as const,target:'source',created_at:at(3)};
+assert.deepEqual([...projectBranchGraph(deduplicated,ownRefs,[birth,published,ownDone],[ownMove],'source','main').events.values()]
+  .filter(e=>e.kind==='merge').map(e=>[e.branch,e.sourceBranch]), [['main','feature']]);
+
+// Same branch identity establishes an operation path, not missing conversation
+// parents. Two PRs reusing older content still retain two distinct side lanes.
+const oldContent = [snap('old','main',[],0), snap('base','main',['old'],1), snap('current','main',['base'],8)];
+const operationHistory: HistoryEvent[] = [1,2].flatMap(n=> {
+  const b = {...birth,id:`operation-birth-${n}`,branch_id:`operation-${n}`,branch:`feature/${n}`,source:'base',target:'base'};
+  return [b,{...done,id:`operation-merge-${n}`,source_branch_id:b.branch_id,source:'old',target:'base',shared_target:'base',
+    pr:{...done.pr!,head_branch:b.branch,number:n},created_at:at(n+3)}];
+});
+const originalOperations = JSON.stringify([oldContent,operationHistory]);
+for (const history of [operationHistory,[...operationHistory].reverse()]) {
+  const projected = projectBranchGraph(oldContent,[{...ownRefs[0],target:'current'}],history,[],'current','main');
+  const map = new Map(projected.snapshots.map(s=>[s.id,s]));
+  assert.equal(projected.lifecycleEdges.size,2);
+  assert.deepEqual(map.get('old')?.parents,[]);
+  assert.deepEqual(map.get('base')?.parents,['old']);
+  const rows = layoutGraph(projected.snapshots,projected.pinHead).rows;
+  for (const n of [1,2]) {
+    const mid=`graph:merge:operation-merge-${n}`, bid=`graph:birth:operation-birth-${n}`;
+    assert.deepEqual([...projected.lifecycleEdges.get(mid)!],[bid]);
+    assert.deepEqual(map.get(mid)?.parents,[n===1?'base':'graph:merge:operation-merge-1',bid]);
+    const merge = rows.find(r=>r.snap.id===mid)!;
+    const birth = rows.find(r=>r.snap.id===bid)!;
+    const lane = merge.branchesOut.find(l=>merge.outgoing[l]===bid)!;
+    assert.equal(merge.lane,0);
+    assert.ok(lane>0);
+    assert.equal(birth.lane,lane);
+    for (const row of rows.slice(rows.indexOf(merge)+1,rows.indexOf(birth))) {
+      assert.equal(row.incoming[lane],bid);
+      assert.equal(row.outgoing[lane],bid);
+    }
+  }
+}
+assert.equal(JSON.stringify([oldContent,operationHistory]),originalOperations);
+// No operation connector may be invented from names, ambiguous births, future
+// creation records, an unverified inclusion or a pending request.
+for (const history of [
+  operationHistory.map(h=>h.kind==='pr-merge'?{...h,source_branch_id:undefined}:h),
+  [...operationHistory,...operationHistory.filter(h=>h.kind==='birth').map(h=>({...h,id:`duplicate-${h.id}`}))],
+  operationHistory.map(h=>h.kind==='birth'?{...h,created_at:at(9)}:h),
+  operationHistory.map(h=>h.kind==='pr-merge'?{...h,target:'old'}:h),
+  operationHistory.map(h=>({...h,pr_completed:false})),
+]) assert.equal(projectBranchGraph(oldContent,[],history,[]).lifecycleEdges.size,0);
+assert.equal(p.lifecycleEdges.size,0,'a natural source/birth path does not get a duplicate operation track');
+assert.equal([...projectBranchGraph(snapshots,refs,[pending,{...pending,id:'ambiguous-receipt'}],[log]).events.values()]
+  .filter(e=>e.kind==='merge').length,0,'ambiguous receipts cannot assign the first matching source identity');

@@ -392,6 +392,8 @@ proves a join when its source and previous base are reachable from its resulting
 base; a ref movement is not required. Without a receipt, a join requires both
 an existing append edge and an unambiguous source branch. A pending receipt,
 shared current hash, or ordinary fast-forward alone does not prove a merge.
+An unbound ref movement publishing the destination branch's own capture is
+not a reverse merge merely because main later points to the same content hash.
 
 At a join, main continues along its previous main history; the source branch
 remains on a side lane between its recorded birth and join. These event nodes
@@ -399,6 +401,16 @@ are a read projection: clicks open the archived conversation at that event;
 no synthetic snapshot or rewritten parent is stored. Rename and name reuse
 retain distinct birth identities. Orphan branches begin without conversation
 parents. An unborn orphan without a capture remains in the operations list.
+
+When the conversation path does not connect a birth to its completed PR, a
+separate long-dashed operation edge may connect them. This requires one unique
+birth and a verified completion bound to the same branch identity, with birth
+preceding completion. The legend and endpoint tooltips distinguish this from
+conversation ancestry; no missing parent is inferred or stored. A no-op PR can
+therefore retain its own branch lane even when several PRs share one source
+hash. Ambiguous identities, pending receipts and cyclic evidence never create
+this operation edge. Status dividers extend every passing lane, including its
+dash style, instead of inserting an unconnected gap between graph rows.
 
 Branch paths use identity-bound `advance` and finalized `publish` targets, plus
 verified completed receipts' `source` and `source_branch_id`. Ordinary automatic
