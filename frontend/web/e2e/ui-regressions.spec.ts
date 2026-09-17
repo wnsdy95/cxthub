@@ -1576,3 +1576,56 @@ test('context has one lazy memory toggle, scrollable badges and independent cent
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+
+test('archived automatic publications retain continuous birth, source and merge paths', async ({page}, testInfo) => {
+  const at = (n:number) => `2026-09-16T00:00:0${n}Z`;
+  const make = (hash:string, branch:string, parents:string[], n:number, graft:string[] = []) => ({
+    id:hash, repo_id:repoId, branch, parents, graft_parents:graft, grafted:graft.length>0,
+    doc_hash:hash, provider:'codex', fidelity:'full', message:`capture-${branch}`, created_at:at(n),
+  });
+  const middle = id('f');
+  const snapshots = [make(appendedRoot,'main',[],0), make(graftTarget,'main',[appendedRoot],1),
+    make(unpushedHead,'feature/left',[appendedRoot],3,[graftTarget]), make(middle,'main',[unpushedHead],5),
+    make(pushedHead,'feature/right',[appendedRoot],6,[middle]), make(uncommittedHead,'main',[pushedHead],8)];
+  const refs = [{repo_id:repoId,kind:'branch',name:'main',branch_id:'main-id',target:uncommittedHead}];
+  const history = [];
+  for (const [branch, source, before, n] of [['feature/left',unpushedHead,graftTarget,3], ['feature/right',pushedHead,middle,6]] as const) {
+    const birth = {repo_id:repoId,id:`birth-${branch}`,branch_id:branch,branch,kind:'birth',source:appendedRoot,target:appendedRoot,created_at:at(n-1)};
+    history.push(birth,
+      {...birth,id:`position-${branch}`,kind:'position',source,target:source,created_at:at(n)},
+      {...birth,id:`publish-${branch}`,kind:'publish',source,target:source,created_at:at(n)},
+      {...birth,id:`merge-${branch}`,kind:'pr-merge',branch:'main',branch_id:'main-id',source_branch_id:branch,
+        source,target:source,shared_target:before,pr_completed:true,created_at:at(n+1),
+        pr:{number:n,head_branch:branch,base_branch:'main',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)}},
+      {...birth,id:`archive-${branch}`,kind:'archive',binding_parent:birth.id,source,target:source,created_at:at(9)});
+  }
+  const {pageErrors,unexpected} = await openGraph(page, publicWorkspaceApi(snapshots,refs,[],[],[],history));
+  await expect(page.locator('[data-graph-event="merge"]')).toHaveCount(2);
+  for (const branch of ['feature/left','feature/right']) {
+    const born = page.locator(`[data-graph-event="birth"][data-graph-branch="${branch}"]`);
+    const source = page.getByRole('button',{name:new RegExp(`^capture-${branch} ·`)});
+    const lane = await source.getAttribute('data-graph-node-lane');
+    await expect(born).toHaveAttribute('data-graph-node-lane',lane!);
+    await expect(born).not.toHaveAttribute('data-graph-node-lane','0');
+    const start = Number(await source.getAttribute('data-graph-row-index'));
+    const end = Number(await born.getAttribute('data-graph-row-index'));
+    expect(end).toBeGreaterThan(start);
+    // Check the actual SVG segments, not only row labels or lane assignments.
+    const continuity = await page.locator('.graph-row').evaluateAll((rows,{start,end,lane}) => {
+      const source = rows[start];
+      const x = source.querySelector('circle')!.getAttribute('cx');
+      return rows.slice(start+1,end+1).every((row,index) => {
+        const last = index === end-start-1;
+        return [...row.querySelectorAll('svg line')].some(line => line.getAttribute('x1') === x
+          && line.getAttribute('x2') === x && line.getAttribute('y1') === '0'
+          && Number(line.getAttribute('y2')) > 0)
+          && (!last || row.getAttribute('data-graph-node-lane') === lane);
+      });
+    },{start,end,lane});
+    expect(continuity).toBe(true);
+  }
+  await page.locator('.graph-wrap').screenshot({path:testInfo.outputPath('published-branch-paths.png')});
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

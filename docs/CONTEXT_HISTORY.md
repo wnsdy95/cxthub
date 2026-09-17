@@ -352,7 +352,8 @@ an ancestry edge, branch identity, Git witness, or replacement conversation.
 
 The graph includes separate event nodes for recorded branch births and proven
 joins, even when a birth shares its source snapshot hash. A completed PR receipt
-must match a real branch ref movement. Without a receipt, a join requires both
+proves a join when its source and previous base are reachable from its resulting
+base; a ref movement is not required. Without a receipt, a join requires both
 an existing append edge and an unambiguous source branch. A pending receipt,
 shared current hash, or ordinary fast-forward alone does not prove a merge.
 
@@ -362,6 +363,15 @@ are a read projection: clicks open the archived conversation at that event;
 no synthetic snapshot or rewritten parent is stored. Rename and name reuse
 retain distinct birth identities. Orphan branches begin without conversation
 parents. An unborn orphan without a capture remains in the operations list.
+
+Branch paths use identity-bound `advance` and finalized `publish` targets, plus
+verified completed receipts' `source` and `source_branch_id`. Ordinary automatic
+capture need not emit an `advance`, and archived refs are not required. Worktree
+`position` selections alone do not prove ownership. Birth insertion follows
+existing natural ancestry; it never invents a missing edge or uses a completion's
+potentially newer base `target` as the source branch. If multiple identities claim
+the same content-addressed edge, leave it unchanged instead of choosing by input
+order. These rules also apply to root-only orphan captures.
 
 Existing archive and previous-progress controls still apply to conversation
 rows. Proven operation nodes are distinguishable from snapshots and do not
