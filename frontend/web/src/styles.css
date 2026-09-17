@@ -534,6 +534,12 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   height: 26px; }
 .graph-row:hover { background: var(--hover); opacity: 1; }
 .graph-row.on { background: var(--hover); }
+.graph-row.on .branch-event-node { stroke-width: 3; }
+.context-selection-notice { display: grid; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 0.8rem; overflow-wrap: anywhere; }
+.context-selection-notice span { color: var(--muted); }
+.viewer { scroll-margin-top: 68px; }
+.graph-merge-records li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; overflow-wrap: anywhere; }
+.graph-merge-records li > span { font-size: 0.75rem; color: var(--muted); }
 .graph-svg { display: block; }
 .graph-svg line, .graph-svg path { stroke-width: 1.6; }
 /* Node hover tooltip — viewport fixed coordinates (JS flips/clamps calculations) */

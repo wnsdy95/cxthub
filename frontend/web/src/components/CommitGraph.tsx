@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
 import { layoutGraph, mainlineOf, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
-import { projectBranchGraph } from '../graphProjection';
+import { projectBranchGraph, type GraphEvent } from '../graphProjection';
+import { completedBranchEvidence } from '../graphEvidence';
 import { sharedReachable } from '../onhold';
 import { classifyGraphSnapshots } from '../graphStatus';
 import { previousProgressGroups, hiddenProgressIds, historicalSnapshotIds, historyBranchHeads } from '../contextHistory';
@@ -62,6 +63,7 @@ function when(iso?: string): string {
 export function CommitGraph({
   snapshots,
   selectedId,
+  selectedEventId,
   onSelect,
   badges,
   refs,
@@ -75,7 +77,8 @@ export function CommitGraph({
 }: {
   snapshots: Snapshot[];
   selectedId: string | null;
-  onSelect: (id: string) => void;
+  selectedEventId?: string;
+  onSelect: (id: string, event?: GraphEvent) => void;
   badges: Map<string, { name: string; kind: string }[]>;
 /** Branch ref list. If present, unpushed commits outside the shared timeline are lightened and separated by a tear line. */
   refs?: Ref[];
@@ -93,6 +96,7 @@ export function CommitGraph({
   repoId?: string | null;
 }) {
   const t = useT();
+  const mergeEvidence = useMemo(() => completedBranchEvidence(snapshots, history), [snapshots, history]);
   const [showArchived, setShowArchived] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
   const [positionId, setPositionId] = useState('');
@@ -499,6 +503,27 @@ export function CommitGraph({
   return (
     <div className="graph-wrap">
       {historyError && <p role="status" className="graph-history-error">{t('graph.historyUnavailable')}</p>}
+      {mergeEvidence.length > 0 && <details className="graph-history-panel graph-merge-records">
+        <summary>{t('graph.mergeRecords', { count: mergeEvidence.length })}</summary>
+        <ul className="graph-history-list">
+          {mergeEvidence.map(({ merge, birth, lineage, merged, sourceAvailable }) => {
+            const event: GraphEvent = { id: `graph:merge:${merge.id}`, kind: 'merge', branch: merge.branch,
+              sourceBranch: merge.pr!.head_branch, snapshot: merge.source ?? '', evidence: merge.id, prNumber: merge.pr!.number };
+            return <li key={merge.id} data-branch-lineage={lineage}>
+              <strong>{merge.pr!.head_branch} → {merge.branch} · PR #{merge.pr!.number}</strong>
+              <span>{t(merged ? 'graph.mergeVerified' : 'graph.mergeUnverified')}</span>
+              <span>{t(`graph.lineage_${lineage}`)}</span>
+              <div className="graph-history-actions">
+                <button type="button" disabled={!sourceAvailable} onClick={() => onSelect(event.snapshot, event)}>{t('graph.viewMergeSource')}</button>
+                {birth?.source && snapshots.some(s => s.id === birth.source) && <button type="button"
+                  onClick={() => onSelect(birth.source!, { id: `graph:birth:${birth.id}`, kind: 'birth', branch: birth.branch, snapshot: birth.source!, evidence: birth.id })}>
+                  {t('graph.viewBranchSource')}
+                </button>}
+              </div>
+            </li>;
+          })}
+        </ul>
+      </details>}
       {positions.length > 0 && <div className="graph-history-scope">
         <label>{t('graph.browsePosition')}
           <select aria-label={t('graph.browsePosition')} value={positionEvent?.id ?? ''} onChange={(event) => {
@@ -759,7 +784,7 @@ export function CommitGraph({
 
           const graphEvent = projection.events.get(r.snap.id);
           const selectId = graphEvent?.snapshot ?? r.snap.id;
-          const sel = !graphEvent && r.snap.id === selectedId;
+          const sel = selectedEventId ? r.snap.id === selectedEventId && selectId === selectedId : !graphEvent && r.snap.id === selectedId;
           // 3rd layer distinction: Uncommitted (hook capture, before commit) ⊂ Unreachable, so uncommitted determination takes precedence over push.
           const isUncommitted = uncommittedIds.has(r.snap.id);
           const isUnpushed = !isUncommitted && unpushed.has(r.snap.id);
@@ -777,9 +802,11 @@ export function CommitGraph({
                 data-graph-row-index={rowIdx}
                 data-graph-node-lane={r.lane}
                 data-graph-event={graphEvent?.kind}
+                data-graph-snapshot={selectId}
+                aria-pressed={sel}
                 data-graph-branch={graphEvent?.branch ?? r.snap.branch}
                 className={`graph-row${sel ? ' on' : ''}${dropRow === r.snap.id ? ' drop-target' : ''}${dragId === r.snap.id ? ' dragging' : ''}${dragId && droppable.has(r.snap.id) ? ' droppable' : ''}`}
-                onClick={() => onSelect(selectId)}
+                onClick={() => onSelect(selectId, graphEvent)}
                 onMouseEnter={(e) => showTip(r.snap.id, e.currentTarget)}
                 onMouseLeave={() => setTip(null)}
                 onFocus={(e) => showTip(r.snap.id, e.currentTarget)}
@@ -892,7 +919,8 @@ export function CommitGraph({
             {tipRow.snap.author?.name || tipRow.snap.author?.email || '?'} · {tipRow.snap.branch} · {tipRow.snap.provider} ·{' '}
             {when(tipRow.snap.created_at)}
           </em>
-          {projection.events.has(tipRow.snap.id) && <em>{t('graph.eventOpensSnapshot')}</em>}
+          {projection.events.has(tipRow.snap.id) && <em>{t('graph.eventOpensSnapshot')}
+            {projection.events.get(tipRow.snap.id)?.prNumber ? ` · PR #${projection.events.get(tipRow.snap.id)!.prNumber}` : ''}</em>}
           {tipRow.snap.grafted && <em style={{ color: '#d29922' }}>{t('graph.appended')}</em>}
           {boundaries.has(tipRow.snap.id) && <em>{t('graph.newSession')}</em>}
           {compactions.has(tipRow.snap.id) && <em style={{ color: COMPACT }}>{t('graph.compaction')}</em>}

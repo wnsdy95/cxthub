@@ -34,8 +34,8 @@ for (const selected of ['legacy', 'named']) {
       if (resource.startsWith('settings/') || resource === 'secrets') return { body: null };
       if (resource.startsWith('docs/') && resource.endsWith('/events')) return { body: {
         hash: resource.split('/')[1], envelope: { cir_version: '2', source_provider: 'codex' },
-        events: [{ kind: 'message', role: 'user', seq: 1, blocks: [{ type: 'text', text: `${repo} conversation` }] }],
-        total: 1, offset: 0, next: -1, inherited: 0,
+        events: Array.from({length:60},(_,seq)=>({ kind: 'message', role: 'user', seq, blocks: [{ type: 'text', text: `${repo} conversation ${seq}` }] })),
+        total: 60, offset: 0, next: -1, inherited: 0,
       } };
       return undefined;
     });
@@ -46,6 +46,15 @@ for (const selected of ['legacy', 'named']) {
     await expect(page).toHaveURL(new URL(holdPath, 'http://127.0.0.1:4174').href);
     await expect(page.locator('.tab.on')).toHaveText('On Hold');
     await expect(page.locator('.commit-row').first()).toContainText(`${selected} held snapshot`);
+    const graphTarget = page.locator(`[data-graph-snapshot="${held}"]`);
+    await graphTarget.click();
+    await expect(page.locator('.viewer-head code')).toHaveText('2222222222');
+    await expect(page.getByText(`${selected} conversation 59`, {exact:true})).toBeAttached();
+    await expect.poll(()=>page.locator('.viewer').evaluate(el=>Math.abs(el.getBoundingClientRect().top-el.closest('.ctx-main')!.getBoundingClientRect().top))).toBeLessThan(3);
+    await page.locator('.ctx-main').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+    await expect.poll(()=>page.locator('.ctx-main').evaluate(el=>el.scrollTop)).toBeGreaterThan(300);
+    await graphTarget.click();
+    await expect.poll(()=>page.locator('.viewer').evaluate(el=>Math.abs(el.getBoundingClientRect().top-el.closest('.ctx-main')!.getBoundingClientRect().top))).toBeLessThan(3);
     await page.reload();
     await expect(page.locator('.commit-row').first()).toContainText(`${selected} held snapshot`);
     await page.goBack();

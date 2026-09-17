@@ -1494,6 +1494,83 @@ test('same-snapshot PR completion closes the branch without a ref movement', asy
   expect(unexpected).toEqual([]);
 });
 
+test('graph activation reveals context and distinguishes events at the same snapshot', async ({ page }) => {
+  const snapshots = [
+    {id:pushedHead,repo_id:repoId,branch:'main',parents:[appendedRoot],doc_hash:pushedHead,provider:'codex',created_at:'2026-09-16T02:00:00Z',message:'current'},
+    {id:appendedRoot,repo_id:repoId,branch:'main',parents:[],doc_hash:appendedRoot,provider:'codex',created_at:'2026-09-16T00:00:00Z',message:'baseline'},
+  ];
+  const birth = {id:'born',repo_id:repoId,branch_id:'topic',branch:'feature/same',kind:'birth',source:appendedRoot,target:appendedRoot,created_at:'2026-09-16T00:01:00Z'};
+  const done = {...birth,id:'done',kind:'pr-merge',branch_id:'main',branch:'main',source_branch_id:'topic',shared_target:appendedRoot,pr_completed:true,
+    pr:{number:42,base_branch:'main',head_branch:'feature/same',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:'2026-09-16T01:00:00Z'};
+  const base = publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],[],[],[],[birth,done]);
+  const {pageErrors,unexpected} = await openGraph(page, req => {
+    if (req.pathname.endsWith('/events')) {
+      const result = docResponse(req.pathname,req.searchParams).body as ReturnType<typeof sessionDoc> & { events: unknown[]; total:number };
+      result.events = Array.from({length:60},(_,seq)=>({kind:'message',role:'user',seq,blocks:[{type:'text',text:`Long context message ${seq}`}]}));
+      result.total = 60;
+      return {body:result};
+    }
+    return base(req);
+  });
+  const main = page.locator('.ctx-main');
+  const graph = page.locator('.graph-viewport');
+  const born = page.locator('[data-graph-event="birth"]');
+  const merged = page.locator('[data-graph-event="merge"]');
+  const raw = page.locator(`[data-graph-snapshot="${appendedRoot}"]:not([data-graph-event])`);
+  const reveal = async () => expect.poll(() => page.locator('.viewer').evaluate(el => {
+    const main = el.closest('.ctx-main')!;
+    return Math.abs(el.getBoundingClientRect().top-main.getBoundingClientRect().top);
+  })).toBeLessThan(3);
+  for (const target of [born, merged, merged, raw]) {
+    await main.evaluate(el=>{el.scrollTop=el.scrollHeight;});
+    await expect.poll(()=>main.evaluate(el=>el.scrollTop)).toBeGreaterThan(300);
+    const before = await graph.evaluate(el=>el.scrollTop);
+    await target.click();
+    await expect(target).toHaveAttribute('aria-pressed','true');
+    await expect(page.locator('.viewer-head code')).toHaveText('aaaaaaaaaa');
+    await reveal();
+    expect(await graph.evaluate(el=>el.scrollTop)).toBe(before);
+    await expect(page.locator('.graph-row.on')).toHaveCount(1);
+  }
+  await expect(page.locator('.context-selection-notice')).toHaveCount(0);
+  await born.click();
+  await expect(page.locator('.context-selection-notice')).toContainText('feature/same');
+  await merged.click();
+  await expect(page.locator('.context-selection-notice')).toContainText('PR #42');
+  await page.locator('.graph-merge-records summary').click();
+  await expect(page.locator('[data-branch-lineage="unchanged"]')).toContainText('does not establish whether later conversation was included');
+  // Narrow screens use page scrolling; the sticky application header must
+  // not cover the selected context after activation from the lower graph.
+  await page.setViewportSize({width:800,height:800});
+  await raw.click();
+  await expect(page.locator('.viewer-head code')).toBeInViewport();
+  expect(await page.locator('.viewer').evaluate(el=>el.getBoundingClientRect().top)).toBeGreaterThanOrEqual(60);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('consecutive same-tip PR joins stay on main while unexplained birth gaps stay explicit', async ({ page }) => {
+  const snapshot = (hash:string,parents:string[],n:number) => ({id:hash,repo_id:repoId,branch:'main',parents,doc_hash:hash,provider:'codex',message:`state-${n}`,created_at:`2026-09-16T00:00:0${n}Z`});
+  const snapshots = [snapshot(appendedRoot,[],0),snapshot(graftTarget,[appendedRoot],1),snapshot(pushedHead,[graftTarget],6)];
+  const history = [1,2,3].flatMap(n=>{
+    const b = {id:`birth-${n}`,repo_id:repoId,branch_id:`topic-${n}`,branch:`feature/${n}`,kind:'birth',source:graftTarget,target:graftTarget,created_at:`2026-09-16T00:00:01Z`};
+    return [b,{...b,id:`merge-${n}`,kind:'pr-merge',branch:'main',branch_id:'main',source_branch_id:b.branch_id,source:appendedRoot,target:graftTarget,shared_target:graftTarget,pr_completed:true,
+      pr:{number:n,base_branch:'main',head_branch:b.branch,head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:`2026-09-16T00:00:0${n+1}Z`}];
+  });
+  const {pageErrors,unexpected} = await openGraph(page,publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],[],[],[],history));
+  const merges = page.locator('[data-graph-event="merge"]');
+  await expect(merges).toHaveCount(3);
+  for (const row of await merges.all()) await expect(row).toHaveAttribute('data-graph-node-lane','0');
+  await page.locator('.graph-merge-records summary').click();
+  await expect(page.locator('[data-branch-lineage="disconnected"]')).toHaveCount(3);
+  await expect(page.locator('.graph-merge-records')).toContainText('no connecting line is inferred');
+  await page.getByRole('button',{name:'View merged context',exact:true}).first().click();
+  await expect(page.locator('.viewer-head code')).toHaveText('aaaaaaaaaa');
+  await expect(page.locator('.context-selection-notice')).toContainText('PR #3');
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('PR delivery distinguishes waiting and completed jobs without viewer retry authority', async ({ page }) => {
   const snapshot = { id: pushedHead, repo_id: repoId, doc_hash: pushedHead, branch: 'main', parents: [], provider: 'codex', created_at: '2026-09-16T01:00:00Z' };
   const base = publicWorkspaceApi([snapshot], [{ kind: 'branch', name: 'main', target: pushedHead }]);
