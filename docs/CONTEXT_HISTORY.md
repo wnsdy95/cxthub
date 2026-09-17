@@ -697,3 +697,40 @@ queued; the replaying worktree's different upstream is not substituted. An
 unchanged owner snapshot that is an ancestor of the verified current head keeps
 that head and its memory selection as the birth baseline. Failure to inspect Git
 is an error, not a successful claim that the branch disappeared.
+
+### Graph state and evidence
+
+Graph projection does not modify stored context or memory. It separates:
+
+- **Branch identity:** rename follows `branch_id`; a reused name cannot take an
+  earlier identity's completion. Ambiguous legacy names do not infer joins.
+- **Publication:** server branch movements, publication acknowledgements and
+  completed PR inclusion preserve the published timeline after refs move.
+  Position, attachment, birth and memory-source observations alone do not
+  publish a pending capture.
+- **Display closure:** pending and unsync roots keep their available natural
+  and graft parents, including intermediate hook captures. A missing parent is
+  reported rather than represented by a line waiting for a nonexistent row.
+- **Retention:** ordinary server tags have a distinct “tagged” status. A tag
+  does not attest branch publication or commit a pending capture.
+- **Archive versus join:** merely sharing a tip with main does not prove a
+  join. An archived branch needs an identity-bound verified PR completion or
+  an explicit legacy graft into its originating content to receive that label.
+
+Completed merge rows use the destination identity. A continuation on its
+current path connects through the completed operation even if its provider
+timestamp predates the server receipt. Explicit subsequent movements away from
+that lineage withdraw the active placement. Retained captures without a proven
+continuation keep their stored parent edges; timestamps alone do not assign
+them to a historical PR.
+
+Branch selection follows a selected identity across polling and rename. Query
+loading, errors and successful empty results are separate display states.
+Failed reads preserve available content and expose a retry action. Selecting,
+folding or retrying a read never writes ancestry.
+
+The pure graph regression fixtures cover rename/name reuse, clock skew, rewind,
+pending → unsync → publication, observation-only history, tags and unavailable
+parents. Browser regressions also follow SVG endpoints and test polling and
+failure recovery. Natural ancestry, stored grafts and display-only lifecycle
+edges remain different evidence types.

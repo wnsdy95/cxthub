@@ -71,6 +71,9 @@ export function CommitGraph({
   reflog = EMPTY_REFLOG,
   history = EMPTY_HISTORY,
   historyError = false,
+  graphLoading = false,
+  graphError,
+  retryGraph,
   uncommitted,
   pinBranch,
   joinBranch,
@@ -87,6 +90,9 @@ export function CommitGraph({
   reflog?: RefLogEntry[];
   history?: HistoryEvent[];
   historyError?: boolean;
+  graphLoading?: boolean;
+  graphError?: string;
+  retryGraph?: () => void;
 /** Uncommitted hook-capture IDs, rendered as hollow dashed nodes with their own divider. */
   uncommitted?: Set<string>;
 /** Default branch name — always fixed at the leftmost lane (0) for this branch chain. */
@@ -123,8 +129,8 @@ export function CommitGraph({
   const revealedHistory = useMemo(() => new Set(historyGroups
     .filter((group) => expandedKeys.has(group.key)).flatMap((group) => [...group.snapshotIds])), [historyGroups, expandedKeys]);
   const status = useMemo(
-    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted, pinBranch, historicalIds),
-    [refs, snapshots, uncommitted, pinBranch, historicalIds],
+    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted, pinBranch, historicalIds, history),
+    [refs, snapshots, uncommitted, pinBranch, historicalIds, history],
   );
   const selectedArchived = selectedId !== null && status.archivedOnly.has(selectedId);
   const archivedVisible = showArchived || selectedArchived;
@@ -141,6 +147,10 @@ export function CommitGraph({
   );
   const projection = useMemo(() => projectBranchGraph(visibleSnapshots, refs ?? [], history, reflog, pinHead, pinBranch), [visibleSnapshots, refs, history, reflog, pinHead, pinBranch]);
   const { rows, laneCount } = useMemo(() => layoutGraph(projection.snapshots, projection.pinHead), [projection]);
+  const missingParents = useMemo(() => {
+    const ids = new Set(snapshots.map(s => s.id));
+    return new Set(snapshots.flatMap(s => [...(s.parents ?? []), ...(s.graft_parents ?? [])]).filter(id => !ids.has(id)));
+  }, [snapshots]);
   function toggleHistory(key: string) {
     const next = new Set(expandedKeys);
     if (next.has(key)) next.delete(key);
@@ -514,7 +524,10 @@ export function CommitGraph({
 
   return (
     <div className="graph-wrap">
-      {historyError && <p role="status" className="graph-history-error">{t('graph.historyUnavailable')}</p>}
+      {graphError ? <p role="alert" className="graph-history-error">{t('graph.loadFailed')} {graphError} {retryGraph && <button onClick={retryGraph}>{t('context.retryRead')}</button>}</p>
+        : historyError && <p role="status" className="graph-history-error">{t('graph.historyUnavailable')}</p>}
+      {graphLoading && <p role="status">{t('graph.loading')}</p>}
+      {missingParents.size > 0 && <p role="status" className="graph-history-error">{t('graph.missingParents', { count: missingParents.size })}</p>}
       {mergeEvidence.length > 0 && <details className="graph-history-panel graph-merge-records">
         <summary>{t('graph.mergeRecords', { count: mergeEvidence.length })}</summary>
         <ul className="graph-history-list">
@@ -578,6 +591,7 @@ export function CommitGraph({
         <span className="graph-status-item uncommitted">
           <i aria-hidden="true" /> {t('graph.uncommittedCount', { count: status.uncommitted.size })}
         </span>
+        {status.tagged.size > 0 && <span className="graph-status-item tagged">{t('graph.taggedCount', { count: status.tagged.size })}</span>}
       </div>
       {historyGroups.length > 0 && (
         <section className="graph-history-panel" aria-label={t('graph.previousProgress')}>
@@ -834,7 +848,7 @@ export function CommitGraph({
                 onMouseLeave={() => setTip(null)}
                 onFocus={(e) => showTip(r.snap.id, e.currentTarget)}
                 onBlur={() => setTip(null)}
-                aria-label={graphEvent ? `${graphEvent.branch} · ${graphEvent.kind === 'birth' ? t(graphEvent.orphan ? 'graph.orphanBirth' : 'graph.branchBorn') : t('graph.branchMerged', { branch: graphEvent.sourceBranch ?? '' })}` : `${r.snap.message || '(no message)'} · ${isUncommitted ? t('graph.uncommitted') : isUnpushed ? t('graph.unpushed') : status.pushed.has(r.snap.id) ? t('graph.pushed') : t('graph.archivedLane', { branch: r.snap.branch })}`}
+                aria-label={graphEvent ? `${graphEvent.branch} · ${graphEvent.kind === 'birth' ? t(graphEvent.orphan ? 'graph.orphanBirth' : 'graph.branchBorn') : t('graph.branchMerged', { branch: graphEvent.sourceBranch ?? '' })}` : `${r.snap.message || '(no message)'} · ${isUncommitted ? t('graph.uncommitted') : isUnpushed ? t('graph.unpushed') : status.tagged.has(r.snap.id) ? t('graph.tagged') : status.pushed.has(r.snap.id) ? t('graph.pushed') : t('graph.archivedLane', { branch: r.snap.branch })}`}
                 draggable={joinEnabled && !isUncommitted && !graphEvent}
                 onDragStart={(e) => {
                   e.dataTransfer.effectAllowed = 'move';
@@ -903,7 +917,7 @@ export function CommitGraph({
             </li>
           );
         })}
-        {rows.length === 0 && <li className="ws-empty">{t('graph.noCommits')}</li>}
+        {rows.length === 0 && !graphLoading && !graphError && !historyError && <li className="ws-empty">{t('graph.noCommits')}</li>}
           </ul>
         </div>
       </div>
@@ -973,6 +987,7 @@ export function CommitGraph({
           ) : (
             unpushed.has(tipRow.snap.id) && <em style={{ color: TICK }}>{t('graph.unpushed')}</em>
           )}
+          {status.tagged.has(tipRow.snap.id) && <em>{t('graph.tagged')}</em>}
           {status.pushed.has(tipRow.snap.id) && <em>{t('graph.pushed')}</em>}
           {badges.get(tipRow.snap.id)?.length ? (
             <span className="tip-badges">
@@ -986,7 +1001,7 @@ export function CommitGraph({
                       : b.kind === 'joined'
                         ? t('context.joinedBranchTitle')
                         : undefined
-                  }
+          }
                 >
                   {b.kind === 'tag' ? '⌂ ' : b.kind === 'archived' ? '⊟ ' : b.kind === 'joined' ? '⎘ ' : ''}
                   {b.kind === 'archived'

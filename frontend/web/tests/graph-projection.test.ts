@@ -29,7 +29,7 @@ assert.equal(JSON.stringify(snapshots),original,'projection cannot rewrite archi
 
 const same=projectBranchGraph([snapshots[0]], [{repo_id:'repo',kind:'branch',name:'feature',target:'root'}], [birth], [],'root','main');
 assert.equal(same.snapshots.length,2,'same-hash branch birth must remain a separate event');
-const pending:HistoryEvent={...birth,id:'receipt',kind:'pr-merge',branch:'main',source:'tip',target:'tip',shared_target:'base',source_branch_id:'feature-id',pr:{number:1,base_branch:'main',head_branch:'feature',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:at(5)};
+const pending:HistoryEvent={...birth,id:'receipt',kind:'pr-merge',branch_id:'main-id',branch:'main',source:'tip',target:'tip',shared_target:'base',source_branch_id:'feature-id',pr:{number:1,base_branch:'main',head_branch:'feature',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:at(5)};
 assert.equal([...projectBranchGraph(snapshots,refs,[pending],[],'tip','main').events.values()].filter(e=>e.kind==='merge').length,0,'pending receipt is not a completed merge');
 assert.equal([...projectBranchGraph(snapshots,refs,[],[{...log,old:'tip',new:'root'}],'root','main').events.values()].length,0,'rewind is not a join');
 console.log('graph projection tests passed');
@@ -172,11 +172,11 @@ for (const history of [repeatedHistory, [...repeatedHistory].reverse()]) {
   }
 }
 
-// A capture between two same-tip completions belongs to the earlier operation,
-// even if main later rewinds and another PR completes at the old stored tip.
+// Provider timestamps cannot assign retained content to a particular PR.
+// Without a recorded continuation, keep the stored historical edge unchanged.
 const historical = projectBranchGraph([snap('root','main',[],0), snap('between','main',['root'],2.5), snap('current','main',['root'],6)],
   [{repo_id:'repo',kind:'branch',name:'main',target:'current'}], repeatedHistory, [], 'current','main');
-assert.deepEqual(historical.snapshots.find(s=>s.id==='between')?.parents, ['graph:merge:repeat-merge-1']);
+assert.deepEqual(historical.snapshots.find(s=>s.id==='between')?.parents, ['root']);
 // Legacy destructive grafts retain an append seam in parents[0]; it cannot
 // establish that the incoming conversation began at this birth.
 const legacyBirth = projectBranchGraph([snap('root','main',[],0), {...snap('legacy','feature',['root'],3), grafted:true}],

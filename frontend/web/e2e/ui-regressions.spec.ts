@@ -3,6 +3,11 @@ import { createHash } from 'node:crypto';
 import { capturePageErrors, installApiFixture, type ApiRequest, type ApiResponse } from './api-fixture';
 import { expectRenderedGraphPath } from './graph-paths';
 
+const auditSnapshot = (hash: string, branch: string, parents: string[], message: string, n: number) => ({
+  id: hash, repo_id: repoId, doc_hash: hash, branch, parents, message, provider: 'codex', fidelity: 'full',
+  created_at: new Date(Date.UTC(2026, 8, 18, 0, 0, n)).toISOString(),
+});
+
 const repoId = 'repo-1';
 const workspaceId = 'workspace-1';
 
@@ -1726,6 +1731,98 @@ test('archived automatic publications retain continuous birth, source and merge 
     await expectRenderedGraphPath(page, `graph:birth:birth-${branch}`, appendedRoot);
   }
   await page.locator('.graph-wrap').screenshot({path:testInfo.outputPath('published-branch-paths.png')});
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+for (const mode of ['pending', 'unsync'] as const) {
+  test(`graph preserves intermediate hook parents for ${mode} without promoting observations`, async ({ page }) => {
+    const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0),
+      auditSnapshot(graftTarget, 'main', [appendedRoot], 'hook: earlier', 1),
+      auditSnapshot(pushedHead, 'main', [graftTarget], 'hook: latest', 2)];
+    const refs = [{ kind: 'branch', name: 'main', repo_id: repoId, target: appendedRoot }];
+    const pending = [{ repo_id: repoId, branch: 'main', session_id: 'live', provider: 'codex', target: pushedHead }];
+    const unsync = mode === 'unsync' ? [{ repo_id: repoId, branch: 'main', user: 'alice', target: pushedHead }] : [];
+    const history = [{ id: 'position', kind: 'position', branch_id: 'main-id', branch: 'main', source: pushedHead, target: pushedHead, created_at: '2026-09-18T00:00:03Z' }];
+    const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, pending, unsync, [], history));
+    await expect(page.locator('.graph-row')).toHaveCount(3);
+    await expect(page.locator(`.graph-row[data-graph-snapshot="${pushedHead}"]`)).toHaveAttribute('aria-label', mode === 'pending' ? /Uncommitted/ : /Not pushed/);
+    await expectRenderedGraphPath(page, pushedHead, graftTarget);
+    await expectRenderedGraphPath(page, graftTarget, appendedRoot);
+    await expect(page.locator('.graph-status-item.pushed')).toHaveText(/Pushed 1/);
+    expect(pageErrors).toEqual([]);
+    expect(unexpected).toEqual([]);
+  });
+}
+
+test('branch selection survives ref polling and follows identity through rename', async ({ page }) => {
+  await page.clock.install();
+  const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0), auditSnapshot(graftTarget, 'feature', [appendedRoot], 'feature', 1), auditSnapshot(pushedHead, 'main', [appendedRoot], 'next main', 2)];
+  let refs = [{ kind: 'branch', name: 'main', branch_id: 'main-id', repo_id: repoId, target: appendedRoot }, { kind: 'branch', name: 'feature', branch_id: 'feature-id', repo_id: repoId, target: graftTarget }];
+  const base = publicWorkspaceApi(snapshots, refs);
+  const { pageErrors, unexpected } = await openGraph(page, req => req.pathname.endsWith('/refs') ? { body: refs } : base(req));
+  const select = page.getByRole('combobox', { name: 'Branch', exact: true });
+  await select.selectOption('feature');
+  refs = [{ ...refs[0], target: pushedHead }, refs[1]];
+  await page.clock.fastForward(16_000);
+  await expect(page.locator('.commit-row').filter({ hasText: 'feature' })).toBeVisible();
+  await expect(select).toHaveValue('feature');
+  refs = [refs[0], { ...refs[1], name: 'renamed' }];
+  await page.clock.fastForward(16_000);
+  await expect(select).toHaveValue('renamed');
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('graph distinguishes snapshot failure from empty history and recovers on retry', async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  let fail = true;
+  const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0)];
+  const base = publicWorkspaceApi(snapshots, [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot }]);
+  const unexpected = await installApiFixture(page, req => req.pathname.endsWith('/snapshots') && fail
+    ? { status: 503, body: { error: { message: 'snapshot outage' } } } : base(req));
+  await page.goto('/alice/cxthub');
+  await expect(page.locator('.graph-wrap').getByRole('alert')).toContainText('snapshot outage', { timeout: 15_000 });
+  await expect(page.locator('.graph .ws-empty')).toHaveCount(0);
+  fail = false;
+  await page.locator('.graph-wrap').getByRole('alert').getByRole('button').click();
+  await expect(page.locator('.graph-row')).toHaveCount(1);
+  await expect(page.locator('.graph-wrap').getByRole('alert')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('tag preservation and unused branch archive do not fabricate publication or a merge', async ({ page }) => {
+  const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0), auditSnapshot(graftTarget, 'feature', [appendedRoot], 'tagged history', 1)];
+  const refs = [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot },
+    { kind: 'tag', repo_id: repoId, name: 'v1', target: graftTarget },
+    { kind: 'tag', repo_id: repoId, name: `cxt/branch-state/v1/00000000000000000001/archived/${appendedRoot.slice(7)}/unused`, target: appendedRoot }];
+  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs));
+  await expect(page.locator(`.graph-row[data-graph-snapshot="${graftTarget}"]`)).toHaveAttribute('aria-label', /Preserved by a server tag/);
+  await expect(page.locator('.graph-status-item.tagged')).toHaveText('Tagged 1');
+  await expect(page.locator('.graph-status-item.unpushed')).toHaveText('Not pushed 0');
+  await page.locator('.graph-archive-panel summary').click();
+  await expect(page.locator('.graph-archive-entry')).toContainText('unused');
+  await expect(page.locator('.graph-row[data-graph-event="merge"]')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('renamed destination keeps a delayed PR completion on its main path', async ({ page }) => {
+  const at = (n: number) => new Date(Date.UTC(2026, 8, 18, 0, 0, n)).toISOString();
+  const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0), auditSnapshot(graftTarget, 'feature', [appendedRoot], 'source', 3), auditSnapshot(pushedHead, 'trunk', [graftTarget], 'current', 2)];
+  const main = { id: 'main-birth', kind: 'birth', repo_id: repoId, branch: 'main', branch_id: 'main-id', source: appendedRoot, target: appendedRoot, created_at: at(0) };
+  const birth = { ...main, id: 'birth', branch: 'feature', branch_id: 'feature-id', created_at: at(1) };
+  const done = { ...main, id: 'done', kind: 'pr-merge', source: graftTarget, target: graftTarget, shared_target: appendedRoot, source_branch_id: birth.branch_id, pr_completed: true,
+    pr: { number: 1, base_branch: 'main', head_branch: 'feature', head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40) }, created_at: at(5) };
+  const rename = { ...main, id: 'rename', kind: 'rename', branch: 'trunk', previous_branch: 'main', binding_parent: main.id, created_at: at(6) };
+  const refs = [{ kind: 'branch', repo_id: repoId, name: 'trunk', branch_id: 'main-id', target: pushedHead }];
+  const base = publicWorkspaceApi(snapshots, refs, [], [], [], [main, birth, done, rename]);
+  const { pageErrors, unexpected } = await openGraph(page, req => req.pathname === '/api/v1/repos'
+    ? { body: [{ id: repoId, default_branch: 'trunk' }] } : base(req));
+  await expectRenderedGraphPath(page, pushedHead, 'graph:merge:done');
+  await expectRenderedGraphPath(page, 'graph:merge:done', graftTarget);
+  await expect(page.locator('[data-graph-id="graph:merge:done"]')).toHaveAttribute('data-graph-node-lane', '0');
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });

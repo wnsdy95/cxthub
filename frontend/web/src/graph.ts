@@ -184,6 +184,7 @@ export function orderGraphSnapshots(snapshots: Snapshot[]): Snapshot[] {
 
 export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { rows: GraphRow[]; laneCount: number } {
   const lanes: (string | null)[] = [];
+  const available = new Set(snapshots.map(s => s.id));
   // Default branch fix: pinHead (default branch's head) pinned to the expected value in lane 0 ensures the entire chain is always on the leftmost lane, and newer feature tips receive the right lane. If head is not in the snapshot list (e.g., unpinned), it is not pinned — preventing an empty vertical line from drawing to the end of the graph.
   if (pinHead && snapshots.some((s) => s.id === pinHead)) lanes.push(pinHead);
   const rows: GraphRow[] = [];
@@ -210,7 +211,7 @@ export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { r
     // graft_parents (server overlay graft edge) should also be considered as parents for the join curve to be drawn —
     // if not drawn, the graft previous history will appear as a disconnected component (reachability = parents ∪ graft_parents).
     const parents = [...(snap.parents ?? []), ...(snap.graft_parents ?? [])].filter(
-      (p, i, arr) => Boolean(p) && arr.indexOf(p) === i,
+      (p, i, arr) => Boolean(p) && available.has(p) && arr.indexOf(p) === i,
     );
     const branchesOut: number[] = [];
     if (parents.length === 0) {

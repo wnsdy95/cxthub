@@ -29,14 +29,41 @@ export interface PreviousProgressGroup {
   collapsibleIds: Set<string>;
 }
 
-/** Server branch movements prove publication even after the ref moves away.
- * This is display evidence, not a durable retention root or a working position. */
+/** Publication survives a later ref movement. Observation/retention events
+ * (especially position and memory_source) do not attest a committed timeline. */
 export function historicalSnapshotIds(entries: RefLogEntry[], snapshots: Snapshot[], history: HistoryEvent[] = []): Set<string> {
   return reachableSnapshotIds(
     [...entries.filter((entry) => entry.kind === 'branch').flatMap((entry) => [entry.old, entry.new]),
-      ...history.flatMap((event) => [event.source, event.target, event.shared_target, event.memory_source].filter((id): id is string => Boolean(id)))],
+      ...history.flatMap((event) => event.kind === 'advance' ? [event.source, event.target]
+        : event.kind === 'publish' ? [event.target]
+        : event.kind === 'pr-merge' && event.pr_completed ? [event.source, event.target, event.shared_target] : [])
+        .filter((id): id is string => Boolean(id))],
     snapshots,
   );
+}
+
+/** Resolve current names through stable IDs. A released/reused name is never
+ * sufficient to assign an old snapshot or a legacy ref to an identity. */
+export function graphBranchBindings(refs: Ref[], history: HistoryEvent[]) {
+  const heads = historyBranchHeads(history);
+  const active = new Map([...heads.values()].filter(e => e.kind !== 'archive').map(e => [e.branch, e.branch_id]));
+  const claims = new Map<string, Set<string>>();
+  for (const e of history) {
+    const ids = claims.get(e.branch) ?? new Set<string>();
+    ids.add(e.branch_id);
+    claims.set(e.branch, ids);
+  }
+  const legacyKey = (name: string) => {
+    const ids = claims.get(name);
+    return ids?.size === 1 ? [...ids][0] : `legacy:${name}`;
+  };
+  const refKey = (ref: Ref) => ref.branch_id ?? active.get(ref.name) ?? legacyKey(ref.name);
+  const snapshotKey = (name: string) => {
+    if ((claims.get(name)?.size ?? 0) > 1) return undefined;
+    return claims.has(name) ? legacyKey(name) : refs.find(r => r.kind === 'branch' && r.name === name)?.branch_id ?? legacyKey(name);
+  };
+  const label = (key: string, fallback: string) => heads.get(key)?.branch ?? refs.find(r => r.kind === 'branch' && refKey(r) === key)?.name ?? fallback;
+  return { refKey, snapshotKey, label };
 }
 
 /** Fold only paths supported by a recorded movement away from their tip.
