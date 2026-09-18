@@ -18,8 +18,18 @@ import (
 // for integrity, but never decoded, masked or canonicalized again. Identity is
 // exactly the existing whole-document hash, including the updated envelope.
 func (s *FileStore) AppendCaptureDoc(ctx context.Context, base domain.ContentHash, delta domain.CIRDocument) (domain.ContentHash, error) {
+	var hash domain.ContentHash
+	err := s.WithObjectsRetained(ctx, func() error {
+		var err error
+		hash, err = s.appendCaptureDoc(ctx, base, delta)
+		return err
+	})
+	return hash, err
+}
+
+func (s *FileStore) appendCaptureDoc(ctx context.Context, base domain.ContentHash, delta domain.CIRDocument) (domain.ContentHash, error) {
 	if base == "" {
-		return s.PutDoc(ctx, domain.SessionDoc{CIR: delta})
+		return s.putDoc(domain.SessionDoc{CIR: delta})
 	}
 	if err := domain.ValidateContentHash(base); err != nil {
 		return "", err
@@ -42,7 +52,7 @@ func (s *FileStore) AppendCaptureDoc(ctx context.Context, base domain.ContentHas
 			return "", err
 		}
 		delta.Events = append(prior.CIR.Events, delta.Events...)
-		return s.PutDoc(ctx, domain.SessionDoc{CIR: delta})
+		return s.putDoc(domain.SessionDoc{CIR: delta})
 	}
 	cb, err := domain.CanonicalBytes(delta)
 	if err != nil {

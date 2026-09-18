@@ -27,6 +27,17 @@ subsequent parts of issue #208; current placement is not a substitute for them.
 
 ## Completion and live-read contracts
 
+Local sync reserves advertised objects until its complete push/pull operation
+finishes. Automatic capture collection takes an exclusive OS lock; active
+readers cause collection to defer instead of deleting an advertised document.
+Deferred capture pairs are stored under `.cxt/capture-collection` and retried
+by later captures after rechecking provider, session, complete-prefix and
+reachability evidence. Deferral survives a process restart. Readers may run
+concurrently, and the kernel releases their reservations on process exit.
+Document publication and chunk repacking participate in the same boundary.
+This coordinates current CLI processes; it is not a multi-file ACID claim,
+and old CLI processes must be restarted to participate in the new protocol.
+
 A server-issued PR completion is an immutable acknowledgement. Later same-branch
 reordering may supersede its graft placement without revoking that operation.
 The graph retains the completed operation and distinguishes historical placement

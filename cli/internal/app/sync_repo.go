@@ -268,7 +268,7 @@ func (s *SyncRepoService) pushSettingsObjects(ctx context.Context, repoID domain
 			pushedSet[h] = true
 			b, err := s.store.GetSettingsObject(ctx, h)
 			if err != nil {
-				return err
+				return fmt.Errorf("read settings %s for snapshot %s: %w", h, snap.ID, err)
 			}
 			if err := s.remote.PushSettingsObject(ctx, repoID, h, b); err != nil {
 				return err
@@ -280,6 +280,10 @@ func (s *SyncRepoService) pushSettingsObjects(ctx context.Context, repoID domain
 
 // Push uploads local snapshots/docs/refs to the central server (sync protocol).
 func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+	return withRetainedObjects(ctx, s.store, func() (inbound.SyncOutput, error) { return s.push(ctx, in) })
+}
+
+func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return inbound.SyncOutput{}, err
@@ -306,7 +310,7 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 	}
 	man, err := s.store.Manifest(ctx, repoID)
 	if err != nil {
-		return inbound.SyncOutput{}, err
+		return inbound.SyncOutput{}, fmt.Errorf("read local push manifest: %w", err)
 	}
 
 	snaps, err := s.collectSnapshots(ctx, repoID, man)
@@ -315,7 +319,7 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 	}
 	pushSnaps, pushDocs, err := s.selectPushObjects(ctx, repoID, snaps)
 	if err != nil {
-		return inbound.SyncOutput{}, err
+		return inbound.SyncOutput{}, fmt.Errorf("prepare push objects: %w", err)
 	}
 
 	var refs []domain.Ref
@@ -394,7 +398,7 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 		}
 		plan, err := s.localMemoryPushPlan(ctx, snap.ID, snap.MemoryHash)
 		if err != nil {
-			return inbound.SyncOutput{}, err
+			return inbound.SyncOutput{}, fmt.Errorf("read memory chain %s for snapshot %s: %w", snap.MemoryHash, snap.ID, err)
 		}
 		if remoteMemoryAttachments != nil {
 			remoteHash := remoteMemoryAttachments[plan.snapshotID]
@@ -863,7 +867,7 @@ func (s *SyncRepoService) collectSnapshots(ctx context.Context, repoID string, m
 	for _, id := range man.SnapshotIndex {
 		snap, err := s.store.GetSnapshot(ctx, id)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read push snapshot %s: %w", id, err)
 		}
 		byID[id] = snap
 	}
@@ -977,7 +981,7 @@ func (s *SyncRepoService) loadPushDocs(ctx context.Context, snaps []domain.Snaps
 		}
 		doc, err := s.store.GetDoc(ctx, hash)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read push document %s for snapshot %s: %w", hash, snap.ID, err)
 		}
 		docs = append(docs, doc)
 		seen[hash] = true
@@ -989,6 +993,10 @@ func (s *SyncRepoService) loadPushDocs(ctx context.Context, snaps []domain.Snaps
 // After deleting remote pending from resolveSessions (commit resolution propagation), it pushes each local pending's snapshot/doc objects as objects-only and upserts the pointers.
 // Branch refs are not modified (hook path does not move server refs — same spirit as capture path).
 func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput, resolutions []inbound.PendingResolution) (int, error) {
+	return withRetainedObjects(ctx, s.store, func() (int, error) { return s.syncPendings(ctx, in, resolutions) })
+}
+
+func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput, resolutions []inbound.PendingResolution) (int, error) {
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return 0, err
@@ -1327,6 +1335,10 @@ func (s *SyncRepoService) updateRemoteSnapshotStateCursor(
 
 // Pull merges the snapshot/doc/ref from the central server into the local repository (fast-forward first).
 func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+	return withRetainedObjects(ctx, s.store, func() (inbound.SyncOutput, error) { return s.pull(ctx, in) })
+}
+
+func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return inbound.SyncOutput{}, err

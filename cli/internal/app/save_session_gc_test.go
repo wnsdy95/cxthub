@@ -12,7 +12,7 @@ import (
 )
 
 type failHookSnapshotDeleteStore struct {
-	outbound.SessionStore
+	*storage.FileStore
 }
 
 func (s *failHookSnapshotDeleteStore) DeleteSnapshot(context.Context, domain.ContentHash) error {
@@ -72,10 +72,18 @@ func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 			}
 			var sessionStore outbound.SessionStore = st
 			if tc.failDelete {
-				sessionStore = &failHookSnapshotDeleteStore{SessionStore: st}
+				sessionStore = &failHookSnapshotDeleteStore{FileStore: st}
 			}
 			svc := NewSaveSessionService(nil, nil, nil, sessionStore)
 			svc.gcHookLeaf(ctx, repo, old, current)
+			jobs, queueErr := st.CaptureCollections(ctx, repo, 32)
+			wantJobs := 0
+			if tc.failDelete {
+				wantJobs = 1
+			}
+			if queueErr != nil || len(jobs) != wantJobs {
+				t.Fatalf("collection retry state: %+v %v", jobs, queueErr)
+			}
 			_, snapErr := st.GetSnapshot(ctx, old)
 			_, docErr := st.GetDoc(ctx, old)
 			if tc.wantDeleted {

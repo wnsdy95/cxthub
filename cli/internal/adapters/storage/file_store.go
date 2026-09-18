@@ -267,7 +267,17 @@ func syncCxtParents(path string) error {
 // deduplicated across captures so only deltas are written. Documents that cannot be chunked
 // (for example, documents with no events) fall back to whole-blob storage. Existing objects
 // are a no-op (idempotent deduplication).
-func (s *FileStore) PutDoc(_ context.Context, doc domain.SessionDoc) (domain.ContentHash, error) {
+func (s *FileStore) PutDoc(ctx context.Context, doc domain.SessionDoc) (domain.ContentHash, error) {
+	var hash domain.ContentHash
+	err := s.WithObjectsRetained(ctx, func() error {
+		var err error
+		hash, err = s.putDoc(doc)
+		return err
+	})
+	return hash, err
+}
+
+func (s *FileStore) putDoc(doc domain.SessionDoc) (domain.ContentHash, error) {
 	cb, err := domain.CanonicalBytes(doc.CIR)
 	if err != nil {
 		return "", err
