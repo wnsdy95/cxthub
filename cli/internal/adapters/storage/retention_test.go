@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"testing"
 	"time"
+
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 func TestRetentionChild(t *testing.T) {
@@ -82,5 +84,47 @@ func TestObjectRetentionCancellationDoesNotEnterCollector(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCaptureWritesWaitForCollection(t *testing.T) {
+	st := NewFileStore(t.TempDir())
+	full := bigDoc(2)
+	prior := full
+	prior.Events = full.Events[:1]
+	base, err := st.PutDoc(context.Background(), domain.SessionDoc{CIR: prior})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := full
+	delta.Events = full.Events[1:]
+	for name, write := range map[string]func(context.Context) (domain.ContentHash, error){
+		"whole document": func(ctx context.Context) (domain.ContentHash, error) {
+			return st.PutDoc(ctx, domain.SessionDoc{CIR: full})
+		},
+		"incremental capture": func(ctx context.Context) (domain.ContentHash, error) {
+			return st.AppendCaptureDoc(ctx, base, delta)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			acquired, err := st.TryCollectObjects(context.Background(), func() error {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				defer cancel()
+				if _, err := write(ctx); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("capture wrote chunks while collection held its reservation: %v", err)
+				}
+				return nil
+			})
+			if !acquired || err != nil {
+				t.Fatalf("collection: acquired=%v error=%v", acquired, err)
+			}
+			id, err := write(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.GetDoc(context.Background(), id); err != nil {
+				t.Fatal("capture did not resume with a complete document", err)
+			}
+		})
 	}
 }

@@ -269,7 +269,11 @@ func syncCxtParents(path string) error {
 // are a no-op (idempotent deduplication).
 func (s *FileStore) PutDoc(ctx context.Context, doc domain.SessionDoc) (domain.ContentHash, error) {
 	var hash domain.ContentHash
-	err := s.WithObjectsRetained(ctx, func() error { var err error; hash, err = s.putDoc(doc); return err })
+	err := s.WithObjectsRetained(ctx, func() error {
+		var err error
+		hash, err = s.putDoc(doc)
+		return err
+	})
 	return hash, err
 }
 
