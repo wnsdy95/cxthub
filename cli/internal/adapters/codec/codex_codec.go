@@ -171,8 +171,15 @@ func decodeCodexCompactedPayload(raw json.RawMessage) (codexCompactedPayload, bo
 }
 
 // Decode converts Codex rollout JSONL bytes to CIRDocument.
-func (c *CodexCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument, error) {
-	doc := domain.CIRDocument{}
+func (c *CodexCodec) Decode(ctx context.Context, raw []byte) (domain.CIRDocument, error) {
+	return c.DecodeAppend(ctx, raw, domain.Envelope{}, 0)
+}
+
+// DecodeAppend consumes complete native records, carrying only envelope state.
+// Previously normalized events are immutable and need not be decoded again.
+func (c *CodexCodec) DecodeAppend(_ context.Context, raw []byte, previous domain.Envelope, start int) (domain.CIRDocument, error) {
+	doc := domain.CIRDocument{Envelope: previous}
+	doc.Envelope.SourceModels = append([]string(nil), previous.SourceModels...)
 	doc.Envelope.CIRVersion = domain.CIRVersionV1
 	doc.Envelope.SourceProvider = domain.ProviderCodex
 	doc.Envelope.Fidelity = domain.FidelityFull
@@ -279,7 +286,13 @@ func (c *CodexCodec) Decode(_ context.Context, raw []byte) (domain.CIRDocument, 
 		return domain.CIRDocument{}, fmt.Errorf("codex decode scan: %w", err)
 	}
 	doc.Events = assignSeq(events)
+	for i := range doc.Events {
+		doc.Events[i].Seq += start
+	}
 	doc.Envelope.CIRVersion = domain.CIRVersionForEvents(doc.Events)
+	if previous.CIRVersion == domain.CIRVersionV2 {
+		doc.Envelope.CIRVersion = domain.CIRVersionV2
+	}
 	return doc, nil
 }
 

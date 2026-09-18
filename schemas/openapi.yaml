@@ -72,6 +72,19 @@ components:
   # Reusable Schemas
   # -------------------------------------------------------------------------
   schemas:
+    RepositoryRevision:
+      type: object
+      required: [graph, pending]
+      properties:
+        graph: { type: string, pattern: '^[0-9]+$' }
+        pending: { type: string, pattern: '^[0-9]+$' }
+    PendingView:
+      type: object
+      required: [revision, pending, snapshots]
+      properties:
+        revision: { $ref: '#/components/schemas/RepositoryRevision' }
+        pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
+        snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
     ContentHash:
       type: string
       description: "Content address hash. Format: sha256:<hex64>. Same content → same value."
@@ -1242,6 +1255,60 @@ paths:
   # =========================================================================
   # Snapshots
   # =========================================================================
+  /repos/{repoID}/revision:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: getRepositoryRevision
+      summary: Read durable graph and pending change counters
+      description: Requires viewer access. Revision counters survive server restarts. Streams send the current counters on every connection, recover missed updates by comparison, and reconnect periodically to recheck authorization.
+      tags: [snapshots]
+      responses:
+        "200":
+          description: Committed repository state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepositoryRevision' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/pending-view:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: getPendingView
+      summary: Read pending pointers and their target snapshot metadata
+      description: Requires viewer access. Revision counters survive server restarts. Streams send the current counters on every connection, recover missed updates by comparison, and reconnect periodically to recheck authorization.
+      tags: [snapshots]
+      responses:
+        "200":
+          description: Committed repository state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PendingView' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/changes:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: streamRepositoryChanges
+      summary: Observe durable repository revisions over server-sent events
+      description: Requires viewer access. Revision counters survive server restarts. Streams send the current counters on every connection, recover missed updates by comparison, and reconnect periodically to recheck authorization.
+      tags: [snapshots]
+      responses:
+        "200":
+          description: Committed repository state
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
   /repos/{repoID}/view:
     parameters:
       - $ref: "#/components/parameters/repoID"
@@ -1257,8 +1324,9 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [refs, snapshots, reflog, history, pending, unsync]
+                required: [revision, refs, snapshots, reflog, history, pending, unsync]
                 properties:
+                  revision: { $ref: '#/components/schemas/RepositoryRevision' }
                   refs: { type: array, items: { $ref: '#/components/schemas/Ref' } }
                   snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
                   reflog:

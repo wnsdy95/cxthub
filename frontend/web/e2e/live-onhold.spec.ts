@@ -7,6 +7,8 @@ test('live sessions precede stored captures, follow replacement, expire offline 
   const id = (n: number) => `sha256:${String(n).repeat(64)}`;
   let generation = 2;
   let offline = false;
+  let fullReads = 0, pendingReads = 0;
+  page.on('request', req => { const path = new URL(req.url()).pathname; if (path.endsWith('/view')) fullReads++; if (path.endsWith('/pending-view')) pendingReads++; });
   const errors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, ({method, pathname}) => {
     if (method !== 'GET') return undefined;
@@ -39,11 +41,16 @@ test('live sessions precede stored captures, follow replacement, expire offline 
   await expect(page.locator('.pending-sessions[data-live="false"] em')).toContainText('2026-09-01');
   await live.locator('.commit-row').filter({has:page.locator('code', {hasText:'2222222222'})}).click();
   await expect(page.getByText('Capture generation 2', {exact:true})).toBeVisible();
+  const initialReads = fullReads;
+  await page.waitForTimeout(6_500);
+  expect(fullReads).toBe(initialReads); // reconnects with unchanged revisions
   generation = 3;
   await page.clock.fastForward(6_000);
   await expect(page.locator('.viewer-head code')).toHaveText('3333333333');
   await expect(page.getByText('Capture generation 3', {exact:true})).toBeVisible();
   await expect(page.locator('.live-viewer-status')).toContainText('LIVE');
+  expect(fullReads).toBe(initialReads);
+  expect(pendingReads).toBeGreaterThan(0);
   offline = true;
   await page.clock.fastForward(125_000);
   await expect(page.locator('.pending-sessions[data-live="true"]')).toHaveCount(0);

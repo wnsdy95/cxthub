@@ -82,34 +82,16 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 			return inbound.SaveOutput{}, domain.ErrNoActiveSession
 		}
 	}
-	// Sample before reading: a concurrently appended tail must not lend its
-	// newer activity timestamp to bytes this snapshot did not capture.
-	var activityAt *time.Time
-	if info, err := os.Stat(path); err == nil {
-		at := info.ModTime().UTC()
-		activityAt = &at
-	}
-	raw, err := capt.ReadSession(ctx, path)
+	envelope, docHash, capturedBytes, activityAt, err := s.projectCapture(ctx, repo.LocalPath, path, capt, cdc, in.Pending)
 	if err != nil {
 		return inbound.SaveOutput{}, err
 	}
-	capturedBytes := int64(len(raw))
-	// Secret masking (.cxtsecrets) — local deterministic replacement before saving (P1 previous step: immutable after saving here).
-	raw, _ = capture.ScrubSecrets(raw, repo.LocalPath)
-	cir, err := cdc.Decode(ctx, raw)
-	if err != nil {
-		return inbound.SaveOutput{}, err
-	}
-	// Pattern scrub (P2): after exact .cxtsecrets replacement above, mask known
-	// credential formats and URL credentials in the CIR layer. Opaque locked
-	// reasoning data (signatures/ciphertext) is intentionally excluded.
-	cir = capture.ScrubDoc(cir, repo.LocalPath)
 
 	branch := in.Branch // explicit branch takes precedence over checkpoint, etc.
 	if branch == "" {
 		branch, _ = s.gitCtx.CurrentBranch(ctx, in.Cwd)
 		if branch == "" || branch == "HEAD" {
-			branch = cir.Envelope.GitBranch
+			branch = envelope.GitBranch
 		}
 	}
 	// "HEAD" is not a detached marker branch name (session records can be recorded at the detached point)
@@ -126,11 +108,6 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	}
 	if branch == "" {
 		branch = "main"
-	}
-
-	docHash, err := s.store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
-	if err != nil {
-		return inbound.SaveOutput{}, err
 	}
 
 	var parents []domain.ContentHash
@@ -199,13 +176,13 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		AgentsSettings:  settingsHashes["agents"],
 		CodexSettings:   settingsHashes["codex"],
 		Provider:        provider,
-		Fidelity:        cir.Envelope.Fidelity,
+		Fidelity:        envelope.Fidelity,
 		Message:         msg,
 		Author:          in.Author,
 		CreatedAt:       time.Now().UTC(),
-		SessionID:       cir.Envelope.SessionOriginID,
-		Models:          cir.Envelope.OrderedModels(),
-		CompactionCount: cir.Envelope.CompactionCount,
+		SessionID:       envelope.SessionOriginID,
+		Models:          envelope.OrderedModels(),
+		CompactionCount: envelope.CompactionCount,
 	}
 	// A new capture imports the selected immutable memory, including orphan
 	// project memory, without inheriting later conversation or mutable grafts.
@@ -237,7 +214,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	if err := s.store.PutSnapshot(ctx, snap); err != nil {
 		return inbound.SaveOutput{}, err
 	}
-	capture.RecordSessionAffinity(repo.LocalPath, provider, cir.Envelope.SessionOriginID)
+	capture.RecordSessionAffinity(repo.LocalPath, provider, envelope.SessionOriginID)
 	if promote {
 		queuePromotion(repo.LocalPath, docHash, msg)
 	}
@@ -246,7 +223,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		// pointer advances to the latest durable snapshot.
 		oldTarget, err := s.store.ReplacePending(ctx, domain.Pending{
 			RepoID:     repo.ID,
-			SessionID:  cir.Envelope.SessionOriginID,
+			SessionID:  envelope.SessionOriginID,
 			Branch:     branch,
 			Provider:   provider,
 			Target:     docHash,
@@ -259,7 +236,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		}
 		s.gcHookLeaf(ctx, repo.ID, oldTarget, docHash)
 		return inbound.SaveOutput{
-			SnapshotID: docHash, Branch: branch, SessionID: cir.Envelope.SessionOriginID, CapturedBytes: capturedBytes,
+			SnapshotID: docHash, Branch: branch, SessionID: envelope.SessionOriginID, CapturedBytes: capturedBytes,
 		}, nil
 	}
 	if position != nil && position.Branch == "" {
@@ -276,11 +253,11 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		if err := s.store.(outbound.WorkingPositionStore).PutWorkingPosition(ctx, p); err != nil {
 			return inbound.SaveOutput{}, err
 		}
-		return inbound.SaveOutput{SnapshotID: docHash, Branch: "HEAD", SessionID: cir.Envelope.SessionOriginID, CapturedBytes: capturedBytes}, nil
+		return inbound.SaveOutput{SnapshotID: docHash, Branch: "HEAD", SessionID: envelope.SessionOriginID, CapturedBytes: capturedBytes}, nil
 	}
 	// Identify the exact capture observed by this commit. Resolution below is a
 	// target CAS because a newer capture can arrive while the ref is moving.
-	oldTarget, err := s.pendingTargetOf(ctx, repo.ID, cir.Envelope.SessionOriginID, provider)
+	oldTarget, err := s.pendingTargetOf(ctx, repo.ID, envelope.SessionOriginID, provider)
 	if err != nil {
 		return inbound.SaveOutput{}, err
 	}
@@ -356,14 +333,14 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	// moving the branch ref; deleting by session identity would erase that newer
 	// continuation. The target CAS preserves it for the next commit.
 	if oldTarget != "" {
-		_, _ = s.store.CompareAndDeletePending(ctx, repo.ID, cir.Envelope.SessionOriginID, oldTarget)
+		_, _ = s.store.CompareAndDeletePending(ctx, repo.ID, envelope.SessionOriginID, oldTarget)
 	}
 	s.gcHookLeaf(ctx, repo.ID, oldTarget, docHash)
 
 	return inbound.SaveOutput{
 		SnapshotID:            docHash,
 		Branch:                branch,
-		SessionID:             cir.Envelope.SessionOriginID,
+		SessionID:             envelope.SessionOriginID,
 		CapturedBytes:         capturedBytes,
 		ResolvedPendingTarget: oldTarget,
 	}, nil

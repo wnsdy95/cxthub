@@ -188,3 +188,6 @@ func (c *CodexCaptureSource) SessionFilePath(_ context.Context, _ string, _ doma
 
 // Ensure CodexCaptureSource implements outbound.CaptureSource.
 var _ outbound.CaptureSource = (*CodexCaptureSource)(nil)
+
+// IncrementalCapture enables verified native-prefix projection checkpoints.
+func (c *CodexCaptureSource) IncrementalCapture() bool { return true }

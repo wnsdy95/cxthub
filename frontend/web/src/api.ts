@@ -68,6 +68,9 @@ export interface DocEventPage {
 }
 
 export const api = {
+  repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes`,
+  repositoryRevision: (repo: string) => call<import('./types').RepositoryRevision>('GET', `/repos/${encodeURIComponent(repo)}/revision`),
+  pendingView: (repo: string) => call<import('./types').PendingView>('GET', `/repos/${encodeURIComponent(repo)}/pending-view`),
   notifications: (workspace: string, signal?: AbortSignal) => call<import('./types').NotificationJob[]>('GET', `/workspaces/${encodeURIComponent(workspace)}/notifications`, undefined, undefined, signal),
   retryNotification: (workspace: string, id: string) => call('POST', `/workspaces/${encodeURIComponent(workspace)}/notifications/${encodeURIComponent(id)}/retry`, {}),
   storageUsage: (namespace: string, month: string, signal?: AbortSignal) => call<StorageUsageReport>('GET', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage?month=${encodeURIComponent(month)}`, undefined, undefined, signal),

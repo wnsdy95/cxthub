@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS repository_revisions (
+ repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+ graph BIGINT NOT NULL DEFAULT 0 CHECK (graph >= 0),
+ pending BIGINT NOT NULL DEFAULT 0 CHECK (pending >= 0)
+);

@@ -424,7 +424,10 @@ export interface StorageUsageReport {
 }
 
 /** A complete graph generation, read in one backend transaction. */
+export interface RepositoryRevision { graph: string; pending: string }
+export interface PendingView { revision: RepositoryRevision; pending: Pending[]; snapshots: Snapshot[] }
 export interface RepositoryView {
+  revision?: RepositoryRevision;
   refs: Ref[];
   snapshots: Snapshot[];
   reflog: RefLogEntry[];

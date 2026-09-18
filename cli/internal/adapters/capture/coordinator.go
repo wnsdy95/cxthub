@@ -76,8 +76,10 @@ func captureStateBase(ctx context.Context, provider domain.ProviderKind, cwd, se
 
 // captureCursor is a growth detector cursor. No-op if session file hasn't grown beyond the cursor.
 type captureCursor struct {
-	Path string `json:"path"`
-	Size int64  `json:"size"`
+	Modified int64  `json:"modified,omitempty"`
+	Policy   string `json:"policy,omitempty"`
+	Path     string `json:"path"`
+	Size     int64  `json:"size"`
 }
 
 // staleLockAge considers locks older than this age as orphan (crash residue) and takes them.
@@ -260,13 +262,18 @@ func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain
 	}
 	size := fi.Size()
 
-	// Growth gate: no-op if the same file did not grow after the last capture.
+	// Skip only unchanged source and policy. Rotation, rewrites and truncation
+	// must reach the projection verifier even when the file did not grow.
 	cursorPath := statePath(".cursor")
 	var cur captureCursor
 	if b, rerr := providerfs.ReadRegularFile(cursorPath); rerr == nil {
 		_ = json.Unmarshal(b, &cur)
 	}
-	if cur.Path == path && size <= cur.Size {
+	policy, err := ScrubPolicyFingerprint(repoRoot)
+	if err != nil {
+		return false, err
+	}
+	if cur.Path == path && size == cur.Size && cur.Modified == fi.ModTime().UnixNano() && cur.Policy == policy {
 		return false, nil
 	}
 
@@ -292,7 +299,7 @@ func (c *CaptureCoordinator) RequestCapture(ctx context.Context, provider domain
 		return false, err
 	}
 	_ = os.Remove(turnPath) // Hint is consumed once
-	if b, merr := json.Marshal(captureCursor{Path: path, Size: size}); merr == nil {
+	if b, merr := json.Marshal(captureCursor{Path: path, Size: size, Modified: fi.ModTime().UnixNano(), Policy: policy}); merr == nil {
 		_ = providerfs.WriteRegularFileAtomic(cursorPath, b, 0o644)
 	}
 	now := time.Now()

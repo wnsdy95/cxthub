@@ -22,7 +22,7 @@ import { CommitGraph } from './CommitGraph';
 import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
 import { About, TeamSettings, SecretsPanel } from './About';
 import { short, when, type ViewMode } from './ContextView';
-import { unsyncChains, orphanPendings, pendingIsLive } from '../onhold';
+import { unsyncChains, orphanPendings, pendingIsLive, PENDING_LIVE_MS } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { useT, Rich } from '../i18n';
 
@@ -30,14 +30,20 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   const t = useT();
   const me = useMe().data;
   const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 5_000);
-    return () => window.clearInterval(timer);
-  }, []);
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
   const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
     useRepoView(repo.id, repo.default_branch || 'main');
+  const activityTimes = pendings.map(p => p.activity_at ?? '').join(',');
+  useEffect(() => {
+    const current = Date.now();
+    const expires = activityTimes.split(',').map(v => Date.parse(v)).filter(at => Number.isFinite(at) && at <= current + 5_000 && current - at < PENDING_LIVE_MS).map(at => at + PENDING_LIVE_MS);
+    // Re-render at the next LIVE expiry, not every five seconds forever.
+    if (!expires.length) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), Math.max(1, Math.min(...expires) - current + 1));
+    return () => window.clearTimeout(timer);
+  }, [activityTimes, now]);
+  useEffect(() => setNow(Date.now()), [activityTimes]);
   const dismissPending = useDismissPending();
   const undismissPending = useUndismissPending();
   // Chain collapse/expand — convenience feature, no data impact. Header always visible, no recovery issues.

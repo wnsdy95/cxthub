@@ -477,7 +477,8 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 		}
 	}
 	for _, snap := range normalizedSnaps {
-		if _, err := s.meta.GetSnapshot(ctx, in.RepoID, snap.ID); err == nil {
+		before, priorErr := s.meta.GetSnapshot(ctx, in.RepoID, snap.ID)
+		if err := priorErr; err == nil {
 			out.DedupedSnapshots++
 		} else if errors.Is(err, domain.ErrNotFound) {
 			out.StoredSnapshots++
@@ -486,6 +487,17 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 		}
 		if err := s.meta.PutSnapshot(ctx, snap); err != nil {
 			return inbound.CommitOutput{}, err
+		}
+		if priorErr == nil {
+			after, err := s.meta.GetSnapshot(ctx, in.RepoID, snap.ID)
+			if err != nil {
+				return inbound.CommitOutput{}, err
+			}
+			if !reflect.DeepEqual(before, after) {
+				if err := revisionWrite(context.WithValue(ctx, revisionScopeKey{}, "graph"), s, in.RepoID); err != nil {
+					return inbound.CommitOutput{}, err
+				}
+			}
 		}
 	}
 	return out, nil
@@ -875,7 +887,7 @@ func (s *Service) PromoteSnapshotMessage(ctx context.Context, repoID, id domain.
 	// The storage-layer CAS (UpdateSnapshotMessage) makes the final one-way-rule decision;
 	// reading and deciding here would introduce a check-then-act race. State conflicts make promotion impossible, so
 	// ErrConflict (409, matching openapi contract) — not an integrity violation (422).
-	return s.meta.UpdateSnapshotMessage(ctx, repoID, id, message)
+	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error { return s.meta.UpdateSnapshotMessage(ctx, repoID, id, message) })
 }
 
 // GraftSnapshotParents adds reachability overlay edges to snapshots (Parents immutable, idempotent).
@@ -1230,7 +1242,9 @@ func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash
 	}
 	// Attaches a derivative pointer to the snapshot metadata — after push, the memorize also holds raw+memory (E clause).
 	// Without this, pull/web cannot recognize memory existence.
-	if err := s.meta.CompareAndSwapSnapshotMemory(ctx, repoID, d.SnapshotID, expected, hash); err != nil {
+	if err := repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error {
+		return s.meta.CompareAndSwapSnapshotMemory(ctx, repoID, d.SnapshotID, expected, hash)
+	}); err != nil {
 		return "", err
 	}
 	return hash, nil
@@ -1359,6 +1373,9 @@ func (s *Service) putPending(ctx context.Context, repoID domain.ContentHash, ses
 // is not performed — snapshot/doc/session history immutable, target preserved, GC protection
 // remains). No-op if already dismissed.
 func (s *Service) DismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
+	return repositoryWriteError(pendingWriteContext(ctx), s, repoID, func(ctx context.Context) error { return s.dismissPending(ctx, repoID, sessionID) })
+}
+func (s *Service) dismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1370,6 +1387,9 @@ func (s *Service) DismissPending(ctx context.Context, repoID domain.ContentHash,
 // changes; the target remains immutable, and subsequent replacements observe
 // the cleared flag atomically. No-op if already undismissed.
 func (s *Service) UndismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
+	return repositoryWriteError(pendingWriteContext(ctx), s, repoID, func(ctx context.Context) error { return s.undismissPending(ctx, repoID, sessionID) })
+}
+func (s *Service) undismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1401,6 +1421,9 @@ func (s *Service) ListPendings(ctx context.Context, repoID domain.ContentHash) (
 // capture. It is idempotent.
 // Releasing a pointer supplies no verified successor, so its capture is retained.
 func (s *Service) DeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
+	return repositoryWriteError(pendingWriteContext(ctx), s, repoID, func(ctx context.Context) error { return s.deletePending(ctx, repoID, sessionID) })
+}
+func (s *Service) deletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1416,6 +1439,11 @@ func (s *Service) DeletePending(ctx context.Context, repoID domain.ContentHash, 
 // This pointer-only operation retains capture data; it supplies no verified
 // successor for GC. A concurrent newer pointer returns false and remains untouched.
 func (s *Service) CompareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (bool, error) {
+	return repositoryWrite(pendingWriteContext(ctx), s, repoID, func(ctx context.Context) (bool, error) {
+		return s.compareAndDeletePending(ctx, repoID, sessionID, expected)
+	})
+}
+func (s *Service) compareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (bool, error) {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return false, err
 	}
@@ -1654,6 +1682,9 @@ func (s *Service) ListUnsyncs(ctx context.Context, repoID domain.ContentHash) ([
 
 // DeleteUnsync resolves a push wait pointer (git push/manual cleanup — idempotent).
 func (s *Service) DeleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error {
+	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error { return s.deleteUnsync(ctx, repoID, user, branch) })
+}
+func (s *Service) deleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
