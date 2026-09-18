@@ -737,6 +737,26 @@ export const ko = {
     uncommittedLabel: '미커밋',
     archivedLane: '보관 · {branch}',
   },
+  gitChanges: {
+    title: "되돌림 검증 이력",
+    scope: "아래 두 커밋 사이의 과거 검증 결과입니다. 현재 적용 여부는 선택한 코드 시점에 따라 달라집니다.",
+    verified: "검증 완료",
+    full: "전체 대상 경로 확인",
+    partial: "일부 경로 확인 필요",
+    unverified: "되돌림 미확인",
+    ambiguous: "Git 근거나 비교할 부모 커밋을 확인해야 합니다.",
+    changed: "저장소 주소 또는 처리 작업이 변경되었습니다.",
+    incomplete: "Git 서버에서 받은 근거가 불완전합니다.",
+    unrelated: "대상 커밋이 되돌림 후보의 조상에 없습니다.",
+    noInverse: "정확히 반대로 바뀐 파일을 찾지 못했습니다.",
+    noChanges: "대상 커밋에 파일 변경이 없습니다.",
+    noParent: "후보 커밋에 비교할 부모가 없습니다.",
+    loading: "검증 이력을 불러오는 중…",
+    loadError: "검증 이력을 불러오지 못했습니다.",
+    empty: "아직 되돌림 검증 요청이 없습니다.",
+    paths: "확인된 경로 {verified}개 · 확인 필요 {unknown}개",
+    more: "더 보기",
+  },
 };
 
 // 키·형태의 단일 원천. en.ts 와 t() 의 키 타입이 이 타입에서 유도된다.

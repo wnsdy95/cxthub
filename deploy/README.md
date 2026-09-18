@@ -199,3 +199,19 @@ data stays readable. Notification delivery status is in repository Settings;
 maintainers and owners can retry an undelivered event with the current webhook.
 External delivery is at least once; receivers can deduplicate using
 `X-CXTHub-Event-ID`. No cloud resources are created by the local test commands.
+
+
+### Git change evidence worker
+
+`cxtd` wires the Git change verifier as a separate application service with a
+GitHub read adapter. Configure `CXT_GITHUB_TOKEN` on the server for private
+repositories and authenticated API limits (repository contents read access is
+required). Without it, public GitHub reads use the anonymous limit. Server
+workers do not read a developer's `gh` keychain. Credentials and provider error
+bodies are excluded from persisted retry reasons and logs; HTTP redirects are
+not followed. Non-GitHub origins remain explicit validation failures.
+
+Apply migration 0047 before serving the new Git verification endpoints. The
+worker stores requests before network I/O and recovers expired leases after a
+restart. No automatic cancellation or branch movement follows from verification
+alone. See [Context history](../docs/CONTEXT_HISTORY.md) for the staged contract.

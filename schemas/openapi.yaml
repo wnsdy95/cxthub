@@ -197,6 +197,68 @@ components:
               bytes_after: { type: integer, format: int64 }
               reason: { type: string }
               occurred_at: { type: string, format: date-time }
+    GitChangeRequest:
+      type: object
+      description: Requests verification of a possible inverse change. Never accepted as proof; merge comparison parents must be explicit.
+      additionalProperties: false
+      required: [target, commit]
+      properties:
+        target: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
+        target_parent: { type: string }
+        commit: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
+        parent: { type: string }
+    GitReversalEvidence:
+      type: object
+      description: Verified inverse file entries at immutable commits, not a global PR status. Partial includes only proved paths. Unverified never cancels anything. Original history remains unchanged.
+      required: [commit, target, parent, coverage, paths, unverified_paths, other_paths]
+      properties:
+        commit: { type: string }
+        target: { type: string }
+        parent: { type: string }
+        target_parent: { type: string }
+        coverage: { type: string, enum: [full, partial, unverified] }
+        paths: { type: array, items: { type: string } }
+        unverified_paths: { type: array, items: { type: string } }
+        other_paths: { type: array, items: { type: string } }
+        reason: { type: string }
+    GitChangeJob:
+      type: object
+      description: Durable, repository-scoped verification. Completed means evidence assessment finished; inspect result.coverage separately. Results are immutable. No ref movement, historical PR cancellation, or current-memory change is implied.
+      required: [id, repo_id, git_origin, request, state, attempts, version, created_at, updated_at, next_attempt, lease_until]
+      properties:
+        id: { type: string }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        git_origin: { type: string }
+        request: { $ref: '#/components/schemas/GitChangeRequest' }
+        state: { type: string, enum: [waiting, running, retrying, completed, attention] }
+        attempts: { type: integer }
+        version: { type: string, pattern: '^[0-9]+$' }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        next_attempt: { type: string, format: date-time }
+        lease_until: { type: string, format: date-time }
+        result: { $ref: '#/components/schemas/GitReversalEvidence' }
+    GitChangeSummary:
+      type: object
+      required: [id, request, state, version, updated_at, verified_paths, unverified_paths]
+      properties:
+        id: { type: string }
+        request: { $ref: '#/components/schemas/GitChangeRequest' }
+        state: { type: string, enum: [waiting, running, retrying, completed, attention] }
+        version: { type: string }
+        reason: { type: string }
+        updated_at: { type: string, format: date-time }
+        coverage: { type: string, enum: [full, partial, unverified, ''] }
+        verified_paths: { type: integer }
+        unverified_paths: { type: integer }
+    GitChangePage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/GitChangeSummary' } }
+        next_cursor: { type: string }
+
     PRPromotionJob:
       type: object
       required: [id, repo_id, pr, state, attempts, version, created_at, updated_at, next_attempt, lease_until]
@@ -1335,6 +1397,79 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/git-changes:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: listGitChanges
+      summary: List retained Git change verification requests and evidence
+      description: Viewer access. ID-ordered cursor pagination; restart to discover concurrently added earlier IDs. Historical evidence is repository-scoped, never an implicit current-branch status.
+      parameters:
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: Retained evidence page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GitChangePage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { description: Invalid pagination }
+        '503': { description: Verification service unavailable }
+    post:
+      operationId: submitGitChange
+      summary: Durably request Git inverse-change verification
+      description: Member access. Stores acceptance before provider I/O. Same repository, origin and request are idempotent. The backend reads immutable GitHub objects and ancestry; it never trusts client-supplied verification or a commit title.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GitChangeRequest' }
+      responses:
+        '200':
+          description: Durable existing or new verification request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GitChangeJob' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '415': { description: JSON Content-Type required }
+        '422': { description: Invalid immutable Git identifiers }
+        '503': { description: Verification service unavailable }
+  /repos/{repoID}/git-changes/{changeID}:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - { name: changeID, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getGitChange
+      summary: Read one retained Git verification result
+      description: Viewer access in the request repository is required.
+      responses:
+        '200':
+          description: Verification request with terminal result when available
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GitChangeJob' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /repos/{repoID}/git-changes/{changeID}/retry:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - { name: changeID, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: retryGitChange
+      summary: Retry deferred Git verification
+      description: Member access and JSON Content-Type required. Active leases cannot be stolen; completed evidence is preserved unchanged.
+      responses:
+        '200': { description: Queued, or already completed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Verification lease is still active }
+        '415': { description: JSON Content-Type required }
 
   /repos/{repoID}/context-query:
     parameters:

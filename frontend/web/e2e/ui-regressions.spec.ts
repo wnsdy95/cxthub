@@ -2017,3 +2017,33 @@ test('PR evidence survives every combination of archive and overlapping progress
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+
+test('Git reversal history loads on demand and preserves partial and unverified outcomes', async ({page}) => {
+ const snap = auditSnapshot(pushedHead, 'main', [], 'Retained merged context', 1);
+ const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ let requests = 0;
+ const row = (char: string, coverage: string) => ({id: char.repeat(64), request: {commit: char.repeat(40), target: 'f'.repeat(40)}, state: 'completed', version: '1', coverage, verified_paths: coverage === 'partial' ? 1 : 0, unverified_paths: 2, updated_at: '2026-09-19T01:00:00Z'});
+ const {pageErrors, unexpected} = await openGraph(page, req => {
+  if (req.pathname === `/api/v1/repos/${repoId}/git-changes`) {
+   requests++;
+   return {body: req.searchParams.get('cursor') ? {items: [row('b', 'unverified')]} : {items: [row('a', 'partial')], next_cursor: 'a'.repeat(64)}};
+  }
+  return base(req);
+ });
+ expect(requests).toBe(0);
+ const panel = page.locator('.git-changes');
+ await panel.locator('summary').click();
+ await expect(panel.locator('li')).toHaveCount(1);
+ await expect(panel).toContainText('Some paths need review');
+ await expect(panel).toContainText('1 verified paths');
+ await panel.getByRole('button', {name: 'Load more'}).click();
+ await expect(panel.locator('li')).toHaveCount(2);
+ await expect(panel).toContainText('Reversal unverified');
+ await expect(panel.getByRole('button', {name: 'Retry'})).toHaveCount(0);
+ await expect(page.locator(`.graph-row[data-graph-id="${pushedHead}"]`)).toHaveCount(1);
+ await panel.locator('summary').click();
+ await expect(panel.locator('li')).toHaveCount(0);
+ expect(pageErrors).toEqual([]);
+ expect(unexpected).toEqual([]);
+});

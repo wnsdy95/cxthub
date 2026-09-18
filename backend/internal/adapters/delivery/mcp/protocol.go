@@ -248,6 +248,7 @@ func toolDefinitions() []map[string]any {
 		},
 	}
 	defs = append(defs, map[string]any{"name": "context_history", "description": "Browse recorded branch births, attachments, worktree selections, and retained progress. Unknown historical links are not inferred.", "annotations": readAnnotations(), "inputSchema": schema(map[string]any{"repository": repositoryProperty(), "branch": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}}, "repository")})
+	defs = append(defs, map[string]any{"name": "git_changes", "description": "Read server-verified Git inverse-change evidence and pending verification. List summaries, then pass change_id for bounded JSON fragments. Evidence is historical and does not by itself mean a PR is currently reverted on a selected branch.", "annotations": readAnnotations(), "inputSchema": schema(map[string]any{"repository": repositoryProperty(), "change_id": map[string]any{"type": "string", "description": "Optional ID from a listed request; concatenate json_fragment pages by byte_offset."}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}}, "repository")})
 	for _, def := range defs {
 		props := def["inputSchema"].(map[string]any)["properties"].(map[string]any)
 		props["cursor"] = map[string]any{"type": "string", "maxLength": 4096, "description": "Continuation from next_cursor. Keep repository and selection/filter arguments unchanged."}

@@ -24,6 +24,7 @@ import (
 	delivery "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/http"
 	deliverymcp "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/mcp"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitevidence"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -147,7 +148,12 @@ func serve(ctx context.Context, args []string) error {
 
 	idSvc := app.NewIdentityService(verifier, st)
 
+	changes, err := app.NewGitChanges(svc, gitevidence.NewGitHub(func() string { return os.Getenv("CXT_GITHUB_TOKEN") }))
+	if err != nil {
+		return err
+	}
 	api := delivery.NewServer(svc, idSvc)
+	api.SetGitChanges(changes)
 	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_PUBLIC_URL")), "/")
 	if publicURL == "" && isLoopback(addr) {
 		publicURL = loopbackPublicURL(addr)
@@ -159,6 +165,7 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("configure remote MCP: %w", err)
 	}
+	mcpServer.SetGitChanges(changes)
 	root := http.NewServeMux()
 	for _, path := range []string{
 		"/mcp",
@@ -195,6 +202,7 @@ func serve(ctx context.Context, args []string) error {
 		backend = "postgres"
 	}
 	fmt.Fprintf(os.Stderr, "cxtd: listening on %s (store=%s, auth=%s, data=%s)\n", addr, backend, authMode, dataDir)
+	go changes.Run(ctx)
 	go svc.RunPRPromotionWorker(ctx)
 	go svc.RunNotificationWorker(ctx)
 	go idSvc.RunRuntimeMaintenance(ctx)

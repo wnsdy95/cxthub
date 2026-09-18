@@ -34,6 +34,9 @@ type pageCursor struct {
 
 func cursorFor(repo, tool string, a toolArgs) (pageCursor, error) {
 	selection := []string{a.Repository, a.Branch, a.Ref, a.Scope, a.Position, a.MemoryHash, a.Query}
+	if a.ChangeID != "" {
+		selection = append(selection, "git-change:"+a.ChangeID)
+	}
 	// Preserve cursor bindings issued before explicit modes existed.
 	if a.Mode != "" {
 		selection = append(selection, a.Mode)
