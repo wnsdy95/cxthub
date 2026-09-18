@@ -144,7 +144,10 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 		t.Fatalf("finished queue still claimable: %v", err)
 	}
 	// Two workers race for a single committed row; the active lease is exclusive.
-	claimJob := domain.NotificationJob{ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, State: "pending", CreatedAt: time.Now().UTC(), NextAttempt: time.Now().UTC()}
+	// Claim uses the database clock. Make these fixtures already due so a small
+	// host/DB clock skew does not turn this lease test into a scheduling race.
+	due := time.Unix(0, 0).UTC()
+	claimJob := domain.NotificationJob{ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, State: "pending", CreatedAt: time.Now().UTC(), NextAttempt: due}
 	if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: claimJob, Destination: wsp.WebhookURL}); err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +175,7 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Reclaim an abandoned lease and fence its previous worker.
-	j := domain.NotificationJob{ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, Kind: "ref_updated", State: "pending", Text: "lease", CreatedAt: time.Now().UTC(), NextAttempt: time.Now().UTC()}
+	j := domain.NotificationJob{ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, Kind: "ref_updated", State: "pending", Text: "lease", CreatedAt: time.Now().UTC(), NextAttempt: due}
 	if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: j, Destination: wsp.WebhookURL}); err != nil {
 		t.Fatal(err)
 	}
