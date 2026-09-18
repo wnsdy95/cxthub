@@ -264,3 +264,40 @@ func promptWorthyMemoryItem(item string) bool {
 	}
 	return true
 }
+
+const CodeAssessmentBegin = "<!-- cxt:code-assessment:v1 -->"
+const CodeAssessmentEnd = "<!-- cxt:end-code-assessment -->"
+
+// WithoutCodeAssessment removes only complete generated assessment blocks from
+// prompt copies. Stored digests/transcripts remain immutable. A prior code
+// selection's status must be queried afresh, never recursively carried as fact.
+func WithoutCodeAssessment(text string) string {
+	for offset := 0; offset < len(text); {
+		start := strings.Index(text[offset:], CodeAssessmentBegin)
+		if start < 0 {
+			break
+		}
+		start += offset
+		end := strings.Index(text[start+len(CodeAssessmentBegin):], CodeAssessmentEnd)
+		if end < 0 {
+			break
+		}
+		end += start + len(CodeAssessmentBegin) + len(CodeAssessmentEnd)
+		text = text[:start] + text[end:]
+		offset = start
+	}
+	return text
+}
+
+// HistoricalPromptProjection replaces obsolete code assessments only when
+// preparing inherited history. Memory sinks can render a newly prepared prompt
+// without stripping the current assessment a second time.
+func HistoricalPromptProjection(d MemoryDigest) MemoryDigest {
+	out := d
+	out.Summary = WithoutCodeAssessment(d.Summary)
+	out.Fragments = append([]MemoryFragment(nil), d.Fragments...)
+	for i := range out.Fragments {
+		out.Fragments[i].Summary = WithoutCodeAssessment(out.Fragments[i].Summary)
+	}
+	return PromptStructuredProjection(out)
+}

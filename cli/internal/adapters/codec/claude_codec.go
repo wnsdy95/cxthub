@@ -197,7 +197,7 @@ func (c *ClaudeCodec) Encode(_ context.Context, doc domain.CIRDocument, _ domain
 	emit := func(rec claudeRecord) error { records = append(records, rec); return nil }
 	model := doc.Envelope.SourceModel
 
-	for _, ev := range normalizeCIR(doc).Events {
+	for _, ev := range claudeReplayEvents(normalizeCIR(doc).Events) {
 		base := claudeRecord{
 			Cwd:       doc.Envelope.Cwd,
 			GitBranch: doc.Envelope.GitBranch,
@@ -280,6 +280,20 @@ func (c *ClaudeCodec) Encode(_ context.Context, doc domain.CIRDocument, _ domain
 }
 
 // --- Helper ---
+
+// Claude represents replacement history as ordinary records following the
+// boundary. Keeping just the marker would discard portable Codex replacement
+// messages when an incomplete later boundary forces archival replay.
+func claudeReplayEvents(events []domain.Event) []domain.Event {
+	out := make([]domain.Event, 0, len(events))
+	for _, ev := range events {
+		out = append(out, ev)
+		if ev.Kind == domain.EventCompaction && ev.Replacement != nil && ev.ReplacementComplete {
+			out = append(out, claudeReplayEvents(normalizeEvents(ev.Replacement))...)
+		}
+	}
+	return out
+}
 
 func setIfEmpty(dst *string, v string) {
 	if *dst == "" && v != "" {

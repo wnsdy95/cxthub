@@ -62,9 +62,9 @@ func TestPGEffectiveMemoryCoherentReplicaRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	publishPRSource(t, writer, observation)
-	req := domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: id, CodeCommit: oid}, Limit: 1}
+	req := domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: id, CodeCommit: oid}, Content: "claims", Limit: 1}
 	before, err := reader.QueryEffectiveMemory(ctx, repo, req)
-	if err != nil || before.Items[0].State != "review" {
+	if err != nil || before.Items[0].State != "review" || before.Content != "claims" {
 		t.Fatal(before, err)
 	}
 	provider := &scanReader{deltas: map[string]domain.GitCommitDelta{oid: {Commit: oid, Parents: []string{}, Complete: true, Changes: []domain.GitPathChange{{Path: "file", After: domain.GitEntry{OID: strings.Repeat("b", 40), Mode: "100644"}}}}}}

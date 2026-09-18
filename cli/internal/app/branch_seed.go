@@ -22,6 +22,7 @@ import (
 //
 // The seed is committed as the first snapshot of the new branch (branch birth — cut meaning), and serialized to a session file (ledger record — capture excluded for resumption).
 type BranchSeedService struct {
+	prompts       *MemoryPromptService
 	gitCtx        outbound.GitContext
 	store         outbound.SessionStore
 	distiller     outbound.MemoryDistiller
@@ -43,6 +44,11 @@ func NewBranchSeedService(
 		gitCtx: gitCtx, store: store, distiller: distiller,
 		codecs: codecs, materializers: materializers, memSources: memSources,
 	}
+}
+
+func (s *BranchSeedService) WithMemoryPrompts(prompts *MemoryPromptService) *BranchSeedService {
+	s.prompts = prompts
+	return s
 }
 
 var _ inbound.SeedBranch = (*BranchSeedService)(nil)
@@ -105,6 +111,10 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 				mainDocAvailable = true
 			}
 		}
+	}
+	prompt, err := s.prompts.prepare(ctx, repo.ID, targetCwd, fromSnap.ID, mainSnap.ID)
+	if err != nil {
+		return inbound.SeedOutput{}, err
 	}
 	if mainSnap.ID != "" {
 		if mainSnap.MemoryHash != "" {
@@ -180,7 +190,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	seedSession := providerfs.NewSessionID()
 	events, seedBranchMemory, err := s.buildBranchSeedEvents(
 		ctx, provider, in.FromBranch, in.NewBranch, now, fromSnap.ID,
-		mainPromptMem, promptBranchMem, branchMem, seedConversationContext(branchContext),
+		mainPromptMem, promptBranchMem, branchMem, seedConversationContext(branchContext), prompt,
 	)
 	if err != nil {
 		return inbound.SeedOutput{}, err
@@ -198,6 +208,9 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	cir.Envelope.ContextTokens = 0 // New seed — statistical reset
 	cir.Envelope.OutputTokens = 0
 
+	if err := prompt.check(ctx); err != nil {
+		return inbound.SeedOutput{}, err
+	}
 	docHash, err := s.store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
 	if err != nil {
 		return inbound.SeedOutput{}, err
@@ -242,7 +255,6 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if _, err := s.store.CreateBranchRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: in.NewBranch, RepoID: repo.ID, Target: docHash}); err != nil {
 		return inbound.SeedOutput{}, err
 	}
-	_ = s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: in.NewBranch})
 
 	out := inbound.SeedOutput{SnapshotID: docHash, SessionID: seedSession}
 	// Materialization (best-effort): Seed snapshot is committed even on failure — can be restored with cxt checkout.
@@ -250,11 +262,11 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	// resume file for them would create an orphan and is explicitly skipped.
 	if !in.SkipMaterialize {
 		cdc, ok := s.codecs[provider]
-		if !ok {
-			return out, nil
-		}
-		if mat, ok2 := s.materializers[provider]; ok2 {
+		if mat, ok2 := s.materializers[provider]; ok && ok2 {
 			if raw, encErr := cdc.Encode(ctx, cir, provider); encErr == nil {
+				if err := prompt.check(ctx); err != nil {
+					return out, err
+				}
 				if path, resume, mErr := mat.Materialize(ctx, raw, in.Cwd); mErr == nil {
 					_ = providerfs.RecordMaterialized(repo.LocalPath, path)
 					out.WrittenPath, out.ResumeCmd = path, resume
@@ -268,6 +280,16 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 			}
 		}
 	}
+	// Validate against the original worker selection before making our own HEAD
+	// transition. Comparing after that write mistakes this seed for a concurrent
+	// checkout and prevents every real worktree wrapper from materializing.
+	if err := prompt.check(ctx); err != nil {
+		return out, err
+	}
+	if err := s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: in.NewBranch}); err != nil {
+		return out, err
+	}
+
 	return out, nil
 }
 
@@ -285,12 +307,13 @@ func (s *BranchSeedService) buildBranchSeedEvents(
 	promptBranchMemory domain.MemoryDigest,
 	storedBranchMemory domain.MemoryDigest,
 	conversation domain.CIRDocument,
+	prompt *memoryPrompt,
 ) ([]domain.Event, domain.MemoryDigest, error) {
 	totalBudget, digestBudget := seedBudgets(provider)
 	promptMemory := promptBranchMemory
 	maxConversationBudget := totalBudget
 	for attempt := 0; attempt <= len(conversation.Events)+1; attempt++ {
-		seedText := renderSeedText(from, to, mainMemory, promptMemory, digestBudget)
+		seedText := prompt.render(digestBudget, func(n int) string { return renderSeedText(from, to, mainMemory, promptMemory, n) })
 		summaryEvent := domain.Event{
 			Kind: domain.EventMessage, Role: "user", Ts: now, Seq: 0,
 			Blocks: []domain.ContentBlock{{Type: "text", Text: seedText}},
@@ -323,7 +346,7 @@ func (s *BranchSeedService) buildBranchSeedEvents(
 		// The bridge itself changes the summary size. Re-render before checking
 		// the actual wire-shaped event budget; if it grew, the next pass trims
 		// only more verbatim events and includes them in a new bridge.
-		seedText = renderSeedText(from, to, mainMemory, mergedPromptMemory, digestBudget)
+		seedText = prompt.render(digestBudget, func(n int) string { return renderSeedText(from, to, mainMemory, mergedPromptMemory, n) })
 		summaryEvent.Blocks[0].Text = seedText
 		events := []domain.Event{summaryEvent}
 		for i, event := range trimmed.Events {
@@ -410,9 +433,9 @@ func isSyntheticReplayMessage(ev domain.Event) bool {
 // outgrows the digest budget. Bullets are reserved first and summaries keep
 // their newest tail; exact byte accounting guarantees the result fits maxBytes.
 func renderSeedText(from, to string, mainMem *domain.MemoryDigest, branchMem domain.MemoryDigest, maxBytes int) string {
-	branchMem = domain.PromptStructuredProjection(branchMem)
+	branchMem = domain.HistoricalPromptProjection(branchMem)
 	if mainMem != nil {
-		projected := domain.PromptStructuredProjection(*mainMem)
+		projected := domain.HistoricalPromptProjection(*mainMem)
 		mainMem = &projected
 	}
 	header := fmt.Sprintf("[cxt seed] Branch-switch context: %s → %s\n", from, to) +

@@ -56,3 +56,6 @@ var ErrBranchArchived = errors.New("branch is archived")
 // cxt is a shadow of git — repository information is always read from the local .git,
 // and it fails like git outside a git repository (no path fallback).
 var ErrNotGitRepo = errors.New("not a git repository (or any of the parent directories): .git")
+
+// ErrSelectionChanged stops prompt installation after a concurrent worktree move.
+var ErrSelectionChanged = errors.New("context selection changed")

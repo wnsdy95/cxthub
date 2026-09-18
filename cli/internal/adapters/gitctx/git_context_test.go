@@ -2,9 +2,11 @@ package gitctx
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -57,5 +59,53 @@ func TestLocalBranchesListsAllHeadsWhileDetached(t *testing.T) {
 func TestLocalBranchesFailsOutsideGitRepository(t *testing.T) {
 	if _, err := NewGitContextAdapter().LocalBranches(context.Background(), t.TempDir()); err == nil {
 		t.Fatal("LocalBranches() outside a Git repository succeeded")
+	}
+}
+
+func TestCurrentCommitUsesTargetWorktreeAndDetachedHEAD(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	run := func(cwd string, args ...string) string {
+		t.Helper()
+		command := append([]string{"-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-C", cwd}, args...)
+		cmd := exec.Command("git", command...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid", "GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run(root, "init", "-q")
+	run(root, "commit", "--allow-empty", "-qm", "base")
+	base := run(root, "rev-parse", "HEAD")
+	second := filepath.Join(t.TempDir(), "worker")
+	run(root, "worktree", "add", "-qb", "worker", second)
+	run(second, "commit", "--allow-empty", "-qm", "worker change")
+	worker := run(second, "rev-parse", "HEAD")
+	a := NewGitContextAdapter()
+	if got, err := a.CurrentCommit(ctx, root); err != nil || got != base {
+		t.Fatal(got, err)
+	}
+	if got, err := a.CurrentCommit(ctx, second); err != nil || got != worker || got == base {
+		t.Fatal(got, err)
+	}
+	// Hooks export these variables. They must not override an explicit target
+	// worktree when cxt restores another directory.
+	t.Setenv("GIT_DIR", filepath.Join(root, ".git"))
+	t.Setenv("GIT_WORK_TREE", root)
+	if got, err := a.CurrentCommit(ctx, second); err != nil || got != worker {
+		t.Fatalf("inherited hook environment selected another worktree: %s %v", got, err)
+	}
+	os.Unsetenv("GIT_DIR")
+	os.Unsetenv("GIT_WORK_TREE")
+	run(second, "checkout", "-q", "--detach", base)
+	if got, err := a.CurrentCommit(ctx, second); err != nil || got != base {
+		t.Fatal(got, err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := a.CurrentCommit(canceled, second); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }

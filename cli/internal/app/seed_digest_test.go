@@ -162,7 +162,7 @@ func TestLoadMemorySeparatesTargetProjectionLookupFromSourceDistillation(t *test
 				distiller,
 				map[domain.ProviderKind]outbound.MemorySink{tc.target: recordingMemorySink{provider: tc.target}},
 			)
-			if _, err := service.loadMemory(ctx, cir, snap, tc.target, cwd); err != nil {
+			if _, err := service.loadMemory(ctx, cir, snap, tc.target, cwd, nil); err != nil {
 				t.Fatal(err)
 			}
 			if source.calls != 1 || source.gotSessionID != "codex-session-exact" {
@@ -206,7 +206,7 @@ func TestLoadMemoryProjectsNativeBaselineByScope(t *testing.T) {
 			cir := domain.CIRDocument{Envelope: domain.Envelope{
 				SourceProvider: tc.provider, SessionOriginID: "codex-session-exact",
 			}, Events: []domain.Event{seedMessage("user", currentDecision, 0)}}
-			if _, err := service.loadMemory(ctx, cir, domain.Snapshot{}, tc.provider, cwd); err != nil {
+			if _, err := service.loadMemory(ctx, cir, domain.Snapshot{}, tc.provider, cwd, nil); err != nil {
 				t.Fatal(err)
 			}
 			if got := strings.Contains(sink.digest.Summary, tc.nativeText); got != tc.wantBaseline {
@@ -249,7 +249,7 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 		Summary:  "did X, decided Y",
 		KeyFacts: []string{"apply_patch", "unknown:Agent", "native memory: claude:MEMORY.md", "absorbed from claude:MEMORY.md", "ingested from codex:memories_1.sqlite", "budget is 400KB per seed"},
 	}, "")
-	out, err := svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestPrependTrimDigestCompactSummary(t *testing.T) {
 
 	// (4) Keep native memory text as a portable fallback.
 	svc = mk(domain.MemoryDigest{Summary: "MEMROOT\nfacts"}, "MEMROOT\nfacts")
-	out, err = svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir())
+	out, err = svc.prependTrimDigest(ctx, full, seed, domain.Snapshot{}, domain.ProviderClaude, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestPrependTrimDigestKeepsOneClaudeNativeBaselineInsideMergedProjection(t *
 	}, Events: []domain.Event{seedMessage("user", "old request", 0)}}
 	seed := domain.CIRDocument{Events: []domain.Event{seedMessage("user", "RECENT RAW TURN", 1)}}
 
-	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderClaude, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderClaude, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestPrependTrimDigestKeepsCodexThreadNativeMemoryForNewSession(t *testing.T
 	}, Events: []domain.Event{seedMessage("user", "old request", 0)}}
 	seed := domain.CIRDocument{Events: []domain.Event{seedMessage("user", "recent request", 1)}}
 
-	out, err := svc.prependTrimDigest(ctx, omitted, seed, domain.Snapshot{}, domain.ProviderCodex, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, domain.Snapshot{}, domain.ProviderCodex, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestPortableReplaySeedCarriesExistingSyntheticMemoryBeforeReplacement(t *te
 	}}
 	svc := NewLoadSessionService(st, nil, nil, nil, nil, nil)
 
-	event, ok := svc.portableReplaySeed(ctx, seed, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes)
+	event, ok := svc.portableReplaySeed(ctx, seed, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes, nil)
 	if !ok || len(event.Blocks) == 0 {
 		t.Fatal("portable replay seed was not produced")
 	}
@@ -461,8 +461,7 @@ func TestPortableReplaySeedOmitsExactlyAttestedWorkingTreeBaseline(t *testing.T)
 	)
 
 	if event, ok := svc.portableReplaySeed(
-		ctx, domain.CIRDocument{}, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes,
-	); ok {
+		ctx, domain.CIRDocument{}, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes, nil); ok {
 		t.Fatalf("exact auto-load attestation produced redundant seed: %+v", event)
 	}
 }
@@ -495,7 +494,7 @@ func TestPortableReplaySeedKeepsReplayedAuthoritativeTaskTombstone(t *testing.T)
 	}}
 	svc := NewLoadSessionService(st, nil, nil, nil, nil, nil)
 
-	event, ok := svc.portableReplaySeed(ctx, seed, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes)
+	event, ok := svc.portableReplaySeed(ctx, seed, snap, domain.ProviderClaude, t.TempDir(), seedDigestBudgetBytes, nil)
 	if !ok || len(event.Blocks) == 0 {
 		t.Fatal("portable replay seed was not produced")
 	}
@@ -524,7 +523,7 @@ func TestPrependTrimDigestPreservesPostCompactionOmittedSpan(t *testing.T) {
 		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "LOAD RECENT RAW REQUEST"}}},
 	}}
 
-	out, err := svc.prependTrimDigest(ctx, omitted, seed, domain.Snapshot{ID: domain.HashContent([]byte("load-omitted-span"))}, domain.ProviderClaude, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, domain.Snapshot{ID: domain.HashContent([]byte("load-omitted-span"))}, domain.ProviderClaude, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +572,7 @@ func TestPrependTrimDigestDoesNotRepeatStoredCurrentConversation(t *testing.T) {
 	seed := domain.CIRDocument{Events: append([]domain.Event(nil), full.Events[2:]...)}
 	svc := NewLoadSessionService(st, nil, nil, nil, memory.NewRuleDistiller(), nil)
 
-	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderClaude, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderClaude, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -629,7 +628,7 @@ func TestPrependTrimDigestProjectsStoredMemoryWithoutSeedRecursion(t *testing.T)
 		{Kind: domain.EventMessage, Role: "user", Seq: 1, Blocks: []domain.ContentBlock{{Type: "text", Text: "latest request"}}},
 	}}
 
-	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderCodex, t.TempDir())
+	out, err := svc.prependTrimDigest(ctx, omitted, seed, snap, domain.ProviderCodex, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,7 +665,7 @@ func TestInsertTrimDigestFailsClosedWhenReplacementFails(t *testing.T) {
 		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "older request"}}},
 	}}
 
-	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, domain.Snapshot{}, domain.ProviderCodex, t.TempDir())
+	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, domain.Snapshot{}, domain.ProviderCodex, t.TempDir(), nil)
 	if err == nil || !strings.Contains(err.Error(), "distillation unavailable") {
 		t.Fatalf("insert error=%v, want distillation failure", err)
 	}
@@ -698,7 +697,7 @@ func TestInsertTrimDigestProjectsExistingSeedWithoutStoredMemory(t *testing.T) {
 		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "older request"}}},
 	}}
 
-	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, domain.Snapshot{ID: snapshotID}, domain.ProviderCodex, t.TempDir())
+	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, domain.Snapshot{ID: snapshotID}, domain.ProviderCodex, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -786,7 +785,7 @@ func TestInsertTrimDigestFallsBackWhenStoredMemorySanitizesEmpty(t *testing.T) {
 	}}
 	snap := domain.Snapshot{ID: snapshotID, DocHash: snapshotID, MemoryHash: memoryHash}
 
-	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, snap, domain.ProviderCodex, t.TempDir())
+	out, err := svc.insertTrimDigestAfterPrefix(ctx, omitted, seed, 2, snap, domain.ProviderCodex, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

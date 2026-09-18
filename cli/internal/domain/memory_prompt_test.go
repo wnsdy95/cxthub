@@ -190,3 +190,24 @@ Summary:
 		}
 	}
 }
+
+func TestPromptProjectionDoesNotCarryPreviousCodeAssessment(t *testing.T) {
+	block := CodeAssessmentBegin + "\nOLD CODE STATE: applied\n" + CodeAssessmentEnd
+	for _, fragments := range []bool{false, true} {
+		d := MemoryDigest{Summary: "original history\n" + block + "\nrecent decision"}
+		if fragments {
+			d.Fragments = []MemoryFragment{{Summary: d.Summary}}
+		}
+		original := d.Summary
+		out := HistoricalPromptProjection(d)
+		if strings.Contains(out.Summary, "OLD CODE STATE") || !strings.Contains(out.Summary, "recent decision") || !strings.Contains(out.Summary, "original history") {
+			t.Fatal(out.Summary)
+		}
+		if d.Summary != original {
+			t.Fatal("archive mutated")
+		}
+	}
+	if got := WithoutCodeAssessment("unfinished " + CodeAssessmentBegin + " user text"); !strings.Contains(got, "user text") {
+		t.Fatal("unclosed marker deleted history")
+	}
+}

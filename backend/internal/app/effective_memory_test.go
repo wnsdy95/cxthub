@@ -347,7 +347,7 @@ func TestEffectiveMemoryReadBoundEndsPageBeforeChangingLaterClaim(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, err := effectiveMemoryItems(f.digest)
+	items, err := effectiveMemoryItems(f.digest, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,5 +409,57 @@ func TestEffectiveMemoryCursorRejectsNewOriginBinding(t *testing.T) {
 	req.Cursor = page.NextCursor
 	if _, err = svc.QueryEffectiveMemory(ctx, repo, req); !errors.Is(err, domain.ErrConflict) {
 		t.Fatal("cursor ignored origin binding", err)
+	}
+}
+
+func TestEffectiveMemoryClaimsFilterSkipsLargeHistoryAndBindsCursor(t *testing.T) {
+	f := newEffectiveFixture(t)
+	ctx := context.Background()
+	d := f.digest
+	d.PreviousMemoryHash = f.memory
+	d.Fragments = append([]domain.MemoryFragment{{SourceSnapshot: f.root, Summary: strings.Repeat("legacy prose\n", 100000)}}, d.Fragments...)
+	hash, err := f.svc.PutMemoryDigestCAS(ctx, f.repo, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(4), MemoryHash: hash}, Content: "claims", Limit: 50}
+	out, err := f.svc.QueryEffectiveMemory(ctx, f.repo, req)
+	if err != nil || out.Content != "claims" || len(out.Items) != 3 || out.Total != 3 || out.NextCursor != "" {
+		t.Fatalf("claims starved by history: %+v %v", out, err)
+	}
+	if itemByText(t, out, "A feature").State != "inactive" || itemByText(t, out, "B feature").State != "applied" {
+		t.Fatal("assessment changed with filter", out.Items)
+	}
+	claims, err := effectiveMemoryItems(d, "claims")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := effectiveMemoryItems(d, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[domain.ContentHash]bool{}
+	for _, item := range all {
+		ids[item.ID] = true
+	}
+	for _, item := range claims {
+		if !ids[item.ID] {
+			t.Fatal("filter changed stable item ID")
+		}
+	}
+	req.Limit = 1
+	page, err := f.svc.QueryEffectiveMemory(ctx, f.repo, req)
+	if err != nil || page.NextCursor == "" {
+		t.Fatal(page, err)
+	}
+	req.Content = "all"
+	req.Cursor = page.NextCursor
+	if _, err = f.svc.QueryEffectiveMemory(ctx, f.repo, req); !errors.Is(err, domain.ErrConflict) {
+		t.Fatal("cursor crossed filter", err)
+	}
+	req.Content = "unknown"
+	req.Cursor = ""
+	if _, err = f.svc.QueryEffectiveMemory(ctx, f.repo, req); !errors.Is(err, domain.ErrValidation) {
+		t.Fatal(err)
 	}
 }
