@@ -1077,3 +1077,40 @@ Typed storage and authoring are the first delivery slice. Effective selection by
 code SHA, verified PR integration anchors, Web/MCP consumption, and short deduplicated
 active-session updates remain under #208. Stored/history reads continue to expose
 the original memory; this slice does not yet classify claims as currently applied.
+
+### Effective memory at an explicit code position
+
+`GET /repos/{repoID}/effective-memory?snapshot_id=…&code_commit=…` is the
+viewer-authorized application query shared by the web and remote MCP
+`memory_load` with `mode=effective`. The immutable code SHA is required; neither
+shared main nor a publication timestamp identifies a worker's code position.
+An optional `memory_hash` pins an archived object belonging to that snapshot.
+Otherwise the query composes the selected context's current memory lineage.
+
+- Code claims require an accepted publication matching source snapshot and
+  declared source SHA. Direct Git ancestry or a completed verified PR anchor
+  must prove integration. A PR anchor requires matching source branch identity,
+  immutable natural context ancestry, source Git ancestry within the PR head,
+  and the merge SHA within the selected history. Mutable graft placement never
+  establishes historical integration.
+- All declared files matching the source after-state produce `applied` only
+  with integration proof. All matching before-states produce `inactive` with
+  sufficient history evidence. Partial inversions, later edits, missing evidence
+  and equal bytes without integration stay `review`. This assesses declared file
+  scope, not prose correctness or whether a named revert operation occurred.
+- Decisions/rationale remain `retained` historical knowledge. Untyped prose is
+  paged as unverified historical text, never guessed into code claims or erased.
+- One repository read owns memory, history and Git evidence. No provider I/O,
+  queue writes or position changes occur. Cached evidence reads are bounded to
+  8192 per request; unresolved scopes remain reviewable.
+- REST pages allow 1–50 items (default 20), at most 256KiB of item JSON. Cursors
+  bind selection, lineage, history, graph and evidence generations; pending
+  activity alone does not invalidate them. Changed generations require restart.
+  MCP uses versioned item fragments within 12KiB responses across replicas.
+- Web renders server states and uses React Query for pagination and revision
+  refresh. Graph folding, current grafts and commit messages never decide
+  applicability in the client.
+
+CLI online loading/seeds and deduplicated active-session notifications remain
+subsequent integration work. Existing provider loading still uses archived
+projected prose and does not yet consume this assessment.

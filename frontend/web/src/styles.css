@@ -1214,3 +1214,16 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .code-applicability input {width:100%;min-width:0;box-sizing:border-box;font-family:var(--mono)}
 .code-applicability ul {padding-left:16px}
 .code-applicability button {font-size:.75rem;justify-self:start}
+
+.effective-memory form { display: grid; gap: .6rem; margin-block: 1rem; }
+.effective-memory label { display: grid; gap: .3rem; }
+.effective-memory input[name="code"] { width: 100%; min-width: 0; font-family: var(--mono); }
+.effective-memory .effective-memory-pin { display: flex; align-items: center; }
+.effective-memory-items { padding: 0; list-style: none; }
+.effective-memory-items li { padding: .8rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.effective-memory-text { white-space: pre-wrap; }
+.effective-memory-items [data-memory-state="inactive"] > strong { color: var(--muted); }
+
+.effective-memory { border-bottom: 1px solid var(--line); padding: 12px 14px; background: var(--hover); font-size: .84rem; }
+.effective-memory > summary { cursor: pointer; color: #8957e5; }
+.effective-memory .memory-note { color: var(--muted); font-size: .72rem; line-height: 1.5; }

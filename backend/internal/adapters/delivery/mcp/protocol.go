@@ -235,7 +235,7 @@ func toolDefinitions() []map[string]any {
 			}, "repository"),
 		},
 		{
-			"name": "memory_load", "description": "Read current project memory across natural and merged lineage by default. Use mode=stored or memory_hash for an exact saved object. Follow bounded JSON fragment pages; if projection dependencies change, restart without cursor.",
+			"name": "memory_load", "description": "Read archived project memory across natural and merged lineage by default; this does not assert that its prose describes current code. Use mode=effective with code_commit to assess explicitly sourced statements at a selected code SHA. Applied means declared files match verified integration, not proof of the prose. Use mode=stored or memory_hash for an exact saved object. Follow bounded JSON fragment pages; if dependencies change, restart without cursor.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
 				"repository": repositoryProperty(), "ref": map[string]any{"type": "string", "description": "Branch, tag, or hash; defaults to the repository default branch."},
 			}, "repository"),
@@ -260,7 +260,8 @@ func toolDefinitions() []map[string]any {
 			props["position"] = map[string]any{"type": "string", "description": "Explicit context snapshot or cloud branch used as the working position. The server cannot infer local Git HEAD."}
 		}
 		if name == "memory_load" {
-			props["mode"] = map[string]any{"type": "string", "enum": []string{"project", "stored"}, "description": "Default project merges current lineage. Stored reads an immutable nearest attachment; memory_hash also selects stored. Historical rewind requires its exact memory_hash."}
+			props["code_commit"] = map[string]any{"type": "string", "description": "Full selected Git SHA, required only in effective mode. The server cannot infer a local worktree position."}
+			props["mode"] = map[string]any{"type": "string", "enum": []string{"project", "stored", "effective"}, "description": "Default project returns archived lineage. Effective requires code_commit and returns per-item JSON fragments with server-assessed states. Stored reads an immutable attachment. memory_hash pins ref for stored/effective; historical rewind requires its exact memory_hash."}
 			props["memory_hash"] = map[string]any{"type": "string", "description": "Exact immutable memory hash belonging to ref, obtained from context_history or context_list."}
 		}
 		if name == "context_search" {

@@ -14,3 +14,9 @@ type GitTreeStore interface {
 type GitTreeReader interface {
 	ReadCommitTree(context.Context, string, string) (domain.GitTreeEvidence, error)
 }
+
+// GitDeltaReader is the read side of discovery storage; query services cannot
+// enqueue, claim or finish provider work through this port.
+type GitDeltaReader interface {
+	GetGitDelta(context.Context, domain.ContentHash, string, string, string) (domain.GitCommitDelta, error)
+}

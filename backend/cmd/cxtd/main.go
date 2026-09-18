@@ -160,6 +160,7 @@ func serve(ctx context.Context, args []string) error {
 	api := delivery.NewServer(svc, idSvc)
 	api.SetGitScans(scans)
 	api.SetCodeApplicability(svc)
+	api.SetEffectiveMemory(svc)
 	api.SetGitChanges(changes)
 	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_PUBLIC_URL")), "/")
 	if publicURL == "" && isLoopback(addr) {
@@ -175,6 +176,7 @@ func serve(ctx context.Context, args []string) error {
 	mcpServer.SetGitChanges(changes)
 	mcpServer.SetGitScans(scans)
 	mcpServer.SetCodeApplicability(svc)
+	mcpServer.SetEffectiveMemory(svc)
 	root := http.NewServeMux()
 	for _, path := range []string{
 		"/mcp",

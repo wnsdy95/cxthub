@@ -69,6 +69,11 @@ export interface DocEventPage {
 }
 
 export const api = {
+ effectiveMemory: (repo: string, selection: import('./types').EffectiveMemorySelection, cursor: string, signal?: AbortSignal) => {
+  const params = new URLSearchParams({snapshot_id: selection.snapshot_id, code_commit: selection.code_commit, cursor, limit: '20'});
+  if (selection.memory_hash) params.set('memory_hash', selection.memory_hash);
+  return call<import('./types').EffectiveMemoryPage>('GET', `/repos/${encodeURIComponent(repo)}/effective-memory?${params}`, undefined, undefined, signal);
+ },
  codeApplicability: (repo: string, selection: import('./types').CodeSelection, signal?: AbortSignal) => {
   const params = new URLSearchParams({code_commit: selection.code_commit, source_commit: selection.source_commit});
   if (selection.source_parent) params.set('source_parent', selection.source_parent);

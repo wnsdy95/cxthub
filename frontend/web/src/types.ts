@@ -488,3 +488,28 @@ export interface CodeApplicabilityResult {
  relation: 'ancestor' | 'not_ancestor' | 'unknown'; reason?: string;
  paths: {path: string; state: 'applied' | 'before' | 'changed' | 'equivalent' | 'not_in_history' | 'unknown'; reason?: string; before: {oid?: string; mode?: string}; after: {oid?: string; mode?: string}; selected: {oid?: string; mode?: string}}[];
 }
+
+export interface EffectiveMemorySelection {snapshot_id: string; code_commit: string; memory_hash?: string}
+export interface EffectiveMemoryItem {
+ id: string;
+ source_snapshot: string;
+ kind: 'code' | 'decision' | 'rationale' | 'legacy_summary' | 'legacy_fact' | 'legacy_task';
+ text: string;
+ text_hash?: string;
+ part?: number;
+ code?: {commit: string; parent?: string; paths: string[]};
+ state: 'applied' | 'inactive' | 'retained' | 'review';
+ reason: string;
+ publication_ids?: string[];
+ integration_receipt?: string;
+ paths?: CodeApplicabilityResult['paths'];
+}
+export interface EffectiveMemoryPage {
+ selection: EffectiveMemorySelection;
+ revision: RepositoryRevision;
+ state_hash: string;
+ lineage_hash: string;
+ items: EffectiveMemoryItem[];
+ total: number;
+ next_cursor: string;
+}

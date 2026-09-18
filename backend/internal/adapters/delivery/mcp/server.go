@@ -98,6 +98,7 @@ type IdentityBackend interface {
 }
 
 type Server struct {
+	effectiveMemory   inbound.EffectiveMemoryQuery
 	codeApplicability inbound.CodeApplicabilityQuery
 	gitChanges        inbound.GitChangeQuery
 	gitScans          inbound.GitScanQuery

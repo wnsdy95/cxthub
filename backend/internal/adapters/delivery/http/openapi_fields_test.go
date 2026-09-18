@@ -19,6 +19,9 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 	}{
 		{"Snapshot", reflect.TypeOf(domain.Snapshot{})},
 		{"RepositoryRevision", reflect.TypeOf(domain.RepositoryRevision{})},
+		{"EffectiveMemorySelection", reflect.TypeOf(domain.EffectiveMemorySelection{})},
+		{"EffectiveMemoryPage", reflect.TypeOf(domain.EffectiveMemoryPage{})},
+		{"EffectiveMemoryItem", reflect.TypeOf(domain.EffectiveMemoryItem{})},
 		{"CodeSelection", reflect.TypeOf(domain.CodeSelection{})},
 		{"CodeApplicability", reflect.TypeOf(domain.CodeApplicability{})},
 		{"CodePathState", reflect.TypeOf(domain.CodePathState{})},
@@ -58,6 +61,10 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 func jsonFields(t reflect.Type) []string {
 	var out []string
 	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).Anonymous && t.Field(i).Type.Kind() == reflect.Struct {
+			out = append(out, jsonFields(t.Field(i).Type)...)
+			continue
+		}
 		tag := t.Field(i).Tag.Get("json")
 		if tag == "" || tag == "-" {
 			continue

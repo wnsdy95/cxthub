@@ -26,6 +26,7 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 	}
 	api.SetGitChanges(changes)
 	api.SetCodeApplicability(svc)
+	api.SetEffectiveMemory(svc)
 	ts := httptest.NewServer(api.Handler())
 	defer ts.Close()
 	var me struct {
@@ -94,12 +95,34 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 	if status := doJSON(t, "GET", strings.Replace(codeURL, request.Commit, "HEAD", 1), nil, nil); status != 422 {
 		t.Fatal("mutable code selection accepted", status)
 	}
+	// Effective memory uses the same viewer guard and application service.
+	ctx := context.Background()
+	snapshotID := domain.HashContent([]byte("synthetic effective memory"))
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PutMemoryDigestCAS(ctx, repo, domain.MemoryDigest{SnapshotID: snapshotID, ClaimsVersion: 1, Fragments: []domain.MemoryFragment{{SourceSnapshot: snapshotID, Claims: []domain.MemoryClaim{{Kind: "rationale", Text: "Keep the reason"}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	effectiveURL := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repo)) + "/effective-memory?snapshot_id=" + url.QueryEscape(string(snapshotID)) + "&code_commit=" + request.Commit
+	var effective domain.EffectiveMemoryPage
+	if status := doJSONAs(t, "", "GET", effectiveURL, nil, &effective); status != 200 || len(effective.Items) != 1 || effective.Items[0].State != "retained" {
+		t.Fatalf("effective read %d %+v", status, effective)
+	}
+	for _, suffix := range []string{"&limit=0", "&limit=bad", "&limit=51", "&cursor=bad"} {
+		if status := doJSON(t, "GET", effectiveURL+suffix, nil, nil); status != 422 {
+			t.Fatal("invalid effective input", status)
+		}
+	}
 	// Return to a private repository: the read must obey the same viewer guard.
 	if status := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+ws.ID, map[string]any{"visibility": "private"}, nil); status != 200 {
 		t.Fatal(status)
 	}
 	if status := doJSONAs(t, "dev:outsider@example.test:Other", "GET", codeURL, nil, nil); status != 403 {
 		t.Fatal("private code evidence leaked", status)
+	}
+	if status := doJSONAs(t, "dev:outsider@example.test:Other", "GET", effectiveURL, nil, nil); status != 403 {
+		t.Fatal("effective memory leaked", status)
 	}
 	history, err := svc.ListHistory(context.Background(), repo)
 	if err != nil || len(history) != 0 {

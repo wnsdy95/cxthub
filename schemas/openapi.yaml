@@ -203,6 +203,41 @@ components:
       properties:
         oid: { type: string }
         mode: { type: string }
+    EffectiveMemorySelection:
+      type: object
+      required: [snapshot_id, code_commit]
+      properties:
+        snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        code_commit: { type: string, description: Explicit full Git SHA; never inferred from shared main. }
+        memory_hash: { $ref: '#/components/schemas/ContentHash' }
+    EffectiveMemoryItem:
+      type: object
+      description: Declared scope state, not proof of prose correctness. Untyped legacy text remains historical and reviewable. Text chunks use text_hash plus part to preserve repeated pieces.
+      required: [id, source_snapshot, kind, text, state, reason]
+      properties:
+        id: { $ref: '#/components/schemas/ContentHash' }
+        source_snapshot: { $ref: '#/components/schemas/ContentHash' }
+        kind: { type: string, enum: [code, decision, rationale, legacy_summary, legacy_fact, legacy_task] }
+        text: { type: string }
+        text_hash: { $ref: '#/components/schemas/ContentHash' }
+        part: { type: integer, minimum: 0 }
+        code: { $ref: '#/components/schemas/MemoryCodeScope' }
+        state: { type: string, enum: [applied, inactive, retained, review] }
+        reason: { type: string }
+        publication_ids: { type: array, items: { type: string } }
+        integration_receipt: { type: string }
+        paths: { type: array, items: { $ref: '#/components/schemas/CodePathState' } }
+    EffectiveMemoryPage:
+      type: object
+      required: [selection, revision, state_hash, lineage_hash, items, total, next_cursor]
+      properties:
+        selection: { $ref: '#/components/schemas/EffectiveMemorySelection' }
+        revision: { $ref: '#/components/schemas/RepositoryRevision' }
+        state_hash: { $ref: '#/components/schemas/ContentHash' }
+        lineage_hash: { $ref: '#/components/schemas/ContentHash' }
+        items: { type: array, items: { $ref: '#/components/schemas/EffectiveMemoryItem' } }
+        total: { type: integer }
+        next_cursor: { type: string }
     CodeSelection:
       type: object
       required: [code_commit, source_commit, paths]
@@ -1515,6 +1550,32 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/effective-memory:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: queryEffectiveMemory
+      summary: Assess sourced memory at an explicit code position
+      description: Viewer access. One coherent read of archived memory, accepted publication and PR history, and cached Git evidence. No provider I/O or writes. Code claims are applied, inactive or review; decision/rationale remain retained historical knowledge. Cursor binds repository, selection, lineage, history, graph and evidence revisions, excluding pending activity. Items are bounded to 256KiB per page. Original memory is never changed.
+      parameters:
+        - { name: snapshot_id, in: query, required: true, schema: { $ref: '#/components/schemas/ContentHash' } }
+        - { name: code_commit, in: query, required: true, schema: { type: string } }
+        - { name: memory_hash, in: query, schema: { $ref: '#/components/schemas/ContentHash' } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 1024 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200':
+          description: Server-assessed items; all states refer only to the returned code selection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EffectiveMemoryPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Memory or evidence changed; restart without cursor }
+        '422': { description: Invalid explicit selection, cursor or result bounds }
+        '503': { description: Query unavailable }
 
   /repos/{repoID}/code-applicability:
     parameters:
