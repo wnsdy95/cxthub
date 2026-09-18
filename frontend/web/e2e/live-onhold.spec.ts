@@ -45,7 +45,7 @@ test('live sessions precede stored captures, follow replacement, expire offline 
   await expect(page.getByText('Capture generation 3', {exact:true})).toBeVisible();
   await expect(page.locator('.live-viewer-status')).toContainText('LIVE');
   offline = true;
-  await page.clock.fastForward(65_000);
+  await page.clock.fastForward(125_000);
   await expect(page.locator('.pending-sessions[data-live="true"]')).toHaveCount(0);
   await expect(page.locator('.pending-sessions[data-live="false"] .commit-row')).toHaveCount(3);
   await expect(page.locator('.live-viewer-status')).not.toContainText('LIVE');

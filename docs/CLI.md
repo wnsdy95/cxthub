@@ -275,8 +275,13 @@ observers are excluded by an OS lock. Observation ends when the session
 registration is removed, after 30 minutes without transcript activity, or after
 24 hours; a later start/prompt hook starts it again.
 
+Capture and publication run as separate bounded steps. A saved capture is the
+retry checkpoint: upload failures retry that capture before reading newer
+transcript growth. Acknowledged server documents are not reopened on a pointer
+retry. Large sessions can take longer than one observation interval to process.
+
 On Hold checks for updates every 5 seconds and follows the selected session's
-latest snapshot. LIVE means transcript activity within the last minute, not a
+latest snapshot. LIVE means transcript activity within the last two minutes, not a
 guarantee that the app or network connection is still open. The badge expires
 without further activity, including while the server is unreachable. Replaying
 an old pointer does not refresh its activity date. Hidden sessions stay hidden,

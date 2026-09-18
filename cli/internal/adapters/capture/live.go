@@ -27,7 +27,7 @@ func RegisteredSession(cwd string, provider domain.ProviderKind, id string) (App
 // create duplicate observers and a crash cannot leave a stale ownership lock.
 // poll starts a fresh command: worktree Git position must be resolved again on
 // every capture, never retained from the observer's startup.
-func WatchSession(ctx context.Context, cwd string, provider domain.ProviderKind, id string, poll func(context.Context) error) error {
+func WatchSession(ctx context.Context, cwd string, provider domain.ProviderKind, id string, poll func(context.Context) error, publish ...func(context.Context) error) error {
 	root, _, enabled := appSessionRoots(ctx, cwd)
 	if !enabled || !validHookSessionID(id) {
 		return nil
@@ -51,14 +51,15 @@ func WatchSession(ctx context.Context, cwd string, provider domain.ProviderKind,
 		return err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	return observeSession(ctx, cwd, provider, id, 10*time.Second, 30*time.Minute, poll)
+	return observeSession(ctx, cwd, provider, id, 10*time.Second, 30*time.Minute, poll, publish...)
 }
 
-func observeSession(ctx context.Context, cwd string, provider domain.ProviderKind, id string, interval, idle time.Duration, poll func(context.Context) error) error {
+func observeSession(ctx context.Context, cwd string, provider domain.ProviderKind, id string, interval, idle time.Duration, poll func(context.Context) error, publish ...func(context.Context) error) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var size int64 = -1
 	var modified time.Time
+	pending := false
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -71,11 +72,17 @@ func observeSession(ctx context.Context, cwd string, provider domain.ProviderKin
 		if err != nil || time.Since(info.ModTime()) > idle {
 			return nil
 		}
-		if info.Size() != size || !info.ModTime().Equal(modified) {
+		if !pending && (info.Size() != size || !info.ModTime().Equal(modified)) {
 			// Retain the old observation on failure, retrying even without new text.
 			if err := poll(ctx); err == nil {
 				size, modified = info.Size(), info.ModTime()
+				pending = len(publish) > 0
 			}
+		}
+		// Finish the durable capture before reading a growing transcript again.
+		// A failed upload cannot starve behind repeated expensive recaptures.
+		if pending && publish[0](ctx) == nil {
+			pending = false
 		}
 		select {
 		case <-ctx.Done():

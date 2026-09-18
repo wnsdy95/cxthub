@@ -1048,18 +1048,12 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 		if gerr != nil {
 			continue
 		}
-		targetDoc, gerr := s.store.GetDoc(ctx, targetSnap.DocHash)
-		if gerr != nil {
-			continue // target itself is missing — nothing to send (existing behavior)
-		}
 		targetSnap.RepoID = repoID
 		p.RepoID = repoID
 
 		var chainSnaps []domain.Snapshot
-		var chainDocs []domain.SessionDoc
 		if chainMode {
 			seenSnap := map[domain.ContentHash]bool{}
-			seenDoc := map[domain.ContentHash]bool{}
 			stack := []domain.ContentHash{p.Target}
 			for len(stack) > 0 && len(chainSnaps) < maxPendingChain {
 				cur := stack[len(stack)-1]
@@ -1071,38 +1065,29 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 				if serr != nil {
 					continue // local missing ancestor (GC etc.) — only what is available (fallback on failure)
 				}
-				var doc domain.SessionDoc
-				if snap.DocHash != "" && !seenDoc[snap.DocHash] {
-					var derr error
-					if doc, derr = s.store.GetDoc(ctx, snap.DocHash); derr != nil {
-						continue // snapshot without doc is push impossible — proceed without ancestor (fallback safety net)
-					}
-				}
 				seenSnap[cur] = true
 				snap.RepoID = repoID
 				chainSnaps = append(chainSnaps, snap)
-				if snap.DocHash != "" && !seenDoc[snap.DocHash] {
-					seenDoc[snap.DocHash] = true
-					chainDocs = append(chainDocs, doc)
-				}
 				stack = append(stack, snap.ReachabilityParents()...)
 			}
 		}
 
-		pushed := false
-		if len(chainSnaps) > 0 {
-			if perr := s.pushSettingsObjects(ctx, repoID, chainSnaps); perr == nil {
-				if perr := s.remote.Push(ctx, repoID, chainSnaps, chainDocs, nil, false, false); perr == nil {
-					pushed = true
-				}
+		push := func(snaps []domain.Snapshot) error {
+			selected, docs, err := s.selectPushObjects(ctx, repoID, snaps)
+			if err != nil {
+				return err
 			}
+			if len(selected) == 0 && len(docs) == 0 {
+				return nil
+			}
+			if err := s.pushSettingsObjects(ctx, repoID, selected); err != nil {
+				return err
+			}
+			return s.remote.Push(ctx, repoID, selected, docs, nil, false, false)
 		}
+		pushed := len(chainSnaps) > 0 && push(chainSnaps) == nil
 		if !pushed {
-			// Fallback: Target single push (original behavior) — Keeps pending in fallback state even if chain assembly is impossible or rejected by the server.
-			if perr := s.pushSettingsObjects(ctx, repoID, []domain.Snapshot{targetSnap}); perr != nil {
-				continue
-			}
-			if perr := s.remote.Push(ctx, repoID, []domain.Snapshot{targetSnap}, []domain.SessionDoc{targetDoc}, nil, false, false); perr != nil {
+			if err := push([]domain.Snapshot{targetSnap}); err != nil {
 				continue
 			}
 		}

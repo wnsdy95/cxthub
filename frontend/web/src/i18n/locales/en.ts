@@ -372,7 +372,7 @@ export const en: Messages = {
   },
   onhold: {
     liveSection: 'Live uncommitted sessions',
-    liveHint: 'Transcript activity observed in the last minute. Captures run about every 10 seconds; this page checks every 5 seconds. LIVE expires when activity stops.',
+    liveHint: 'Transcript activity observed in the last 2 minutes. Changes are checked every 10 seconds; large sessions take longer to process. This page refreshes every 5 seconds.',
     followingSession: 'Following this session’s latest capture.',
     holdCount: '{count} on hold',
     empty: 'Nothing on hold — context committed locally but not yet `git push`ed, plus uncommitted session captures, show up here.',

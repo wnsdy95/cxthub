@@ -55,17 +55,24 @@ func canonicalEvents(events []CIREvent) []CIREvent {
 
 // ValidateSessionDocHash recalculates the claimed hash at the wire/storage boundary into a canonical CIR.
 func ValidateSessionDocHash(doc SessionDoc) error {
+	_, err := ValidatedSessionDocBytes(doc)
+	return err
+}
+
+// ValidatedSessionDocBytes lets storage reuse exactly the bytes it validates,
+// avoiding a second canonicalization of a cumulative session.
+func ValidatedSessionDocBytes(doc SessionDoc) ([]byte, error) {
 	if err := ValidateContentHash(doc.Hash); err != nil {
-		return err
+		return nil, err
 	}
 	canonical, err := CanonicalBytes(doc.CIR)
 	if err != nil {
-		return fmt.Errorf("%w: doc canonicalization failed: %v", ErrIntegrity, err)
+		return nil, fmt.Errorf("%w: doc canonicalization failed: %v", ErrIntegrity, err)
 	}
 	if got := HashContent(canonical); got != doc.Hash {
-		return fmt.Errorf("%w: doc hash mismatch: got %s want %s", ErrIntegrity, got, doc.Hash)
+		return nil, fmt.Errorf("%w: doc hash mismatch: got %s want %s", ErrIntegrity, got, doc.Hash)
 	}
-	return nil
+	return canonical, nil
 }
 
 // MemoryDigestHash calculates the wire JSON content hash of a memory object.

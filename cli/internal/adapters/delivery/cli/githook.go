@@ -1116,6 +1116,8 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 
 	case "live-capture":
 		return runLiveCapture(ctx, c, cwd, args)
+	case "live-publish":
+		return runLivePublish(ctx, c, cwd, args)
 
 	case "pending-sync":
 		// Reflects uncommitted capture pointers to the server (detached helper — resolves hook capture/commit after spawn).

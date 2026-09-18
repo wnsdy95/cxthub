@@ -297,7 +297,8 @@ func TestLivePendingSyncIsScopedAndRetriesUnchangedCapture(t *testing.T) {
 		}
 	}
 	remote := &retryPendingRemote{failPointer: true}
-	svc := NewSyncRepoService(st, remote, nil)
+	counting := &docReadCountingStore{SessionStore: st}
+	svc := NewSyncRepoService(counting, remote, nil)
 	in := inbound.SyncInput{RepoID: repo, PendingSessionID: "live"}
 	if _, err := svc.SyncPendings(ctx, in, nil); err == nil {
 		t.Fatal("failure hidden from observer retry")
@@ -305,8 +306,15 @@ func TestLivePendingSyncIsScopedAndRetriesUnchangedCapture(t *testing.T) {
 	if remote.attempts != 1 {
 		t.Fatalf("published sibling: %d attempts", remote.attempts)
 	}
+	if len(counting.reads) != 1 {
+		t.Fatalf("first upload read cumulative doc %d times", len(counting.reads))
+	}
+	counting.reads = nil
 	remote.failPointer = false
 	n, err := svc.SyncPendings(ctx, in, nil)
+	if len(counting.reads) != 0 {
+		t.Fatalf("pointer retry reopened acknowledged docs: %v", counting.reads)
+	}
 	if err != nil || n != 1 || len(remote.pointers) != 1 || remote.pointers["live"] == "" {
 		t.Fatalf("retry: %d %+v %v", n, remote.pointers, err)
 	}
