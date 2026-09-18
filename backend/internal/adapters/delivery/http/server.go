@@ -221,6 +221,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/settings-objects/{hash}", s.guard(domain.RoleMember, s.putSettingsObject))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleMember, s.putMemory))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putMemoryAttachment))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/memory-publications", s.guard(domain.RoleMember, s.publishMemoryArchive))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/typed-memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putTypedMemoryAttachment))
 	// In-progress context pointer: Write/Delete = context push layer (member), Read = pull/web layer (puller).
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending", s.guard(domain.RolePuller, s.listPending))

@@ -21,11 +21,12 @@ func (s *failHookSnapshotDeleteStore) DeleteSnapshot(context.Context, domain.Con
 
 func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		change      func(*domain.CIRDocument)
-		child       bool
-		failDelete  bool
-		wantDeleted bool
+		name           string
+		change         func(*domain.CIRDocument)
+		child          bool
+		failDelete     bool
+		attachedMemory bool
+		wantDeleted    bool
 	}{
 		{name: "same native session moves worktrees", wantDeleted: true},
 		{name: "different provider same native ID", change: func(d *domain.CIRDocument) { d.Envelope.SourceProvider = domain.ProviderCodex }},
@@ -34,6 +35,7 @@ func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 		{name: "divergent capture", change: func(d *domain.CIRDocument) { d.Events[0].Role = "system" }},
 		{name: "unreferenced child still needs parent", child: true},
 		{name: "snapshot delete fails", failDelete: true},
+		{name: "attached memory absent from successor", attachedMemory: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -55,6 +57,15 @@ func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 				t.Fatal(err)
 			}
 			old := put(oldDoc)
+			if tc.attachedMemory {
+				h, err := st.PutMemory(ctx, domain.MemoryDigest{SnapshotID: old, Summary: "independent archived memory"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := st.CompareAndSwapSnapshotMemory(ctx, old, "", h); err != nil {
+					t.Fatal(err)
+				}
+			}
 			newDoc, err := codec.NewClaudeCodec().Decode(ctx, []byte(e2eClaudeSession+"\n"+`{"type":"user","cwd":"/Users/work/other-worktree","sessionId":"s1","gitBranch":"feature/other","timestamp":"2026-06-30T00:00:02Z","message":{"role":"user","content":"continue"}}`))
 			if err != nil {
 				t.Fatal(err)

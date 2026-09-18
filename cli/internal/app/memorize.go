@@ -59,6 +59,10 @@ func NewMemorizeService(
 // → PutMemory(content-addressed) → attach MemoryHash to head snapshot metadata.
 // Push carries the attached memory with the raw document (compatibility rules).
 func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput) (inbound.MemorizeOutput, error) {
+	return withRetainedObjects(ctx, s.store, func() (inbound.MemorizeOutput, error) { return s.memorize(ctx, in) })
+}
+
+func (s *MemorizeService) memorize(ctx context.Context, in inbound.MemorizeInput) (inbound.MemorizeOutput, error) {
 	provider := in.Provider
 	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
 	if err != nil {

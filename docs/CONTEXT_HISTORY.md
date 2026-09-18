@@ -1114,3 +1114,23 @@ Otherwise the query composes the selected context's current memory lineage.
 CLI online loading/seeds and deduplicated active-session notifications remain
 subsequent integration work. Existing provider loading still uses archived
 projected prose and does not yet consume this assessment.
+
+### Memory retention during capture replacement
+
+A successor's complete event prefix proves conversation coverage only. A capture
+with an attached memory is retained even when its pending pointer moves and no
+branch currently references it. Legacy server memory metadata also prevents
+collection. CLI memorization holds the existing local object-retention lock from
+selection through memory attachment.
+
+Push negotiation is an observation, not a remote retention lease. If a later
+memory attachment returns 404, a capable CLI restores the locally retained
+snapshot, document and root memory through `POST /memory-publications`, then
+replays the validated causal suffix before publishing refs. Staged chunks stay
+immutable. PostgreSQL binds archive ownership and the root attachment in one
+repository transaction; capture collection uses the same transaction boundary.
+The development FS adapter serializes writers but does not claim database crash
+rollback. Existing divergent attachments return conflict, unrelated errors do
+not trigger restoration, and older servers are never downgraded to an unsafe
+non-atomic repair. Normal already-present memory still uses the existing CAS
+endpoint and hash-only manifest optimization.
