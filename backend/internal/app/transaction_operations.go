@@ -8,7 +8,7 @@ import (
 )
 
 func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error) {
-	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.CommitOutput, error) { return s.commit(ctx, in) })
+	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, in.RepoID, func(ctx context.Context) (inbound.CommitOutput, error) { return s.commit(ctx, in) })
 }
 func (s *Service) UpdateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
 	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.UpdateRefOutput, error) { return s.updateRefWithPending(ctx, in) })
@@ -32,7 +32,7 @@ func (s *Service) SubmitPRPromotion(ctx context.Context, repo domain.ContentHash
 	return repositoryWrite(ctx, s, repo, func(ctx context.Context) (domain.PRPromotionJob, error) { return s.submitPRPromotion(ctx, repo, pr) })
 }
 func (s *Service) PutPending(ctx context.Context, repo domain.ContentHash, session string, p domain.Pending) error {
-	return repositoryWriteError(ctx, s, repo, func(ctx context.Context) error { return s.putPending(ctx, repo, session, p) })
+	return repositoryWriteError(pendingWriteContext(ctx), s, repo, func(ctx context.Context) error { return s.putPending(ctx, repo, session, p) })
 }
 func (s *Service) GraftSnapshotParents(ctx context.Context, repo, id domain.ContentHash, parents []domain.ContentHash, seq uint64) error {
 	return repositoryWriteError(ctx, s, repo, func(ctx context.Context) error { return s.graftSnapshotParents(ctx, repo, id, parents, seq) })
@@ -53,7 +53,7 @@ func (s *Service) GetManifest(ctx context.Context, repo domain.ContentHash) (dom
 }
 
 func (s *Service) EnsureRepo(ctx context.Context, actor string, repo domain.Repo) (domain.Repo, error) {
-	return repositoryWrite(ctx, s, repo.ID, func(ctx context.Context) (domain.Repo, error) { return s.ensureRepo(ctx, actor, repo) })
+	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repo.ID, func(ctx context.Context) (domain.Repo, error) { return s.ensureRepo(ctx, actor, repo) })
 }
 func (s *Service) ListRefs(ctx context.Context, repo domain.ContentHash) ([]domain.Ref, error) {
 	return repositoryRead(ctx, s, func(ctx context.Context) ([]domain.Ref, error) { return s.listRefs(ctx, repo) })

@@ -775,3 +775,7 @@ attachment for the exact native alias and context branch identity across
 worktrees. The ordinary capture proof must still match the publishing worktree,
 Git revision, native alias, identity and snapshot. Unrelated aliases in another
 worktree do not qualify; same-worktree rename evidence remains supported.
+
+## Live uncommitted capture
+
+Active native sessions use incremental normalized projection checkpoints. On Hold follows durable repository revisions instead of repeatedly fetching the full graph. Capture identity, pending publication and failure/reconnect behavior are specified in [Live capture and repository updates](LIVE_CAPTURE.md).

@@ -2,6 +2,8 @@ package capture
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -130,4 +132,22 @@ func GenerateFromEnv(repoRoot string) (int, bool) {
 		return 0, false
 	}
 	return len(vals), true
+}
+
+// ScrubPolicyFingerprint invalidates reusable projections when secrets or masking options change.
+func ScrubPolicyFingerprint(root string) (string, error) {
+	secrets, err := providerfs.ReadRepoFile(root, SecretsFile)
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	options, err := json.Marshal(LoadScrubOptions(root))
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	h.Write([]byte("capture-projection-v1\x00"))
+	h.Write(options)
+	h.Write([]byte{0})
+	h.Write(secrets)
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

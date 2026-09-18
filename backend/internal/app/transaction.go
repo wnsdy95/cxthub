@@ -9,13 +9,33 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
+type revisionScopeKey struct{}
+
+func pendingWriteContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, revisionScopeKey{}, "pending")
+}
+func revisionWrite(ctx context.Context, s *Service, repo domain.ContentHash) error {
+	if scope, _ := ctx.Value(revisionScopeKey{}).(string); scope == "none" {
+		return nil
+	}
+	if revisions, ok := s.meta.(outbound.RepositoryRevisions); ok {
+		scope, _ := ctx.Value(revisionScopeKey{}).(string)
+		return revisions.AdvanceRepositoryRevision(ctx, repo, scope == "pending")
+	}
+	return nil
+}
+
 type afterCommitKey struct{}
 type afterCommitActions struct{ actions []func() }
 
 func repositoryWrite[T any](ctx context.Context, s *Service, repo domain.ContentHash, fn func(context.Context) (T, error)) (out T, err error) {
 	tx, ok := s.meta.(outbound.RepositoryTransactions)
 	if !ok {
-		return fn(ctx)
+		out, err = fn(ctx)
+		if err == nil {
+			err = revisionWrite(ctx, s, repo)
+		}
+		return out, err
 	}
 	if _, nested := ctx.Value(afterCommitKey{}).(*afterCommitActions); nested {
 		err = tx.WithinRepository(ctx, repo, func(bound context.Context) error { out, err = fn(bound); return err })
@@ -24,6 +44,9 @@ func repositoryWrite[T any](ctx context.Context, s *Service, repo domain.Content
 			after := &afterCommitActions{}
 			err = tx.WithinRepository(ctx, repo, func(bound context.Context) error {
 				out, err = fn(context.WithValue(bound, afterCommitKey{}, after))
+				if err == nil {
+					err = revisionWrite(bound, s, repo)
+				}
 				return err
 			})
 			if err == nil {

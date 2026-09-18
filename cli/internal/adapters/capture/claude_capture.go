@@ -123,3 +123,6 @@ func (c *ClaudeCaptureSource) SessionFilePath(_ context.Context, cwd string, _ d
 
 // Ensure ClaudeCaptureSource implements outbound.CaptureSource.
 var _ outbound.CaptureSource = (*ClaudeCaptureSource)(nil)
+
+// IncrementalCapture enables verified native-prefix projection checkpoints.
+func (c *ClaudeCaptureSource) IncrementalCapture() bool { return true }

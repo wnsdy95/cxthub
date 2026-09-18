@@ -432,3 +432,47 @@ func TestForcedCaptureLockHonorsDeadlineAndCanRetry(t *testing.T) {
 		t.Fatalf("retry: captured=%v err=%v", captured, err)
 	}
 }
+
+func TestCaptureGateAllowsRewriteAndPolicyChange(t *testing.T) {
+	coord, save, cwd, path := newTestCoord(t)
+	ctx := context.Background()
+	if _, err := coord.RequestCapture(ctx, domain.ProviderClaude, cwd, path, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same length plus a different write time is not an unchanged transcript.
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, at, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coord.RequestCapture(ctx, domain.ProviderClaude, cwd, path, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(save.calls) != 2 {
+		t.Fatal("same-size rewrite skipped")
+	}
+	if err := os.WriteFile(cwd+"/.cxtsecrets", []byte("new-secret-value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coord.RequestCapture(ctx, domain.ProviderClaude, cwd, path, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(save.calls) != 3 {
+		t.Fatal("new masking policy skipped")
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coord.RequestCapture(ctx, domain.ProviderClaude, cwd, path, "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(save.calls) != 4 {
+		t.Fatal("truncation skipped")
+	}
+}

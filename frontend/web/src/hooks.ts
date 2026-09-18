@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
+import { useRepositoryUpdates } from './useRepositoryUpdates';
 import type { User } from './types';
 import { sharedReachable } from './onhold';
 import { repositoryGraph } from './repositoryGraph';
@@ -412,14 +413,14 @@ export function useDismissPending() {
 // Ensure "badge count = tab row count" is guaranteed by logic (onhold.ts) and input equality, so
 // exclude stash, hook capture leaves, and badge map must be created here only (review front #2).
 export function useRepoView(repoId: string | null, primaryBranch?: string) {
+  useRepositoryUpdates(repoId);
   const viewQuery = useQuery({
     queryKey: ['repo-view', repoId],
     queryFn: () => api.repositoryView(repoId!),
-    // The next poll retries. Nested retries outlasting the poll interval can
-    // leave the initial view in loading forever instead of exposing an error.
+    // Changes arrive by durable revision; stream failure uses a bounded fallback.
     retry: false,
     enabled: Boolean(repoId),
-    refetchInterval: 5_000,
+    refetchOnWindowFocus: false,
   });
   const rawRefs = viewQuery.data?.refs ?? [];
   const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);
