@@ -430,6 +430,9 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 		} else {
 			err = s.pushMemoryPlan(ctx, repoID, plan)
 		}
+		if isMemoryAttachmentNotFound(err) {
+			err = s.restoreMemoryArchive(ctx, repoID, plan)
+		}
 		if err != nil {
 			return inbound.SyncOutput{}, err
 		}

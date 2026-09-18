@@ -450,6 +450,10 @@ func (s *SaveSessionService) collectHookLeaf(ctx context.Context, repoID string,
 	if !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
 		return true
 	}
+	// Session-prefix coverage cannot prove coverage of a separate memory object.
+	if snap.MemoryHash != "" {
+		return true
+	}
 	replacement, err := s.store.GetSnapshot(ctx, current)
 	if err != nil {
 		return false

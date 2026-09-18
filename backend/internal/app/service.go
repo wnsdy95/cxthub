@@ -1202,43 +1202,50 @@ func (s *Service) PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentH
 	return s.putMemoryDigest(ctx, repoID, d, d.PreviousMemoryHash, true)
 }
 
-func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest, expected domain.ContentHash, causal bool) (domain.ContentHash, error) {
+func validateMemoryDigest(repoID domain.ContentHash, d domain.MemoryDigest) error {
 	if err := d.ValidateMemoryClaims(); err != nil {
-		return "", fmt.Errorf("%w: %v", domain.ErrValidation, err)
+		return fmt.Errorf("%w: %v", domain.ErrValidation, err)
 	}
 	if err := validateHashes(repoID, d.SnapshotID); err != nil {
-		return "", err
+		return err
 	}
 	if err := domain.ValidateOptionalContentHash(d.PreviousMemoryHash); err != nil {
-		return "", err
+		return err
 	}
 	for _, fragment := range d.Fragments {
 		if err := domain.ValidateContentHash(fragment.SourceSnapshot); err != nil {
-			return "", err
+			return err
 		}
 	}
 	if coverage := d.GraftCoverage; coverage != nil {
 		if coverage.ProjectionVersion == 0 || coverage.GraftSeq > domain.MaxGraftSeq {
-			return "", fmt.Errorf("%w: invalid memory graft coverage version or sequence", domain.ErrIntegrity)
+			return fmt.Errorf("%w: invalid memory graft coverage version or sequence", domain.ErrIntegrity)
 		}
 		if coverage.ProjectionComplete && coverage.LineageFingerprint == "" {
-			return "", fmt.Errorf("%w: complete memory projection is missing its lineage fingerprint", domain.ErrIntegrity)
+			return fmt.Errorf("%w: complete memory projection is missing its lineage fingerprint", domain.ErrIntegrity)
 		}
 		if coverage.LineageFingerprint != "" {
 			if err := domain.ValidateContentHash(coverage.LineageFingerprint); err != nil {
-				return "", err
+				return err
 			}
 		}
 		for _, parent := range coverage.GraftParents {
 			if err := domain.ValidateContentHash(parent); err != nil {
-				return "", err
+				return err
 			}
 		}
 		for _, source := range coverage.PinnedSources {
 			if err := domain.ValidateContentHash(source); err != nil {
-				return "", err
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest, expected domain.ContentHash, causal bool) (domain.ContentHash, error) {
+	if err := validateMemoryDigest(repoID, d); err != nil {
+		return "", err
 	}
 	if _, err := s.meta.GetSnapshot(ctx, repoID, d.SnapshotID); err != nil {
 		return "", err // ErrNotFound → 404
@@ -1575,6 +1582,15 @@ func (s *Service) gcHookLeaf(ctx context.Context, repoID domain.ContentHash, old
 	}
 	snap, err := s.meta.GetSnapshot(ctx, repoID, old)
 	if err != nil || !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
+		return
+	}
+	// A repeated event prefix does not carry the separately authored memory.
+	// An attached digest makes this an archive, even without a current ref.
+	if snap.MemoryHash != "" {
+		return
+	}
+	// Old installations also have snapshot-keyed memory metadata.
+	if _, err := s.meta.GetMemoryMeta(ctx, repoID, old); !errors.Is(err, domain.ErrNotFound) {
 		return
 	}
 	replacement, err := s.meta.GetSnapshot(ctx, repoID, current)

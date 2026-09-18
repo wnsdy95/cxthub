@@ -2232,6 +2232,79 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /repos/{repoID}/memory-publications:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: publishMemoryArchive
+      summary: Atomically restore a collected snapshot with its first memory
+      description: |
+        Member-only recovery after transient capture collection. Accepts exactly
+        one snapshot, its complete document (or a manifest of already-staged
+        chunks), and a root memory with no previous_memory_hash. Typed claims
+        are validated and preserved. Snapshot metadata must not contain graft
+        state or a memory_hash. Does not move refs or pending pointers.
+        Existing divergent memory returns 409; identical root replay is idempotent.
+        PostgreSQL publishes document ownership, snapshot and memory attachment
+        in one transaction. FS development storage does not promise crash rollback.
+        Request body is limited to 32 MiB. Older servers have no compatible fallback.
+      tags: [memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [objects, memory]
+              properties:
+                objects:
+                  type: object
+                  required: [snapshots]
+                  properties:
+                    snapshots:
+                      type: array
+                      minItems: 1
+                      maxItems: 1
+                      items:
+                        $ref: "#/components/schemas/Snapshot"
+                    docs:
+                      type: array
+                      maxItems: 1
+                      items:
+                        $ref: "#/components/schemas/SessionDoc"
+                    chunked_docs:
+                      type: array
+                      maxItems: 1
+                      items:
+                        $ref: "#/components/schemas/ChunkedDoc"
+                memory:
+                  $ref: "#/components/schemas/MemoryDigest"
+      responses:
+        "200":
+          description: Archive restored or identical root already present.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [memory_hash]
+                properties:
+                  memory_hash:
+                    $ref: "#/components/schemas/ContentHash"
+        "400":
+          description: Invalid publication shape or memory version.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Existing attachment differs from the supplied root.
+        "413":
+          description: Body exceeds 32 MiB.
+        "422":
+          description: Invalid archive hash, ownership, or graph.
+        "503":
+          description: Atomic memory publication is unavailable.
+
   /repos/{repoID}/memory-attachments/{snapshotID}:
     parameters:
       - $ref: "#/components/parameters/repoID"

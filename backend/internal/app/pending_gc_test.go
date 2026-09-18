@@ -92,7 +92,7 @@ func TestPutPendingLateCapturePreservesNewerData(t *testing.T) {
 }
 
 func TestPutPendingGCRequiresUnreferencedSupersededLeaf(t *testing.T) {
-	for _, guard := range []string{"none", "branch", "tag", "pending", "natural child", "graft child"} {
+	for _, guard := range []string{"none", "branch", "tag", "pending", "natural child", "graft child", "memory", "legacy memory"} {
 		t.Run(guard, func(t *testing.T) {
 			ctx := context.Background()
 			svc, st := newFsckSvc(t)
@@ -102,6 +102,14 @@ func TestPutPendingGCRequiresUnreferencedSupersededLeaf(t *testing.T) {
 			nextDoc.Envelope.Cwd, nextDoc.Envelope.GitBranch = "/work/other-worktree", "feature/other"
 			next := putPendingGCCapture(t, st, repo, nextDoc)
 			switch guard {
+			case "legacy memory":
+				if err := st.PutMemoryMeta(ctx, repo, domain.MemoryDigest{SnapshotID: old.ID, Summary: "legacy memory"}); err != nil {
+					t.Fatal(err)
+				}
+			case "memory":
+				if _, err := svc.PutMemoryDigestCAS(ctx, repo, domain.MemoryDigest{SnapshotID: old.ID, Summary: "independent memory absent from successor"}); err != nil {
+					t.Fatal(err)
+				}
 			case "branch", "tag":
 				kind := domain.RefBranch
 				if guard == "tag" {

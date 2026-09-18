@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 const maxMemoryAttachmentDepth = 1024
@@ -284,4 +285,31 @@ func memoryAttachmentAncestor(loader *memoryPullLoader, ancestor, descendant dom
 		}
 	}
 	return false, nil
+}
+
+// restoreMemoryArchive runs only after a missing attachment target. The push
+// holds local object retention throughout. No retry of arbitrary failures and
+// no ref publication until this exact archive and its causal suffix succeed.
+func (s *SyncRepoService) restoreMemoryArchive(ctx context.Context, repoID string, plan memoryPushPlan) error {
+	publisher, ok := s.remote.(outbound.MemoryArchivePublisher)
+	if !ok {
+		return fmt.Errorf("%w: remote cannot restore memory archive %s atomically", domain.ErrNotFound, plan.snapshotID)
+	}
+	if len(plan.chain) == 0 {
+		return domain.ErrHashMismatch
+	}
+	snap, err := s.store.GetSnapshot(ctx, plan.snapshotID)
+	if err != nil {
+		return err
+	}
+	snap.RepoID = repoID
+	doc, err := s.store.GetDoc(ctx, snap.DocHash)
+	if err != nil {
+		return err
+	}
+	root := plan.chain[len(plan.chain)-1]
+	if err := publisher.PublishMemoryArchive(ctx, repoID, snap, doc, root.digest); err != nil {
+		return fmt.Errorf("restore memory archive %s: %w", plan.snapshotID, err)
+	}
+	return s.pushMemoryPlanFromKnown(ctx, repoID, plan, root.hash)
 }
