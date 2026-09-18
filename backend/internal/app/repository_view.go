@@ -83,22 +83,12 @@ func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (
 			return
 		}
 
-		refs, err := s.meta.ListRefs(ctx, repo)
-		if err != nil {
-			return v, err
-		}
-		anchors := map[domain.ContentHash]bool{}
-		for _, ref := range refs {
-			anchors[ref.Target] = true
-		}
+		// The initial graph view already contains historical ancestors. Do not
+		// walk them again for old captures behind current ref tips. A client
+		// seeing a new target with unknown parents refreshes its complete view.
 		seen := map[domain.ContentHash]domain.Snapshot{}
-		queue := []domain.ContentHash{}
 		for _, p := range v.Pending {
-			queue = append(queue, p.Target)
-		}
-		for len(queue) > 0 {
-			id := queue[0]
-			queue = queue[1:]
+			id := p.Target
 			if _, ok := seen[id]; ok {
 				continue
 			}
@@ -108,14 +98,6 @@ func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (
 			}
 			seen[id] = snap
 			v.Snapshots = append(v.Snapshots, snap)
-			if anchors[id] {
-				continue
-			}
-			for _, parent := range snap.ReachabilityParents() {
-				if !anchors[parent] {
-					queue = append(queue, parent)
-				}
-			}
 		}
 		for i, p := range v.Pending {
 			v.Pending[i].UpdatedAt = seen[p.Target].CreatedAt

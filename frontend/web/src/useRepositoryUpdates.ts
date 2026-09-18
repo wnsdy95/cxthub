@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './api';
 import type { RepositoryRevision, RepositoryView } from './types';
-import { mergePendingView, revisionCovers, subscribeRepository } from './repositoryUpdates';
+import { mergePendingView, pendingViewNeedsFull, revisionCovers, subscribeRepository } from './repositoryUpdates';
 
 export function useRepositoryUpdates(repo: string | null) {
   const qc = useQueryClient();
@@ -49,7 +49,7 @@ export function useRepositoryUpdates(repo: string | null) {
             const live = await api.pendingView(repo);
             if (disposed) break;
             const latest = qc.getQueryData<RepositoryView>(key);
-            if (!latest?.revision || latest.revision.graph !== live.revision.graph) await full();
+            if (!latest || pendingViewNeedsFull(latest, live)) await full();
             else qc.setQueryData<RepositoryView>(key, old => old ? mergePendingView(old, live) : old);
           }
         }

@@ -1279,7 +1279,7 @@ paths:
     get:
       operationId: getPendingView
       summary: Read pending pointers and their target snapshot metadata
-      description: Requires viewer access. Revision counters survive server restarts. Streams send the current counters on every connection, recover missed updates by comparison, and reconnect periodically to recheck authorization.
+      description: Requires viewer access. Returns unique current capture targets without traversing historical ancestors. Clients refresh the complete repository view when the graph revision differs or a new target references an unknown parent.
       tags: [snapshots]
       responses:
         "200":
