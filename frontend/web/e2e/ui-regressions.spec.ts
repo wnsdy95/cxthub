@@ -2047,3 +2047,28 @@ test('Git reversal history loads on demand and preserves partial and unverified 
  expect(pageErrors).toEqual([]);
  expect(unexpected).toEqual([]);
 });
+
+test('automatic Git discovery shows deferred work without changing graph facts', async ({page}) => {
+ const snap = auditSnapshot(pushedHead, 'main', [], 'Retained context', 1);
+ const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ let requests = 0;
+ const {pageErrors, unexpected} = await openGraph(page, req => {
+  if (req.pathname === `/api/v1/repos/${repoId}/git-scans`) {
+   requests++;
+   return {body: {items: [{id: 'a'.repeat(64), commit: 'b'.repeat(40), state: 'retrying', indexed: false, version: '2', reason: 'temporary_provider_or_storage_failure', updated_at: '2026-09-19T01:00:00Z'}]}};
+  }
+  return base(req);
+ });
+ expect(requests).toBe(0);
+ const panel = page.locator('.git-scans');
+ await panel.locator('summary').click();
+ await expect(panel.locator('li')).toHaveCount(1);
+ await expect(panel).toContainText('Waiting for complete Git objects');
+ await expect(panel.getByRole('button', {name: 'Retry', exact: true})).toHaveCount(0);
+ await expect(page.locator(`.graph-row[data-graph-id="${pushedHead}"]`)).toHaveCount(1);
+ await panel.locator('summary').click();
+ await expect(panel.locator('li')).toHaveCount(0);
+ expect(requests).toBe(1);
+ expect(pageErrors).toEqual([]);
+ expect(unexpected).toEqual([]);
+});

@@ -45,6 +45,9 @@ func (s *Service) submitPRPromotion(ctx context.Context, repo domain.ContentHash
 		if existing.PR != pr || existing.GitOrigin != normalizeGitURL(metadata.GitRemoteURL) {
 			return existing, domain.ErrConflict
 		}
+		if e := s.queuePRGitScans(ctx, repo, metadata.GitRemoteURL, pr); e != nil {
+			return existing, e
+		}
 		return existing, nil
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -63,6 +66,9 @@ func (s *Service) submitPRPromotion(ctx context.Context, repo domain.ContentHash
 		baseID = b.ID
 	} else if bindings.Released[pr.BaseBranch] != "" {
 		return domain.PRPromotionJob{}, fmt.Errorf("%w: PR base was released", domain.ErrConflict)
+	}
+	if err := s.queuePRGitScans(ctx, repo, metadata.GitRemoteURL, pr); err != nil {
+		return domain.PRPromotionJob{}, err
 	}
 	now := time.Now().UTC()
 	return st.EnqueuePRJob(ctx, domain.PRPromotionJob{ID: domain.PRPromotionID(repo, pr.Number), RepoID: repo, PR: pr, BaseBranchID: baseID, GitOrigin: normalizeGitURL(metadata.GitRemoteURL), State: "waiting", CreatedAt: now, UpdatedAt: now, NextAttempt: now})

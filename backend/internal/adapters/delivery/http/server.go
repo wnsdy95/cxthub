@@ -97,6 +97,7 @@ type Backend interface {
 // Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/workspace).
 type Server struct {
 	gitChanges inbound.GitChanges
+	gitScans   inbound.GitScans
 	changes    repositoryChangeHub
 	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (workspace ID set).
 	syncInflight sync.Map
@@ -186,6 +187,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/refs/batch", s.guard(domain.RoleMember, s.putRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/context-query", s.guard(domain.RoleViewer, s.contextQuery))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleMember, s.submitGitChange))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-scans", s.guard(domain.RoleViewer, s.listGitScans))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-scans/{scanID}/retry", s.guard(domain.RoleMember, s.retryGitScan))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleViewer, s.listGitChanges))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes/{changeID}", s.guard(domain.RoleViewer, s.getGitChange))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes/{changeID}/retry", s.guard(domain.RoleMember, s.retryGitChange))
@@ -979,6 +982,10 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
 	if sig == "" || !hmac.Equal([]byte(sig), []byte(want)) {
 		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "Webhook signature mismatch")
+		return
+	}
+	if r.Header.Get("X-GitHub-Event") == "push" {
+		s.githubPush(w, r, body)
 		return
 	}
 	if ev := r.Header.Get("X-GitHub-Event"); ev != "pull_request" {

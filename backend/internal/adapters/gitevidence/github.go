@@ -11,7 +11,9 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -19,9 +21,11 @@ import (
 )
 
 type GitHub struct {
-	client *http.Client
-	base   string
-	token  func() string
+	rateMu   sync.Mutex
+	resumeAt time.Time
+	client   *http.Client
+	base     string
+	token    func() string
 }
 
 func NewGitHub(token func() string) *GitHub {
@@ -58,6 +62,16 @@ func repositoryPath(origin string) (string, error) {
 	return parts[0] + "/" + parts[1], nil
 }
 func (g *GitHub) get(ctx context.Context, path string, out any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	g.rateMu.Lock()
+	blocked := time.Now().Before(g.resumeAt)
+	g.rateMu.Unlock()
+	if blocked {
+		return fmt.Errorf("Git evidence provider rate limit; retry later")
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.base+path, nil)
 	if err != nil {
 		return err
@@ -76,6 +90,20 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 429 || (resp.StatusCode == 403 && (resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != "")) {
+			resume := time.Now().Add(time.Minute)
+			if seconds, e := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64); e == nil && seconds > 0 {
+				resume = time.Now().Add(time.Duration(min(seconds, 86400)) * time.Second)
+			}
+			if epoch, e := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); e == nil && time.Unix(epoch, 0).After(resume) {
+				resume = time.Unix(epoch, 0)
+			}
+			g.rateMu.Lock()
+			if resume.After(g.resumeAt) {
+				g.resumeAt = resume
+			}
+			g.rateMu.Unlock()
+		}
 		return fmt.Errorf("Git evidence provider returned HTTP %d", resp.StatusCode)
 	}
 	// Refuse truncation; a clipped JSON response must never be interpreted as a
@@ -262,3 +290,105 @@ func (g *GitHub) IsGitAncestor(ctx context.Context, origin, ancestor, descendant
 		return false, domain.ErrIntegrity
 	}
 }
+
+// ReadCommitDeltas retains all comparison parents; it does not choose a merge
+// mainline from ordering or a message. Each bounded read must be complete.
+func (g *GitHub) ReadCommitDeltas(ctx context.Context, origin, oid string) ([]domain.GitCommitDelta, error) {
+	repo, err := repositoryPath(origin)
+	if err != nil {
+		return nil, err
+	}
+	obj, err := g.commit(ctx, repo, oid)
+	if err != nil {
+		return nil, err
+	}
+	if len(obj.Parents) > 16 {
+		return nil, fmt.Errorf("%w: Git commit has too many comparison parents", domain.ErrValidation)
+	}
+	parents := []string{}
+	for _, p := range obj.Parents {
+		parents = append(parents, p.SHA)
+	}
+	comparisons := parents
+	if len(comparisons) == 0 {
+		comparisons = []string{""}
+	}
+	after, complete, err := g.tree(ctx, repo, obj.Tree.SHA)
+	if err != nil {
+		return nil, err
+	}
+	if !complete {
+		return nil, fmt.Errorf("%w: incomplete Git tree", domain.ErrIntegrity)
+	}
+	result := []domain.GitCommitDelta{}
+	for _, parent := range comparisons {
+		d := domain.GitCommitDelta{Commit: oid, Parents: parents, Parent: parent, Changes: []domain.GitPathChange{}, Complete: true}
+		if err = d.Validate(); err != nil {
+			return nil, err
+		}
+		before := map[string]domain.GitEntry{}
+		if parent != "" {
+			prior, e := g.commit(ctx, repo, parent)
+			if e != nil {
+				return nil, e
+			}
+			if prior.Tree.SHA == obj.Tree.SHA {
+				before = after
+			} else {
+				before, complete, err = g.tree(ctx, repo, prior.Tree.SHA)
+				if err != nil {
+					return nil, err
+				}
+				if !complete {
+					return nil, fmt.Errorf("%w: incomplete Git tree", domain.ErrIntegrity)
+				}
+			}
+		}
+		for path, entry := range before {
+			if after[path] != entry {
+				d.Changes = append(d.Changes, domain.GitPathChange{Path: path, Before: entry, After: after[path]})
+			}
+		}
+		for path, entry := range after {
+			if _, ok := before[path]; !ok {
+				d.Changes = append(d.Changes, domain.GitPathChange{Path: path, After: entry})
+			}
+		}
+		sort.Slice(d.Changes, func(i, j int) bool { return d.Changes[i].Path < d.Changes[j].Path })
+		result = append(result, d)
+	}
+	return result, nil
+}
+func (g *GitHub) ListGitHeads(ctx context.Context, origin string, page int) ([]outbound.GitHead, bool, error) {
+	if page < 1 {
+		return nil, false, domain.ErrValidation
+	}
+	repo, err := repositoryPath(origin)
+	if err != nil {
+		return nil, false, err
+	}
+	var branches []struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err = g.get(ctx, "/repos/"+repo+"/branches?per_page=100&page="+strconv.Itoa(page), &branches); err != nil {
+		return nil, false, err
+	}
+	if branches == nil || len(branches) > 100 {
+		return nil, false, domain.ErrIntegrity
+	}
+	out := []outbound.GitHead{}
+	seen := map[string]bool{}
+	for _, b := range branches {
+		if b.Name == "" || seen[b.Name] || domain.ValidateGitOID(b.Commit.SHA) != nil {
+			return nil, false, domain.ErrIntegrity
+		}
+		seen[b.Name] = true
+		out = append(out, outbound.GitHead{Ref: "refs/heads/" + b.Name, Commit: b.Commit.SHA})
+	}
+	return out, len(branches) == 100, nil
+}
+
+var _ outbound.GitCommitReader = (*GitHub)(nil)

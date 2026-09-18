@@ -121,6 +121,9 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 }
 
 func (s *Service) wakePublishedPRJobs(ctx context.Context, event domain.HistoryEvent) error {
+	if err := s.queueHistoryGitScan(ctx, event); err != nil {
+		return err
+	}
 	if event.Kind == "publish" {
 		if jobs, ok := s.meta.(outbound.PRJobStore); ok {
 			return jobs.WakePRSourceJobs(ctx, domain.ContentHash(event.RepoID), time.Now().UTC())

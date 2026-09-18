@@ -100,7 +100,11 @@ func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
 	}
 	var proof domain.GitReversalEvidence
 	if err == nil {
-		proof, err = verifyGitReversal(work, g.reader, j.GitOrigin, j.Request.Target, j.Request.TargetParent, j.Request.Commit, j.Request.Parent)
+		reader := g.reader
+		if st, ok := g.core.meta.(outbound.GitScanStore); ok {
+			reader = cachedGitEvidence{st, j.RepoID, reader}
+		}
+		proof, err = verifyGitReversal(work, reader, j.GitOrigin, j.Request.Target, j.Request.TargetParent, j.Request.Commit, j.Request.Parent)
 	}
 	now := time.Now().UTC()
 	next := j

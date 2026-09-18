@@ -148,11 +148,17 @@ func serve(ctx context.Context, args []string) error {
 
 	idSvc := app.NewIdentityService(verifier, st)
 
-	changes, err := app.NewGitChanges(svc, gitevidence.NewGitHub(func() string { return os.Getenv("CXT_GITHUB_TOKEN") }))
+	gitReader := gitevidence.NewGitHub(func() string { return os.Getenv("CXT_GITHUB_TOKEN") })
+	changes, err := app.NewGitChanges(svc, gitReader)
+	if err != nil {
+		return err
+	}
+	scans, err := app.NewGitScans(svc, gitReader)
 	if err != nil {
 		return err
 	}
 	api := delivery.NewServer(svc, idSvc)
+	api.SetGitScans(scans)
 	api.SetGitChanges(changes)
 	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_PUBLIC_URL")), "/")
 	if publicURL == "" && isLoopback(addr) {
@@ -166,6 +172,7 @@ func serve(ctx context.Context, args []string) error {
 		return fmt.Errorf("configure remote MCP: %w", err)
 	}
 	mcpServer.SetGitChanges(changes)
+	mcpServer.SetGitScans(scans)
 	root := http.NewServeMux()
 	for _, path := range []string{
 		"/mcp",
@@ -203,6 +210,8 @@ func serve(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "cxtd: listening on %s (store=%s, auth=%s, data=%s)\n", addr, backend, authMode, dataDir)
 	go changes.Run(ctx)
+	go scans.Run(ctx)
+	go scans.RunReconciler(ctx)
 	go svc.RunPRPromotionWorker(ctx)
 	go svc.RunNotificationWorker(ctx)
 	go idSvc.RunRuntimeMaintenance(ctx)

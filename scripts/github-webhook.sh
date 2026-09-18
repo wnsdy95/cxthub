@@ -56,7 +56,7 @@ valid=false
 if [ -n "$hook_id" ]; then
   valid="$(jq -r --arg url "$WEBHOOK_URL" '.[] | select(.config.url == $url) |
     (.active == true and .config.content_type == "json" and .config.insecure_ssl == "0" and
-     (.events | sort) == ["pull_request"])' "$hooks")"
+     (.events | sort) == ["pull_request", "push"])' "$hooks")"
 fi
 
 if [ "$MODE" = check ]; then
@@ -79,7 +79,7 @@ secret = secret_path.read_text().rstrip("\r\n")
 if not secret:
     raise SystemExit("webhook secret is empty")
 payload_path.write_text(json.dumps({
-    "name": "web", "active": True, "events": ["pull_request"],
+    "name": "web", "active": True, "events": ["pull_request", "push"],
     "config": {"url": url, "content_type": "json", "secret": secret, "insecure_ssl": "0"},
 }))
 secret_path.write_text("")
@@ -97,7 +97,7 @@ fi
 gh api "repos/$REPO/hooks/$hook_id" >"$tmp/result.json"
 jq -e --arg url "$WEBHOOK_URL" '
   .active == true and .config.url == $url and .config.content_type == "json" and
-  .config.insecure_ssl == "0" and (.events | sort) == ["pull_request"]
+  .config.insecure_ssl == "0" and (.events | sort) == ["pull_request", "push"]
 ' "$tmp/result.json" >/dev/null || die "GitHub webhook verification failed after reconciliation"
 pass "GitHub webhook configuration verified"
 

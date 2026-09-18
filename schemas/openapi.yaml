@@ -197,6 +197,44 @@ components:
               bytes_after: { type: integer, format: int64 }
               reason: { type: string }
               occurred_at: { type: string, format: date-time }
+    GitScanJob:
+      type: object
+      description: Automatic discovery for one immutable commit. Completed refers to this cursor pass, not to all ancestry or current code applicability. Late records discover their own inverse candidates.
+      required: [id, repo_id, git_origin, commit, state, indexed, version, attempts, created_at, updated_at, next_attempt, lease_until]
+      properties:
+        id: { type: string }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        git_origin: { type: string }
+        commit: { type: string }
+        state: { type: string, enum: [waiting, running, retrying, completed, attention] }
+        indexed: { type: boolean }
+        cursor: { type: string }
+        version: { type: string }
+        attempts: { type: integer }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        next_attempt: { type: string, format: date-time }
+        lease_until: { type: string, format: date-time }
+    GitHeadScan:
+      type: object
+      required: [repo_id, git_origin, page, version, next_attempt, lease_until, state]
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        git_origin: { type: string }
+        page: { type: integer }
+        version: { type: string }
+        next_attempt: { type: string, format: date-time }
+        lease_until: { type: string, format: date-time }
+        state: { type: string, enum: [waiting, running, retrying, completed] }
+        reason: { type: string }
+    GitScanPage:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/GitScanJob' } }
+        reconciliation: { $ref: '#/components/schemas/GitHeadScan' }
+        next_cursor: { type: string }
     GitChangeRequest:
       type: object
       description: Requests verification of a possible inverse change. Never accepted as proof; merge comparison parents must be explicit.
@@ -1397,6 +1435,42 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/git-scans:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: listGitScans
+      summary: Read automatic Git discovery progress
+      description: Viewer access. ID-ordered pages; restart to discover concurrent earlier IDs. Each job indexes one commit and discovers inverse candidates. It never moves context refs.
+      parameters:
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: Bounded discovery jobs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GitScanPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { description: Invalid pagination }
+        '503': { description: Discovery unavailable }
+  /repos/{repoID}/git-scans/{scanID}/retry:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - { name: scanID, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: retryGitScan
+      summary: Resume deferred automatic Git discovery
+      description: Member access and JSON Content-Type required. Completed work is preserved and active leases cannot be stolen.
+      responses:
+        '200': { description: Queued or already completed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Worker lease active }
+        '415': { description: JSON required }
 
   /repos/{repoID}/git-changes:
     parameters:
