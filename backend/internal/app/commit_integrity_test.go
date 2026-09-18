@@ -7,7 +7,47 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
+
+type verifiedCommitBlobs struct {
+	outbound.BlobStore
+	writes int
+}
+
+func (s *verifiedCommitBlobs) PutDoc(context.Context, domain.ContentHash, domain.SessionDoc) (bool, error) {
+	return false, errors.New("unexpected second validation through legacy port")
+}
+func (s *verifiedCommitBlobs) PutVerifiedDoc(ctx context.Context, repo domain.ContentHash, doc domain.VerifiedSessionDoc) (bool, error) {
+	s.writes++
+	return s.BlobStore.(outbound.VerifiedDocStore).PutVerifiedDoc(ctx, repo, doc)
+}
+
+func TestCommitUsesVerifiedDocumentAndRejectsForgedDuplicate(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	repo := hh("verified-commit")
+	bindCommitTestRepo(t, st, repo)
+	writer := &verifiedCommitBlobs{BlobStore: st}
+	svc.blobs = writer
+	doc := makeCommitDoc(t, "original")
+	snap := domain.Snapshot{ID: doc.Hash, RepoID: repo, DocHash: doc.Hash}
+	input := inbound.CommitInput{RepoID: repo, Docs: []domain.SessionDoc{doc}, Snapshots: []domain.Snapshot{snap}}
+	if _, err := svc.Commit(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	if writer.writes != 1 {
+		t.Fatalf("validated writes = %d", writer.writes)
+	}
+	forged := makeCommitDoc(t, "different")
+	forged.Hash = doc.Hash
+	input.Docs = append(input.Docs, forged)
+	if _, err := svc.Commit(context.Background(), input); !errors.Is(err, domain.ErrIntegrity) {
+		t.Fatalf("forged duplicate: %v", err)
+	}
+	if writer.writes != 1 {
+		t.Fatal("a document was written before validating the full batch")
+	}
+}
 
 func makeCommitDoc(t *testing.T, text string) domain.SessionDoc {
 	t.Helper()

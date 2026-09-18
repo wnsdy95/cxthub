@@ -23,16 +23,25 @@ type RepositoryRoots struct {
 // path for both fields.
 func ResolveRepositoryRoots(ctx context.Context, cwd string) (RepositoryRoots, error) {
 	worktree, err := git(ctx, cwd, "rev-parse", "--show-toplevel")
+	if ctx.Err() != nil {
+		return RepositoryRoots{}, ctx.Err()
+	}
 	if err != nil || worktree == "" {
 		return RepositoryRoots{}, domain.ErrNotGitRepo
 	}
 	worktree = canonicalRoot(worktree)
 
 	common, err := git(ctx, cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if ctx.Err() != nil {
+		return RepositoryRoots{}, ctx.Err()
+	}
 	if err != nil || common == "" {
 		// Older Git versions do not support --path-format. The ordinary form is
 		// relative to the worktree when it is not already absolute.
 		common, err = git(ctx, cwd, "rev-parse", "--git-common-dir")
+		if ctx.Err() != nil {
+			return RepositoryRoots{}, ctx.Err()
+		}
 		if err != nil || common == "" {
 			return RepositoryRoots{}, domain.ErrNotGitRepo
 		}

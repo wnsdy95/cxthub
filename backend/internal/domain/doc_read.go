@@ -51,21 +51,33 @@ func SearchableEventText(e CIREvent) string {
 }
 
 func BuildDocReadIndex(doc SessionDoc) (DocReadIndex, error) {
-	cb, err := CanonicalBytes(doc.CIR)
+	verified, err := VerifySessionDoc(doc)
 	if err != nil {
 		return DocReadIndex{}, err
 	}
-	if HashContent(cb) != doc.Hash {
+	return verified.ReadIndex()
+}
+
+// ReadIndex derives offsets and searchable metadata from the same canonical
+// event bytes, including when the original input was not in sequence order.
+func (doc VerifiedSessionDoc) ReadIndex() (DocReadIndex, error) {
+	if !doc.Valid() {
 		return DocReadIndex{}, ErrIntegrity
 	}
-	_, raw, err := splitCanonicalDocBytes(cb)
+	env, raw, err := splitCanonicalDocBytes(doc.Bytes())
 	if err != nil {
 		return DocReadIndex{}, err
 	}
-	out := DocReadIndex{Version: 1, Hash: doc.Hash, Envelope: doc.CIR.Envelope, Events: make([]DocEventIndex, 0, len(raw))}
+	out := DocReadIndex{Version: 1, Hash: doc.Hash(), Events: make([]DocEventIndex, 0, len(raw))}
+	if err := json.Unmarshal(env, &out.Envelope); err != nil {
+		return DocReadIndex{}, err
+	}
 	offset := 0
 	for i, body := range raw {
-		ev := doc.CIR.Events[i]
+		var ev CIREvent
+		if err := json.Unmarshal(body, &ev); err != nil {
+			return DocReadIndex{}, err
+		}
 		out.Events = append(out.Events, DocEventIndex{Index: i, Offset: offset, Length: len(body), Hash: HashContent(body), Seq: ev.Seq, Role: string(ev.Role), Text: SearchableEventText(ev)})
 		offset += len(body) + 1 // canonical comma between events
 	}

@@ -54,11 +54,11 @@ func checkReadIndexPG(t *testing.T, s *PostgresStore, repo domain.ContentHash) {
 		t.Fatal(err)
 	}
 	var n int
-	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM doc_search_events WHERE hash=$1`, idx.Events[0].Hash).Scan(&n); err != nil || n != 1 {
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM doc_search_events_v2 WHERE hash=$1`, idx.Events[0].Hash).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("shared event dedup: %d %v", n, err)
 	}
 	// Simulate a pre-migration document, then prove lazy rebuilding is lossless.
-	if _, err = s.pool.Exec(ctx, `DELETE FROM doc_read_indexes WHERE hash=$1`, child.Hash); err != nil {
+	if _, err = s.pool.Exec(ctx, `DELETE FROM doc_read_indexes_v2 WHERE hash=$1`, child.Hash); err != nil {
 		t.Fatal(err)
 	}
 	rebuilt, err := s.DocReadIndex(ctx, repo, child.Hash)
@@ -71,7 +71,7 @@ func checkReadIndexPG(t *testing.T, s *PostgresStore, repo domain.ContentHash) {
 	if err = s.DeleteDoc(ctx, repo, doc.Hash); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM doc_search_events WHERE hash=$1`, idx.Events[0].Hash).Scan(&n); err != nil || n != 0 {
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM doc_search_events_v2 WHERE hash=$1`, idx.Events[0].Hash).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("orphan search text: %d %v", n, err)
 	}
 }

@@ -2,11 +2,35 @@ package gitctx
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
+
+func TestRepositoryRootsPreservesCancellation(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		want := context.Canceled
+		if expired {
+			cancel()
+			ctx, cancel = context.WithDeadline(context.Background(), time.Unix(1, 0))
+			want = context.DeadlineExceeded
+		}
+		cancel()
+		_, err := ResolveRepositoryRoots(ctx, t.TempDir())
+		if !errors.Is(err, want) || errors.Is(err, domain.ErrNotGitRepo) {
+			t.Fatalf("cancellation became repository error: %v", err)
+		}
+	}
+	if _, err := ResolveRepositoryRoots(context.Background(), t.TempDir()); !errors.Is(err, domain.ErrNotGitRepo) {
+		t.Fatalf("non-repository: %v", err)
+	}
+}
 
 func gitTestRun(t *testing.T, cwd string, args ...string) {
 	t.Helper()

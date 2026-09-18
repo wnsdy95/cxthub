@@ -12,11 +12,19 @@ import (
 )
 
 func (s *FSStore) readIndexPath(repo, hash domain.ContentHash) string {
-	return filepath.Join(s.repoDir(repo), "read-index-v1", hexOf(hash))
+	return filepath.Join(s.repoDir(repo), "read-index-v2", hexOf(hash))
 }
 
 func (s *FSStore) putReadIndex(repo domain.ContentHash, doc domain.SessionDoc) error {
-	idx, err := domain.BuildDocReadIndex(doc)
+	verified, err := domain.VerifySessionDoc(doc)
+	if err != nil {
+		return err
+	}
+	return s.putVerifiedReadIndex(repo, verified)
+}
+
+func (s *FSStore) putVerifiedReadIndex(repo domain.ContentHash, doc domain.VerifiedSessionDoc) error {
+	idx, err := doc.ReadIndex()
 	if err != nil {
 		return err
 	}
@@ -26,7 +34,7 @@ func (s *FSStore) putReadIndex(repo domain.ContentHash, doc domain.SessionDoc) e
 	}
 	// Search text and event offsets have different read paths. Keep the viewer
 	// projection small even when a transcript contains a large seed prompt.
-	if err = writeAtomic(s.readIndexPath(repo, doc.Hash)+".search", docCompress(raw)); err != nil {
+	if err = writeAtomic(s.readIndexPath(repo, doc.Hash())+".search", docCompress(raw)); err != nil {
 		return err
 	}
 	bits := make([]byte, 32768)
@@ -36,14 +44,14 @@ func (s *FSStore) putReadIndex(repo domain.ContentHash, doc domain.SessionDoc) e
 		}
 		idx.Events[i].Text = ""
 	}
-	if err = writeAtomic(s.readIndexPath(repo, doc.Hash)+".filter", bits); err != nil {
+	if err = writeAtomic(s.readIndexPath(repo, doc.Hash())+".filter", bits); err != nil {
 		return err
 	}
 	raw, err = json.Marshal(idx)
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.readIndexPath(repo, doc.Hash), docCompress(raw))
+	return writeAtomic(s.readIndexPath(repo, doc.Hash()), docCompress(raw))
 }
 
 func (s *FSStore) DocReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {

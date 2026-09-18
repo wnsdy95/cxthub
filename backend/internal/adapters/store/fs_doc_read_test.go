@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -17,6 +18,14 @@ func TestLegacyDocReadProjectionBackfillIsLosslessAndOwned(t *testing.T) {
 	doc.Hash = domain.HashContent(raw)
 	if err := writeAtomic(s.docPath(repo, doc.Hash), raw); err != nil {
 		t.Fatal(err)
+	}
+	// A pre-fix index may contain text/roles from a different event ordering.
+	// The new namespace must rebuild from the archive, not adopt that projection.
+	legacyIndex := filepath.Join(s.repoDir(repo), "read-index-v1", hexOf(doc.Hash))
+	for _, suffix := range []string{"", ".search", ".filter"} {
+		if err := writeAtomic(legacyIndex+suffix, []byte("legacy index")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	count := 0
 	if err := s.BackfillReadIndexes(ctx, func(n int) { count = n }); err != nil || count != 1 {
@@ -59,6 +68,9 @@ func TestLegacyDocReadProjectionBackfillIsLosslessAndOwned(t *testing.T) {
 	for _, suffix := range []string{"", ".search", ".filter"} {
 		if _, err = os.Stat(s.readIndexPath(repo, doc.Hash) + suffix); !os.IsNotExist(err) {
 			t.Fatalf("retained derived text: %s %v", suffix, err)
+		}
+		if _, err = os.Stat(legacyIndex + suffix); !os.IsNotExist(err) {
+			t.Fatalf("retained legacy derived text: %v", err)
 		}
 	}
 }
