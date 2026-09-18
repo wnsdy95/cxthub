@@ -4,6 +4,7 @@
 import type { MsgKey, Vars } from './i18n';
 
 export interface SecretsEnvelope {
+  revision?: string; // Server-issued editing generation; unrelated to the passphrase.
   version: number;
   kdf: string;
   iterations: number;

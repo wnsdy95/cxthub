@@ -1195,3 +1195,9 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .storage-ledger { list-style: none; padding: 0; max-height: 320px; overflow-y: auto; }
 .storage-ledger li { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: .78rem; }
 .storage-ledger strong { margin-left: auto; }
+
+.notification-list { max-height: 28rem; overflow: auto; }
+.notification-entry { border-top: 1px solid var(--border); padding: 12px 0; overflow-wrap: anywhere; }
+.notification-entry p { margin: 5px 0; }
+.notification-entry code { display: block; font-size: 11px; }
+.notification-entry button { margin-top: 8px; }

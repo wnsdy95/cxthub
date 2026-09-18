@@ -25,6 +25,10 @@ export interface OAuthConsentRequest {
   expires_at: string;
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly code: string, public readonly status: number) { super(message); }
+}
+
 async function call<T>(method: string, path: string, body?: unknown, idpToken?: string, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {};
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') headers['X-Cxt-CSRF'] = '1';
@@ -39,13 +43,15 @@ async function call<T>(method: string, path: string, body?: unknown, idpToken?: 
   });
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
+    let code = '';
     try {
-      const e = (await res.json()) as { error?: { message?: string } };
+      const e = (await res.json()) as { error?: { message?: string; code?: string } };
+      code = e?.error?.code ?? '';
       if (e?.error?.message) detail = e.error.message;
     } catch {
       /* non-JSON error body */
     }
-    throw new Error(detail);
+    throw new ApiError(detail, code, res.status);
   }
   const text = await res.text();
   return (text ? JSON.parse(text) : null) as T;
@@ -62,6 +68,8 @@ export interface DocEventPage {
 }
 
 export const api = {
+  notifications: (workspace: string, signal?: AbortSignal) => call<import('./types').NotificationJob[]>('GET', `/workspaces/${encodeURIComponent(workspace)}/notifications`, undefined, undefined, signal),
+  retryNotification: (workspace: string, id: string) => call('POST', `/workspaces/${encodeURIComponent(workspace)}/notifications/${encodeURIComponent(id)}/retry`, {}),
   storageUsage: (namespace: string, month: string, signal?: AbortSignal) => call<StorageUsageReport>('GET', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage?month=${encodeURIComponent(month)}`, undefined, undefined, signal),
   reconcileStorage: (namespace: string) => call<{ reconciled: boolean }>('POST', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage/reconcile`, {}),
   prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
@@ -194,11 +202,11 @@ export const api = {
     ),
   putSettings: (repoId: string, kind: 'claude' | 'agents' | 'codex', payload: SettingsUpload) =>
     call<{ kind: string; files: number }>('PUT', `/repos/${encodeURIComponent(repoId)}/settings/${kind}`, payload),
-  // Rotate: expect = CAS of envelope read as basis for replacement — if other storage intervenes between GET~PUT, server rejects with 409 rotate_conflict, preventing stale re-encryption from overwriting.
-  putSecrets: (repoId: string, envelope: unknown, rotate = false, expect = '') =>
-    call<{ status: string }>(
+  // The editing revision is captured before editing, never refreshed at save time.
+  putSecrets: (repoId: string, envelope: unknown, revision: string, rotate = false, expect = '') =>
+    call<{ status: string; revision: string }>(
       'PUT',
-      `/repos/${encodeURIComponent(repoId)}/secrets${rotate ? `?rotate=true&expect=${encodeURIComponent(expect)}` : ''}`,
+      `/repos/${encodeURIComponent(repoId)}/secrets?expected_revision=${encodeURIComponent(revision)}${rotate ? `&rotate=true&expect=${encodeURIComponent(expect)}` : ''}`,
       envelope,
     ),
   getSecrets: (repoId: string) =>

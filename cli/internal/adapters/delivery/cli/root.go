@@ -13,23 +13,19 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/githooks"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/secretscrypto"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -451,11 +447,16 @@ func Run(c *Container, args []string) error {
 		// pull decrypts server ciphertext into local .cxtsecrets. The passphrase never reaches the server.
 		sub := firstPositional(rest)
 		if sub != "push" && sub != "pull" {
-			return fmt.Errorf("usage: cxt secrets push|pull [-p <team passphrase>] [--remember] [--rotate]")
+			return fmt.Errorf("usage: cxt secrets push|pull [-p <team passphrase>] [--remember] [--rotate] [--force (pull only)]")
 		}
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
+		roots, err := gitctx.ResolveRepositoryRoots(ctx, cwd)
+		if err != nil {
+			return err
+		}
+		cwd = roots.WorktreeRoot
 		conn, err := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd})
 		if err != nil {
 			return err
@@ -484,88 +485,14 @@ func Run(c *Container, args []string) error {
 				fmt.Println("✓ passphrase saved (~/.cxt/credentials.json, 0600) — future commands may omit -p")
 			}
 		}
-		if sub == "push" {
-			rotate := hasFlag(rest, "--rotate")
-			if verr := secretscrypto.ValidatePassphrase(pass); verr != nil {
-				// Enforce the format only when rotation introduces a new passphrase. A legacy team passphrase
-				// must not block ordinary secret refreshes; the server fingerprint check still enforces consistency.
-				if rotate {
-					return verr
-				}
-				fmt.Fprintf(os.Stderr, "warning: %v — the new format is required for passphrase replacement (--rotate)\n", verr)
-			}
-			plain, rerr := providerfs.ReadRepoFile(cwd, ".cxtsecrets")
-			if rerr != nil {
-				return fmt.Errorf(".cxtsecrets not found — create with cxt init or write manually")
-			}
-			env, eerr := secretscrypto.Encrypt(pass, string(plain), repoID)
-			if eerr != nil {
-				return eerr
-			}
-			env.UpdatedAt = time.Now().UTC()
-			raw, _ := json.Marshal(env)
-			// rotate CAS: send server's current envelope fingerprint to expect — if another save
-			// interferes, the server rejects with 409, preventing stale decrypted secrets from
-			// overwriting team members' updates.
-			expect := ""
-			if rotate {
-				if cur, cerr := c.Settings.(interface {
-					PullSecrets(ctx context.Context, repoID string) ([]byte, error)
-				}).PullSecrets(ctx, repoID); cerr == nil {
-					var curEnv struct {
-						Fingerprint string `json:"fingerprint"`
-					}
-					_ = json.Unmarshal(cur, &curEnv)
-					expect = curEnv.Fingerprint
-				}
-			}
-			if err := c.Settings.(interface {
-				PushSecrets(ctx context.Context, repoID string, raw []byte, rotate bool, expect string) error
-			}).PushSecrets(ctx, repoID, raw, rotate, expect); err != nil {
-				if strings.Contains(err.Error(), "401") {
-					return fmt.Errorf("%v\nhint: login required for secret upload — generate token in Web Account Settings ⚙ and run `cxt login <token>`", err)
-				}
-				if strings.Contains(err.Error(), "passphrase_mismatch") {
-					return fmt.Errorf("already set with a different team passphrase — use the passphrase shared by the team.\nTo rotate, upload the existing secret with the new passphrase and add `--rotate`")
-				}
-				if strings.Contains(err.Error(), "rotate_conflict") {
-					return fmt.Errorf("secret updated during rotation — run `cxt secrets pull` to get the latest and retry rotation")
-				}
-				return err
-			}
-			if rotate {
-				fmt.Println("✓ Team passphrase rotated — share the new passphrase with team members")
-			} else {
-				fmt.Println("✓ Encrypted and uploaded — server cannot see plaintext (E2E)")
-			}
-			remember()
-			return nil
+		remote, ok := c.Settings.(secretsRemote)
+		if !ok {
+			return fmt.Errorf("secrets client unavailable")
 		}
-		raw, perr := c.Settings.(interface {
-			PullSecrets(ctx context.Context, repoID string) ([]byte, error)
-		}).PullSecrets(ctx, repoID)
-		if perr != nil {
-			if strings.Contains(perr.Error(), "401") {
-				return fmt.Errorf("login required — create a token in Web Account Settings ⚙, then run cxt login <token>")
-			}
-			if strings.Contains(perr.Error(), "403") {
-				return fmt.Errorf("Insufficient permissions — Secret pull requires puller or higher role (request from owner)")
-			}
-			return fmt.Errorf("No secret on server — Set via web About ⚙ or cxt secrets push")
-		}
-		var env secretscrypto.Envelope
-		if err := json.Unmarshal(raw, &env); err != nil {
+		if err := syncSecrets(ctx, remote, cwd, repoID, sub, pass, hasFlag(rest, "--rotate"), hasFlag(rest, "--force")); err != nil {
 			return err
 		}
-		plain, derr := secretscrypto.Decrypt(pass, env, repoID)
-		if derr != nil {
-			return derr
-		}
-		if err := providerfs.WriteRepoFileAtomic(cwd, ".cxtsecrets", []byte(plain), 0o600); err != nil {
-			return err
-		}
-		fmt.Printf("✓ .cxtsecrets saved (%d bytes) — Used for automatic masking during context storage\n", len(plain))
-		remember() // Save only after successful decryption — to prevent typo passphrase leakage
+		remember()
 		return nil
 
 	case "settings":
@@ -1122,7 +1049,7 @@ usage: cxt <command> [flags]
   Configuration and maintenance:
   settings pull|list|restore [n]
                             apply team defaults, list backups, or restore a backup
-  secrets push|pull [-p <pw>] [--remember] [--rotate]
+  secrets push|pull [-p <pw>] [--remember] [--rotate] [--force (pull only)]
                             share .cxtsecrets with end-to-end encryption
   hooks install|uninstall   manage Git hooks manually
   config <key> [value]      inspect or set checkout, load, boundary, capture, or scrub behavior

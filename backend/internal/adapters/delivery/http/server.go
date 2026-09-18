@@ -618,6 +618,15 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "consistency_check_failed", "Failed to retrieve existing secret — consistency check failed, storage rejected. Retry later.")
 		return
 	}
+	expected := r.URL.Query().Get("expected_revision")
+	if expected == "" {
+		s.writeError(w, http.StatusPreconditionRequired, "revision_required", "An editing baseline is required. Update the client and load secrets before editing; use absent only for initial creation.")
+		return
+	}
+	if expected != domain.SecretsRevision(existing) {
+		s.writeError(w, http.StatusConflict, "secrets_conflict", "Secrets changed since editing began. Keep your draft and compare it with the latest version before saving.")
+		return
+	}
 	oldFp := ""
 	if gerr == nil {
 		oldFp = fingerprintOf(existing)
@@ -628,9 +637,8 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "fingerprint_required", "Envelope lacks fingerprint — update cxt/web to the latest version.")
 			return
 		}
-		// CAS: rotation intentionally changes the fingerprint, so expect must identify the envelope the client
-		// used as its re-encryption baseline. Rejecting an intervening write prevents a GET-to-PUT race from
-		// replacing a teammate's fresh secrets with stale re-encrypted data.
+		// Rotation also identifies the old passphrase generation. Same-key content
+		// changes are guarded by expected_revision above and the final byte CAS.
 		if oldFp != "" {
 			if expect := r.URL.Query().Get("expect"); expect != oldFp {
 				s.writeError(w, http.StatusConflict, "rotate_conflict",
@@ -651,16 +659,21 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	raw, err = domain.WithSecretsRevision(raw, "")
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_request", "Invalid encrypted envelope")
+		return
+	}
 	if err := s.b.PutSecretsCAS(r.Context(), s.repoID(r), raw, existing); err != nil {
 		if errors.Is(err, domain.ErrRefConflict) {
-			s.writeError(w, http.StatusConflict, "rotate_conflict", "secrets changed during this request — fetch the latest envelope and retry")
+			s.writeError(w, http.StatusConflict, "secrets_conflict", "Secrets changed during this request. Keep your draft and compare it with the latest version.")
 			return
 		}
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
 		return
 	}
-	s.respond(w, map[string]string{"status": "stored"}, nil)
+	s.respond(w, map[string]string{"status": "stored", "revision": domain.SecretsRevision(raw)}, nil)
 }
 
 // fingerprintOf extracts the fingerprint field from the envelope raw (server treats the rest as opaque — E2E).
@@ -674,6 +687,7 @@ func fingerprintOf(raw []byte) string {
 
 // getSecrets returns the encrypted envelope as is (decryption is on the client — E2E).
 func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	raw, err := s.b.GetSecrets(r.Context(), s.repoID(r))
 	if errors.Is(err, domain.ErrNotFound) {
 		// The web status rail probes this endpoint before a team envelope exists.
@@ -685,6 +699,11 @@ func (s *Server) getSecrets(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
+		return
+	}
+	raw, err = domain.WithSecretsRevision(raw, domain.SecretsRevision(raw))
+	if err != nil {
+		s.respond(w, nil, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

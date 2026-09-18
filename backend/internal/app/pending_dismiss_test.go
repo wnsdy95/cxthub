@@ -134,6 +134,9 @@ func TestUpdateRefReconcilesReachablePendingWithoutDeletingHistory(t *testing.T)
 			svc, st := newFsckSvc(t)
 			ctx := context.Background()
 			repo := hh("r")
+			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
+				t.Fatal(err)
+			}
 			pendingTarget := hh("p")
 			head := hh("h")
 			if err := st.PutSnapshot(ctx, domain.Snapshot{ID: pendingTarget, RepoID: repo, DocHash: pendingTarget, Message: "hook: pending"}); err != nil {

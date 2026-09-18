@@ -147,7 +147,7 @@ type Workspace struct {
 	// Archived makes the workspace read-only. Because P1 never deletes history, archival is the terminal state.
 	// Every operation above viewer returns 403; the owner can unarchive the workspace in settings.
 	Archived bool `json:"archived,omitempty"`
-	// WebhookURL is an alert webhook (Slack incoming webhook compatible — {"text": ...} POST). Asynchronous invocation on ref update (push/branch creation), failures are ignored (best-effort notifications).
+	// WebhookURL is an alert webhook (Slack incoming webhook compatible — {"text": ...} POST). Ref updates, secrets changes and member joins enqueue durable delivery jobs; credentials are excluded from job status.
 	WebhookURL string    `json:"webhook_url,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }

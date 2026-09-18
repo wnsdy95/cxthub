@@ -1,9 +1,7 @@
 package app
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,25 +12,38 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-// Alert webhook — Slack incoming webhook compatibility (POST {"text": "..."}).
-//
-// On successful ref update (push/branch creation/force), asynchronously notifies the repo's workspace webhook_url. Alert is best-effort: failure has no impact on synchronization (goroutine + 5s timeout, errors ignored).
+// Notifications contain event metadata only, never secrets ciphertext or plaintext.
+func enqueueWorkspaceNotification(ctx context.Context, store any, wsp domain.Workspace, kind, text string) error {
+	if wsp.WebhookURL == "" || wsp.Archived {
+		return nil
+	}
+	outbox, ok := store.(outbound.NotificationStore)
+	if !ok {
+		return fmt.Errorf("durable notification storage unavailable")
+	}
+	now := time.Now().UTC()
+	return outbox.EnqueueNotification(ctx, outbound.NotificationDelivery{Destination: wsp.WebhookURL, Job: domain.NotificationJob{
+		ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, Kind: kind, Text: text, State: "pending", CreatedAt: now, UpdatedAt: now, NextAttempt: now,
+	}})
+}
 
-// notifyRefUpdate notifies the workspace webhook of ref movement success (only if configured).
-func (s *Service) notifyRefUpdate(ctx context.Context, repoID domain.ContentHash, ref domain.Ref, forced, created bool) {
+func (s *Service) notifyRefUpdate(ctx context.Context, repoID domain.ContentHash, ref domain.Ref, forced, created bool) error {
 	if s.ws == nil || ref.Kind != domain.RefBranch {
-		return
+		return nil
 	}
 	repo, err := s.meta.GetRepo(ctx, repoID)
-	if err != nil || repo.WorkspaceID == "" {
-		return
+	if err != nil {
+		return err
+	}
+	if repo.WorkspaceID == "" {
+		return nil
 	}
 	wsp, err := s.ws.GetWorkspace(ctx, repo.WorkspaceID)
-	if err != nil || wsp.WebhookURL == "" {
-		return
+	if err != nil {
+		return err
 	}
 	name := repo.RemoteURL
 	if i := strings.LastIndex(name, "/"); i >= 0 {
@@ -45,38 +56,29 @@ func (s *Service) notifyRefUpdate(ctx context.Context, repoID domain.ContentHash
 	if forced {
 		verb += "(force)"
 	}
-	text := fmt.Sprintf("cxthub: %s — branch %q %s → %s", name, ref.Name, verb, shortHash(ref.Target))
-	afterRepositoryCommit(ctx, func() { go postWebhook(wsp.WebhookURL, text) })
+	return enqueueWorkspaceNotification(ctx, s.meta, wsp, "ref_updated", fmt.Sprintf("cxthub: %s — branch %q %s → %s", name, ref.Name, verb, shortHash(ref.Target)))
 }
 
-// notifyWorkspace sends text to the workspace webhook (only if configured, best-effort).
-// Entry point for common events (member join, secret change) outside ref update.
-func notifyWorkspace(wsp domain.Workspace, text string) {
-	if wsp.WebhookURL == "" {
-		return
-	}
-	go postWebhook(wsp.WebhookURL, text)
-}
-
-// notifySecretsChanged notifies the workspace webhook of repo secret envelope replacement.
-// Content is an E2E encrypted message, only "changed" is communicated (team member pull encouraged + audit signal).
-func (s *Service) notifySecretsChanged(ctx context.Context, repoID domain.ContentHash) {
+func (s *Service) notifySecretsChanged(ctx context.Context, repoID domain.ContentHash) error {
 	if s.ws == nil {
-		return
+		return nil
 	}
 	repo, err := s.meta.GetRepo(ctx, repoID)
-	if err != nil || repo.WorkspaceID == "" {
-		return
+	if err != nil {
+		return err
+	}
+	if repo.WorkspaceID == "" {
+		return nil
 	}
 	wsp, err := s.ws.GetWorkspace(ctx, repo.WorkspaceID)
 	if err != nil {
-		return
+		return err
 	}
 	name := repo.RemoteURL
 	if i := strings.LastIndex(name, "/"); i >= 0 {
 		name = name[i+1:]
 	}
-	notifyWorkspace(wsp, fmt.Sprintf("cxthub: %s — secrets updated (team members run cxt secrets pull)", name))
+	return enqueueWorkspaceNotification(ctx, s.meta, wsp, "secrets_updated", fmt.Sprintf("cxthub: %s — secrets updated (team members run cxt secrets pull)", name))
 }
 
 func shortHash(h domain.ContentHash) string {
@@ -159,37 +161,8 @@ func buildWebhookClient() *http.Client {
 	return &http.Client{
 		Timeout:   5 * time.Second,
 		Transport: &http.Transport{DialContext: dial},
-		// Redirects are re-validated by the dialer, but excessive redirects are capped separately.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("webhook: too many redirects")
-			}
-			if !webhookSchemeOK(req.URL.String()) {
-				return fmt.Errorf("webhook: disallowed redirect scheme")
-			}
-			return nil
-		},
+		// Do not forward event content to a different URL or accept a redirect's
+		// GET response as an acknowledgment of the original POST.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
-
-// postWebhook sends {"text": ...} via POST. Failures are silently ignored (best-effort).
-// SSRF defense is enforced by the safeWebhookClient's dialer (schemes are pre-blocked here).
-func postWebhook(url, text string) {
-	if !webhookSchemeOK(url) {
-		return
-	}
-	body, _ := json.Marshal(map[string]string{"text": text})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if resp, err := safeWebhookClient().Do(req); err == nil {
-		resp.Body.Close()
-	}
-}
-
-// _ = inbound reference to maintain file compilation clarity
-var _ = inbound.RefForced

@@ -897,8 +897,24 @@ func (s *IdentityService) Invite(ctx context.Context, userID, workspaceID, email
 	return inv, nil
 }
 
+// AcceptInvite serializes membership changes and their notification in one transaction.
+func (s *IdentityService) AcceptInvite(ctx context.Context, user domain.User, token string) (out domain.Workspace, err error) {
+	inv, err := s.ws.GetInvite(ctx, token)
+	if err != nil {
+		return out, err
+	}
+	if tx, ok := s.ws.(outbound.WorkspaceTransactions); ok {
+		err = tx.WithinWorkspace(ctx, inv.WorkspaceID, func(ctx context.Context) error { out, err = s.acceptInvite(ctx, user, token); return err })
+		if err != nil {
+			return domain.Workspace{}, err
+		}
+		return out, nil
+	}
+	return s.acceptInvite(ctx, user, token)
+}
+
 // AcceptInvite joins a workspace by token (member addition is idempotent — link reuse possible).
-func (s *IdentityService) AcceptInvite(ctx context.Context, user domain.User, token string) (domain.Workspace, error) {
+func (s *IdentityService) acceptInvite(ctx context.Context, user domain.User, token string) (domain.Workspace, error) {
 	inv, err := s.ws.GetInvite(ctx, token)
 	if err != nil {
 		return domain.Workspace{}, err // ErrNotFound
@@ -912,7 +928,28 @@ func (s *IdentityService) AcceptInvite(ctx context.Context, user domain.User, to
 	if inv.Email != "" && !strings.EqualFold(inv.Email, user.Email) {
 		return domain.Workspace{}, domain.ErrForbidden // Invite to specific email target
 	}
-	existingRole, wasMember := s.RoleOf(ctx, inv.WorkspaceID, user.ID)
+	workspace, err := s.ws.GetWorkspace(ctx, inv.WorkspaceID)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
+	members, err := s.ws.ListMembers(ctx, inv.WorkspaceID)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
+	var existingRole domain.MemberRole
+	wasMember := false
+	for _, member := range members {
+		if member.UserID == user.ID {
+			if !domain.ValidRole(member.Role) {
+				return domain.Workspace{}, domain.ErrIntegrity
+			}
+			existingRole, wasMember = member.Role, true
+			break
+		}
+	}
+	if workspace.OwnerID == user.ID {
+		existingRole, wasMember = domain.RoleOwner, true
+	}
 	// Reinviting an old low role invite does not downgrade the current permissions. For existing members,
 	// an invite is upserted only if it explicitly promotes, and is a no-op if it is equal or lower.
 	if !wasMember || !existingRole.AtLeast(inv.Role) {
@@ -941,7 +978,9 @@ func (s *IdentityService) AcceptInvite(ctx context.Context, user domain.User, to
 		if who == "" {
 			who = user.Email
 		}
-		notifyWorkspace(wsp, fmt.Sprintf("cxthub: %s — %s joined as %s", wsp.Name, who, inv.Role))
+		if err := enqueueWorkspaceNotification(ctx, s.ws, wsp, "member_joined", fmt.Sprintf("cxthub: %s — %s joined as %s", wsp.Name, who, inv.Role)); err != nil {
+			return domain.Workspace{}, err
+		}
 	}
 	return wsp, nil
 }

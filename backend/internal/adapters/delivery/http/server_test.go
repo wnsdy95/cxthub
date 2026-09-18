@@ -1014,6 +1014,7 @@ func TestSecretsFingerprintConsistency(t *testing.T) {
 	}
 	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
 	var ws struct {
+		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
 	doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "Sec"}, &ws)
@@ -1030,7 +1031,7 @@ func TestSecretsFingerprintConsistency(t *testing.T) {
 	}
 	unbounded := env("aaaaaaaaaaaa")
 	unbounded["iterations"] = 2_000_000_000
-	if code := doJSON(t, "PUT", sec, unbounded, nil); code != http.StatusUnprocessableEntity {
+	if code := doJSON(t, "PUT", sec+"?expected_revision=absent", unbounded, nil); code != http.StatusUnprocessableEntity {
 		t.Fatalf("unbounded KDF envelope code %d, want 422", code)
 	}
 
@@ -1053,10 +1054,73 @@ func TestSecretsFingerprintConsistency(t *testing.T) {
 		{"After replacement A retry → 409", sec, "aaaaaaaaaaaa", http.StatusConflict},
 	}
 	for _, c := range cases {
-		if code := doJSON(t, "PUT", c.url, env(c.fp), nil); code != c.want {
+		var baseline map[string]any
+		code := doJSON(t, "GET", sec, nil, &baseline)
+		revision := "absent"
+		if code == 200 {
+			revision = baseline["revision"].(string)
+		}
+		sep := "?"
+		if strings.Contains(c.url, "?") {
+			sep = "&"
+		}
+		if code := doJSON(t, "PUT", c.url+sep+"expected_revision="+url.QueryEscape(revision), env(c.fp), nil); code != c.want {
 			t.Fatalf("%s: got %d, want %d", c.name, code, c.want)
 		}
 	}
+	var base map[string]any
+	doJSON(t, "GET", sec, nil, &base)
+	old := base["revision"].(string)
+	if code := doJSON(t, "PUT", sec, env("bbbbbbbbbbbb"), nil); code != 428 {
+		t.Fatalf("unguarded write: %d", code)
+	}
+	if code := doJSON(t, "PUT", sec+"?expected_revision=absent", env("bbbbbbbbbbbb"), nil); code != 409 {
+		t.Fatalf("concurrent create: %d", code)
+	}
+	var ack map[string]string
+	if code := doJSON(t, "PUT", sec+"?expected_revision="+old, env("bbbbbbbbbbbb"), &ack); code != 200 {
+		t.Fatalf("first edit: %d", code)
+	}
+	if ack["revision"] == old || ack["revision"] == "" {
+		t.Fatal("write did not advance generation")
+	}
+	for _, path := range []string{sec + "?expected_revision=" + old, sec + "?rotate=true&expect=bbbbbbbbbbbb&expected_revision=" + old} {
+		if code := doJSON(t, "PUT", path, env("bbbbbbbbbbbb"), nil); code != 409 {
+			t.Fatalf("stale same-key/rotation write: %d", code)
+		}
+	}
+	var after map[string]any
+	doJSON(t, "GET", sec, nil, &after)
+	if after["revision"] != ack["revision"] {
+		t.Fatal("rejected edit changed server version")
+	}
+
+	workspaceURL := ts.URL + "/api/v1/workspaces/" + ws.ID
+	if code := doJSON(t, "PATCH", workspaceURL, map[string]any{"webhook_url": "https://example.test/private-webhook-credential"}, nil); code != 200 {
+		t.Fatalf("configure webhook: %d", code)
+	}
+	if code := doJSON(t, "PUT", sec+"?expected_revision="+ack["revision"], env("bbbbbbbbbbbb"), nil); code != 200 {
+		t.Fatalf("write with outbox: %d", code)
+	}
+	var jobs []domain.NotificationJob
+	if code := doJSON(t, "GET", workspaceURL+"/notifications", nil, &jobs); code != 200 || len(jobs) != 1 {
+		t.Fatalf("delivery list: %d %+v", code, jobs)
+	}
+	serialized, _ := json.Marshal(jobs)
+	if strings.Contains(string(serialized), "private-webhook-credential") || strings.Contains(string(serialized), "ciphertext") {
+		t.Fatal("notification metadata leaked protected values")
+	}
+	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "GET", workspaceURL+"/notifications", nil, nil); code != 403 {
+		t.Fatalf("outsider read delivery: %d", code)
+	}
+	retryURL := workspaceURL + "/notifications/" + jobs[0].ID + "/retry"
+	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "POST", retryURL, map[string]any{}, nil); code != 403 {
+		t.Fatalf("outsider retried: %d", code)
+	}
+	if code := doJSON(t, "POST", retryURL, map[string]any{}, nil); code != 200 {
+		t.Fatalf("owner retry: %d", code)
+	}
+
 }
 
 func TestOptionalTeamAssetsReturnNoContentWhenUnset(t *testing.T) {

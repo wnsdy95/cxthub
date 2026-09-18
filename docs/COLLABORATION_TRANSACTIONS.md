@@ -11,12 +11,13 @@ multi-file or multi-server ACID transactions.
 | Operation | Atomic publication boundary |
 |---|---|
 | Object batch | Validated document bodies, repository ownership, snapshot rows, indexes and transactional storage accounting |
-| Ref batch | All requested ref changes, graft overlays, reflog entries and associated pending resolution |
+| Ref batch | All requested ref changes, graft overlays, reflog entries, associated pending resolution and notification jobs |
 | Branch history, fork, join | History/retention evidence and the resulting shared refs and overlays |
 | PR promotion | Exact source binding, DAG append, ref/reflog, completion receipt, and the claimed job's completed state |
 | Pending replacement | Pointer replacement and verified obsolete-prefix cleanup; distinct raw captures are retained |
 | Memory publication | Immutable body first, then atomic compare-and-swap of the snapshot's memory pointer; a losing body's data is retained |
-| Encrypted secrets | Replace only the exact envelope that the HTTP request validated; a competing write returns a conflict |
+| Encrypted secrets | Replace the exact editing revision and enqueue its notification in the same transaction |
+| New member accepts invite | Membership change and notification; concurrent acceptance creates one event |
 
 Chunk uploads and memory bodies can exist before their publication pointers.
 Such staging objects are deliberately retained and are not an incomplete graph
@@ -52,9 +53,17 @@ network calls.
   that valid worker finishes.
 - Registration can fill an unknown Git origin, but cannot overwrite an
   established origin or reset the configured default branch.
-- Secrets CAS covers the server's validation-to-write window. It is not a
-  general client editing revision: the existing client fingerprint identifies
-  a passphrase generation, not every same-key content edit.
+- Secrets require the `expected_revision` returned before editing, even for
+  same-passphrase edits or rotation. First creation uses `absent`. A missing
+  baseline returns 428; a stale baseline returns 409 `secrets_conflict`.
+  Every accepted write receives a fresh opaque revision, including identical
+  ciphertext writes, preventing an ABA overwrite. Legacy reads receive a stable
+  revision without rewriting their ciphertext. Upgrade all writers together.
+- The web editor retains its original baseline across query refreshes and
+  reopening. Conflicts preserve the draft; loading latest retains prior drafts
+  for comparison. CLI baselines are scoped to server, repository and worktree.
+  A push without a baseline can create an absent envelope but cannot replace an
+  existing one. A failed push never changes local plaintext or its baseline.
 
 Only explicit database transaction-abort codes (`40001`, `40P01`) receive up to
 three attempts, each with a fresh transaction and fresh after-commit callbacks.
@@ -92,9 +101,32 @@ recovered immediately. Upgrade all simultaneous local writers for this guarantee
 Supported systems are macOS and Linux with local filesystems; network filesystem
 locking and local disk durability require separate operator validation.
 
-External alert webhooks start only after successful commit. They remain
-best-effort delivery, not a durable notification outbox. The PR promotion queue
-itself is durable and retried.
+Ref updates, secrets changes and new invite acceptances enqueue a PostgreSQL
+notification outbox record in the same transaction as their business change.
+An enqueue failure rolls the change back. A worker claims committed jobs with
+`FOR UPDATE SKIP LOCKED`, a version and a two-minute lease; it sends outside
+transactions with a five-second HTTP timeout. Database time governs claims and
+lease fencing across replicas. Reopening the process retains pending work.
+
+Delivery is **at least once**, not exactly once: a receiver can accept an event
+before the worker loses the response or crashes before recording success.
+`X-CXTHub-Event-ID` remains stable for every retry; compatible receivers can use
+it for deduplication. Only 2xx acknowledges delivery. Redirects are not followed.
+Network failures, 408, 425, 429 and 5xx retry with exponential delay (30 seconds
+initially), up to eight attempts. `Retry-After` is respected up to 24 hours.
+Other failures or exhausted attempts require attention.
+
+Repository settings show the latest 100 jobs, safe failure reasons and retry
+controls for maintainers/owners. Webhook credentials and secret values are never
+included in status. A disabled, archived or changed destination stops automatic
+sending once observed by a worker. An already in-flight request cannot be
+recalled. Explicit retry uses the currently saved webhook with the same event ID;
+active leases and delivered events cannot be manually replayed. Historical jobs
+remain stored; the UI limit is not a retention policy.
+
+The filesystem development adapter persists individual queue transitions but
+cannot atomically combine separate business and queue files. PostgreSQL remains
+required for the production transaction guarantee.
 
 PostgreSQL durability still depends on honest storage/fsync, backups and tested
 restore procedures. Surviving primary-machine loss without acknowledged-write
@@ -120,6 +152,12 @@ CI runs real PostgreSQL tests, including repeated Go race-detector runs:
   returns the old complete generation, and the next request returns the new one.
 - CLI writer termination and an artificially aged live lock: recovery without
   stealing a live writer's lock.
+- Injected outbox insert failure rolls back ciphertext, refs and membership;
+  concurrent invite acceptance through independent PostgreSQL pools creates one event.
+- Same-key edit and rotation conflicts, dirty CLI pulls, worker lease takeover,
+  restart persistence, transient HTTP failures and destination changes.
+- Browser E2E: stale drafts survive rejection and latest-version comparison;
+  rotation sends its decrypted revision; delivery status and retry controls work.
 - Browser E2E: graph polling advances from the complete view even if the legacy
   component endpoints still expose an older generation.
 

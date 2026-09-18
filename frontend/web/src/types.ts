@@ -430,3 +430,19 @@ export interface RepositoryView {
   pending: Pending[];
   unsync: Unsync[];
 }
+
+export interface NotificationJob {
+  id: string;
+  workspace_id: string;
+  kind: string;
+  text: string;
+  state: 'pending' | 'running' | 'retrying' | 'delivered' | 'attention';
+  attempts: number;
+  version: number;
+  reason?: string;
+  http_status?: number;
+  created_at: string;
+  updated_at: string;
+  next_attempt: string;
+  lease_until: string;
+}

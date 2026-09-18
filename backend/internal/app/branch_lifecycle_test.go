@@ -13,6 +13,9 @@ func TestUpdateRefAppliesBranchLifecycleAndRejectsStaleBranch(t *testing.T) {
 	svc, st := newFsckSvc(t)
 	ctx := context.Background()
 	repo := hh("branch-lifecycle-service-repo")
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
+		t.Fatal(err)
+	}
 	target := hh("branch-lifecycle-service-target")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: target, RepoID: repo, DocHash: target, Branch: "feature/archive"}); err != nil {
 		t.Fatal(err)

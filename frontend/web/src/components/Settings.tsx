@@ -1,3 +1,4 @@
+import { NotificationHistory } from './NotificationHistory';
 import { PersonalStorageUsage } from './StorageUsage';
 // Settings — Account settings (top bar ⚙) and workspace settings (title bar ⚙, owner-only).
 //
@@ -680,6 +681,7 @@ export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator:
               </div>
               {save.error && <p className="err">{save.error.message}</p>}
 
+              <NotificationHistory workspace={ws.id} />
               <ArchiveSection ws={ws} />
               {isCreator && <SlugSection ws={ws} />}
               {isCreator && <TransferSection ws={ws} members={members} onDone={() => {}} />}

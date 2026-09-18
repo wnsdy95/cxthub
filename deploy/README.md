@@ -180,3 +180,22 @@ twice per minute, from Storage usage. Enterprise Admins can inspect aggregate
 usage without gaining private repository access; only Owners can request a
 recount. Personal usage appears in account settings. Filesystem development
 servers report usage as unavailable; authoritative billing requires PostgreSQL.
+
+
+### Background delivery workers
+
+`cxtd` runs durable PR-promotion and notification workers alongside HTTP. The
+Cloud Run configuration keeps at least one instance and sets `cpu_idle = false`
+so jobs continue without incoming requests. This uses **instance-based billing**:
+CPU and memory are billed for the instance lifetime, including idle time.
+See [Cloud Run billing settings](https://docs.cloud.google.com/run/docs/configuring/billing-settings).
+A request-only or scale-to-zero deployment needs a separately scheduled worker;
+otherwise persisted jobs remain safe but cannot make progress while suspended.
+
+Migration `0045_notification_outbox.sql` is applied before readiness. Deploy the
+backend, web and CLI update together: secrets writes now require the revision
+read before editing (`expected_revision`, HTTP 428 if missing). Existing encrypted
+data stays readable. Notification delivery status is in repository Settings;
+maintainers and owners can retry an undelivered event with the current webhook.
+External delivery is at least once; receivers can deduplicate using
+`X-CXTHub-Event-ID`. No cloud resources are created by the local test commands.

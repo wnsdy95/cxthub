@@ -469,13 +469,23 @@ func (c *BackendClient) PullSettings(ctx context.Context, repoID, kind string) (
 	return b, nil
 }
 
-// PushSecrets uploads a sealed envelope of secret ciphertexts (server performs transparent storage — E2E). If rotate=true, it performs an explicit replacement — instead of server's thumbprint verification, it uses CAS: if the thumbprint of the envelope read based on the replacement differs from the server's current thumbprint, it returns 409 (to prevent loss during the update).
-func (c *BackendClient) PushSecrets(ctx context.Context, repoID string, raw []byte, rotate bool, expect string) error {
-	path := c.reposPath(repoID) + "/secrets"
+// SecretsOrigin scopes local edit baselines to the backend that issued them.
+func (c *BackendClient) SecretsOrigin() string { return strings.TrimRight(c.baseURL(), "/") }
+
+// PushSecrets requires the generation read before editing, even for same-key writes.
+func (c *BackendClient) PushSecrets(ctx context.Context, repoID string, raw []byte, rotate bool, expect, revision string) (string, error) {
+	path := c.reposPath(repoID) + "/secrets?expected_revision=" + url.QueryEscape(revision)
 	if rotate {
-		path += "?rotate=true&expect=" + url.QueryEscape(expect)
+		path += "&rotate=true&expect=" + url.QueryEscape(expect)
 	}
-	return c.do(ctx, http.MethodPut, path, json.RawMessage(raw), nil)
+	var result struct {
+		Revision string `json:"revision"`
+	}
+	err := c.do(ctx, http.MethodPut, path, json.RawMessage(raw), &result)
+	if err == nil && result.Revision == "" {
+		return "", fmt.Errorf("server did not acknowledge a secrets revision; upgrade the server before editing")
+	}
+	return result.Revision, err
 }
 
 // PullSecrets retrieves the sealed envelope of secret ciphertexts as raw bytes (decryption is performed by the caller).

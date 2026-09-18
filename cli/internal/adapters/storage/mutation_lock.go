@@ -96,3 +96,8 @@ func liveMutationOwner(path string) bool {
 	err = syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
+
+// WithSecretsLock serializes plaintext and edit-baseline changes in one worktree.
+func (s *FileStore) WithSecretsLock(ctx context.Context, fn func() error) error {
+	return s.withMutationLock(ctx, "secrets", "editing", fn)
+}
