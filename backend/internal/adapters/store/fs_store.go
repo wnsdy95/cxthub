@@ -2399,7 +2399,8 @@ func (s *FSStore) PutDoc(_ context.Context, repoID domain.ContentHash, doc domai
 	if err := validateHash(repoID); err != nil {
 		return false, err
 	}
-	if err := domain.ValidateSessionDocHash(doc); err != nil {
+	canonical, err := domain.ValidatedSessionDocBytes(doc)
+	if err != nil {
 		return false, err
 	}
 	p := s.docPath(repoID, doc.Hash)
@@ -2409,10 +2410,7 @@ func (s *FSStore) PutDoc(_ context.Context, repoID domain.ContentHash, doc domai
 		}
 		return false, nil
 	}
-	data, err := domain.CanonicalBytes(doc.CIR)
-	if err != nil {
-		return false, err
-	}
+	data := canonical
 	// Chunk CAS basic (doc_chunks.go) — append-only session prefixes are deduped across pushes.
 	// Inapplicable chunking falls back to whole. Integrity hash remains whole canonical.
 	chunked, _, err := s.putDocChunked(repoID, doc.Hash, data)

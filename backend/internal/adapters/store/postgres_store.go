@@ -1147,10 +1147,7 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 	if err := validateHash(repoID); err != nil {
 		return false, err
 	}
-	if err := domain.ValidateSessionDocHash(doc); err != nil {
-		return false, err
-	}
-	canonical, err := domain.CanonicalBytes(doc.CIR)
+	canonical, err := domain.ValidatedSessionDocBytes(doc)
 	if err != nil {
 		return false, err
 	}

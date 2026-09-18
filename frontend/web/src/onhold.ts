@@ -147,5 +147,5 @@ export function holdCounts(
  * proof of an open app. Expire even when polling fails or a client disappears. */
 export function pendingIsLive(p: Pending, now = Date.now()): boolean {
   const at = p.activity_at ? Date.parse(p.activity_at) : NaN;
-  return Number.isFinite(at) && at <= now + 5_000 && now - at < 60_000;
+  return Number.isFinite(at) && at <= now + 5_000 && now - at < 120_000;
 }
