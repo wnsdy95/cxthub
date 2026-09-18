@@ -216,6 +216,8 @@ export const api = {
     call<import('./secretscrypto').SecretsEnvelope | null>('GET', `/repos/${encodeURIComponent(repoId)}/secrets`),
   getMemory: (repoId: string, snapshotId: string) =>
     call<MemoryDigest>('GET', `/repos/${encodeURIComponent(repoId)}/memories/${encodeURIComponent(snapshotId)}`),
+  getMemoryObject: (repoId: string, hash: string) =>
+    call<MemoryDigest>('GET', `/repos/${encodeURIComponent(repoId)}/memory-objects/${encodeURIComponent(hash)}`),
   listPending: (repoId: string) => call<Pending[]>('GET', `/repos/${encodeURIComponent(repoId)}/pending`),
   listUnsync: (repoId: string) => call<Unsync[]>('GET', `/repos/${encodeURIComponent(repoId)}/unsync`),
   // Empty object body: Server enforces application/json for this POST (CSRF 2nd defense — form submission blocking).

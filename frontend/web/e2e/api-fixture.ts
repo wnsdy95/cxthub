@@ -33,6 +33,12 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
   const states = new Map<string, {graph: number; pending: number; g: string; p: string}>();
   const projected = (input: ApiRequest): ApiResponse | undefined => {
     if (input.method !== 'GET' || !/\/(view|revision|changes|pending-view)$/.test(input.pathname)) return undefined;
+    // Contract regressions can supply actual, distinct serialized responses.
+    // Do not silently replace them with an enriched full-view fixture.
+    if (input.pathname.endsWith('/pending-view')) {
+      const direct = responder(input);
+      if (direct) return direct;
+    }
     const base = input.pathname.replace(/[^/]+$/, 'view');
     const viewRequest = {...input, pathname: base};
     const response = responder(viewRequest) ?? graphViewFixture(viewRequest, responder);
@@ -47,7 +53,8 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
     const revision = {graph: options.graphRevision?.() ?? String(next.graph), pending: String(next.pending)};
     if (input.pathname.endsWith('/revision')) return {body: revision};
     if (input.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
-    if (input.pathname.endsWith('/pending-view')) return {body: {revision, pending: body.pending, snapshots: body.snapshots?.filter((s: any) => pendingIDs.has(s.id))}};
+    if (input.pathname.endsWith('/pending-view')) return {body: {revision, pending: body.pending,
+      snapshots: body.snapshots?.filter((s: any) => pendingIDs.has(s.id)).map(({branches: _memberships, ...capture}: any) => capture)}};
     return {...response, body: {...body,revision}};
   };
   await page.route('**/api/v1/**', async (route) => {

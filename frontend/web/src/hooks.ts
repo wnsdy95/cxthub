@@ -284,11 +284,11 @@ export function useSearch(repoId: string | null, q: string) {
     enabled: Boolean(repoId) && q.trim().length >= 2,
   });
 }
-export function useMemory(repoId: string | null, snapshotId: string | null, enabled: boolean) {
+export function useMemory(repoId: string | null, memoryHash: string | null, enabled: boolean) {
   return useQuery({
-    queryKey: ['memory', repoId, snapshotId],
-    queryFn: () => api.getMemory(repoId as string, snapshotId as string),
-    enabled: enabled && Boolean(repoId && snapshotId),
+    queryKey: ['memory-object', repoId, memoryHash],
+    queryFn: () => api.getMemoryObject(repoId as string, memoryHash as string),
+    enabled: enabled && Boolean(repoId && memoryHash),
     retry: false,
     staleTime: Infinity,
   });

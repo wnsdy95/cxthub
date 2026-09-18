@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { projectBranchGraph } from '../src/graphProjection.ts';
 import { layoutGraph } from '../src/graph.ts';
+import { GraphIndex } from '../src/graphIndex.ts';
 import type { Snapshot, HistoryEvent, RefLogEntry, Ref } from '../src/types.ts';
 
 const at=(n:number)=>`2026-09-16T00:00:0${n}Z`;
@@ -11,6 +12,24 @@ const birth:HistoryEvent={repo_id:'repo',id:'birth',branch_id:'feature-id',kind:
 const advance:HistoryEvent={...birth,id:'advance',kind:'advance',source:'root',target:'feature',created_at:at(3)};
 const log:RefLogEntry={kind:'branch',name:'main',old:'base',new:'tip',created_at:at(5)};
 const original=JSON.stringify(snapshots);
+
+// A valid same-branch Join can supersede a historical append edge while
+// preserving all content. Completion is immutable; current placement is not.
+{
+  const before = [snap('P','main',[],0), snap('X','main',['P'],1),
+    snap('H','main',['P'],2,['X']), snap('H2','main',['H'],3)];
+  const after = [before[0], {...before[1], graft_parents:['H2'], grafted:true},
+    {...before[2], graft_parents:[], grafted:false}, before[3]];
+  const receipt: HistoryEvent = {...birth, id:'reordered-completion', kind:'pr-merge',
+    branch:'main', branch_id:'main-id', source_branch_id:'topic-id',
+    source:'H', target:'H', shared_target:'X', pr_completed:true,
+    pr:{number:42,base_branch:'main',head_branch:'topic',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)}};
+  for (const [data,head] of [[before,'H2'],[after,'X']] as const) {
+    const result = projectBranchGraph(data,[{repo_id:'repo',kind:'branch',name:'main',branch_id:'main-id',target:head}],[receipt],[],head,'main');
+    assert.ok(result.events.has('graph:merge:reordered-completion'), 'a later reorder must not erase the completed operation');
+    assert.deepEqual(new GraphIndex(result.snapshots).issues, [], 'retained operations must not recreate an old placement cycle');
+  }
+}
 const p=projectBranchGraph(snapshots,refs,[birth,advance],[log],'tip','main');
 const merge=[...p.events].find(([,e])=>e.kind==='merge')![0];
 const born=[...p.events].find(([,e])=>e.kind==='birth')![0];
@@ -230,14 +249,17 @@ for (const history of [operationHistory,[...operationHistory].reverse()]) {
 }
 assert.equal(JSON.stringify([oldContent,operationHistory]),originalOperations);
 // No operation connector may be invented from names, ambiguous births, future
-// creation records, an unverified inclusion or a pending request.
+// creation records or a pending request.
 for (const history of [
   operationHistory.map(h=>h.kind==='pr-merge'?{...h,source_branch_id:undefined}:h),
   [...operationHistory,...operationHistory.filter(h=>h.kind==='birth').map(h=>({...h,id:`duplicate-${h.id}`}))],
   operationHistory.map(h=>h.kind==='birth'?{...h,created_at:at(9)}:h),
-  operationHistory.map(h=>h.kind==='pr-merge'?{...h,target:'old'}:h),
   operationHistory.map(h=>({...h,pr_completed:false})),
 ]) assert.equal(projectBranchGraph(oldContent,[],history,[]).lifecycleEdges.size,0);
+const superseded = projectBranchGraph(oldContent,[],operationHistory.map(h=>h.kind==='pr-merge'?{...h,target:'old'}:h),[]);
+assert.equal([...superseded.events.values()].filter(e=>e.kind==='merge').length,2,'changed placement cannot revoke server completion');
+assert.deepEqual(new GraphIndex(superseded.snapshots).issues,[]);
+assert.deepEqual(superseded.snapshots.find(s=>s.id==='current')?.parents,['base'],'historical operations must not take over current ancestry');
 assert.equal(p.lifecycleEdges.size,0,'a natural source/birth path does not get a duplicate operation track');
 assert.equal([...projectBranchGraph(snapshots,refs,[pending,{...pending,id:'ambiguous-receipt'}],[log]).events.values()]
   .filter(e=>e.kind==='merge').length,0,'ambiguous receipts cannot assign the first matching source identity');

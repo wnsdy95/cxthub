@@ -657,6 +657,7 @@ export const en: Messages = {
     branchMerged: 'Merged {branch}',
     mergeRecords: 'PR merge records · {count}',
     mergeVerified: 'Merged · source verified in the recorded destination history',
+    historicalPlacement: 'Placement has changed · historical completion retained',
     mergeUnverified: 'Completion recorded · destination lineage unavailable or inconsistent',
     viewMergeSource: 'View merged context',
     viewingBirthContext: 'Showing the context recorded at branch creation. This operation has no conversation of its own.',

@@ -50,7 +50,7 @@ export function classifyBranchHistoryMarkers(
   const joined = (branch: string, target: string) => {
     const identities = [...heads.values()].filter(e => e.branch === branch);
     if (identities.length) return identities.length === 1 && identities[0].kind === 'archive'
-      && evidence.some(e => e.merged && e.merge.source_branch_id === identities[0].branch_id && e.merge.source === target);
+      && evidence.some(e => e.completed && e.merge.source_branch_id === identities[0].branch_id && e.merge.source === target);
     return snapshots.some(s => primaryReachable.has(s.id) && s.branch !== branch
       && s.graft_parents?.includes(target) && byId.get(target)?.branch === branch);
   };

@@ -38,7 +38,7 @@ for(let mask=0;mask<1<<snapshots.length;mask++) {
 }
 assert.deepEqual(index.stats,beforeQueries,'folding performs no ancestry query');
 assert.equal(JSON.stringify([snapshots,history,projection.snapshots]),original);
-assert.equal(evidence[0].merged,true);
+assert.equal(evidence[0].placementIntact,true);
 assert.equal(evidence[0].lineage,'natural');
 assert.ok(sessionBoundaries(snapshots).has('source'));
 assert.ok(compactionBoundaries(snapshots).has('source'));

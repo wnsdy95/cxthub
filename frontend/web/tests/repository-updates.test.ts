@@ -18,6 +18,14 @@ assert.deepEqual(mergePendingView(view,{...update,snapshots:[snapshot('new',['ol
 const knownBroken = {...view,snapshots:[...view.snapshots,snapshot('new',['unseen'])]};
 assert.equal(pendingViewNeedsFull(knownBroken,{...update,snapshots:[snapshot('new',['unseen'])]}),false); // full view already exposes this diagnostic
 
+// /view enriches membership; /pending-view only owns capture metadata.
+const enriched = {...view, snapshots:[{...snapshot('old'), branches:['main','topic'], memory_hash:'memory-1'}]};
+const raw = {revision:{graph:'2',pending:'2'}, pending:[{target:'old'} as Pending],
+  snapshots:[{...snapshot('old'), memory_hash:'memory-2'}]};
+const refreshed = mergePendingView(enriched,raw).snapshots[0];
+assert.deepEqual(refreshed.branches,['main','topic']);
+assert.equal(refreshed.memory_hash,'memory-2');
+
 // Multiple consumers share a stream; malformed notifications must recover
 // rather than silently leaving the browser's view stale.
 class FakeEventSource {

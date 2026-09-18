@@ -99,7 +99,7 @@ function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unkn
     if (pathname.startsWith(`/api/v1/repos/${repoId}/docs/`)) {
       return docResponse(pathname, searchParams);
     }
-    if (pathname.startsWith(`/api/v1/repos/${repoId}/memories/`)) {
+    if (pathname.startsWith(`/api/v1/repos/${repoId}/memories/`) || pathname.startsWith(`/api/v1/repos/${repoId}/memory-objects/`)) {
       return {
         body: {
           snapshot_id: graftTarget,
@@ -1613,6 +1613,56 @@ test('PR delivery distinguishes waiting and completed jobs without viewer retry 
   expect(unexpected).toEqual([]);
 });
 
+test('completed PR survives a live graft reorder without rewriting current ancestry', async ({ page }) => {
+  const p=id('1'), x=id('2'), h=id('3'), h2=id('4');
+  const snapshots = [auditSnapshot(p,'main',[],'root',0), auditSnapshot(x,'main',[p],'earlier main',1),
+    {...auditSnapshot(h,'main',[p],'merged context',2),graft_parents:[x],grafted:true},
+    auditSnapshot(h2,'main',[h],'continued context',3)];
+  const refs = [{repo_id:repoId,kind:'branch',name:'main',branch_id:'main-id',target:h2}];
+  const history = [{id:'retained-completion',repo_id:repoId,branch_id:'main-id',branch:'main',kind:'pr-merge',
+    source_branch_id:'topic-id',source:h,target:h,shared_target:x,pr_completed:true,
+    pr:{number:42,head_branch:'topic',base_branch:'main',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},
+    created_at:'2026-09-18T00:00:02Z'}];
+  const {pageErrors,unexpected} = await openGraph(page,publicWorkspaceApi(snapshots,refs,[],[],[],history));
+  const merge = page.locator('[data-graph-id="graph:merge:retained-completion"]');
+  await expect(merge).toHaveCount(1);
+  snapshots[1] = {...snapshots[1],graft_parents:[h2],grafted:true};
+  snapshots[2] = {...snapshots[2],graft_parents:[],grafted:false};
+  refs[0].target = x;
+  await page.locator('.graph-merge-records summary').click();
+  await expect(page.locator('.graph-merge-records')).toContainText('Placement has changed', {timeout:15_000});
+  await expect(merge).toHaveCount(1);
+  await expect(page.locator('[data-graph-issue]')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('memory attachment changes load the new immutable blob at the same snapshot', async ({ page }) => {
+  let generation = 1;
+  const reads: string[] = [];
+  const snapshots = [{id:pushedHead,repo_id:repoId,doc_hash:pushedHead,branch:'main',parents:[],
+    provider:'codex',created_at:'2026-09-19T00:00:00Z',memory_hash:id('8')}];
+  const base = publicWorkspaceApi(snapshots,[{kind:'branch',name:'main',target:pushedHead}]);
+  const {pageErrors,unexpected} = await openGraph(page, request => {
+    snapshots[0].memory_hash = id(generation === 1 ? '8' : '9');
+    if (/\/(memories|memory-objects)\//.test(request.pathname)) {
+      const hash = decodeURIComponent(request.pathname.split('/').at(-1)!);
+      reads.push(hash);
+      const version = hash === id('9') ? 2 : 1;
+      return {body:{snapshot_id:pushedHead,summary:`memory version ${version}`,key_facts:[],open_tasks:[]}};
+    }
+    return base(request);
+  });
+  const panel = page.locator('.memory-box');
+  await panel.locator('summary').click();
+  await expect(panel).toContainText('memory version 1');
+  generation = 2;
+  await expect(panel).toContainText('memory version 2', {timeout:15_000});
+  expect(reads).toEqual([id('8'),id('9')]);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('context has one lazy memory toggle, scrollable badges and independent center/graph scrolling', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
   const snapshots = Array.from({ length: 40 }, (_, n) => ({
@@ -1626,7 +1676,7 @@ test('context has one lazy memory toggle, scrollable badges and independent cent
   const base = publicWorkspaceApi(snapshots, refs);
   let memoryReads = 0;
   const { pageErrors, unexpected } = await openGraph(page, request => {
-    if (request.pathname.includes('/memories/')) memoryReads++;
+    if (request.pathname.includes('/memory-objects/')) memoryReads++;
     if (request.pathname.endsWith('/events')) return { body: {
       hash: snapshots[0].doc_hash, envelope: sessionDoc(snapshots[0].id).cir.envelope,
       events: Array.from({ length: 40 }, (_, seq) => ({ kind: 'message', role: 'user', seq, blocks: [{ type: 'text', text: `Long conversation ${seq}\n` + 'Archived conversation line.\n'.repeat(8) }] })),
