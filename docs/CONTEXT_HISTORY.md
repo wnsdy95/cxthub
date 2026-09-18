@@ -742,3 +742,29 @@ pending → unsync → publication, observation-only history, tags and unavailab
 parents. Browser regressions also follow SVG endpoints and test polling and
 failure recovery. Natural ancestry, stored grafts and display-only lifecycle
 edges remain different evidence types.
+
+#### Folding and integrity
+
+The graph validates the complete snapshot input before applying visibility.
+Merge evidence, branch operation projection, session boundaries and compaction
+markers use that full input. Archive/progress toggles only select projected rows;
+they do not rerun ancestry queries or change whether a PR is verified. Visible
+rows retain their virtual operation ancestors. A hidden real capture is never
+skipped to manufacture a new edge: its folded endpoint is reported separately
+from an unavailable parent.
+
+Duplicate snapshot IDs (even identical duplicates) and a cycle in natural or
+graft parents stop graph drawing and graph drag operations. The panel reports
+bounded ID samples and offers a read retry. The document viewer remains usable.
+Validation also covers the full display projection before folding, so hiding an
+invalid component cannot hide its error. Cycle diagnostics identify one actual
+cycle, not every node blocked by a topological sort. Missing parents remain a
+nonfatal, separate partial-data condition. No automatic data repair occurs.
+
+A repository-view index shares ancestry queries across evidence, status and
+projection. Iterative traversal supports long chains without recursive stack
+limits. DFS intervals prove positive ancestry only; cross edges still require
+exact traversal. Cached closures are bounded to 64 roots and 100,000 ID
+memberships; larger closures are computed without retention. See
+[graph performance](GRAPH_PERFORMANCE.md) for reproducible measurements and their
+scope.

@@ -1,6 +1,6 @@
 import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from './types';
 import { parseBranchLifecycleRef } from './branchLifecycle';
-import { reachableSnapshotIds } from './onhold';
+import { GraphIndex, reachesSnapshot } from './graphIndex';
 import { completedBranchEvidence, conversationParents } from './graphEvidence';
 import { graphBranchBindings } from './contextHistory';
 
@@ -18,15 +18,21 @@ export interface GraphEvent {
 /** Graph event rows are a view projection, never stored snapshots. A branch
  * ref move plus verified ancestry proves a join; a pending PR receipt does not.
  * Natural parents and the original source branch remain in their own lane. */
-export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: HistoryEvent[], reflog: RefLogEntry[], pinHead?: string | null, pinBranch?: string) {
+export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: HistoryEvent[], reflog: RefLogEntry[], pinHead?: string | null, pinBranch?: string, index = new GraphIndex(snapshots), evidence = completedBranchEvidence(snapshots, history, index)) {
+  if (index.issues.length) return { snapshots: [] as Snapshot[], events: new Map<string, GraphEvent>(), lifecycleEdges: new Map<string, Set<string>>(), pinHead, refs };
   const time = (value: string) => Date.parse(value);
-  const byId = new Map(snapshots.map(s => [s.id, s]));
+  const { byId } = index;
   const bindings = graphBranchBindings(refs, history);
-  const scopeOf = (name: string) => bindings.refKey(refs.find(r => r.kind === 'branch' && r.name === name)
+  const refsByName = new Map(refs.filter(r => r.kind === 'branch').map(r => [r.name, r]));
+  const scopeOf = (name: string) => bindings.refKey(refsByName.get(name)
     ?? { kind: 'branch', name, target: '', repo_id: '' });
-  const branchReach = new Map(refs.filter(r => r.kind === 'branch')
-    .map(r => [bindings.refKey(r), reachableSnapshotIds([r.target], snapshots)]));
+  const branchTargets = new Map(refs.filter(r => r.kind === 'branch').map(r => [bindings.refKey(r), r.target]));
   const nodes = new Map(snapshots.map(s => [s.id, { ...s, parents: [...(s.parents ?? [])], graft_parents: [...(s.graft_parents ?? [])] }]));
+  const children = new Map<string, Set<string>>();
+  const addChild = (parent: string, child: string) => {
+    const ids = children.get(parent) ?? new Set<string>(); ids.add(child); children.set(parent, ids);
+  };
+  for (const s of nodes.values()) for (const p of s.parents) addChild(p, s.id);
   const events = new Map<string, GraphEvent>();
   // Separately typed display edges: same branch identity from birth to a
   // verified PR completion. They never attest conversation ancestry.
@@ -49,10 +55,31 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
   }
   let projectedHead = pinHead;
   const merges: Array<{ id: string; before: string; after: string; source: string; branch: string; scope: string; from: string; at: string; identity?: string }> = [];
-  const completed = history.filter(h => h.kind === 'pr-merge' && h.pr_completed && h.pr && h.source && h.target && h.shared_target
-    && byId.has(h.source) && byId.has(h.target) && byId.has(h.shared_target)
-    && reachableSnapshotIds([h.target], snapshots).has(h.source)
-    && reachableSnapshotIds([h.target], snapshots).has(h.shared_target));
+  const completed = evidence.filter(e => e.merged).map(e => e.merge);
+  const completedById = new Map(completed.map(h => [`graph:merge:${h.id}`, h]));
+  const completedMoves = new Set(completed.map(h => JSON.stringify([h.branch_id, h.shared_target, h.target])));
+  const publications = new Map<string, Set<string>>();
+  const publicationTimes = new Map<string, number>();
+  const receiptsByMove = new Map<string, HistoryEvent[]>();
+  const movementsByScope = new Map<string, Array<{old?: string; next?: string; at: string}>>();
+  const addMovement = (scope: string, move: {old?: string; next?: string; at: string}) => {
+    const list = movementsByScope.get(scope) ?? []; list.push(move); movementsByScope.set(scope, list);
+  };
+  for (const h of history) {
+    if (h.kind === 'advance' || h.kind === 'publish') {
+      const ids = publications.get(h.branch_id) ?? new Set<string>();
+      if (h.target) ids.add(h.target);
+      publications.set(h.branch_id, ids);
+      const key = JSON.stringify([h.branch, h.target]);
+      publicationTimes.set(key, Math.min(publicationTimes.get(key) ?? Infinity, time(h.created_at)));
+    }
+    if (h.kind === 'advance') addMovement(h.branch_id, {old:h.source, next:h.target, at:h.created_at});
+    if (h.kind === 'pr-merge' && !h.pr_completed && h.pr) {
+      const key = JSON.stringify([h.branch, h.source, h.shared_target]);
+      const list = receiptsByMove.get(key) ?? []; list.push(h); receiptsByMove.set(key, list);
+    }
+  }
+  for (const r of reflog) if (r.kind === 'branch') addMovement(scopeOf(r.name), {old:r.old, next:r.new, at:r.created_at});
   // A normal capture need not move a rewound ref, so it may never emit advance.
   // Publication and verified completion attest the exact source identity even
   // after its ref is archived. A worktree position is only a selection and must
@@ -87,21 +114,20 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
   for (const move of reflog) {
     if (bindings.snapshotKey(move.name) === undefined) continue; // legacy name cannot identify a reused generation
     if (move.kind !== 'branch' || !move.old || !move.new || move.old === move.new || !byId.has(move.old) || !byId.has(move.new)) continue;
-    if (!reachableSnapshotIds([move.new], snapshots).has(move.old)) continue;
-    const receipts = history.filter(h => h.kind === 'pr-merge' && !h.pr_completed && h.branch === move.name && h.source === move.new && h.shared_target === move.old && h.pr && time(h.created_at) <= time(move.created_at));
+    if (!index.reaches(move.new, move.old)) continue;
+    const receipts = (receiptsByMove.get(JSON.stringify([move.name, move.new, move.old])) ?? []).filter(h => time(h.created_at) <= time(move.created_at));
     if (receipts.length > 1) continue;
-    if (completed.some(h => h.branch_id === scopeOf(move.name) && h.shared_target === move.old && h.target === move.new)) continue;
+    if (completedMoves.has(JSON.stringify([scopeOf(move.name), move.old, move.new]))) continue;
     const candidates = [...(branchTips.get(move.new) ?? [])].filter(name => name !== move.name);
-    const incoming = reachableSnapshotIds([move.new], snapshots);
-    const previous = reachableSnapshotIds([move.old], snapshots);
+    const incoming = index.closure(move.new).ids;
+    const previous = index.closure(move.old).ids;
     const hasAppendEdge = [...incoming].some(id => !previous.has(id) && byId.get(id)?.graft_parents?.includes(move.old));
     // A current shared hash can also be a later fork point. Without a bound PR
     // receipt, only a stored append edge proves this was a join.
     // Publishing a branch's own capture can carry an append of earlier main.
     // A later main ref/position at that hash does not prove a reverse PR into
     // the source branch. Legacy inference needs a distinct originating branch.
-    const ownPublication = history.some(h => (h.kind === 'publish' || h.kind === 'advance')
-      && h.branch === move.name && h.target === move.new && time(h.created_at) <= time(move.created_at));
+    const ownPublication = (publicationTimes.get(JSON.stringify([move.name, move.new])) ?? Infinity) <= time(move.created_at);
     if (receipts.length !== 1 && (!hasAppendEdge || byId.get(move.new)?.branch === move.name || ownPublication)) continue;
     const from = receipts.length === 1 ? receipts[0].pr!.head_branch : candidates.length === 1 ? candidates[0] : undefined;
     if (!from) continue;
@@ -119,25 +145,21 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     const node: Snapshot = { ...source, id: merge.id, branch: merge.branch, parents: [previous, merge.source], graft_parents: [], grafted: false,
       created_at: merge.at, message: `${merge.from} → ${merge.branch}`, memory_hash: undefined, session_id: undefined };
     nodes.set(merge.id, { ...node, parents: node.parents ?? [], graft_parents: [] });
-    const receipt = completed.find(h => `graph:merge:${h.id}` === merge.id);
+    for (const p of node.parents ?? []) addChild(p, merge.id);
+    const receipt = completedById.get(merge.id);
     events.set(merge.id, { id: merge.id, kind: 'merge', branch: merge.branch, sourceBranch: merge.from, snapshot: merge.source, evidence: receipt?.id ?? 'ref-move', prNumber: receipt?.pr?.number });
     mergeForTip.set(`${merge.scope}:${merge.after}`, merge.id);
     // Explicit movements away from this lineage supersede its placement.
     // Compare server operation times here, never provider snapshot timestamps.
-    const movements = [
-      ...history.filter(h => h.kind === 'advance' && h.branch_id === merge.scope)
-        .map(h => ({ old: h.source, next: h.target, at: h.created_at })),
-      ...reflog.filter(r => r.kind === 'branch' && scopeOf(r.name) === merge.scope)
-        .map(r => ({ old: r.old, next: r.new, at: r.created_at })),
-    ];
+    const movements = movementsByScope.get(merge.scope) ?? [];
     const withdrawn = movements.some(m => m.old && m.next && time(m.at) > time(merge.at)
-      && reachableSnapshotIds([m.old], snapshots).has(merge.after)
-      && !reachableSnapshotIds([m.next], snapshots).has(m.old));
+      && index.reaches(m.old, merge.after)
+      && !index.reaches(m.next, m.old));
     if (withdrawn) inactiveMerges.add(merge.id);
     // The verified ref move already represents this append edge. Drawing its
     // storage graft too would invert main and feature paths a second time.
-    const segment = reachableSnapshotIds([merge.source], snapshots);
-    const previousIDs = reachableSnapshotIds([merge.before], snapshots);
+    const segment = index.closure(merge.source).ids;
+    const previousIDs = index.closure(merge.before).ids;
     for (const id of segment) {
       if (previousIDs.has(id)) continue;
       const n = nodes.get(id);
@@ -148,18 +170,23 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
         if (!n.graft_parents.length) n.grafted = false;
       }
     }
-    for (const n of nodes.values()) {
-      const membership = history.some(h => (h.kind === 'advance' || h.kind === 'publish') && h.branch_id === merge.scope && h.target === n.id);
+    const affected = new Set([...(children.get(merge.after) ?? []), ...(replacedTip ? children.get(replacedTip) ?? [] : [])]);
+    for (const child of affected) {
+      const n = nodes.get(child)!;
+      const membership = publications.get(merge.scope)?.has(n.id);
       if (n.id === merge.id || events.has(n.id) || segment.has(n.id)
         || (!membership && bindings.snapshotKey(n.branch ?? '') !== merge.scope)) continue;
       // The active destination path supplies ancestry evidence even when a
       // provider clock precedes the server completion. Unproven retained paths
       // keep their original parents; wall-clock order must not assign them.
-      if (withdrawn || !branchReach.get(merge.scope)?.has(n.id)) continue;
+      if (withdrawn || !index.reaches(branchTargets.get(merge.scope) ?? '', n.id)) continue;
       // Several completed PRs can leave the stored ref unchanged. Children
       // already redirected to its earlier projection must follow the latest
       // operation, or later joins become detached tips beside main.
-      n.parents = n.parents.map(p => p === merge.after || p === replacedTip ? merge.id : p);
+      const parents = n.parents.map(p => p === merge.after || p === replacedTip ? merge.id : p);
+      for (const p of n.parents) if (!parents.includes(p)) children.get(p)?.delete(n.id);
+      for (const p of parents) addChild(p, n.id);
+      n.parents = parents;
     }
     if (!withdrawn && pinBranch && scopeOf(pinBranch) === merge.scope && pinHead === merge.after) projectedHead = merge.id;
   }
@@ -211,22 +238,21 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
       else if (!node.parents.length) node.parents = [birth];
     }
   }
-  for (const { merge, birth, merged } of completedBranchEvidence(snapshots, history)) {
+  for (const { merge, birth, merged } of evidence) {
     if (!merged || !birth || birth.kind !== 'birth' || !(time(birth.created_at) <= time(merge.created_at))) continue;
     const birthId = `graph:birth:${birth.id}`;
     const mergeId = `graph:merge:${merge.id}`;
     const node = nodes.get(mergeId);
     if (!node || !nodes.has(birthId)) continue;
-    const projected = [...nodes.values()];
     // Normal captures already join their own birth. Shared/legacy captures
     // may not: connect the confirmed operations, never change their parents.
-    if (reachableSnapshotIds([merge.source!], projected).has(birthId) || node.parents.includes(birthId)) continue;
+    if (reachesSnapshot(nodes, merge.source!, birthId) || node.parents.includes(birthId)) continue;
     // Inconsistent historical evidence must not create a display cycle.
-    if (reachableSnapshotIds([birthId], projected).has(mergeId)) continue;
+    if (reachesSnapshot(nodes, birthId, mergeId)) continue;
     const previous = node.parents[0];
     // A no-op PR's source is already on main. Repeating that source edge would
     // obscure the branch identity, especially when several PRs share a hash.
-    const alreadyIncluded = reachableSnapshotIds([previous], projected).has(merge.source!);
+    const alreadyIncluded = reachesSnapshot(nodes, previous, merge.source!);
     node.parents = [previous, birthId, ...node.parents.slice(1).filter(p => !alreadyIncluded || p !== merge.source)];
     lifecycleEdges.set(mergeId, new Set([birthId]));
   }
@@ -235,4 +261,31 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     return target && !inactiveMerges.has(target) ? { ...ref, target } : ref;
   });
   return { snapshots: [...nodes.values()], events, lifecycleEdges, pinHead: projectedHead, refs: projectedRefs };
+}
+
+/** Visibility is applied only after evidence and operation edges are fixed.
+ * Retain virtual ancestors of visible rows, but stop at hidden real captures:
+ * skipping across those captures would fabricate a conversation edge. Events
+ * with a visible source remain selectable even without a visible descendant. */
+export function visibleBranchGraph(projection: ReturnType<typeof projectBranchGraph>, visibleIds: ReadonlySet<string>) {
+  const byId = new Map(projection.snapshots.map(s => [s.id, s]));
+  const included = new Set<string>();
+  const stack = [...visibleIds];
+  for (const event of projection.events.values()) if (visibleIds.has(event.snapshot)) stack.push(event.id);
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (included.has(id)) continue;
+    const node = byId.get(id);
+    if (!node) continue;
+    included.add(id);
+    for (const p of [...(node.parents ?? []), ...(node.graft_parents ?? [])]) {
+      if (projection.events.has(p)) stack.push(p);
+    }
+  }
+  const snapshots = projection.snapshots.filter(s => included.has(s.id));
+  const foldedParents = new Set<string>();
+  for (const s of snapshots) for (const p of [...(s.parents ?? []), ...(s.graft_parents ?? [])]) {
+    if (byId.has(p) && !included.has(p)) foldedParents.add(p);
+  }
+  return { ...projection, snapshots, foldedParents };
 }

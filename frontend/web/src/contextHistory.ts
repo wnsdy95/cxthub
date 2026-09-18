@@ -1,5 +1,6 @@
 import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from './types';
 import { reachableSnapshotIds } from './onhold';
+import { GraphIndex } from './graphIndex';
 
 /** Resolve recorded identity heads without relying on event order or clocks.
  * A birth's dependency releases a name owned by another identity, so only
@@ -58,11 +59,13 @@ export function graphBranchBindings(refs: Ref[], history: HistoryEvent[]) {
     return ids?.size === 1 ? [...ids][0] : `legacy:${name}`;
   };
   const refKey = (ref: Ref) => ref.branch_id ?? active.get(ref.name) ?? legacyKey(ref.name);
+  const refsByName = new Map(refs.filter(r => r.kind === 'branch').map(r => [r.name, r]));
+  const labels = new Map(refs.filter(r => r.kind === 'branch').map(r => [refKey(r), r.name]));
   const snapshotKey = (name: string) => {
     if ((claims.get(name)?.size ?? 0) > 1) return undefined;
-    return claims.has(name) ? legacyKey(name) : refs.find(r => r.kind === 'branch' && r.name === name)?.branch_id ?? legacyKey(name);
+    return claims.has(name) ? legacyKey(name) : refsByName.get(name)?.branch_id ?? legacyKey(name);
   };
-  const label = (key: string, fallback: string) => heads.get(key)?.branch ?? refs.find(r => r.kind === 'branch' && refKey(r) === key)?.name ?? fallback;
+  const label = (key: string, fallback: string) => heads.get(key)?.branch ?? labels.get(key) ?? fallback;
   return { refKey, snapshotKey, label };
 }
 
@@ -71,8 +74,9 @@ export function graphBranchBindings(refs: Ref[], history: HistoryEvent[]) {
  * Unknown/missing ancestry stays visible rather than manufacturing a fork. */
 export function previousProgressGroups(
   refs: Ref[], snapshots: Snapshot[], entries: RefLogEntry[],
-  history: HistoryEvent[] = [], position?: { branch: string; branch_id?: string; snapshot: string },
+  history: HistoryEvent[] = [], position?: { branch: string; branch_id?: string; snapshot: string }, index = new GraphIndex(snapshots),
 ): PreviousProgressGroup[] {
+  if (index.issues.length) return [];
   const heads = historyBranchHeads(history);
   const active = new Map([...heads.values()].filter(e => e.kind !== 'archive').map(e => [e.branch, e.branch_id]));
   const labels = new Map([...heads].map(([id, event]) => [id, event.branch]));
@@ -94,27 +98,9 @@ export function previousProgressGroups(
     refs = [...refs.filter((ref) => ref.kind !== 'branch' || ref.name !== branch),
       { kind: 'branch', name: branch, target: position.snapshot, repo_id: refs[0]?.repo_id ?? '' }];
   }
-  const byId = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
+  const { byId } = index;
   const branches = new Map(refs.filter((ref) => ref.kind === 'branch').map((ref) => [ref.name, ref.target]));
-  const cache = new Map<string, { ids: Set<string>; complete: boolean }>();
-  function closure(root: string) {
-    const cached = cache.get(root);
-    if (cached) return cached;
-    const ids = new Set<string>();
-    const stack = [root];
-    let complete = true;
-    while (stack.length) {
-      const id = stack.pop()!;
-      if (ids.has(id)) continue;
-      ids.add(id);
-      const snapshot = byId.get(id);
-      if (!snapshot) { complete = false; continue; }
-      stack.push(...(snapshot.parents ?? []), ...(snapshot.graft_parents ?? []));
-    }
-    const result = { ids, complete };
-    cache.set(root, result);
-    return result;
-  }
+  const closure = (root: string) => index.closure(root);
 
   const groups: PreviousProgressGroup[] = [];
   const seen = new Set<string>();

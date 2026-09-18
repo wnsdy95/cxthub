@@ -7,6 +7,12 @@
 //   Other lanes expecting c join this node (fork point — reverse of fork).
 //   Node lane updates to expect first parent, additional parents (merges) open new lanes.
 import type { Ref, Snapshot } from './types';
+import { GraphIndex, type GraphIssue } from './graphIndex';
+
+export class GraphStructureError extends Error {
+  constructor(readonly issues: GraphIssue[]) { super('Invalid graph: ' + issues.map(i => i.kind).join(', ')); }
+}
+
 
 export interface GraphRow {
   snap: Snapshot;
@@ -86,23 +92,19 @@ export function mainlinesOf(refs: Ref[], snapshots: Snapshot[]): Set<string> {
  * Kahn's algorithm is used in the child -> parent direction. When multiple
  * rows are ready, the newest snapshot wins and the original input position is
  * the stable tie-breaker. Missing parents do not constrain this partial view.
- * A backend cycle should be impossible, but any remaining rows are appended
- * deterministically so corrupt/legacy data cannot make the whole graph vanish.
+ * Cycles and duplicate IDs cannot be drawn faithfully and are reported.
+ * Missing parents remain a separate, nonfatal partial-data condition.
  */
-export function orderGraphSnapshots(snapshots: Snapshot[]): Snapshot[] {
+export function orderGraphSnapshots(snapshots: Snapshot[], index = new GraphIndex(snapshots)): Snapshot[] {
+  if (index.issues.length) throw new GraphStructureError(index.issues);
   if (snapshots.length < 2) return [...snapshots];
 
   const byId = new Map(snapshots.map((snapshot, index) => [snapshot.id, { snapshot, index }]));
-  // Duplicate IDs violate the snapshot-list contract. Preserve the response
-  // verbatim rather than silently dropping rows through the ID map.
-  if (byId.size !== snapshots.length) return [...snapshots];
 
   const parentIds = new Map<string, string[]>();
   const remainingChildren = new Map(snapshots.map((snapshot) => [snapshot.id, 0]));
   for (const snapshot of snapshots) {
-    const parents = [...(snapshot.parents ?? []), ...(snapshot.graft_parents ?? [])].filter(
-      (parent, index, all) => Boolean(parent) && byId.has(parent) && all.indexOf(parent) === index,
-    );
+    const parents = [...new Set([...(snapshot.parents ?? []), ...(snapshot.graft_parents ?? [])])].filter(parent => byId.has(parent));
     parentIds.set(snapshot.id, parents);
     for (const parent of parents) {
       remainingChildren.set(parent, (remainingChildren.get(parent) ?? 0) + 1);
@@ -157,12 +159,10 @@ export function orderGraphSnapshots(snapshots: Snapshot[]): Snapshot[] {
   }
 
   const ordered: Snapshot[] = [];
-  const emitted = new Set<string>();
   while (ready.length > 0) {
     const index = popReady() as number;
     const snapshot = snapshots[index];
     ordered.push(snapshot);
-    emitted.add(snapshot.id);
     for (const parent of parentIds.get(snapshot.id) ?? []) {
       const next = (remainingChildren.get(parent) ?? 0) - 1;
       remainingChildren.set(parent, next);
@@ -170,19 +170,12 @@ export function orderGraphSnapshots(snapshots: Snapshot[]): Snapshot[] {
     }
   }
 
-  if (ordered.length !== snapshots.length) {
-    const remainder = snapshots
-      .map((snapshot, index) => ({ snapshot, index }))
-      .filter(({ snapshot }) => !emitted.has(snapshot.id))
-      .sort((left, right) =>
-        comesFirst(left.index, right.index) ? -1 : comesFirst(right.index, left.index) ? 1 : 0,
-      );
-    ordered.push(...remainder.map(({ snapshot }) => snapshot));
-  }
   return ordered;
 }
 
-export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { rows: GraphRow[]; laneCount: number } {
+export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { rows: GraphRow[]; laneCount: number; issues: GraphIssue[] } {
+  const index = new GraphIndex(snapshots);
+  if (index.issues.length) return { rows: [], laneCount: 0, issues: index.issues };
   const lanes: (string | null)[] = [];
   const available = new Set(snapshots.map(s => s.id));
   // Default branch fix: pinHead (default branch's head) pinned to the expected value in lane 0 ensures the entire chain is always on the leftmost lane, and newer feature tips receive the right lane. If head is not in the snapshot list (e.g., unpinned), it is not pinned — preventing an empty vertical line from drawing to the end of the graph.
@@ -190,7 +183,7 @@ export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { r
   const rows: GraphRow[] = [];
   let laneCount = 0;
 
-  for (const snap of orderGraphSnapshots(snapshots)) {
+  for (const snap of orderGraphSnapshots(snapshots, index)) {
     const incoming = [...lanes];
     // 1) Node lane: first lane expected for this commit, or reuse an empty slot or create a new one.
     let lane = lanes.findIndex((h) => h === snap.id);
@@ -233,5 +226,5 @@ export function layoutGraph(snapshots: Snapshot[], pinHead?: string | null): { r
     rows.push({ snap, lane, incoming, outgoing: [...lanes], mergesIn, branchesOut });
     laneCount = Math.max(laneCount, incoming.length, lanes.length, lane + 1);
   }
-  return { rows, laneCount };
+  return { rows, laneCount, issues: [] };
 }
