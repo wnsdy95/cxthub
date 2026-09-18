@@ -401,12 +401,16 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 			docs = append(docs, domain.SessionDoc{Hash: cd.Hash, CIR: cir})
 		}
 	}
-	docByHash := make(map[domain.ContentHash]domain.SessionDoc, len(docs))
+	docByHash := make(map[domain.ContentHash]domain.VerifiedSessionDoc, len(docs))
+	verifiedDocs := make([]domain.VerifiedSessionDoc, 0, len(docs))
 	for _, d := range docs {
-		if err := validateSessionDocHash(d); err != nil {
+		verified, err := domain.VerifySessionDoc(d)
+		if err != nil {
 			return inbound.CommitOutput{}, err
 		}
-		docByHash[d.Hash] = d
+		// Validate every submitted body, even a duplicate claimed hash.
+		docByHash[d.Hash] = verified
+		verifiedDocs = append(verifiedDocs, verified)
 	}
 	verifiedSettings := make(map[domain.ContentHash]bool)
 	normalizedSnaps := make([]domain.Snapshot, 0, len(in.Snapshots))
@@ -418,8 +422,8 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 			return inbound.CommitOutput{}, err
 		}
 		if d, ok := docByHash[snap.DocHash]; ok {
-			if err := validateSnapshotDocPair(snap, d); err != nil {
-				return inbound.CommitOutput{}, err
+			if !d.Valid() || d.Hash() != snap.DocHash {
+				return inbound.CommitOutput{}, domain.ErrIntegrity
 			}
 		} else {
 			existing, err := s.blobs.GetDoc(ctx, in.RepoID, snap.DocHash)
@@ -465,8 +469,14 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 		return inbound.CommitOutput{}, err
 	}
 	var out inbound.CommitOutput
-	for _, d := range docs {
-		stored, err := s.blobs.PutDoc(ctx, in.RepoID, d)
+	for i, d := range docs {
+		var stored bool
+		var err error
+		if writer, ok := s.blobs.(outbound.VerifiedDocStore); ok {
+			stored, err = writer.PutVerifiedDoc(ctx, in.RepoID, verifiedDocs[i])
+		} else {
+			stored, err = s.blobs.PutDoc(ctx, in.RepoID, d)
+		}
 		if err != nil {
 			return inbound.CommitOutput{}, err
 		}

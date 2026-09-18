@@ -28,6 +28,7 @@ import (
 type Store interface {
 	outbound.MetadataStore
 	outbound.BlobStore
+	outbound.VerifiedDocStore
 	outbound.WorkspaceStore
 	outbound.EnterpriseStore
 	outbound.OAuthStore
@@ -756,7 +757,8 @@ func (s *FSStore) DeleteDoc(_ context.Context, repoID, hash domain.ContentHash) 
 	if err := validateHashes(repoID, hash); err != nil {
 		return err
 	}
-	for _, path := range []string{s.docPath(repoID, hash), s.readIndexPath(repoID, hash), s.readIndexPath(repoID, hash) + ".search", s.readIndexPath(repoID, hash) + ".filter"} {
+	legacyIndex := filepath.Join(s.repoDir(repoID), "read-index-v1", hexOf(hash))
+	for _, path := range []string{s.docPath(repoID, hash), s.readIndexPath(repoID, hash), s.readIndexPath(repoID, hash) + ".search", s.readIndexPath(repoID, hash) + ".filter", legacyIndex, legacyIndex + ".search", legacyIndex + ".filter"} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -2395,17 +2397,34 @@ func (s *FSStore) memPath(repoID, hash domain.ContentHash) string {
 }
 
 // PutDoc stores the SessionDoc.CIR body under the client-provided doc.Hash key (content-hash dedup).
-func (s *FSStore) PutDoc(_ context.Context, repoID domain.ContentHash, doc domain.SessionDoc) (bool, error) {
+func (s *FSStore) PutDoc(ctx context.Context, repoID domain.ContentHash, doc domain.SessionDoc) (bool, error) {
 	if err := validateHash(repoID); err != nil {
 		return false, err
 	}
-	canonical, err := domain.ValidatedSessionDocBytes(doc)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	verified, err := domain.VerifySessionDoc(doc)
 	if err != nil {
 		return false, err
 	}
-	p := s.docPath(repoID, doc.Hash)
+	return s.PutVerifiedDoc(ctx, repoID, verified)
+}
+
+func (s *FSStore) PutVerifiedDoc(ctx context.Context, repoID domain.ContentHash, doc domain.VerifiedSessionDoc) (bool, error) {
+	if err := validateHash(repoID); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if !doc.Valid() {
+		return false, domain.ErrIntegrity
+	}
+	canonical := doc.Bytes()
+	p := s.docPath(repoID, doc.Hash())
 	if exists(p) {
-		if _, err := s.GetDoc(context.Background(), repoID, doc.Hash); err != nil {
+		if _, err := s.GetDoc(ctx, repoID, doc.Hash()); err != nil {
 			return false, err
 		}
 		return false, nil
@@ -2413,7 +2432,7 @@ func (s *FSStore) PutDoc(_ context.Context, repoID domain.ContentHash, doc domai
 	data := canonical
 	// Chunk CAS basic (doc_chunks.go) — append-only session prefixes are deduped across pushes.
 	// Inapplicable chunking falls back to whole. Integrity hash remains whole canonical.
-	chunked, _, err := s.putDocChunked(repoID, doc.Hash, data)
+	chunked, _, err := s.putDocChunked(repoID, doc.Hash(), data)
 	if err != nil {
 		return false, err
 	}
@@ -2422,7 +2441,7 @@ func (s *FSStore) PutDoc(_ context.Context, repoID domain.ContentHash, doc domai
 			return false, err
 		}
 	}
-	if err := s.putReadIndex(repoID, doc); err != nil {
+	if err := s.putVerifiedReadIndex(repoID, doc); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -1147,10 +1147,27 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 	if err := validateHash(repoID); err != nil {
 		return false, err
 	}
-	canonical, err := domain.ValidatedSessionDocBytes(doc)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	verified, err := domain.VerifySessionDoc(doc)
 	if err != nil {
 		return false, err
 	}
+	return s.PutVerifiedDoc(ctx, repoID, verified)
+}
+
+func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.ContentHash, doc domain.VerifiedSessionDoc) (bool, error) {
+	if err := validateHash(repoID); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if !doc.Valid() {
+		return false, domain.ErrIntegrity
+	}
+	canonical := doc.Bytes()
 	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return false, err
@@ -1168,28 +1185,28 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 		payload = docCompress(mb)
 	}
 	ct, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
-		string(doc.Hash), payload)
+		string(doc.Hash()), payload)
 	if err != nil {
 		return false, err
 	}
 	created := ct.RowsAffected() > 0
 	// Blob validation: For existing rows that are legacy blobs or manifests, the original/reshuffled content must match the canonical bytes — blocking content injection under the hash (maintaining existing contract).
 	var stored []byte
-	if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1 FOR UPDATE`, string(doc.Hash)).Scan(&stored); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1 FOR UPDATE`, string(doc.Hash())).Scan(&stored); err != nil {
 		return false, err
 	}
 	stored, err = docDecompress(stored)
 	if err != nil {
-		return false, fmt.Errorf("%w: stored blob undecodable for doc %s", domain.ErrIntegrity, doc.Hash)
+		return false, fmt.Errorf("%w: stored blob undecodable for doc %s", domain.ErrIntegrity, doc.Hash())
 	}
 	storedMan, isMan := domain.ParseDocChunkManifest(stored)
 	if !created {
-		if cb, _, cerr := s.reassembleManifestTx(ctx, tx, stored, doc.Hash); isMan {
+		if cb, _, cerr := s.reassembleManifestTx(ctx, tx, stored, doc.Hash()); isMan {
 			if cerr != nil || !bytes.Equal(cb, canonical) {
-				return false, fmt.Errorf("%w: stored manifest disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash)
+				return false, fmt.Errorf("%w: stored manifest disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash())
 			}
 		} else if !bytes.Equal(stored, canonical) {
-			return false, fmt.Errorf("%w: stored blob disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash)
+			return false, fmt.Errorf("%w: stored blob disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash())
 		}
 	}
 	if chunked {
@@ -1221,7 +1238,7 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO repo_blobs (repo_id, kind, hash)
 				 SELECT repo_id, 'chunk', $2 FROM repo_blobs WHERE kind='doc' AND hash=$1
-				 ON CONFLICT DO NOTHING`, string(doc.Hash), string(ch)); err != nil {
+				 ON CONFLICT DO NOTHING`, string(doc.Hash()), string(ch)); err != nil {
 				return false, err
 			}
 		}
@@ -1229,7 +1246,7 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 		if merr != nil {
 			return false, merr
 		}
-		if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, docCompress(mb), string(doc.Hash)); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, docCompress(mb), string(doc.Hash())); err != nil {
 			return false, err
 		}
 	} else if isMan {
@@ -1245,7 +1262,7 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'doc',$2) ON CONFLICT DO NOTHING`,
-		string(repoID), string(doc.Hash)); err != nil {
+		string(repoID), string(doc.Hash())); err != nil {
 		return false, err
 	}
 	if err := putReadIndexPG(ctx, tx, doc); err != nil {

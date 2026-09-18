@@ -999,3 +999,28 @@ This is file-level evidence, not a natural-language memory classifier. Typed
 claim provenance, effective memory selection, integrated-PR source bindings and
 bounded active-session briefings remain required work under #208. A mixed legacy
 memory fragment cannot be silently canceled merely because a source file changed.
+
+### Verified document values and read-index compatibility
+
+Document ingestion validates the CIR schema and canonical content hash before
+publishing any snapshot. The application carries those exact bytes as a
+request-scoped `VerifiedSessionDoc` through the optional `VerifiedDocStore` port.
+The value has private immutable content; returned byte buffers are copies. It is
+not a wire-supplied verification flag or a long-lived cache. Both FS and PostgreSQL
+still validate repository identity and pre-existing blob integrity. PostgreSQL
+publishes the body, ownership and read index in the existing transaction.
+
+Read-index metadata now comes from canonical event bytes, so unsorted input cannot
+associate another event's text, role or sequence with an offset. The v2 storage
+namespace (`read-index-v2` / migration 0050 tables) isolates old projections during
+rolling deployment. Missing v2 indexes are rebuilt lazily; the existing backfill
+command can warm them. Archive bytes, snapshot IDs, memory hashes, natural parents
+and graph facts are unchanged. Rebuilding may add latency on the first read;
+retaining the old index namespace supports old replicas during rollout. Deleting
+a document cleans its derived search data in both generations.
+
+A synthetic approximately 4MB document reduced the CPU validation/index pipeline
+from about 112ms and 125MB allocations to 61ms and 57MB on the development machine.
+This does not measure provider, network or complete synchronization latency.
+Cancellation during Git root discovery remains a cancellation/deadline error.
+HTTP sync failures identify the method/path without exposing query credentials.

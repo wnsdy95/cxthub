@@ -209,6 +209,9 @@ type HTTPError struct {
 	Status  int
 	Code    string
 	Message string
+	// Operation contains only the method and escaped path, never query values,
+	// credentials, headers or request bodies.
+	Operation string
 	// raw is the original text (for debugging) when envelope parsing fails.
 	raw string
 }
@@ -217,14 +220,19 @@ func (e *HTTPError) Error() string {
 	// code and status are included as strings — existing callers identify "non_fast_forward", "401", "403"
 	// as error strings (for compatibility with the old do() which directly stored the original envelope).
 	// New code instead uses *HTTPError.Code for type discrimination.
+	var message string
 	switch {
 	case e.Code != "":
-		return fmt.Sprintf("%s (%d): %s", e.Code, e.Status, e.Message)
+		message = fmt.Sprintf("%s (%d): %s", e.Code, e.Status, e.Message)
 	case e.Message != "":
-		return fmt.Sprintf("(%d): %s", e.Status, e.Message)
+		message = fmt.Sprintf("(%d): %s", e.Status, e.Message)
 	default:
-		return fmt.Sprintf("Server error (%d): %s", e.Status, e.raw)
+		message = fmt.Sprintf("Server error (%d): %s", e.Status, e.raw)
 	}
+	if e.Operation != "" {
+		return e.Operation + ": " + message
+	}
+	return message
 }
 
 // StatusCode lets use-case code classify terminal queue conflicts without
@@ -233,6 +241,10 @@ func (e *HTTPError) StatusCode() int { return e.Status }
 
 func newHTTPError(status int, method, path string, body []byte) *HTTPError {
 	he := &HTTPError{Status: status, raw: string(body)}
+	he.Operation = method
+	if u, err := url.Parse(path); err == nil {
+		he.Operation += " " + u.EscapedPath()
+	}
 	var env struct {
 		Error struct {
 			Code    string `json:"code"`
@@ -243,7 +255,7 @@ func newHTTPError(status int, method, path string, body []byte) *HTTPError {
 		he.Code = env.Error.Code
 		he.Message = env.Error.Message
 	} else {
-		he.Message = fmt.Sprintf("%s %s → %d: %s", method, path, status, strings.TrimSpace(string(body)))
+		he.Message = strings.TrimSpace(string(body))
 	}
 	return he
 }
