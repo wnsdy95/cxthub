@@ -428,7 +428,14 @@ export interface RepositoryRevision { graph: string; pending: string }
 /** Raw capture patch: branch memberships belong to the full graph generation. */
 export type PendingSnapshot = Omit<Snapshot, 'branches'>;
 export interface PendingView { revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[] }
+export type BranchLineage = 'natural' | 'unchanged' | 'graft' | 'disconnected' | 'missing' | 'unknown' | 'orphan';
+export interface ContextSemantics {
+  version: 1;
+  merges: { event_id: string; birth_id?: string; completed: boolean; placement_intact: boolean; source_available: boolean; lineage: BranchLineage }[];
+}
 export interface RepositoryView {
+  /** Absent only during rolling upgrades from pre-projection servers. */
+  semantics?: ContextSemantics;
   revision?: RepositoryRevision;
   refs: Ref[];
   snapshots: Snapshot[];

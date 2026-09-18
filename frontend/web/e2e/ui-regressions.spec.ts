@@ -1623,12 +1623,17 @@ test('completed PR survives a live graft reorder without rewriting current ances
     source_branch_id:'topic-id',source:h,target:h,shared_target:x,pr_completed:true,
     pr:{number:42,head_branch:'topic',base_branch:'main',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},
     created_at:'2026-09-18T00:00:02Z'}];
-  const {pageErrors,unexpected} = await openGraph(page,publicWorkspaceApi(snapshots,refs,[],[],[],history));
+  const semantics = {version:1,merges:[{event_id:'retained-completion',completed:true,
+    source_available:true,placement_intact:true,lineage:'unknown'}]};
+  const base = publicWorkspaceApi(snapshots,refs,[],[],[],history);
+  const {pageErrors,unexpected} = await openGraph(page,request => request.pathname.endsWith('/view')
+    ? {body:{snapshots,refs,history,reflog:[],pending:[],unsync:[],semantics}} : base(request));
   const merge = page.locator('[data-graph-id="graph:merge:retained-completion"]');
   await expect(merge).toHaveCount(1);
   snapshots[1] = {...snapshots[1],graft_parents:[h2],grafted:true};
   snapshots[2] = {...snapshots[2],graft_parents:[],grafted:false};
   refs[0].target = x;
+  semantics.merges[0].placement_intact = false;
   await page.locator('.graph-merge-records summary').click();
   await expect(page.locator('.graph-merge-records')).toContainText('Placement has changed', {timeout:15_000});
   await expect(merge).toHaveCount(1);

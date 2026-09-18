@@ -70,10 +70,17 @@ func TestRepositoryChangesAuthorizationAndPendingDelivery(t *testing.T) {
 		t.Fatal("repo")
 	}
 	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repo))
-	for _, path := range []string{"/revision", "/pending-view", "/changes"} {
+	for _, path := range []string{"/revision", "/pending-view", "/changes", "/context-query"} {
 		if code := doJSONAs(t, "dev:outsider@example.test:Other", "GET", base+path, nil, nil); code != 403 {
 			t.Fatalf("%s exposed: %d", path, code)
 		}
+	}
+	var query domain.ContextQueryView
+	if code := doJSON(t, "GET", base+"/context-query", nil, &query); code != 200 || query.Version != 1 || query.Semantics.Version != 1 {
+		t.Fatalf("shared context query: %d %+v", code, query)
+	}
+	if code := doJSON(t, "GET", base+"/context-query?scope=previous", nil, nil); code != 422 {
+		t.Fatalf("implicit past selection accepted: %d", code)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

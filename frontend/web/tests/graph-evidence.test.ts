@@ -27,3 +27,16 @@ assert.equal(classify([snap('base'),snap('source'),snap('main')]).placementIntac
 assert.equal(completedBranchEvidence(data,[birth,{...merge,pr_completed:false}]).length,0);
 // A reused name never substitutes for the missing branch identity.
 assert.equal(classify(data,[{...birth,branch_id:'other-generation'},merge]).lineage,'unknown');
+
+// Server facts take precedence even if the client was given a filtered graph.
+const serverFacts = { version: 1 as const, merges: [{event_id:'merge',birth_id:'birth',completed:true,
+  placement_intact:false,source_available:true,lineage:'natural' as const}] };
+const projected = completedBranchEvidence([], [birth,merge], undefined, serverFacts)[0];
+assert.equal(projected.completed,true);
+assert.equal(projected.sourceAvailable,true);
+assert.equal(projected.placementIntact,false);
+assert.equal(projected.lineage,'natural');
+assert.equal(projected.birth?.id,'birth');
+assert.deepEqual(completedBranchEvidence(data,[birth,merge],undefined,{version:1,merges:[]}),[],
+  'empty server facts must not trigger client inference');
+assert.throws(() => completedBranchEvidence([],[],undefined,serverFacts),/Incomplete context semantics/);

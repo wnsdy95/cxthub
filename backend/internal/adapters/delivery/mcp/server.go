@@ -75,6 +75,7 @@ func (g *requestGate) allowRequest(ctx context.Context) (bool, error) {
 }
 
 type ContextBackend interface {
+	inbound.ContextQuery
 	GetMemoryProjection(context.Context, domain.ContentHash, domain.ContentHash) (domain.MemoryProjection, error)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
 	List(ctx context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error)

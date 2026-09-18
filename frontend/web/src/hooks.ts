@@ -1,3 +1,5 @@
+import { completedBranchEvidence } from './graphEvidence';
+import { GraphIndex } from './graphIndex';
 // React Query — Server State (Query/Mutation).
 //
 // Authentication status is represented by the `me` query: success (200) → logged in, failure (401) → logged out.
@@ -427,6 +429,8 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
   const allData = viewQuery.data?.snapshots;
   const reflog = viewQuery.data?.reflog ?? [];
   const history = viewQuery.data?.history ?? [];
+  const semantics = viewQuery.data?.semantics;
+  const mergeEvidence = useMemo(() => completedBranchEvidence(allData ?? [], history, new GraphIndex(allData ?? []), semantics), [allData, history, semantics]);
   const pendings = viewQuery.data?.pending ?? [];
   const unsyncs = viewQuery.data?.unsync ?? [];
   const historicalIds = useMemo(() => historicalSnapshotIds(reflog, allData ?? [], history), [reflog, allData, history]);
@@ -447,13 +451,13 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
       list.push({ name: r.name, kind: r.kind });
       m.set(r.target, list);
     }
-    for (const marker of classifyBranchHistoryMarkers(refs, snapshots, primaryBranch, history)) {
+    for (const marker of classifyBranchHistoryMarkers(refs, snapshots, primaryBranch, history, new GraphIndex(snapshots), mergeEvidence)) {
       const list = m.get(marker.target) ?? [];
       list.push({ name: marker.branch, kind: marker.kind });
       m.set(marker.target, list);
     }
     return m;
-  }, [refs, snapshots, primaryBranch, history]);
+  }, [refs, snapshots, primaryBranch, history, mergeEvidence]);
   // Hook capture leaves (hook: prefix) are remnants of progress state — typically excluding graph/AI bar. However, hook snapshots reachable from branch refs (absorbed into commits or directly referenced by ref) are part of the history and are displayed. Just removing the label (message prefix) breaks the commit walk, causing the head to disappear from the graph — the pin line to break and its child pending to appear orphaned (stash-dedup trap, same principle: determination based on reachability).
   const sharedIds = useMemo(() => {
     const ids = sharedReachable(refs, snapshots);
@@ -486,7 +490,7 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
     return { ids, tips };
   }, [sharedIds, graphSnapshots]);
   return { refs, snapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history,
-    pendings, unsyncs, historyError: viewQuery.isError, graphLoading, graphError, retryGraph };
+    pendings, unsyncs, semantics, historyError: viewQuery.isError, graphLoading, graphError, retryGraph };
 }
 
 // ── Mutation ──────────────────────────────────────────

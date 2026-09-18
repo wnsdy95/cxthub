@@ -1,5 +1,30 @@
 # Context branches, working positions, and retained history
 
+## Shared query semantics
+
+`GET /repos/{repoID}/context-query` and remote MCP history/list/search scopes
+use the same application query and domain selection rules. PostgreSQL reads
+repository defaults, selected position, snapshots, refs, history and revision
+inside one repeatable-read transaction. The FS development adapter does not
+provide this multi-object isolation guarantee.
+
+`all` includes stored pending captures. `current` follows natural and active
+overlay ancestors of an explicit position. `previous` returns retained records
+outside that ancestry; it does not guess temporal order from timestamps.
+`archived` includes logical archived identities even after their names are reused.
+Selecting a past position never moves shared refs or deletes later records.
+
+The full repository view includes versioned `semantics.merges`. Completion,
+current placement, source availability and conversation lineage are separate
+fields computed before any UI folding. Web uses these server facts exclusively
+when present; a compatibility reader remains for servers predating this field
+during rolling upgrades. MCP history pages expose the corresponding facts too.
+Snapshot scope does not revoke historical receipts. Branch-filtered queries
+retain the birth records needed to interpret their completion facts.
+
+Explicit code revert/reapplication and provenance-aware memory validity are
+subsequent parts of issue #208; current placement is not a substitute for them.
+
 ## Completion and live-read contracts
 
 A server-issued PR completion is an immutable acknowledgement. Later same-branch
