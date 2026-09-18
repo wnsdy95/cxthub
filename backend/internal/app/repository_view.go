@@ -45,6 +45,7 @@ func (s *Service) GetRepositoryView(ctx context.Context, repo domain.ContentHash
 		if v.Revision, err = s.RepositoryRevision(ctx, repo); err != nil {
 			return
 		}
+		v.Semantics = domain.ProjectContextSemantics(v.Snapshots, v.History)
 		v.Refs = nonNil(v.Refs)
 		v.Snapshots = nonNil(v.Snapshots)
 		v.Reflog = nonNil(v.Reflog)
@@ -92,13 +93,13 @@ func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (
 			if _, ok := seen[id]; ok {
 				continue
 			}
-				snap, e := s.meta.GetSnapshot(ctx, repo, id)
+			snap, e := s.meta.GetSnapshot(ctx, repo, id)
 			if e != nil {
-					return v, e
-				}
-				// Capture patches never own projected memberships, including values
-				// persisted by legacy FS versions. The full graph generation does.
-				snap.Branches = nil
+				return v, e
+			}
+			// Capture patches never own projected memberships, including values
+			// persisted by legacy FS versions. The full graph generation does.
+			snap.Branches = nil
 			seen[id] = snap
 			v.Snapshots = append(v.Snapshots, snap)
 		}

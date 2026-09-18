@@ -3,7 +3,7 @@
 // Lane layout is handled in graph.ts (pure function), this file renders only the SVG.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
+import type { ContextSemantics, HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
 import { layoutGraph, mainlineOf, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { projectBranchGraph, visibleBranchGraph, type GraphEvent } from '../graphProjection';
 import { completedBranchEvidence } from '../graphEvidence';
@@ -71,6 +71,7 @@ export function CommitGraph({
   refs,
   reflog = EMPTY_REFLOG,
   history = EMPTY_HISTORY,
+  semantics,
   historyError = false,
   graphLoading = false,
   graphError,
@@ -90,6 +91,7 @@ export function CommitGraph({
 /** Server ref movements; missing evidence never creates a historical path. */
   reflog?: RefLogEntry[];
   history?: HistoryEvent[];
+  semantics?: ContextSemantics;
   historyError?: boolean;
   graphLoading?: boolean;
   graphError?: string;
@@ -105,7 +107,7 @@ export function CommitGraph({
 }) {
   const t = useT();
   const graphIndex = useMemo(() => new GraphIndex(snapshots), [snapshots]);
-  const mergeEvidence = useMemo(() => completedBranchEvidence(snapshots, history, graphIndex), [snapshots, history, graphIndex]);
+  const mergeEvidence = useMemo(() => completedBranchEvidence(snapshots, history, graphIndex, semantics), [snapshots, history, graphIndex, semantics]);
   const [showArchived, setShowArchived] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
   const [positionId, setPositionId] = useState('');

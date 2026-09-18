@@ -18,6 +18,10 @@ type pageBackend struct {
 	events []domain.HistoryEvent
 }
 
+func (f pageBackend) QueryContext(_ context.Context, repo domain.ContentHash, in domain.ContextSelection) (domain.ContextQueryView, error) {
+	return domain.SelectContext(domain.RepositoryView{Snapshots: f.snapshots[repo], Refs: f.refs, History: f.events}, in, "main")
+}
+
 func (f pageBackend) GetDoc(_ context.Context, repo, id domain.ContentHash) (domain.SessionDoc, error) {
 	d, ok := f.docs[id]
 	if !ok {

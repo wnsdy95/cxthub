@@ -32,7 +32,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   const [now, setNow] = useState(Date.now);
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const activityTimes = pendings.map(p => p.activity_at ?? '').join(',');
   useEffect(() => {
@@ -443,7 +443,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
           onSelect={openSnapshot}
           badges={badges}
           refs={refs}
-          reflog={reflog} history={history} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph}
+          reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph}
           uncommitted={uncommittedIds}
           pinBranch={repo.default_branch || 'main'}
           repoId={atLeast(role, 'member') ? repo.id : null}

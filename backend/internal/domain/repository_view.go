@@ -3,6 +3,7 @@ package domain
 // RepositoryView is one committed generation of graph metadata. Document bodies
 // remain independently addressable by immutable content hash.
 type RepositoryView struct {
+	Semantics ContextSemantics   `json:"semantics"`
 	Revision  RepositoryRevision `json:"revision"`
 	Refs      []Ref              `json:"refs"`
 	Snapshots []Snapshot         `json:"snapshots"`

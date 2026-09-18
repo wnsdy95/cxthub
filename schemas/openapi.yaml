@@ -78,6 +78,32 @@ components:
       properties:
         graph: { type: string, pattern: '^[0-9]+$' }
         pending: { type: string, pattern: '^[0-9]+$' }
+    ContextMergeEvidence:
+      type: object
+      required: [event_id, completed, placement_intact, source_available, lineage]
+      properties:
+        event_id: { type: string }
+        birth_id: { type: string }
+        completed: { type: boolean, const: true }
+        placement_intact: { type: boolean }
+        source_available: { type: boolean }
+        lineage: { type: string, enum: [natural, unchanged, graft, disconnected, missing, unknown, orphan] }
+    ContextSemantics:
+      type: object
+      required: [version, merges]
+      properties:
+        version: { type: integer, const: 1 }
+        merges: { type: array, items: { $ref: '#/components/schemas/ContextMergeEvidence' } }
+    ContextQueryView:
+      type: object
+      required: [version, revision, snapshots, history, semantics]
+      properties:
+        version: { type: integer, const: 1 }
+        revision: { $ref: '#/components/schemas/RepositoryRevision' }
+        position: { $ref: '#/components/schemas/ContentHash' }
+        snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+        history: { type: array, items: { $ref: '#/components/schemas/HistoryEvent' } }
+        semantics: { $ref: '#/components/schemas/ContextSemantics' }
     PendingView:
       type: object
       description: Raw capture patches at a matching graph revision. Snapshot branches is omitted and must not replace membership from RepositoryView. Other capture metadata may update; unknown new ancestors require a complete view refresh.
@@ -1310,6 +1336,30 @@ paths:
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
 
+  /repos/{repoID}/context-query:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: queryContext
+      summary: Select context using the shared Web and MCP history rules
+      description: Viewer access is required. PostgreSQL selects position, refs, history, and snapshots in one repeatable-read transaction. Current and previous require an explicit position. History and semantics preserve operation facts independently of snapshot scope. All includes stored pending captures; previous contains retained context outside the selected ancestry, not chronological speculation. Branch names resolve to their logical identity when known.
+      tags: [snapshots]
+      parameters:
+        - { name: branch, in: query, schema: { type: string } }
+        - { name: position, in: query, schema: { type: string } }
+        - { name: scope, in: query, schema: { type: string, enum: [all, current, previous, archived], default: all } }
+      responses:
+        '200':
+          description: Context selected from one repository generation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContextQueryView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Ambiguous archived branch identity }
+        '422': { description: Invalid scope or ambiguous position }
+
   /repos/{repoID}/view:
     parameters:
       - $ref: "#/components/parameters/repoID"
@@ -1325,8 +1375,9 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [revision, refs, snapshots, reflog, history, pending, unsync]
+                required: [revision, refs, snapshots, reflog, history, pending, unsync, semantics]
                 properties:
+                  semantics: { $ref: '#/components/schemas/ContextSemantics' }
                   revision: { $ref: '#/components/schemas/RepositoryRevision' }
                   refs: { type: array, items: { $ref: '#/components/schemas/Ref' } }
                   snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }

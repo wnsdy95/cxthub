@@ -6,6 +6,7 @@
 // and the server sets the session cookie in the Set-Cookie response.
 import type { StorageUsageReport, RefLogEntry, User, PublicUser, Workspace, PublicWorkspace, WorkspacePatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Enterprise, PublicEnterprise, EnterpriseMembership, EnterprisePolicy, EnterpriseAuditEvent, BreakGlassGrant, EnterpriseRole } from './types';
 import { normalizeActivityResponse } from './activity';
+import { validateContextSemantics } from './graphEvidence';
 
 // Default is same-origin relative path (/api/v1). Dev uses Vite proxy, prod assumes same-domain deployment.
 // To serve from a different origin, use an absolute URL with VITE_API_BASE, but cookies must be same-site.
@@ -227,7 +228,11 @@ export const api = {
       `/repos/${encodeURIComponent(repoId)}/pending/${encodeURIComponent(sessionId)}/undismiss`,
       {},
     ),
-  repositoryView: (repoId: string) => call<import('./types').RepositoryView>('GET', `/repos/${encodeURIComponent(repoId)}/view`),
+  repositoryView: async (repoId: string) => {
+    const view = await call<import('./types').RepositoryView>('GET', `/repos/${encodeURIComponent(repoId)}/view`);
+    validateContextSemantics(view.history, view.semantics);
+    return view;
+  },
   reflog: (repoId: string) => call<RefLogEntry[]>('GET', `/repos/${encodeURIComponent(repoId)}/reflog`),
   history: (repoId: string) => call<import('./types').HistoryEvent[]>('GET', `/repos/${encodeURIComponent(repoId)}/history`),
   enableContextProtocol: (repoId: string) => call<{ context_protocol: number }>('POST', `/repos/${encodeURIComponent(repoId)}/context-protocol`, {}),

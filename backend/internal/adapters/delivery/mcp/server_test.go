@@ -29,6 +29,10 @@ type fakeContextBackend struct {
 	memories  map[domain.ContentHash]domain.MemoryDigest
 }
 
+func (f fakeContextBackend) QueryContext(_ context.Context, repo domain.ContentHash, in domain.ContextSelection) (domain.ContextQueryView, error) {
+	return domain.SelectContext(domain.RepositoryView{Snapshots: f.snapshots[repo]}, in, "main")
+}
+
 func (f fakeContextBackend) ListRepos(context.Context, string) ([]domain.Repo, error) {
 	return f.repos, nil
 }

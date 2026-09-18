@@ -103,7 +103,7 @@ type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug' | 'visi
 export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspace | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
+  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
@@ -586,7 +586,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
+        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
         <ReflogPanel repoId={repo.id} />
         <AIBar snapshots={committedSnapshots} />
       </aside>
