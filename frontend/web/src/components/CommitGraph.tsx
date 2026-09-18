@@ -682,7 +682,7 @@ export function CommitGraph({
       )}
       {projection.lifecycleEdges.size > 0 && <p className="graph-lifecycle-legend">{t('graph.lifecycleLine')}</p>}
       <div className="graph-viewport" ref={graphViewportRef}>
-        <div className="graph-canvas" style={{ width: svgW }}>
+        <div className="graph-canvas" style={{ width: svgW + (uncommittedIds.size ? 100 : 0) }}>
           {/* Top: branch labels per currently visible track. The header and SVG rows share one scroll canvas. */}
           <div className="graph-head">
             {laneLabels.map((label, i) =>
@@ -825,8 +825,6 @@ export function CommitGraph({
           const isUncommitted = uncommittedIds.has(r.snap.id);
           const isUnpushed = !isUncommitted && unpushed.has(r.snap.id);
           const next = rowIdx + 1 < rows.length ? rows[rowIdx + 1].snap.id : null;
-          // Uncommitted block bottom boundary (commit history from next row) — exclusive truncation line.
-          const uncommittedEnd = isUncommitted && next !== null && !uncommittedIds.has(next);
           // Bottom boundary of the push block — distinguished by a truncation line. Uncommitted lines also enter the unpushed set (unreachable), so "is the next line a push commit" must be determined without uncommitted lines — otherwise, uncommitted lines between would be mistaken for the truncation line.
           const nextIsUnpushedCommit = next !== null && unpushed.has(next) && !uncommittedIds.has(next);
           const blockEnd = isUnpushed && next !== null && !nextIsUnpushedCommit;
@@ -874,8 +872,8 @@ export function CommitGraph({
                   openJoinModal(r.snap.id);
                 }}
               >
-                {/* Unpushed/uncommitted lines are light — visually distinguish them from the shared timeline (push pre) */}
-                <svg width={svgW} height={ROW_H} className="graph-svg" aria-hidden="true" opacity={isUnpushed || isUncommitted ? 0.42 : isSide ? 0.6 : 1}>
+                {/* Pending is a node state; through-lines may belong to published branches. */}
+                <svg width={svgW} height={ROW_H} className="graph-svg" aria-hidden="true" opacity={isUnpushed ? 0.42 : isSide ? 0.6 : 1}>
                   {defs.length > 0 && <defs>{defs}</defs>}
                   {segs}
                   {sel && <circle cx={x} cy={mid} r={R + 3} fill="none" stroke={laneColor(r.lane)} strokeWidth={1.2} />}
@@ -891,13 +889,14 @@ export function CommitGraph({
                     // Uncommitted = a hook capture not yet linked to a commit.
                     // A dotted node distinguishes durable capture state without
                     // claiming that the provider process is still alive.
-                    <circle className="uncommitted-node" cx={x} cy={mid} r={R} stroke={laneColor(r.lane)} strokeWidth={1.5} strokeDasharray="2.5 2" />
+                    <circle className="uncommitted-node" cx={x} cy={mid} r={R} stroke="#9a6a00" strokeWidth={1.5} strokeDasharray="2.5 2" />
                   ) : (
                     <circle cx={x} cy={mid} r={R} fill={laneColor(r.lane)} />
                   )}
                 </svg>
+                {isUncommitted && <span className="graph-uncommitted-badge" aria-hidden="true">{t('graph.uncommittedLabel')}</span>}
               </button>
-              {(uncommittedEnd || blockEnd) && <div className="graph-status-divider" data-graph-divider={r.snap.id}>
+              {blockEnd && <div className="graph-status-divider" data-graph-divider={r.snap.id}>
                 <svg width={svgW} height={20} className="graph-svg" aria-hidden="true">
                   {r.outgoing.map((target, lane) => {
                     if (!target) return null;
@@ -910,8 +909,8 @@ export function CommitGraph({
                       strokeDasharray={lifecycle ? LIFECYCLE_DASH : seam ? SEAM_DASH : sessionSeams.has(key) ? SESSION_DASH : undefined} />;
                   })}
                 </svg>
-                <div className={uncommittedEnd ? 'uncommitted-divider' : 'unpushed-divider'}>
-                  {t(uncommittedEnd ? 'graph.uncommittedDivider' : 'graph.unpushedDivider')}
+                <div className="unpushed-divider">
+                  {t('graph.unpushedDivider')}
                 </div>
               </div>}
             </li>

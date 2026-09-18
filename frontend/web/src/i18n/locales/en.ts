@@ -689,7 +689,7 @@ export const en: Messages = {
     joinCrossBranch: 'This commit is also used by a session branch scoped to another Git branch.',
     joinAlreadyHead: 'This commit is already the branch head.',
     uncommitted: '◌ Uncommitted — hook capture not yet linked to a commit',
-    uncommittedDivider: '◌ above: uncommitted captures',
+    uncommittedLabel: 'Uncommitted',
     archivedLane: 'archive · {branch}',
   },
 };
