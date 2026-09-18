@@ -869,9 +869,13 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 		}
 		chunkObjs = nil
 	}
-	if len(sendSnaps) > 0 || len(sendDocs) > 0 || len(chunkedDocs) > 0 {
-		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/objects", objectsReq{sendSnaps, sendDocs, chunkedDocs, chunkObjs}, nil); err != nil {
-			return err
+	batches, err := objectCommitBatches(sendSnaps, sendDocs, chunkedDocs, chunkObjs)
+	if err != nil {
+		return err
+	}
+	for i, batch := range batches {
+		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/objects", batch, nil); err != nil {
+			return fmt.Errorf("finalize object batch %d/%d (no ref updates sent): %w", i+1, len(batches), err)
 		}
 	}
 

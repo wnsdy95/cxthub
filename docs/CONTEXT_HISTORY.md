@@ -795,3 +795,18 @@ worktree do not qualify; same-worktree rename evidence remains supported.
 ## Live uncommitted capture
 
 Active native sessions use incremental normalized projection checkpoints. On Hold follows durable repository revisions instead of repeatedly fetching the full graph. Capture identity, pending publication and failure/reconnect behavior are specified in [Live capture and repository updates](LIVE_CAPTURE.md).
+
+### Bounded object finalization
+
+Chunk transfer limits the bytes sent over the network; it does not limit how
+many cumulative transcripts the server reconstructs in one request. CLI pushes
+therefore finalize at most one document and one snapshot per object request,
+with natural parents before children. Ref updates are sent only after every
+object request succeeds. An interrupted push can leave verified immutable
+objects on the server; subsequent negotiation skips those objects and resumes.
+A lost acknowledgement never implies that the object was not stored.
+
+This bounds the number of reconstructed documents per request, not the cost of
+a single large transcript. Streaming validation/indexing remains a separate
+optimization. Other clients can continue to move their refs concurrently;
+normal server CAS and transaction rules still govern ref publication.
