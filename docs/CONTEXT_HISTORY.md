@@ -1,5 +1,21 @@
 # Context branches, working positions, and retained history
 
+## Completion and live-read contracts
+
+A server-issued PR completion is an immutable acknowledgement. Later same-branch
+reordering may supersede its graft placement without revoking that operation.
+The graph retains the completed operation and distinguishes historical placement
+from current conversation ancestry; it must not redirect current refs/children
+through a superseded placement or reconstruct a cycle.
+
+`RepositoryView` owns projected branch memberships. `PendingView` supplies raw
+capture patches at a matching graph revision and intentionally omits `branches`;
+clients preserve that field from the full generation. Stored memory is fetched
+and cached by immutable `memory_hash`, not by the mutable snapshot attachment.
+
+Revert/applicability events and the common server-owned Web/MCP read model are
+tracked in #208; this contract fix does not claim those follow-up stages ship.
+
 Status: accepted product behavior implemented and integration-tested on 2026-09-16.
 The checklist below records the implemented contract and its verification. This
 document supersedes the earlier proposal to repair every shared-tip alias by

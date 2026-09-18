@@ -7,7 +7,9 @@ type RepositoryRevision struct {
 	Pending uint64 `json:"pending,string"`
 }
 type PendingView struct {
-	Revision  RepositoryRevision `json:"revision"`
-	Pending   []Pending          `json:"pending"`
-	Snapshots []Snapshot         `json:"snapshots"`
+	Revision RepositoryRevision `json:"revision"`
+	Pending  []Pending          `json:"pending"`
+	// Snapshots carry raw capture metadata only. Branches is intentionally absent;
+	// consumers preserve memberships from their matching graph generation.
+	Snapshots []Snapshot `json:"snapshots"`
 }

@@ -80,6 +80,7 @@ components:
         pending: { type: string, pattern: '^[0-9]+$' }
     PendingView:
       type: object
+      description: Raw capture patches at a matching graph revision. Snapshot branches is omitted and must not replace membership from RepositoryView. Other capture metadata may update; unknown new ancestors require a complete view refresh.
       required: [revision, pending, snapshots]
       properties:
         revision: { $ref: '#/components/schemas/RepositoryRevision' }

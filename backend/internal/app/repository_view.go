@@ -92,10 +92,13 @@ func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (
 			if _, ok := seen[id]; ok {
 				continue
 			}
-			snap, e := s.meta.GetSnapshot(ctx, repo, id)
+				snap, e := s.meta.GetSnapshot(ctx, repo, id)
 			if e != nil {
-				return v, e
-			}
+					return v, e
+				}
+				// Capture patches never own projected memberships, including values
+				// persisted by legacy FS versions. The full graph generation does.
+				snap.Branches = nil
 			seen[id] = snap
 			v.Snapshots = append(v.Snapshots, snap)
 		}

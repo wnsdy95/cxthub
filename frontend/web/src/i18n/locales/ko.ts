@@ -660,6 +660,7 @@ export const ko = {
     branchMerged: '{branch} 합류',
     mergeRecords: 'PR 합류 기록 · {count}개',
     mergeVerified: '합류 완료 · 합류 당시 대상 계보에 원본 포함 확인',
+    historicalPlacement: '현재 배치는 변경됨 · 과거 완료 기록은 유지',
     mergeUnverified: '완료 기록 있음 · 대상 계보 누락 또는 불일치로 확인 필요',
     viewMergeSource: '합류한 컨텍스트 보기',
     viewingBirthContext: '브랜치 생성 시점의 컨텍스트입니다. 생성 동작 자체에 별도 대화는 없습니다.',

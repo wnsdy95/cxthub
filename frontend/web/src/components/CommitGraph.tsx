@@ -544,12 +544,13 @@ export function CommitGraph({
       {mergeEvidence.length > 0 && <details className="graph-history-panel graph-merge-records">
         <summary>{t('graph.mergeRecords', { count: mergeEvidence.length })}</summary>
         <ul className="graph-history-list">
-          {mergeEvidence.map(({ merge, birth, lineage, merged, sourceAvailable }) => {
+          {mergeEvidence.map(({ merge, birth, lineage, placementIntact, sourceAvailable }) => {
             const event: GraphEvent = { id: `graph:merge:${merge.id}`, kind: 'merge', branch: merge.branch,
               sourceBranch: merge.pr!.head_branch, snapshot: merge.source ?? '', evidence: merge.id, prNumber: merge.pr!.number };
             return <li key={merge.id} data-branch-lineage={lineage}>
               <strong>{merge.pr!.head_branch} → {merge.branch} · PR #{merge.pr!.number}</strong>
-              <span>{t(merged ? 'graph.mergeVerified' : 'graph.mergeUnverified')}</span>
+              <span>{t('graph.mergeVerified')}</span>
+              {!placementIntact && <span>{t('graph.historicalPlacement')}</span>}
               <span>{t(`graph.lineage_${lineage}`)}</span>
               <div className="graph-history-actions">
                 <button type="button" disabled={!sourceAvailable} onClick={() => onSelect(event.snapshot, event)}>{t('graph.viewMergeSource')}</button>

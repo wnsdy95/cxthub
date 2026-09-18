@@ -23,8 +23,13 @@ export function mergePendingView(view: RepositoryView, pending: PendingView): Re
   for (const e of view.reflog) { retained.add(e.old); retained.add(e.new); }
   for (const s of [...view.snapshots, ...pending.snapshots]) for (const id of [...(s.parents ?? []), ...(s.graft_parents ?? [])]) retained.add(id);
   const oldTargets = new Set(view.pending.map(p => p.target));
+  const memberships = new Map(view.snapshots.map(s => [s.id, s.branches]));
   const snapshots = new Map(view.snapshots.filter(s => !oldTargets.has(s.id) || retained.has(s.id)).map(s => [s.id, s]));
-  for (const s of pending.snapshots) snapshots.set(s.id, s);
+  for (const s of pending.snapshots) {
+    // /pending-view does not project branch membership. It must neither erase
+    // nor manufacture graph-owned fields at the same graph revision.
+    snapshots.set(s.id, {...s, branches: memberships.get(s.id)});
+  }
   return {...view, revision: pending.revision, pending: pending.pending, snapshots: [...snapshots.values()]};
 }
 

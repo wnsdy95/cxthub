@@ -2,11 +2,56 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"testing"
 )
+
+func TestFullAndPendingViewMembershipOwnership(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newFsckSvc(t)
+	repo, id := hh(t.Name()), hh("shared pending capture")
+	if err := st.PutSnapshot(ctx, domain.Snapshot{RepoID: repo, ID: id, DocHash: id, Branch: "main", Branches: []string{"legacy-stale"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"main", "topic"} {
+		if err := st.CompareAndSwapRef(ctx, repo, domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: name, Target: id}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.PutPending(ctx, repo, domain.Pending{RepoID: repo, SessionID: "session", Target: id}); err != nil {
+		t.Fatal(err)
+	}
+	full, err := svc.GetRepositoryView(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := svc.GetPendingView(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Assert actual serialization, not a mock that enriches both endpoints.
+	decode := func(v any) map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(raw, &wire); err != nil {
+			t.Fatal(err)
+		}
+		return wire["snapshots"].([]any)[0].(map[string]any)
+	}
+	if got := fmt.Sprint(decode(full)["branches"]); got != "[main topic]" {
+		t.Fatalf("full memberships: %s", got)
+	}
+	if _, exists := decode(patch)["branches"]; exists {
+		t.Fatal("capture patch claimed graph membership")
+	}
+}
 
 func TestPendingViewDoesNotTraverseOldAncestors(t *testing.T) {
 	ctx := context.Background()

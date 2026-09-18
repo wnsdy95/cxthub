@@ -55,7 +55,12 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
   }
   let projectedHead = pinHead;
   const merges: Array<{ id: string; before: string; after: string; source: string; branch: string; scope: string; from: string; at: string; identity?: string }> = [];
-  const completed = evidence.filter(e => e.merged).map(e => e.merge);
+  // Completion comes from the server receipt, never from mutable current edges.
+  // Missing endpoints remain inspectable in the operation list; drawing must
+  // not invent the missing captures.
+  const completed = evidence.filter(e => e.completed && e.sourceAvailable
+    && byId.has(e.merge.shared_target ?? '') && byId.has(e.merge.target ?? '')).map(e => e.merge);
+  const historicalOnly = new Set(evidence.filter(e => !e.placementIntact).map(e => `graph:merge:${e.merge.id}`));
   const completedById = new Map(completed.map(h => [`graph:merge:${h.id}`, h]));
   const completedMoves = new Set(completed.map(h => JSON.stringify([h.branch_id, h.shared_target, h.target])));
   const publications = new Map<string, Set<string>>();
@@ -148,6 +153,14 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     for (const p of node.parents ?? []) addChild(p, merge.id);
     const receipt = completedById.get(merge.id);
     events.set(merge.id, { id: merge.id, kind: 'merge', branch: merge.branch, sourceBranch: merge.from, snapshot: merge.source, evidence: receipt?.id ?? 'ref-move', prNumber: receipt?.pr?.number });
+    if (historicalOnly.has(merge.id)) {
+      // A superseded placement is an operation relationship, not current
+      // conversation ancestry. Do not redirect live children or refs through
+      // it: that would reconstruct an old edge and can create a display cycle.
+      lifecycleEdges.set(merge.id, new Set(node.parents));
+      inactiveMerges.add(merge.id);
+      continue;
+    }
     mergeForTip.set(`${merge.scope}:${merge.after}`, merge.id);
     // Explicit movements away from this lineage supersede its placement.
     // Compare server operation times here, never provider snapshot timestamps.
@@ -238,8 +251,8 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
       else if (!node.parents.length) node.parents = [birth];
     }
   }
-  for (const { merge, birth, merged } of evidence) {
-    if (!merged || !birth || birth.kind !== 'birth' || !(time(birth.created_at) <= time(merge.created_at))) continue;
+  for (const { merge, birth, completed } of evidence) {
+    if (!completed || !birth || birth.kind !== 'birth' || !(time(birth.created_at) <= time(merge.created_at))) continue;
     const birthId = `graph:birth:${birth.id}`;
     const mergeId = `graph:merge:${merge.id}`;
     const node = nodes.get(mergeId);
@@ -254,7 +267,9 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], history: 
     // obscure the branch identity, especially when several PRs share a hash.
     const alreadyIncluded = reachesSnapshot(nodes, previous, merge.source!);
     node.parents = [previous, birthId, ...node.parents.slice(1).filter(p => !alreadyIncluded || p !== merge.source)];
-    lifecycleEdges.set(mergeId, new Set([birthId]));
+    const operationEdges = lifecycleEdges.get(mergeId) ?? new Set<string>();
+    operationEdges.add(birthId);
+    lifecycleEdges.set(mergeId, operationEdges);
   }
   const projectedRefs = refs.map(ref => {
     const target = ref.kind === 'branch' ? mergeForTip.get(`${bindings.refKey(ref)}:${ref.target}`) : undefined;

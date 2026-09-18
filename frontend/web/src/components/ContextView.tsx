@@ -203,7 +203,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   const [downloadError, setDownloadError] = useState('');
   const [downloading, setDownloading] = useState(false);
   useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); setDownloadError(''); }, [selected?.id]);
-  const memoryQ = useMemory(repo.id, selected?.id ?? null, memoryOpen && Boolean(selected?.memory_hash));
+  const memoryQ = useMemory(repo.id, selected?.memory_hash ?? null, memoryOpen);
   const memory = memoryQ.data;
   const tailPending = selected ? continuing.get(selected.id) ?? null : null;
   async function downloadRaw() {

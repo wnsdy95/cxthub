@@ -425,7 +425,9 @@ export interface StorageUsageReport {
 
 /** A complete graph generation, read in one backend transaction. */
 export interface RepositoryRevision { graph: string; pending: string }
-export interface PendingView { revision: RepositoryRevision; pending: Pending[]; snapshots: Snapshot[] }
+/** Raw capture patch: branch memberships belong to the full graph generation. */
+export type PendingSnapshot = Omit<Snapshot, 'branches'>;
+export interface PendingView { revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[] }
 export interface RepositoryView {
   revision?: RepositoryRevision;
   refs: Ref[];

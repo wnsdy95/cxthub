@@ -11,7 +11,7 @@ const merge: HistoryEvent = {...birth,id:'merge',kind:'pr-merge',branch_id:'main
 const data = [snap('base'),snap('source',['base']),snap('main',['source'])];
 const classify = (snapshots=data,history=[birth,merge]) => completedBranchEvidence(snapshots,history)[0];
 assert.equal(classify().lineage,'natural');
-assert.equal(classify().merged,true);
+assert.equal(classify().placementIntact,true);
 assert.equal(classify(data,[birth,{...merge,source:'base'}]).lineage,'unchanged');
 assert.equal(classify([snap('base'),snap('source',[],['base']),snap('main',['source'])]).lineage,'graft');
 assert.equal(classify([snap('base'),{...snap('source',['base']),grafted:true},snap('main',['source'])]).lineage,'graft', 'legacy append is not natural conversation ancestry');
@@ -21,9 +21,9 @@ assert.equal(classify([snap('base'),snap('source',['missing']),snap('main',['sou
 assert.equal(classify(data,[merge]).lineage,'unknown');
 assert.equal(classify(data,[birth,{...birth,id:'duplicate'},merge]).lineage,'unknown');
 assert.equal(classify(data,[{...birth,kind:'orphan',source:undefined,target:undefined},merge]).lineage,'orphan');
-assert.equal(classify(data.filter(s=>s.id!=='main')).merged,false);
+assert.equal(classify(data.filter(s=>s.id!=='main')).placementIntact,false);
 assert.equal(classify(data.filter(s=>s.id!=='source')).sourceAvailable,false);
-assert.equal(classify([snap('base'),snap('source'),snap('main')]).merged,false);
+assert.equal(classify([snap('base'),snap('source'),snap('main')]).placementIntact,false);
 assert.equal(completedBranchEvidence(data,[birth,{...merge,pr_completed:false}]).length,0);
 // A reused name never substitutes for the missing branch identity.
 assert.equal(classify(data,[{...birth,branch_id:'other-generation'},merge]).lineage,'unknown');

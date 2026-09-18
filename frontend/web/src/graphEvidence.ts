@@ -5,9 +5,8 @@ export type BranchLineage = 'natural' | 'unchanged' | 'graft' | 'disconnected' |
 
 export { conversationParents } from './graphIndex';
 
-/** A PR completion proves inclusion, not the path taken after branch creation.
- * Classify those facts separately; an append of previous main cannot prove
- * that the incoming conversation started at that branch's birth. */
+/** Server-issued completion is an immutable operation fact. Current placement
+ * and conversation lineage may change independently after a valid Join. */
 export function completedBranchEvidence(snapshots: Snapshot[], history: HistoryEvent[], index = new GraphIndex(snapshots)) {
   if (index.issues.length) return [];
   const { byId } = index;
@@ -20,7 +19,7 @@ export function completedBranchEvidence(snapshots: Snapshot[], history: HistoryE
     const births = birthsByBranch.get(merge.source_branch_id ?? '') ?? [];
     const birth = births.length === 1 ? births[0] : undefined;
     const sourceAvailable = Boolean(merge.source && byId.has(merge.source));
-    const merged = Boolean(sourceAvailable && merge.target && merge.shared_target && byId.has(merge.target)
+    const placementIntact = Boolean(sourceAvailable && merge.target && merge.shared_target && byId.has(merge.target)
       && byId.has(merge.shared_target) && index.reaches(merge.target, merge.source!)
       && index.reaches(merge.target, merge.shared_target));
     let lineage: BranchLineage;
@@ -33,6 +32,6 @@ export function completedBranchEvidence(snapshots: Snapshot[], history: HistoryE
     else if (!index.closure(merge.source!, 'conversation').complete) lineage = 'missing';
     else if (index.reaches(merge.source!, birth.source)) lineage = 'graft';
     else lineage = index.closure(merge.source!).complete ? 'disconnected' : 'missing';
-    return { merge, birth, lineage, merged, sourceAvailable };
+    return { merge, birth, lineage, completed: true as const, placementIntact, sourceAvailable };
   }).sort((a, b) => Date.parse(b.merge.created_at) - Date.parse(a.merge.created_at) || a.merge.id.localeCompare(b.merge.id));
 }
