@@ -13,18 +13,22 @@ import (
 )
 
 type toolArgs struct {
-	ChangeID   string `json:"change_id"`
-	Mode       string `json:"mode"`
-	Repository string `json:"repository"`
-	Branch     string `json:"branch"`
-	Limit      int    `json:"limit"`
-	Ref        string `json:"ref"`
-	Events     int    `json:"events"`
-	Query      string `json:"query"`
-	Cursor     string `json:"cursor"`
-	Scope      string `json:"scope"`
-	Position   string `json:"position"`
-	MemoryHash string `json:"memory_hash"`
+	CodeCommit   string   `json:"code_commit"`
+	SourceCommit string   `json:"source_commit"`
+	SourceParent string   `json:"source_parent"`
+	Paths        []string `json:"paths"`
+	ChangeID     string   `json:"change_id"`
+	Mode         string   `json:"mode"`
+	Repository   string   `json:"repository"`
+	Branch       string   `json:"branch"`
+	Limit        int      `json:"limit"`
+	Ref          string   `json:"ref"`
+	Events       int      `json:"events"`
+	Query        string   `json:"query"`
+	Cursor       string   `json:"cursor"`
+	Scope        string   `json:"scope"`
+	Position     string   `json:"position"`
+	MemoryHash   string   `json:"memory_hash"`
 }
 
 const (
@@ -56,6 +60,8 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 		return s.eventPage(ctx, repo, args)
 	case "memory_load":
 		return s.memoryPage(ctx, repo, args)
+	case "code_applicability":
+		return s.codeApplicabilityPage(ctx, repo, args)
 	case "git_observations":
 		return s.gitScansPage(ctx, repo, args)
 	case "git_changes":

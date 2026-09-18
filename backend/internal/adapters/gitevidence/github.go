@@ -148,6 +148,21 @@ func (g *GitHub) commit(ctx context.Context, repo, oid string) (commitObject, er
 	return out, nil
 }
 func (g *GitHub) tree(ctx context.Context, repo, oid string) (map[string]domain.GitEntry, bool, error) {
+	entries, complete, err := g.treeEntries(ctx, repo, oid)
+	if err != nil || !complete {
+		return nil, complete, err
+	}
+	if _, err = domain.BuildGitTreeNodes(oid, entries); err != nil {
+		return nil, false, err
+	}
+	for path, entry := range entries {
+		if entry.Mode == "040000" {
+			delete(entries, path)
+		}
+	}
+	return entries, true, nil
+}
+func (g *GitHub) treeEntries(ctx context.Context, repo, oid string) (map[string]domain.GitEntry, bool, error) {
 	var out struct {
 		SHA       string `json:"sha"`
 		Truncated *bool  `json:"truncated"`
@@ -180,7 +195,6 @@ func (g *GitHub) tree(ctx context.Context, repo, oid string) (map[string]domain.
 			if item.Mode != "040000" {
 				return nil, false, domain.ErrIntegrity
 			}
-			continue
 		case "blob":
 			if item.Mode != "100644" && item.Mode != "100755" && item.Mode != "120000" {
 				return nil, false, domain.ErrIntegrity
@@ -392,3 +406,31 @@ func (g *GitHub) ListGitHeads(ctx context.Context, origin string, page int) ([]o
 }
 
 var _ outbound.GitCommitReader = (*GitHub)(nil)
+
+// ReadCommitTree retains exact directory objects, including empty directories.
+// Hash verification catches missing paths even if a provider claims completeness.
+func (g *GitHub) ReadCommitTree(ctx context.Context, origin, oid string) (domain.GitTreeEvidence, error) {
+	var empty domain.GitTreeEvidence
+	repo, err := repositoryPath(origin)
+	if err != nil {
+		return empty, err
+	}
+	obj, err := g.commit(ctx, repo, oid)
+	if err != nil {
+		return empty, err
+	}
+	paths, complete, err := g.treeEntries(ctx, repo, obj.Tree.SHA)
+	if err != nil {
+		return empty, err
+	}
+	if !complete {
+		return empty, domain.ErrIntegrity
+	}
+	c := domain.GitCommitTree{Commit: oid, Tree: obj.Tree.SHA, Parents: []string{}}
+	for _, p := range obj.Parents {
+		c.Parents = append(c.Parents, p.SHA)
+	}
+	return domain.BuildGitTreeEvidence(c, paths)
+}
+
+var _ outbound.GitTreeReader = (*GitHub)(nil)

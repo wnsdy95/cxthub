@@ -25,6 +25,7 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 		t.Fatal(err)
 	}
 	api.SetGitChanges(changes)
+	api.SetCodeApplicability(svc)
 	ts := httptest.NewServer(api.Handler())
 	defer ts.Close()
 	var me struct {
@@ -83,6 +84,22 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 	}
 	if code := doJSONAs(t, "", "POST", endpoint, request, nil); code != 401 && code != 403 {
 		t.Fatal("public write", code)
+	}
+
+	codeURL := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repo)) + "/code-applicability?code_commit=" + request.Commit + "&source_commit=" + request.Target + "&path=feature.go"
+	var codeState domain.CodeApplicability
+	if status := doJSONAs(t, "", "GET", codeURL, nil, &codeState); status != 200 || codeState.Reason != "selected_tree_pending" || codeState.Paths[0].State != "unknown" {
+		t.Fatalf("code read %d %+v", status, codeState)
+	}
+	if status := doJSON(t, "GET", strings.Replace(codeURL, request.Commit, "HEAD", 1), nil, nil); status != 422 {
+		t.Fatal("mutable code selection accepted", status)
+	}
+	// Return to a private repository: the read must obey the same viewer guard.
+	if status := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+ws.ID, map[string]any{"visibility": "private"}, nil); status != 200 {
+		t.Fatal(status)
+	}
+	if status := doJSONAs(t, "dev:outsider@example.test:Other", "GET", codeURL, nil, nil); status != 403 {
+		t.Fatal("private code evidence leaked", status)
 	}
 	history, err := svc.ListHistory(context.Background(), repo)
 	if err != nil || len(history) != 0 {

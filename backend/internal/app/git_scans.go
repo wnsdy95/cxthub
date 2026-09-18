@@ -7,6 +7,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"log"
 	"reflect"
+	"slices"
 	"time"
 )
 
@@ -21,7 +22,9 @@ type GitScans struct {
 func NewGitScans(core *Service, reader outbound.GitCommitReader) (*GitScans, error) {
 	st, ok := core.meta.(outbound.GitScanStore)
 	_, headStore := core.meta.(outbound.GitHeadScanStore)
-	if !ok || !headStore || reader == nil {
+	_, treeStore := core.meta.(outbound.GitTreeStore)
+	_, treeReader := reader.(outbound.GitTreeReader)
+	if !ok || !headStore || !treeStore || !treeReader || reader == nil {
 		return nil, domain.ErrValidation
 	}
 	return &GitScans{core, st, reader}, nil
@@ -68,7 +71,7 @@ func (g *GitScans) ObservePush(ctx context.Context, origin, ref, before, after s
 			continue
 		}
 		o := domain.GitRefObservation{RepoID: r.ID, GitOrigin: r.GitRemoteURL, Source: "github-push", Ref: ref, Before: before, After: after, Forced: forced, Delivery: delivery}.WithID()
-		err = repositoryWriteError(ctx, g.core, r.ID, func(tx context.Context) error {
+		err = repositoryWriteError(evidenceWriteContext(ctx), g.core, r.ID, func(tx context.Context) error {
 			current, err := g.core.meta.GetRepo(tx, r.ID)
 			if err != nil {
 				return err
@@ -97,11 +100,22 @@ func (g *GitScans) run(ctx context.Context, j domain.GitScanJob) error {
 	if err == nil && repo.GitRemoteURL != j.GitOrigin {
 		err = domain.ErrConflict
 	}
-	if err == nil && !j.Indexed {
+	if err == nil && !j.TreeIndexed {
+		var evidence domain.GitTreeEvidence
+		evidence, err = g.reader.(outbound.GitTreeReader).ReadCommitTree(work, j.GitOrigin, j.Commit)
+		if err == nil {
+			p.Tree = &evidence
+			p.Job.TreeIndexed = true
+			err = p.Validate()
+		}
+	} else if err == nil && !j.Indexed {
 		var deltas []domain.GitCommitDelta
 		deltas, err = g.reader.ReadCommitDeltas(work, j.GitOrigin, j.Commit)
 		if err == nil {
 			err = planGitIndex(&p, deltas)
+		}
+		if err == nil {
+			err = g.validateIndexTree(work, j, deltas)
 		}
 	} else if err == nil {
 		var candidates []domain.GitInverseCandidate
@@ -125,7 +139,7 @@ func (g *GitScans) run(ctx context.Context, j domain.GitScanJob) error {
 		}
 	}
 	if err == nil {
-		err = repositoryWriteError(work, g.core, j.RepoID, func(tx context.Context) error {
+		err = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
 			r, e := g.core.meta.GetRepo(tx, j.RepoID)
 			if e != nil {
 				return e
@@ -160,7 +174,7 @@ func (g *GitScans) run(ctx context.Context, j domain.GitScanJob) error {
 	}
 	finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
-	e := repositoryWriteError(finish, g.core, j.RepoID, func(tx context.Context) error { return g.store.FinishGitScan(tx, fail) })
+	e := repositoryWriteError(evidenceWriteContext(finish), g.core, j.RepoID, func(tx context.Context) error { return g.store.FinishGitScan(tx, fail) })
 	return errors.Join(err, e)
 }
 func planGitIndex(p *domain.GitScanFinish, deltas []domain.GitCommitDelta) error {
@@ -312,7 +326,7 @@ func (g *GitScans) RetryScan(ctx context.Context, repo domain.ContentHash, id st
 	if domain.ValidateContentHash(repo) != nil || domain.ValidateGitChangeID(id) != nil {
 		return domain.ErrValidation
 	}
-	return repositoryWriteError(ctx, g.core, repo, func(tx context.Context) error { return g.store.RetryGitScan(tx, repo, id, time.Now().UTC()) })
+	return repositoryWriteError(evidenceWriteContext(ctx), g.core, repo, func(tx context.Context) error { return g.store.RetryGitScan(tx, repo, id, time.Now().UTC()) })
 }
 
 // Reconcile observes one durable page per repository on each pass. Failed or
@@ -347,7 +361,7 @@ func (g *GitScans) Reconcile(ctx context.Context) error {
 			for _, h := range heads {
 				observations = append(observations, domain.GitRefObservation{RepoID: j.RepoID, GitOrigin: j.GitOrigin, Source: "reconciliation", Ref: h.Ref, After: h.Commit}.WithID())
 			}
-			e = repositoryWriteError(work, g.core, j.RepoID, func(tx context.Context) error {
+			e = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
 				r, e := g.core.meta.GetRepo(tx, j.RepoID)
 				if e != nil {
 					return e
@@ -361,7 +375,7 @@ func (g *GitScans) Reconcile(ctx context.Context) error {
 		cancel()
 		if e != nil {
 			finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			_ = repositoryWriteError(finish, g.core, j.RepoID, func(tx context.Context) error { return st.FailGitHeadScan(tx, j, time.Now().UTC()) })
+			_ = repositoryWriteError(evidenceWriteContext(finish), g.core, j.RepoID, func(tx context.Context) error { return st.FailGitHeadScan(tx, j, time.Now().UTC()) })
 			done()
 			log.Printf("Git head reconciliation %s page %d deferred", j.RepoID, j.Page)
 		}
@@ -394,6 +408,32 @@ func (s *Service) queuePRGitScans(ctx context.Context, repo domain.ContentHash, 
 		}
 		if err := st.EnqueueGitScan(ctx, domain.NewGitScan(repo, origin, sha, time.Now().UTC())); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// Index and tree come from separate bounded reads. Verify their common
+// immutable identity before marking the index complete.
+func (g *GitScans) validateIndexTree(ctx context.Context, j domain.GitScanJob, deltas []domain.GitCommitDelta) error {
+	st := g.core.meta.(outbound.GitTreeStore)
+	c, err := st.GetGitCommitTree(ctx, j.RepoID, j.GitOrigin, j.Commit)
+	if err != nil {
+		return err
+	}
+	cache := map[string]domain.GitTreeNode{}
+	for _, d := range deltas {
+		if !slices.Equal(c.Parents, d.Parents) {
+			return domain.ErrIntegrity
+		}
+		for _, change := range d.Changes {
+			entry, err := cachedGitEntry(ctx, st, j.RepoID, j.GitOrigin, c.Tree, change.Path, cache)
+			if err != nil {
+				return err
+			}
+			if entry != change.After {
+				return domain.ErrIntegrity
+			}
 		}
 	}
 	return nil

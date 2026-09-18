@@ -26,13 +26,21 @@ func (s *FSStore) RepositoryRevision(ctx context.Context, repo domain.ContentHas
 	return v, err
 }
 func (s *FSStore) AdvanceRepositoryRevision(ctx context.Context, repo domain.ContentHash, pending bool) error {
+	return s.advanceRevision(ctx, repo, pending, false)
+}
+func (s *FSStore) AdvanceEvidenceRevision(ctx context.Context, repo domain.ContentHash) error {
+	return s.advanceRevision(ctx, repo, false, true)
+}
+func (s *FSStore) advanceRevision(ctx context.Context, repo domain.ContentHash, pending, evidence bool) error {
 	revisionMu.Lock()
 	defer revisionMu.Unlock()
 	v, err := s.RepositoryRevision(ctx, repo)
 	if err != nil {
 		return err
 	}
-	if pending {
+	if evidence {
+		v.Evidence++
+	} else if pending {
 		v.Pending++
 	} else {
 		v.Graph++

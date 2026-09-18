@@ -119,6 +119,11 @@ func checkGitScans(t *testing.T, st scanTestStore) domain.GitScanJob {
 		p := domain.GitScanFinish{Job: x}
 		p.Job.State = "completed"
 		p.Job.Indexed = true
+		p.Job.TreeIndexed = true
+		if !x.TreeIndexed {
+			n, _ := domain.NewGitTreeNode(map[string]domain.GitEntry{}, 40)
+			p.Tree = &domain.GitTreeEvidence{Commit: domain.GitCommitTree{Commit: x.Commit, Tree: n.OID, Parents: []string{}}, Nodes: []domain.GitTreeNode{n}}
+		}
 		if !x.Indexed {
 			delta := domain.GitCommitDelta{Commit: x.Commit, Parents: []string{}, Complete: true, Changes: []domain.GitPathChange{{Path: "file", Before: after, After: before}}}
 			p.Deltas = []domain.GitDeltaRecord{domain.NewGitDelta(repo, origin, delta)}
@@ -165,7 +170,13 @@ func checkGitScans(t *testing.T, st scanTestStore) domain.GitScanJob {
 			t.Fatal("unindexed fixture", x)
 		}
 		x.State = "completed"
-		if e = st.FinishGitScan(ctx, domain.GitScanFinish{Job: x}); e != nil {
+		p := domain.GitScanFinish{Job: x}
+		if !x.TreeIndexed {
+			n, _ := domain.NewGitTreeNode(map[string]domain.GitEntry{}, 40)
+			p.Job.TreeIndexed = true
+			p.Tree = &domain.GitTreeEvidence{Commit: domain.GitCommitTree{Commit: x.Commit, Tree: n.OID, Parents: []string{}}, Nodes: []domain.GitTreeNode{n}}
+		}
+		if e = st.FinishGitScan(ctx, p); e != nil {
 			t.Fatal(e)
 		}
 	}

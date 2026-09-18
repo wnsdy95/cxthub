@@ -98,14 +98,15 @@ type IdentityBackend interface {
 }
 
 type Server struct {
-	gitChanges inbound.GitChangeQuery
-	gitScans   inbound.GitScanQuery
-	context    ContextBackend
-	identity   IdentityBackend
-	oauth      outbound.OAuthStore
-	publicURL  string
-	resource   string
-	handler    http.Handler
+	codeApplicability inbound.CodeApplicabilityQuery
+	gitChanges        inbound.GitChangeQuery
+	gitScans          inbound.GitScanQuery
+	context           ContextBackend
+	identity          IdentityBackend
+	oauth             outbound.OAuthStore
+	publicURL         string
+	resource          string
+	handler           http.Handler
 }
 
 func NewServer(contextBackend ContextBackend, identity IdentityBackend, oauth outbound.OAuthStore, publicURL string) (*Server, error) {

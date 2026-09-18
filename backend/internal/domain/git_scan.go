@@ -16,6 +16,7 @@ type GitScanJob struct {
 	GitOrigin   string      `json:"git_origin"`
 	Commit      string      `json:"commit"`
 	State       string      `json:"state"`
+	TreeIndexed bool        `json:"tree_indexed,omitempty"`
 	Indexed     bool        `json:"indexed"`
 	Cursor      string      `json:"cursor,omitempty"`
 	Version     int64       `json:"version,string"`
@@ -52,7 +53,7 @@ func (j GitScanJob) Validate() error {
 	return ErrValidation
 }
 func (j GitScanJob) Claim(now time.Time, lease time.Duration) (GitScanJob, error) {
-	if lease <= 0 || j.NextAttempt.After(now) || (j.State != "waiting" && j.State != "retrying" && j.State != "running") || (j.State == "running" && j.LeaseUntil.After(now)) {
+	if lease <= 0 || j.NextAttempt.After(now) || (j.State != "waiting" && j.State != "retrying" && j.State != "running" && !(j.State == "completed" && !j.TreeIndexed)) || (j.State == "running" && j.LeaseUntil.After(now)) {
 		return j, ErrNotFound
 	}
 	j.State = "running"
@@ -63,7 +64,7 @@ func (j GitScanJob) Claim(now time.Time, lease time.Duration) (GitScanJob, error
 	return j, j.Validate()
 }
 func (j GitScanJob) AcceptFinish(n GitScanJob) error {
-	if j.State != "running" || j.Version != n.Version || j.ID != n.ID || j.RepoID != n.RepoID || j.GitOrigin != n.GitOrigin || j.Commit != n.Commit || j.Attempts != n.Attempts || !j.CreatedAt.Equal(n.CreatedAt) || (j.Indexed && !n.Indexed) || n.Cursor < j.Cursor {
+	if j.State != "running" || j.Version != n.Version || j.ID != n.ID || j.RepoID != n.RepoID || j.GitOrigin != n.GitOrigin || j.Commit != n.Commit || j.Attempts != n.Attempts || !j.CreatedAt.Equal(n.CreatedAt) || (j.TreeIndexed && !n.TreeIndexed) || (j.Indexed && !n.Indexed) || n.Cursor < j.Cursor {
 		return ErrConflict
 	}
 	switch n.State {
@@ -131,6 +132,7 @@ type GitInverseCandidate struct {
 // candidate requests + cursor. PostgreSQL commits this with the repo revision.
 type GitScanFinish struct {
 	Job     GitScanJob
+	Tree    *GitTreeEvidence
 	Deltas  []GitDeltaRecord
 	Parents []GitScanJob
 	Changes []GitChangeJob
@@ -139,6 +141,14 @@ type GitScanFinish struct {
 func (p GitScanFinish) Validate() error {
 	if err := p.Job.Validate(); err != nil {
 		return err
+	}
+	if p.Tree != nil {
+		if !p.Job.TreeIndexed || p.Tree.Commit.Commit != p.Job.Commit {
+			return ErrIntegrity
+		}
+		if err := p.Tree.Validate(); err != nil {
+			return err
+		}
 	}
 	if len(p.Deltas) > 16 || len(p.Parents) > 16 || len(p.Changes) > 100 {
 		return ErrValidation
@@ -280,6 +290,12 @@ func (p GitScanFinish) ValidateFor(old GitScanJob) error {
 	}
 	if err := old.AcceptFinish(p.Job); err != nil {
 		return err
+	}
+	if p.Job.TreeIndexed != old.TreeIndexed && p.Tree == nil {
+		return ErrIntegrity
+	}
+	if p.Tree != nil && old.TreeIndexed {
+		return ErrIntegrity
 	}
 	if old.Indexed || !p.Job.Indexed {
 		if len(p.Deltas) != 0 || len(p.Parents) != 0 {

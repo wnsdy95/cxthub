@@ -145,6 +145,11 @@ func (s *FSStore) FinishGitScan(ctx context.Context, p domain.GitScanFinish) err
 	if err = p.ValidateFor(old); err != nil {
 		return err
 	}
+	if p.Tree != nil {
+		if err = s.writeGitTreeFS(p.Job.RepoID, p.Job.GitOrigin, *p.Tree); err != nil {
+			return err
+		}
+	}
 	// Development FS is one-process only. Publish idempotent dependencies first,
 	// cursor last: a crash replays the leased page; it cannot skip unqueued work.
 	for _, d := range p.Deltas {

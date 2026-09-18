@@ -11,12 +11,20 @@ import (
 
 type revisionScopeKey struct{}
 
+func evidenceWriteContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, revisionScopeKey{}, "evidence")
+}
 func pendingWriteContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, revisionScopeKey{}, "pending")
 }
 func revisionWrite(ctx context.Context, s *Service, repo domain.ContentHash) error {
 	if scope, _ := ctx.Value(revisionScopeKey{}).(string); scope == "none" {
 		return nil
+	}
+	if scope, _ := ctx.Value(revisionScopeKey{}).(string); scope == "evidence" {
+		if revisions, ok := s.meta.(outbound.EvidenceRevisions); ok {
+			return revisions.AdvanceEvidenceRevision(ctx, repo)
+		}
 	}
 	if revisions, ok := s.meta.(outbound.RepositoryRevisions); ok {
 		scope, _ := ctx.Value(revisionScopeKey{}).(string)

@@ -2072,3 +2072,66 @@ test('automatic Git discovery shows deferred work without changing graph facts',
  expect(pageErrors).toEqual([]);
  expect(unexpected).toEqual([]);
 });
+
+test('code applicability uses explicit selection and server state without moving graph history', async ({page}) => {
+ const snap = auditSnapshot(pushedHead, 'main', [], 'Retained merged context', 1);
+ const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ const requests: string[] = [];
+ const {pageErrors, unexpected} = await openGraph(page, req => {
+  if (req.pathname === `/api/v1/repos/${repoId}/code-applicability`) {
+   const code = req.searchParams.get('code_commit')!;
+   requests.push(code);
+   expect(req.searchParams.get('source_commit')).toBe('a'.repeat(40));
+   expect(req.searchParams.getAll('path')).toEqual(['feature.ts']);
+   return {body: {selection: {code_commit: code, source_commit: 'a'.repeat(40), paths: ['feature.ts']}, revision: {graph: '1', pending: '0'}, state_hash: id('f'), relation: code.startsWith('b') ? 'ancestor' : 'unknown', paths: [{path: 'feature.ts', state: code.startsWith('b') ? 'before' : 'unknown'}]}};
+  }
+  return base(req);
+ });
+ const panel = page.locator('.code-applicability');
+ expect(requests).toHaveLength(0);
+ await panel.locator('summary').click();
+ expect(requests).toHaveLength(0);
+ await panel.getByLabel('Selected code').fill('b'.repeat(40));
+ await panel.getByLabel('Source change').fill('a'.repeat(40));
+ await panel.getByLabel('Repository file path').fill('feature.ts');
+ await panel.getByRole('button', {name: 'Check file state'}).click();
+ await expect(panel).toContainText('Matches the state before the change');
+ await panel.getByLabel('Selected code').fill('c'.repeat(40));
+ await panel.getByRole('button', {name: 'Check file state'}).click();
+ await expect(panel).toContainText('Needs verification');
+ await expect(panel).not.toContainText('Matches the state before the change');
+ await expect(page.locator(`.graph-row[data-graph-id="${pushedHead}"]`)).toHaveCount(1);
+ await panel.locator('summary').click();
+ await expect(panel.locator('form')).toHaveCount(0);
+ expect(requests).toHaveLength(2);
+ expect(pageErrors).toEqual([]);
+ expect(unexpected).toEqual([]);
+});
+
+
+test('evidence-only revisions refresh applicability without downloading the graph', async ({page}) => {
+ const snap = auditSnapshot(pushedHead, 'main', [], 'Historical completion retained', 1);
+ const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ let evidence = '1', fullReads = 0;
+ page.on('request', req => {if (new URL(req.url()).pathname.endsWith('/view')) fullReads++;});
+ const {pageErrors, unexpected} = await openGraph(page, req => {
+  const revision = {graph: '1', pending: '1', evidence};
+  if (req.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
+  if (req.pathname.endsWith('/revision')) return {body: revision};
+  if (req.pathname.endsWith('/code-applicability')) return {body: {selection: {code_commit: 'b'.repeat(40), source_commit: 'a'.repeat(40), paths: ['feature.ts']}, revision, state_hash: id('f'), relation: 'ancestor', paths: [{path: 'feature.ts', state: evidence === '1' ? 'unknown' : 'applied'}]}};
+  return base(req);
+ });
+ const panel = page.locator('.code-applicability');
+ await panel.locator('summary').click();
+ await panel.getByLabel('Selected code').fill('b'.repeat(40));
+ await panel.getByLabel('Source change').fill('a'.repeat(40));
+ await panel.getByLabel('Repository file path').fill('feature.ts');
+ await panel.getByRole('button', {name: 'Check file state'}).click();
+ await expect(panel).toContainText('Needs verification');
+ const before = fullReads;
+ evidence = '2';
+ await expect(panel).toContainText('Matches the applied change', {timeout: 10_000});
+ expect(fullReads).toBe(before);
+ await expect(page.locator(`.graph-row[data-graph-id="${pushedHead}"]`)).toHaveCount(1);
+ expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
+});

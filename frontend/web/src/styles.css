@@ -1206,3 +1206,11 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .live-capture-hint { color: var(--muted); font-size: .78rem; line-height: 1.5; margin: 4px 0 12px; }
 .live-viewer-status { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .8rem; margin-bottom: 12px; }
 .pending-sessions { margin-bottom: 20px; }
+
+.code-applicability {margin-bottom:16px;font-size:.78rem;overflow-wrap:anywhere}
+.code-applicability summary {cursor:pointer}
+.code-applicability form {display:grid;gap:8px}
+.code-applicability label {display:grid;gap:4px}
+.code-applicability input {width:100%;min-width:0;box-sizing:border-box;font-family:var(--mono)}
+.code-applicability ul {padding-left:16px}
+.code-applicability button {font-size:.75rem;justify-self:start}
