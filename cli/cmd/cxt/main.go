@@ -275,7 +275,7 @@ func buildContainer(cfg config) container {
 	// The explicit --local MCP helper is a read-only offline projection. The
 	// product MCP runs remotely in cxtd against shared cloud storage.
 	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
-	hookHdl := delivhook.NewHandler(coord)
+	hookHdl := delivhook.NewHandler(coord).WithLiveObservation()
 	clictr := &delivcli.Container{
 		Init:            initSvc,
 		Save:            saveSvc,

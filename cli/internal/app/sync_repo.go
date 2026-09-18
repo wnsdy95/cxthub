@@ -1006,6 +1006,15 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 	if merr == nil {
 		pendings = s.reconcileSharedPendings(ctx, repoID, man.Refs, pendings)
 	}
+	if in.PendingSessionID != "" {
+		filtered := pendings[:0]
+		for _, p := range pendings {
+			if p.SessionID == in.PendingSessionID {
+				filtered = append(filtered, p)
+			}
+		}
+		pendings = filtered
+	}
 	remoteMan, rerr := s.remote.RemoteManifest(ctx, repoID)
 	// Known remote set: reachability walk from remote branch/session/tag ref to local objects.
 	// (If remote target is not in local, only what is available — renegotiate dedup is harmless.)
@@ -1102,7 +1111,7 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 		}
 	}
 	// Push unsync reconciliation: If local branch ref differs from server and server is my ancestor (meaning I am ahead), create a shadow push (ref unchanged — negotiate dedup) and update the pointer. If the same or behind, release my pointer.
-	if merr == nil && rerr == nil {
+	if in.PendingSessionID == "" && merr == nil && rerr == nil {
 		remoteRef := map[string]domain.ContentHash{}
 		for _, r := range remoteMan.Refs {
 			if r.Kind == domain.RefBranch {
@@ -1140,6 +1149,9 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 				}
 			}
 		}
+	}
+	if in.PendingSessionID != "" && len(pendings) > 0 && synced == 0 {
+		return 0, fmt.Errorf("live capture remains local; pending upload did not complete")
 	}
 	return synced, nil
 }

@@ -360,6 +360,8 @@ type BranchHandoffInput struct {
 
 // SyncInput is an input DTO for SyncRepo.Push / SyncRepo.Pull.
 type SyncInput struct {
+	// PendingSessionID scopes live capture sync; skips unrelated pending/unsync publication.
+	PendingSessionID string
 	// RepoID is the ID of the sync target repo (empty means Cwd gitctx interpretation).
 	RepoID string
 	// Cwd is the working directory for repoID interpretation (used if RepoID is empty).

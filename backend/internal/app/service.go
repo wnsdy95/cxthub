@@ -1332,13 +1332,21 @@ func (s *Service) putPending(ctx context.Context, repoID domain.ContentHash, ses
 		return err
 	}
 	// target object existence validation — pointer/object push is a separate request (non-atomic), so client order (objects-first) does not guarantee server consistency. Accepting a pointer to a non-existent snapshot results in a phantom session in the list but no node in the graph, so we reject it (fail-closed).
-	if _, gerr := s.meta.GetSnapshot(ctx, repoID, p.Target); gerr != nil {
+	snap, gerr := s.meta.GetSnapshot(ctx, repoID, p.Target)
+	if gerr != nil {
 		if errors.Is(gerr, domain.ErrNotFound) {
 			return fmt.Errorf("%w: pending.target %s snapshot not found on server — object push prerequisite", domain.ErrValidation, p.Target)
 		}
 		return gerr
 	}
-	p.UpdatedAt = time.Now().UTC()
+	// Display capture time, not replay time. Legacy snapshots can lack a time.
+	if !snap.CreatedAt.IsZero() {
+		p.UpdatedAt = snap.CreatedAt
+	}
+	// Future client clocks cannot manufacture indefinite live state.
+	if p.ActivityAt != nil && (p.ActivityAt.IsZero() || p.ActivityAt.After(time.Now().UTC().Add(5*time.Second))) {
+		p.ActivityAt = nil
+	}
 	old, err := s.meta.ReplacePending(ctx, repoID, p)
 	if err != nil {
 		return err
@@ -1374,7 +1382,18 @@ func (s *Service) ListPendings(ctx context.Context, repoID domain.ContentHash) (
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return nil, err
 	}
-	return s.meta.ListPendings(ctx, repoID)
+	items, err := s.meta.ListPendings(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	// Repair the display of legacy pointers whose timestamp was overwritten on
+	// every sync. Immutable snapshot creation remains the capture-time fallback.
+	for i := range items {
+		if snap, err := s.meta.GetSnapshot(ctx, repoID, items[i].Target); err == nil && !snap.CreatedAt.IsZero() {
+			items[i].UpdatedAt = snap.CreatedAt
+		}
+	}
+	return items, nil
 }
 
 // DeletePending is the legacy unconditional commit-resolution path. Current

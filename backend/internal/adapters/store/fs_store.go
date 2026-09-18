@@ -399,6 +399,10 @@ func (s *FSStore) ReplacePending(_ context.Context, repoID domain.ContentHash, p
 		if current.Provider != p.Provider {
 			return "", fmt.Errorf("%w: pending session %q belongs to provider %q, not %q", domain.ErrConflict, p.SessionID, current.Provider, p.Provider)
 		}
+		// A late upload of an older observed transcript must not rewind a live pointer.
+		if current.ActivityAt != nil && p.ActivityAt != nil && p.ActivityAt.Before(*current.ActivityAt) {
+			return "", fmt.Errorf("%w: newer session activity is already stored", domain.ErrConflict)
+		}
 		previous = current.Target
 		if current.Dismissed {
 			p.Dismissed = true

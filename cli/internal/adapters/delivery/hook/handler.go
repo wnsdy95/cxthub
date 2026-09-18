@@ -37,9 +37,10 @@ import (
 // Handler is the hook event handler. Keep it thin (capture path) —
 // parse stdin and classify events, delegate core logic to CaptureCoordinator.
 type Handler struct {
-	coord  *capture.CaptureCoordinator
-	stdin  io.Reader // for testing. nil means os.Stdin (no read from terminal)
-	stdout io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
+	coord   *capture.CaptureCoordinator
+	observe func(string, domain.ProviderKind, string)
+	stdin   io.Reader // for testing. nil means os.Stdin (no read from terminal)
+	stdout  io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
 }
 
 // NewHandler creates a Handler and injects CaptureCoordinator.
@@ -107,6 +108,9 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 		return nil
 	}
 	state := gitctx.InspectContextRoot(ctx, cwd)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if state.Initialized {
 		// Payload IDs may be inherited by provider child processes. Never infer
 		// a corrected ID from their path or let a mismatch touch parent state.
@@ -137,10 +141,16 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 	case "SessionStart":
 		err := h.coord.MarkBaseline(ctx, provider, cwd, path, p.SessionID)
 		h.emitBriefing(event, cwd, p.SessionID) // app branch handoff + pull briefing
+		if h.observe != nil {
+			h.observe(cwd, provider, p.SessionID)
+		}
 		return err
 	case "UserPromptSubmit":
 		err := h.coord.MarkTurn(ctx, provider, cwd, p.SessionID, p.Prompt)
 		h.emitBriefing(event, cwd, p.SessionID) // app branch handoff + team context notice
+		if h.observe != nil {
+			h.observe(cwd, provider, p.SessionID)
+		}
 		return err
 	case "Stop":
 		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, true, false)
@@ -219,3 +229,25 @@ func spawnPendingSync(cwd string) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	_ = cmd.Start()
 }
+
+// An observer is started only for the hook's proven exact-worktree identity.
+// It never holds up the hook and exits when the registry is removed or idle.
+func spawnLiveObserver(cwd string, provider domain.ProviderKind, id string) {
+	if _, ok := capture.RegisteredSession(cwd, provider, id); !ok {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "git-hook", "live-watch", string(provider), id)
+	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if cmd.Start() == nil {
+		_ = cmd.Process.Release()
+	}
+}
+
+// WithLiveObservation enables process creation in the production composition
+// root. Tests can inject a recorder without ever launching detached helpers.
+func (h *Handler) WithLiveObservation() *Handler { h.observe = spawnLiveObserver; return h }

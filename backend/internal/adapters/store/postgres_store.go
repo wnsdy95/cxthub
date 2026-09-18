@@ -1897,6 +1897,10 @@ func (s *PostgresStore) ReplacePending(ctx context.Context, repoID domain.Conten
 			if current.Provider != p.Provider {
 				return "", fmt.Errorf("%w: pending session %q belongs to provider %q, not %q", domain.ErrConflict, p.SessionID, current.Provider, p.Provider)
 			}
+			// A late upload of an older observed transcript must not rewind a live pointer.
+			if current.ActivityAt != nil && p.ActivityAt != nil && p.ActivityAt.Before(*current.ActivityAt) {
+				return "", fmt.Errorf("%w: newer session activity is already stored", domain.ErrConflict)
+			}
 			if err := validateHash(current.Target); err != nil {
 				return "", err
 			}

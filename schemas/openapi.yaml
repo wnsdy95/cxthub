@@ -710,6 +710,10 @@ components:
         target: { $ref: "#/components/schemas/ContentHash" }
         author: { $ref: "#/components/schemas/Author" }
         updated_at: { type: string, format: date-time }
+        activity_at:
+          type: string
+          format: date-time
+          description: Actual transcript activity observed by the CLI. Replays do not refresh this timestamp; absence provides no live activity evidence.
         dismissed:
           type: boolean
           description: "A session that the user has hidden from the uncommitted list (data deletion is not involved, sticky). If true, it is excluded from the web Uncommitted list."

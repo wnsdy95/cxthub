@@ -29,6 +29,7 @@ const (
 // AppSession is one provider session that official lifecycle hooks have seen
 // in this exact worktree. The registry is local-only and stores no transcript.
 type AppSession struct {
+	NativeID  string
 	Provider  domain.ProviderKind
 	SessionID string
 	Path      string
@@ -515,7 +516,7 @@ func activeAppSessions(cwd string, relatedWorktrees bool) []AppSession {
 				continue
 			}
 		}
-		out = append(out, AppSession{Provider: state.Provider, SessionID: state.SessionID, Path: state.Path})
+		out = append(out, AppSession{NativeID: state.NativeID, Provider: state.Provider, SessionID: state.SessionID, Path: state.Path})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Provider != out[j].Provider {

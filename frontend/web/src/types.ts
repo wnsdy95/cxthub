@@ -242,6 +242,8 @@ export interface Pending {
   target: string;
   author?: { name: string; email: string; team: string };
   updated_at: string;
+  /** Actual transcript activity, not the time this pointer was synchronized. */
+  activity_at?: string;
 /** Session hidden in the user's uncommitted list (data not deleted, sticky) — true to exclude from list. */
   dismissed?: boolean;
 }

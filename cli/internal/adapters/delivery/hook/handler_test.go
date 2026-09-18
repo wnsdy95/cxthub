@@ -634,3 +634,36 @@ func TestSessionEndSaveFailureRetainsNewlyResolvedSession(t *testing.T) {
 		t.Fatalf("successful retry left liveness behind: %+v", active)
 	}
 }
+
+func TestStartAndPromptRequestExactLiveObserver(t *testing.T) {
+	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
+		t.Run(string(provider), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			cwd := t.TempDir()
+			initHookContext(t, cwd)
+			const id = "11111111-1111-4111-8111-111111111111"
+			path := writeHookSession(t, cwd, provider, id)
+			for _, event := range []string{"SessionStart", "UserPromptSubmit"} {
+				h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
+				calls := 0
+				h.observe = func(gotCwd string, gotProvider domain.ProviderKind, gotID string) {
+					calls++
+					if gotCwd != cwd || gotProvider != provider || gotID != id {
+						t.Fatal("observer identity changed")
+					}
+					if _, ok := capture.RegisteredSession(gotCwd, gotProvider, gotID); !ok {
+						t.Fatal("observer started before registration")
+					}
+				}
+				b, _ := json.Marshal(hookPayload{SessionID: id, TranscriptPath: path, Cwd: cwd, Prompt: "keep working"})
+				h.stdin = bytes.NewReader(b)
+				if err := h.Run(provider, event); err != nil {
+					t.Fatal(err)
+				}
+				if calls != 1 {
+					t.Fatalf("observer calls=%d", calls)
+				}
+			}
+		})
+	}
+}

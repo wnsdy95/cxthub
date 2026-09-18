@@ -22,13 +22,18 @@ import { CommitGraph } from './CommitGraph';
 import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
 import { About, TeamSettings, SecretsPanel } from './About';
 import { short, when, type ViewMode } from './ContextView';
-import { unsyncChains, orphanPendings } from '../onhold';
+import { unsyncChains, orphanPendings, pendingIsLive } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { useT, Rich } from '../i18n';
 
 export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | null; role: Role | null }) {
   const t = useT();
   const me = useMe().data;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 5_000);
+    return () => window.clearInterval(timer);
+  }, []);
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
   const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
@@ -50,7 +55,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   };
 
   const byId = useMemo(() => new Map(allSnapshots.map((s) => [s.id, s])), [allSnapshots]);
-  const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
+  const branches = useMemo(() => [...new Set([...refs.filter((r) => r.kind === 'branch').map((r) => r.name), ...pendings.map(p => p.branch).filter(Boolean)])].sort(), [refs, pendings]);
 
   // Determination is a common definition in onhold.ts — must match the context tab badge count.
   const shared = sharedIds;
@@ -102,10 +107,11 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   // Chains are not split, so pagination is by item count (clusters/sessions) rather than commit count.
   const holdItems = useMemo(
     () => [
+      ...orphansShown.filter(p => pendingIsLive(p, now)).map((p) => ({ kind: 'orphan' as const, p })),
       ...chainsShown.map((c) => ({ kind: 'chain' as const, c })),
-      ...orphansShown.map((p) => ({ kind: 'orphan' as const, p })),
+      ...orphansShown.filter(p => !pendingIsLive(p, now)).map((p) => ({ kind: 'orphan' as const, p })),
     ],
-    [chainsShown, orphansShown],
+    [chainsShown, orphansShown, now],
   );
   const paged = usePaged(holdItems, `${branchSel}|${memberSel}`);
   const visChains = paged.visible.flatMap((it) => (it.kind === 'chain' ? [it.c] : []));
@@ -113,22 +119,27 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
 
   const [selSnap, setSelSnap] = useState<string | null>(null);
   const [selPending, setSelPending] = useState<string | null>(null);
-  const { viewerRef, openSnapshot, selectedEvent } = useContextSelection(repo.id, selSnap, (id) => {
-    setSelPending(null);
+  const selectedPending = (selPending ? pendings.find(p => p.session_id === selPending) : null) ?? null;
+  const selected = (selectedPending ? byId.get(selectedPending.target) : selSnap ? byId.get(selSnap) : null) ?? null;
+  // Keep following a session's mutable target. Remember its last snapshot so
+  // commit resolution doesn't abruptly close the conversation being read.
+  useEffect(() => {
+    if (selectedPending) setSelSnap(selectedPending.target);
+  }, [selectedPending?.target]);
+  useEffect(() => { setSelPending(null); setSelSnap(null); }, [repo.id]);
+  const { viewerRef, openSnapshot, selectedEvent } = useContextSelection(repo.id, selected?.id ?? null, (id) => {
+    setSelPending(orphans.find(p => p.target === id)?.session_id ?? null);
     setSelSnap(id);
   });
-  const selected = selSnap ? byId.get(selSnap) ?? null : null;
-  const selectedPending: Pending | null =
-    (selPending ? orphans.find((p) => p.session_id === selPending) : null) ?? null;
   // Hidden targets: session-specific fallback selection or if the selected snapshot is the target of an uncommitted session.
   const dismissablePending: Pending | null =
     selectedPending ?? (selected ? orphans.find((p) => p.target === selected.id) ?? null : null);
   const selectedHash = selected?.doc_hash ?? selectedPending?.target ?? null;
   // Pending tail from the unsync tip (only when the selected commit is that tip).
   const tailPending = useMemo(() => {
-    if (!selected?.session_id) return null;
+    if (selectedPending || !selected?.session_id) return null;
     return pendings.find((p) => p.session_id === selected.session_id && p.target !== selected.id) ?? null;
-  }, [selected, pendings]);
+  }, [selected, selectedPending, pendings]);
 
   const [viewMode, setViewMode] = useState<ViewMode>('all');
   // Fork (checkout): can create a new branch from unpushed commits — the fork base is a git commit,
@@ -136,6 +147,39 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   const forkMut = useFork();
   const [forkOpen, setForkOpen] = useState(false);
   const [forkName, setForkName] = useState('');
+
+  const renderPendings = (live: boolean) => {
+    const items = visOrphans.filter(p => pendingIsLive(p, now) === live);
+    return items.length > 0 && <section className="pending-sessions" key={String(live)} data-live={live}>
+      <span className="label">{t(live ? 'onhold.liveSection' : 'onhold.uncommittedSection')}</span>
+      {live && <p className="live-capture-hint">{t('onhold.liveHint')}</p>}
+      <ul className="commits">
+        {items.map((p) => (
+          <li key={p.session_id}>
+            <button
+              className={`commit-row${p.session_id === selPending || (selSnap !== null && p.target === selSnap) ? ' on' : ''}`}
+              onClick={() => {
+                setSelPending(p.session_id === selPending ? null : p.session_id);
+                setSelSnap(p.session_id === selPending ? null : p.target);
+              }}
+            >
+              <code>{short(p.target)}</code>
+              <span className="commit-msg">{t('onhold.inProgress')} · {p.branch || t('onhold.unknownBranch')}</span>
+              <span className={`ref-badge ${live ? 'live' : 'pending'}`} title={live ? t('onhold.liveHint') : undefined}>{live ? '● LIVE' : '◌ uncommitted'}</span>
+              <AIIcon
+                logo={PROVIDER_LOGOS[p.provider] ?? null}
+                color={PROVIDER_META[p.provider]?.color ?? '#b6bcc6'}
+                title={p.provider}
+              />
+              <em>
+                {p.author?.name || p.author?.email || p.provider} · {when(p.activity_at || byId.get(p.target)?.created_at || p.updated_at)}
+              </em>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>;
+  };
 
   return (
     <div className="ctx ctx-cols">
@@ -165,6 +209,8 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
         {chainsShown.length === 0 && orphansShown.length === 0 && (
           <div className="empty-box"><Rich>{t('onhold.empty')}</Rich></div>
         )}
+
+        {renderPendings(true)}
 
         {visChains.length > 0 && (
           <>
@@ -222,42 +268,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
           </>
         )}
 
-        {visOrphans.length > 0 && (
-          <>
-            <span className="label">{t('onhold.uncommittedSection')}</span>
-            <ul className="commits">
-              {visOrphans.map((p) => (
-                <li key={p.session_id}>
-                  <button
-                    className={`commit-row${p.session_id === selPending || (selSnap !== null && p.target === selSnap) ? ' on' : ''}`}
-                    onClick={() => {
-                      // Unify viewer: Open graph selection and related screens (snapshot header + ⎇ branch + hide) if the target snapshot exists. Fall back to session-specific screen only if the object has not yet been fetched.
-                      if (byId.has(p.target)) {
-                        setSelPending(null);
-                        setSelSnap(p.target === selSnap ? null : p.target);
-                      } else {
-                        setSelSnap(null);
-                        setSelPending(p.session_id === selPending ? null : p.session_id);
-                      }
-                    }}
-                  >
-                    <code>{short(p.target)}</code>
-                    <span className="commit-msg">{t('onhold.inProgress')} · {p.branch || t('onhold.unknownBranch')}</span>
-                    <span className="ref-badge pending">● uncommitted</span>
-                    <AIIcon
-                      logo={PROVIDER_LOGOS[p.provider] ?? null}
-                      color={PROVIDER_META[p.provider]?.color ?? '#b6bcc6'}
-                      title={p.provider}
-                    />
-                    <em>
-                      {p.author?.name || p.author?.email || p.provider} · {when(p.updated_at)}
-                    </em>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
+        {renderPendings(false)}
 
         {pendings.some((p) => p.dismissed) && (
           <details className="dismissed-pendings">
@@ -297,6 +308,10 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
             style={{ ['--assistant-ink' as string]: PROVIDER_INK[(selected?.provider ?? selectedPending?.provider) as string] ?? 'var(--text)' } as React.CSSProperties}
           >
             <ContextSelectionNotice event={selectedEvent} />
+            {selectedPending && <div className="live-viewer-status" role="status">
+              <span className={`ref-badge ${pendingIsLive(selectedPending, now) ? 'live' : 'pending'}`}>{pendingIsLive(selectedPending, now) ? '● LIVE' : '◌ uncommitted'}</span>
+              {t('onhold.followingSession')}
+            </div>}
             <div className="viewer-head">
               <code>{short(selected?.id ?? selectedPending!.target)}</code>{' '}
               {selected

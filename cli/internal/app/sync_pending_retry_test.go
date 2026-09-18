@@ -285,3 +285,29 @@ func TestPushRetriesIndependentPendingPointersAfterOneFailure(t *testing.T) {
 		t.Fatalf("one pointer failure blocked an independent retry: attempts=%d published=%v", remote.attempts, remote.pendings)
 	}
 }
+
+func TestLivePendingSyncIsScopedAndRetriesUnchangedCapture(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	repo := string(domain.HashContent([]byte("scoped live retry")))
+	for _, session := range []string{"live", "sibling"} {
+		target := pendingRetrySnapshot(t, st, repo, session)
+		if err := st.PutPending(ctx, domain.Pending{RepoID: repo, SessionID: session, Provider: domain.ProviderCodex, Branch: "main", Target: target}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remote := &retryPendingRemote{failPointer: true}
+	svc := NewSyncRepoService(st, remote, nil)
+	in := inbound.SyncInput{RepoID: repo, PendingSessionID: "live"}
+	if _, err := svc.SyncPendings(ctx, in, nil); err == nil {
+		t.Fatal("failure hidden from observer retry")
+	}
+	if remote.attempts != 1 {
+		t.Fatalf("published sibling: %d attempts", remote.attempts)
+	}
+	remote.failPointer = false
+	n, err := svc.SyncPendings(ctx, in, nil)
+	if err != nil || n != 1 || len(remote.pointers) != 1 || remote.pointers["live"] == "" {
+		t.Fatalf("retry: %d %+v %v", n, remote.pointers, err)
+	}
+}

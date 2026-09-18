@@ -26,11 +26,20 @@ func (s *Service) GetRepositoryView(ctx context.Context, repo domain.ContentHash
 		if v.History, err = s.ListHistory(ctx, repo); err != nil {
 			return
 		}
-		if v.Pending, err = s.ListPendings(ctx, repo); err != nil {
+		if v.Pending, err = s.meta.ListPendings(ctx, repo); err != nil {
 			return
 		}
 		if v.Unsync, err = s.ListUnsyncs(ctx, repo); err != nil {
 			return
+		}
+		byID := make(map[domain.ContentHash]domain.Snapshot, len(v.Snapshots))
+		for _, snap := range v.Snapshots {
+			byID[snap.ID] = snap
+		}
+		for i := range v.Pending {
+			if snap, ok := byID[v.Pending[i].Target]; ok && !snap.CreatedAt.IsZero() {
+				v.Pending[i].UpdatedAt = snap.CreatedAt
+			}
 		}
 		v.Refs = nonNil(v.Refs)
 		v.Snapshots = nonNil(v.Snapshots)

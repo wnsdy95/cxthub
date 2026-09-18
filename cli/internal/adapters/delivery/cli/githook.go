@@ -1022,6 +1022,9 @@ func shouldSupersedeSession(path, preparedSeedPath string) bool {
 // Total limit: 60 seconds: Hooks block git commands, so they must finish in finite time for network operations.
 // (Individual HTTPs have a 30-second client timeout as a first defense — this is the total safety net).
 func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) error {
+	if len(rest) > 0 && rest[0] == "live-watch" {
+		return runLiveObserver(ctx, cwd, rest[1:])
+	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	if len(rest) == 0 {
@@ -1110,6 +1113,9 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 			msg = fmt.Sprintf("%s [git %s]", msg, sha)
 		}
 		_, _ = snapshotForCommit(ctx, c, cwd, msg)
+
+	case "live-capture":
+		return runLiveCapture(ctx, c, cwd, args)
 
 	case "pending-sync":
 		// Reflects uncommitted capture pointers to the server (detached helper — resolves hook capture/commit after spawn).

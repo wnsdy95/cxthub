@@ -82,6 +82,13 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 			return inbound.SaveOutput{}, domain.ErrNoActiveSession
 		}
 	}
+	// Sample before reading: a concurrently appended tail must not lend its
+	// newer activity timestamp to bytes this snapshot did not capture.
+	var activityAt *time.Time
+	if info, err := os.Stat(path); err == nil {
+		at := info.ModTime().UTC()
+		activityAt = &at
+	}
 	raw, err := capt.ReadSession(ctx, path)
 	if err != nil {
 		return inbound.SaveOutput{}, err
@@ -238,13 +245,14 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		// Uncommitted capture: branch ref remains immutable while the per-session
 		// pointer advances to the latest durable snapshot.
 		oldTarget, err := s.store.ReplacePending(ctx, domain.Pending{
-			RepoID:    repo.ID,
-			SessionID: cir.Envelope.SessionOriginID,
-			Branch:    branch,
-			Provider:  provider,
-			Target:    docHash,
-			Author:    in.Author,
-			UpdatedAt: time.Now().UTC(),
+			RepoID:     repo.ID,
+			SessionID:  cir.Envelope.SessionOriginID,
+			Branch:     branch,
+			Provider:   provider,
+			Target:     docHash,
+			Author:     in.Author,
+			UpdatedAt:  time.Now().UTC(),
+			ActivityAt: activityAt,
 		})
 		if err != nil {
 			return inbound.SaveOutput{}, err
