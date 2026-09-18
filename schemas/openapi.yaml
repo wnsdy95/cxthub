@@ -76,6 +76,7 @@ components:
       type: object
       required: [graph, pending]
       properties:
+        evidence: { type: string, pattern: '^[0-9]+$', description: Git evidence query generation; does not invalidate graph metadata }
         graph: { type: string, pattern: '^[0-9]+$' }
         pending: { type: string, pattern: '^[0-9]+$' }
     ContextMergeEvidence:
@@ -197,6 +198,39 @@ components:
               bytes_after: { type: integer, format: int64 }
               reason: { type: string }
               occurred_at: { type: string, format: date-time }
+    GitEntry:
+      type: object
+      properties:
+        oid: { type: string }
+        mode: { type: string }
+    CodeSelection:
+      type: object
+      required: [code_commit, source_commit, paths]
+      properties:
+        code_commit: { type: string }
+        source_commit: { type: string }
+        source_parent: { type: string }
+        paths: { type: array, minItems: 1, maxItems: 100, items: { type: string } }
+    CodePathState:
+      type: object
+      required: [path, state, before, after, selected]
+      properties:
+        path: { type: string }
+        state: { type: string, enum: [applied, before, changed, equivalent, not_in_history, unknown] }
+        reason: { type: string }
+        before: { $ref: '#/components/schemas/GitEntry' }
+        after: { $ref: '#/components/schemas/GitEntry' }
+        selected: { $ref: '#/components/schemas/GitEntry' }
+    CodeApplicability:
+      type: object
+      required: [selection, revision, state_hash, relation, paths]
+      properties:
+        selection: { $ref: '#/components/schemas/CodeSelection' }
+        revision: { $ref: '#/components/schemas/RepositoryRevision' }
+        state_hash: { $ref: '#/components/schemas/ContentHash' }
+        relation: { type: string, enum: [ancestor, not_ancestor, unknown] }
+        paths: { type: array, items: { $ref: '#/components/schemas/CodePathState' } }
+        reason: { type: string }
     GitScanJob:
       type: object
       description: Automatic discovery for one immutable commit. Completed refers to this cursor pass, not to all ancestry or current code applicability. Late records discover their own inverse candidates.
@@ -208,6 +242,7 @@ components:
         commit: { type: string }
         state: { type: string, enum: [waiting, running, retrying, completed, attention] }
         indexed: { type: boolean }
+        tree_indexed: { type: boolean, description: Complete hash-verified directory evidence is available }
         cursor: { type: string }
         version: { type: string }
         attempts: { type: integer }
@@ -1435,6 +1470,35 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/code-applicability:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: queryCodeApplicability
+      summary: Compare source file changes at an explicit code position
+      description: Viewer access. Uses one repository read generation and immutable cached Git evidence. Does not write, fetch a provider, select a branch tip, or change historical completion. Missing evidence returns unknown.
+      parameters:
+        - { name: code_commit, in: query, required: true, schema: { type: string } }
+        - { name: source_commit, in: query, required: true, schema: { type: string } }
+        - { name: source_parent, in: query, schema: { type: string } }
+        - name: path
+          in: query
+          required: true
+          style: form
+          explode: true
+          schema: { type: array, minItems: 1, maxItems: 100, items: { type: string, maxLength: 4096 } }
+      responses:
+        '200':
+          description: Per-path state with separate ancestry and content evidence
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CodeApplicability' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid explicit code selection or file scope }
+        '503': { description: Query unavailable }
 
   /repos/{repoID}/git-scans:
     parameters:

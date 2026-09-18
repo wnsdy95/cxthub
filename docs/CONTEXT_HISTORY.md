@@ -882,9 +882,9 @@ read port. `change_id` fetches bounded JSON fragments with a generation hash;
 changed verification results require restarting the cursor. These are retained
 historical facts, not implicit current-branch applicability.
 
-Automatic discovery is described below. Code-position applicability,
-provenance-aware memory filtering and active-session briefings remain follow-up
-work under #208. Neither discovery nor verification changes the current memory
+Automatic discovery and file-level code-position applicability are described
+below. Provenance-aware memory filtering and active-session briefings remain
+follow-up work under #208. Neither discovery nor verification changes the current memory
 projection, refs, or the historical PR graph.
 
 
@@ -945,3 +945,57 @@ memory cancellation is inferred. Incomplete trees and commits exceeding the
 FS remains a development adapter with a process lock. It writes idempotent
 index/queue dependencies before advancing the cursor so interruption replays
 the page; it does not provide PostgreSQL multi-process transaction isolation.
+
+## File applicability at an explicit code position
+
+The application query `GET /repos/{repoID}/code-applicability` and read-only MCP
+`code_applicability` compare a source change against an explicit full selected
+Git SHA. They accept file paths and an explicit comparison parent for source
+merge commits. They never infer the selected code from the latest publication
+of a context snapshot. Web's on-demand code-state panel consumes that query;
+branch folding, lane placement and historical PR completion are independent.
+
+The observation worker now caches the selected commit's complete directory
+objects. It rehashes the canonical Git tree representation, including modes,
+symlinks, gitlinks, empty directories and directory-aware ordering. A clipped
+response marked complete still fails the root hash check. Identical directories
+share their Git OID, rather than copying the whole file list per commit. Blob
+contents are not stored. Tree and later delta reads must agree on parents and
+changed after-entries. Migration 0049 publishes nodes, the commit/root binding,
+the observation fence and the evidence revision in one PostgreSQL transaction.
+Previously completed scans without tree evidence are claimed for a resumable
+upgrade. Existing proof, discovery cursor and context history are preserved.
+
+Queries use one repository read generation, do no provider I/O and enqueue no
+work. A bounded ancestry walk reports missing evidence or its visit limit as
+unknown, never as a negative proof. A merge's current files come from its own
+verified tree. Its first parent is not used as a substitute. The file states are:
+
+- `applied`: source is in the selected ancestry and the file matches its after-entry.
+- `before`: source is in ancestry but the file matches its before-entry. This
+  alone does not identify a particular revert operation.
+- `changed`: source is in ancestry and the file matches neither entry. This
+  does not prove that all of the source's functionality is absent.
+- `equivalent`: matching after-entry, but source is outside the selected ancestry.
+  This is not a fabricated merge receipt; squash/cherry-pick provenance is a
+  separate history binding.
+- `not_in_history`: source is outside ancestry and its after-entry does not match.
+- `unknown`: selected/source/index/ancestry evidence is incomplete, the merge
+  comparison parent is ambiguous, or the source did not change the requested path.
+
+A → unrelated B → inverse(A) therefore restores A's before-state while B stays
+applied. Reapplication restores A's after-state. Sibling branches and another
+worktree's selected SHA are independent. The response hash binds code selection,
+repository generation and all returned evidence states. Original memory and
+historical completion remain readable and unmodified.
+
+Evidence progress has a separate durable revision counter. SSE updates invalidate
+only Git discovery, verification and code-state queries; they do not download the
+whole context graph. Actual history/refs still advance the graph counter. Older
+clients can ignore the optional evidence counter; new clients retain the existing
+graph invalidation fallback with older servers.
+
+This is file-level evidence, not a natural-language memory classifier. Typed
+claim provenance, effective memory selection, integrated-PR source bindings and
+bounded active-session briefings remain required work under #208. A mixed legacy
+memory fragment cannot be silently canceled merely because a source file changed.

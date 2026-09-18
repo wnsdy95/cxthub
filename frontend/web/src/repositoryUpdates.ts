@@ -1,11 +1,13 @@
 import type { PendingView, RepositoryRevision, RepositoryView } from './types';
 
+// Graph and live captures have their own cache. Evidence-only revisions
+// invalidate separate queries and never require another full graph download.
 export function revisionCovers(current: RepositoryRevision, wanted: RepositoryRevision) {
   return BigInt(current.graph) >= BigInt(wanted.graph) && BigInt(current.pending) >= BigInt(wanted.pending);
 }
 export function parseRevision(value: unknown): RepositoryRevision | null {
   const r = value as RepositoryRevision | null;
-  return r && typeof r.graph === 'string' && /^\d+$/.test(r.graph) && typeof r.pending === 'string' && /^\d+$/.test(r.pending) ? r : null;
+  return r && typeof r.graph === 'string' && /^\d+$/.test(r.graph) && typeof r.pending === 'string' && /^\d+$/.test(r.pending) && (r.evidence === undefined || (typeof r.evidence === 'string' && /^\d+$/.test(r.evidence))) ? r : null;
 }
 export function pendingViewNeedsFull(view: RepositoryView, pending: PendingView): boolean {
   if (!view.revision || view.revision.graph !== pending.revision.graph) return true;

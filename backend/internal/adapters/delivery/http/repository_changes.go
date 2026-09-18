@@ -125,7 +125,7 @@ func (s *Server) repositoryChanges(w http.ResponseWriter, r *http.Request) {
 			// The current durable counters recover any missed notifications, including
 			// a restart or a Last-Event-ID older than retained process state.
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if _, err = fmt.Fprintf(w, "id: %d:%d\nevent: revision\ndata: %s\n\n", n.revision.Graph, n.revision.Pending, data); err != nil {
+			if _, err = fmt.Fprintf(w, "id: %d:%d:%d\nevent: revision\ndata: %s\n\n", n.revision.Graph, n.revision.Pending, n.revision.Evidence, data); err != nil {
 				return
 			}
 			f.Flush()

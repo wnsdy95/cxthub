@@ -35,7 +35,7 @@ func (g *GitChanges) Submit(ctx context.Context, repo domain.ContentHash, r doma
 	if err := r.Validate(); err != nil {
 		return domain.GitChangeJob{}, err
 	}
-	return repositoryWrite(ctx, g.core, repo, func(ctx context.Context) (domain.GitChangeJob, error) {
+	return repositoryWrite(evidenceWriteContext(ctx), g.core, repo, func(ctx context.Context) (domain.GitChangeJob, error) {
 		metadata, err := g.core.meta.GetRepo(ctx, repo)
 		if err != nil {
 			return domain.GitChangeJob{}, err
@@ -89,7 +89,7 @@ func (g *GitChanges) Retry(ctx context.Context, repo domain.ContentHash, id stri
 	if err := domain.ValidateGitChangeID(id); err != nil {
 		return err
 	}
-	return repositoryWriteError(ctx, g.core, repo, func(ctx context.Context) error { return g.store.RetryGitChange(ctx, repo, id, time.Now().UTC()) })
+	return repositoryWriteError(evidenceWriteContext(ctx), g.core, repo, func(ctx context.Context) error { return g.store.RetryGitChange(ctx, repo, id, time.Now().UTC()) })
 }
 func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
 	work, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -114,7 +114,7 @@ func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
 		next.State = "completed"
 		next.Result = &proof
 		next.Reason = proof.Reason
-		err = repositoryWriteError(work, g.core, j.RepoID, func(tx context.Context) error {
+		err = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
 			current, e := g.core.meta.GetRepo(tx, j.RepoID)
 			if e != nil {
 				return e
@@ -156,7 +156,7 @@ func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
 	defer done()
 	// If another worker completed, or our own COMMIT succeeded with a lost ack,
 	// this fence rejects the stale failure state without changing the result.
-	e := repositoryWriteError(finish, g.core, j.RepoID, func(tx context.Context) error { return g.store.FinishGitChange(tx, next) })
+	e := repositoryWriteError(evidenceWriteContext(finish), g.core, j.RepoID, func(tx context.Context) error { return g.store.FinishGitChange(tx, next) })
 	return errors.Join(err, e)
 }
 func (g *GitChanges) Process(ctx context.Context, limit int) error {

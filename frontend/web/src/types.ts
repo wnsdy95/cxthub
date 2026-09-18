@@ -424,7 +424,7 @@ export interface StorageUsageReport {
 }
 
 /** A complete graph generation, read in one backend transaction. */
-export interface RepositoryRevision { graph: string; pending: string }
+export interface RepositoryRevision { graph: string; pending: string; evidence?: string }
 /** Raw capture patch: branch memberships belong to the full graph generation. */
 export type PendingSnapshot = Omit<Snapshot, 'branches'>;
 export interface PendingView { revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[] }
@@ -475,7 +475,14 @@ export interface GitChangeSummary {
 export interface GitChangePage {items: GitChangeSummary[]; next_cursor?: string}
 
 export interface GitScanJob {
- id: string; commit: string; state: GitChangeSummary['state']; indexed: boolean;
+ id: string; commit: string; state: GitChangeSummary['state']; indexed: boolean; tree_indexed?: boolean;
  version: string; reason?: string; updated_at: string;
 }
 export interface GitScanPage {items: GitScanJob[]; next_cursor?: string; reconciliation?: {state: 'waiting' | 'running' | 'retrying' | 'completed'; page: number; reason?: string}}
+
+export interface CodeSelection {code_commit: string; source_commit: string; source_parent?: string; paths: string[]}
+export interface CodeApplicabilityResult {
+ selection: CodeSelection; revision: RepositoryRevision; state_hash: string;
+ relation: 'ancestor' | 'not_ancestor' | 'unknown'; reason?: string;
+ paths: {path: string; state: 'applied' | 'before' | 'changed' | 'equivalent' | 'not_in_history' | 'unknown'; reason?: string; before: {oid?: string; mode?: string}; after: {oid?: string; mode?: string}; selected: {oid?: string; mode?: string}}[];
+}

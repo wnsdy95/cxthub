@@ -18,6 +18,10 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		typ    reflect.Type
 	}{
 		{"Snapshot", reflect.TypeOf(domain.Snapshot{})},
+		{"RepositoryRevision", reflect.TypeOf(domain.RepositoryRevision{})},
+		{"CodeSelection", reflect.TypeOf(domain.CodeSelection{})},
+		{"CodeApplicability", reflect.TypeOf(domain.CodeApplicability{})},
+		{"CodePathState", reflect.TypeOf(domain.CodePathState{})},
 		{"GitChangeRequest", reflect.TypeOf(domain.GitChangeRequest{})},
 		{"GitReversalEvidence", reflect.TypeOf(domain.GitReversalEvidence{})},
 		{"GitChangeJob", reflect.TypeOf(domain.GitChangeJob{})},

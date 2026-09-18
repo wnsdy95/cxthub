@@ -69,6 +69,12 @@ export interface DocEventPage {
 }
 
 export const api = {
+ codeApplicability: (repo: string, selection: import('./types').CodeSelection, signal?: AbortSignal) => {
+  const params = new URLSearchParams({code_commit: selection.code_commit, source_commit: selection.source_commit});
+  if (selection.source_parent) params.set('source_parent', selection.source_parent);
+  for (const path of selection.paths) params.append('path', path);
+  return call<import('./types').CodeApplicabilityResult>('GET', `/repos/${encodeURIComponent(repo)}/code-applicability?${params}`, undefined, undefined, signal);
+ },
  gitScans: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').GitScanPage>('GET', `/repos/${encodeURIComponent(repo)}/git-scans?limit=20&cursor=${encodeURIComponent(cursor)}`, undefined, undefined, signal),
  retryGitScan: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-scans/${encodeURIComponent(id)}/retry`, {}),
  gitChanges: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').GitChangePage>('GET', `/repos/${encodeURIComponent(repo)}/git-changes?limit=20&cursor=${encodeURIComponent(cursor)}`, undefined, undefined, signal),

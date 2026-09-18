@@ -28,6 +28,7 @@ export function GitScans({repoId, canRetry}: {repoId: string; canRetry: boolean}
    {jobs.isSuccess && !rows.length && <p>{t('gitScans.empty')}</p>}
    <ul>{rows.map(j => <li key={j.id}>
     <strong>{labels[j.state]}</strong> <code title={j.commit}>{j.commit.slice(0, 10)}</code>
+    <span>{j.tree_indexed ? t('codeState.treeReady') : t('codeState.treePending')}</span>
     <span>{j.indexed ? t('gitScans.indexed') : t('gitScans.reading')}</span>
     {j.reason && <p>{reasons[j.reason] ?? t('gitChanges.ambiguous')}</p>}
     <time dateTime={j.updated_at}>{new Date(j.updated_at).toLocaleString()}</time>

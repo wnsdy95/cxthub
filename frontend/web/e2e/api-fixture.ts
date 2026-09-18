@@ -35,7 +35,7 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
     if (input.method !== 'GET' || !/\/(view|revision|changes|pending-view)$/.test(input.pathname)) return undefined;
     // Contract regressions can supply actual, distinct serialized responses.
     // Do not silently replace them with an enriched full-view fixture.
-    if (input.pathname.endsWith('/pending-view')) {
+    if (/\/(pending-view|revision|changes)$/.test(input.pathname)) {
       const direct = responder(input);
       if (direct) return direct;
     }

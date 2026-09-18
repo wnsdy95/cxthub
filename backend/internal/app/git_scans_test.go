@@ -31,6 +31,38 @@ func (f *scanReader) ReadCommitDeltas(_ context.Context, _, sha string) ([]domai
 	}
 	return []domain.GitCommitDelta{d}, nil
 }
+func (f *scanReader) ReadCommitTree(_ context.Context, _, sha string) (domain.GitTreeEvidence, error) {
+	if f.offline {
+		return domain.GitTreeEvidence{}, errors.New("offline")
+	}
+	d, ok := f.deltas[sha]
+	if !ok {
+		return domain.GitTreeEvidence{}, errors.New("unknown commit")
+	}
+	// Synthetic fixtures use flat filenames. Apply their explicit linear history.
+	entries := map[string]domain.GitEntry{}
+	var walk func(string)
+	walk = func(id string) {
+		v := f.deltas[id]
+		if len(v.Parents) > 0 {
+			walk(v.Parents[0])
+		}
+		for _, c := range v.Changes {
+			if c.After.OID == "" {
+				delete(entries, c.Path)
+			} else {
+				entries[c.Path] = c.After
+			}
+		}
+	}
+	walk(sha)
+	n, e := domain.NewGitTreeNode(entries, 40)
+	if e != nil {
+		return domain.GitTreeEvidence{}, e
+	}
+	parents := append([]string{}, d.Parents...)
+	return domain.GitTreeEvidence{Commit: domain.GitCommitTree{Commit: sha, Tree: n.OID, Parents: parents}, Nodes: []domain.GitTreeNode{n}}, nil
+}
 func (f *scanReader) ListGitHeads(ctx context.Context, origin string, page int) ([]outbound.GitHead, bool, error) {
 	f.headReads = append(f.headReads, page)
 	if f.headError {
@@ -173,7 +205,7 @@ func TestGitScanOfflineRetryAndOriginFence(t *testing.T) {
 	if err = scans.RetryScan(ctx, repo, j.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = scans.Process(ctx, 2); err != nil {
+	if err = scans.Process(ctx, 3); err != nil {
 		t.Fatal(err)
 	}
 	j, _ = st.GetGitScan(ctx, repo, j.ID)

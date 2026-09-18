@@ -12,6 +12,7 @@ export function useRepositoryUpdates(repo: string | null) {
     let disposed = false, busy = false, wanted: RepositoryRevision | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let delay = 15_000;
+    let evidence = 0n;
     let unsubscribe: (() => void) | undefined;
     const clearRetry = () => { if (retry) clearTimeout(retry); retry = undefined; };
     const full = () => qc.fetchQuery({queryKey: key, queryFn: () => api.repositoryView(repo), staleTime: 0});
@@ -45,6 +46,7 @@ export function useRepositoryUpdates(repo: string | null) {
           if (!current.revision || current.revision.graph !== wanted.graph) {
             void qc.invalidateQueries({queryKey: ['git-changes', repo]});
             void qc.invalidateQueries({queryKey: ['git-scans', repo]});
+            void qc.invalidateQueries({queryKey: ['code-applicability', repo]});
             const next = await full();
             if (!next.revision) break; // rolling upgrade: old backend
           } else {
@@ -58,7 +60,14 @@ export function useRepositoryUpdates(repo: string | null) {
       } catch { recover(); }
       finally { busy = false; }
     };
-    const changed = async (r: RepositoryRevision) => { wanted = r; await sync(); };
+    const changed = async (r: RepositoryRevision) => {
+      const nextEvidence = BigInt(r.evidence ?? '0');
+      if (nextEvidence > evidence) {
+        evidence = nextEvidence;
+        for (const name of ['git-changes', 'git-scans', 'code-applicability']) void qc.invalidateQueries({queryKey: [name, repo]});
+      }
+      wanted = r; await sync();
+    };
     const visible = () => {
       unsubscribe?.(); unsubscribe = undefined; clearRetry();
       if (document.hidden || disposed) return;

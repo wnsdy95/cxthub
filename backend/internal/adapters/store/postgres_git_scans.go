@@ -82,7 +82,7 @@ func (s *PostgresStore) ClaimGitScan(ctx context.Context, repo domain.ContentHas
 	defer tx.Rollback(ctx)
 	var b []byte
 	var j domain.GitScanJob
-	err = tx.QueryRow(ctx, `SELECT payload FROM git_scan_jobs WHERE ($2='' OR repo_id=$2) AND state IN ('waiting','running','retrying') AND next_attempt<=$1 AND (state<>'running' OR lease_until<=$1) ORDER BY next_attempt,id FOR UPDATE SKIP LOCKED LIMIT 1`, now, repo).Scan(&b)
+	err = tx.QueryRow(ctx, `SELECT payload FROM git_scan_jobs WHERE ($2='' OR repo_id=$2) AND (state IN ('waiting','running','retrying') OR (state='completed' AND NOT coalesce((payload->>'tree_indexed')::boolean,false))) AND next_attempt<=$1 AND (state<>'running' OR lease_until<=$1) ORDER BY next_attempt,id FOR UPDATE SKIP LOCKED LIMIT 1`, now, repo).Scan(&b)
 	if err != nil {
 		return j, mapNoRows(err)
 	}
@@ -119,6 +119,11 @@ func (s *PostgresStore) FinishGitScan(ctx context.Context, p domain.GitScanFinis
 	}
 	if err = p.ValidateFor(old); err != nil {
 		return err
+	}
+	if p.Tree != nil {
+		if err = writeGitTreePG(ctx, tx, p.Job.RepoID, p.Job.GitOrigin, *p.Tree); err != nil {
+			return err
+		}
 	}
 	for _, d := range p.Deltas {
 		b, err = json.Marshal(d)
