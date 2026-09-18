@@ -406,50 +406,96 @@ func (s *SaveSessionService) gcHookLeaf(ctx context.Context, repoID string, old,
 	if old == "" || old == current {
 		return
 	}
-	snap, err := s.store.GetSnapshot(ctx, old)
-	if err != nil || !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
+	retention, ok := s.store.(outbound.ObjectRetention)
+	if !ok {
+		return
+	} // A store without reader coordination must retain data.
+	job := outbound.CaptureCollection{RepoID: repoID, Previous: old, Replacement: current}
+	if err := retention.QueueCaptureCollection(ctx, job); err != nil {
 		return
 	}
+	_, _ = retention.TryCollectObjects(ctx, func() error {
+		jobs, err := retention.CaptureCollections(ctx, repoID, 32)
+		if err != nil {
+			return err
+		}
+		for _, queued := range jobs {
+			// The original successor may itself have been collected. The current
+			// capture is also eligible, but must pass the same provider/session/
+			// complete-prefix and reachability checks before any removal.
+			done := s.collectHookLeaf(ctx, repoID, queued.Previous, queued.Replacement)
+			if !done {
+				done = s.collectHookLeaf(ctx, repoID, queued.Previous, current)
+			}
+			if done {
+				if err := retention.CompleteCaptureCollection(ctx, queued); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// true means a final retain/remove decision; false leaves a failed read/write
+// queued. A retained historical object must not starve later collection jobs.
+func (s *SaveSessionService) collectHookLeaf(ctx context.Context, repoID string, old, current domain.ContentHash) bool {
+	if old == "" || current == "" || old == current {
+		return true
+	}
+	snap, err := s.store.GetSnapshot(ctx, old)
+	if err != nil {
+		return errors.Is(err, domain.ErrNotFound)
+	}
+	if !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
+		return true
+	}
 	replacement, err := s.store.GetSnapshot(ctx, current)
-	if err != nil || snap.Provider == "" || snap.SessionID == "" ||
+	if err != nil {
+		return false
+	}
+	if snap.Provider == "" || snap.SessionID == "" ||
 		replacement.Provider != snap.Provider || replacement.SessionID != snap.SessionID {
-		return
+		return true
 	}
 	oldDoc, err := s.store.GetDoc(ctx, snap.DocHash)
 	if err != nil {
-		return
+		return false
 	}
 	newDoc, err := s.store.GetDoc(ctx, replacement.DocHash)
-	if err != nil || oldDoc.CIR.Envelope.SourceProvider != snap.Provider ||
+	if err != nil {
+		return false
+	}
+	if oldDoc.CIR.Envelope.SourceProvider != snap.Provider ||
 		newDoc.CIR.Envelope.SourceProvider != snap.Provider ||
 		oldDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
 		newDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
 		len(newDoc.CIR.Events) < len(oldDoc.CIR.Events) {
-		return
+		return true
 	}
 	for i, event := range oldDoc.CIR.Events {
 		if !reflect.DeepEqual(event, newDoc.CIR.Events[i]) {
-			return
+			return true
 		}
 	}
 	refs, err := s.store.ListRefs(ctx, repoID)
 	if err != nil {
-		return
+		return false
 	}
 	// Reachability walk preparation — load full snapshot once, then in-memory walk (parents ∪ graft_parents).
 	all, err := s.store.ListSnapshots(ctx, repoID, "")
 	if err != nil {
-		return // Safely preserve when indeterminate
+		return false // Safely preserve when indeterminate
 	}
 	byID := make(map[domain.ContentHash]domain.Snapshot, len(all))
 	for _, sn := range all {
 		for _, parent := range sn.ReachabilityParents() {
 			if parent == old {
-				return // even an unreferenced child still needs this object
+				return true // even an unreferenced child still needs this object
 			}
 		}
 		if sn.ID != old && sn.DocHash == snap.DocHash {
-			return // another snapshot still owns the document
+			return true // another snapshot still owns the document
 		}
 		byID[sn.ID] = sn
 	}
@@ -467,7 +513,7 @@ func (s *SaveSessionService) gcHookLeaf(ctx context.Context, repoID string, old,
 			continue
 		}
 		if cur == old {
-			return // reachable from ref — part of history, so preserved
+			return true // reachable from ref — part of history, so preserved
 		}
 		seen[cur] = true
 		if sn, ok := byID[cur]; ok {
@@ -476,17 +522,17 @@ func (s *SaveSessionService) gcHookLeaf(ctx context.Context, repoID string, old,
 	}
 	pendings, err := s.store.ListPendings(ctx, repoID)
 	if err != nil {
-		return
+		return false
 	}
 	for _, p := range pendings {
 		if p.Target == old {
-			return
+			return true
 		}
 	}
 	if err := s.store.DeleteSnapshot(ctx, old); err != nil {
-		return
+		return false
 	}
-	_ = s.store.DeleteDoc(ctx, snap.DocHash)
+	return s.store.DeleteDoc(ctx, snap.DocHash) == nil
 }
 
 // graftsFile is a versioned graft event queue pending propagation to the server. Must preserve order and expected_seq to prevent edges from being restored after late-arriving adds following a join supersede.

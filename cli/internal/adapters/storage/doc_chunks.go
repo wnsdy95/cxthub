@@ -16,10 +16,12 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
@@ -116,6 +118,15 @@ func (s *FileStore) GetChunk(hash domain.ContentHash) ([]byte, error) {
 // RepackDocs converts legacy full doc to chunk storage with the same hash, cleans up orphan chunks (leftover from DeleteDoc).
 // Returns: (number of conversions, bytes saved). Each conversion is only replaced after reassembly==original validation (lossless).
 func (s *FileStore) RepackDocs() (converted int, saved int64, err error) {
+	_, err = s.withOSLock(context.Background(), "object-retention", "repo", syscall.LOCK_EX, true, func() error {
+		var inner error
+		converted, saved, inner = s.repackDocs()
+		return inner
+	})
+	return
+}
+
+func (s *FileStore) repackDocs() (converted int, saved int64, err error) {
 	docsDir := filepath.Join(s.storeDir(), "objects", "docs")
 	entries, err := os.ReadDir(docsDir)
 	if os.IsNotExist(err) {

@@ -280,6 +280,10 @@ func (s *SyncRepoService) pushSettingsObjects(ctx context.Context, repoID domain
 
 // Push uploads local snapshots/docs/refs to the central server (sync protocol).
 func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+	return withRetainedObjects(ctx, s.store, func() (inbound.SyncOutput, error) { return s.push(ctx, in) })
+}
+
+func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return inbound.SyncOutput{}, err
@@ -989,6 +993,10 @@ func (s *SyncRepoService) loadPushDocs(ctx context.Context, snaps []domain.Snaps
 // After deleting remote pending from resolveSessions (commit resolution propagation), it pushes each local pending's snapshot/doc objects as objects-only and upserts the pointers.
 // Branch refs are not modified (hook path does not move server refs — same spirit as capture path).
 func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput, resolutions []inbound.PendingResolution) (int, error) {
+	return withRetainedObjects(ctx, s.store, func() (int, error) { return s.syncPendings(ctx, in, resolutions) })
+}
+
+func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput, resolutions []inbound.PendingResolution) (int, error) {
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return 0, err
@@ -1327,6 +1335,10 @@ func (s *SyncRepoService) updateRemoteSnapshotStateCursor(
 
 // Pull merges the snapshot/doc/ref from the central server into the local repository (fast-forward first).
 func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+	return withRetainedObjects(ctx, s.store, func() (inbound.SyncOutput, error) { return s.pull(ctx, in) })
+}
+
+func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return inbound.SyncOutput{}, err
