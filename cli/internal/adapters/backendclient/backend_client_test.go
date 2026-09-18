@@ -939,3 +939,61 @@ func TestMemoryClientUsesCausalAttachmentAndObjectEndpoints(t *testing.T) {
 		t.Fatalf("paths put=%q get=%q, want %q / %q", putPath, getPath, wantPut, wantGet)
 	}
 }
+
+func TestTypedMemoryClientRejectsOldServerBeforeMutation(t *testing.T) {
+	repo := domain.HashContent([]byte("typed-client-repo"))
+	id := domain.HashContent([]byte("typed-client-snapshot"))
+	d := domain.MemoryDigest{SnapshotID: id, ClaimsVersion: 1, Fragments: []domain.MemoryFragment{{SourceSnapshot: id, Claims: []domain.MemoryClaim{{Kind: "rationale", Text: "Explicit rationale."}}}}}
+	requests, mutations := 0, 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if strings.Contains(r.URL.Path, "/typed-memory-attachments/") {
+			http.NotFound(w, r)
+			return
+		}
+		// This old server would accept a legacy endpoint while silently dropping
+		// unknown JSON fields. It must never receive such a fallback request.
+		mutations++
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if err := c.PushMemory(context.Background(), string(repo), d); err == nil {
+		t.Fatal("unsupported server accepted claims")
+	}
+	if requests != 1 || mutations != 0 {
+		t.Fatalf("requests=%d mutations=%d", requests, mutations)
+	}
+}
+
+func TestTypedMemoryClientRoundTrip(t *testing.T) {
+	repo := domain.HashContent([]byte("typed-new-client-repo"))
+	id := domain.HashContent([]byte("typed-new-client-snapshot"))
+	d := domain.MemoryDigest{SnapshotID: id, ClaimsVersion: 1, Fragments: []domain.MemoryFragment{{SourceSnapshot: id, Claims: []domain.MemoryClaim{{Kind: "decision", Text: "Explicit decision."}}}}}
+	hash, _ := domain.MemoryDigestHash(d)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			if !strings.Contains(r.URL.Path, "/typed-memory-attachments/") {
+				t.Errorf("wrong route: %s", r.URL.Path)
+			}
+			var got domain.MemoryDigest
+			err := json.NewDecoder(r.Body).Decode(&got)
+			gotHash, _ := domain.MemoryDigestHash(got)
+			if err != nil || gotHash != hash {
+				t.Errorf("wire claims lost: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"memory_hash": hash})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(d)
+	}))
+	defer ts.Close()
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if err := c.PushMemory(context.Background(), string(repo), d); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.PullMemoryObject(context.Background(), string(repo), hash)
+	if err != nil || got.ClaimsVersion != 1 || !got.HasMemoryClaims() {
+		t.Fatalf("pull=%+v err=%v", got, err)
+	}
+}

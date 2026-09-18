@@ -219,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/settings-objects/{hash}", s.guard(domain.RoleMember, s.putSettingsObject))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleMember, s.putMemory))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putMemoryAttachment))
+	mux.HandleFunc("PUT /api/v1/repos/{repoID}/typed-memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putTypedMemoryAttachment))
 	// In-progress context pointer: Write/Delete = context push layer (member), Read = pull/web layer (puller).
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending", s.guard(domain.RolePuller, s.listPending))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/pending/{sessionID}", s.guard(domain.RoleMember, s.putPending))
@@ -891,8 +892,20 @@ func (s *Server) putMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putMemoryAttachment(w http.ResponseWriter, r *http.Request) {
+	s.putMemoryAttachmentVersion(w, r, false)
+}
+
+func (s *Server) putTypedMemoryAttachment(w http.ResponseWriter, r *http.Request) {
+	s.putMemoryAttachmentVersion(w, r, true)
+}
+
+func (s *Server) putMemoryAttachmentVersion(w http.ResponseWriter, r *http.Request, typed bool) {
 	var d domain.MemoryDigest
 	if !s.decode(w, r, &d) {
+		return
+	}
+	if (typed && d.ClaimsVersion != domain.MemoryClaimsVersion) || (!typed && (d.ClaimsVersion != 0 || d.HasMemoryClaims())) {
+		s.respond(w, nil, fmt.Errorf("%w: memory claims version does not match attachment endpoint", domain.ErrValidation))
 		return
 	}
 	d.SnapshotID = domain.ContentHash(r.PathValue("snapshotID"))

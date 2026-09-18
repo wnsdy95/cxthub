@@ -1083,3 +1083,47 @@ func containsExact(items []string, want string) bool {
 	}
 	return false
 }
+
+func TestExplicitMemoryClaimsSurviveRememorizeAndCarry(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	repo := domain.Repo{ID: "typed-memory-repo", DefaultBranch: "main", LocalPath: t.TempDir()}
+	doc, err := st.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex}, Events: []domain.Event{{Kind: domain.EventMessage, Role: "user", Seq: 0}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: doc, DocHash: doc, RepoID: repo.ID, Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo.ID, Target: doc}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMemorizeService(branchSeedGit{repo: repo}, nil, nil, nil, stubDistiller{d: domain.MemoryDigest{Summary: "fresh distillation"}}, st)
+	claims := []domain.MemoryClaim{{Kind: "rationale", Text: "Keep complete history."}}
+	first, err := svc.Memorize(ctx, inbound.MemorizeInput{Cwd: repo.LocalPath, Claims: claims})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.Memorize(ctx, inbound.MemorizeInput{Cwd: repo.LocalPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.MemoryHash != second.MemoryHash {
+		t.Fatalf("automatic distillation changed authored memory: %s -> %s", first.MemoryHash, second.MemoryHash)
+	}
+	d, err := st.GetMemory(ctx, second.MemoryHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ClaimsVersion != 1 || !d.HasMemoryClaims() {
+		t.Fatalf("claims lost: %+v", d)
+	}
+	d.Fragments = append(d.Fragments, domain.MemoryFragment{SourceSnapshot: domain.HashContent([]byte("large")), Summary: strings.Repeat("z", memoryCarryBudgetBytes+1)})
+	carried := boundCarriedDigest(d)
+	if !carried.HasMemoryClaims() {
+		t.Fatal("carry budget dropped explicit claims")
+	}
+	if legacyDigestContainsProjectionNarrative(domain.MemoryDigest{Summary: d.Summary}, d) {
+		t.Fatal("opaque narrative swallowed claims")
+	}
+}

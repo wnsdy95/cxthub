@@ -1024,3 +1024,56 @@ from about 112ms and 125MB allocations to 61ms and 57MB on the development machi
 This does not measure provider, network or complete synchronization latency.
 Cancellation during Git root discovery remains a cancellation/deadline error.
 HTTP sync failures identify the method/path without exposing query credentials.
+
+### Typed memory provenance and rolling compatibility
+
+Memory fragments may contain explicit author-provided `claims`. Each is `code`,
+`decision`, or `rationale` with text. Code claims additionally declare a full
+source Git commit, an optional explicit comparison parent, and 1–20 exact
+repository-relative paths. A fragment's `source_snapshot` supplies its context
+provenance. This is a declaration, not proof of publication, current applicability,
+or semantic truth. Those require the effective-memory query described below.
+Automatic extractive/provider distillation remains untyped.
+
+Authors can add a JSON array of claims with:
+
+```sh
+cxt memorize <snapshot-or-branch> --claims ./claims.json
+cxt push
+```
+
+For example (replace the synthetic commit with the exact accepted source SHA):
+
+```json
+[
+  {"kind":"code","text":"Login uses tokens.","code":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","paths":["src/login.go"]}},
+  {"kind":"rationale","text":"Retain authentication failure history for debugging."}
+]
+```
+
+Import is additive. Subsequent automatic distillation replaces generated prose
+while preserving explicit claims. Carry budgets apply to prose; explicit claims
+remain attached and are not silently promoted to current code facts or inserted
+into provider prompts. Limits are 256 claims per fragment, 2048 per digest and
+8192 UTF-8 bytes per claim text. Exceeding them rejects the new write and retains
+previous immutable generations.
+
+Digests with claims use `claims_version: 1`; omitted optional fields keep existing
+wire hashes unchanged. Large typed digests use the v4 storage chunk manifest.
+The CLI uploads typed generations only through
+`PUT /repos/{repoID}/typed-memory-attachments/{snapshotID}`. Older servers reject
+that new path before mutation; clients never retry a legacy write route. Upgrade
+the backend replicas before using typed writes. Mixed-version replicas can reject
+new typed reads/writes until the rollout finishes, rather than discard fields.
+
+The typed endpoint uses the same repository membership and causal pointer CAS as
+ordinary memory. Untyped endpoints reject typed bodies. A causal child cannot
+downgrade its parent's claims version. An explicit typed API replacement can clear
+claims while retaining version 1; the original object remains readable. Concurrent
+writers preserve their objects and only one pointer update from a given parent
+succeeds. Never infer a publication mapping from timestamp order or graph placement.
+
+Typed storage and authoring are the first delivery slice. Effective selection by
+code SHA, verified PR integration anchors, Web/MCP consumption, and short deduplicated
+active-session updates remain under #208. Stored/history reads continue to expose
+the original memory; this slice does not yet classify claims as currently applied.

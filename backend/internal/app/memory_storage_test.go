@@ -213,3 +213,48 @@ type missingMemoryBlob struct {
 func (s *missingMemoryBlob) GetMemory(context.Context, domain.ContentHash, domain.ContentHash) (domain.MemoryDigest, error) {
 	return domain.MemoryDigest{}, domain.ErrNotFound
 }
+
+func TestTypedMemoryRejectsDowngradeBeforeBlobOrPointerMutation(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := context.Background()
+	repo := hh("typed-repo")
+	id := hh("typed-snapshot")
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: id, RepoID: repo, DocHash: id}); err != nil {
+		t.Fatal(err)
+	}
+	d := domain.MemoryDigest{SnapshotID: id, ClaimsVersion: 1, Fragments: []domain.MemoryFragment{{SourceSnapshot: id, Claims: []domain.MemoryClaim{{Kind: "decision", Text: "Preserve accepted history."}}}}}
+	if _, err := svc.PutMemoryDigest(ctx, repo, d); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("legacy upload err=%v", err)
+	}
+	first, err := svc.PutMemoryDigestCAS(ctx, repo, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is what an old client produces after dropping fields it cannot decode.
+	bad := domain.MemoryDigest{SnapshotID: id, PreviousMemoryHash: first, Summary: "legacy rewrite"}
+	badHash, _ := domain.MemoryDigestHash(bad)
+	if _, err := svc.PutMemoryDigestCAS(ctx, repo, bad); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("downgrade err=%v", err)
+	}
+	if _, err := st.GetMemory(ctx, repo, badHash); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("downgrade wrote blob: %v", err)
+	}
+	snap, err := st.GetSnapshot(ctx, repo, id)
+	if err != nil || snap.MemoryHash != first {
+		t.Fatalf("pointer changed: %+v err=%v", snap, err)
+	}
+	// An aware author may clear claims, but the typed generation stays explicit.
+	next := domain.MemoryDigest{SnapshotID: id, PreviousMemoryHash: first, ClaimsVersion: 1, Summary: "Explicitly cleared claims"}
+	second, err := svc.PutMemoryDigestCAS(ctx, repo, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := svc.PutMemoryDigestCAS(ctx, repo, next)
+	if err != nil || retry != second {
+		t.Fatalf("retry %s %v", retry, err)
+	}
+	got, err := svc.GetMemoryDigest(ctx, repo, id)
+	if err != nil || got.ClaimsVersion != 1 {
+		t.Fatalf("read %+v %v", got, err)
+	}
+}

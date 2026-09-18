@@ -13,11 +13,13 @@ const (
 	MemoryChunkFormatV1 = "cxt-memory-chunks-v1"
 	MemoryChunkFormatV2 = "cxt-memory-chunks-v2"
 	MemoryChunkFormatV3 = "cxt-memory-chunks-v3"
+	MemoryChunkFormatV4 = "cxt-memory-chunks-v4"
 )
 
 // MemoryChunkManifest is an at-rest representation. MemoryDigestHash remains
 // the hash of complete wire JSON; storage chunking never changes identity.
 type MemoryChunkManifest struct {
+	ClaimsVersion      uint32               `json:"claims_version,omitempty"`
 	Format             string               `json:"format"`
 	SnapshotID         ContentHash          `json:"snapshot_id"`
 	PreviousMemoryHash ContentHash          `json:"previous_memory_hash,omitempty"`
@@ -36,6 +38,9 @@ type MemoryChunkPlan struct {
 }
 
 func PlanMemoryChunks(d MemoryDigest) (plan MemoryChunkPlan, ok bool, err error) {
+	if err := d.ValidateMemoryClaims(); err != nil {
+		return MemoryChunkPlan{}, false, err
+	}
 	var fragments []byte
 	if len(d.Fragments) > 0 {
 		fragments, err = json.Marshal(d.Fragments)
@@ -48,6 +53,7 @@ func PlanMemoryChunks(d MemoryDigest) (plan MemoryChunkPlan, ok bool, err error)
 	}
 	plan = MemoryChunkPlan{
 		Manifest: MemoryChunkManifest{
+			ClaimsVersion:      d.ClaimsVersion,
 			Format:             memoryChunkFormatFor(d),
 			SnapshotID:         d.SnapshotID,
 			PreviousMemoryHash: d.PreviousMemoryHash,
@@ -76,6 +82,9 @@ func PlanMemoryChunks(d MemoryDigest) (plan MemoryChunkPlan, ok bool, err error)
 }
 
 func memoryChunkFormatFor(d MemoryDigest) string {
+	if d.ClaimsVersion != 0 {
+		return MemoryChunkFormatV4
+	}
 	if d.PreviousMemoryHash != "" {
 		return MemoryChunkFormatV3
 	}
@@ -86,7 +95,7 @@ func memoryChunkFormatFor(d MemoryDigest) string {
 }
 
 func SupportedMemoryChunkFormat(format string) bool {
-	return format == MemoryChunkFormatV1 || format == MemoryChunkFormatV2 || format == MemoryChunkFormatV3
+	return format == MemoryChunkFormatV1 || format == MemoryChunkFormatV2 || format == MemoryChunkFormatV3 || format == MemoryChunkFormatV4
 }
 
 func (p *MemoryChunkPlan) addComponent(data []byte) []ContentHash {
@@ -133,6 +142,9 @@ func ParseMemoryChunkManifest(data []byte) (MemoryChunkManifest, bool, error) {
 	if err := json.Unmarshal(data, &man); err != nil {
 		return MemoryChunkManifest{}, true, err
 	}
+	if (man.Format == MemoryChunkFormatV4) != (man.ClaimsVersion == MemoryClaimsVersion) || man.ClaimsVersion > MemoryClaimsVersion {
+		return MemoryChunkManifest{}, true, fmt.Errorf("invalid claims version for memory manifest")
+	}
 	if len(man.SummaryChunks) == 0 && len(man.FragmentChunks) == 0 {
 		return MemoryChunkManifest{}, true, fmt.Errorf("empty memory manifest")
 	}
@@ -169,6 +181,7 @@ func AssembleMemoryChunks(man MemoryChunkManifest, bodies map[ContentHash][]byte
 		}
 	}
 	return MemoryDigest{
+		ClaimsVersion:      man.ClaimsVersion,
 		SnapshotID:         man.SnapshotID,
 		PreviousMemoryHash: man.PreviousMemoryHash,
 		Summary:            string(summary),

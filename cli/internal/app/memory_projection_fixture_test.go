@@ -16,9 +16,12 @@ type projectionFixture struct {
 	Snapshots  []struct {
 		ID, Summary                           string
 		Parents, Grafts, Pinned, Facts, Tasks []string
-		Fragments                             []struct{ Source, Summary string }
+		Fragments                             []struct {
+			Source, Summary string
+			Claims          []domain.MemoryClaim
+		}
 	}
-	Want, Absent, Facts, Tasks []string
+	Want, Absent, Facts, Tasks, Claims []string
 }
 
 func TestMemoryProjectionSharedFixtures(t *testing.T) {
@@ -51,7 +54,10 @@ func TestMemoryProjectionSharedFixtures(t *testing.T) {
 				if input.Summary != "" || len(input.Fragments) > 0 {
 					d := domain.MemoryDigest{SnapshotID: snap.ID, Summary: input.Summary, KeyFacts: input.Facts, OpenTasks: input.Tasks}
 					for _, f := range input.Fragments {
-						d.Fragments = append(d.Fragments, domain.MemoryFragment{SourceSnapshot: hash(f.Source), Summary: f.Summary})
+						d.Fragments = append(d.Fragments, domain.MemoryFragment{SourceSnapshot: hash(f.Source), Summary: f.Summary, Claims: f.Claims})
+					}
+					if d.HasMemoryClaims() {
+						d.ClaimsVersion = domain.MemoryClaimsVersion
 					}
 					if len(input.Pinned) > 0 {
 						d.GraftCoverage = &domain.MemoryGraftCoverage{ProjectionVersion: domain.MemoryProjectionVersion, PinnedSources: hashes(input.Pinned)}
@@ -69,6 +75,19 @@ func TestMemoryProjectionSharedFixtures(t *testing.T) {
 			got, found, complete := memoryProjectionFromDetailed(ctx, st, hash(fixture.Root))
 			if !found || !complete {
 				t.Fatalf("found=%v complete=%v", found, complete)
+			}
+			for _, want := range fixture.Claims {
+				count := 0
+				for _, f := range got.Fragments {
+					for _, c := range f.Claims {
+						if c.Text == want {
+							count++
+						}
+					}
+				}
+				if count != 1 || got.ClaimsVersion != 1 {
+					t.Fatalf("typed claim %q count=%d version=%d", want, count, got.ClaimsVersion)
+				}
 			}
 			for _, want := range fixture.Want {
 				if strings.Count(got.Summary, want) != 1 {

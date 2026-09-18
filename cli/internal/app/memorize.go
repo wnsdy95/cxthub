@@ -122,6 +122,14 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 	// it has no inherited memory. Otherwise a future lineage mutation cannot
 	// separate this snapshot's own contribution from opaque inherited content.
 	digest = domain.MergeDigests(domain.MemoryDigest{}, digest)
+	if len(in.Claims) > 0 {
+		authored := domain.MemoryDigest{SnapshotID: snap.ID, ClaimsVersion: domain.MemoryClaimsVersion,
+			Fragments: []domain.MemoryFragment{{SourceSnapshot: snap.ID, Claims: in.Claims}}}
+		if err := authored.ValidateMemoryClaims(); err != nil {
+			return inbound.MemorizeOutput{}, err
+		}
+		digest = domain.MergeDigests(authored, digest)
+	}
 	// Project memory follows every natural/graft lineage and unions provenance
 	// fragments; choosing one globally closest digest loses sibling PR memory.
 	// Filter noisy prior KeyFacts so tool names and ingestion markers do not propagate forever across generations. Keep only sentence-form facts, using the same rules as the seed filter.
@@ -140,6 +148,9 @@ func (s *MemorizeService) Memorize(ctx context.Context, in inbound.MemorizeInput
 	// computing it before the merge would make those fragments disappear on the
 	// first later graft mutation.
 	digest.GraftCoverage = memoryGraftCoverageFromState(ctx, s.store, projectionState, digest.Fragments, priorComplete)
+	if err := digest.ValidateMemoryClaims(); err != nil {
+		return inbound.MemorizeOutput{}, err
+	}
 	if snap.MemoryHash != "" {
 		current, err := s.store.GetMemory(ctx, snap.MemoryHash)
 		if err != nil {
@@ -247,7 +258,12 @@ func priorMemoryProjectionDetailed(ctx context.Context, store MemoryReader, snap
 		return digest, found, false
 	}
 	if len(current.Fragments) == 0 {
-		return ancestorMemoryProjectionDetailed(ctx, store, snap)
+		prior, found, complete := ancestorMemoryProjectionDetailed(ctx, store, snap)
+		if current.ClaimsVersion > prior.ClaimsVersion {
+			prior.ClaimsVersion = current.ClaimsVersion
+			found = true // Preserve the protocol generation even after explicit clearing.
+		}
+		return prior, found, complete
 	}
 	projected, ok, complete := snapshotMemoryProjectionDetailed(ctx, store, snap)
 	if !ok {
@@ -257,12 +273,15 @@ func priorMemoryProjectionDetailed(ctx context.Context, store MemoryReader, snap
 	for _, fragment := range projected.Fragments {
 		if fragment.SourceSnapshot != snap.ID {
 			fragments = append(fragments, fragment)
+		} else if len(fragment.Claims) > 0 {
+			// Automatic distillation replaces prose, never explicit authored claims.
+			fragments = append(fragments, domain.MemoryFragment{SourceSnapshot: snap.ID, Claims: fragment.Claims})
 		}
 	}
-	if len(fragments) == 0 {
+	if len(fragments) == 0 && projected.ClaimsVersion == 0 {
 		return domain.MemoryDigest{}, false, complete
 	}
-	prior := domain.MemoryDigest{SnapshotID: snap.ID, Provider: projected.Provider, Fragments: fragments}
+	prior := domain.MemoryDigest{SnapshotID: snap.ID, Provider: projected.Provider, Fragments: fragments, ClaimsVersion: projected.ClaimsVersion}
 	return domain.MergeDigests(domain.MemoryDigest{}, prior), true, complete
 }
 
@@ -401,6 +420,10 @@ func (w *memoryProjectionWalker) mergeLegacyOpaque(digest domain.MemoryDigest) {
 }
 
 func legacyDigestContainsProjectionNarrative(legacy, projection domain.MemoryDigest) bool {
+	// Narrative containment cannot establish that explicit claims were carried.
+	if projection.ClaimsVersion != 0 || projection.HasMemoryClaims() {
+		return false
+	}
 	if len(projection.Fragments) == 0 {
 		return projection.Summary == "" || strings.Contains(legacy.Summary, projection.Summary)
 	}
@@ -759,7 +782,7 @@ func (w *memoryProjectionWalker) retainedMemoryContribution(digest domain.Memory
 	if len(fragments) == 0 {
 		return domain.MemoryDigest{}, false
 	}
-	own := domain.MemoryDigest{SnapshotID: snap.ID, Provider: digest.Provider, Fragments: fragments}
+	own := domain.MemoryDigest{SnapshotID: snap.ID, Provider: digest.Provider, Fragments: fragments, ClaimsVersion: digest.ClaimsVersion}
 	return domain.MergeDigests(domain.MemoryDigest{}, own), true
 }
 
@@ -850,16 +873,13 @@ func boundCarriedDigest(d domain.MemoryDigest) domain.MemoryDigest {
 			fragment.Summary = truncateUTF8Tail(fragment.Summary, remainingSummary)
 			fragment.KeyFacts = boundStringListTail(fragment.KeyFacts, remainingFacts)
 			fragment.OpenTasks = boundStringListTail(fragment.OpenTasks, remainingTasks)
-			if fragment.Summary == "" && len(fragment.KeyFacts) == 0 && len(fragment.OpenTasks) == 0 && !fragment.TasksAuthoritative {
+			if fragment.Summary == "" && len(fragment.KeyFacts) == 0 && len(fragment.OpenTasks) == 0 && !fragment.TasksAuthoritative && len(fragment.Claims) == 0 {
 				continue
 			}
 			remainingSummary -= len(fragment.Summary)
 			remainingFacts -= stringListBytes(fragment.KeyFacts)
 			remainingTasks -= stringListBytes(fragment.OpenTasks)
 			kept = append(kept, fragment)
-			if remainingSummary <= 0 && remainingFacts <= 0 && remainingTasks <= 0 {
-				break
-			}
 		}
 		for left, right := 0, len(kept)-1; left < right; left, right = left+1, right-1 {
 			kept[left], kept[right] = kept[right], kept[left]

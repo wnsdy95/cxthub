@@ -1186,6 +1186,9 @@ func gitOriginLabel(raw string) string {
 // create an empty attachment or retry the exact current digest, but it cannot
 // replace a non-empty pointer because old clients provide no causal parent.
 func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+	if d.ClaimsVersion != 0 || d.HasMemoryClaims() {
+		return "", fmt.Errorf("%w: typed memory requires the typed attachment endpoint", domain.ErrValidation)
+	}
 	if d.PreviousMemoryHash != "" {
 		return "", fmt.Errorf("%w: causal memory requires the attachment endpoint", domain.ErrValidation)
 	}
@@ -1200,6 +1203,9 @@ func (s *Service) PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentH
 }
 
 func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest, expected domain.ContentHash, causal bool) (domain.ContentHash, error) {
+	if err := d.ValidateMemoryClaims(); err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrValidation, err)
+	}
 	if err := validateHashes(repoID, d.SnapshotID); err != nil {
 		return "", err
 	}
@@ -1244,6 +1250,9 @@ func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash
 		}
 		if previous.SnapshotID != d.SnapshotID {
 			return "", fmt.Errorf("%w: memory parent belongs to another snapshot", domain.ErrIntegrity)
+		}
+		if previous.ClaimsVersion > d.ClaimsVersion {
+			return "", fmt.Errorf("%w: memory claims cannot be downgraded; upgrade the client and pull before retrying", domain.ErrValidation)
 		}
 	}
 	hash, err := s.blobs.PutMemory(ctx, repoID, d)

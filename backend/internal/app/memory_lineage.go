@@ -145,6 +145,10 @@ func (w *memoryProjectionWalker) mergeLegacyOpaque(digest domain.MemoryDigest) {
 }
 
 func legacyDigestContainsProjectionNarrative(legacy, projection domain.MemoryDigest) bool {
+	// Narrative containment cannot establish that explicit claims were carried.
+	if projection.ClaimsVersion != 0 || projection.HasMemoryClaims() {
+		return false
+	}
 	if len(projection.Fragments) == 0 {
 		return projection.Summary == "" || strings.Contains(legacy.Summary, projection.Summary)
 	}
@@ -350,7 +354,7 @@ func (w *memoryProjectionWalker) retainedMemoryContribution(digest domain.Memory
 	if len(fragments) == 0 {
 		return domain.MemoryDigest{}, false
 	}
-	own := domain.MemoryDigest{SnapshotID: snap.ID, Provider: digest.Provider, Fragments: fragments}
+	own := domain.MemoryDigest{SnapshotID: snap.ID, Provider: digest.Provider, Fragments: fragments, ClaimsVersion: digest.ClaimsVersion}
 	return domain.MergeDigests(domain.MemoryDigest{}, own), true
 }
 

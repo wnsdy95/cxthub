@@ -273,6 +273,7 @@ type MemoryDigest struct {
 	Provider           ProviderKind         `json:"provider"`
 	Fragments          []MemoryFragment     `json:"fragments,omitempty"`
 	GraftCoverage      *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
+	ClaimsVersion      uint32               `json:"claims_version,omitempty"`
 }
 
 // MemoryGraftCoverage is the root graft register and transitive lineage state
@@ -292,9 +293,10 @@ type MemoryGraftCoverage struct {
 // treats it as CIR-neutral content and preserves it for deterministic client
 // projection across natural and graft parents.
 type MemoryFragment struct {
-	SourceSnapshot     ContentHash `json:"source_snapshot"`
-	Summary            string      `json:"summary,omitempty"`
-	KeyFacts           []string    `json:"key_facts,omitempty"`
-	OpenTasks          []string    `json:"open_tasks,omitempty"`
-	TasksAuthoritative bool        `json:"tasks_authoritative,omitempty"`
+	SourceSnapshot     ContentHash   `json:"source_snapshot"`
+	Summary            string        `json:"summary,omitempty"`
+	KeyFacts           []string      `json:"key_facts,omitempty"`
+	OpenTasks          []string      `json:"open_tasks,omitempty"`
+	TasksAuthoritative bool          `json:"tasks_authoritative,omitempty"`
+	Claims             []MemoryClaim `json:"claims,omitempty"`
 }

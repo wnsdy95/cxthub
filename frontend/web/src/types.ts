@@ -318,6 +318,7 @@ export interface CIREvent {
 
 /** Compressed memory distilled from snapshot */
 export interface MemoryDigest {
+  claims_version?: 1;
   snapshot_id: string;
   previous_memory_hash?: string;
   summary: string;
@@ -330,6 +331,7 @@ export interface MemoryDigest {
     key_facts?: string[];
     open_tasks?: string[];
     tasks_authoritative?: boolean;
+    claims?: Array<{ kind: 'code' | 'decision' | 'rationale'; text: string; code?: { commit: string; parent?: string; paths: string[] } }>;
   }>;
   graft_coverage?: {
     projection_version: number;

@@ -754,7 +754,11 @@ func Run(c *Container, args []string) error {
 	case "memorize", "memory":
 		// Current branch head context distilled (compressed memory) → attached to snapshot.
 		// Push sends the attached memory to the server with the raw data.
-		out, err := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: flagVal(rest, "--provider"), Ref: firstPositional(rest)})
+		claims, err := readMemoryClaims(flagVal(rest, "--claims"))
+		if err != nil {
+			return err
+		}
+		out, err := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: flagVal(rest, "--provider"), Ref: firstPositional(rest), Claims: claims})
 		if err != nil {
 			if err == domain.ErrNotFound {
 				return fmt.Errorf("no snapshot to distill — create a snapshot first using git commit (or cxt commit)")
@@ -1043,7 +1047,7 @@ usage: cxt <command> [flags]
                             fork and restore a context branch
   load [<ref>] [--provider claude|codex] [--mode full|reconstructed|memory]
                             restore a snapshot (current head when ref is omitted)
-  memorize | memory [<ref>] [--provider claude|codex]
+  memorize | memory [<ref>] [--provider claude|codex] [--claims <json-file>]
                             distill context into reusable memory
 
   Configuration and maintenance:

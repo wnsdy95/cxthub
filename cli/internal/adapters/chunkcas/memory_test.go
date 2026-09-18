@@ -1,6 +1,7 @@
 package chunkcas
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -104,5 +105,29 @@ func TestMemoryComponentPlanKeepsSmallDigestMonolithic(t *testing.T) {
 	_, ok, err := PlanMemory(domain.MemoryDigest{Summary: "small", Provider: domain.ProviderClaude})
 	if err != nil || ok {
 		t.Fatalf("small digest should stay monolithic: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestTypedMemoryComponentRoundTrip(t *testing.T) {
+	d := domain.MemoryDigest{SnapshotID: domain.HashContent([]byte("typed")), ClaimsVersion: 1, Summary: strings.Repeat("archive", 12000), Fragments: []domain.MemoryFragment{{SourceSnapshot: domain.HashContent([]byte("source")), Claims: []domain.MemoryClaim{{Kind: "rationale", Text: "Historical reason."}}}}}
+	plan, ok, err := PlanMemory(d)
+	if err != nil || !ok || plan.Manifest.Format != MemoryFormatV4 {
+		t.Fatalf("typed plan=%+v ok=%v err=%v", plan.Manifest, ok, err)
+	}
+	raw, _ := json.Marshal(plan.Manifest)
+	man, recognized, err := ParseMemoryManifest(raw)
+	if err != nil || !recognized {
+		t.Fatalf("parse=%v %v", recognized, err)
+	}
+	got, err := AssembleMemory(man, plan.Bodies)
+	wantHash, _ := domain.MemoryDigestHash(d)
+	gotHash, _ := domain.MemoryDigestHash(got)
+	if err != nil || gotHash != wantHash {
+		t.Fatalf("roundtrip got %s want %s err=%v", gotHash, wantHash, err)
+	}
+	man.Format = MemoryFormatV3
+	raw, _ = json.Marshal(man)
+	if _, _, err := ParseMemoryManifest(raw); err == nil {
+		t.Fatal("typed version hidden in legacy manifest")
 	}
 }
