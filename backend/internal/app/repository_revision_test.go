@@ -38,6 +38,32 @@ func TestPendingViewDoesNotTraverseOldAncestors(t *testing.T) {
 	}
 }
 
+func TestEmptyRefBatchReconcilesPendingWithoutGraphRevision(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newFsckSvc(t)
+	repo := hh(t.Name())
+	snap := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderCodex, "shared capture"))
+	if err := svc.PutPending(ctx, repo, snap.SessionID, domain.Pending{Target: snap.ID, Provider: snap.Provider}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CompareAndSwapRef(ctx, repo, domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "main", Target: snap.ID}, ""); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := svc.RepositoryRevision(ctx, repo)
+	if _, err := svc.UpdateRefs(ctx, inbound.UpdateRefsInput{RepoID: repo}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := svc.RepositoryRevision(ctx, repo)
+	if after.Graph != before.Graph || after.Pending <= before.Pending {
+		t.Fatalf("empty batch scope: %+v -> %+v", before, after)
+	}
+	pendings, err := st.ListPendings(ctx, repo)
+	if err != nil || len(pendings) != 0 {
+		t.Fatalf("shared pending reconciliation lost: %+v %v", pendings, err)
+	}
+	assertPendingGCCapture(t, st, snap)
+}
+
 func TestPendingRevisionDoesNotInvalidateGraph(t *testing.T) {
 	ctx := context.Background()
 	svc, st := newFsckSvc(t)

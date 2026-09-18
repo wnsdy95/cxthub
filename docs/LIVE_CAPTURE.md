@@ -36,6 +36,9 @@ The published pointer change and its revision commit in the same transaction.
 A rollback publishes neither. Object upload alone does not publish a graph revision;
 ref/history publication or changes to existing metadata do. Immutable memory blobs
 remain outside a losing attachment CAS, preserving the existing recovery contract.
+Objects-only CLI uploads skip ref reconciliation. Explicit ref synchronization
+retains empty-batch pending reconciliation; legacy empty batches advance only the
+pending revision, since they cannot move a branch.
 
 - `GET /repos/{repoID}/view`: initial complete graph generation plus revision.
 - `GET /repos/{repoID}/pending-view`: pending pointers and their unique target

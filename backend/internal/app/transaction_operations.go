@@ -14,6 +14,11 @@ func (s *Service) UpdateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.UpdateRefOutput, error) { return s.updateRefWithPending(ctx, in) })
 }
 func (s *Service) UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (inbound.UpdateRefsOutput, error) {
+	if len(in.Updates) == 0 {
+		// Legacy capture clients send empty batches. They can reconcile shared
+		// pending pointers, but cannot move a ref or change graph history.
+		ctx = pendingWriteContext(ctx)
+	}
 	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.UpdateRefsOutput, error) { return s.updateRefs(ctx, in) })
 }
 func (s *Service) Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error) {
