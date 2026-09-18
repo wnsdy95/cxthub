@@ -66,7 +66,7 @@ jobs:
         env:
           CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
         run: |
-          go test -tags postgres ./internal/adapters/store/ -run 'TestPGSmoke|TestPGTransaction|TestPGRepositoryRevision' -timeout=120s -v
+          go test -tags postgres ./internal/adapters/store/ -run 'TestPGSmoke|TestPGTransaction|TestPGRepositoryRevision|TestPGGitChanges' -timeout=120s -v
           go test -tags postgres ./internal/app/ -race -run 'TestPGMemoryProjection|TestPGCollaboration|TestPGNotification|TestPGContextQuery' -count=3 -timeout=120s -v
 
   cli:

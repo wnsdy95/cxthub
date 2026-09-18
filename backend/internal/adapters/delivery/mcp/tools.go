@@ -13,6 +13,7 @@ import (
 )
 
 type toolArgs struct {
+	ChangeID   string `json:"change_id"`
 	Mode       string `json:"mode"`
 	Repository string `json:"repository"`
 	Branch     string `json:"branch"`
@@ -55,6 +56,8 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 		return s.eventPage(ctx, repo, args)
 	case "memory_load":
 		return s.memoryPage(ctx, repo, args)
+	case "git_changes":
+		return s.gitChangesPage(ctx, repo, args)
 	case "context_history":
 		return s.historyPage(ctx, repo, args)
 	case "context_search":

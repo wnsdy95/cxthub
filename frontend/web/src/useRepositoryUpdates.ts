@@ -43,6 +43,7 @@ export function useRepositoryUpdates(repo: string | null) {
           if (!current) current = await full();
           if (current.revision && revisionCovers(current.revision, wanted)) break;
           if (!current.revision || current.revision.graph !== wanted.graph) {
+            void qc.invalidateQueries({queryKey: ['git-changes', repo]});
             const next = await full();
             if (!next.revision) break; // rolling upgrade: old backend
           } else {

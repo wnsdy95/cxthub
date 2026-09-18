@@ -96,7 +96,8 @@ type Backend interface {
 
 // Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/workspace).
 type Server struct {
-	changes repositoryChangeHub
+	gitChanges inbound.GitChanges
+	changes    repositoryChangeHub
 	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (workspace ID set).
 	syncInflight sync.Map
 	runtime      outbound.RuntimeStore
@@ -184,6 +185,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/refs", s.guard(domain.RoleViewer, s.listRefs))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/refs/batch", s.guard(domain.RoleMember, s.putRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/context-query", s.guard(domain.RoleViewer, s.contextQuery))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleMember, s.submitGitChange))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleViewer, s.listGitChanges))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes/{changeID}", s.guard(domain.RoleViewer, s.getGitChange))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes/{changeID}/retry", s.guard(domain.RoleMember, s.retryGitChange))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/view", s.guard(domain.RoleViewer, s.repositoryView))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending-view", s.guard(domain.RoleViewer, s.pendingView))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/revision", s.guard(domain.RoleViewer, s.repositoryRevision))

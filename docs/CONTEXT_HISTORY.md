@@ -846,3 +846,44 @@ This bounds the number of reconstructed documents per request, not the cost of
 a single large transcript. Streaming validation/indexing remains a separate
 optimization. Other clients can continue to move their refs concurrently;
 normal server CAS and transaction rules still govern ref publication.
+
+
+## Verified Git inverse-change evidence
+
+Git evidence is a separate stream from immutable context branch and PR history.
+A completed PR promotion stays completed when a later commit reverses code.
+The `/repos/{repoID}/git-changes` member endpoint accepts a target/commit pair
+and optional explicit comparison parents. It durably stores the request before
+reading the Git provider. Repeated identical submissions return the same job.
+
+The backend compares complete immutable file trees, including file modes,
+symlinks and submodule object IDs, and checks target ancestry. Commit titles
+are never proof. Renames are represented as exact delete/add paths. Merge
+commits need an explicit comparison parent. Exact inversions are `full` or
+`partial`; intra-file partial changes, intervening edits and incomplete trees
+remain unverified. Unrelated later changes are outside the inversion scope.
+A reversal of a reversal is evidence about that reversal commit, not a global
+boolean toggle for the original PR.
+
+PostgreSQL migration 0047 persists request state and the terminal result in one
+row. Independent pairs can be verified concurrently. Claims use row locks;
+lease versions fence expired workers. Result publication and repository revision
+advance commit together; provider calls never hold database locks. A restart
+recovers expired claims. Transient failures retry with bounded backoff, then
+remain available for explicit retry. Terminal results cannot be replaced by
+late responses or retry requests. The FS development adapter uses atomic job
+files and a process lock; it does not claim multi-process database ACID.
+
+Web shows verification summaries when the evidence section is expanded and
+invalidates them on repository revisions. Lists omit large path arrays and use
+ID-based continuation; restart pagination to see concurrent insertions earlier
+than the cursor. MCP `git_changes` uses the same application query and only a
+read port. `change_id` fetches bounded JSON fragments with a generation hash;
+changed verification results require restarting the cursor. These are retained
+historical facts, not implicit current-branch applicability.
+
+This slice provides explicit durable verification, REST/MCP queries and UI.
+Automatic candidate discovery from webhook/CLI observations, code-position
+applicability, provenance-aware memory filtering and active-session briefings
+are separate follow-up work under #208. This verification stream does not yet
+change the current memory projection, refs, or the historical PR graph.

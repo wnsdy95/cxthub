@@ -460,3 +460,16 @@ export interface NotificationJob {
   next_attempt: string;
   lease_until: string;
 }
+
+export interface GitChangeSummary {
+ id: string;
+ request: {target: string; commit: string; parent?: string; target_parent?: string};
+ state: 'waiting' | 'running' | 'retrying' | 'completed' | 'attention';
+ version: string;
+ reason?: string;
+ updated_at: string;
+ coverage?: 'full' | 'partial' | 'unverified';
+ verified_paths: number;
+ unverified_paths: number;
+}
+export interface GitChangePage {items: GitChangeSummary[]; next_cursor?: string}

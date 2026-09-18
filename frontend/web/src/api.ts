@@ -69,6 +69,8 @@ export interface DocEventPage {
 }
 
 export const api = {
+ gitChanges: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').GitChangePage>('GET', `/repos/${encodeURIComponent(repo)}/git-changes?limit=20&cursor=${encodeURIComponent(cursor)}`, undefined, undefined, signal),
+ retryGitChange: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-changes/${encodeURIComponent(id)}/retry`, {}),
   repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes`,
   repositoryRevision: (repo: string) => call<import('./types').RepositoryRevision>('GET', `/repos/${encodeURIComponent(repo)}/revision`),
   pendingView: (repo: string) => call<import('./types').PendingView>('GET', `/repos/${encodeURIComponent(repo)}/pending-view`),
