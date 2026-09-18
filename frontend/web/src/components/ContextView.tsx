@@ -1,3 +1,4 @@
+import {EffectiveMemory} from './EffectiveMemory';
 // ContextView — GitHub repo view context browser.
 // Automatically displays the latest context of the default branch (main/master),
 // and provides a branch dropdown + commit log (click to show context at that point in time).
@@ -551,6 +552,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
             {memoryOpen && memoryQ.isLoading && <div className="skel" style={{ height: 60 }} />}
             {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
           </MemoryPanel>}
+          <EffectiveMemory key={`effective:${repo.id}:${selected.id}`} repoId={repo.id} snapshotId={selected.id} memoryHash={selected.memory_hash} />
           {doc && inheritedCount > 0 && (
             <details className="inherited-block" open={inheritedOpen} onToggle={e => setInheritedOpen(e.currentTarget.open)}>
               <summary>↰ {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}</summary>

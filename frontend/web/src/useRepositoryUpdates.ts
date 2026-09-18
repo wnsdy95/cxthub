@@ -47,6 +47,7 @@ export function useRepositoryUpdates(repo: string | null) {
             void qc.invalidateQueries({queryKey: ['git-changes', repo]});
             void qc.invalidateQueries({queryKey: ['git-scans', repo]});
             void qc.invalidateQueries({queryKey: ['code-applicability', repo]});
+            void qc.invalidateQueries({queryKey: ['effective-memory', repo]});
             const next = await full();
             if (!next.revision) break; // rolling upgrade: old backend
           } else {
@@ -64,7 +65,7 @@ export function useRepositoryUpdates(repo: string | null) {
       const nextEvidence = BigInt(r.evidence ?? '0');
       if (nextEvidence > evidence) {
         evidence = nextEvidence;
-        for (const name of ['git-changes', 'git-scans', 'code-applicability']) void qc.invalidateQueries({queryKey: [name, repo]});
+        for (const name of ['git-changes', 'git-scans', 'code-applicability', 'effective-memory']) void qc.invalidateQueries({queryKey: [name, repo]});
       }
       wanted = r; await sync();
     };

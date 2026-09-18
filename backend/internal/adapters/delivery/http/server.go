@@ -96,6 +96,7 @@ type Backend interface {
 
 // Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/workspace).
 type Server struct {
+	effectiveMemory   inbound.EffectiveMemoryQuery
 	codeApplicability inbound.CodeApplicabilityQuery
 	gitChanges        inbound.GitChanges
 	gitScans          inbound.GitScans
@@ -188,6 +189,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/refs/batch", s.guard(domain.RoleMember, s.putRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/context-query", s.guard(domain.RoleViewer, s.contextQuery))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleMember, s.submitGitChange))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory", s.guard(domain.RoleViewer, s.queryEffectiveMemory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/code-applicability", s.guard(domain.RoleViewer, s.queryCodeApplicability))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-scans", s.guard(domain.RoleViewer, s.listGitScans))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-scans/{scanID}/retry", s.guard(domain.RoleMember, s.retryGitScan))

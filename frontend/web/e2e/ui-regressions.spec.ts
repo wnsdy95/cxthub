@@ -2135,3 +2135,51 @@ test('evidence-only revisions refresh applicability without downloading the grap
  await expect(page.locator(`.graph-row[data-graph-id="${pushedHead}"]`)).toHaveCount(1);
  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
 });
+
+test('effective memory displays server assessments and rejects mixed cursor generations', async ({page}) => {
+ const snap = {...auditSnapshot(pushedHead, 'main', [], 'Retained merged context', 1), memory_hash: id('a')};
+ const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ let calls = 0, changed = false;
+ const {pageErrors, unexpected} = await openGraph(page, req => {
+  if (!req.pathname.endsWith('/effective-memory')) return base(req);
+  calls++;
+  const code = req.searchParams.get('code_commit');
+  expect(req.searchParams.get('snapshot_id')).toBe(pushedHead);
+  expect(req.searchParams.get('memory_hash')).toBeNull();
+  if (changed && req.searchParams.get('cursor')) return {status: 409, body: {error: {code: 'conflict', message: 'effective memory changed'}}};
+  return {body: {selection: {snapshot_id: pushedHead, code_commit: code}, revision: {graph: '1', pending: '1', evidence: '1'}, state_hash: changed ? id('b') : id('f'), lineage_hash: id('e'), total: 2,
+   items: [{id: id('d'), source_snapshot: pushedHead, kind: 'code', text: changed ? 'Reapplied claim' : 'Original claim', state: changed ? 'applied' : 'inactive', reason: changed ? 'declared_scope_matches' : 'declared_scope_before'}], next_cursor: changed ? '' : 'generation-one'}};
+ });
+ const panel = page.locator('.effective-memory');
+ await panel.locator('summary').click();expect(calls).toBe(0);
+ await panel.getByLabel('Selected code').fill('a'.repeat(40));
+ await panel.getByRole('button', {name: 'Check memory state'}).click();
+ await expect(panel).toContainText('Inactive scope');await expect(panel).toContainText('Original claim');
+ changed = true;await panel.getByRole('button', {name: 'Load more items'}).click();
+ await expect(panel.getByRole('alert')).toBeVisible();await expect(panel).not.toContainText('Original claim');
+ await panel.getByRole('button', {name: 'Start again'}).click();
+ await expect(panel).toContainText('Reapplied claim');await expect(panel).toContainText('Applied scope');
+ await expect(page.locator(`.graph-row[data-graph-id="${pushedHead}"]`)).toHaveCount(1);
+ expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
+});
+
+test('effective memory ignores pending activity and refreshes on evidence arrival', async ({page}) => {
+ const snap = auditSnapshot(pushedHead, 'main', [], 'Stable historical context', 1);
+ const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ let evidence = '1', pending = '1', memoryReads = 0, pendingReads = 0, fullReads = 0;
+ page.on('request', req => {if (new URL(req.url()).pathname.endsWith('/view')) fullReads++;});
+ const {pageErrors, unexpected} = await openGraph(page, req => {
+  const revision = {graph: '1', pending, evidence};
+  if (req.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
+  if (req.pathname.endsWith('/revision')) return {body: revision};
+  if (req.pathname.endsWith('/pending-view')) {pendingReads++;return {body:{revision,pending:[],snapshots:[]}};}
+  if (req.pathname.endsWith('/effective-memory')) {memoryReads++;return {body:{selection:{snapshot_id:pushedHead,code_commit:'a'.repeat(40)},revision,state_hash:id('f'),lineage_hash:id('e'),total:1,items:[{id:id('d'),source_snapshot:pushedHead,kind:'code',text:'Scoped claim',state:evidence==='1'?'review':'applied',reason:evidence==='1'?'source_publication_missing':'declared_scope_matches'}],next_cursor:''}};}
+  return base(req);
+ });
+ const panel=page.locator('.effective-memory');await panel.locator('summary').click();
+ await panel.getByLabel('Selected code').fill('a'.repeat(40));await panel.getByRole('button',{name:'Check memory state'}).click();
+ await expect(panel).toContainText('Needs review');const reads=memoryReads,graphs=fullReads;
+ pending='2';await expect.poll(()=>pendingReads,{timeout:10000}).toBeGreaterThan(0);expect(memoryReads).toBe(reads);
+ evidence='2';await expect(panel).toContainText('Applied scope',{timeout:10000});
+ expect(fullReads).toBe(graphs);expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
+});
