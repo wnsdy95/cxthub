@@ -243,7 +243,7 @@ type RemoteSync interface {
 	// (claude|agents|codex). Returns ErrNotFound if not found.
 	PullSettings(ctx context.Context, repoID, kind string) (domain.SettingsBundle, error)
 	// Secret ciphertext envelope (E2E — raw bytes, server opaque). rotate=true performs an explicit replacement — protects updates inserted during CAS (conditional assignment) based on the envelope's fingerprint read during replacement.
-	PushSecrets(ctx context.Context, repoID string, raw []byte, rotate bool, expect string) error
+	PushSecrets(ctx context.Context, repoID string, raw []byte, rotate bool, expect, revision string) (string, error)
 	PullSecrets(ctx context.Context, repoID string) ([]byte, error)
 	// Propagate content-addressed commit attachment object.
 	PushSettingsObject(ctx context.Context, repoID string, hash domain.ContentHash, bundle domain.SettingsBundle) error

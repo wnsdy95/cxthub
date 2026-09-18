@@ -232,6 +232,8 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/transfer", s.requireUser(s.transferWorkspace))
 	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/sync-visibility", s.requireUser(s.syncVisibility))
 	mux.HandleFunc("GET /api/v1/workspaces", s.requireUser(s.listWorkspaces))
+	mux.HandleFunc("GET /api/v1/workspaces/{wsID}/notifications", s.requireUser(s.listNotifications))
+	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/notifications/{notificationID}/retry", s.requireUser(s.retryNotification))
 	mux.HandleFunc("GET /api/v1/workspaces/{wsID}/members", s.requireUser(s.listMembers))
 	mux.HandleFunc("PATCH /api/v1/workspaces/{wsID}/members/{userID}", s.requireUser(s.patchMember))
 	mux.HandleFunc("DELETE /api/v1/workspaces/{wsID}/members/{userID}", s.requireUser(s.deleteMember))

@@ -655,7 +655,9 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 		}
 		out.Result = inbound.RefForced
 		out.ServerTarget = in.Ref.Target
-		s.notifyRefUpdate(ctx, in.RepoID, in.Ref, true, serverTarget == "")
+		if err := s.notifyRefUpdate(ctx, in.RepoID, in.Ref, true, serverTarget == ""); err != nil {
+			return inbound.UpdateRefOutput{}, err
+		}
 		return out, nil
 	}
 
@@ -691,7 +693,9 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 		}
 		out.Result = inbound.RefFastForward
 		out.ServerTarget = in.Ref.Target
-		s.notifyRefUpdate(ctx, in.RepoID, in.Ref, false, serverTarget == "")
+		if err := s.notifyRefUpdate(ctx, in.RepoID, in.Ref, false, serverTarget == ""); err != nil {
+			return inbound.UpdateRefOutput{}, err
+		}
 		return out, nil
 	case outbound.MoveDiverged:
 		if in.Append {
@@ -722,7 +726,9 @@ func (s *Service) appendDiverged(ctx context.Context, in inbound.UpdateRefInput,
 	}
 	out.Result = inbound.RefAppended
 	out.ServerTarget = in.Ref.Target
-	s.notifyRefUpdate(ctx, in.RepoID, in.Ref, false, false)
+	if err := s.notifyRefUpdate(ctx, in.RepoID, in.Ref, false, false); err != nil {
+		return inbound.UpdateRefOutput{}, err
+	}
 	return out, nil
 }
 
@@ -1687,7 +1693,9 @@ func validateSecretsEnvelope(raw []byte) error {
 // PutSecrets stores a secret ciphertext envelope. Server never decrypts (E2E),
 // but client validates format to prevent team members from forcing abnormal KDF cost or AES-GCM parameters.
 func (s *Service) PutSecrets(ctx context.Context, repoID domain.ContentHash, raw []byte) error {
-	return s.putSecrets(ctx, repoID, raw, func() error { return s.meta.PutSecretsEnvelope(ctx, repoID, raw) })
+	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error {
+		return s.putSecrets(ctx, repoID, raw, func() error { return s.meta.PutSecretsEnvelope(ctx, repoID, raw) })
+	})
 }
 
 func (s *Service) PutSecretsCAS(ctx context.Context, repoID domain.ContentHash, raw, expected []byte) error {
@@ -1695,7 +1703,9 @@ func (s *Service) PutSecretsCAS(ctx context.Context, repoID domain.ContentHash, 
 	if !ok {
 		return fmt.Errorf("atomic secrets storage unavailable")
 	}
-	return s.putSecrets(ctx, repoID, raw, func() error { return st.CompareAndSwapSecrets(ctx, repoID, expected, raw) })
+	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error {
+		return s.putSecrets(ctx, repoID, raw, func() error { return st.CompareAndSwapSecrets(ctx, repoID, expected, raw) })
+	})
 }
 
 func (s *Service) putSecrets(ctx context.Context, repoID domain.ContentHash, raw []byte, write func() error) error {
@@ -1711,8 +1721,7 @@ func (s *Service) putSecrets(ctx context.Context, repoID domain.ContentHash, raw
 	if err := write(); err != nil {
 		return err
 	}
-	s.notifySecretsChanged(ctx, repoID) // best-effort notification — no impact on save success
-	return nil
+	return s.notifySecretsChanged(ctx, repoID)
 }
 
 // GetSecrets returns secret ciphertext envelopes (ciphertext as-is — decryption is on the client).

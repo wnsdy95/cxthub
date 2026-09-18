@@ -113,7 +113,9 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		return err
 	}
 	if event.Kind == "advance" {
-		s.notifyRefUpdate(ctx, repoID, domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: event.Branch, Target: event.Target}, true, false)
+		if err := s.notifyRefUpdate(ctx, repoID, domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: event.Branch, Target: event.Target}, true, false); err != nil {
+			return err
+		}
 	}
 	return s.wakePublishedPRJobs(ctx, event)
 }

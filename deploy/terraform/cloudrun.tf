@@ -34,6 +34,16 @@ resource "google_cloud_run_v2_service" "cxtd" {
     containers {
       image = local.image
 
+      # Durable PR/notification queues must keep running without HTTP traffic.
+      # Instance-based billing charges the full lifetime of the warm instance.
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+        cpu_idle = false
+      }
+
       # Security settings (see the deployment configuration, Environment variables): require Firebase
       # authentication, secure cookies, and one exact user-facing origin for CSRF checks.
       env {

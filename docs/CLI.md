@@ -577,7 +577,7 @@ cxt settings restore [index]
 
 ```text
 cxt secrets push [-p <passphrase>] [--remember] [--rotate]
-cxt secrets pull [-p <passphrase>] [--remember]
+cxt secrets pull [-p <passphrase>] [--remember] [--force]
 ```
 
 Encrypts or decrypts the repository's `.cxtsecrets` list locally. The
@@ -588,6 +588,20 @@ Passphrase lookup order:
 1. `-p`;
 2. `CXT_SECRETS_PASSPHRASE`; and
 3. the per-repository credential saved by `--remember`.
+
+The server returns an editing revision with each encrypted envelope. `pull`
+records that revision, server/repository identity, passphrase fingerprint and a
+hash of the downloaded plaintext in this worktree's `.cxt/secrets-baseline.json`.
+`push` uses that original revision; it never fetches a newer one to bless an
+already-edited file. A missing baseline permits first creation only when the
+server confirms that no envelope exists. Upgrade the server and all clients
+before writing; older clients without the precondition receive HTTP 428.
+
+If another editor saves first, push fails and leaves your draft unchanged.
+Copy the draft aside, pull the latest, compare and reapply your changes. A pull
+refuses to overwrite unsaved local changes; `--force` explicitly permits that
+replacement. A failed baseline write after a successful transfer requires
+reloading before further edits. Do not delete the baseline to bypass a conflict.
 
 `--rotate` performs a compare-and-swap passphrase rotation and rejects a stale
 update. Share a rotated passphrase with authorized team members through a

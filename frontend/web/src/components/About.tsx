@@ -5,7 +5,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Repo } from '../types';
 import { useUpdateAbout, usePutSettings, useSettingsBundle, useSecretsEnvelope } from '../hooks';
-import { api } from '../api';
+import { ApiError, api } from '../api';
 import { encryptSecrets, decryptSecrets, fingerprint } from '../secretscrypto';
 import { generatePassphrase, passphraseError } from '../passphrase';
 import { buildZip, b64ToBytes, saveBlob } from '../zip';
@@ -383,8 +383,25 @@ export function SecretsPanel({
   const [rotate, setRotate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState<{ repo: string; revision: string; fingerprint?: string } | null>(null);
+  const [previousDrafts, setPreviousDrafts] = useState<string[]>([]);
+  const [conflict, setConflict] = useState(false);
+  useEffect(() => { setBaseline(null); setLines(''); setPreviousDrafts([]); setPass(''); setNewPass(''); setOpen(false); setConflict(false); }, [repoId]);
   const envelope = useSecretsEnvelope(repoId);
   const qc = useQueryClient();
+
+  async function openEditor() {
+    setOpen(true);
+    setMsg(null);
+    if (baseline?.repo === repoId) return; // Keep the original baseline when reopening a draft.
+    setBusy(true);
+    try {
+      const env = await api.getSecrets(repoId);
+      if (env && !env.revision) throw new Error(t('secrets.revisionRequired'));
+      setBaseline({ repo: repoId, revision: env?.revision ?? 'absent', fingerprint: env?.fingerprint });
+    } catch (x) { setMsg(x instanceof Error ? x.message : String(x)); }
+    finally { setBusy(false); }
+  }
 
   async function requireEnvelope() {
     const env = await api.getSecrets(repoId);
@@ -408,24 +425,29 @@ export function SecretsPanel({
     setMsg(null);
     try {
       // Team passphrase consistency: If a fingerprint already exists, the input passphrase's fingerprint must match to proceed (mismatched replaces the tab). The server also re-verifies with 409.
-      const existing = envelope.data?.fingerprint;
+      if (!baseline || baseline.repo !== repoId) throw new Error(t('secrets.revisionRequired'));
+      const existing = baseline.fingerprint;
       if (existing && (await fingerprint(pass, repoId)) !== existing) {
         setMsg(t('secrets.mismatch', { id: existing }));
         return;
       }
       const env = await encryptSecrets(pass, lines.endsWith('\n') ? lines : lines + '\n', repoId);
-      await api.putSecrets(repoId, env);
+      const result = await api.putSecrets(repoId, env, baseline.revision);
+      setBaseline({ repo: repoId, revision: result.revision, fingerprint: env.fingerprint });
+      setConflict(false);
       qc.invalidateQueries({ queryKey: ['secrets', repoId] });
       setMsg(t('about.encryptedSaved'));
       setLines('');
     } catch (x) {
-      setMsg(x instanceof Error ? x.message : String(x));
+      const changed = x instanceof ApiError && x.code === 'secrets_conflict';
+      if (changed) setConflict(true);
+      setMsg(changed ? t('secrets.editConflict') : x instanceof Error ? x.message : String(x));
     } finally {
       setBusy(false);
     }
   }
 
-  // rotateSecrets — re-key: decrypts the server's current secret with 'current passphrase' and re-encrypts it with 'new passphrase'. Content comes from the server envelope; decryption fails if the current passphrase is unknown (forces old passphrase knowledge). Race condition between GET and PUT is resolved by server's 409 rejection if expect (based on envelope's fingerprint) CAS fails — without this, stale plaintext re-encryption overwrites team member's update silently.
+  // Re-encrypt exactly the revision just decrypted. Same-key concurrent edits conflict too.
   async function rotateSecrets() {
     if (!pass) {
       setMsg(t('about.needPassDecrypt'));
@@ -442,14 +464,18 @@ export function SecretsPanel({
       const cur = await requireEnvelope();
       const plain = await decryptSecrets(pass, cur, repoId, t); // decrypts with current passphrase (throws if incorrect)
       const env = await encryptSecrets(newPass, plain, repoId); // re-encrypts with new passphrase
-      await api.putSecrets(repoId, env, true, cur.fingerprint ?? ''); // rotate CAS — based envelope fingerprint
+      if (!cur.revision) throw new Error(t('secrets.revisionRequired'));
+      await api.putSecrets(repoId, env, cur.revision, true, cur.fingerprint ?? '');
+      // Retain an open content draft and its old revision: rotation must not bless stale edits.
       qc.invalidateQueries({ queryKey: ['secrets', repoId] });
       setMsg(t('secrets.rotated'));
       setPass('');
       setNewPass('');
       setRotate(false);
     } catch (x) {
-      setMsg(x instanceof Error ? x.message : String(x));
+      const changed = x instanceof ApiError && x.code === 'secrets_conflict';
+      if (changed) setConflict(true);
+      setMsg(changed ? t('secrets.editConflict') : x instanceof Error ? x.message : String(x));
     } finally {
       setBusy(false);
     }
@@ -465,11 +491,18 @@ export function SecretsPanel({
     setMsg(null);
     try {
       const env = await requireEnvelope();
-      setLines(await decryptSecrets(pass, env, repoId, t));
+      if (!env.revision) throw new Error(t('secrets.revisionRequired'));
+      const latest = await decryptSecrets(pass, env, repoId, t);
+      if (lines && lines !== latest) setPreviousDrafts(drafts => drafts.includes(lines) ? drafts : [...drafts, lines]);
+      setLines(latest);
+      setBaseline({ repo: repoId, revision: env.revision, fingerprint: env.fingerprint });
+      setConflict(false);
       setOpen(true); // decryption result confirmed and editable in modal
       setMsg(t('about.decrypted') + (env.updated_at ? ` (${env.updated_at.slice(0, 10)})` : ''));
     } catch (x) {
-      setMsg(x instanceof Error ? x.message : String(x));
+      const changed = x instanceof ApiError && x.code === 'secrets_conflict';
+      if (changed) setConflict(true);
+      setMsg(changed ? t('secrets.editConflict') : x instanceof Error ? x.message : String(x));
     } finally {
       setBusy(false);
     }
@@ -507,7 +540,9 @@ export function SecretsPanel({
       }
     } catch (x) {
       if (x instanceof DOMException && x.name === 'AbortError') return; // Folder selection canceled
-      setMsg(x instanceof Error ? x.message : String(x));
+      const changed = x instanceof ApiError && x.code === 'secrets_conflict';
+      if (changed) setConflict(true);
+      setMsg(changed ? t('secrets.editConflict') : x instanceof Error ? x.message : String(x));
     } finally {
       setBusy(false);
     }
@@ -529,8 +564,7 @@ export function SecretsPanel({
                 setMsg(t('about.secretsSettingsAccessDenied'));
                 return;
               }
-              setMsg(null);
-              setOpen(true);
+              void openEditor();
             }}
           />
         )}
@@ -578,6 +612,8 @@ export function SecretsPanel({
             </div>
             {!rotate && (
               <textarea
+                disabled={busy || !baseline}
+                aria-label={t('secrets.editorLabel')}
                 className="secrets-area"
                 rows={5}
                 placeholder={'sk-…\nAKIA…'}
@@ -586,6 +622,10 @@ export function SecretsPanel({
                 spellCheck={false}
               />
             )}
+            {previousDrafts.length > 0 && <details open className="guide"><summary>{t('secrets.previousDraft')}</summary>
+              {previousDrafts.map((draft, index) => <textarea key={index} readOnly className="secrets-area" aria-label={`${t('secrets.previousDraft')} ${index + 1}`} value={draft} />)}
+              <button type="button" className="ghost" onClick={() => setPreviousDrafts([])}>{t('secrets.clearDraft')}</button>
+            </details>}
             <div className="settings-row">
               <input
                 type={showPass ? 'text' : 'password'}
@@ -665,7 +705,7 @@ export function SecretsPanel({
               </button>
               {!rotate && (
                 <button type="button" className="ghost" onClick={load} disabled={busy}>
-                  {t('about.load')}
+                  {conflict ? t('secrets.loadCompare') : t('about.load')}
                 </button>
               )}
               {!rotate && (
@@ -679,7 +719,7 @@ export function SecretsPanel({
                     {busy ? '…' : t('secrets.rotateAction')}
                   </button>
                 ) : (
-                  <button type="button" onClick={save} disabled={busy}>
+                  <button type="button" onClick={save} disabled={busy || !baseline || conflict}>
                     {busy ? '…' : t('about.encryptSave')}
                   </button>
                 ))}

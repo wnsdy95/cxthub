@@ -39,6 +39,7 @@ export async function installApiFixture(page: Page, responder: ApiResponder): Pr
       searchParams: url.searchParams,
     };
     const response = responder(input) ?? graphViewFixture(input, responder)
+      ?? (request.method() === 'GET' && /^\/api\/v1\/workspaces\/[^/]+\/notifications$/.test(url.pathname) ? { body: [] } : undefined)
       ?? (request.method() === 'GET' && /^\/api\/v1\/repos\/[^/]+\/prs\/promotions$/.test(url.pathname) ? { body: [] } : undefined);
     if (!response) {
       unexpected.push(key);

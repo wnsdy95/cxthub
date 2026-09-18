@@ -408,6 +408,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
         )}
         {atLeast(role, 'puller') && (
           <SecretsPanel
+            key={repo.id}
             repoId={repo.id}
             canWrite={canWriteAsset(role, ws?.secrets_policy)}
             showLockedControl={ws?.visibility === 'public'}

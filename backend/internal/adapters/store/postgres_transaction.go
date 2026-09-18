@@ -26,9 +26,10 @@ type pgDatabase interface {
 type repositoryTxKey struct{}
 type repositoryTx struct {
 	pgx.Tx
-	owner    *PostgresStore
-	repo     domain.ContentHash
-	readOnly bool
+	owner     *PostgresStore
+	repo      domain.ContentHash
+	workspace string
+	readOnly  bool
 }
 
 // Inner storage operations use savepoints; releasing one never commits the

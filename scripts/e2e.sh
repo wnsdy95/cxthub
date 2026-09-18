@@ -169,10 +169,12 @@ PY
 )"
 ENVL="{\"version\":1,\"kdf\":\"PBKDF2-SHA256\",\"iterations\":600000,\"salt_b64\":\"AAAAAAAAAAAAAAAAAAAAAA==\",\"cipher\":\"AES-256-GCM\",\"nonce_b64\":\"AAAAAAAAAAAAAAAA\",\"ciphertext_b64\":\"AAAAAAAAAAAAAAAAAAAAAA==\",\"fingerprint\":\"$SECFP\"}"
 mrow() { # mrow <jar|-> → "read pull push secretsPUT"
+  local revision
+  revision=$(curl -sb "$JA" "$RB/secrets" | python3 -c 'import json,sys;s=sys.stdin.read();print(json.loads(s)["revision"] if s else "absent")')
   if [ "$1" = "-" ]; then
-    echo "$(code "$RB/snapshots?branch=main") $(code "$RB/secrets") $(code -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG") $(code -X PUT "$RB/secrets" -H 'Content-Type: application/json' -d "$ENVL")"
+    echo "$(code "$RB/snapshots?branch=main") $(code "$RB/secrets") $(code -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG") $(code -X PUT "$RB/secrets?expected_revision=$revision" -H 'Content-Type: application/json' -d "$ENVL")"
   else
-    echo "$(ccode -b "$1" "$RB/snapshots?branch=main") $(ccode -b "$1" "$RB/secrets") $(ccode -b "$1" -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG") $(ccode -b "$1" -X PUT "$RB/secrets" -H 'Content-Type: application/json' -d "$ENVL")"
+    echo "$(ccode -b "$1" "$RB/snapshots?branch=main") $(ccode -b "$1" "$RB/secrets") $(ccode -b "$1" -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG") $(ccode -b "$1" -X PUT "$RB/secrets?expected_revision=$revision" -H 'Content-Type: application/json' -d "$ENVL")"
   fi
 }
 expect "anonymous 401/401/401/401" "$(mrow -)" "401 401 401 401"
@@ -222,7 +224,10 @@ cxt init --no-hooks >/dev/null 2>&1
 expect ".cxtsecrets extracts the .env value" "$(grep -c 'sk-e2e-secret-12345' .cxtsecrets)" 1
 expect ".cxtsecrets exclude less than 4 characters" "$(grep -c '^ab$' .cxtsecrets)" 0
 expect ".gitignore auto-registration" "$(grep -c -e '.cxt/' -e '.cxtsecrets' .gitignore)" 2
-cxt remote add origin "http://127.0.0.1:$PORT/$OWN/$SLUG" >/dev/null 2>&1
+# Use a fresh repository for a decryptable CLI round trip; the role matrix above
+# intentionally stores a format-valid opaque fixture which is not decryptable.
+CLISLUG=$(ccurl -sb "$JA" -X POST "$B/workspaces" -H 'Content-Type: application/json' -d '{"name":"SecretsCLI"}' | jget "['slug']")
+cxt remote add origin "http://127.0.0.1:$PORT/$OWN/$CLISLUG" >/dev/null 2>&1
 CXT_NO_BROWSER=1 cxt login >"$TMP/login.out" 2>&1 &
 LPID=$!
 sleep 1.5
@@ -234,7 +239,7 @@ expect "device login complete(auth.json)" "$(python3 -c "import json;print('127.
 # Device name label: device flow passes CLI hostname as a label → shows in token list.
 expect "device token with hostname label" "$(curl -sb "$JA" "$B/me/cli-tokens" | python3 -c "import json,socket,sys;ts=json.load(sys.stdin) or [];print(any(t.get('label')==socket.gethostname() for t in ts))")" True
 # Enforce team passphrase format (four or more words, at least 12 characters) on push; pull accepts legacy formats.
-cxt secrets push -p "$SECPASS" >/dev/null 2>&1
+expect "initial push records editing baseline" "$(cxt secrets push -p "$SECPASS" >/dev/null 2>&1; echo $?)" 0
 expect "server stores no plaintext after secret push" "$(grep -r 'sk-e2e-secret-12345' "$TMP/data" | wc -l | tr -d ' ')" 0
 rm .cxtsecrets
 expect "incorrect passphrase pull failure" "$(cxt secrets pull -p wrong >/dev/null 2>&1; echo $?)" 1
@@ -254,8 +259,8 @@ hit=os.environ['CXT_HITFILE']; port=int(os.environ['CXT_STUB_PORT'])
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n=int(self.headers.get('Content-Length',0)); self.rfile.read(n)
-        open(hit,'a').write('HIT\n')
-        self.send_response(200); self.end_headers()
+        open(hit,'a').write(self.headers.get('X-CXTHub-Event-ID','missing')+'\n')
+        self.send_response(503 if os.path.exists(hit+'.fail') else 200); self.end_headers()
     def log_message(self,*a): pass
 HTTPServer(('127.0.0.1',port),H).serve_forever()
 PY
@@ -264,8 +269,13 @@ for i in $(seq 1 20); do code "http://127.0.0.1:$STUB_PORT/" >/dev/null 2>&1 && 
 hits() { cat "$HITFILE" 2>/dev/null | wc -l | tr -d ' '; }
 ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d "{\"webhook_url\":\"http://127.0.0.1:$STUB_PORT/h\"}" >/dev/null
 ccurl -sb "$JA" -X PUT "$RB/refs/branch/wh-test" -H 'Content-Type: application/json' -d "{\"target\":\"$H1\"}" >/dev/null
-# SSRF blocking is an absence assertion, so wait conservatively and confirm zero deliveries.
-sleep 1
+# Wait until the durable worker has actually attempted delivery before asserting absence.
+for i in $(seq 1 30); do
+  reason=$(curl -sb "$JA" "$B/workspaces/$WS/notifications" | python3 -c 'import json,sys;j=json.load(sys.stdin);print(j[0].get("reason", "") if j else "")')
+  [ "$reason" = "transport_failed" ] && break
+  sleep 0.2
+done
+expect "SSRF failure is durably visible" "$reason" transport_failed
 expect "SSRF: default setting loopback webhook not fired" "$(hits)" 0
 CXT_AUTH=dev CXT_ALLOW_PRIVATE_WEBHOOK=1 "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT2 --data "$TMP/data2" >"$TMP/srv2.log" 2>&1 &
 SRV2_PID=$!
@@ -288,7 +298,7 @@ ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/refs/branch/main" -H 'Content-Type: app
 for i in $(seq 1 25); do [ "$(hits)" -ge 1 ] && break; sleep 0.2; done
 expect "webhook delivered when private targets are explicitly allowed" "$(hits)" 1
 # Webhook event extension: triggers on secret update and member join in addition to ref update.
-ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/secrets" -H 'Content-Type: application/json' -d "$ENVL" >/dev/null
+ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/secrets?expected_revision=absent" -H 'Content-Type: application/json' -d "$ENVL" >/dev/null
 for i in $(seq 1 25); do [ "$(hits)" -ge 2 ] && break; sleep 0.2; done
 expect "Secret update webhook delivery" "$(hits)" 2
 INV2=$(ccurl2 -sb "$J2" -X POST "$B2/workspaces/$WS2/invites" -H 'Content-Type: application/json' -d '{"role":"member"}' | jget "['token']")
@@ -300,6 +310,31 @@ expect "Member join webhook delivery" "$(hits)" 3
 ccurl2 -sb "$J3" -X POST "$B2/invites/$INV2/accept" >/dev/null
 sleep 1
 expect "idempotent reaccept emits no duplicate webhook" "$(hits)" 3
+
+echo "── G2. Durable notification retry survives a real server restart"
+touch "$HITFILE.fail"
+REV2=$(ccurl2 -sb "$J2" "$B2/repos/$RID2/secrets" | jget "['revision']")
+ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/secrets?expected_revision=$REV2" -H 'Content-Type: application/json' -d "$ENVL" >/dev/null
+for i in $(seq 1 30); do
+  state=$(ccurl2 -sb "$J2" "$B2/workspaces/$WS2/notifications" | jget "[0]['state']")
+  [ "$state" = "retrying" ] && break
+  sleep 0.2
+done
+expect "failed HTTP delivery persists retry state" "$state" retrying
+kill "$SRV2_PID"; wait "$SRV2_PID" 2>/dev/null; SRV2_PID=""
+rm "$HITFILE.fail"
+CXT_AUTH=dev CXT_ALLOW_PRIVATE_WEBHOOK=1 "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT2 --data "$TMP/data2" >"$TMP/srv2-restart.log" 2>&1 &
+SRV2_PID=$!
+for i in $(seq 1 20); do [ "$(code "$B2/repos")" = 200 ] && break; sleep 0.3; done
+# Preserve the real 30-second backoff; no test-only scheduler override.
+for i in $(seq 1 150); do
+  state=$(ccurl2 -sb "$J2" "$B2/workspaces/$WS2/notifications" | jget "[0]['state']")
+  [ "$state" = "delivered" ] && break
+  sleep 0.3
+done
+expect "restart automatically resumes queued delivery" "$state" delivered
+expect "receiver sees one failed and one successful attempt" "$(hits)" 5
+expect "retry preserves stable event ID" "$(tail -2 "$HITFILE" | uniq | wc -l | tr -d ' ')" 1
 
 echo "── H. Security surface"
 expect "CORS: arbitrary origin is not reflected" "$(curl -s -H 'Origin: https://evil.com' -o /dev/null -w '%{header_json}' "$B/repos" | python3 -c "import json,sys;print(json.load(sys.stdin).get('access-control-allow-origin',['none'])[0])")" none

@@ -743,12 +743,32 @@ components:
         updated_at: { type: string, format: date-time }
         updated_by: { type: string }
 
+    NotificationJob:
+      type: object
+      required: [id, workspace_id, kind, state, text, attempts, version, created_at, updated_at, next_attempt, lease_until]
+      properties:
+        state: { type: string, enum: [pending, running, retrying, delivered, attention] }
+        id: { type: string }
+        workspace_id: { type: string }
+        kind: { type: string }
+        text: { type: string }
+        attempts: { type: integer }
+        version: { type: integer }
+        reason: { type: string }
+        http_status: { type: integer }
+        created_at: { type: string }
+        updated_at: { type: string }
+        next_attempt: { type: string }
+        lease_until: { type: string }
+
     SecretsEnvelope:
       type: object
       description: |
         .cxtsecrets inter-process encrypted envelope. The server only stores it transparently (plain text and passphrase not included).
         PBKDF2-SHA256(600k) + AES-256-GCM, AAD = "cxtsecrets:v1:<repoID>".
       properties:
+        revision: { type: string, readOnly: true, description: "Opaque editing generation returned by the server" }
+        fingerprint: { type: string, pattern: "^[0-9a-f]{12}$" }
         version: { type: integer }
         kdf: { type: string, example: PBKDF2-SHA256 }
         iterations: { type: integer, minimum: 100000 }
@@ -2633,10 +2653,16 @@ paths:
         This prevents secrets from being overwritten with a different key and becoming undecryptable. A legacy cxt envelope without a fingerprint is
         accepted only when the existing team envelope also has no fingerprint; otherwise the server returns 400 (fingerprint_required).
         rotate=true explicitly replaces the envelope after re-encryption. The expect parameter must contain the fingerprint read before rotation.
-        If it differs from the server's current fingerprint, the server returns 409 (rotate_conflict), preventing a concurrent update from being
-        overwritten by stale re-encrypted data.
+        Every write also requires expected_revision from the envelope read before editing. The server returns 409 secrets_conflict
+        for stale content revisions, even with the same fingerprint, and 428 revision_required when the precondition is omitted.
+        A successful PUT returns status and a fresh revision. Legacy ciphertext reads receive a stable revision without mutation.
       tags: [assets]
       parameters:
+        - name: expected_revision
+          in: query
+          required: true
+          schema: { type: string }
+          description: "Revision returned before editing, or absent for initial creation. Never refresh this at save time."
         - name: rotate
           in: query
           required: false
@@ -2653,11 +2679,21 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/SecretsEnvelope" }
       responses:
-        "200": { description: OK }
+        "200":
+          description: Stored with a fresh editing revision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, revision]
+                properties:
+                  status: { type: string }
+                  revision: { type: string }
         "400": { description: "fingerprint_required — team is using fingerprint system but no fingerprint in envelope (legacy cxt)" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { description: "passphrase_mismatch (fingerprint mismatch) or rotate_conflict (conflict during rotation)" }
+        "409": { description: "secrets_conflict (stale editing revision), passphrase_mismatch, or rotate_conflict" }
+        "428": { description: "revision_required — missing editing baseline" }
         "503": { description: "consistency_check_failed — failed to query existing envelope, unable to perform consistency check (fail-closed)" }
 
   # =========================================================================
@@ -3615,6 +3651,50 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/BreakGlassGrant" }
         "403": { $ref: "#/components/responses/Forbidden" }
+
+  /workspaces/{wsID}/notifications:
+    parameters:
+      - name: wsID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: listNotifications
+      tags: [identity]
+      summary: Latest 100 notification delivery records — maintainer or owner only
+      responses:
+        "200":
+          description: Safe event metadata without webhook credentials or secrets
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/NotificationJob" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /workspaces/{wsID}/notifications/{notificationID}/retry:
+    parameters:
+      - name: wsID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: notificationID
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: retryNotification
+      tags: [identity]
+      summary: Queue an undelivered event using the currently configured webhook — maintainer or owner only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200": { description: Queued with the same event ID }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: Active delivery, already delivered, archived repository, or webhook disabled }
+
 
 tags:
   - name: repos
