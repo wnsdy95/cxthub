@@ -2,10 +2,41 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"testing"
 )
+
+func TestPendingViewDoesNotTraverseOldAncestors(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newFsckSvc(t)
+	repo := hh(t.Name())
+	var parent domain.ContentHash
+	for i := 0; i < 300; i++ {
+		id := hh(fmt.Sprintf("historical-%d", i))
+		snap := domain.Snapshot{RepoID: repo, ID: id, DocHash: id}
+		if parent != "" {
+			snap.Parents = []domain.ContentHash{parent}
+		}
+		if err := st.PutSnapshot(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+		parent = id
+	}
+	for _, session := range []string{"capture-a", "capture-b"} {
+		if err := st.PutPending(ctx, repo, domain.Pending{RepoID: repo, SessionID: session, Target: parent}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := svc.GetPendingView(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Pending) != 2 || len(v.Snapshots) != 1 || v.Snapshots[0].ID != parent {
+		t.Fatalf("pending=%d snapshots=%d: historical ancestors must not be retransmitted", len(v.Pending), len(v.Snapshots))
+	}
+}
 
 func TestPendingRevisionDoesNotInvalidateGraph(t *testing.T) {
 	ctx := context.Background()

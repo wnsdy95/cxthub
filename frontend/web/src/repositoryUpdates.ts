@@ -7,6 +7,13 @@ export function parseRevision(value: unknown): RepositoryRevision | null {
   const r = value as RepositoryRevision | null;
   return r && typeof r.graph === 'string' && /^\d+$/.test(r.graph) && typeof r.pending === 'string' && /^\d+$/.test(r.pending) ? r : null;
 }
+export function pendingViewNeedsFull(view: RepositoryView, pending: PendingView): boolean {
+  if (!view.revision || view.revision.graph !== pending.revision.graph) return true;
+  const existing = new Set(view.snapshots.map(s => s.id));
+  const known = new Set([...existing, ...pending.snapshots.map(s => s.id)]);
+  return pending.snapshots.some(s => !existing.has(s.id) &&
+    [...(s.parents ?? []), ...(s.graft_parents ?? [])].some(id => !known.has(id)));
+}
 /** Replace only the live projection. Retained history and referenced snapshots
  * remain untouched; stale, unreferenced sliding captures do not accumulate. */
 export function mergePendingView(view: RepositoryView, pending: PendingView): RepositoryView {
@@ -14,7 +21,7 @@ export function mergePendingView(view: RepositoryView, pending: PendingView): Re
   const retained = new Set(view.refs.map(r => r.target));
   for (const e of view.history) for (const id of [e.source, e.target, e.shared_target]) if (id) retained.add(id);
   for (const e of view.reflog) { retained.add(e.old); retained.add(e.new); }
-  for (const s of view.snapshots) for (const id of [...(s.parents ?? []), ...(s.graft_parents ?? [])]) retained.add(id);
+  for (const s of [...view.snapshots, ...pending.snapshots]) for (const id of [...(s.parents ?? []), ...(s.graft_parents ?? [])]) retained.add(id);
   const oldTargets = new Set(view.pending.map(p => p.target));
   const snapshots = new Map(view.snapshots.filter(s => !oldTargets.has(s.id) || retained.has(s.id)).map(s => [s.id, s]));
   for (const s of pending.snapshots) snapshots.set(s.id, s);

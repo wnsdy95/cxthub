@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mergePendingView,parseRevision,revisionCovers,subscribeRepository} from '../src/repositoryUpdates';
+import {mergePendingView,pendingViewNeedsFull,parseRevision,revisionCovers,subscribeRepository} from '../src/repositoryUpdates';
 import type {RepositoryView,Snapshot,Pending} from '../src/types';
 const snapshot = (id: string, parents: string[] = []): Snapshot => ({id,parents} as Snapshot);
 const view: RepositoryView = {revision:{graph:'2',pending:'1'}, refs:[],history:[],reflog:[],unsync:[],pending:[{target:'old'} as Pending],snapshots:[snapshot('committed'),snapshot('old')]};
@@ -10,6 +10,13 @@ assert.equal(mergePendingView({...view,revision:{graph:'2',pending:'3'}},update)
 assert.deepEqual(mergePendingView({...view,snapshots:[...view.snapshots,snapshot('child',['old'])]},update).snapshots.map(s=>s.id),['committed','old','child','new']);
 assert.equal(revisionCovers({graph:'9007199254740993',pending:'2'},{graph:'9007199254740992',pending:'2'}),true);
 assert.equal(parseRevision({graph:'1',pending:'bad'}),null);
+assert.equal(pendingViewNeedsFull(view,update),false);
+assert.equal(pendingViewNeedsFull(view,{...update,snapshots:[snapshot('new',['unseen'])]}),true);
+assert.equal(pendingViewNeedsFull(view,{...update,snapshots:[{...snapshot('new'),graft_parents:['unseen']}]}),true);
+assert.equal(pendingViewNeedsFull(view,{...update,snapshots:[snapshot('new',['old'])]}),false);
+assert.deepEqual(mergePendingView(view,{...update,snapshots:[snapshot('new',['old'])]}).snapshots.map(s=>s.id),['committed','old','new']);
+const knownBroken = {...view,snapshots:[...view.snapshots,snapshot('new',['unseen'])]};
+assert.equal(pendingViewNeedsFull(knownBroken,{...update,snapshots:[snapshot('new',['unseen'])]}),false); // full view already exposes this diagnostic
 
 // Multiple consumers share a stream; malformed notifications must recover
 // rather than silently leaving the browser's view stale.

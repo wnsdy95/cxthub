@@ -38,8 +38,8 @@ ref/history publication or changes to existing metadata do. Immutable memory blo
 remain outside a losing attachment CAS, preserving the existing recovery contract.
 
 - `GET /repos/{repoID}/view`: initial complete graph generation plus revision.
-- `GET /repos/{repoID}/pending-view`: pending pointers and snapshot metadata needed
-  to connect them to existing shared anchors, from one committed generation.
+- `GET /repos/{repoID}/pending-view`: pending pointers and their unique target
+  snapshots, from one committed generation. It never traverses older history.
 - `GET /repos/{repoID}/revision`: cheap current counters, for fallback recovery.
 - `GET /repos/{repoID}/changes`: authenticated SSE notifications of current counters.
 
@@ -52,7 +52,8 @@ most every 25 seconds to repeat normal membership/session authorization.
 
 React Query owns server data. The browser compares counters, fetches a full view
 only for graph changes, and merges pending metadata when the graph revision still
-matches. A concurrently changed graph forces a full coherent refresh. Replaced
+matches. A concurrently changed graph or a new target with an unknown natural or
+overlay parent forces a full coherent refresh. Replaced
 unreferenced sliding captures are removed from the client cache; referenced and
 retained history stays. Hidden pages close subscriptions. Stream errors use a
 15-to-120-second bounded fallback that first reads only revision counters. LIVE
