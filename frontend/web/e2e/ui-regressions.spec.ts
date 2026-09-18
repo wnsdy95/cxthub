@@ -1894,3 +1894,71 @@ test('pending badge stays beside its active lanes in a wide sparse graph', async
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+for (const malformed of ['duplicate-id', 'cycle'] as const) {
+  test(`invalid ${malformed} is reported even on a folded branch and a fresh read recovers`, async ({ page }, testInfo) => {
+    const root=id('1'), current=id('2'), hidden=id('3');
+    const good=[auditSnapshot(current,'main',[root],'current readable context',2),auditSnapshot(root,'main',[],'root',0),auditSnapshot(hidden,'deleted',[root],'archived record',1)];
+    const bad=malformed==='duplicate-id' ? [...good,{...good[2],message:'conflicting duplicate'}]
+      : good.map(s=>s.id===hidden?{...s,graft_parents:[hidden]}:s);
+    const refs=[{repo_id:repoId,kind:'branch',name:'main',target:current},
+      {repo_id:repoId,kind:'tag',name:`cxt/branch-state/v1/00000000000000000001/archived/${hidden.slice(7)}/deleted`,target:hidden}];
+    let recovered=false;
+    const badApi=publicWorkspaceApi(bad,refs), goodApi=publicWorkspaceApi(good,refs);
+    const pageErrors=capturePageErrors(page);
+    const unexpected=await installApiFixture(page, request=>(recovered?goodApi:badApi)(request));
+    await page.goto('/alice/cxthub');
+    const alert=page.locator('.graph-invalid');
+    await expect(alert).toBeVisible();
+    await expect(alert.locator(`[data-graph-issue="${malformed}"]`)).toContainText(hidden);
+    await expect(page.locator('.graph-row')).toHaveCount(0);
+    // The independent document viewer stays usable while invalid lines are withheld.
+    await page.locator('.commit-row').filter({hasText:'current readable context'}).click();
+    await expect(page.getByText('Visible fixture prompt',{exact:true})).toBeVisible();
+    await alert.screenshot({path:testInfo.outputPath(`invalid-${malformed}.png`)});
+    recovered=true;
+    await alert.getByRole('button').click();
+    await expect(alert).toHaveCount(0);
+    await expect(page.locator('.graph-row')).toHaveCount(2);
+    expect(pageErrors).toEqual([]);
+    expect(unexpected).toEqual([]);
+  });
+}
+
+test('PR evidence survives every combination of archive and overlapping progress folds', async ({page}) => {
+  const root=id('1'), before=id('2'), source=id('3'), current=id('4'), previous=id('5'), archived=id('6');
+  const snapshots=[auditSnapshot(root,'main',[],'root',0),auditSnapshot(before,'main',[root],'before',1),
+    {...auditSnapshot(source,'topic',[root],'merged source',3),graft_parents:[before],grafted:true},
+    auditSnapshot(previous,'main',[source],'previous tip',5),auditSnapshot(current,'main',[root],'current tip',6),
+    auditSnapshot(archived,'deleted',[root],'archived only',7)];
+  const birth={repo_id:repoId,id:'fold-birth',kind:'birth',branch:'topic',branch_id:'topic-id',source:root,target:root,created_at:'2026-09-18T00:00:02Z'};
+  const history=[birth,{...birth,id:'fold-merge',kind:'pr-merge',branch:'main',branch_id:'main-id',source_branch_id:'topic-id',source,target:source,shared_target:before,pr_completed:true,created_at:'2026-09-18T00:00:04Z',pr:{number:501,head_branch:'topic',base_branch:'main',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)}}];
+  const refs=[{repo_id:repoId,kind:'branch',name:'main',branch_id:'main-id',target:current},
+    {repo_id:repoId,kind:'tag',name:`cxt/branch-state/v1/00000000000000000001/archived/${archived.slice(7)}/deleted`,target:archived}];
+  const reflog=[{kind:'branch',name:'main',old:previous,new:root,created_at:'2026-09-18T00:00:06Z'},
+    {kind:'branch',name:'main',old:source,new:root,created_at:'2026-09-18T00:00:07Z'}];
+  const {pageErrors,unexpected}=await openGraph(page,publicWorkspaceApi(snapshots,refs,[],[],reflog,history));
+  await page.locator('.graph-merge-records summary').click();
+  const evidence=page.locator('.graph-merge-records li');
+  const evidenceText=await evidence.innerText();
+  await page.locator('.graph-archive-panel summary').click();
+  const controls=[page.locator('.graph-history-toggle').nth(0),page.locator('.graph-history-toggle').nth(1),page.locator('.graph-archive-toggle')];
+  await expect(controls[1]).toBeVisible();
+  // Gray-code traversal visits all 8 states, changing only one control each time.
+  let prior=0;
+  for(const mask of [0,1,3,2,6,7,5,4]) {
+    const changed=mask^prior;
+    if(changed) await controls[Math.log2(changed)].click();
+    prior=mask;
+    await expect(evidence).toHaveText(evidenceText, {useInnerText:true});
+    await expect(evidence).toHaveAttribute('data-branch-lineage','natural');
+    await expect(page.locator('.graph-invalid')).toHaveCount(0);
+    await expect(page.locator('.graph-history-error')).toHaveCount(0);
+    if(mask&3) {
+      await expectRenderedGraphPath(page,'graph:merge:fold-merge',source);
+      await expectRenderedGraphPath(page,source,'graph:birth:fold-birth');
+    } else await expect(page.locator('[data-graph-event="merge"]')).toHaveCount(0);
+  }
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:i18n": "node scripts/check-i18n.mjs",
-    "check:vercel": "node scripts/check-vercel-config.mjs"
+    "check:vercel": "node scripts/check-vercel-config.mjs",
+    "benchmark:graph": "node scripts/benchmark-graph.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",

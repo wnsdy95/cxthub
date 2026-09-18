@@ -2,6 +2,7 @@ import type { HistoryEvent, Ref, Snapshot } from './types';
 import { archivedBranchMarkers, parseBranchLifecycleRef } from './branchLifecycle';
 import { reachableSnapshotIds, sharedReachable } from './onhold';
 import { completedBranchEvidence } from './graphEvidence';
+import { GraphIndex } from './graphIndex';
 import { historyBranchHeads } from './contextHistory';
 
 export interface GraphSnapshotStatus {
@@ -34,6 +35,8 @@ export function classifyBranchHistoryMarkers(
   snapshots: Snapshot[],
   primaryBranch?: string,
   history: HistoryEvent[] = [],
+  index = new GraphIndex(snapshots),
+  evidence = completedBranchEvidence(snapshots, history, index),
 ): BranchHistoryMarker[] {
   const branches = refs.filter((ref) => ref.kind === 'branch');
   const primary =
@@ -42,9 +45,8 @@ export function classifyBranchHistoryMarkers(
     branches.find((ref) => ref.name === 'master') ||
     branches[0];
   const primaryReachable = reachableSnapshotIds(primary ? [primary.target] : [], snapshots);
-  const evidence = completedBranchEvidence(snapshots, history);
   const heads = historyBranchHeads(history);
-  const byId = new Map(snapshots.map(s => [s.id, s]));
+  const { byId } = index;
   const joined = (branch: string, target: string) => {
     const identities = [...heads.values()].filter(e => e.branch === branch);
     if (identities.length) return identities.length === 1 && identities[0].kind === 'archive'
@@ -68,11 +70,13 @@ export function classifyGraphSnapshots(
   primaryBranch?: string,
   historicalIds: ReadonlySet<string> = new Set<string>(),
   history: HistoryEvent[] = [],
+  index = new GraphIndex(snapshots),
+  evidence = completedBranchEvidence(snapshots, history, index),
 ): GraphSnapshotStatus {
   const ids = new Set(snapshots.map((snapshot) => snapshot.id));
   const shared = sharedReachable(refs, snapshots);
   for (const id of historicalIds) if (ids.has(id)) shared.add(id);
-  const historyMarkers = classifyBranchHistoryMarkers(refs, snapshots, primaryBranch, history);
+  const historyMarkers = classifyBranchHistoryMarkers(refs, snapshots, primaryBranch, history, index, evidence);
   const joined = historyMarkers.filter((marker) => marker.kind === 'joined');
   const archivedMarkers = historyMarkers.filter((marker) => marker.kind === 'archived');
   const archivedReachable = reachableSnapshotIds(
@@ -94,7 +98,7 @@ export function classifyGraphSnapshots(
   const archived = archivedMarkers.map(({ branch, target }) => ({
     branch,
     target,
-    uniqueCount: [...reachableSnapshotIds([target], snapshots)].filter(
+    uniqueCount: [...index.closure(target).ids].filter(
       (id) => ids.has(id) && !activeReachable.has(id),
     ).length,
     targetAvailable: ids.has(target),

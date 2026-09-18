@@ -5,8 +5,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
 import { layoutGraph, mainlineOf, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
-import { projectBranchGraph, type GraphEvent } from '../graphProjection';
+import { projectBranchGraph, visibleBranchGraph, type GraphEvent } from '../graphProjection';
 import { completedBranchEvidence } from '../graphEvidence';
+import { GraphIndex } from '../graphIndex';
 import { sharedReachable } from '../onhold';
 import { classifyGraphSnapshots } from '../graphStatus';
 import { previousProgressGroups, hiddenProgressIds, historicalSnapshotIds, historyBranchHeads } from '../contextHistory';
@@ -93,7 +94,7 @@ export function CommitGraph({
   graphLoading?: boolean;
   graphError?: string;
   retryGraph?: () => void;
-/** Uncommitted hook-capture IDs, rendered as hollow dashed nodes with their own divider. */
+/** Uncommitted hook-capture IDs, rendered as hollow dashed nodes with an individual label. */
   uncommitted?: Set<string>;
 /** Default branch name — always fixed at the leftmost lane (0) for this branch chain. */
   pinBranch?: string;
@@ -103,18 +104,19 @@ export function CommitGraph({
   repoId?: string | null;
 }) {
   const t = useT();
-  const mergeEvidence = useMemo(() => completedBranchEvidence(snapshots, history), [snapshots, history]);
+  const graphIndex = useMemo(() => new GraphIndex(snapshots), [snapshots]);
+  const mergeEvidence = useMemo(() => completedBranchEvidence(snapshots, history, graphIndex), [snapshots, history, graphIndex]);
   const [showArchived, setShowArchived] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
   const [positionId, setPositionId] = useState('');
   const positions = useMemo(() => history.filter((event) => event.kind === 'position' && event.target
-    && snapshots.some((snapshot) => snapshot.id === event.target)).slice().reverse(), [history, snapshots]);
+    && graphIndex.byId.has(event.target)).slice().reverse(), [history, graphIndex]);
   const positionEvent = positions.find((event) => event.id === positionId);
   const historyHeads = useMemo(() => historyBranchHeads(history), [history]);
   const positionHead = positionEvent ? historyHeads.get(positionEvent.branch_id) : undefined;
   const position = positionEvent ? { branch: positionHead?.branch ?? positionEvent.branch, branch_id: positionEvent.branch_id, snapshot: positionEvent.target! } : undefined;
   const historicalIds = useMemo(() => historicalSnapshotIds(reflog, snapshots, history), [reflog, snapshots, history]);
-  const historyGroups = useMemo(() => previousProgressGroups(refs ?? [], snapshots, reflog, history, position), [refs, snapshots, reflog, history, position?.branch, position?.branch_id, position?.snapshot]);
+  const historyGroups = useMemo(() => previousProgressGroups(refs ?? [], snapshots, reflog, history, position, graphIndex), [refs, snapshots, reflog, history, graphIndex, position?.branch, position?.branch_id, position?.snapshot]);
   // A selection made elsewhere in the viewer must reveal its recorded path.
   const expandedKeys = useMemo(() => {
     const next = new Set(expandedHistory);
@@ -129,8 +131,8 @@ export function CommitGraph({
   const revealedHistory = useMemo(() => new Set(historyGroups
     .filter((group) => expandedKeys.has(group.key)).flatMap((group) => [...group.snapshotIds])), [historyGroups, expandedKeys]);
   const status = useMemo(
-    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted, pinBranch, historicalIds, history),
-    [refs, snapshots, uncommitted, pinBranch, historicalIds, history],
+    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted, pinBranch, historicalIds, history, graphIndex, mergeEvidence),
+    [refs, snapshots, uncommitted, pinBranch, historicalIds, history, graphIndex, mergeEvidence],
   );
   const selectedArchived = selectedId !== null && status.archivedOnly.has(selectedId);
   const archivedVisible = showArchived || selectedArchived;
@@ -145,12 +147,13 @@ export function CommitGraph({
     () => position && positionHead?.kind !== 'archive' && position.branch === pinBranch ? position.snapshot : (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
     [refs, pinBranch, position?.branch, position?.snapshot, positionHead?.kind],
   );
-  const projection = useMemo(() => projectBranchGraph(visibleSnapshots, refs ?? [], history, reflog, pinHead, pinBranch), [visibleSnapshots, refs, history, reflog, pinHead, pinBranch]);
-  const { rows, laneCount } = useMemo(() => layoutGraph(projection.snapshots, projection.pinHead), [projection]);
-  const missingParents = useMemo(() => {
-    const ids = new Set(snapshots.map(s => s.id));
-    return new Set(snapshots.flatMap(s => [...(s.parents ?? []), ...(s.graft_parents ?? [])]).filter(id => !ids.has(id)));
-  }, [snapshots]);
+  const fullProjection = useMemo(() => projectBranchGraph(snapshots, refs ?? [], history, reflog, pinHead, pinBranch, graphIndex, mergeEvidence), [snapshots, refs, history, reflog, pinHead, pinBranch, graphIndex, mergeEvidence]);
+  // Validate before folding too: hiding a bad component must not hide its error.
+  const projectedIndex = useMemo(() => new GraphIndex(fullProjection.snapshots), [fullProjection]);
+  const projection = useMemo(() => visibleBranchGraph(fullProjection, new Set(visibleSnapshots.map(s => s.id))), [fullProjection, visibleSnapshots]);
+  const graphIssues = graphIndex.issues.length ? graphIndex.issues : projectedIndex.issues;
+  const { rows, laneCount } = useMemo(() => graphIssues.length ? { rows: [], laneCount: 0 } : layoutGraph(projection.snapshots, projection.pinHead), [projection, graphIssues]);
+  const missingParents = graphIndex.missingParents;
   function toggleHistory(key: string) {
     const next = new Set(expandedKeys);
     if (next.has(key)) next.delete(key);
@@ -202,7 +205,7 @@ export function CommitGraph({
     return segments;
   }, [rows, projection]);
   // Session boundary edge: matches child bot·through·parent top with the same key system (`${lane}:${expectedHash}`).
-  const boundaries = useMemo(() => sessionBoundaries(visibleSnapshots), [visibleSnapshots]);
+  const boundaries = useMemo(() => sessionBoundaries(snapshots), [snapshots]);
   const sessionSeams = useMemo(() => {
     const s = new Set<string>();
     for (const r of rows) {
@@ -212,10 +215,10 @@ export function CommitGraph({
     return s;
   }, [rows, boundaries]);
   // Compression boundary: nodes after context compression (same session — lineage unchanged, only node markers).
-  const compactions = useMemo(() => compactionBoundaries(visibleSnapshots), [visibleSnapshots]);
+  const compactions = useMemo(() => compactionBoundaries(snapshots), [snapshots]);
   // Main lineage (union of all branch refs' first-parents) — shared nodes not here = join paths.
   // Different branches: distinguish "current trunk vs appended branch".
-  const mainlines = useMemo(() => mainlinesOf(projection.refs, projection.snapshots), [projection]);
+  const mainlines = useMemo(() => mainlinesOf(fullProjection.refs, fullProjection.snapshots), [fullProjection]);
 
   // ── Drag & Drop Reordering (join) ────────────────────────────────────────────
   // Reorder commits of branch fork (side branch) to behind the branch head.
@@ -232,7 +235,8 @@ export function CommitGraph({
     branchId?: string;
     error?: string;
   } | null>(null);
-  const byId = useMemo(() => new Map(projection.snapshots.map((s) => [s.id, s])), [projection]);
+  // Join eligibility uses stored ancestry, not virtual operation nodes or folds.
+  const byId = graphIndex.byId;
   // Child map based on first-parent (session branch calculation — merge/graft edges exclude inheritance).
   const childrenOf = useMemo(() => {
     const m = new Map<string, string[]>();
@@ -352,7 +356,7 @@ export function CommitGraph({
     setJoinAsk({ snapshot: dragId, branch: dragPlan.branch, branchId: refs?.find((r) => r.kind === 'branch' && r.name === dragPlan.branch)?.branch_id, descendants: dragPlan.descendants });
   }
   function runJoin(includeDescendants: boolean) {
-    if (!repoId || !joinAsk) return;
+    if (!repoId || !joinAsk || graphIssues.length) return;
     join.mutate(
       { repoId, branch: joinAsk.branch, branchId: joinAsk.branchId, snapshot: joinAsk.snapshot, includeDescendants },
       {
@@ -361,7 +365,7 @@ export function CommitGraph({
       },
     );
   }
-  const joinEnabled = Boolean(repoId) && (refs?.length ?? 0) > 0;
+  const joinEnabled = !graphIssues.length && Boolean(repoId) && (refs?.length ?? 0) > 0;
 
   // when the drag plan is calculated, an immediate reason for rejection is provided (silent rejection appears as a failure).
   useEffect(() => {
@@ -453,7 +457,7 @@ export function CommitGraph({
       }
       const current = [...active];
       for (const lane of row.branchesOut) {
-        const parent = byId.get(row.outgoing[lane] ?? '');
+        const parent = projectedIndex.byId.get(row.outgoing[lane] ?? '');
         const event = projection.events.get(row.snap.id);
         current[lane] = event?.kind === 'merge' && event.sourceBranch
           ? { text: event.sourceBranch, archived: false }
@@ -462,7 +466,7 @@ export function CommitGraph({
       active = row.outgoing.map((target, lane) => (target ? current[lane] ?? null : null));
       return current;
     });
-  }, [rows, laneCount, pinHead, pinBranch, labelForSnapshot, byId, projection]);
+  }, [rows, laneCount, pinHead, pinBranch, labelForSnapshot, projectedIndex, projection]);
 
   // The labels are a viewport overlay for the graph lines, not a separate
   // always-on legend. Keep only labels whose lane has a visible node/segment.
@@ -526,6 +530,15 @@ export function CommitGraph({
     <div className="graph-wrap">
       {graphError ? <p role="alert" className="graph-history-error">{t('graph.loadFailed')} {graphError} {retryGraph && <button onClick={retryGraph}>{t('context.retryRead')}</button>}</p>
         : historyError && <p role="status" className="graph-history-error">{t('graph.historyUnavailable')}</p>}
+      {graphIssues.length > 0 && <div role="alert" className="graph-history-error graph-invalid">
+        <p>{t('graph.invalidStructure')}</p>
+        {graphIssues.map(issue => <p key={issue.kind} data-graph-issue={issue.kind}>
+          {t(issue.kind === 'duplicate-id' ? 'graph.duplicateIds' : 'graph.cycleDetected', { count: issue.count })}
+          {' '}<code>{issue.ids.join(', ')}{issue.count > issue.ids.length ? ' …' : ''}</code>
+        </p>)}
+        {retryGraph && <button type="button" onClick={retryGraph}>{t('context.retryRead')}</button>}
+      </div>}
+      {!graphIssues.length && projection.foldedParents.size > 0 && <p role="status" className="graph-folded-edges">{t('graph.foldedConnections', { count: projection.foldedParents.size })}</p>}
       {graphLoading && <p role="status">{t('graph.loading')}</p>}
       {missingParents.size > 0 && <p role="status" className="graph-history-error">{t('graph.missingParents', { count: missingParents.size })}</p>}
       {mergeEvidence.length > 0 && <details className="graph-history-panel graph-merge-records">
@@ -540,7 +553,7 @@ export function CommitGraph({
               <span>{t(`graph.lineage_${lineage}`)}</span>
               <div className="graph-history-actions">
                 <button type="button" disabled={!sourceAvailable} onClick={() => onSelect(event.snapshot, event)}>{t('graph.viewMergeSource')}</button>
-                {birth?.source && snapshots.some(s => s.id === birth.source) && <button type="button"
+                {birth?.source && graphIndex.byId.has(birth.source) && <button type="button"
                   onClick={() => onSelect(birth.source!, { id: `graph:birth:${birth.id}`, kind: 'birth', branch: birth.branch, snapshot: birth.source!, evidence: birth.id })}>
                   {t('graph.viewBranchSource')}
                 </button>}
@@ -574,7 +587,7 @@ export function CommitGraph({
               <span className="graph-history-branch" title={`${event.branch} · ${event.branch_id}`}>{event.kind === 'rename' ? `${event.previous_branch} → ${event.branch}` : event.local_branch && event.local_branch !== event.branch ? `${event.local_branch} → ${event.branch}` : event.branch}</span>
               <span>{event.kind === 'rename' ? t('graph.branchRenamed') : event.kind === 'archive' ? t('graph.branchArchived') : event.kind === 'orphan' ? t('graph.orphanBirth') : event.kind === 'attach' ? t('graph.branchAttached') : t('graph.branchBorn')}</span>
               <time dateTime={event.created_at}>{when(event.created_at)}</time>
-              {event.target && snapshots.some((snapshot) => snapshot.id === event.target) && <div className="graph-history-actions"><button type="button" className="graph-history-view" onClick={() => onSelect(event.target!)}>
+              {event.target && graphIndex.byId.has(event.target) && <div className="graph-history-actions"><button type="button" className="graph-history-view" onClick={() => onSelect(event.target!)}>
                 {t('graph.viewBranchSource')} · {event.target.replace(/^sha256:/, '').slice(0, 7)}
               </button></div>}
               {event.kind === 'orphan' && event.memory_hash && <span>{t('graph.inheritedProjectMemory')}</span>}
@@ -941,16 +954,16 @@ export function CommitGraph({
             <div className="modal-actions">
               {!joinAsk.error && joinAsk.descendants > 0 && (
                 <>
-                  <button className="primary" disabled={join.isPending} onClick={() => runJoin(true)}>
+                  <button className="primary" disabled={join.isPending || graphIssues.length > 0} onClick={() => runJoin(true)}>
                     {t('graph.joinAll', { count: String(joinAsk.descendants + 1) })}
                   </button>
-                  <button disabled={join.isPending} onClick={() => runJoin(false)}>
+                  <button disabled={join.isPending || graphIssues.length > 0} onClick={() => runJoin(false)}>
                     {t('graph.joinOnly')}
                   </button>
                 </>
               )}
               {!joinAsk.error && joinAsk.descendants === 0 && (
-                <button className="primary" disabled={join.isPending} onClick={() => runJoin(false)}>
+                <button className="primary" disabled={join.isPending || graphIssues.length > 0} onClick={() => runJoin(false)}>
                   {t('graph.joinGo')}
                 </button>
               )}

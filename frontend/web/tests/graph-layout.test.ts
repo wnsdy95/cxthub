@@ -82,8 +82,6 @@ const cycle = [
   snapshot('cycle-new', '2026-08-30T08:00:00Z', ['cycle-old']),
   snapshot('cycle-old', '2026-08-30T07:00:00Z', ['cycle-new']),
 ];
-assert.deepEqual(
-  orderGraphSnapshots(cycle).map((item) => item.id),
-  ['cycle-new', 'cycle-old'],
-  'legacy/corrupt cycles retain every row in deterministic recency order',
-);
+assert.throws(() => orderGraphSnapshots(cycle), /Invalid graph: cycle/);
+assert.equal(layoutGraph(cycle).rows.length, 0, 'invalid structure never becomes plausible lines');
+assert.equal(layoutGraph(cycle).issues[0].kind, 'cycle');

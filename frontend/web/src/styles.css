@@ -1168,6 +1168,8 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .graph-history-scope label { display: grid; gap: 4px; }
 .graph-history-scope select { width: 100%; min-width: 0; max-width: 100%; padding: 5px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
 .graph-history-scope > span, .graph-history-error { color: var(--muted); font-size: 11px; }
+.graph-invalid code { overflow-wrap: anywhere; white-space: normal; }
+.graph-folded-edges { color: var(--muted); font-size: 11px; }
 .graph-births > summary { cursor: pointer; font-size: 12px; }
 .graph-births .graph-history-list { max-height: 260px; overflow: auto; margin-top: 6px; }
 
