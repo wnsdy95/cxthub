@@ -879,6 +879,9 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 	// immutable lifecycle history and unchanged branch pointers on every push.
 	// A ref-list failure means an old or temporarily unavailable peer, so retain
 	// the previous fail-open behavior and send the complete ref set.
+	if len(refs) == 0 {
+		return nil // objects-only capture; no branch reconciliation was requested
+	}
 	refsToPush := pushableRefs(refs)
 	if len(refsToPush) > 0 {
 		if remoteRefs, err := c.remoteRefs(ctx, repoID); err == nil {

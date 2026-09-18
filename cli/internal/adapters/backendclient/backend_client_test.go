@@ -487,6 +487,33 @@ func TestRefOnlyPushSkipsObjectNegotiation(t *testing.T) {
 	}
 }
 
+func TestObjectsOnlyPushDoesNotRequestRefReconciliation(t *testing.T) {
+	repoID := domain.HashContent([]byte(t.Name()))
+	target := domain.HashContent([]byte("synthetic capture"))
+	objects, refs := 0, 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/push/negotiate"):
+			_ = json.NewEncoder(w).Encode(negotiateResp{SnapshotWants: []domain.ContentHash{target}})
+		case strings.HasSuffix(r.URL.Path, "/push/objects"):
+			objects++
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			refs++
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+	c := NewBackendClient(func() string { return ts.URL }, func() string { return "" }, domain.TeamIdentity{})
+	snap := domain.Snapshot{RepoID: string(repoID), ID: target, DocHash: target}
+	if err := c.Push(context.Background(), string(repoID), []domain.Snapshot{snap}, nil, nil, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if objects != 1 || refs != 0 {
+		t.Fatalf("objects=%d unexpected ref calls=%d", objects, refs)
+	}
+}
+
 func TestRefOnlyPushUsesEmptyBatchToReconcileWhenRemoteIsCurrent(t *testing.T) {
 	repoID := domain.HashContent([]byte("ref-delta-push-repo"))
 	target := domain.HashContent([]byte("ref-delta-push-target"))
