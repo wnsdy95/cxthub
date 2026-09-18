@@ -371,6 +371,9 @@ export const en: Messages = {
     inviteHint: 'Links are reusable until revoked (joining is idempotent). Set an email to restrict acceptance to that account.',
   },
   onhold: {
+    liveSection: 'Live uncommitted sessions',
+    liveHint: 'Transcript activity observed in the last minute. Captures run about every 10 seconds; this page checks every 5 seconds. LIVE expires when activity stops.',
+    followingSession: 'Following this session’s latest capture.',
     holdCount: '{count} on hold',
     empty: 'Nothing on hold — context committed locally but not yet `git push`ed, plus uncommitted session captures, show up here.',
     pendingPush: 'Awaiting push — moves to Context after git push',

@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { pendingIsLive } from '../src/onhold';
+import type { Pending } from '../src/types';
+const now = Date.parse('2026-09-18T12:00:00Z');
+const p: Pending = { repo_id:'r', session_id:'s', target:'h', provider:'codex', branch:'main', updated_at:new Date(now).toISOString() };
+assert.equal(pendingIsLive(p, now), false, 'a fresh sync timestamp is not transcript activity');
+assert.equal(pendingIsLive({...p, activity_at:new Date(now - 10_000).toISOString()}, now), true);
+assert.equal(pendingIsLive({...p, activity_at:new Date(now - 60_000).toISOString()}, now), false);
+assert.equal(pendingIsLive({...p, activity_at:new Date(now + 60_000).toISOString()}, now), false);
+assert.equal(pendingIsLive({...p, activity_at:'invalid'}, now), false);

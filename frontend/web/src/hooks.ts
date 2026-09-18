@@ -415,8 +415,11 @@ export function useRepoView(repoId: string | null, primaryBranch?: string) {
   const viewQuery = useQuery({
     queryKey: ['repo-view', repoId],
     queryFn: () => api.repositoryView(repoId!),
+    // The next poll retries. Nested retries outlasting the poll interval can
+    // leave the initial view in loading forever instead of exposing an error.
+    retry: false,
     enabled: Boolean(repoId),
-    refetchInterval: 10_000,
+    refetchInterval: 5_000,
   });
   const rawRefs = viewQuery.data?.refs ?? [];
   const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);

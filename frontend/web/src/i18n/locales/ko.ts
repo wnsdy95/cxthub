@@ -374,6 +374,9 @@ export const ko = {
     inviteHint: '링크는 회수 전까지 재사용 가능(합류는 멱등). 이메일을 지정하면 그 계정만 수락할 수 있습니다.',
   },
   onhold: {
+    liveSection: '실시간 미커밋 세션',
+    liveHint: '최근 1분 안에 대화 갱신이 감지된 세션입니다. 약 10초마다 캡처하고 화면은 5초마다 확인합니다. 활동이 멈추면 LIVE 표시가 해제됩니다.',
+    followingSession: '이 세션의 최신 캡처를 자동으로 표시합니다.',
     holdCount: '보류 {count}건',
     empty: '보류 중인 작업 없음 — 로컬에서 커밋했지만 `git push` 전인 컨텍스트, 그리고 아직 커밋되지 않은 세션 캡처가 여기 나타납니다.',
     pendingPush: '푸시 대기 커밋 — git push 하면 컨텍스트 탭으로 이동',

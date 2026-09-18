@@ -81,6 +81,8 @@ type Pending struct {
 	Target    ContentHash  `json:"target"`
 	Author    TeamIdentity `json:"author"`
 	UpdatedAt time.Time    `json:"updated_at"`
+	// ActivityAt is transcript activity reported by the capturing client; replay never refreshes it.
+	ActivityAt *time.Time `json:"activity_at,omitempty"`
 	// Dismissed means the user hid this durable capture from the uncommitted list.
 	// It does not delete data: snapshot, document, and session history remain intact. The flag is sticky;
 	// PutPending preserves it so SyncPendings cannot make the entry visible again. Only the UI list excludes it.

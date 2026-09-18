@@ -305,6 +305,24 @@ func TestPGSmoke(t *testing.T) {
 	if result, err := st.CompareAndDeletePending(ctx, repoID, pendingSession, oldPending); err != nil || result != domain.PendingDeleteDeleted {
 		t.Fatalf("matching pending CAS: result=%v err=%v", result, err)
 	}
+	// Live activity ordering is checked under the same row lock as replacement.
+	liveAt, olderAt := time.Now().UTC(), time.Now().Add(-time.Minute).UTC()
+	live := domain.Pending{RepoID: repoID, SessionID: pendingSession, Provider: domain.ProviderClaude, Target: newPending, ActivityAt: &liveAt}
+	if err := st.PutPending(ctx, repoID, live); err != nil {
+		t.Fatal(err)
+	}
+	live.Target, live.ActivityAt = oldPending, &olderAt
+	if _, err := st.ReplacePending(ctx, repoID, live); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale live capture: %v", err)
+	}
+	liveRows, err := st.ListPendings(ctx, repoID)
+	if err != nil || len(liveRows) != 1 || liveRows[0].Target != newPending || liveRows[0].ActivityAt == nil || !liveRows[0].ActivityAt.Equal(liveAt) {
+		t.Fatalf("live pending rewound: %+v %v", liveRows, err)
+	}
+	if err := st.DeletePending(ctx, repoID, pendingSession); err != nil {
+		t.Fatal(err)
+	}
+
 	// Bounded chunk staging: store/mutual exclusion dedup/repo ownership isolation verified by actual PG transaction.
 	chunkBody := []byte("pg smoke bounded chunk")
 	chunkHash := domain.HashContent(chunkBody)

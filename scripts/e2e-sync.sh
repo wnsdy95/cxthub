@@ -566,5 +566,7 @@ echo
 source "$ROOT/scripts/e2e-context-history.inc.sh"
 source "$ROOT/scripts/e2e-publication.inc.sh"
 
+source "$ROOT/scripts/e2e-live-capture.inc.sh"
+
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: All passed ✓"; else echo "SYNC E2E: Failures exist ✗"; fi
 exit "$FAIL"

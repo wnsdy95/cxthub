@@ -1201,3 +1201,8 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .notification-entry p { margin: 5px 0; }
 .notification-entry code { display: block; font-size: 11px; }
 .notification-entry button { margin-top: 8px; }
+
+.ref-badge.live { color: var(--green, #23845b); border-color: currentColor; flex: none; }
+.live-capture-hint { color: var(--muted); font-size: .78rem; line-height: 1.5; margin: 4px 0 12px; }
+.live-viewer-status { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .8rem; margin-bottom: 12px; }
+.pending-sessions { margin-bottom: 20px; }

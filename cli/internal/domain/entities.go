@@ -799,6 +799,8 @@ type Pending struct {
 	Author TeamIdentity `json:"author"`
 	// UpdatedAt is the last update timestamp.
 	UpdatedAt time.Time `json:"updated_at"`
+	// ActivityAt is the observed transcript mtime, never a sync/heartbeat timestamp.
+	ActivityAt *time.Time `json:"activity_at,omitempty"`
 	// Dismissed is a session display in the uncommitted list that the user has hidden (server authority — no data deletion).
 	// Local settings are usually not set; the server preserves them as sticky, so they do not revive on re-push.
 	Dismissed bool `json:"dismissed,omitempty"`

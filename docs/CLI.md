@@ -265,6 +265,24 @@ does not bound the total input accumulated across many branch switches.
 Claude Desktop's general Chat tab is outside this hook model and is not
 passively captured.
 
+Start/prompt hooks also launch one background observer for their validated
+session in that exact worktree. While the transcript changes, it captures and
+syncs the uncommitted pointer about every 10 seconds; it never advances a
+branch ref or inserts team conversation into the active provider session.
+Every sample resolves the current Git position afresh. Failed uploads retain
+the local pointer and retry even when no more text is written. Duplicate
+observers are excluded by an OS lock. Observation ends when the session
+registration is removed, after 30 minutes without transcript activity, or after
+24 hours; a later start/prompt hook starts it again.
+
+On Hold checks for updates every 5 seconds and follows the selected session's
+latest snapshot. LIVE means transcript activity within the last minute, not a
+guarantee that the app or network connection is still open. The badge expires
+without further activity, including while the server is unreachable. Replaying
+an old pointer does not refresh its activity date. Hidden sessions stay hidden,
+and committed captures remain on the shared timeline.
+
+
 ## Capture and commit commands
 
 ### `cxt add`
