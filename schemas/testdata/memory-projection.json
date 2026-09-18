@@ -24,4 +24,13 @@
   {"id":"a","summary":"A decision","facts":["A fact"],"tasks":["A task"]},
   {"id":"b","grafts":["a"],"summary":"A decision then B decision","facts":["B fact"]}],
   "want":["A decision","B decision"],"facts":["A fact","B fact"],"tasks":["A task"]}
+,
+ {"name":"typed contributions survive opaque descendants","root":"b","snapshots":[
+  {"id":"a","fragments":[{"source":"a","summary":"A decision","claims":[{"kind":"rationale","text":"A explicit reason"}]}]},
+  {"id":"b","grafts":["a"],"summary":"A decision then B decision"}],
+  "claims":["A explicit reason"]},
+ {"name":"typed pinned import survives graft replacement","root":"b","snapshots":[
+  {"id":"a","summary":"replacement"},
+  {"id":"b","grafts":["a"],"pinned":["import"],"fragments":[{"source":"import","claims":[{"kind":"decision","text":"Pinned explicit decision"}]},{"source":"b","summary":"B decision"}]}],
+  "want":["replacement","B decision"],"claims":["Pinned explicit decision"]}
 ]

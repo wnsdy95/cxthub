@@ -360,6 +360,9 @@ func (c *BackendClient) RegisterRepo(ctx context.Context, repo domain.Repo) (dom
 // distinct path makes rolling upgrades fail before mutation on old servers
 // that do not understand PreviousMemoryHash.
 func (c *BackendClient) PushMemory(ctx context.Context, repoID string, digest domain.MemoryDigest) error {
+	if err := digest.ValidateMemoryClaims(); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return err
 	}
@@ -373,7 +376,12 @@ func (c *BackendClient) PushMemory(ctx context.Context, repoID string, digest do
 	var out struct {
 		MemoryHash domain.ContentHash `json:"memory_hash"`
 	}
-	path := c.reposPath(repoID) + "/memory-attachments/" + url.PathEscape(string(digest.SnapshotID))
+	endpoint := "/memory-attachments/"
+	if digest.ClaimsVersion != 0 {
+		// No fallback: an old server must reject before it can drop unknown fields.
+		endpoint = "/typed-memory-attachments/"
+	}
+	path := c.reposPath(repoID) + endpoint + url.PathEscape(string(digest.SnapshotID))
 	if err := c.do(ctx, http.MethodPut, path, digest, &out); err != nil {
 		return err
 	}

@@ -147,7 +147,11 @@ if [ -z "$HEAD_A" ]; then
 fi
 expect "repo1 push after server main exists" "$([ -n "$HEAD_A" ] && echo yes)" yes
 [ -z "$HEAD_A" ] && exit 1
-cxt memorize >/dev/null 2>&1
+cat > "$TMP/authored-claims.json" <<'JSONCLAIMS'
+[{"kind":"rationale","text":"Retain accepted history across branch joins."}]
+JSONCLAIMS
+cxt memorize --claims "$TMP/authored-claims.json" >/dev/null 2>&1
+expect "explicit claims authoring succeeds" "$?" 0
 cxt push >/dev/null 2>&1
 NOOP_PUSH=$(cxt push 2>&1)
 expect "no-op push offers zero snapshots after preflight" "$(echo "$NOOP_PUSH" | grep -c 'pushed 0 snapshot(s)')" 1
@@ -191,6 +195,14 @@ import json,sys; s=json.load(sys.stdin).get('summary','')
 print('inherited' if 'task A' in s and 'task B' in s else 'missing')
 ")
 expect "B head inherits A session summary" "$MEM" inherited
+TYPED_MEMORY=$(curl -sb "$J" "$B/repos/$RID/memories/$(main_head)" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+claims=[c for f in (d.get("fragments") or []) for c in (f.get("claims") or [])]
+print("retained" if d.get("claims_version")==1 and sum(c.get("text")=="Retain accepted history across branch joins." for c in claims)==1 else "missing")
+')
+expect "typed claims survive remote pull, join and re-memorize" "$TYPED_MEMORY" retained
+
 
 echo "── D. repo2: New session C commit → Session boundary meta"
 session "$TMP/repo2" C

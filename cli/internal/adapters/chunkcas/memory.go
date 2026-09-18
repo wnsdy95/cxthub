@@ -24,6 +24,7 @@ const (
 	// V3 carries the causal parent of a memory attachment. Older readers must
 	// reject it rather than silently reconstructing a different digest hash.
 	MemoryFormatV3 = "cxt-memory-chunks-v3"
+	MemoryFormatV4 = "cxt-memory-chunks-v4"
 )
 
 // MemoryManifest is an at-rest representation only. The wire protocol keeps
@@ -31,6 +32,7 @@ const (
 // Potentially large, prefix-sharing components are chunked independently;
 // small structured fields stay inline.
 type MemoryManifest struct {
+	ClaimsVersion      uint32                      `json:"claims_version,omitempty"`
 	Format             string                      `json:"format"`
 	SnapshotID         domain.ContentHash          `json:"snapshot_id"`
 	PreviousMemoryHash domain.ContentHash          `json:"previous_memory_hash,omitempty"`
@@ -52,6 +54,9 @@ type MemoryPlan struct {
 // object. For larger digests it creates fixed-offset component chunks and
 // verifies that reconstruction preserves the original content identity.
 func PlanMemory(d domain.MemoryDigest) (plan MemoryPlan, ok bool, err error) {
+	if err := d.ValidateMemoryClaims(); err != nil {
+		return MemoryPlan{}, false, err
+	}
 	var fragments []byte
 	if len(d.Fragments) > 0 {
 		fragments, err = json.Marshal(d.Fragments)
@@ -64,6 +69,7 @@ func PlanMemory(d domain.MemoryDigest) (plan MemoryPlan, ok bool, err error) {
 	}
 	plan = MemoryPlan{
 		Manifest: MemoryManifest{
+			ClaimsVersion:      d.ClaimsVersion,
 			Format:             memoryFormatFor(d),
 			SnapshotID:         d.SnapshotID,
 			PreviousMemoryHash: d.PreviousMemoryHash,
@@ -93,6 +99,9 @@ func PlanMemory(d domain.MemoryDigest) (plan MemoryPlan, ok bool, err error) {
 }
 
 func memoryFormatFor(d domain.MemoryDigest) string {
+	if d.ClaimsVersion != 0 {
+		return MemoryFormatV4
+	}
 	if d.PreviousMemoryHash != "" {
 		return MemoryFormatV3
 	}
@@ -103,7 +112,7 @@ func memoryFormatFor(d domain.MemoryDigest) string {
 }
 
 func SupportedMemoryFormat(format string) bool {
-	return format == MemoryFormatV1 || format == MemoryFormatV2 || format == MemoryFormatV3
+	return format == MemoryFormatV1 || format == MemoryFormatV2 || format == MemoryFormatV3 || format == MemoryFormatV4
 }
 
 func (p *MemoryPlan) addComponent(data []byte) []domain.ContentHash {
@@ -153,6 +162,9 @@ func ParseMemoryManifest(data []byte) (MemoryManifest, bool, error) {
 	if err := json.Unmarshal(data, &man); err != nil {
 		return MemoryManifest{}, true, err
 	}
+	if (man.Format == MemoryFormatV4) != (man.ClaimsVersion == domain.MemoryClaimsVersion) || man.ClaimsVersion > domain.MemoryClaimsVersion {
+		return MemoryManifest{}, true, fmt.Errorf("invalid claims version for memory manifest")
+	}
 	if len(man.SummaryChunks) == 0 && len(man.FragmentChunks) == 0 {
 		return MemoryManifest{}, true, fmt.Errorf("empty memory manifest")
 	}
@@ -192,6 +204,7 @@ func AssembleMemory(man MemoryManifest, bodies map[domain.ContentHash][]byte) (d
 		}
 	}
 	return domain.MemoryDigest{
+		ClaimsVersion:      man.ClaimsVersion,
 		SnapshotID:         man.SnapshotID,
 		PreviousMemoryHash: man.PreviousMemoryHash,
 		Summary:            string(summary),

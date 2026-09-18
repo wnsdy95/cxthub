@@ -627,6 +627,10 @@ components:
       required: [snapshot_id, summary, key_facts, open_tasks, provider]
       additionalProperties: false
       properties:
+        claims_version:
+          type: integer
+          enum: [1]
+          description: "Present for typed claims, including descendants that explicitly clear them. Never downgrade a typed causal attachment to an untyped one."
         snapshot_id:
           $ref: "#/components/schemas/ContentHash"
         previous_memory_hash:
@@ -664,6 +668,12 @@ components:
               open_tasks:
                 type: array
                 items: { type: string }
+              claims:
+                type: array
+                maxItems: 256
+                description: "Explicit statements attributed to source_snapshot; at most 2048 claims per digest."
+                items:
+                  $ref: "#/components/schemas/MemoryClaim"
               tasks_authoritative:
                 type: boolean
         graft_coverage:
@@ -694,6 +704,41 @@ components:
               description: "Fragment source snapshots retained by this digest because they were imported or were not reproducible from the available root parent-memory projection."
               items:
                 $ref: "#/components/schemas/ContentHash"
+
+    MemoryClaim:
+      type: object
+      description: "Explicit author statement. Declared file equality does not establish the truth of its prose."
+      required: [kind, text]
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: [code, decision, rationale]
+        text:
+          type: string
+          minLength: 1
+          maxLength: 8192
+        code:
+          type: object
+          description: "Required for code claims; forbidden for decision/rationale. Full accepted source Git commit, optional explicit merge parent, and exact repository-relative paths."
+          required: [commit, paths]
+          additionalProperties: false
+          properties:
+            commit:
+              type: string
+              pattern: "^([0-9a-f]{40}|[0-9a-f]{64})$"
+            parent:
+              type: string
+              pattern: "^([0-9a-f]{40}|[0-9a-f]{64})$"
+            paths:
+              type: array
+              minItems: 1
+              maxItems: 20
+              uniqueItems: true
+              items:
+                type: string
+                minLength: 1
+                maxLength: 4096
 
     ErrorResponse:
       type: object
@@ -2138,6 +2183,62 @@ paths:
       operationId: putMemoryAttachment
       summary: Fast-forward a causal memory attachment
       description: |
+        Stores the immutable digest, then atomically advances Snapshot.MemoryHash
+        only when its current value equals previous_memory_hash. Repeating an
+        already-applied digest is idempotent. Divergent or stale parents return
+        409 without moving the pointer. Untyped route rejects claims_version or claims.
+      tags: [memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryDigest"
+      responses:
+        "200":
+          description: Attachment advanced or already current.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [memory_hash]
+                additionalProperties: false
+                properties:
+                  memory_hash:
+                    $ref: "#/components/schemas/ContentHash"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "Current memory pointer differs from previous_memory_hash."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: "Digest, snapshot, or causal parent integrity validation failed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /repos/{repoID}/typed-memory-attachments/{snapshotID}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: snapshotID
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/ContentHash"
+    put:
+      operationId: putTypedMemoryAttachment
+      summary: Fast-forward a typed causal memory attachment
+      description: |
+        Requires claims_version=1 and validated typed claims. Older servers reject
+        this route before any mutation; clients must not fall back to legacy paths.
         Stores the immutable digest, then atomically advances Snapshot.MemoryHash
         only when its current value equals previous_memory_hash. Repeating an
         already-applied digest is idempotent. Divergent or stale parents return

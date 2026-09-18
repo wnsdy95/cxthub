@@ -444,6 +444,9 @@ type CheckoutOutput struct {
 
 // MemorizeInput is the input DTO for Memorize.Memorize (compatibility rules).
 type MemorizeInput struct {
+	// Claims are explicit author-provided statements, never inferred from prose.
+	// They are attributed to Ref's snapshot and retained by later distillation.
+	Claims []domain.MemoryClaim
 	// Cwd is the working directory for detecting the active session target for distillation.
 	Cwd string
 	// Provider is an optional native-memory source hint for legacy snapshots.

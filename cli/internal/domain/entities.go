@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -182,6 +183,7 @@ type MemoryDigest struct {
 	// marker, but a nil value is legacy/unknown and cannot prove that the
 	// corrected transitive frontier algorithm covered grafts hidden below them.
 	GraftCoverage *MemoryGraftCoverage `json:"graft_coverage,omitempty"`
+	ClaimsVersion uint32               `json:"claims_version,omitempty"`
 }
 
 // MemoryGraftCoverage describes which transitive lineage a MemoryDigest tried
@@ -203,11 +205,12 @@ type MemoryGraftCoverage struct {
 // SourceSnapshot plus fragment content is the stable dedup key across natural
 // and graft lineages.
 type MemoryFragment struct {
-	SourceSnapshot     ContentHash `json:"source_snapshot"`
-	Summary            string      `json:"summary,omitempty"`
-	KeyFacts           []string    `json:"key_facts,omitempty"`
-	OpenTasks          []string    `json:"open_tasks,omitempty"`
-	TasksAuthoritative bool        `json:"tasks_authoritative,omitempty"`
+	SourceSnapshot     ContentHash   `json:"source_snapshot"`
+	Summary            string        `json:"summary,omitempty"`
+	KeyFacts           []string      `json:"key_facts,omitempty"`
+	OpenTasks          []string      `json:"open_tasks,omitempty"`
+	TasksAuthoritative bool          `json:"tasks_authoritative,omitempty"`
+	Claims             []MemoryClaim `json:"claims,omitempty"`
 }
 
 // MergeDigests inherits memory (prior) into new distillation (fresh) — deterministic.
@@ -215,10 +218,20 @@ type MemoryFragment struct {
 // Memory follows the same logic as raw ancestry: if the snapshot ancestry continues (natural inheritance·append graft irrelevant), memory also continues. Continuous commits in the same session result in deterministic distillation recreating the same items, so dedup absorbs, and new sessions/appends preserve prior items (ancestor precedence).
 func MergeDigests(prior, fresh MemoryDigest) MemoryDigest {
 	if len(memoryFragments(prior)) == 0 && len(memoryFragments(fresh)) == 0 {
-		return mergeLegacyDigests(prior, fresh)
+		out := mergeLegacyDigests(prior, fresh)
+		if prior.ClaimsVersion > out.ClaimsVersion {
+			out.ClaimsVersion = prior.ClaimsVersion
+		}
+		return out
 	}
 	out := fresh
 	out.Fragments = mergeMemoryFragments(memoryFragments(prior), memoryFragments(fresh))
+	if prior.ClaimsVersion > out.ClaimsVersion {
+		out.ClaimsVersion = prior.ClaimsVersion
+	}
+	if out.HasMemoryClaims() && out.ClaimsVersion == 0 {
+		out.ClaimsVersion = MemoryClaimsVersion
+	}
 	renderMemoryFragments(&out)
 	return out
 }
@@ -274,12 +287,9 @@ func mergeMemoryFragments(groups ...[]MemoryFragment) []MemoryFragment {
 }
 
 func memoryFragmentKey(fragment MemoryFragment) string {
-	authority := "0"
-	if fragment.TasksAuthoritative {
-		authority = "1"
-	}
-	return string(fragment.SourceSnapshot) + "\x00" + fragment.Summary + "\x00" +
-		strings.Join(fragment.KeyFacts, "\x00") + "\x00" + strings.Join(fragment.OpenTasks, "\x00") + "\x00" + authority
+	// Include typed provenance; equal legacy text cannot erase distinct scopes.
+	raw, _ := json.Marshal(fragment)
+	return string(raw)
 }
 
 func renderMemoryFragments(out *MemoryDigest) {
