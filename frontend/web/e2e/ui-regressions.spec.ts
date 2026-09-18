@@ -835,18 +835,20 @@ test('graph exposes pushed, unpushed, and uncommitted as three browser-visible t
   await expect(page.locator('.graph-status-item.unpushed')).toContainText('1');
   await expect(page.locator('.graph-status-item.uncommitted')).toContainText('1');
   await expect(page.locator('.uncommitted-node')).toHaveCount(1);
-  await expect(page.locator('.uncommitted-divider')).toHaveCount(1);
+  await expect(page.locator('.uncommitted-divider')).toHaveCount(0);
+  await expect(page.locator('.graph-uncommitted-badge')).toHaveText('Uncommitted');
+  await expect(page.locator('.graph-row').filter({ has: page.locator('.graph-uncommitted-badge') })).toHaveAttribute('data-graph-snapshot', uncommittedHead);
   await expect(page.locator('.unpushed-divider')).toHaveCount(1);
 
   const opacity = await page
     .locator('.graph-row[aria-label^="hook: active desktop session"] svg')
     .getAttribute('opacity');
-  expect(opacity).toBe('0.42');
+  expect(opacity).toBe('1'); // Published through-lines are not dimmed by a pending node.
   await expectRenderedGraphPath(page, uncommittedHead, unpushedHead);
   await expectRenderedGraphPath(page, unpushedHead, pushedHead);
   // Regression control: the old divider gap must fail the same path check.
   await page.locator('.graph-status-divider svg').first().evaluate(el=>el.remove());
-  await expect(expectRenderedGraphPath(page, uncommittedHead, unpushedHead)).rejects.toThrow('Rendered path');
+  await expect(expectRenderedGraphPath(page, unpushedHead, pushedHead)).rejects.toThrow('Rendered path');
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
@@ -1572,7 +1574,14 @@ test('consecutive same-tip PR joins stay on main while unexplained birth gaps st
   const pending = [{repo_id:repoId,session_id:'unrelated-session',branch:'main',provider:'codex',target:uncommittedHead,updated_at:'2026-09-16T00:00:03.5Z'}];
   const unsync = [{repo_id:repoId,user:'alice',branch:'main',target:unpushedHead,updated_at:'2026-09-16T00:00:02.5Z'}];
   const {pageErrors,unexpected} = await openGraph(page,publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],pending,unsync,[],history));
-  await expect(page.locator('.graph-status-divider')).toHaveCount(2);
+  await expect(page.locator('.graph-status-divider')).toHaveCount(1);
+  await expect(page.locator('.uncommitted-divider')).toHaveCount(0);
+  const captureRow = page.locator(`.graph-row[data-graph-id="${uncommittedHead}"]`);
+  await expect(captureRow.locator('.graph-uncommitted-badge')).toHaveText('Uncommitted');
+  await expect(page.locator('.graph-row').filter({ has: page.locator('.graph-uncommitted-badge') })).toHaveCount(1);
+  // Pending is interleaved with published commits and three PRs, not a range.
+  await expect(page.locator('[data-graph-event] .graph-uncommitted-badge')).toHaveCount(0);
+  await expect(page.locator('.graph')).not.toContainText('above: uncommitted');
   const merges = page.locator('[data-graph-event="merge"]');
   await expect(merges).toHaveCount(3);
   for (const row of await merges.all()) await expect(row).toHaveAttribute('data-graph-node-lane','0');

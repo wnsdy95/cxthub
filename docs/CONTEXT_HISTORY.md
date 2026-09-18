@@ -732,6 +732,11 @@ loading, errors and successful empty results are separate display states.
 Failed reads preserve available content and expose a retry action. Selecting,
 folding or retrying a read never writes ancestry.
 
+Uncommitted captures carry a hollow dashed node and a label on their own row.
+There is no horizontal uncommitted boundary: topological ordering can interleave
+published commits and PR events with pending captures from other sessions.
+Pending status does not dim published paths passing through that row.
+
 The pure graph regression fixtures cover rename/name reuse, clock skew, rewind,
 pending → unsync → publication, observation-only history, tags and unavailable
 parents. Browser regressions also follow SVG endpoints and test polling and

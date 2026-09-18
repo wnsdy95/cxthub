@@ -692,7 +692,7 @@ export const ko = {
     joinCrossBranch: '다른 git 브랜치에 속한 세션 가지에서도 이 커밋을 사용 중이라 합류할 수 없습니다.',
     joinAlreadyHead: '이 커밋이 이미 브랜치 head 입니다.',
     uncommitted: '◌ 미커밋 — 아직 commit에 연결되지 않은 훅 캡처',
-    uncommittedDivider: '◌ 위는 미커밋 (commit 전)',
+    uncommittedLabel: '미커밋',
     archivedLane: '보관 · {branch}',
   },
 };
