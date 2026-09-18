@@ -11,7 +11,10 @@ func IsPublicationProof(p, observation HistoryEvent) bool {
 
 // MatchesPRSourcePublication recognizes a canonical branch or a recorded native
 // alias. Alias attachment must precede the ordinary proof, not the publication:
-// finalization can be delayed or created after a wall-clock rollback.
+// finalization can be delayed or created after a wall-clock rollback. A Git
+// alias binding is shared across worktrees, so its creation and its capture
+// need not have the same worktree ID. Across worktrees the alias must match
+// exactly; the existing same-worktree path also supports a renamed alias.
 func MatchesPRSourcePublication(p HistoryEvent, head string, events []HistoryEvent) bool {
 	if p.Kind != "publish" {
 		return false
@@ -28,7 +31,7 @@ func MatchesPRSourcePublication(p HistoryEvent, head string, events []HistoryEve
 		}
 		for _, attached := range events {
 			if attached.Kind == "attach" && attached.RepoID == p.RepoID && attached.LocalBranch != "" &&
-				attached.WorktreeID == p.WorktreeID && attached.BranchID == p.BranchID &&
+				attached.WorktreeID != "" && (attached.WorktreeID == p.WorktreeID || attached.LocalBranch == p.LocalBranch) && attached.BranchID == p.BranchID &&
 				!attached.CreatedAt.After(proof.CreatedAt) {
 				return true
 			}

@@ -768,3 +768,10 @@ exact traversal. Cached closures are bounded to 64 roots and 100,000 ID
 memberships; larger closures are computed without retention. See
 [graph performance](GRAPH_PERFORMANCE.md) for reproducible measurements and their
 scope.
+
+A tracking alias can be created in one worktree and committed in another. Its
+repository-local Git binding is shared, so PR publication accepts an earlier
+attachment for the exact native alias and context branch identity across
+worktrees. The ordinary capture proof must still match the publishing worktree,
+Git revision, native alias, identity and snapshot. Unrelated aliases in another
+worktree do not qualify; same-worktree rename evidence remains supported.
