@@ -43,7 +43,7 @@ done
 case "$path" in
   'repos/acme/project/hooks?per_page=100')
     if [ -s "$TEST_HOOK_STATE" ]; then
-      printf '[{"id":123,"active":true,"events":["pull_request"],"config":{"url":"https://example.com/api/v1/hooks/github","content_type":"json","insecure_ssl":"0"}}]\n'
+      printf '[{"id":123,"active":true,"events":["pull_request", "push"],"config":{"url":"https://example.com/api/v1/hooks/github","content_type":"json","insecure_ssl":"0"}}]\n'
     else
       printf '[]\n'
     fi
@@ -53,7 +53,7 @@ case "$path" in
     printf '123\n'
     ;;
   'repos/acme/project/hooks/123')
-    printf '{"id":123,"active":true,"events":["pull_request"],"config":{"url":"https://example.com/api/v1/hooks/github","content_type":"json","insecure_ssl":"0"}}\n'
+    printf '{"id":123,"active":true,"events":["pull_request", "push"],"config":{"url":"https://example.com/api/v1/hooks/github","content_type":"json","insecure_ssl":"0"}}\n'
     ;;
   'repos/acme/project/hooks/123/pings') printf '{}\n' ;;
   'repos/acme/project/hooks/123/deliveries?per_page=10') printf '204\n' ;;

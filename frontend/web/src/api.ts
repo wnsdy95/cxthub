@@ -69,6 +69,8 @@ export interface DocEventPage {
 }
 
 export const api = {
+ gitScans: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').GitScanPage>('GET', `/repos/${encodeURIComponent(repo)}/git-scans?limit=20&cursor=${encodeURIComponent(cursor)}`, undefined, undefined, signal),
+ retryGitScan: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-scans/${encodeURIComponent(id)}/retry`, {}),
  gitChanges: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').GitChangePage>('GET', `/repos/${encodeURIComponent(repo)}/git-changes?limit=20&cursor=${encodeURIComponent(cursor)}`, undefined, undefined, signal),
  retryGitChange: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-changes/${encodeURIComponent(id)}/retry`, {}),
   repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes`,

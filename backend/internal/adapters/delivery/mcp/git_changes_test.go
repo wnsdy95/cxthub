@@ -79,3 +79,36 @@ func TestGitChangesMCPBoundedFragmentsAndSelectionBinding(t *testing.T) {
 		t.Fatalf("summary leaked unbounded paths %d %v", len(raw), err)
 	}
 }
+
+type scanQuery struct{ repo domain.ContentHash }
+
+func (q scanQuery) ListScans(ctx context.Context, repo domain.ContentHash, cursor string, limit int) (domain.GitScanPage, error) {
+	if repo != q.repo || limit > 20 {
+		return domain.GitScanPage{}, domain.ErrForbidden
+	}
+	return domain.GitScanPage{Items: []domain.GitScanJob{{ID: strings.Repeat("a", 64), Commit: strings.Repeat("b", 40), State: "retrying", Reason: "temporary_provider_or_storage_failure"}}, NextCursor: strings.Repeat("a", 64)}, nil
+}
+func TestGitObservationsMCPReadOnlyCursorBoundToRepository(t *testing.T) {
+	repo := domain.Repo{ID: pageHash(1)}
+	s := &Server{}
+	s.SetGitScans(scanQuery{repo: repo.ID})
+	a := toolArgs{Repository: string(repo.ID)}
+	raw, err := s.gitScansPage(context.Background(), repo, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, "retrying") || strings.Contains(raw, "git_origin") {
+		t.Fatal(raw)
+	}
+	var page struct {
+		Cursor string `json:"next_cursor"`
+	}
+	json.Unmarshal([]byte(raw), &page)
+	if page.Cursor == "" {
+		t.Fatal("lost pagination")
+	}
+	a.Cursor = page.Cursor
+	if _, err = s.gitScansPage(context.Background(), domain.Repo{ID: pageHash(2)}, a); err == nil {
+		t.Fatal("cross repository cursor accepted")
+	}
+}

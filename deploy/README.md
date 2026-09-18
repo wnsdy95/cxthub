@@ -215,3 +215,20 @@ Apply migration 0047 before serving the new Git verification endpoints. The
 worker stores requests before network I/O and recovers expired leases after a
 restart. No automatic cancellation or branch movement follows from verification
 alone. See [Context history](../docs/CONTEXT_HISTORY.md) for the staged contract.
+
+
+Automatic discovery additionally requires migration 0048. The same `cxtd`
+composition runs commit discovery and periodic remote-head reconciliation.
+Provision GitHub repository Contents read access before enabling real workloads;
+large histories are processed incrementally and provider rate limits can delay
+completion. Workers share one adapter cooldown within each instance. They do
+not expose source file contents: the index holds immutable object IDs, paths and
+modes. Its database storage is operational evidence, separate from retained
+conversation objects, and should be included in database capacity monitoring.
+
+Run the webhook operator again to reconcile existing subscriptions to both
+`pull_request` and `push`. Signed delivery IDs are required for push observations.
+The operator still checks readiness before any GitHub mutation and requires a
+successful signed ping. Branch reconciliation recovers reachable history when
+webhook delivery is missed; per-repository page positions survive restarts.
+REST/Web and MCP expose both per-commit and remote reconciliation states.

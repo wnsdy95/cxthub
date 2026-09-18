@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -61,7 +62,14 @@ func TestGitHubReadsExactTreesAndRejectsIncompleteEvidence(t *testing.T) {
 	if yes, err := g.IsGitAncestor(context.Background(), "https://github.com/org/project", parent, commit); err != nil || !yes {
 		t.Fatal("ancestry", yes, err)
 	}
+	all, err := g.ReadCommitDeltas(context.Background(), "git@github.com:org/project.git", commit)
+	if err != nil || len(all) != 1 || !all[0].Complete || all[0].Parent != parent {
+		t.Fatal("automatic comparison", all, err)
+	}
 	truncated = true
+	if _, e := g.ReadCommitDeltas(context.Background(), "git@github.com:org/project.git", commit); !errors.Is(e, domain.ErrIntegrity) {
+		t.Fatal("automatic truncated index", e)
+	}
 	got, err = g.ReadCommitDelta(context.Background(), "git@github.com:org/project.git", commit, "")
 	if err != nil || got.Complete || len(got.Changes) > 0 {
 		t.Fatalf("truncated tree accepted: %+v %v", got, err)
@@ -85,5 +93,41 @@ func TestGitHubReadsExactTreesAndRejectsIncompleteEvidence(t *testing.T) {
 		if _, err := g.ReadCommitDelta(context.Background(), origin, commit, ""); err == nil {
 			t.Fatal("untrusted origin accepted", origin)
 		}
+	}
+}
+
+func TestGitHubSharedCooldownAndPaginatedHeads(t *testing.T) {
+	calls := 0
+	limited := true
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if limited {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(429)
+			return
+		}
+		if r.URL.Query().Get("page") != "2" || r.URL.Query().Get("per_page") != "100" {
+			t.Error("pagination lost")
+		}
+		json.NewEncoder(w).Encode([]any{map[string]any{"name": "feature/x", "commit": map[string]string{"sha": strings.Repeat("a", 40)}}})
+	}))
+	defer ts.Close()
+	g := NewGitHub(nil)
+	g.base = ts.URL
+	for i := 0; i < 3; i++ {
+		if _, _, err := g.ListGitHeads(context.Background(), "https://github.com/org/project", 2); err == nil {
+			t.Fatal("rate limit accepted")
+		}
+	}
+	if calls != 1 {
+		t.Fatal("parallel queues bypassed cooldown", calls)
+	}
+	limited = false
+	g.rateMu.Lock()
+	g.resumeAt = time.Time{}
+	g.rateMu.Unlock()
+	heads, more, err := g.ListGitHeads(context.Background(), "https://github.com/org/project", 2)
+	if err != nil || more || len(heads) != 1 || heads[0].Ref != "refs/heads/feature/x" {
+		t.Fatal(heads, more, err)
 	}
 }

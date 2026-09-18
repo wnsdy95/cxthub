@@ -99,6 +99,7 @@ type IdentityBackend interface {
 
 type Server struct {
 	gitChanges inbound.GitChangeQuery
+	gitScans   inbound.GitScanQuery
 	context    ContextBackend
 	identity   IdentityBackend
 	oauth      outbound.OAuthStore

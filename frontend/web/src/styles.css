@@ -1176,12 +1176,12 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .repo-history-protection { flex-basis: 100%; padding-top: 12px; border-top: 1px solid var(--border); }
 .repo-history-protection p { margin: 6px 0; max-width: 65ch; }
 
-.pr-promotions, .git-changes { margin-bottom: 16px; font-size: .78rem; }
-.pr-promotions summary, .git-changes summary { cursor: pointer; }
-.pr-promotions ul, .git-changes ul { list-style: none; padding: 0; }
-.pr-promotions li, .git-changes li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.pr-promotions li > span, .git-changes li > span { display: block; color: var(--muted); }
-.pr-promotions button, .git-changes button { font-size: .75rem; padding: 3px 6px; }
+.pr-promotions, .git-changes, .git-scans { margin-bottom: 16px; font-size: .78rem; }
+.pr-promotions summary, .git-changes summary, .git-scans summary { cursor: pointer; }
+.pr-promotions ul, .git-changes ul, .git-scans ul { list-style: none; padding: 0; }
+.pr-promotions li, .git-changes li, .git-scans li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.pr-promotions li > span, .git-changes li > span, .git-scans li > span { display: block; color: var(--muted); }
+.pr-promotions button, .git-changes button, .git-scans button { font-size: .75rem; padding: 3px 6px; }
 
 .ctx-main .dl-btns { flex-wrap: wrap; max-width: 100%; }
 .storage-usage { min-width: 0; padding: 14px 0; }

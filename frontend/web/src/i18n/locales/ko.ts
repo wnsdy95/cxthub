@@ -737,6 +737,17 @@ export const ko = {
     uncommittedLabel: '미커밋',
     archivedLane: '보관 · {branch}',
   },
+  gitScans: {
+    heads: "원격 브랜치 확인 · {page}페이지",
+    checked: "최근 조회 완료",
+
+    "title": "Git 변경 자동 감지",
+    "scope": "각 행은 한 커밋의 처리 상태입니다. 이전 커밋은 별도로 처리합니다. 감지 결과는 이력으로 보존되며 선택한 컨텍스트나 메모리를 바꾸지 않습니다.",
+    "completed": "후보 탐색 완료",
+    "empty": "아직 관찰된 커밋이 없습니다.",
+    "indexed": "파일 변경 색인 완료",
+    "reading": "전체 Git 객체 조회 대기"
+},
   gitChanges: {
     title: "되돌림 검증 이력",
     scope: "아래 두 커밋 사이의 과거 검증 결과입니다. 현재 적용 여부는 선택한 코드 시점에 따라 달라집니다.",

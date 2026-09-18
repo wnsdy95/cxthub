@@ -473,3 +473,9 @@ export interface GitChangeSummary {
  unverified_paths: number;
 }
 export interface GitChangePage {items: GitChangeSummary[]; next_cursor?: string}
+
+export interface GitScanJob {
+ id: string; commit: string; state: GitChangeSummary['state']; indexed: boolean;
+ version: string; reason?: string; updated_at: string;
+}
+export interface GitScanPage {items: GitScanJob[]; next_cursor?: string; reconciliation?: {state: 'waiting' | 'running' | 'retrying' | 'completed'; page: number; reason?: string}}

@@ -882,8 +882,66 @@ read port. `change_id` fetches bounded JSON fragments with a generation hash;
 changed verification results require restarting the cursor. These are retained
 historical facts, not implicit current-branch applicability.
 
-This slice provides explicit durable verification, REST/MCP queries and UI.
-Automatic candidate discovery from webhook/CLI observations, code-position
-applicability, provenance-aware memory filtering and active-session briefings
-are separate follow-up work under #208. This verification stream does not yet
-change the current memory projection, refs, or the historical PR graph.
+Automatic discovery is described below. Code-position applicability,
+provenance-aware memory filtering and active-session briefings remain follow-up
+work under #208. Neither discovery nor verification changes the current memory
+projection, refs, or the historical PR graph.
+
+
+## Automatic Git observations and inverse discovery
+
+Accepted CLI history records and PR promotion requests enqueue their full Git
+object IDs in the same repository transaction. The CLI's existing durable
+history replay therefore also retries observation delivery. Legacy abbreviated
+IDs are not guessed. Signed GitHub `push` deliveries retain the delivery ID,
+ref, both tips and forced flag before returning success. A delivery ID cannot
+be reused with changed content. Both tips are scanned, including the old tip
+of a deleted or force-updated ref. Observations never move context refs or a
+teammate's working position.
+
+A commit worker reads all explicit parent comparisons, indexes exact
+path/content/mode transitions and enqueues every parent. Commit-message wording
+is irrelevant: an unlabelled inverse is discoverable. The index supplies
+candidates to the existing ancestry and inverse verifier in both directions,
+because arrival order does not establish Git ancestry. Reapplication is a
+verified inverse of the reversal commit, not a global PR boolean. An unrelated
+B between A and A's inverse remains outside A's proof.
+
+PostgreSQL migration 0048 atomically publishes complete comparison records,
+ancestor jobs and the scan cursor, with a version fence against expired
+workers. Candidate pages publish at most 100 verification jobs with their
+cursor. Duplicate deliveries reuse work; a late record discovers inverses
+against already indexed records even when their original scan has completed.
+Provider I/O is outside transactions. Immutable indexed deltas and bounded
+cached ancestry walks reduce repeated provider reads. A shared adapter cooldown
+honors GitHub rate-limit responses; workers keep retrying transient discovery
+failures with bounded backoff. Integrity failures stay visible for review.
+
+A separate reconciler reads remote branches one page at a time. Each page's
+observations and continuation commit together; failures retain the page and
+publish a retry status. Reconciliation runs at minute intervals, with five
+minutes between complete passes. It observes tips independently and never
+infers deletion from a mutable paginated list. It recovers missed deliveries
+for commits reachable from a subsequently observed tip. Commits that vanished
+before any CLI, webhook or remote observation cannot be reconstructed by
+assertion; retained CLI history and explicit verification are additional
+sources. No protocol can prove an unobserved, unavailable object existed.
+
+`GET /repos/{repoID}/git-scans` and read-only MCP `git_observations` expose the
+same application query: per-commit state, reasons, indexed status and remote
+reconciliation progress. Lists are bounded and ID-ordered; restart pagination
+for concurrent insertions earlier than a cursor. Web fetches these only when
+expanded and invalidates on repository revisions, with no additional polling
+timer. Only members can retry through the REST command.
+
+“Completed” means discovery against the index at that pass. Ancestors may still
+be queued and later records can add candidates. It is not a claim that all
+project history, current code or memory has been verified. Exact file inversion
+cannot establish an intra-file partial revert after intervening edits. Such
+changes require stronger range evidence or explicit review; no whole-PR or
+memory cancellation is inferred. Incomplete trees and commits exceeding the
+16-parent read bound are surfaced as attention states, not silently indexed.
+
+FS remains a development adapter with a process lock. It writes idempotent
+index/queue dependencies before advancing the cursor so interruption replays
+the page; it does not provide PostgreSQL multi-process transaction isolation.

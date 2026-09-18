@@ -15,6 +15,7 @@ import { AIBar, AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK, modelColor,
 import { About, TeamSettings, SecretsPanel } from './About';
 import { Markdown } from './Markdown';
 import { PRPromotions } from './PRPromotions';
+import {GitScans} from './GitScans';
 import { GitChanges } from './GitChanges';
 import { MemoryPanel } from './MemoryPanel';
 import { saveBlob } from '../zip';
@@ -570,6 +571,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
       {/* Right rail: About → team settings → secrets → commit graph → AI participants. */}
       <aside className="ctx-side">
         <PRPromotions repoId={repo.id} canRetry={atLeast(role, 'member')} />
+        <GitScans key={`git-scans:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />
         <GitChanges key={`git-changes:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />
         <About repo={repo} canEdit={canWriteAsset(role, undefined)} />
         {atLeast(role, 'puller') && (

@@ -734,6 +734,17 @@ export const en: Messages = {
     uncommittedLabel: 'Uncommitted',
     archivedLane: 'archive · {branch}',
   },
+  gitScans: {
+    heads: "Remote branch discovery · page {page}",
+    checked: "Last pass finished",
+
+    "title": "Automatic Git discovery",
+    "scope": "Each row tracks one commit. Earlier commits are processed separately. Discovery retains history and does not change the selected context or memory.",
+    "completed": "Discovery pass finished",
+    "empty": "No observed commits yet.",
+    "indexed": "File changes indexed",
+    "reading": "Waiting for complete Git objects"
+},
   gitChanges: {
     title: "Git reversal evidence",
     scope: "Historical verification of the two commits shown below. Current applicability depends on the selected code position.",

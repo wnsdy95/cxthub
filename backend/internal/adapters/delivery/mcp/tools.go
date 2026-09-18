@@ -56,6 +56,8 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 		return s.eventPage(ctx, repo, args)
 	case "memory_load":
 		return s.memoryPage(ctx, repo, args)
+	case "git_observations":
+		return s.gitScansPage(ctx, repo, args)
 	case "git_changes":
 		return s.gitChangesPage(ctx, repo, args)
 	case "context_history":
