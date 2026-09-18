@@ -387,7 +387,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   font-size: 0.6rem; letter-spacing: 0.04em; color: var(--muted); opacity: 0.8; }
 .unpushed-divider::before, .unpushed-divider::after { content: ''; flex: 1; border-top: 1px dashed var(--line); }
 /* Status belongs to this capture row, never a vertical range of other lanes. */
-.graph-uncommitted-badge { flex: none; margin-left: 8px; padding: 1px 6px; border: 1px solid rgba(154, 106, 0, 0.35);
+.graph-uncommitted-badge { position: absolute; top: 50%; transform: translateY(-50%); padding: 1px 6px; border: 1px solid rgba(154, 106, 0, 0.35);
   border-radius: 4px; color: #9a6a00; background: var(--bg); font-family: var(--mono); font-size: 0.62rem;
   line-height: 1.4; white-space: nowrap; }
 /* Commit empty node — fill should follow background to avoid misshapen disks on hover/selection. */
@@ -530,7 +530,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .graph-lane-tip.archived { font-style: italic; text-decoration: line-through; text-decoration-thickness: 1px; }
 .graph { list-style: none; margin: 0; padding: 0; }
 .graph li { position: relative; }
-.graph-row { display: flex; align-items: center; padding: 0 4px; background: transparent; border: 0; border-radius: 4px;
+.graph-row { position: relative; display: block; padding: 0 4px; background: transparent; border: 0; border-radius: 4px;
   height: 26px; }
 .graph-row:hover { background: var(--hover); opacity: 1; }
 .graph-row.on { background: var(--hover); }

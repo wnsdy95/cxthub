@@ -1866,3 +1866,31 @@ test('renamed destination keeps a delayed PR completion on its main path', async
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
+
+
+test('pending badge stays beside its active lanes in a wide sparse graph', async ({ page }) => {
+  const hash = (n: number) => `sha256:${n.toString(16).padStart(64, '0')}`;
+  const roots = Array.from({ length: 20 }, (_, i) => auditSnapshot(hash(100 + i), `feature/${i}`, [], `root ${i}`, 2));
+  const heads = roots.map((root, i) => auditSnapshot(hash(200 + i), root.branch, [root.id], `head ${i}`, 3));
+  const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'main root', 0),
+    auditSnapshot(uncommittedHead, 'main', [appendedRoot], 'hook: pending', 1), ...roots, ...heads];
+  const refs = [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot },
+    ...heads.map(s => ({ kind: 'branch', repo_id: repoId, name: s.branch, target: s.id }))];
+  const pending = [{ repo_id: repoId, branch: 'main', session_id: 'pending', provider: 'codex', target: uncommittedHead }];
+  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, pending));
+  const viewport = page.locator('.graph-viewport');
+  expect(await viewport.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+  const node = page.locator('.uncommitted-node');
+  await node.scrollIntoViewIfNeeded();
+  const badge = page.locator('.graph-uncommitted-badge');
+  const bounds = await badge.boundingBox();
+  const visible = await viewport.boundingBox();
+  const nodeBounds = await node.boundingBox();
+  expect(bounds!.x).toBeGreaterThan(nodeBounds!.x + nodeBounds!.width);
+  expect(bounds!.x - nodeBounds!.x - nodeBounds!.width).toBeLessThan(40);
+  expect(bounds!.x).toBeGreaterThanOrEqual(visible!.x);
+  expect(bounds!.x + bounds!.width).toBeLessThan(visible!.x + visible!.width);
+  await expectRenderedGraphPath(page, uncommittedHead, appendedRoot);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});

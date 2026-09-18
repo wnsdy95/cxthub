@@ -894,7 +894,7 @@ export function CommitGraph({
                     <circle cx={x} cy={mid} r={R} fill={laneColor(r.lane)} />
                   )}
                 </svg>
-                {isUncommitted && <span className="graph-uncommitted-badge" aria-hidden="true">{t('graph.uncommittedLabel')}</span>}
+                {isUncommitted && <span className="graph-uncommitted-badge" style={{ left: (Math.max(...occupiedLanes(r)) + 1) * LANE_W + 12 }} aria-hidden="true">{t('graph.uncommittedLabel')}</span>}
               </button>
               {blockEnd && <div className="graph-status-divider" data-graph-divider={r.snap.id}>
                 <svg width={svgW} height={20} className="graph-svg" aria-hidden="true">
