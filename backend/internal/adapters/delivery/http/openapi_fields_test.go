@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 // TestOpenAPISchemaFieldDrift checks if the schema attributes in openapi.yaml match the json fields in the Go struct (bidirectionally). It pairs with TestOpenAPIDrift to prevent silent discrepancies (fields added in code but missing in spec, or phantom fields in the spec). When fields are added or removed, the spec must be updated to pass.
@@ -18,6 +19,7 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		typ    reflect.Type
 	}{
 		{"Snapshot", reflect.TypeOf(domain.Snapshot{})},
+		{"DocFinalizationStatus", reflect.TypeOf(inbound.DocFinalizationStatus{})},
 		{"RepositoryRevision", reflect.TypeOf(domain.RepositoryRevision{})},
 		{"EffectiveMemorySelection", reflect.TypeOf(domain.EffectiveMemorySelection{})},
 		{"EffectiveMemoryPage", reflect.TypeOf(domain.EffectiveMemoryPage{})},

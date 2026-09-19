@@ -240,6 +240,9 @@ func (s *FSStore) RepackDocs() (converted int, saved int64, err error) {
 }
 
 func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved int64, err error) {
+	l := s.oauthLock()
+	l.Lock()
+	defer l.Unlock()
 	docsDir := filepath.Join(s.repoDir(repoID), "objects", "docs")
 	entries, err := os.ReadDir(docsDir)
 	if os.IsNotExist(err) {
@@ -249,6 +252,17 @@ func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved in
 		return 0, 0, err
 	}
 	live := map[domain.ContentHash]bool{}
+	jobs, err := s.docJobsRaw()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, j := range jobs {
+		if j.RepoID == repoID && j.Pending() {
+			for _, h := range j.Manifest.Chunks {
+				live[h] = true
+			}
+		}
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue

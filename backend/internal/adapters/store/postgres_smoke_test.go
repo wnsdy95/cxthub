@@ -73,6 +73,7 @@ func TestPGSmoke(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
+	defer t.Run("document jobs", func(t *testing.T) { checkDocJobs(t, st); checkDocJobRollback(t, st) })
 	defer t.Run("pairing rollback", func(t *testing.T) { checkPairingRollbackPG(t, st) })
 	defer t.Run("storage accounting", func(t *testing.T) { checkStorageAccountingPG(t, st) })
 	defer t.Run("shared runtime", func(t *testing.T) { checkRuntime(t, st) })

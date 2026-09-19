@@ -216,6 +216,7 @@ func serve(ctx context.Context, args []string) error {
 	go changes.Run(ctx)
 	go scans.Run(ctx)
 	go scans.RunReconciler(ctx)
+	go svc.RunDocFinalizationWorker(ctx)
 	go svc.RunPRPromotionWorker(ctx)
 	go svc.RunNotificationWorker(ctx)
 	go idSvc.RunRuntimeMaintenance(ctx)
