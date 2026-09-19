@@ -1278,3 +1278,10 @@ replay), immutable exact PR source checks and idempotent server promotion remain
 Only a completely processed range is acknowledged; provider or promotion failure
 keeps it available. Replaying discovery does not restore provider transcripts or
 invent a branch/merge relationship.
+
+Completed PR replay may return the context target recorded for an older merge.
+If validated local reachability already includes that target in the current
+branch, reconciliation preserves the newer local ref and acknowledges the old
+result without a remote ancestor walk. The 256-snapshot remote search limit
+still applies to genuinely unproven paths. Replaying a historical completion
+must neither rewind the worktree nor exhaust the hook before later PR discovery.

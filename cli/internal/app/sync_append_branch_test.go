@@ -307,3 +307,44 @@ func TestReconcileAppendedPathIsBounded(t *testing.T) {
 		t.Fatalf("remote reads = %d, want %d", len(remote.getCalls), maxAppendReconcileSnapshots)
 	}
 }
+
+func TestCompletedAppendReplayPreservesVerifiedDescendantWithoutRemoteWalk(t *testing.T) {
+	ctx := context.Background()
+	f := newAppendBranchFixture(t)
+	// Replaying an old, completed PR returns its historical target. A published
+	// graph larger than the hook budget must not make that harmless replay block
+	// discovery of subsequent PRs when local ancestry already proves inclusion.
+	older := domain.ContentHash("")
+	for i := 0; i < maxAppendReconcileSnapshots+2; i++ {
+		id := domain.HashContent([]byte(fmt.Sprintf("completed-pr-history-%d", i)))
+		snap := domain.Snapshot{ID: id, DocHash: id, RepoID: f.repoID, Branch: "main"}
+		if older != "" {
+			snap.Parents = []domain.ContentHash{older}
+		}
+		if err := f.store.PutSnapshot(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+		f.remote.snapshots[id] = snap
+		older = id
+	}
+	target := older
+	head := domain.HashContent([]byte("already-past-completed-pr"))
+	if err := f.store.PutSnapshot(ctx, domain.Snapshot{ID: head, DocHash: head, RepoID: f.repoID, Branch: "main", Parents: []domain.ContentHash{target}}); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: f.repoID, Target: head}
+	if err := f.store.PutRef(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	ref.Target = target
+	if err := f.service.convergeAppendedBranch(ctx, f.repoID, ref); err != nil {
+		t.Fatalf("completed replay blocked: %v", err)
+	}
+	after, err := f.store.GetRef(ctx, f.repoID, domain.RefBranch, "main")
+	if err != nil || after.Target != head {
+		t.Fatalf("rewound local progress %+v %v", after, err)
+	}
+	if len(f.remote.getCalls) != 0 {
+		t.Fatalf("unnecessary remote walk: %d", len(f.remote.getCalls))
+	}
+}
