@@ -858,6 +858,12 @@ func (s *SyncRepoService) convergeAppendedBranch(ctx context.Context, repoID str
 		return nil
 	case s.isAncestor(ctx, cur.Target, target):
 		return s.store.PutRef(ctx, ref)
+	case s.isAncestor(ctx, target, cur.Target):
+		// Completed PR replay can return its historical target after this local
+		// branch has already advanced beyond it. Inclusion is proven locally;
+		// preserve newer progress without searching backwards through the remote
+		// graph (which cannot reach a newer descendant and may exhaust the hook).
+		return nil
 	}
 
 	// A diverged server append may have added its graft to an ancestor of target.

@@ -342,3 +342,38 @@ func TestPRDiscoveryDoesNotReplaceCorruptSavedRange(t *testing.T) {
 		t.Fatalf("original overwritten: %s %v", raw, err)
 	}
 }
+
+type completedExactPRSync struct {
+	fakeMergedPRSync
+	calls   []int
+	failure error
+}
+
+func (s *completedExactPRSync) PromotePullRequest(_ context.Context, _ inbound.SyncInput, p outbound.MergedPullRequest) error {
+	s.calls = append(s.calls, p.Number)
+	if p.Number == 225 {
+		return s.failure
+	}
+	return nil
+}
+func TestPRDiscoveryAcknowledgesCompletedPromotionDespiteLocalConflict(t *testing.T) {
+	for _, completed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "completed", false: "unconfirmed"}[completed], func(t *testing.T) {
+			root := t.TempDir()
+			resolver := &fakePRMergeResolver{pulls: []outbound.MergedPullRequest{{Number: 225, BaseBranch: "main", HeadBranch: "feature/225"}, {Number: 226, BaseBranch: "main", HeadBranch: "feature/226"}}}
+			failure := errors.New("network failure")
+			if completed {
+				failure = errors.Join(domain.ErrPRLocalReconciliation, domain.ErrSyncConflict)
+			}
+			syncer := &completedExactPRSync{failure: failure}
+			replayPRDiscovery(context.Background(), resolver, syncer, root, "main", "https://github.com/acme/repo", []string{"merged"})
+			if len(syncer.calls) != 2 {
+				t.Fatalf("later PR blocked: %v", syncer.calls)
+			}
+			files, _ := filepath.Glob(filepath.Join(root, ".cxt", "pr-discovery", "*.json"))
+			if (len(files) == 0) != completed {
+				t.Fatalf("discovery files=%d completed=%v", len(files), completed)
+			}
+		})
+	}
+}

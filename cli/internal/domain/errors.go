@@ -63,3 +63,8 @@ var ErrSelectionChanged = errors.New("context selection changed")
 // ErrMemoryContention means concurrent writers prevented bounded replay; it
 // does not establish divergence and must never suggest a forced pull.
 var ErrMemoryContention = errors.New("memory attachment kept changing during upload")
+
+// ErrPRLocalReconciliation means the exact server promotion succeeded and its
+// local delivery acknowledgement is durable, but local graph refresh did not.
+// It must not be reported as a failed server merge or block later PR discovery.
+var ErrPRLocalReconciliation = errors.New("PR promotion completed; local synchronization deferred")
