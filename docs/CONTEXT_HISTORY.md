@@ -1234,3 +1234,20 @@ not once for each branch/session/lifecycle ref.
 This stage centralizes backend planning and storage invariants. The browser's
 existing drag eligibility calculation remains until a server preview contract is
 wired; that remaining duplication is not resolved by this extraction alone.
+
+
+### Incoming PR discovery before fetch
+
+The post-merge/post-rewrite path durably records incoming Git commit ranges before
+fetching context from the server. Otherwise a failed first fetch would return
+before recording ORIG_HEAD..HEAD, and a later Git operation could replace that
+only discovery source. Storage failure is reported without claiming the work was
+queued; no context promotion is attempted from an unrecorded range.
+
+Saved discovery for the current Git origin/base branch also retries after an
+ordinary successful `cxt push` or `cxt pull`. It no longer requires another Git
+merge event. Existing limits (200 commits per batch, at most four batches per
+replay), immutable exact PR source checks and idempotent server promotion remain.
+Only a completely processed range is acknowledged; provider or promotion failure
+keeps it available. Replaying discovery does not restore provider transcripts or
+invent a branch/merge relationship.
