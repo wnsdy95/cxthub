@@ -256,7 +256,7 @@ func buildContainer(cfg config) container {
 
 	// --- use-case services (inbound implementation, outbound injection) ---
 	initSvc := app.NewInitRepoService(gitCtx, store)
-	saveSvc := app.NewSaveSessionService(gitCtx, captures, codecs, store)
+	saveSvc := app.NewSaveSessionService(gitCtx, captures, codecs, store, capture.NewSessionCapture(store), storage.NewSyncOutbox())
 	forkSvc := app.NewForkSessionService(store)
 	branchLifecycleSvc := app.NewBranchLifecycleService(gitCtx, store)
 	prompts := app.NewMemoryPromptService(remote, gitctx.NewGitContextAdapter(), store)
@@ -265,10 +265,10 @@ func buildContainer(cfg config) container {
 	listSvc := app.NewListSessionsService(store)
 	memorizeSvc := app.NewMemorizeService(gitCtx, captures, codecs, memSources, distiller, store)
 	handoffSvc := app.NewBranchHandoffService(store)
-	syncSvc := app.NewSyncRepoService(store, remote, gitCtx)
+	syncSvc := app.NewSyncRepoService(store, remote, gitCtx, storage.NewSyncOutbox())
 	seedSvc := app.NewBranchSeedService(gitCtx, store, distiller, codecs, materializers, memSources).WithMemoryPrompts(prompts)
 	tagSvc := app.NewTagService(gitCtx, store)
-	stashSvc := app.NewStashService(gitCtx, captures, codecs, store, loadSvc)
+	stashSvc := app.NewStashService(gitCtx, captures, codecs, store, loadSvc, capture.NewSessionCapture(store))
 
 	// --- capture coordinator ---
 	coord := capture.NewCaptureCoordinator(saveSvc, cfg.Identity)

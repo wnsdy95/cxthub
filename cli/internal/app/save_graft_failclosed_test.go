@@ -75,7 +75,7 @@ func TestGraftLocalAndQueueAdvancesExpectedSeq(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st := storage.NewFileStore(root)
-	svc := &SaveSessionService{store: st}
+	svc := newTestSaveService(nil, nil, nil, st)
 	head := domain.HashContent([]byte("head"))
 	p1 := domain.HashContent([]byte("parent-1"))
 	p2 := domain.HashContent([]byte("parent-2"))
@@ -108,7 +108,7 @@ func TestGraftLocalAndQueueDoesNotMutateWhenQueueWriteFails(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st := storage.NewFileStore(root)
-	svc := &SaveSessionService{store: st}
+	svc := newTestSaveService(nil, nil, nil, st)
 	head := domain.HashContent([]byte("head"))
 	parent := domain.HashContent([]byte("parent"))
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: head, DocHash: head, Branch: "main"}); err != nil {
@@ -134,7 +134,7 @@ func TestGraftLocalAndQueueNeverWrapsSequence(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st := storage.NewFileStore(root)
-	svc := &SaveSessionService{store: st}
+	svc := newTestSaveService(nil, nil, nil, st)
 	head := domain.HashContent([]byte("max-seq-head"))
 	parent := domain.HashContent([]byte("max-seq-parent"))
 	if err := st.PutSnapshot(ctx, domain.Snapshot{
@@ -159,7 +159,7 @@ func TestGraftLocalAndQueueBlocksNewEventBehindLegacyQueue(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st := storage.NewFileStore(root)
-	svc := &SaveSessionService{store: st}
+	svc := newTestSaveService(nil, nil, nil, st)
 	head := domain.HashContent([]byte("legacy-head"))
 	p1 := domain.HashContent([]byte("legacy-parent"))
 	p2 := domain.HashContent([]byte("new-parent"))

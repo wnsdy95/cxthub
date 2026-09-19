@@ -99,6 +99,7 @@ jobs:
           npm ci
           npm audit --audit-level=high
           npm test
+          npm run check:architecture
           npm run check:i18n
           npm run check:vercel
           npx tsc --noEmit

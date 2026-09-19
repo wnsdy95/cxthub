@@ -95,7 +95,7 @@ func TestSyncPendingsPushesUnpushedAncestorChain(t *testing.T) {
 	}
 
 	remote := &pendingChainRemote{manifest: domain.Manifest{Refs: []domain.Ref{{Kind: domain.RefBranch, Name: "main", RepoID: repoID, Target: a}}}}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 
 	if _, err := svc.SyncPendings(ctx, inbound.SyncInput{RepoID: repoID}, nil); err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestSyncPendingsCASResolvesOnlySharedReachableTargets(t *testing.T) {
 	}
 
 	remote := &pendingChainRemote{manifest: domain.Manifest{Refs: refs}}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	if _, err := svc.SyncPendings(ctx, inbound.SyncInput{RepoID: repoID}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestSyncPendingsCASDoesNotDeleteConcurrentReplacement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	_, _ = svc.SyncPendings(ctx, inbound.SyncInput{RepoID: repoID}, nil)
 	remaining, err := st.ListPendings(ctx, repoID)
 	if err != nil || len(remaining) != 1 || remaining[0].Target != newTarget {
@@ -264,7 +264,7 @@ func TestPullReconcilesPendingMadeReachableByAdoptedRef(t *testing.T) {
 	}
 	remoteRef := domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repoID, Target: target}
 	remote := &pendingChainRemote{pullRefs: []domain.Ref{remoteRef}}
-	out, err := NewSyncRepoService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repoID})
+	out, err := newTestSyncService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repoID})
 	if err != nil {
 		t.Fatal(err)
 	}

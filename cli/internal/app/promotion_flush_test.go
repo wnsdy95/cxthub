@@ -87,7 +87,7 @@ func TestFlushPromotionsFromRepoRoot(t *testing.T) {
 	}
 
 	remote := &promoteRecordingRemote{calls: map[string]string{}, grafts: map[string][]domain.ContentHash{}, failID: failID}
-	svc := NewSyncRepoService(nil, remote, nil)
+	svc := newTestSyncService(nil, remote, nil)
 	repoID := string(domain.HashContent([]byte("repo")))
 
 	// Passing a subdirectory path causes the queue to be not found — should be a no-op, and the root queue should remain unchanged (to reproduce the regression scenario).
@@ -152,7 +152,7 @@ func TestFlushGrafts(t *testing.T) {
 		calls: map[string]string{}, grafts: map[string][]domain.ContentHash{},
 		snaps: map[string]domain.Snapshot{string(head): authoritative},
 	}
-	svc := NewSyncRepoService(local, remote, nil)
+	svc := newTestSyncService(local, remote, nil)
 	if err := svc.flushGrafts(ctx, root, repoID); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestFlushGraftsDropsTerminalStaleEvent(t *testing.T) {
 			ID: head, RepoID: repoID, Branch: "main", DocHash: head, GraftSeq: 10,
 		}},
 	}
-	err := NewSyncRepoService(local, remote, nil).flushGrafts(ctx, root, repoID)
+	err := newTestSyncService(local, remote, nil).flushGrafts(ctx, root, repoID)
 	if !errors.Is(err, domain.ErrSyncConflict) {
 		t.Fatalf("Push interruption error after stale graft: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestFlushGraftsKeepsQueueWhenConflictReconcileFetchFails(t *testing.T) {
 		graftErr: map[string]error{string(head): fakeStatusError{status: 409}},
 		getErr:   errors.New("temporary fetch failure"),
 	}
-	err := NewSyncRepoService(storage.NewFileStore(root), remote, nil).
+	err := newTestSyncService(storage.NewFileStore(root), remote, nil).
 		flushGrafts(ctx, root, string(domain.HashContent([]byte("repo"))))
 	if err == nil {
 		t.Fatal("source of truth retrieval failure treated as success")
@@ -271,7 +271,7 @@ func TestFlushGraftsPreservesConcurrentAppend(t *testing.T) {
 			t.Errorf("concurrent append failed: %v", err)
 		}
 	}
-	if err := NewSyncRepoService(nil, remote, nil).flushGrafts(ctx, root, string(domain.HashContent([]byte("repo")))); err != nil {
+	if err := newTestSyncService(nil, remote, nil).flushGrafts(ctx, root, string(domain.HashContent([]byte("repo")))); err != nil {
 		t.Fatal(err)
 	}
 	state, err := readGraftQueue(root, ".cxt/grafts.json")

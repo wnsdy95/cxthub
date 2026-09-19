@@ -40,7 +40,7 @@ func TestMemorizeRetainsTargetUntilMemoryAttachment(t *testing.T) {
 		return id
 	}
 	old, next := put("first"), put("first", "next")
-	collector := NewSaveSessionService(nil, nil, nil, peer)
+	collector := newTestSaveService(nil, nil, nil, peer)
 	svc := NewMemorizeService(branchSeedGit{repo: repo}, nil, nil, nil, collectingMemoryDistiller{collector: collector, repo: repo.ID, old: old, next: next}, st)
 	out, err := svc.Memorize(ctx, inbound.MemorizeInput{Cwd: root, Ref: string(old), Provider: domain.ProviderCodex})
 	if err != nil || out.MemoryHash == "" {

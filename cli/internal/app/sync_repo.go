@@ -2,13 +2,10 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"time"
-
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -47,14 +44,15 @@ func sharedTimelineRef(ref domain.Ref) bool {
 // Dependencies: SessionStore (local .cxt/), RemoteSync (backendclient REST), GitContext (repoID resolution).
 // push/pull authority operations are delegated to the central server REST (sync protocol) via RemoteSync.
 type SyncRepoService struct {
+	outbox outbound.SyncOutbox
 	store  outbound.SessionStore
 	remote outbound.RemoteSync
 	gitCtx outbound.GitContext
 }
 
 // NewSyncRepoService creates and injects dependencies into SyncRepoService.
-func NewSyncRepoService(store outbound.SessionStore, remote outbound.RemoteSync, gitCtx outbound.GitContext) *SyncRepoService {
-	return &SyncRepoService{store: store, remote: remote, gitCtx: gitCtx}
+func NewSyncRepoService(store outbound.SessionStore, remote outbound.RemoteSync, gitCtx outbound.GitContext, outbox outbound.SyncOutbox) *SyncRepoService {
+	return &SyncRepoService{store: store, remote: remote, gitCtx: gitCtx, outbox: outbox}
 }
 
 // repoID returns the in.RepoID (if present) or the ID of the current repo interpreted from gitctx.
@@ -508,31 +506,14 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 
 // flushPromotions flushes the <repoRoot>/.cxt/promotions.json queue to the server, removing successful items.
 func (s *SyncRepoService) flushPromotions(ctx context.Context, repoRoot, repoID string) {
-	rel := ".cxt/promotions.json"
-	b, err := providerfs.ReadRepoFile(repoRoot, rel)
+	m, err := s.outbox.ListPromotions(ctx, repoRoot)
 	if err != nil {
 		return
 	}
-	m := map[string]string{}
-	if json.Unmarshal(b, &m) != nil || len(m) == 0 {
-		return
-	}
-	changed := false
 	for id, msg := range m {
-		if perr := s.remote.PromoteSnapshotMessage(ctx, repoID, domain.ContentHash(id), msg); perr == nil {
-			delete(m, id)
-			changed = true
+		if err := s.remote.PromoteSnapshotMessage(ctx, repoID, id, msg); err == nil {
+			_ = s.outbox.AcknowledgePromotion(ctx, repoRoot, id, msg)
 		}
-	}
-	if !changed {
-		return
-	}
-	if len(m) == 0 {
-		_ = providerfs.RemoveRepoFile(repoRoot, rel)
-		return
-	}
-	if nb, merr := json.Marshal(m); merr == nil {
-		_ = providerfs.WriteRepoFileAtomic(repoRoot, rel, nb, 0o644)
 	}
 }
 
@@ -545,7 +526,7 @@ func terminalGraftConflict(err error) bool {
 	return errors.As(err, &statusErr) && statusErr.StatusCode() == 409
 }
 
-func sameGraftQueueEvent(a, b graftQueueEvent) bool {
+func sameGraftQueueEvent(a, b domain.GraftQueueEvent) bool {
 	if a.Snapshot != b.Snapshot || a.ExpectedSeq != b.ExpectedSeq || a.Legacy != b.Legacy || len(a.Parents) != len(b.Parents) {
 		return false
 	}
@@ -561,21 +542,13 @@ func sameGraftQueueEvent(a, b graftQueueEvent) bool {
 //
 // A 409 (stale/cycle) error is resolved by reloading the server snapshot and adjusting the local optimistic register. Events following the same snapshot are all rejected, so they are also removed. If an edge dependent on the removed ref is to be published in this push, ErrSyncConflict is returned. If any of the remote GET, local adjustment, or queue update fails, the event is preserved, and an error is returned.
 func (s *SyncRepoService) flushGrafts(ctx context.Context, repoRoot, repoID string) error {
-	rel := ".cxt/grafts.json"
-	unlock, lockErr := lockGraftQueue(repoRoot)
-	if lockErr != nil {
-		return lockErr
-	}
-	state, err := readGraftQueue(repoRoot, rel)
-	unlock()
+	var state []domain.GraftQueueEvent
+	err := s.outbox.WithGrafts(ctx, repoRoot, func(q outbound.GraftQueueAccess) error { var e error; state, e = q.Load(); return e })
 	if err != nil {
 		return err
 	}
-	if len(state.Events) == 0 {
-		return nil
-	}
 
-	for _, event := range state.Events {
+	for _, event := range state {
 		ps := make([]domain.ContentHash, 0, len(event.Parents))
 		for _, p := range event.Parents {
 			ps = append(ps, domain.ContentHash(p))
@@ -599,63 +572,57 @@ func (s *SyncRepoService) flushGrafts(ctx context.Context, repoRoot, repoID stri
 			authoritative = &remoteSnap
 		}
 
-		unlock, lockErr = lockGraftQueue(repoRoot)
-		if lockErr != nil {
-			return lockErr
-		}
-		current, rerr := readGraftQueue(repoRoot, rel)
-		if rerr != nil {
-			unlock()
-			return rerr
-		}
-		idx := -1
-		for i, queued := range current.Events {
-			if sameGraftQueueEvent(queued, event) {
-				idx = i
-				break
+		acknowledged := false
+		err = s.outbox.WithGrafts(ctx, repoRoot, func(q outbound.GraftQueueAccess) error {
+			current, rerr := q.Load()
+			if rerr != nil {
+				return rerr
 			}
-		}
-		if idx < 0 {
-			// Another flusher has already completed. That flusher was responsible for the local rebase,
-			// so we do not overwrite the stale GET with the latest local state here.
-			unlock()
-			continue
-		}
-		if idx != 0 {
-			unlock()
-			return fmt.Errorf("%w: graft queue order changed", domain.ErrSyncConflict)
-		}
-
-		if authoritative != nil {
-			if rerr := s.store.ReconcileGraftState(ctx, *authoritative); rerr != nil {
-				unlock()
-				return fmt.Errorf("graft conflict local rebase failed(%s): %w", event.Snapshot, rerr)
-			}
-			if conflicted {
-				// This event's add, piled up on the same snapshot, also originated from an optimistic state.
-				// Remove all to block the re-emergence of the superseded edge.
-				kept := current.Events[:0]
-				for _, queued := range current.Events {
-					if queued.Snapshot != event.Snapshot {
-						kept = append(kept, queued)
-					}
+			idx := -1
+			for i, queued := range current {
+				if sameGraftQueueEvent(queued, event) {
+					idx = i
+					break
 				}
-				current.Events = kept
-			} else {
-				// Legacy success is confirmed by this event only. The order of other snapshots is preserved.
-				current.Events = current.Events[1:]
 			}
-		} else {
-			current.Events = current.Events[1:]
+			if idx < 0 {
+				// Another flusher has already completed. That flusher was responsible for the local rebase,
+				// so we do not overwrite the stale GET with the latest local state here.
+				return nil
+			}
+			if idx != 0 {
+				return fmt.Errorf("%w: graft queue order changed", domain.ErrSyncConflict)
+			}
+
+			if authoritative != nil {
+				if rerr := s.store.ReconcileGraftState(ctx, *authoritative); rerr != nil {
+					return fmt.Errorf("graft conflict local rebase failed(%s): %w", event.Snapshot, rerr)
+				}
+				if conflicted {
+					// This event's add, piled up on the same snapshot, also originated from an optimistic state.
+					// Remove all to block the re-emergence of the superseded edge.
+					kept := current[:0]
+					for _, queued := range current {
+						if queued.Snapshot != event.Snapshot {
+							kept = append(kept, queued)
+						}
+					}
+					current = kept
+				} else {
+					// Legacy success is confirmed by this event only. The order of other snapshots is preserved.
+					current = current[1:]
+				}
+			} else {
+				current = current[1:]
+			}
+			acknowledged = true
+			return q.Store(current)
+		})
+		if err != nil {
+			return err
 		}
-		if len(current.Events) == 0 {
-			rerr = providerfs.RemoveRepoFile(repoRoot, rel)
-		} else {
-			rerr = writeGraftQueue(repoRoot, rel, current)
-		}
-		unlock()
-		if rerr != nil {
-			return rerr
+		if !acknowledged {
+			continue
 		}
 		if conflicted {
 			return fmt.Errorf("%w: server join superseded local graft; retry pull then push", domain.ErrSyncConflict)

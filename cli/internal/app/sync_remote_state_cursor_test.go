@@ -62,7 +62,7 @@ func newRemoteStateCursorFixture(t *testing.T) remoteStateCursorFixture {
 	remote := &remoteStateCursorRemote{snapshot: remoteSnapshot}
 	return remoteStateCursorFixture{
 		ctx: ctx, repoID: repoID, store: store, remote: remote,
-		svc: NewSyncRepoService(store, remote, nil), id: doc.Hash,
+		svc: newTestSyncService(store, remote, nil), id: doc.Hash,
 	}
 }
 
@@ -164,7 +164,7 @@ func (s *failingRemoteStateCursorStore) SaveRemoteSnapshotStateCursor(context.Co
 func TestPullRemoteStateCursorFailureIsFailOpen(t *testing.T) {
 	f := newRemoteStateCursorFixture(t)
 	store := &failingRemoteStateCursorStore{FileStore: f.store}
-	svc := NewSyncRepoService(store, f.remote, nil)
+	svc := newTestSyncService(store, f.remote, nil)
 	if _, err := svc.Pull(f.ctx, inbound.SyncInput{RepoID: f.repoID, FetchOnly: true}); err != nil {
 		t.Fatal(err)
 	}

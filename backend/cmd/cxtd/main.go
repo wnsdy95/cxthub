@@ -122,6 +122,11 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
+	if requirePostgres || dsn != "" {
+		if err := app.ValidateProductionStore(st); err != nil {
+			return err
+		}
+	}
 	// Automatic PostgreSQL schema migration is idempotent through schema_migrations history (FS is a no-op).
 	// Default search: CXT_MIGRATIONS_DIR > ./schemas/db/migrations (if exists).
 	if dsn != "" {

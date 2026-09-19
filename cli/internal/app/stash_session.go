@@ -3,11 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -25,6 +22,7 @@ import (
 // StashPop sequence (corresponding to git stash pop):
 //  1. Remove latest stack item → 2. Restore that snapshot as active session
 type StashService struct {
+	capture  outbound.SessionCapture
 	gitCtx   outbound.GitContext
 	captures map[domain.ProviderKind]outbound.CaptureSource
 	codecs   map[domain.ProviderKind]outbound.ProviderCodec
@@ -39,8 +37,9 @@ func NewStashService(
 	codecs map[domain.ProviderKind]outbound.ProviderCodec,
 	store outbound.SessionStore,
 	load inbound.LoadSession,
+	capture outbound.SessionCapture,
 ) *StashService {
-	return &StashService{gitCtx: gitCtx, captures: captures, codecs: codecs, store: store, load: load}
+	return &StashService{gitCtx: gitCtx, captures: captures, codecs: codecs, store: store, load: load, capture: capture}
 }
 
 // Stash saves the active session to the stack and restores the branch head context.
@@ -75,22 +74,11 @@ func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inboun
 			return inbound.StashOutput{}, err // ErrNoActiveSession included
 		}
 	} else {
-		info, statErr := os.Stat(path)
-		if statErr != nil || providerfs.CaptureExcluded(repo.LocalPath, path, info.Size()) {
+		if !s.capture.Eligible(repo.LocalPath, path) {
 			return inbound.StashOutput{}, domain.ErrNoActiveSession
 		}
 	}
-	raw, err := capt.ReadSession(ctx, path)
-	if err != nil {
-		return inbound.StashOutput{}, err
-	}
-	raw, _ = capture.ScrubSecrets(raw, repo.LocalPath) // .cxtsecrets masking (before saving)
-	cir, err := cdc.Decode(ctx, raw)
-	if err != nil {
-		return inbound.StashOutput{}, err
-	}
-	cir = capture.ScrubDoc(cir, repo.LocalPath) // pattern scrub (same layer as save)
-	docHash, err := s.store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	envelope, docHash, _, _, err := s.capture.Project(ctx, repo.LocalPath, path, capt, cdc, false)
 	if err != nil {
 		return inbound.StashOutput{}, err
 	}
@@ -115,12 +103,12 @@ func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inboun
 		Parents:   parents,
 		DocHash:   docHash,
 		Provider:  provider,
-		Fidelity:  cir.Envelope.Fidelity,
+		Fidelity:  envelope.Fidelity,
 		Message:   msg,
 		Author:    in.Author,
 		CreatedAt: time.Now().UTC(),
-		SessionID: cir.Envelope.SessionOriginID,
-		Models:    cir.Envelope.OrderedModels(),
+		SessionID: envelope.SessionOriginID,
+		Models:    envelope.OrderedModels(),
 	}
 	if err := s.store.PutSnapshot(ctx, snap); err != nil {
 		return inbound.StashOutput{}, err

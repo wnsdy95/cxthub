@@ -84,7 +84,7 @@ func runRepair(args []string) error {
 	stage := storage.NewFileStore(filepath.Join(backup, "server"))
 	remote := backendclient.NewBackendClient(func() string { return endpoint }, token, domain.TeamIdentity{})
 	remote.SetChunkLocal(stage)
-	syncer := app.NewSyncRepoService(stage, remote, nil)
+	syncer := app.NewSyncRepoService(stage, remote, nil, storage.NewSyncOutbox())
 	if _, err := syncer.Pull(ctx, inbound.SyncInput{RepoID: repoID, FetchOnly: true}); err != nil {
 		return fmt.Errorf("server verification failed; live replica unchanged (recovery evidence: %s): %w", backup, err)
 	}

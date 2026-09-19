@@ -383,7 +383,7 @@ func TestBranchBirthCheckpointRetainsEffectiveSavedHead(t *testing.T) {
 					}
 				}
 				c.List = app.NewListSessionsService(st)
-				c.Save = app.NewSaveSessionService(gitctx.NewGitContextAdapter(), map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}, st)
+				c.Save = app.NewSaveSessionService(gitctx.NewGitContextAdapter(), map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}, st, capture.NewSessionCapture(st), storage.NewSyncOutbox())
 				dir := filepath.Join(home, ".claude", "projects", providerfs.EncodeCwd(cwd))
 				if err := os.MkdirAll(dir, 0700); err != nil {
 					t.Fatal(err)

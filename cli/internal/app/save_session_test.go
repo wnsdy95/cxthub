@@ -74,7 +74,7 @@ func TestSaveEndToEnd(t *testing.T) {
 	store := storage.NewFileStore(repoRoot)
 	captures := map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}
 	codecs := map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}
-	svc := NewSaveSessionService(gitctx.NewGitContextAdapter(), captures, codecs, store)
+	svc := newTestSaveService(gitctx.NewGitContextAdapter(), captures, codecs, store)
 
 	// 3) Execute save
 	ctx := context.Background()
@@ -144,7 +144,7 @@ func TestSaveCommitPreservesNewerConcurrentPendingCapture(t *testing.T) {
 	store := &replaceBeforePendingCASStore{SessionStore: base}
 	captures := map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}
 	codecs := map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}
-	svc := NewSaveSessionService(gitctx.NewGitContextAdapter(), captures, codecs, store)
+	svc := newTestSaveService(gitctx.NewGitContextAdapter(), captures, codecs, store)
 	ctx := context.Background()
 
 	pending, err := svc.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: domain.ProviderClaude, Message: domain.HookMessagePrefix + " test", Pending: true})
@@ -195,7 +195,7 @@ func TestSaveRejectsCrossProviderNativeSessionCollision(t *testing.T) {
 				}
 			}
 			st := storage.NewFileStore(cwd)
-			svc := NewSaveSessionService(gitctx.NewGitContextAdapter(),
+			svc := newTestSaveService(gitctx.NewGitContextAdapter(),
 				map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture(), domain.ProviderCodex: capture.NewCodexCapture()},
 				map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec(), domain.ProviderCodex: codec.NewCodexCodec()}, st)
 			first, err := svc.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: domain.ProviderClaude, SessionPath: claudePath, Pending: true, Message: domain.HookMessagePrefix + " capture"})

@@ -1,5 +1,5 @@
 import { useDocPages } from '../hooks';
-import { EventStream, type ViewMode } from './ContextView';
+import { EventStream, type ViewMode } from './EventStream';
 import { useT } from '../i18n';
 
 // Only mounted when a section is visible. Parent/tail comparisons happen on

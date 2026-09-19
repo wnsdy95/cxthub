@@ -9,8 +9,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -195,12 +193,6 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 				return inbound.LoadOutput{}, err
 			}
 			if path, resume, mErr := mat.Materialize(ctx, raw, in.Cwd); mErr == nil {
-				// Ledger record: Recovery candidate is excluded from capture until actual resume (live session hijacking prevention — providerfs/ledger.go).
-				stateRoot := in.Cwd
-				if root, ok := gitctx.ContextRoot(ctx, in.Cwd); ok {
-					stateRoot = root
-				}
-				_ = providerfs.RecordMaterialized(stateRoot, path)
 				fid := domain.FidelityReconstructed
 				if target == cir.Envelope.SourceProvider {
 					fid = domain.FidelityFull

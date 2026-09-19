@@ -58,9 +58,9 @@ func TestPullRetainsAdvertisedDocumentsUntilBatchIsInstalled(t *testing.T) {
 		return snap
 	}
 	old, next := put("first"), put("first", "second")
-	collector := NewSaveSessionService(nil, nil, nil, peer)
+	collector := newTestSaveService(nil, nil, nil, peer)
 	remote := &collectingPullRemote{t: t, collector: collector, old: old, next: next.ID}
-	_, err := NewSyncRepoService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo, FetchOnly: true})
+	_, err := newTestSyncService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo, FetchOnly: true})
 	if err != nil {
 		t.Fatalf("advertised object vanished during pull: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestPullRetainsAdvertisedDocumentsUntilBatchIsInstalled(t *testing.T) {
 		t.Fatalf("collection deferral lost: %+v %v", jobs, err)
 	}
 	latest := put("first", "second", "third")
-	NewSaveSessionService(nil, nil, nil, restarted).gcHookLeaf(ctx, repo, next.ID, latest.ID)
+	newTestSaveService(nil, nil, nil, restarted).gcHookLeaf(ctx, repo, next.ID, latest.ID)
 	if _, err = st.GetDoc(ctx, old.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("read reservation leaked: %v", err)
 	}

@@ -140,7 +140,7 @@ func TestSaveUsesSelectedPastAndRetainsFutureWithoutGraft(t *testing.T) {
 			if err := os.WriteFile(session, []byte(strings.ReplaceAll(e2eClaudeSession, "hello", "new work")), 0600); err != nil {
 				t.Fatal(err)
 			}
-			svc := NewSaveSessionService(gitctx.NewGitContextAdapter(), map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}, store)
+			svc := newTestSaveService(gitctx.NewGitContextAdapter(), map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}, store)
 			out, err := svc.Save(ctx, inbound.SaveInput{Cwd: root, Provider: domain.ProviderClaude, SessionPath: session, Branch: "main"})
 			if err != nil {
 				t.Fatal(err)

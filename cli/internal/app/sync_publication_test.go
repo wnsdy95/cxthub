@@ -157,7 +157,7 @@ func TestHistoryPushPublishesMaximalCompletedSourceFirst(t *testing.T) {
 			}
 			_, ob := putPublication(t, st, 2, p)
 			r := &publicationRemote{requiredOrdinary: []string{oa.ID, ob.ID}}
-			if err := NewSyncRepoService(st, r, nil).pushHistory(ctx, repo); err != nil {
+			if err := newTestSyncService(st, r, nil).pushHistory(ctx, repo); err != nil {
 				t.Fatal(err)
 			}
 			if got := publicationTargets(r); !reflect.DeepEqual(got, []domain.ContentHash{b, a}) {
@@ -211,7 +211,7 @@ func TestHistoryPushRejectsAmbiguousPublicationsBeforePublishing(t *testing.T) {
 			}
 			putPublication(t, st, 2, p)
 			r := &publicationRemote{}
-			err := NewSyncRepoService(st, r, nil).pushHistory(ctx, repo)
+			err := newTestSyncService(st, r, nil).pushHistory(ctx, repo)
 			if !errors.Is(err, domain.ErrSyncConflict) || len(publicationTargets(r)) != 0 || len(r.terminal) != 0 {
 				t.Fatalf("ambiguous group published: targets=%v terminal=%v err=%v", publicationTargets(r), r.terminal, err)
 			}
@@ -240,7 +240,7 @@ func TestHistoryPushPublicationPartialRetry(t *testing.T) {
 			case "ordinary rejected":
 				r.failID = ob.ID
 			}
-			svc := NewSyncRepoService(st, r, nil)
+			svc := newTestSyncService(st, r, nil)
 			if err := svc.pushHistory(ctx, repo); err == nil {
 				t.Fatal("injected failure did not stop push")
 			}
@@ -274,7 +274,7 @@ func TestHistoryPushLaterPublicationPreservesAcceptedTerminal(t *testing.T) {
 	p := domain.HistoryEvent{RepoID: repo, BranchID: "task", Branch: "feature", Target: a, GitAfter: strings.Repeat("a", 40), CreatedAt: time.Unix(100, 0).UTC()}
 	putPublication(t, st, 1, p)
 	r := &publicationRemote{}
-	svc := NewSyncRepoService(st, r, nil)
+	svc := newTestSyncService(st, r, nil)
 	if err := svc.pushHistory(ctx, repo); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestHistoryPushKeepsUnrelatedPublicationGroupsIndependent(t *testing.T) {
 			}
 			pb, _ := putPublication(t, st, 2, p)
 			r := &publicationRemote{}
-			if err := NewSyncRepoService(st, r, nil).pushHistory(ctx, repo); err != nil {
+			if err := newTestSyncService(st, r, nil).pushHistory(ctx, repo); err != nil {
 				t.Fatal(err)
 			}
 			if len(publicationTargets(r)) != 2 || r.terminal[[3]string{repo, pa.Branch, pa.GitAfter}] != a || r.terminal[[3]string{repo, pb.Branch, pb.GitAfter}] != b {
@@ -330,7 +330,7 @@ func TestHistoryPushFinalizesAfterProofDespiteClockRollback(t *testing.T) {
 		}
 	}
 	r := &publicationRemote{}
-	svc := NewSyncRepoService(st, r, nil)
+	svc := newTestSyncService(st, r, nil)
 	for i := 0; i < 2; i++ {
 		if err := svc.pushHistory(ctx, repo); err != nil {
 			t.Fatal(err)

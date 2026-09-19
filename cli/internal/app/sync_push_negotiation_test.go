@@ -72,7 +72,7 @@ func TestPushUploadsEachDocumentBeforeReadingTheNext(t *testing.T) {
 		}
 		return nil
 	}
-	_, err := NewSyncRepoService(counting, remote, nil).Push(context.Background(), inbound.SyncInput{RepoID: repoID})
+	_, err := newTestSyncService(counting, remote, nil).Push(context.Background(), inbound.SyncInput{RepoID: repoID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestPushStopsBeforeNextDocumentAndRefsOnFailure(t *testing.T) {
 				}
 				return failure
 			}
-			_, err := NewSyncRepoService(counting, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repoID})
+			_, err := newTestSyncService(counting, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repoID})
 			want := failure
 			if canceled {
 				want = context.Canceled
@@ -125,7 +125,7 @@ func TestPushResumesCompletedDocumentsWithoutAdvancingRefsEarly(t *testing.T) {
 		}
 		return nil
 	}
-	svc := NewSyncRepoService(counting, remote, nil)
+	svc := newTestSyncService(counting, remote, nil)
 	if _, err := svc.Push(context.Background(), inbound.SyncInput{RepoID: repoID}); err == nil {
 		t.Fatal("failed upload succeeded")
 	}
@@ -221,7 +221,7 @@ func TestPushLoadsOnlyServerRequestedDocuments(t *testing.T) {
 			base, repoID, ids := lazyPushFixture(t)
 			counting := &docReadCountingStore{SessionStore: base}
 			remote := &lazyPushRemote{wants: test.wants(ids)}
-			out, err := NewSyncRepoService(counting, remote, nil).Push(context.Background(), inbound.SyncInput{RepoID: repoID})
+			out, err := newTestSyncService(counting, remote, nil).Push(context.Background(), inbound.SyncInput{RepoID: repoID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -254,7 +254,7 @@ func TestPushRejectsWantOutsideAdvertisedInventoryBeforeDocRead(t *testing.T) {
 	remote := &lazyPushRemote{wants: outbound.PushObjectWants{
 		Docs: []domain.ContentHash{domain.HashContent([]byte("not advertised"))},
 	}}
-	_, err := NewSyncRepoService(counting, remote, nil).Push(context.Background(), inbound.SyncInput{RepoID: repoID})
+	_, err := newTestSyncService(counting, remote, nil).Push(context.Background(), inbound.SyncInput{RepoID: repoID})
 	if !errors.Is(err, domain.ErrHashMismatch) {
 		t.Fatalf("push error=%v, want hash mismatch", err)
 	}

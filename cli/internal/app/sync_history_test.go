@@ -69,7 +69,7 @@ func TestHistoryPushPublishesUnpushedSourceBeforeRetentionAndRejectsConcurrentWo
 	}
 	for _, initial := range []domain.ContentHash{"", ids[0], ids[1], ids[3]} {
 		r := &historyPushRemote{target: initial}
-		svc := NewSyncRepoService(st, r, nil)
+		svc := newTestSyncService(st, r, nil)
 		err := svc.pushHistory(ctx, repo)
 		if initial == ids[3] {
 			if !errors.Is(err, domain.ErrSyncConflict) || len(r.calls) != 0 || r.target != initial {

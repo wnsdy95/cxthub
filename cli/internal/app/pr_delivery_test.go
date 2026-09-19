@@ -34,7 +34,7 @@ func TestPRDeliverySurvivesOfflineAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &prQueueRemote{fail: true}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	if err := svc.flushPRDeliveries(ctx, repo); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestPRDeliverySurvivesOfflineAndRestart(t *testing.T) {
 		t.Fatalf("lost delivery: %+v %v", pending, err)
 	}
 	remote.fail = false
-	svc = NewSyncRepoService(st, remote, nil)
+	svc = newTestSyncService(st, remote, nil)
 	if err := svc.flushPRDeliveries(ctx, repo); err != nil {
 		t.Fatal(err)
 	}
