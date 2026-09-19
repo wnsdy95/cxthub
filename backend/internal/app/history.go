@@ -84,11 +84,7 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		if _, ok := verified[key]; ok {
 			continue
 		}
-		doc, err := s.blobs.GetDoc(ctx, repoID, snap.DocHash)
-		if err != nil {
-			return err
-		}
-		if err = s.engine.VerifyIntegrity(ctx, snap, doc); err != nil {
+		if err := s.verifyStoredSnapshotDoc(ctx, repoID, snap); err != nil {
 			return err
 		}
 		verified[key] = struct{}{}

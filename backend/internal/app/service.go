@@ -454,14 +454,11 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 				return inbound.CommitOutput{}, domain.ErrIntegrity
 			}
 		} else {
-			existing, err := s.blobs.GetDoc(ctx, in.RepoID, snap.DocHash)
+			err := s.verifyStoredSnapshotDoc(ctx, in.RepoID, snap)
 			if err != nil {
 				if errors.Is(err, domain.ErrNotFound) {
 					return inbound.CommitOutput{}, fmt.Errorf("%w: snapshot %s references an absent doc %s (send doc first via push/objects)", domain.ErrIntegrity, snap.ID, snap.DocHash)
 				}
-				return inbound.CommitOutput{}, err
-			}
-			if err := validateSnapshotDocPair(snap, existing); err != nil {
 				return inbound.CommitOutput{}, err
 			}
 		}

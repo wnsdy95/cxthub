@@ -54,6 +54,7 @@ type Store interface {
 //
 // Content-addressing uses client-provided hash as key (server is consumer of body integrity, data model Q3).
 type FSStore struct {
+	docProofs   docProofCache
 	dataDir     string
 	recoveryErr error
 }
@@ -2330,6 +2331,7 @@ func (s *FSStore) PutVerifiedDoc(ctx context.Context, repoID domain.ContentHash,
 		return false, domain.ErrIntegrity
 	}
 	canonical := doc.Bytes()
+	s.docProofs.put(docProofKey{repo: repoID, expected: doc.Hash(), representation: doc.Hash()}, doc.Reference())
 	p := s.docPath(repoID, doc.Hash())
 	if exists(p) {
 		if _, err := s.GetDoc(ctx, repoID, doc.Hash()); err != nil {
@@ -2355,39 +2357,20 @@ func (s *FSStore) PutVerifiedDoc(ctx context.Context, repoID domain.ContentHash,
 	return true, nil
 }
 
-func (s *FSStore) GetDoc(_ context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error) {
-	if err := validateHashes(repoID, hash); err != nil {
-		return domain.SessionDoc{}, err
-	}
-	data, err := os.ReadFile(s.docPath(repoID, hash))
+func (s *FSStore) GetDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error) {
+	data, chunked, err := s.readDocBytes(ctx, repoID, hash)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return domain.SessionDoc{}, domain.ErrNotFound
-		}
 		return domain.SessionDoc{}, err
-	}
-	if data, err = docDecompress(data); err != nil {
-		return domain.SessionDoc{}, err
-	}
-	// For chunked (manifest) types, reassembly — reassembly bytes are compared to the integrity hash,
-	// equivalent to RecalculateSessionDocHash (byte equality is stronger).
-	if cb, isManifest, cerr := s.getDocChunked(repoID, hash, data); isManifest {
-		if cerr != nil {
-			return domain.SessionDoc{}, cerr
-		}
-		var cir domain.CIRDocument
-		if err := json.Unmarshal(cb, &cir); err != nil {
-			return domain.SessionDoc{}, err
-		}
-		return domain.SessionDoc{Hash: hash, CIR: cir}, nil
 	}
 	var cir domain.CIRDocument
 	if err := json.Unmarshal(data, &cir); err != nil {
 		return domain.SessionDoc{}, err
 	}
 	doc := domain.SessionDoc{Hash: hash, CIR: cir}
-	if err := domain.ValidateSessionDocHash(doc); err != nil {
-		return domain.SessionDoc{}, err
+	if !chunked {
+		if err := domain.ValidateSessionDocHash(doc); err != nil {
+			return domain.SessionDoc{}, err
+		}
 	}
 	return doc, nil
 }
