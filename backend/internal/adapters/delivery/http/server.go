@@ -45,7 +45,7 @@ type Backend interface {
 	Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error)
 	PromoteSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error
 	GraftSnapshotParents(ctx context.Context, repoID, id domain.ContentHash, parents []domain.ContentHash, expectedSeq uint64) error
-	Join(ctx context.Context, in inbound.JoinInput) (inbound.JoinOutput, error)
+	inbound.JoinPreview
 	GetManifest(ctx context.Context, repoID domain.ContentHash) (domain.Manifest, error)
 	EnsureRepo(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
@@ -205,6 +205,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots/{id}", s.guard(domain.RoleViewer, s.getSnapshot))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/promote", s.guard(domain.RoleMember, s.promoteSnapshot))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/graft", s.guard(domain.RoleMember, s.graftSnapshot))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/join/preview", s.guard(domain.RoleMember, s.previewJoin))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/join", s.guard(domain.RoleMember, s.joinSnapshot))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/search", s.guard(domain.RoleViewer, s.search))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}", s.guard(domain.RoleViewer, s.getDoc))
@@ -1094,8 +1095,16 @@ func (s *Server) graftSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 // joinSnapshot repositions session forks of the same git branch behind the branch head.
+func (s *Server) previewJoin(w http.ResponseWriter, r *http.Request) {
+	u, _ := userFrom(r.Context())
+	out, err := s.b.PreviewJoin(r.Context(), inbound.JoinPreviewInput{ActorID: u.ID, RepoID: s.repoID(r), Snapshot: domain.ContentHash(r.URL.Query().Get("snapshot")), Branch: r.URL.Query().Get("branch")})
+	s.respond(w, out, err)
+}
+
 func (s *Server) joinSnapshot(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		ExpectedHead       domain.ContentHash `json:"expected_head"`
+		PlanRevision       domain.ContentHash `json:"plan_revision"`
 		BranchID           string             `json:"branch_id,omitempty"`
 		Branch             string             `json:"branch"`
 		Snapshot           domain.ContentHash `json:"snapshot"`
@@ -1104,10 +1113,12 @@ func (s *Server) joinSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.b.Join(r.Context(), inbound.JoinInput{
+	u, _ := userFrom(r.Context())
+	out, err := s.b.ConfirmJoin(r.Context(), inbound.ConfirmJoinInput{ActorID: u.ID, JoinInput: inbound.JoinInput{
+		ExpectedHead: body.ExpectedHead, PlanRevision: body.PlanRevision,
 		RepoID: s.repoID(r), TargetBranch: body.Branch, BranchID: body.BranchID, Snapshot: body.Snapshot,
 		IncludeDescendants: body.IncludeDescendants,
-	})
+	}})
 	s.respond(w, out, err)
 }
 
@@ -1274,6 +1285,8 @@ func mapError(err error) (code string, status int) {
 		return "git_origin_mismatch", http.StatusConflict
 	case errors.Is(err, domain.ErrUnsupportedCIRVersion):
 		return "unsupported_cir_version", http.StatusConflict
+	case errors.Is(err, domain.ErrJoinPreviewChanged):
+		return "join_preview_changed", http.StatusConflict
 	case errors.Is(err, domain.ErrConflict):
 		return "conflict", http.StatusConflict
 	case errors.Is(err, domain.ErrValidation):

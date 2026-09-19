@@ -60,7 +60,7 @@ func TestJoinSnapshot(t *testing.T) {
 
 	t.Run("Full join: head=T, H is preserved as graft", func(t *testing.T) {
 		svc, st, repo, n := setup(t)
-		out, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true))
+		out, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true))
 		if err != nil {
 			t.Fatalf("join: %v", err)
 		}
@@ -79,7 +79,7 @@ func TestJoinSnapshot(t *testing.T) {
 
 	t.Run("Partial join: head=X, remaining branch forks/* from X", func(t *testing.T) {
 		svc, st, repo, n := setup(t)
-		out, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], false))
+		out, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], false))
 		if err != nil {
 			t.Fatalf("join: %v", err)
 		}
@@ -103,7 +103,7 @@ func TestJoinSnapshot(t *testing.T) {
 
 	t.Run("T retained by a partial join can rejoin the same Git branch", func(t *testing.T) {
 		svc, st, repo, n := setup(t)
-		partial, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], false))
+		partial, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], false))
 		if err != nil {
 			t.Fatalf("partial join: %v", err)
 		}
@@ -111,7 +111,7 @@ func TestJoinSnapshot(t *testing.T) {
 			t.Fatalf("No remaining session ref: %v", err)
 		}
 		// session ref is not on another git branch. Treating it as a branch would block this second join with a cross-branch conflict, preventing the original UX from being completed.
-		joined, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["T"], false))
+		joined, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["T"], false))
 		if err != nil {
 			t.Fatalf("T rejoin: %v", err)
 		}
@@ -136,7 +136,7 @@ func TestJoinSnapshot(t *testing.T) {
 
 	t.Run("Already included in history → ErrConflict", func(t *testing.T) {
 		svc, _, repo, n := setup(t)
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["P"], false)); !errors.Is(err, domain.ErrConflict) {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["P"], false)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -153,7 +153,7 @@ func TestJoinSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 		// X is only connected to main via graft — rebase (full join: X..T) must succeed.
-		out, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true))
+		out, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true))
 		if err != nil {
 			t.Fatalf("rebase join failed: %v", err)
 		}
@@ -187,7 +187,7 @@ func TestJoinSnapshot(t *testing.T) {
 			Branch: "feature", Provider: "claude"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "main", other, false)); !errors.Is(err, domain.ErrConflict) {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", other, false)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("join error from different git branch session: err=%v, want conflict", err)
 		}
 		_ = n
@@ -217,7 +217,7 @@ func TestJoinSnapshot(t *testing.T) {
 		if err := st.AddGraftParents(ctx, repo, h, []domain.ContentHash{x}); err != nil {
 			t.Fatal(err)
 		}
-		out, err := svc.Join(ctx, inbound_JoinInput(repo, "main", x, false))
+		out, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", x, false))
 		if err != nil {
 			t.Fatalf("reflog-membership join failed: %v", err)
 		}
@@ -237,7 +237,7 @@ func TestJoinSnapshot(t *testing.T) {
 			domain.Ref{Kind: domain.RefBranch, Name: "feature", RepoID: repo, Target: u}, ""); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true)); !errors.Is(err, domain.ErrConflict) {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("cross-branch reachable snapshot join err=%v", err)
 		}
 		got, err := st.GetSnapshot(ctx, repo, u)
@@ -253,7 +253,7 @@ func TestJoinSnapshot(t *testing.T) {
 		}, ""); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true)); !errors.Is(err, domain.ErrConflict) {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("foreign scoped session join err=%v", err)
 		}
 		main, _ := st.GetRef(ctx, repo, domain.RefBranch, "main")
@@ -277,7 +277,7 @@ func TestJoinSnapshot(t *testing.T) {
 			domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo, Target: h2}, n["H"]); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true)); !errors.Is(err, domain.ErrConflict) {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("shared source supersede err=%v", err)
 		}
 		h, _ := st.GetSnapshot(ctx, repo, n["H"])
@@ -305,7 +305,7 @@ func TestJoinSnapshot(t *testing.T) {
 		if err := st.AddGraftParents(ctx, repo, h, []domain.ContentHash{tip}); err != nil {
 			t.Fatal(err)
 		}
-		out, err := svc.Join(ctx, inbound_JoinInput(repo, "main", x, true))
+		out, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", x, true))
 		if err != nil {
 			t.Fatalf("SessionID boundary blocks join: %v", err)
 		}
@@ -319,7 +319,7 @@ func TestJoinSnapshot(t *testing.T) {
 		if err := st.SetGraftParents(ctx, repo, n["H"], nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true)); !errors.Is(err, domain.ErrConflict) {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("unattached join err=%v", err)
 		}
 		main, _ := st.GetRef(ctx, repo, domain.RefBranch, "main")
@@ -331,7 +331,7 @@ func TestJoinSnapshot(t *testing.T) {
 	t.Run("an unpushed natural descendant above attached X cannot be promoted by a full join", func(t *testing.T) {
 		svc, st, repo, n := setup(t)
 		u := mk(st, repo, "unpushed-U", n["T"])
-		out, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true))
+		out, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true))
 		if !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("unpushed descendant join out=%+v err=%v", out, err)
 		}
@@ -359,14 +359,14 @@ func TestJoinSnapshot(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		out, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true))
+		out, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true))
 		if err != nil {
 			t.Fatalf("Hidden pending leaf blocks normal commit join: %v", err)
 		}
 		if out.Head != n["T"] {
 			t.Fatalf("Pending moves to head: %s", out.Head)
 		}
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "main", pendingID, false)); !errors.Is(err, domain.ErrValidation) {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", pendingID, false)); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("pending hook join error=%v", err)
 		}
 	})
@@ -383,7 +383,7 @@ func TestJoinSnapshot(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		out, err := svc.Join(ctx, inbound_JoinInput(repo, "main", n["X"], true))
+		out, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "main", n["X"], true))
 		if err != nil {
 			t.Fatalf("stale pending blocks join: %v", err)
 		}
@@ -394,7 +394,7 @@ func TestJoinSnapshot(t *testing.T) {
 
 	t.Run("HEAD is not a merge target → reject", func(t *testing.T) {
 		svc, _, repo, n := setup(t)
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "HEAD", n["X"], false)); err == nil {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "HEAD", n["X"], false)); err == nil {
 			t.Fatal("HEAD branch merge is allowed")
 		}
 	})
@@ -406,7 +406,7 @@ func TestJoinSnapshot(t *testing.T) {
 			Branch: "ghost", Provider: "claude"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := svc.Join(ctx, inbound_JoinInput(repo, "ghost", ghost, false)); !errors.Is(err, domain.ErrNotFound) {
+		if _, err := svc.joinForTest(ctx, inbound_JoinInput(repo, "ghost", ghost, false)); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -449,4 +449,10 @@ func TestJoinSnapshot(t *testing.T) {
 			t.Fatalf("rejected atomic join changed state: main=%s x=%+v", main.Target, x)
 		}
 	})
+}
+
+// Existing planner/storage fixtures intentionally omit user identity. Keep this
+// unapproved harness test-only; production exposes only ConfirmJoin.
+func (s *Service) joinForTest(ctx context.Context, in inbound.JoinInput) (inbound.JoinOutput, error) {
+	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.JoinOutput, error) { return s.join(ctx, in) })
 }

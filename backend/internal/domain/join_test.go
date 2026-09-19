@@ -183,3 +183,41 @@ func BenchmarkPlanJoinSharedRoots(b *testing.B) {
 		}
 	}
 }
+
+func TestJoinApprovalIgnoresTranscriptGrowthButBindsBranchIdentity(t *testing.T) {
+	g, r, n := joinFixture()
+	p, err := PlanJoin(g, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := p.Revision()
+	// New pending capture and metadata on existing history must not force a
+	// collaborator to reconfirm an otherwise identical published graph.
+	copyGraph := g
+	copyGraph.Snapshots = append([]Snapshot{}, g.Snapshots...)
+	for i := range copyGraph.Snapshots {
+		copyGraph.Snapshots[i].Message = "updated label"
+		copyGraph.Snapshots[i].MemoryHash = HashContent([]byte("new-memory"))
+	}
+	pendingID := HashContent([]byte("growing-transcript"))
+	copyGraph.Snapshots = append(copyGraph.Snapshots, Snapshot{ID: pendingID, RepoID: r.RepoID, Message: HookMessagePrefix + "live", Parents: []ContentHash{n["X"]}})
+	copyGraph.Pendings = append([]Pending{}, g.Pendings...)
+	copyGraph.Pendings = append(copyGraph.Pendings, Pending{Target: pendingID})
+	p, err = PlanJoin(copyGraph, r)
+	if err != nil || p.Revision() != before {
+		t.Fatalf("transcript invalidated approval: %+v %v", p, err)
+	}
+	copyGraph.Refs = append([]Ref{}, g.Refs...)
+	for i := range copyGraph.Refs {
+		if copyGraph.Refs[i].Kind == RefBranch && copyGraph.Refs[i].Name == r.Branch {
+			copyGraph.Refs[i].BranchID = "reused-name-new-identity"
+		}
+	}
+	p, err = PlanJoin(copyGraph, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Revision() == before {
+		t.Fatal("same name and head hid a changed branch identity")
+	}
+}

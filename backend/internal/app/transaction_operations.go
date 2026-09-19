@@ -24,9 +24,6 @@ func (s *Service) UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (i
 func (s *Service) Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error) {
 	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.ForkOutput, error) { return s.fork(ctx, in) })
 }
-func (s *Service) Join(ctx context.Context, in inbound.JoinInput) (inbound.JoinOutput, error) {
-	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.JoinOutput, error) { return s.join(ctx, in) })
-}
 
 func (s *Service) promoteBoundPR(ctx context.Context, repo domain.ContentHash, pr domain.PullRequestMerge, baseID string) (inbound.UpdateRefOutput, error) {
 	return repositoryWrite(ctx, s, repo, func(ctx context.Context) (inbound.UpdateRefOutput, error) {

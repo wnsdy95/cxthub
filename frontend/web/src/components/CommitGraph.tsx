@@ -4,14 +4,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ContextSemantics, HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
-import { layoutGraph, mainlineOf, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
+import { layoutGraph, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { projectBranchGraph, visibleBranchGraph, type GraphEvent } from '../graphProjection';
 import { completedBranchEvidence } from '../graphEvidence';
 import { GraphIndex } from '../graphIndex';
-import { sharedReachable } from '../onhold';
 import { classifyGraphSnapshots } from '../graphStatus';
 import { previousProgressGroups, hiddenProgressIds, historicalSnapshotIds, historyBranchHeads } from '../contextHistory';
-import { useJoinSnapshot } from '../hooks';
+import { useJoinPreview, useJoinSnapshot } from '../hooks';
 import { useT } from '../i18n';
 
 const LANE_W = 22; // Lane width
@@ -52,9 +51,7 @@ function occupiedLanes(row: {
 }
 
 // Internal session ref includes branch byte length as a separate component to prevent prefix comparison from misidentifying as a git branch.
-function sessionRefPrefix(branch: string): string {
-  return `fork/v1/${new TextEncoder().encode(branch).length}/${branch}/`;
-}
+
 
 function when(iso?: string): string {
   if (!iso) return '';
@@ -222,157 +219,44 @@ export function CommitGraph({
   // Different branches: distinguish "current trunk vs appended branch".
   const mainlines = useMemo(() => mainlinesOf(fullProjection.refs, fullProjection.snapshots), [fullProjection]);
 
-  // ── Drag & Drop Reordering (join) ────────────────────────────────────────────
-  // Reorder commits of branch fork (side branch) to behind the branch head.
-  // Context session is tied to its git branch — no cross-branch joins. Segment/tip
-  // calculations and supersede are performed by the server (join operation), while this calculation is for display and guidance.
+  // Only the server decides join scope and eligibility. React keeps interaction state.
   const join = useJoinSnapshot();
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropRow, setDropRow] = useState<string | null>(null);
-  const [dragHint, setDragHint] = useState<string | null>(null);
-  const [joinAsk, setJoinAsk] = useState<{
-    snapshot: string;
-    branch: string;
-    descendants: number;
-    branchId?: string;
-    error?: string;
-  } | null>(null);
-  // Join eligibility uses stored ancestry, not virtual operation nodes or folds.
-  const byId = graphIndex.byId;
-  // Child map based on first-parent (session branch calculation — merge/graft edges exclude inheritance).
-  const childrenOf = useMemo(() => {
-    const m = new Map<string, string[]>();
-    for (const s of snapshots) {
-      const p = s.parents?.[0];
-      if (p) m.set(p, [...(m.get(p) ?? []), s.id]);
+  const [joinAsk, setJoinAsk] = useState<{snapshot:string; branch?:string; dropTarget?:string; error?:string} | null>(null);
+  const preview = useJoinPreview(repoId, joinAsk?.snapshot ?? dragId, joinAsk?.branch ?? joinBranch);
+  const plan = preview.data;
+  const reasonText = (reason: import('../types').JoinPreview['reason']) => {
+    switch (reason) {
+      case 'branch_required': case 'no_branch': return t('graph.joinNoBranch');
+      case 'already_head': return t('graph.joinAlreadyHead');
+      case 'unpushed': case 'uncommitted': return t('graph.joinUnpushed');
+      case 'cross_branch': return t('graph.joinCrossBranch');
+      case 'branched': return t('graph.joinBranched');
+      case 'natural_history': return t('graph.joinNoTarget');
+      default: return null;
     }
-    return m;
-  }, [snapshots]);
-  type DragPlan = {
-    branch: string;
-    tip: string;
-    droppable: Set<string>;
-    descendants: number;
-    reason: string | null;
   };
-/** Reachable set following natural parents — "true history" of the branch (exclude graft side branches). */
-  function naturalReachOf(headId: string): Set<string> {
-    const seen = new Set<string>();
-    const stack = [headId];
-    while (stack.length > 0) {
-      const cur = stack.pop() as string;
-      if (seen.has(cur)) continue;
-      seen.add(cur);
-      for (const p of byId.get(cur)?.parents ?? []) stack.push(p);
-    }
-    return seen;
-  }
-/** Drag plan: target branch (= commit's git branch), droppable row, descendant count, reasons for infeasibility. */
-  const dragPlan = useMemo<DragPlan | null>(() => {
-    if (!dragId) return null;
-    const src = byId.get(dragId);
-    const memberships = src ? (src.branches?.length ? src.branches : [src.branch]) : [];
-    const available = memberships.filter((name) =>
-      (refs ?? []).some((r) => r.kind === 'branch' && r.name === name && r.name !== 'HEAD' && r.target),
-    );
-    // Same snapshot can have multiple git branch memberships due to content deduplication and reflog, so we do not guess the target based on the default lane or birth label. The selected branch is the explicit target, and only safe to choose when membership is unique before selection.
-    const branch = joinBranch && available.includes(joinBranch)
-      ? joinBranch
-      : available.length === 1
-        ? available[0]
-        : '';
-    const refB = (refs ?? []).find((r) => r.kind === 'branch' && r.name === branch && r.name !== 'HEAD' && r.target);
-    if (!src || !refB) {
-      return { branch, tip: dragId, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinNoBranch') };
-    }
-    if (refB.target === dragId) {
-      return { branch, tip: dragId, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinAlreadyHead') };
-    }
-    if (unpushed.has(dragId)) {
-      return { branch, tip: dragId, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinUnpushed') };
-    }
-    const branchShared = sharedReachable(
-      (refs ?? []).filter(
-        (r) =>
-          (r.kind === 'branch' && r.name === branch) ||
-          (r.kind === 'session' && r.name.startsWith(sessionRefPrefix(branch))),
-      ),
-      snapshots,
-    );
-    const foreignShared = sharedReachable(
-      (refs ?? []).filter(
-        (r) =>
-          (r.kind === 'branch' && r.name !== branch) ||
-          (r.kind === 'session' && !r.name.startsWith(sessionRefPrefix(branch))),
-      ),
-      snapshots,
-    );
-    if (!branchShared.has(dragId)) {
-      return { branch, tip: dragId, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinNoTarget') };
-    }
-    if (foreignShared.has(dragId)) {
-      return { branch, tip: dragId, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinCrossBranch') };
-    }
-    if (naturalReachOf(refB.target).has(dragId)) {
-      // already included in natural history — no reordering (not a side branch, but the backbone).
-      return { branch, tip: dragId, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinNoTarget') };
-    }
-    // natural path continues as long as the first-parent child is unique. SessionID is for boundary indication only; it is not a branch identity. If there are multiple children, lane selection is ambiguous, so it is blocked in this context.
-    const segment = new Set<string>([dragId]);
-    let tip = dragId;
-    while (true) {
-      const kids = (childrenOf.get(tip) ?? []).filter((id) => {
-        const child = byId.get(id);
-        const childBranches = child?.branches?.length ? child.branches : child ? [child.branch] : [];
-        // An uncommitted hook capture is visible in its own graph layer, but it
-        // is not part of the joinable commit segment.
-        return child != null && !uncommittedIds.has(id) && childBranches.includes(branch);
-      });
-      if (kids.length === 0) break;
-      if (kids.length > 1) {
-        return { branch, tip, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinBranched') };
-      }
-      tip = kids[0];
-      // like the server, X above natural descendants must also be shared commits from branch/session refs. Do not publish objects-only push tips as join segments.
-      if (!branchShared.has(tip)) {
-        return { branch, tip, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinUnpushed') };
-      }
-      if (foreignShared.has(tip)) {
-        return { branch, tip, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinCrossBranch') };
-      }
-      if (segment.has(tip)) {
-        return { branch, tip, droppable: new Set<string>(), descendants: 0, reason: t('graph.joinBranched') };
-      }
-      segment.add(tip);
-    }
-    // the actual operation appends to the current head of the selected git branch. Therefore, the drop zone is limited to the first-parent ancestry row of that branch. Opening other side branches that can be reached via grafting would lead to user confusion about selecting that branch as a merge target.
-    const droppable = new Set(
-      [...mainlineOf(refB.target, snapshots)].filter((id) => !segment.has(id)),
-    );
-    return { branch, tip, droppable, descendants: segment.size - 1, reason: null as string | null };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragId, byId, refs, snapshots, childrenOf, joinBranch, uncommittedIds, unpushed]);
-  const droppable = dragPlan?.droppable ?? new Set<string>();
+  const droppable = new Set(plan?.drop_targets ?? []);
+  const rejectedDrop = Boolean(joinAsk?.dropTarget && plan && !plan.reason && !droppable.has(joinAsk.dropTarget));
+  const dragHint = dragId ? preview.isFetching ? t('graph.joinLoading')
+    : preview.error ? t('graph.joinUnavailable') : reasonText(plan?.reason) : null;
+  const joinEnabled = !graphIssues.length && Boolean(repoId);
   function openJoinModal(rowId: string) {
-    if (!dragId || !dragPlan || dragPlan.reason || !dragPlan.droppable.has(rowId)) return;
-    setJoinAsk({ snapshot: dragId, branch: dragPlan.branch, branchId: refs?.find((r) => r.kind === 'branch' && r.name === dragPlan.branch)?.branch_id, descendants: dragPlan.descendants });
+    if (!dragId) return;
+    setJoinAsk({snapshot:dragId, branch:plan?.branch || joinBranch, dropTarget:rowId});
   }
   function runJoin(includeDescendants: boolean) {
-    if (!repoId || !joinAsk || graphIssues.length) return;
-    join.mutate(
-      { repoId, branch: joinAsk.branch, branchId: joinAsk.branchId, snapshot: joinAsk.snapshot, includeDescendants },
-      {
-        onSuccess: () => setJoinAsk(null),
-        onError: (e) => setJoinAsk({ ...joinAsk, error: e instanceof Error ? e.message : String(e) }),
-      },
-    );
+    if (!repoId || !joinAsk || !plan || plan.reason || rejectedDrop || preview.isFetching || joinAsk.error || graphIssues.length) return;
+    join.mutate({repoId, preview:plan, includeDescendants}, {
+      onSuccess: () => setJoinAsk(null),
+      onError: (e) => setJoinAsk(current => current ? {...current,error:e.message} : null),
+    });
   }
-  const joinEnabled = !graphIssues.length && Boolean(repoId) && (refs?.length ?? 0) > 0;
-
-  // when the drag plan is calculated, an immediate reason for rejection is provided (silent rejection appears as a failure).
-  useEffect(() => {
-    setDragHint(dragId && dragPlan ? dragPlan.reason : null);
-  }, [dragId, dragPlan]);
+  async function refreshJoin() {
+    const result = await preview.refetch();
+    if (!result.error) setJoinAsk(current => current ? {...current,error:undefined} : null);
+  }
 
   // Hover tooltip — render at viewport fixed coordinates, flip to left if no space on the right.
   const TIP_W = 300;
@@ -857,6 +741,7 @@ export function CommitGraph({
                 aria-pressed={sel}
                 data-graph-branch={graphEvent?.branch ?? r.snap.branch}
                 className={`graph-row${sel ? ' on' : ''}${dropRow === r.snap.id ? ' drop-target' : ''}${dragId === r.snap.id ? ' dragging' : ''}${dragId && droppable.has(r.snap.id) ? ' droppable' : ''}`}
+                onContextMenu={(e) => { if (joinEnabled && !graphEvent) { e.preventDefault(); setJoinAsk({snapshot:r.snap.id,branch:joinBranch}); } }}
                 onClick={() => onSelect(selectId, graphEvent)}
                 onMouseEnter={(e) => showTip(r.snap.id, e.currentTarget)}
                 onMouseLeave={() => setTip(null)}
@@ -873,10 +758,10 @@ export function CommitGraph({
                 onDragEnd={() => {
                   setDragId(null);
                   setDropRow(null);
-                  setDragHint(null);
                 }}
                 onDragOver={(e) => {
-                  if (!joinEnabled || !dragId || !droppable.has(r.snap.id)) return;
+                  if (!joinEnabled || !dragId || graphEvent) return;
+                  if (!preview.isFetching && !preview.error && plan?.reason !== 'branch_required' && !droppable.has(r.snap.id)) return;
                   e.preventDefault(); // Allow drop only on valid targets
                   e.dataTransfer.dropEffect = 'move';
                   setDropRow(r.snap.id);
@@ -940,37 +825,29 @@ export function CommitGraph({
       {dragHint && <div className="join-hint">{dragHint}</div>}
 
       {joinAsk && (
-        <div className="modal-back" onClick={() => setJoinAsk(null)}>
+        <div className="modal-back" onClick={() => !join.isPending && setJoinAsk(null)}>
           <div className="modal" role="dialog" aria-label={t('graph.joinTitle')} onClick={(e) => e.stopPropagation()}>
             <h3>{t('graph.joinTitle')}</h3>
-            {joinAsk.error ? (
-              <p className="join-error">{joinAsk.error}</p>
-            ) : (
-              <>
-                <p>
-                  <code>{joinAsk.snapshot.replace(/^sha256:/, '').slice(0, 10)}</code>{' '}
-                  {t('graph.joinBody', { branch: joinAsk.branch })}
-                </p>
-                {joinAsk.descendants > 0 && <p>{t('graph.joinAsk', { count: String(joinAsk.descendants) })}</p>}
-              </>
-            )}
+            {preview.isFetching ? <p role="status">{t('graph.joinLoading')}</p> : preview.error ? <p role="alert">{t('graph.joinUnavailable')}</p> : plan && <>
+              {plan.branches.length > 1 && <select aria-label={t('graph.joinChooseBranch')} value={joinAsk.branch ?? ''}
+                disabled={join.isPending} onChange={e => setJoinAsk({...joinAsk, branch:e.target.value,error:undefined})}>
+                <option value="">{t('graph.joinChooseBranch')}</option>
+                {plan.branches.map(b => <option key={b.branch} value={b.branch}>{b.branch}</option>)}
+              </select>}
+              {plan.reason || rejectedDrop ? <p role="status">{rejectedDrop ? t('graph.joinNoTarget') : reasonText(plan.reason)}</p> : <>
+                <p><code>{plan.snapshot.replace(/^sha256:/, '').slice(0,10)}</code>{' '}{t('graph.joinBody',{branch:plan.branch})}</p>
+                <p>{t('graph.joinHead')}: <code>{plan.expected_head?.replace(/^sha256:/,'').slice(0,10)}</code></p>
+                {plan.descendants > 0 && <p>{t('graph.joinAsk',{count:String(plan.descendants)})}</p>}
+              </>}
+            </>}
+            {joinAsk.error && <p className="join-error" role="alert">{joinAsk.error} {t('graph.joinReviewChanged')}</p>}
             <div className="modal-actions">
-              {!joinAsk.error && joinAsk.descendants > 0 && (
-                <>
-                  <button className="primary" disabled={join.isPending || graphIssues.length > 0} onClick={() => runJoin(true)}>
-                    {t('graph.joinAll', { count: String(joinAsk.descendants + 1) })}
-                  </button>
-                  <button disabled={join.isPending || graphIssues.length > 0} onClick={() => runJoin(false)}>
-                    {t('graph.joinOnly')}
-                  </button>
-                </>
-              )}
-              {!joinAsk.error && joinAsk.descendants === 0 && (
-                <button className="primary" disabled={join.isPending || graphIssues.length > 0} onClick={() => runJoin(false)}>
-                  {t('graph.joinGo')}
-                </button>
-              )}
-              <button onClick={() => setJoinAsk(null)}>{t('common.cancel')}</button>
+              {(joinAsk.error || preview.error) ? <button disabled={preview.isFetching} onClick={() => void refreshJoin()}>{t('graph.joinRefresh')}</button>
+                : plan && !plan.reason && !rejectedDrop && !preview.isFetching && <>
+                  {plan.descendants > 0 && <button className="primary" disabled={join.isPending || graphIssues.length > 0} onClick={() => runJoin(true)}>{t('graph.joinAll',{count:String(plan.descendants+1)})}</button>}
+                  <button disabled={join.isPending || graphIssues.length > 0} onClick={() => runJoin(false)}>{t(plan.descendants ? 'graph.joinOnly' : 'graph.joinGo')}</button>
+                </>}
+              <button disabled={join.isPending} onClick={() => setJoinAsk(null)}>{t('common.cancel')}</button>
             </div>
           </div>
         </div>

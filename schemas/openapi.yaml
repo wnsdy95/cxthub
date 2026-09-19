@@ -3241,6 +3241,48 @@ paths:
         "404": { description: "No snapshot or graft parent" }
         "409": { description: "Stale expected_seq or attempted cycle. The client reloads the server snapshot baseline, drops stale queued operations for that snapshot, and stops before publishing the ref." }
 
+  /repos/{repoID}/join/preview:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    get:
+      operationId: previewJoin
+      summary: Preview a same-branch session reorder using the complete server graph — member or higher
+      description: "Read-only. Branch choices, rejection reason, target head and first-parent drop targets come from server policy, independent of UI folding. A missing branch is selected only when membership is unambiguous. Confirmation must send the selected only_revision or all_revision and expected_head. Revisions are content hashes, not authorization tokens."
+      tags: [sync]
+      parameters:
+        - { name: snapshot, in: query, required: true, schema: { type: string } }
+        - { name: branch, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Current plan or typed policy rejection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshot, branch, branch_id, branches, descendants, drop_targets]
+                properties:
+                  snapshot: { type: string }
+                  branch: { type: string }
+                  branch_id: { type: string }
+                  branches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        branch: { type: string }
+                        branch_id: { type: string }
+                  reason: { type: string, enum: [branch_required, no_branch, already_head, unpushed, uncommitted, natural_history, cross_branch, branched] }
+                  expected_head: { type: string }
+                  tip: { type: string }
+                  descendants: { type: integer }
+                  drop_targets: { type: array, items: { type: string } }
+                  only_revision: { type: string }
+                  all_revision: { type: string }
+        "401": { description: Authentication required }
+        "403": { description: Member role required or archived workspace }
+        "404": { description: Repository or snapshot not found }
+        "422": { description: Invalid snapshot or graph integrity failure }
+
   /repos/{repoID}/join:
     parameters:
       - $ref: "#/components/parameters/repoID"
@@ -3255,11 +3297,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [branch, snapshot]
+              required: [branch, branch_id, snapshot, expected_head, plan_revision]
               properties:
                 branch: { type: string, description: target branch name (= commit's git branch) }
                 snapshot: { type: string, description: "Commit to reposition (X)" }
                 branch_id: { type: string, maxLength: 128 }
+                expected_head: { type: string, description: Head from the server preview }
+                plan_revision: { type: string, description: Selected only_revision or all_revision from the preview }
                 include_descendants: { type: boolean, description: true moves the entire first-parent segment }
       responses:
         "200":
@@ -3273,7 +3317,7 @@ paths:
                   head: { type: string }
                   fork_branch: { type: string, description: "For a partial join, the internal session-ref name that preserves the natural descendant tip (compatibility field name; not a real Git branch)" }
         "404": { description: "Snapshot/branch not found" }
-        "409": { description: "Cannot rebase natural history/head, unattached/unpushed segments, other git branch reachability, branching or stale first-parent topology, concurrent graft_seq/branch/session ref changes" }
+        "409": { description: "join_preview_changed requires an explicit new preview and confirmation. Cannot rebase natural history/head, unattached/unpushed segments, other git branch reachability, branching or stale first-parent topology, concurrent graft_seq/branch/session ref changes" }
 
   /repos/{repoID}/pending/{sessionID}/dismiss:
     parameters:

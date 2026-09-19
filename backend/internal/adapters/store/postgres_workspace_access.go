@@ -11,9 +11,9 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-var _ outbound.SecretsAccessLocker = (*PostgresStore)(nil)
+var _ outbound.WorkspaceAccessLocker = (*PostgresStore)(nil)
 
-func (s *PostgresStore) LockSecretsAccess(ctx context.Context, workspace, actor string) error {
+func (s *PostgresStore) LockWorkspaceAccess(ctx context.Context, workspace, actor string) error {
 	tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx)
 	if !ok || tx.owner != s || tx.readOnly || tx.repo == "" {
 		return domain.ErrConflict

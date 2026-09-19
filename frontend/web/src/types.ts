@@ -513,3 +513,17 @@ export interface EffectiveMemoryPage {
  total: number;
  next_cursor: string;
 }
+
+export interface JoinPreview {
+ snapshot: string;
+ branch: string;
+ branch_id: string;
+ branches: Array<{branch:string; branch_id:string}>;
+ reason?: 'branch_required' | 'no_branch' | 'already_head' | 'unpushed' | 'uncommitted' | 'natural_history' | 'cross_branch' | 'branched';
+ expected_head?: string;
+ tip?: string;
+ descendants: number;
+ drop_targets: string[];
+ only_revision?: string;
+ all_revision?: string;
+}

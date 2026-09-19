@@ -381,20 +381,33 @@ export function useReflog(repoId: string | null, enabled: boolean) {
 
 // useJoinSnapshot — reorder session branches of the same git branch behind the head (graph drag/drop).
 // On success, refresh snapshots (graft_parents update), refs (head movement/remaining session ref).
+export function useJoinPreview(repoId: string | null | undefined, snapshot: string | null, branch?: string) {
+  return useQuery({
+    queryKey: ['join-preview', repoId, snapshot, branch ?? ''],
+    enabled: Boolean(repoId && snapshot),
+    queryFn: ({signal}) => api.joinPreview(repoId!, snapshot!, branch, signal),
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+}
 export function useJoinSnapshot() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { repoId: string; branch: string; branchId?: string; snapshot: string; includeDescendants?: boolean }) =>
+    mutationFn: (v: {repoId: string; preview: import('./types').JoinPreview; includeDescendants: boolean}) =>
       api.joinSnapshot(v.repoId, {
-        branch: v.branch,
-        branch_id: v.branchId,
-        snapshot: v.snapshot,
-        include_descendants: v.includeDescendants ?? false,
+        branch: v.preview.branch,
+        branch_id: v.preview.branch_id,
+        snapshot: v.preview.snapshot,
+        include_descendants: v.includeDescendants,
+        expected_head: v.preview.expected_head!,
+        plan_revision: (v.includeDescendants ? v.preview.all_revision : v.preview.only_revision)!,
       }),
     onSuccess: (_d, v) => {
       void qc.invalidateQueries({ queryKey: ['snapshots', v.repoId, '*'] });
       void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
       void qc.invalidateQueries({ queryKey: ['refs', v.repoId] });
+      void qc.invalidateQueries({ queryKey: ['join-preview', v.repoId] });
     },
   });
 }

@@ -2105,7 +2105,13 @@ func (s *Service) join(ctx context.Context, in inbound.JoinInput) (inbound.JoinO
 	plan, err := domain.PlanJoin(graph, domain.JoinRequest{RepoID: in.RepoID, Branch: in.TargetBranch,
 		BranchID: in.BranchID, Source: in.Snapshot, IncludeDescendants: in.IncludeDescendants})
 	if err != nil {
+		if in.PlanRevision != "" && (errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrValidation)) {
+			return inbound.JoinOutput{}, domain.ErrJoinPreviewChanged
+		}
 		return inbound.JoinOutput{}, err
+	}
+	if in.PlanRevision != "" && (plan.Revision() != in.PlanRevision || plan.ExpectedHead != in.ExpectedHead || plan.BranchID != in.BranchID) {
+		return inbound.JoinOutput{}, domain.ErrJoinPreviewChanged
 	}
 	var forkName string
 	if plan.RemainingTip != "" {

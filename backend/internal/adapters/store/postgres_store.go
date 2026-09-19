@@ -375,37 +375,38 @@ func ensureNoReachabilityCycle(ctx context.Context, tx pgx.Tx, repoID domain.Con
 // Read the locked graph; the same domain invariant is used by FS and commands.
 func ensureJoinGraphScopePG(ctx context.Context, tx pgx.Tx, m domain.JoinMutation) error {
 	byID := make(map[domain.ContentHash]domain.Snapshot)
-	rows, err := tx.Query(ctx, `SELECT id, COALESCE(parents,'{}'::text[]), COALESCE(graft_parents,'{}'::text[]) FROM snapshots WHERE repo_id=$1`, string(m.RepoID))
+	rows, err := tx.Query(ctx, `SELECT id, COALESCE(parents,'{}'::text[]), COALESCE(graft_parents,'{}'::text[]), COALESCE(graft_seq,0) FROM snapshots WHERE repo_id=$1`, string(m.RepoID))
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var id string
 		var parents, grafts []string
-		if err := rows.Scan(&id, &parents, &grafts); err != nil {
+		var seq uint64
+		if err := rows.Scan(&id, &parents, &grafts, &seq); err != nil {
 			rows.Close()
 			return err
 		}
 		hash := domain.ContentHash(id)
-		byID[hash] = domain.Snapshot{ID: hash, Parents: hashes(parents), GraftParents: hashes(grafts)}
+		byID[hash] = domain.Snapshot{GraftSeq: seq, ID: hash, Parents: hashes(parents), GraftParents: hashes(grafts)}
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return err
 	}
-	rows, err = tx.Query(ctx, `SELECT kind,name,COALESCE(target,'') FROM refs WHERE repo_id=$1`, string(m.RepoID))
+	rows, err = tx.Query(ctx, `SELECT kind,name,COALESCE(target,''),branch_id FROM refs WHERE repo_id=$1`, string(m.RepoID))
 	if err != nil {
 		return err
 	}
 	var refs []domain.Ref
 	for rows.Next() {
-		var kind, name, target string
-		if err := rows.Scan(&kind, &name, &target); err != nil {
+		var kind, name, target, branchID string
+		if err := rows.Scan(&kind, &name, &target, &branchID); err != nil {
 			rows.Close()
 			return err
 		}
-		refs = append(refs, domain.Ref{Kind: domain.RefKind(kind), Name: name, Target: domain.ContentHash(target)})
+		refs = append(refs, domain.Ref{BranchID: branchID, Kind: domain.RefKind(kind), Name: name, Target: domain.ContentHash(target)})
 	}
 	err = rows.Err()
 	rows.Close()
