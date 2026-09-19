@@ -33,6 +33,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	adaptersession "github.com/wnsdy95/cxthub/cli/internal/adapters/session"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/sessionnotice"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/app"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -276,7 +277,8 @@ func buildContainer(cfg config) container {
 	// The explicit --local MCP helper is a read-only offline projection. The
 	// product MCP runs remotely in cxtd against shared cloud storage.
 	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
-	hookHdl := delivhook.NewHandler(coord).WithLiveObservation()
+	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
+	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices)
 	clictr := &delivcli.Container{
 		Init:            initSvc,
 		Save:            saveSvc,

@@ -1297,3 +1297,42 @@ Transport errors before server confirmation, malformed responses and failed
 local acknowledgements remain retryable discovery work. Ordinary pull/push
 continues local reconciliation; a completed server PR never authorizes a forced
 local ref move or makes a divergent local branch a failed remote promotion.
+
+### Active-session selection notices
+
+Supported `SessionStart` and `UserPromptSubmit` hooks deliver a bounded,
+identifier-only notice when the exact local worktree's code/context/memory
+selection differs from the last successful output for that provider session.
+The hook makes no remote request. Pending capture growth, selection timestamps,
+and unrelated shared ref progress do not trigger another notice. A same-code
+memory repin does. The application service owns preparation/revalidation and
+acknowledgement; storage supplies the process-safe delivery lock and atomic
+cursor file. No backend applicability policy is duplicated in the CLI.
+
+The notice includes repository, worktree, logical branch identity, snapshot,
+actual full code SHA, and any pinned memory owner/hash. It asks for the cloud
+MCP `memory_load` query with `mode=effective`, explicit `repository`, `ref` and
+`code_commit` (plus `memory_hash` when pinned). An empty historical pin remains
+empty. It does not import collaborator-authored conversation text, assert that
+a change is applied/reverted, or replace provider transcripts. Pull notices also
+no longer claim that imported context proves code is in the working tree.
+
+The reader verifies the hook's worktree admin directory against its configured
+store, resolves Git without inherited repository-selector environment variables,
+and checks code HEAD before/after the position read. The application repeats
+that read under the delivery lock. A stale prepared selection, corrupt identity,
+cancelled request, or failed/short output leaves acknowledgement unchanged. The
+cursor is isolated by repository/worktree/provider/session. Output success plus
+acknowledgement failure can repeat the same deterministic notice ID; this is not
+exactly-once model delivery. Git can still move after the final read, so consumers
+must use the explicit immutable SHA and refresh on a subsequent notice.
+
+Codex hook JSON follows [the documented hooks contract](https://learn.chatgpt.com/docs/hooks):
+`hookSpecificOutput.hookEventName` and `additionalContext` for both events. Claude
+uses the corresponding [Claude Code hooks](https://code.claude.com/docs/en/hooks).
+Tests execute both handler formats, output failure/retry, independent worktrees,
+and concurrent cursor writers. This proves our hook protocol implementation,
+not that every desktop product/version enables these hooks. A desktop app that
+does not invoke this supported channel receives updated memory on its next MCP
+query; observers do not synthesize user messages. Server-only evidence changes
+at an unchanged local selection likewise become visible on the next MCP query.
