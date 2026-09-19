@@ -370,3 +370,177 @@ func TestPushSkipsRemoteMemoryDescendantAndPublishesRefs(t *testing.T) {
 		t.Fatalf("refs published %d times, want 1", remote.refPushes)
 	}
 }
+
+// The catalog and CAS are separate requests. Another uploader can legitimately
+// publish a later generation between them; that does not prove a memory fork.
+type advancingMemoryRemote struct {
+	*causalPushRemote
+	advance domain.ContentHash
+	once    bool
+}
+
+func (r *advancingMemoryRemote) PushMemory(ctx context.Context, repo string, d domain.MemoryDigest) error {
+	if !r.once {
+		r.once = true
+		r.current = r.advance
+	}
+	return r.causalPushRemote.PushMemory(ctx, repo, d)
+}
+
+func TestPushMemoryReconcilesConcurrentSameChain(t *testing.T) {
+	for _, known := range []bool{false, true} {
+		t.Run(map[bool]string{false: "optimistic", true: "catalog"}[known], func(t *testing.T) {
+			ctx := context.Background()
+			st := storage.NewFileStore(t.TempDir())
+			snapshot := domain.HashContent([]byte("same chain"))
+			root := domain.MemoryDigest{SnapshotID: snapshot, Summary: "root"}
+			rh := putMemoryObject(t, ctx, st, root)
+			mid := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: rh, Summary: "middle"}
+			mh := putMemoryObject(t, ctx, st, mid)
+			tip := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: mh, Summary: "tip"}
+			th := putMemoryObject(t, ctx, st, tip)
+			remote := &advancingMemoryRemote{causalPushRemote: &causalPushRemote{objects: map[domain.ContentHash]domain.MemoryDigest{rh: root, mh: mid}}, advance: mh}
+			svc := NewSyncRepoService(st, remote, nil)
+			plan, err := svc.localMemoryPushPlan(ctx, snapshot, th)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if known {
+				err = svc.pushMemoryPlanFromKnown(ctx, "repo", plan, "")
+			} else {
+				err = svc.pushMemoryPlan(ctx, "repo", plan)
+			}
+			if err != nil {
+				t.Fatalf("same-chain concurrent progress reported as fork: %v", err)
+			}
+			if remote.current != th {
+				t.Fatal("remaining suffix was not published")
+			}
+		})
+	}
+}
+
+func TestPushMemoryPreservesConcurrentRemoteDescendant(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	snapshot := domain.HashContent([]byte("remote ahead"))
+	root := domain.MemoryDigest{SnapshotID: snapshot, Summary: "root"}
+	rh := putMemoryObject(t, ctx, st, root)
+	tip := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: rh, Summary: "tip"}
+	th := putMemoryObject(t, ctx, st, tip)
+	newer := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: th, Summary: "new server memory"}
+	nh, _ := domain.MemoryDigestHash(newer)
+	remote := &advancingMemoryRemote{causalPushRemote: &causalPushRemote{current: rh, objects: map[domain.ContentHash]domain.MemoryDigest{rh: root, th: tip, nh: newer}}, advance: nh}
+	svc := NewSyncRepoService(st, remote, nil)
+	plan, err := svc.localMemoryPushPlan(ctx, snapshot, th)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.pushMemoryPlanFromKnown(ctx, "repo", plan, rh); err != nil {
+		t.Fatalf("proven remote descendant rejected: %v", err)
+	}
+	if remote.current != nh {
+		t.Fatal("remote memory was rewound")
+	}
+	if _, err := st.GetMemory(ctx, nh); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("push silently adopted remote memory")
+	}
+}
+
+type contendedMemoryRemote struct {
+	*causalPushRemote
+	calls   int
+	failure error
+}
+
+func (r *contendedMemoryRemote) PushMemory(context.Context, string, domain.MemoryDigest) error {
+	r.calls++
+	return r.failure
+}
+
+func TestPushMemoryContentionIsBoundedAndNotAFork(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	snapshot := domain.HashContent([]byte("contention"))
+	root := domain.MemoryDigest{SnapshotID: snapshot, Summary: "root"}
+	rh := putMemoryObject(t, ctx, st, root)
+	tip := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: rh, Summary: "tip"}
+	th := putMemoryObject(t, ctx, st, tip)
+	for _, failure := range []error{memoryStatusError(409), memoryStatusError(503), context.Canceled} {
+		remote := &contendedMemoryRemote{causalPushRemote: &causalPushRemote{current: rh, objects: map[domain.ContentHash]domain.MemoryDigest{rh: root}}, failure: failure}
+		svc := NewSyncRepoService(st, remote, nil)
+		plan, err := svc.localMemoryPushPlan(ctx, snapshot, th)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = svc.pushMemoryPlanFromKnown(ctx, "repo", plan, rh)
+		if isMemoryAttachmentConflict(failure) {
+			if !errors.Is(err, domain.ErrMemoryContention) || errors.Is(err, domain.ErrSyncConflict) {
+				t.Fatalf("contention classified as fork: %v", err)
+			}
+			if remote.calls != maxMemoryPushReplans+1 {
+				t.Fatalf("unbounded retries: %d", remote.calls)
+			}
+		} else if !errors.Is(err, failure) || remote.calls != 1 {
+			t.Fatalf("non-CAS error retried: %v calls=%d", err, remote.calls)
+		}
+	}
+}
+
+func TestPushMemoryConcurrentForkStopsBeforeRefs(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	doc := pullDoc(t, "concurrent fork")
+	repo := string(domain.HashContent([]byte("fork repo")))
+	if _, err := st.PutDoc(ctx, doc); err != nil {
+		t.Fatal(err)
+	}
+	root := domain.MemoryDigest{SnapshotID: doc.Hash, Summary: "root"}
+	rh := putMemoryObject(t, ctx, st, root)
+	tip := domain.MemoryDigest{SnapshotID: doc.Hash, PreviousMemoryHash: rh, Summary: "local"}
+	th := putMemoryObject(t, ctx, st, tip)
+	sibling := domain.MemoryDigest{SnapshotID: doc.Hash, PreviousMemoryHash: rh, Summary: "remote sibling"}
+	sh, _ := domain.MemoryDigestHash(sibling)
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: doc.Hash, DocHash: doc.Hash, RepoID: repo, Branch: "main", MemoryHash: th}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutRef(ctx, domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo, Target: doc.Hash}); err != nil {
+		t.Fatal(err)
+	}
+	remote := &advancingMemoryRemote{causalPushRemote: &causalPushRemote{current: rh, objects: map[domain.ContentHash]domain.MemoryDigest{rh: root, sh: sibling}}, advance: sh}
+	_, err := NewSyncRepoService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo})
+	if !errors.Is(err, domain.ErrSyncConflict) {
+		t.Fatalf("fork accepted: %v", err)
+	}
+	if remote.current != sh || remote.refPushes != 0 {
+		t.Fatal("fork rewrote remote memory or published refs")
+	}
+}
+
+func TestMemoryPreflightUsesActualCurrentDigest(t *testing.T) {
+	ctx := context.Background()
+	st := storage.NewFileStore(t.TempDir())
+	snapshot := domain.HashContent([]byte("preflight"))
+	root := domain.MemoryDigest{SnapshotID: snapshot, Summary: "root"}
+	rh := putMemoryObject(t, ctx, st, root)
+	newer := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: rh, Summary: "remote"}
+	nh, _ := domain.MemoryDigestHash(newer)
+	latest := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: nh, Summary: "newer remote"}
+	lh, _ := domain.MemoryDigestHash(latest)
+	remote := &causalPushRemote{current: lh, objects: map[domain.ContentHash]domain.MemoryDigest{nh: newer, lh: latest}}
+	svc := NewSyncRepoService(st, remote, nil)
+	plan, err := svc.localMemoryPushPlan(ctx, snapshot, rh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ahead, err := svc.preflightKnownRemoteMemory(ctx, "repo", plan, nh)
+	if err != nil || !ahead {
+		t.Fatalf("catalog race rejected verified descendant: ahead=%v err=%v", ahead, err)
+	}
+	// The returned envelope must be for this exact snapshot even during a race.
+	latest.SnapshotID = domain.HashContent([]byte("foreign"))
+	remote.objects[lh] = latest
+	if _, err := svc.preflightKnownRemoteMemory(ctx, "repo", plan, nh); !errors.Is(err, domain.ErrHashMismatch) {
+		t.Fatalf("foreign memory accepted: %v", err)
+	}
+}
