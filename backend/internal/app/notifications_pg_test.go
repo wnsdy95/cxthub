@@ -45,7 +45,8 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 	fail := failedNotificationPG{st}
 	broken := NewService(fail, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	raw := []byte(`{"version":1,"kdf":"PBKDF2-SHA256","iterations":600000,"salt_b64":"AAAAAAAAAAAAAAAAAAAAAA==","cipher":"AES-256-GCM","nonce_b64":"AAAAAAAAAAAAAAAA","ciphertext_b64":"AAAAAAAAAAAAAAAAAAAAAA==","fingerprint":"aaaaaaaaaaaa"}`)
-	if err := broken.PutSecretsCAS(ctx, repo, raw, nil); err == nil {
+	inputSecrets := inbound.SaveSecretsInput{RepoID: repo, ActorID: user.ID, Envelope: raw, Edit: domain.SecretsEdit{ExpectedRevision: "absent"}}
+	if _, err := broken.SaveSecrets(ctx, inputSecrets); err == nil {
 		t.Fatal("injected enqueue failure accepted")
 	}
 	if _, err := st.GetSecretsEnvelope(ctx, repo); !errors.Is(err, domain.ErrNotFound) {
@@ -69,10 +70,10 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 	if _, err := svc.UpdateRef(ctx, input); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.PutSecretsCAS(ctx, repo, raw, nil); err != nil {
+	if _, err := svc.SaveSecrets(ctx, inputSecrets); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.PutSecretsCAS(ctx, repo, raw, nil); !errors.Is(err, domain.ErrRefConflict) {
+	if _, err := svc.SaveSecrets(ctx, inputSecrets); !errors.Is(err, domain.ErrSecretsConflict) {
 		t.Fatal("stale ciphertext CAS accepted")
 	}
 	jobs, err = st.ListNotifications(ctx, wsp.ID)

@@ -3368,6 +3368,8 @@ paths:
         Every write also requires expected_revision from the envelope read before editing. The server returns 409 secrets_conflict
         for stale content revisions, even with the same fingerprint, and 428 revision_required when the precondition is omitted.
         A successful PUT returns status and a fresh revision. Legacy ciphertext reads receive a stable revision without mutation.
+        Authorization, editing baseline, rotation policy and ciphertext CAS are enforced by one application command.
+        PostgreSQL pins workspace policy and membership through ciphertext, revision and notification-outbox commit.
       tags: [assets]
       parameters:
         - name: expected_revision
@@ -3401,12 +3403,15 @@ paths:
                 properties:
                   status: { type: string }
                   revision: { type: string }
-        "400": { description: "fingerprint_required — team is using fingerprint system but no fingerprint in envelope (legacy cxt)" }
+        "400": { description: "Malformed encrypted envelope JSON or required fingerprint missing" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { description: "secrets_conflict (stale editing revision), passphrase_mismatch, or rotate_conflict" }
+        "413": { description: "Transport body exceeds 512KiB" }
+        "415": { description: "Content-Type must be application/json" }
+        "422": { description: "Envelope exceeds 256KiB or has invalid cryptographic parameters" }
         "428": { description: "revision_required — missing editing baseline" }
-        "503": { description: "consistency_check_failed — failed to query existing envelope, unable to perform consistency check (fail-closed)" }
+        "503": { description: "consistency_check_failed — existing envelope cannot be read or validated, or atomic storage capability unavailable (fail-closed)" }
 
   # =========================================================================
   # Authentication · Account

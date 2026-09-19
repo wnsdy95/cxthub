@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1768,86 +1767,6 @@ func (s *Service) deleteUnsync(ctx context.Context, repoID domain.ContentHash, u
 		return err
 	}
 	return s.meta.DeleteUnsync(ctx, repoID, user, branch)
-}
-
-const secretsKDFIterations = 600_000
-
-type secretsEnvelope struct {
-	Version       int    `json:"version"`
-	KDF           string `json:"kdf"`
-	Iterations    int    `json:"iterations"`
-	SaltB64       string `json:"salt_b64"`
-	Cipher        string `json:"cipher"`
-	NonceB64      string `json:"nonce_b64"`
-	CiphertextB64 string `json:"ciphertext_b64"`
-	Fingerprint   string `json:"fingerprint,omitempty"`
-}
-
-func validateSecretsEnvelope(raw []byte) error {
-	var env secretsEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("%w: invalid secrets envelope JSON", domain.ErrIntegrity)
-	}
-	if env.Version != 1 || env.KDF != "PBKDF2-SHA256" || env.Cipher != "AES-256-GCM" || env.Iterations != secretsKDFIterations {
-		return fmt.Errorf("%w: unsupported secrets envelope parameters", domain.ErrIntegrity)
-	}
-	salt, err := base64.StdEncoding.DecodeString(env.SaltB64)
-	if err != nil || len(salt) != 16 {
-		return fmt.Errorf("%w: secrets envelope salt must be 16 bytes", domain.ErrIntegrity)
-	}
-	nonce, err := base64.StdEncoding.DecodeString(env.NonceB64)
-	if err != nil || len(nonce) != 12 {
-		return fmt.Errorf("%w: secrets envelope nonce must be 12 bytes", domain.ErrIntegrity)
-	}
-	ciphertext, err := base64.StdEncoding.DecodeString(env.CiphertextB64)
-	if err != nil || len(ciphertext) < 16 {
-		return fmt.Errorf("%w: invalid AES-GCM ciphertext", domain.ErrIntegrity)
-	}
-	if env.Fingerprint != "" {
-		if len(env.Fingerprint) != 12 {
-			return fmt.Errorf("%w: invalid secrets fingerprint", domain.ErrIntegrity)
-		}
-		for _, r := range env.Fingerprint {
-			if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-				return fmt.Errorf("%w: invalid secrets fingerprint", domain.ErrIntegrity)
-			}
-		}
-	}
-	return nil
-}
-
-// PutSecrets stores a secret ciphertext envelope. Server never decrypts (E2E),
-// but client validates format to prevent team members from forcing abnormal KDF cost or AES-GCM parameters.
-func (s *Service) PutSecrets(ctx context.Context, repoID domain.ContentHash, raw []byte) error {
-	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error {
-		return s.putSecrets(ctx, repoID, raw, func() error { return s.meta.PutSecretsEnvelope(ctx, repoID, raw) })
-	})
-}
-
-func (s *Service) PutSecretsCAS(ctx context.Context, repoID domain.ContentHash, raw, expected []byte) error {
-	st, ok := s.meta.(outbound.SecretsCASStore)
-	if !ok {
-		return fmt.Errorf("atomic secrets storage unavailable")
-	}
-	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error {
-		return s.putSecrets(ctx, repoID, raw, func() error { return st.CompareAndSwapSecrets(ctx, repoID, expected, raw) })
-	})
-}
-
-func (s *Service) putSecrets(ctx context.Context, repoID domain.ContentHash, raw []byte, write func() error) error {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return err
-	}
-	if len(raw) > 256<<10 {
-		return fmt.Errorf("%w: envelope exceeds 256KB", domain.ErrIntegrity)
-	}
-	if err := validateSecretsEnvelope(raw); err != nil {
-		return err
-	}
-	if err := write(); err != nil {
-		return err
-	}
-	return s.notifySecretsChanged(ctx, repoID)
 }
 
 // GetSecrets returns secret ciphertext envelopes (ciphertext as-is — decryption is on the client).
