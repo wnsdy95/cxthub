@@ -59,3 +59,7 @@ var ErrNotGitRepo = errors.New("not a git repository (or any of the parent direc
 
 // ErrSelectionChanged stops prompt installation after a concurrent worktree move.
 var ErrSelectionChanged = errors.New("context selection changed")
+
+// ErrMemoryContention means concurrent writers prevented bounded replay; it
+// does not establish divergence and must never suggest a forced pull.
+var ErrMemoryContention = errors.New("memory attachment kept changing during upload")
