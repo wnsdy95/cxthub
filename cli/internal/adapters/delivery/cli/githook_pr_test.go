@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -247,5 +248,97 @@ func TestPRDiscoveryRetainsFailedRangeAcrossLaterPull(t *testing.T) {
 	replayPRDiscovery(context.Background(), resolver, syncer, root, "main", "https://github.com/acme/repo", nil)
 	if len(resolver.shas) != 0 {
 		t.Fatalf("discovery not acknowledged: %v", resolver.shas)
+	}
+}
+
+type failedIncomingSync struct{ fixedBriefingSync }
+
+func (failedIncomingSync) Pull(context.Context, inbound.SyncInput) (inbound.SyncOutput, error) {
+	return inbound.SyncOutput{}, errors.New("simulated initial fetch timeout")
+}
+
+func TestIncomingFetchFailureRetainsDiscoveryBeforeNetwork(t *testing.T) {
+	root := t.TempDir()
+	runGitForTest(t, root, "init", "-q", "-b", "main")
+	for _, entry := range [][2]string{{"core.hooksPath", "/dev/null"}, {"commit.gpgsign", "false"}, {"gc.auto", "0"}, {"maintenance.auto", "false"}, {"user.name", "Test"}, {"user.email", "test@example.test"}} {
+		runGitForTest(t, root, "config", entry[0], entry[1])
+	}
+	runGitForTest(t, root, "remote", "add", "origin", "https://github.com/acme/repo.git")
+	runGitForTest(t, root, "commit", "--allow-empty", "-qm", "base")
+	base := gitOut(root, "rev-parse", "HEAD")
+	runGitForTest(t, root, "commit", "--allow-empty", "-qm", "merged PR")
+	merged := gitOut(root, "rev-parse", "HEAD")
+	runGitForTest(t, root, "update-ref", "ORIG_HEAD", base)
+	t.Setenv("CXT_REMOTE", "http://example.test")
+	c := &Container{Sync: failedIncomingSync{}, PRMerges: &fakePRMergeResolver{}}
+	handleIncomingContexts(context.Background(), c, root)
+	// A later Git operation replaces ORIG_HEAD before the network recovers.
+	runGitForTest(t, root, "update-ref", "ORIG_HEAD", merged)
+	resolver := &fakePRMergeResolver{}
+	replayPRDiscovery(context.Background(), resolver, &fakeMergedPRSync{}, root, "main", "https://github.com/acme/repo.git", nil)
+	if len(resolver.shas) != 1 || resolver.shas[0] != merged {
+		t.Fatalf("initial fetch failure lost incoming PR range: %v", resolver.shas)
+	}
+}
+
+func TestOrdinarySyncReplaysSavedPRDiscovery(t *testing.T) {
+	for _, command := range []string{"push", "pull"} {
+		t.Run(command, func(t *testing.T) {
+			root := t.TempDir()
+			runGitForTest(t, root, "init", "-q", "-b", "main")
+			runGitForTest(t, root, "config", "core.hooksPath", "/dev/null")
+			runGitForTest(t, root, "config", "commit.gpgsign", "false")
+			runGitForTest(t, root, "config", "user.name", "Test")
+			runGitForTest(t, root, "config", "user.email", "test@example.test")
+			runGitForTest(t, root, "remote", "add", "origin", "https://github.com/acme/repo.git")
+			runGitForTest(t, root, "commit", "--allow-empty", "-qm", "base")
+			t.Setenv("CXT_REMOTE", "http://example.test")
+			t.Chdir(root)
+			if err := persistPRDiscovery(context.Background(), root, "main", "https://github.com/acme/repo.git", []string{"retained-merge"}); err != nil {
+				t.Fatal(err)
+			}
+			resolver := &fakePRMergeResolver{err: errors.New("GitHub unavailable")}
+			c := &Container{Sync: fixedBriefingSync{}, PRMerges: resolver}
+			if err := Run(c, []string{"cxt", command}); err != nil {
+				t.Fatal(err)
+			}
+			resolver.err = nil
+			resolver.shas = nil
+			if err := Run(c, []string{"cxt", command}); err != nil {
+				t.Fatal(err)
+			}
+			if len(resolver.shas) != 1 || resolver.shas[0] != "retained-merge" {
+				t.Fatalf("%s did not retry saved discovery: %v", command, resolver.shas)
+			}
+			resolver.shas = nil
+			if err := Run(c, []string{"cxt", command}); err != nil {
+				t.Fatal(err)
+			}
+			if len(resolver.shas) != 0 {
+				t.Fatalf("%s replayed acknowledged discovery: %v", command, resolver.shas)
+			}
+		})
+	}
+}
+
+func TestPRDiscoveryDoesNotReplaceCorruptSavedRange(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+	if err := persistPRDiscovery(ctx, root, "main", "https://github.com/acme/repo.git", []string{"merge"}); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(root, ".cxt", "pr-discovery", "*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("queue: %v %v", paths, err)
+	}
+	if err := os.WriteFile(paths[0], []byte("corrupt test range"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistPRDiscovery(ctx, root, "main", "https://github.com/acme/repo.git", []string{"merge"}); !errors.Is(err, domain.ErrHashMismatch) {
+		t.Fatalf("corruption silently accepted: %v", err)
+	}
+	raw, err := os.ReadFile(paths[0])
+	if err != nil || string(raw) != "corrupt test range" {
+		t.Fatalf("original overwritten: %s %v", raw, err)
 	}
 }

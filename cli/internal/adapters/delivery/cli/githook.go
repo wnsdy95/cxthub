@@ -1427,6 +1427,15 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
 		return
 	}
+	branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	origin := gitOut(cwd, "config", "--get", "remote.origin.url")
+	shas := incomingCommitSHAs(cwd)
+	if c.PRMerges != nil {
+		if err := persistPRDiscovery(ctx, cwd, branch, origin, shas); err != nil {
+			hookWarn("incoming PR discovery was not saved: %v", err)
+			return
+		}
+	}
 	out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, FetchOnly: true})
 	if err != nil {
 		syncWarn(cwd, "pull", err)
@@ -1439,7 +1448,6 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	for _, b := range out.RemoteAhead {
 		hookWarn("New context on remote %q — history move is 'cxt pull', session injection is 'cxt load'", b)
 	}
-	branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	localBaseline, baselineOK := localBranchTarget(ctx, c, branch)
 	remoteWasAhead := false
 	for _, b := range out.RemoteAhead {
@@ -1464,8 +1472,7 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	// PR merge context promotion: First resolve host-side squash/rebase/merge
 	// commits back to their source branches. Then retain the generic [git sha]
 	// path for non-GitHub and direct merge histories.
-	shas := incomingCommitSHAs(cwd)
-	prReflected := replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, gitOut(cwd, "config", "--get", "remote.origin.url"), shas)
+	prReflected := replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, origin, nil)
 	mergeReflected := appendMergedContexts(ctx, c, cwd, branch, shas)
 	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
 		hookWarn("completed PR context position remains pending: %v", err)
