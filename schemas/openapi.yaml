@@ -2573,6 +2573,10 @@ paths:
           description: Pending job capacity exhausted; retry later
         "413":
           description: Manifest request exceeds the bounded transport limit
+        "415":
+          description: Content-Type must be application/json
+        "422":
+          description: Invalid manifest, identifier or unavailable repository-owned chunks
         "503":
           description: Durable finalization unavailable
   /repos/{repoID}/push/doc-jobs/{jobID}:
@@ -2597,6 +2601,8 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Invalid manifest, identifier or unavailable repository-owned chunks
         "503":
           description: Durable finalization unavailable
   /repos/{repoID}/push/objects:

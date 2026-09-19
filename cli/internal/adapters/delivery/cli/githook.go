@@ -63,9 +63,12 @@ func cxtRepoRoot(ctx context.Context, cwd string) string {
 // syncWarn notifies of push/pull failures in hooks. Authentication issues (401/403) are warned once and then suppressed — local snapshots continue to accumulate, so the next push will pick up any missed changes after login.
 func syncWarn(cwd, op string, err error) {
 	cwd = cxtRepoRoot(context.Background(), cwd)
-	msg := err.Error()
-	is401 := strings.Contains(msg, "401")
-	is403 := strings.Contains(msg, "403")
+	// Hashes, job IDs and cancellation messages may contain any three digits.
+	// Only a typed server response is evidence of an authentication failure.
+	var response interface{ StatusCode() int }
+	isHTTP := errors.As(err, &response)
+	is401 := isHTTP && response.StatusCode() == 401
+	is403 := isHTTP && response.StatusCode() == 403
 	if !is401 && !is403 {
 		hookWarn("context %s failed (git continues): %v", op, err)
 		return
