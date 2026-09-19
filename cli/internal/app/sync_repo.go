@@ -117,6 +117,9 @@ func sameParents(left, right []domain.ContentHash) bool {
 // validatePullBatch validates the entire remote response before local write. The same snapshot ID's natural
 // parent is immutable across replicas, and GraftParents can only be added as server overlays.
 func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID string, snaps []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return err
 	}
@@ -161,7 +164,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 		doc, err := store.GetDoc(ctx, snap.DocHash)
 		if err != nil {
-			return fmt.Errorf("%w: snapshot %s has no verified doc %s", domain.ErrHashMismatch, snap.ID, snap.DocHash)
+			return pullReadError(err, fmt.Sprintf("snapshot %s doc %s", snap.ID, snap.DocHash))
 		}
 		if err := domain.ValidateSessionDocHash(doc); err != nil {
 			return err
@@ -184,6 +187,9 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 	state := make(map[domain.ContentHash]uint8, len(snaps))
 	var visit func(domain.ContentHash) error
 	visit = func(id domain.ContentHash) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		switch state[id] {
 		case 1:
 			return fmt.Errorf("%w: pulled snapshot graph cycle at %s", domain.ErrHashMismatch, id)
@@ -192,7 +198,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 		snap, err := getSnapshot(id)
 		if err != nil {
-			return fmt.Errorf("%w: missing pulled parent %s", domain.ErrHashMismatch, id)
+			return pullReadError(err, fmt.Sprintf("pulled parent %s", id))
 		}
 		state[id] = 1
 		seenParents := map[domain.ContentHash]bool{}
@@ -233,7 +239,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 		if ref.Target != "" {
 			if _, err := getSnapshot(ref.Target); err != nil {
-				return fmt.Errorf("%w: ref %s/%s targets missing snapshot", domain.ErrHashMismatch, ref.Kind, ref.Name)
+				return pullReadError(err, fmt.Sprintf("ref %s/%s target", ref.Kind, ref.Name))
 			}
 		}
 	}
@@ -249,10 +255,19 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 			continue
 		}
 		if _, err := store.GetRef(ctx, repoID, domain.RefBranch, branch); err != nil {
-			return fmt.Errorf("%w: symbolic HEAD targets missing branch %s", domain.ErrHashMismatch, branch)
+			return pullReadError(err, fmt.Sprintf("symbolic HEAD branch %s", branch))
 		}
 	}
 	return nil
+}
+
+// Only an absent dependency proves a broken graph. Cancellation and I/O failures
+// leave integrity unproven and must retain their actual cause for recovery.
+func pullReadError(err error, object string) error {
+	if errors.Is(err, domain.ErrNotFound) {
+		return fmt.Errorf("%w: missing %s: %w", domain.ErrHashMismatch, object, err)
+	}
+	return fmt.Errorf("read %s: %w", object, err)
 }
 
 // pushSettingsObjects uploads every settings object before a snapshot can

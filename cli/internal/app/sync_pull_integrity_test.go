@@ -250,3 +250,31 @@ func TestPullDoesNotReplaceUntrackedLocalMemoryWithDifferentRemotePointer(t *tes
 		t.Fatalf("forced pull deleted losing immutable local memory: %v", err)
 	}
 }
+
+type failingPullReadStore struct {
+	outbound.SessionStore
+	docErr error
+}
+
+func (s failingPullReadStore) GetDoc(context.Context, domain.ContentHash) (domain.SessionDoc, error) {
+	return domain.SessionDoc{}, s.docErr
+}
+
+func TestValidatePullBatchPreservesReadFailures(t *testing.T) {
+	repo := string(domain.HashContent([]byte("pull-read-error")))
+	doc := pullDoc(t, "local document")
+	snap := domain.Snapshot{ID: doc.Hash, DocHash: doc.Hash, RepoID: repo, Branch: "main"}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, errors.New("disk read failed"), domain.ErrNotFound} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			store := failingPullReadStore{SessionStore: storage.NewFileStore(t.TempDir()), docErr: cause}
+			err := validatePullBatch(context.Background(), store, repo, []domain.Snapshot{snap}, nil, nil)
+			if cause == domain.ErrNotFound {
+				if !errors.Is(err, domain.ErrHashMismatch) {
+					t.Fatalf("missing object: %v", err)
+				}
+			} else if !errors.Is(err, cause) || errors.Is(err, domain.ErrHashMismatch) {
+				t.Fatalf("read failure misclassified: %v; want %v", err, cause)
+			}
+		})
+	}
+}
