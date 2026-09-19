@@ -3,10 +3,9 @@ import {EffectiveMemory} from './EffectiveMemory';
 // Automatically displays the latest context of the default branch (main/master),
 // and provides a branch dropdown + commit log (click to show context at that point in time).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Repo, Workspace, Snapshot, Pending } from '../types';
+import type { Repo, Workspace, Snapshot } from '../types';
 import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, useRepoView, useReflog } from '../hooks';
 import { navigate, repoPath } from '../route';
-import { holdCounts, reachableSnapshotIds } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { mainlineOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { atLeast, canWriteAsset, type Role } from '../roles';
@@ -89,7 +88,7 @@ type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug' | 'visi
 export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspace | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
+  const { refs, snapshots: allSnapshots, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
@@ -108,11 +107,9 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   // graft-overlay parents. First-parent/mainline styling remains a separate
   // concern below; snapshots unreachable from the selected ref stay graph-only.
   const snapshots = useMemo(() => {
-    const head = refs.find((r) => r.kind === 'branch' && r.name === branch)?.target;
-    if (!head) return [];
-    const reachable = reachableSnapshotIds([head], allSnapshots);
-    return allSnapshots.filter((s) => reachable.has(s.id));
-  }, [refs, branch, allSnapshots]);
+    const ids = new Set(branch ? graphState?.branch_snapshots[branch] : []);
+    return allSnapshots.filter(s => ids.has(s.id));
+  }, [branch, allSnapshots, graphState]);
   // Selected branch's main lineage (head's first-parent direct ancestor) — distinguishes merge branches (⎘).
   const mainline = useMemo(() => {
     const head = refs.find((r) => r.kind === 'branch' && r.name === branch)?.target;
@@ -128,21 +125,10 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   // uncommitted continuation. This does not imply that the provider is alive.
   // If there are unsync push commits, it's the unsync tip in the On Hold tab.
   // (Context tab shows only shared timeline — pending work is only indicated by badges). Orphan pending is also handled by On Hold.
-  const sharedPendingTargets = sharedIds;
   const continuing = useMemo(() => {
-    const m = new Map<string, Pending>(); // tip snapshot id → pending
-    for (const p of pendings) {
-      if (p.dismissed || sharedPendingTargets.has(p.target)) continue;
-      const head = refs.find((r) => r.kind === 'branch' && r.name === p.branch)?.target;
-      if (!head) continue;
-      if (unsyncs.some((u) => u.branch === p.branch && u.target !== head)) continue; // pending commit is ahead
-      const tip = allSnapshots.find((s) => s.id === head);
-      if (tip?.session_id && tip.session_id === p.session_id) m.set(tip.id, p);
-    }
-    return m;
-  }, [pendings, unsyncs, refs, allSnapshots, sharedPendingTargets]);
-  // Branch-specific pending count (for tip badges) — same definition as rows in On Hold tab (onhold.ts shared).
-  const holdCount = useMemo(() => holdCounts(refs, allSnapshots, unsyncs, pendings, sharedIds), [refs, allSnapshots, unsyncs, pendings, sharedIds]);
+    const bySession = new Map(pendings.map(p => [p.session_id,p]));
+    return new Map(Object.entries(graphState?.continuations ?? {}).flatMap(([id,session]) => bySession.has(session) ? [[id,bySession.get(session)!] as const] : []));
+  }, [pendings,graphState]);
   const [snapId, setSnapId] = useState<string | null>(null);
   const { viewerRef, openSnapshot, selectedEvent } = useContextSelection(repo.id, snapId, setSnapId);
   // Auto-selection is conservative: keep current selection if it exists in the full list (user click respected),
@@ -576,7 +562,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
+        <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
         <ReflogPanel repoId={repo.id} />
         <AIBar snapshots={committedSnapshots} />
       </aside>

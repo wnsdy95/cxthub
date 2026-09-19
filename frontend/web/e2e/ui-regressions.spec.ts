@@ -1,3 +1,4 @@
+import { serverGraphWireFixture } from '../tests/serverGraphFixture';
 import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { capturePageErrors, installApiFixture, type ApiRequest, type ApiResponse } from './api-fixture';
@@ -417,7 +418,7 @@ test('public workspace management controls deny non-maintainers without opening 
           graft_parents: [],
           doc_hash: pushedHead,
           message: 'shared main head',
-          author: 'Alice',
+          author: {name:'Alice',email:'alice@example.test',team:''},
           session_id: 'session-1',
           provider: 'codex',
           models: ['gpt-5.6-sol'],
@@ -1051,8 +1052,10 @@ test('previous progress folds independently and preserves shared paths and sync 
   await expect(page.locator('.graph-row')).toHaveCount(2);
   await expect(page.locator('.graph-status-item.pushed')).toHaveText('Pushed 5');
   await expect(page.locator('.graph-status-item.unpushed')).toHaveText('Not pushed 0');
-  const first = panel.locator('.graph-history-toggle').nth(0);
-  const second = panel.locator('.graph-history-toggle').nth(1);
+  const firstRow=panel.locator('li').filter({has:page.locator('code',{hasText:previous.slice(7,14)})});
+  const secondRow=panel.locator('li').filter({has:page.locator('code',{hasText:other.slice(7,14)})});
+  const first = firstRow.locator('.graph-history-toggle');
+  const second = secondRow.locator('.graph-history-toggle');
   await first.focus();
   await page.keyboard.press('Enter');
   await expect(first).toHaveAttribute('aria-expanded', 'true');
@@ -1065,14 +1068,14 @@ test('previous progress folds independently and preserves shared paths and sync 
   await first.click();
   await expect(page.locator('.graph-row')).toHaveCount(4);
   await expect(page.locator('.graph-row[aria-label^="shared previous ancestor"]')).toBeVisible();
-  await panel.locator('.graph-history-view').nth(1).click();
+  await secondRow.locator('.graph-history-view').click();
   await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^second previous tip/);
   await second.focus();
   await page.keyboard.press('Space');
   await expect(page.locator('.graph-row')).toHaveCount(2);
   await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^current work/);
   // Reading a folded tip reveals it; folding remains a local display operation.
-  await panel.locator('.graph-history-view').nth(0).click();
+  await firstRow.locator('.graph-history-view').click();
   await expect(page.locator('.graph-row')).toHaveCount(4);
   await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^hook: first previous tip/);
   await first.click();
@@ -1958,20 +1961,22 @@ for (const malformed of ['duplicate-id', 'cycle'] as const) {
       : good.map(s=>s.id===hidden?{...s,graft_parents:[hidden]}:s);
     const refs=[{repo_id:repoId,kind:'branch',name:'main',target:current},
       {repo_id:repoId,kind:'tag',name:`cxt/branch-state/v1/00000000000000000001/archived/${hidden.slice(7)}/deleted`,target:hidden}];
-    let recovered=false;
+    let stage=0;
     const badApi=publicWorkspaceApi(bad,refs), goodApi=publicWorkspaceApi(good,refs);
     const pageErrors=capturePageErrors(page);
-    const unexpected=await installApiFixture(page, request=>(recovered?goodApi:badApi)(request));
+    const unexpected=await installApiFixture(page, request=>(stage===1?badApi:goodApi)(request));
     await page.goto('/alice/cxthub');
-    const alert=page.locator('.graph-invalid');
-    await expect(alert).toBeVisible();
-    await expect(alert.locator(`[data-graph-issue="${malformed}"]`)).toContainText(hidden);
-    await expect(page.locator('.graph-row')).toHaveCount(0);
-    // The independent document viewer stays usable while invalid lines are withheld.
     await page.locator('.commit-row').filter({hasText:'current readable context'}).click();
     await expect(page.getByText('Visible fixture prompt',{exact:true})).toBeVisible();
+    stage=1;
+    const alert=page.locator('.graph-wrap [role="alert"]');
+    await expect(alert).toBeVisible({timeout:10_000});
+    await expect(alert).toContainText(malformed==='duplicate-id'?'duplicate graph snapshot':'cyclic graph ancestry');
+    await expect(page.locator('.graph-row')).toHaveCount(0);
+    // The last coherent document view stays usable while invalid new graph data is rejected.
+    await expect(page.getByText('Visible fixture prompt',{exact:true})).toBeVisible();
     await alert.screenshot({path:testInfo.outputPath(`invalid-${malformed}.png`)});
-    recovered=true;
+    stage=2;
     await alert.getByRole('button').click();
     await expect(alert).toHaveCount(0);
     await expect(page.locator('.graph-row')).toHaveCount(2);
@@ -2172,7 +2177,7 @@ test('effective memory ignores pending activity and refreshes on evidence arriva
   const revision = {graph: '1', pending, evidence};
   if (req.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
   if (req.pathname.endsWith('/revision')) return {body: revision};
-  if (req.pathname.endsWith('/pending-view')) {pendingReads++;return {body:{revision,pending:[],snapshots:[]}};}
+  if (req.pathname.endsWith('/pending-view')) {pendingReads++;const graph=serverGraphWireFixture({revision,snapshots:[snap],refs:[{kind:'branch',name:'main',target:pushedHead,repo_id:repoId}]}).graph;return {body:{revision,graph,pending:[],snapshots:[]}};}
   if (req.pathname.endsWith('/effective-memory')) {memoryReads++;return {body:{selection:{snapshot_id:pushedHead,code_commit:'a'.repeat(40)},revision,state_hash:id('f'),lineage_hash:id('e'),total:1,items:[{id:id('d'),source_snapshot:pushedHead,kind:'code',text:'Scoped claim',state:evidence==='1'?'review':'applied',reason:evidence==='1'?'source_publication_missing':'declared_scope_matches'}],next_cursor:''}};}
   return base(req);
  });

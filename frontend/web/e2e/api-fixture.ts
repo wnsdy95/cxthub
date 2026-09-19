@@ -1,3 +1,4 @@
+import { serverGraphWireFixture } from '../tests/serverGraphFixture';
 import type { Page } from '@playwright/test';
 
 export interface ApiRequest {
@@ -32,7 +33,7 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
   const unexpected: string[] = [];
   const states = new Map<string, {graph: number; pending: number; g: string; p: string}>();
   const projected = (input: ApiRequest): ApiResponse | undefined => {
-    if (input.method !== 'GET' || !/\/(view|revision|changes|pending-view)$/.test(input.pathname)) return undefined;
+    if (input.method !== 'GET' || !/\/(view|revision|changes|pending-view|graph-state)$/.test(input.pathname)) return undefined;
     // Contract regressions can supply actual, distinct serialized responses.
     // Do not silently replace them with an enriched full-view fixture.
     if (/\/(pending-view|revision|changes)$/.test(input.pathname)) {
@@ -53,9 +54,16 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
     const revision = {graph: options.graphRevision?.() ?? String(next.graph), pending: String(next.pending)};
     if (input.pathname.endsWith('/revision')) return {body: revision};
     if (input.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
-    if (input.pathname.endsWith('/pending-view')) return {body: {revision, pending: body.pending,
-      snapshots: body.snapshots?.filter((s: any) => pendingIDs.has(s.id)).map(({branches: _memberships, ...capture}: any) => capture)}};
-    return {...response, body: {...body,revision}};
+    try {
+      const full=serverGraphWireFixture({...body,revision},input.pathname.endsWith('/graph-state')?input.searchParams.get('position') ?? '':'');
+      if(input.pathname.endsWith('/graph-state')) return {body:full.graph};
+      if(input.pathname.endsWith('/pending-view')) return {body:{revision,graph:full.graph,pending:full.pending,
+        snapshots:full.snapshots.filter(s=>pendingIDs.has(s.id)).map(({branches:_membership,...s})=>s)}};
+      return {...response,body:full};
+    } catch(error) {
+      const cause=error as Error & {stderr?:string};
+      return {status:500,body:{error:{message:String(cause.stderr || cause.message)}}};
+    }
   };
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();

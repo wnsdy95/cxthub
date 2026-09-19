@@ -429,13 +429,15 @@ export interface StorageUsageReport {
 export interface RepositoryRevision { graph: string; pending: string; evidence?: string }
 /** Raw capture patch: branch memberships belong to the full graph generation. */
 export type PendingSnapshot = Omit<Snapshot, 'branches'>;
-export interface PendingView { revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[] }
+export interface PendingView { graph: GraphState; revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[] }
 export type BranchLineage = 'natural' | 'unchanged' | 'graft' | 'disconnected' | 'missing' | 'unknown' | 'orphan';
 export interface ContextSemantics {
   version: 1;
   merges: { event_id: string; birth_id?: string; completed: boolean; placement_intact: boolean; source_available: boolean; lineage: BranchLineage }[];
 }
 export interface RepositoryView {
+  graph: GraphState;
+  default_branch: string;
   /** Absent only during rolling upgrades from pre-projection servers. */
   semantics?: ContextSemantics;
   revision?: RepositoryRevision;
@@ -526,4 +528,29 @@ export interface JoinPreview {
  drop_targets: string[];
  only_revision?: string;
  all_revision?: string;
+}
+
+/** Server-owned business facts. UI owns only filtering, folding and coordinates. */
+export interface GraphState {
+  version: 1; revision: RepositoryRevision; position_event?: string; primary_branch: string;
+  snapshot_ids: string[]; graph_ids: string[]; committed_ids: string[]; historical_ids: string[];
+  shared_ids: string[]; pushed_ids: string[]; unpushed_ids: string[]; uncommitted_ids: string[];
+  tagged_ids: string[]; archived_only_ids: string[]; ahead_ids: string[]; ahead_tips: string[];
+  markers: {branch: string; target: string; kind: 'joined' | 'archived'; unique_count: number; target_available: boolean}[];
+  branch_heads: Record<string, {branch: string; event_id: string; archived: boolean}>;
+  ref_scopes: Record<string,string>; snapshot_scopes: Record<string,string>; scope_labels: Record<string,string>;
+  hold: {tips: Unsync[]; ids: string[]}[]; orphan_sessions: string[]; hold_counts: Record<string,number>;
+  positions: {event_id: string; branch: string; branch_id: string; snapshot: string; archived: boolean; created_at: string}[];
+  previous: {key: string; branch: string; before: string; after: string; created_at: string; snapshot_ids: string[]; collapsible_ids: string[]}[];
+  branch_snapshots: Record<string,string[]>;
+  continuations: Record<string,string>;
+  operations: {births: GraphBirth[]; merges: GraphMerge[]};
+}
+export interface GraphBirth {
+  id: string; event_id: string; branch: string; source: string; orphan: boolean; created_at: string; children: string[];
+}
+export interface GraphMerge {
+  id: string; event_id: string; before: string; after: string; source: string; branch: string; scope: string; from: string;
+  created_at: string; pr_number?: number; historical_only: boolean; withdrawn: boolean;
+  represented_grafts: string[]; redirect_children: string[]; source_birth?: string; lifecycle_birth?: string;
 }

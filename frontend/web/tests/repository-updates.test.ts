@@ -1,28 +1,37 @@
 import assert from 'node:assert/strict';
 import {mergePendingView,pendingViewNeedsFull,parseRevision,revisionCovers,subscribeRepository} from '../src/repositoryUpdates';
-import type {RepositoryView,Snapshot,Pending} from '../src/types';
-const snapshot = (id: string, parents: string[] = []): Snapshot => ({id,parents} as Snapshot);
-const view: RepositoryView = {revision:{graph:'2',pending:'1'}, refs:[],history:[],reflog:[],unsync:[],pending:[{target:'old'} as Pending],snapshots:[snapshot('committed'),snapshot('old')]};
-const update = {revision:{graph:'2',pending:'2'},pending:[{target:'new'} as Pending],snapshots:[snapshot('new')]};
+import {validateGraphState} from '../src/graphState';
+import {serverGraphFixture} from './serverGraphFixture';
+import type {Snapshot,Pending,PendingView,RepositoryView} from '../src/types';
+const snapshot=(id:string,parents:string[]=[]):Snapshot=>({id,parents,repo_id:'repo',doc_hash:id,provider:'codex',branch:'main',created_at:'2026-09-01T00:00:00Z',message:id==='committed'?'commit':'hook: capture'});
+const pending=(target:string):Pending=>({target,session_id:'live',repo_id:'repo',branch:'main',provider:'codex',updated_at:'2026-09-01T00:00:00Z'});
+const refs=[{kind:'branch' as const,name:'main',repo_id:'repo',target:'committed'}];
+const full=(snapshots:Snapshot[],target:string,seq='2')=>serverGraphFixture({refs,snapshots,pending:[pending(target)],revision:{graph:'2',pending:seq}});
+const patch=(v:RepositoryView):PendingView=>({revision:v.revision!,graph:v.graph,pending:v.pending,snapshots:v.snapshots.filter(s=>v.pending.some(p=>p.target===s.id)).map(({branches:_ignored,...s})=>s)});
+const view=full([snapshot('committed'),snapshot('old',['committed'])],'old','1');
+const update=patch(full([snapshot('committed'),snapshot('new',['committed'])],'new'));
 assert.deepEqual(mergePendingView(view,update).snapshots.map(s=>s.id),['committed','new']);
+assert.equal(mergePendingView(view,update).graph,update.graph);
 assert.equal(mergePendingView(view,{...update,revision:{graph:'3',pending:'2'}}),view);
 assert.equal(mergePendingView({...view,revision:{graph:'2',pending:'3'}},update).revision?.pending,'3');
-assert.deepEqual(mergePendingView({...view,snapshots:[...view.snapshots,snapshot('child',['old'])]},update).snapshots.map(s=>s.id),['committed','old','child','new']);
+const retained=full([snapshot('committed'),snapshot('old'),snapshot('child',['old']),snapshot('new')],'new');
+assert.deepEqual(mergePendingView({...view,snapshots:[...view.snapshots,snapshot('child',['old'])]},patch(retained)).snapshots.map(s=>s.id),['committed','old','child','new']);
 assert.equal(revisionCovers({graph:'9007199254740993',pending:'2'},{graph:'9007199254740992',pending:'2'}),true);
 assert.equal(parseRevision({graph:'1',pending:'bad'}),null);
 assert.equal(pendingViewNeedsFull(view,update),false);
-assert.equal(pendingViewNeedsFull(view,{...update,snapshots:[snapshot('new',['unseen'])]}),true);
-assert.equal(pendingViewNeedsFull(view,{...update,snapshots:[{...snapshot('new'),graft_parents:['unseen']}]}),true);
-assert.equal(pendingViewNeedsFull(view,{...update,snapshots:[snapshot('new',['old'])]}),false);
-assert.deepEqual(mergePendingView(view,{...update,snapshots:[snapshot('new',['old'])]}).snapshots.map(s=>s.id),['committed','old','new']);
-const knownBroken = {...view,snapshots:[...view.snapshots,snapshot('new',['unseen'])]};
-assert.equal(pendingViewNeedsFull(knownBroken,{...update,snapshots:[snapshot('new',['unseen'])]}),false); // full view already exposes this diagnostic
-
-// /view enriches membership; /pending-view only owns capture metadata.
-const enriched = {...view, snapshots:[{...snapshot('old'), branches:['main','topic'], memory_hash:'memory-1'}]};
-const raw = {revision:{graph:'2',pending:'2'}, pending:[{target:'old'} as Pending],
-  snapshots:[{...snapshot('old'), memory_hash:'memory-2'}]};
-const refreshed = mergePendingView(enriched,raw).snapshots[0];
+for(const graft of [false,true]) {
+ const current=full([snapshot('committed'),{...snapshot('new',graft?[]:['unseen']),...(graft?{graft_parents:['unseen']}:{})}],'new');
+ assert.equal(pendingViewNeedsFull(view,patch(current)),true);
+ const known={...view,snapshots:[...view.snapshots,...current.snapshots]};
+ assert.equal(pendingViewNeedsFull(known,patch(current)),false);
+}
+const staged=patch(full([snapshot('committed'),snapshot('new'),snapshot('staged')],'new'));
+assert.equal(pendingViewNeedsFull(view,staged),true,'metadata staged at the same graph revision still needs one complete read');
+assert.throws(()=>validateGraphState(undefined,view.revision),/Unsupported/);
+assert.throws(()=>mergePendingView(view,{...update,graph:{...update.graph,revision:{graph:'2',pending:'9'}}}),/Inconsistent/);
+const enriched={...view,snapshots:[{...snapshot('old'),branches:['main','topic'],memory_hash:'memory-1'}]};
+const raw=patch(full([{...snapshot('old'),memory_hash:'memory-2'}],'old'));
+const refreshed=mergePendingView(enriched,raw).snapshots[0];
 assert.deepEqual(refreshed.branches,['main','topic']);
 assert.equal(refreshed.memory_hash,'memory-2');
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/graphwire"
 	"net/http"
 	"sync"
 	"time"
@@ -91,7 +92,14 @@ func (h *repositoryChangeHub) run(ctx context.Context, repo domain.ContentHash, 
 }
 func (s *Server) pendingView(w http.ResponseWriter, r *http.Request) {
 	v, err := s.b.GetPendingView(r.Context(), s.repoID(r))
-	s.respond(w, v, err)
+	if err != nil {
+		s.respond(w, nil, err)
+		return
+	}
+	s.respond(w, struct {
+		domain.PendingView
+		Graph graphwire.State `json:"graph"`
+	}{v, graphwire.Encode(*v.Graph)}, nil)
 }
 func (s *Server) repositoryChanges(w http.ResponseWriter, r *http.Request) {
 	f, ok := w.(http.Flusher)

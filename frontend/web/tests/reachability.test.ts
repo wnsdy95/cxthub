@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mainlineOf } from '../src/graph.ts';
-import { reachableSnapshotIds, sharedReachable } from '../src/onhold.ts';
-import { archivedBranchMarkers, parseBranchLifecycleRef, projectBranchRefs } from '../src/branchLifecycle.ts';
+import { reachableSnapshotIds, sharedReachable } from './serverGraphFixture';
+import { archivedBranchMarkers, parseBranchLifecycleRef, projectBranchRefs } from './legacy-branchLifecycle';
 import type { Ref, Snapshot } from '../src/types.ts';
 
 function snapshot(id: string, parents: string[] = [], graftParents: string[] = []): Snapshot {
@@ -22,7 +22,7 @@ function snapshot(id: string, parents: string[] = [], graftParents: string[] = [
 const snapshots = [
   snapshot('unreachable'),
   snapshot('root'),
-  snapshot('graft-root', [], ['merge']), // cycle must terminate
+  snapshot('graft-root'),
   snapshot('natural', ['root']),
   snapshot('merge', ['natural'], ['graft-root', 'graft-root']),
   snapshot('head', ['merge']),
@@ -109,3 +109,5 @@ assert.deepEqual(
   [],
   'an active winner must remove the archived graph marker',
 );
+
+assert.throws(()=>reachableSnapshotIds(['head'],snapshots.map(s=>s.id==='graft-root'?{...s,graft_parents:['merge']}:s)),/cyclic graph ancestry/);

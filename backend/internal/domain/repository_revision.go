@@ -8,6 +8,7 @@ type RepositoryRevision struct {
 	Pending  uint64 `json:"pending,string"`
 }
 type PendingView struct {
+	Graph    *GraphState        `json:"graph"`
 	Revision RepositoryRevision `json:"revision"`
 	Pending  []Pending          `json:"pending"`
 	// Snapshots carry raw capture metadata only. Branches is intentionally absent;

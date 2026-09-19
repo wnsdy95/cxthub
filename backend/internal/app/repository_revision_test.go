@@ -32,6 +32,11 @@ func TestFullAndPendingViewMembershipOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fullGraph, _ := json.Marshal(full.Graph)
+	patchGraph, _ := json.Marshal(patch.Graph)
+	if string(fullGraph) != string(patchGraph) {
+		t.Fatalf("different graph contracts: %s / %s", fullGraph, patchGraph)
+	}
 	// Assert actual serialization, not a mock that enriches both endpoints.
 	decode := func(v any) map[string]any {
 		t.Helper()
@@ -53,7 +58,7 @@ func TestFullAndPendingViewMembershipOwnership(t *testing.T) {
 	}
 }
 
-func TestPendingViewDoesNotTraverseOldAncestors(t *testing.T) {
+func TestPendingViewDoesNotRetransmitOldAncestorMetadata(t *testing.T) {
 	ctx := context.Background()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
@@ -176,5 +181,40 @@ func TestObjectStagingDoesNotPublishGraphRevision(t *testing.T) {
 	rev, _ = svc.RepositoryRevision(ctx, repo)
 	if rev.Graph != 0 || rev.Pending != 1 {
 		t.Fatalf("wrong publication scope: %+v", rev)
+	}
+}
+
+func TestGraphQuerySeesStagingAcrossIndependentReads(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newFsckSvc(t)
+	repo := hh(t.Name())
+	first, err := svc.GetRepositoryView(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := hh("new staged metadata")
+	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: id, RepoID: repo, DocHash: id, Message: "staged commit"}); err != nil {
+		t.Fatal(err)
+	}
+	full, err := svc.GetRepositoryView(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := svc.GetPendingView(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Revision != full.Revision {
+		t.Fatal("fixture unexpectedly advanced publication revision")
+	}
+	a, _ := json.Marshal(full.Graph)
+	b, _ := json.Marshal(patch.Graph)
+	if string(a) != string(b) || len(patch.Graph.SnapshotIDs) != 1 || patch.Graph.SnapshotIDs[0] != id {
+		t.Fatalf("stale classification: %s / %s", a, b)
+	}
+	full.Graph.SnapshotIDs[0] = "mutated caller copy"
+	next, err := svc.GetPendingView(ctx, repo)
+	if err != nil || next.Graph.SnapshotIDs[0] != id {
+		t.Fatalf("caller mutation escaped: %+v %v", next, err)
 	}
 }

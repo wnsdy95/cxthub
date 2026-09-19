@@ -1,3 +1,4 @@
+import { validateGraphState } from './graphState';
 import type { PendingView, RepositoryRevision, RepositoryView } from './types';
 
 // Graph and live captures have their own cache. Evidence-only revisions
@@ -11,8 +12,10 @@ export function parseRevision(value: unknown): RepositoryRevision | null {
 }
 export function pendingViewNeedsFull(view: RepositoryView, pending: PendingView): boolean {
   if (!view.revision || view.revision.graph !== pending.revision.graph) return true;
+  validateGraphState(pending.graph,pending.revision);
   const existing = new Set(view.snapshots.map(s => s.id));
   const known = new Set([...existing, ...pending.snapshots.map(s => s.id)]);
+  if (pending.graph.snapshot_ids.some(id => !known.has(id))) return true;
   return pending.snapshots.some(s => !existing.has(s.id) &&
     [...(s.parents ?? []), ...(s.graft_parents ?? [])].some(id => !known.has(id)));
 }
@@ -20,19 +23,12 @@ export function pendingViewNeedsFull(view: RepositoryView, pending: PendingView)
  * remain untouched; stale, unreferenced sliding captures do not accumulate. */
 export function mergePendingView(view: RepositoryView, pending: PendingView): RepositoryView {
   if (!view.revision || view.revision.graph !== pending.revision.graph || BigInt(view.revision.pending) > BigInt(pending.revision.pending)) return view;
-  const retained = new Set(view.refs.map(r => r.target));
-  for (const e of view.history) for (const id of [e.source, e.target, e.shared_target]) if (id) retained.add(id);
-  for (const e of view.reflog) { retained.add(e.old); retained.add(e.new); }
-  for (const s of [...view.snapshots, ...pending.snapshots]) for (const id of [...(s.parents ?? []), ...(s.graft_parents ?? [])]) retained.add(id);
-  const oldTargets = new Set(view.pending.map(p => p.target));
-  const memberships = new Map(view.snapshots.map(s => [s.id, s.branches]));
-  const snapshots = new Map(view.snapshots.filter(s => !oldTargets.has(s.id) || retained.has(s.id)).map(s => [s.id, s]));
-  for (const s of pending.snapshots) {
-    // /pending-view does not project branch membership. It must neither erase
-    // nor manufacture graph-owned fields at the same graph revision.
-    snapshots.set(s.id, {...s, branches: memberships.get(s.id)});
-  }
-  return {...view, revision: pending.revision, pending: pending.pending, snapshots: [...snapshots.values()]};
+  validateGraphState(pending.graph,pending.revision);
+  const keep = new Set(pending.graph.snapshot_ids);
+  const memberships = new Map(view.snapshots.map(s => [s.id,s.branches]));
+  const snapshots = new Map(view.snapshots.filter(s => keep.has(s.id)).map(s => [s.id,s]));
+  for (const s of pending.snapshots) snapshots.set(s.id,{...s,branches:memberships.get(s.id)});
+  return {...view,graph:pending.graph,revision:pending.revision,pending:pending.pending,snapshots:[...snapshots.values()]};
 }
 
 type Listener = { changed: (r: RepositoryRevision) => void; failed: () => void };

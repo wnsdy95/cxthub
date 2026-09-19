@@ -23,7 +23,7 @@ import { ContextSelectionNotice, useContextSelection } from './ContextSelection'
 import { About, TeamSettings, SecretsPanel } from './About';
 import { short, when } from '../snapshotFormat';
 import type { ViewMode } from './EventStream';
-import { unsyncChains, orphanPendings, pendingIsLive, PENDING_LIVE_MS } from '../onhold';
+import { pendingIsLive, PENDING_LIVE_MS } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { useT, Rich } from '../i18n';
 
@@ -33,7 +33,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
   const [now, setNow] = useState(Date.now);
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, snapshots: allSnapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings, unsyncs } =
+  const { refs, snapshots: allSnapshots, badges, graphState, chains, orphans, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const activityTimes = pendings.map(p => p.activity_at ?? '').join(',');
   useEffect(() => {
@@ -63,11 +63,6 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
 
   const byId = useMemo(() => new Map(allSnapshots.map((s) => [s.id, s])), [allSnapshots]);
   const branches = useMemo(() => [...new Set([...refs.filter((r) => r.kind === 'branch').map((r) => r.name), ...pendings.map(p => p.branch).filter(Boolean)])].sort(), [refs, pendings]);
-
-  // Determination is a common definition in onhold.ts — must match the context tab badge count.
-  const shared = sharedIds;
-  const chains = useMemo(() => unsyncChains(unsyncs, allSnapshots, shared), [unsyncs, allSnapshots, shared]);
-  const orphans = useMemo(() => orphanPendings(pendings, refs, allSnapshots, chains, shared), [pendings, refs, allSnapshots, chains, shared]);
 
   // Branch/member filters — pending items can span multiple branches/authors, default is all.
   const [branchSel, setBranchSel] = useState<string>('*');
@@ -437,7 +432,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph
+        <CommitGraph readRepoId={repo.id} graphState={graphState}
           snapshots={graphSnapshots}
           selectedId={selSnap}
           selectedEventId={selectedEvent?.id}

@@ -52,3 +52,30 @@ invalidates the index and evidence together.
   recovered graph, with no write requests.
 - 50,000-node chain, bounded closure cache and deterministic generated DAGs
   compared against exact traversal, including cross edges and reversed inputs.
+
+## Server projection boundary (2026-09-20)
+
+The table above records the earlier frontend implementation. Business evidence,
+retained progress and publication now run in Go. `npm run benchmark:graph` invokes
+the real server fixture once per dataset, decodes its HTTP representation, then
+measures browser projection/layout/folding separately. `serverProcessMs` includes
+process startup, JSON input/output and projection; it is not database latency.
+
+Reproduce the domain benchmark from the repository root:
+
+```sh
+go -C backend test ./internal/domain -run '^$' -bench BenchmarkGraphState -benchmem
+```
+
+On the development machine, 10,000 snapshots with 100 completed branch merges
+required about 64 ms and 66 MB of total allocations per query, compared with
+330 ms and 228 MB before replacing repeated ancestry hash maps with indexed
+bitsets. A straight 10,000-snapshot chain took about 28 ms. Total allocations
+include the result and metadata index; the 8 MiB ancestry cache cap does not
+bound the size of the repository or returned groups.
+
+A 677-snapshot, 55-merge metadata sample retained the same operations while the
+graph portion fell from 1,321,475 bytes to 311,121 bytes with dictionary encoding;
+gzip at the fastest level reduced it to 78,017 bytes. These are payload/CPU
+measurements, not cloud throughput or browser paint guarantees. Neither this
+transport nor the cache changes stored ancestry, history, memory, or access rules.

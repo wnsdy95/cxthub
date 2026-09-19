@@ -49,8 +49,9 @@ capture patches at a matching graph revision and intentionally omits `branches`;
 clients preserve that field from the full generation. Stored memory is fetched
 and cached by immutable `memory_hash`, not by the mutable snapshot attachment.
 
-Revert/applicability events and the common server-owned Web/MCP read model are
-tracked in #208; this contract fix does not claim those follow-up stages ship.
+The subsequent applicability, effective-memory and server-owned graph contracts
+are described below and in [Architecture](ARCHITECTURE.md). Web and MCP consume
+shared domain facts; graph placement does not determine current memory validity.
 
 Status: accepted product behavior implemented and integration-tested on 2026-09-16.
 The checklist below records the implemented contract and its verification. This

@@ -1,3 +1,5 @@
+import { decodeGraphState, type GraphWire } from './graphWire';
+import { validateGraphState } from './graphState';
 // Backend cxtd REST client.
 //
 // Authentication uses HttpOnly session cookies — JS does not store or attach tokens.
@@ -86,7 +88,12 @@ export const api = {
  retryGitChange: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-changes/${encodeURIComponent(id)}/retry`, {}),
   repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes`,
   repositoryRevision: (repo: string) => call<import('./types').RepositoryRevision>('GET', `/repos/${encodeURIComponent(repo)}/revision`),
-  pendingView: (repo: string) => call<import('./types').PendingView>('GET', `/repos/${encodeURIComponent(repo)}/pending-view`),
+  pendingView: async (repo: string) => {
+    const view = await call<Omit<import('./types').PendingView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repo)}/pending-view`);
+    const graph = decodeGraphState(view.graph);
+    validateGraphState(graph, view.revision);
+    return {...view, graph};
+  },
   notifications: (workspace: string, signal?: AbortSignal) => call<import('./types').NotificationJob[]>('GET', `/workspaces/${encodeURIComponent(workspace)}/notifications`, undefined, undefined, signal),
   retryNotification: (workspace: string, id: string) => call('POST', `/workspaces/${encodeURIComponent(workspace)}/notifications/${encodeURIComponent(id)}/retry`, {}),
   storageUsage: (namespace: string, month: string, signal?: AbortSignal) => call<StorageUsageReport>('GET', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage?month=${encodeURIComponent(month)}`, undefined, undefined, signal),
@@ -243,9 +250,17 @@ export const api = {
       `/repos/${encodeURIComponent(repoId)}/pending/${encodeURIComponent(sessionId)}/undismiss`,
       {},
     ),
+  graphState: async (repoId: string, position: string, signal?: AbortSignal) => {
+    const wire = await call<GraphWire>('GET', `/repos/${encodeURIComponent(repoId)}/graph-state?${new URLSearchParams({position})}`, undefined, undefined, signal);
+    const g = decodeGraphState(wire);
+    validateGraphState(g, g.revision);
+    return g;
+  },
   repositoryView: async (repoId: string) => {
-    const view = await call<import('./types').RepositoryView>('GET', `/repos/${encodeURIComponent(repoId)}/view`);
+    const wire = await call<Omit<import('./types').RepositoryView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repoId)}/view`);
+    const view = {...wire, graph: decodeGraphState(wire.graph)};
     validateContextSemantics(view.history, view.semantics);
+    validateGraphState(view.graph, view.revision);
     return view;
   },
   reflog: (repoId: string) => call<RefLogEntry[]>('GET', `/repos/${encodeURIComponent(repoId)}/reflog`),

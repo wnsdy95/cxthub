@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { projectBranchGraph } from '../src/graphProjection.ts';
+import { projectBranchGraph } from './serverGraphFixture';
 import { layoutGraph } from '../src/graph.ts';
 import { GraphIndex } from '../src/graphIndex.ts';
 import type { Snapshot, HistoryEvent, RefLogEntry, Ref } from '../src/types.ts';
@@ -57,8 +57,8 @@ console.log('graph projection tests passed');
 const ordinary=[snap('root','main',[],0),snap('tip','main',['root'],1)];
 assert.equal([...projectBranchGraph(ordinary,refs,[],[{...log,old:'root',new:'tip'}],'tip','main').events.values()].filter(e=>e.kind==='merge').length,0);
 // Name reuse creates two identities, not one overwrite; a bound receipt selects the correct birth.
-const reused={...birth,id:'reused-birth',branch_id:'reused',created_at:at(6)};
-const renamed={...birth,id:'rename',kind:'rename' as const,branch:'renamed',previous_branch:'feature',created_at:at(4)};
+const reused={...birth,id:'reused-birth',branch_id:'reused',binding_parent:'rename',created_at:at(6)};
+const renamed={...birth,id:'rename',kind:'rename' as const,branch:'renamed',previous_branch:'feature',binding_parent:birth.id,created_at:at(4)};
 const q=projectBranchGraph(snapshots,refs,[birth,advance,reused,renamed,pending],[log],'tip','main');
 assert.equal([...q.events.values()].filter(e=>e.kind==='birth').length,2);
 assert.deepEqual(q.snapshots.find(s=>s.id==='feature')?.parents,['graph:birth:birth']);
@@ -145,7 +145,7 @@ assert.equal(JSON.stringify([autoSnapshots, autoHistory, autoRefs]), beforeAuto)
 const onlySelected = autoHistory.filter(e => e.kind === 'birth' || e.kind === 'position');
 assert.deepEqual(projectBranchGraph(autoSnapshots, autoRefs, onlySelected, []).snapshots.find(s => s.id === 'left')?.parents, ['root']);
 // A reused name without the original identity cannot take its publication.
-const otherBirth = {...birth, id:'other-birth', branch_id:'other-id', branch:'feature/left'};
+const otherBirth = {...birth, id:'other-birth', branch_id:'other-id', branch:'feature/left', binding_parent:'left-archive'};
 const reusedAuto = projectBranchGraph(autoSnapshots, autoRefs, [...autoHistory, otherBirth], []);
 assert.deepEqual(reusedAuto.snapshots.find(s => s.id === 'left')?.parents, ['graph:birth:left-birth']);
 // Publication also connects a root-only orphan after its ref is archived.
@@ -252,7 +252,6 @@ assert.equal(JSON.stringify([oldContent,operationHistory]),originalOperations);
 // creation records or a pending request.
 for (const history of [
   operationHistory.map(h=>h.kind==='pr-merge'?{...h,source_branch_id:undefined}:h),
-  [...operationHistory,...operationHistory.filter(h=>h.kind==='birth').map(h=>({...h,id:`duplicate-${h.id}`}))],
   operationHistory.map(h=>h.kind==='birth'?{...h,created_at:at(9)}:h),
   operationHistory.map(h=>({...h,pr_completed:false})),
 ]) assert.equal(projectBranchGraph(oldContent,[],history,[]).lifecycleEdges.size,0);
@@ -263,3 +262,5 @@ assert.deepEqual(superseded.snapshots.find(s=>s.id==='current')?.parents,['base'
 assert.equal(p.lifecycleEdges.size,0,'a natural source/birth path does not get a duplicate operation track');
 assert.equal([...projectBranchGraph(snapshots,refs,[pending,{...pending,id:'ambiguous-receipt'}],[log]).events.values()]
   .filter(e=>e.kind==='merge').length,0,'ambiguous receipts cannot assign the first matching source identity');
+
+assert.throws(()=>projectBranchGraph(oldContent,[],[...operationHistory,...operationHistory.filter(h=>h.kind==='birth').map(h=>({...h,id:`duplicate-${h.id}`}))],[]),/identity conflict/);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { classifyGraphSnapshots } from '../src/graphStatus.ts';
+import { classifyGraphSnapshots } from './serverGraphFixture';
 import type { Ref, Snapshot } from '../src/types.ts';
 
 const id = (ch: string) => `sha256:${ch.repeat(64)}`;

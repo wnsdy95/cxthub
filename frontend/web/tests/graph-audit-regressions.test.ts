@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { projectBranchGraph } from '../src/graphProjection.ts';
+import { projectBranchGraph } from './serverGraphFixture';
 import { layoutGraph } from '../src/graph.ts';
-import { classifyBranchHistoryMarkers, classifyGraphSnapshots } from '../src/graphStatus.ts';
-import { historicalSnapshotIds } from '../src/contextHistory.ts';
-import { repositoryGraph } from '../src/repositoryGraph.ts';
-import { sharedReachable } from '../src/onhold.ts';
+import { classifyBranchHistoryMarkers, classifyGraphSnapshots } from './serverGraphFixture';
+import { historicalSnapshotIds } from './serverGraphFixture';
+import { repositoryGraph } from './serverGraphFixture';
+import { sharedReachable } from './serverGraphFixture';
 import type { HistoryEvent, Pending, Ref, Snapshot, Unsync } from '../src/types.ts';
 
 const at = (n: number) => new Date(Date.UTC(2026, 8, 18, 0, 0, n)).toISOString();
@@ -55,7 +55,7 @@ const unsync = { repo_id: 'repo', branch: 'main', target: 'C', user: 'alice', up
 const unsynced = repositoryGraph(chain, refs, [], shared, [pending], [unsync]);
 assert.equal(unsynced.graphSnapshots.length, 3, 'unsync hook captures and their parents stay visible');
 assert.equal(unsynced.uncommittedIds.size, 0, 'committed unsync path supersedes pending');
-assert.deepEqual([...classifyGraphSnapshots(refs, chain, unsynced.uncommittedIds).unpushed].sort(), ['B', 'C']);
+assert.deepEqual(unsynced.graphState.unpushed_ids, ['B', 'C']);
 const published = historicalSnapshotIds([], chain, [{ ...birth, kind: 'publish', target: 'C' }]);
 const committed = repositoryGraph(chain, refs, [], published, [pending], [unsync]);
 assert.equal(committed.uncommittedIds.size, 0);
