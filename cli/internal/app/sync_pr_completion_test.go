@@ -44,7 +44,7 @@ func TestCompletedPRSeparatesDurableServerResultFromLocalRefresh(t *testing.T) {
 			case "bad-hash":
 				remote.ref.Target = "bad"
 			}
-			svc := NewSyncRepoService(store, remote, nil)
+			svc := newTestSyncService(store, remote, nil)
 			err := svc.PromotePullRequest(ctx, inbound.SyncInput{RepoID: repo}, outbound.MergedPullRequest{Number: 225, BaseBranch: "main", HeadBranch: "feature", HeadSHA: strings.Repeat("a", 40), MergeCommitSHA: strings.Repeat("b", 40)})
 			deferred := errors.Is(err, domain.ErrPRLocalReconciliation)
 			if err == nil || deferred != (kind == "local-fetch") {

@@ -90,7 +90,7 @@ func setupPushOrder(t *testing.T) (*SyncRepoService, *pushOrderRemote, string, s
 	}
 	remote := &pushOrderRemote{}
 	repo := domain.Repo{ID: repoID, LocalPath: root, DefaultBranch: "main"}
-	return NewSyncRepoService(st, remote, pushOrderGit{repo: repo}), remote, root, repoID
+	return newTestSyncService(st, remote, pushOrderGit{repo: repo}), remote, root, repoID
 }
 
 func TestPushPublishesObjectsThenGraftsThenRefs(t *testing.T) {

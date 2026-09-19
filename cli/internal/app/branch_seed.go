@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -187,7 +186,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	// with an older provider compaction summary silently loses post-compaction
 	// work between the summary and the retained tail (#84).
 	now := time.Now().UTC().Format(time.RFC3339)
-	seedSession := providerfs.NewSessionID()
+	seedSession := domain.NewSessionID()
 	events, seedBranchMemory, err := s.buildBranchSeedEvents(
 		ctx, provider, in.FromBranch, in.NewBranch, now, fromSnap.ID,
 		mainPromptMem, promptBranchMem, branchMem, seedConversationContext(branchContext), prompt,
@@ -268,12 +267,11 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 					return out, err
 				}
 				if path, resume, mErr := mat.Materialize(ctx, raw, in.Cwd); mErr == nil {
-					_ = providerfs.RecordMaterialized(repo.LocalPath, path)
 					out.WrittenPath, out.ResumeCmd = path, resume
 					// Materializers rewrite provider-native session IDs to avoid
 					// colliding with the source session. The restart target is the
 					// rewritten ID, not the synthetic CIR origin ID.
-					if fields := strings.Fields(resume); len(fields) > 0 && providerfs.ValidSessionID(fields[len(fields)-1]) {
+					if fields := strings.Fields(resume); len(fields) > 0 && domain.ValidSessionID(fields[len(fields)-1]) {
 						out.SessionID = fields[len(fields)-1]
 					}
 				}

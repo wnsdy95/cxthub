@@ -70,7 +70,7 @@ func TestPushRestoresCollectedMemoryArchiveBeforeRefs(t *testing.T) {
 			if mode == "server failure" {
 				remote.failure = memoryStatusError(503)
 			}
-			_, err := NewSyncRepoService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo})
+			_, err := newTestSyncService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo})
 			if mode == "restored" {
 				if err != nil || remote.current != latestHash || remote.refPushes != 1 || remote.restores != 1 {
 					t.Fatalf("restore failed: current=%s refs=%d restore=%d err=%v", remote.current, remote.refPushes, remote.restores, err)

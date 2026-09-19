@@ -12,7 +12,7 @@ import (
 func TestSaveNeverMovesRefBackward(t *testing.T) {
 	ctx := context.Background()
 	st := storage.NewFileStore(t.TempDir())
-	svc := &SaveSessionService{store: st}
+	svc := newTestSaveService(nil, nil, nil, st)
 	repoID := string(domain.HashContent([]byte("repo")))
 
 	d1, c2, leaf := gh('1'), gh('2'), gh('3')

@@ -74,7 +74,7 @@ func TestSavePreservesPositionSelectedAfterReadingBaseline(t *testing.T) {
 				t.Fatal(err)
 			}
 			repo := domain.Repo{ID: f.ref.RepoID, LocalPath: f.root, DefaultBranch: "main"}
-			svc := NewSaveSessionService(pushOrderGit{repo}, map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}, store)
+			svc := newTestSaveService(pushOrderGit{repo}, map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}, store)
 			out, err := svc.Save(ctx, inbound.SaveInput{Cwd: f.root, Provider: domain.ProviderClaude, SessionPath: path})
 			if change == "none" {
 				if err != nil {
@@ -123,7 +123,7 @@ func TestPendingCaptureSurvivesStaleSharedBranchSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := domain.Repo{ID: f.ref.RepoID, LocalPath: f.root, DefaultBranch: "main"}
-	svc := NewSaveSessionService(pushOrderGit{repo}, map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}, f.store)
+	svc := newTestSaveService(pushOrderGit{repo}, map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()}, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()}, f.store)
 	in := inbound.SaveInput{Cwd: f.root, Provider: domain.ProviderClaude, SessionPath: path, Pending: true, Message: domain.HookMessagePrefix + "capture"}
 	out, err := svc.Save(ctx, in)
 	if err != nil {

@@ -1,4 +1,4 @@
-package app
+package capture
 
 import (
 	"bytes"
@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -46,10 +45,10 @@ func (p captureProjection) sum() string {
 	return string(domain.HashContent(b))
 }
 
-// projectCapture reuses normalized chunks while checking the complete native
+// Project reuses normalized chunks while checking the complete native
 // prefix with a bounded-memory hash. Merely observing growth cannot prove that
 // older native bytes were not edited; a prefix mismatch rebuilds the projection.
-func (s *SaveSessionService) projectCapture(ctx context.Context, root, path string, capt outbound.CaptureSource, cdc outbound.ProviderCodec, allowPartial ...bool) (domain.Envelope, domain.ContentHash, int64, *time.Time, error) {
+func (s *SessionCaptureAdapter) Project(ctx context.Context, root, path string, capt outbound.CaptureSource, cdc outbound.ProviderCodec, allowPartial bool) (domain.Envelope, domain.ContentHash, int64, *time.Time, error) {
 	incremental, codecOK := cdc.(appendCodec)
 	store, storeOK := s.store.(appendCaptureStore)
 	native, nativeOK := capt.(interface{ IncrementalCapture() bool })
@@ -64,12 +63,12 @@ func (s *SaveSessionService) projectCapture(ctx context.Context, root, path stri
 			return domain.Envelope{}, "", 0, at, err
 		}
 		n := int64(len(raw))
-		raw, _ = capture.ScrubSecrets(raw, root)
+		raw, _ = ScrubSecrets(raw, root)
 		doc, err := cdc.Decode(ctx, raw)
 		if err != nil {
 			return domain.Envelope{}, "", 0, at, err
 		}
-		doc = capture.ScrubDoc(doc, root)
+		doc = ScrubDoc(doc, root)
 		hash, err := s.store.PutDoc(ctx, domain.SessionDoc{CIR: doc})
 		return doc.Envelope, hash, n, at, err
 	}
@@ -98,7 +97,7 @@ func (s *SaveSessionService) projectCapture(ctx context.Context, root, path stri
 		}
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	policy, err := capture.ScrubPolicyFingerprint(root)
+	policy, err := ScrubPolicyFingerprint(root)
 	if err != nil {
 		return domain.Envelope{}, "", 0, nil, err
 	}
@@ -138,7 +137,7 @@ func (s *SaveSessionService) projectCapture(ctx context.Context, root, path stri
 	end := len(raw)
 	last := bytes.LastIndexByte(raw, '\n') + 1
 	if len(bytes.TrimSpace(raw[last:])) > 0 && !json.Valid(bytes.TrimSpace(raw[last:])) {
-		if len(allowPartial) == 0 || !allowPartial[0] {
+		if !allowPartial {
 			return domain.Envelope{}, "", 0, &at, fmt.Errorf("native transcript ends in an incomplete record; retry capture")
 		}
 		end = last
@@ -149,13 +148,13 @@ func (s *SaveSessionService) projectCapture(ctx context.Context, root, path stri
 	}
 	h.Write(raw)
 	offset := prior.Offset + int64(len(raw))
-	raw, _ = capture.ScrubSecrets(raw, root)
+	raw, _ = ScrubSecrets(raw, root)
 	delta, err := incremental.DecodeAppend(ctx, raw, prior.Envelope, prior.Events)
 	if err != nil {
 		return domain.Envelope{}, "", 0, &at, err
 	}
-	delta = capture.ScrubDoc(delta, root)
-	if current, e := capture.ScrubPolicyFingerprint(root); e != nil || current != policy {
+	delta = ScrubDoc(delta, root)
+	if current, e := ScrubPolicyFingerprint(root); e != nil || current != policy {
 		return domain.Envelope{}, "", 0, &at, fmt.Errorf("capture masking policy changed; retry capture")
 	}
 	hash, err := store.AppendCaptureDoc(ctx, prior.Doc, delta)
@@ -187,3 +186,23 @@ func (r contextReader) Read(p []byte) (int, error) {
 	}
 	return r.r.Read(p)
 }
+
+// SessionCaptureAdapter keeps native file policy and checkpoint I/O behind the
+// capture port; the store is injected at the composition root.
+type SessionCaptureAdapter struct{ store outbound.SessionStore }
+
+func NewSessionCapture(store outbound.SessionStore) *SessionCaptureAdapter {
+	return &SessionCaptureAdapter{store: store}
+}
+func (*SessionCaptureAdapter) Eligible(root, path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !providerfs.CaptureExcluded(root, path, info.Size())
+}
+func (*SessionCaptureAdapter) Settings(root, kind string) (domain.SettingsBundle, bool) {
+	return ReadSettingsDir(root, kind)
+}
+func (*SessionCaptureAdapter) RecordAffinity(root string, provider domain.ProviderKind, sessionID string) {
+	RecordSessionAffinity(root, provider, sessionID)
+}
+
+var _ outbound.SessionCapture = (*SessionCaptureAdapter)(nil)

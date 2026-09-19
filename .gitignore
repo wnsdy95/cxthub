@@ -115,6 +115,7 @@ Thumbs.db
 # documentation is explicitly allowlisted below.
 /docs/internal/
 /docs/*.md
+!/docs/ARCHITECTURE.md
 !/docs/BRANCHING.md
 !/docs/CLI.md
 !/docs/CONTEXT_HISTORY.md

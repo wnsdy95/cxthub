@@ -20,7 +20,7 @@ func gh(c byte) domain.ContentHash {
 func TestIsAncestorCrossesGraftOverlay(t *testing.T) {
 	ctx := context.Background()
 	st := storage.NewFileStore(t.TempDir())
-	svc := NewSyncRepoService(st, nil, nil)
+	svc := newTestSyncService(st, nil, nil)
 
 	// Server-side graft form: no shared ancestor X, old head H (X's child), diverged segment Q (parent=X, graft=H) ← R (tip).
 	x, hOld, q, r := gh('x'), gh('h'), gh('q'), gh('r')

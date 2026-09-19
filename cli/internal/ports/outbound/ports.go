@@ -325,6 +325,8 @@ type SessionMaterializer interface {
 	// Provider returns the provider this materializer is responsible for (claude|codex).
 	Provider() domain.ProviderKind
 
+	// Implementations also record the native capture baseline so generated replay
+	// is excluded until real conversation grows, independent of the caller.
 	// Materialize records the encoded session bytes (raw) to a native session file based on the cwd. It returns the sessionPath (record path) and resumeCmd (native resume command).
 	Materialize(ctx context.Context, raw []byte, cwd string) (sessionPath string, resumeCmd string, err error)
 }

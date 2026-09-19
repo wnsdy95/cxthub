@@ -23,7 +23,7 @@ func NewCodexMaterializer() *CodexMaterializer { return &CodexMaterializer{} }
 func (m *CodexMaterializer) Provider() domain.ProviderKind { return domain.ProviderCodex }
 
 // Materialize records raw (encoded Codex rollout JSONL) as a native session file.
-func (m *CodexMaterializer) Materialize(_ context.Context, raw []byte, _ string) (string, string, error) {
+func (m *CodexMaterializer) Materialize(ctx context.Context, raw []byte, cwd string) (string, string, error) {
 	root, err := providerfs.CodexSessionsDir()
 	if err != nil {
 		return "", "", err
@@ -40,6 +40,7 @@ func (m *CodexMaterializer) Materialize(_ context.Context, raw []byte, _ string)
 	if err := providerfs.WriteRegularFileAtomic(path, rewriteCodexSessionID(raw, id), 0o644); err != nil {
 		return "", "", err
 	}
+	recordMaterialized(ctx, cwd, path)
 	return path, "codex resume " + id, nil
 }
 

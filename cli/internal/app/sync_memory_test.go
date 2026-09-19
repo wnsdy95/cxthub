@@ -81,7 +81,7 @@ func TestPullFastForwardsRemoteMemoryDescendant(t *testing.T) {
 		snapshot: remoteSnapshot, doc: doc, latest: latest,
 		objects: map[domain.ContentHash]domain.MemoryDigest{middleHash: middle},
 	}
-	if _, err := NewSyncRepoService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
+	if _, err := newTestSyncService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.GetSnapshot(ctx, doc.Hash)
@@ -118,7 +118,7 @@ func TestPullKeepsLocalMemoryDescendant(t *testing.T) {
 	remoteSnapshot := local
 	remoteSnapshot.MemoryHash = rootHash
 	remote := &causalPullRemote{snapshot: remoteSnapshot, doc: doc, latest: root, objects: map[domain.ContentHash]domain.MemoryDigest{}}
-	if _, err := NewSyncRepoService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
+	if _, err := newTestSyncService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.GetSnapshot(ctx, doc.Hash)
@@ -155,7 +155,7 @@ func TestPullRepairsMissingAncestorBehindCurrentMemoryPointer(t *testing.T) {
 		latest:   tip,
 		objects:  map[domain.ContentHash]domain.MemoryDigest{rootHash: root},
 	}
-	if _, err := NewSyncRepoService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
+	if _, err := newTestSyncService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.GetMemory(ctx, rootHash); err != nil {
@@ -268,7 +268,7 @@ func TestPushReplaysOnlyMissingMemorySuffix(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &causalPushRemote{current: rootHash, objects: map[domain.ContentHash]domain.MemoryDigest{rootHash: root}}
-	if _, err := NewSyncRepoService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
+	if _, err := newTestSyncService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
 		t.Fatal(err)
 	}
 	want := []domain.ContentHash{middleHash, latestHash}
@@ -285,7 +285,7 @@ func TestPushReplaysOnlyMissingMemorySuffix(t *testing.T) {
 	}
 	remote.pushes = nil
 	counting := &countingMemoryStore{SessionStore: st}
-	if _, err := NewSyncRepoService(counting, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
+	if _, err := newTestSyncService(counting, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
 		t.Fatal(err)
 	}
 	if len(remote.pushes) != 0 {
@@ -320,7 +320,7 @@ func TestPushRejectsDivergentRemoteMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &causalPushRemote{current: remoteRootHash, objects: map[domain.ContentHash]domain.MemoryDigest{remoteRootHash: remoteRoot}}
-	_, err = NewSyncRepoService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo})
+	_, err = newTestSyncService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo})
 	if !errors.Is(err, domain.ErrSyncConflict) {
 		t.Fatalf("push error=%v, want sync conflict", err)
 	}
@@ -357,7 +357,7 @@ func TestPushSkipsRemoteMemoryDescendantAndPublishesRefs(t *testing.T) {
 		current: remoteTipHash,
 		objects: map[domain.ContentHash]domain.MemoryDigest{rootHash: root, remoteTipHash: remoteTip},
 	}
-	if _, err := NewSyncRepoService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
+	if _, err := newTestSyncService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
 		t.Fatal(err)
 	}
 	if len(remote.pushes) != 0 {
@@ -400,7 +400,7 @@ func TestPushMemoryReconcilesConcurrentSameChain(t *testing.T) {
 			tip := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: mh, Summary: "tip"}
 			th := putMemoryObject(t, ctx, st, tip)
 			remote := &advancingMemoryRemote{causalPushRemote: &causalPushRemote{objects: map[domain.ContentHash]domain.MemoryDigest{rh: root, mh: mid}}, advance: mh}
-			svc := NewSyncRepoService(st, remote, nil)
+			svc := newTestSyncService(st, remote, nil)
 			plan, err := svc.localMemoryPushPlan(ctx, snapshot, th)
 			if err != nil {
 				t.Fatal(err)
@@ -431,7 +431,7 @@ func TestPushMemoryPreservesConcurrentRemoteDescendant(t *testing.T) {
 	newer := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: th, Summary: "new server memory"}
 	nh, _ := domain.MemoryDigestHash(newer)
 	remote := &advancingMemoryRemote{causalPushRemote: &causalPushRemote{current: rh, objects: map[domain.ContentHash]domain.MemoryDigest{rh: root, th: tip, nh: newer}}, advance: nh}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	plan, err := svc.localMemoryPushPlan(ctx, snapshot, th)
 	if err != nil {
 		t.Fatal(err)
@@ -468,7 +468,7 @@ func TestPushMemoryContentionIsBoundedAndNotAFork(t *testing.T) {
 	th := putMemoryObject(t, ctx, st, tip)
 	for _, failure := range []error{memoryStatusError(409), memoryStatusError(503), context.Canceled} {
 		remote := &contendedMemoryRemote{causalPushRemote: &causalPushRemote{current: rh, objects: map[domain.ContentHash]domain.MemoryDigest{rh: root}}, failure: failure}
-		svc := NewSyncRepoService(st, remote, nil)
+		svc := newTestSyncService(st, remote, nil)
 		plan, err := svc.localMemoryPushPlan(ctx, snapshot, th)
 		if err != nil {
 			t.Fatal(err)
@@ -508,7 +508,7 @@ func TestPushMemoryConcurrentForkStopsBeforeRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &advancingMemoryRemote{causalPushRemote: &causalPushRemote{current: rh, objects: map[domain.ContentHash]domain.MemoryDigest{rh: root, sh: sibling}}, advance: sh}
-	_, err := NewSyncRepoService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo})
+	_, err := newTestSyncService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo})
 	if !errors.Is(err, domain.ErrSyncConflict) {
 		t.Fatalf("fork accepted: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestMemoryPreflightUsesActualCurrentDigest(t *testing.T) {
 	latest := domain.MemoryDigest{SnapshotID: snapshot, PreviousMemoryHash: nh, Summary: "newer remote"}
 	lh, _ := domain.MemoryDigestHash(latest)
 	remote := &causalPushRemote{current: lh, objects: map[domain.ContentHash]domain.MemoryDigest{nh: newer, lh: latest}}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	plan, err := svc.localMemoryPushPlan(ctx, snapshot, rh)
 	if err != nil {
 		t.Fatal(err)

@@ -128,7 +128,7 @@ func TestPullArchivePrunesOnlyBranchAbsentFromLocalGit(t *testing.T) {
 			// Old servers preserve the lifecycle tag but cannot remove their
 			// branch projection. Pull must treat that exact pointer as shadowed.
 			legacyBranch := domain.Ref{Kind: domain.RefBranch, Name: "feature/shared", RepoID: repoID, Target: target}
-			svc := NewSyncRepoService(store, branchLifecycleRemote{refs: []domain.Ref{archive, legacyBranch}}, branchInventoryGit{branches: tc.gitBranches})
+			svc := newTestSyncService(store, branchLifecycleRemote{refs: []domain.Ref{archive, legacyBranch}}, branchInventoryGit{branches: tc.gitBranches})
 			if _, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: "/repo"}); err != nil {
 				t.Fatal(err)
 			}
@@ -172,7 +172,7 @@ func TestPullRepairsAdvancedRemoteBranchMissingLifecycleCompensation(t *testing.
 			t.Fatal(err)
 		}
 	}
-	svc := NewSyncRepoService(store, branchLifecycleRemote{refs: []domain.Ref{archive, branch}}, branchInventoryGit{})
+	svc := newTestSyncService(store, branchLifecycleRemote{refs: []domain.Ref{archive, branch}}, branchInventoryGit{})
 	if _, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: "/repo"}); err != nil {
 		t.Fatalf("pull advanced archive residue: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestPullDoesNotReactivateArchivesWhenGitInventoryFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	inventoryErr := errors.New("injected Git inventory failure")
-	svc := NewSyncRepoService(store, branchLifecycleRemote{refs: []domain.Ref{archive}}, branchInventoryGit{err: inventoryErr})
+	svc := newTestSyncService(store, branchLifecycleRemote{refs: []domain.Ref{archive}}, branchInventoryGit{err: inventoryErr})
 	if _, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: "/repo"}); !errors.Is(err, inventoryErr) {
 		t.Fatalf("pull error = %v, want inventory failure", err)
 	}

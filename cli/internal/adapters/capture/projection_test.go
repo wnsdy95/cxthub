@@ -1,4 +1,4 @@
-package app
+package capture_test
 
 import (
 	"context"
@@ -21,7 +21,9 @@ type countingAppendCodec struct {
 
 func (c *countingAppendCodec) DecodeAppend(ctx context.Context, b []byte, e domain.Envelope, n int) (domain.CIRDocument, error) {
 	c.bytes += len(b)
-	return c.ProviderCodec.(appendCodec).DecodeAppend(ctx, b, e, n)
+	return c.ProviderCodec.(interface {
+		DecodeAppend(context.Context, []byte, domain.Envelope, int) (domain.CIRDocument, error)
+	}).DecodeAppend(ctx, b, e, n)
 }
 func TestCaptureProjectionMatchesFullDecode(t *testing.T) {
 	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {
@@ -29,7 +31,7 @@ func TestCaptureProjectionMatchesFullDecode(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "native.jsonl")
 			store := storage.NewFileStore(root)
-			svc := &SaveSessionService{store: store}
+			svc := capture.NewSessionCapture(store)
 			var source outbound.CaptureSource
 			var cdc outbound.ProviderCodec
 			var lines []string
@@ -49,7 +51,7 @@ func TestCaptureProjectionMatchesFullDecode(t *testing.T) {
 					t.Fatal(err)
 				}
 				counting.bytes = 0
-				_, got, offset, _, err := svc.projectCapture(context.Background(), root, path, source, counting, true)
+				_, got, offset, _, err := svc.Project(context.Background(), root, path, source, counting, true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -97,10 +99,10 @@ func TestCaptureProjectionMatchesFullDecode(t *testing.T) {
 			if err := os.WriteFile(path, []byte(broken), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, _, _, err := svc.projectCapture(context.Background(), root, path, source, counting, false); err == nil {
+			if _, _, _, _, err := svc.Project(context.Background(), root, path, source, counting, false); err == nil {
 				t.Fatal("explicit save accepted an incomplete record")
 			}
-			_, _, offset, _, err := svc.projectCapture(context.Background(), root, path, source, counting, true)
+			_, _, offset, _, err := svc.Project(context.Background(), root, path, source, counting, true)
 			if err != nil {
 				t.Fatal(err)
 			}

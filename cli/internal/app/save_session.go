@@ -3,17 +3,12 @@ package app
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -33,6 +28,8 @@ import (
 //  7. If existing branch HEAD exists, connect to parent
 //  8. Snapshot(ID=docHash) → PutSnapshot, branch ref/HEAD updated
 type SaveSessionService struct {
+	capture  outbound.SessionCapture
+	outbox   outbound.SyncOutbox
 	gitCtx   outbound.GitContext
 	captures map[domain.ProviderKind]outbound.CaptureSource
 	codecs   map[domain.ProviderKind]outbound.ProviderCodec
@@ -45,8 +42,10 @@ func NewSaveSessionService(
 	captures map[domain.ProviderKind]outbound.CaptureSource,
 	codecs map[domain.ProviderKind]outbound.ProviderCodec,
 	store outbound.SessionStore,
+	capture outbound.SessionCapture,
+	outbox outbound.SyncOutbox,
 ) *SaveSessionService {
-	return &SaveSessionService{gitCtx: gitCtx, captures: captures, codecs: codecs, store: store}
+	return &SaveSessionService{gitCtx: gitCtx, captures: captures, codecs: codecs, store: store, capture: capture, outbox: outbox}
 }
 
 // Save snapshots the active session in the current cwd.
@@ -77,12 +76,11 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		}
 	} else {
 		// Explicit path (hook payload) isolation/growing materialization gate applies the same (capture path).
-		fi, serr := os.Stat(path)
-		if serr != nil || providerfs.CaptureExcluded(repo.LocalPath, path, fi.Size()) {
+		if !s.capture.Eligible(repo.LocalPath, path) {
 			return inbound.SaveOutput{}, domain.ErrNoActiveSession
 		}
 	}
-	envelope, docHash, capturedBytes, activityAt, err := s.projectCapture(ctx, repo.LocalPath, path, capt, cdc, in.Pending)
+	envelope, docHash, capturedBytes, activityAt, err := s.capture.Project(ctx, repo.LocalPath, path, capt, cdc, in.Pending)
 	if err != nil {
 		return inbound.SaveOutput{}, err
 	}
@@ -160,7 +158,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	// Attach the .claude/.agents/.codex folder state at commit time using content-addressed storage (similar to git history).
 	settingsHashes := map[string]domain.ContentHash{}
 	for _, kind := range []string{"claude", "agents", "codex"} {
-		if b, ok := capture.ReadSettingsDir(repo.LocalPath, kind); ok {
+		if b, ok := s.capture.Settings(repo.LocalPath, kind); ok {
 			if h, herr := s.store.PutSettingsObject(ctx, b); herr == nil {
 				settingsHashes[kind] = h
 			}
@@ -214,9 +212,9 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 	if err := s.store.PutSnapshot(ctx, snap); err != nil {
 		return inbound.SaveOutput{}, err
 	}
-	capture.RecordSessionAffinity(repo.LocalPath, provider, envelope.SessionOriginID)
+	s.capture.RecordAffinity(repo.LocalPath, provider, envelope.SessionOriginID)
 	if promote {
-		queuePromotion(repo.LocalPath, docHash, msg)
+		_ = s.outbox.EnqueuePromotion(ctx, repo.LocalPath, docHash, msg)
 	}
 	if in.Pending {
 		// Uncommitted capture: branch ref remains immutable while the per-session
@@ -539,122 +537,19 @@ func (s *SaveSessionService) collectHookLeaf(ctx context.Context, repoID string,
 	return s.store.DeleteDoc(ctx, snap.DocHash) == nil
 }
 
-// graftsFile is a versioned graft event queue pending propagation to the server. Must preserve order and expected_seq to prevent edges from being restored after late-arriving adds following a join supersede.
-const graftsFile = "grafts.json"
-
-const graftQueueVersion = 1
-
-const graftQueueLockStale = 2 * time.Minute
-
-type graftQueueEvent struct {
-	Snapshot    string   `json:"snapshot"`
-	Parents     []string `json:"parents"`
-	ExpectedSeq uint64   `json:"expected_seq"`
-	// Legacy is an event promoted from the legacy map queue. The legacy queue did not upload a local GraftSeq, so a server projection must be re-fetched after success to match the seq.
-	Legacy bool `json:"legacy,omitempty"`
-}
-
-type graftQueueState struct {
-	Version int               `json:"version"`
-	Events  []graftQueueEvent `json:"events"`
-}
-
-func lockGraftQueue(repoRoot string) (func(), error) {
-	path, err := providerfs.PrepareRepoFile(repoRoot, ".cxt/grafts.json.lock", 0o755)
-	if err != nil {
-		return func() {}, err
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if err == nil {
-			_ = f.Close()
-			return func() { _ = os.Remove(path) }, nil
-		}
-		if !os.IsExist(err) {
-			return func() {}, err
-		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > graftQueueLockStale {
-			_ = os.Remove(path)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return func() {}, fmt.Errorf("graft queue lock timeout")
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-}
-
-func readGraftQueue(repoRoot, rel string) (graftQueueState, error) {
-	state := graftQueueState{Version: graftQueueVersion}
-	b, err := providerfs.ReadRepoFile(repoRoot, rel)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return state, nil
-		}
-		return state, err
-	}
-	var current graftQueueState
-	if json.Unmarshal(b, &current) == nil && current.Version == graftQueueVersion {
-		// current format
-		state = current
-	} else {
-		// Read the map format of 558155c~254ab52 once and promote it to an ordered CAS event (seq=0). Silently discard corrupted JSON and fail-closed.
-		legacy := map[string][]string{}
-		if err := json.Unmarshal(b, &legacy); err != nil {
-			return graftQueueState{}, fmt.Errorf("corrupted graft queue: %w", err)
-		}
-		state = graftQueueState{Version: graftQueueVersion}
-		ids := make([]string, 0, len(legacy))
-		for id := range legacy {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			state.Events = append(state.Events, graftQueueEvent{Snapshot: id, Parents: legacy[id], Legacy: true})
-		}
-	}
-	for _, event := range state.Events {
-		if err := domain.ValidateContentHash(domain.ContentHash(event.Snapshot)); err != nil {
-			return graftQueueState{}, fmt.Errorf("corrupted graft queue snapshot: %w", err)
-		}
-		if len(event.Parents) == 0 || len(event.Parents) > 16 {
-			return graftQueueState{}, fmt.Errorf("corrupted graft queue parents")
-		}
-		if event.ExpectedSeq > domain.MaxGraftSeq {
-			return graftQueueState{}, fmt.Errorf("corrupted graft queue expected_seq")
-		}
-		for _, parent := range event.Parents {
-			if err := domain.ValidateContentHash(domain.ContentHash(parent)); err != nil {
-				return graftQueueState{}, fmt.Errorf("corrupted graft queue parent: %w", err)
-			}
-		}
-	}
-	return state, nil
-}
-
-func writeGraftQueue(repoRoot, rel string, state graftQueueState) error {
-	state.Version = graftQueueVersion
-	b, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	return providerfs.WriteRepoFileAtomic(repoRoot, rel, b, 0o644)
-}
-
-func appendGraftQueueEvent(state *graftQueueState, event graftQueueEvent) bool {
-	for _, queued := range state.Events {
+func appendGraftQueueEvent(state *[]domain.GraftQueueEvent, event domain.GraftQueueEvent) bool {
+	for _, queued := range *state {
 		if queued.Snapshot == event.Snapshot && queued.ExpectedSeq == event.ExpectedSeq &&
 			len(queued.Parents) == 1 && len(event.Parents) == 1 && queued.Parents[0] == event.Parents[0] {
 			return false
 		}
 	}
-	state.Events = append(state.Events, event)
+	*state = append(*state, event)
 	return true
 }
 
-func hasLegacyGraftEvent(state graftQueueState, snapshot string) bool {
-	for _, event := range state.Events {
+func hasLegacyGraftEvent(state []domain.GraftQueueEvent, snapshot string) bool {
+	for _, event := range state {
 		if event.Snapshot == snapshot && event.Legacy {
 			return true
 		}
@@ -664,89 +559,45 @@ func hasLegacyGraftEvent(state graftQueueState, snapshot string) bool {
 
 // graftLocalAndQueue serializes local LWW register advancement and remote propagation events under the same process lock. It durable writes the queue first and then increments local seq. It avoids creating a state where "there is an edge locally but no remote event". The opposite (queue only) can be idempotently recovered on retry, and the ref does not move, making it safe.
 func (s *SaveSessionService) graftLocalAndQueue(ctx context.Context, repoRoot string, head, parent domain.ContentHash) error {
-	rel := ".cxt/" + graftsFile
-	unlock, err := lockGraftQueue(repoRoot)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	state, err := readGraftQueue(repoRoot, rel)
-	if err != nil {
-		return err
-	}
-	snap, err := s.store.GetSnapshot(ctx, head)
-	if err != nil {
-		return err
-	}
-	for _, p := range snap.Parents {
-		if p == parent {
-			return nil // if natural parent, no graft/queue is needed.
-		}
-	}
-	for _, p := range snap.GraftParents {
-		if p == parent {
-			return nil // already reflected by previous success or remote pull.
-		}
-	}
-	// The old map queue has all expected_seq as 0 and local seq was not advanced. If new events are appended to the same snapshot, it forms a [0,0] chain, causing the second to be discarded as stale 409 after the first propagation. First, confirm and adjust the old event with cxt push.
-	if hasLegacyGraftEvent(state, string(head)) {
-		return fmt.Errorf("legacy graft queue remains; retry save after cxt push")
-	}
-	if snap.GraftSeq == domain.MaxGraftSeq {
-		return fmt.Errorf("graft sequence exhausted")
-	}
-	event := graftQueueEvent{
-		Snapshot: string(head), Parents: []string{string(parent)}, ExpectedSeq: snap.GraftSeq,
-	}
-	if appendGraftQueueEvent(&state, event) {
-		if err := writeGraftQueue(repoRoot, rel, state); err != nil {
+	return s.outbox.WithGrafts(ctx, repoRoot, func(q outbound.GraftQueueAccess) error {
+		state, err := q.Load()
+		if err != nil {
 			return err
 		}
-	}
-	snap.GraftParents = append(snap.GraftParents, parent)
-	snap.Grafted = true
-	snap.GraftSeq++
-	return s.store.PutSnapshot(ctx, snap)
-}
-
-// queueGraft records the graft edge in the queue. Failure returns an error — the caller (Save) stops ref movement on fail-closed (queue loss = server replica permanent unpropagation).
-func queueGraft(repoRoot string, head, parent domain.ContentHash, expectedSeq uint64) error {
-	rel := ".cxt/" + graftsFile
-	unlock, err := lockGraftQueue(repoRoot)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	state, err := readGraftQueue(repoRoot, rel)
-	if err != nil {
-		return err
-	}
-	event := graftQueueEvent{Snapshot: string(head), Parents: []string{string(parent)}, ExpectedSeq: expectedSeq}
-	if hasLegacyGraftEvent(state, event.Snapshot) {
-		return fmt.Errorf("legacy graft queue remains; flush first")
-	}
-	if !appendGraftQueueEvent(&state, event) {
-		return nil // already in queue — idempotent
-	}
-	return writeGraftQueue(repoRoot, rel, state)
-}
-
-// promotionsFile is a server-propagation pending message promotion queue (.cxt/promotions.json —
-// snapshotID→commit message). push flushes (removes successful items, keeps failures — idempotent retry).
-const promotionsFile = "promotions.json"
-
-// queuePromotion records message promotions to the queue (best-effort — failure does not invalidate commit).
-func queuePromotion(repoRoot string, id domain.ContentHash, msg string) {
-	rel := ".cxt/" + promotionsFile
-	m := map[string]string{}
-	if b, err := providerfs.ReadRepoFile(repoRoot, rel); err == nil {
-		_ = json.Unmarshal(b, &m)
-	}
-	m[string(id)] = msg
-	if b, err := json.Marshal(m); err == nil {
-		_ = providerfs.WriteRepoFileAtomic(repoRoot, rel, b, 0o644)
-	}
+		snap, err := s.store.GetSnapshot(ctx, head)
+		if err != nil {
+			return err
+		}
+		for _, p := range snap.Parents {
+			if p == parent {
+				return nil // if natural parent, no graft/queue is needed.
+			}
+		}
+		for _, p := range snap.GraftParents {
+			if p == parent {
+				return nil // already reflected by previous success or remote pull.
+			}
+		}
+		// The old map queue has all expected_seq as 0 and local seq was not advanced. If new events are appended to the same snapshot, it forms a [0,0] chain, causing the second to be discarded as stale 409 after the first propagation. First, confirm and adjust the old event with cxt push.
+		if hasLegacyGraftEvent(state, string(head)) {
+			return fmt.Errorf("legacy graft queue remains; retry save after cxt push")
+		}
+		if snap.GraftSeq == domain.MaxGraftSeq {
+			return fmt.Errorf("graft sequence exhausted")
+		}
+		event := domain.GraftQueueEvent{
+			Snapshot: string(head), Parents: []string{string(parent)}, ExpectedSeq: snap.GraftSeq,
+		}
+		if appendGraftQueueEvent(&state, event) {
+			if err := q.Store(state); err != nil {
+				return err
+			}
+		}
+		snap.GraftParents = append(snap.GraftParents, parent)
+		snap.Grafted = true
+		snap.GraftSeq++
+		return s.store.PutSnapshot(ctx, snap)
+	})
 }
 
 // Ensure SaveSessionService implements inbound.SaveSession.

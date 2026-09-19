@@ -133,7 +133,7 @@ func TestSyncPullAdvertisesSnapshotStatesAndVerifiedDocs(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &inventoryPullRemote{refs: []domain.Ref{ref}}
-	out, err := NewSyncRepoService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo, FetchOnly: true})
+	out, err := newTestSyncService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo, FetchOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestPullRejectsMemoryHashMismatchBeforeAnyWrite(t *testing.T) {
 		ref: domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo, Target: snap.ID},
 	}
 	st := storage.NewFileStore(t.TempDir())
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	_, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repo})
 	if !errors.Is(err, domain.ErrHashMismatch) {
 		t.Fatalf("pull error = %v", err)
@@ -225,7 +225,7 @@ func TestPullDoesNotReplaceUntrackedLocalMemoryWithDifferentRemotePointer(t *tes
 		snap: remoteSnapshot, doc: doc, memory: remoteMemory,
 		ref: domain.Ref{Kind: domain.RefBranch, Name: "main", RepoID: repo, Target: doc.Hash},
 	}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	if _, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repo}); !errors.Is(err, domain.ErrSyncConflict) {
 		t.Fatalf("pull error = %v, want memory attachment conflict", err)
 	}

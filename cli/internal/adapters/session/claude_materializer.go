@@ -22,7 +22,7 @@ func NewClaudeMaterializer() *ClaudeMaterializer { return &ClaudeMaterializer{} 
 func (m *ClaudeMaterializer) Provider() domain.ProviderKind { return domain.ProviderClaude }
 
 // Materialize records raw (encoded Claude JSONL) as a native session file.
-func (m *ClaudeMaterializer) Materialize(_ context.Context, raw []byte, cwd string) (string, string, error) {
+func (m *ClaudeMaterializer) Materialize(ctx context.Context, raw []byte, cwd string) (string, string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		abs = cwd
@@ -40,6 +40,7 @@ func (m *ClaudeMaterializer) Materialize(_ context.Context, raw []byte, cwd stri
 	if err := providerfs.WriteRegularFileAtomic(path, nativizeClaudeSession(raw, id), 0o644); err != nil {
 		return "", "", err
 	}
+	recordMaterialized(ctx, cwd, path)
 	return path, "claude --resume " + id, nil
 }
 

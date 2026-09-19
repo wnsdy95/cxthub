@@ -35,7 +35,7 @@ func TestStashUsesExplicitWrapperOwnedSessionPath(t *testing.T) {
 	writeClaudeSession(t, dir, cwd, siblingID, "newer sibling", time.Unix(2000, 0))
 
 	store := storage.NewFileStore(t.TempDir())
-	service := NewStashService(
+	service := newTestStashService(
 		gitctx.NewGitContextAdapter(),
 		map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture()},
 		map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec()},

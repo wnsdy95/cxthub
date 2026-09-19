@@ -39,7 +39,7 @@ func TestPushSettingsObjectsCoversAndDeduplicatesSnapshotReferences(t *testing.T
 	}
 	store := settingsPushStore{bundles: map[domain.ContentHash]domain.SettingsBundle{hash: bundle}}
 	remote := &settingsPushRemote{}
-	svc := NewSyncRepoService(store, remote, nil)
+	svc := newTestSyncService(store, remote, nil)
 	snaps := []domain.Snapshot{{ClaudeSettings: hash}, {ClaudeSettings: hash}}
 
 	if err := svc.pushSettingsObjects(context.Background(), domain.HashContent([]byte("repo")), snaps); err != nil {

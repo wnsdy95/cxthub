@@ -12,7 +12,7 @@ import (
 func TestCollectObjectsIncludesReachableStash(t *testing.T) {
 	ctx := context.Background()
 	st := storage.NewFileStore(t.TempDir())
-	svc := NewSyncRepoService(st, nil, nil)
+	svc := newTestSyncService(st, nil, nil)
 	mk := func(label, branch, message string, parents ...domain.ContentHash) domain.ContentHash {
 		h, err := st.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{
 			Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: domain.ProviderClaude, SessionOriginID: label},

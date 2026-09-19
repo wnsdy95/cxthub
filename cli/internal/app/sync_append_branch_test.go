@@ -120,7 +120,7 @@ func newAppendBranchFixture(t *testing.T) appendBranchFixture {
 		failGets: map[domain.ContentHash]int{},
 	}
 	return appendBranchFixture{
-		store: st, remote: remote, service: NewSyncRepoService(st, remote, nil),
+		store: st, remote: remote, service: newTestSyncService(st, remote, nil),
 		repoID: repoID, oldHead: oldHead, boundary: boundary, target: target,
 	}
 }
@@ -298,7 +298,7 @@ func TestReconcileAppendedPathIsBounded(t *testing.T) {
 		remote.snapshots[id] = snap
 	}
 
-	svc := NewSyncRepoService(storage.NewFileStore(t.TempDir()), remote, nil)
+	svc := newTestSyncService(storage.NewFileStore(t.TempDir()), remote, nil)
 	reached, err := svc.reconcileAppendedPath(context.Background(), repoID, ids[0], ancestor)
 	if reached || !errors.Is(err, domain.ErrSyncConflict) {
 		t.Fatalf("bounded traversal = reached:%v err:%v", reached, err)

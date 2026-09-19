@@ -104,7 +104,7 @@ func TestPushRetriesPendingPointerAfterHelperFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &retryPendingRemote{failPointer: true}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	in := inbound.SyncInput{RepoID: repo}
 	if _, err := svc.SyncPendings(ctx, in, nil); err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestPushPendingRetryPreservesConcurrentCASReplacement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	if _, err := svc.Push(ctx, inbound.SyncInput{RepoID: repo}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestPushDefersConcurrentPendingUntilObjectsUploaded(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	in := inbound.SyncInput{RepoID: repo}
 	if _, err := svc.Push(ctx, in); err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestPushPendingUploadFailureRemainsRetryable(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &retryPendingRemote{failPointer: true}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	in := inbound.SyncInput{RepoID: repo}
 	if _, err := svc.Push(ctx, in); err == nil {
 		t.Fatal("ordinary push hid its pointer upload failure")
@@ -248,7 +248,7 @@ func TestPushDoesNotRepublishSharedPendingAfterCASFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &retryPendingRemote{failCAS: true}
-	svc := NewSyncRepoService(st, remote, nil)
+	svc := newTestSyncService(st, remote, nil)
 	in := inbound.SyncInput{RepoID: repo}
 	if _, err := svc.Push(ctx, in); err != nil {
 		t.Fatal(err)
@@ -278,7 +278,7 @@ func TestPushRetriesIndependentPendingPointersAfterOneFailure(t *testing.T) {
 		}
 	}
 	remote := &retryPendingRemote{failFirstPointer: true}
-	if _, err := NewSyncRepoService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo}); err == nil {
+	if _, err := newTestSyncService(st, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repo}); err == nil {
 		t.Fatal("pointer failure was hidden")
 	}
 	if remote.attempts != 2 || len(remote.pendings) != 1 {
@@ -298,7 +298,7 @@ func TestLivePendingSyncIsScopedAndRetriesUnchangedCapture(t *testing.T) {
 	}
 	remote := &retryPendingRemote{failPointer: true}
 	counting := &docReadCountingStore{SessionStore: st}
-	svc := NewSyncRepoService(counting, remote, nil)
+	svc := newTestSyncService(counting, remote, nil)
 	in := inbound.SyncInput{RepoID: repo, PendingSessionID: "live"}
 	if _, err := svc.SyncPendings(ctx, in, nil); err == nil {
 		t.Fatal("failure hidden from observer retry")

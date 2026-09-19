@@ -85,7 +85,7 @@ func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 			if tc.failDelete {
 				sessionStore = &failHookSnapshotDeleteStore{FileStore: st}
 			}
-			svc := NewSaveSessionService(nil, nil, nil, sessionStore)
+			svc := newTestSaveService(nil, nil, nil, sessionStore)
 			svc.gcHookLeaf(ctx, repo, old, current)
 			jobs, queueErr := st.CaptureCollections(ctx, repo, 32)
 			wantJobs := 0
