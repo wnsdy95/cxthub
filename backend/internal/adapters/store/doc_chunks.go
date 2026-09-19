@@ -64,12 +64,19 @@ func (s *FSStore) putDocChunked(repoID, h domain.ContentHash, cb []byte) (bool, 
 
 // getDocChunked reassembles manifest from chunks. If isManifest=false, it's a legacy comprehensive.
 func (s *FSStore) getDocChunked(repoID, hash domain.ContentHash, data []byte) ([]byte, bool, error) {
+	return s.getDocChunkedContext(context.Background(), repoID, hash, data)
+}
+
+func (s *FSStore) getDocChunkedContext(ctx context.Context, repoID, hash domain.ContentHash, data []byte) ([]byte, bool, error) {
 	man, isMan := domain.ParseDocChunkManifest(data)
 	if !isMan {
 		return nil, false, nil
 	}
 	chunks := make([][]byte, 0, len(man.Chunks))
 	for _, ch := range man.Chunks {
+		if err := ctx.Err(); err != nil {
+			return nil, true, err
+		}
 		if err := validateHash(ch); err != nil {
 			return nil, true, domain.ErrIntegrity
 		}

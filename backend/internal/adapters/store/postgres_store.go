@@ -22,7 +22,8 @@ import (
 
 // PostgresStore stores metadata and content in PostgreSQL (repos/blobs/snapshots/refs/memories).
 type PostgresStore struct {
-	pool *pgxpool.Pool
+	docProofs docProofCache
+	pool      *pgxpool.Pool
 }
 
 // NewPostgresStore connects to a pgx pool using a dsn.
@@ -1116,6 +1117,7 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 		return false, domain.ErrIntegrity
 	}
 	canonical := doc.Bytes()
+	s.docProofs.put(docProofKey{repo: repoID, expected: doc.Hash(), representation: doc.Hash()}, doc.Reference())
 	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return false, err
@@ -1245,43 +1247,24 @@ func (s *PostgresStore) reassembleManifestTx(ctx context.Context, tx pgx.Tx, dat
 }
 
 func (s *PostgresStore) GetDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error) {
-	if err := validateHashes(repoID, hash); err != nil {
-		return domain.SessionDoc{}, err
-	}
-	var b []byte
-	if err := s.db(ctx).QueryRow(ctx,
-		`SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
-		 WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2`,
-		string(repoID), string(hash)).Scan(&b); err != nil {
-		return domain.SessionDoc{}, mapNoRows(err)
-	}
-	b, err := docDecompress(b)
+	data, chunked, err := s.readDocBytes(ctx, repoID, hash)
 	if err != nil {
 		return domain.SessionDoc{}, err
 	}
-	// If chunk-type (manifest), assemble chunks using owner join(kind='chunk') and compare with integrity hash — block chunk access across repos + detect contamination.
-	if cb, isMan, cerr := s.getDocChunkedPG(ctx, repoID, hash, b); isMan {
-		if cerr != nil {
-			return domain.SessionDoc{}, cerr
-		}
-		var cir domain.CIRDocument
-		if err := json.Unmarshal(cb, &cir); err != nil {
-			return domain.SessionDoc{}, err
-		}
-		return domain.SessionDoc{Hash: hash, CIR: cir}, nil
-	}
 	var cir domain.CIRDocument
-	if err := json.Unmarshal(b, &cir); err != nil {
+	if err := json.Unmarshal(data, &cir); err != nil {
 		return domain.SessionDoc{}, err
 	}
 	doc := domain.SessionDoc{Hash: hash, CIR: cir}
-	if err := domain.ValidateSessionDocHash(doc); err != nil {
-		return domain.SessionDoc{}, err
+	if !chunked {
+		if err := domain.ValidateSessionDocHash(doc); err != nil {
+			return domain.SessionDoc{}, err
+		}
 	}
 	return doc, nil
 }
 
-// PutChunks stores the first arrived chunk in the global CAS and grants ownership to the repo. Blob collision verification and repo grant are bundled in a single transaction.
+// PutChunks stores content and its repository ownership grant in one transaction.
 func (s *PostgresStore) PutChunks(ctx context.Context, repoID domain.ContentHash, chunks map[domain.ContentHash][]byte) (int, int, error) {
 	if err := validateHash(repoID); err != nil {
 		return 0, 0, err

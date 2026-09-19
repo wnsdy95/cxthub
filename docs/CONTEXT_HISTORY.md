@@ -1336,3 +1336,22 @@ not that every desktop product/version enables these hooks. A desktop app that
 does not invoke this supported channel receives updated memory on its next MCP
 query; observers do not synthesize user messages. Server-only evidence changes
 at an unchanged local selection likewise become visible on the next MCP query.
+
+### Stored-document verification for metadata writes
+
+History and snapshot metadata publication use `StoredDocVerifier` when the
+storage adapter provides it. The application still checks snapshot/document ID
+agreement; the adapter rereads the current repository-owned body and chunks in
+the current transaction. A bounded, process-local cache can reuse a domain-issued
+schema proof only for the exact freshly hashed byte representation and expected
+content address. No timestamp, index, persisted trust flag or prior repo grant
+is accepted as evidence of current existence/ownership. Missing bodies/chunks,
+changed bytes, unsupported CIR versions and cancellation still reject the write.
+Legacy non-canonical JSON is accepted only after canonical validation reproduces
+the claimed hash. Cold reads and evicted entries revalidate the complete CIR;
+cache entries contain hashes/proofs rather than conversation bodies.
+
+Validated incoming documents can warm the disposable proof cache. A transaction
+rollback cannot grant access because each later read repeats its ownership and
+physical-byte checks. Adapters without the capability retain full domain/engine
+validation; failure of an available verifier never falls back to weaker evidence.
