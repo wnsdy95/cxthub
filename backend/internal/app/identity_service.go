@@ -377,22 +377,17 @@ func (s *IdentityService) RoleOf(ctx context.Context, workspaceID, userID string
 		return "", false
 	}
 	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
-	if err == nil && wsp.OwnerID == userID {
-		return domain.RoleOwner, true
+	if err != nil {
+		return "", false
+	}
+	if wsp.OwnerID == userID {
+		return domain.WorkspaceRole(wsp, nil, userID)
 	}
 	members, err := s.ws.ListMembers(ctx, workspaceID)
 	if err != nil {
 		return "", false
 	}
-	for _, m := range members {
-		if m.UserID == userID {
-			if !domain.ValidRole(m.Role) {
-				return "", false // conservatively reject unknown or corrupt role values (fail closed)
-			}
-			return m.Role, true
-		}
-	}
-	return "", false
+	return domain.WorkspaceRole(wsp, members, userID)
 }
 
 // IsOwner determines owner permissions: workspace constructor (OwnerID) or owner role member (co-owner).

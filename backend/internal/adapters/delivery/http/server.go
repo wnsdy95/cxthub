@@ -69,8 +69,7 @@ type Backend interface {
 	UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error
 	PutSettings(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettings(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
-	PutSecrets(ctx context.Context, repoID domain.ContentHash, raw []byte) error
-	PutSecretsCAS(ctx context.Context, repoID domain.ContentHash, raw, expected []byte) error
+	inbound.SaveSecrets
 	GetSecrets(ctx context.Context, repoID domain.ContentHash) ([]byte, error)
 	PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettingsObjectByHash(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash) (domain.SettingsBundle, error)
@@ -212,7 +211,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/events", s.guard(domain.RoleViewer, s.getDocEvents))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleViewer, s.getMemory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memory-objects/{hash}", s.guard(domain.RoleViewer, s.getMemoryObject))
-	// About/team settings/secrets: writes require maintainer or higher plus the action-specific requireRepoAction policy; reads require puller or higher for local team-asset synchronization.
+	// Team-asset reads require puller. Settings writes use the action gate;
+	// secrets writes authorize inside the application transaction.
 	mux.HandleFunc("PATCH /api/v1/repos/{repoID}/about", s.guard(domain.RoleMaintainer, s.patchAbout))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/settings/{kind}", s.guard(domain.RolePuller, s.getSettings))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/settings/{kind}", s.requireUser(s.putSettings))
@@ -500,7 +500,8 @@ func (s *Server) requireRepoRole(w http.ResponseWriter, r *http.Request, min dom
 }
 
 // requireRepoAction narrows down policy by action after role gate (maintainer and above).
-// action ∈ {secrets, settings}. Policy "list" allows only specified user (owner always allowed).
+// Settings policy may narrow maintainer access to owners. Unknown policy values
+// are denied except for owners. Secrets use the transactional application command.
 func (s *Server) requireRepoAction(w http.ResponseWriter, r *http.Request, action string) bool {
 	if !s.requireRepoRole(w, r, domain.RoleMaintainer) {
 		return false
@@ -521,10 +522,11 @@ func (s *Server) requireRepoAction(w http.ResponseWriter, r *http.Request, actio
 		s.writeError(w, status, code, werr.Error())
 		return false
 	}
-	policy := wsp.SecretsPolicy
-	if action == "settings" {
-		policy = wsp.SettingsPolicy
+	if action != "settings" {
+		s.writeError(w, http.StatusForbidden, "forbidden", "unsupported settings action")
+		return false
 	}
+	policy := wsp.SettingsPolicy
 	if policy == "" || policy == "members" {
 		return true // role-based only (no additional narrowing)
 	}
@@ -622,93 +624,27 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, map[string]any{"kind": bundle.Kind, "files": len(bundle.Files)}, nil)
 }
 
-// putSecrets stores secret ciphertext envelopes (server handles transparently — E2E).
+// putSecrets decodes transport input; application owns edit and rotation policy.
 func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
-	if !s.requireRepoAction(w, r, "secrets") {
-		return
-	}
-	if !isJSONBody(r) { // apply CSRF 2nd defense like decode() for raw body paths
+	if !isJSONBody(r) {
 		s.writeError(w, http.StatusUnsupportedMediaType, "bad_request", "Content-Type must be application/json")
 		return
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 512<<10))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, (512<<10)+1))
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		s.writeError(w, http.StatusBadRequest, "bad_request", "Cannot read encrypted envelope")
 		return
 	}
-	// team passphrase consistency: reject if envelope fingerprint differs from server stored version — prevent accidental unlocking with old keys. rotate=true is explicit replacement (upload completed re-encryption).
-	newFp := fingerprintOf(raw)
-	// fail-closed: inconsistent state on failure other than not-found — passing through allows incorrect passphrase push to overwrite existing envelope in transient outage window. reject without saving.
-	existing, gerr := s.b.GetSecrets(r.Context(), s.repoID(r))
-	if gerr != nil && !errors.Is(gerr, domain.ErrNotFound) {
-		s.writeError(w, http.StatusServiceUnavailable, "consistency_check_failed", "Failed to retrieve existing secret — consistency check failed, storage rejected. Retry later.")
+	if len(raw) > 512<<10 {
+		s.writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "Encrypted envelope too large")
 		return
 	}
-	expected := r.URL.Query().Get("expected_revision")
-	if expected == "" {
-		s.writeError(w, http.StatusPreconditionRequired, "revision_required", "An editing baseline is required. Update the client and load secrets before editing; use absent only for initial creation.")
-		return
-	}
-	if expected != domain.SecretsRevision(existing) {
-		s.writeError(w, http.StatusConflict, "secrets_conflict", "Secrets changed since editing began. Keep your draft and compare it with the latest version before saving.")
-		return
-	}
-	oldFp := ""
-	if gerr == nil {
-		oldFp = fingerprintOf(existing)
-	}
-	if r.URL.Query().Get("rotate") == "true" {
-		// rotate is the point of transition = new system adoption, so a fingerprint is required.
-		if newFp == "" {
-			s.writeError(w, http.StatusBadRequest, "fingerprint_required", "Envelope lacks fingerprint — update cxt/web to the latest version.")
-			return
-		}
-		// Rotation also identifies the old passphrase generation. Same-key content
-		// changes are guarded by expected_revision above and the final byte CAS.
-		if oldFp != "" {
-			if expect := r.URL.Query().Get("expect"); expect != oldFp {
-				s.writeError(w, http.StatusConflict, "rotate_conflict",
-					"secrets changed after rotation began (current id "+oldFp+") — fetch the latest envelope and retry")
-				return
-			}
-		}
-	} else {
-		if newFp == "" {
-			// Legacy cxt compatibility (grandfather): Envelopes without fingerprints are accepted only when the team is not using the fingerprint system (legacy contract = transparent storage). If the existing envelope has a fingerprint, consistency check fails, and it is rejected.
-			if oldFp != "" {
-				s.writeError(w, http.StatusBadRequest, "fingerprint_required", "Team is using passphrase fingerprint system — update cxt and push again.")
-				return
-			}
-		} else if oldFp != "" && oldFp != newFp {
-			s.writeError(w, http.StatusConflict, "passphrase_mismatch",
-				"secrets already use a different team passphrase (id "+oldFp+") — use the same passphrase or set rotate=true to replace it")
-			return
-		}
-	}
-	raw, err = domain.WithSecretsRevision(raw, "")
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_request", "Invalid encrypted envelope")
-		return
-	}
-	if err := s.b.PutSecretsCAS(r.Context(), s.repoID(r), raw, existing); err != nil {
-		if errors.Is(err, domain.ErrRefConflict) {
-			s.writeError(w, http.StatusConflict, "secrets_conflict", "Secrets changed during this request. Keep your draft and compare it with the latest version.")
-			return
-		}
-		code, status := mapError(err)
-		s.writeError(w, status, code, err.Error())
-		return
-	}
-	s.respond(w, map[string]string{"status": "stored", "revision": domain.SecretsRevision(raw)}, nil)
-}
-
-// fingerprintOf extracts the fingerprint field from the envelope raw (server treats the rest as opaque — E2E).
-func fingerprintOf(raw []byte) string {
-	var e struct {
-		Fingerprint string `json:"fingerprint"`
-	}
-	_ = json.Unmarshal(raw, &e)
-	return e.Fingerprint
+	actor, _ := userFrom(r.Context())
+	out, err := s.b.SaveSecrets(r.Context(), inbound.SaveSecretsInput{
+		RepoID: s.repoID(r), ActorID: actor.ID, Envelope: raw,
+		Edit: domain.SecretsEdit{ExpectedRevision: r.URL.Query().Get("expected_revision"), Rotate: r.URL.Query().Get("rotate") == "true", ExpectedFingerprint: r.URL.Query().Get("expect")},
+	})
+	s.respond(w, out, err)
 }
 
 // getSecrets returns the encrypted envelope as is (decryption is on the client — E2E).
@@ -1301,6 +1237,21 @@ func (s *Server) respond(w http.ResponseWriter, v any, err error) {
 
 func mapError(err error) (code string, status int) {
 	switch {
+	case errors.Is(err, domain.ErrSecretsRevisionRequired):
+		return "revision_required", http.StatusPreconditionRequired
+	case errors.Is(err, domain.ErrSecretsConflict):
+		return "secrets_conflict", http.StatusConflict
+	case errors.Is(err, domain.ErrSecretsFingerprintRequired):
+		return "fingerprint_required", http.StatusBadRequest
+	case errors.Is(err, domain.ErrSecretsRotateConflict):
+		return "rotate_conflict", http.StatusConflict
+	case errors.Is(err, domain.ErrSecretsPassphraseMismatch):
+		return "passphrase_mismatch", http.StatusConflict
+	case errors.Is(err, domain.ErrSecretsConsistency):
+		return "consistency_check_failed", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrSecretsMalformedEnvelope):
+		return "bad_request", http.StatusBadRequest
+
 	case errors.Is(err, domain.ErrStorageLimit):
 		return "storage_limit", http.StatusConflict
 	case errors.Is(err, domain.ErrUsageUnavailable):
@@ -1335,6 +1286,9 @@ func mapError(err error) (code string, status int) {
 func (s *Server) writeError(w http.ResponseWriter, status int, code, msg string) {
 	if code == "internal" {
 		msg = "internal server error"
+	}
+	if code == "consistency_check_failed" {
+		msg = domain.ErrSecretsConsistency.Error()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

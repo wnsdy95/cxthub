@@ -22,7 +22,13 @@ type PRJobFence interface {
 }
 
 // SecretsCASStore keeps the validated encrypted envelope from being replaced
-// between the HTTP consistency check and its write. nil means absent.
+// between the application consistency check and its write. nil means absent.
 type SecretsCASStore interface {
 	CompareAndSwapSecrets(context.Context, domain.ContentHash, []byte, []byte) error
+}
+
+// SecretsAccessLocker pins workspace policy and the actor's membership for the
+// surrounding repository transaction. This is a storage lock, not a role policy.
+type SecretsAccessLocker interface {
+	LockSecretsAccess(context.Context, string, string) error
 }

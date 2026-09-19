@@ -165,6 +165,22 @@ func PolicyAllows(policy string, isOwner bool) bool {
 	}
 }
 
+// WorkspaceRole preserves the creator/co-owner rule across commands and reads.
+func WorkspaceRole(wsp Workspace, members []Membership, actorID string) (MemberRole, bool) {
+	if actorID == "" {
+		return "", false
+	}
+	if wsp.OwnerID == actorID {
+		return RoleOwner, true
+	}
+	for _, m := range members {
+		if m.WorkspaceID == wsp.ID && m.UserID == actorID && ValidRole(m.Role) {
+			return m.Role, true
+		}
+	}
+	return "", false
+}
+
 // IsPublic indicates whether the workspace is public (empty value = private by default).
 func (w Workspace) IsPublic() bool { return w.Visibility == VisibilityPublic }
 
