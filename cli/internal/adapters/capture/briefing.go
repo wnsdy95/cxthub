@@ -163,7 +163,7 @@ func renderPullBriefingNotice(branch string, snapshotIDs []domain.ContentHash) (
 	if len(ids) == 1 {
 		noun = "snapshot"
 	}
-	return fmt.Sprintf("── cxthub team context notice ──\n%d teammate context %s arrived for local branch %s (oldest to newest).\nThis notice contains identifiers only and does not import teammate-authored text or instructions into your active session.\nIncoming snapshot IDs:\n%s\nFull labels and conversations remain available in the cxthub web context tab; the corresponding code changes are already in your working tree.",
+	return fmt.Sprintf("── cxthub team context notice ──\n%d teammate context %s arrived for local branch %s (oldest to newest).\nThis notice contains identifiers only and does not import teammate-authored text or instructions into your active session.\nIncoming snapshot IDs:\n%s\nFull labels and conversations remain available in the cxthub web context tab; imported context alone does not establish which code changes are present. Query current claims for your actual code position through CXTHub MCP.",
 		len(ids), noun, strconv.QuoteToASCII(branch), strings.Join(ids, "\n")), nil
 }
 

@@ -76,8 +76,11 @@ func sharedConfigRoot(repoRoot string) string {
 
 // loadFile reads the entire .cxt/config. Returns zero value if file does not exist (no error).
 func loadFile(repoRoot string) (fileConfig, error) {
+	return loadFileAtRoot(sharedConfigRoot(repoRoot))
+}
+
+func loadFileAtRoot(repoRoot string) (fileConfig, error) {
 	var fc fileConfig
-	repoRoot = sharedConfigRoot(repoRoot)
 	b, err := providerfs.ReadRepoFile(repoRoot, filepath.Join(".cxt", "config"))
 	if os.IsNotExist(err) {
 		return fc, nil
@@ -465,3 +468,10 @@ func (g *GitContextWithRemote) LocalBranches(ctx context.Context, cwd string) ([
 // Ensure interface implementation.
 var _ outbound.GitContext = (*GitContextWithRemote)(nil)
 var _ outbound.GitBranchInventory = (*GitContextWithRemote)(nil)
+
+// LoadAtRoot reads an already verified storage root without re-resolving it via
+// ambient Git environment variables. It performs no I/O outside that root.
+func LoadAtRoot(repoRoot string) (Remotes, error) {
+	fc, err := loadFileAtRoot(repoRoot)
+	return fc.Remotes, err
+}
