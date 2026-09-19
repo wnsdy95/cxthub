@@ -1053,3 +1053,44 @@ func TestClaudeCompactSummaryFlag(t *testing.T) {
 		t.Fatal("isCompactSummary lost during encode round-trip")
 	}
 }
+
+func TestClaudeReplayPreservesPortableReplacementBeforeIncompleteBoundary(t *testing.T) {
+	ctx := context.Background()
+	d := domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV2, SourceProvider: domain.ProviderCodex}, Events: []domain.Event{
+		{Kind: domain.EventCompaction, Seq: 0, ReplacementComplete: true, Replacement: []domain.Event{
+			{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "portable replacement history"}}},
+			{Kind: domain.EventCompaction, Seq: 1, Locked: &domain.LockedBlob{Provider: domain.ProviderCodex, Scheme: "encrypted_content", Blob: "opaque-codex-only"}},
+		}},
+		{Kind: domain.EventCompaction, Seq: 1, ReplacementComplete: false, Replacement: []domain.Event{}},
+		{Kind: domain.EventMessage, Seq: 2, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "current request"}}},
+	}}
+	before, err := domain.CanonicalBytes(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewClaudeCodec()
+	raw, err := c.Encode(ctx, d, domain.ProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "opaque-codex-only") {
+		t.Fatal("foreign encrypted state leaked")
+	}
+	got, err := c.Decode(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective, err := domain.CanonicalBytes(got.EffectiveContext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"portable replacement history", "current request"} {
+		if !strings.Contains(string(effective), text) {
+			t.Fatal("lost replacement", text)
+		}
+	}
+	after, _ := domain.CanonicalBytes(d)
+	if string(before) != string(after) {
+		t.Fatal("archive mutated")
+	}
+}

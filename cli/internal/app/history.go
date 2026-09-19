@@ -274,7 +274,7 @@ func (s *ContextHistoryService) BindLocalBranch(ctx context.Context, e domain.Hi
 // memory. Following the snapshot's current mutable pointer would import later
 // work into an earlier code position.
 func selectedMemory(ctx context.Context, store MemoryReader, id domain.ContentHash) (domain.MemoryDigest, bool, error) {
-	positions, ok := store.(outbound.WorkingPositionStore)
+	positions, ok := store.(outbound.WorkingPositionReader)
 	if !ok {
 		return domain.MemoryDigest{}, false, nil
 	}

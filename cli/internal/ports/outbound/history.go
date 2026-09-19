@@ -23,8 +23,12 @@ type RemoteHistory interface {
 	PullHistoryEvents(context.Context, string) ([]domain.HistoryEvent, error)
 }
 
-type WorkingPositionStore interface {
+type WorkingPositionReader interface {
 	GetWorkingPosition(context.Context) (domain.WorkingPosition, error)
+}
+
+type WorkingPositionStore interface {
+	WorkingPositionReader
 	PutWorkingPosition(context.Context, domain.WorkingPosition) error
 }
 

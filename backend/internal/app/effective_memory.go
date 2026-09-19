@@ -24,6 +24,12 @@ type effectiveMemoryCursor struct {
 // One read snapshot owns memory, accepted history and Git evidence. It never
 // asks a provider to verify or enqueue anything, nor changes a worker's position.
 func (s *Service) QueryEffectiveMemory(ctx context.Context, repo domain.ContentHash, in domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
+	if in.Content == "all" {
+		in.Content = ""
+	}
+	if in.Content != "" && in.Content != "claims" {
+		return domain.EffectiveMemoryPage{}, domain.ErrValidation
+	}
 	if domain.ValidateContentHash(repo) != nil || in.Selection.Validate() != nil || in.Limit < 0 || in.Limit > 50 || len(in.Cursor) > 1024 {
 		return domain.EffectiveMemoryPage{}, domain.ErrValidation
 	}
@@ -35,7 +41,7 @@ func (s *Service) QueryEffectiveMemory(ctx context.Context, repo domain.ContentH
 	})
 }
 func (s *Service) queryEffectiveMemory(ctx context.Context, repo domain.ContentHash, in domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
-	out := domain.EffectiveMemoryPage{Selection: in.Selection, Items: []domain.EffectiveMemoryItem{}}
+	out := domain.EffectiveMemoryPage{Content: in.Content, Selection: in.Selection, Items: []domain.EffectiveMemoryItem{}}
 	evidence, err := s.newCodeEvidence(ctx, repo)
 	if err != nil {
 		return out, err
@@ -91,8 +97,9 @@ func (s *Service) queryEffectiveMemory(ctx context.Context, repo domain.ContentH
 		Selection        domain.EffectiveMemorySelection
 		Lineage, History domain.ContentHash
 		Graph, Evidence  uint64
+		Content          string `json:"Content,omitempty"`
 	}{
-		1, repo, evidence.origin, in.Selection, out.LineageHash, domain.HashContent(historyBytes), out.Revision.Graph, out.Revision.Evidence,
+		1, repo, evidence.origin, in.Selection, out.LineageHash, domain.HashContent(historyBytes), out.Revision.Graph, out.Revision.Evidence, in.Content,
 	}
 	raw, err := json.Marshal(basis)
 	if err != nil {
@@ -114,7 +121,7 @@ func (s *Service) queryEffectiveMemory(ctx context.Context, repo domain.ContentH
 		}
 		offset = cursor.Index
 	}
-	items, err := effectiveMemoryItems(digest)
+	items, err := effectiveMemoryItems(digest, in.Content)
 	if err != nil {
 		return out, err
 	}
@@ -173,7 +180,7 @@ func resolveEffectiveMemoryPage(ctx context.Context, resolver *memoryIntegration
 	return out, nil
 }
 
-func effectiveMemoryItems(d domain.MemoryDigest) ([]domain.EffectiveMemoryItem, error) {
+func effectiveMemoryItems(d domain.MemoryDigest, content string) ([]domain.EffectiveMemoryItem, error) {
 	fragments := d.Fragments
 	if len(fragments) == 0 {
 		fragments = []domain.MemoryFragment{{SourceSnapshot: d.SnapshotID, Summary: d.Summary, KeyFacts: d.KeyFacts, OpenTasks: d.OpenTasks}}
@@ -202,6 +209,9 @@ func effectiveMemoryItems(d domain.MemoryDigest) ([]domain.EffectiveMemoryItem, 
 			if err := add(domain.EffectiveMemoryItem{SourceSnapshot: fragment.SourceSnapshot, Kind: claim.Kind, Text: claim.Text, Code: claim.Code, MemoryClaimAssessment: state}); err != nil {
 				return nil, err
 			}
+		}
+		if content == "claims" {
+			continue
 		}
 		historical := []struct {
 			kind  string

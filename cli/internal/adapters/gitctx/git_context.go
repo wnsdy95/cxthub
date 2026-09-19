@@ -2,6 +2,7 @@ package gitctx
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -109,3 +110,35 @@ func (a *GitContextAdapter) LocalBranches(ctx context.Context, cwd string) ([]st
 // Ensure GitContextAdapter implements outbound.GitContext.
 var _ outbound.GitContext = (*GitContextAdapter)(nil)
 var _ outbound.GitBranchInventory = (*GitContextAdapter)(nil)
+
+// CurrentCommit never substitutes the primary worktree or an archived CIR's SHA.
+func (a *GitContextAdapter) CurrentCommit(ctx context.Context, cwd string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--verify", "HEAD^{commit}")
+	// A hook's exported repository selector overrides -C. This port explicitly
+	// reads the requested worktree, never the calling hook's repository.
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
+			continue
+		}
+		cmd.Env = append(cmd.Env, entry)
+	}
+	raw, err := cmd.Output()
+	oid := strings.TrimSpace(string(raw))
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if err != nil {
+		return "", err
+	}
+	if !domain.ValidGitOID(oid) {
+		return "", domain.ErrHashMismatch
+	}
+	return oid, nil
+}
+
+var _ outbound.CodePosition = (*GitContextAdapter)(nil)

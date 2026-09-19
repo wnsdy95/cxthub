@@ -45,6 +45,7 @@ import (
 //
 // CIR is the single source of truth (compatibility rules).
 type LoadSessionService struct {
+	prompts       *MemoryPromptService
 	store         outbound.SessionStore
 	codecs        map[domain.ProviderKind]outbound.ProviderCodec
 	materializers map[domain.ProviderKind]outbound.SessionMaterializer
@@ -70,6 +71,12 @@ func NewLoadSessionService(
 		distiller:     distiller,
 		memSinks:      memSinks,
 	}
+}
+
+// WithMemoryPrompts injects the readonly cloud projection at composition time.
+func (s *LoadSessionService) WithMemoryPrompts(prompts *MemoryPromptService) *LoadSessionService {
+	s.prompts = prompts
+	return s
 }
 
 // Load restores a snapshot to a target provider session file.
@@ -99,13 +106,17 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	if target == "" {
 		target = cir.Envelope.SourceProvider
 	}
+	prompt, err := s.prompts.prepare(ctx, snap.RepoID, in.Cwd, snap.ID)
+	if err != nil {
+		return inbound.LoadOutput{}, err
+	}
 	mode := in.Mode
 	if mode == "" {
 		mode = domain.FidelityFull
 	}
 
 	if mode == domain.FidelityMemory {
-		return s.loadMemory(ctx, cir, snap, target, in.Cwd)
+		return s.loadMemory(ctx, cir, snap, target, in.Cwd, prompt)
 	}
 
 	// full / reconstructed: codec.Encode → materializer.Materialize
@@ -121,12 +132,12 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	preserveCodexReplacement := target == domain.ProviderCodex &&
 		cir.Envelope.SourceProvider == domain.ProviderCodex &&
 		hasCompleteReplacement
-	seedCIR := cir.EffectiveContext()
+	seedCIR := withoutReplayAssessments(cir.EffectiveContext())
 	var omitted []domain.Event
 	keptReplacement := preserveCodexReplacement
 	totalBudget, digestBudget := seedBudgets(target)
 	portableSeed, hasPortableSeed := s.portableReplaySeed(
-		ctx, seedCIR, snap, target, in.Cwd, digestBudget,
+		ctx, seedCIR, snap, target, in.Cwd, digestBudget, prompt,
 	)
 	projectedSeedCIR := seedCIR
 	if hasPortableSeed {
@@ -155,9 +166,9 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 		omittedCIR.Events = omitted
 		var digestErr error
 		if keptReplacement {
-			seedCIR, digestErr = s.insertTrimDigestAfterPrefix(ctx, omittedCIR, seedCIR, replacementCount, snap, target, in.Cwd)
+			seedCIR, digestErr = s.insertTrimDigestAfterPrefix(ctx, omittedCIR, seedCIR, replacementCount, snap, target, in.Cwd, prompt)
 		} else {
-			seedCIR, digestErr = s.prependTrimDigest(ctx, omittedCIR, seedCIR, snap, target, in.Cwd)
+			seedCIR, digestErr = s.prependTrimDigest(ctx, omittedCIR, seedCIR, snap, target, in.Cwd, prompt)
 		}
 		if digestErr != nil {
 			return inbound.LoadOutput{}, fmt.Errorf("distill omitted context: %w", digestErr)
@@ -172,6 +183,7 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	if targetCwd := materializationCwd(in.Cwd); targetCwd != "" {
 		seedCIR.Envelope.Cwd = targetCwd
 	}
+	seedCIR = assessmentAfterCompaction(seedCIR)
 	if preserveCodexReplacement {
 		seedCIR = asCodexCompactedReplay(seedCIR)
 	}
@@ -179,6 +191,9 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	mat, okMat := s.materializers[target]
 	if okCodec && okMat {
 		if raw, encErr := cdc.Encode(ctx, seedCIR, target); encErr == nil {
+			if err := prompt.check(ctx); err != nil {
+				return inbound.LoadOutput{}, err
+			}
 			if path, resume, mErr := mat.Materialize(ctx, raw, in.Cwd); mErr == nil {
 				// Ledger record: Recovery candidate is excluded from capture until actual resume (live session hijacking prevention — providerfs/ledger.go).
 				stateRoot := in.Cwd
@@ -195,7 +210,7 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 		}
 	}
 	// Fallback (compatibility rules): full restoration failure → memory mode downgrade.
-	return s.loadMemory(ctx, cir, snap, target, in.Cwd)
+	return s.loadMemory(ctx, cir, snap, target, in.Cwd, prompt)
 }
 
 // asCodexCompactedReplay restores Codex's native operation shape. Codex does
@@ -577,7 +592,7 @@ func renderPortableReplayDigest(digest domain.MemoryDigest, budget int) string {
 }
 
 func renderSeedDigestWithHeader(digest domain.MemoryDigest, header string, budget int) string {
-	digest = domain.PromptStructuredProjection(digest)
+	digest = domain.HistoricalPromptProjection(digest)
 	if len(header) >= budget {
 		return truncateUTF8Prefix(header, budget)
 	}
@@ -620,9 +635,10 @@ func (s *LoadSessionService) portableReplaySeed(
 	target domain.ProviderKind,
 	cwd string,
 	budget int,
+	prompt *memoryPrompt,
 ) (domain.Event, bool) {
 	digest, ok := snapshotMemoryProjection(ctx, s.store, snap)
-	if !ok {
+	if !ok && prompt == nil {
 		return domain.Event{}, false
 	}
 	// Normalize legacy opaque digests before prompt-only projections. Besides
@@ -653,7 +669,7 @@ func (s *LoadSessionService) portableReplaySeed(
 	); found {
 		digest = projectAutoLoadedNative(digest, native)
 	}
-	if !memoryDigestHasProjection(digest) {
+	if !memoryDigestHasProjection(digest) && prompt == nil {
 		return domain.Event{}, false
 	}
 	return domain.Event{
@@ -662,7 +678,7 @@ func (s *LoadSessionService) portableReplaySeed(
 		CompactSummary: true,
 		Blocks: []domain.ContentBlock{{
 			Type: "text",
-			Text: renderPortableReplayDigest(digest, budget),
+			Text: prompt.render(budget, func(n int) string { return renderPortableReplayDigest(digest, n) }),
 		}},
 	}, true
 }
@@ -754,8 +770,8 @@ const (
 //     omitted from the prompt copy because the target provider loads it again.
 //     Session-scoped memory remains portable across the new provider session ID.
 //   - KeyFacts noise such as whitespace-free tool tokens and legacy ingestion markers ("native memory:"/"absorbed from") is excluded from seed content.
-func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) (domain.CIRDocument, error) {
-	out, _, _, err := s.prependTrimDigestWithStatus(ctx, omitted, seed, snap, target, cwd, nil)
+func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string, prompt *memoryPrompt) (domain.CIRDocument, error) {
+	out, _, _, err := s.prependTrimDigestWithStatus(ctx, omitted, seed, snap, target, cwd, nil, prompt)
 	return out, err
 }
 
@@ -764,7 +780,7 @@ func (s *LoadSessionService) prependTrimDigest(ctx context.Context, omitted, see
 // retain an old seed unless its meaning came from stored memory or was folded
 // into a normalized projection; otherwise that seed can be the sole surviving
 // representation of earlier context.
-func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string, priorSeeds []domain.Event) (domain.CIRDocument, bool, bool, error) {
+func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, omitted, seed domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string, priorSeeds []domain.Event, prompt *memoryPrompt) (domain.CIRDocument, bool, bool, error) {
 	digest, err := s.distiller.Distill(ctx, omitted, nil)
 	if err != nil {
 		return seed, false, false, err
@@ -817,7 +833,7 @@ func (s *LoadSessionService) prependTrimDigestWithStatus(ctx context.Context, om
 		digest = projectAutoLoadedNative(digest, native)
 	}
 	_, digestBudget := seedBudgets(target)
-	text := renderSeedDigest(digest, len(omitted.Events), digestBudget)
+	text := prompt.render(digestBudget, func(n int) string { return renderSeedDigest(digest, len(omitted.Events), n) })
 	ev := domain.Event{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: text}}}
 	// Remove previous generation seed summary (materialized copy limit): Since the new summary inherits its content,
 	// leaving it would cause ◈ blocks to accumulate per generation. Determination is based on prefix text — legacy seed messages (unmarked user) must also be removed.
@@ -841,9 +857,9 @@ func memoryDigestHasProjection(d domain.MemoryDigest) bool {
 	return strings.TrimSpace(d.Summary) != "" || len(d.KeyFacts) > 0 || len(d.OpenTasks) > 0
 }
 
-func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, omitted, seed domain.CIRDocument, prefixCount int, snap domain.Snapshot, target domain.ProviderKind, cwd string) (domain.CIRDocument, error) {
+func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, omitted, seed domain.CIRDocument, prefixCount int, snap domain.Snapshot, target domain.ProviderKind, cwd string, prompt *memoryPrompt) (domain.CIRDocument, error) {
 	if prefixCount < 0 || prefixCount > len(seed.Events) {
-		return s.prependTrimDigest(ctx, omitted, seed, snap, target, cwd)
+		return s.prependTrimDigest(ctx, omitted, seed, snap, target, cwd, prompt)
 	}
 	prefix := append([]domain.Event{}, seed.Events[:prefixCount]...)
 	priorSeeds := make([]domain.Event, 0, 1)
@@ -856,7 +872,7 @@ func (s *LoadSessionService) insertTrimDigestAfterPrefix(ctx context.Context, om
 	tail.Events = seed.Events[prefixCount:]
 	var inserted, replacesPriorSeeds bool
 	var err error
-	tail, inserted, replacesPriorSeeds, err = s.prependTrimDigestWithStatus(ctx, omitted, tail, snap, target, cwd, priorSeeds)
+	tail, inserted, replacesPriorSeeds, err = s.prependTrimDigestWithStatus(ctx, omitted, tail, snap, target, cwd, priorSeeds, prompt)
 	if err != nil {
 		return seed, err
 	}
@@ -1015,7 +1031,7 @@ func seedWorthyFacts(facts []string) []string {
 }
 
 // loadMemory performs memory-form restoration: native-first ingestion → distillation → provider memory file injection.
-func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string) (inbound.LoadOutput, error) {
+func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocument, snap domain.Snapshot, target domain.ProviderKind, cwd string, prompt *memoryPrompt) (inbound.LoadOutput, error) {
 	if digest, pinned, err := selectedMemory(ctx, s.store, snap.ID); pinned || err != nil {
 		if err != nil {
 			return inbound.LoadOutput{}, err
@@ -1033,7 +1049,10 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 		if !ok {
 			return inbound.LoadOutput{}, domain.ErrUnsupportedProvider
 		}
-		path, err := sink.Inject(ctx, digest, cwd)
+		if err := prompt.check(ctx); err != nil {
+			return inbound.LoadOutput{}, err
+		}
+		path, err := sink.Inject(ctx, prompt.digest(digest), cwd)
 		return inbound.LoadOutput{WrittenPath: path, Fidelity: domain.FidelityMemory}, err
 	}
 	targetNative, _ := readTargetNativeMemory(ctx, s.memSources, target, cwd, cir.Envelope.SessionOriginID)
@@ -1061,7 +1080,10 @@ func (s *LoadSessionService) loadMemory(ctx context.Context, cir domain.CIRDocum
 	if !ok {
 		return inbound.LoadOutput{}, domain.ErrUnsupportedProvider
 	}
-	path, err := sink.Inject(ctx, digest, cwd)
+	if err := prompt.check(ctx); err != nil {
+		return inbound.LoadOutput{}, err
+	}
+	path, err := sink.Inject(ctx, prompt.digest(digest), cwd)
 	if err != nil {
 		return inbound.LoadOutput{}, err
 	}

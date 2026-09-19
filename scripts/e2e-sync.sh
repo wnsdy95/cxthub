@@ -426,6 +426,10 @@ cxt load main --provider claude >"$TMP/pref.out" 2>&1
 expect "CLI load uses server personal settings(memory)" "$(grep -c 'fidelity: memory' "$TMP/pref.out")" 1
 cxt load main --provider claude >/dev/null 2>&1
 expect "memory load preserves user instructions" "$(python3 -c "from pathlib import Path; print('yes' if Path('CLAUDE.md').read_text().startswith('# User-owned instructions\nPreserve this text and its file mode.\n') else 'no')")" yes
+expect "CLI memory uses server-assessed claims" "$(grep -c 'Assessment: server_assessed' CLAUDE.md)" 1
+expect "CLI keeps retained rationale from shared query" "$(grep -c '\[retained; rationale;' CLAUDE.md)" 1
+expect "CLI assessment names target worktree code" "$(grep -c "Selected committed code: $(git rev-parse HEAD)" CLAUDE.md)" 1
+expect "CLI repeated load replaces assessment" "$(grep -c '^<!-- cxt:code-assessment:v1 -->' CLAUDE.md)" 1
 expect "memory load refreshes one managed block" "$(grep -c '^<!-- cxt:begin managed memory' CLAUDE.md)" 1
 expect "memory managed block stays within 64 KiB" "$(python3 -c "from pathlib import Path; b=Path('CLAUDE.md').read_bytes(); s=b.index(b'<!-- cxt:begin managed memory'); e=b.index(b'<!-- cxt:end managed memory -->', s)+len(b'<!-- cxt:end managed memory -->')+1; print('yes' if e-s <= 64*1024 else 'no')")" yes
 expect "memory load preserves instruction file mode" "$(python3 -c "from pathlib import Path; print(oct(Path('CLAUDE.md').stat().st_mode & 0o777))")" 0o600

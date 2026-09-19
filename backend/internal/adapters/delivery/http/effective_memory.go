@@ -23,6 +23,6 @@ func (s *Server) queryEffectiveMemory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out, err := s.effectiveMemory.QueryEffectiveMemory(r.Context(), s.repoID(r), domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: domain.ContentHash(q.Get("snapshot_id")), CodeCommit: q.Get("code_commit"), MemoryHash: domain.ContentHash(q.Get("memory_hash"))}, Limit: limit, Cursor: q.Get("cursor")})
+	out, err := s.effectiveMemory.QueryEffectiveMemory(r.Context(), s.repoID(r), domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: domain.ContentHash(q.Get("snapshot_id")), CodeCommit: q.Get("code_commit"), MemoryHash: domain.ContentHash(q.Get("memory_hash"))}, Content: q.Get("content"), Limit: limit, Cursor: q.Get("cursor")})
 	s.respond(w, out, err)
 }

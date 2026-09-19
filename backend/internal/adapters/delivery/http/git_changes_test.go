@@ -109,7 +109,10 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 	if status := doJSONAs(t, "", "GET", effectiveURL, nil, &effective); status != 200 || len(effective.Items) != 1 || effective.Items[0].State != "retained" {
 		t.Fatalf("effective read %d %+v", status, effective)
 	}
-	for _, suffix := range []string{"&limit=0", "&limit=bad", "&limit=51", "&cursor=bad"} {
+	if status := doJSON(t, "GET", effectiveURL+"&content=claims", nil, &effective); status != 200 || effective.Content != "claims" || len(effective.Items) != 1 {
+		t.Fatalf("claims contract %d %+v", status, effective)
+	}
+	for _, suffix := range []string{"&limit=0", "&limit=bad", "&limit=51", "&cursor=bad", "&content=unknown"} {
 		if status := doJSON(t, "GET", effectiveURL+suffix, nil, nil); status != 422 {
 			t.Fatal("invalid effective input", status)
 		}

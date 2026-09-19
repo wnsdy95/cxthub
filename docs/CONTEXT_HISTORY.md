@@ -1111,9 +1111,41 @@ Otherwise the query composes the selected context's current memory lineage.
   refresh. Graph folding, current grafts and commit messages never decide
   applicability in the client.
 
-CLI online loading/seeds and deduplicated active-session notifications remain
-subsequent integration work. Existing provider loading still uses archived
-projected prose and does not yet consume this assessment.
+CLI online load (full replay and managed memory) and branch seeds use this same
+application query through a readonly port. `content=claims` excludes untyped
+archive chunks without changing claim assessment or stable item IDs. This filter
+is bound into cursor identity and echoed in responses; default archival paging
+is unchanged. An older server ignoring the filter cannot be treated as a verified
+prompt source.
+
+- Read the actual target worktree HEAD, including detached HEAD. Never substitute
+  shared main, another worktree, or a captured document's code SHA. The result is
+  explicitly scoped to committed code, not dirty working-tree edits.
+- Fetch at most four 50-item pages within a two-second operation deadline, with
+  a 320KiB transport response bound. Main and departure roots share the allowance.
+  Reject mixed generations, changed selections, repeated cursors, malformed
+  pages and unsupported response contracts. An unavailable/incomplete server
+  yields bounded, explicitly unverified history; caller cancellation still fails.
+- A rewound selection uses its exact historical attachment, including an
+  ancestor-owned memory object. An intentionally empty historical pin does not
+  query the latest attachment.
+- Reserve at most 16KiB inside existing seed budgets for state-labelled claims,
+  source/context IDs and omitted-content retrieval guidance. All remaining
+  summaries and replay are labelled history. `applied` proves declared file
+  state with integration evidence, not semantic truth of the author's prose.
+  No prose-only legacy statement becomes a verified current-code fact.
+- Original digests and typed claims remain stored unchanged. Only the prompt
+  copy includes assessments. New seeds replace prior generated assessments;
+  inherited prompt text cannot carry an old selection's status into a new one.
+- Recheck the target Git HEAD and worker-owned context/memory selection before
+  installing the prompt. A checkout or same-code memory repin during preparation
+  aborts installation. This check does not lock unrelated Git processes after
+  it completes, and server generations can advance after a response; the prompt
+  retains its explicit code/generation provenance.
+
+Deduplicated active-session change notifications remain subsequent work. This
+slice does not replace an already running provider transcript or inject a full
+new seed on every observation.
 
 ### Memory retention during capture replacement
 

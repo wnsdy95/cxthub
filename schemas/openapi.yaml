@@ -231,6 +231,7 @@ components:
       type: object
       required: [selection, revision, state_hash, lineage_hash, items, total, next_cursor]
       properties:
+        content: { type: string, enum: [claims], description: Present when untyped historical text was excluded by the claims filter. }
         selection: { $ref: '#/components/schemas/EffectiveMemorySelection' }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         state_hash: { $ref: '#/components/schemas/ContentHash' }
@@ -1559,6 +1560,7 @@ paths:
       summary: Assess sourced memory at an explicit code position
       description: Viewer access. One coherent read of archived memory, accepted publication and PR history, and cached Git evidence. No provider I/O or writes. Code claims are applied, inactive or review; decision/rationale remain retained historical knowledge. Cursor binds repository, selection, lineage, history, graph and evidence revisions, excluding pending activity. Items are bounded to 256KiB per page. Original memory is never changed.
       parameters:
+        - { name: content, in: query, schema: { type: string, enum: [all, claims], default: all }, description: Claims uses the same assessment and stable item IDs without paging through legacy text. Cursors bind this filter. }
         - { name: snapshot_id, in: query, required: true, schema: { $ref: '#/components/schemas/ContentHash' } }
         - { name: code_commit, in: query, required: true, schema: { type: string } }
         - { name: memory_hash, in: query, schema: { $ref: '#/components/schemas/ContentHash' } }

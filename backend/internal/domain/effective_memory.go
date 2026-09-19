@@ -87,11 +87,14 @@ type EffectiveMemoryItem struct {
 
 type EffectiveMemoryRequest struct {
 	Selection EffectiveMemorySelection
-	Limit     int
-	Cursor    string
+	// Claims excludes untyped archival text without changing claim assessment.
+	Content string // empty/all, claims
+	Limit   int
+	Cursor  string
 }
 
 type EffectiveMemoryPage struct {
+	Content     string                   `json:"content,omitempty"`
 	Selection   EffectiveMemorySelection `json:"selection"`
 	Revision    RepositoryRevision       `json:"revision"`
 	StateHash   ContentHash              `json:"state_hash"`
