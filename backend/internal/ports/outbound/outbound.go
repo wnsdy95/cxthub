@@ -40,7 +40,7 @@ type MetadataStore interface {
 	SetGraftParents(ctx context.Context, repoID, id domain.ContentHash, parents []domain.ContentHash) error
 	// ApplyJoin applies the reordering of session branches to the storage atomic boundary.
 	// It validates and reflects all graft patches' ExpectedSeq, target ref's ExpectedHead, and optionally creates session refs in one go. The PostgreSQL implementation uses a single transaction/row lock.
-	ApplyJoin(ctx context.Context, mutation JoinMutation) error
+	ApplyJoin(ctx context.Context, mutation domain.JoinMutation) error
 	ListSnapshots(ctx context.Context, repoID domain.ContentHash, branch string) ([]domain.Snapshot, error)
 	HasSnapshots(ctx context.Context, repoID domain.ContentHash, ids []domain.ContentHash) (have []domain.ContentHash, err error)
 	// AddGraftParents appends a graft (UpdateRef Append) for diverged push to the current head, adding to the snapshot's GraftParents overlay and marking Grafted=true.
@@ -99,30 +99,6 @@ type MetadataStore interface {
 	// hash; adapters keep these methods to read and safely retire old records.
 	GetMemoryMeta(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error)
 	PutMemoryMeta(ctx context.Context, repoID domain.ContentHash, digest domain.MemoryDigest) error
-}
-
-// GraftPatch is a single graft LWW register to be replaced by join.
-type GraftPatch struct {
-	SnapshotID  domain.ContentHash
-	ExpectedSeq uint64
-	Parents     []domain.ContentHash
-}
-
-// JoinMutation is an atomic join change set sent to the store.
-type JoinMutation struct {
-	BranchID string
-	RepoID   domain.ContentHash
-	Branch   string
-	// Source is the commit X pulled by the user. The store revalidates that the entire Segment is still attached to the target branch or scoped internal session ref, and that the single-leaf condition of first-parent is maintained within the repo graph lock/transaction.
-	Source domain.ContentHash
-	// Segment is the unique first-parent child path calculated by the server from X to tip X…tip.
-	// Used for revalidation of attachment/cross-git-branch in storage atomic boundary.
-	Segment      []domain.ContentHash
-	ExpectedHead domain.ContentHash
-	NewHead      domain.ContentHash
-	ForkName     string
-	ForkTip      domain.ContentHash
-	Grafts       []GraftPatch
 }
 
 // BlobStore stores content-addressed immutable bodies (data model).

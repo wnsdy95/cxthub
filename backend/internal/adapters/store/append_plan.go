@@ -2,14 +2,14 @@ package store
 
 import (
 	"fmt"
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"sort"
+
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
 // appendPlan is computed while the repository graph lock is held. Only incoming
 // segment boundaries receive an overlay; natural parents stay immutable.
-func appendPlan(snaps []domain.Snapshot, old, next domain.ContentHash) ([]outbound.GraftPatch, error) {
+func appendPlan(snaps []domain.Snapshot, old, next domain.ContentHash) ([]domain.GraftPatch, error) {
 	byID := map[domain.ContentHash]domain.Snapshot{}
 	for _, s := range snaps {
 		byID[s.ID] = s
@@ -50,7 +50,7 @@ func appendPlan(snaps []domain.Snapshot, old, next domain.ContentHash) ([]outbou
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	patches := []outbound.GraftPatch{}
+	patches := []domain.GraftPatch{}
 	for _, id := range ids {
 		snap := byID[id]
 		boundary := len(snap.Parents) == 0
@@ -67,7 +67,7 @@ func appendPlan(snaps []domain.Snapshot, old, next domain.ContentHash) ([]outbou
 			return nil, domain.ErrConflict
 		}
 		parents := dedupHashParents(id, snap.Parents, append(append([]domain.ContentHash{}, snap.GraftParents...), old))
-		patches = append(patches, outbound.GraftPatch{SnapshotID: id, ExpectedSeq: snap.GraftSeq, Parents: parents})
+		patches = append(patches, domain.GraftPatch{SnapshotID: id, ExpectedSeq: snap.GraftSeq, Parents: parents})
 	}
 	if len(patches) == 0 {
 		return nil, domain.ErrIntegrity

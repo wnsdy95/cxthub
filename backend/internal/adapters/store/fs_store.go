@@ -1180,68 +1180,19 @@ func (s *FSStore) SetGraftParents(ctx context.Context, repoID, id domain.Content
 }
 
 // ApplyJoin applies the validated prepared/committed durable journal under repo/ref lock and snapshot lock. A prepared crash rolls back, while a committed crash rolls forward.
-func (s *FSStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) error {
-	if err := validateHashes(m.RepoID, m.Source, m.ExpectedHead, m.NewHead); err != nil {
+func (s *FSStore) ApplyJoin(ctx context.Context, m domain.JoinMutation) error {
+	if err := domain.ValidateJoinMutation(m); err != nil {
 		return err
-	}
-	if len(m.Segment) == 0 || m.Segment[0] != m.Source {
-		return fmt.Errorf("%w: join segment must start at source", domain.ErrValidation)
-	}
-	segmentSeen := map[domain.ContentHash]bool{}
-	for _, id := range m.Segment {
-		if err := validateHash(id); err != nil {
-			return err
-		}
-		if segmentSeen[id] {
-			return fmt.Errorf("%w: duplicate join segment snapshot", domain.ErrIntegrity)
-		}
-		segmentSeen[id] = true
-	}
-	if !segmentSeen[m.NewHead] {
-		return fmt.Errorf("%w: join head is outside segment", domain.ErrValidation)
-	}
-	if err := domain.ValidateBranchName(m.Branch); err != nil {
-		return err
-	}
-	if (m.ForkName == "") != (m.ForkTip == "") {
-		return fmt.Errorf("%w: join fork name and tip must be provided together", domain.ErrValidation)
-	}
-	if m.ForkName != "" {
-		if err := domain.ValidateBranchName(m.ForkName); err != nil {
-			return err
-		}
-		if err := validateHash(m.ForkTip); err != nil {
-			return err
-		}
-		if !segmentSeen[m.ForkTip] {
-			return fmt.Errorf("%w: join session tip is outside segment", domain.ErrValidation)
-		}
-	}
-	if len(m.Grafts) == 0 {
-		return fmt.Errorf("%w: join requires at least one graft patch", domain.ErrValidation)
 	}
 	ids := make([]domain.ContentHash, 0, len(m.Grafts))
 	required := []domain.ContentHash{m.Source, m.ExpectedHead, m.NewHead, m.ForkTip}
 	required = append(required, m.Segment...)
-	seenID := map[domain.ContentHash]bool{}
 	for _, p := range m.Grafts {
-		if err := validateHash(p.SnapshotID); err != nil {
-			return err
-		}
-		if err := validateHashes(p.Parents...); err != nil {
-			return err
-		}
-		if seenID[p.SnapshotID] {
-			return domain.ErrIntegrity
-		}
-		seenID[p.SnapshotID] = true
 		ids = append(ids, p.SnapshotID)
 		required = append(required, p.SnapshotID)
 		required = append(required, p.Parents...)
 	}
-	if err := validateJoinMutationPlan(m); err != nil {
-		return err
-	}
+
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	refMu := s.refLock(m.RepoID, domain.RefBranch, m.Branch)
 	refMu.Lock()
@@ -1340,7 +1291,7 @@ func (s *FSStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) error 
 	return s.finishCommittedJoin(journalPath, journal)
 }
 
-func (s *FSStore) ensureJoinGraphScope(ctx context.Context, m outbound.JoinMutation) error {
+func (s *FSStore) ensureJoinGraphScope(ctx context.Context, m domain.JoinMutation) error {
 	if len(m.Grafts) == 0 {
 		return nil
 	}
@@ -1356,50 +1307,7 @@ func (s *FSStore) ensureJoinGraphScope(ctx context.Context, m outbound.JoinMutat
 	if err != nil {
 		return err
 	}
-	attached := make(map[domain.ContentHash]bool, len(snaps))
-	sessionPrefix := domain.SessionRefPrefix(m.Branch)
-	blocked := append([]domain.ContentHash{}, m.Segment...)
-	for _, patch := range m.Grafts {
-		blocked = append(blocked, patch.SnapshotID)
-	}
-	for _, ref := range refs {
-		if ref.Target != "" && ((ref.Kind == domain.RefBranch && ref.Name == m.Branch) ||
-			(ref.Kind == domain.RefSession && strings.HasPrefix(ref.Name, sessionPrefix))) {
-			reach := snapshotReachableFrom(byID, ref.Target)
-			for id := range reach {
-				attached[id] = true
-			}
-		}
-		otherScope := (ref.Kind == domain.RefBranch && ref.Name != m.Branch) ||
-			(ref.Kind == domain.RefSession && !strings.HasPrefix(ref.Name, sessionPrefix))
-		if !otherScope || ref.Target == "" {
-			continue
-		}
-		reach := snapshotReachableFrom(byID, ref.Target)
-		for _, id := range blocked {
-			if reach[id] {
-				return fmt.Errorf("%w: snapshot %s is reachable from branch %q", domain.ErrConflict, id, ref.Name)
-			}
-		}
-	}
-	return validateJoinSegmentTopology(m, byID, attached)
-}
-
-func snapshotReachableFrom(byID map[domain.ContentHash]domain.Snapshot, head domain.ContentHash) map[domain.ContentHash]bool {
-	out := map[domain.ContentHash]bool{}
-	stack := []domain.ContentHash{head}
-	for len(stack) > 0 {
-		id := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if id == "" || out[id] {
-			continue
-		}
-		out[id] = true
-		if snap, ok := byID[id]; ok {
-			stack = append(stack, snap.ReachabilityParents()...)
-		}
-	}
-	return out
+	return domain.ValidateJoinGraphScope(m, byID, refs)
 }
 
 type fsJoinSnapshot struct {

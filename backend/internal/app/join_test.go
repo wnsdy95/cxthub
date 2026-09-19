@@ -11,7 +11,6 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func inbound_JoinInput(repo domain.ContentHash, branch string, snap domain.ContentHash, all bool) inbound.JoinInput {
@@ -414,10 +413,10 @@ func TestJoinSnapshot(t *testing.T) {
 
 	t.Run("atomic application pre-validation failure does not leave fork ref or graft", func(t *testing.T) {
 		_, st, repo, n := setup(t)
-		err := st.ApplyJoin(ctx, outbound.JoinMutation{
+		err := st.ApplyJoin(ctx, domain.JoinMutation{
 			RepoID: repo, Branch: "main", Source: n["X"], Segment: []domain.ContentHash{n["X"], n["T"]}, ExpectedHead: n["H"], NewHead: n["X"],
 			ForkName: domain.SessionRefPrefix("main") + "atomic", ForkTip: n["T"],
-			Grafts: []outbound.GraftPatch{{SnapshotID: n["X"], ExpectedSeq: 99, Parents: []domain.ContentHash{n["H"]}}},
+			Grafts: []domain.GraftPatch{{SnapshotID: n["X"], ExpectedSeq: 99, Parents: []domain.ContentHash{n["H"]}}},
 		})
 		if !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("err=%v", err)
@@ -437,9 +436,9 @@ func TestJoinSnapshot(t *testing.T) {
 			domain.Ref{Kind: domain.RefBranch, Name: "feature", RepoID: repo, Target: n["X"]}, ""); err != nil {
 			t.Fatal(err)
 		}
-		err := st.ApplyJoin(ctx, outbound.JoinMutation{
+		err := st.ApplyJoin(ctx, domain.JoinMutation{
 			RepoID: repo, Branch: "main", Source: n["X"], Segment: []domain.ContentHash{n["X"]}, ExpectedHead: n["H"], NewHead: n["X"],
-			Grafts: []outbound.GraftPatch{{SnapshotID: n["X"], ExpectedSeq: 0, Parents: []domain.ContentHash{n["H"]}}},
+			Grafts: []domain.GraftPatch{{SnapshotID: n["X"], ExpectedSeq: 0, Parents: []domain.ContentHash{n["H"]}}},
 		})
 		if !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("cross-branch race was not rejected: %v", err)

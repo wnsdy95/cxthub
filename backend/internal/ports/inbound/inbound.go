@@ -72,7 +72,7 @@ type JoinSnapshot interface {
 }
 
 // JoinInput repositions Snapshot(X) behind TargetBranch head(H). Only git branch membership projected via reflog is allowed.
-// Segments are unique first-parent child paths starting from SessionID, not from X. The server calculates the graph directly.
+// Segments follow the unique first-parent child path starting at Snapshot, independent of SessionID.
 // If IncludeDescendants is true, head advances to the server-calculated tip (entire branch), otherwise, it advances only to X,
 // and remaining descendants are preserved as internal session refs branching from X.
 type JoinInput struct {
