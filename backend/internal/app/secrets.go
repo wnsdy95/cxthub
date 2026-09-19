@@ -75,11 +75,11 @@ func (s *Service) authorizeSecretsEdit(ctx context.Context, in inbound.SaveSecre
 	// Prevent revocation, archival or policy changes racing an authorized write.
 	// A transactional store without this capability must not silently weaken it.
 	if _, transactional := s.meta.(outbound.RepositoryTransactions); transactional {
-		locker, ok := s.ws.(outbound.SecretsAccessLocker)
+		locker, ok := s.ws.(outbound.WorkspaceAccessLocker)
 		if !ok {
 			return domain.ErrSecretsConsistency
 		}
-		if err := locker.LockSecretsAccess(ctx, repo.WorkspaceID, in.ActorID); err != nil {
+		if err := locker.LockWorkspaceAccess(ctx, repo.WorkspaceID, in.ActorID); err != nil {
 			return err
 		}
 	}

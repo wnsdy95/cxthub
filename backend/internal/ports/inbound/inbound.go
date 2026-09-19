@@ -65,17 +65,13 @@ type PromoteSnapshot interface {
 	PromoteSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error
 }
 
-// JoinSnapshot repositions session forks (sibling branches) of the same git branch behind the branch head (web graph drag&drop).
-// It performs a graft overlay and ref movement under the parent immutability principle and does not allow cross-branch merges.
-type JoinSnapshot interface {
-	Join(ctx context.Context, in JoinInput) (JoinOutput, error)
-}
-
 // JoinInput repositions Snapshot(X) behind TargetBranch head(H). Only git branch membership projected via reflog is allowed.
 // Segments follow the unique first-parent child path starting at Snapshot, independent of SessionID.
 // If IncludeDescendants is true, head advances to the server-calculated tip (entire branch), otherwise, it advances only to X,
 // and remaining descendants are preserved as internal session refs branching from X.
 type JoinInput struct {
+	ExpectedHead       domain.ContentHash
+	PlanRevision       domain.ContentHash
 	BranchID           string
 	RepoID             domain.ContentHash
 	TargetBranch       string
@@ -355,4 +351,37 @@ type FsckReport struct {
 	Roots           []domain.ContentHash `json:"roots"`            // Snapshots without parents (normal roots)
 	Unreachable     []domain.ContentHash `json:"unreachable"`      // Stored snapshots not reachable from current refs or pending sessions
 	DanglingParents []DanglingParent     `json:"dangling_parents"` // Non-existent parent references (corrupted)
+}
+
+// JoinPreview exposes server policy without mutating repository state.
+type JoinPreview interface {
+	PreviewJoin(context.Context, JoinPreviewInput) (JoinPreviewOutput, error)
+	ConfirmJoin(context.Context, ConfirmJoinInput) (JoinOutput, error)
+}
+type JoinPreviewInput struct {
+	ActorID  string
+	RepoID   domain.ContentHash
+	Snapshot domain.ContentHash
+	Branch   string
+}
+type ConfirmJoinInput struct {
+	JoinInput
+	ActorID string
+}
+type JoinBranchOption struct {
+	Branch   string `json:"branch"`
+	BranchID string `json:"branch_id"`
+}
+type JoinPreviewOutput struct {
+	Snapshot     domain.ContentHash   `json:"snapshot"`
+	Branch       string               `json:"branch"`
+	BranchID     string               `json:"branch_id"`
+	Branches     []JoinBranchOption   `json:"branches"`
+	Reason       string               `json:"reason,omitempty"`
+	ExpectedHead domain.ContentHash   `json:"expected_head,omitempty"`
+	Tip          domain.ContentHash   `json:"tip,omitempty"`
+	Descendants  int                  `json:"descendants"`
+	DropTargets  []domain.ContentHash `json:"drop_targets"`
+	OnlyRevision domain.ContentHash   `json:"only_revision,omitempty"`
+	AllRevision  domain.ContentHash   `json:"all_revision,omitempty"`
 }

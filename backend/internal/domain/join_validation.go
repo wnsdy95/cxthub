@@ -176,6 +176,9 @@ func validateJoinSegmentTopology(
 
 // ValidateJoinGraphScope checks attachment and branch isolation against the locked graph.
 func ValidateJoinGraphScope(m JoinMutation, byID map[ContentHash]Snapshot, refs []Ref) error {
+	if m.ExpectedScopeRevision != "" && JoinScopeRevision(byID, refs) != m.ExpectedScopeRevision {
+		return ErrJoinPreviewChanged
+	}
 	var targetRoots, otherRoots []ContentHash
 	sessionPrefix := SessionRefPrefix(m.Branch)
 	for _, ref := range refs {

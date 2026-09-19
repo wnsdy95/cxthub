@@ -25,19 +25,20 @@ type JoinRequest struct {
 // JoinPlan preserves natural parents and all previously reachable sessions.
 // RemainingTip needs a scoped session-ref name before the plan becomes a mutation.
 type JoinPlan struct {
-	RepoID       ContentHash
-	Branch       string
-	BranchID     string
-	Source       ContentHash
-	Segment      []ContentHash
-	ExpectedHead ContentHash
-	NewHead      ContentHash
-	RemainingTip ContentHash
-	Grafts       []GraftPatch
+	ScopeRevision ContentHash
+	RepoID        ContentHash
+	Branch        string
+	BranchID      string
+	Source        ContentHash
+	Segment       []ContentHash
+	ExpectedHead  ContentHash
+	NewHead       ContentHash
+	RemainingTip  ContentHash
+	Grafts        []GraftPatch
 }
 
 func (p JoinPlan) Mutation(forkName string) (JoinMutation, error) {
-	m := JoinMutation{RepoID: p.RepoID, Branch: p.Branch, BranchID: p.BranchID,
+	m := JoinMutation{ExpectedScopeRevision: p.ScopeRevision, RepoID: p.RepoID, Branch: p.Branch, BranchID: p.BranchID,
 		Source: p.Source, Segment: p.Segment, ExpectedHead: p.ExpectedHead, NewHead: p.NewHead,
 		ForkTip: p.RemainingTip, ForkName: forkName, Grafts: p.Grafts}
 	if err := ValidateJoinMutation(m); err != nil {
@@ -108,10 +109,10 @@ func PlanJoin(graph JoinGraph, in JoinRequest) (JoinPlan, error) {
 		return JoinPlan{}, fmt.Errorf("%w: snapshot %s", ErrNotFound, in.Source)
 	}
 	if !isJoinCommit(in.Source) {
-		return JoinPlan{}, fmt.Errorf("%w: pending hook capture cannot be joined", ErrValidation)
+		return JoinPlan{}, joinDenied("uncommitted", fmt.Errorf("%w: pending hook capture cannot be joined", ErrValidation))
 	}
 	if !members[in.Source][in.Branch] {
-		return JoinPlan{}, fmt.Errorf("%w: snapshot does not belong to git branch %q — cross-branch join is not allowed", ErrConflict, in.Branch)
+		return JoinPlan{}, joinDenied("cross_branch", fmt.Errorf("%w: snapshot does not belong to git branch %q — cross-branch join is not allowed", ErrConflict, in.Branch))
 	}
 	var head Ref
 	for _, ref := range refs {
@@ -121,10 +122,13 @@ func PlanJoin(graph JoinGraph, in JoinRequest) (JoinPlan, error) {
 		}
 	}
 	if head.Target == "" {
-		return JoinPlan{}, fmt.Errorf("%w: target branch %q has no head", ErrNotFound, in.Branch)
+		return JoinPlan{}, joinDenied("no_branch", fmt.Errorf("%w: target branch %q has no head", ErrNotFound, in.Branch))
+	}
+	if in.BranchID != "" && head.BranchID != in.BranchID {
+		return JoinPlan{}, ErrJoinPreviewChanged
 	}
 	if head.Target == in.Source {
-		return JoinPlan{}, fmt.Errorf("%w: snapshot is already the branch head", ErrConflict)
+		return JoinPlan{}, joinDenied("already_head", fmt.Errorf("%w: snapshot is already the branch head", ErrConflict))
 	}
 	headReach := snapshotReachableSet(byID, head.Target)
 	targetShared := make(map[ContentHash]bool, len(headReach)+len(targetSessionShared))
@@ -136,11 +140,11 @@ func PlanJoin(graph JoinGraph, in JoinRequest) (JoinPlan, error) {
 	}
 	// Join is an operation to reorder a shared session branch. It's not a bypass path for objects-only shadow push, which could elevate unpushed objects or past dangling snapshots to branch ref on web. Only allow in target branch's graft reach set or partial join session ref.
 	if !targetShared[in.Source] {
-		return JoinPlan{}, fmt.Errorf("%w: snapshot is not an attached session branch; push it first", ErrConflict)
+		return JoinPlan{}, joinDenied("unpushed", fmt.Errorf("%w: snapshot is not an attached session branch; push it first", ErrConflict))
 	}
 	// 1) Natural history determination: parents-only walk excluding grafts — branches connected only by grafts are reordering targets, natural history rejects (head retreat/circular source).
 	if naturalReachable(byID, head.Target, in.Source) {
-		return JoinPlan{}, fmt.Errorf("%w: snapshot already in branch %q natural history", ErrConflict, in.Branch)
+		return JoinPlan{}, joinDenied("natural_history", fmt.Errorf("%w: snapshot already in branch %q natural history", ErrConflict, in.Branch))
 	}
 	// 2) Segments are not SessionID but natural first-parent path. Server extends from X to target git branch's unique child leaf. Multiple children mean unknown lane, so safely reject. Client doesn't specify move range/tip.
 	segment := map[ContentHash]bool{}
@@ -163,12 +167,12 @@ func PlanJoin(graph JoinGraph, in JoinRequest) (JoinPlan, error) {
 			break
 		}
 		if len(kids) > 1 {
-			return JoinPlan{}, fmt.Errorf("%w: chain above snapshot forks — join a leaf after resolving the fork", ErrConflict)
+			return JoinPlan{}, joinDenied("branched", fmt.Errorf("%w: chain above snapshot forks — join a leaf after resolving the fork", ErrConflict))
 		}
 		tip = kids[0]
 		// Objects-only shadow push existing natural descendants elevate to "full join" branch/session ref, bypassing cxt push public boundary. Opposite full join must be reachable from current branch or partial join session ref, i.e., pushed commits.
 		if !targetShared[tip] {
-			return JoinPlan{}, fmt.Errorf("%w: chain above snapshot contains an unpushed commit; push it first", ErrConflict)
+			return JoinPlan{}, joinDenied("unpushed", fmt.Errorf("%w: chain above snapshot contains an unpushed commit; push it first", ErrConflict))
 		}
 		if seen[tip] {
 			return JoinPlan{}, fmt.Errorf("%w: cycle in natural lineage", ErrIntegrity)
@@ -200,7 +204,7 @@ func PlanJoin(graph JoinGraph, in JoinRequest) (JoinPlan, error) {
 	otherBranchReach := snapshotReachableSet(byID, otherRoots...)
 	for _, id := range segmentIDs {
 		if otherBranchReach[id] {
-			return JoinPlan{}, fmt.Errorf("%w: snapshot %s is currently reachable from another git branch", ErrConflict, id)
+			return JoinPlan{}, joinDenied("cross_branch", fmt.Errorf("%w: snapshot %s is currently reachable from another git branch", ErrConflict, id))
 		}
 	}
 	for _, sn := range snaps {
@@ -218,10 +222,10 @@ func PlanJoin(graph JoinGraph, in JoinRequest) (JoinPlan, error) {
 		}
 		if hit {
 			if !members[sn.ID][in.Branch] {
-				return JoinPlan{}, fmt.Errorf("%w: a graft from another git branch blocks this join", ErrConflict)
+				return JoinPlan{}, joinDenied("cross_branch", fmt.Errorf("%w: a graft from another git branch blocks this join", ErrConflict))
 			}
 			if otherBranchReach[sn.ID] {
-				return JoinPlan{}, fmt.Errorf("%w: graft source %s is shared by another git branch", ErrConflict, sn.ID)
+				return JoinPlan{}, joinDenied("cross_branch", fmt.Errorf("%w: graft source %s is shared by another git branch", ErrConflict, sn.ID))
 			}
 			supersedes = append(supersedes, patch{id: sn.ID, next: next})
 		}
@@ -244,7 +248,7 @@ func PlanJoin(graph JoinGraph, in JoinRequest) (JoinPlan, error) {
 	if !in.IncludeDescendants && tip != in.Source {
 		remaining = tip
 	}
-	return JoinPlan{RepoID: in.RepoID, Branch: in.Branch, BranchID: in.BranchID,
+	return JoinPlan{ScopeRevision: JoinScopeRevision(byID, refs), RepoID: in.RepoID, Branch: in.Branch, BranchID: head.BranchID,
 		Source: in.Source, Segment: segmentIDs, ExpectedHead: head.Target, NewHead: newHead,
 		RemainingTip: remaining, Grafts: patches}, nil
 }

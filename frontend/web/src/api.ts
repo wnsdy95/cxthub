@@ -252,7 +252,12 @@ export const api = {
   history: (repoId: string) => call<import('./types').HistoryEvent[]>('GET', `/repos/${encodeURIComponent(repoId)}/history`),
   enableContextProtocol: (repoId: string) => call<{ context_protocol: number }>('POST', `/repos/${encodeURIComponent(repoId)}/context-protocol`, {}),
   // Rebase session fork of the same git branch behind its head (graft + ref move, no rewrite).
-  joinSnapshot: (repoId: string, body: { branch: string; branch_id?: string; snapshot: string; include_descendants?: boolean }) =>
+  joinPreview: (repoId: string, snapshot: string, branch: string | undefined, signal?: AbortSignal) => {
+    const params = new URLSearchParams({snapshot});
+    if (branch) params.set("branch", branch);
+    return call<import("./types").JoinPreview>("GET", `/repos/${encodeURIComponent(repoId)}/join/preview?${params}`, undefined, undefined, signal);
+  },
+  joinSnapshot: (repoId: string, body: { branch: string; branch_id: string; snapshot: string; include_descendants: boolean; expected_head: string; plan_revision: string }) =>
     call<{ branch: string; head: string; fork_branch?: string }>('POST', `/repos/${encodeURIComponent(repoId)}/join`, body),
   dismissPending: (repoId: string, sessionId: string) =>
     call<{ status: string }>('POST', `/repos/${encodeURIComponent(repoId)}/pending/${encodeURIComponent(sessionId)}/dismiss`, {}),

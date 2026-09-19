@@ -5,13 +5,82 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
+
+func TestPGJoinConfirmationUsesTransaction(t *testing.T) {
+	svc, st, _ := collaborationPG(t)
+	ctx := context.Background()
+	owner := domain.User{ID: domain.NewID("user_"), Username: fmt.Sprintf("join%d", time.Now().UnixNano()), Email: "join@example.test"}
+	if err := st.UpsertUser(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	ws := domain.Workspace{ID: domain.NewID("ws_"), OwnerID: owner.ID, OwnerUsername: owner.Username, Name: "Join", Slug: "join"}
+	if err := st.CreateWorkspace(ctx, ws); err != nil {
+		t.Fatal(err)
+	}
+	repo := domain.HashContent([]byte(ws.ID))
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: ws.ID}); err != nil {
+		t.Fatal(err)
+	}
+	p := collaborationSnapshot(t, st, repo, "P")
+	h := collaborationSnapshot(t, st, repo, "H", p)
+	x := collaborationSnapshot(t, st, repo, "X", p)
+	tip := collaborationSnapshot(t, st, repo, "T", x)
+	previous := domain.ContentHash("")
+	for _, target := range []domain.ContentHash{p, x, tip, h} {
+		if err := st.CompareAndSwapRef(ctx, repo, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: target}, previous); err != nil {
+			t.Fatal(err)
+		}
+		previous = target
+	}
+	if err := st.AddGraftParents(ctx, repo, h, []domain.ContentHash{tip}); err != nil {
+		t.Fatal(err)
+	}
+	in := inbound.JoinPreviewInput{ActorID: owner.ID, RepoID: repo, Snapshot: x}
+	preview, err := svc.PreviewJoin(ctx, in)
+	if err != nil || preview.Reason != "" {
+		t.Fatalf("preview %+v %v", preview, err)
+	}
+	peer, err := store.NewPostgresStore(ctx, collaborationDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	other := NewService(peer, peer, nil, nil, peer)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, writer := range []*Service{svc, other} {
+		go func() { <-start; _, err := writer.ConfirmJoin(ctx, confirmPreview(in, preview, true)); results <- err }()
+	}
+	close(start)
+	wins, stale := 0, 0
+	for range 2 {
+		err := <-results
+		if err == nil {
+			wins++
+		} else if errors.Is(err, domain.ErrJoinPreviewChanged) {
+			stale++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if wins != 1 || stale != 1 {
+		t.Fatalf("wins %d stale %d", wins, stale)
+	}
+	ref, _ := st.GetRef(ctx, repo, domain.RefBranch, "main")
+	snap, _ := st.GetSnapshot(ctx, repo, x)
+	if ref.Target != tip || snap.GraftSeq != 1 {
+		t.Fatalf("non-atomic confirmation %+v %+v", ref, snap)
+	}
+}
 
 func TestPGJoinPolicyAndConcurrentWriters(t *testing.T) {
 	for _, scenario := range []string{"whole", "partial", "foreign attachment", "new child", "two writers"} {
@@ -46,7 +115,7 @@ func TestPGJoinPolicyAndConcurrentWriters(t *testing.T) {
 			}
 			switch scenario {
 			case "whole", "partial":
-				out, err := svc.Join(ctx, inbound.JoinInput{RepoID: repo, TargetBranch: "main", Snapshot: x, IncludeDescendants: scenario == "whole"})
+				out, err := svc.joinForTest(ctx, inbound.JoinInput{RepoID: repo, TargetBranch: "main", Snapshot: x, IncludeDescendants: scenario == "whole"})
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -1231,10 +1231,37 @@ Neither adapter may trust an earlier plan after another child or foreign ref has
 been attached. Multi-root reachability traverses a shared ancestor once per scope,
 not once for each branch/session/lifecycle ref.
 
-This stage centralizes backend planning and storage invariants. The browser's
-existing drag eligibility calculation remains until a server preview contract is
-wired; that remaining duplication is not resolved by this extraction alone.
+The browser uses `GET /join/preview` for branch choices, typed rejection reasons,
+segment count and allowed drop targets. It no longer derives eligibility from
+folded nodes, branch labels, natural ancestry or graft reachability. Selection,
+drag state, folding, tooltips and coordinates stay in React; React Query owns
+preview loading/cancellation. Right-clicking a snapshot opens the same preview
+and permits an explicit branch choice when membership is ambiguous.
 
+The user-facing `ConfirmJoin` command requires the preview's expected head and
+content-derived plan revision. The whole-segment and source-only choices have
+separate revisions. Revisions are not signed credentials and grant no rights.
+Confirmation repeats membership/archival checks inside the write transaction;
+PostgreSQL locks workspace policy and actor membership until commit. The former
+unapproved public Join application method is removed.
+
+A revision includes the exact segment, graft patches, branch identity and a
+canonical published-graph scope hash. Both FS and PostgreSQL recompute the scope
+hash under the ApplyJoin lock, including ref attachments and graft generations.
+This rejects a stale approval even when the selected head has not moved. Pending
+transcript growth and display metadata alone do not invalidate the preview. A
+changed plan returns `409 join_preview_changed`; the browser preserves selection
+and requires a fresh preview and a new explicit confirmation. Query failures
+never fall back to browser business logic. FS retains its development-only
+prepared/committed journal guarantee; PostgreSQL provides the transactional
+policy/graph boundary used by production.
+
+Verification includes real HTTP preview/confirmation contracts, two PostgreSQL
+services confirming one approval (one winner), stale topology and permission
+checks, and a full-stack browser test using actual cxtd handlers. The browser
+case covers query failure, concurrent ref changes, renewed approval and preserved
+natural ancestry; transport errors are injected without replacing the server's
+business response with a shared mock.
 
 ### Incoming PR discovery before fetch
 
