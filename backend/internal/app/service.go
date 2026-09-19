@@ -258,7 +258,9 @@ func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) 
 		}
 		chunkWants = difference(in.ChunkHaves, haveChunks)
 	}
+	_, asyncDocs := s.blobs.(outbound.DocJobStore)
 	return inbound.PushNegotiateOutput{
+		AsyncDocsSupported:     asyncDocs,
 		SnapshotWants:          difference(in.SnapshotHaves, haveSnaps),
 		DocWants:               difference(in.DocHaves, haveDocs),
 		ChunksSupported:        true,

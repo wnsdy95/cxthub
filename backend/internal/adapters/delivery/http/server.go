@@ -96,6 +96,7 @@ type Backend interface {
 
 // Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/workspace).
 type Server struct {
+	docFinalization   inbound.DocFinalization
 	effectiveMemory   inbound.EffectiveMemoryQuery
 	codeApplicability inbound.CodeApplicabilityQuery
 	gitChanges        inbound.GitChanges
@@ -124,7 +125,8 @@ func NewServer(b Backend, id IdentityBackend) *Server {
 	if provider, ok := id.(interface{ RuntimeStore() outbound.RuntimeStore }); ok {
 		runtime = provider.RuntimeStore()
 	}
-	return &Server{b: b, id: id, runtime: runtime, cookie: loadCookieCfg(), cors: splitCSV(os.Getenv("CXT_CORS_ORIGINS"))}
+	docFinalization, _ := b.(inbound.DocFinalization)
+	return &Server{b: b, id: id, docFinalization: docFinalization, runtime: runtime, cookie: loadCookieCfg(), cors: splitCSV(os.Getenv("CXT_CORS_ORIGINS"))}
 }
 
 // loadCookieCfg reads cookie attributes from CXT_COOKIE_SECURE / _SAMESITE / _DOMAIN.
@@ -241,6 +243,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/negotiate", s.guard(domain.RoleMember, s.pushNegotiate))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/chunks", s.guard(domain.RoleMember, s.pushChunks))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/doc-jobs", s.guard(domain.RoleMember, s.submitDocFinalization))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/push/doc-jobs/{jobID}", s.guard(domain.RoleMember, s.getDocFinalization))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/objects", s.guard(domain.RoleMember, s.pushObjects))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/chunks", s.guard(domain.RolePuller, s.pullChunks))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/objects", s.guard(domain.RolePuller, s.pullObjects))

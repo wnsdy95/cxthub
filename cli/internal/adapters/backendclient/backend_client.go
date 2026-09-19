@@ -49,8 +49,9 @@ type negotiateReq struct {
 	ChunkHaves []domain.ContentHash `json:"chunk_haves,omitempty"`
 }
 type negotiateResp struct {
-	SnapshotWants []domain.ContentHash `json:"snapshot_wants"`
-	DocWants      []domain.ContentHash `json:"doc_wants"`
+	AsyncDocsSupported bool                 `json:"async_docs_supported,omitempty"`
+	SnapshotWants      []domain.ContentHash `json:"snapshot_wants"`
+	DocWants           []domain.ContentHash `json:"doc_wants"`
 	// ChunksSupported true = chunk wire support server (old servers lack field → false — blanket fallback).
 	ChunksSupported        bool                 `json:"chunks_supported,omitempty"`
 	BoundedChunksSupported bool                 `json:"bounded_chunks_supported,omitempty"`
@@ -888,6 +889,14 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 			return err
 		}
 		chunkObjs = nil
+	}
+	if neg.AsyncDocsSupported && neg.BoundedChunksSupported {
+		for _, doc := range chunkedDocs {
+			if err := c.finalizeDocument(ctx, repoID, doc); err != nil {
+				return err
+			}
+		}
+		chunkedDocs = nil
 	}
 	batches, err := objectCommitBatches(sendSnaps, sendDocs, chunkedDocs, chunkObjs)
 	if err != nil {

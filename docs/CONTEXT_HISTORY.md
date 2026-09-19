@@ -1181,3 +1181,33 @@ than the sum of the backlog. It does not claim constant memory independent of
 document size: one document still requires reconstruction, JSON decoding and
 canonicalization. Cancellation is checked between documents and stored chunks,
 and after decoding; a single JSON decoding/hash operation is not preemptible.
+
+### Durable document finalization
+
+Peers advertising `async_docs_supported` accept one repository-owned staged
+manifest at `POST /push/doc-jobs`. Acceptance returns 202 and a deterministic
+job ID; it does not publish a snapshot or move a ref. `GET /push/doc-jobs/{id}`
+reports waiting, running, retrying, completed or rejected. The CLI waits through
+short HTTP requests and replays acceptance after interruption. Existing HTTP and
+hook deadlines are unchanged; cancellation stops waiting but leaves accepted
+server work durable. Older servers retain synchronous `/push/objects` behavior.
+
+The worker verifies each chunk, reconstructed hash and typed CIR canonical form
+outside the repository transaction. Renewable leases and versions fence stale
+workers. PostgreSQL commits the verified body/read index and completion receipt
+in one transaction. Exact manifest bytes use a `bytea` payload: JSONB would alter
+key ordering or number spelling inside the canonical envelope. Queue capacity is
+32 pending documents per repository; each manifest is bounded to 256 KiB and
+2048 chunks, and each assembled body to 512 MiB. One worker runs per process;
+claims serialize a repository across replicas. Temporary failures retry with
+bounded backoff; invalid documents remain rejected and never publish refs.
+
+FS is a single-process development adapter: an interrupted cross-file write is
+replayed idempotently, not advertised as database ACID. Repack retains chunks
+referenced by pending jobs. A completed body removed by ordinary collection is
+verified again if later submitted.
+
+This removes document validation from the HTTP request lifetime. It does not
+claim constant per-document memory, short storage-index transactions, or eliminate
+subsequent snapshot/reference integrity checks. Large-body operational validation
+must cover those remaining phases before declaring backlog recovery complete.

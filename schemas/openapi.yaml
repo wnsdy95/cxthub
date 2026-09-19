@@ -542,6 +542,17 @@ components:
         next: { type: integer, minimum: -1, description: "Next event offset; -1 means exhausted." }
         inherited: { type: integer, minimum: 0, description: "Exact shared event prefix with base." }
 
+    DocFinalizationStatus:
+      type: object
+      additionalProperties: false
+      required: [id, doc_hash, state, updated_at]
+      properties:
+        id: { $ref: "#/components/schemas/ContentHash" }
+        doc_hash: { $ref: "#/components/schemas/ContentHash" }
+        state: { type: string, enum: [waiting, running, retrying, completed, rejected] }
+        reason: { type: string }
+        updated_at: { type: string, format: date-time }
+
     ChunkedDoc:
       type: object
       description: |
@@ -2501,6 +2512,9 @@ paths:
                   chunks_supported:
                     type: boolean
                     description: "Chunk manifest wire support."
+                  async_docs_supported:
+                    type: boolean
+                    description: "Durable document acceptance at POST /push/doc-jobs. Caller cancellation does not cancel accepted work."
                   bounded_chunks_supported:
                     type: boolean
                     description: "If true, chunk bodies are sent to /push/chunks and /pull/chunks paths."
@@ -2527,6 +2541,64 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /repos/{repoID}/push/doc-jobs:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: submitDocFinalization
+      summary: Durably accept one staged document for background verification
+      tags: [push]
+      description: |
+        Requires member access and repository-owned chunks already staged via /push/chunks.
+        At most 2048 chunks, 256 KiB manifest and 512 MiB assembled document.
+        At most 32 pending jobs per repository. Same repo/hash/manifest replays the same job.
+        Acceptance never moves refs or creates snapshots. Poll until completed before publishing metadata.
+        Integrity failure rejects the job; temporary storage failures retry durably.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChunkedDoc" }
+      responses:
+        "202":
+          description: Persisted acceptance or idempotent existing status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocFinalizationStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Pending job capacity exhausted; retry later
+        "413":
+          description: Manifest request exceeds the bounded transport limit
+        "503":
+          description: Durable finalization unavailable
+  /repos/{repoID}/push/doc-jobs/{jobID}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: jobID
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/ContentHash" }
+    get:
+      operationId: getDocFinalization
+      summary: Read durable document verification status
+      tags: [push]
+      description: Requires member access. No manifest or context body is returned.
+      responses:
+        "200":
+          description: Current status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocFinalizationStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: Durable finalization unavailable
   /repos/{repoID}/push/objects:
     parameters:
       - $ref: "#/components/parameters/repoID"
