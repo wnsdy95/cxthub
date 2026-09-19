@@ -1592,8 +1592,18 @@ func processMergedPRContexts(
 			PromotePullRequest(context.Context, inbound.SyncInput, outbound.MergedPullRequest) error
 		}); ok {
 			if err := exact.PromotePullRequest(ctx, inbound.SyncInput{Cwd: cwd}, pull); err != nil {
-				complete = false
-				hookWarn("PR #%d exact context promotion remains pending: %v", pull.Number, err)
+				if errors.Is(err, domain.ErrPRLocalReconciliation) {
+					// The service validated the server result and durably
+					// acknowledged delivery before attempting local refresh.
+					// Preserve local progress without rediscovering a completed
+					// PR forever or starving later saved Git ranges.
+					appended++
+					reflected = true
+					hookWarn("PR #%d server context promotion completed; local synchronization remains pending (local records preserved): %v", pull.Number, err)
+				} else {
+					complete = false
+					hookWarn("PR #%d exact context promotion remains pending: %v", pull.Number, err)
+				}
 			} else {
 				appended++
 				reflected = true

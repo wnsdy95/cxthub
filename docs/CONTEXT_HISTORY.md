@@ -1285,3 +1285,15 @@ branch, reconciliation preserves the newer local ref and acknowledges the old
 result without a remote ancestor walk. The 256-snapshot remote search limit
 still applies to genuinely unproven paths. Replaying a historical completion
 must neither rewind the worktree nor exhaust the hook before later PR discovery.
+
+
+Exact PR promotion completion and local reconciliation are separate results.
+The CLI validates the returned repository, base branch, branch identity and
+snapshot hash before durably acknowledging the exact PR delivery. A subsequent
+fetch or bounded local ancestry reconciliation failure reports
+`ErrPRLocalReconciliation`: server completion is confirmed, local progress is
+preserved, and discovery can acknowledge that Git range and process later PRs.
+Transport errors before server confirmation, malformed responses and failed
+local acknowledgements remain retryable discovery work. Ordinary pull/push
+continues local reconciliation; a completed server PR never authorizes a forced
+local ref move or makes a divergent local branch a failed remote promotion.

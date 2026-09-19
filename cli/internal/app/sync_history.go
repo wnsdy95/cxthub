@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -346,14 +347,17 @@ func (s *SyncRepoService) PromotePullRequest(ctx context.Context, in inbound.Syn
 	if err != nil {
 		return err
 	}
-	if ref.RepoID != repoID || ref.Kind != domain.RefBranch || ref.Target == "" {
+	if ref.RepoID != repoID || ref.Kind != domain.RefBranch || ref.Name != request.BaseBranch || ref.BranchID == "" || ref.Target == "" || domain.ValidateRef(ref) != nil {
 		return domain.ErrHashMismatch
 	}
 	if err := local.AcceptPRDelivery(ctx, repoID, request); err != nil {
 		return err
 	}
 	if _, err := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); err != nil {
-		return err
+		return errors.Join(domain.ErrPRLocalReconciliation, err)
 	}
-	return s.convergeAppendedBranch(ctx, repoID, ref)
+	if err := s.convergeAppendedBranch(ctx, repoID, ref); err != nil {
+		return errors.Join(domain.ErrPRLocalReconciliation, err)
+	}
+	return nil
 }
