@@ -308,7 +308,10 @@ func (s *FileStore) putDoc(doc domain.SessionDoc) (domain.ContentHash, error) {
 // GetDoc retrieves a SessionDoc by ContentHash and returns domain.ErrNotFound when absent.
 // Chunk-manifest documents are reassembled from chunks and checked against their canonical
 // content hash. Legacy whole blobs are read from their original path.
-func (s *FileStore) GetDoc(_ context.Context, hash domain.ContentHash) (domain.SessionDoc, error) {
+func (s *FileStore) GetDoc(ctx context.Context, hash domain.ContentHash) (domain.SessionDoc, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.SessionDoc{}, err
+	}
 	if err := domain.ValidateContentHash(hash); err != nil {
 		return domain.SessionDoc{}, err
 	}
@@ -323,7 +326,7 @@ func (s *FileStore) GetDoc(_ context.Context, hash domain.ContentHash) (domain.S
 	if err != nil {
 		return domain.SessionDoc{}, domain.ErrInvalidCIR
 	}
-	if cb, isManifest, cerr := s.getDocChunked(hash, data); isManifest {
+	if cb, isManifest, cerr := s.getDocChunked(ctx, hash, data); isManifest {
 		if cerr != nil {
 			return domain.SessionDoc{}, cerr
 		}
@@ -331,12 +334,21 @@ func (s *FileStore) GetDoc(_ context.Context, hash domain.ContentHash) (domain.S
 		if err := json.Unmarshal(cb, &cir); err != nil {
 			return domain.SessionDoc{}, domain.ErrInvalidCIR
 		}
+		if err := ctx.Err(); err != nil {
+			return domain.SessionDoc{}, err
+		}
 		// No additional recalculation is needed since the reassembled bytes have already been compared to the hash.
 		return domain.SessionDoc{Hash: hash, CIR: cir}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.SessionDoc{}, err
 	}
 	var cir domain.CIRDocument
 	if err := json.Unmarshal(data, &cir); err != nil {
 		return domain.SessionDoc{}, domain.ErrInvalidCIR
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.SessionDoc{}, err
 	}
 	doc := domain.SessionDoc{Hash: hash, CIR: cir}
 	if err := domain.ValidateSessionDocHash(doc); err != nil {

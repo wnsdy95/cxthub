@@ -32,7 +32,9 @@ func (r *pendingChainRemote) Pull(_ context.Context, _ string, _ map[domain.Cont
 }
 
 func (r *pendingChainRemote) Push(_ context.Context, _ string, snaps []domain.Snapshot, _ []domain.SessionDoc, _ []domain.Ref, _, _ bool) error {
-	r.pushes = append(r.pushes, snaps)
+	if len(snaps) > 0 {
+		r.pushes = append(r.pushes, snaps)
+	}
 	return nil
 }
 

@@ -98,7 +98,7 @@ func TestPushPublishesObjectsThenGraftsThenRefs(t *testing.T) {
 	if _, err := svc.Push(context.Background(), inbound.SyncInput{Cwd: root}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"objects", "graft", "refs"}
+	want := []string{"objects", "objects", "objects", "graft", "refs"}
 	if len(remote.events) != len(want) {
 		t.Fatalf("publish order=%v want=%v", remote.events, want)
 	}
@@ -118,7 +118,7 @@ func TestPushDoesNotPublishRefsWhenGraftFlushFails(t *testing.T) {
 	if _, err := svc.Push(context.Background(), inbound.SyncInput{Cwd: root}); err == nil {
 		t.Fatal("graft failed but push succeeded")
 	}
-	want := []string{"objects", "graft"}
+	want := []string{"objects", "objects", "objects", "graft"}
 	if len(remote.events) != len(want) {
 		t.Fatalf("publish order=%v want=%v", remote.events, want)
 	}

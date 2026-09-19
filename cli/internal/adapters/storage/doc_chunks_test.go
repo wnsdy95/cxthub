@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,23 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
+
+func TestCanceledDocumentReadStopsBeforeOpeningObjects(t *testing.T) {
+	st := NewFileStore(t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	missing := domain.HashContent([]byte("not stored"))
+	if _, err := st.GetDoc(ctx, missing); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetDoc = %v, want cancellation before file lookup", err)
+	}
+	raw, err := json.Marshal(chunkcas.Manifest{Format: chunkcas.FormatV2, Envelope: json.RawMessage(`{}`), Chunks: []domain.ContentHash{missing}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, manifest, err := st.getDocChunked(ctx, missing, raw); !manifest || !errors.Is(err, context.Canceled) {
+		t.Fatalf("chunk read = %v/%v, want cancellation before chunk lookup", manifest, err)
+	}
+}
 
 // bigDoc creates an n-event CIR (each ~40KB — exceeding the chunk threshold).
 // The body is filled with deterministic pseudorandom numbers (sha256 chain) to compress poorly —

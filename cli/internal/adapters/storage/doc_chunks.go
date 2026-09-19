@@ -64,13 +64,16 @@ func (s *FileStore) putDocChunked(h domain.ContentHash, cb []byte) (bool, int64,
 
 // getDocChunked reconstructs canonical bytes from manifest in chunks.
 // Returns (bytes, isManifest, err) — isManifest=false means data is not a manifest (legacy full).
-func (s *FileStore) getDocChunked(hash domain.ContentHash, data []byte) ([]byte, bool, error) {
+func (s *FileStore) getDocChunked(ctx context.Context, hash domain.ContentHash, data []byte) ([]byte, bool, error) {
 	man, isMan := chunkcas.ParseManifest(data)
 	if !isMan {
 		return nil, false, nil
 	}
 	chunks := make([][]byte, 0, len(man.Chunks))
 	for _, ch := range man.Chunks {
+		if err := ctx.Err(); err != nil {
+			return nil, true, err
+		}
 		if err := domain.ValidateContentHash(ch); err != nil {
 			return nil, true, domain.ErrInvalidCIR
 		}
@@ -89,7 +92,7 @@ func (s *FileStore) getDocChunked(hash domain.ContentHash, data []byte) ([]byte,
 	if err != nil {
 		return nil, true, err
 	}
-	return cb, true, nil
+	return cb, true, ctx.Err()
 }
 
 // HasChunk checks local chunk existence (pull delta negotiation — body retrieval).
@@ -153,7 +156,7 @@ func (s *FileStore) repackDocs() (converted int, saved int64, err error) {
 		if derr != nil {
 			continue
 		}
-		if cb, isMan, chunkErr := s.getDocChunked(hash, data); isMan {
+		if cb, isMan, chunkErr := s.getDocChunked(context.Background(), hash, data); isMan {
 			var man chunkcas.Manifest
 			if json.Unmarshal(data, &man) != nil {
 				continue

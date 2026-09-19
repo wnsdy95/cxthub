@@ -13,10 +13,16 @@ import (
 
 type docReadCountingStore struct {
 	outbound.SessionStore
-	reads []domain.ContentHash
+	reads      []domain.ContentHash
+	beforeRead func(domain.ContentHash) error
 }
 
 func (s *docReadCountingStore) GetDoc(ctx context.Context, hash domain.ContentHash) (domain.SessionDoc, error) {
+	if s.beforeRead != nil {
+		if err := s.beforeRead(hash); err != nil {
+			return domain.SessionDoc{}, err
+		}
+	}
 	s.reads = append(s.reads, hash)
 	return s.SessionStore.GetDoc(ctx, hash)
 }
@@ -30,6 +36,7 @@ type lazyPushRemote struct {
 	refCalls        int
 	objectSnapshots []domain.Snapshot
 	objectDocs      []domain.SessionDoc
+	onPush          func([]domain.SessionDoc) error
 }
 
 func (r *lazyPushRemote) NegotiatePushObjects(_ context.Context, _ string, snapshotHaves, docHaves []domain.ContentHash) (outbound.PushObjectWants, error) {
@@ -39,6 +46,11 @@ func (r *lazyPushRemote) NegotiatePushObjects(_ context.Context, _ string, snaps
 }
 
 func (r *lazyPushRemote) Push(_ context.Context, _ string, snapshots []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, _, _ bool) error {
+	if r.onPush != nil {
+		if err := r.onPush(docs); err != nil {
+			return err
+		}
+	}
 	if len(snapshots) > 0 || len(docs) > 0 {
 		r.objectCalls++
 		r.objectSnapshots = append(r.objectSnapshots, snapshots...)
@@ -48,6 +60,88 @@ func (r *lazyPushRemote) Push(_ context.Context, _ string, snapshots []domain.Sn
 		r.refCalls++
 	}
 	return nil
+}
+
+func TestPushUploadsEachDocumentBeforeReadingTheNext(t *testing.T) {
+	base, repoID, ids := lazyPushFixture(t)
+	remote := &lazyPushRemote{wants: outbound.PushObjectWants{Snapshots: ids, Docs: ids}}
+	counting := &docReadCountingStore{SessionStore: base}
+	counting.beforeRead = func(domain.ContentHash) error {
+		if len(counting.reads) != len(remote.objectDocs) {
+			return errors.New("previous document still buffered")
+		}
+		return nil
+	}
+	_, err := NewSyncRepoService(counting, remote, nil).Push(context.Background(), inbound.SyncInput{RepoID: repoID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(counting.reads) != 2 || remote.refCalls != 1 {
+		t.Fatalf("reads=%v refs=%d", counting.reads, remote.refCalls)
+	}
+}
+
+func TestPushStopsBeforeNextDocumentAndRefsOnFailure(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "transport", true: "cancellation"}[canceled], func(t *testing.T) {
+			base, repoID, ids := lazyPushFixture(t)
+			counting := &docReadCountingStore{SessionStore: base}
+			remote := &lazyPushRemote{wants: outbound.PushObjectWants{Snapshots: ids, Docs: ids}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			failure := errors.New("upload failed")
+			remote.onPush = func(docs []domain.SessionDoc) error {
+				if len(docs) == 0 {
+					return nil
+				}
+				if canceled {
+					cancel()
+					return nil
+				}
+				return failure
+			}
+			_, err := NewSyncRepoService(counting, remote, nil).Push(ctx, inbound.SyncInput{RepoID: repoID})
+			want := failure
+			if canceled {
+				want = context.Canceled
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("got %v want %v", err, want)
+			}
+			if len(counting.reads) != 1 || remote.refCalls != 0 || len(remote.objectSnapshots) != 0 {
+				t.Fatalf("after failure reads=%v refs=%d snapshots=%d", counting.reads, remote.refCalls, len(remote.objectSnapshots))
+			}
+		})
+	}
+}
+
+func TestPushResumesCompletedDocumentsWithoutAdvancingRefsEarly(t *testing.T) {
+	base, repoID, ids := lazyPushFixture(t)
+	counting := &docReadCountingStore{SessionStore: base}
+	remote := &lazyPushRemote{wants: outbound.PushObjectWants{Snapshots: ids, Docs: ids}}
+	remote.onPush = func(docs []domain.SessionDoc) error {
+		if len(docs) > 0 && len(remote.objectDocs) == 1 {
+			return errors.New("second document unavailable")
+		}
+		return nil
+	}
+	svc := NewSyncRepoService(counting, remote, nil)
+	if _, err := svc.Push(context.Background(), inbound.SyncInput{RepoID: repoID}); err == nil {
+		t.Fatal("failed upload succeeded")
+	}
+	if len(remote.objectDocs) != 1 || len(remote.objectSnapshots) != 0 || remote.refCalls != 0 {
+		t.Fatal("incomplete objects advanced snapshot/ref phase")
+	}
+	remaining := counting.reads[1]
+	counting.reads = nil
+	remote.wants.Docs = []domain.ContentHash{remaining}
+	remote.onPush = nil
+	if _, err := svc.Push(context.Background(), inbound.SyncInput{RepoID: repoID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(counting.reads) != 1 || counting.reads[0] != remaining || len(remote.objectDocs) != 2 || len(remote.objectSnapshots) != 2 || remote.refCalls != 1 {
+		t.Fatalf("retry reads=%v docs=%d snapshots=%d refs=%d", counting.reads, len(remote.objectDocs), len(remote.objectSnapshots), remote.refCalls)
+	}
 }
 
 func (r *lazyPushRemote) DeleteUnsyncRemote(context.Context, string, string) error { return nil }
@@ -140,9 +234,9 @@ func TestPushLoadsOnlyServerRequestedDocuments(t *testing.T) {
 			if len(remote.objectSnapshots) != test.wantSnapshots || len(remote.objectDocs) != test.wantDocs {
 				t.Fatalf("objects snapshots=%d docs=%d, want %d/%d", len(remote.objectSnapshots), len(remote.objectDocs), test.wantSnapshots, test.wantDocs)
 			}
-			wantObjectCalls := 0
-			if test.wantSnapshots > 0 || test.wantDocs > 0 {
-				wantObjectCalls = 1
+			wantObjectCalls := test.wantDocs
+			if test.wantSnapshots > 0 {
+				wantObjectCalls++
 			}
 			if remote.objectCalls != wantObjectCalls || remote.refCalls != 1 {
 				t.Fatalf("calls objects=%d refs=%d, want %d/1", remote.objectCalls, remote.refCalls, wantObjectCalls)

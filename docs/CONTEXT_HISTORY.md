@@ -1166,3 +1166,18 @@ rollback. Existing divergent attachments return conflict, unrelated errors do
 not trigger restoration, and older servers are never downgraded to an unsafe
 non-atomic repair. Normal already-present memory still uses the existing CAS
 endpoint and hash-only manifest optimization.
+
+### Bounded document upload
+
+Sync negotiates missing document IDs before reading their bodies. It then reads,
+validates and uploads one cumulative document at a time, and publishes snapshot
+metadata only after every required document is available. Memory, graft/history
+and ref publication keep their existing ordering. Pending and unsync uploads use
+the same object path. A failed or canceled upload does not advance those pointers;
+completed immutable documents/chunks can be reused by the next negotiation.
+
+This bounds decoded-body retention to the largest individual document rather
+than the sum of the backlog. It does not claim constant memory independent of
+document size: one document still requires reconstruction, JSON decoding and
+canonicalization. Cancellation is checked between documents and stored chunks,
+and after decoding; a single JSON decoding/hash operation is not preemptible.
