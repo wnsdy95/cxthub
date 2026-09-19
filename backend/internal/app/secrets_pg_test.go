@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -17,6 +19,22 @@ func TestPGSecretsConcurrentEditingBaseline(t *testing.T) {
 	_, st, _ := collaborationPG(t)
 	ctx := context.Background()
 	wsp, in := seedSecretsRepo(t, st, st)
+	// This fixture checks enqueue only. Remove its own undelivered test jobs so
+	// repeated suites do not feed them to another worker test's global queue.
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn, err := pgxpool.New(cleanup, collaborationDSN(t))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, err := conn.Exec(cleanup, "DELETE FROM notification_outbox WHERE workspace_id=$1", wsp.ID); err != nil {
+			t.Error(err)
+		}
+	})
+
 	wsp.WebhookURL = "https://example.test/secrets-test"
 	if err := st.CreateWorkspace(ctx, wsp); err != nil {
 		t.Fatal(err)
