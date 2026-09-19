@@ -117,6 +117,9 @@ func sameParents(left, right []domain.ContentHash) bool {
 // validatePullBatch validates the entire remote response before local write. The same snapshot ID's natural
 // parent is immutable across replicas, and GraftParents can only be added as server overlays.
 func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID string, snaps []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return err
 	}
@@ -161,7 +164,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 		doc, err := store.GetDoc(ctx, snap.DocHash)
 		if err != nil {
-			return fmt.Errorf("%w: snapshot %s has no verified doc %s", domain.ErrHashMismatch, snap.ID, snap.DocHash)
+			return pullReadError(err, fmt.Sprintf("snapshot %s doc %s", snap.ID, snap.DocHash))
 		}
 		if err := domain.ValidateSessionDocHash(doc); err != nil {
 			return err
@@ -184,6 +187,9 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 	state := make(map[domain.ContentHash]uint8, len(snaps))
 	var visit func(domain.ContentHash) error
 	visit = func(id domain.ContentHash) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		switch state[id] {
 		case 1:
 			return fmt.Errorf("%w: pulled snapshot graph cycle at %s", domain.ErrHashMismatch, id)
@@ -192,7 +198,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 		snap, err := getSnapshot(id)
 		if err != nil {
-			return fmt.Errorf("%w: missing pulled parent %s", domain.ErrHashMismatch, id)
+			return pullReadError(err, fmt.Sprintf("pulled parent %s", id))
 		}
 		state[id] = 1
 		seenParents := map[domain.ContentHash]bool{}
@@ -233,7 +239,7 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 		if ref.Target != "" {
 			if _, err := getSnapshot(ref.Target); err != nil {
-				return fmt.Errorf("%w: ref %s/%s targets missing snapshot", domain.ErrHashMismatch, ref.Kind, ref.Name)
+				return pullReadError(err, fmt.Sprintf("ref %s/%s target", ref.Kind, ref.Name))
 			}
 		}
 	}
@@ -249,10 +255,19 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 			continue
 		}
 		if _, err := store.GetRef(ctx, repoID, domain.RefBranch, branch); err != nil {
-			return fmt.Errorf("%w: symbolic HEAD targets missing branch %s", domain.ErrHashMismatch, branch)
+			return pullReadError(err, fmt.Sprintf("symbolic HEAD branch %s", branch))
 		}
 	}
 	return nil
+}
+
+// Only an absent dependency proves a broken graph. Cancellation and I/O failures
+// leave integrity unproven and must retain their actual cause for recovery.
+func pullReadError(err error, object string) error {
+	if errors.Is(err, domain.ErrNotFound) {
+		return fmt.Errorf("%w: missing %s: %w", domain.ErrHashMismatch, object, err)
+	}
+	return fmt.Errorf("read %s: %w", object, err)
 }
 
 // pushSettingsObjects uploads every settings object before a snapshot can
@@ -411,9 +426,11 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 		memoryPlans = append(memoryPlans, plan)
 	}
 
-	// Publish order is object → graft overlay → ref. New snapshots arrive without server-owned graft metadata. Publishing refs first would make sibling-session histories that depend on the queued graft appear non-fast-forward. Call RemoteSync.Push twice to make the protocol boundary explicit: objects first, refs last.
+	// Publish order is documents → snapshots → memory/graft/history → refs.
+	// Objects are resumable prerequisites. Refs remain a separate final phase
+	// so incomplete uploads cannot publish unreachable sibling-session history.
 	if len(pushSnaps) > 0 || len(pushDocs) > 0 {
-		if err := s.remote.Push(ctx, repoID, pushSnaps, pushDocs, nil, false, false); err != nil {
+		if err := s.pushSelectedObjects(ctx, repoID, pushSnaps, pushDocs); err != nil {
 			return inbound.SyncOutput{}, err
 		}
 	}
@@ -913,11 +930,13 @@ func (s *SyncRepoService) collectSnapshots(ctx context.Context, repoID string, m
 // snapshot while losing its doc (or vice versa), so manifest snapshot indexes
 // are not a sufficient repair proof. Optional capability fallback preserves
 // compatibility with non-HTTP remotes and older adapters.
-func (s *SyncRepoService) selectPushObjects(ctx context.Context, repoID string, snaps []domain.Snapshot) ([]domain.Snapshot, []domain.SessionDoc, error) {
+func (s *SyncRepoService) selectPushObjects(ctx context.Context, repoID string, snaps []domain.Snapshot) ([]domain.Snapshot, []domain.ContentHash, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	negotiator, ok := s.remote.(outbound.PushObjectNegotiator)
 	if !ok {
-		docs, err := s.loadPushDocs(ctx, snaps, nil)
-		return snaps, docs, err
+		return snaps, pushDocumentHashes(snaps, nil), ctx.Err()
 	}
 
 	snapshotHaves := make([]domain.ContentHash, 0, len(snaps))
@@ -949,11 +968,7 @@ func (s *SyncRepoService) selectPushObjects(ctx context.Context, repoID string, 
 			pushSnaps = append(pushSnaps, snap)
 		}
 	}
-	pushDocs, err := s.loadPushDocs(ctx, snaps, wantDocs)
-	if err != nil {
-		return nil, nil, err
-	}
-	return pushSnaps, pushDocs, nil
+	return pushSnaps, pushDocumentHashes(snaps, wantDocs), ctx.Err()
 }
 
 func negotiatedWantSet(haves, wants []domain.ContentHash) (map[domain.ContentHash]bool, error) {
@@ -974,22 +989,60 @@ func negotiatedWantSet(haves, wants []domain.ContentHash) (map[domain.ContentHas
 	return out, nil
 }
 
-func (s *SyncRepoService) loadPushDocs(ctx context.Context, snaps []domain.Snapshot, wanted map[domain.ContentHash]bool) ([]domain.SessionDoc, error) {
-	var docs []domain.SessionDoc
+// Selection holds identifiers only. A backlog of cumulative transcripts must
+// not retain every decoded body until the final upload starts.
+func pushDocumentHashes(snaps []domain.Snapshot, wanted map[domain.ContentHash]bool) []domain.ContentHash {
+	var hashes []domain.ContentHash
 	seen := map[domain.ContentHash]bool{}
 	for _, snap := range snaps {
 		hash := snap.DocHash
 		if hash == "" || seen[hash] || (wanted != nil && !wanted[hash]) {
 			continue
 		}
-		doc, err := s.store.GetDoc(ctx, hash)
-		if err != nil {
-			return nil, fmt.Errorf("read push document %s for snapshot %s: %w", hash, snap.ID, err)
-		}
-		docs = append(docs, doc)
+		hashes = append(hashes, hash)
 		seen[hash] = true
 	}
-	return docs, nil
+	return hashes
+}
+
+// Upload immutable document bodies one at a time, then their snapshot metadata.
+// A failure can leave reusable objects on the server, but no refs, pending or
+// unsync pointers advance until the entire prerequisite object phase succeeds.
+// Peak decoded-body retention is proportional to the largest document, not the
+// sum of the backlog. Chunk negotiation still reuses prior uploads on retry.
+func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string, snaps []domain.Snapshot, hashes []domain.ContentHash) error {
+	for _, hash := range hashes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.pushDocument(ctx, repoID, hash); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(snaps) == 0 {
+		return nil
+	}
+	return s.remote.Push(ctx, repoID, snaps, nil, nil, false, false)
+}
+
+func (s *SyncRepoService) pushDocument(ctx context.Context, repoID string, hash domain.ContentHash) error {
+	doc, err := s.store.GetDoc(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("read push document %s: %w", hash, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if doc.Hash != hash {
+		return domain.ErrHashMismatch
+	}
+	if err := s.remote.Push(ctx, repoID, nil, []domain.SessionDoc{doc}, nil, false, false); err != nil {
+		return fmt.Errorf("upload push document %s (no ref updates sent): %w", hash, err)
+	}
+	return nil
 }
 
 // SyncPendings reflects durable uncommitted capture pointers to the server (detached helper path).
@@ -1094,7 +1147,7 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 			if err := s.pushSettingsObjects(ctx, repoID, selected); err != nil {
 				return err
 			}
-			return s.remote.Push(ctx, repoID, selected, docs, nil, false, false)
+			return s.pushSelectedObjects(ctx, repoID, selected, docs)
 		}
 		pushed := len(chainSnaps) > 0 && push(chainSnaps) == nil
 		if !pushed {
@@ -1131,7 +1184,7 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 					pushSnaps, pushDocs, perr := s.selectPushObjects(ctx, repoID, snaps)
 					objectsReady := perr == nil
 					if objectsReady && (len(pushSnaps) > 0 || len(pushDocs) > 0) {
-						objectsReady = s.remote.Push(ctx, repoID, pushSnaps, pushDocs, nil, false, false) == nil
+						objectsReady = s.pushSelectedObjects(ctx, repoID, pushSnaps, pushDocs) == nil
 					}
 					if objectsReady {
 						for _, r := range ahead {

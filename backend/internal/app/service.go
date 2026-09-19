@@ -349,6 +349,9 @@ func (s *Service) PullChunks(ctx context.Context, in inbound.PullChunksInput) (i
 
 // Commit: stores docs in the order of blobs → snapshots (W1). Full integrity verification followed by content-addressed deduplication.
 func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return inbound.CommitOutput{}, err
+	}
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.CommitOutput{}, err
 	}
@@ -357,6 +360,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 	if len(in.ChunkedDocs) > 0 {
 		bodies := make(map[domain.ContentHash][]byte, len(in.ChunkObjects))
 		for _, co := range in.ChunkObjects {
+			if err := ctx.Err(); err != nil {
+				return inbound.CommitOutput{}, err
+			}
 			if err := domain.ValidateContentHash(co.Hash); err != nil {
 				return inbound.CommitOutput{}, err
 			}
@@ -366,6 +372,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 			bodies[co.Hash] = co.Data
 		}
 		for _, cd := range in.ChunkedDocs {
+			if err := ctx.Err(); err != nil {
+				return inbound.CommitOutput{}, err
+			}
 			if err := domain.ValidateContentHash(cd.Hash); err != nil {
 				return inbound.CommitOutput{}, err
 			}
@@ -378,6 +387,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 			}
 			chunks := make([][]byte, 0, len(cd.Chunks))
 			for _, ch := range cd.Chunks {
+				if err := ctx.Err(); err != nil {
+					return inbound.CommitOutput{}, err
+				}
 				if err := domain.ValidateContentHash(ch); err != nil {
 					return inbound.CommitOutput{}, err
 				}
@@ -385,14 +397,23 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 				if !ok {
 					var gerr error
 					if b, gerr = s.blobs.GetChunk(ctx, in.RepoID, ch); gerr != nil {
+						if err := ctx.Err(); err != nil {
+							return inbound.CommitOutput{}, err
+						}
 						return inbound.CommitOutput{}, fmt.Errorf("%w: chunked doc %s references unknown chunk %s", domain.ErrIntegrity, cd.Hash, ch)
 					}
 				}
 				chunks = append(chunks, b)
 			}
+			if err := ctx.Err(); err != nil {
+				return inbound.CommitOutput{}, err
+			}
 			cb, aerr := domain.AssembleDocChunks(domain.DocChunkManifest{Format: format, Envelope: cd.Envelope, Chunks: cd.Chunks}, chunks, cd.Hash)
 			if aerr != nil {
 				return inbound.CommitOutput{}, fmt.Errorf("%w: chunked doc %s reassembly mismatch", domain.ErrIntegrity, cd.Hash)
+			}
+			if err := ctx.Err(); err != nil {
+				return inbound.CommitOutput{}, err
 			}
 			var cir domain.CIRDocument
 			if err := json.Unmarshal(cb, &cir); err != nil {
@@ -404,6 +425,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 	docByHash := make(map[domain.ContentHash]domain.VerifiedSessionDoc, len(docs))
 	verifiedDocs := make([]domain.VerifiedSessionDoc, 0, len(docs))
 	for _, d := range docs {
+		if err := ctx.Err(); err != nil {
+			return inbound.CommitOutput{}, err
+		}
 		verified, err := domain.VerifySessionDoc(d)
 		if err != nil {
 			return inbound.CommitOutput{}, err
@@ -415,6 +439,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 	verifiedSettings := make(map[domain.ContentHash]bool)
 	normalizedSnaps := make([]domain.Snapshot, 0, len(in.Snapshots))
 	for _, snap := range in.Snapshots {
+		if err := ctx.Err(); err != nil {
+			return inbound.CommitOutput{}, err
+		}
 		snap.RepoID = in.RepoID
 		// Branches is a response-specific projection calculated from the branch reflog. If the client stores the sent value, it can introduce fake membership in the next response through the FS adapter.
 		snap.Branches = nil
@@ -454,6 +481,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 		snap.MemoryHash = ""
 		normalizedSnaps = append(normalizedSnaps, snap)
 	}
+	if err := ctx.Err(); err != nil {
+		return inbound.CommitOutput{}, err
+	}
 	repo, err := s.meta.GetRepo(ctx, in.RepoID)
 	if err != nil {
 		return inbound.CommitOutput{}, err
@@ -470,6 +500,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 	}
 	var out inbound.CommitOutput
 	for i, d := range docs {
+		if err := ctx.Err(); err != nil {
+			return inbound.CommitOutput{}, err
+		}
 		var stored bool
 		var err error
 		if writer, ok := s.blobs.(outbound.VerifiedDocStore); ok {
@@ -487,6 +520,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 		}
 	}
 	for _, snap := range normalizedSnaps {
+		if err := ctx.Err(); err != nil {
+			return inbound.CommitOutput{}, err
+		}
 		before, priorErr := s.meta.GetSnapshot(ctx, in.RepoID, snap.ID)
 		if err := priorErr; err == nil {
 			out.DedupedSnapshots++
@@ -509,6 +545,9 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 				}
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return inbound.CommitOutput{}, err
 	}
 	return out, nil
 }
