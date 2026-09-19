@@ -1211,3 +1211,26 @@ This removes document validation from the HTTP request lifetime. It does not
 claim constant per-document memory, short storage-index transactions, or eliminate
 subsequent snapshot/reference integrity checks. Large-body operational validation
 must cover those remaining phases before declaring backlog recovery complete.
+
+
+### Join policy ownership
+
+Manual same-branch session repositioning uses `domain.PlanJoin` over a complete
+repository graph. The application loads snapshots, refs, pending pointers and
+durable branch memberships inside the repository write boundary, allocates any
+residual session ref, and persists the domain mutation. The planner never changes
+natural parents or immutable PR completion records. It rejects unpublished source
+segments, natural ancestors, ambiguous first-parent descendants and mutations
+that affect another branch. A stale pending pointer does not turn a shared commit
+back into an uncommitted capture.
+
+Both storage adapters call the same domain mutation and graph-scope validators.
+PostgreSQL still locks the repository and verifies head/graft generations inside
+the transaction; FS still journals prepared/committed changes for crash recovery.
+Neither adapter may trust an earlier plan after another child or foreign ref has
+been attached. Multi-root reachability traverses a shared ancestor once per scope,
+not once for each branch/session/lifecycle ref.
+
+This stage centralizes backend planning and storage invariants. The browser's
+existing drag eligibility calculation remains until a server preview contract is
+wired; that remaining duplication is not resolved by this extraction alone.

@@ -18,7 +18,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // PostgresStore stores metadata and content in PostgreSQL (repos/blobs/snapshots/refs/memories).
@@ -373,99 +372,47 @@ func ensureNoReachabilityCycle(ctx context.Context, tx pgx.Tx, repoID domain.Con
 	return nil
 }
 
-func ensureJoinGraphScopePG(ctx context.Context, tx pgx.Tx, m outbound.JoinMutation) error {
-	if len(m.Grafts) == 0 {
-		return nil
-	}
-	segmentIDs := make([]string, 0, len(m.Segment))
-	for _, id := range m.Segment {
-		segmentIDs = append(segmentIDs, string(id))
-	}
-	attached := make(map[domain.ContentHash]bool)
-	sessionPrefix := domain.SessionRefPrefix(m.Branch)
-	rows, err := tx.Query(ctx, `
-		WITH RECURSIVE edges(child,parent) AS (
-			SELECT id, unnest(COALESCE(parents,'{}'::text[]) || COALESCE(graft_parents,'{}'::text[]))
-			  FROM snapshots WHERE repo_id=$1
-		), reach(node) AS (
-			SELECT target FROM refs
-			 WHERE repo_id=$1 AND target IS NOT NULL
-			   AND ((kind='branch' AND name=$2)
-				        OR (kind='session' AND left(name,length($3))=$3))
-			UNION
-			SELECT edges.parent FROM reach JOIN edges ON edges.child=reach.node
-		)
-		SELECT node FROM reach`, string(m.RepoID), m.Branch, sessionPrefix)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		attached[domain.ContentHash(id)] = true
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-
+// Read the locked graph; the same domain invariant is used by FS and commands.
+func ensureJoinGraphScopePG(ctx context.Context, tx pgx.Tx, m domain.JoinMutation) error {
 	byID := make(map[domain.ContentHash]domain.Snapshot)
-	rows, err = tx.Query(ctx, `SELECT id, COALESCE(parents,'{}'::text[]) FROM snapshots WHERE repo_id=$1`, string(m.RepoID))
+	rows, err := tx.Query(ctx, `SELECT id, COALESCE(parents,'{}'::text[]), COALESCE(graft_parents,'{}'::text[]) FROM snapshots WHERE repo_id=$1`, string(m.RepoID))
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var id string
-		var parents []string
-		if err := rows.Scan(&id, &parents); err != nil {
+		var parents, grafts []string
+		if err := rows.Scan(&id, &parents, &grafts); err != nil {
 			rows.Close()
 			return err
 		}
-		hashID := domain.ContentHash(id)
-		byID[hashID] = domain.Snapshot{ID: hashID, Parents: hashes(parents)}
+		hash := domain.ContentHash(id)
+		byID[hash] = domain.Snapshot{ID: hash, Parents: hashes(parents), GraftParents: hashes(grafts)}
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
+	err = rows.Err()
 	rows.Close()
-	if err := validateJoinSegmentTopology(m, byID, attached); err != nil {
-		return err
-	}
-	ids := append([]string{}, segmentIDs...)
-	for _, patch := range m.Grafts {
-		if err := validateHash(patch.SnapshotID); err != nil {
-			return err
-		}
-		ids = append(ids, string(patch.SnapshotID))
-	}
-	var blocked bool
-	err = tx.QueryRow(ctx, `
-		WITH RECURSIVE edges(child,parent) AS (
-			SELECT id, unnest(COALESCE(parents,'{}'::text[]) || COALESCE(graft_parents,'{}'::text[]))
-			  FROM snapshots WHERE repo_id=$1
-		), reach(branch,node) AS (
-			SELECT name,target FROM refs
-			 WHERE repo_id=$1 AND target IS NOT NULL
-			   AND ((kind='branch' AND name<>$2)
-			        OR (kind='session' AND left(name,length($4))<>$4))
-			UNION
-			SELECT reach.branch, edges.parent
-			  FROM reach JOIN edges ON edges.child=reach.node
-		)
-		SELECT EXISTS(SELECT 1 FROM reach WHERE node=ANY($3::text[]))`,
-		string(m.RepoID), m.Branch, ids, sessionPrefix).Scan(&blocked)
 	if err != nil {
 		return err
 	}
-	if blocked {
-		return fmt.Errorf("%w: join mutation is reachable from another git branch", domain.ErrConflict)
+	rows, err = tx.Query(ctx, `SELECT kind,name,COALESCE(target,'') FROM refs WHERE repo_id=$1`, string(m.RepoID))
+	if err != nil {
+		return err
 	}
-	return nil
+	var refs []domain.Ref
+	for rows.Next() {
+		var kind, name, target string
+		if err := rows.Scan(&kind, &name, &target); err != nil {
+			rows.Close()
+			return err
+		}
+		refs = append(refs, domain.Ref{Kind: domain.RefKind(kind), Name: name, Target: domain.ContentHash(target)})
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	return domain.ValidateJoinGraphScope(m, byID, refs)
 }
 
 // addGraftParents groups read/seq-CAS/cycle-check/write into a single transaction.
@@ -2178,66 +2125,17 @@ func (s *PostgresStore) SetGraftParents(ctx context.Context, repoID, id domain.C
 
 // ApplyJoin applies the graft replacement, optional session ref creation, and target branch ref CAS in a single PostgreSQL
 // transaction. It prevents overwriting append/join updates from different server instances due to row lock and graft_seq CAS.
-func (s *PostgresStore) ApplyJoin(ctx context.Context, m outbound.JoinMutation) error {
-	if err := validateHashes(m.RepoID, m.Source, m.ExpectedHead, m.NewHead); err != nil {
+func (s *PostgresStore) ApplyJoin(ctx context.Context, m domain.JoinMutation) error {
+	if err := domain.ValidateJoinMutation(m); err != nil {
 		return err
-	}
-	if len(m.Segment) == 0 || m.Segment[0] != m.Source {
-		return fmt.Errorf("%w: join segment must start at source", domain.ErrValidation)
-	}
-	segmentSeen := map[domain.ContentHash]bool{}
-	for _, id := range m.Segment {
-		if err := validateHash(id); err != nil {
-			return err
-		}
-		if segmentSeen[id] {
-			return fmt.Errorf("%w: duplicate join segment snapshot", domain.ErrIntegrity)
-		}
-		segmentSeen[id] = true
-	}
-	if !segmentSeen[m.NewHead] {
-		return fmt.Errorf("%w: join head is outside segment", domain.ErrValidation)
-	}
-	if err := domain.ValidateBranchName(m.Branch); err != nil {
-		return err
-	}
-	if (m.ForkName == "") != (m.ForkTip == "") {
-		return fmt.Errorf("%w: join fork name and tip must be provided together", domain.ErrValidation)
-	}
-	if m.ForkName != "" {
-		if err := domain.ValidateBranchName(m.ForkName); err != nil {
-			return err
-		}
-		if err := validateHash(m.ForkTip); err != nil {
-			return err
-		}
-		if !segmentSeen[m.ForkTip] {
-			return fmt.Errorf("%w: join session tip is outside segment", domain.ErrValidation)
-		}
-	}
-	if len(m.Grafts) == 0 {
-		return fmt.Errorf("%w: join requires at least one graft patch", domain.ErrValidation)
 	}
 	required := []domain.ContentHash{m.Source, m.ExpectedHead, m.NewHead, m.ForkTip}
 	required = append(required, m.Segment...)
-	seenPatch := map[domain.ContentHash]bool{}
 	for _, patch := range m.Grafts {
-		if err := validateHash(patch.SnapshotID); err != nil {
-			return err
-		}
-		if err := validateHashes(patch.Parents...); err != nil {
-			return err
-		}
-		if seenPatch[patch.SnapshotID] {
-			return domain.ErrIntegrity
-		}
-		seenPatch[patch.SnapshotID] = true
 		required = append(required, patch.SnapshotID)
 		required = append(required, patch.Parents...)
 	}
-	if err := validateJoinMutationPlan(m); err != nil {
-		return err
-	}
+
 	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func joinRecoveryFixture(t *testing.T) (*FSStore, domain.ContentHash, domain.ContentHash, domain.ContentHash, []byte, []byte) {
@@ -230,11 +229,11 @@ func TestFSStoreApplyJoinRejectsMissingTargetsWithoutMutation(t *testing.T) {
 	ghost := domain.HashContent([]byte("missing-join-target"))
 	tests := []struct {
 		name   string
-		mutate func(outbound.JoinMutation) outbound.JoinMutation
+		mutate func(domain.JoinMutation) domain.JoinMutation
 	}{
 		{
 			name: "new head",
-			mutate: func(m outbound.JoinMutation) outbound.JoinMutation {
+			mutate: func(m domain.JoinMutation) domain.JoinMutation {
 				m.NewHead = ghost
 				m.Segment = append(m.Segment, ghost)
 				return m
@@ -242,7 +241,7 @@ func TestFSStoreApplyJoinRejectsMissingTargetsWithoutMutation(t *testing.T) {
 		},
 		{
 			name: "fork tip",
-			mutate: func(m outbound.JoinMutation) outbound.JoinMutation {
+			mutate: func(m domain.JoinMutation) domain.JoinMutation {
 				m.ForkName = domain.SessionRefPrefix("main") + "missing"
 				m.ForkTip = ghost
 				m.Segment = append(m.Segment, ghost)
@@ -251,7 +250,7 @@ func TestFSStoreApplyJoinRejectsMissingTargetsWithoutMutation(t *testing.T) {
 		},
 		{
 			name: "graft parent",
-			mutate: func(m outbound.JoinMutation) outbound.JoinMutation {
+			mutate: func(m domain.JoinMutation) domain.JoinMutation {
 				m.Grafts[0].Parents = append(m.Grafts[0].Parents, ghost)
 				return m
 			},
@@ -260,9 +259,9 @@ func TestFSStoreApplyJoinRejectsMissingTargetsWithoutMutation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st, repo, h, x, _, _ := joinRecoveryFixture(t)
-			m := outbound.JoinMutation{
+			m := domain.JoinMutation{
 				RepoID: repo, Branch: "main", Source: x, Segment: []domain.ContentHash{x}, ExpectedHead: h, NewHead: x,
-				Grafts: []outbound.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
+				Grafts: []domain.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
 			}
 			err := st.ApplyJoin(ctx, tt.mutate(m))
 			if !errors.Is(err, domain.ErrNotFound) {
@@ -325,9 +324,9 @@ func TestFSStoreApplyJoinNeverOverwritesUnfinishedJournal(t *testing.T) {
 	if err := writeAtomic(path, want); err != nil {
 		t.Fatal(err)
 	}
-	err := st.ApplyJoin(ctx, outbound.JoinMutation{
+	err := st.ApplyJoin(ctx, domain.JoinMutation{
 		RepoID: repo, Branch: "main", Source: x, Segment: []domain.ContentHash{x}, ExpectedHead: h, NewHead: x,
-		Grafts: []outbound.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
+		Grafts: []domain.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
 	})
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("err=%v, want ErrConflict", err)
@@ -344,10 +343,10 @@ func TestFSStoreApplyJoinNeverOverwritesUnfinishedJournal(t *testing.T) {
 
 func TestFSStoreApplyJoinRechecksSourceAttachment(t *testing.T) {
 	ctx := context.Background()
-	mutation := func(repo, h, x domain.ContentHash) outbound.JoinMutation {
-		return outbound.JoinMutation{
+	mutation := func(repo, h, x domain.ContentHash) domain.JoinMutation {
+		return domain.JoinMutation{
 			RepoID: repo, Branch: "main", Source: x, Segment: []domain.ContentHash{x}, ExpectedHead: h, NewHead: x,
-			Grafts: []outbound.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
+			Grafts: []domain.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
 		}
 	}
 
@@ -448,10 +447,10 @@ func TestFSStoreApplyJoinRechecksSourceAttachment(t *testing.T) {
 		}, ""); err != nil {
 			t.Fatal(err)
 		}
-		err := st.ApplyJoin(ctx, outbound.JoinMutation{
+		err := st.ApplyJoin(ctx, domain.JoinMutation{
 			RepoID: repo, Branch: "main", Source: x, Segment: []domain.ContentHash{x, tip},
 			ExpectedHead: h, NewHead: tip,
-			Grafts: []outbound.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
+			Grafts: []domain.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
 		})
 		if !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("err=%v, want ErrConflict", err)
@@ -481,10 +480,10 @@ func TestFSStoreApplyJoinRechecksSourceAttachment(t *testing.T) {
 		}, ""); err != nil {
 			t.Fatal(err)
 		}
-		err := st.ApplyJoin(ctx, outbound.JoinMutation{
+		err := st.ApplyJoin(ctx, domain.JoinMutation{
 			RepoID: repo, Branch: "main", Source: x, Segment: []domain.ContentHash{x, tip},
 			ExpectedHead: h, NewHead: tip,
-			Grafts: []outbound.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
+			Grafts: []domain.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
 		})
 		if !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("stale segment err=%v, want ErrConflict", err)
@@ -511,11 +510,11 @@ func TestFSStoreApplyJoinRejectsLossyMutationShape(t *testing.T) {
 	}, ""); err != nil {
 		t.Fatal(err)
 	}
-	base := outbound.JoinMutation{
+	base := domain.JoinMutation{
 		RepoID: repo, Branch: "main", Source: x, Segment: []domain.ContentHash{x, tip},
 		ExpectedHead: h, NewHead: x,
 		ForkName: domain.SessionRefPrefix("main") + "tip", ForkTip: tip,
-		Grafts: []outbound.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
+		Grafts: []domain.GraftPatch{{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}}},
 	}
 	foreignParent := domain.HashContent([]byte("foreign-graft-parent"))
 	if err := st.PutSnapshot(ctx, domain.Snapshot{
@@ -525,25 +524,25 @@ func TestFSStoreApplyJoinRejectsLossyMutationShape(t *testing.T) {
 	}
 	tests := []struct {
 		name   string
-		mutate func(outbound.JoinMutation) outbound.JoinMutation
+		mutate func(domain.JoinMutation) domain.JoinMutation
 	}{
-		{"partial join without residual ref", func(m outbound.JoinMutation) outbound.JoinMutation {
+		{"partial join without residual ref", func(m domain.JoinMutation) domain.JoinMutation {
 			m.ForkName, m.ForkTip = "", ""
 			return m
 		}},
-		{"session ref outside target branch scope", func(m outbound.JoinMutation) outbound.JoinMutation {
+		{"session ref outside target branch scope", func(m domain.JoinMutation) domain.JoinMutation {
 			m.ForkName = domain.SessionRefPrefix("main/topic") + "tip"
 			return m
 		}},
-		{"source patch drops previous head", func(m outbound.JoinMutation) outbound.JoinMutation {
+		{"source patch drops previous head", func(m domain.JoinMutation) domain.JoinMutation {
 			m.Grafts[0].Parents = nil
 			return m
 		}},
-		{"source patch imports parent outside target branch scope", func(m outbound.JoinMutation) outbound.JoinMutation {
+		{"source patch imports parent outside target branch scope", func(m domain.JoinMutation) domain.JoinMutation {
 			m.Grafts[0].Parents = append(m.Grafts[0].Parents, foreignParent)
 			return m
 		}},
-		{"disconnected natural segment", func(m outbound.JoinMutation) outbound.JoinMutation {
+		{"disconnected natural segment", func(m domain.JoinMutation) domain.JoinMutation {
 			disconnected := domain.HashContent([]byte("disconnected-tip"))
 			if err := st.PutSnapshot(ctx, domain.Snapshot{ID: disconnected, DocHash: disconnected, RepoID: repo, Branch: "main"}); err != nil {
 				t.Fatal(err)
@@ -561,7 +560,7 @@ func TestFSStoreApplyJoinRejectsLossyMutationShape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mutation := base
 			mutation.Segment = append([]domain.ContentHash{}, base.Segment...)
-			mutation.Grafts = append([]outbound.GraftPatch{}, base.Grafts...)
+			mutation.Grafts = append([]domain.GraftPatch{}, base.Grafts...)
 			for i := range mutation.Grafts {
 				mutation.Grafts[i].Parents = append([]domain.ContentHash{}, base.Grafts[i].Parents...)
 			}
@@ -586,9 +585,9 @@ func TestFSStoreApplyJoinRejectsCycleInIntermediatePatchOrder(t *testing.T) {
 	}
 	// The final graph removes H's X edge and adds X→H, so it's a DAG, but if X→H is written first in this order,
 	// a temporary H↔X cycle occurs. The repository must reject writes before applying them if it doesn't strictly follow the service patch order.
-	err := st.ApplyJoin(ctx, outbound.JoinMutation{
+	err := st.ApplyJoin(ctx, domain.JoinMutation{
 		RepoID: repo, Branch: "main", Source: x, Segment: []domain.ContentHash{x}, ExpectedHead: h, NewHead: x,
-		Grafts: []outbound.GraftPatch{
+		Grafts: []domain.GraftPatch{
 			{SnapshotID: x, ExpectedSeq: 0, Parents: []domain.ContentHash{h}},
 			{SnapshotID: h, ExpectedSeq: 1, Parents: nil},
 		},

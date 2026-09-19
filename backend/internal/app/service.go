@@ -2095,271 +2095,56 @@ func (s *Service) fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkO
 	return inbound.ForkOutput{Branch: in.NewBranch, Head: in.FromSnapshot}, nil
 }
 
-// Join moves commit X of the same git branch session fork (sibling branch) to behind the branch head (graph drag&drop). The context session is tied to its git branch — no merge into other branches (enforced by projected branch membership).
-//
-// Full graft register + ref move — parent original unchanged, history rewritten/lost none:
-//  1. X with natural parent only in H history is rejected (true history — reordering meaningless·circular source)
-//  2. X follows unique first-parent child to tip, server calculates tip (SessionID only marks boundary)
-//  3. Existing graft in-flow edge superseded, X grafts to H, optional session ref, branch ref CAS to one ApplyJoin change set
-//
-// PostgreSQL uses transaction+row lock, FS uses durable intent journal+replay for mid-failure recovery. Supersede recorded before new edge in FS prevents circularity even in mid-state.
+// join loads the repository graph inside the write boundary and executes the
+// domain plan. Ref allocation and persistence stay in the application/adapters.
 func (s *Service) join(ctx context.Context, in inbound.JoinInput) (inbound.JoinOutput, error) {
-	if err := validateHashes(in.RepoID, in.Snapshot); err != nil {
-		return inbound.JoinOutput{}, err
-	}
-	if err := domain.ValidateBranchName(in.TargetBranch); err != nil {
-		return inbound.JoinOutput{}, err
-	}
-	if in.TargetBranch == "HEAD" {
-		return inbound.JoinOutput{}, fmt.Errorf("%w: HEAD is not a joinable branch", domain.ErrValidation)
-	}
-	snaps, err := s.meta.ListSnapshots(ctx, in.RepoID, "")
+	graph, err := s.loadJoinGraph(ctx, in.RepoID)
 	if err != nil {
 		return inbound.JoinOutput{}, err
 	}
-	byID := make(map[domain.ContentHash]domain.Snapshot, len(snaps))
-	for _, sn := range snaps {
-		byID[sn.ID] = sn
-	}
-	refs, err := s.meta.ListRefs(ctx, in.RepoID)
+	plan, err := domain.PlanJoin(graph, domain.JoinRequest{RepoID: in.RepoID, Branch: in.TargetBranch,
+		BranchID: in.BranchID, Source: in.Snapshot, IncludeDescendants: in.IncludeDescendants})
 	if err != nil {
 		return inbound.JoinOutput{}, err
 	}
-	// Writes the same commit set as the UI. Active pending target is never a join target, and hook leafs not reachable from ref are excluded from descendant/tip calculation.
-	// Conversely, past deduplication leaves hook labels, but if reachable from a branch/session/lifecycle root, it's already a shared commit and included.
-	shared := map[domain.ContentHash]bool{}
-	targetSessionShared := map[domain.ContentHash]bool{}
-	for _, ref := range refs {
-		if sharedTimelineRef(ref) {
-			for id := range snapshotReachableSet(byID, ref.Target) {
-				shared[id] = true
-				if ref.Kind == domain.RefSession && strings.HasPrefix(ref.Name, domain.SessionRefPrefix(in.TargetBranch)) {
-					targetSessionShared[id] = true
-				}
-			}
-		}
-	}
-	pendingTargets := map[domain.ContentHash]bool{}
-	pendings, err := s.meta.ListPendings(ctx, in.RepoID)
-	if err != nil {
-		return inbound.JoinOutput{}, err
-	}
-	for _, pending := range pendings {
-		// Applies rules like web's uncommitted determination. Targets already reachable from branch/session ref are stale pending and dismissed is user's pointer in progress list. Both must not block normal commit join.
-		if pending.Dismissed || shared[pending.Target] {
-			continue
-		}
-		pendingTargets[pending.Target] = true
-	}
-	isJoinCommit := func(id domain.ContentHash) bool {
-		snap, ok := byID[id]
-		return ok && !pendingTargets[id] && (!strings.HasPrefix(snap.Message, domain.HookMessagePrefix) || shared[id])
-	}
-	firstChildren := map[domain.ContentHash][]domain.ContentHash{}
-	for _, sn := range snaps {
-		if isJoinCommit(sn.ID) && len(sn.Parents) > 0 {
-			firstChildren[sn.Parents[0]] = append(firstChildren[sn.Parents[0]], sn.ID)
-		}
-	}
-	members, err := s.snapshotBranchMemberships(ctx, in.RepoID, snaps)
-	if err != nil {
-		return inbound.JoinOutput{}, err
-	}
-	snapX, ok := byID[in.Snapshot]
-	if !ok {
-		return inbound.JoinOutput{}, fmt.Errorf("%w: snapshot %s", domain.ErrNotFound, in.Snapshot)
-	}
-	if !isJoinCommit(in.Snapshot) {
-		return inbound.JoinOutput{}, fmt.Errorf("%w: pending hook capture cannot be joined", domain.ErrValidation)
-	}
-	if !members[in.Snapshot][in.TargetBranch] {
-		return inbound.JoinOutput{}, fmt.Errorf("%w: snapshot does not belong to git branch %q — cross-branch join is not allowed", domain.ErrConflict, in.TargetBranch)
-	}
-	head, err := s.meta.GetRef(ctx, in.RepoID, domain.RefBranch, in.TargetBranch)
-	if err != nil || head.Target == "" {
-		return inbound.JoinOutput{}, fmt.Errorf("%w: target branch %q has no head", domain.ErrNotFound, in.TargetBranch)
-	}
-	if head.Target == in.Snapshot {
-		return inbound.JoinOutput{}, fmt.Errorf("%w: snapshot is already the branch head", domain.ErrConflict)
-	}
-	headReach := snapshotReachableSet(byID, head.Target)
-	targetShared := make(map[domain.ContentHash]bool, len(headReach)+len(targetSessionShared))
-	for id := range headReach {
-		targetShared[id] = true
-	}
-	for id := range targetSessionShared {
-		targetShared[id] = true
-	}
-	// Join is an operation to reorder a shared session branch. It's not a bypass path for objects-only shadow push, which could elevate unpushed objects or past dangling snapshots to branch ref on web. Only allow in target branch's graft reach set or partial join session ref.
-	if !targetShared[in.Snapshot] {
-		return inbound.JoinOutput{}, fmt.Errorf("%w: snapshot is not an attached session branch; push it first", domain.ErrConflict)
-	}
-	// 1) Natural history determination: parents-only walk excluding grafts — branches connected only by grafts are reordering targets, natural history rejects (head retreat/circular source).
-	if naturalReachable(byID, head.Target, in.Snapshot) {
-		return inbound.JoinOutput{}, fmt.Errorf("%w: snapshot already in branch %q natural history", domain.ErrConflict, in.TargetBranch)
-	}
-	// 2) Segments are not SessionID but natural first-parent path. Server extends from X to target git branch's unique child leaf. Multiple children mean unknown lane, so safely reject. Client doesn't specify move range/tip.
-	segment := map[domain.ContentHash]bool{}
-	branchChildren := func(id domain.ContentHash) []domain.ContentHash {
-		var out []domain.ContentHash
-		for _, kid := range firstChildren[id] {
-			if members[kid][in.TargetBranch] {
-				out = append(out, kid)
-			}
-		}
-		return out
-	}
-	tip := in.Snapshot
-	segment[tip] = true
-	segmentIDs := []domain.ContentHash{tip}
-	seen := map[domain.ContentHash]bool{tip: true}
-	for {
-		kids := branchChildren(tip)
-		if len(kids) == 0 {
-			break
-		}
-		if len(kids) > 1 {
-			return inbound.JoinOutput{}, fmt.Errorf("%w: chain above snapshot forks — join a leaf after resolving the fork", domain.ErrConflict)
-		}
-		tip = kids[0]
-		// Objects-only shadow push existing natural descendants elevate to "full join" branch/session ref, bypassing cxt push public boundary. Opposite full join must be reachable from current branch or partial join session ref, i.e., pushed commits.
-		if !targetShared[tip] {
-			return inbound.JoinOutput{}, fmt.Errorf("%w: chain above snapshot contains an unpushed commit; push it first", domain.ErrConflict)
-		}
-		if seen[tip] {
-			return inbound.JoinOutput{}, fmt.Errorf("%w: cycle in natural lineage", domain.ErrIntegrity)
-		}
-		seen[tip] = true
-		segment[tip] = true
-		segmentIDs = append(segmentIDs, tip)
-	}
-	newHead := in.Snapshot
-	if in.IncludeDescendants {
-		newHead = tip
-	}
-	// 3) Supersede plan: Remove graft in-flow edge from outside to inside segment (auto-graft residue) to prevent reordering loop. Segment reachability continues with new head/session ref, so total reach set doesn't shrink.
-	type patch struct {
-		id   domain.ContentHash
-		next []domain.ContentHash
-	}
-	var supersedes []patch
-	// graft register is snapshot global meta, if another git branch ref reaches the same source, edge removal changes the branch graph. Shared sources cannot be safely superseded without branch-scoped placement, so it is rejected.
-	otherBranchReach := map[domain.ContentHash]bool{}
-	targetSessionPrefix := domain.SessionRefPrefix(in.TargetBranch)
-	for _, ref := range refs {
-		otherScope := (ref.Kind == domain.RefBranch && ref.Name != in.TargetBranch) ||
-			(ref.Kind == domain.RefSession && !strings.HasPrefix(ref.Name, targetSessionPrefix))
-		if !otherScope || ref.Target == "" {
-			continue
-		}
-		for id := range snapshotReachableSet(byID, ref.Target) {
-			otherBranchReach[id] = true
-		}
-	}
-	for _, id := range segmentIDs {
-		if otherBranchReach[id] {
-			return inbound.JoinOutput{}, fmt.Errorf("%w: snapshot %s is currently reachable from another git branch", domain.ErrConflict, id)
-		}
-	}
-	for _, sn := range snaps {
-		if segment[sn.ID] || len(sn.GraftParents) == 0 || !headReach[sn.ID] {
-			continue
-		}
-		var next []domain.ContentHash
-		hit := false
-		for _, g := range sn.GraftParents {
-			if segment[g] {
-				hit = true
-				continue
-			}
-			next = append(next, g)
-		}
-		if hit {
-			if !members[sn.ID][in.TargetBranch] {
-				return inbound.JoinOutput{}, fmt.Errorf("%w: a graft from another git branch blocks this join", domain.ErrConflict)
-			}
-			if otherBranchReach[sn.ID] {
-				return inbound.JoinOutput{}, fmt.Errorf("%w: graft source %s is shared by another git branch", domain.ErrConflict, sn.ID)
-			}
-			supersedes = append(supersedes, patch{id: sn.ID, next: next})
-		}
-	}
-	out := inbound.JoinOutput{Branch: in.TargetBranch}
-	// 4) Repository atomic change set composition. supersede first, then X's new edge last. FS implementation also avoids creating loops during mid-crash, and PostgreSQL is a single transaction.
 	var forkName string
-	if !in.IncludeDescendants && tip != in.Snapshot {
-		var ferr error
-		forkName, ferr = s.joinForkRefName(ctx, in.RepoID, in.TargetBranch, tip)
-		if ferr != nil {
-			return inbound.JoinOutput{}, ferr
+	if plan.RemainingTip != "" {
+		forkName, err = s.joinForkRefName(ctx, in.RepoID, in.TargetBranch, plan.RemainingTip)
+		if err != nil {
+			return inbound.JoinOutput{}, err
 		}
-		out.ForkBranch = forkName
 	}
-	patches := make([]outbound.GraftPatch, 0, len(supersedes)+1)
-	for _, p := range supersedes {
-		patches = append(patches, outbound.GraftPatch{SnapshotID: p.id, ExpectedSeq: byID[p.id].GraftSeq, Parents: p.next})
-	}
-	xNext := append([]domain.ContentHash{}, snapX.GraftParents...)
-	foundHead := false
-	for _, parent := range xNext {
-		foundHead = foundHead || parent == head.Target
-	}
-	if !foundHead {
-		xNext = append(xNext, head.Target)
-	}
-	patches = append(patches, outbound.GraftPatch{SnapshotID: in.Snapshot, ExpectedSeq: snapX.GraftSeq, Parents: xNext})
-	forkTip := domain.ContentHash("")
-	if forkName != "" {
-		forkTip = tip
-	}
-	if err := s.meta.ApplyJoin(ctx, outbound.JoinMutation{
-		RepoID: in.RepoID, Branch: in.TargetBranch, BranchID: in.BranchID, Source: in.Snapshot, Segment: segmentIDs,
-		ExpectedHead: head.Target, NewHead: newHead,
-		ForkName: forkName, ForkTip: forkTip, Grafts: patches,
-	}); err != nil {
+	mutation, err := plan.Mutation(forkName)
+	if err != nil {
 		return inbound.JoinOutput{}, err
 	}
-	out.Head = newHead
-	return out, s.reconcileSharedPendingPointers(ctx, in.RepoID)
+	if err := s.meta.ApplyJoin(ctx, mutation); err != nil {
+		return inbound.JoinOutput{}, err
+	}
+	return inbound.JoinOutput{Branch: plan.Branch, Head: plan.NewHead, ForkBranch: forkName}, s.reconcileSharedPendingPointers(ctx, in.RepoID)
 }
 
-func snapshotReachableSet(byID map[domain.ContentHash]domain.Snapshot, head domain.ContentHash) map[domain.ContentHash]bool {
-	out := map[domain.ContentHash]bool{}
-	stack := []domain.ContentHash{head}
-	for len(stack) > 0 {
-		cur := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if cur == "" || out[cur] {
-			continue
-		}
-		out[cur] = true
-		if snap, ok := byID[cur]; ok {
-			stack = append(stack, snap.ReachabilityParents()...)
-		}
+func (s *Service) loadJoinGraph(ctx context.Context, repo domain.ContentHash) (domain.JoinGraph, error) {
+	if err := domain.ValidateContentHash(repo); err != nil {
+		return domain.JoinGraph{}, err
 	}
-	return out
-}
-
-// naturalReachable determines if from follows natural parents to anc (excluding grafts).
-func naturalReachable(byID map[domain.ContentHash]domain.Snapshot, from, anc domain.ContentHash) bool {
-	if from == anc {
-		return true
+	snaps, err := s.meta.ListSnapshots(ctx, repo, "")
+	if err != nil {
+		return domain.JoinGraph{}, err
 	}
-	seen := map[domain.ContentHash]bool{}
-	stack := []domain.ContentHash{from}
-	for len(stack) > 0 {
-		cur := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if cur == anc {
-			return true
-		}
-		if seen[cur] {
-			continue
-		}
-		seen[cur] = true
-		stack = append(stack, byID[cur].Parents...)
+	refs, err := s.meta.ListRefs(ctx, repo)
+	if err != nil {
+		return domain.JoinGraph{}, err
 	}
-	return false
+	pendings, err := s.meta.ListPendings(ctx, repo)
+	if err != nil {
+		return domain.JoinGraph{}, err
+	}
+	members, err := s.snapshotBranchMemberships(ctx, repo, snaps)
+	if err != nil {
+		return domain.JoinGraph{}, err
+	}
+	return domain.JoinGraph{Snapshots: snaps, Refs: refs, Pendings: pendings, Memberships: members}, nil
 }
 
 // joinForkRefName selects a session ref name to preserve natural descendants after partial join. The session ref itself is not a real git branch membership, but the branch scope in the name participates in join ownership determination. Actual creation and conflict final determination is performed in the ApplyJoin atomic boundary.
