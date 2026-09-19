@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { completedBranchEvidence } from '../src/graphEvidence';
+import { completedBranchEvidence } from './serverGraphFixture';
 import type { Snapshot, HistoryEvent } from '../src/types';
 
 const snap = (id: string, parents: string[] = [], graft_parents: string[] = []): Snapshot => ({

@@ -71,3 +71,37 @@ as exactly-once transport.
   Explicit type-only edges are exempt; mixed and side-effect imports are checked.
 - API contracts, real browser E2E and provider/sync E2E remain required. Dependency
   checks complement those regressions rather than replacing behavior verification.
+
+## Server-owned graph reads
+
+`domain.ProjectGraphState` decides publication tiers, branch identity, archived
+membership, retained-progress groups, On Hold clusters and supported birth/merge
+operations. It shares branch bindings and completion semantics with the existing
+context query used by REST and MCP. MCP does not need SVG layout metadata.
+
+`GetRepositoryView`, `GetPendingView` and `QueryGraphState` load metadata in one
+repository read transaction. PostgreSQL pins one MVCC generation across metadata,
+revision and projection. Pending responses carry the same classification contract
+but only current capture metadata; they omit branch memberships owned by the full
+view. Missing new inputs trigger one full browser refresh, not local inference.
+
+There is no cross-request graph cache: staging metadata can change before its
+publication revision advances. A revision-only cache could serve stale inputs on
+one replica. Per-read ancestry bitsets have an 8 MiB / 4,096-entry cache limit;
+exhaustion changes cost, never correctness. Documents are not loaded for graph
+classification.
+
+The HTTP graph adapter uses `indexed-v1`: repeated ID sets reference one response
+local dictionary. These indices are neither persisted identities nor business
+state. Web validates and decodes the transport, resolves IDs, and then handles
+folding, selection and geometry. `/view`, `/pending-view` and `/graph-state` support
+gzip inside their viewer authorization guard; SSE is not compressed by this
+adapter. Deploy the backend contract before the corresponding frontend. A missing
+or unsupported contract fails explicitly rather than silently restoring old
+frontend policy rules.
+
+Browser fixtures invoke the actual Go domain projection and wire encoder. The
+same tests cover live capture changes with PR history, superseded grafts,
+renames/name reuse, read-only position selection and invalid-response recovery.
+A rejected refresh preserves the last coherent conversation; an invalid first
+read shows an error and does not draw a guessed graph.

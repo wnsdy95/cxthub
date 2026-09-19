@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { GraphIndex } from '../src/graphIndex';
-import { completedBranchEvidence } from '../src/graphEvidence';
-import { projectBranchGraph, visibleBranchGraph } from '../src/graphProjection';
+import { completedBranchEvidence } from './serverGraphFixture';
+import { projectBranchGraph } from './serverGraphFixture';
+import { visibleBranchGraph } from '../src/graphProjection';
 import { layoutGraph, sessionBoundaries, compactionBoundaries } from '../src/graph';
 import type { Snapshot, HistoryEvent, Ref } from '../src/types';
 const at=(n:number)=>new Date(Date.UTC(2026,8,18,0,0,n)).toISOString();
@@ -45,6 +46,5 @@ assert.ok(compactionBoundaries(snapshots).has('source'));
 // Duplicate/cyclic hidden inputs block the full projection, even if a visible
 // subset would otherwise look perfectly valid.
 for(const bad of [[...snapshots,snapshots[4]],[...snapshots,s('loop',['loop'],'deleted',8)]]) {
-  const full=projectBranchGraph(bad,refs,history,[]);
-  assert.equal(visibleBranchGraph(full,new Set(['current','root'])).snapshots.length,0);
+  assert.throws(()=>projectBranchGraph(bad,refs,history,[]),/integrity violation/);
 }

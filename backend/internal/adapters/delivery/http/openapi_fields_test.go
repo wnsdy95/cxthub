@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/graphwire"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
@@ -19,6 +20,17 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		typ    reflect.Type
 	}{
 		{"Snapshot", reflect.TypeOf(domain.Snapshot{})},
+		{"PendingView", reflect.TypeOf(domain.PendingView{})},
+		{"GraphState", reflect.TypeOf(graphwire.State{})},
+		{"GraphBranchHead", reflect.TypeOf(domain.GraphBranchHead{})},
+		{"GraphBranchMarker", reflect.TypeOf(domain.GraphBranchMarker{})},
+		{"GraphHoldCluster", reflect.TypeOf(domain.GraphHoldCluster{})},
+		{"GraphPosition", reflect.TypeOf(domain.GraphPosition{})},
+		{"GraphProgressGroup", reflect.TypeOf(domain.GraphProgressGroup{})},
+		{"GraphOperations", reflect.TypeOf(domain.GraphOperations{})},
+		{"GraphBirth", reflect.TypeOf(domain.GraphBirth{})},
+		{"GraphMerge", reflect.TypeOf(domain.GraphMerge{})},
+
 		{"DocFinalizationStatus", reflect.TypeOf(inbound.DocFinalizationStatus{})},
 		{"RepositoryRevision", reflect.TypeOf(domain.RepositoryRevision{})},
 		{"EffectiveMemorySelection", reflect.TypeOf(domain.EffectiveMemorySelection{})},

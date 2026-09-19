@@ -29,6 +29,7 @@ try {
       absWorkingDir: projectRoot,
       entryPoints: [test],
       bundle: true,
+      sourcemap: 'inline',
       format: 'cjs',
       logLevel: 'silent',
       outfile,

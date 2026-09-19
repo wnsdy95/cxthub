@@ -14,7 +14,7 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 		if err != nil {
 			return domain.ContextQueryView{}, err
 		}
-		view, err := s.GetRepositoryView(ctx, repo)
+		view, err := s.loadRepositoryView(ctx, repo)
 		if err != nil {
 			return domain.ContextQueryView{}, err
 		}

@@ -1,4 +1,4 @@
-import type { Ref } from './types';
+import type { Ref } from '../src/types';
 
 export const BRANCH_LIFECYCLE_TAG_PREFIX = 'cxt/branch-state/v1/';
 

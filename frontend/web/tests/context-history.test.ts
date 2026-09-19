@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { previousProgressGroups, hiddenProgressIds, historicalSnapshotIds } from '../src/contextHistory.ts';
-import { classifyGraphSnapshots } from '../src/graphStatus.ts';
-import { holdCounts, orphanPendings, unsyncChains } from '../src/onhold.ts';
+import { previousProgressGroups, hiddenProgressIds, historicalSnapshotIds } from './serverGraphFixture';
+import { classifyGraphSnapshots } from './serverGraphFixture';
+import { holdCounts, orphanPendings, unsyncChains } from './serverGraphFixture';
 import type { HistoryEvent, Ref, RefLogEntry, Snapshot } from '../src/types.ts';
 
 const snapshot = (id: string, parents: string[] = [], graft_parents: string[] = []): Snapshot => ({

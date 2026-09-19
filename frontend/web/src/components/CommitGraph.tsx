@@ -3,21 +3,20 @@
 // Lane layout is handled in graph.ts (pure function), this file renders only the SVG.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { ContextSemantics, HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
+import type { ContextSemantics, GraphState, HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
 import { layoutGraph, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { projectBranchGraph, visibleBranchGraph, type GraphEvent } from '../graphProjection';
 import { completedBranchEvidence } from '../graphEvidence';
 import { GraphIndex } from '../graphIndex';
-import { classifyGraphSnapshots } from '../graphStatus';
-import { previousProgressGroups, hiddenProgressIds, historicalSnapshotIds, historyBranchHeads } from '../contextHistory';
-import { useJoinPreview, useJoinSnapshot } from '../hooks';
+import { graphStatus, graphProgress } from '../graphState';
+import { hiddenProgressIds } from '../contextHistory';
+import { useGraphPosition, useJoinPreview, useJoinSnapshot } from '../hooks';
 import { useT } from '../i18n';
 
 const LANE_W = 22; // Lane width
 const ROW_H = 26; // Row height (text-free — compact)
 const HEAD_H = 44; // Sticky lane-label area; kept in sync with .graph-head.
 const R = 4.5; // Node radius
-const EMPTY_REFLOG: RefLogEntry[] = [];
 const EMPTY_HISTORY: HistoryEvent[] = [];
 
 // Cycle lane colors (ink + desaturated colors).
@@ -66,17 +65,18 @@ export function CommitGraph({
   onSelect,
   badges,
   refs,
-  reflog = EMPTY_REFLOG,
+
   history = EMPTY_HISTORY,
   semantics,
   historyError = false,
   graphLoading = false,
   graphError,
   retryGraph,
-  uncommitted,
+  graphState,
   pinBranch,
   joinBranch,
   repoId,
+  readRepoId,
 }: {
   snapshots: Snapshot[];
   selectedId: string | null;
@@ -95,12 +95,14 @@ export function CommitGraph({
   retryGraph?: () => void;
 /** Uncommitted hook-capture IDs, rendered as hollow dashed nodes with an individual label. */
   uncommitted?: Set<string>;
+  graphState?: GraphState;
 /** Default branch name — always fixed at the leftmost lane (0) for this branch chain. */
   pinBranch?: string;
 /** Join target git branch — fixed to the current branch to avoid guessing multiple memberships */
   joinBranch?: string;
 /** repo ID — activates drag-and-drop join if provided */
   repoId?: string | null;
+  readRepoId?: string;
 }) {
   const t = useT();
   const graphIndex = useMemo(() => new GraphIndex(snapshots), [snapshots]);
@@ -108,14 +110,15 @@ export function CommitGraph({
   const [showArchived, setShowArchived] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
   const [positionId, setPositionId] = useState('');
-  const positions = useMemo(() => history.filter((event) => event.kind === 'position' && event.target
-    && graphIndex.byId.has(event.target)).slice().reverse(), [history, graphIndex]);
-  const positionEvent = positions.find((event) => event.id === positionId);
-  const historyHeads = useMemo(() => historyBranchHeads(history), [history]);
-  const positionHead = positionEvent ? historyHeads.get(positionEvent.branch_id) : undefined;
-  const position = positionEvent ? { branch: positionHead?.branch ?? positionEvent.branch, branch_id: positionEvent.branch_id, snapshot: positionEvent.target! } : undefined;
-  const historicalIds = useMemo(() => historicalSnapshotIds(reflog, snapshots, history), [reflog, snapshots, history]);
-  const historyGroups = useMemo(() => previousProgressGroups(refs ?? [], snapshots, reflog, history, position, graphIndex), [refs, snapshots, reflog, history, graphIndex, position?.branch, position?.branch_id, position?.snapshot]);
+  const positions = useMemo(() => (graphState?.positions ?? []).flatMap(p => {
+    const event=history.find(e=>e.id===p.event_id);
+    return event ? [{...event,branch:p.branch,archived:p.archived}] : [];
+  }),[graphState,history]);
+  const positionEvent = positions.find(e=>e.id===positionId);
+  const selectedPosition = useGraphPosition(readRepoId ?? repoId,positionEvent?.id ?? '',graphState?.revision);
+  const currentGraph = positionEvent ? selectedPosition.data : graphState;
+  const position = positionEvent && currentGraph ? {branch:positionEvent.branch,snapshot:positionEvent.target!,archived:positionEvent.archived} : undefined;
+  const historyGroups = useMemo(()=>graphProgress(currentGraph),[currentGraph]);
   // A selection made elsewhere in the viewer must reveal its recorded path.
   const expandedKeys = useMemo(() => {
     const next = new Set(expandedHistory);
@@ -129,10 +132,7 @@ export function CommitGraph({
   const hiddenHistory = useMemo(() => hiddenProgressIds(historyGroups, expandedKeys), [historyGroups, expandedKeys]);
   const revealedHistory = useMemo(() => new Set(historyGroups
     .filter((group) => expandedKeys.has(group.key)).flatMap((group) => [...group.snapshotIds])), [historyGroups, expandedKeys]);
-  const status = useMemo(
-    () => classifyGraphSnapshots(refs ?? [], snapshots, uncommitted, pinBranch, historicalIds, history, graphIndex, mergeEvidence),
-    [refs, snapshots, uncommitted, pinBranch, historicalIds, history, graphIndex, mergeEvidence],
-  );
+  const status = useMemo(()=>graphStatus(currentGraph ?? graphState),[currentGraph,graphState]);
   const selectedArchived = selectedId !== null && status.archivedOnly.has(selectedId);
   const archivedVisible = showArchived || selectedArchived;
   const visibleSnapshots = useMemo(
@@ -143,15 +143,15 @@ export function CommitGraph({
   const graphIdentity = refs?.[0]?.repo_id ?? repoId ?? '';
   useEffect(() => { setShowArchived(false); setExpandedHistory(new Set()); setPositionId(''); }, [graphIdentity]);
   const pinHead = useMemo(
-    () => position && positionHead?.kind !== 'archive' && position.branch === pinBranch ? position.snapshot : (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
-    [refs, pinBranch, position?.branch, position?.snapshot, positionHead?.kind],
+    () => position && !position.archived && position.branch === pinBranch ? position.snapshot : (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
+    [refs, pinBranch, position?.branch, position?.snapshot, position?.archived],
   );
-  const fullProjection = useMemo(() => projectBranchGraph(snapshots, refs ?? [], history, reflog, pinHead, pinBranch, graphIndex, mergeEvidence), [snapshots, refs, history, reflog, pinHead, pinBranch, graphIndex, mergeEvidence]);
+  const fullProjection = useMemo(() => projectBranchGraph(snapshots, refs ?? [], currentGraph, pinHead, pinBranch), [snapshots, refs, currentGraph, pinHead, pinBranch]);
   // Validate before folding too: hiding a bad component must not hide its error.
   const projectedIndex = useMemo(() => new GraphIndex(fullProjection.snapshots), [fullProjection]);
   const projection = useMemo(() => visibleBranchGraph(fullProjection, new Set(visibleSnapshots.map(s => s.id))), [fullProjection, visibleSnapshots]);
   const graphIssues = graphIndex.issues.length ? graphIndex.issues : projectedIndex.issues;
-  const { rows, laneCount } = useMemo(() => graphIssues.length ? { rows: [], laneCount: 0 } : layoutGraph(projection.snapshots, projection.pinHead), [projection, graphIssues]);
+  const { rows, laneCount } = useMemo(() => graphError || graphIssues.length || (positionEvent && !currentGraph) ? { rows: [], laneCount: 0 } : layoutGraph(projection.snapshots, projection.pinHead), [projection, graphIssues, positionEvent, currentGraph, graphError]);
   const missingParents = graphIndex.missingParents;
   function toggleHistory(key: string) {
     const next = new Set(expandedKeys);
@@ -165,8 +165,7 @@ export function CommitGraph({
     setExpandedHistory(next);
   }
   const svgW = Math.max(laneCount, 1) * LANE_W;
-  // Unpushed = branch ref unreachable (outside shared timeline — unsync shadow push·residue included).
-  // Determined the same way as onhold (sharedReachable = parents ∪ graft_parents walk).
+  // Publication tiers come from the same server projection used by On Hold.
   const unpushed = status.unpushed;
   const uncommittedIds = status.uncommitted;
 
@@ -449,6 +448,8 @@ export function CommitGraph({
           })}
         </ul>
       </details>}
+      {positionEvent && !currentGraph && selectedPosition.isPending && <p role="status">{t('graph.loading')}</p>}
+      {selectedPosition.error && <p role="alert">{selectedPosition.error.message} <button onClick={() => { void selectedPosition.refetch(); }}>{t('context.retryRead')}</button></p>}
       {positions.length > 0 && <div className="graph-history-scope">
         <label>{t('graph.browsePosition')}
           <select aria-label={t('graph.browsePosition')} value={positionEvent?.id ?? ''} onChange={(event) => {
@@ -817,7 +818,7 @@ export function CommitGraph({
             </li>
           );
         })}
-        {rows.length === 0 && !graphLoading && !graphError && !historyError && <li className="ws-empty">{t('graph.noCommits')}</li>}
+        {rows.length === 0 && !graphLoading && !graphError && !historyError && !(positionEvent && !currentGraph) && <li className="ws-empty">{t('graph.noCommits')}</li>}
           </ul>
         </div>
       </div>

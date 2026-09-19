@@ -70,10 +70,19 @@ func TestRepositoryChangesAuthorizationAndPendingDelivery(t *testing.T) {
 		t.Fatal("repo")
 	}
 	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repo))
-	for _, path := range []string{"/revision", "/pending-view", "/changes", "/context-query"} {
+	for _, path := range []string{"/revision", "/pending-view", "/changes", "/context-query", "/graph-state", "/view"} {
 		if code := doJSONAs(t, "dev:outsider@example.test:Other", "GET", base+path, nil, nil); code != 403 {
 			t.Fatalf("%s exposed: %d", path, code)
 		}
+	}
+	var graph struct {
+		Version int `json:"version"`
+	}
+	if code := doJSON(t, "GET", base+"/graph-state", nil, &graph); code != 200 || graph.Version != 1 {
+		t.Fatalf("graph query: %d %+v", code, graph)
+	}
+	if code := doJSON(t, "GET", base+"/graph-state?position=missing", nil, nil); code != 404 {
+		t.Fatalf("unknown graph position: %d", code)
 	}
 	var query domain.ContextQueryView
 	if code := doJSON(t, "GET", base+"/context-query", nil, &query); code != 200 || query.Version != 1 || query.Semantics.Version != 1 {
@@ -122,8 +131,34 @@ func TestRepositoryChangesAuthorizationAndPendingDelivery(t *testing.T) {
 	if changed.Graph != initial.Graph || changed.Pending != initial.Pending+1 {
 		t.Fatalf("wrong notification %+v -> %+v", initial, changed)
 	}
-	var v domain.PendingView
+	var v struct {
+		Graph     json.RawMessage           `json:"graph"`
+		Revision  domain.RepositoryRevision `json:"revision"`
+		Pending   []domain.Pending          `json:"pending"`
+		Snapshots []domain.Snapshot         `json:"snapshots"`
+	}
 	if doJSON(t, "GET", base+"/pending-view", nil, &v) != 200 || len(v.Snapshots) != 1 || v.Revision != changed {
 		t.Fatalf("%+v", v)
+	}
+	var full struct {
+		Graph json.RawMessage `json:"graph"`
+	}
+	if doJSON(t, "GET", base+"/view", nil, &full) != 200 || string(full.Graph) != string(v.Graph) {
+		t.Fatal("full/pending graph wire contracts diverged")
+	}
+	var selected json.RawMessage
+	if doJSON(t, "GET", base+"/graph-state", nil, &selected) != 200 || string(selected) != string(v.Graph) {
+		t.Fatal("positionless graph query disagrees with view")
+	}
+	var indexed struct {
+		Encoding    string               `json:"encoding"`
+		Dictionary  []domain.ContentHash `json:"dictionary"`
+		SnapshotIDs []uint32             `json:"snapshot_ids"`
+	}
+	if err := json.Unmarshal(v.Graph, &indexed); err != nil {
+		t.Fatal(err)
+	}
+	if indexed.Encoding != "indexed-v1" || len(indexed.SnapshotIDs) != 1 || indexed.Dictionary[indexed.SnapshotIDs[0]] != target {
+		t.Fatalf("unexpected wire dictionary: %+v", indexed)
 	}
 }

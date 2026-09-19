@@ -1,5 +1,4 @@
-import { completedBranchEvidence } from './graphEvidence';
-import { GraphIndex } from './graphIndex';
+import { graphViewRows } from './graphState';
 // React Query — Server State (Query/Mutation).
 //
 // Authentication status is represented by the `me` query: success (200) → logged in, failure (401) → logged out.
@@ -9,11 +8,6 @@ import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tansta
 import { api } from './api';
 import { useRepositoryUpdates } from './useRepositoryUpdates';
 import type { User } from './types';
-import { sharedReachable } from './onhold';
-import { repositoryGraph } from './repositoryGraph';
-import { parseBranchLifecycleRef, projectBranchRefs } from './branchLifecycle';
-import { classifyBranchHistoryMarkers } from './graphStatus';
-import { historicalSnapshotIds } from './contextHistory';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseGoogleIdToken, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 
@@ -424,86 +418,25 @@ export function useDismissPending() {
   });
 }
 
-// useRepoView — single assembly point for repo-derived states shared by context/On Hold views.
-// Ensure "badge count = tab row count" is guaranteed by logic (onhold.ts) and input equality, so
-// exclude stash, hook capture leaves, and badge map must be created here only (review front #2).
-export function useRepoView(repoId: string | null, primaryBranch?: string) {
+// One server generation shared by the context and On Hold views.
+export function useRepoView(repoId: string | null, _primaryBranch?: string) {
   useRepositoryUpdates(repoId);
-  const viewQuery = useQuery({
-    queryKey: ['repo-view', repoId],
-    queryFn: () => api.repositoryView(repoId!),
-    // Changes arrive by durable revision; stream failure uses a bounded fallback.
-    retry: false,
-    enabled: Boolean(repoId),
-    refetchOnWindowFocus: false,
-  });
-  const rawRefs = viewQuery.data?.refs ?? [];
-  const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);
-  const allData = viewQuery.data?.snapshots;
-  const reflog = viewQuery.data?.reflog ?? [];
-  const history = viewQuery.data?.history ?? [];
-  const semantics = viewQuery.data?.semantics;
-  const mergeEvidence = useMemo(() => completedBranchEvidence(allData ?? [], history, new GraphIndex(allData ?? []), semantics), [allData, history, semantics]);
-  const pendings = viewQuery.data?.pending ?? [];
-  const unsyncs = viewQuery.data?.unsync ?? [];
-  const historicalIds = useMemo(() => historicalSnapshotIds(reflog, allData ?? [], history), [reflog, allData, history]);
-  const snapshots = useMemo(() => {
-    const all = (allData ?? []).filter((s) => s.branch !== '(stash)');
-    // Excluding stashes is based on reachability criteria — a "(stash)" label object may exist on the server (stash-dedup trap). Just removing the label breaks the commit walk, pushing the entire history to the tip.
-    const stashed = (allData ?? []).filter((s) => s.branch === '(stash)');
-    if (stashed.length === 0) return all;
-    const reachable = sharedReachable(refs, allData ?? []);
-    return (allData ?? []).filter((s) => s.branch !== '(stash)' || reachable.has(s.id) || historicalIds.has(s.id));
-  }, [allData, refs, historicalIds]);
-  const badges = useMemo(() => {
-    const m = new Map<string, { name: string; kind: string }[]>();
-    for (const r of refs) {
-      if (r.kind !== 'branch' && r.kind !== 'tag') continue;
-      if (parseBranchLifecycleRef(r) || r.name.startsWith('cxt/history/v1/')) continue;
-      const list = m.get(r.target) ?? [];
-      list.push({ name: r.name, kind: r.kind });
-      m.set(r.target, list);
-    }
-    for (const marker of classifyBranchHistoryMarkers(refs, snapshots, primaryBranch, history, new GraphIndex(snapshots), mergeEvidence)) {
-      const list = m.get(marker.target) ?? [];
-      list.push({ name: marker.branch, kind: marker.kind });
-      m.set(marker.target, list);
-    }
-    return m;
-  }, [refs, snapshots, primaryBranch, history, mergeEvidence]);
-  // Hook capture leaves (hook: prefix) are remnants of progress state — typically excluding graph/AI bar. However, hook snapshots reachable from branch refs (absorbed into commits or directly referenced by ref) are part of the history and are displayed. Just removing the label (message prefix) breaks the commit walk, causing the head to disappear from the graph — the pin line to break and its child pending to appear orphaned (stash-dedup trap, same principle: determination based on reachability).
-  const sharedIds = useMemo(() => {
-    const ids = sharedReachable(refs, snapshots);
-    for (const id of historicalIds) ids.add(id);
-    return ids;
-  }, [refs, snapshots, historicalIds]);
-  const committedSnapshots = useMemo(
-    () => snapshots.filter((s) => !s.message?.startsWith('hook: ') || sharedIds.has(s.id)),
-    [snapshots, sharedIds],
-  );
-  // Uncommitted = undismissed hook captures that have not reached the shared
-  // timeline. This is durable pointer state, not a process-liveness signal.
-  const { graphSnapshots, uncommittedIds } = useMemo(() => repositoryGraph(snapshots, refs, history, sharedIds,
-    pendings, unsyncs), [snapshots, refs, history, sharedIds, pendings, unsyncs]);
-  const graphLoading = viewQuery.isPending;
-  const graphError = viewQuery.error?.message;
-  const retryGraph = () => { void viewQuery.refetch(); };
-  // Local predecessors (push-pending ∪ uncommitted) set and its tip (topmost — a leaf with no children). checkout -b semantics: branches have meaning only at the tip — when a new branch ref points to the tip, push commits + uncommitted state as a chain (splitting the chain).
-  const localAhead = useMemo(() => {
-    const shared = sharedIds;
-    const ids = new Set(graphSnapshots.filter((s) => !shared.has(s.id)).map((s) => s.id));
-    const hasChildAhead = new Set<string>();
-    for (const s of graphSnapshots) {
-      if (!ids.has(s.id)) continue;
-      for (const p of [...(s.parents ?? []), ...(s.graft_parents ?? [])]) {
-        if (ids.has(p)) hasChildAhead.add(p);
-      }
-    }
-    const tips = new Set([...ids].filter((id) => !hasChildAhead.has(id)));
-    return { ids, tips };
-  }, [sharedIds, graphSnapshots]);
-  return { refs, snapshots, badges, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, sharedIds, history,
-    pendings, unsyncs, semantics, historyError: viewQuery.isError, graphLoading, graphError, retryGraph };
+  const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:()=>api.repositoryView(repoId!),retry:false,
+    enabled:Boolean(repoId),refetchOnWindowFocus:false});
+  const view = viewQuery.data;
+  const rows = useMemo(()=>graphViewRows(view),[view]);
+  return {...rows,refs:view?.refs ?? [],reflog:view?.reflog ?? [],history:view?.history ?? [],graphState:view?.graph,
+    pendings:view?.pending ?? [],unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError,
+    graphLoading:viewQuery.isPending,graphError:viewQuery.error?.message,retryGraph:()=>{void viewQuery.refetch();}};
+}
+
+export function useGraphPosition(repoId: string | null | undefined, position: string, revision?: import('./types').RepositoryRevision) {
+  const qc = useQueryClient();
+  const q = useQuery({queryKey:['graph-position',repoId,position,revision?.graph,revision?.pending,revision?.evidence],
+    queryFn:({signal})=>api.graphState(repoId!,position,signal),enabled:Boolean(repoId && position && revision),retry:false,refetchOnWindowFocus:false});
+  const matches = q.data && revision && q.data.revision.graph===revision.graph && q.data.revision.pending===revision.pending && (q.data.revision.evidence??'0')===(revision.evidence??'0');
+  useEffect(()=>{if(q.data && !matches) void qc.invalidateQueries({queryKey:['repo-view',repoId]});},[q.data,matches,qc,repoId]);
+  return {...q,data:matches?q.data:undefined};
 }
 
 // ── Mutation ──────────────────────────────────────────

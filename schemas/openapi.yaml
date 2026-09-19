@@ -105,11 +105,127 @@ components:
         snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
         history: { type: array, items: { $ref: '#/components/schemas/HistoryEvent' } }
         semantics: { $ref: '#/components/schemas/ContextSemantics' }
+    GraphState:
+      type: object
+      required: ["branch_snapshots", "continuations", "operations", "encoding", "dictionary", "version", "revision", "primary_branch", "snapshot_ids", "graph_ids", "committed_ids", "historical_ids", "shared_ids", "pushed_ids", "unpushed_ids", "uncommitted_ids", "tagged_ids", "archived_only_ids", "ahead_ids", "ahead_tips", "markers", "branch_heads", "ref_scopes", "snapshot_scopes", "scope_labels", "hold", "orphan_sessions", "hold_counts", "positions", "previous"]
+      properties:
+        encoding: { type: string, const: indexed-v1 }
+        dictionary: { type: array, items: { type: string } }
+        branch_snapshots: { type: object, additionalProperties: { type: array, items: { type: integer, minimum: 0 } } }
+        continuations: { type: object, additionalProperties: { type: string } }
+        operations: {"$ref": "#/components/schemas/GraphOperations"}
+        version: {"type": "integer", "const": 1}
+        revision: {"$ref": "#/components/schemas/RepositoryRevision"}
+        position_event: {"type": "string"}
+        primary_branch: {"type": "string"}
+        snapshot_ids: {type: array, items: {type: integer, minimum: 0}}
+        graph_ids: {type: array, items: {type: integer, minimum: 0}}
+        committed_ids: {type: array, items: {type: integer, minimum: 0}}
+        historical_ids: {type: array, items: {type: integer, minimum: 0}}
+        shared_ids: {type: array, items: {type: integer, minimum: 0}}
+        pushed_ids: {type: array, items: {type: integer, minimum: 0}}
+        unpushed_ids: {type: array, items: {type: integer, minimum: 0}}
+        uncommitted_ids: {type: array, items: {type: integer, minimum: 0}}
+        tagged_ids: {type: array, items: {type: integer, minimum: 0}}
+        archived_only_ids: {type: array, items: {type: integer, minimum: 0}}
+        ahead_ids: {type: array, items: {type: integer, minimum: 0}}
+        ahead_tips: {type: array, items: {type: integer, minimum: 0}}
+        markers: {"type": "array", "items": {"$ref": "#/components/schemas/GraphBranchMarker"}}
+        branch_heads: {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/GraphBranchHead"}}
+        ref_scopes: {"type": "object", "additionalProperties": {"type": "string"}}
+        snapshot_scopes: {"type": "object", "additionalProperties": {"type": "string"}}
+        scope_labels: {"type": "object", "additionalProperties": {"type": "string"}}
+        hold: {"type": "array", "items": {"$ref": "#/components/schemas/GraphHoldCluster"}}
+        orphan_sessions: {"type": "array", "items": {"type": "string"}}
+        hold_counts: {"type": "object", "additionalProperties": {"type": "integer"}}
+        positions: {"type": "array", "items": {"$ref": "#/components/schemas/GraphPosition"}}
+        previous: {"type": "array", "items": {"$ref": "#/components/schemas/GraphProgressGroup"}}
+    GraphBranchHead:
+      type: object
+      required: ["branch", "event_id", "archived"]
+      properties:
+        branch: {"type": "string"}
+        event_id: {"type": "string"}
+        archived: {"type": "boolean"}
+    GraphBranchMarker:
+      type: object
+      required: ["branch", "target", "kind", "unique_count", "target_available"]
+      properties:
+        branch: {"type": "string"}
+        target: {"type": "string"}
+        kind: {"type": "string"}
+        unique_count: {"type": "integer"}
+        target_available: {"type": "boolean"}
+    GraphHoldCluster:
+      type: object
+      required: ["tips", "ids"]
+      properties:
+        tips: {"type": "array", "items": {"$ref": "#/components/schemas/Unsync"}}
+        ids: {type: array, items: {type: integer, minimum: 0}}
+    GraphPosition:
+      type: object
+      required: ["event_id", "branch", "branch_id", "snapshot", "archived", "created_at"]
+      properties:
+        event_id: {"type": "string"}
+        branch: {"type": "string"}
+        branch_id: {"type": "string"}
+        snapshot: {"type": "string"}
+        archived: {"type": "boolean"}
+        created_at: {"type": "string", "format": "date-time"}
+    GraphProgressGroup:
+      type: object
+      required: ["key", "branch", "before", "after", "created_at", "snapshot_ids", "collapsible_ids"]
+      properties:
+        key: {"type": "string"}
+        branch: {"type": "string"}
+        before: {"type": "string"}
+        after: {"type": "string"}
+        created_at: {"type": "string", "format": "date-time"}
+        snapshot_ids: {type: array, items: {type: integer, minimum: 0}}
+        collapsible_ids: {type: array, items: {type: integer, minimum: 0}}
+    GraphOperations:
+      type: object
+      required: ["births", "merges"]
+      properties:
+        births: {"type": "array", "items": {"$ref": "#/components/schemas/GraphBirth"}}
+        merges: {"type": "array", "items": {"$ref": "#/components/schemas/GraphMerge"}}
+    GraphBirth:
+      type: object
+      required: ["id", "event_id", "branch", "source", "orphan", "created_at", "children"]
+      properties:
+        id: {"type": "string"}
+        event_id: {"type": "string"}
+        branch: {"type": "string"}
+        source: {"type": "string"}
+        orphan: {"type": "boolean"}
+        created_at: {"type": "string", "format": "date-time"}
+        children: {"type": "array", "items": {"type": "string"}}
+    GraphMerge:
+      type: object
+      required: ["id", "event_id", "before", "after", "source", "branch", "scope", "from", "created_at", "historical_only", "withdrawn", "represented_grafts", "redirect_children"]
+      properties:
+        id: {"type": "string"}
+        event_id: {"type": "string"}
+        before: {"type": "string"}
+        after: {"type": "string"}
+        source: {"type": "string"}
+        branch: {"type": "string"}
+        scope: {"type": "string"}
+        from: {"type": "string"}
+        created_at: {"type": "string", "format": "date-time"}
+        pr_number: {"type": "integer"}
+        historical_only: {"type": "boolean"}
+        withdrawn: {"type": "boolean"}
+        represented_grafts: {"type": "array", "items": {"type": "string"}}
+        redirect_children: {"type": "array", "items": {"type": "string"}}
+        source_birth: {"type": "string"}
+        lifecycle_birth: {"type": "string"}
     PendingView:
       type: object
       description: Raw capture patches at a matching graph revision. Snapshot branches is omitted and must not replace membership from RepositoryView. Other capture metadata may update; unknown new ancestors require a complete view refresh.
-      required: [revision, pending, snapshots]
+      required: [revision, pending, snapshots, graph]
       properties:
+        graph: { $ref: '#/components/schemas/GraphState' }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
         snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
@@ -1752,6 +1868,26 @@ paths:
         '409': { description: Ambiguous archived branch identity }
         '422': { description: Invalid scope or ambiguous position }
 
+  /repos/{repoID}/graph-state:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: getGraphState
+      summary: Read server-classified graph state at an optional browsing position
+      description: Viewer access required. The position is a recorded worktree position event ID, never a ref mutation. Response facts must be used with a matching repository revision.
+      tags: [snapshots]
+      parameters:
+        - { name: position, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Identifier-only business projection from one repository generation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GraphState' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /repos/{repoID}/view:
     parameters:
       - $ref: "#/components/parameters/repoID"
@@ -1767,8 +1903,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [revision, refs, snapshots, reflog, history, pending, unsync, semantics]
+                required: [revision, refs, snapshots, reflog, history, pending, unsync, semantics, graph, default_branch]
                 properties:
+                  graph: { $ref: '#/components/schemas/GraphState' }
+                  default_branch: { type: string }
                   semantics: { $ref: '#/components/schemas/ContextSemantics' }
                   revision: { $ref: '#/components/schemas/RepositoryRevision' }
                   refs: { type: array, items: { $ref: '#/components/schemas/Ref' } }

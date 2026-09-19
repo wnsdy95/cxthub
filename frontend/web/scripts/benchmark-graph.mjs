@@ -10,8 +10,8 @@ const root=fileURLToPath(new URL('..',import.meta.url));
 const output=await mkdtemp(path.join(tmpdir(),'cxt-graph-benchmark-'));
 try {
   const file=path.join(output,'graph.cjs');
-  await build({stdin:{contents:`export {GraphIndex} from './src/graphIndex'; export {projectBranchGraph,visibleBranchGraph} from './src/graphProjection'; export {completedBranchEvidence} from './src/graphEvidence'; export {layoutGraph} from './src/graph'; export {previousProgressGroups} from './src/contextHistory';`,resolveDir:root},bundle:true,platform:'node',format:'cjs',outfile:file});
-  const {GraphIndex,projectBranchGraph,visibleBranchGraph,completedBranchEvidence,layoutGraph,previousProgressGroups}=createRequire(import.meta.url)(file);
+  await build({stdin:{contents:`export {GraphIndex} from './src/graphIndex'; export {projectBranchGraph,visibleBranchGraph} from './src/graphProjection'; export {completedBranchEvidence} from './src/graphEvidence'; export {layoutGraph} from './src/graph'; export {graphProgress} from './src/graphState'; export {decodeGraphState} from './src/graphWire'; export {serverGraphWireFixture} from './tests/serverGraphFixture';`,resolveDir:root},bundle:true,platform:'node',format:'cjs',outfile:file});
+  const {GraphIndex,projectBranchGraph,visibleBranchGraph,completedBranchEvidence,layoutGraph,graphProgress,decodeGraphState,serverGraphWireFixture}=createRequire(import.meta.url)(file);
   const at=n=>new Date(1750000000000+n*1000).toISOString();
   const s=(id,parents,n,branch='main')=>({id,repo_id:'repo',doc_hash:id,branch,parents,created_at:at(n),provider:'codex',fidelity:'full'});
   const chain=Array.from({length:10_000},(_,n)=>s(`s${n}`,n?[`s${n-1}`]:[],n)).reverse();
@@ -32,14 +32,20 @@ try {
   cases.push({...cases[0],name:'10k chain / 100 overlapping rewinds',refs:[{...cases[0].refs[0],target:'s99'}],
     reflog:Array.from({length:100},(_,n)=>({kind:'branch',name:'main',old:`s${5049+n*50}`,new:'s99',created_at:at(11000+n)}))});
   const median=values=>[...values].sort((a,b)=>a-b)[Math.floor(values.length/2)];
+  // Compile the real server fixture before measuring reads.
+  serverGraphWireFixture({});
   for(const c of cases) {
+    const serverStart=performance.now();
+    const wire=serverGraphWireFixture(c);
+    const serverProcessMs=performance.now()-serverStart;
+    const state=decodeGraphState(wire.graph);
     const runs=[];
     for(let run=0;run<3;run++) {
       const start=performance.now(),index=new GraphIndex(c.snapshots);
-      const evidence=completedBranchEvidence(c.snapshots,c.history,index);
-      const groups=previousProgressGroups(c.refs,c.snapshots,c.reflog,c.history,undefined,index);
+      const evidence=completedBranchEvidence(c.snapshots,c.history,index,wire.semantics);
+      const groups=graphProgress(state);
       const t1=performance.now();
-      const projection=projectBranchGraph(c.snapshots,c.refs,c.history,c.reflog,c.refs[0].target,c.refs[0].name,index,evidence);
+      const projection=projectBranchGraph(c.snapshots,c.refs,state,c.refs[0].target,c.refs[0].name);
       const t2=performance.now(),layout=layoutGraph(projection.snapshots,projection.pinHead),t3=performance.now();
       const stats=JSON.stringify(index.stats);
       for(let mask=0;mask<8;mask++) {
@@ -52,7 +58,7 @@ try {
       if(layout.issues.length) throw Error('benchmark generated invalid projection');
       runs.push({evidenceAndGroupsMs:t1-start,projectionMs:t2-t1,layoutMs:t3-t2,eightVisibilityChangesMs:t4-t3,rows:layout.rows.length,lanes:layout.laneCount,groups:groups.length,cachedMemberships:index.stats.cachedMemberships});
     }
-    const result={name:c.name};
+    const result={name:c.name,serverProcessMs:Math.round(serverProcessMs),graphWireBytes:Buffer.byteLength(JSON.stringify(wire.graph))};
     for(const key of Object.keys(runs[0])) result[key]=Math.round(median(runs.map(r=>r[key]))*10)/10;
     console.log(JSON.stringify(result));
   }

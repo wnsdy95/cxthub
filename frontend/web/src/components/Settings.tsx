@@ -28,7 +28,6 @@ import { GearBtn } from './About';
 import { Portal } from './Portal';
 import { useT, Rich } from '../i18n';
 import { safeAvatarUrl } from '../urls';
-import { projectBranchRefs } from '../branchLifecycle';
 
 // resizeToDataURL reduces uploaded images to a 256px square JPEG data URL (center crop).
 // Stores the record as is, keeping it small (server limit ~700KB).
@@ -459,8 +458,7 @@ function RepoBranchSettings({ repo, label }: { repo: Repo; label: string | null 
   const save = useUpdateAbout();
   const enableHistory = useEnableContextProtocol();
   // Candidate = list of actual branch refs on the server — not free input; must be chosen from actual remote branches (prevents creating non-existent default branches by typo). Current setting is always included.
-  const rawRefs = useRefs(repo.id).data ?? [];
-  const refs = useMemo(() => projectBranchRefs(rawRefs), [rawRefs]);
+  const refs = useRefs(repo.id).data ?? [];
   const branches = useMemo(() => {
     const names = new Set<string>();
     for (const r of refs) if (r.kind === 'branch' && r.name) names.add(r.name);
