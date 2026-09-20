@@ -1515,11 +1515,15 @@ test('graph activation reveals context and distinguishes events at the same snap
     {id:pushedHead,repo_id:repoId,branch:'main',parents:[appendedRoot],doc_hash:pushedHead,provider:'codex',created_at:'2026-09-16T02:00:00Z',message:'current'},
     {id:appendedRoot,repo_id:repoId,branch:'main',parents:[],doc_hash:appendedRoot,provider:'codex',created_at:'2026-09-16T00:00:00Z',message:'baseline'},
   ];
-  const birth = {id:'born',repo_id:repoId,branch_id:'topic',branch:'feature/same',kind:'birth',source:appendedRoot,target:appendedRoot,created_at:'2026-09-16T00:01:00Z'};
+  const birth = {git_after:'a'.repeat(40),id:'born',repo_id:repoId,branch_id:'topic',branch:'feature/same',kind:'birth',source:appendedRoot,target:appendedRoot,created_at:'2026-09-16T00:01:00Z'};
   const done = {...birth,id:'done',kind:'pr-merge',branch_id:'main',branch:'main',source_branch_id:'topic',shared_target:appendedRoot,pr_completed:true,
     pr:{number:42,base_branch:'main',head_branch:'feature/same',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:'2026-09-16T01:00:00Z'};
   const base = publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],[],[],[],[birth,done]);
   const {pageErrors,unexpected} = await openGraph(page, req => {
+    if (req.pathname.endsWith('/effective-memory')) {
+      const code=req.searchParams.get('code_commit')!;
+      return {body:{selection:{snapshot_id:appendedRoot,code_commit:code},state_hash:id('f'),lineage_hash:id('e'),revision:{graph:'1',pending:'1'},items:[{id:id('d'),source_snapshot:appendedRoot,text:`Code basis ${code}`,state:'review',reason:'source_publication_missing',kind:'code'}],total:1,next_cursor:''}};
+    }
     if (req.pathname.endsWith('/events')) {
       const result = docResponse(req.pathname,req.searchParams).body as ReturnType<typeof sessionDoc> & { events: unknown[]; total:number };
       result.events = Array.from({length:60},(_,seq)=>({kind:'message',role:'user',seq,blocks:[{type:'text',text:`Long context message ${seq}`}]}));
@@ -1551,8 +1555,10 @@ test('graph activation reveals context and distinguishes events at the same snap
   await expect(page.locator('.context-selection-notice')).toHaveCount(0);
   await born.click();
   await expect(page.locator('.context-selection-notice')).toContainText('feature/same');
+  await expect(page.locator('.effective-memory')).toContainText(`Code basis ${'a'.repeat(40)}`);
   await merged.click();
   await expect(page.locator('.context-selection-notice')).toContainText('PR #42');
+  await expect(page.locator('.effective-memory')).toContainText(`Code basis ${'b'.repeat(40)}`);
   await page.locator('.graph-merge-records summary').click();
   await expect(page.locator('[data-branch-lineage="unchanged"]')).toContainText('does not establish whether later conversation was included');
   // Narrow screens use page scrolling; the sticky application header must
@@ -1662,7 +1668,6 @@ test('memory attachment changes load the new immutable blob at the same snapshot
     return base(request);
   });
   const panel = page.locator('.memory-box');
-  await panel.locator('summary').click();
   await expect(panel).toContainText('memory version 1');
   generation = 2;
   await expect(panel).toContainText('memory version 2', {timeout:15_000});
@@ -1671,7 +1676,7 @@ test('memory attachment changes load the new immutable blob at the same snapshot
   expect(unexpected).toEqual([]);
 });
 
-test('context has one lazy memory toggle, scrollable badges and independent center/graph scrolling', async ({ page }) => {
+test('context shows saved memory with one toggle, scrollable badges and independent center/graph scrolling', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
   const snapshots = Array.from({ length: 40 }, (_, n) => ({
     id: `sha256:${n.toString(16).padStart(64, '0')}`, repo_id: repoId, branch: 'main',
@@ -1722,11 +1727,10 @@ test('context has one lazy memory toggle, scrollable badges and independent cent
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(outerBefore);
   expect(await center.evaluate(e => e.scrollTop)).toBe(centerBefore);
 
-  expect(memoryReads).toBe(0);
+  expect(memoryReads).toBe(1);
   const memory = page.locator('.memory-box');
   await expect(memory).toHaveCount(1);
   expect(await memory.evaluate(e => e.parentElement?.closest('details') === null)).toBe(true);
-  await memory.locator('summary').click();
   await expect(memory).toContainText('fixture memory');
   expect(memoryReads).toBe(1);
   await memory.locator('summary').click();
@@ -2143,22 +2147,20 @@ test('evidence-only revisions refresh applicability without downloading the grap
 
 test('effective memory displays server assessments and rejects mixed cursor generations', async ({page}) => {
  const snap = {...auditSnapshot(pushedHead, 'main', [], 'Retained merged context', 1), memory_hash: id('a')};
- const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}], [], [], [], [memoryPublication(pushedHead, 'a'.repeat(40))]);
  let calls = 0, changed = false;
  const {pageErrors, unexpected} = await openGraph(page, req => {
   if (!req.pathname.endsWith('/effective-memory')) return base(req);
   calls++;
   const code = req.searchParams.get('code_commit');
   expect(req.searchParams.get('snapshot_id')).toBe(pushedHead);
-  expect(req.searchParams.get('memory_hash')).toBeNull();
+  expect(req.searchParams.get('memory_hash')).toBe(id('a'));
   if (changed && req.searchParams.get('cursor')) return {status: 409, body: {error: {code: 'conflict', message: 'effective memory changed'}}};
   return {body: {selection: {snapshot_id: pushedHead, code_commit: code}, revision: {graph: '1', pending: '1', evidence: '1'}, state_hash: changed ? id('b') : id('f'), lineage_hash: id('e'), total: 2,
    items: [{id: id('d'), source_snapshot: pushedHead, kind: 'code', text: changed ? 'Reapplied claim' : 'Original claim', state: changed ? 'applied' : 'inactive', reason: changed ? 'declared_scope_matches' : 'declared_scope_before'}], next_cursor: changed ? '' : 'generation-one'}};
  });
  const panel = page.locator('.effective-memory');
- await panel.locator('summary').click();expect(calls).toBe(0);
- await panel.getByLabel('Selected code').fill('a'.repeat(40));
- await panel.getByRole('button', {name: 'Check memory state'}).click();
+ await expect(panel.locator('input[name=code]')).not.toBeVisible();
  await expect(panel).toContainText('Inactive scope');await expect(panel).toContainText('Original claim');
  changed = true;await panel.getByRole('button', {name: 'Load more items'}).click();
  await expect(panel.getByRole('alert')).toBeVisible();await expect(panel).not.toContainText('Original claim');
@@ -2170,7 +2172,7 @@ test('effective memory displays server assessments and rejects mixed cursor gene
 
 test('effective memory ignores pending activity and refreshes on evidence arrival', async ({page}) => {
  const snap = auditSnapshot(pushedHead, 'main', [], 'Stable historical context', 1);
- const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}], [], [], [], [memoryPublication(pushedHead, 'a'.repeat(40))]);
  let evidence = '1', pending = '1', memoryReads = 0, pendingReads = 0, fullReads = 0;
  page.on('request', req => {if (new URL(req.url()).pathname.endsWith('/view')) fullReads++;});
  const {pageErrors, unexpected} = await openGraph(page, req => {
@@ -2181,10 +2183,52 @@ test('effective memory ignores pending activity and refreshes on evidence arriva
   if (req.pathname.endsWith('/effective-memory')) {memoryReads++;return {body:{selection:{snapshot_id:pushedHead,code_commit:'a'.repeat(40)},revision,state_hash:id('f'),lineage_hash:id('e'),total:1,items:[{id:id('d'),source_snapshot:pushedHead,kind:'code',text:'Scoped claim',state:evidence==='1'?'review':'applied',reason:evidence==='1'?'source_publication_missing':'declared_scope_matches'}],next_cursor:''}};}
   return base(req);
  });
- const panel=page.locator('.effective-memory');await panel.locator('summary').click();
- await panel.getByLabel('Selected code').fill('a'.repeat(40));await panel.getByRole('button',{name:'Check memory state'}).click();
+ const panel=page.locator('.effective-memory');
  await expect(panel).toContainText('Needs review');const reads=memoryReads,graphs=fullReads;
  pending='2';await expect.poll(()=>pendingReads,{timeout:10000}).toBeGreaterThan(0);expect(memoryReads).toBe(reads);
  evidence='2';await expect(panel).toContainText('Applied scope',{timeout:10000});
  expect(fullReads).toBe(graphs);expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
+});
+
+function memoryPublication(snapshot: string, code: string, event = 'a'.repeat(32), branch = 'main') {
+ return {id:event, repo_id:repoId, branch_id:branch, branch, kind:'publish', source:snapshot, target:snapshot, git_after:code, created_at:'2026-09-20T00:00:00Z'};
+}
+
+test('memory with no code association stays visible and never guesses shared main', async ({page}) => {
+ const snap={...auditSnapshot(pushedHead,'main',[],'No publication',1),memory_hash:id('a')};
+ const base=publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}],[],[],[],[memoryPublication(graftTarget,'b'.repeat(40))]);
+ let reads=0;
+ const {pageErrors,unexpected}=await openGraph(page,req=>{
+  if(req.pathname.endsWith('/effective-memory')) {reads++;return {status:500,body:{error:{message:'Unexpected assessment'}}};}
+  return base(req);
+ });
+ await expect(page.locator('.memory-box')).toContainText('fixture memory');
+ await expect(page.locator('.effective-memory')).toContainText('No code position is linked');
+ expect(reads).toBe(0);
+ await expect(page.locator('.effective-memory input[name=code]')).not.toBeVisible();
+ expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
+});
+
+test('ambiguous memory positions offer branch and commit choices without a required SHA', async ({page}) => {
+ const snap={...auditSnapshot(pushedHead,'main',[],'Two recorded positions',1),memory_hash:id('a')};
+ const a='a'.repeat(40),b='b'.repeat(40);
+ const base=publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}],[],[],[],[
+  memoryPublication(pushedHead,a),memoryPublication(pushedHead,b,'b'.repeat(32),'topic')]);
+ const selections:string[]=[];
+ const {pageErrors,unexpected}=await openGraph(page,req=>{
+  if(req.pathname.endsWith('/effective-memory')) {
+   const code=req.searchParams.get('code_commit')!;selections.push(code);
+   return {body:{selection:{snapshot_id:pushedHead,code_commit:code},state_hash:id('f'),lineage_hash:id('e'),revision:{graph:'1',pending:'1'},items:[{id:id('d'),source_snapshot:pushedHead,text:code===a?'First position':'Second position',state:'review',reason:'source_publication_missing',kind:'code'}],total:1,next_cursor:''}};
+  }
+  return base(req);
+ });
+ const panel=page.locator('.effective-memory');
+ await expect(panel).toContainText('linked to several code positions');expect(selections).toEqual([]);
+ await expect(page.locator('.memory-box')).toContainText('fixture memory');
+ await panel.getByRole('combobox',{name:'Code position',exact:true}).selectOption(b);
+ await expect(panel).toContainText('Second position');
+ await panel.locator('.effective-memory-options > summary').click();
+ await panel.getByRole('combobox',{name:'Code position',exact:true}).selectOption(a);
+ await expect(panel).toContainText('First position');
+ expect(selections).toEqual([b,a]);expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
 });

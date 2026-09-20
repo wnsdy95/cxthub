@@ -15,12 +15,19 @@ import (
 
 func main() {
 	var input struct {
+		Snapshot domain.ContentHash    `json:"snapshot"`
 		Mode     string                `json:"mode"`
 		View     domain.RepositoryView `json:"view"`
 		Position string                `json:"position"`
 	}
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
 		fail(err)
+	}
+	if input.Mode == "memory-positions" {
+		if err := json.NewEncoder(os.Stdout).Encode(domain.ResolveMemoryPositions(input.Snapshot, input.Position, input.View.History)); err != nil {
+			fail(err)
+		}
+		return
 	}
 	v := input.View
 	v.Semantics = domain.ProjectContextSemantics(v.Snapshots, v.History)

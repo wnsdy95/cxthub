@@ -34,6 +34,8 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"DocFinalizationStatus", reflect.TypeOf(inbound.DocFinalizationStatus{})},
 		{"RepositoryRevision", reflect.TypeOf(domain.RepositoryRevision{})},
 		{"EffectiveMemorySelection", reflect.TypeOf(domain.EffectiveMemorySelection{})},
+		{"MemoryPositions", reflect.TypeOf(domain.MemoryPositions{})},
+		{"MemoryCodePosition", reflect.TypeOf(domain.MemoryCodePosition{})},
 		{"EffectiveMemoryPage", reflect.TypeOf(domain.EffectiveMemoryPage{})},
 		{"EffectiveMemoryItem", reflect.TypeOf(domain.EffectiveMemoryItem{})},
 		{"CodeSelection", reflect.TypeOf(domain.CodeSelection{})},

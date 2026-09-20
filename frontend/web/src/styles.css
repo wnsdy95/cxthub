@@ -1134,7 +1134,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .commit-row.off-mainline { opacity: 0.66; }
 .commit-row.off-mainline:hover, .commit-row.off-mainline.on { opacity: 1; }
 
-/* compressed memory box — collapsible (default closed). ◆ badge with the same purple series label. */
+/* Saved memory opens with the selected context and remains collapsible. */
 details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: revert; }
 
 /* View mode select (viewer header) */
@@ -1227,3 +1227,8 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .effective-memory { border-bottom: 1px solid var(--line); padding: 12px 14px; background: var(--hover); font-size: .84rem; }
 .effective-memory > summary { cursor: pointer; color: #8957e5; }
 .effective-memory .memory-note { color: var(--muted); font-size: .72rem; line-height: 1.5; }
+
+.effective-memory-options { margin-block: .75rem; }
+.effective-memory-options > summary, .effective-memory-advanced > summary { cursor: pointer; }
+.effective-memory-options label, .effective-memory-advanced { margin-top: .7rem; }
+.effective-memory-options select { min-width: 0; width: 100%; }

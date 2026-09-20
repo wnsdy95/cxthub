@@ -48,6 +48,7 @@ export function useRepositoryUpdates(repo: string | null) {
             void qc.invalidateQueries({queryKey: ['git-scans', repo]});
             void qc.invalidateQueries({queryKey: ['code-applicability', repo]});
             void qc.invalidateQueries({queryKey: ['effective-memory', repo]});
+            void qc.invalidateQueries({queryKey: ['memory-positions', repo]});
             const next = await full();
             if (!next.revision) break; // rolling upgrade: old backend
           } else {

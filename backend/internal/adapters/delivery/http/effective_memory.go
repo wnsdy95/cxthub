@@ -8,6 +8,17 @@ import (
 )
 
 func (s *Server) SetEffectiveMemory(q inbound.EffectiveMemoryQuery) { s.effectiveMemory = q }
+func (s *Server) SetMemoryPositions(q inbound.MemoryPositionQuery)  { s.memoryPositions = q }
+func (s *Server) queryMemoryPositions(w http.ResponseWriter, r *http.Request) {
+	if s.memoryPositions == nil {
+		s.writeError(w, 503, "unavailable", "Effective memory query unavailable")
+		return
+	}
+	q := r.URL.Query()
+	out, err := s.memoryPositions.QueryMemoryPositions(r.Context(), s.repoID(r), domain.ContentHash(q.Get("snapshot_id")), q.Get("event_id"))
+	s.respond(w, out, err)
+}
+
 func (s *Server) queryEffectiveMemory(w http.ResponseWriter, r *http.Request) {
 	if s.effectiveMemory == nil {
 		s.writeError(w, 503, "unavailable", "Effective memory query unavailable")

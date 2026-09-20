@@ -171,10 +171,10 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   const doc = page ? { cir: { envelope: page.envelope, events: page.events } } : undefined;
   const inheritedCount = page?.inherited ?? 0;
   const [inheritedOpen, setInheritedOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(true);
   const [downloadError, setDownloadError] = useState('');
   const [downloading, setDownloading] = useState(false);
-  useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); setDownloadError(''); }, [selected?.id]);
+  useEffect(() => { setInheritedOpen(false); setMemoryOpen(true); setDownloadError(''); }, [selected?.id]);
   const memoryQ = useMemory(repo.id, selected?.memory_hash ?? null, memoryOpen);
   const memory = memoryQ.data;
   const tailPending = selected ? continuing.get(selected.id) ?? null : null;
@@ -520,7 +520,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
             {memoryOpen && memoryQ.isLoading && <div className="skel" style={{ height: 60 }} />}
             {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
           </MemoryPanel>}
-          <EffectiveMemory key={`effective:${repo.id}:${selected.id}`} repoId={repo.id} snapshotId={selected.id} memoryHash={selected.memory_hash} />
+          <EffectiveMemory key={`effective:${repo.id}:${selected.id}:${selectedEvent?.id ?? ''}`} repoId={repo.id} snapshotId={selected.id} memoryHash={selected.memory_hash} eventId={selectedEvent?.evidence} />
           {doc && inheritedCount > 0 && (
             <details className="inherited-block" open={inheritedOpen} onToggle={e => setInheritedOpen(e.currentTarget.open)}>
               <summary>↰ {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}</summary>
