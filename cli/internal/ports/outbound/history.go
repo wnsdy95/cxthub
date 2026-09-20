@@ -60,3 +60,9 @@ type WorkingCommitStore interface {
 type WorkingCommitCASStore interface {
 	CommitWorkingSnapshotIfCurrent(context.Context, domain.Ref, domain.ContentHash, domain.WorkingPosition, domain.WorkingPosition, *domain.HistoryEvent) error
 }
+
+// WorkingCodePositionCASStore also fences the destination Git commit observed
+// by this store. It retains the complete old position comparison under the lock.
+type WorkingCodePositionCASStore interface {
+	CompareAndSwapWorkingCodePosition(context.Context, domain.WorkingPosition, domain.WorkingPosition, domain.Ref) error
+}

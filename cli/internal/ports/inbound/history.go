@@ -22,3 +22,9 @@ type ContextHistory interface {
 type ContextHistoryReconciler interface {
 	SelectPositionIfCurrent(context.Context, domain.WorkingPosition, domain.WorkingPosition, domain.Ref) error
 }
+
+// ContextCodeMoveReconciler is distinct from same-code refresh. The caller
+// proves the latest forward Git move before applying its completed PR source.
+type ContextCodeMoveReconciler interface {
+	SelectPositionAfterCodeMove(context.Context, domain.WorkingPosition, domain.WorkingPosition, domain.Ref) error
+}

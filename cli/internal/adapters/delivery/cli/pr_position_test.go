@@ -67,7 +67,7 @@ func TestCodeSelectionUsesCompletedPRSourceAtMergeRevision(t *testing.T) {
 }
 
 func TestCompletedPRPositionRefreshPreservesOtherSelections(t *testing.T) {
-	for _, scenario := range []string{"incoming", "incomplete", "same-code-selection", "newer-capture", "already-current-baseline", "backward-reset", "detached", "future-ref", "different-identity"} {
+	for _, scenario := range []string{"incoming", "unselected-code-move", "unselected-unrelated-reflog", "unselected-missing-reflog", "unselected-backward", "unselected-newer-capture", "incomplete", "same-code-selection", "newer-capture", "already-current-baseline", "backward-reset", "detached", "future-ref", "different-identity"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			cwd, c, plain, repo, baseline := historyFixture(t)
@@ -86,8 +86,10 @@ func TestCompletedPRPositionRefreshPreservesOtherSelections(t *testing.T) {
 			merged := gitOut(cwd, "rev-parse", "HEAD")
 			st = storage.NewWorktreeFileStore(cwd, gitDir, "main", merged)
 			c.List, c.History = app.NewListSessionsService(st), app.NewContextHistoryService(st, st)
-			if err := c.History.SelectPosition(ctx, domain.WorkingPosition{RepoID: repo, Branch: "main", GitCommit: merged, Snapshot: baseline, MemoryPinned: true}); err != nil {
-				t.Fatal(err)
+			if !strings.HasPrefix(scenario, "unselected-") {
+				if err := c.History.SelectPosition(ctx, domain.WorkingPosition{RepoID: repo, Branch: "main", GitCommit: merged, Snapshot: baseline, MemoryPinned: true}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			source := publicationSnapshot(t, plain, repo, "finalized source", oldRef)
 			branchID := domain.LegacyContextBranchID(repo, "main")
@@ -99,6 +101,19 @@ func TestCompletedPRPositionRefreshPreservesOtherSelections(t *testing.T) {
 				t.Fatal(err)
 			}
 			switch scenario {
+			case "unselected-missing-reflog":
+				runLifecycleGit(t, cwd, "reflog", "expire", "--expire=all", "--all")
+			case "unselected-newer-capture":
+				old.GitCommit = merged
+				old.Snapshot = publicationSnapshot(t, plain, repo, "new capture after move", source)
+				old.Selection = nil
+			case "unselected-unrelated-reflog", "unselected-backward":
+				runLifecycleGit(t, cwd, "commit", "--allow-empty", "-qm", "intervening code")
+				if scenario == "unselected-backward" {
+					old.GitCommit = gitOut(cwd, "rev-parse", "HEAD")
+					old.Selection.GitAfter = old.GitCommit
+				}
+				runLifecycleGit(t, cwd, "reset", "--hard", merged)
 			case "incomplete":
 				receipt.PRCompleted = false
 			case "same-code-selection":
@@ -140,8 +155,8 @@ func TestCompletedPRPositionRefreshPreservesOtherSelections(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if scenario == "incoming" {
-				if got.Snapshot != source || got.SharedTarget != source || got.Rewound || !got.MemoryPinned || got.MemoryHash != "" {
+			if scenario == "incoming" || scenario == "unselected-code-move" {
+				if got.GitCommit != merged || got.Snapshot != source || got.SharedTarget != source || got.Rewound || !got.MemoryPinned || got.MemoryHash != "" {
 					t.Fatalf("stale position after promotion: %+v", got)
 				}
 				if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
