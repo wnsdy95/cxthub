@@ -99,6 +99,9 @@ components:
       type: object
       required: [version, revision, snapshots, history, semantics]
       properties:
+        branch: { type: string }
+        state_hash: { $ref: '#/components/schemas/ContentHash' }
+        inclusion: { $ref: '#/components/schemas/BranchContext' }
         version: { type: integer, const: 1 }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         position: { $ref: '#/components/schemas/ContentHash' }
@@ -112,6 +115,19 @@ components:
         encoding: { type: string, const: indexed-v1 }
         dictionary: { type: array, items: { type: string } }
         branch_snapshots: { type: object, additionalProperties: { type: array, items: { type: integer, minimum: 0 } } }
+        branch_contexts: { type: object, additionalProperties: { $ref: '#/components/schemas/BranchContext' } }
+        integrations:
+          type: array
+          items:
+            type: object
+            required: [branch, scope, target, head, parents, extra_parents]
+            properties:
+              branch: { type: string }
+              scope: { type: string }
+              target: { $ref: '#/components/schemas/ContentHash' }
+              head: { type: string }
+              parents: { type: object, additionalProperties: { type: array, items: { type: string } } }
+              extra_parents: { type: array, items: { type: string } }
         continuations: { type: object, additionalProperties: { type: string } }
         operations: {"$ref": "#/components/schemas/GraphOperations"}
         version: {"type": "integer", "const": 1}
@@ -140,6 +156,31 @@ components:
         hold_counts: {"type": "object", "additionalProperties": {"type": "integer"}}
         positions: {"type": "array", "items": {"$ref": "#/components/schemas/GraphPosition"}}
         previous: {"type": "array", "items": {"$ref": "#/components/schemas/GraphProgressGroup"}}
+    BranchContext:
+      type: object
+      required: [branch_id, snapshot_id, reason, roots, snapshot_ids, merges]
+      properties:
+        branch_id: { type: string }
+        snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        code_commit: { type: string }
+        reason: { type: string }
+        roots: { type: array, items: { $ref: '#/components/schemas/ContentHash' } }
+        snapshot_ids: { type: array, items: { $ref: '#/components/schemas/ContentHash' } }
+        merges:
+          type: array
+          items:
+            type: object
+            required: [event_id, destination_branch_id, source, merge_sha, pr_number, state, reason, order]
+            properties:
+              event_id: { type: string }
+              source: { $ref: '#/components/schemas/ContentHash' }
+              destination_branch_id: { type: string }
+              before: { $ref: '#/components/schemas/ContentHash' }
+              merge_sha: { type: string }
+              pr_number: { type: integer }
+              state: { type: string, enum: [included, not_selected, review] }
+              reason: { type: string }
+              order: { type: integer, minimum: -1 }
     GraphBranchHead:
       type: object
       required: ["branch", "event_id", "archived"]
@@ -343,6 +384,7 @@ components:
       type: object
       required: [snapshot_id, code_commit]
       properties:
+        branch: { type: string, description: Select integrated branch knowledge; mutually exclusive with memory_hash. }
         snapshot_id: { $ref: '#/components/schemas/ContentHash' }
         code_commit: { type: string, description: Explicit full Git SHA; never inferred from shared main. }
         memory_hash: { $ref: '#/components/schemas/ContentHash' }
@@ -367,7 +409,8 @@ components:
       type: object
       required: [selection, revision, state_hash, lineage_hash, items, total, next_cursor]
       properties:
-        content: { type: string, enum: [claims], description: Present when untyped historical text was excluded by the claims filter. }
+        inclusion: { $ref: '#/components/schemas/BranchContext' }
+        content: { type: string, enum: [claims, prompt], description: Claims exclude untyped history; prompt adds bounded newest-first historical excerpts. }
         selection: { $ref: '#/components/schemas/EffectiveMemorySelection' }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         state_hash: { $ref: '#/components/schemas/ContentHash' }
@@ -1729,7 +1772,8 @@ paths:
       summary: Assess sourced memory at an explicit code position
       description: Viewer access. One coherent read of archived memory, accepted publication and PR history, and cached Git evidence. No provider I/O or writes. Code claims are applied, inactive or review; decision/rationale remain retained historical knowledge. Cursor binds repository, selection, lineage, history, graph and evidence revisions, excluding pending activity. Items are bounded to 256KiB per page. Original memory is never changed.
       parameters:
-        - { name: content, in: query, schema: { type: string, enum: [all, claims], default: all }, description: Claims uses the same assessment and stable item IDs without paging through legacy text. Cursors bind this filter. }
+        - { name: branch, in: query, schema: { type: string }, description: Include verified PR contributions at the selected code. Mutually exclusive with memory_hash. }
+        - { name: content, in: query, schema: { type: string, enum: [all, claims, prompt], default: all }, description: Claims uses the same assessment and stable item IDs without paging through legacy text. Prompt adds up to 24KiB of recent unverified historical excerpts. Cursors bind this filter. }
         - { name: snapshot_id, in: query, required: true, schema: { $ref: '#/components/schemas/ContentHash' } }
         - { name: code_commit, in: query, required: true, schema: { type: string } }
         - { name: memory_hash, in: query, schema: { $ref: '#/components/schemas/ContentHash' } }
@@ -1895,6 +1939,7 @@ paths:
       description: Viewer access is required. PostgreSQL selects position, refs, history, and snapshots in one repeatable-read transaction. Current and previous require an explicit position. History and semantics preserve operation facts independently of snapshot scope. All includes stored pending captures; previous contains retained context outside the selected ancestry, not chronological speculation. Branch names resolve to their logical identity when known.
       tags: [snapshots]
       parameters:
+        - { name: code_commit, in: query, schema: { type: string }, description: Optional full Git SHA for a current branch timeline. Without it only unambiguous recorded code associations are used. }
         - { name: branch, in: query, schema: { type: string } }
         - { name: position, in: query, schema: { type: string } }
         - { name: scope, in: query, schema: { type: string, enum: [all, current, previous, archived], default: all } }

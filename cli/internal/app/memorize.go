@@ -300,6 +300,7 @@ type memoryProjectionWalker struct {
 	supplementSeen map[domain.ContentHash]bool
 	fingerprinter  *memoryProjectionFingerprinter
 	projection     domain.MemoryDigest
+	queued         []domain.MemoryDigest
 	found          bool
 	complete       bool
 }
@@ -318,6 +319,7 @@ func memoryProjectionFromDetailed(ctx context.Context, store MemoryReader, start
 	for _, start := range starts {
 		walker.walk(start)
 	}
+	walker.flush()
 	return walker.projection, walker.found, walker.complete
 }
 
@@ -405,7 +407,7 @@ func (w *memoryProjectionWalker) merge(digest domain.MemoryDigest) {
 		w.found = true
 		return
 	}
-	w.projection = domain.MergeDigests(w.projection, digest)
+	w.queued = append(w.queued, digest)
 }
 
 // mergeLegacyOpaque avoids recreating the historical cumulative-summary
@@ -413,7 +415,16 @@ func (w *memoryProjectionWalker) merge(digest domain.MemoryDigest) {
 // when the later opaque digest byte-for-byte contains every projected fragment
 // summary. Structured facts/tasks are still unioned explicitly, so narrative
 // containment cannot discard them. No fuzzy or semantic match is inferred.
+func (w *memoryProjectionWalker) flush() {
+	if len(w.queued) == 0 {
+		return
+	}
+	w.projection = domain.MergeDigestSequence(append([]domain.MemoryDigest{w.projection}, w.queued...)...)
+	w.queued = nil
+}
+
 func (w *memoryProjectionWalker) mergeLegacyOpaque(digest domain.MemoryDigest) {
+	w.flush()
 	if w.found && legacyDigestContainsProjectionNarrative(digest, w.projection) {
 		digest.KeyFacts = mergeExactStrings(w.projection.KeyFacts, digest.KeyFacts)
 		digest.OpenTasks = mergeExactStrings(w.projection.OpenTasks, digest.OpenTasks)

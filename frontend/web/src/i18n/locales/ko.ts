@@ -744,6 +744,8 @@ export const ko = {
     archivedLane: '보관 · {branch}',
   },
   effectiveMemory: {
+    branchTitle: '브랜치 합류 메모리',
+    integrations: 'PR {included}건 포함 · {review}건 확인 필요 · 선택한 코드 밖 {excluded}건 제외',
     "title": "코드 시점별 메모리",
     "scope": "선택한 기록의 코드 시점에서 메모리 적용 상태를 확인합니다. 원본 메모리는 위에서 그대로 볼 수 있습니다.",
     "resolving": "기록에 연결된 코드 시점을 확인하고 있습니다.",

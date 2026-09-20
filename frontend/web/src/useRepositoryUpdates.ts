@@ -58,6 +58,9 @@ export function useRepositoryUpdates(repo: string | null) {
             if (!latest || pendingViewNeedsFull(latest, live)) await full();
             else qc.setQueryData<RepositoryView>(key, old => old ? mergePendingView(old, live) : old);
           }
+          const next = qc.getQueryData<RepositoryView>(key)?.revision;
+          // A lagging replica must not cause an unbounded synchronous fetch loop.
+          if (next && current.revision && revisionCovers(current.revision, next)) throw new Error('Repository replica has not advanced');
         }
       } catch { recover(); }
       finally { busy = false; }

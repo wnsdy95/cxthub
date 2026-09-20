@@ -18,6 +18,8 @@ const retained=full([snapshot('committed'),snapshot('old'),snapshot('child',['ol
 assert.deepEqual(mergePendingView({...view,snapshots:[...view.snapshots,snapshot('child',['old'])]},patch(retained)).snapshots.map(s=>s.id),['committed','old','child','new']);
 assert.equal(revisionCovers({graph:'9007199254740993',pending:'2'},{graph:'9007199254740992',pending:'2'}),true);
 assert.equal(parseRevision({graph:'1',pending:'bad'}),null);
+assert.equal(revisionCovers({graph:'2',pending:'2',evidence:'1'},{graph:'2',pending:'2',evidence:'2'}),false);
+assert.equal(mergePendingView({...view,revision:{...view.revision!,evidence:'3'}},update).revision?.evidence,'3');
 assert.equal(pendingViewNeedsFull(view,update),false);
 for(const graft of [false,true]) {
  const current=full([snapshot('committed'),{...snapshot('new',graft?[]:['unseen']),...(graft?{graft_parents:['unseen']}:{})}],'new');

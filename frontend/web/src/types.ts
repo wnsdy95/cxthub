@@ -491,7 +491,7 @@ export interface CodeApplicabilityResult {
  paths: {path: string; state: 'applied' | 'before' | 'changed' | 'equivalent' | 'not_in_history' | 'unknown'; reason?: string; before: {oid?: string; mode?: string}; after: {oid?: string; mode?: string}; selected: {oid?: string; mode?: string}}[];
 }
 
-export interface EffectiveMemorySelection {snapshot_id: string; code_commit: string; memory_hash?: string}
+export interface EffectiveMemorySelection {snapshot_id: string; code_commit: string; memory_hash?: string; branch?: string}
 export interface MemoryPositions {
  snapshot_id: string;
  event_id?: string;
@@ -514,6 +514,7 @@ export interface EffectiveMemoryItem {
  paths?: CodeApplicabilityResult['paths'];
 }
 export interface EffectiveMemoryPage {
+	 inclusion?: BranchContext;
  selection: EffectiveMemorySelection;
  revision: RepositoryRevision;
  state_hash: string;
@@ -539,6 +540,8 @@ export interface JoinPreview {
 
 /** Server-owned business facts. UI owns only filtering, folding and coordinates. */
 export interface GraphState {
+	integrations?: {branch: string; scope: string; target: string; head: string; parents: Record<string,string[]>; extra_parents: string[]}[];
+	branch_contexts?: Record<string, BranchContext>;
   version: 1; revision: RepositoryRevision; position_event?: string; primary_branch: string;
   snapshot_ids: string[]; graph_ids: string[]; committed_ids: string[]; historical_ids: string[];
   shared_ids: string[]; pushed_ids: string[]; unpushed_ids: string[]; uncommitted_ids: string[];
@@ -552,6 +555,11 @@ export interface GraphState {
   branch_snapshots: Record<string,string[]>;
   continuations: Record<string,string>;
   operations: {births: GraphBirth[]; merges: GraphMerge[]};
+}
+export interface BranchContext {
+  branch_id: string; snapshot_id: string; code_commit?: string; reason: string;
+  roots: string[]; snapshot_ids: string[];
+  merges: {event_id: string; destination_branch_id?: string; source: string; before?: string; merge_sha: string; pr_number: number; state: 'included' | 'not_selected' | 'review'; reason: string; order: number}[];
 }
 export interface GraphBirth {
   id: string; event_id: string; branch: string; source: string; orphan: boolean; created_at: string; children: string[];

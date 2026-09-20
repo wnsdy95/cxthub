@@ -46,9 +46,16 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	if (input.Mode == "integrations" || input.Mode == "integrations-wire") && input.View.Graph != nil {
+		g.BranchContexts = input.View.Graph.BranchContexts
+		for name, c := range g.BranchContexts {
+			g.BranchSnapshots[name] = c.SnapshotIDs
+		}
+		domain.ApplyGraphIntegrations(&g, v.Snapshots)
+	}
 	v.Graph = &g
 	var result any = v
-	if input.Mode == "wire" {
+	if input.Mode == "wire" || input.Mode == "integrations-wire" {
 		result = struct {
 			domain.RepositoryView
 			Graph graphwire.State `json:"graph"`

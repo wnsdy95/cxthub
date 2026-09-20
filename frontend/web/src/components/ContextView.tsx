@@ -103,12 +103,15 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
     if (!graphLoading && !selectedBranch && branch) setBranch(branch);
   }, [repo.id, selectedBranch, branch, graphLoading]);
 
-  // Branch log = git log <branch>: every snapshot reachable through natural or
-  // graft-overlay parents. First-parent/mainline styling remains a separate
-  // concern below; snapshots unreachable from the selected ref stay graph-only.
+  // The server owns inclusion and Git order, including completed PR contexts
+  // retained outside the current conversation's mutable placement.
   const snapshots = useMemo(() => {
-    const ids = new Set(branch ? graphState?.branch_snapshots[branch] : []);
-    return allSnapshots.filter(s => ids.has(s.id));
+    const ids = branch ? graphState?.branch_snapshots[branch] ?? [] : [];
+    if (!branch || !graphState?.branch_contexts?.[branch]) {
+      const keep = new Set(ids); return allSnapshots.filter(s => keep.has(s.id));
+    }
+    const byID = new Map(allSnapshots.map(s => [s.id,s]));
+    return ids.flatMap(id => byID.has(id) ? [byID.get(id)!] : []);
   }, [branch, allSnapshots, graphState]);
   // Selected branch's main lineage (head's first-parent direct ancestor) — distinguishes merge branches (⎘).
   const mainline = useMemo(() => {
@@ -134,8 +137,9 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   // Auto-selection is conservative: keep current selection if it exists in the full list (user click respected),
   // otherwise set to branch head. (Orphan commits selected in the graph are also kept).
   useEffect(() => {
-    setSnapId((cur) => (cur && allSnapshots.some((s) => s.id === cur) ? cur : snapshots[0]?.id ?? null));
-  }, [branch, snapshots, allSnapshots]);
+    const head = branch ? graphState?.branch_contexts?.[branch]?.snapshot_id : undefined;
+    setSnapId((cur) => (cur && allSnapshots.some((s) => s.id === cur) ? cur : head ?? snapshots[0]?.id ?? null));
+  }, [branch, snapshots, allSnapshots, graphState]);
 
   // View mode — Full / Prompt only (folded) / Prompt + Response (message only).
   const [viewMode, setViewMode] = useState<ViewMode>('all');
@@ -520,7 +524,9 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
             {memoryOpen && memoryQ.isLoading && <div className="skel" style={{ height: 60 }} />}
             {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
           </MemoryPanel>}
-          <EffectiveMemory key={`effective:${repo.id}:${selected.id}:${selectedEvent?.id ?? ''}`} repoId={repo.id} snapshotId={selected.id} memoryHash={selected.memory_hash} eventId={selectedEvent?.evidence} />
+          <EffectiveMemory key={`effective:${repo.id}:${branch}:${selected.id}:${selectedEvent?.id ?? ''}`} repoId={repo.id} snapshotId={selected.id} memoryHash={selected.memory_hash} eventId={selectedEvent?.evidence}
+            branch={!selectedEvent && branch && graphState?.branch_contexts?.[branch]?.snapshot_id === selected.id ? branch : undefined}
+            codeCommit={!selectedEvent && branch && graphState?.branch_contexts?.[branch]?.snapshot_id === selected.id ? graphState.branch_contexts[branch].code_commit : undefined} />
           {doc && inheritedCount > 0 && (
             <details className="inherited-block" open={inheritedOpen} onToggle={e => setInheritedOpen(e.currentTarget.open)}>
               <summary>↰ {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}</summary>

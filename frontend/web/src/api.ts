@@ -79,6 +79,7 @@ export const api = {
  effectiveMemory: (repo: string, selection: import('./types').EffectiveMemorySelection, cursor: string, signal?: AbortSignal) => {
   const params = new URLSearchParams({snapshot_id: selection.snapshot_id, code_commit: selection.code_commit, cursor, limit: '20'});
   if (selection.memory_hash) params.set('memory_hash', selection.memory_hash);
+  if (selection.branch) params.set('branch', selection.branch);
   return call<import('./types').EffectiveMemoryPage>('GET', `/repos/${encodeURIComponent(repo)}/effective-memory?${params}`, undefined, undefined, signal);
  },
  codeApplicability: (repo: string, selection: import('./types').CodeSelection, signal?: AbortSignal) => {

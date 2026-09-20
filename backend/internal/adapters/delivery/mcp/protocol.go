@@ -219,7 +219,7 @@ func toolDefinitions() []map[string]any {
 			}),
 		},
 		{
-			"name": "context_list", "description": "List all stored context, including retained and pending sessions, with cursor pages. Use current/previous with an explicit context position.",
+			"name": "context_list", "description": "List all stored context, including retained and pending sessions, with cursor pages. Use current/previous with an explicit context position. A current named branch includes completed PR contexts in verified Git integration order.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
 				"repository": repositoryProperty(),
 				"branch":     map[string]any{"type": "string", "description": "Optional Git branch filter."},
@@ -235,7 +235,7 @@ func toolDefinitions() []map[string]any {
 			}, "repository"),
 		},
 		{
-			"name": "memory_load", "description": "Read archived project memory across natural and merged lineage by default; this does not assert that its prose describes current code. Use mode=effective with code_commit to assess explicitly sourced statements at a selected code SHA. Applied means declared files match verified integration, not proof of the prose. Use mode=stored or memory_hash for an exact saved object. Follow bounded JSON fragment pages; if dependencies change, restart without cursor.",
+			"name": "memory_load", "description": "Read project memory including completed PR contributions for a named branch at its recorded code position, or exact archived lineage for a snapshot; this does not assert that its prose describes current code. Use mode=effective with code_commit to assess explicitly sourced statements at a selected code SHA. Applied means declared files match verified integration, not proof of the prose. Use mode=stored or memory_hash for an exact saved object. Follow bounded JSON fragment pages; if dependencies change, restart without cursor.",
 			"annotations": readAnnotations(), "inputSchema": schema(map[string]any{
 				"repository": repositoryProperty(), "ref": map[string]any{"type": "string", "description": "Branch, tag, or hash; defaults to the repository default branch."},
 			}, "repository"),
@@ -256,6 +256,7 @@ func toolDefinitions() []map[string]any {
 		props["cursor"] = map[string]any{"type": "string", "maxLength": 4096, "description": "Continuation from next_cursor. Keep repository and selection/filter arguments unchanged."}
 		name := def["name"].(string)
 		if name == "context_list" || name == "context_search" {
+			props["code_commit"] = map[string]any{"type": "string", "description": "Optional full selected Git SHA for current named-branch inclusion. Otherwise uses its exact recorded code association."}
 			props["scope"] = map[string]any{"type": "string", "enum": []string{"all", "current", "previous", "archived"}, "description": "Default all. Current/previous require position; visibility does not modify the live app."}
 			props["position"] = map[string]any{"type": "string", "description": "Explicit context snapshot or cloud branch used as the working position. The server cannot infer local Git HEAD."}
 		}

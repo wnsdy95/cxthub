@@ -9,12 +9,16 @@ import (
 // ContextSelection is an explicit read position, not a mutable branch command.
 // It is shared by REST and MCP; neither adapter defines its own history scope.
 type ContextSelection struct {
-	Branch   string `json:"branch,omitempty"`
-	Position string `json:"position,omitempty"`
-	Scope    string `json:"scope,omitempty"`
+	CodeCommit string `json:"code_commit,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	Position   string `json:"position,omitempty"`
+	Scope      string `json:"scope,omitempty"`
 }
 
 type ContextQueryView struct {
+	Branch    string             `json:"branch,omitempty"`
+	StateHash ContentHash        `json:"state_hash,omitempty"`
+	Inclusion *BranchContext     `json:"inclusion,omitempty"`
 	Semantics ContextSemantics   `json:"semantics"`
 	Version   int                `json:"version"`
 	Revision  RepositoryRevision `json:"revision"`

@@ -114,8 +114,22 @@ func (s *MemoryPromptService) prepare(ctx context.Context, repo, cwd string, roo
 				}
 			}
 		}
+		if selection.MemoryHash == "" && p.positions != nil {
+			position, err := p.positions.GetWorkingPosition(ctx)
+			if err != nil && !errors.Is(err, domain.ErrNotFound) {
+				return nil, err
+			}
+			// Only this worktree's current selection requests branch integration.
+			// Historical pins, detached code and departure roots remain exact.
+			if err == nil && position.RepoID == repo && position.Snapshot == root && position.GitCommit == p.commit && !position.Rewound && !position.Orphan {
+				selection.Branch = position.Branch
+			}
+		}
 		p.selections = append(p.selections, selection)
 		req := domain.EffectiveMemoryRequest{Selection: selection, Content: "claims", Limit: 50}
+		if selection.Branch != "" {
+			req.Content = "prompt"
+		}
 		var state, lineage domain.ContentHash
 		total, received := -1, 0
 		cursors := map[string]bool{}
@@ -183,7 +197,7 @@ func (s *MemoryPromptService) prepare(ctx context.Context, repo, cwd string, roo
 // Shape and enum checks protect the query contract. Applicability itself is
 // determined exclusively by the backend; do not duplicate its Git rules here.
 func validEffectivePromptPage(p domain.EffectiveMemoryPage, r domain.EffectiveMemoryRequest) bool {
-	if p.Content != "claims" || p.Selection != r.Selection || domain.ValidateContentHash(p.StateHash) != nil || domain.ValidateContentHash(p.LineageHash) != nil || p.Total < 0 || p.Total > 16384 || len(p.Items) > r.Limit || len(p.NextCursor) > 1024 || (p.NextCursor != "" && len(p.Items) == 0) {
+	if p.Content != r.Content || (p.Content != "claims" && p.Content != "prompt") || p.Selection != r.Selection || domain.ValidateContentHash(p.StateHash) != nil || domain.ValidateContentHash(p.LineageHash) != nil || p.Total < 0 || p.Total > 16384 || len(p.Items) > r.Limit || len(p.NextCursor) > 1024 || (p.NextCursor != "" && len(p.Items) == 0) {
 		return false
 	}
 	seen := map[domain.ContentHash]bool{}
@@ -192,6 +206,12 @@ func validEffectivePromptPage(p domain.EffectiveMemoryPage, r domain.EffectiveMe
 			return false
 		}
 		seen[i.ID] = true
+		if i.Kind == "legacy_summary" && r.Content == "prompt" {
+			if i.State != "review" || i.Reason != "untyped_historical_text" || i.Code != nil || len(i.Text) > 1024 {
+				return false
+			}
+			continue
+		}
 		d := domain.MemoryDigest{ClaimsVersion: domain.MemoryClaimsVersion, Fragments: []domain.MemoryFragment{{SourceSnapshot: i.SourceSnapshot, Claims: []domain.MemoryClaim{{Kind: i.Kind, Text: i.Text, Code: i.Code}}}}}
 		if d.ValidateMemoryClaims() != nil {
 			return false
@@ -261,6 +281,10 @@ func (p *memoryPrompt) notice(budget int) string {
 		fmt.Fprintf(&b, "Context root: %s\n", root)
 	}
 	for _, selection := range p.selections {
+		if selection.Branch != "" {
+			fmt.Fprintf(&b, "Integrated branch: %s (at selected code; full merged history via MCP)\n", selection.Branch)
+			b.WriteString("Historical excerpts are bounded and may omit older contributions; use memory_load for complete integrated memory.\n")
+		}
 		if selection.MemoryHash != "" {
 			fmt.Fprintf(&b, "Pinned memory: %s (owner snapshot %s)\n", selection.MemoryHash, selection.SnapshotID)
 		}

@@ -39,7 +39,7 @@ func promptItem(text, state string) domain.EffectiveMemoryItem {
 	return domain.EffectiveMemoryItem{ID: promptHash(text), SourceSnapshot: promptHash("source"), Kind: "code", Text: text, State: state, Reason: "declared_scope_matches", Code: &domain.MemoryCodeScope{Commit: promptOID(1), Paths: []string{"feature.go"}}}
 }
 func promptPage(q domain.EffectiveMemoryRequest, items ...domain.EffectiveMemoryItem) domain.EffectiveMemoryPage {
-	p := domain.EffectiveMemoryPage{Content: "claims", Selection: q.Selection, StateHash: promptHash(string(q.Selection.SnapshotID) + "generation"), LineageHash: promptHash("lineage"), Items: items, Total: len(items)}
+	p := domain.EffectiveMemoryPage{Content: q.Content, Selection: q.Selection, StateHash: promptHash(string(q.Selection.SnapshotID) + "generation"), LineageHash: promptHash("lineage"), Items: items, Total: len(items)}
 	p.Revision.Graph = 2
 	p.Revision.Evidence = 3
 	return p
@@ -217,6 +217,52 @@ func TestEffectivePromptPinsAncestorAndEmptyMemory(t *testing.T) {
 	p, err = svc.prepare(ctx, "repo", "/target", root)
 	if err != nil || calls != 1 || p.status != "historical_memory_empty" {
 		t.Fatal("empty pin queried latest", p, err, calls)
+	}
+}
+
+func TestEffectivePromptUsesOnlyCurrentWorktreeBranchIntegration(t *testing.T) {
+	ctx := context.Background()
+	root := promptHash("integrated root")
+	other := promptHash("departure root")
+	for _, mode := range []string{"current", "other-code", "orphan", "different-repo", "detached"} {
+		t.Run(mode, func(t *testing.T) {
+			st := &promptPositionStore{FileStore: storage.NewFileStore(t.TempDir()), position: domain.WorkingPosition{RepoID: "repo", Branch: "main", Snapshot: root, GitCommit: promptOID(2)}}
+			switch mode {
+			case "other-code":
+				st.position.GitCommit = promptOID(1)
+			case "orphan":
+				st.position.Orphan = true
+			case "different-repo":
+				st.position.RepoID = "other"
+			case "detached":
+				st.position.Branch = ""
+			}
+			calls := 0
+			reader := promptReadFunc(func(_ context.Context, _ string, q domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
+				calls++
+				want := ""
+				if mode == "current" && q.Selection.SnapshotID == root {
+					want = "main"
+				}
+				if q.Selection.Branch != want {
+					t.Fatalf("wrong inclusion scope: %+v", q.Selection)
+				}
+				if want != "" {
+					if q.Content != "prompt" {
+						t.Fatal("branch memory omitted from prompt")
+					}
+					return promptPage(q, domain.EffectiveMemoryItem{ID: promptHash("merged-excerpt"), SourceSnapshot: other, Kind: "legacy_summary", Text: "NEW MERGED HISTORY", State: "review", Reason: "untyped_historical_text"}), nil
+				}
+				return promptPage(q), nil
+			})
+			p, err := NewMemoryPromptService(reader, &promptCode{oid: promptOID(2)}, st).prepare(ctx, "repo", "/target", root, other)
+			if err != nil || calls != 2 || p.status != "server_assessed" {
+				t.Fatal(p, err, calls)
+			}
+			if mode == "current" && !strings.Contains(p.notice(16<<10), "NEW MERGED HISTORY") {
+				t.Fatal("merged memory missing from rendered prompt")
+			}
+		})
 	}
 }
 

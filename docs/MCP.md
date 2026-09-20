@@ -301,3 +301,20 @@ captured through lifecycle/Git hooks, while the CLI maintains the local `.cxt`
 working replica and synchronizes it with `cxtd`. Connecting MCP does not grant
 the server access to a live desktop conversation and does not replace capture
 hooks.
+
+### Branch integration selection
+
+For `context_list(scope="current", position="main")`, the application includes
+completed PR contributions proven present at main's recorded Git code position.
+`code_commit` optionally selects another exact code SHA. Results follow Git
+integration order with causal children before parents; cursor pages pin this
+ordered projection rather than the captures' timestamps. A changed selection or
+dependency generation requires restarting pagination.
+
+`memory_load(ref="main", mode="project")` uses the same integrated branch roots,
+including retained PR source memory after a later context-placement change.
+The response's `inclusion` summarizes included, excluded and unresolved PRs.
+An exact snapshot/tag still reads that archived lineage; `mode="stored"` or an
+explicit memory hash keeps the immutable original. Effective mode assesses typed
+claims against explicit code; historical prose remains unverified. None of these
+queries moves shared refs, worktree positions or provider conversations.

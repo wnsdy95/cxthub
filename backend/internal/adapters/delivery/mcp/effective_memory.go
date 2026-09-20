@@ -34,7 +34,14 @@ func (s *Server) effectiveMemoryPage(ctx context.Context, repo domain.Repo, a to
 		}
 		cur.Snapshot = snap.ID
 	}
-	out, err := s.effectiveMemory.QueryEffectiveMemory(ctx, repo.ID, domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: cur.Snapshot, CodeCommit: a.CodeCommit, MemoryHash: domain.ContentHash(a.MemoryHash)}, Limit: 1, Cursor: cur.EffectiveCursor})
+	branch := ""
+	if a.MemoryHash == "" {
+		branch, err = s.memoryBranch(ctx, repo, a.Ref)
+		if err != nil {
+			return "", err
+		}
+	}
+	out, err := s.effectiveMemory.QueryEffectiveMemory(ctx, repo.ID, domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{Branch: branch, SnapshotID: cur.Snapshot, CodeCommit: a.CodeCommit, MemoryHash: domain.ContentHash(a.MemoryHash)}, Limit: 1, Cursor: cur.EffectiveCursor})
 	if err != nil {
 		return "", err
 	}
@@ -45,6 +52,9 @@ func (s *Server) effectiveMemoryPage(ctx context.Context, repo domain.Repo, a to
 	cur.FragmentFormat = "memory-effective-v1"
 	cur.Projection = out.StateHash
 	result := map[string]any{"notice": archiveNotice, "mode": "effective", "selection": out.Selection, "state_hash": out.StateHash, "lineage_hash": out.LineageHash, "total": out.Total, "next_cursor": ""}
+	if out.Inclusion != nil {
+		result["inclusion"] = memoryInclusionSummary(out.Inclusion)
+	}
 	if len(out.Items) == 0 {
 		if cur.Offset != 0 {
 			return "", fmt.Errorf("invalid empty memory cursor")

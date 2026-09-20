@@ -51,7 +51,7 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
     const p = JSON.stringify([body.pending, body.snapshots?.filter((s: any) => pendingIDs.has(s.id))]);
     const old = states.get(base);
     const next = {graph: (old?.graph ?? 0) + (g !== old?.g ? 1 : 0), pending: (old?.pending ?? 0) + (p !== old?.p ? 1 : 0), g, p}; states.set(base,next);
-    const revision = {graph: options.graphRevision?.() ?? String(next.graph), pending: String(next.pending)};
+    const revision = {graph: options.graphRevision?.() ?? String(next.graph), pending: String(next.pending), ...(body.revision ?? {})};
     if (input.pathname.endsWith('/revision')) return {body: revision};
     if (input.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
     try {
