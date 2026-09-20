@@ -426,3 +426,52 @@ func TestWritePullBriefingUsesPrePromotionBaselineAfterLocalRefMoves(t *testing.
 		t.Fatalf("promoted range was briefed twice: %q", repeated)
 	}
 }
+
+type pointerOnlyBriefingSync struct {
+	fixedBriefingSync
+	reads int
+	err   error
+}
+
+func (s *pointerOnlyBriefingSync) ReadRemoteBranch(context.Context, inbound.SyncInput, string) (domain.Ref, error) {
+	s.reads++
+	return s.remote, s.err
+}
+func (*pointerOnlyBriefingSync) ResolveRemoteBranch(context.Context, inbound.SyncInput, string) (domain.Ref, error) {
+	panic("briefing attempted another full sync")
+}
+
+func TestPullBriefingReadsOnlyPointerAndPreservesIncompleteCursor(t *testing.T) {
+	for _, mode := range []string{"complete", "missing ancestor", "lookup failed"} {
+		t.Run(mode, func(t *testing.T) {
+			cwd := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(cwd, ".cxt"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TERM_SESSION_ID", "pointer-only-briefing")
+			base, head := briefingHash("base"), briefingHash("head")
+			snaps := []domain.Snapshot{{ID: base}, {ID: head, Parents: []domain.ContentHash{base}, Message: "new context"}}
+			sync := &pointerOnlyBriefingSync{fixedBriefingSync: fixedBriefingSync{remote: domain.Ref{Kind: domain.RefBranch, Name: "main", Target: head}}}
+			if mode == "missing ancestor" {
+				snaps[1].Parents = []domain.ContentHash{briefingHash("missing")}
+			}
+			if mode == "lookup failed" {
+				sync.err = fmt.Errorf("offline")
+			}
+			if err := preservePullBriefingBaseline(cwd, "main", base); err != nil {
+				t.Fatal(err)
+			}
+			c := &Container{Sync: sync, List: fixedBriefingList{out: inbound.ListOutput{Snapshots: snaps}}}
+			writePullBriefingFromBaseline(context.Background(), c, cwd, "main", base)
+			cursor, ok := capture.ReadPullBriefingCursor(cwd, "main")
+			text, queued := capture.ConsumeBriefing(cwd)
+			want := base
+			if mode == "complete" {
+				want = head
+			}
+			if sync.reads != 1 || !ok || cursor != want || queued != (mode == "complete") || (queued && !strings.Contains(text, string(head))) {
+				t.Fatalf("reads=%d cursor=%s queued=%v", sync.reads, cursor, queued)
+			}
+		})
+	}
+}

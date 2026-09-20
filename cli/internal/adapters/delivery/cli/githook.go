@@ -1976,7 +1976,16 @@ func writePullBriefingFromBaseline(
 	localBaseline domain.ContentHash,
 ) {
 	if err := capture.WithPullBriefingTransaction(cwd, branch, func() error {
-		ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch)
+		read := c.Sync.ResolveRemoteBranch
+		if reader, ok := c.Sync.(interface {
+			ReadRemoteBranch(context.Context, inbound.SyncInput, string) (domain.Ref, error)
+		}); ok {
+			// Incoming contexts were already fetched before promotion. A briefing
+			// only needs the final pointer, not another full integrity-checked pull.
+			// pullBriefingDelta below refuses to advance past any missing context.
+			read = reader.ReadRemoteBranch
+		}
+		ref, err := read(ctx, inbound.SyncInput{Cwd: cwd}, branch)
 		if err != nil || ref.Target == "" {
 			return err
 		}
