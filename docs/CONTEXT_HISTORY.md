@@ -1356,3 +1356,24 @@ Validated incoming documents can warm the disposable proof cache. A transaction
 rollback cannot grant access because each later read repeats its ownership and
 physical-byte checks. Adapters without the capability retain full domain/engine
 validation; failure of an available verifier never falls back to weaker evidence.
+
+### Browser memory position selection
+
+The context viewer displays the snapshot's saved memory immediately. Effective
+memory is queried automatically when the server resolves an exact recorded code
+position through `GET /repos/{repoID}/effective-memory/positions`. The browser
+passes the selected graph event's evidence ID, not its virtual display-node ID.
+A completed PR event selects its merge SHA; a birth selects its recorded code SHA.
+Without an explicit event, automatic selection requires exactly one distinct
+recorded SHA associated with the snapshot. Concurrent workers' different positions
+remain separate choices; shared `main`, creation timestamps, graph adjacency and
+unfinished PR requests are never substitutes for missing evidence.
+
+Ambiguous associations offer a branch/commit selector. Missing associations leave
+the saved memory visible with unknown applicability. Full-SHA input is available
+only in the advanced comparison controls. The saved memory hash is pinned by
+default; changing this checkbox requests the composed lineage projection instead.
+Selecting another graph event at the same snapshot resets comparison state.
+Graph/history changes refresh the code choices; pending-only activity does not.
+The existing effective-memory query still requires an explicit immutable SHA,
+and server evidence remains responsible for all applicability assessments.

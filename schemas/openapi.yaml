@@ -319,6 +319,26 @@ components:
       properties:
         oid: { type: string }
         mode: { type: string }
+    MemoryPositions:
+      type: object
+      description: Recorded browsing positions for this exact snapshot. Never inferred from a shared branch head or another worker's latest position.
+      required: [snapshot_id, reason, options]
+      properties:
+        snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        event_id: { type: string }
+        code_commit: { type: string }
+        reason: { type: string, enum: [selected_event, unique, ambiguous, unavailable] }
+        options: { type: array, items: { $ref: '#/components/schemas/MemoryCodePosition' } }
+    MemoryCodePosition:
+      type: object
+      required: [event_id, code_commit, branch, kind, created_at]
+      properties:
+        event_id: { type: string }
+        code_commit: { type: string }
+        branch: { type: string }
+        kind: { type: string }
+        pr_number: { type: integer }
+        created_at: { type: string, format: date-time }
     EffectiveMemorySelection:
       type: object
       required: [snapshot_id, code_commit]
@@ -1678,6 +1698,28 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/effective-memory/positions:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: queryMemoryPositions
+      summary: Resolve code positions recorded for a selected context
+      description: Viewer access. Uses one repository read generation. A selected event resolves only its own exact association; otherwise a single distinct recorded SHA is selected automatically. Missing or ambiguous associations leave code_commit absent. Does not infer current local HEAD, mutate history or access a provider. PR completion uses the merge SHA, not the source SHA.
+      parameters:
+        - { name: snapshot_id, in: query, required: true, schema: { $ref: '#/components/schemas/ContentHash' } }
+        - { name: event_id, in: query, schema: { type: string, maxLength: 128 } }
+      responses:
+        '200':
+          description: Exact recorded options and an optional automatic selection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemoryPositions' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid snapshot or event }
+        '503': { description: Query unavailable }
 
   /repos/{repoID}/effective-memory:
     parameters:

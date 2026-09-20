@@ -27,6 +27,7 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 	api.SetGitChanges(changes)
 	api.SetCodeApplicability(svc)
 	api.SetEffectiveMemory(svc)
+	api.SetMemoryPositions(svc)
 	ts := httptest.NewServer(api.Handler())
 	defer ts.Close()
 	var me struct {
@@ -117,6 +118,14 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 			t.Fatal("invalid effective input", status)
 		}
 	}
+	positionsURL := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repo)) + "/effective-memory/positions?snapshot_id=" + url.QueryEscape(string(snapshotID))
+	var positions domain.MemoryPositions
+	if status := doJSONAs(t, "", "GET", positionsURL, nil, &positions); status != 200 || positions.Reason != "unavailable" || positions.Options == nil {
+		t.Fatalf("positions read %d %+v", status, positions)
+	}
+	if status := doJSON(t, "GET", strings.Replace(positionsURL, url.QueryEscape(string(snapshotID)), "invalid", 1), nil, nil); status != 422 {
+		t.Fatal("invalid position accepted", status)
+	}
 	// Return to a private repository: the read must obey the same viewer guard.
 	if status := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+ws.ID, map[string]any{"visibility": "private"}, nil); status != 200 {
 		t.Fatal(status)
@@ -126,6 +135,9 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 	}
 	if status := doJSONAs(t, "dev:outsider@example.test:Other", "GET", effectiveURL, nil, nil); status != 403 {
 		t.Fatal("effective memory leaked", status)
+	}
+	if status := doJSONAs(t, "dev:outsider@example.test:Other", "GET", positionsURL, nil, nil); status != 403 {
+		t.Fatal("private code positions leaked", status)
 	}
 	history, err := svc.ListHistory(context.Background(), repo)
 	if err != nil || len(history) != 0 {

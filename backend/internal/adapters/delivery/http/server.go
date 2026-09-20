@@ -98,6 +98,7 @@ type Backend interface {
 type Server struct {
 	docFinalization   inbound.DocFinalization
 	effectiveMemory   inbound.EffectiveMemoryQuery
+	memoryPositions   inbound.MemoryPositionQuery
 	codeApplicability inbound.CodeApplicabilityQuery
 	gitChanges        inbound.GitChanges
 	gitScans          inbound.GitScans
@@ -192,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/context-query", s.guard(domain.RoleViewer, s.contextQuery))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleMember, s.submitGitChange))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory", s.guard(domain.RoleViewer, s.queryEffectiveMemory))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory/positions", s.guard(domain.RoleViewer, s.queryMemoryPositions))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/code-applicability", s.guard(domain.RoleViewer, s.queryCodeApplicability))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-scans", s.guard(domain.RoleViewer, s.listGitScans))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-scans/{scanID}/retry", s.guard(domain.RoleMember, s.retryGitScan))

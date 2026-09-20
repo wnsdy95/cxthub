@@ -492,6 +492,13 @@ export interface CodeApplicabilityResult {
 }
 
 export interface EffectiveMemorySelection {snapshot_id: string; code_commit: string; memory_hash?: string}
+export interface MemoryPositions {
+ snapshot_id: string;
+ event_id?: string;
+ code_commit?: string;
+ reason: 'selected_event' | 'unique' | 'ambiguous' | 'unavailable';
+ options: {event_id: string; code_commit: string; branch: string; kind: string; pr_number?: number; created_at: string}[];
+}
 export interface EffectiveMemoryItem {
  id: string;
  source_snapshot: string;

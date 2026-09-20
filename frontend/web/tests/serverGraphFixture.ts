@@ -7,7 +7,7 @@ import type { GraphWire } from '../src/graphWire';
 import { projectBranchGraph as renderGraph } from '../src/graphProjection';
 
 const state = globalThis as typeof globalThis & { __cxtGraphFixture?: string };
-export function serverGraphFixture(input: Partial<RepositoryView>, position = '', mode = ''): RepositoryView {
+export function serverGraphFixture(input: Partial<RepositoryView>, position = '', mode = '', snapshot = ''): RepositoryView {
   if (!state.__cxtGraphFixture) {
     const dir = mkdtempSync(path.join(tmpdir(),'cxt-graph-contract-'));
     state.__cxtGraphFixture = path.join(dir,'project');
@@ -15,7 +15,7 @@ export function serverGraphFixture(input: Partial<RepositoryView>, position = ''
     process.once('exit',()=>rmSync(dir,{recursive:true,force:true}));
   }
   const view = {refs:[],snapshots:[],history:[],reflog:[],pending:[],unsync:[],default_branch:'main',revision:{graph:'1',pending:'1'},...input};
-  return JSON.parse(execFileSync(state.__cxtGraphFixture,[],{input:JSON.stringify({view,position,mode},(key,value) => value === '' && /(_at|_until)$/.test(key) ? '1970-01-01T00:00:00Z' : value),encoding:'utf8',stdio:['pipe','pipe','pipe'],maxBuffer:64<<20}));
+  return JSON.parse(execFileSync(state.__cxtGraphFixture,[],{input:JSON.stringify({view,position,mode,snapshot},(key,value) => value === '' && /(_at|_until)$/.test(key) ? '1970-01-01T00:00:00Z' : value),encoding:'utf8',stdio:['pipe','pipe','pipe'],maxBuffer:64<<20}));
 }
 
 export function serverGraphWireFixture(input: Partial<RepositoryView>, position = ''): Omit<RepositoryView, 'graph'> & {graph: GraphWire} {
@@ -59,3 +59,7 @@ export function unsyncChains(unsync:Unsync[],snapshots:Snapshot[],shared:Set<str
 export function orphanPendings(pending:Pending[],refs:Ref[],snapshots:Snapshot[],clusters:{tips:Unsync[]}[],shared=sharedReachable(refs,snapshots)) {return graphViewRows(serverGraphFixture({refs:[...refs,...retainedRefs(shared)],snapshots,pending,unsync:clusters.flatMap(c=>c.tips)})).orphans;}
 export function holdCounts(refs:Ref[],snapshots:Snapshot[],unsync:Unsync[],pending:Pending[],shared=sharedReachable(refs,snapshots)) {return graphViewRows(serverGraphFixture({refs:[...refs,...retainedRefs(shared)],snapshots,pending,unsync})).holdCount;}
 export function repositoryGraph(snapshots:Snapshot[],refs:Ref[],history:HistoryEvent[],shared:Set<string>,pending:Pending[],unsync:Unsync[]) {const v=serverGraphFixture({refs:[...refs,...retainedRefs(shared)],snapshots,history,pending,unsync});return {...graphViewRows(v),graphState:v.graph};}
+
+export function serverMemoryPositionsFixture(snapshot: string, event: string, history: HistoryEvent[]) {
+ return serverGraphFixture({history}, event, 'memory-positions', snapshot) as unknown as import('../src/types').MemoryPositions;
+}

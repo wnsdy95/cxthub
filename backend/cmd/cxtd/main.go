@@ -166,6 +166,7 @@ func serve(ctx context.Context, args []string) error {
 	api.SetGitScans(scans)
 	api.SetCodeApplicability(svc)
 	api.SetEffectiveMemory(svc)
+	api.SetMemoryPositions(svc)
 	api.SetGitChanges(changes)
 	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_PUBLIC_URL")), "/")
 	if publicURL == "" && isLoopback(addr) {

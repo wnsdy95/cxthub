@@ -68,6 +68,7 @@ func TestPGEffectiveMemoryCoherentReplicaRead(t *testing.T) {
 		t.Fatal(before, err)
 	}
 	provider := &scanReader{deltas: map[string]domain.GitCommitDelta{oid: {Commit: oid, Parents: []string{}, Complete: true, Changes: []domain.GitPathChange{{Path: "file", After: domain.GitEntry{OID: strings.Repeat("b", 40), Mode: "100644"}}}}}}
+	provider.deltas[strings.Repeat("c", 40)] = domain.GitCommitDelta{Commit: strings.Repeat("c", 40), Parent: oid, Parents: []string{oid}, Complete: true, Changes: []domain.GitPathChange{}}
 	scans, err := NewGitScans(writer, provider)
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +76,21 @@ func TestPGEffectiveMemoryCoherentReplicaRead(t *testing.T) {
 	// Keep the reader in one database generation while a separate replica commits
 	// new memory and Git evidence. Nested query calls must reuse the bound read.
 	err = peer.WithinReadSnapshot(ctx, func(bound context.Context) error {
+
+		positions, e := reader.QueryMemoryPositions(bound, repo, id, "")
+		if e != nil || positions.CodeCommit != oid || positions.Reason != "unique" {
+			t.Fatalf("initial positions: %+v %v", positions, e)
+		}
+		another := observation
+		another.ID, another.GitAfter = strings.Repeat("2", 32), strings.Repeat("c", 40)
+		another.CreatedAt = time.Now().UTC()
+		if e = writer.RecordHistory(ctx, another); e != nil {
+			return e
+		}
+		againPositions, e := reader.QueryMemoryPositions(bound, repo, id, "")
+		if e != nil || againPositions.CodeCommit != oid || againPositions.Reason != "unique" {
+			t.Fatalf("mixed position generations: %+v %v", againPositions, e)
+		}
 		held, e := reader.QueryEffectiveMemory(bound, repo, req)
 		if e != nil {
 			return e
@@ -110,6 +126,11 @@ func TestPGEffectiveMemoryCoherentReplicaRead(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	positions, err := reader.QueryMemoryPositions(ctx, repo, id, "")
+	if err != nil || positions.Reason != "ambiguous" || positions.CodeCommit != "" {
+		t.Fatalf("missing committed position: %+v %v", positions, err)
 	}
 	after, err := reader.QueryEffectiveMemory(ctx, repo, req)
 	if err != nil || after.Items[0].State != "applied" || after.StateHash == before.StateHash {

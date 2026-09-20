@@ -1,16 +1,22 @@
 import {useState} from 'react';
-import {useInfiniteQuery, useQueryClient} from '@tanstack/react-query';
+import {useInfiniteQuery, useQuery, useQueryClient} from '@tanstack/react-query';
 import {api} from '../api';
 import {useT} from '../i18n';
 import type {EffectiveMemorySelection} from '../types';
 
-// The client owns form and disclosure state. All applicability decisions and
-// continuation generations come from the shared backend query.
-export function EffectiveMemory({repoId, snapshotId, memoryHash}: {repoId: string; snapshotId: string; memoryHash?: string}) {
+// The server resolves recorded code positions; the client owns only disclosure
+// and explicit comparison choices. Never substitute the current shared main.
+export function EffectiveMemory({repoId, snapshotId, memoryHash, eventId}: {repoId: string; snapshotId: string; memoryHash?: string; eventId?: string}) {
  const t = useT();
  const qc = useQueryClient();
- const [open, setOpen] = useState(false);
- const [selection, setSelection] = useState<EffectiveMemorySelection>();
+ const [open, setOpen] = useState(true);
+ const [override, setOverride] = useState<string>();
+ const [stored, setStored] = useState(true);
+ const positions = useQuery({queryKey: ['memory-positions', repoId, snapshotId, eventId],
+  queryFn: ({signal}) => api.memoryPositions(repoId, snapshotId, eventId, signal), enabled: open, retry: false});
+ const code = override ?? positions.data?.code_commit;
+ const selection: EffectiveMemorySelection | undefined = code ? {snapshot_id: snapshotId, code_commit: code,
+  ...(stored && memoryHash ? {memory_hash: memoryHash} : {})} : undefined;
  const queryKey = ['effective-memory', repoId, selection];
  const result = useInfiniteQuery({queryKey, initialPageParam: '',
   queryFn: ({pageParam, signal}) => api.effectiveMemory(repoId, selection!, pageParam, signal),
@@ -29,11 +35,29 @@ export function EffectiveMemory({repoId, snapshotId, memoryHash}: {repoId: strin
   <summary className="label">{t('effectiveMemory.title')}</summary>
   {open && <>
    <p className="memory-note">{t('effectiveMemory.scope')}</p>
-   <form onSubmit={e => {e.preventDefault(); const data = new FormData(e.currentTarget); const next = {snapshot_id: snapshotId, code_commit: String(data.get('code')), ...(data.get('stored') && memoryHash ? {memory_hash: memoryHash} : {})}; if (JSON.stringify(next) === JSON.stringify(selection)) restart(); else setSelection(next);}}>
-    <label>{t('codeState.code')}<input name="code" required pattern="[0-9a-f]{40}|[0-9a-f]{64}" autoComplete="off" /></label>
-    {memoryHash && <label className="effective-memory-pin"><input type="checkbox" name="stored" />{t('effectiveMemory.pin')}</label>}
-    <button type="submit">{t('effectiveMemory.check')}</button>
-   </form>
+   {positions.isPending && !code && <p role="status">{t('effectiveMemory.resolving')}</p>}
+   {positions.isError && <p role="alert">{t('effectiveMemory.positionsFailed')} <button onClick={() => void positions.refetch()}>{t('context.retryRead')}</button></p>}
+   {!code && positions.data && <p role="status">{t(positions.data.reason === 'ambiguous' ? 'effectiveMemory.ambiguous' : 'effectiveMemory.unavailable')}</p>}
+   <details className="effective-memory-options" open={!code && !!positions.data?.options.length ? true : undefined}>
+    <summary>{t('effectiveMemory.changePosition')}</summary>
+    {!!positions.data?.options.length && <label>{t('effectiveMemory.position')}
+     <select value={code ?? ''} onChange={e => setOverride(e.target.value || undefined)}>
+      <option value="">{t('effectiveMemory.automatic')}</option>
+      {override && !positions.data.options.some(p => p.code_commit === override) && <option value={override}>{override.slice(0, 10)}</option>}
+      {positions.data.options.map(p => <option key={p.event_id} value={p.code_commit}>
+       {p.branch}{p.pr_number ? ` · PR #${p.pr_number}` : ''} · {p.code_commit.slice(0, 10)}
+      </option>)}
+     </select>
+    </label>}
+    {memoryHash && <label className="effective-memory-pin"><input type="checkbox" checked={stored} onChange={e => setStored(e.target.checked)} />{t('effectiveMemory.pin')}</label>}
+    <details className="effective-memory-advanced">
+     <summary>{t('effectiveMemory.advanced')}</summary>
+     <form onSubmit={e => {e.preventDefault(); setOverride(String(new FormData(e.currentTarget).get('code')).trim());}}>
+      <label>{t('codeState.code')}<input name="code" required pattern="[0-9a-f]{40}|[0-9a-f]{64}" autoComplete="off" /></label>
+      <button type="submit">{t('effectiveMemory.check')}</button>
+     </form>
+    </details>
+   </details>
    {selection && result.isPending && <p role="status">{t('codeState.loading')}</p>}
    {result.isError && <p role="alert">{t('effectiveMemory.failed')} <button onClick={restart}>{t('effectiveMemory.restart')}</button></p>}
    {!result.isError && result.data && <div aria-live="polite">
