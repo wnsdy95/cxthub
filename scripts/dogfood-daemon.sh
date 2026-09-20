@@ -95,33 +95,51 @@ validate_auth() {
 
 write_plist() {
   mkdir -p "$LOGDIR" "$(dirname "$PLIST")"
-  cat > "$PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$BIN</string>
-    <string>serve</string>
-    <string>--addr</string><string>$ADDR</string>
-    <string>--data</string><string>$DATA</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>CXT_AUTH</key><string>$AUTH</string>
-    <key>CXT_FIREBASE_PROJECT</key><string>$FIREBASE</string>
-  </dict>
-  <key>WorkingDirectory</key><string>$ROOT</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$LOGDIR/cxtd.out.log</string>
-  <key>StandardErrorPath</key><string>$LOGDIR/cxtd.err.log</string>
-  <key>ProcessType</key><string>Background</string>
-</dict>
-</plist>
-PLIST
+  # launchd does not inherit the caller's environment. Preserve an explicitly
+  # configured GitHub credential across restarts, unless explicitly cleared.
+  # plistlib escapes paths/values; atomic private output keeps credentials out
+  # of argv, logs, and world-readable launch-agent files.
+  python3 - "$PLIST" "$LABEL" "$BIN" "$ADDR" "$DATA" "$ROOT" "$LOGDIR" "$AUTH" "$FIREBASE" <<'PYPLIST'
+import os
+import plistlib
+import sys
+import tempfile
+
+path, label, binary, addr, data, root, logs, auth, firebase = sys.argv[1:]
+environment = {"CXT_AUTH": auth, "CXT_FIREBASE_PROJECT": firebase}
+if "CXT_GITHUB_TOKEN" in os.environ:
+    token = os.environ["CXT_GITHUB_TOKEN"]
+else:
+    token = ""
+    try:
+        with open(path, "rb") as source:
+            token = plistlib.load(source).get("EnvironmentVariables", {}).get("CXT_GITHUB_TOKEN", "")
+    except FileNotFoundError:
+        pass
+if token:
+    environment["CXT_GITHUB_TOKEN"] = token
+config = {
+    "Label": label,
+    "ProgramArguments": [binary, "serve", "--addr", addr, "--data", data],
+    "EnvironmentVariables": environment,
+    "WorkingDirectory": root,
+    "RunAtLoad": True,
+    "KeepAlive": True,
+    "StandardOutPath": logs + "/cxtd.out.log",
+    "StandardErrorPath": logs + "/cxtd.err.log",
+    "ProcessType": "Background",
+}
+fd, temporary = tempfile.mkstemp(prefix=".cxtd-", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "wb") as destination:
+        plistlib.dump(config, destination)
+        destination.flush()
+        os.fsync(destination.fileno())
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PYPLIST
 }
 
 reload_plist() {

@@ -211,6 +211,13 @@ workers do not read a developer's `gh` keychain. Credentials and provider error
 bodies are excluded from persisted retry reasons and logs; HTTP redirects are
 not followed. Non-GitHub origins remain explicit validation failures.
 
+For the macOS dogfood LaunchAgent, provide `CXT_GITHUB_TOKEN` when running
+`scripts/dogfood-daemon.sh install` or `restart`. The script stores it in the
+owner-only (0600) LaunchAgent configuration and preserves it across ordinary
+restarts. Set `CXT_GITHUB_TOKEN=''` explicitly to remove it. The token is never
+placed in process arguments or diagnostic output; the operator supplies it,
+and the daemon does not discover a local `gh` login automatically.
+
 Apply migration 0047 before serving the new Git verification endpoints. The
 worker stores requests before network I/O and recovers expired leases after a
 restart. No automatic cancellation or branch movement follows from verification

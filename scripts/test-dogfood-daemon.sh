@@ -70,4 +70,36 @@ if CXT_AUTH=firebase CXT_FIREBASE_PROJECT=bad HOME="$TMP/home" \
   exit 1
 fi
 
-echo "dogfood daemon auth resolution: passed"
+mkdir -p "$TMP/bin"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/launchctl"
+chmod +x "$TMP/bin/launchctl"
+run_restart() {
+  PATH="$TMP/bin:$PATH" CXT_AUTH=dev HOME="$TMP/home" \
+    bash "$TMP/repo/scripts/dogfood-daemon.sh" restart
+}
+out="$(CXT_GITHUB_TOKEN='test-only<&credential' run_restart)"
+if [[ "$out" == *credential* ]]; then
+  echo "daemon output exposed its credential" >&2
+  exit 1
+fi
+# A normal restart must retain the configured token, without consulting a
+# developer keychain or changing cloud-server authentication behavior.
+unset CXT_GITHUB_TOKEN
+run_restart >/dev/null
+python3 - "$TMP/home/Library/LaunchAgents/com.cxthub.cxtd.plist" <<'PY'
+import os, plistlib, stat, sys
+p = sys.argv[1]
+with open(p, 'rb') as source:
+    config = plistlib.load(source)
+assert config['EnvironmentVariables']['CXT_GITHUB_TOKEN'] == 'test-only<&credential', 'credential not preserved'
+assert stat.S_IMODE(os.stat(p).st_mode) == 0o600, 'launch agent must be private'
+assert not any('credential' in a for a in config['ProgramArguments']), 'credential in argv'
+PY
+CXT_GITHUB_TOKEN='' run_restart >/dev/null
+python3 - "$TMP/home/Library/LaunchAgents/com.cxthub.cxtd.plist" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], 'rb') as source:
+    assert 'CXT_GITHUB_TOKEN' not in plistlib.load(source)['EnvironmentVariables'], 'explicit clear was ignored'
+PY
+
+echo "dogfood daemon auth resolution and credential persistence: passed"
