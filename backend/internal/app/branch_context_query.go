@@ -11,6 +11,7 @@ import (
 // branch identity disambiguates them without guessing from wall-clock order.
 func branchCode(ref domain.Ref, history []domain.HistoryEvent) string {
 	codes := map[string]bool{}
+	mergedSources := map[string]bool{}
 	for _, h := range history {
 		if h.BranchID != ref.BranchID || h.Target != ref.Target {
 			continue
@@ -26,11 +27,22 @@ func branchCode(ref domain.Ref, history []domain.HistoryEvent) string {
 		case "pr-merge":
 			if h.PRCompleted && h.PR != nil {
 				code = h.PR.MergeSHA
+				// Tracking aliases share the destination identity. Their exact
+				// source publication still names the pre-squash Git head. A
+				// completed receipt proves that this same context was integrated
+				// at MergeSHA, so HeadSHA is not a competing destination position.
+				// Unrelated positions and competing merges remain ambiguous.
+				if h.Source == ref.Target && h.PR.HeadSHA != code && domain.ValidateGitOID(code) == nil {
+					mergedSources[h.PR.HeadSHA] = true
+				}
 			}
 		}
 		if domain.ValidateGitOID(code) == nil {
 			codes[code] = true
 		}
+	}
+	for code := range mergedSources {
+		delete(codes, code)
 	}
 	if len(codes) == 1 {
 		for code := range codes {
