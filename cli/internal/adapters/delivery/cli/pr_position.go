@@ -122,7 +122,23 @@ func reconcileCompletedPRPosition(ctx context.Context, c *Container, cwd string)
 	branch := gitOut(cwd, "symbolic-ref", "--quiet", "--short", "HEAD")
 	code := gitOut(cwd, "rev-parse", "--verify", "HEAD")
 	e := old.Selection
-	if branch == "" || old.Orphan || old.GitBranch() != branch || old.GitCommit != code || e == nil || e.Kind != "position" || e.Target != old.Snapshot || e.WorktreeID != old.WorktreeID || e.GitAfter != code || e.GitBefore == "" || e.GitBefore == code {
+	if branch == "" || old.Orphan || old.GitBranch() != branch || e == nil || e.Kind != "position" || e.Target != old.Snapshot || e.WorktreeID != old.WorktreeID || e.GitAfter != old.GitCommit {
+		return nil
+	}
+	before := e.GitBefore
+	selectPosition := cas.SelectPositionIfCurrent
+	codeMoved := old.GitCommit != code
+	if codeMoved {
+		// The original reference hook may have preserved the old position while
+		// the receipt was unavailable. Only replay the latest observed Git move;
+		// an unrelated checkout/reset or missing reflog cannot authorize it.
+		mover, ok := c.History.(inbound.ContextCodeMoveReconciler)
+		if !ok || gitOut(cwd, "rev-parse", "--verify", "HEAD@{1}") != old.GitCommit {
+			return nil
+		}
+		before = old.GitCommit
+		selectPosition = mover.SelectPositionAfterCodeMove
+	} else if before == "" || before == code {
 		return nil
 	}
 	if e.RepoID != old.RepoID || e.BranchID != old.BranchID || e.Branch != old.Branch {
@@ -160,7 +176,7 @@ func reconcileCompletedPRPosition(ctx context.Context, c *Container, cwd string)
 	if ref.Target != selected.Snapshot || ref.Target == old.SharedTarget || (ref.BranchID != "" && ref.BranchID != old.BranchID) || !snapshotContains(all.Snapshots, selected.Snapshot, old.Snapshot) {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, "git", "merge-base", "--is-ancestor", e.GitBefore, code)
+	cmd := exec.CommandContext(ctx, "git", "merge-base", "--is-ancestor", before, code)
 	cmd.Dir = cwd
 	if err := cmd.Run(); err != nil {
 		var status *exec.ExitError
@@ -181,5 +197,8 @@ func reconcileCompletedPRPosition(ctx context.Context, c *Container, cwd string)
 	if gitOut(cwd, "symbolic-ref", "--quiet", "--short", "HEAD") != branch || gitOut(cwd, "rev-parse", "--verify", "HEAD") != code {
 		return domain.ErrSyncConflict
 	}
-	return cas.SelectPositionIfCurrent(ctx, old, selected, ref)
+	if codeMoved && gitOut(cwd, "rev-parse", "--verify", "HEAD@{1}") != old.GitCommit {
+		return domain.ErrSyncConflict
+	}
+	return selectPosition(ctx, old, selected, ref)
 }

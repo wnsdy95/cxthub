@@ -10,14 +10,26 @@ import (
 )
 
 var _ outbound.WorkingPositionCASStore = (*FileStore)(nil)
+var _ outbound.WorkingCodePositionCASStore = (*FileStore)(nil)
 
 // CompareAndSwapWorkingPosition never moves a shared branch. Retention roots
 // and the previous selection are persisted before the atomic position write;
 // an interruption can only leave the old position or the complete new one.
 func (s *FileStore) CompareAndSwapWorkingPosition(ctx context.Context, expected, next domain.WorkingPosition, expectedRef domain.Ref) error {
-	if s.worktreeID == "" || expected.WorktreeID != s.worktreeID || expected.GitBranch() != s.gitBranch || expected.GitCommit != s.gitCommit ||
+	return s.compareAndSwapWorkingPosition(ctx, expected, next, expectedRef, false)
+}
+
+func (s *FileStore) CompareAndSwapWorkingCodePosition(ctx context.Context, expected, next domain.WorkingPosition, expectedRef domain.Ref) error {
+	return s.compareAndSwapWorkingPosition(ctx, expected, next, expectedRef, true)
+}
+
+func (s *FileStore) compareAndSwapWorkingPosition(ctx context.Context, expected, next domain.WorkingPosition, expectedRef domain.Ref, codeMove bool) error {
+	if (codeMove && expected.GitCommit == next.GitCommit) || (!codeMove && expected.GitCommit != next.GitCommit) {
+		return domain.ErrSyncConflict
+	}
+	if s.worktreeID == "" || expected.WorktreeID != s.worktreeID || expected.GitBranch() != s.gitBranch || next.GitCommit != s.gitCommit ||
 		next.WorktreeID != expected.WorktreeID || next.RepoID != expected.RepoID || next.Branch != expected.Branch || next.BranchID != expected.BranchID ||
-		next.GitBranch() != expected.GitBranch() || next.GitCommit != expected.GitCommit || expected.Branch == "" || expected.GitCommit == "" || expected.Orphan || next.Orphan ||
+		next.GitBranch() != expected.GitBranch() || expected.Branch == "" || expected.GitCommit == "" || expected.Orphan || next.Orphan ||
 		expectedRef.Kind != domain.RefBranch || expectedRef.Symbolic != "" || expectedRef.RepoID != expected.RepoID || expectedRef.Name != expected.Branch || next.SharedTarget != expectedRef.Target {
 		return domain.ErrSyncConflict
 	}

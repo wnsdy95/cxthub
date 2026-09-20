@@ -17,6 +17,68 @@ type conditionalPositionSelector interface {
 	SelectPositionIfCurrent(context.Context, domain.WorkingPosition, domain.WorkingPosition, domain.Ref) error
 }
 
+func TestSelectPositionAfterCodeMoveFencesValidationRaces(t *testing.T) {
+	for _, change := range []string{"none", "capture", "memory pin", "shared ref", "other observed code"} {
+		t.Run(change, func(t *testing.T) {
+			f := newHistoryPositionCASFixture(t)
+			ctx := context.Background()
+			code := strings.Repeat("b", 40)
+			f.next.GitCommit = code
+			if change == "other observed code" {
+				code = strings.Repeat("c", 40)
+			}
+			st := storage.NewWorktreeFileStore(f.root, filepath.Join(f.root, ".git"), "main", code)
+			wrapped := &positionValidationInterleavingStore{FileStore: st}
+			var concurrent domain.WorkingPosition
+			if change != "none" && change != "other observed code" {
+				wrapped.interleave = func() {
+					if change == "shared ref" {
+						ref := f.ref
+						ref.Target = f.expected.Snapshot
+						if err := st.PutRef(ctx, ref); err != nil {
+							t.Fatal(err)
+						}
+						return
+					}
+					concurrent = f.expected
+					concurrent.Selection = nil
+					if change == "capture" {
+						concurrent.GitCommit, concurrent.Snapshot = code, f.next.Snapshot
+					} else {
+						concurrent.MemoryHash, concurrent.MemorySource = f.memory, f.next.Snapshot
+					}
+					if err := st.PutWorkingPosition(ctx, concurrent); err != nil {
+						t.Fatal(err)
+					}
+					concurrent, _ = st.GetWorkingPosition(ctx)
+				}
+			}
+			svc := NewContextHistoryService(wrapped, st)
+			err := svc.SelectPositionAfterCodeMove(ctx, f.expected, f.next, f.ref)
+			got, readErr := svc.CurrentPosition(ctx)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if change == "none" {
+				if err != nil || got.GitCommit != code || got.Snapshot != f.next.Snapshot || got.Selection.GitBefore != f.expected.GitCommit {
+					t.Fatalf("code move not applied: %+v %v", got, err)
+				}
+			} else {
+				if !errors.Is(err, domain.ErrSyncConflict) {
+					t.Fatalf("race accepted: %v", err)
+				}
+				want := f.expected
+				if concurrent.Snapshot != "" {
+					want = concurrent
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatal("concurrent selection overwritten")
+				}
+			}
+		})
+	}
+}
+
 type historyPositionCASFixture struct {
 	root           string
 	store          *storage.FileStore
