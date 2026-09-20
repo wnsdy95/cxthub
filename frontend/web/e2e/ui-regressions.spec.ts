@@ -2125,6 +2125,7 @@ test('evidence-only revisions refresh applicability without downloading the grap
  page.on('request', req => {if (new URL(req.url()).pathname.endsWith('/view')) fullReads++;});
  const {pageErrors, unexpected} = await openGraph(page, req => {
   const revision = {graph: '1', pending: '1', evidence};
+  if (req.pathname.endsWith('/view')) return {body:{refs:[{kind:'branch',name:'main',target:pushedHead,repo_id:repoId}],snapshots:[snap],pending:[],unsync:[],reflog:[],history:[],revision}};
   if (req.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
   if (req.pathname.endsWith('/revision')) return {body: revision};
   if (req.pathname.endsWith('/code-applicability')) return {body: {selection: {code_commit: 'b'.repeat(40), source_commit: 'a'.repeat(40), paths: ['feature.ts']}, revision, state_hash: id('f'), relation: 'ancestor', paths: [{path: 'feature.ts', state: evidence === '1' ? 'unknown' : 'applied'}]}};
@@ -2231,4 +2232,53 @@ test('ambiguous memory positions offer branch and commit choices without a requi
  await panel.getByRole('combobox',{name:'Code position',exact:true}).selectOption(a);
  await expect(panel).toContainText('First position');
  expect(selections).toEqual([b,a]);expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
+});
+
+test('main includes PR conversations and memory, and evidence refreshes both without a full reload', async ({page}) => {
+ const head=pushedHead, a=appendedRoot, b=graftTarget, baseID=id('9');
+ const code='3'.repeat(40);
+ const snapshots=[
+  {...auditSnapshot(head,'main',[baseID],'Continued main',4),memory_hash:id('8')},
+  auditSnapshot(a,'feature-a',[baseID],'First integrated PR context',3),
+  auditSnapshot(b,'feature-b',[baseID],'Second integrated PR context',1),
+  auditSnapshot(baseID,'main',[],'Prior main context',0),
+ ];
+ const refs=[{kind:'branch',name:'main',branch_id:'main-id',target:head,repo_id:repoId}];
+ const history=[a,b].map((source,i)=>({id:`integration-${i}`,repo_id:repoId,branch:'main',branch_id:'main-id',source_branch_id:`topic-${i}`,kind:'pr-merge',source,target:source,shared_target:baseID,pr_completed:true,
+  pr:{number:i+1,base_branch:'main',head_branch:`feature-${i}`,head_sha:'a'.repeat(40),merge_sha:String(i+1).repeat(40)},created_at:`2026-01-0${3-i}T00:00:00Z`}));
+ let evidence='1',fullReads=0,patchReads=0;
+ const inclusion=()=>({branch_id:'main-id',snapshot_id:head,code_commit:code,reason:'selected_code',roots:evidence==='1'?[head]:[a,b,head],snapshot_ids:evidence==='1'?[head,baseID]:[head,b,a,baseID],
+  merges:history.map((h,i)=>({event_id:h.id,source:h.source,before:baseID,merge_sha:h.pr.merge_sha,pr_number:i+1,state:evidence==='1'?'review':'included',reason:'verified_git_order',order:1-i}))});
+ const view=()=>({snapshots,refs,history,pending:[],unsync:[],reflog:[],revision:{graph:'1',pending:'1',evidence},graph:{branch_contexts:{main:inclusion()}}});
+ const base=publicWorkspaceApi(snapshots,refs,[],[],[],history);
+ const {pageErrors,unexpected}=await openGraph(page,req=>{
+  const v=view();
+  if(req.pathname.endsWith('/view')) {fullReads++;return {body:v};}
+  if(req.pathname.endsWith('/revision')) return {body:v.revision};
+  if(req.pathname.endsWith('/changes')) return {contentType:'text/event-stream',body:`event: revision\ndata: ${JSON.stringify(v.revision)}\n\n`};
+  if(req.pathname.endsWith('/pending-view')) {patchReads++;const full=serverGraphWireFixture(v as any);return {body:{graph:full.graph,revision:v.revision,pending:[],snapshots:[]}};}
+  if(req.pathname.endsWith('/effective-memory')) {
+   const stored=req.searchParams.has('memory_hash');
+   expect(req.searchParams.get('branch')).toBe(stored?null:'main');
+   expect(req.searchParams.get('code_commit')).toBe(code);
+   return {body:{content:'',selection:{snapshot_id:head,code_commit:code},revision:v.revision,state_hash:id(evidence==='1'?'f':'e'),lineage_hash:id('d'),inclusion:stored?undefined:inclusion(),total:1,items:[{id:id('7'),source_snapshot:stored?head:b,kind:'legacy_summary',text:stored?'ORIGINAL SAVED MEMORY':evidence==='1'?'AWAITING INTEGRATION EVIDENCE':'BOTH PR MEMORIES AVAILABLE',state:'review',reason:'untyped_historical_text'}],next_cursor:''}};
+  }
+  return base(req);
+ });
+ const panel=page.locator('.effective-memory');
+ await expect(panel).toContainText('Integrated branch memory');
+ await expect(panel).toContainText('AWAITING INTEGRATION EVIDENCE');
+ await expect(panel.locator('form')).not.toBeVisible();
+ const before=fullReads;
+ evidence='2';
+ await expect(panel).toContainText('BOTH PR MEMORIES AVAILABLE',{timeout:10_000});
+ await expect(panel).toContainText('2 PRs included');
+ await expect(page.locator('.commits .commit-msg')).toHaveText(['Continued main','Second integrated PR context','First integrated PR context','Prior main context']);
+ await expectRenderedGraphPath(page,head,'graph:merge:integration-1');
+ await expectRenderedGraphPath(page,'graph:merge:integration-1','graph:merge:integration-0');
+ expect(fullReads).toBe(before);expect(patchReads).toBeGreaterThan(0);
+ await panel.getByText('Compare at another code position',{exact:true}).click();
+ await panel.getByLabel('Assess only this saved memory object').check();
+ await expect(panel).toContainText('ORIGINAL SAVED MEMORY');
+ expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
 });

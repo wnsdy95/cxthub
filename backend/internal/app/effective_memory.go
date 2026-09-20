@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -27,7 +28,7 @@ func (s *Service) QueryEffectiveMemory(ctx context.Context, repo domain.ContentH
 	if in.Content == "all" {
 		in.Content = ""
 	}
-	if in.Content != "" && in.Content != "claims" {
+	if in.Content != "" && in.Content != "claims" && in.Content != "prompt" {
 		return domain.EffectiveMemoryPage{}, domain.ErrValidation
 	}
 	if domain.ValidateContentHash(repo) != nil || in.Selection.Validate() != nil || in.Limit < 0 || in.Limit > 50 || len(in.Cursor) > 1024 {
@@ -65,11 +66,18 @@ func (s *Service) queryEffectiveMemory(ctx context.Context, repo domain.ContentH
 		}
 		out.LineageHash = actual
 	} else {
-		projection, e := s.getMemoryProjection(ctx, repo, in.Selection.SnapshotID)
+		var projection domain.MemoryProjection
+		var e error
+		if in.Selection.Branch != "" {
+			projection, e = s.queryBranchMemory(ctx, repo, in.Selection.Branch, in.Selection.SnapshotID, in.Selection.CodeCommit)
+		} else {
+			projection, e = s.getMemoryProjection(ctx, repo, in.Selection.SnapshotID)
+		}
 		if e != nil {
 			return out, e
 		}
 		digest = projection.Digest
+		out.Inclusion = projection.Inclusion
 		out.LineageHash = projection.StateHash
 	}
 	if err := (domain.MemoryDigest{ClaimsVersion: digest.ClaimsVersion}).ValidateMemoryClaims(); err != nil {
@@ -181,6 +189,9 @@ func resolveEffectiveMemoryPage(ctx context.Context, resolver *memoryIntegration
 }
 
 func effectiveMemoryItems(d domain.MemoryDigest, content string) ([]domain.EffectiveMemoryItem, error) {
+	if content == "prompt" {
+		return effectivePromptItems(d)
+	}
 	fragments := d.Fragments
 	if len(fragments) == 0 {
 		fragments = []domain.MemoryFragment{{SourceSnapshot: d.SnapshotID, Summary: d.Summary, KeyFacts: d.KeyFacts, OpenTasks: d.OpenTasks}}
@@ -243,6 +254,54 @@ func effectiveMemoryItems(d domain.MemoryDigest, content string) ([]domain.Effec
 		}
 	}
 	return out, nil
+}
+
+// Prompt excerpts are a bounded read projection, never a new saved digest.
+// Claims retain their normal assessments; legacy text remains explicitly
+// unverified. Newest contributions get space first, regardless of summary size.
+func effectivePromptItems(d domain.MemoryDigest) ([]domain.EffectiveMemoryItem, error) {
+	items, err := effectiveMemoryItems(d, "claims")
+	if err != nil {
+		return nil, err
+	}
+	fragments := d.Fragments
+	if len(fragments) == 0 {
+		fragments = []domain.MemoryFragment{{SourceSnapshot: d.SnapshotID, Summary: d.Summary, KeyFacts: d.KeyFacts, OpenTasks: d.OpenTasks}}
+	}
+	used := 0
+	for i := len(fragments) - 1; i >= 0 && used < 24<<10; i-- {
+		f := fragments[i]
+		text := strings.TrimSpace(strings.Join(append(append([]string{f.Summary}, f.KeyFacts...), f.OpenTasks...), "\n"))
+		if text == "" {
+			continue
+		}
+		if !utf8.ValidString(text) {
+			return nil, domain.ErrIntegrity
+		}
+		original := domain.HashContent([]byte(text))
+		if len(text) > 768 {
+			offset := len(text) - 768
+			for offset < len(text) && !utf8.RuneStart(text[offset]) {
+				offset++
+			}
+			text = "[excerpt; full source through MCP]\n" + text[offset:]
+		}
+		item := domain.EffectiveMemoryItem{SourceSnapshot: f.SourceSnapshot, Kind: "legacy_summary", Text: text, TextHash: original, MemoryClaimAssessment: domain.MemoryClaimAssessment{State: "review", Reason: "untyped_historical_text"}}
+		raw, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		if used+len(raw) > 24<<10 {
+			break
+		}
+		item.ID = domain.HashContent(raw)
+		items = append(items, item)
+		used += len(raw)
+	}
+	if len(items) > effectiveMemoryMaxItems {
+		return nil, domain.ErrValidation
+	}
+	return items, nil
 }
 
 // An author's malformed comparison parent is reviewable evidence, not a reason

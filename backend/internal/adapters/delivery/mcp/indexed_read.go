@@ -41,7 +41,7 @@ func (s *Server) indexedSearchPage(ctx context.Context, repo domain.Repo, a tool
 		return "", err
 	}
 	if cur.Top == "" && len(snaps) > 0 {
-		cur.Top = snapshotKey(snaps[0])
+		cur.Top = searchSnapshotKey(snaps[0], 0, len(snaps), cur.Version)
 	}
 	if cur.Scan != "" {
 		found := false
@@ -68,8 +68,8 @@ func (s *Server) indexedSearchPage(ctx context.Context, repo domain.Repo, a tool
 	limit := pageLimit(a.Limit, 20, 100)
 	hits := []map[string]any{}
 	documents := 0
-	for _, snap := range snaps {
-		key := snapshotKey(snap)
+	for ordinal, snap := range snaps {
+		key := searchSnapshotKey(snap, ordinal, len(snaps), cur.Version)
 		if key > cur.Top || (cur.After != "" && key >= cur.After) || (cur.Scan != "" && cur.Scan != snap.ID) {
 			continue
 		}

@@ -20,7 +20,7 @@ export function serverGraphFixture(input: Partial<RepositoryView>, position = ''
 
 export function serverGraphWireFixture(input: Partial<RepositoryView>, position = ''): Omit<RepositoryView, 'graph'> & {graph: GraphWire} {
   // The Go HTTP adapter encodes this response; tests never duplicate the encoder.
-  return serverGraphFixture(input, position, 'wire') as unknown as Omit<RepositoryView, 'graph'> & {graph: GraphWire};
+  return serverGraphFixture(input, position, input.graph?.branch_contexts ? 'integrations-wire' : 'wire') as unknown as Omit<RepositoryView, 'graph'> & {graph: GraphWire};
 }
 
 // Existing layout regressions now exercise Go's business plan plus TS rendering.

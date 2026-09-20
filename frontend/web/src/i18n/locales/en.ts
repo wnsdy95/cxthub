@@ -741,6 +741,8 @@ export const en: Messages = {
     archivedLane: 'archive · {branch}',
   },
   effectiveMemory: {
+    branchTitle: 'Integrated branch memory',
+    integrations: '{included} PRs included · {review} need verification · {excluded} outside selected code',
     "title": "Memory at a code position",
     "scope": "Memory is assessed at the code position linked to this record. The original memory remains available above.",
     "resolving": "Finding the code position linked to this record.",

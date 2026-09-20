@@ -1,10 +1,10 @@
 import { validateGraphState } from './graphState';
 import type { PendingView, RepositoryRevision, RepositoryView } from './types';
 
-// Graph and live captures have their own cache. Evidence-only revisions
-// invalidate separate queries and never require another full graph download.
+// Verified Git evidence affects branch inclusion as well as memory. A compact
+// pending-view response refreshes that projection without fetching all records.
 export function revisionCovers(current: RepositoryRevision, wanted: RepositoryRevision) {
-  return BigInt(current.graph) >= BigInt(wanted.graph) && BigInt(current.pending) >= BigInt(wanted.pending);
+  return BigInt(current.graph) >= BigInt(wanted.graph) && BigInt(current.pending) >= BigInt(wanted.pending) && BigInt(current.evidence ?? '0') >= BigInt(wanted.evidence ?? '0');
 }
 export function parseRevision(value: unknown): RepositoryRevision | null {
   const r = value as RepositoryRevision | null;
@@ -22,7 +22,7 @@ export function pendingViewNeedsFull(view: RepositoryView, pending: PendingView)
 /** Replace only the live projection. Retained history and referenced snapshots
  * remain untouched; stale, unreferenced sliding captures do not accumulate. */
 export function mergePendingView(view: RepositoryView, pending: PendingView): RepositoryView {
-  if (!view.revision || view.revision.graph !== pending.revision.graph || BigInt(view.revision.pending) > BigInt(pending.revision.pending)) return view;
+  if (!view.revision || view.revision.graph !== pending.revision.graph || BigInt(view.revision.pending) > BigInt(pending.revision.pending) || BigInt(view.revision.evidence ?? '0') > BigInt(pending.revision.evidence ?? '0')) return view;
   validateGraphState(pending.graph,pending.revision);
   const keep = new Set(pending.graph.snapshot_ids);
   const memberships = new Map(view.snapshots.map(s => [s.id,s.branches]));

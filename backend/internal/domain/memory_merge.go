@@ -87,6 +87,7 @@ func memoryFragmentKey(fragment MemoryFragment) string {
 // MemoryProjection is a derived view. StateHash identifies its dependencies,
 // not the address of a stored memory object.
 type MemoryProjection struct {
+	Inclusion *BranchContext `json:"inclusion,omitempty"`
 	Digest    MemoryDigest
 	Found     bool
 	StateHash ContentHash

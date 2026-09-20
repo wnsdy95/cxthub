@@ -10,6 +10,8 @@ import (
 // GraphState is an identifier-only business projection, not stored graph edges.
 // Consumers own selection/folding/coordinates, never publication or identity.
 type GraphState struct {
+	Integrations    []GraphIntegration         `json:"integrations"`
+	BranchContexts  map[string]BranchContext   `json:"branch_contexts"`
 	BranchSnapshots map[string][]ContentHash   `json:"branch_snapshots"`
 	Continuations   map[ContentHash]string     `json:"continuations"`
 	Operations      GraphOperations            `json:"operations"`
@@ -220,7 +222,7 @@ func (x *graphStateIndex) roots(roots []ContentHash) graphSet {
 }
 
 func ProjectGraphState(v RepositoryView, primary, positionID string) (GraphState, error) {
-	out := GraphState{Version: 1, Revision: v.Revision, PositionEvent: positionID, Markers: []GraphBranchMarker{}, BranchHeads: map[string]GraphBranchHead{}, RefScopes: map[string]string{}, SnapshotScopes: map[string]string{}, ScopeLabels: map[string]string{}, Hold: []GraphHoldCluster{}, OrphanSessions: []string{}, HoldCounts: map[string]int{}, Positions: []GraphPosition{}, Previous: []GraphProgressGroup{}}
+	out := GraphState{BranchContexts: map[string]BranchContext{}, Version: 1, Revision: v.Revision, PositionEvent: positionID, Markers: []GraphBranchMarker{}, BranchHeads: map[string]GraphBranchHead{}, RefScopes: map[string]string{}, SnapshotScopes: map[string]string{}, ScopeLabels: map[string]string{}, Hold: []GraphHoldCluster{}, OrphanSessions: []string{}, HoldCounts: map[string]int{}, Positions: []GraphPosition{}, Previous: []GraphProgressGroup{}}
 	x, err := newGraphStateIndex(v.Snapshots)
 	if err != nil {
 		return out, err

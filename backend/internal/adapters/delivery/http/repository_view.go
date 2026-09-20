@@ -20,7 +20,7 @@ func (s *Server) repositoryView(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) contextQuery(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	v, err := s.b.QueryContext(r.Context(), s.repoID(r), domain.ContextSelection{Branch: q.Get("branch"), Position: q.Get("position"), Scope: q.Get("scope")})
+	v, err := s.b.QueryContext(r.Context(), s.repoID(r), domain.ContextSelection{Branch: q.Get("branch"), Position: q.Get("position"), Scope: q.Get("scope"), CodeCommit: q.Get("code_commit")})
 	s.respond(w, v, err)
 }
 

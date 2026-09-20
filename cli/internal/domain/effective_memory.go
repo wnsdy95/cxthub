@@ -3,12 +3,16 @@ package domain
 // EffectiveMemorySelection identifies an immutable code position in the target
 // worktree. MemoryHash optionally pins a historical attachment of SnapshotID.
 type EffectiveMemorySelection struct {
+	Branch     string      `json:"branch,omitempty"`
 	SnapshotID ContentHash `json:"snapshot_id"`
 	CodeCommit string      `json:"code_commit"`
 	MemoryHash ContentHash `json:"memory_hash,omitempty"`
 }
 
 func (s EffectiveMemorySelection) Validate() error {
+	if s.Branch != "" && (ValidateBranchName(s.Branch) != nil || s.MemoryHash != "") {
+		return ErrHashMismatch
+	}
 	if ValidateContentHash(s.SnapshotID) != nil || !ValidGitOID(s.CodeCommit) || (s.MemoryHash != "" && ValidateContentHash(s.MemoryHash) != nil) {
 		return ErrHashMismatch
 	}

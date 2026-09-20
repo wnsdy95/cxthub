@@ -20,7 +20,7 @@ func (s *Service) GetRepositoryView(ctx context.Context, repo domain.ContentHash
 		if err != nil {
 			return v, err
 		}
-		graph, err := domain.ProjectGraphState(v, v.DefaultBranch, "")
+		graph, err := s.projectGraphState(ctx, v, "")
 		if err != nil {
 			return domain.RepositoryView{}, err
 		}
@@ -105,7 +105,7 @@ func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (
 		if err != nil {
 			return v, err
 		}
-		graph, err := domain.ProjectGraphState(base, base.DefaultBranch, "")
+		graph, err := s.projectGraphState(ctx, base, "")
 		if err != nil {
 			return v, err
 		}

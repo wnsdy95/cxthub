@@ -6,17 +6,17 @@ import type {EffectiveMemorySelection} from '../types';
 
 // The server resolves recorded code positions; the client owns only disclosure
 // and explicit comparison choices. Never substitute the current shared main.
-export function EffectiveMemory({repoId, snapshotId, memoryHash, eventId}: {repoId: string; snapshotId: string; memoryHash?: string; eventId?: string}) {
+export function EffectiveMemory({repoId, snapshotId, memoryHash, eventId, branch, codeCommit}: {repoId: string; snapshotId: string; memoryHash?: string; eventId?: string; branch?: string; codeCommit?: string}) {
  const t = useT();
  const qc = useQueryClient();
  const [open, setOpen] = useState(true);
  const [override, setOverride] = useState<string>();
- const [stored, setStored] = useState(true);
+ const [stored, setStored] = useState(!branch);
  const positions = useQuery({queryKey: ['memory-positions', repoId, snapshotId, eventId],
   queryFn: ({signal}) => api.memoryPositions(repoId, snapshotId, eventId, signal), enabled: open, retry: false});
- const code = override ?? positions.data?.code_commit;
+ const code = override ?? (branch ? codeCommit : positions.data?.code_commit);
  const selection: EffectiveMemorySelection | undefined = code ? {snapshot_id: snapshotId, code_commit: code,
-  ...(stored && memoryHash ? {memory_hash: memoryHash} : {})} : undefined;
+  ...(stored && memoryHash ? {memory_hash: memoryHash} : branch ? {branch} : {})} : undefined;
  const queryKey = ['effective-memory', repoId, selection];
  const result = useInfiniteQuery({queryKey, initialPageParam: '',
   queryFn: ({pageParam, signal}) => api.effectiveMemory(repoId, selection!, pageParam, signal),
@@ -32,7 +32,7 @@ export function EffectiveMemory({repoId, snapshotId, memoryHash, eventId}: {repo
  };
  const restart = () => void qc.resetQueries({queryKey, exact: true});
  return <details className="effective-memory" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
-  <summary className="label">{t('effectiveMemory.title')}</summary>
+  <summary className="label">{t(branch && !stored ? 'effectiveMemory.branchTitle' : 'effectiveMemory.title')}</summary>
   {open && <>
    <p className="memory-note">{t('effectiveMemory.scope')}</p>
    {positions.isPending && !code && <p role="status">{t('effectiveMemory.resolving')}</p>}
@@ -61,6 +61,11 @@ export function EffectiveMemory({repoId, snapshotId, memoryHash, eventId}: {repo
    {selection && result.isPending && <p role="status">{t('codeState.loading')}</p>}
    {result.isError && <p role="alert">{t('effectiveMemory.failed')} <button onClick={restart}>{t('effectiveMemory.restart')}</button></p>}
    {!result.isError && result.data && <div aria-live="polite">
+    {result.data.pages[0].inclusion && <p>{t('effectiveMemory.integrations', {
+     included: result.data.pages[0].inclusion.merges.filter(m => m.state === 'included').length,
+     review: result.data.pages[0].inclusion.merges.filter(m => m.state === 'review').length,
+     excluded: result.data.pages[0].inclusion.merges.filter(m => m.state === 'not_selected').length,
+    })}</p>}
     <p>{t('effectiveMemory.atCode')} <code>{result.data.pages[0].selection.code_commit.slice(0, 10)}</code></p>
     {result.data.pages[0].total === 0 && <p>{t('effectiveMemory.empty')}</p>}
     <ul className="effective-memory-items">{result.data.pages.flatMap(page => page.items).map(item => <li key={item.id} data-memory-state={item.state}>

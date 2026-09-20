@@ -15,7 +15,7 @@ func (s *Service) QueryGraphState(ctx context.Context, repo domain.ContentHash, 
 		if err != nil {
 			return domain.GraphState{}, err
 		}
-		return domain.ProjectGraphState(v, v.DefaultBranch, position)
+		return s.projectGraphState(ctx, v, position)
 	})
 }
 

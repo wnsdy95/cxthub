@@ -3,12 +3,18 @@ package domain
 // EffectiveMemorySelection never infers a worker's code position from shared
 // main. MemoryHash, when supplied, pins an immutable attachment of SnapshotID.
 type EffectiveMemorySelection struct {
+	// Branch selects integrated project knowledge. Empty preserves the exact
+	// snapshot-lineage query; MemoryHash always selects the saved original.
+	Branch     string      `json:"branch,omitempty"`
 	SnapshotID ContentHash `json:"snapshot_id"`
 	CodeCommit string      `json:"code_commit"`
 	MemoryHash ContentHash `json:"memory_hash,omitempty"`
 }
 
 func (s EffectiveMemorySelection) Validate() error {
+	if s.Branch != "" && (ValidateBranchName(s.Branch) != nil || s.MemoryHash != "") {
+		return ErrValidation
+	}
 	if ValidateContentHash(s.SnapshotID) != nil || ValidateGitOID(s.CodeCommit) != nil || ValidateOptionalContentHash(s.MemoryHash) != nil {
 		return ErrValidation
 	}
@@ -88,12 +94,13 @@ type EffectiveMemoryItem struct {
 type EffectiveMemoryRequest struct {
 	Selection EffectiveMemorySelection
 	// Claims excludes untyped archival text without changing claim assessment.
-	Content string // empty/all, claims
+	Content string // empty/all, claims, prompt (claims plus bounded historical excerpts)
 	Limit   int
 	Cursor  string
 }
 
 type EffectiveMemoryPage struct {
+	Inclusion   *BranchContext           `json:"inclusion,omitempty"`
 	Content     string                   `json:"content,omitempty"`
 	Selection   EffectiveMemorySelection `json:"selection"`
 	Revision    RepositoryRevision       `json:"revision"`

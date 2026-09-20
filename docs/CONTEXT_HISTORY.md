@@ -1377,3 +1377,49 @@ Selecting another graph event at the same snapshot resets comparison state.
 Graph/history changes refresh the code choices; pending-only activity does not.
 The existing effective-memory query still requires an explicit immutable SHA,
 and server evidence remains responsible for all applicability assessments.
+
+### Integrated branch knowledge (2026-09-21)
+
+Conversation ancestry, immutable PR completion, and inclusion at a code position
+are separate facts. A same-code continuation or later placement change cannot
+remove a completed PR's knowledge from main. The branch read model pairs the
+accepted PR binding with its validated completion, verifies the merge commit
+against cached Git evidence, and orders included contributions by Git first-parent
+order. Receipt timestamps never determine merge order. Missing evidence stays
+`review`; a proven unrelated code selection is `not_selected`.
+
+A later branch inherits integration scopes through its recorded birth source and accepted publications in natural ancestry. Reused names and mutable grafts cannot supply this proof. Inherited PRs retain their original destination identity; they are not fabricated as new merges on the child branch. Orphans do not inherit conversation membership this way.
+
+The model includes the pre-merge destination and each PR source's immutable
+natural ancestry, plus the selected context's existing ancestry. A source's later
+mutable graft cannot import a future PR into a past selection. Exact branch
+identity disambiguates reused names; multiple code associations remain unknown.
+The server returns ordered `branch_snapshots`, `branch_contexts`, and a virtual
+`integrations` graph plan from the same repository read snapshot. Full and live
+responses use the identical projector. Evidence-only notifications refresh this
+compact graph plan as well as memory, without downloading all records again.
+
+Named branch memory combines these roots with the checked, provenance-deduplicated
+memory projector. The original snapshot attachments, conversation parents, refs,
+and completion events are never rewritten by a read. Graph folds cannot hide
+included sources as previous-only/archived-only records. Display merge nodes follow
+verified Git order, while original placement/withdrawal facts stay available.
+
+The browser selects the actual branch context head and automatically shows its
+integrated memory. A selected historical event or saved-object checkbox still
+reads the original attachment. Code applicability separately marks typed claims;
+including a reverted PR preserves its history without declaring its code applied.
+Opaque legacy summaries remain unverified rather than being classified as true.
+
+CLI preparation requests the same branch projection only for the current
+worktree's unpinned code/context pair. Explicit historical/empty memory pins,
+detached positions, orphan selections and departure roots keep their existing
+semantics. `content=prompt` returns assessed claims plus at most 24KiB of recent
+unverified historical excerpts, each under 1KiB. Existing CLI page, timeout and
+encoded prompt limits still apply. Complete records remain available through
+MCP; merged collaborator transcripts are not pasted into an active conversation.
+
+Fragment rendering is batched within one projection (backend and CLI): dedup and
+render once between legacy opaque barriers. Pairwise-fold equivalence tests keep
+original text, typed provenance and authoritative task-list semantics unchanged.
+There is no cross-request cache or relaxed hash validation.

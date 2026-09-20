@@ -24,15 +24,15 @@ func (s *Server) searchPage(ctx context.Context, repo domain.Repo, a toolArgs) (
 		return "", err
 	}
 	if cur.Top == "" && len(snaps) > 0 {
-		cur.Top = snapshotKey(snaps[0])
+		cur.Top = searchSnapshotKey(snaps[0], 0, len(snaps), cur.Version)
 	}
 	hits := []map[string]any{}
 	limit := pageLimit(a.Limit, 20, 100)
 	scanned := 0
 	documents := 0
 	next := ""
-	for _, snap := range snaps {
-		key := snapshotKey(snap)
+	for ordinal, snap := range snaps {
+		key := searchSnapshotKey(snap, ordinal, len(snaps), cur.Version)
 		if key > cur.Top || (cur.After != "" && key >= cur.After) {
 			continue
 		}
