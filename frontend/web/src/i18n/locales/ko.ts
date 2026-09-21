@@ -702,6 +702,7 @@ export const ko = {
     owner: 'owner — 공동 소유',
   },
   graph: {
+    detailsTitle: '기록 및 동기화',
     branchMerged: '{branch} 합류',
     mergeRecords: 'PR 합류 기록 · {count}개',
     mergeVerified: '합류 완료 · 합류 당시 대상 계보에 원본 포함 확인',

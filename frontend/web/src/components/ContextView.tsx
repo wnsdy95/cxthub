@@ -1,4 +1,3 @@
-import {EffectiveMemory} from './EffectiveMemory';
 // ContextView — GitHub repo view context browser.
 // Automatically displays the latest context of the default branch (main/master),
 // and provides a branch dropdown + commit log (click to show context at that point in time).
@@ -524,9 +523,6 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
             {memoryOpen && memoryQ.isLoading && <div className="skel" style={{ height: 60 }} />}
             {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
           </MemoryPanel>}
-          <EffectiveMemory key={`effective:${repo.id}:${branch}:${selected.id}:${selectedEvent?.id ?? ''}`} repoId={repo.id} snapshotId={selected.id} memoryHash={selected.memory_hash} eventId={selectedEvent?.evidence}
-            branch={!selectedEvent && branch && graphState?.branch_contexts?.[branch]?.snapshot_id === selected.id ? branch : undefined}
-            codeCommit={!selectedEvent && branch && graphState?.branch_contexts?.[branch]?.snapshot_id === selected.id ? graphState.branch_contexts[branch].code_commit : undefined} />
           {doc && inheritedCount > 0 && (
             <details className="inherited-block" open={inheritedOpen} onToggle={e => setInheritedOpen(e.currentTarget.open)}>
               <summary>↰ {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}</summary>
@@ -545,12 +541,8 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
       )}
       </div>
 
-      {/* Right rail: About → team settings → secrets → commit graph → AI participants. */}
+      {/* Right rail: repository tools → graph → AI participants → history and sync. */}
       <aside className="ctx-side">
-        <PRPromotions repoId={repo.id} canRetry={atLeast(role, 'member')} />
-        <CodeApplicability key={`code-state:${repo.id}`} repoId={repo.id} />
-        <GitScans key={`git-scans:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />
-        <GitChanges key={`git-changes:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />
         <About repo={repo} canEdit={canWriteAsset(role, undefined)} />
         {atLeast(role, 'puller') && (
           <TeamSettings
@@ -568,9 +560,16 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null} />
-        <ReflogPanel repoId={repo.id} />
-        <AIBar snapshots={committedSnapshots} />
+        <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null}
+          afterGraph={<AIBar snapshots={committedSnapshots} />}
+          diagnostics={<>
+            <PRPromotions repoId={repo.id} canRetry={atLeast(role, 'member')} />
+            <CodeApplicability key={`code-state:${repo.id}`} repoId={repo.id} />
+            <GitScans key={`git-scans:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />
+            <GitChanges key={`git-changes:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />
+            <ReflogPanel repoId={repo.id} />
+          </>}
+        />
       </aside>
     </div>
   );

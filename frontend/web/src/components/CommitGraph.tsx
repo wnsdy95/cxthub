@@ -1,7 +1,7 @@
 // CommitGraph — GitHub network graph style commit tree.
 // Text-free pure graph: lane colors, top branch labels, node tooltips on hover, viewer integration on click.
 // Lane layout is handled in graph.ts (pure function), this file renders only the SVG.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { ContextSemantics, GraphState, HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
 import { layoutGraph, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
@@ -77,6 +77,8 @@ export function CommitGraph({
   joinBranch,
   repoId,
   readRepoId,
+  afterGraph,
+  diagnostics,
 }: {
   snapshots: Snapshot[];
   selectedId: string | null;
@@ -103,6 +105,9 @@ export function CommitGraph({
 /** repo ID — activates drag-and-drop join if provided */
   repoId?: string | null;
   readRepoId?: string;
+/** Presentation slots only; graph state and all graph interactions stay here. */
+  afterGraph?: ReactNode;
+  diagnostics?: ReactNode;
 }) {
   const t = useT();
   const graphIndex = useMemo(() => new GraphIndex(snapshots), [snapshots]);
@@ -423,165 +428,10 @@ export function CommitGraph({
         </p>)}
         {retryGraph && <button type="button" onClick={retryGraph}>{t('context.retryRead')}</button>}
       </div>}
-      {!graphIssues.length && projection.foldedParents.size > 0 && <p role="status" className="graph-folded-edges">{t('graph.foldedConnections', { count: projection.foldedParents.size })}</p>}
       {graphLoading && <p role="status">{t('graph.loading')}</p>}
       {missingParents.size > 0 && <p role="status" className="graph-history-error">{t('graph.missingParents', { count: missingParents.size })}</p>}
-      {mergeEvidence.length > 0 && <details className="graph-history-panel graph-merge-records">
-        <summary>{t('graph.mergeRecords', { count: mergeEvidence.length })}</summary>
-        <ul className="graph-history-list">
-          {mergeEvidence.map(({ merge, birth, lineage, placementIntact, sourceAvailable }) => {
-            const event: GraphEvent = { id: `graph:merge:${merge.id}`, kind: 'merge', branch: merge.branch,
-              sourceBranch: merge.pr!.head_branch, snapshot: merge.source ?? '', evidence: merge.id, prNumber: merge.pr!.number };
-            return <li key={merge.id} data-branch-lineage={lineage}>
-              <strong>{merge.pr!.head_branch} → {merge.branch} · PR #{merge.pr!.number}</strong>
-              <span>{t('graph.mergeVerified')}</span>
-              {!placementIntact && <span>{t('graph.historicalPlacement')}</span>}
-              <span>{t(`graph.lineage_${lineage}`)}</span>
-              <div className="graph-history-actions">
-                <button type="button" disabled={!sourceAvailable} onClick={() => onSelect(event.snapshot, event)}>{t('graph.viewMergeSource')}</button>
-                {birth?.source && graphIndex.byId.has(birth.source) && <button type="button"
-                  onClick={() => onSelect(birth.source!, { id: `graph:birth:${birth.id}`, kind: 'birth', branch: birth.branch, snapshot: birth.source!, evidence: birth.id })}>
-                  {t('graph.viewBranchSource')}
-                </button>}
-              </div>
-            </li>;
-          })}
-        </ul>
-      </details>}
       {positionEvent && !currentGraph && selectedPosition.isPending && <p role="status">{t('graph.loading')}</p>}
       {selectedPosition.error && <p role="alert">{selectedPosition.error.message} <button onClick={() => { void selectedPosition.refetch(); }}>{t('context.retryRead')}</button></p>}
-      {positions.length > 0 && <div className="graph-history-scope">
-        <label>{t('graph.browsePosition')}
-          <select aria-label={t('graph.browsePosition')} value={positionEvent?.id ?? ''} onChange={(event) => {
-            const next = positions.find((item) => item.id === event.target.value);
-            setPositionId(next?.id ?? '');
-            setExpandedHistory(new Set());
-            const target = next?.target ?? refs?.find((ref) => ref.kind === 'branch' && ref.name === pinBranch)?.target;
-            if (target) onSelect(target);
-          }}>
-            <option value="">{t('graph.serverBranchPositions')}</option>
-            {positions.map((event) => <option key={event.id} value={event.id}>
-              {event.branch || 'HEAD'} · {event.git_after?.slice(0, 7) || event.target?.replace(/^sha256:/, '').slice(0, 7)} · {when(event.created_at)} · {event.worktree_id?.slice(0, 6)}
-            </option>)}
-          </select>
-        </label>
-        {positionEvent && <span>{t('graph.browsePositionHint')}</span>}
-      </div>}
-      {history.some((event) => event.kind === 'birth' || event.kind === 'attach' || event.kind === 'orphan' || event.kind === 'rename' || event.kind === 'archive') &&
-        <details className="graph-history-panel graph-births">
-          <summary>{t('graph.branchOperations')}</summary>
-          <ul className="graph-history-list">
-            {history.filter((event) => event.kind === 'birth' || event.kind === 'attach' || event.kind === 'orphan' || event.kind === 'rename' || event.kind === 'archive').slice().reverse().map((event) => <li key={event.id}>
-              <span className="graph-history-branch" title={`${event.branch} · ${event.branch_id}`}>{event.kind === 'rename' ? `${event.previous_branch} → ${event.branch}` : event.local_branch && event.local_branch !== event.branch ? `${event.local_branch} → ${event.branch}` : event.branch}</span>
-              <span>{event.kind === 'rename' ? t('graph.branchRenamed') : event.kind === 'archive' ? t('graph.branchArchived') : event.kind === 'orphan' ? t('graph.orphanBirth') : event.kind === 'attach' ? t('graph.branchAttached') : t('graph.branchBorn')}</span>
-              <time dateTime={event.created_at}>{when(event.created_at)}</time>
-              {event.target && graphIndex.byId.has(event.target) && <div className="graph-history-actions"><button type="button" className="graph-history-view" onClick={() => onSelect(event.target!)}>
-                {t('graph.viewBranchSource')} · {event.target.replace(/^sha256:/, '').slice(0, 7)}
-              </button></div>}
-              {event.kind === 'orphan' && event.memory_hash && <span>{t('graph.inheritedProjectMemory')}</span>}
-            </li>)}
-          </ul>
-        </details>}
-      <div className="graph-status" aria-label={t('graph.statusLabel')}>
-        <span className="graph-status-item pushed">
-          <i aria-hidden="true" /> {t('graph.pushedCount', { count: status.pushed.size })}
-        </span>
-        <span className="graph-status-item unpushed">
-          <i aria-hidden="true" /> {t('graph.unpushedCount', { count: status.unpushed.size })}
-        </span>
-        <span className="graph-status-item uncommitted">
-          <i aria-hidden="true" /> {t('graph.uncommittedCount', { count: status.uncommitted.size })}
-        </span>
-        {status.tagged.size > 0 && <span className="graph-status-item tagged">{t('graph.taggedCount', { count: status.tagged.size })}</span>}
-      </div>
-      {historyGroups.length > 0 && (
-        <section className="graph-history-panel" aria-label={t('graph.previousProgress')}>
-          <div className="graph-history-heading">{t('graph.previousProgress')} · {t('graph.previousProgressCount', {
-            count: new Set(historyGroups.flatMap((group) => [...group.snapshotIds])).size,
-          })}</div>
-          <ul className="graph-history-list">
-            {historyGroups.map((group) => (
-              <li key={group.key}>
-                <span className="graph-history-branch" title={group.branch}>{group.branch}</span>
-                <span className="graph-history-position" title={`${group.before} → ${group.after}`}>
-                  <code>{group.before.replace(/^sha256:/, '').slice(0, 7)}</code> → <code>{group.after.replace(/^sha256:/, '').slice(0, 7)}</code>
-                </span>
-                <time dateTime={group.createdAt}>{when(group.createdAt)}</time>
-                <div className="graph-history-actions">
-                  {group.collapsibleIds.size > 0 ? (
-                    <button type="button" className="graph-history-toggle" aria-expanded={expandedKeys.has(group.key)}
-                      onClick={() => toggleHistory(group.key)}>
-                      {expandedKeys.has(group.key)
-                        ? t('graph.collapsePrevious', { count: group.collapsibleIds.size })
-                        : t('graph.expandPrevious', { count: group.collapsibleIds.size })}
-                    </button>
-                  ) : <span>{t('graph.previousProgressShared')}</span>}
-                  <button type="button" className="graph-history-view" onClick={() => {
-                    setExpandedHistory(new Set([...expandedKeys, group.key]));
-                    onSelect(group.before);
-                  }}>{t('graph.viewPrevious')}</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {status.archived.length > 0 && (
-        <details className="graph-archive-panel">
-          <summary title={t('graph.archivedBranchesTitle', { count: status.archivedBranches })}>
-            {t('graph.archivedBranchList', { count: status.archived.length })}
-          </summary>
-          <ul className="graph-archive-list">
-            {status.archived.map((item) => (
-              <li key={`${item.branch}:${item.target}`}>
-                <button
-                  type="button"
-                  className="graph-archive-entry"
-                  disabled={!item.targetAvailable}
-                  aria-label={t('graph.openArchivedBranch', { branch: item.branch })}
-                  onClick={() => {
-                    setShowArchived(true);
-                    onSelect(item.target);
-                  }}
-                >
-                  <span title={item.branch}>⊟ {item.branch}</span>
-                  <code>{item.target.replace(/^sha256:/, '').slice(0, 10)}</code>
-                  <em>
-                    {!item.targetAvailable
-                      ? t('graph.archivedBranchUnavailable')
-                      : item.uniqueCount > 0
-                        ? t('graph.archivedBranchUnique', { count: item.uniqueCount })
-                        : t('graph.archivedBranchShared')}
-                  </em>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {status.archivedOnly.size > 0 && (
-            <button
-              type="button"
-              className="graph-archive-toggle"
-              aria-pressed={archivedVisible}
-              onClick={() => {
-                if (archivedVisible) {
-                  if (selectedArchived) {
-                    const fallback = pinHead ?? visibleSnapshots.find((snapshot) => !status.archivedOnly.has(snapshot.id))?.id;
-                    if (fallback) onSelect(fallback);
-                  }
-                  setShowArchived(false);
-                } else {
-                  setShowArchived(true);
-                }
-              }}
-            >
-              {archivedVisible
-                ? t('graph.hideArchived', { count: status.archivedOnly.size })
-                : t('graph.showArchived', { count: status.archivedOnly.size })}
-            </button>
-          )}
-        </details>
-      )}
-      {projection.lifecycleEdges.size > 0 && <p className="graph-lifecycle-legend">{t('graph.lifecycleLine')}</p>}
       <div className="graph-viewport" ref={graphViewportRef}>
         <div className="graph-canvas" style={{ width: svgW + (uncommittedIds.size ? 100 : 0) }}>
           {/* Top: branch labels per currently visible track. The header and SVG rows share one scroll canvas. */}
@@ -822,6 +672,167 @@ export function CommitGraph({
           </ul>
         </div>
       </div>
+
+      {afterGraph}
+      <section className="graph-details" aria-label={t('graph.detailsTitle')}>
+        <h3 className="graph-details-title">{t('graph.detailsTitle')}</h3>
+        <div className="graph-status" aria-label={t('graph.statusLabel')}>
+          <span className="graph-status-item pushed">
+            <i aria-hidden="true" /> {t('graph.pushedCount', { count: status.pushed.size })}
+          </span>
+          <span className="graph-status-item unpushed">
+            <i aria-hidden="true" /> {t('graph.unpushedCount', { count: status.unpushed.size })}
+          </span>
+          <span className="graph-status-item uncommitted">
+            <i aria-hidden="true" /> {t('graph.uncommittedCount', { count: status.uncommitted.size })}
+          </span>
+          {status.tagged.size > 0 && <span className="graph-status-item tagged">{t('graph.taggedCount', { count: status.tagged.size })}</span>}
+        </div>
+        {!graphIssues.length && projection.foldedParents.size > 0 && <p role="status" className="graph-folded-edges">{t('graph.foldedConnections', { count: projection.foldedParents.size })}</p>}
+        {mergeEvidence.length > 0 && <details className="graph-history-panel graph-merge-records">
+          <summary>{t('graph.mergeRecords', { count: mergeEvidence.length })}</summary>
+          <ul className="graph-history-list">
+            {mergeEvidence.map(({ merge, birth, lineage, placementIntact, sourceAvailable }) => {
+              const event: GraphEvent = { id: `graph:merge:${merge.id}`, kind: 'merge', branch: merge.branch,
+                sourceBranch: merge.pr!.head_branch, snapshot: merge.source ?? '', evidence: merge.id, prNumber: merge.pr!.number };
+              return <li key={merge.id} data-branch-lineage={lineage}>
+                <strong>{merge.pr!.head_branch} → {merge.branch} · PR #{merge.pr!.number}</strong>
+                <span>{t('graph.mergeVerified')}</span>
+                {!placementIntact && <span>{t('graph.historicalPlacement')}</span>}
+                <span>{t(`graph.lineage_${lineage}`)}</span>
+                <div className="graph-history-actions">
+                  <button type="button" disabled={!sourceAvailable} onClick={() => onSelect(event.snapshot, event)}>{t('graph.viewMergeSource')}</button>
+                  {birth?.source && graphIndex.byId.has(birth.source) && <button type="button"
+                    onClick={() => onSelect(birth.source!, { id: `graph:birth:${birth.id}`, kind: 'birth', branch: birth.branch, snapshot: birth.source!, evidence: birth.id })}>
+                    {t('graph.viewBranchSource')}
+                  </button>}
+                </div>
+              </li>;
+            })}
+          </ul>
+        </details>}
+        {positions.length > 0 && <div className="graph-history-scope">
+          <label>{t('graph.browsePosition')}
+            <select aria-label={t('graph.browsePosition')} value={positionEvent?.id ?? ''} onChange={(event) => {
+              const next = positions.find((item) => item.id === event.target.value);
+              setPositionId(next?.id ?? '');
+              setExpandedHistory(new Set());
+              const target = next?.target ?? refs?.find((ref) => ref.kind === 'branch' && ref.name === pinBranch)?.target;
+              if (target) onSelect(target);
+            }}>
+              <option value="">{t('graph.serverBranchPositions')}</option>
+              {positions.map((event) => <option key={event.id} value={event.id}>
+                {event.branch || 'HEAD'} · {event.git_after?.slice(0, 7) || event.target?.replace(/^sha256:/, '').slice(0, 7)} · {when(event.created_at)} · {event.worktree_id?.slice(0, 6)}
+              </option>)}
+            </select>
+          </label>
+          {positionEvent && <span>{t('graph.browsePositionHint')}</span>}
+        </div>}
+        {history.some((event) => event.kind === 'birth' || event.kind === 'attach' || event.kind === 'orphan' || event.kind === 'rename' || event.kind === 'archive') &&
+          <details className="graph-history-panel graph-births">
+            <summary>{t('graph.branchOperations')}</summary>
+            <ul className="graph-history-list">
+              {history.filter((event) => event.kind === 'birth' || event.kind === 'attach' || event.kind === 'orphan' || event.kind === 'rename' || event.kind === 'archive').slice().reverse().map((event) => <li key={event.id}>
+                <span className="graph-history-branch" title={`${event.branch} · ${event.branch_id}`}>{event.kind === 'rename' ? `${event.previous_branch} → ${event.branch}` : event.local_branch && event.local_branch !== event.branch ? `${event.local_branch} → ${event.branch}` : event.branch}</span>
+                <span>{event.kind === 'rename' ? t('graph.branchRenamed') : event.kind === 'archive' ? t('graph.branchArchived') : event.kind === 'orphan' ? t('graph.orphanBirth') : event.kind === 'attach' ? t('graph.branchAttached') : t('graph.branchBorn')}</span>
+                <time dateTime={event.created_at}>{when(event.created_at)}</time>
+                {event.target && graphIndex.byId.has(event.target) && <div className="graph-history-actions"><button type="button" className="graph-history-view" onClick={() => onSelect(event.target!)}>
+                  {t('graph.viewBranchSource')} · {event.target.replace(/^sha256:/, '').slice(0, 7)}
+                </button></div>}
+                {event.kind === 'orphan' && event.memory_hash && <span>{t('graph.inheritedProjectMemory')}</span>}
+              </li>)}
+            </ul>
+          </details>}
+        {historyGroups.length > 0 && (
+          <details className="graph-history-panel graph-previous" aria-label={t('graph.previousProgress')}>
+            <summary className="graph-history-heading">{t('graph.previousProgress')} · {t('graph.previousProgressCount', {
+              count: new Set(historyGroups.flatMap((group) => [...group.snapshotIds])).size,
+            })}</summary>
+            <ul className="graph-history-list">
+              {historyGroups.map((group) => (
+                <li key={group.key}>
+                  <span className="graph-history-branch" title={group.branch}>{group.branch}</span>
+                  <span className="graph-history-position" title={`${group.before} → ${group.after}`}>
+                    <code>{group.before.replace(/^sha256:/, '').slice(0, 7)}</code> → <code>{group.after.replace(/^sha256:/, '').slice(0, 7)}</code>
+                  </span>
+                  <time dateTime={group.createdAt}>{when(group.createdAt)}</time>
+                  <div className="graph-history-actions">
+                    {group.collapsibleIds.size > 0 ? (
+                      <button type="button" className="graph-history-toggle" aria-expanded={expandedKeys.has(group.key)}
+                        onClick={() => toggleHistory(group.key)}>
+                        {expandedKeys.has(group.key)
+                          ? t('graph.collapsePrevious', { count: group.collapsibleIds.size })
+                          : t('graph.expandPrevious', { count: group.collapsibleIds.size })}
+                      </button>
+                    ) : <span>{t('graph.previousProgressShared')}</span>}
+                    <button type="button" className="graph-history-view" onClick={() => {
+                      setExpandedHistory(new Set([...expandedKeys, group.key]));
+                      onSelect(group.before);
+                    }}>{t('graph.viewPrevious')}</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {status.archived.length > 0 && (
+          <details className="graph-archive-panel">
+            <summary title={t('graph.archivedBranchesTitle', { count: status.archivedBranches })}>
+              {t('graph.archivedBranchList', { count: status.archived.length })}
+            </summary>
+            <ul className="graph-archive-list">
+              {status.archived.map((item) => (
+                <li key={`${item.branch}:${item.target}`}>
+                  <button
+                    type="button"
+                    className="graph-archive-entry"
+                    disabled={!item.targetAvailable}
+                    aria-label={t('graph.openArchivedBranch', { branch: item.branch })}
+                    onClick={() => {
+                      setShowArchived(true);
+                      onSelect(item.target);
+                    }}
+                  >
+                    <span title={item.branch}>⊟ {item.branch}</span>
+                    <code>{item.target.replace(/^sha256:/, '').slice(0, 10)}</code>
+                    <em>
+                      {!item.targetAvailable
+                        ? t('graph.archivedBranchUnavailable')
+                        : item.uniqueCount > 0
+                          ? t('graph.archivedBranchUnique', { count: item.uniqueCount })
+                          : t('graph.archivedBranchShared')}
+                    </em>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {status.archivedOnly.size > 0 && (
+              <button
+                type="button"
+                className="graph-archive-toggle"
+                aria-pressed={archivedVisible}
+                onClick={() => {
+                  if (archivedVisible) {
+                    if (selectedArchived) {
+                      const fallback = pinHead ?? visibleSnapshots.find((snapshot) => !status.archivedOnly.has(snapshot.id))?.id;
+                      if (fallback) onSelect(fallback);
+                    }
+                    setShowArchived(false);
+                  } else {
+                    setShowArchived(true);
+                  }
+                }}
+              >
+                {archivedVisible
+                  ? t('graph.hideArchived', { count: status.archivedOnly.size })
+                  : t('graph.showArchived', { count: status.archivedOnly.size })}
+              </button>
+            )}
+          </details>
+        )}
+        {projection.lifecycleEdges.size > 0 && <p className="graph-lifecycle-legend">{t('graph.lifecycleLine')}</p>}
+        {diagnostics}
+      </section>
 
       {dragHint && <div className="join-hint">{dragHint}</div>}
 

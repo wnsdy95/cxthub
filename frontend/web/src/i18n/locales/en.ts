@@ -699,6 +699,7 @@ export const en: Messages = {
     owner: 'owner — co-owner',
   },
   graph: {
+    detailsTitle: 'History & sync',
     branchMerged: 'Merged {branch}',
     mergeRecords: 'PR merge records · {count}',
     mergeVerified: 'Merged · source verified in the recorded destination history',
