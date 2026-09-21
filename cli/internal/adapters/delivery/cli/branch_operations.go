@@ -591,6 +591,13 @@ func resolveBranchOperation(ctx context.Context, c *Container, cwd string, op br
 				return e, err
 			}
 			e.BranchID = bindings.Identity(e.RepoID, remoteBranch)
+			if e.Creation != nil && e.Creation.Evidence == "process-argv" && e.Creation.OriginBranch == remoteBranch {
+				// The server binding may arrive after the prepared local vote. Resolve
+				// this retained identity together with the tracking attachment.
+				creation := *e.Creation
+				creation.OriginBranchID = e.BranchID
+				e.Creation = &creation
+			}
 			e.LocalBranch, e.Branch = e.Branch, remoteBranch
 			all, err := c.List.List(ctx, inbound.ListInput{RepoID: e.RepoID})
 			if err != nil {

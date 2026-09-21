@@ -195,6 +195,9 @@ func (a *GitSyncAudit) CheckGitHubSync(ctx context.Context, repo domain.ContentH
 			sha := e.GitAfter
 			if e.Kind == "orphan" {
 				sha = e.GitBefore
+				if e.Creation != nil && e.Creation.StartCommit != "" {
+					sha = e.Creation.StartCommit
+				}
 			}
 			check.Expected = sha
 			if sha == "" {

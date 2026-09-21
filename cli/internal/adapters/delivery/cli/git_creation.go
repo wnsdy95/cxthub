@@ -132,11 +132,11 @@ func captureGitCreation(ctx context.Context, cwd, pid, target, before, after str
 	if !ok {
 		return unknown
 	}
-	c.StartCommit = after
-	if orphan {
-		c.StartCommit = before
+	c.StartCommit = gitOut(cwd, "rev-parse", "--verify", c.StartRef+"^{commit}")
+	if !orphan && c.StartCommit != after {
+		return unknown
 	}
-	if !orphan && gitOut(cwd, "rev-parse", "--verify", c.StartRef+"^{commit}") != after {
+	if orphan && c.StartRef == "HEAD" && c.StartCommit != before {
 		return unknown
 	}
 	ref := gitOut(cwd, "rev-parse", "--symbolic-full-name", c.StartRef)

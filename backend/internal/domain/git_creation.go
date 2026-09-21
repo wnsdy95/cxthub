@@ -72,7 +72,7 @@ func ValidateGitCreation(e HistoryEvent) error {
 		if e.Kind == "orphan" {
 			expected = e.GitBefore
 		}
-		if c.StartCommit != expected {
+		if c.StartCommit != expected && !(e.Kind == "orphan" && c.Evidence == "process-argv" && c.StartRef != "HEAD") {
 			return fmt.Errorf("creation start commit differs from Git transaction")
 		}
 	}

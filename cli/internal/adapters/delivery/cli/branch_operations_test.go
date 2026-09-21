@@ -301,6 +301,12 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 				}
 				j, _ := branchjournal.Open(ctx, cwd)
 				before, _ := j.List()
+				if tracking {
+					before[0].Event.Creation = &domain.GitCreation{Evidence: "process-argv", Command: []string{"git", "branch", "--track", "relocated", "origin/team-task"}, StartRef: "origin/team-task", StartCommit: oid, OriginBranch: "team-task", OriginBranchID: domain.LegacyContextBranchID(repo, "team-task")}
+					if err := j.Transaction(ctx, func() error { return j.Save(before[0]) }); err != nil {
+						t.Fatal(err)
+					}
+				}
 				commitBirthJournal(t, cwd, before[0].Event.ID)
 				if removal {
 					runLifecycleGit(t, cwd, "worktree", "remove", linked)
@@ -325,6 +331,9 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 					t.Fatalf("surviving native branch lost its context ref: %+v %v", ref, err)
 				}
 				after, _ := j.List()
+				if tracking && after[0].Event.Creation.OriginBranchID != "remote-identity" {
+					t.Fatalf("tracking creation retained stale local identity: %+v", after[0].Event.Creation)
+				}
 				if after[0].Phase != "applied" || after[0].Event.Kind != wantKind || after[0].Worktree != before[0].Worktree || after[0].Event.WorktreeID != before[0].Event.WorktreeID {
 					t.Fatalf("replay changed provenance or did not finish: %+v", after[0])
 				}

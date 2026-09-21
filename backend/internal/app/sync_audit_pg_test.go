@@ -51,6 +51,9 @@ func TestPGSyncAuditCreationPersistenceAndConcurrentWriter(t *testing.T) {
 	changed := e
 	c := *e.Creation
 	c.StartRef = "other"
+	c.Command = []string{"git", "branch", "feature", "other"}
+	c.OriginBranch = "other"
+	c.OriginBranchID = domain.LegacyContextBranchID(string(repo), "other")
 	changed.Creation = &c
 	if err = svc.RecordHistory(ctx, changed); !errors.Is(err, domain.ErrRefConflict) {
 		t.Fatal("immutable command overwritten", err)

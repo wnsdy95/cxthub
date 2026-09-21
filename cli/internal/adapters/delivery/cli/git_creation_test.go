@@ -25,6 +25,7 @@ func TestCreationCommandSanitizesWithoutGuessing(t *testing.T) {
 		{[]string{"git", "worktree", "add", "-b", "x", "/private/path with spaces", "main"}, "x", "main", true},
 		{[]string{"git", "switch", "--track", "origin/x"}, "x", "origin/x", true},
 		{[]string{"git", "switch", "--orphan", "x"}, "x", "HEAD", true},
+		{[]string{"git", "checkout", "--orphan", "x", "main"}, "x", "main", true},
 		{[]string{"git", "switch", "x"}, "x", "", false},
 		{[]string{"git", "branch", "--unsupported", "secret", "x"}, "x", "", false},
 		{[]string{"git", "branch", "other"}, "x", "", false},
