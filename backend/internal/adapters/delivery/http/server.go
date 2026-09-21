@@ -50,8 +50,8 @@ type Backend interface {
 	GetManifest(ctx context.Context, repoID domain.ContentHash) (domain.Manifest, error)
 	EnsureRepo(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error)
 	ListRepos(ctx context.Context, team string) ([]domain.Repo, error)
-	Contributions(ctx context.Context, workspaceIDs []string) (map[string]int, error)
-	Activity(ctx context.Context, workspaces []domain.Workspace) ([]domain.ActivityMonth, error)
+	Contributions(ctx context.Context, repositoryIDs []string) (map[string]int, error)
+	Activity(ctx context.Context, repositories []domain.Repository) ([]domain.ActivityMonth, error)
 	GetRepo(ctx context.Context, id domain.ContentHash) (domain.Repo, error)
 	Fsck(ctx context.Context, repoID domain.ContentHash) (inbound.FsckReport, error)
 	Reflog(ctx context.Context, repoID domain.ContentHash) ([]domain.RefLogEntry, error)
@@ -88,13 +88,13 @@ type Backend interface {
 	PutUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string, u domain.Unsync) error
 	ListUnsyncs(ctx context.Context, repoID domain.ContentHash) ([]domain.Unsync, error)
 	DeleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error
-	// GitHub public state sync (GHVisibilitySync enabled workspace — GitHub → cxthub unidirectional).
-	SyncWorkspaceVisibility(ctx context.Context, workspaceID string) (domain.Workspace, error)
+	// GitHub public state sync (GHVisibilitySync enabled repository — GitHub → cxthub unidirectional).
+	SyncRepositoryVisibility(ctx context.Context, repositoryID string) (domain.Repository, error)
 	// Repository structure setup (default branch, protected branch) — for maintainers and above.
 	UpdateRepoConfig(ctx context.Context, repoID domain.ContentHash, defaultBranch *string, protectDefault *bool) error
 }
 
-// Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/workspace).
+// Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/repository).
 type Server struct {
 	gitSyncAudit      inbound.GitSyncAudit
 	docFinalization   inbound.DocFinalization
@@ -104,7 +104,7 @@ type Server struct {
 	gitChanges        inbound.GitChanges
 	gitScans          inbound.GitScans
 	changes           repositoryChangeHub
-	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (workspace ID set).
+	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (repository ID set).
 	syncInflight sync.Map
 	runtime      outbound.RuntimeStore
 	b            Backend
@@ -174,9 +174,9 @@ func (s *Server) Handler() http.Handler {
 
 	// 5-tier role gate (guard): viewer=Read / puller=Team asset pull / member=Context write
 	// / maintainer=Team asset write (+policy by action) / owner=Operations.
-	// GET at viewer level is allowed for public workspaces. Detailed rules are in requireRepoRole.
+	// GET at viewer level is allowed for public repositories. Detailed rules are in requireRepoRole.
 	mux.HandleFunc("GET /api/v1/repos", s.listRepos)
-	mux.HandleFunc("POST /api/v1/repos", s.requireUser(s.createRepo)) // distillation (empirically verified usage of bound ws is checked by subsequent gate)
+	mux.HandleFunc("POST /api/v1/repos", s.requireUser(s.createRepo)) // distillation (empirically verified usage of bound repositoryRecord is checked by subsequent gate)
 	mux.HandleFunc("GET /api/v1/repos/{repoID}", s.guard(domain.RoleViewer, s.getRepo))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/fsck", s.guard(domain.RoleViewer, s.fsck))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/reflog", s.guard(domain.RoleViewer, s.reflog))
@@ -261,7 +261,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/diff", s.guard(domain.RoleViewer, s.diff))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/fork", s.guard(domain.RoleMember, s.fork))
 
-	// Authentication · Workspace · Invite (all Firebase/dev tokens required — requireUser middleware).
+	// Authentication · Repository · Invite (all Firebase/dev tokens required — requireUser middleware).
 	s.registerIdentity(mux)
 
 	return s.withSecurityHeaders(s.withCORS(s.withCSRF(mux)))
@@ -284,10 +284,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, map[string]string{"status": "ok"}, nil)
 }
 
-// listRepos: if ?workspace=<id> is present, requires login + corresponding workspace membership and
-// returns only repos within that workspace (visibility boundary). Without parameters, returns accessible repos only.
+// listRepos: if ?repository=<id> is present, requires login + corresponding repository membership and
+// returns only repos within that repository (visibility boundary). Without parameters, returns accessible repos only.
 func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
-	wsID := r.URL.Query().Get("workspace")
+	repositoryID := r.URL.Query().Get("repository")
 	team := r.URL.Query().Get("team")
 	if team == "" {
 		team = "default"
@@ -297,10 +297,10 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, repos, err)
 		return
 	}
-	if wsID == "" {
-		// Workspace filter-less full list exposes enumeration info (review found #4) —
+	if repositoryID == "" {
+		// Repository filter-less full list exposes enumeration info (review found #4) —
 		// Anonymous gets empty list (server survival check 200), authenticated user gets only accessible ones:
-		// My member workspaces · Public workspaces. Membership or policy lookup failures are hidden.
+		// My member repositories · Public repositories. Membership or policy lookup failures are hidden.
 		token := s.requestToken(r)
 		u, uerr := s.id.ResolveUser(r.Context(), token)
 		if token == "" || uerr != nil {
@@ -309,54 +309,54 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 		}
 		visible := make([]domain.Repo, 0, len(repos))
 		for _, rp := range repos {
-			if rp.WorkspaceID == "" {
+			if rp.RepositoryID == "" {
 				continue
 			}
-			wsp, werr := s.id.GetWorkspace(r.Context(), rp.WorkspaceID)
+			repositoryRecord, werr := s.id.GetRepository(r.Context(), rp.RepositoryID)
 			if werr != nil {
 				continue
 			}
-			if wsp.IsPublic() {
+			if repositoryRecord.IsPublic() {
 				visible = append(visible, rp)
 				continue
 			}
-			if _, ok := s.id.RoleOf(r.Context(), rp.WorkspaceID, u.ID); ok {
+			if _, ok := s.id.RoleOf(r.Context(), rp.RepositoryID, u.ID); ok {
 				visible = append(visible, rp)
 			}
 		}
 		s.respond(w, visible, nil)
 		return
 	}
-	// Workspace filter — members only. However, public (public) workspaces are accessible by anyone.
-	wsp, werr := s.id.GetWorkspace(r.Context(), wsID)
+	// Repository filter — members only. However, public (public) repositories are accessible by anyone.
+	repositoryRecord, werr := s.id.GetRepository(r.Context(), repositoryID)
 	if werr != nil {
 		code, status := mapError(werr)
 		s.writeError(w, status, code, werr.Error())
 		return
 	}
-	if !wsp.IsPublic() {
+	if !repositoryRecord.IsPublic() {
 		token := s.requestToken(r)
 		u, uerr := s.id.ResolveUser(r.Context(), token)
 		if token == "" || uerr != nil {
-			s.writeError(w, http.StatusUnauthorized, "unauthenticated", "workspace filter requires login")
+			s.writeError(w, http.StatusUnauthorized, "unauthenticated", "repository filter requires login")
 			return
 		}
-		if _, merr := s.id.ListMembers(r.Context(), u.ID, wsID); merr != nil {
-			allowed, accessErr := s.id.HasBreakGlassAccess(r.Context(), wsID, u.ID)
+		if _, merr := s.id.ListMembers(r.Context(), u.ID, repositoryID); merr != nil {
+			allowed, accessErr := s.id.HasBreakGlassAccess(r.Context(), repositoryID, u.ID)
 			if accessErr != nil {
 				s.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "break-glass audit unavailable")
 				return
 			}
 			if !allowed {
 				code, status := mapError(merr)
-				s.writeError(w, status, code, "not a workspace member")
+				s.writeError(w, status, code, "not a repository member")
 				return
 			}
 		}
 	}
 	filtered := make([]domain.Repo, 0, len(repos))
 	for _, rp := range repos {
-		if rp.WorkspaceID == wsID {
+		if rp.RepositoryID == repositoryID {
 			filtered = append(filtered, rp)
 		}
 	}
@@ -413,13 +413,13 @@ func (s *Server) getSnapshot(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, out, err)
 }
 
-// requireRepoMember checks if the caller is a member of the repo if it belongs to the workspace.
+// requireRepoMember checks if the caller is a member of the repo if it belongs to the repository.
 // guard gates the route as a 5-step role ladder (serial AND front — roles are layer boundaries,
 // policy specifics are narrowed by requireRepoAction behind).
 //
 //   - If a token is present, it is interpreted and injected into the context (anonymous is initially allowed — determination is by requireRepoRole).
-//   - Reading at the viewer level in a public workspace is allowed for anonymous users (GitHub public repo compatibility).
-//   - Repos not belonging to the workspace have no policy boundary and are all rejected.
+//   - Reading at the viewer level in a public repository is allowed for anonymous users (GitHub public repo compatibility).
+//   - Repos not belonging to the repository have no policy boundary and are all rejected.
 func (s *Server) guard(min domain.MemberRole, fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if token := s.requestToken(r); token != "" {
@@ -435,22 +435,22 @@ func (s *Server) guard(min domain.MemberRole, fn http.HandlerFunc) http.HandlerF
 }
 
 // kickVisibilitySync runs GitHub public sync in the background once (preventing duplicates).
-func (s *Server) kickVisibilitySync(wsID string) {
-	if _, running := s.syncInflight.LoadOrStore(wsID, true); running {
+func (s *Server) kickVisibilitySync(repositoryID string) {
+	if _, running := s.syncInflight.LoadOrStore(repositoryID, true); running {
 		return
 	}
 	go func() {
-		defer s.syncInflight.Delete(wsID)
+		defer s.syncInflight.Delete(repositoryID)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, _ = s.b.SyncWorkspaceVisibility(ctx, wsID)
+		_, _ = s.b.SyncRepositoryVisibility(ctx, repositoryID)
 	}()
 }
 
-// requireRepoRole checks if the user's role in the repo's workspace is at least min.
+// requireRepoRole checks if the user's role in the repo's repository is at least min.
 //
-//   - Reading at the viewer level in a public workspace is allowed for anonymous users (GitHub public repo compatibility).
-//   - Repos not belonging to the workspace have no policy boundary and are all rejected.
+//   - Reading at the viewer level in a public repository is allowed for anonymous users (GitHub public repo compatibility).
+//   - Repos not belonging to the repository have no policy boundary and are all rejected.
 func (s *Server) requireRepoRole(w http.ResponseWriter, r *http.Request, min domain.MemberRole) bool {
 	repo, err := s.b.GetRepo(r.Context(), s.repoID(r))
 	if err != nil {
@@ -459,20 +459,20 @@ func (s *Server) requireRepoRole(w http.ResponseWriter, r *http.Request, min dom
 		return false
 	}
 	u, authed := userFrom(r.Context())
-	if repo.WorkspaceID == "" {
+	if repo.RepositoryID == "" {
 		s.writeError(w, http.StatusForbidden, "repo_unbound",
-			"repository is not bound to a workspace — verify that <namespace>/<workspace>/<repository> in the remote URL matches an existing workspace, then reconnect with cxt setup <url>")
+			"repository is not bound to a repository — verify that <namespace>/<repository>/<repository> in the remote URL matches an existing repository, then reconnect with cxt setup <url>")
 		return false
 	}
-	wsp, werr := s.id.GetWorkspace(r.Context(), repo.WorkspaceID)
+	repositoryRecord, werr := s.id.GetRepository(r.Context(), repo.RepositoryID)
 	if werr != nil {
 		code, status := mapError(werr)
 		s.writeError(w, status, code, werr.Error())
 		return false
 	}
-	// Public workspace: non-members (including anonymous) receive the default role set by the workspace (viewer by default, owner can go up to puller). Members are determined by their actual role below.
-	if wsp.IsPublic() {
-		if wsp.PublicBaseRole().AtLeast(min) && (min == domain.RoleViewer || !wsp.Archived) {
+	// Public repository: non-members (including anonymous) receive the default role set by the repository (viewer by default, owner can go up to puller). Members are determined by their actual role below.
+	if repositoryRecord.IsPublic() {
+		if repositoryRecord.PublicBaseRole().AtLeast(min) && (min == domain.RoleViewer || !repositoryRecord.Archived) {
 			return true // Satisfies the default role for non-members (viewer exceeds storage is blocked)
 		}
 	}
@@ -480,18 +480,18 @@ func (s *Server) requireRepoRole(w http.ResponseWriter, r *http.Request, min dom
 		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "Login required — cxt login <token> (generate from Account Settings ⚙)")
 		return false
 	}
-	// The archived workspace is read-only — deny actions beyond viewer (check after authentication —
-	// does not leak workspace status to anonymous users).
-	if min != domain.RoleViewer && wsp.Archived {
-		s.writeError(w, http.StatusForbidden, "forbidden", "archived workspace (read-only) — owner can disable in settings")
+	// The archived repository is read-only — deny actions beyond viewer (check after authentication —
+	// does not leak repository status to anonymous users).
+	if min != domain.RoleViewer && repositoryRecord.Archived {
+		s.writeError(w, http.StatusForbidden, "forbidden", "archived repository (read-only) — owner can disable in settings")
 		return false
 	}
-	role, ok := s.id.RoleOf(r.Context(), repo.WorkspaceID, u.ID)
+	role, ok := s.id.RoleOf(r.Context(), repo.RepositoryID, u.ID)
 	if !ok || !role.AtLeast(min) {
 		// Break-glass is a narrow read-only exception. It never satisfies pull,
 		// push, settings, secrets, or any other write-capable role gate.
 		if min == domain.RoleViewer {
-			allowed, accessErr := s.id.HasBreakGlassAccess(r.Context(), repo.WorkspaceID, u.ID)
+			allowed, accessErr := s.id.HasBreakGlassAccess(r.Context(), repo.RepositoryID, u.ID)
 			if accessErr != nil {
 				s.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "break-glass audit unavailable")
 				return false
@@ -519,11 +519,11 @@ func (s *Server) requireRepoAction(w http.ResponseWriter, r *http.Request, actio
 		s.writeError(w, status, code, err.Error())
 		return false
 	}
-	if repo.WorkspaceID == "" {
-		s.writeError(w, http.StatusForbidden, "repo_unbound", "repo not bound to workspace, policy determination impossible")
+	if repo.RepositoryID == "" {
+		s.writeError(w, http.StatusForbidden, "repo_unbound", "repo not bound to repository, policy determination impossible")
 		return false
 	}
-	wsp, werr := s.id.GetWorkspace(r.Context(), repo.WorkspaceID)
+	repositoryRecord, werr := s.id.GetRepository(r.Context(), repo.RepositoryID)
 	if werr != nil {
 		code, status := mapError(werr)
 		s.writeError(w, status, code, werr.Error())
@@ -533,13 +533,13 @@ func (s *Server) requireRepoAction(w http.ResponseWriter, r *http.Request, actio
 		s.writeError(w, http.StatusForbidden, "forbidden", "unsupported settings action")
 		return false
 	}
-	policy := wsp.SettingsPolicy
+	policy := repositoryRecord.SettingsPolicy
 	if policy == "" || policy == "members" {
 		return true // role-based only (no additional narrowing)
 	}
 	u, _ := userFrom(r.Context())
-	if !domain.PolicyAllows(policy, s.id.IsOwner(r.Context(), wsp.ID, u.ID)) {
-		s.writeError(w, http.StatusForbidden, "forbidden", "action not allowed by workspace permissions ("+action+")")
+	if !domain.PolicyAllows(policy, s.id.IsOwner(r.Context(), repositoryRecord.ID, u.ID)) {
+		s.writeError(w, http.StatusForbidden, "forbidden", "action not allowed by repository permissions ("+action+")")
 		return false
 	}
 	return true
@@ -565,7 +565,7 @@ func (s *Server) patchAbout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// about field is true PATCH semantics — missing fields maintain existing values (workspace settings save does not overwrite About body with empty value).
+	// about field is true PATCH semantics — missing fields maintain existing values (repository settings save does not overwrite About body with empty value).
 	if body.Description != nil || body.Website != nil || body.Topics != nil {
 		cur, gerr := s.b.GetRepo(r.Context(), s.repoID(r))
 		if gerr != nil {
@@ -722,8 +722,8 @@ func (s *Server) pendingGuard(w http.ResponseWriter, r *http.Request, sessionID 
 		if p.Author.Email != "" && caller.Email != "" && p.Author.Email == caller.Email {
 			return caller, false // owner
 		}
-		if repo, rerr := s.b.GetRepo(r.Context(), s.repoID(r)); rerr == nil && repo.WorkspaceID != "" {
-			if role, ok := s.id.RoleOf(r.Context(), repo.WorkspaceID, caller.ID); ok && role.AtLeast(domain.RoleMaintainer) {
+		if repo, rerr := s.b.GetRepo(r.Context(), s.repoID(r)); rerr == nil && repo.RepositoryID != "" {
+			if role, ok := s.id.RoleOf(r.Context(), repo.RepositoryID, caller.ID); ok && role.AtLeast(domain.RoleMaintainer) {
 				return caller, false // maintainer or above
 			}
 		}

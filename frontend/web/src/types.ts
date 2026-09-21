@@ -25,7 +25,9 @@ export interface PublicUser {
   created_at: string;
 }
 
-export interface Workspace {
+export interface Repository {
+  /** Server-computed direct/team permission for the signed-in caller. */
+  effective_role?: '' | 'viewer' | 'puller' | 'member' | 'maintainer' | 'owner';
   id: string;
   name: string;
   owner_id: string;
@@ -53,8 +55,8 @@ export interface Workspace {
   created_at: string;
 }
 
-/** Allowlist workspace field for public endpoints. No operational policy or webhook capability. */
-export interface PublicWorkspace {
+/** Allowlist repository field for public endpoints. No operational policy or webhook capability. */
+export interface PublicRepository {
   id: string;
   name: string;
   slug: string;
@@ -65,9 +67,10 @@ export interface PublicWorkspace {
   created_at: string;
 }
 
-export type EnterpriseRole = 'member' | 'admin' | 'owner';
+export type OrganizationRole = 'member' | 'admin' | 'owner';
 
-export interface Enterprise {
+export interface Organization {
+  effective_role?: OrganizationRole;
   id: string;
   namespace_id: string;
   name: string;
@@ -77,37 +80,37 @@ export interface Enterprise {
   created_at: string;
 }
 
-export interface PublicEnterprise {
+export interface PublicOrganization {
   id: string;
   name: string;
   slug: string;
   logo?: string;
   created_at: string;
-  workspaces: PublicWorkspace[];
+  repositories: PublicRepository[];
 }
 
-export interface EnterpriseMembership {
-  enterprise_id: string;
+export interface OrganizationMembership {
+  organization_id: string;
   user_id: string;
-  role: EnterpriseRole;
+  role: OrganizationRole;
   user?: User;
   created_at: string;
 }
 
-export interface EnterprisePolicy {
-  enterprise_id: string;
-  workspace_creation: 'admins' | 'members';
-  default_workspace_visibility: 'private' | 'public';
-  allow_public_workspaces: boolean;
+export interface OrganizationPolicy {
+  organization_id: string;
+  repository_creation: 'admins' | 'members';
+  default_repository_visibility: 'private' | 'public';
+  allow_public_repositories: boolean;
   break_glass_enabled: boolean;
   break_glass_max_minutes: number;
   updated_by?: string;
   updated_at: string;
 }
 
-export interface EnterpriseAuditEvent {
+export interface OrganizationAuditEvent {
   id: string;
-  enterprise_id: string;
+  organization_id: string;
   actor_id: string;
   action: string;
   target_type?: string;
@@ -118,15 +121,15 @@ export interface EnterpriseAuditEvent {
 
 export interface BreakGlassGrant {
   id: string;
-  enterprise_id: string;
-  workspace_id: string;
+  organization_id: string;
+  repository_id: string;
   user_id: string;
   reason: string;
   created_at: string;
   expires_at: string;
 }
 
-/** User profile activity feed — monthly commit bundles + workspace creation */
+/** User profile activity feed — monthly commit bundles + repository creation */
 export interface ActivityRepo {
   name: string;
   path: string;
@@ -145,8 +148,8 @@ export interface ActivityMonth {
   created: ActivityCreated[];
 }
 
-/** Update workspace settings (owner only) */
-export interface WorkspacePatch {
+/** Update repository settings (owner only) */
+export interface RepositoryPatch {
   visibility?: 'private' | 'public';
   secrets_policy?: 'members' | 'owner';
   settings_policy?: 'members' | 'owner';
@@ -165,7 +168,7 @@ export interface Membership {
 
 export interface Invite {
   token: string;
-  workspace_id: string;
+  repository_id: string;
   email: string;
   role: string;
   status: string;
@@ -452,7 +455,7 @@ export interface RepositoryView {
 
 export interface NotificationJob {
   id: string;
-  workspace_id: string;
+  repository_id: string;
   kind: string;
   text: string;
   state: 'pending' | 'running' | 'retrying' | 'delivered' | 'attention';
@@ -585,3 +588,14 @@ export interface SyncAuditPage {
  version: number; revision: string; checked_at: string; checks: SyncAuditCheck[];
  next_cursor?: string; processed: number; total: number;
 }
+
+export interface Team {
+  id: string; organization_id: string; name: string; slug: string; description?: string; created_at: string;
+  can_manage: boolean; can_delete: boolean;
+}
+export interface TeamMembership { team_id: string; organization_id: string; user_id: string; role: 'member' | 'maintainer'; created_at: string }
+export interface TeamRepositoryGrant { team_id: string; organization_id: string; repository_id: string; role: import('./roles').Role; created_at: string }
+export interface EnterprisePolicy { repository_creation: 'admins' | 'members'; allow_public_repositories: boolean; allow_break_glass: boolean }
+export interface Enterprise { id: string; name: string; slug: string; logo?: string; policy: EnterprisePolicy; created_by: string; created_at: string }
+export interface EnterpriseMembership { user?: Pick<User, 'id' | 'username' | 'name' | 'nickname'>; enterprise_id: string; user_id: string; role: 'owner' | 'admin' | 'member'; created_at: string }
+export interface EnterpriseAuditEvent { id: string; enterprise_id: string; actor_id: string; action: string; target_id: string; created_at: string }

@@ -14,7 +14,7 @@ func TestMemoryPublicationUsesStagedChunkedDocument(t *testing.T) {
 	ctx := context.Background()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
-	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: "memory-chunks"}); err != nil {
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: domain.NewID("ws_")}); err != nil {
 		t.Fatal(err)
 	}
 	cir := pendingGCCIR(domain.ProviderCodex, strings.Repeat("preserved archive ", 90000))
@@ -53,7 +53,7 @@ func TestMemoryPublicationRestoresCollectedCaptureAndPreservesArchive(t *testing
 	ctx := context.Background()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
-	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: "memory-test"}); err != nil {
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: domain.NewID("ws_")}); err != nil {
 		t.Fatal(err)
 	}
 	old := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderCodex, "first"))
@@ -126,7 +126,7 @@ func TestMemoryPublicationRejectsInvalidArchiveBeforePersistence(t *testing.T) {
 			ctx := context.Background()
 			svc, st := newFsckSvc(t)
 			repo := hh(t.Name())
-			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: "memory-test"}); err != nil {
+			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: domain.NewID("ws_")}); err != nil {
 				t.Fatal(err)
 			}
 			cir := pendingGCCIR(domain.ProviderClaude, "archive")

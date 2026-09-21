@@ -17,10 +17,12 @@ For installation and first-run setup, see
 ## Conventions
 
 - Run repository commands inside an existing Git working tree.
-- A repository remote uses
-  `https://<host>/<namespace>/<workspace>/<repository>`. Existing
-  `/<namespace>/<workspace>` remotes remain valid legacy identities and are
-  never rewritten because the normalized URL determines RepoID.
+- New connections use `https://<host>/<owner>/<repository>`. The server resolves
+  this canonical display address to the original connection identity before it
+  is saved. Existing two- and three-segment remotes remain valid exact aliases;
+  their normalized URL and RepoID are never rewritten during ownership migration.
+  An unavailable server prevents saving a new unverified connection, while
+  existing connections and local captures continue to work offline.
 - `<ref>` accepts `HEAD`, a branch name, a tag name, or a full
   `sha256:<64-hex-character>` snapshot ID. An omitted ref resolves to the
   current context head where supported.
@@ -137,7 +139,7 @@ then `cxt branch replay` to process verified Git operations.
 ### `cxt init`
 
 ```text
-cxt init [--no-hooks] [--remote <workspace-url>]
+cxt init [--no-hooks] [--remote <repository-url>]
 ```
 
 Initializes `.cxt/`, updates local ignore protections, creates `.cxtsecrets`
@@ -155,7 +157,7 @@ cxt init
 ### `cxt repo create`
 
 ```text
-cxt repo create <workspace-url>
+cxt repo create <repository-url>
 ```
 
 Convenience alias for initialization plus `origin` registration.
@@ -164,14 +166,16 @@ Convenience alias for initialization plus `origin` registration.
 
 ```text
 cxt remote [-v]
-cxt remote add <name> <workspace-url>
+cxt remote add <name> <repository-url>
 cxt remote remove <name>
 ```
 
-The `origin` URL determines both the server API endpoint and the content
-repository identity.
+The server resolves the display URL to its stable connection identity before
+registration. The saved `origin` determines the API endpoint and content ID;
+renaming a repository does not create a new context history.
 
 ```bash
+cxt login --server https://cxthub.example
 cxt remote add origin https://cxthub.example/alice/platform
 cxt remote -v
 cxt remote remove origin
@@ -182,11 +186,13 @@ Changing an existing remote requires removing it and adding the replacement.
 ### `cxt login`
 
 ```text
-cxt login [token]
-cxt login -t <token>
+cxt login [token] [--server <server-url>]
+cxt login -t <token> [--server <server-url>]
 ```
 
-Without a token, starts the browser device flow for the configured `origin`.
+Without a token, starts the browser device flow. Use `--server https://<host>`
+to authenticate before a new connection; otherwise it uses the configured
+`origin`. `cxt setup <repository-url>` performs login and connection together.
 The manual token form is intended as a fallback and may leave the token in
 shell history. `CXT_TOKEN` is the non-interactive override.
 

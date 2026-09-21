@@ -152,7 +152,7 @@ func bindCommitTestRepo(t *testing.T, st interface {
 }, repo domain.ContentHash) {
 	t.Helper()
 	if _, err := st.PutRepo(context.Background(), domain.Repo{
-		ID: repo, DefaultBranch: "main", WorkspaceID: domain.NewID("ws_"),
+		ID: repo, DefaultBranch: "main", RepositoryID: domain.NewID("ws_"),
 	}); err != nil {
 		t.Fatal(err)
 	}

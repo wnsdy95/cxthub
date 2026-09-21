@@ -13,8 +13,11 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-// IdentityBackend is a set of actions called by authentication/workspace/invite handlers (app.IdentityService implements).
+// IdentityBackend is a set of actions called by authentication/repository/invite handlers (app.IdentityService implements).
 type IdentityBackend interface {
+	TeamIdentity
+	EnterpriseIdentity
+	ResolveRepositoryConnection(context.Context, string, string) (app.RepositoryConnection, error)
 	// Session: IDP token exchange → server session issuance/revoke, Bearer interpretation.
 	Login(ctx context.Context, idpToken, label string) (domain.User, domain.Session, error)
 	Logout(ctx context.Context, sessionToken string) error
@@ -23,45 +26,45 @@ type IdentityBackend interface {
 	Authenticate(ctx context.Context, idToken string) (domain.User, error)
 	UpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error)
 	CreateCLIToken(ctx context.Context, userID, label string) (domain.Session, error)
-	CreateWorkspace(ctx context.Context, owner domain.User, name string) (domain.Workspace, error)
-	UpdateWorkspaceSettings(ctx context.Context, userID, workspaceID string, p app.WorkspacePatch) (domain.Workspace, error)
-	GetWorkspace(ctx context.Context, workspaceID string) (domain.Workspace, error)
-	IsPublicWorkspace(ctx context.Context, workspaceID string) bool
-	IsOwner(ctx context.Context, workspaceID, userID string) bool
-	RoleOf(ctx context.Context, workspaceID, userID string) (domain.MemberRole, bool)
-	TransferOwnership(ctx context.Context, actorID, workspaceID, targetID string) (domain.Workspace, error)
-	UpdateMemberRole(ctx context.Context, actorID, workspaceID, targetID string, role domain.MemberRole) error
-	RemoveMember(ctx context.Context, actorID, workspaceID, targetID string) error
+	CreateRepository(ctx context.Context, owner domain.User, name string) (domain.Repository, error)
+	UpdateRepositorySettings(ctx context.Context, userID, repositoryID string, p app.RepositoryPatch) (domain.Repository, error)
+	GetRepository(ctx context.Context, repositoryID string) (domain.Repository, error)
+	IsPublicRepository(ctx context.Context, repositoryID string) bool
+	IsOwner(ctx context.Context, repositoryID, userID string) bool
+	RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool)
+	TransferOwnership(ctx context.Context, actorID, repositoryID, targetID string) (domain.Repository, error)
+	UpdateMemberRole(ctx context.Context, actorID, repositoryID, targetID string, role domain.MemberRole) error
+	RemoveMember(ctx context.Context, actorID, repositoryID, targetID string) error
 	ListCLITokens(ctx context.Context, userID string) ([]app.CLITokenInfo, error)
 	RevokeCLIToken(ctx context.Context, userID, suffix string) error
 	ListWebSessions(ctx context.Context, userID string) ([]app.CLITokenInfo, error)
 	RevokeWebSession(ctx context.Context, userID, suffix string) error
-	PublicWorkspace(ctx context.Context, username, slug string) (domain.Workspace, error)
-	ReadableWorkspace(ctx context.Context, namespace, slug, viewerID string) (domain.Workspace, error)
-	PublicUser(ctx context.Context, username, viewerID string) (domain.User, []domain.Workspace, error)
-	ListWorkspaces(ctx context.Context, userID string) ([]domain.Workspace, error)
-	Invite(ctx context.Context, userID, workspaceID, email string, role domain.MemberRole, ttl time.Duration) (domain.Invite, error)
-	ListInvites(ctx context.Context, userID, workspaceID string) ([]domain.Invite, error)
-	AcceptInvite(ctx context.Context, user domain.User, token string) (domain.Workspace, error)
-	ListMembers(ctx context.Context, userID, workspaceID string) ([]domain.Membership, error)
-	RevokeInvite(ctx context.Context, userID, workspaceID, token string) error
+	PublicRepository(ctx context.Context, username, slug string) (domain.Repository, error)
+	ReadableRepository(ctx context.Context, namespace, slug, viewerID string) (domain.Repository, error)
+	PublicUser(ctx context.Context, username, viewerID string) (domain.User, []domain.Repository, error)
+	ListRepositories(ctx context.Context, userID string) ([]domain.Repository, error)
+	Invite(ctx context.Context, userID, repositoryID, email string, role domain.MemberRole, ttl time.Duration) (domain.Invite, error)
+	ListInvites(ctx context.Context, userID, repositoryID string) ([]domain.Invite, error)
+	AcceptInvite(ctx context.Context, user domain.User, token string) (domain.Repository, error)
+	ListMembers(ctx context.Context, userID, repositoryID string) ([]domain.Membership, error)
+	RevokeInvite(ctx context.Context, userID, repositoryID, token string) error
 
-	CreateEnterprise(ctx context.Context, creator domain.User, name, slug string) (domain.Enterprise, error)
-	ListEnterprises(ctx context.Context, userID string) ([]domain.Enterprise, error)
-	GetEnterprise(ctx context.Context, enterpriseID string) (domain.Enterprise, error)
-	UpdateEnterpriseProfile(ctx context.Context, actorID, enterpriseID string, name, logo *string) (domain.Enterprise, error)
-	PublicEnterprise(ctx context.Context, slug string) (domain.Enterprise, []domain.Workspace, error)
-	EnterpriseRoleOf(ctx context.Context, enterpriseID, userID string) (domain.EnterpriseRole, bool)
-	ListEnterpriseMembers(ctx context.Context, actorID, enterpriseID string) ([]domain.EnterpriseMembership, error)
-	UpdateEnterpriseMember(ctx context.Context, actorID, enterpriseID, targetID string, role domain.EnterpriseRole) error
-	RemoveEnterpriseMember(ctx context.Context, actorID, enterpriseID, targetID string) error
-	GetEnterprisePolicy(ctx context.Context, actorID, enterpriseID string) (domain.EnterprisePolicy, error)
-	UpdateEnterprisePolicy(ctx context.Context, actorID string, policy domain.EnterprisePolicy) (domain.EnterprisePolicy, error)
-	CreateEnterpriseWorkspace(ctx context.Context, actor domain.User, enterpriseID, name string) (domain.Workspace, error)
-	ListEnterpriseWorkspaces(ctx context.Context, actorID, enterpriseID string) ([]domain.Workspace, error)
-	CreateBreakGlassGrant(ctx context.Context, actorID, enterpriseID, workspaceID, reason string, minutes int) (domain.BreakGlassGrant, error)
-	HasBreakGlassAccess(ctx context.Context, workspaceID, userID string) (bool, error)
-	ListEnterpriseAudit(ctx context.Context, actorID, enterpriseID string, limit int) ([]domain.EnterpriseAuditEvent, error)
+	CreateOrganization(ctx context.Context, creator domain.User, name, slug string) (domain.Organization, error)
+	ListOrganizations(ctx context.Context, userID string) ([]domain.Organization, error)
+	GetOrganization(ctx context.Context, organizationID string) (domain.Organization, error)
+	UpdateOrganizationProfile(ctx context.Context, actorID, organizationID string, name, logo *string) (domain.Organization, error)
+	PublicOrganization(ctx context.Context, slug string) (domain.Organization, []domain.Repository, error)
+	OrganizationRoleOf(ctx context.Context, organizationID, userID string) (domain.OrganizationRole, bool)
+	ListOrganizationMembers(ctx context.Context, actorID, organizationID string) ([]domain.OrganizationMembership, error)
+	UpdateOrganizationMember(ctx context.Context, actorID, organizationID, targetID string, role domain.OrganizationRole) error
+	OffboardOrganizationMember(ctx context.Context, actorID, organizationID, targetID, repositoryAccess string) error
+	GetOrganizationPolicy(ctx context.Context, actorID, organizationID string) (domain.OrganizationPolicy, error)
+	UpdateOrganizationPolicy(ctx context.Context, actorID string, policy domain.OrganizationPolicy) (domain.OrganizationPolicy, error)
+	CreateOrganizationRepository(ctx context.Context, actor domain.User, organizationID, name string) (domain.Repository, error)
+	ListOrganizationRepositories(ctx context.Context, actorID, organizationID string) ([]domain.Repository, error)
+	CreateBreakGlassGrant(ctx context.Context, actorID, organizationID, repositoryID, reason string, minutes int) (domain.BreakGlassGrant, error)
+	HasBreakGlassAccess(ctx context.Context, repositoryID, userID string) (bool, error)
+	ListOrganizationAudit(ctx context.Context, actorID, organizationID string, limit int) ([]domain.OrganizationAuditEvent, error)
 }
 
 type ctxKey int
@@ -222,42 +225,46 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/me/cli-tokens/{suffix}", s.requireUser(s.revokeCLIToken))
 	mux.HandleFunc("GET /api/v1/me/sessions", s.requireUser(s.listWebSessions))
 	mux.HandleFunc("DELETE /api/v1/me/sessions/{suffix}", s.requireUser(s.revokeWebSession))
-	// Anonymous public read: username/slug → public workspace interpretation (private results in 404 — non-existence not exposed).
-	mux.HandleFunc("GET /api/v1/public/workspaces/{username}/{slug}", s.optionalUser(s.publicWorkspace))
+	// Anonymous public read: username/slug → public repository interpretation (private results in 404 — non-existence not exposed).
+	mux.HandleFunc("GET /api/v1/public/repositories/{username}/{slug}", s.optionalUser(s.publicRepository))
 	mux.HandleFunc("GET /api/v1/public/users/{username}", s.optionalUser(s.publicUser))
 	mux.HandleFunc("GET /api/v1/public/users/{username}/contributions", s.optionalUser(s.userContributions))
 	mux.HandleFunc("GET /api/v1/public/users/{username}/activity", s.optionalUser(s.userActivity))
-	mux.HandleFunc("POST /api/v1/workspaces", s.requireUser(s.createWorkspace))
-	mux.HandleFunc("PATCH /api/v1/workspaces/{wsID}", s.requireUser(s.patchWorkspace))
-	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/transfer", s.requireUser(s.transferWorkspace))
-	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/sync-visibility", s.requireUser(s.syncVisibility))
-	mux.HandleFunc("GET /api/v1/workspaces", s.requireUser(s.listWorkspaces))
-	mux.HandleFunc("GET /api/v1/workspaces/{wsID}/notifications", s.requireUser(s.listNotifications))
-	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/notifications/{notificationID}/retry", s.requireUser(s.retryNotification))
-	mux.HandleFunc("GET /api/v1/workspaces/{wsID}/members", s.requireUser(s.listMembers))
-	mux.HandleFunc("PATCH /api/v1/workspaces/{wsID}/members/{userID}", s.requireUser(s.patchMember))
-	mux.HandleFunc("DELETE /api/v1/workspaces/{wsID}/members/{userID}", s.requireUser(s.deleteMember))
-	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/invites", s.requireUser(s.createInvite))
-	mux.HandleFunc("GET /api/v1/workspaces/{wsID}/invites", s.requireUser(s.listInvites))
-	mux.HandleFunc("POST /api/v1/workspaces/{wsID}/invites/{token}/revoke", s.requireUser(s.revokeInvite))
+	mux.HandleFunc("POST /api/v1/repositories", s.requireUser(s.createRepository))
+	mux.HandleFunc("PATCH /api/v1/repositories/{repositoryID}", s.requireUser(s.patchRepository))
+	mux.HandleFunc("POST /api/v1/repositories/{repositoryID}/transfer", s.requireUser(s.transferRepository))
+	mux.HandleFunc("POST /api/v1/repositories/{repositoryID}/sync-visibility", s.requireUser(s.syncVisibility))
+	mux.HandleFunc("GET /api/v1/repositories", s.requireUser(s.listRepositories))
+	mux.HandleFunc("GET /api/v1/repositories/{repositoryID}/notifications", s.requireUser(s.listNotifications))
+	mux.HandleFunc("POST /api/v1/repositories/{repositoryID}/notifications/{notificationID}/retry", s.requireUser(s.retryNotification))
+	mux.HandleFunc("GET /api/v1/repositories/{repositoryID}/members", s.requireUser(s.listMembers))
+	mux.HandleFunc("PATCH /api/v1/repositories/{repositoryID}/members/{userID}", s.requireUser(s.patchMember))
+	mux.HandleFunc("DELETE /api/v1/repositories/{repositoryID}/members/{userID}", s.requireUser(s.deleteMember))
+	mux.HandleFunc("POST /api/v1/repositories/{repositoryID}/invites", s.requireUser(s.createInvite))
+	mux.HandleFunc("GET /api/v1/repositories/{repositoryID}/invites", s.requireUser(s.listInvites))
+	mux.HandleFunc("POST /api/v1/repositories/{repositoryID}/invites/{token}/revoke", s.requireUser(s.revokeInvite))
 	mux.HandleFunc("POST /api/v1/invites/{token}/accept", s.requireUser(s.acceptInvite))
 
-	// Enterprise organization plane. Enterprise roles administer namespaces,
-	// people, and policy; repository context still uses Workspace membership.
-	mux.HandleFunc("POST /api/v1/enterprises", s.requireUser(s.createEnterprise))
-	mux.HandleFunc("GET /api/v1/enterprises", s.requireUser(s.listEnterprises))
-	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}", s.requireUser(s.getEnterprise))
-	mux.HandleFunc("PATCH /api/v1/enterprises/{enterpriseID}", s.requireUser(s.patchEnterprise))
-	mux.HandleFunc("GET /api/v1/public/enterprises/{slug}", s.publicEnterprise)
-	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/members", s.requireUser(s.listEnterpriseMembers))
-	mux.HandleFunc("PATCH /api/v1/enterprises/{enterpriseID}/members/{userID}", s.requireUser(s.patchEnterpriseMember))
-	mux.HandleFunc("DELETE /api/v1/enterprises/{enterpriseID}/members/{userID}", s.requireUser(s.deleteEnterpriseMember))
-	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/policy", s.requireUser(s.getEnterprisePolicy))
-	mux.HandleFunc("PATCH /api/v1/enterprises/{enterpriseID}/policy", s.requireUser(s.patchEnterprisePolicy))
-	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/workspaces", s.requireUser(s.listEnterpriseWorkspaces))
-	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/workspaces", s.requireUser(s.createEnterpriseWorkspace))
-	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/audit", s.requireUser(s.listEnterpriseAudit))
-	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/break-glass", s.requireUser(s.createBreakGlassGrant))
+	s.registerTeamRoutes(mux)
+	s.registerEnterpriseRoutes(mux)
+	mux.HandleFunc("GET /api/v1/repository-connections", s.optionalUser(s.resolveRepositoryConnection))
+
+	// Organization administration plane. Organization roles administer namespaces,
+	// people, and policy; repository context still uses Repository membership.
+	mux.HandleFunc("POST /api/v1/organizations", s.requireUser(s.createOrganization))
+	mux.HandleFunc("GET /api/v1/organizations", s.requireUser(s.listOrganizations))
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}", s.requireUser(s.getOrganization))
+	mux.HandleFunc("PATCH /api/v1/organizations/{organizationID}", s.requireUser(s.patchOrganization))
+	mux.HandleFunc("GET /api/v1/public/organizations/{slug}", s.publicOrganization)
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/members", s.requireUser(s.listOrganizationMembers))
+	mux.HandleFunc("PATCH /api/v1/organizations/{organizationID}/members/{userID}", s.requireUser(s.patchOrganizationMember))
+	mux.HandleFunc("DELETE /api/v1/organizations/{organizationID}/members/{userID}", s.requireUser(s.deleteOrganizationMember))
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/policy", s.requireUser(s.getOrganizationPolicy))
+	mux.HandleFunc("PATCH /api/v1/organizations/{organizationID}/policy", s.requireUser(s.patchOrganizationPolicy))
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/repositories", s.requireUser(s.listOrganizationRepositories))
+	mux.HandleFunc("POST /api/v1/organizations/{organizationID}/repositories", s.requireUser(s.createOrganizationRepository))
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/audit", s.requireUser(s.listOrganizationAudit))
+	mux.HandleFunc("POST /api/v1/organizations/{organizationID}/break-glass", s.requireUser(s.createBreakGlassGrant))
 }
 
 // rateLimit uses a shared GCRA allowance. Proxy forwarding headers are never
@@ -350,8 +357,8 @@ func (s *Server) updateMe(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, out, err)
 }
 
-// patchWorkspace updates workspace settings (visibility·policy — owner only, partial PATCH).
-func (s *Server) patchWorkspace(w http.ResponseWriter, r *http.Request) {
+// patchRepository updates repository settings (visibility·policy — owner only, partial PATCH).
+func (s *Server) patchRepository(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Visibility       *string `json:"visibility"`
 		SecretsPolicy    *string `json:"secrets_policy"`
@@ -365,7 +372,7 @@ func (s *Server) patchWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	var patch app.WorkspacePatch
+	var patch app.RepositoryPatch
 	if body.Visibility != nil {
 		v := domain.Visibility(*body.Visibility)
 		patch.Visibility = &v
@@ -378,18 +385,18 @@ func (s *Server) patchWorkspace(w http.ResponseWriter, r *http.Request) {
 	patch.Slug = body.Slug
 	patch.PublicRole = body.PublicRole
 	u, _ := userFrom(r.Context())
-	out, err := s.id.UpdateWorkspaceSettings(r.Context(), u.ID, r.PathValue("wsID"), patch)
+	out, err := s.id.UpdateRepositorySettings(r.Context(), u.ID, r.PathValue("repositoryID"), patch)
 	if err == nil && body.GHVisibilitySync != nil && *body.GHVisibilitySync {
-		// syncWorkspace runs once immediately upon enabling sync — success updates response, failure maintains setting.
-		if synced, serr := s.b.SyncWorkspaceVisibility(r.Context(), r.PathValue("wsID")); serr == nil {
+		// syncRepository runs once immediately upon enabling sync — success updates response, failure maintains setting.
+		if synced, serr := s.b.SyncRepositoryVisibility(r.Context(), r.PathValue("repositoryID")); serr == nil {
 			out = synced
 		}
 	}
-	s.respond(w, out, err)
+	s.respond(w, s.repositoryAccess(r.Context(), u.ID, out), err)
 }
 
-// transferWorkspace transfers ownership to existing members (creator retains rights — URL changes).
-func (s *Server) transferWorkspace(w http.ResponseWriter, r *http.Request) {
+// transferRepository transfers ownership to existing members (creator retains rights — URL changes).
+func (s *Server) transferRepository(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ToUserID string `json:"to_user_id"`
 	}
@@ -397,18 +404,18 @@ func (s *Server) transferWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, _ := userFrom(r.Context())
-	out, err := s.id.TransferOwnership(r.Context(), u.ID, r.PathValue("wsID"), body.ToUserID)
+	out, err := s.id.TransferOwnership(r.Context(), u.ID, r.PathValue("repositoryID"), body.ToUserID)
 	s.respond(w, out, err)
 }
 
 // syncVisibility manually runs GitHub public state sync (owner only).
 func (s *Server) syncVisibility(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
-	if !s.id.IsOwner(r.Context(), r.PathValue("wsID"), u.ID) {
+	if !s.id.IsOwner(r.Context(), r.PathValue("repositoryID"), u.ID) {
 		s.writeError(w, http.StatusForbidden, "forbidden", "only owner can run sync")
 		return
 	}
-	out, err := s.b.SyncWorkspaceVisibility(r.Context(), r.PathValue("wsID"))
+	out, err := s.b.SyncRepositoryVisibility(r.Context(), r.PathValue("repositoryID"))
 	s.respond(w, out, err)
 }
 
@@ -469,7 +476,7 @@ func (s *Server) revokeWebSession(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, map[string]string{"status": "revoked"}, err)
 }
 
-// Public endpoints do not directly serialize internal domain objects. In the Workspace, webhook capability URLs and policy/synchronization status are included, and in the User, personal settings are also included. Therefore, new fields added via allowlist projection are not automatically exposed.
+// Public endpoints do not directly serialize internal domain objects. In the Repository, webhook capability URLs and policy/synchronization status are included, and in the User, personal settings are also included. Therefore, new fields added via allowlist projection are not automatically exposed.
 type publicUserView struct {
 	Name      string    `json:"name"`
 	Username  string    `json:"username"`
@@ -485,7 +492,7 @@ func publicUserViewOf(u domain.User) publicUserView {
 	}
 }
 
-type publicWorkspaceView struct {
+type publicRepositoryView struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
 	Slug          string            `json:"slug"`
@@ -496,53 +503,53 @@ type publicWorkspaceView struct {
 	CreatedAt     time.Time         `json:"created_at"`
 }
 
-func publicWorkspaceViewOf(ws domain.Workspace) publicWorkspaceView {
-	return publicWorkspaceView{
-		ID: ws.ID, Name: ws.Name, Slug: ws.Slug, OwnerUsername: ws.OwnerUsername,
-		Visibility: ws.Visibility, PublicRole: ws.PublicRole, Archived: ws.Archived,
-		CreatedAt: ws.CreatedAt,
+func publicRepositoryViewOf(repositoryRecord domain.Repository) publicRepositoryView {
+	return publicRepositoryView{
+		ID: repositoryRecord.ID, Name: repositoryRecord.Name, Slug: repositoryRecord.Slug, OwnerUsername: repositoryRecord.OwnerUsername,
+		Visibility: repositoryRecord.Visibility, PublicRole: repositoryRecord.PublicRole, Archived: repositoryRecord.Archived,
+		CreatedAt: repositoryRecord.CreatedAt,
 	}
 }
 
-// publicWorkspace is the entry point for anonymous public read access — only public workspaces are interpreted (any other results in 404).
-func (s *Server) publicWorkspace(w http.ResponseWriter, r *http.Request) {
+// publicRepository is the entry point for anonymous public read access — only public repositories are interpreted (any other results in 404).
+func (s *Server) publicRepository(w http.ResponseWriter, r *http.Request) {
 	viewer, _ := userFrom(r.Context())
-	out, err := s.id.ReadableWorkspace(r.Context(), r.PathValue("username"), r.PathValue("slug"), viewer.ID)
-	s.respond(w, publicWorkspaceViewOf(out), err)
+	out, err := s.id.ReadableRepository(r.Context(), r.PathValue("username"), r.PathValue("slug"), viewer.ID)
+	s.respond(w, publicRepositoryViewOf(out), err)
 }
 
-// publicUser is the user profile entry point (/<username>) — user + publicly accessible workspaces.
-// Accessible by anonymous users (only public workspaces visible), includes private if self.
+// publicUser is the user profile entry point (/<username>) — user + publicly accessible repositories.
+// Accessible by anonymous users (only public repositories visible), includes private if self.
 func (s *Server) publicUser(w http.ResponseWriter, r *http.Request) {
 	viewer, _ := userFrom(r.Context())
-	u, wss, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
+	u, repositoryList, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
 	if err != nil {
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
 		return
 	}
-	if wss == nil {
-		wss = []domain.Workspace{}
+	if repositoryList == nil {
+		repositoryList = []domain.Repository{}
 	}
-	publicWorkspaces := make([]publicWorkspaceView, 0, len(wss))
-	for _, ws := range wss {
-		publicWorkspaces = append(publicWorkspaces, publicWorkspaceViewOf(ws))
+	publicRepositories := make([]publicRepositoryView, 0, len(repositoryList))
+	for _, repositoryRecord := range repositoryList {
+		publicRepositories = append(publicRepositories, publicRepositoryViewOf(repositoryRecord))
 	}
-	s.respond(w, map[string]any{"user": publicUserViewOf(u), "workspaces": publicWorkspaces}, nil)
+	s.respond(w, map[string]any{"user": publicUserViewOf(u), "repositories": publicRepositories}, nil)
 }
 
-// userContributions is user profile contribution heatmap data — daily commit counts per visible workspace (PublicUser same visibility: anonymous only public, self includes private).
+// userContributions is user profile contribution heatmap data — daily commit counts per visible repository (PublicUser same visibility: anonymous only public, self includes private).
 func (s *Server) userContributions(w http.ResponseWriter, r *http.Request) {
 	viewer, _ := userFrom(r.Context())
-	_, wss, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
+	_, repositoryList, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
 	if err != nil {
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
 		return
 	}
-	ids := make([]string, 0, len(wss))
-	for _, ws := range wss {
-		ids = append(ids, ws.ID)
+	ids := make([]string, 0, len(repositoryList))
+	for _, repositoryRecord := range repositoryList {
+		ids = append(ids, repositoryRecord.ID)
 	}
 	counts, err := s.b.Contributions(r.Context(), ids)
 	if err != nil {
@@ -563,16 +570,16 @@ func (s *Server) userContributions(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, map[string]any{"days": days, "total": total}, nil)
 }
 
-// userActivity is user profile activity feed — monthly commit bundles + workspace creation (PublicUser same visibility).
+// userActivity is user profile activity feed — monthly commit bundles + repository creation (PublicUser same visibility).
 func (s *Server) userActivity(w http.ResponseWriter, r *http.Request) {
 	viewer, _ := userFrom(r.Context())
-	_, wss, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
+	_, repositoryList, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
 	if err != nil {
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
 		return
 	}
-	months, err := s.b.Activity(r.Context(), wss)
+	months, err := s.b.Activity(r.Context(), repositoryList)
 	if err != nil {
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
@@ -593,18 +600,18 @@ func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, _ := userFrom(r.Context())
-	err := s.id.UpdateMemberRole(r.Context(), u.ID, r.PathValue("wsID"), r.PathValue("userID"), domain.MemberRole(body.Role))
+	err := s.id.UpdateMemberRole(r.Context(), u.ID, r.PathValue("repositoryID"), r.PathValue("userID"), domain.MemberRole(body.Role))
 	s.respond(w, map[string]string{"status": "updated"}, err)
 }
 
 // deleteMember removes a member (owner can remove anyone, self can leave — constructor cannot).
 func (s *Server) deleteMember(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
-	err := s.id.RemoveMember(r.Context(), u.ID, r.PathValue("wsID"), r.PathValue("userID"))
+	err := s.id.RemoveMember(r.Context(), u.ID, r.PathValue("repositoryID"), r.PathValue("userID"))
 	s.respond(w, map[string]string{"status": "removed"}, err)
 }
 
-func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createRepository(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -612,27 +619,27 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, _ := userFrom(r.Context())
-	ws, err := s.id.CreateWorkspace(r.Context(), u, body.Name)
-	s.respond(w, ws, err)
+	repositoryRecord, err := s.id.CreateRepository(r.Context(), u, body.Name)
+	s.respond(w, s.repositoryAccess(r.Context(), u.ID, repositoryRecord), err)
 }
 
-func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listRepositories(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
-	out, err := s.id.ListWorkspaces(r.Context(), u.ID)
-	// GitHub sync lazy TTL (1 hour): old workspaces refreshed in background (response unblocked, in-flight guard to prevent duplicate execution). Result reflected in next query.
+	out, err := s.id.ListRepositories(r.Context(), u.ID)
+	// GitHub sync lazy TTL (1 hour): old repositories refreshed in background (response unblocked, in-flight guard to prevent duplicate execution). Result reflected in next query.
 	if err == nil {
-		for _, wsp := range out {
-			if wsp.GHVisibilitySync && (wsp.GHSyncedAt == nil || time.Since(*wsp.GHSyncedAt) > time.Hour) {
-				s.kickVisibilitySync(wsp.ID)
+		for _, repositoryRecord := range out {
+			if repositoryRecord.GHVisibilitySync && (repositoryRecord.GHSyncedAt == nil || time.Since(*repositoryRecord.GHSyncedAt) > time.Hour) {
+				s.kickVisibilitySync(repositoryRecord.ID)
 			}
 		}
 	}
-	s.respond(w, out, err)
+	s.respond(w, s.repositoryAccessList(r.Context(), u.ID, out), err)
 }
 
 func (s *Server) listMembers(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
-	out, err := s.id.ListMembers(r.Context(), u.ID, r.PathValue("wsID"))
+	out, err := s.id.ListMembers(r.Context(), u.ID, r.PathValue("repositoryID"))
 	s.respond(w, out, err)
 }
 
@@ -647,39 +654,39 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	u, _ := userFrom(r.Context())
 	ttl := time.Duration(body.ExpiresInDays) * 24 * time.Hour
-	inv, err := s.id.Invite(r.Context(), u.ID, r.PathValue("wsID"), body.Email, domain.MemberRole(body.Role), ttl)
+	inv, err := s.id.Invite(r.Context(), u.ID, r.PathValue("repositoryID"), body.Email, domain.MemberRole(body.Role), ttl)
 	s.respond(w, inv, err)
 }
 
 // listInvites returns the invite list (maintainer or above — invite management screen).
 func (s *Server) listInvites(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
-	out, err := s.id.ListInvites(r.Context(), u.ID, r.PathValue("wsID"))
+	out, err := s.id.ListInvites(r.Context(), u.ID, r.PathValue("repositoryID"))
 	s.respond(w, out, err)
 }
 
 func (s *Server) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
-	ws, err := s.id.AcceptInvite(r.Context(), u, r.PathValue("token"))
-	s.respond(w, ws, err)
+	repositoryRecord, err := s.id.AcceptInvite(r.Context(), u, r.PathValue("token"))
+	s.respond(w, repositoryRecord, err)
 }
 
 func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
-	err := s.id.RevokeInvite(r.Context(), u.ID, r.PathValue("wsID"), r.PathValue("token"))
+	err := s.id.RevokeInvite(r.Context(), u.ID, r.PathValue("repositoryID"), r.PathValue("token"))
 	s.respond(w, map[string]string{"status": "revoked"}, err)
 }
 
-type publicEnterpriseResponse struct {
-	ID         string                `json:"id"`
-	Name       string                `json:"name"`
-	Slug       string                `json:"slug"`
-	Logo       string                `json:"logo,omitempty"`
-	CreatedAt  time.Time             `json:"created_at"`
-	Workspaces []publicWorkspaceView `json:"workspaces"`
+type publicOrganizationResponse struct {
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Slug         string                 `json:"slug"`
+	Logo         string                 `json:"logo,omitempty"`
+	CreatedAt    time.Time              `json:"created_at"`
+	Repositories []publicRepositoryView `json:"repositories"`
 }
 
-func (s *Server) createEnterprise(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createOrganization(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 		Slug string `json:"slug"`
@@ -688,28 +695,38 @@ func (s *Server) createEnterprise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := userFrom(r.Context())
-	enterprise, err := s.id.CreateEnterprise(r.Context(), user, body.Name, body.Slug)
-	s.respond(w, enterprise, err)
+	organization, err := s.id.CreateOrganization(r.Context(), user, body.Name, body.Slug)
+	s.respond(w, organization, err)
 }
 
-func (s *Server) listEnterprises(w http.ResponseWriter, r *http.Request) {
-	user, _ := userFrom(r.Context())
-	enterprises, err := s.id.ListEnterprises(r.Context(), user.ID)
-	s.respond(w, enterprises, err)
+type organizationAccessView struct {
+	domain.Organization
+	EffectiveRole domain.OrganizationRole `json:"effective_role,omitempty"`
 }
 
-func (s *Server) getEnterprise(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listOrganizations(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r.Context())
-	enterpriseID := r.PathValue("enterpriseID")
-	if _, ok := s.id.EnterpriseRoleOf(r.Context(), enterpriseID, user.ID); !ok {
-		s.respond(w, domain.Enterprise{}, domain.ErrForbidden)
+	organizations, err := s.id.ListOrganizations(r.Context(), user.ID)
+	result := make([]organizationAccessView, 0, len(organizations))
+	for _, organization := range organizations {
+		role, _ := s.id.OrganizationRoleOf(r.Context(), organization.ID, user.ID)
+		result = append(result, organizationAccessView{Organization: organization, EffectiveRole: role})
+	}
+	s.respond(w, result, err)
+}
+
+func (s *Server) getOrganization(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	organizationID := r.PathValue("organizationID")
+	if _, ok := s.id.OrganizationRoleOf(r.Context(), organizationID, user.ID); !ok {
+		s.respond(w, domain.Organization{}, domain.ErrForbidden)
 		return
 	}
-	enterprise, err := s.id.GetEnterprise(r.Context(), enterpriseID)
-	s.respond(w, enterprise, err)
+	organization, err := s.id.GetOrganization(r.Context(), organizationID)
+	s.respond(w, organization, err)
 }
 
-func (s *Server) patchEnterprise(w http.ResponseWriter, r *http.Request) {
+func (s *Server) patchOrganization(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name *string `json:"name"`
 		Logo *string `json:"logo"`
@@ -718,37 +735,37 @@ func (s *Server) patchEnterprise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Name == nil && body.Logo == nil {
-		s.respond(w, domain.Enterprise{}, domain.ErrValidation)
+		s.respond(w, domain.Organization{}, domain.ErrValidation)
 		return
 	}
 	user, _ := userFrom(r.Context())
-	enterprise, err := s.id.UpdateEnterpriseProfile(r.Context(), user.ID, r.PathValue("enterpriseID"), body.Name, body.Logo)
-	s.respond(w, enterprise, err)
+	organization, err := s.id.UpdateOrganizationProfile(r.Context(), user.ID, r.PathValue("organizationID"), body.Name, body.Logo)
+	s.respond(w, organization, err)
 }
 
-func (s *Server) publicEnterprise(w http.ResponseWriter, r *http.Request) {
-	enterprise, workspaces, err := s.id.PublicEnterprise(r.Context(), r.PathValue("slug"))
+func (s *Server) publicOrganization(w http.ResponseWriter, r *http.Request) {
+	organization, repositories, err := s.id.PublicOrganization(r.Context(), r.PathValue("slug"))
 	if err != nil {
-		s.respond(w, publicEnterpriseResponse{}, err)
+		s.respond(w, publicOrganizationResponse{}, err)
 		return
 	}
-	publicWorkspaces := make([]publicWorkspaceView, 0, len(workspaces))
-	for _, workspace := range workspaces {
-		publicWorkspaces = append(publicWorkspaces, publicWorkspaceViewOf(workspace))
+	publicRepositories := make([]publicRepositoryView, 0, len(repositories))
+	for _, repository := range repositories {
+		publicRepositories = append(publicRepositories, publicRepositoryViewOf(repository))
 	}
-	s.respond(w, publicEnterpriseResponse{
-		ID: enterprise.ID, Name: enterprise.Name, Slug: enterprise.Slug,
-		Logo: enterprise.Logo, CreatedAt: enterprise.CreatedAt, Workspaces: publicWorkspaces,
+	s.respond(w, publicOrganizationResponse{
+		ID: organization.ID, Name: organization.Name, Slug: organization.Slug,
+		Logo: organization.Logo, CreatedAt: organization.CreatedAt, Repositories: publicRepositories,
 	}, nil)
 }
 
-func (s *Server) listEnterpriseMembers(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listOrganizationMembers(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r.Context())
-	members, err := s.id.ListEnterpriseMembers(r.Context(), user.ID, r.PathValue("enterpriseID"))
+	members, err := s.id.ListOrganizationMembers(r.Context(), user.ID, r.PathValue("organizationID"))
 	s.respond(w, members, err)
 }
 
-func (s *Server) patchEnterpriseMember(w http.ResponseWriter, r *http.Request) {
+func (s *Server) patchOrganizationMember(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Role string `json:"role"`
 	}
@@ -756,47 +773,47 @@ func (s *Server) patchEnterpriseMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := userFrom(r.Context())
-	err := s.id.UpdateEnterpriseMember(r.Context(), user.ID, r.PathValue("enterpriseID"), r.PathValue("userID"), domain.EnterpriseRole(body.Role))
+	err := s.id.UpdateOrganizationMember(r.Context(), user.ID, r.PathValue("organizationID"), r.PathValue("userID"), domain.OrganizationRole(body.Role))
 	s.respond(w, map[string]string{"status": "updated"}, err)
 }
 
-func (s *Server) deleteEnterpriseMember(w http.ResponseWriter, r *http.Request) {
+func (s *Server) deleteOrganizationMember(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r.Context())
-	err := s.id.RemoveEnterpriseMember(r.Context(), user.ID, r.PathValue("enterpriseID"), r.PathValue("userID"))
+	err := s.id.OffboardOrganizationMember(r.Context(), user.ID, r.PathValue("organizationID"), r.PathValue("userID"), r.URL.Query().Get("repository_access"))
 	s.respond(w, map[string]string{"status": "removed"}, err)
 }
 
-func (s *Server) getEnterprisePolicy(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getOrganizationPolicy(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r.Context())
-	policy, err := s.id.GetEnterprisePolicy(r.Context(), user.ID, r.PathValue("enterpriseID"))
+	policy, err := s.id.GetOrganizationPolicy(r.Context(), user.ID, r.PathValue("organizationID"))
 	s.respond(w, policy, err)
 }
 
-func (s *Server) patchEnterprisePolicy(w http.ResponseWriter, r *http.Request) {
+func (s *Server) patchOrganizationPolicy(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		WorkspaceCreation          *domain.EnterpriseWorkspaceCreation `json:"workspace_creation"`
-		DefaultWorkspaceVisibility *domain.Visibility                  `json:"default_workspace_visibility"`
-		AllowPublicWorkspaces      *bool                               `json:"allow_public_workspaces"`
-		BreakGlassEnabled          *bool                               `json:"break_glass_enabled"`
-		BreakGlassMaxMinutes       *int                                `json:"break_glass_max_minutes"`
+		RepositoryCreation          *domain.OrganizationRepositoryCreation `json:"repository_creation"`
+		DefaultRepositoryVisibility *domain.Visibility                     `json:"default_repository_visibility"`
+		AllowPublicRepositories     *bool                                  `json:"allow_public_repositories"`
+		BreakGlassEnabled           *bool                                  `json:"break_glass_enabled"`
+		BreakGlassMaxMinutes        *int                                   `json:"break_glass_max_minutes"`
 	}
 	if !s.decode(w, r, &body) {
 		return
 	}
 	user, _ := userFrom(r.Context())
-	policy, err := s.id.GetEnterprisePolicy(r.Context(), user.ID, r.PathValue("enterpriseID"))
+	policy, err := s.id.GetOrganizationPolicy(r.Context(), user.ID, r.PathValue("organizationID"))
 	if err != nil {
-		s.respond(w, domain.EnterprisePolicy{}, err)
+		s.respond(w, domain.OrganizationPolicy{}, err)
 		return
 	}
-	if body.WorkspaceCreation != nil {
-		policy.WorkspaceCreation = *body.WorkspaceCreation
+	if body.RepositoryCreation != nil {
+		policy.RepositoryCreation = *body.RepositoryCreation
 	}
-	if body.DefaultWorkspaceVisibility != nil {
-		policy.DefaultWorkspaceVisibility = *body.DefaultWorkspaceVisibility
+	if body.DefaultRepositoryVisibility != nil {
+		policy.DefaultRepositoryVisibility = *body.DefaultRepositoryVisibility
 	}
-	if body.AllowPublicWorkspaces != nil {
-		policy.AllowPublicWorkspaces = *body.AllowPublicWorkspaces
+	if body.AllowPublicRepositories != nil {
+		policy.AllowPublicRepositories = *body.AllowPublicRepositories
 	}
 	if body.BreakGlassEnabled != nil {
 		policy.BreakGlassEnabled = *body.BreakGlassEnabled
@@ -804,17 +821,17 @@ func (s *Server) patchEnterprisePolicy(w http.ResponseWriter, r *http.Request) {
 	if body.BreakGlassMaxMinutes != nil {
 		policy.BreakGlassMaxMinutes = *body.BreakGlassMaxMinutes
 	}
-	updated, err := s.id.UpdateEnterprisePolicy(r.Context(), user.ID, policy)
+	updated, err := s.id.UpdateOrganizationPolicy(r.Context(), user.ID, policy)
 	s.respond(w, updated, err)
 }
 
-func (s *Server) listEnterpriseWorkspaces(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listOrganizationRepositories(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r.Context())
-	workspaces, err := s.id.ListEnterpriseWorkspaces(r.Context(), user.ID, r.PathValue("enterpriseID"))
-	s.respond(w, workspaces, err)
+	repositories, err := s.id.ListOrganizationRepositories(r.Context(), user.ID, r.PathValue("organizationID"))
+	s.respond(w, s.repositoryAccessList(r.Context(), user.ID, repositories), err)
 }
 
-func (s *Server) createEnterpriseWorkspace(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createOrganizationRepository(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -822,26 +839,32 @@ func (s *Server) createEnterpriseWorkspace(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	user, _ := userFrom(r.Context())
-	workspace, err := s.id.CreateEnterpriseWorkspace(r.Context(), user, r.PathValue("enterpriseID"), body.Name)
-	s.respond(w, workspace, err)
+	repository, err := s.id.CreateOrganizationRepository(r.Context(), user, r.PathValue("organizationID"), body.Name)
+	s.respond(w, s.repositoryAccess(r.Context(), user.ID, repository), err)
 }
 
-func (s *Server) listEnterpriseAudit(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listOrganizationAudit(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r.Context())
-	events, err := s.id.ListEnterpriseAudit(r.Context(), user.ID, r.PathValue("enterpriseID"), 100)
+	events, err := s.id.ListOrganizationAudit(r.Context(), user.ID, r.PathValue("organizationID"), 100)
 	s.respond(w, events, err)
 }
 
 func (s *Server) createBreakGlassGrant(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		WorkspaceID string `json:"workspace_id"`
-		Reason      string `json:"reason"`
-		Minutes     int    `json:"minutes"`
+		RepositoryID string `json:"repository_id"`
+		Reason       string `json:"reason"`
+		Minutes      int    `json:"minutes"`
 	}
 	if !s.decode(w, r, &body) {
 		return
 	}
 	user, _ := userFrom(r.Context())
-	grant, err := s.id.CreateBreakGlassGrant(r.Context(), user.ID, r.PathValue("enterpriseID"), body.WorkspaceID, body.Reason, body.Minutes)
+	grant, err := s.id.CreateBreakGlassGrant(r.Context(), user.ID, r.PathValue("organizationID"), body.RepositoryID, body.Reason, body.Minutes)
 	s.respond(w, grant, err)
+}
+
+func (s *Server) resolveRepositoryConnection(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r.Context())
+	out, err := s.id.ResolveRepositoryConnection(r.Context(), user.ID, r.URL.Query().Get("remote_url"))
+	s.respond(w, out, err)
 }

@@ -12,10 +12,10 @@ import (
 	"unicode"
 )
 
-// User · Workspace · Membership · Invite Domain (Auth/Multi-tenancy). schemas/db/migrations/0002.
-// Visibility boundary = Workspace. repo belongs to exactly one workspace.
+// User · Repository · Membership · Invite Domain (Auth/Multi-tenancy). schemas/db/migrations/0002.
+// Visibility boundary = Repository. repo belongs to exactly one repository.
 
-// MemberRole represents a role within a workspace (distinct from Role in cir.go).
+// MemberRole represents a role within a repository (distinct from Role in cir.go).
 //
 // 5-tier ladder (GitLab equivalent) — Role is a "layer boundary" (serial AND gate front), and
 // policy-specific actions (SecretsPolicy, etc.) narrow it further behind (separation of truth).
@@ -24,7 +24,7 @@ import (
 //	puller     + local synchronization of team assets (settings/secrets pull, session object pull)
 //	member     + context write (push/ref/memory — "git write follows")
 //	maintainer + write to team shared assets (.cxtsecrets·team settings·About·invite creation)
-//	owner      + management (workspace settings·member management·transfer ownership to creator)
+//	owner      + management (repository settings·member management·transfer ownership to creator)
 type MemberRole string
 
 const (
@@ -103,7 +103,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Visibility is the workspace public scope. Default is private (empty value is also interpreted as private).
+// Visibility is the repository public scope. Default is private (empty value is also interpreted as private).
 type Visibility string
 
 const (
@@ -111,8 +111,8 @@ const (
 	VisibilityPublic  Visibility = "public"  // Anyone can view (GitHub public repo equivalent)
 )
 
-// Workspace is a multi-tenancy/visibility boundary.
-type Workspace struct {
+// Repository is a multi-tenancy/visibility boundary.
+type Repository struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	OwnerID string `json:"owner_id"`
@@ -121,14 +121,14 @@ type Workspace struct {
 	Slug string `json:"slug"`
 	// OwnerUsername is the unnormalized owner handle (URL composition — avoids user joins on each query).
 	OwnerUsername string `json:"owner_username"`
-	// OwnerNamespaceID is the personal or enterprise namespace that owns the
-	// URL. OwnerID remains the human workspace creator and permission anchor.
+	// OwnerNamespaceID is the personal or organization namespace that owns the
+	// URL. OwnerID remains the human repository creator and permission anchor.
 	OwnerNamespaceID string `json:"owner_namespace_id,omitempty"`
 	// Visibility is the public scope ("" == private). Changes are only possible by the owner.
 	Visibility Visibility `json:"visibility,omitempty"`
-	// PublicRole is the default role granted to non-members (including anonymous users) in a public workspace:
+	// PublicRole is the default role granted to non-members (including anonymous users) in a public repository:
 	// ""(=viewer, default) | "viewer" | "puller". viewer=web view only, puller=+local sync (pull).
-	// In a private workspace, it has no meaning (non-members cannot access). Roles above member are not assignable
+	// In a private repository, it has no meaning (non-members cannot access). Roles above member are not assignable
 	// (non-members cannot write — the upper limit is puller).
 	PublicRole string `json:"public_role,omitempty"`
 	// SecretsPolicy is the upload permission for .cxtsecrets encrypted text:
@@ -144,8 +144,8 @@ type Workspace struct {
 	GHVisibilitySync bool `json:"gh_visibility_sync,omitempty"`
 	// GHSyncedAt is the last synchronization timestamp.
 	GHSyncedAt *time.Time `json:"gh_synced_at,omitempty"`
-	// Archived makes the workspace read-only. Because P1 never deletes history, archival is the terminal state.
-	// Every operation above viewer returns 403; the owner can unarchive the workspace in settings.
+	// Archived makes the repository read-only. Because P1 never deletes history, archival is the terminal state.
+	// Every operation above viewer returns 403; the owner can unarchive the repository in settings.
 	Archived bool `json:"archived,omitempty"`
 	// WebhookURL is an alert webhook (Slack incoming webhook compatible — {"text": ...} POST). Ref updates, secrets changes and member joins enqueue durable delivery jobs; credentials are excluded from job status.
 	WebhookURL string    `json:"webhook_url,omitempty"`
@@ -165,27 +165,27 @@ func PolicyAllows(policy string, isOwner bool) bool {
 	}
 }
 
-// WorkspaceRole preserves the creator/co-owner rule across commands and reads.
-func WorkspaceRole(wsp Workspace, members []Membership, actorID string) (MemberRole, bool) {
+// RepositoryRole preserves the creator/co-owner rule across commands and reads.
+func RepositoryRole(repositoryRecord Repository, members []Membership, actorID string) (MemberRole, bool) {
 	if actorID == "" {
 		return "", false
 	}
-	if wsp.OwnerID == actorID {
+	if repositoryRecord.OwnerID == actorID {
 		return RoleOwner, true
 	}
 	for _, m := range members {
-		if m.WorkspaceID == wsp.ID && m.UserID == actorID && ValidRole(m.Role) {
+		if m.RepositoryID == repositoryRecord.ID && m.UserID == actorID && ValidRole(m.Role) {
 			return m.Role, true
 		}
 	}
 	return "", false
 }
 
-// IsPublic indicates whether the workspace is public (empty value = private by default).
-func (w Workspace) IsPublic() bool { return w.Visibility == VisibilityPublic }
+// IsPublic indicates whether the repository is public (empty value = private by default).
+func (w Repository) IsPublic() bool { return w.Visibility == VisibilityPublic }
 
-// PublicBaseRole returns the role to assign to non-members in a public workspace (default viewer). Only "puller" is promoted, other/unknown values are conservatively assigned as viewer (fail-closed).
-func (w Workspace) PublicBaseRole() MemberRole {
+// PublicBaseRole returns the role to assign to non-members in a public repository (default viewer). Only "puller" is promoted, other/unknown values are conservatively assigned as viewer (fail-closed).
+func (w Repository) PublicBaseRole() MemberRole {
 	if w.PublicRole == string(RolePuller) {
 		return RolePuller
 	}
@@ -197,27 +197,27 @@ func ValidPublicRole(r string) bool {
 	return r == "" || r == string(RoleViewer) || r == string(RolePuller)
 }
 
-// Workspace name rules (enforced in English): Only allowed characters are letters, digits, '-', '_'.
+// Repository name rules (enforced in English): Only allowed characters are letters, digits, '-', '_'.
 // The first character must be a letter, and the last character must be a letter or digit. Maximum 64 characters.
-var workspaceNameRe = regexp.MustCompile(`^[A-Za-z]([A-Za-z0-9_-]*[A-Za-z0-9])?$`)
+var repositoryNameRe = regexp.MustCompile(`^[A-Za-z]([A-Za-z0-9_-]*[A-Za-z0-9])?$`)
 
-// ValidWorkspaceName validates workspace names according to the rules.
-func ValidWorkspaceName(name string) bool {
-	return len(name) <= 64 && workspaceNameRe.MatchString(name)
+// ValidRepositoryName validates repository names according to the rules.
+func ValidRepositoryName(name string) bool {
+	return len(name) <= 64 && repositoryNameRe.MatchString(name)
 }
 
-// WorkspaceSlug creates a slug from a valid workspace name (lowercased — '_' preserved).
+// RepositorySlug creates a slug from a valid repository name (lowercased — '_' preserved).
 // Legacy (pre-rule) names are fallback to Slugify.
-func WorkspaceSlug(name string) string {
-	if ValidWorkspaceName(name) {
+func RepositorySlug(name string) string {
+	if ValidRepositoryName(name) {
 		return strings.ToLower(name)
 	}
-	return Slugify(name, "workspace")
+	return Slugify(name, "repository")
 }
 
-// ValidWorkspaceSlug validates slugs according to the name rules (lowercased).
-func ValidWorkspaceSlug(slug string) bool {
-	return ValidWorkspaceName(slug) && slug == strings.ToLower(slug)
+// ValidRepositorySlug validates slugs according to the name rules (lowercased).
+func ValidRepositorySlug(slug string) bool {
+	return ValidRepositoryName(slug) && slug == strings.ToLower(slug)
 }
 
 // Slugify creates a URL-safe slug: lowercased, non-unicode characters/numbers replaced with '-', consecutive/leading/trailing '-' cleaned up.
@@ -247,26 +247,26 @@ func Slugify(s, fallback string) string {
 	return string(b)
 }
 
-// Membership represents the user ↔ workspace relationship.
+// Membership represents the user ↔ repository relationship.
 type Membership struct {
-	WorkspaceID string     `json:"workspace_id"`
-	UserID      string     `json:"user_id"`
-	Role        MemberRole `json:"role"`
-	CreatedAt   time.Time  `json:"created_at"`
+	RepositoryID string     `json:"repository_id"`
+	UserID       string     `json:"user_id"`
+	Role         MemberRole `json:"role"`
+	CreatedAt    time.Time  `json:"created_at"`
 	// User is a denormalized field for convenience (included in list responses, not stored).
 	User *User `json:"user,omitempty"`
 }
 
 // Invite is a share invitation token (join using token).
 type Invite struct {
-	Token       string       `json:"token"`
-	WorkspaceID string       `json:"workspace_id"`
-	Email       string       `json:"email"`
-	Role        MemberRole   `json:"role"`
-	Status      InviteStatus `json:"status"`
-	CreatedBy   string       `json:"created_by"`
-	CreatedAt   time.Time    `json:"created_at"`
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
+	Token        string       `json:"token"`
+	RepositoryID string       `json:"repository_id"`
+	Email        string       `json:"email"`
+	Role         MemberRole   `json:"role"`
+	Status       InviteStatus `json:"status"`
+	CreatedBy    string       `json:"created_by"`
+	CreatedAt    time.Time    `json:"created_at"`
+	ExpiresAt    *time.Time   `json:"expires_at,omitempty"`
 }
 
 // Session is a server login session (issued via IDP token exchange, stored in DB).
@@ -321,8 +321,8 @@ func validatePrefixedHexID(value, prefix string, hexLen int) error {
 	return nil
 }
 
-// ValidateWorkspaceID validates the workspace identifier issued by the server.
-func ValidateWorkspaceID(id string) error { return validatePrefixedHexID(id, "ws_", 32) }
+// ValidateRepositoryID validates the repository identifier issued by the server.
+func ValidateRepositoryID(id string) error { return validatePrefixedHexID(id, "ws_", 32) }
 
 // ValidateInviteToken validates the invite capability token issued by the server.
 func ValidateInviteToken(token string) error { return validatePrefixedHexID(token, "inv_", 32) }
@@ -388,37 +388,37 @@ func ValidateAvatarDataURL(value string) error {
 	return nil
 }
 
-// ValidateWorkspaceRecord validates the tenant identifier and fail-closed policy value of the workspace at the storage boundary. Legacy display formats for name/slug are allowed.
-func ValidateWorkspaceRecord(ws Workspace) error {
-	if err := ValidateWorkspaceID(ws.ID); err != nil {
+// ValidateRepositoryRecord validates the tenant identifier and fail-closed policy value of the repository at the storage boundary. Legacy display formats for name/slug are allowed.
+func ValidateRepositoryRecord(repositoryRecord Repository) error {
+	if err := ValidateRepositoryID(repositoryRecord.ID); err != nil {
 		return err
 	}
-	if err := ValidateExternalID(ws.OwnerID); err != nil {
+	if err := ValidateExternalID(repositoryRecord.OwnerID); err != nil {
 		return err
 	}
-	if ws.OwnerNamespaceID != "" {
-		if err := ValidateNamespaceID(ws.OwnerNamespaceID); err != nil {
+	if repositoryRecord.OwnerNamespaceID != "" {
+		if err := ValidateNamespaceID(repositoryRecord.OwnerNamespaceID); err != nil {
 			return err
 		}
 	}
-	if ws.Visibility != "" && ws.Visibility != VisibilityPrivate && ws.Visibility != VisibilityPublic {
-		return fmt.Errorf("%w: invalid workspace visibility", ErrValidation)
+	if repositoryRecord.Visibility != "" && repositoryRecord.Visibility != VisibilityPrivate && repositoryRecord.Visibility != VisibilityPublic {
+		return fmt.Errorf("%w: invalid repository visibility", ErrValidation)
 	}
-	if !ValidPublicRole(ws.PublicRole) {
-		return fmt.Errorf("%w: invalid workspace public role", ErrValidation)
+	if !ValidPublicRole(repositoryRecord.PublicRole) {
+		return fmt.Errorf("%w: invalid repository public role", ErrValidation)
 	}
 	validPolicy := func(policy string) bool {
 		return policy == "" || policy == "members" || policy == "owner"
 	}
-	if !validPolicy(ws.SecretsPolicy) || !validPolicy(ws.SettingsPolicy) {
-		return fmt.Errorf("%w: invalid workspace policy", ErrValidation)
+	if !validPolicy(repositoryRecord.SecretsPolicy) || !validPolicy(repositoryRecord.SettingsPolicy) {
+		return fmt.Errorf("%w: invalid repository policy", ErrValidation)
 	}
 	return nil
 }
 
 // ValidateMembershipRecord validates the identifiers and role of the membership at the storage boundary.
 func ValidateMembershipRecord(m Membership) error {
-	if err := ValidateWorkspaceID(m.WorkspaceID); err != nil {
+	if err := ValidateRepositoryID(m.RepositoryID); err != nil {
 		return err
 	}
 	if err := ValidateExternalID(m.UserID); err != nil {
@@ -436,7 +436,7 @@ func ValidateInviteRecord(inv Invite) error {
 	if err := ValidateInviteToken(inv.Token); err != nil {
 		return err
 	}
-	if err := ValidateWorkspaceID(inv.WorkspaceID); err != nil {
+	if err := ValidateRepositoryID(inv.RepositoryID); err != nil {
 		return err
 	}
 	if err := ValidateExternalID(inv.CreatedBy); err != nil {

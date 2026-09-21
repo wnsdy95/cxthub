@@ -16,11 +16,11 @@ func (s *PostgresStore) EnqueueNotification(ctx context.Context, d outbound.Noti
 	if err != nil {
 		return err
 	}
-	_, err = s.db(ctx).Exec(ctx, `INSERT INTO notification_outbox(id,workspace_id,destination,payload,state,version,created_at,next_attempt,lease_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, d.Job.ID, d.Job.WorkspaceID, d.Destination, b, d.Job.State, d.Job.Version, d.Job.CreatedAt, d.Job.NextAttempt, d.Job.LeaseUntil)
+	_, err = s.db(ctx).Exec(ctx, `INSERT INTO notification_outbox(id,repository_id,destination,payload,state,version,created_at,next_attempt,lease_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, d.Job.ID, d.Job.RepositoryID, d.Destination, b, d.Job.State, d.Job.Version, d.Job.CreatedAt, d.Job.NextAttempt, d.Job.LeaseUntil)
 	return err
 }
-func (s *PostgresStore) ListNotifications(ctx context.Context, workspace string) ([]domain.NotificationJob, error) {
-	rows, err := s.db(ctx).Query(ctx, `SELECT payload FROM notification_outbox WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100`, workspace)
+func (s *PostgresStore) ListNotifications(ctx context.Context, repository string) ([]domain.NotificationJob, error) {
+	rows, err := s.db(ctx).Query(ctx, `SELECT payload FROM notification_outbox WHERE repository_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100`, repository)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (s *PostgresStore) FinishNotification(ctx context.Context, j domain.Notific
 	}
 	return nil
 }
-func (s *PostgresStore) RetryNotification(ctx context.Context, workspace, id, destination string, _ time.Time) error {
+func (s *PostgresStore) RetryNotification(ctx context.Context, repository, id, destination string, _ time.Time) error {
 	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
@@ -93,7 +93,7 @@ func (s *PostgresStore) RetryNotification(ctx context.Context, workspace, id, de
 	defer rollbackPG(tx)
 	var raw []byte
 	var now time.Time
-	if err = tx.QueryRow(ctx, `SELECT payload,clock_timestamp() FROM notification_outbox WHERE id=$1 AND workspace_id=$2 FOR UPDATE`, id, workspace).Scan(&raw, &now); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT payload,clock_timestamp() FROM notification_outbox WHERE id=$1 AND repository_id=$2 FOR UPDATE`, id, repository).Scan(&raw, &now); err != nil {
 		return mapNoRows(err)
 	}
 	var j domain.NotificationJob
@@ -122,9 +122,9 @@ func (s *PostgresStore) RetryNotification(ctx context.Context, workspace, id, de
 	return tx.Commit(ctx)
 }
 
-func (s *PostgresStore) WithinWorkspace(ctx context.Context, workspace string, fn func(context.Context) error) error {
+func (s *PostgresStore) WithinRepositoryMetadata(ctx context.Context, repository string, fn func(context.Context) error) error {
 	if prior, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx); ok {
-		if prior.owner != s || prior.readOnly || prior.workspace != workspace {
+		if prior.owner != s || prior.readOnly || (!prior.identity && prior.repository != repository) {
 			return domain.ErrConflict
 		}
 		return fn(ctx)
@@ -134,11 +134,14 @@ func (s *PostgresStore) WithinWorkspace(ctx context.Context, workspace string, f
 		return err
 	}
 	defer rollbackPG(tx)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('cxt-identity-access',0))`); err != nil {
+		return err
+	}
 	var id string
-	if err = tx.QueryRow(ctx, `SELECT id FROM workspaces WHERE id=$1 FOR UPDATE`, workspace).Scan(&id); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT id FROM repositories WHERE id=$1 FOR UPDATE`, repository).Scan(&id); err != nil {
 		return mapNoRows(err)
 	}
-	bound := context.WithValue(ctx, repositoryTxKey{}, &repositoryTx{Tx: tx, owner: s, workspace: workspace})
+	bound := context.WithValue(ctx, repositoryTxKey{}, &repositoryTx{Tx: tx, owner: s, repository: repository})
 	if err = fn(bound); err != nil {
 		return err
 	}
@@ -146,4 +149,4 @@ func (s *PostgresStore) WithinWorkspace(ctx context.Context, workspace string, f
 }
 
 var _ outbound.NotificationStore = (*PostgresStore)(nil)
-var _ outbound.WorkspaceTransactions = (*PostgresStore)(nil)
+var _ outbound.RepositoryMetadataTransactions = (*PostgresStore)(nil)

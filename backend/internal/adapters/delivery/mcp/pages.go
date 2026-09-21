@@ -117,7 +117,7 @@ func (s *Server) repositoryPage(ctx context.Context, user domain.User, a toolArg
 			next = encodeCursor(cur)
 			break
 		}
-		rows = append(rows, map[string]any{"id": repo.ID, "path": path, "default_branch": defaultBranch(repo)})
+		rows = append(rows, map[string]any{"id": repo.ID, "path": path, "default_branch": defaultBranch(repo.Repo)})
 		cur.After = key
 	}
 	return pageJSON(map[string]any{"notice": archiveNotice, "repositories": rows, "next_cursor": next})

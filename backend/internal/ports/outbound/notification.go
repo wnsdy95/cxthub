@@ -20,7 +20,7 @@ type NotificationStore interface {
 	RetryNotification(context.Context, string, string, string, time.Time) error
 }
 
-// WorkspaceTransactions joins membership changes and their outbox entry.
-type WorkspaceTransactions interface {
-	WithinWorkspace(context.Context, string, func(context.Context) error) error
+// RepositoryMetadataTransactions joins membership changes and their outbox entry.
+type RepositoryMetadataTransactions interface {
+	WithinRepositoryMetadata(context.Context, string, func(context.Context) error) error
 }

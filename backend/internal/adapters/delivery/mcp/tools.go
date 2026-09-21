@@ -75,56 +75,49 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 	}
 }
 
-func repositoryPath(repo domain.Repo) string {
-	u, err := url.Parse(repo.RemoteURL)
-	if err != nil {
-		return string(repo.ID)
-	}
-	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
-	for i := range parts {
-		if decoded, err := url.PathUnescape(parts[i]); err == nil {
-			parts[i] = decoded
-		}
-	}
-	if len(parts) >= 3 {
-		return strings.Join(parts[len(parts)-3:], "/")
-	}
-	if len(parts) == 2 {
-		return strings.Join(parts, "/")
-	}
-	return string(repo.ID)
+// Repository addresses are a server identity projection, not a derivation from
+// the immutable historical connection URL.
+type listedRepository struct {
+	domain.Repo
+	Path string
 }
 
+func repositoryPath(repo listedRepository) string { return repo.Path }
+
 func (s *Server) canReadRepository(ctx context.Context, user domain.User, repo domain.Repo) (bool, error) {
-	if repo.WorkspaceID == "" {
+	if repo.RepositoryID == "" {
 		return false, nil
 	}
-	workspace, err := s.identity.GetWorkspace(ctx, repo.WorkspaceID)
+	repository, err := s.identity.GetRepository(ctx, repo.RepositoryID)
 	if err != nil {
 		return false, err
 	}
-	if workspace.IsPublic() {
+	if repository.IsPublic() {
 		return true, nil
 	}
-	if role, ok := s.identity.RoleOf(ctx, repo.WorkspaceID, user.ID); ok && role.AtLeast(domain.RoleViewer) {
+	if role, ok := s.identity.RoleOf(ctx, repo.RepositoryID, user.ID); ok && role.AtLeast(domain.RoleViewer) {
 		return true, nil
 	}
-	return s.identity.HasBreakGlassAccess(ctx, repo.WorkspaceID, user.ID)
+	return s.identity.HasBreakGlassAccess(ctx, repo.RepositoryID, user.ID)
 }
 
-func (s *Server) visibleRepositories(ctx context.Context, user domain.User) ([]domain.Repo, error) {
+func (s *Server) visibleRepositories(ctx context.Context, user domain.User) ([]listedRepository, error) {
 	repos, err := s.context.ListRepos(ctx, "default")
 	if err != nil {
 		return nil, err
 	}
-	visible := make([]domain.Repo, 0, len(repos))
+	visible := make([]listedRepository, 0, len(repos))
 	for _, repo := range repos {
 		allowed, accessErr := s.canReadRepository(ctx, user, repo)
 		if accessErr != nil {
 			return nil, accessErr
 		}
 		if allowed {
-			visible = append(visible, repo)
+			metadata, err := s.identity.GetRepository(ctx, repo.RepositoryID)
+			if err != nil {
+				return nil, err
+			}
+			visible = append(visible, listedRepository{Repo: repo, Path: metadata.OwnerUsername + "/" + metadata.Slug})
 		}
 	}
 	sort.Slice(visible, func(i, j int) bool { return repositoryPath(visible[i]) < repositoryPath(visible[j]) })
@@ -142,7 +135,18 @@ func (s *Server) resolveRepository(ctx context.Context, user domain.User, select
 	}
 	for _, repo := range repos {
 		if selector == string(repo.ID) || strings.EqualFold(selector, repositoryPath(repo)) {
-			return repo, nil
+			return repo.Repo, nil
+		}
+	}
+	parts := strings.SplitN(selector, "/", 2)
+	if len(parts) == 2 {
+		metadata, err := s.identity.ReadableRepository(ctx, parts[0], parts[1], user.ID)
+		if err == nil {
+			for _, repo := range repos {
+				if repo.RepositoryID == metadata.ID {
+					return repo.Repo, nil
+				}
+			}
 		}
 	}
 	return domain.Repo{}, fmt.Errorf("repository not found or not authorized")
@@ -156,7 +160,7 @@ func (s *Server) toolRepositoryList(ctx context.Context, user domain.User, query
 	return formatRepositoryList(repos, query, limit)
 }
 
-func formatRepositoryList(repos []domain.Repo, query string, limit int) (string, error) {
+func formatRepositoryList(repos []listedRepository, query string, limit int) (string, error) {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if len([]rune(query)) > 128 {
 		return "", fmt.Errorf("repository query must contain at most 128 characters")
@@ -167,7 +171,7 @@ func formatRepositoryList(repos []domain.Repo, query string, limit int) (string,
 	if limit > 100 {
 		limit = 100
 	}
-	filtered := make([]domain.Repo, 0, min(len(repos), limit+1))
+	filtered := make([]listedRepository, 0, min(len(repos), limit+1))
 	for _, repo := range repos {
 		if query == "" || strings.Contains(strings.ToLower(repositoryPath(repo)), query) {
 			filtered = append(filtered, repo)
@@ -179,7 +183,7 @@ func formatRepositoryList(repos []domain.Repo, query string, limit int) (string,
 	var b strings.Builder
 	b.WriteString("Accessible CXTHub repositories:\n")
 	for _, repo := range filtered[:min(len(filtered), limit)] {
-		fmt.Fprintf(&b, "- %s · default branch %s · id %s\n", repositoryPath(repo), defaultBranch(repo), shortHash(repo.ID))
+		fmt.Fprintf(&b, "- %s · default branch %s · id %s\n", repositoryPath(repo), defaultBranch(repo.Repo), shortHash(repo.ID))
 	}
 	if omitted := len(filtered) - limit; omitted > 0 {
 		fmt.Fprintf(&b, "… %d additional repositories omitted; narrow query or raise limit up to 100\n", omitted)

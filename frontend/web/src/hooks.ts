@@ -20,108 +20,111 @@ export function useMe() {
 function useAuthed() {
   return Boolean(useMe().data);
 }
-export function useWorkspaces() {
+export function useRepositories() {
   const authed = useAuthed();
-  return useQuery({ queryKey: ['workspaces'], queryFn: api.listWorkspaces, enabled: authed });
+  return useQuery({ queryKey: ['repositories'], queryFn: api.listRepositories, enabled: authed });
 }
-export function useEnterprises() {
+export function useOrganizations() {
   const authed = useAuthed();
-  return useQuery({ queryKey: ['enterprises'], queryFn: api.listEnterprises, enabled: authed });
+  return useQuery({ queryKey: ['organizations'], queryFn: api.listOrganizations, enabled: authed });
 }
-export function useCreateEnterprise() {
+export function useCreateOrganization() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { name: string; slug: string }) => api.createEnterprise(v.name, v.slug),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['enterprises'] }),
+    mutationFn: (v: { name: string; slug: string }) => api.createOrganization(v.name, v.slug),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organizations'] }),
   });
 }
-export function useUpdateEnterprise() {
+export function useUpdateOrganization() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { enterpriseId: string; patch: { name?: string; logo?: string } }) =>
-      api.updateEnterprise(v.enterpriseId, v.patch),
-    onSuccess: (enterprise) => {
-      qc.setQueryData(['enterprise', enterprise.id], enterprise);
-      void qc.invalidateQueries({ queryKey: ['enterprises'] });
-      void qc.invalidateQueries({ queryKey: ['publicEnterprise', enterprise.slug] });
+    mutationFn: (v: { organizationId: string; patch: { name?: string; logo?: string } }) =>
+      api.updateOrganization(v.organizationId, v.patch),
+    onSuccess: (organization) => {
+      qc.setQueryData(['organization', organization.id], organization);
+      void qc.invalidateQueries({ queryKey: ['organizations'] });
+      void qc.invalidateQueries({ queryKey: ['publicOrganization', organization.slug] });
     },
   });
 }
-export function useEnterpriseMembers(enterpriseId: string | null) {
+export function useOrganizationMembers(organizationId: string | null) {
   return useQuery({
-    queryKey: ['enterprise-members', enterpriseId],
-    queryFn: () => api.listEnterpriseMembers(enterpriseId as string),
-    enabled: Boolean(enterpriseId),
+    queryKey: ['organization-members', organizationId],
+    queryFn: () => api.listOrganizationMembers(organizationId as string),
+    enabled: Boolean(organizationId),
   });
 }
-export function useUpdateEnterpriseMember() {
+export function useUpdateOrganizationMember() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { enterpriseId: string; userId: string; role: import('./types').EnterpriseRole }) =>
-      api.updateEnterpriseMember(v.enterpriseId, v.userId, v.role),
-    onSuccess: (_result, v) => void qc.invalidateQueries({ queryKey: ['enterprise-members', v.enterpriseId] }),
+    mutationFn: (v: { organizationId: string; userId: string; role: import('./types').OrganizationRole }) =>
+      api.updateOrganizationMember(v.organizationId, v.userId, v.role),
+    onSuccess: (_result, v) => void qc.invalidateQueries({ queryKey: ['organization-members', v.organizationId] }),
   });
 }
-export function useRemoveEnterpriseMember() {
+export function useRemoveOrganizationMember() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { enterpriseId: string; userId: string }) => api.removeEnterpriseMember(v.enterpriseId, v.userId),
+    mutationFn: (v: { organizationId: string; userId: string; access: 'revoke' | 'retain' }) => api.removeOrganizationMember(v.organizationId, v.userId, v.access),
     onSuccess: (_result, v) => {
-      void qc.invalidateQueries({ queryKey: ['enterprise-members', v.enterpriseId] });
-      void qc.invalidateQueries({ queryKey: ['enterprises'] });
+      void qc.invalidateQueries({ queryKey: ['organization-members', v.organizationId] });
+      void qc.invalidateQueries({ queryKey: ['teams', v.organizationId] });
+      void qc.invalidateQueries({ queryKey: ['teamMembers', v.organizationId] });
+      void qc.invalidateQueries({ queryKey: ['repositories'] });
+      void qc.invalidateQueries({ queryKey: ['organizations'] });
     },
   });
 }
-export function useEnterprisePolicy(enterpriseId: string | null) {
+export function useOrganizationPolicy(organizationId: string | null) {
   return useQuery({
-    queryKey: ['enterprise-policy', enterpriseId],
-    queryFn: () => api.getEnterprisePolicy(enterpriseId as string),
-    enabled: Boolean(enterpriseId),
+    queryKey: ['organization-policy', organizationId],
+    queryFn: () => api.getOrganizationPolicy(organizationId as string),
+    enabled: Boolean(organizationId),
   });
 }
-export function useUpdateEnterprisePolicy() {
+export function useUpdateOrganizationPolicy() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: {
-      enterpriseId: string;
-      patch: Partial<Omit<import('./types').EnterprisePolicy, 'enterprise_id' | 'updated_by' | 'updated_at'>>;
-    }) => api.updateEnterprisePolicy(v.enterpriseId, v.patch),
-    onSuccess: (policy) => qc.setQueryData(['enterprise-policy', policy.enterprise_id], policy),
+      organizationId: string;
+      patch: Partial<Omit<import('./types').OrganizationPolicy, 'organization_id' | 'updated_by' | 'updated_at'>>;
+    }) => api.updateOrganizationPolicy(v.organizationId, v.patch),
+    onSuccess: (policy) => qc.setQueryData(['organization-policy', policy.organization_id], policy),
   });
 }
-export function useEnterpriseWorkspaces(enterpriseId: string | null) {
+export function useOrganizationRepositories(organizationId: string | null) {
   return useQuery({
-    queryKey: ['enterprise-workspaces', enterpriseId],
-    queryFn: () => api.listEnterpriseWorkspaces(enterpriseId as string),
-    enabled: Boolean(enterpriseId),
+    queryKey: ['organization-repositories', organizationId],
+    queryFn: () => api.listOrganizationRepositories(organizationId as string),
+    enabled: Boolean(organizationId),
   });
 }
-export function useCreateEnterpriseWorkspace() {
+export function useCreateOrganizationRepository() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { enterpriseId: string; name: string }) => api.createEnterpriseWorkspace(v.enterpriseId, v.name),
-    onSuccess: (_workspace, v) => {
-      void qc.invalidateQueries({ queryKey: ['enterprise-workspaces', v.enterpriseId] });
-      void qc.invalidateQueries({ queryKey: ['workspaces'] });
+    mutationFn: (v: { organizationId: string; name: string }) => api.createOrganizationRepository(v.organizationId, v.name),
+    onSuccess: (_repository, v) => {
+      void qc.invalidateQueries({ queryKey: ['organization-repositories', v.organizationId] });
+      void qc.invalidateQueries({ queryKey: ['repositories'] });
     },
   });
 }
-export function useEnterpriseAudit(enterpriseId: string | null, enabled: boolean) {
+export function useOrganizationAudit(organizationId: string | null, enabled: boolean) {
   return useQuery({
-    queryKey: ['enterprise-audit', enterpriseId],
-    queryFn: () => api.listEnterpriseAudit(enterpriseId as string),
-    enabled: enabled && Boolean(enterpriseId),
+    queryKey: ['organization-audit', organizationId],
+    queryFn: () => api.listOrganizationAudit(organizationId as string),
+    enabled: enabled && Boolean(organizationId),
   });
 }
 export function useCreateBreakGlassGrant() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { enterpriseId: string; workspaceId: string; reason: string; minutes: number }) =>
-      api.createBreakGlassGrant(v.enterpriseId, v.workspaceId, v.reason, v.minutes),
-    onSuccess: (_grant, v) => void qc.invalidateQueries({ queryKey: ['enterprise-audit', v.enterpriseId] }),
+    mutationFn: (v: { organizationId: string; repositoryId: string; reason: string; minutes: number }) =>
+      api.createBreakGlassGrant(v.organizationId, v.repositoryId, v.reason, v.minutes),
+    onSuccess: (_grant, v) => void qc.invalidateQueries({ queryKey: ['organization-audit', v.organizationId] }),
   });
 }
-// Account settings: nickname is lightweight, while username changes URLs and workspace paths.
+// Account settings: nickname is lightweight, while username changes URLs and repository paths.
 export function useUpdateMe() {
   const qc = useQueryClient();
   return useMutation({
@@ -129,32 +132,32 @@ export function useUpdateMe() {
       api.updateMe(patch),
     onSuccess: (u) => {
       qc.setQueryData(['me'], u);
-      qc.invalidateQueries({ queryKey: ['workspaces'] }); // owner_username denormalization reflected
+      qc.invalidateQueries({ queryKey: ['repositories'] }); // owner_username denormalization reflected
     },
   });
 }
-// Workspace settings (public scope · permission policy — owner exclusive, partial PATCH).
-export function useUpdateWorkspace() {
+// Repository settings (public scope · permission policy — owner exclusive, partial PATCH).
+export function useUpdateRepository() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { wsId: string; patch: import('./types').WorkspacePatch }) => api.updateWorkspace(v.wsId, v.patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
+    mutationFn: (v: { repositoryId: string; patch: import('./types').RepositoryPatch }) => api.updateRepository(v.repositoryId, v.patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['repositories'] }),
   });
 }
-// Ownership transfer (creator's sole right) — URL changes, so refresh workspace list on success.
-export function useTransferWorkspace() {
+// Ownership transfer (creator's sole right) — URL changes, so refresh repository list on success.
+export function useTransferRepository() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { wsId: string; toUserId: string }) => api.transferWorkspace(v.wsId, v.toUserId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
+    mutationFn: (v: { repositoryId: string; toUserId: string }) => api.transferRepository(v.repositoryId, v.toUserId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['repositories'] }),
   });
 }
 // GitHub public state manual sync (owner only).
 export function useSyncVisibility() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (wsId: string) => api.syncVisibility(wsId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
+    mutationFn: (repositoryId: string) => api.syncVisibility(repositoryId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['repositories'] }),
   });
 }
 // CLI token: issue (expose once — cxt login <token>) · list · revoke.
@@ -193,34 +196,34 @@ export function useRevokeCliToken() {
 export function useUpdateMemberRole() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { wsId: string; userId: string; role: 'owner' | 'member' }) =>
-      api.updateMemberRole(v.wsId, v.userId, v.role),
-    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['members', v.wsId] }),
+    mutationFn: (v: { repositoryId: string; userId: string; role: 'owner' | 'member' }) =>
+      api.updateMemberRole(v.repositoryId, v.userId, v.role),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['members', v.repositoryId] }),
   });
 }
 export function useRemoveMember() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { wsId: string; userId: string }) => api.removeMember(v.wsId, v.userId),
+    mutationFn: (v: { repositoryId: string; userId: string }) => api.removeMember(v.repositoryId, v.userId),
     onSuccess: (_r, v) => {
-      qc.invalidateQueries({ queryKey: ['members', v.wsId] });
-      qc.invalidateQueries({ queryKey: ['workspaces'] }); // Reflect self-exit.
+      qc.invalidateQueries({ queryKey: ['members', v.repositoryId] });
+      qc.invalidateQueries({ queryKey: ['repositories'] }); // Reflect self-exit.
     },
   });
 }
-export function useMembers(workspaceId: string | null) {
+export function useMembers(repositoryId: string | null) {
   return useQuery({
-    queryKey: ['members', workspaceId],
-    queryFn: () => api.listMembers(workspaceId as string),
-    enabled: Boolean(workspaceId),
+    queryKey: ['members', repositoryId],
+    queryFn: () => api.listMembers(repositoryId as string),
+    enabled: Boolean(repositoryId),
   });
 }
-export function useRepos(workspaceId: string | null) {
+export function useRepos(repositoryId: string | null) {
   const authed = useAuthed();
   return useQuery({
-    queryKey: ['repos', workspaceId],
-    queryFn: () => api.listRepos(workspaceId as string),
-    enabled: authed && Boolean(workspaceId),
+    queryKey: ['repos', repositoryId],
+    queryFn: () => api.listRepos(repositoryId as string),
+    enabled: authed && Boolean(repositoryId),
   });
 }
 // Context Browser: Branch List → Commit Log → Body(CIR). Immutable data(doc) is infinite cache.
@@ -440,42 +443,42 @@ export function useGraphPosition(repoId: string | null | undefined, position: st
 }
 
 // ── Mutation ──────────────────────────────────────────
-export function useCreateWorkspace() {
+export function useCreateRepository() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => api.createWorkspace(name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
+    mutationFn: (name: string) => api.createRepository(name),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['repositories'] }),
   });
 }
 export function useCreateInvite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { workspaceId: string; role?: string; email?: string; expiresInDays?: number }) =>
-      api.createInvite(v.workspaceId, v.email ?? '', v.role ?? 'member', v.expiresInDays ?? 0),
-    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['invites', v.workspaceId] }),
+    mutationFn: (v: { repositoryId: string; role?: string; email?: string; expiresInDays?: number }) =>
+      api.createInvite(v.repositoryId, v.email ?? '', v.role ?? 'member', v.expiresInDays ?? 0),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['invites', v.repositoryId] }),
   });
 }
 // Invite list/redemption — only maintainers can view (403 is disabled).
-export function useInvites(workspaceId: string | null, enabled: boolean) {
+export function useInvites(repositoryId: string | null, enabled: boolean) {
   return useQuery({
-    queryKey: ['invites', workspaceId],
-    queryFn: () => api.listInvites(workspaceId as string),
-    enabled: enabled && Boolean(workspaceId),
+    queryKey: ['invites', repositoryId],
+    queryFn: () => api.listInvites(repositoryId as string),
+    enabled: enabled && Boolean(repositoryId),
     retry: false,
   });
 }
 export function useRevokeInvite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { workspaceId: string; token: string }) => api.revokeInvite(v.workspaceId, v.token),
-    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['invites', v.workspaceId] }),
+    mutationFn: (v: { repositoryId: string; token: string }) => api.revokeInvite(v.repositoryId, v.token),
+    onSuccess: (_r, v) => qc.invalidateQueries({ queryKey: ['invites', v.repositoryId] }),
   });
 }
 export function useAcceptInvite() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (token: string) => api.acceptInvite(token),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['repositories'] }),
   });
 }
 

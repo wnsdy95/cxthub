@@ -16,14 +16,14 @@ func TestActivitySerializesEmptyCollectionsAsArrays(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	svc := NewService(st, st, nil, nil, st)
 
-	commitWorkspace := domain.Workspace{
-		ID:            "ws_commit",
+	commitRepository := domain.Repository{
+		ID:            domain.NewID("ws_"),
 		Name:          "Commit only",
 		Slug:          "commit-only",
 		OwnerUsername: "alice",
 	}
-	createdWorkspace := domain.Workspace{
-		ID:            "ws_created",
+	createdRepository := domain.Repository{
+		ID:            domain.NewID("ws_"),
 		Name:          "Created only",
 		Slug:          "created-only",
 		OwnerUsername: "alice",
@@ -31,8 +31,8 @@ func TestActivitySerializesEmptyCollectionsAsArrays(t *testing.T) {
 	}
 	repoID := domain.HashContent([]byte("activity-repo"))
 	if _, err := st.PutRepo(ctx, domain.Repo{
-		ID:          repoID,
-		WorkspaceID: commitWorkspace.ID,
+		ID:           repoID,
+		RepositoryID: commitRepository.ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestActivitySerializesEmptyCollectionsAsArrays(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	months, err := svc.Activity(ctx, []domain.Workspace{commitWorkspace, createdWorkspace})
+	months, err := svc.Activity(ctx, []domain.Repository{commitRepository, createdRepository})
 	if err != nil {
 		t.Fatal(err)
 	}

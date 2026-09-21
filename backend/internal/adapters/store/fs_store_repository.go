@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,15 +18,15 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-// FSStore implementation of WorkspaceStore (user, workspace, membership, invite).
+// FSStore implementation of RepositoryStore (user, repository, membership, invite).
 //
 // Layout:
 //
 //	dataDir/users/<safe(id)>.json
-//	dataDir/workspaces/<wsID>.json
-//	dataDir/members/<wsID>/<safe(userID)>.json
+//	dataDir/repositories/<repositoryID>.json
+//	dataDir/members/<repositoryID>/<safe(userID)>.json
 //	dataDir/invites/<token>.json
-var _ outbound.WorkspaceStore = (*FSStore)(nil)
+var _ outbound.RepositoryStore = (*FSStore)(nil)
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
@@ -45,11 +46,11 @@ func storedIdentityIntegrity(err error) error {
 	return fmt.Errorf("%w: invalid stored identity record", domain.ErrIntegrity)
 }
 
-func (s *FSStore) usersDir() string      { return filepath.Join(s.dataDir, "users") }
-func (s *FSStore) workspacesDir() string { return filepath.Join(s.dataDir, "workspaces") }
-func (s *FSStore) membersDir() string    { return filepath.Join(s.dataDir, "members") }
-func (s *FSStore) invitesDir() string    { return filepath.Join(s.dataDir, "invites") }
-func (s *FSStore) sessionsDir() string   { return filepath.Join(s.dataDir, "sessions") }
+func (s *FSStore) usersDir() string        { return filepath.Join(s.dataDir, "users") }
+func (s *FSStore) repositoriesDir() string { return filepath.Join(s.dataDir, "repositories") }
+func (s *FSStore) membersDir() string      { return filepath.Join(s.dataDir, "members") }
+func (s *FSStore) invitesDir() string      { return filepath.Join(s.dataDir, "invites") }
+func (s *FSStore) sessionsDir() string     { return filepath.Join(s.dataDir, "sessions") }
 
 // --- Session ---
 
@@ -220,107 +221,165 @@ func (s *FSStore) GetUserByUsername(_ context.Context, username string) (domain.
 	return domain.User{}, domain.ErrNotFound
 }
 
-// --- Workspace ---
+// --- Repository ---
 
-func (s *FSStore) CreateWorkspace(_ context.Context, ws domain.Workspace) error {
-	if err := domain.ValidateWorkspaceRecord(ws); err != nil {
+func (s *FSStore) CreateRepository(ctx context.Context, repositoryRecord domain.Repository) error {
+	if err := domain.ValidateRepositoryRecord(repositoryRecord); err != nil {
 		return err
 	}
-	data, _ := json.Marshal(ws)
-	return writeAtomic(filepath.Join(s.workspacesDir(), ws.ID+".json"), data)
+	// Persist the previous address before changing the display path. The
+	// alias is harmless if the subsequent write fails: it still points here.
+	if repositoryRecord.OwnerUsername != "" && repositoryRecord.Slug != "" {
+		found, err := s.GetRepositoryByPath(ctx, repositoryRecord.OwnerUsername, repositoryRecord.Slug)
+		if errors.Is(err, domain.ErrNotFound) && repositoryRecord.OwnerNamespaceID != "" {
+			found, err = s.GetRepositoryByNamespacePath(ctx, repositoryRecord.OwnerNamespaceID, repositoryRecord.Slug)
+		}
+		if err == nil && found.ID != repositoryRecord.ID {
+			return domain.ErrConflict
+		}
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+	}
+	if old, err := s.GetRepository(ctx, repositoryRecord.ID); err == nil && old.Slug != "" && old.OwnerUsername != "" && (old.Slug != repositoryRecord.Slug || old.OwnerUsername != repositoryRecord.OwnerUsername || old.OwnerNamespaceID != repositoryRecord.OwnerNamespaceID) {
+		key := old.OwnerNamespaceID
+		if key == "" {
+			key = "handle:" + old.OwnerUsername
+		}
+		alias := domain.RepositoryPathAlias{NamespaceID: old.OwnerNamespaceID, Owner: old.OwnerUsername, Path: old.Slug, RepositoryID: old.ID}
+		if current, err := s.repositoryAlias(ctx, key, old.Slug); err == nil && current.RepositoryID != old.ID {
+			return domain.ErrConflict
+		} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		for _, aliasKey := range []string{key, "handle:" + old.OwnerUsername} {
+			if current, err := s.repositoryAlias(ctx, aliasKey, old.Slug); err == nil && current.RepositoryID != old.ID {
+				return domain.ErrConflict
+			} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
+				return err
+			}
+			data, _ := json.Marshal(alias)
+			if err := writeAtomic(filepath.Join(s.dataDir, "repository-aliases", opaqueName(aliasKey+"/"+old.Slug)+".json"), data); err != nil {
+				return err
+			}
+		}
+	} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+	data, _ := json.Marshal(repositoryRecord)
+	return writeAtomic(filepath.Join(s.repositoriesDir(), repositoryRecord.ID+".json"), data)
 }
 
-func (s *FSStore) GetWorkspace(_ context.Context, id string) (domain.Workspace, error) {
-	if err := domain.ValidateWorkspaceID(id); err != nil {
-		return domain.Workspace{}, err
+func (s *FSStore) GetRepository(_ context.Context, id string) (domain.Repository, error) {
+	if err := domain.ValidateRepositoryID(id); err != nil {
+		return domain.Repository{}, err
 	}
-	var ws domain.Workspace
-	err := readJSON(filepath.Join(s.workspacesDir(), id+".json"), &ws)
+	var repositoryRecord domain.Repository
+	err := readJSON(filepath.Join(s.repositoriesDir(), id+".json"), &repositoryRecord)
 	if err == nil {
-		if ws.ID != id {
-			return domain.Workspace{}, domain.ErrNotFound
+		if repositoryRecord.ID != id {
+			return domain.Repository{}, domain.ErrNotFound
 		}
-		if verr := domain.ValidateWorkspaceRecord(ws); verr != nil {
-			return domain.Workspace{}, storedIdentityIntegrity(verr)
+		if verr := domain.ValidateRepositoryRecord(repositoryRecord); verr != nil {
+			return domain.Repository{}, storedIdentityIntegrity(verr)
 		}
 	}
-	return ws, err
+	return repositoryRecord, err
 }
 
-// GetWorkspaceByPath finds a workspace by URL path segments (owner_username, slug). Used for remote URL → workspace binding during repo push. FS scans linearly.
-func (s *FSStore) GetWorkspaceByPath(_ context.Context, ownerUsername, slug string) (domain.Workspace, error) {
-	entries, err := os.ReadDir(s.workspacesDir())
+// GetRepositoryByPath finds a repository by URL path segments (owner_username, slug). Used for remote URL → repository binding during repo push. FS scans linearly.
+func (s *FSStore) GetRepositoryByPath(ctx context.Context, ownerUsername, slug string) (domain.Repository, error) {
+	entries, err := os.ReadDir(s.repositoriesDir())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return domain.Workspace{}, domain.ErrNotFound
+			return domain.Repository{}, domain.ErrNotFound
 		}
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		var ws domain.Workspace
-		if err := readJSON(filepath.Join(s.workspacesDir(), e.Name()), &ws); err == nil &&
-			ws.OwnerUsername == ownerUsername && ws.Slug == slug {
-			if verr := domain.ValidateWorkspaceRecord(ws); verr != nil {
-				return domain.Workspace{}, storedIdentityIntegrity(verr)
+		var repositoryRecord domain.Repository
+		if err := readJSON(filepath.Join(s.repositoriesDir(), e.Name()), &repositoryRecord); err == nil &&
+			repositoryRecord.OwnerUsername == ownerUsername && repositoryRecord.Slug == slug {
+			if verr := domain.ValidateRepositoryRecord(repositoryRecord); verr != nil {
+				return domain.Repository{}, storedIdentityIntegrity(verr)
 			}
-			return ws, nil
+			return repositoryRecord, nil
 		}
 	}
-	return domain.Workspace{}, domain.ErrNotFound
+	if alias, aliasErr := s.repositoryAlias(ctx, "handle:"+ownerUsername, slug); aliasErr == nil {
+		return s.GetRepository(ctx, alias.RepositoryID)
+	} else if !errors.Is(aliasErr, domain.ErrNotFound) {
+		return domain.Repository{}, aliasErr
+	}
+	return domain.Repository{}, domain.ErrNotFound
 }
 
-func (s *FSStore) GetWorkspaceByNamespacePath(_ context.Context, namespaceID, slug string) (domain.Workspace, error) {
+func (s *FSStore) GetRepositoryByNamespacePath(ctx context.Context, namespaceID, slug string) (domain.Repository, error) {
 	if err := domain.ValidateNamespaceID(namespaceID); err != nil {
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
-	entries, err := os.ReadDir(s.workspacesDir())
+	entries, err := os.ReadDir(s.repositoriesDir())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return domain.Workspace{}, domain.ErrNotFound
+			return domain.Repository{}, domain.ErrNotFound
 		}
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		var workspace domain.Workspace
-		if readJSON(filepath.Join(s.workspacesDir(), entry.Name()), &workspace) == nil &&
-			workspace.OwnerNamespaceID == namespaceID && workspace.Slug == slug {
-			if err := domain.ValidateWorkspaceRecord(workspace); err != nil {
-				return domain.Workspace{}, storedIdentityIntegrity(err)
+		var repository domain.Repository
+		if readJSON(filepath.Join(s.repositoriesDir(), entry.Name()), &repository) == nil &&
+			repository.OwnerNamespaceID == namespaceID && repository.Slug == slug {
+			if err := domain.ValidateRepositoryRecord(repository); err != nil {
+				return domain.Repository{}, storedIdentityIntegrity(err)
 			}
-			return workspace, nil
+			return repository, nil
 		}
 	}
-	return domain.Workspace{}, domain.ErrNotFound
+	if alias, aliasErr := s.repositoryAlias(ctx, namespaceID, slug); aliasErr == nil {
+		return s.GetRepository(ctx, alias.RepositoryID)
+	} else if !errors.Is(aliasErr, domain.ErrNotFound) {
+		return domain.Repository{}, aliasErr
+	}
+	return domain.Repository{}, domain.ErrNotFound
 }
 
-func (s *FSStore) ListWorkspacesForUser(ctx context.Context, userID string) ([]domain.Workspace, error) {
+func (s *FSStore) ListRepositoriesForUser(ctx context.Context, userID string) ([]domain.Repository, error) {
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(s.membersDir())
+	entries, err := os.ReadDir(s.repositoriesDir())
+	if os.IsNotExist(err) {
+		return []domain.Repository{}, nil
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	var out []domain.Workspace
-	for _, e := range entries {
-		if !e.IsDir() {
+	out := []domain.Repository{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		wsID := e.Name()
-		if domain.ValidateWorkspaceID(wsID) != nil || !s.membershipExists(wsID, userID) {
-			continue
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		repository, err := s.GetRepository(ctx, id)
+		if err != nil {
+			return nil, err
 		}
-		if ws, err := s.GetWorkspace(ctx, wsID); err == nil {
-			out = append(out, ws)
+		members, err := s.ListMembers(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		grants, err := s.RepositoryTeamAccess(ctx, id, userID)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := domain.EffectiveRepositoryRole(repository, members, userID, grants); ok {
+			out = append(out, repository)
 		}
 	}
 	return out, nil
@@ -334,28 +393,28 @@ func (s *FSStore) AddMember(_ context.Context, m domain.Membership) error {
 	}
 	m.User = nil // Do not store denormalized fields
 	data, _ := json.Marshal(m)
-	if err := writeAtomic(filepath.Join(s.membersDir(), m.WorkspaceID, opaqueName(m.UserID)+".json"), data); err != nil {
+	if err := writeAtomic(filepath.Join(s.membersDir(), m.RepositoryID, opaqueName(m.UserID)+".json"), data); err != nil {
 		return err
 	}
-	legacy := filepath.Join(s.membersDir(), m.WorkspaceID, safeName(m.UserID)+".json")
+	legacy := filepath.Join(s.membersDir(), m.RepositoryID, safeName(m.UserID)+".json")
 	var old domain.Membership
-	if readJSON(legacy, &old) == nil && old.WorkspaceID == m.WorkspaceID && old.UserID == m.UserID {
+	if readJSON(legacy, &old) == nil && old.RepositoryID == m.RepositoryID && old.UserID == m.UserID {
 		_ = os.Remove(legacy)
 	}
 	return nil
 }
 
-func (s *FSStore) RemoveMember(_ context.Context, workspaceID, userID string) error {
-	if err := domain.ValidateWorkspaceID(workspaceID); err != nil {
+func (s *FSStore) RemoveMember(_ context.Context, repositoryID, userID string) error {
+	if err := domain.ValidateRepositoryID(repositoryID); err != nil {
 		return err
 	}
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return err
 	}
 	for _, name := range []string{opaqueName(userID), safeName(userID)} {
-		p := filepath.Join(s.membersDir(), workspaceID, name+".json")
+		p := filepath.Join(s.membersDir(), repositoryID, name+".json")
 		var m domain.Membership
-		if err := readJSON(p, &m); err == nil && m.WorkspaceID == workspaceID && m.UserID == userID {
+		if err := readJSON(p, &m); err == nil && m.RepositoryID == repositoryID && m.UserID == userID {
 			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -364,32 +423,32 @@ func (s *FSStore) RemoveMember(_ context.Context, workspaceID, userID string) er
 	return nil
 }
 
-func (s *FSStore) IsMember(_ context.Context, workspaceID, userID string) (bool, error) {
-	if err := domain.ValidateWorkspaceID(workspaceID); err != nil {
+func (s *FSStore) IsMember(_ context.Context, repositoryID, userID string) (bool, error) {
+	if err := domain.ValidateRepositoryID(repositoryID); err != nil {
 		return false, err
 	}
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return false, err
 	}
-	return s.membershipExists(workspaceID, userID), nil
+	return s.membershipExists(repositoryID, userID), nil
 }
 
-func (s *FSStore) membershipExists(workspaceID, userID string) bool {
+func (s *FSStore) membershipExists(repositoryID, userID string) bool {
 	for _, name := range []string{opaqueName(userID), safeName(userID)} {
 		var m domain.Membership
-		if readJSON(filepath.Join(s.membersDir(), workspaceID, name+".json"), &m) == nil &&
-			m.WorkspaceID == workspaceID && m.UserID == userID && domain.ValidateMembershipRecord(m) == nil {
+		if readJSON(filepath.Join(s.membersDir(), repositoryID, name+".json"), &m) == nil &&
+			m.RepositoryID == repositoryID && m.UserID == userID && domain.ValidateMembershipRecord(m) == nil {
 			return true
 		}
 	}
 	return false
 }
 
-func (s *FSStore) ListMembers(ctx context.Context, workspaceID string) ([]domain.Membership, error) {
-	if err := domain.ValidateWorkspaceID(workspaceID); err != nil {
+func (s *FSStore) ListMembers(ctx context.Context, repositoryID string) ([]domain.Membership, error) {
+	if err := domain.ValidateRepositoryID(repositoryID); err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(s.membersDir(), workspaceID)
+	dir := filepath.Join(s.membersDir(), repositoryID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -407,7 +466,7 @@ func (s *FSStore) ListMembers(ctx context.Context, workspaceID string) ([]domain
 		if readJSON(filepath.Join(dir, e.Name()), &m) != nil {
 			continue
 		}
-		if m.WorkspaceID != workspaceID || domain.ValidateExternalID(m.UserID) != nil || !domain.ValidRole(m.Role) {
+		if m.RepositoryID != repositoryID || domain.ValidateExternalID(m.UserID) != nil || !domain.ValidRole(m.Role) {
 			continue
 		}
 		isOpaque := e.Name() == opaqueName(m.UserID)+".json"
@@ -473,8 +532,8 @@ func (s *FSStore) UpdateInviteStatus(ctx context.Context, token string, status d
 	return writeAtomic(filepath.Join(s.invitesDir(), token+".json"), data)
 }
 
-func (s *FSStore) ListInvites(_ context.Context, workspaceID string) ([]domain.Invite, error) {
-	if err := domain.ValidateWorkspaceID(workspaceID); err != nil {
+func (s *FSStore) ListInvites(_ context.Context, repositoryID string) ([]domain.Invite, error) {
+	if err := domain.ValidateRepositoryID(repositoryID); err != nil {
 		return nil, err
 	}
 	entries, err := os.ReadDir(s.invitesDir())
@@ -493,7 +552,7 @@ func (s *FSStore) ListInvites(_ context.Context, workspaceID string) ([]domain.I
 		if readJSON(filepath.Join(s.invitesDir(), e.Name()), &inv) != nil {
 			continue
 		}
-		if inv.WorkspaceID == workspaceID {
+		if inv.RepositoryID == repositoryID {
 			if verr := domain.ValidateInviteRecord(inv); verr != nil {
 				return nil, storedIdentityIntegrity(verr)
 			}

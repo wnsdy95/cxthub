@@ -15,18 +15,18 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func notificationFixture(t *testing.T) (*Service, *store.FSStore, domain.Workspace) {
+func notificationFixture(t *testing.T) (*Service, *store.FSStore, domain.Repository) {
 	t.Helper()
 	svc, st := newFsckSvc(t)
-	wsp := domain.Workspace{ID: domain.NewID("ws_"), Name: "test", OwnerID: "dev:notification-test", Visibility: domain.VisibilityPrivate, CreatedAt: time.Now().UTC(), WebhookURL: "https://example.test/hook"}
-	if err := st.CreateWorkspace(context.Background(), wsp); err != nil {
+	repositoryRecord := domain.Repository{ID: domain.NewID("ws_"), Name: "test", OwnerID: "dev:notification-test", Visibility: domain.VisibilityPrivate, CreatedAt: time.Now().UTC(), WebhookURL: "https://example.test/hook"}
+	if err := st.CreateRepository(context.Background(), repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
-	return svc, st, wsp
+	return svc, st, repositoryRecord
 }
 func TestNotificationRetryRestartAndCredentialIsolation(t *testing.T) {
 	ctx := context.Background()
-	svc, st, wsp := notificationFixture(t)
+	svc, st, repositoryRecord := notificationFixture(t)
 	var ids []string
 	status := 503
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,33 +39,33 @@ func TestNotificationRetryRestartAndCredentialIsolation(t *testing.T) {
 	old := safeWebhookClient()
 	webhookClient = receiver.Client()
 	defer func() { webhookClient = old }()
-	wsp.WebhookURL = receiver.URL + "/private-credential"
-	if err := st.CreateWorkspace(ctx, wsp); err != nil {
+	repositoryRecord.WebhookURL = receiver.URL + "/private-credential"
+	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
-	if err := enqueueWorkspaceNotification(ctx, st, wsp, "secrets_updated", "metadata only"); err != nil {
+	if err := enqueueRepositoryNotification(ctx, st, repositoryRecord, "secrets_updated", "metadata only"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.ProcessNotification(ctx); err != nil {
 		t.Fatal(err)
 	}
-	jobs, _ := st.ListNotifications(ctx, wsp.ID)
+	jobs, _ := st.ListNotifications(ctx, repositoryRecord.ID)
 	if len(jobs) != 1 || jobs[0].State != "retrying" || jobs[0].HTTPStatus != 503 || jobs[0].NextAttempt.Before(time.Now().Add(115*time.Second)) {
 		t.Fatalf("retry status: %+v", jobs)
 	}
 	// Simulate an operator retry after recovery; the same stored ID is reused.
-	if err := st.RetryNotification(ctx, wsp.ID, jobs[0].ID, wsp.WebhookURL, time.Now()); err != nil {
+	if err := st.RetryNotification(ctx, repositoryRecord.ID, jobs[0].ID, repositoryRecord.WebhookURL, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	status = 204
 	if _, err := svc.ProcessNotification(ctx); err != nil {
 		t.Fatal(err)
 	}
-	jobs, _ = st.ListNotifications(ctx, wsp.ID)
+	jobs, _ = st.ListNotifications(ctx, repositoryRecord.ID)
 	if jobs[0].State != "delivered" || len(ids) != 2 || ids[0] != ids[1] {
 		t.Fatalf("delivery not stable: %+v %+v", jobs, ids)
 	}
-	if err := st.RetryNotification(ctx, wsp.ID, jobs[0].ID, wsp.WebhookURL, time.Now()); !errors.Is(err, domain.ErrConflict) {
+	if err := st.RetryNotification(ctx, repositoryRecord.ID, jobs[0].ID, repositoryRecord.WebhookURL, time.Now()); !errors.Is(err, domain.ErrConflict) {
 		t.Fatal("delivered event replayed")
 	}
 }
@@ -75,7 +75,7 @@ func TestNotificationClaimsAreExclusiveAndExpiredWorkersCannotFinish(t *testing.
 	first := store.NewFSStore(dir)
 	peer := store.NewFSStore(dir)
 	now := time.Now().UTC()
-	j := domain.NotificationJob{ID: "event", WorkspaceID: "ws", State: "pending", CreatedAt: now, NextAttempt: now}
+	j := domain.NotificationJob{ID: "event", RepositoryID: "repositoryRecord", State: "pending", CreatedAt: now, NextAttempt: now}
 	if err := first.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: j, Destination: "https://example.test/secret"}); err != nil {
 		t.Fatal(err)
 	}
@@ -112,25 +112,25 @@ func TestNotificationClaimsAreExclusiveAndExpiredWorkersCannotFinish(t *testing.
 		t.Fatal(err)
 	}
 	restarted := store.NewFSStore(dir)
-	jobs, err := restarted.ListNotifications(ctx, "ws")
+	jobs, err := restarted.ListNotifications(ctx, "repositoryRecord")
 	if err != nil || len(jobs) != 1 || jobs[0].State != "delivered" {
 		t.Fatalf("restart lost job: %+v %v", jobs, err)
 	}
 }
 func TestNotificationChangedDestinationRequiresExplicitRetry(t *testing.T) {
 	ctx := context.Background()
-	svc, st, wsp := notificationFixture(t)
-	if err := enqueueWorkspaceNotification(ctx, st, wsp, "ref_updated", "safe metadata"); err != nil {
+	svc, st, repositoryRecord := notificationFixture(t)
+	if err := enqueueRepositoryNotification(ctx, st, repositoryRecord, "ref_updated", "safe metadata"); err != nil {
 		t.Fatal(err)
 	}
-	wsp.WebhookURL = "https://example.test/replacement"
-	if err := st.CreateWorkspace(ctx, wsp); err != nil {
+	repositoryRecord.WebhookURL = "https://example.test/replacement"
+	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.ProcessNotification(ctx); err != nil {
 		t.Fatal(err)
 	}
-	jobs, _ := st.ListNotifications(ctx, wsp.ID)
+	jobs, _ := st.ListNotifications(ctx, repositoryRecord.ID)
 	if jobs[0].State != "attention" || jobs[0].Reason != "destination_changed" {
 		t.Fatalf("sent stale destination: %+v", jobs)
 	}
@@ -146,7 +146,7 @@ func TestNotificationHTTPOutcomeAndExhaustion(t *testing.T) {
 	} {
 		t.Run(fmt.Sprint(tc.code), func(t *testing.T) {
 			ctx := context.Background()
-			svc, st, wsp := notificationFixture(t)
+			svc, st, repositoryRecord := notificationFixture(t)
 			receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Location", "https://example.test/unexpected")
 				w.WriteHeader(tc.code)
@@ -158,19 +158,19 @@ func TestNotificationHTTPOutcomeAndExhaustion(t *testing.T) {
 			client.CheckRedirect = old.CheckRedirect
 			webhookClient = client
 			defer func() { webhookClient = old }()
-			wsp.WebhookURL = receiver.URL
-			if err := st.CreateWorkspace(ctx, wsp); err != nil {
+			repositoryRecord.WebhookURL = receiver.URL
+			if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC()
-			j := domain.NotificationJob{ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, State: "pending", Text: "metadata", Attempts: tc.prior, CreatedAt: now, NextAttempt: now}
-			if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: j, Destination: wsp.WebhookURL}); err != nil {
+			j := domain.NotificationJob{ID: domain.NewID("evt_"), RepositoryID: repositoryRecord.ID, State: "pending", Text: "metadata", Attempts: tc.prior, CreatedAt: now, NextAttempt: now}
+			if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: j, Destination: repositoryRecord.WebhookURL}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := svc.ProcessNotification(ctx); err != nil {
 				t.Fatal(err)
 			}
-			jobs, _ := st.ListNotifications(ctx, wsp.ID)
+			jobs, _ := st.ListNotifications(ctx, repositoryRecord.ID)
 			if len(jobs) != 1 || jobs[0].State != tc.state || jobs[0].Reason != tc.reason {
 				t.Fatalf("unexpected outcome: %+v", jobs)
 			}

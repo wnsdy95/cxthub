@@ -49,10 +49,10 @@ func TestSecretsEditPolicy(t *testing.T) {
 }
 
 func TestSecretsUnknownPolicyAndRoleFailClosed(t *testing.T) {
-	if CanEditSecrets(Workspace{SecretsPolicy: "unknown"}, RoleMaintainer) {
+	if CanEditSecrets(Repository{SecretsPolicy: "unknown"}, RoleMaintainer) {
 		t.Fatal("unknown policy granted maintainer write")
 	}
-	if CanEditSecrets(Workspace{}, MemberRole("administrator")) {
+	if CanEditSecrets(Repository{}, MemberRole("administrator")) {
 		t.Fatal("unknown role granted write")
 	}
 }

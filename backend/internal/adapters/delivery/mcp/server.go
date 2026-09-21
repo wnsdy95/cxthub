@@ -1,7 +1,7 @@
 // Package mcp exposes CXTHub's cloud repository context as a stateless,
 // read-only Streamable HTTP MCP server. Unlike `cxt mcp --local`
 // helper, this server reads through cxtd's shared storage (PostgreSQL in
-// production) and applies the same Workspace viewer boundary as the REST API.
+// production) and applies the same Repository viewer boundary as the REST API.
 package mcp
 
 import (
@@ -87,11 +87,12 @@ type ContextBackend interface {
 }
 
 type IdentityBackend interface {
+	ReadableRepository(context.Context, string, string, string) (domain.Repository, error)
 	ResolveUser(ctx context.Context, bearer string) (domain.User, error)
 	ResolveMCPUser(ctx context.Context, bearer string) (domain.User, error)
-	GetWorkspace(ctx context.Context, workspaceID string) (domain.Workspace, error)
-	RoleOf(ctx context.Context, workspaceID, userID string) (domain.MemberRole, bool)
-	HasBreakGlassAccess(ctx context.Context, workspaceID, userID string) (bool, error)
+	GetRepository(ctx context.Context, repositoryID string) (domain.Repository, error)
+	RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool)
+	HasBreakGlassAccess(ctx context.Context, repositoryID, userID string) (bool, error)
 	IssueMCPTokenPair(ctx context.Context, userID, clientID string) (domain.OAuthTokenPair, error)
 	RefreshMCPAccessToken(ctx context.Context, refreshToken, clientID string) (domain.OAuthTokenPair, error)
 	RevokeMCPToken(ctx context.Context, token, clientID string) error

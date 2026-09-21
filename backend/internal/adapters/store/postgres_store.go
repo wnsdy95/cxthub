@@ -111,8 +111,8 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 		return domain.Repo{}, err
 	}
 	var r domain.Repo
-	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE id=$1`, string(id)).
-		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.WorkspaceID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol)
+	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE id=$1`, string(id)).
+		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol)
 	if err != nil {
 		return domain.Repo{}, mapNoRows(err)
 	}
@@ -131,11 +131,11 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 
 func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
 	if err := validateHash(repo.ID); err != nil {
-		return domain.Repo{}, storageWriteError(err)
+		return domain.Repo{}, storageWriteError(mapPGConstraint(err))
 	}
 	if repo.DefaultBranch != "" {
 		if err := domain.ValidateBranchName(repo.DefaultBranch); err != nil {
-			return domain.Repo{}, storageWriteError(err)
+			return domain.Repo{}, storageWriteError(mapPGConstraint(err))
 		}
 	}
 	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
@@ -144,20 +144,24 @@ func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.R
 	if db == "" {
 		db = "main"
 	}
-	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO repos (id, remote_url, default_branch, team, workspace_id, git_remote_url) VALUES ($1,$2,$3,$4,NULLIF($5,''),$6)
-		 ON CONFLICT (id) DO UPDATE SET workspace_id = COALESCE(repos.workspace_id, EXCLUDED.workspace_id),
+	tag, err := s.db(ctx).Exec(ctx,
+		`INSERT INTO repos (id, remote_url, default_branch, team, repository_id, git_remote_url) VALUES ($1,$2,$3,$4,NULLIF($5,''),$6)
+		 ON CONFLICT (id) DO UPDATE SET repository_id = COALESCE(repos.repository_id, EXCLUDED.repository_id),
 		   default_branch = repos.default_branch,
-		   git_remote_url = COALESCE(NULLIF(repos.git_remote_url,''), EXCLUDED.git_remote_url)`,
-		string(repo.ID), repo.RemoteURL, db, "default", repo.WorkspaceID, repo.GitRemoteURL)
+		   git_remote_url = COALESCE(NULLIF(repos.git_remote_url,''), EXCLUDED.git_remote_url)
+           WHERE repos.repository_id IS NULL OR EXCLUDED.repository_id IS NULL OR repos.repository_id=EXCLUDED.repository_id`,
+		string(repo.ID), repo.RemoteURL, db, "default", repo.RepositoryID, repo.GitRemoteURL)
 	if err != nil {
-		return domain.Repo{}, storageWriteError(err)
+		return domain.Repo{}, storageWriteError(mapPGConstraint(err))
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.Repo{}, domain.ErrConflict
 	}
 	return s.GetRepo(ctx, repo.ID)
 }
 
 func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
-	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(workspace_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE team=$1`, team)
+	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE team=$1`, team)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +169,7 @@ func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Re
 	var out []domain.Repo
 	for rows.Next() {
 		var r domain.Repo
-		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.WorkspaceID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol); err != nil {
+		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol); err != nil {
 			return nil, err
 		}
 		if err := validateHash(r.ID); err != nil {

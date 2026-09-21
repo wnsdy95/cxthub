@@ -19,7 +19,7 @@ type noSharedRuntime struct {
 }
 type noAccessLock struct {
 	productionFixture
-	LockWorkspaceAccess int
+	LockRepositoryAccess int
 }
 type noOutbox struct {
 	productionFixture
@@ -41,7 +41,7 @@ func TestProductionStoreRejectsMissingCapabilities(t *testing.T) {
 	}{
 		{nil, "nil"}, {(*productionFixture)(nil), "nil"},
 		{noTransactions{}, "repository write/read transactions"}, {noSharedRuntime{}, "shared authentication/rate limits"},
-		{noAccessLock{}, "workspace access locks"}, {noOutbox{}, "notification outbox"},
+		{noAccessLock{}, "repository access locks"}, {noOutbox{}, "notification outbox"},
 		{noRevision{}, "evidence revisions"}, {noFence{}, "PR lease fencing"},
 		{store.NewFSStore(t.TempDir()), "repository write/read transactions"},
 	} {

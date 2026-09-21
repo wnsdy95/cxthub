@@ -1,16 +1,16 @@
 // PublicBrowse — Public read-only access for GitHub public repos.
-// On entering /<username>/<slug>, if it's a public workspace, show the context in read-only mode.
+// On entering /<username>/<slug>, if it's a public repository, show the context in read-only mode.
 // No write UI (role=null → ContextView hides the rail assets section and ⚙).
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { PublicWorkspace } from '../types';
+import type { PublicRepository } from '../types';
 import { api } from '../api';
 import {
   navigate,
-  repoPath,
-  repositorySlug,
+  repositoryPath,
+  replacePath,
   findRepositoryByRoute,
-  resolvedWorkspaceTab,
+  resolvedRepositoryTab,
   type Route,
 } from '../route';
 import { Logo } from './Logo';
@@ -18,45 +18,48 @@ import { LocaleSwitcher } from './LocaleSwitcher';
 import { Breadcrumb } from './Breadcrumb';
 import { useT } from '../i18n';
 import { ContextView } from './ContextView';
-import { sanitizeRemoteUrl } from '../urls';
 import { AccessDenied } from './AccessDenied';
 
 export function PublicBrowse({
   route,
   onLogin,
 }: {
-  route: Extract<NonNullable<Route>, { kind: 'ws' }>;
+  route: Extract<NonNullable<Route>, { kind: 'repository' }>;
   onLogin?: () => void;
 }) {
   const t = useT();
   const { username, slug } = route;
-  const wsQ = useQuery<PublicWorkspace>({
-    queryKey: ['public-ws', username, slug],
-    queryFn: () => api.publicWorkspace(username, slug),
+  const repositoryQuery = useQuery<PublicRepository>({
+    queryKey: ['public-repository', username, slug],
+    queryFn: () => api.publicRepository(username, slug),
     retry: false,
   });
-  const ws = wsQ.data ?? null;
+  const repositoryMetadata = repositoryQuery.data ?? null;
   const reposQ = useQuery({
-    queryKey: ['repos', ws?.id],
-    queryFn: () => api.listRepos(ws!.id),
-    enabled: Boolean(ws),
+    queryKey: ['repos', repositoryMetadata?.id],
+    queryFn: () => api.listRepos(repositoryMetadata!.id),
+    enabled: Boolean(repositoryMetadata),
   });
   const repos = reposQ.data ?? [];
-  const [activeRepoId, setActiveRepoId] = useState<string | null>(null);
+  useEffect(() => {
+    if (repositoryMetadata && (repositoryMetadata.owner_username !== username || repositoryMetadata.slug !== slug)) {
+      replacePath(repositoryPath(repositoryMetadata) + location.search);
+    }
+  }, [repositoryMetadata, username, slug]);
   const routedRepo = findRepositoryByRoute(route, repos);
-  const activeRepo = routedRepo ?? repos.find((r) => r.id === activeRepoId) ?? repos[0] ?? null;
-  const tab = resolvedWorkspaceTab(route, repos);
+  const activeRepo = routedRepo;
+  const tab = resolvedRepositoryTab(route, repos);
 
   // private or non-existent — Do not leak existence, redirect to login (no setState during render → effect).
-  const notFound = !wsQ.isLoading && !ws;
+  const notFound = !repositoryQuery.isLoading && !repositoryMetadata;
   useEffect(() => {
     if (notFound) onLogin?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notFound]);
 
-  if (wsQ.isLoading || (notFound && onLogin)) return <div className="loading">…</div>;
-  if (notFound) return <div className="loading">{t('common.workspaceUnavailable')}</div>;
-  if (!ws) return null;
+  if (repositoryQuery.isLoading || (notFound && onLogin)) return <div className="loading">…</div>;
+  if (notFound) return <div className="loading">{t('common.repositoryUnavailable')}</div>;
+  if (!repositoryMetadata) return null;
 
   return (
     <div className="app">
@@ -67,18 +70,17 @@ export function PublicBrowse({
               <Logo />
             </div>
           </button>
-          {ws && (
+          {repositoryMetadata && (
             <Breadcrumb
-              owner={ws.owner_username}
-              name={ws.name}
-              repository={activeRepo ? repositorySlug(activeRepo) : undefined}
+              owner={repositoryMetadata.owner_username}
+              name={repositoryMetadata.name}
             />
           )}
         </div>
         <div className="who">
           <LocaleSwitcher />
-          <span className={`vis-chip${ws.visibility === 'public' ? '' : ' emergency'}`}>
-            {ws.visibility === 'public' ? t('common.publicView') : t('enterprise.emergencyReadOnly')}
+          <span className={`vis-chip${repositoryMetadata.visibility === 'public' ? '' : ' emergency'}`}>
+            {repositoryMetadata.visibility === 'public' ? t('common.publicView') : t('organization.emergencyReadOnly')}
           </span>
           {onLogin && (
             <button
@@ -96,43 +98,26 @@ export function PublicBrowse({
 
       <div className="cols public-cols">
         <main className="main">
-          <div className="ws-head">
+          <div className="repository-head">
             <h2>
-              {ws.name}
-              <span className={`vis-chip${ws.visibility === 'public' ? '' : ' emergency'}`}>
-                {ws.visibility === 'public' ? t('common.public') : t('common.private')}
+              {repositoryMetadata.name}
+              <span className={`vis-chip${repositoryMetadata.visibility === 'public' ? '' : ' emergency'}`}>
+                {repositoryMetadata.visibility === 'public' ? t('common.public') : t('common.private')}
               </span>
             </h2>
-            <p className="ws-meta">
+            <p className="repository-meta">
               <code>
-                {ws.owner_username}/{ws.slug}
+                {repositoryMetadata.owner_username}/{repositoryMetadata.slug}
               </code>
             </p>
-            {ws.visibility !== 'public' && <p className="warn-red">{t('enterprise.emergencySessionNotice')}</p>}
+            {repositoryMetadata.visibility !== 'public' && <p className="warn-red">{t('organization.emergencySessionNotice')}</p>}
           </div>
-
-          {tab !== 'settings' && repos.length > 1 && (
-            <div className="pub-repos">
-              {repos.map((r) => (
-                <button
-                  key={r.id}
-                  className={`ghost mini${activeRepo?.id === r.id ? ' on' : ''}`}
-                  onClick={() => {
-                    setActiveRepoId(r.id);
-                    navigate(repoPath(ws, r));
-                  }}
-                >
-                  {repositorySlug(r) || sanitizeRemoteUrl(r.remote_url) || r.id.slice(7, 19)}
-                </button>
-              ))}
-            </div>
-          )}
 
           <section className="panel">
             {tab === 'settings' ? (
-              <AccessDenied message={t('dashboard.workspaceAccessDenied')} />
+              <AccessDenied message={t('dashboard.repositoryAccessDenied')} />
             ) : activeRepo ? (
-              <ContextView repo={activeRepo} ws={ws} role={null} />
+              <ContextView repo={activeRepo} repositoryMetadata={repositoryMetadata} role={null} />
             ) : (
               <div className="empty-box">{t('common.noPushedContext')}</div>
             )}

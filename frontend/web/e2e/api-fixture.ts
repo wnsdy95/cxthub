@@ -83,7 +83,7 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
       // Graph-only fixtures contain no effective memory items. Memory behavior
       // tests supply their own response and consume Go's real position resolver.
       ?? (input.method === 'GET' && input.pathname.endsWith('/effective-memory') ? {body:{selection:{snapshot_id:input.searchParams.get('snapshot_id'),code_commit:input.searchParams.get('code_commit')},revision:{graph:'1',pending:'1'},state_hash:'fixture',lineage_hash:'fixture',items:[],total:0,next_cursor:''}} : undefined)
-      ?? (request.method() === 'GET' && /^\/api\/v1\/workspaces\/[^/]+\/notifications$/.test(url.pathname) ? { body: [] } : undefined)
+      ?? (request.method() === 'GET' && /^\/api\/v1\/repositories\/[^/]+\/notifications$/.test(url.pathname) ? { body: [] } : undefined)
       ?? (request.method() === 'GET' && /^\/api\/v1\/repos\/[^/]+\/prs\/promotions$/.test(url.pathname) ? { body: [] } : undefined);
     if (!response) {
       unexpected.push(key);

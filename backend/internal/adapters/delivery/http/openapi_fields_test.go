@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/graphwire"
+	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
@@ -19,6 +20,16 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		schema string
 		typ    reflect.Type
 	}{
+		{"Repository", reflect.TypeOf(repositoryAccessView{})},
+		{"Team", reflect.TypeOf(teamView{})},
+		{"Organization", reflect.TypeOf(organizationAccessView{})},
+		{"TeamMembership", reflect.TypeOf(domain.TeamMembership{})},
+		{"TeamRepositoryGrant", reflect.TypeOf(domain.TeamRepositoryGrant{})},
+		{"Enterprise", reflect.TypeOf(domain.Enterprise{})},
+		{"EnterprisePolicy", reflect.TypeOf(domain.EnterprisePolicy{})},
+		{"EnterpriseMembership", reflect.TypeOf(domain.EnterpriseMembership{})},
+		{"EnterpriseAuditEvent", reflect.TypeOf(domain.EnterpriseAuditEvent{})},
+		{"RepositoryConnection", reflect.TypeOf(app.RepositoryConnection{})},
 		{"Snapshot", reflect.TypeOf(domain.Snapshot{})},
 		{"HistoryEvent", reflect.TypeOf(domain.HistoryEvent{})},
 		{"GitCreation", reflect.TypeOf(domain.GitCreation{})},
@@ -40,6 +51,7 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"EffectiveMemorySelection", reflect.TypeOf(domain.EffectiveMemorySelection{})},
 		{"MemoryPositions", reflect.TypeOf(domain.MemoryPositions{})},
 		{"MemoryCodePosition", reflect.TypeOf(domain.MemoryCodePosition{})},
+		{"MemoryCodeScope", reflect.TypeOf(domain.MemoryCodeScope{})},
 		{"EffectiveMemoryPage", reflect.TypeOf(domain.EffectiveMemoryPage{})},
 		{"EffectiveMemoryItem", reflect.TypeOf(domain.EffectiveMemoryItem{})},
 		{"CodeSelection", reflect.TypeOf(domain.CodeSelection{})},

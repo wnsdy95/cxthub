@@ -22,11 +22,11 @@ func checkStorageAccountingPG(t *testing.T, s *PostgresStore) {
 		t.Fatal(err)
 	}
 	makeRepo := func(ns string, n int) domain.ContentHash {
-		w := domain.Workspace{ID: domain.NewID("ws_"), Name: fmt.Sprint("Usage", n), Slug: fmt.Sprint("usage", n), OwnerID: u.ID, OwnerUsername: u.Username, OwnerNamespaceID: ns, CreatedAt: now}
-		if err := s.CreateWorkspace(ctx, w); err != nil {
+		w := domain.Repository{ID: domain.NewID("ws_"), Name: fmt.Sprint("Usage", n), Slug: fmt.Sprint("usage", n), OwnerID: u.ID, OwnerUsername: u.Username, OwnerNamespaceID: ns, CreatedAt: now}
+		if err := s.CreateRepository(ctx, w); err != nil {
 			t.Fatal(err)
 		}
-		r := domain.Repo{ID: domain.HashContent([]byte(w.ID)), WorkspaceID: w.ID, RemoteURL: "https://example.test/" + w.ID, DefaultBranch: "main"}
+		r := domain.Repo{ID: domain.HashContent([]byte(w.ID)), RepositoryID: w.ID, RemoteURL: "https://example.test/" + w.ID, DefaultBranch: "main"}
 		if _, err := s.PutRepo(ctx, r); err != nil {
 			t.Fatal(err)
 		}
@@ -218,17 +218,17 @@ func checkStorageAccountingPG(t *testing.T, s *PostgresStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	moving, err := s.GetWorkspace(ctx, rp.WorkspaceID)
+	moving, err := s.GetRepository(ctx, rp.RepositoryID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	moving.OwnerNamespaceID = ns2
 	moving.OwnerID = u2.ID
 	moving.OwnerUsername = u2.Username
-	if err := s.CreateWorkspace(ctx, moving); !errors.Is(err, domain.ErrStorageLimit) {
+	if err := s.CreateRepository(ctx, moving); !errors.Is(err, domain.ErrStorageLimit) {
 		t.Fatal("transfer bypassed cap", err)
 	}
-	stayed, err := s.GetWorkspace(ctx, rp.WorkspaceID)
+	stayed, err := s.GetRepository(ctx, rp.RepositoryID)
 	if err != nil || stayed.OwnerNamespaceID != ns {
 		t.Fatal("failed transfer changed ownership", err)
 	}

@@ -228,7 +228,7 @@ type RemoteSync interface {
 	// UpdateRefRemote requests a single ref move to the server. appendDiverged=true appends the diverged target to the server head without loss (graft) — the promotion path for context merged into the default branch. Targets already behind are rejected by the server as non_fast_forward, so the caller treats it as an idempotent no-op.
 	UpdateRefRemote(ctx context.Context, repoID string, ref domain.Ref, appendDiverged bool) error
 
-	// RegisterRepo registers repo metadata to the server (idempotently) and returns the server-confirmed record (including workspace_id — binding occurs if the remote URL path matches the workspace).
+	// RegisterRepo registers repo metadata to the server (idempotently) and returns the server-confirmed record (including repository_id — binding occurs if the remote URL path matches the repository).
 	// Call before push to ensure the server holds metadata like remote URL (sync protocol).
 	RegisterRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error)
 	// PushMemory advances the server's causal memory attachment using the

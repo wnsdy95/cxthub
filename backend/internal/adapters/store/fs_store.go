@@ -29,8 +29,8 @@ type Store interface {
 	outbound.MetadataStore
 	outbound.BlobStore
 	outbound.VerifiedDocStore
-	outbound.WorkspaceStore
-	outbound.EnterpriseStore
+	outbound.RepositoryStore
+	outbound.OrganizationStore
 	outbound.OAuthStore
 	outbound.PRJobStore
 	outbound.RuntimeStore
@@ -68,6 +68,9 @@ func NewFSStore(dataDir string) *FSStore {
 	s.recoveryErr = s.recoverJoinJournals()
 	if s.recoveryErr == nil {
 		s.recoveryErr = s.recoverHistoryJournals()
+	}
+	if s.recoveryErr == nil {
+		s.recoveryErr = s.migrateOwnership()
 	}
 	return s
 }
@@ -158,6 +161,10 @@ func (s *FSStore) repoDir(repoID domain.ContentHash) string {
 }
 
 func writeAtomic(path string, data []byte) error {
+	return writeAtomicMode(path, data, 0644)
+}
+
+func writeAtomicMode(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -168,7 +175,7 @@ func writeAtomic(path string, data []byte) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -256,8 +263,21 @@ func (s *FSStore) GetRepo(_ context.Context, id domain.ContentHash) (domain.Repo
 	return r, nil
 }
 
-// PutRepo is idempotent: if it already exists, it returns the existing record (sync protocol). Exception: for unowned (workspace_id="") records, it fills in a delayed binding if a new binding arrives.
+// PutRepo is idempotent: if it already exists, it returns the existing record (sync protocol). Exception: for unowned (repository_id="") records, it fills in a delayed binding if a new binding arrives.
 func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
+	if repo.RepositoryID != "" {
+		if err := domain.ValidateRepositoryID(repo.RepositoryID); err != nil {
+			return domain.Repo{}, err
+		}
+		binding := s.repositoryBindingLock(repo.RepositoryID)
+		binding.Lock()
+		defer binding.Unlock()
+		if bound, err := s.GetBoundRepo(ctx, repo.RepositoryID); err == nil && bound.ID != repo.ID {
+			return domain.Repo{}, domain.ErrConflict
+		} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return domain.Repo{}, err
+		}
+	}
 	lock := s.refLock(repo.ID, domain.RefBranch, "")
 	lock.Lock()
 	defer lock.Unlock()
@@ -274,9 +294,12 @@ func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, e
 	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
 	repo.GitRemoteURL = domain.SanitizeRemoteURL(repo.GitRemoteURL)
 	if existing, err := s.GetRepo(ctx, repo.ID); err == nil {
+		if existing.RepositoryID != "" && repo.RepositoryID != "" && existing.RepositoryID != repo.RepositoryID {
+			return domain.Repo{}, domain.ErrConflict
+		}
 		changed := false
-		if existing.WorkspaceID == "" && repo.WorkspaceID != "" {
-			existing.WorkspaceID = repo.WorkspaceID
+		if existing.RepositoryID == "" && repo.RepositoryID != "" {
+			existing.RepositoryID = repo.RepositoryID
 			changed = true
 		}
 		// Registration may fill an unknown origin, but cannot replace established

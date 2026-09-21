@@ -62,40 +62,40 @@ func (s *Service) SaveSecrets(ctx context.Context, in inbound.SaveSecretsInput) 
 }
 
 func (s *Service) authorizeSecretsEdit(ctx context.Context, in inbound.SaveSecretsInput) error {
-	if s.ws == nil {
+	if s.repositories == nil {
 		return domain.ErrForbidden
 	}
 	repo, err := s.meta.GetRepo(ctx, in.RepoID)
 	if err != nil {
 		return err
 	}
-	if repo.WorkspaceID == "" {
+	if repo.RepositoryID == "" {
 		return domain.ErrForbidden
 	}
 	// Prevent revocation, archival or policy changes racing an authorized write.
 	// A transactional store without this capability must not silently weaken it.
 	if _, transactional := s.meta.(outbound.RepositoryTransactions); transactional {
-		locker, ok := s.ws.(outbound.WorkspaceAccessLocker)
+		locker, ok := s.repositories.(outbound.RepositoryAccessLocker)
 		if !ok {
 			return domain.ErrSecretsConsistency
 		}
-		if err := locker.LockWorkspaceAccess(ctx, repo.WorkspaceID, in.ActorID); err != nil {
+		if err := locker.LockRepositoryAccess(ctx, repo.RepositoryID, in.ActorID); err != nil {
 			return err
 		}
 	}
-	wsp, err := s.ws.GetWorkspace(ctx, repo.WorkspaceID)
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repo.RepositoryID)
 	if err != nil {
 		return err
 	}
 	var members []domain.Membership
-	if wsp.OwnerID != in.ActorID {
-		members, err = s.ws.ListMembers(ctx, wsp.ID)
+	if repositoryRecord.OwnerID != in.ActorID {
+		members, err = s.repositories.ListMembers(ctx, repositoryRecord.ID)
 		if err != nil {
 			return err
 		}
 	}
-	role, ok := domain.WorkspaceRole(wsp, members, in.ActorID)
-	if !ok || !domain.CanEditSecrets(wsp, role) {
+	role, ok := domain.RepositoryRole(repositoryRecord, members, in.ActorID)
+	if !ok || !domain.CanEditSecrets(repositoryRecord, role) {
 		return domain.ErrForbidden
 	}
 	return nil

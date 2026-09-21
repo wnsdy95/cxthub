@@ -27,8 +27,8 @@ type SecretsCASStore interface {
 	CompareAndSwapSecrets(context.Context, domain.ContentHash, []byte, []byte) error
 }
 
-// WorkspaceAccessLocker pins workspace policy and the actor's membership for the
+// RepositoryAccessLocker pins repository policy and the actor's membership for the
 // surrounding repository transaction. This is a storage lock, not a role policy.
-type WorkspaceAccessLocker interface {
-	LockWorkspaceAccess(context.Context, string, string) error
+type RepositoryAccessLocker interface {
+	LockRepositoryAccess(context.Context, string, string) error
 }

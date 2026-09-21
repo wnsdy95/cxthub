@@ -58,7 +58,7 @@ move together.
   `cxtd` remote.
 - **Retrieval** — let Codex, Claude, and compatible agents inspect server-side
   repository context through the OAuth-protected remote MCP server.
-- **Review** — inspect history, comparisons, pending sessions, and workspace
+- **Review** — inspect history, comparisons, pending sessions, and repository
   state in the web interface.
 
 The underlying model is deliberately Git-like:
@@ -105,7 +105,7 @@ and the separate `cxtd` server.
 Run these commands inside an existing Git repository:
 
 ```bash
-cxt setup https://<host>/<namespace>/<workspace>/<repository>
+cxt setup https://<host>/<owner>/<repository>
 cxt remote -v
 ```
 

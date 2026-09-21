@@ -139,7 +139,7 @@ storage-price proposals are preserved only in [Pricing status](../docs/PRICING.m
 
 The inactive entitlement foundation below is available for development tests
 and a future, separately approved paid rollout. Its Enterprise candidate includes
-50 GiB and excess metering. Workspace count is unrestricted; request and payload
+50 GiB and excess metering. Repository count is unrestricted; request and payload
 limits still apply. Customer REST and MCP routes cannot assign or upgrade plans.
 
 Operators use a separate tool with the deployment database credential. A policy

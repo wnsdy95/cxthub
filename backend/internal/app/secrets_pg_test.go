@@ -18,7 +18,7 @@ import (
 func TestPGSecretsConcurrentEditingBaseline(t *testing.T) {
 	_, st, _ := collaborationPG(t)
 	ctx := context.Background()
-	wsp, in := seedSecretsRepo(t, st, st)
+	repositoryRecord, in := seedSecretsRepo(t, st, st)
 	// This fixture checks enqueue only. Remove its own undelivered test jobs so
 	// repeated suites do not feed them to another worker test's global queue.
 	t.Cleanup(func() {
@@ -30,13 +30,13 @@ func TestPGSecretsConcurrentEditingBaseline(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		if _, err := conn.Exec(cleanup, "DELETE FROM notification_outbox WHERE workspace_id=$1", wsp.ID); err != nil {
+		if _, err := conn.Exec(cleanup, "DELETE FROM notification_outbox WHERE repository_id=$1", repositoryRecord.ID); err != nil {
 			t.Error(err)
 		}
 	})
 
-	wsp.WebhookURL = "https://example.test/secrets-test"
-	if err := st.CreateWorkspace(ctx, wsp); err != nil {
+	repositoryRecord.WebhookURL = "https://example.test/secrets-test"
+	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
 	peer, err := store.NewPostgresStore(ctx, collaborationDSN(t))
@@ -66,7 +66,7 @@ func TestPGSecretsConcurrentEditingBaseline(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("accepted %d concurrent initial writes", wins)
 	}
-	jobs, err := st.ListNotifications(ctx, wsp.ID)
+	jobs, err := st.ListNotifications(ctx, repositoryRecord.ID)
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("notifications %d: %v", len(jobs), err)
 	}
@@ -109,12 +109,12 @@ func TestPGSecretsAuthorizationPinnedUntilCommit(t *testing.T) {
 	_, st, _ := collaborationPG(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	wsp, in := seedSecretsRepo(t, st, st)
+	repositoryRecord, in := seedSecretsRepo(t, st, st)
 	member := domain.User{ID: domain.NewID("user_"), Username: "m" + domain.NewID("")[:12], Email: "maintainer@example.test", Name: "Maintainer"}
 	if err := st.UpsertUser(ctx, member); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddMember(ctx, domain.Membership{WorkspaceID: wsp.ID, UserID: member.ID, Role: domain.RoleMaintainer}); err != nil {
+	if err := st.AddMember(ctx, domain.Membership{RepositoryID: repositoryRecord.ID, UserID: member.ID, Role: domain.RoleMaintainer}); err != nil {
 		t.Fatal(err)
 	}
 	in.ActorID = member.ID
@@ -139,11 +139,11 @@ func TestPGSecretsAuthorizationPinnedUntilCommit(t *testing.T) {
 	// Both operations would invalidate the authorization that has already passed.
 	// Their row updates must wait for the command transaction to finish.
 	for _, change := range []func(context.Context) error{
-		func(ctx context.Context) error { return peer.RemoveMember(ctx, wsp.ID, member.ID) },
+		func(ctx context.Context) error { return peer.RemoveMember(ctx, repositoryRecord.ID, member.ID) },
 		func(ctx context.Context) error {
-			changed := wsp
+			changed := repositoryRecord
 			changed.SecretsPolicy = "owner"
-			return peer.CreateWorkspace(ctx, changed)
+			return peer.CreateRepository(ctx, changed)
 		},
 	} {
 		blocked, stop := context.WithTimeout(ctx, 250*time.Millisecond)
@@ -157,7 +157,7 @@ func TestPGSecretsAuthorizationPinnedUntilCommit(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if err := peer.RemoveMember(ctx, wsp.ID, member.ID); err != nil {
+	if err := peer.RemoveMember(ctx, repositoryRecord.ID, member.ID); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := st.GetSecretsEnvelope(ctx, in.RepoID)

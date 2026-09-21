@@ -1,25 +1,24 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { Invite } from '../types';
-import type { Workspace } from '../types';
+import type { Repository } from '../types';
 import { useUiStore } from '../store';
 import {
-  wsPath,
+  repositoryPath,
   repoPath,
-  repositorySlug,
   invitePath,
   parseRoute,
   findByRoute,
   findRepositoryByRoute,
-  resolvedWorkspaceTab,
+  resolvedRepositoryTab,
   navigate,
   replacePath,
 } from '../route';
 import {
   useMe,
-  useWorkspaces,
+  useRepositories,
   useMembers,
   useRepos,
-  useCreateWorkspace,
+  useCreateRepository,
   useCreateInvite,
   useInvites,
   useRevokeInvite,
@@ -33,7 +32,7 @@ import { useT } from '../i18n';
 import { Breadcrumb } from './Breadcrumb';
 import { ContextView } from './ContextView';
 import { OnHoldView } from './OnHoldView';
-import { AccountSettings, WorkspaceSettings } from './Settings';
+import { AccountSettings, RepositorySettings } from './Settings';
 import { RoleCapabilities } from './RoleCapabilities';
 import { LockIcon } from './Breadcrumb';
 import { myRole, atLeast, ROLES } from '../roles';
@@ -47,28 +46,26 @@ function short(hash: string): string {
 export function Dashboard() {
   const t = useT();
   const user = useMe().data;
-  const selectedId = useUiStore((s) => s.selectedWorkspaceId);
-  const selectWs = useUiStore((s) => s.selectWorkspace);
+  const selectedId = useUiStore((s) => s.selectedRepositoryId);
+  const selectRepository = useUiStore((s) => s.selectRepository);
 
-  const workspacesQ = useWorkspaces();
-  const workspaces = workspacesQ.data ?? [];
+  const repositoriesQ = useRepositories();
+  const repositories = repositoriesQ.data ?? [];
   // Guard against null with [] (backend can return null for empty lists — destructuring defaults only cover undefined).
   const members = useMembers(selectedId).data ?? [];
   const repos = useRepos(selectedId).data ?? [];
 
-  const createWs = useCreateWorkspace();
+  const createRepositoryAction = useCreateRepository();
   const logout = useLogout();
   const setRole = useUpdateMemberRole();
   const removeMember = useRemoveMember();
 
   const [newName, setNewName] = useState('');
-  // Workspace name rules (enforced in English): start with a letter, end with a letter or number, middle can be letters, numbers, -, or _.
+  // Repository name rules (enforced in English): start with a letter, end with a letter or number, middle can be letters, numbers, -, or _.
   const NAME_RE = /^[A-Za-z]([A-Za-z0-9_-]*[A-Za-z0-9])?$/;
   const nameValid = NAME_RE.test(newName.trim());
 
-  // View one repository within the selected workspace. The route wins over
-  // local state so refresh/back/deep links select the same context DAG.
-  const [activeRepoId, setActiveRepoId] = useState<string | null>(null);
+  // A repository has one stable content identity; routes never select an arbitrary child.
   const [accessNotice, setAccessNotice] = useState<string | null>(null);
 
   // URL (/<username>/<slug>) → synchronize selection. The URL is the source of truth on entry, refresh, and back navigation.
@@ -81,40 +78,39 @@ export function Dashboard() {
     return () => window.removeEventListener('popstate', onChange);
   }, []);
   useEffect(() => {
-    const found = findByRoute(parseRoute(path.pathname, path.search), workspaces);
-    if (found) selectWs(found.id);
-  }, [path, workspaces, selectWs]);
+    const found = findByRoute(parseRoute(path.pathname, path.search), repositories);
+    if (found) selectRepository(found.id);
+  }, [path, repositories, selectRepository]);
 
-  // After list load: if URL doesn't point to my workspace, correct to the first item (without history).
+  // After list load: if URL doesn't point to my repository, correct to the first item (without history).
   // Invite paths (/invite/…) are handled by App on accept→redirect, so don't interfere here.
   useEffect(() => {
-    if (!workspacesQ.isSuccess || workspaces.length === 0) return;
+    if (!repositoriesQ.isSuccess || repositories.length === 0) return;
     const route = parseRoute(path.pathname, path.search);
     if (route?.kind === 'invite') return;
-    if (!findByRoute(route, workspaces)) {
-      selectWs(workspaces[0].id);
-      replacePath(wsPath(workspaces[0]));
+    if (!findByRoute(route, repositories)) {
+      selectRepository(repositories[0].id);
+      replacePath(repositoryPath(repositories[0]));
     }
-  }, [workspacesQ.isSuccess, workspaces, path, selectWs]);
+  }, [repositoriesQ.isSuccess, repositories, path, selectRepository]);
 
   const route = parseRoute(path.pathname, path.search);
   const routedRepo = findRepositoryByRoute(route, repos);
-  const activeRepo = routedRepo ?? repos.find((r) => r.id === activeRepoId) ?? repos[0] ?? null;
+  const activeRepo = routedRepo;
 
-  // Workspace click = navigate to that path (history is pushed for back action).
-  function goWorkspace(w: Workspace) {
+  // Repository click = navigate to that path (history is pushed for back action).
+  function goRepository(w: Repository) {
     setAccessNotice(null);
-    selectWs(w.id);
-    navigate(wsPath(w));
+    selectRepository(w.id);
+    navigate(repositoryPath(w));
   }
 
-  const selected = workspaces.find((w) => w.id === selectedId) ?? null;
+  const selected = repositories.find((w) => w.id === selectedId) ?? null;
   // My role — UI gating (security boundary is server requireRepoRole).
   const role = myRole(selected, user?.id, members);
 
-  // The URL is the source of truth. Legacy /<u>/<ws>/settings is interpreted
-  // as a tab only if this workspace has no repository literally named settings.
-  const routedTab = resolvedWorkspaceTab(route, repos);
+  // Tabs are query parameters, independent of repository names.
+  const routedTab = resolvedRepositoryTab(route, repos);
   const tab: 'context' | 'connections' | 'members' | 'onhold' | 'settings' =
     routedTab === 'members' || routedTab === 'connections' || routedTab === 'onhold' || routedTab === 'settings'
       ? routedTab
@@ -122,34 +118,34 @@ export function Dashboard() {
   function goTab(next: 'context' | 'connections' | 'members' | 'onhold' | 'settings') {
     if (!selected) return;
     if (next === 'settings' && !atLeast(role, 'owner')) {
-      setAccessNotice(t('dashboard.workspaceAccessDenied'));
+      setAccessNotice(t('dashboard.repositoryAccessDenied'));
       return;
     }
     setAccessNotice(null);
     if (next === 'context') {
-      navigate(activeRepo ? repoPath(selected, activeRepo) : wsPath(selected));
+      navigate(activeRepo ? repoPath(selected, activeRepo) : repositoryPath(selected));
       return;
     }
     if (next === 'onhold') {
       if (activeRepo) navigate(repoPath(selected, activeRepo, 'onhold'));
       return;
     }
-    navigate(wsPath(selected, next));
+    navigate(repositoryPath(selected, next));
   }
 
-  function createWorkspace(e: FormEvent) {
+  function createRepository(e: FormEvent) {
     e.preventDefault();
     const name = newName.trim();
     if (!name || !nameValid) return;
-    createWs.mutate(name, {
+    createRepositoryAction.mutate(name, {
       onSuccess: (w) => {
         setNewName('');
-        goWorkspace(w);
+        goRepository(w);
       },
     });
   }
 
-  const err = workspacesQ.error ?? createWs.error;
+  const err = repositoriesQ.error ?? createRepositoryAction.error;
 
   return (
     <div className="app">
@@ -164,11 +160,10 @@ export function Dashboard() {
             <Breadcrumb
               owner={selected.owner_username}
               name={selected.name}
-              repository={activeRepo ? repositorySlug(activeRepo) : undefined}
               isPrivate={selected.visibility !== 'public'}
-              workspaces={workspaces}
+              repositories={repositories}
               currentId={selected.id}
-              onSelect={goWorkspace}
+              onSelect={goRepository}
             />
           )}
         </div>
@@ -185,28 +180,28 @@ export function Dashboard() {
       <div className="cols">
         <aside className="app-side">
           <div className="side-head">
-            <span className="label">{t('common.workspaces')}</span>
-            <span className="count-badge">{workspaces.length}</span>
+            <span className="label">{t('common.repositories')}</span>
+            <span className="count-badge">{repositories.length}</span>
           </div>
-          {workspacesQ.isLoading ? (
-            <div className="ws-list" aria-hidden="true">
+          {repositoriesQ.isLoading ? (
+            <div className="repository-list" aria-hidden="true">
               <div className="skel" />
               <div className="skel" />
               <div className="skel" />
             </div>
           ) : (
-            <ul className="ws-list">
-              {workspaces.map((w) => (
+            <ul className="repository-list">
+              {repositories.map((w) => (
                 <li key={w.id}>
-                  <button className={`ws-item${selectedId === w.id ? ' on' : ''}`} onClick={() => goWorkspace(w)}>
+                  <button className={`repository-item${selectedId === w.id ? ' on' : ''}`} onClick={() => goRepository(w)}>
                     {w.name}
                   </button>
                 </li>
               ))}
-              {workspaces.length === 0 && <li className="ws-empty">{t('dashboard.noWorkspacesShort')}</li>}
+              {repositories.length === 0 && <li className="repository-empty">{t('dashboard.noRepositoriesShort')}</li>}
             </ul>
           )}
-          <form onSubmit={createWorkspace} className="newws">
+          <form onSubmit={createRepository} className="newws">
             <input
               placeholder={t('dashboard.newWsPlaceholder')}
               aria-label={t('dashboard.newWsAria')}
@@ -215,8 +210,8 @@ export function Dashboard() {
               spellCheck={false}
             />
             {newName.trim() !== '' && !nameValid && <p className="err name-rule">{t('dashboard.nameRule')}</p>}
-            <button type="submit" disabled={createWs.isPending || !nameValid}>
-              {createWs.isPending ? t('common.creating') : t('dashboard.createWs')}
+            <button type="submit" disabled={createRepositoryAction.isPending || !nameValid}>
+              {createRepositoryAction.isPending ? t('common.creating') : t('dashboard.createRepositoryAction')}
             </button>
           </form>
         </aside>
@@ -225,10 +220,10 @@ export function Dashboard() {
           {err && <p className="err-banner">{err.message}</p>}
           {selected ? (
             <>
-              <div className="ws-head">
+              <div className="repository-head">
                 <h2>
                   {selected.name}
-                  <span className="ws-card-vis">
+                  <span className="repository-card-vis">
                     {selected.visibility === 'public' ? (
                       t('common.public')
                     ) : (
@@ -238,7 +233,7 @@ export function Dashboard() {
                     )}
                   </span>
                 </h2>
-                <p className="ws-meta">
+                <p className="repository-meta">
                   <code>
                     {selected.owner_username}/{selected.slug}
                   </code>
@@ -272,7 +267,7 @@ export function Dashboard() {
 
               {tab === 'members' ? (
                 <>
-                  {atLeast(role, 'maintainer') && <InvitePanel key={selected.id} wsId={selected.id} />}
+                  {atLeast(role, 'maintainer') && <InvitePanel key={selected.id} repositoryId={selected.id} />}
 
                   <RoleCapabilities />
 
@@ -285,9 +280,7 @@ export function Dashboard() {
                     <ul className="members">
                       {members.map((m) => {
                         const isCreator = m.user_id === selected.owner_id; // Creator — role fixed and removal not allowed
-                        const iAmOwner =
-                          user?.id === selected.owner_id ||
-                          members.some((x) => x.user_id === user?.id && x.role === 'owner');
+                        const iAmOwner = role === 'owner';
                         const isSelf = m.user_id === user?.id;
                         return (
                           <li key={m.user_id}>
@@ -298,7 +291,7 @@ export function Dashboard() {
                                 className="role-select"
                                 value={m.role}
                                 onChange={(e) =>
-                                  setRole.mutate({ wsId: selected.id, userId: m.user_id, role: e.target.value as 'owner' | 'member' })
+                                  setRole.mutate({ repositoryId: selected.id, userId: m.user_id, role: e.target.value as 'owner' | 'member' })
                                 }
                                 disabled={setRole.isPending}
                                 aria-label={t('dashboard.roleChangeAria')}
@@ -315,7 +308,7 @@ export function Dashboard() {
                             {!isCreator && (iAmOwner || isSelf) && (
                               <button
                                 className="ghost mini"
-                                onClick={() => removeMember.mutate({ wsId: selected.id, userId: m.user_id })}
+                                onClick={() => removeMember.mutate({ repositoryId: selected.id, userId: m.user_id })}
                                 disabled={removeMember.isPending}
                               >
                                 {isSelf ? t('dashboard.leave') : t('common.remove')}
@@ -339,13 +332,13 @@ export function Dashboard() {
                     </h4>
                   </div>
                   {activeRepo ? (
-                    <ContextView repo={activeRepo} ws={selected} role={role} />
+                    <ContextView repo={activeRepo} repositoryMetadata={selected} role={role} />
                   ) : (
                     <div className="empty-box">
                       {t('dashboard.contextEmptyLead')}
                       <br />
                       <code>
-                        cxt setup {location.origin}/{selected.owner_username}/{selected.slug}/&lt;{t('dashboard.repoName')}&gt;
+                        cxt setup {location.origin}/{selected.owner_username}/{selected.slug}
                       </code>
                       <br />
                       {t('dashboard.contextEmptyTail')}
@@ -361,7 +354,7 @@ export function Dashboard() {
                     </h4>
                   </div>
                   {activeRepo ? (
-                    <OnHoldView repo={activeRepo} ws={selected} role={role} />
+                    <OnHoldView repo={activeRepo} repositoryMetadata={selected} role={role} />
                   ) : (
                     <div className="empty-box">{t('dashboard.noRepo')}</div>
                   )}
@@ -371,17 +364,17 @@ export function Dashboard() {
               {tab === 'settings' && user && atLeast(role, 'owner') && (
                 <section className="panel">
                   <div className="panel-head">
-                    <h4>{t('dashboard.wsSettings')}</h4>
+                    <h4>{t('dashboard.repositorySettings')}</h4>
                   </div>
-                  <WorkspaceSettings ws={selected} isCreator={user.id === selected.owner_id} />
+                  <RepositorySettings repositoryMetadata={selected} isCreator={user.id === selected.owner_id} />
                 </section>
               )}
               {tab === 'settings' && (!user || !atLeast(role, 'owner')) && (
                 <section className="panel">
                   <div className="panel-head">
-                    <h4>{t('dashboard.wsSettings')}</h4>
+                    <h4>{t('dashboard.repositorySettings')}</h4>
                   </div>
-                  <AccessDenied message={t('dashboard.workspaceAccessDenied')} />
+                  <AccessDenied message={t('dashboard.repositoryAccessDenied')} />
                 </section>
               )}
 
@@ -401,7 +394,6 @@ export function Dashboard() {
                             <button
                               className={`repo-row${activeRepo?.id === r.id ? ' on' : ''}`}
                               onClick={() => {
-                                setActiveRepoId(r.id);
                                 navigate(repoPath(selected, r));
                               }}
                               title={t('dashboard.viewRepoContext')}
@@ -430,7 +422,7 @@ export function Dashboard() {
                     <div className="empty-box">
                       {t('dashboard.connEmptyPre')}
                       <code>
-                        cxt setup {location.origin}/{selected.owner_username}/{selected.slug}/&lt;{t('dashboard.repoName')}&gt;
+                        cxt setup {location.origin}/{selected.owner_username}/{selected.slug}
                       </code>
                       {t('dashboard.connEmptyTail')}
                     </div>
@@ -438,10 +430,10 @@ export function Dashboard() {
                 </section>
               )}
             </>
-          ) : workspacesQ.isLoading ? (
+          ) : repositoriesQ.isLoading ? (
             <div className="skel" style={{ height: 120, marginTop: '8vh' }} aria-label={t('common.loadingLabel')} />
           ) : (
-            <div className="empty-box">{t('dashboard.pickWorkspace')}</div>
+            <div className="empty-box">{t('dashboard.pickRepository')}</div>
           )}
         </main>
       </div>
@@ -451,11 +443,11 @@ export function Dashboard() {
 
 // InvitePanel — Invite management (maintainer and above): create (role and email restrictions) + pending list + revoke.
 // Like GitHub, all invite records are kept (including revoked) — only pending is shown by default.
-function InvitePanel({ wsId }: { wsId: string }) {
+function InvitePanel({ repositoryId }: { repositoryId: string }) {
   const t = useT();
   const createInv = useCreateInvite();
   const revoke = useRevokeInvite();
-  const invites = useInvites(wsId, true).data ?? [];
+  const invites = useInvites(repositoryId, true).data ?? [];
   const [role, setRole] = useState('member');
   const [email, setEmail] = useState('');
   const [expDays, setExpDays] = useState(0); // 0=unlimited
@@ -474,7 +466,7 @@ function InvitePanel({ wsId }: { wsId: string }) {
 
   function make() {
     createInv.mutate(
-      { workspaceId: wsId, role, email: email.trim(), expiresInDays: expDays },
+      { repositoryId: repositoryId, role, email: email.trim(), expiresInDays: expDays },
       {
         onSuccess: (inv) => {
           setMade(inv);
@@ -553,7 +545,7 @@ function InvitePanel({ wsId }: { wsId: string }) {
                   </button>
                   <button
                     className="ghost mini"
-                    onClick={() => revoke.mutate({ workspaceId: wsId, token: i.token })}
+                    onClick={() => revoke.mutate({ repositoryId: repositoryId, token: i.token })}
                     disabled={revoke.isPending}
                   >
                     {t('dashboard.revoke')}

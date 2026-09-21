@@ -34,14 +34,14 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 		Username string `json:"username"`
 	}
 	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
-	var ws struct {
+	var repositoryRecord struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "GitChanges"}, &ws); code != 200 {
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "GitChanges"}, &repositoryRecord); code != 200 {
 		t.Fatal(code)
 	}
-	remote := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remote := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	repo := repoIDForRemoteURLForTest(remote)
 	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": repo, "remote_url": remote, "git_remote_url": "https://github.com/example/changes", "default_branch": "main"}, nil); code != 200 {
 		t.Fatal(code)
@@ -78,7 +78,7 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 	if res.StatusCode != 415 {
 		t.Fatal("missing content type accepted", res.StatusCode)
 	}
-	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+ws.ID, map[string]any{"visibility": "public", "public_role": "viewer"}, nil); code != 200 {
+	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/repositories/"+repositoryRecord.ID, map[string]any{"visibility": "public", "public_role": "viewer"}, nil); code != 200 {
 		t.Fatal(code)
 	}
 	if code := doJSONAs(t, "", "GET", endpoint, nil, nil); code != 200 {
@@ -127,7 +127,7 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 		t.Fatal("invalid position accepted", status)
 	}
 	// Return to a private repository: the read must obey the same viewer guard.
-	if status := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+ws.ID, map[string]any{"visibility": "private"}, nil); status != 200 {
+	if status := doJSON(t, "PATCH", ts.URL+"/api/v1/repositories/"+repositoryRecord.ID, map[string]any{"visibility": "private"}, nil); status != 200 {
 		t.Fatal(status)
 	}
 	if status := doJSONAs(t, "dev:outsider@example.test:Other", "GET", codeURL, nil, nil); status != 403 {

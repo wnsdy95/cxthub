@@ -6,7 +6,7 @@ git config --global url."$TMP/publication-code.git".insteadOf https://git.exampl
 mkdir -p "$TMP/publication-client"; cd "$TMP/publication-client"
 git init -q; git remote add origin https://git.example.test/acme/publication.git
 cxt init >/dev/null 2>&1
-PUB_SLUG=$(ccurl -sb "$J" -X POST "$B/workspaces" -H 'Content-Type: application/json' -d '{"name":"PublicationE2E"}' | jget "['slug']")
+PUB_SLUG=$(ccurl -sb "$J" -X POST "$B/repositories" -H 'Content-Type: application/json' -d '{"name":"PublicationE2E"}' | jget "['slug']")
 PUB_REMOTE="$ORIGIN/$OWN/$PUB_SLUG"
 cxt remote add origin "$PUB_REMOTE" >/dev/null 2>&1
 session "$PWD" PUBBASE

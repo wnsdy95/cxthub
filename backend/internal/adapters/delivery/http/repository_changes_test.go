@@ -60,11 +60,11 @@ func TestRepositoryChangesAuthorizationAndPendingDelivery(t *testing.T) {
 	if doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me) != 200 {
 		t.Fatal("login")
 	}
-	var ws struct{ Slug string }
-	if doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "Revision"}, &ws) != 200 {
-		t.Fatal("workspace")
+	var repositoryRecord struct{ Slug string }
+	if doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Revision"}, &repositoryRecord) != 200 {
+		t.Fatal("repository")
 	}
-	remote := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remote := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	repo := repoIDForRemoteURLForTest(remote)
 	if doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": repo, "remote_url": remote}, nil) != 200 {
 		t.Fatal("repo")

@@ -139,20 +139,20 @@ Release as the archive and is not a separate publisher signature.
 
 ## Set up a repository
 
-Run `cxt` inside an existing Git repository. A Workspace can contain multiple
-Repositories, so use the Repository URL shown in the web UI:
+Run `cxt` inside an existing Git repository. A User or Organization directly owns each
+Repository. Use the canonical address shown in the web UI:
 
 ```bash
 cd /path/to/code-repository
-cxt setup https://<host>/<namespace>/<workspace>/<repository>
+cxt setup https://<host>/<owner>/<repository>
 ```
 
 `cxt setup` is idempotent and performs:
 
 1. local `.cxt` store initialization;
 2. managed Git hook installation;
-3. repository remote registration;
-4. browser-based login;
+3. browser-based login, unless a credential already exists;
+4. verified repository remote registration;
 5. Claude Code and Codex hook registration when available; and
 6. team settings pull when authenticated.
 
@@ -203,10 +203,11 @@ To initialize local-only storage without a remote:
 cxt init
 ```
 
-To skip browser login during setup:
+To skip browser login during setup (requires an existing credential or
+`CXT_TOKEN` for private repositories):
 
 ```bash
-cxt setup https://<host>/<namespace>/<workspace>/<repository> --no-login
+cxt setup https://<host>/<owner>/<repository> --no-login
 ```
 
 See the [CLI reference](CLI.md) for manual setup and all commands.
@@ -321,10 +322,10 @@ then bind development authentication only to loopback:
 ./bin/cxtd serve --addr 127.0.0.1:8907 --data ./cxt-data
 ```
 
-Connect a test Git repository with a workspace-shaped URL:
+Connect a test Git repository with a repository-shaped URL:
 
 ```bash
-cxt setup http://127.0.0.1:8907/<namespace>/<workspace>/<repository> --no-login
+cxt setup http://127.0.0.1:8907/<owner>/<repository> --no-login
 ```
 
 Development authentication and the filesystem store are for trusted local
@@ -357,15 +358,18 @@ installer, or add the installation directory to `PATH`.
 
 ### Repository URL rejected
 
-Use an HTTP or HTTPS URL with a Namespace, Workspace, and Repository segment:
+Use an HTTP or HTTPS URL with owner and repository segments:
 
 ```text
-https://<host>/<namespace>/<workspace>/<repository>
+https://<host>/<owner>/<repository>
 ```
 
-Credentials, query strings, fragments, one-segment paths, and paths deeper
-than three segments are rejected. Existing two-segment remotes are accepted
-only as stable legacy repository identities.
+The server resolves this display address before the CLI stores its connection.
+Existing two- and three-segment connections keep their original repository IDs.
+Three-segment addresses only resolve when registered as exact migration aliases;
+arbitrary extra path segments are rejected. Credentials, query strings,
+fragments, and one-segment paths are rejected. New connections require a
+reachable server and sufficient access; existing remotes are not rewritten.
 
 ### No active session to snapshot
 
@@ -389,3 +393,10 @@ may remain in shell history.
 Development authentication is intentionally restricted to loopback. Use
 `127.0.0.1` for local testing or configure production authentication before
 binding to an external interface.
+
+## Upgrading the ownership model
+
+Existing installations must follow the coordinated backup and migration steps in
+[Repository ownership upgrade](REPOSITORY_ORGANIZATIONS.md#upgrade-and-recovery).
+The migration preserves content repository IDs and existing CLI remotes while
+flattening old containers into independently owned repositories.

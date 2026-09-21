@@ -23,16 +23,16 @@ func TestTypedMemoryAttachmentVersionGateAndAuthorization(t *testing.T) {
 	var me struct {
 		Username string `json:"username"`
 	}
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
 	if status := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); status != 200 {
 		t.Fatal(status)
 	}
-	if status := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]string{"name": "Typed-memory"}, &ws); status != 200 {
+	if status := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]string{"name": "Typed-memory"}, &repositoryRecord); status != 200 {
 		t.Fatal(status)
 	}
-	remote := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remote := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	repo := repoIDForRemoteURLForTest(remote)
 	if status := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": repo, "remote_url": remote, "default_branch": "main"}, nil); status != 200 {
 		t.Fatal(status)

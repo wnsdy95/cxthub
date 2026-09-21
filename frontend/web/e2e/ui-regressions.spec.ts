@@ -11,7 +11,7 @@ const auditSnapshot = (hash: string, branch: string, parents: string[], message:
 });
 
 const repoId = 'repo-1';
-const workspaceId = 'workspace-1';
+const repositoryId = 'repository-1';
 
 function id(char: string): string {
   return `sha256:${char.repeat(64)}`;
@@ -60,16 +60,16 @@ function docResponse(pathname: string, searchParams = new URLSearchParams()) {
   return { body: { hash, envelope: doc.cir.envelope, events: doc.cir.events.slice(offset), total: doc.cir.events.length, offset, next: -1, inherited: 0 } };
 }
 
-function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unknown[] = [], unsync: unknown[] = [], reflog: unknown[] = [], history: unknown[] = []) {
+function publicRepositoryApi(snapshots: unknown[], refs: unknown[], pending: unknown[] = [], unsync: unknown[] = [], reflog: unknown[] = [], history: unknown[] = []) {
   return ({ method, pathname, searchParams }: ApiRequest): ApiResponse | undefined => {
     if (method !== 'GET') return undefined;
     if (pathname === '/api/v1/me') {
       return { status: 401, body: { error: { message: 'anonymous fixture' } } };
     }
-    if (pathname === '/api/v1/public/workspaces/alice/cxthub') {
+    if (pathname === '/api/v1/public/repositories/alice/cxthub') {
       return {
         body: {
-          id: workspaceId,
+          id: repositoryId,
           name: 'cxthub',
           slug: 'cxthub',
           owner_username: 'alice',
@@ -79,7 +79,7 @@ function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unkn
         },
       };
     }
-    if (pathname === '/api/v1/repos' && searchParams.get('workspace') === workspaceId) {
+    if (pathname === '/api/v1/repos' && searchParams.get('repository') === repositoryId) {
       return {
         body: [
           {
@@ -116,7 +116,7 @@ function publicWorkspaceApi(snapshots: unknown[], refs: unknown[], pending: unkn
   };
 }
 
-async function openGraph(page: Page, responder: ReturnType<typeof publicWorkspaceApi>) {
+async function openGraph(page: Page, responder: ReturnType<typeof publicRepositoryApi>) {
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, responder);
   await page.goto('/alice/cxthub');
@@ -124,77 +124,19 @@ async function openGraph(page: Page, responder: ReturnType<typeof publicWorkspac
   return { pageErrors, unexpected };
 }
 
-test('repository route keeps the selected context DAG across navigation and reload', async ({ page }) => {
+test('legacy repository alias resolves to one canonical DAG across reload', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
-  const repositoryIds = { backend: 'repo-backend', frontend: 'repo-frontend' } as const;
-  const responder = ({ method, pathname, searchParams }: ApiRequest): ApiResponse | undefined => {
-    if (method !== 'GET') return undefined;
-    if (pathname === '/api/v1/me') return { status: 401, body: { error: { message: 'anonymous fixture' } } };
-    if (pathname === '/api/v1/public/workspaces/alice/cxthub') {
-      return {
-        body: {
-          id: workspaceId,
-          name: 'cxthub',
-          slug: 'cxthub',
-          owner_username: 'alice',
-          visibility: 'public',
-          public_role: 'viewer',
-          created_at: '2026-08-01T00:00:00Z',
-        },
-      };
-    }
-    if (pathname === '/api/v1/repos' && searchParams.get('workspace') === workspaceId) {
-      return {
-        body: Object.entries(repositoryIds).map(([name, id]) => ({
-          id,
-          remote_url: `https://cxthub.com/alice/cxthub/${name}`,
-          default_branch: 'main',
-        })),
-      };
-    }
-    for (const [name, repositoryId] of Object.entries(repositoryIds)) {
-      const snapshotId = name === 'backend' ? id('6') : id('7');
-      if (pathname === `/api/v1/repos/${repositoryId}/refs`) {
-        return { body: [{ kind: 'branch', name: 'main', repo_id: repositoryId, target: snapshotId }] };
-      }
-      if (pathname === `/api/v1/repos/${repositoryId}/snapshots`) {
-        return {
-          body: [{
-            id: snapshotId,
-            repo_id: repositoryId,
-            branch: 'main',
-            parents: [],
-            doc_hash: snapshotId,
-            provider: 'codex',
-            fidelity: 'full',
-            message: `${name} context`,
-            created_at: '2026-09-03T00:00:00Z',
-          }],
-        };
-      }
-      if (pathname === `/api/v1/repos/${repositoryId}/pending` || pathname === `/api/v1/repos/${repositoryId}/unsync` || pathname === `/api/v1/repos/${repositoryId}/reflog` || pathname === `/api/v1/repos/${repositoryId}/history`) {
-        return { body: [] };
-      }
-      if (pathname.startsWith(`/api/v1/repos/${repositoryId}/docs/`)) {
-        return docResponse(pathname, searchParams);
-      }
-    }
-    return undefined;
-  };
-  const unexpected = await installApiFixture(page, responder);
-
-  await page.goto('/alice/cxthub/frontend');
-  await expect(page.locator('.crumb-repo')).toHaveText('frontend');
+  const responder = publicRepositoryApi([{id:pushedHead,repo_id:repoId,doc_hash:pushedHead,branch:'main',parents:[],message:'frontend context',created_at:'2026-09-03T00:00:00Z'}], [{kind:'branch',name:'main',target:pushedHead}]);
+  const unexpected = await installApiFixture(page, request => {
+    if (decodeURIComponent(request.pathname) === '/api/v1/public/repositories/alice/legacy/frontend') return responder({...request,pathname:'/api/v1/public/repositories/alice/cxthub'});
+    return responder(request);
+  });
+  await page.goto('/alice/legacy/frontend');
+  await expect(page).toHaveURL(/\/alice\/cxthub$/);
   await expect(page.locator('.commit-msg')).toContainText('frontend context');
-
-  await page.locator('.pub-repos button').filter({ hasText: 'backend' }).click();
-  await expect(page).toHaveURL(/\/alice\/cxthub\/backend$/);
-  await expect(page.locator('.crumb-repo')).toHaveText('backend');
-  await expect(page.locator('.commit-msg')).toContainText('backend context');
-
+  await expect(page.locator('.pub-repos')).toHaveCount(0);
   await page.reload();
-  await expect(page.locator('.crumb-repo')).toHaveText('backend');
-  await expect(page.locator('.commit-msg')).toContainText('backend context');
+  await expect(page.locator('.commit-msg')).toContainText('frontend context');
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
@@ -278,13 +220,13 @@ test('members page orders invites, role capabilities, and members without page o
         },
       };
     }
-    if (pathname === '/api/v1/workspaces') {
+    if (pathname === '/api/v1/repositories') {
       return {
         body: [{
-          id: workspaceId,
+          id: repositoryId,
           name: 'cxthub',
           slug: 'cxthub',
-          owner_id: 'user-1',
+          owner_id: 'user-1', effective_role: 'owner',
           owner_username: 'alice',
           visibility: 'private',
           public_role: 'viewer',
@@ -292,18 +234,18 @@ test('members page orders invites, role capabilities, and members without page o
         }],
       };
     }
-    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) {
+    if (pathname === `/api/v1/repositories/${repositoryId}/members`) {
       return {
         body: [{
-          workspace_id: workspaceId,
+          repository_id: repositoryId,
           user_id: 'user-1',
           role: 'owner',
           user: { id: 'user-1', name: 'Alice', nickname: 'Alice', email: 'alice@example.test' },
         }],
       };
     }
-    if (pathname === `/api/v1/workspaces/${workspaceId}/invites`) return { body: [] };
-    if (pathname === '/api/v1/repos' && searchParams.get('workspace') === workspaceId) return { body: [] };
+    if (pathname === `/api/v1/repositories/${repositoryId}/invites`) return { body: [] };
+    if (pathname === '/api/v1/repos' && searchParams.get('repository') === repositoryId) return { body: [] };
     return undefined;
   });
 
@@ -358,7 +300,7 @@ test('members page orders invites, role capabilities, and members without page o
   expect(unexpected).toEqual([]);
 });
 
-test('public workspace management controls deny non-maintainers without opening dialogs', async ({ page }) => {
+test('public repository management controls deny non-maintainers without opening dialogs', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
     if (method !== 'GET') return undefined;
@@ -374,13 +316,13 @@ test('public workspace management controls deny non-maintainers without opening 
         },
       };
     }
-    if (pathname === '/api/v1/workspaces') {
+    if (pathname === '/api/v1/repositories') {
       return {
         body: [{
-          id: workspaceId,
+          id: repositoryId,
           name: 'cxthub',
           slug: 'cxthub',
-          owner_id: 'owner-1',
+          owner_id: 'owner-1', effective_role: 'member',
           owner_username: 'alice',
           visibility: 'public',
           public_role: 'viewer',
@@ -388,17 +330,17 @@ test('public workspace management controls deny non-maintainers without opening 
         }],
       };
     }
-    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) {
+    if (pathname === `/api/v1/repositories/${repositoryId}/members`) {
       return {
         body: [{
-          workspace_id: workspaceId,
+          repository_id: repositoryId,
           user_id: 'member-1',
           role: 'member',
           user: { id: 'member-1', name: 'Member', nickname: 'Member', email: 'member@example.test' },
         }],
       };
     }
-    if (pathname === '/api/v1/repos' && searchParams.get('workspace') === workspaceId) {
+    if (pathname === '/api/v1/repos' && searchParams.get('repository') === repositoryId) {
       return {
         body: [{
           id: repoId,
@@ -442,7 +384,7 @@ test('public workspace management controls deny non-maintainers without opening 
   const settingsTab = page.locator('nav.tabs').getByRole('button', { name: 'Settings', exact: true });
   await expect(settingsTab).toBeVisible();
   await settingsTab.click();
-  await expect(page.getByRole('alert')).toContainText('Workspace settings require owner access');
+  await expect(page.getByRole('alert')).toContainText('Repository settings require owner access');
   await expect(page).toHaveURL(/\/alice\/cxthub$/);
 
   const teamSection = page.locator('.side-sec').filter({ hasText: 'Team defaults' });
@@ -456,26 +398,26 @@ test('public workspace management controls deny non-maintainers without opening 
   await expect(page.getByRole('dialog', { name: '.cxtsecrets settings' })).toHaveCount(0);
 
   await page.goto('/alice/cxthub?tab=settings');
-  await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
-  await expect(page.locator('.ws-settings-form')).toHaveCount(0);
+  await expect(page.locator('.access-denied')).toContainText('Repository settings require owner access');
+  await expect(page.locator('.repository-settings-form')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
 
-test('anonymous public settings URL renders access denial instead of workspace context', async ({ page }) => {
+test('anonymous public settings URL renders access denial instead of repository context', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
-  const unexpected = await installApiFixture(page, publicWorkspaceApi([], []));
+  const unexpected = await installApiFixture(page, publicRepositoryApi([], []));
 
   await page.goto('/alice/cxthub?tab=settings');
-  await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
+  await expect(page.locator('.access-denied')).toContainText('Repository settings require owner access');
   await expect(page.locator('.ctx-layout')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
 
-test('signed-in non-member stays on the public workspace route and gets settings denial', async ({ page }) => {
+test('signed-in non-member stays on the public repository route and gets settings denial', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
-  const publicApi = publicWorkspaceApi([], []);
+  const publicApi = publicRepositoryApi([], []);
   const unexpected = await installApiFixture(page, (request) => {
     const { method, pathname } = request;
     if (method === 'GET' && pathname === '/api/v1/me') {
@@ -490,14 +432,14 @@ test('signed-in non-member stays on the public workspace route and gets settings
         },
       };
     }
-    if (method === 'GET' && pathname === '/api/v1/workspaces') return { body: [] };
+    if (method === 'GET' && pathname === '/api/v1/repositories') return { body: [] };
     return publicApi(request);
   });
 
   await page.goto('/alice/cxthub?tab=settings');
   await expect(page).toHaveURL(/\/alice\/cxthub\?tab=settings$/);
   await expect(page.getByText('Public view', { exact: true })).toBeVisible();
-  await expect(page.locator('.access-denied')).toContainText('Workspace settings require owner access');
+  await expect(page.locator('.access-denied')).toContainText('Repository settings require owner access');
   await expect(page.locator('.app-side')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -529,9 +471,9 @@ test('profile survives nullable activity arrays and keeps the legend inside the 
             nickname: 'JY Min',
             created_at: '2026-01-01T00:00:00Z',
           },
-          workspaces: [
+          repositories: [
             {
-              id: workspaceId,
+              id: repositoryId,
               name: 'cxthub',
               slug: 'cxthub',
               owner_username: 'alice',
@@ -542,10 +484,10 @@ test('profile survives nullable activity arrays and keeps the legend inside the 
         },
       };
     }
-    if (pathname === '/api/v1/public/enterprises/alice') {
-      return { status: 404, body: { error: { message: 'not an Enterprise namespace' } } };
+    if (pathname === '/api/v1/public/organizations/alice') {
+      return { status: 404, body: { error: { message: 'not an Organization namespace' } } };
     }
-    if (pathname === '/api/v1/enterprises') return { body: [] };
+    if (pathname === '/api/v1/organizations' || pathname === '/api/v1/enterprises') return { body: [] };
     if (pathname === '/api/v1/public/users/alice/contributions') {
       return { body: { total: 0, days: [] } };
     }
@@ -583,24 +525,24 @@ test('profile survives nullable activity arrays and keeps the legend inside the 
   expect(unexpected).toEqual([]);
 });
 
-test('Enterprise profile keeps administration separate from Workspace context and opens audited emergency read', async ({ page }) => {
+test('Organization profile keeps administration separate from Repository context and opens audited emergency read', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
-  const enterpriseId = 'ent_11111111111111111111111111111111';
-  const enterpriseWorkspaceId = 'ws_11111111111111111111111111111111';
-  const enterprise = {
-    id: enterpriseId,
+  const organizationId = 'ent_11111111111111111111111111111111';
+  const organizationRepositoryId = 'ws_11111111111111111111111111111111';
+  const organization = {
+    id: organizationId,
     namespace_id: 'ns_11111111111111111111111111111111',
     name: 'Acme Engineering',
     slug: 'acme',
     created_by: 'owner-1',
     created_at: '2026-09-03T00:00:00Z',
   };
-  const workspace = {
-    id: enterpriseWorkspaceId,
+  const repository = {
+    id: organizationRepositoryId,
     name: 'Platform',
     slug: 'platform',
-    owner_id: 'admin-1',
-    owner_namespace_id: enterprise.namespace_id,
+    owner_id: 'admin-1', effective_role: '',
+    owner_namespace_id: organization.namespace_id,
     owner_username: 'acme',
     visibility: 'private',
     created_at: '2026-09-03T00:00:00Z',
@@ -608,27 +550,27 @@ test('Enterprise profile keeps administration separate from Workspace context an
   let usageReads = 0;
   let reconciled = false;
   const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
-    if (pathname === `/api/v1/namespaces/${enterprise.namespace_id}/storage` && method === 'GET') {
+    if (pathname === `/api/v1/namespaces/${organization.namespace_id}/storage` && method === 'GET') {
       usageReads++;
-      return { body: { namespace_id: enterprise.namespace_id, policy: { plan: 'enterprise', included_bytes: 50 * 2 ** 30, pay_as_you_go: true, max_bytes: 55 * 2 ** 30, grace_bytes: 0, grace_until: null }, policy_revision: 1,
+      return { body: { namespace_id: organization.namespace_id, policy: { plan: 'enterprise', included_bytes: 50 * 2 ** 30, pay_as_you_go: true, max_bytes: 55 * 2 ** 30, grace_bytes: 0, grace_until: null }, policy_revision: 1,
         current_bytes: (reconciled ? 49 : 56) * 2 ** 30, excess_bytes: (reconciled ? 0 : 6) * 2 ** 30, state: reconciled ? 'active' : 'read_only', metered_since: '2026-09-01T00:00:00Z', period_start: '2026-09-01T00:00:00Z', period_end: '2026-09-16T00:00:00Z', overage_byte_hours: '1073741824', entries: [] } };
     }
-    if (pathname === `/api/v1/namespaces/${enterprise.namespace_id}/storage/reconcile` && method === 'POST') { reconciled = true; return { body: { reconciled: true } }; }
+    if (pathname === `/api/v1/namespaces/${organization.namespace_id}/storage/reconcile` && method === 'POST') { reconciled = true; return { body: { reconciled: true } }; }
     if (method === 'GET' && pathname === '/api/v1/me') {
       return { body: { id: 'owner-1', email: 'owner@acme.test', name: 'Owner', username: 'owner', locale: 'en' } };
     }
     if (method === 'GET' && pathname === '/api/v1/public/users/acme') {
       return { status: 404, body: { error: { message: 'not a user namespace' } } };
     }
-    if (method === 'GET' && pathname === '/api/v1/public/enterprises/acme') {
-      return { body: { ...enterprise, workspaces: [] } };
+    if (method === 'GET' && pathname === '/api/v1/public/organizations/acme') {
+      return { body: { ...organization, repositories: [] } };
     }
-    if (method === 'GET' && pathname === '/api/v1/enterprises') return { body: [enterprise] };
-    if (method === 'GET' && pathname === `/api/v1/enterprises/${enterpriseId}`) return { body: enterprise };
-    if (method === 'GET' && pathname === `/api/v1/enterprises/${enterpriseId}/members`) {
+    if (method === 'GET' && pathname === '/api/v1/organizations') return { body: [organization] };
+    if (method === 'GET' && pathname === `/api/v1/organizations/${organizationId}`) return { body: organization };
+    if (method === 'GET' && pathname === `/api/v1/organizations/${organizationId}/members`) {
       return {
         body: [{
-          enterprise_id: enterpriseId,
+          organization_id: organizationId,
           user_id: 'owner-1',
           role: 'owner',
           user: { id: 'owner-1', email: 'owner@acme.test', name: 'Owner', username: 'owner' },
@@ -636,27 +578,27 @@ test('Enterprise profile keeps administration separate from Workspace context an
         }],
       };
     }
-    if (method === 'GET' && pathname === `/api/v1/enterprises/${enterpriseId}/policy`) {
+    if (method === 'GET' && pathname === `/api/v1/organizations/${organizationId}/policy`) {
       return {
         body: {
-          enterprise_id: enterpriseId,
-          workspace_creation: 'admins',
-          default_workspace_visibility: 'private',
-          allow_public_workspaces: true,
+          organization_id: organizationId,
+          repository_creation: 'admins',
+          default_repository_visibility: 'private',
+          allow_public_repositories: true,
           break_glass_enabled: true,
           break_glass_max_minutes: 60,
           updated_at: '2026-09-03T00:00:00Z',
         },
       };
     }
-    if (method === 'GET' && pathname === `/api/v1/enterprises/${enterpriseId}/workspaces`) return { body: [workspace] };
-    if (method === 'GET' && pathname === '/api/v1/workspaces') return { body: [] };
-    if (method === 'POST' && pathname === `/api/v1/enterprises/${enterpriseId}/break-glass`) {
+    if (method === 'GET' && pathname === `/api/v1/organizations/${organizationId}/repositories`) return { body: [repository] };
+    if (method === 'GET' && pathname === '/api/v1/repositories') return { body: [] };
+    if (method === 'POST' && pathname === `/api/v1/organizations/${organizationId}/break-glass`) {
       return {
         body: {
           id: 'bg_11111111111111111111111111111111',
-          enterprise_id: enterpriseId,
-          workspace_id: enterpriseWorkspaceId,
+          organization_id: organizationId,
+          repository_id: organizationRepositoryId,
           user_id: 'owner-1',
           reason: 'production incident',
           created_at: '2026-09-03T00:00:00Z',
@@ -664,8 +606,8 @@ test('Enterprise profile keeps administration separate from Workspace context an
         },
       };
     }
-    if (method === 'GET' && pathname === '/api/v1/public/workspaces/acme/platform') return { body: workspace };
-    if (method === 'GET' && pathname === '/api/v1/repos' && searchParams.get('workspace') === enterpriseWorkspaceId) {
+    if (method === 'GET' && pathname === '/api/v1/public/repositories/acme/platform') return { body: repository };
+    if (method === 'GET' && pathname === '/api/v1/repos' && searchParams.get('repository') === organizationRepositoryId) {
       return { body: [] };
     }
     return undefined;
@@ -673,11 +615,11 @@ test('Enterprise profile keeps administration separate from Workspace context an
 
   await page.goto('/acme');
   await expect(page.locator('.profile-name')).toHaveText('Acme Engineering');
-  await expect(page.locator('.enterprise-access-note')).toContainText('explicit role on each Workspace');
+  await expect(page.locator('.organization-access-note')).toContainText('explicit role on each Repository');
   await expect(page.getByRole('tab', { name: 'People' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Audit log' })).toBeVisible();
-  await expect(page.locator('.ws-card')).toBeDisabled();
-  await expect(page.locator('.ws-card-access')).toContainText('explicit Workspace role');
+  await expect(page.locator('.repository-card')).toBeDisabled();
+  await expect(page.locator('.repository-card-access')).toContainText('explicit Repository role');
 
   expect(usageReads).toBe(0);
   await page.getByRole('tab', { name: 'Storage usage' }).click();
@@ -691,11 +633,11 @@ test('Enterprise profile keeps administration separate from Workspace context an
   expect(usageReads).toBeGreaterThan(1);
 
 	await page.getByRole('tab', { name: 'People' }).click();
-	const lastOwnerRole = page.getByRole('combobox', { name: "Change Owner's Enterprise role" });
+	const lastOwnerRole = page.getByRole('combobox', { name: "Change Owner's Organization role" });
 	await expect(lastOwnerRole).toBeDisabled();
-	await expect(lastOwnerRole).toHaveAttribute('title', 'An Enterprise must always retain at least one Owner.');
-	await expect(page.locator('.enterprise-inline-form select option')).toHaveCount(3);
-	await page.getByRole('tab', { name: 'Workspaces' }).click();
+	await expect(lastOwnerRole).toHaveAttribute('title', 'An Organization must always retain at least one Owner.');
+	await expect(page.locator('.organization-inline-form select option')).toHaveCount(3);
+	await page.getByRole('tab', { name: 'Repositories' }).click();
 
   await page.getByRole('button', { name: 'Emergency read access' }).click();
   await page.getByPlaceholder('Specific reason recorded in the audit log').fill('production incident');
@@ -740,7 +682,7 @@ test('reverse-time graft stays ordered and its same-lane SVG connector renders',
     },
   ];
   const refs = [{ kind: 'branch', name: 'main', repo_id: repoId, target: appendedRoot }];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs));
 
   const rows = page.locator('.graph-row');
   await expect(rows).toHaveCount(2);
@@ -830,7 +772,7 @@ test('graph exposes pushed, unpushed, and uncommitted as three browser-visible t
   ];
   const { pageErrors, unexpected } = await openGraph(
     page,
-    publicWorkspaceApi(snapshots, refs, pending, unsync),
+    publicRepositoryApi(snapshots, refs, pending, unsync),
   );
 
   await expect(page.locator('.graph-status-item.pushed')).toContainText('1');
@@ -923,7 +865,7 @@ test('branch labels exist only for visible graph lanes and share horizontal scro
   ];
   const first = await openGraph(
     page,
-    publicWorkspaceApi([...shortBranch, ...mainSnapshots, ...oldBranch], verticalRefs),
+    publicRepositoryApi([...shortBranch, ...mainSnapshots, ...oldBranch], verticalRefs),
   );
   const viewport = page.locator('.graph-viewport');
   const shortLabel = page.locator('[data-graph-lane="1"]');
@@ -995,7 +937,7 @@ test('branch labels exist only for visible graph lanes and share horizontal scro
   ];
   const second = await openGraph(
     page,
-    publicWorkspaceApi([...wideHeads, ...mainSnapshots, ...wideRoots], wideRefs),
+    publicRepositoryApi([...wideHeads, ...mainSnapshots, ...wideRoots], wideRefs),
   );
   const wideViewport = page.locator('.graph-viewport');
   const movement = await wideViewport.evaluate((element) => {
@@ -1053,7 +995,7 @@ test('sidebar keeps graph first and groups collapsed history and diagnostics at 
     { ...common, id: 'sidebar-position', kind: 'position', source: previous, target: root, git_after: 'c'.repeat(40) },
     { ...common, id: 'sidebar-advance', kind: 'advance', source: previous, target: current },
   ];
-  const base = publicWorkspaceApi(snapshots, refs, [], [], [], history);
+  const base = publicRepositoryApi(snapshots, refs, [], [], [], history);
   const { pageErrors, unexpected } = await openGraph(page, request => request.pathname.endsWith('/prs/promotions')
     ? { body: [{ id: 'waiting', repo_id: repoId, pr: { number: 43, base_branch: 'main', head_branch: 'feature/pending' }, state: 'waiting', reason: 'source_context_pending', attempts: 1 }] }
     : base(request));
@@ -1116,7 +1058,7 @@ test('previous progress folds independently and preserves shared paths and sync 
     { kind: 'branch', name: 'main', old: previous, new: root, created_at: '2026-09-15T03:00:00Z' },
     { kind: 'branch', name: 'main', old: other, new: root, created_at: '2026-09-15T04:00:00Z' },
   ];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], reflog));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs, [], [], reflog));
   const panel = page.locator('.graph-previous');
   await panel.locator(':scope > summary').click();
   await expect(panel).toContainText('3 saved snapshots');
@@ -1171,7 +1113,7 @@ test('previous progress used by a teammate remains visible', async ({ page }) =>
     { kind: 'branch', name: 'teammate', repo_id: repoId, target: previous },
   ];
   const reflog = [{ kind: 'branch', name: 'main', old: previous, new: root, created_at: '2026-09-15T01:00:00Z' }];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], reflog));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs, [], [], reflog));
   await expect(page.locator('.graph-history-panel')).toContainText('On an active path');
   await expect(page.locator('.graph-history-toggle')).toHaveCount(0);
   await expect(page.locator('.graph-row')).toHaveCount(3);
@@ -1194,7 +1136,7 @@ test('server history exposes births and explicit past positions without write re
     { ...common, id: 'position', kind: 'position', source: later, target: root, git_after: 'a'.repeat(40), worktree_id: 'b'.repeat(32) },
     { ...common, id: 'advance', kind: 'advance', source: later, target: current },
   ];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], history));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs, [], [], [], history));
   await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(2);
   await expect(page.locator('.graph-status-item.pushed')).toHaveText('Pushed 3');
   await page.locator('.graph-births summary').click();
@@ -1230,7 +1172,7 @@ test('renamed history stays with its identity when the old name is reused', asyn
     { ...common, id: 'advance', kind: 'advance', source: later, target: current },
     { ...common, id: 'birth', kind: 'birth', source: root, target: root },
   ];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], history));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs, [], [], [], history));
   await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(2);
   await expect(page.locator('.graph-previous .graph-history-branch')).toHaveText('main');
   await page.getByLabel('View from', { exact: true }).selectOption('position');
@@ -1305,7 +1247,7 @@ test('PR-joined branch lanes keep their name while truly deleted branches stay a
     lifecycleRef('feature/merged', joinedHead, 1),
     lifecycleRef('feature/abandoned', archivedHead, 2),
   ];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs));
 
   await expect(page.locator('.graph-row')).toHaveCount(3);
   const joinedRow = page.locator('.graph-row[aria-label^="merged branch history"]');
@@ -1342,7 +1284,7 @@ test('real cxtd wire renders a newly created public profile', async ({ page }, t
   const api = page.context().request;
   const origin = 'http://127.0.0.1:4174';
   const mutationHeaders = { Origin: origin, 'X-Cxt-CSRF': '1' };
-  const workspaceName = `Browser_E2E_${testInfo.retry}`;
+  const repositoryName = `Browser_E2E_${testInfo.retry}`;
 
   const login = await api.post('/api/v1/auth/session', {
     headers: {
@@ -1356,14 +1298,14 @@ test('real cxtd wire renders a newly created public profile', async ({ page }, t
   expect(meResponse.ok()).toBe(true);
   const me = (await meResponse.json()) as { username: string };
 
-  const create = await api.post('/api/v1/workspaces', {
+  const create = await api.post('/api/v1/repositories', {
     headers: mutationHeaders,
-    data: { name: workspaceName },
+    data: { name: repositoryName },
   });
   expect(create.ok()).toBe(true);
-  const workspace = (await create.json()) as { id: string };
+  const repository = (await create.json()) as { id: string };
 
-  const publish = await api.patch(`/api/v1/workspaces/${encodeURIComponent(workspace.id)}`, {
+  const publish = await api.patch(`/api/v1/repositories/${encodeURIComponent(repository.id)}`, {
     headers: mutationHeaders,
     data: { visibility: 'public' },
   });
@@ -1374,7 +1316,7 @@ test('real cxtd wire renders a newly created public profile', async ({ page }, t
 
   await page.goto(`/${encodeURIComponent(me.username)}`);
   await expect(page.locator('.profile-name')).toHaveText('Browser E2E');
-  await expect(page.locator('.ws-card-name').filter({ hasText: workspaceName })).toHaveCount(1);
+  await expect(page.locator('.repository-card-name').filter({ hasText: repositoryName })).toHaveCount(1);
   await expect(page.locator('.contrib-legend')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
@@ -1485,13 +1427,13 @@ test('repository history protection is explicit, survives reload, and reports up
     if (method !== 'GET') return undefined;
     if (pathname === `/api/v1/repos/${repoId}/secrets`) return { status: 404, body: { error: { message: 'No secrets configured' } } };
     if (pathname === '/api/v1/me') return { body: { id: 'owner', username: 'alice', name: 'Alice', locale: 'en' } };
-    if (pathname === '/api/v1/workspaces') return { body: [{ id: workspaceId, owner_id: 'owner', owner_username: 'alice', name: 'cxthub', slug: 'cxthub', visibility: 'private' }] };
-    if (pathname === `/api/v1/workspaces/${workspaceId}/members`) return { body: [{ workspace_id: workspaceId, user_id: 'owner', role: 'owner' }] };
+    if (pathname === '/api/v1/repositories') return { body: [{ id: repositoryId, owner_id: 'owner', effective_role: 'owner', owner_username: 'alice', name: 'cxthub', slug: 'cxthub', visibility: 'private' }] };
+    if (pathname === `/api/v1/repositories/${repositoryId}/members`) return { body: [{ repository_id: repositoryId, user_id: 'owner', role: 'owner' }] };
     if (pathname === '/api/v1/repos') return { body: [{ id: repoId, default_branch: 'main', remote_url: 'https://cxthub.com/alice/cxthub/repo', context_protocol: protocol }] };
     if (pathname === `/api/v1/repos/${repoId}/refs`) return { body: [{ kind: 'branch', name: 'main', repo_id: repoId, target: pushedHead, ...(protocol ? { branch_id: 'main-identity' } : {}) }] };
     return undefined;
   });
-  await page.goto('/alice/cxthub/settings');
+  await page.goto('/alice/cxthub?tab=settings');
   const panel = page.locator('.repo-history-protection');
   await expect(panel).toContainText('Update every CLI');
   expect(attempts).toBe(0);
@@ -1512,7 +1454,7 @@ test('context loads bounded pages and only reads inherited events when expanded'
     { id: pushedHead, repo_id: repoId, branch: 'main', parents: [graftTarget], doc_hash: pushedHead, provider: 'codex', fidelity: 'full', message: 'paged head', created_at: '2026-09-16T00:01:00Z' },
     { id: graftTarget, repo_id: repoId, branch: 'main', parents: [], doc_hash: graftTarget, provider: 'codex', fidelity: 'full', message: 'parent', created_at: '2026-09-16T00:00:00Z' },
   ];
-  const base = publicWorkspaceApi(snapshots, [{ repo_id: repoId, kind: 'branch', name: 'main', target: pushedHead }]);
+  const base = publicRepositoryApi(snapshots, [{ repo_id: repoId, kind: 'branch', name: 'main', target: pushedHead }]);
   const reads: string[] = [];
   const responder = (request: ApiRequest): ApiResponse | undefined => {
     if (request.pathname.includes('/docs/')) {
@@ -1557,7 +1499,7 @@ for (const view of ['context', 'onhold']) for (const width of [1440, 390]) test(
     {...auditSnapshot(head, 'main', [root], 'Saved conversation', 1), session_id: 'active-session'},
     {...auditSnapshot(tail, 'main', [head], 'hook: live continuation', 2), session_id: 'active-session'}].reverse();
   const pending = [{repo_id:repoId,session_id:'active-session',branch:'main',target:tail,provider:'codex',updated_at:'2026-09-21T00:00:00Z'}];
-  const base = publicWorkspaceApi(snapshots, [{kind:'branch',name:'main',target:view === 'context' ? head : root}], pending,
+  const base = publicRepositoryApi(snapshots, [{kind:'branch',name:'main',target:view === 'context' ? head : root}], pending,
     view === 'onhold' ? [{repo_id:repoId,branch:'main',user:'alice',target:head,updated_at:'2026-09-21T00:00:00Z'}] : []);
   const reads: string[] = [];
   // Count completed transfers. React's development StrictMode may cancel the
@@ -1571,8 +1513,8 @@ for (const view of ['context', 'onhold']) for (const width of [1440, 390]) test(
   const {pageErrors, unexpected} = await openGraph(page, req => {
     if (view === 'onhold') {
       if (req.pathname === '/api/v1/me') return {body:{id:'member',username:'alice',locale:'en'}};
-      if (req.pathname === '/api/v1/workspaces') return {body:[{id:workspaceId,name:'cxthub',slug:'cxthub',owner_username:'alice',visibility:'private'}]};
-      if (req.pathname.endsWith('/members')) return {body:[{workspace_id:workspaceId,user_id:'member',role:'member'}]};
+      if (req.pathname === '/api/v1/repositories') return {body:[{id:repositoryId,name:'cxthub',slug:'cxthub',owner_username:'alice',visibility:'private'}]};
+      if (req.pathname.endsWith('/members')) return {body:[{repository_id:repositoryId,user_id:'member',role:'member'}]};
       if (req.pathname.includes('/settings/') || req.pathname.endsWith('/secrets')) return {body:null};
     }
     if (req.pathname.endsWith('/events')) {
@@ -1627,7 +1569,7 @@ for (const view of ['context', 'onhold']) for (const width of [1440, 390]) test(
 
 test('bottom pagination keeps loaded text on failure and retries only the missing page', async ({page}) => {
   const snap = auditSnapshot(pushedHead,'main',[],'Retryable conversation',1);
-  const base = publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}]);
+  const base = publicRepositoryApi([snap],[{kind:'branch',name:'main',target:pushedHead}]);
   const reads: number[] = [];
   let fail = true;
   const {pageErrors, unexpected} = await openGraph(page, req => {
@@ -1659,7 +1601,7 @@ test('bottom pagination keeps loaded text on failure and retries only the missin
 
 test('bottom pagination fills the viewport when a page has no visible chat events', async ({page}) => {
   const snap = auditSnapshot(pushedHead,'main',[],'Hidden work followed by conversation',1);
-  const base = publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}]);
+  const base = publicRepositoryApi([snap],[{kind:'branch',name:'main',target:pushedHead}]);
   const reads: number[] = [];
   const {pageErrors, unexpected} = await openGraph(page, req => {
     if (req.pathname.endsWith('/events')) {
@@ -1685,7 +1627,7 @@ test('branch birth and completed join keep feature off the main lane', async ({ 
   const birth = { id: 'birth', repo_id: repoId, branch_id: 'feature-identity', branch: 'feature/login', kind: 'birth', source: appendedRoot, target: appendedRoot, created_at: at(1) };
   const advance = { ...birth, id: 'advance', kind: 'advance', target: unpushedHead, created_at: at(3) };
   const reflog = [{ kind: 'branch', name: 'main', old: graftTarget, new: pushedHead, created_at: at(5) }];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], reflog, [birth, advance]));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs, [], [], reflog, [birth, advance]));
   const merge = page.locator('[data-graph-event="merge"]');
   const born = page.locator('[data-graph-event="birth"]');
   await expect(merge).toHaveAttribute('data-graph-node-lane', '0');
@@ -1708,7 +1650,7 @@ test('same-snapshot PR completion closes the branch without a ref movement', asy
   const birth = {id: 'birth', repo_id: repoId, branch_id: 'feature-id', branch: 'feature/no-context-change', kind: 'birth', source: pushedHead, target: pushedHead, created_at: '2026-09-16T00:00:01Z'};
   const completed = {...birth, id: 'completed', kind: 'pr-merge', branch: 'main', branch_id: 'main-id', source_branch_id: 'feature-id', shared_target: pushedHead, pr_completed: true,
     pr: {number: 1, base_branch: 'main', head_branch: birth.branch, head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40)}, created_at: '2026-09-16T00:00:02Z'};
-  const {pageErrors, unexpected} = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], [birth, completed]));
+  const {pageErrors, unexpected} = await openGraph(page, publicRepositoryApi(snapshots, refs, [], [], [], [birth, completed]));
   await expect(page.locator('[data-graph-event="merge"]')).toHaveCount(1);
   await expect(page.locator('[data-graph-event="merge"]')).toHaveAttribute('data-graph-node-lane', '0');
   await expect(page.locator('[data-graph-event="birth"]')).not.toHaveAttribute('data-graph-node-lane', '0');
@@ -1726,7 +1668,7 @@ test('graph activation reveals context and distinguishes events at the same snap
   const birth = {git_after:'a'.repeat(40),id:'born',repo_id:repoId,branch_id:'topic',branch:'feature/same',kind:'birth',source:appendedRoot,target:appendedRoot,created_at:'2026-09-16T00:01:00Z'};
   const done = {...birth,id:'done',kind:'pr-merge',branch_id:'main',branch:'main',source_branch_id:'topic',shared_target:appendedRoot,pr_completed:true,
     pr:{number:42,base_branch:'main',head_branch:'feature/same',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:'2026-09-16T01:00:00Z'};
-  const base = publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],[],[],[],[birth,done]);
+  const base = publicRepositoryApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],[],[],[],[birth,done]);
   const {pageErrors,unexpected} = await openGraph(page, req => {
     if (req.pathname.endsWith('/events')) {
       const result = docResponse(req.pathname,req.searchParams).body as ReturnType<typeof sessionDoc> & { events: unknown[]; total:number };
@@ -1786,7 +1728,7 @@ test('consecutive same-tip PR joins stay on main while unexplained birth gaps st
   });
   const pending = [{repo_id:repoId,session_id:'unrelated-session',branch:'main',provider:'codex',target:uncommittedHead,updated_at:'2026-09-16T00:00:03.5Z'}];
   const unsync = [{repo_id:repoId,user:'alice',branch:'main',target:unpushedHead,updated_at:'2026-09-16T00:00:02.5Z'}];
-  const {pageErrors,unexpected} = await openGraph(page,publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],pending,unsync,[],history));
+  const {pageErrors,unexpected} = await openGraph(page,publicRepositoryApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],pending,unsync,[],history));
   await expect(page.locator('.graph-status-divider')).toHaveCount(1);
   await expect(page.locator('.uncommitted-divider')).toHaveCount(0);
   const captureRow = page.locator(`.graph-row[data-graph-id="${uncommittedHead}"]`);
@@ -1815,7 +1757,7 @@ test('consecutive same-tip PR joins stay on main while unexplained birth gaps st
 
 test('PR delivery distinguishes waiting and completed jobs without viewer retry authority', async ({ page }) => {
   const snapshot = { id: pushedHead, repo_id: repoId, doc_hash: pushedHead, branch: 'main', parents: [], provider: 'codex', created_at: '2026-09-16T01:00:00Z' };
-  const base = publicWorkspaceApi([snapshot], [{ kind: 'branch', name: 'main', target: pushedHead }]);
+  const base = publicRepositoryApi([snapshot], [{ kind: 'branch', name: 'main', target: pushedHead }]);
   const state = { id: 'job-1', repo_id: repoId, pr: { number: 42, base_branch: 'main', head_branch: 'feature/late' }, state: 'waiting', reason: 'source_context_pending', attempts: 1 };
   const { pageErrors, unexpected } = await openGraph(page, request => request.pathname.endsWith('/prs/promotions') ? { body: [state] } : base(request));
   await expect(page.locator('.pr-promotions > summary')).toContainText('1 pending');
@@ -1838,7 +1780,7 @@ test('completed PR survives a live graft reorder without rewriting current ances
     created_at:'2026-09-18T00:00:02Z'}];
   const semantics = {version:1,merges:[{event_id:'retained-completion',completed:true,
     source_available:true,placement_intact:true,lineage:'unknown'}]};
-  const base = publicWorkspaceApi(snapshots,refs,[],[],[],history);
+  const base = publicRepositoryApi(snapshots,refs,[],[],[],history);
   const {pageErrors,unexpected} = await openGraph(page,request => request.pathname.endsWith('/view')
     ? {body:{snapshots,refs,history,reflog:[],pending:[],unsync:[],semantics}} : base(request));
   const merge = page.locator('[data-graph-id="graph:merge:retained-completion"]');
@@ -1860,7 +1802,7 @@ test('memory attachment changes load the new immutable blob at the same snapshot
   const reads: string[] = [];
   const snapshots = [{id:pushedHead,repo_id:repoId,doc_hash:pushedHead,branch:'main',parents:[],
     provider:'codex',created_at:'2026-09-19T00:00:00Z',memory_hash:id('8')}];
-  const base = publicWorkspaceApi(snapshots,[{kind:'branch',name:'main',target:pushedHead}]);
+  const base = publicRepositoryApi(snapshots,[{kind:'branch',name:'main',target:pushedHead}]);
   const {pageErrors,unexpected} = await openGraph(page, request => {
     snapshots[0].memory_hash = id(generation === 1 ? '8' : '9');
     if (/\/(memories|memory-objects)\//.test(request.pathname)) {
@@ -1891,7 +1833,7 @@ test('context shows saved memory with one toggle, scrollable badges and independ
     author: { name: 'Alice', email: 'alice@example.test', team: '' }, created_at: '2026-09-16T04:00:00Z',
   }));
   const refs = ['main', ...Array.from({ length: 18 }, (_, n) => `feature/long-branch-name-${n}`)].map(name => ({ kind: 'branch', name, repo_id: repoId, target: snapshots[0].id }));
-  const base = publicWorkspaceApi(snapshots, refs);
+  const base = publicRepositoryApi(snapshots, refs);
   let memoryReads = 0;
   const { pageErrors, unexpected } = await openGraph(page, request => {
     if (request.pathname.includes('/memory-objects/')) memoryReads++;
@@ -1979,7 +1921,7 @@ test('archived automatic publications retain continuous birth, source and merge 
     {kind:'branch',name:'feature/left',old:appendedRoot,new:unpushedHead,created_at:at(3)},
     {kind:'branch',name:'feature/right',old:appendedRoot,new:pushedHead,created_at:at(6)},
   ];
-  const {pageErrors,unexpected} = await openGraph(page, publicWorkspaceApi(snapshots,refs,[],[],reflog,history));
+  const {pageErrors,unexpected} = await openGraph(page, publicRepositoryApi(snapshots,refs,[],[],reflog,history));
   await expect(page.locator('[data-graph-event="merge"]')).toHaveCount(2);
   for (const branch of ['feature/left','feature/right']) {
     const born = page.locator(`[data-graph-event="birth"][data-graph-branch="${branch}"]`);
@@ -2022,7 +1964,7 @@ for (const mode of ['pending', 'unsync'] as const) {
     const pending = [{ repo_id: repoId, branch: 'main', session_id: 'live', provider: 'codex', target: pushedHead }];
     const unsync = mode === 'unsync' ? [{ repo_id: repoId, branch: 'main', user: 'alice', target: pushedHead }] : [];
     const history = [{ id: 'position', kind: 'position', branch_id: 'main-id', branch: 'main', source: pushedHead, target: pushedHead, created_at: '2026-09-18T00:00:03Z' }];
-    const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, pending, unsync, [], history));
+    const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs, pending, unsync, [], history));
     await expect(page.locator('.graph-row')).toHaveCount(3);
     await expect(page.locator(`.graph-row[data-graph-snapshot="${pushedHead}"]`)).toHaveAttribute('aria-label', mode === 'pending' ? /Uncommitted/ : /Not pushed/);
     await expectRenderedGraphPath(page, pushedHead, graftTarget);
@@ -2037,7 +1979,7 @@ test('branch selection survives ref polling and follows identity through rename'
   await page.clock.install();
   const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0), auditSnapshot(graftTarget, 'feature', [appendedRoot], 'feature', 1), auditSnapshot(pushedHead, 'main', [appendedRoot], 'next main', 2)];
   let refs = [{ kind: 'branch', name: 'main', branch_id: 'main-id', repo_id: repoId, target: appendedRoot }, { kind: 'branch', name: 'feature', branch_id: 'feature-id', repo_id: repoId, target: graftTarget }];
-  const base = publicWorkspaceApi(snapshots, refs);
+  const base = publicRepositoryApi(snapshots, refs);
   const { pageErrors, unexpected } = await openGraph(page, req => req.pathname.endsWith('/refs') ? { body: refs } : base(req));
   const select = page.getByRole('combobox', { name: 'Branch', exact: true });
   await select.selectOption('feature');
@@ -2056,12 +1998,12 @@ test('graph distinguishes snapshot failure from empty history and recovers on re
   const pageErrors = capturePageErrors(page);
   let fail = true;
   const snapshots = [auditSnapshot(appendedRoot, 'main', [], 'root', 0)];
-  const base = publicWorkspaceApi(snapshots, [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot }]);
+  const base = publicRepositoryApi(snapshots, [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot }]);
   const unexpected = await installApiFixture(page, req => req.pathname.endsWith('/snapshots') && fail
     ? { status: 503, body: { error: { message: 'snapshot outage' } } } : base(req));
   await page.goto('/alice/cxthub');
   await expect(page.locator('.graph-wrap').getByRole('alert')).toContainText('snapshot outage', { timeout: 15_000 });
-  await expect(page.locator('.graph .ws-empty')).toHaveCount(0);
+  await expect(page.locator('.graph .repository-empty')).toHaveCount(0);
   fail = false;
   await page.locator('.graph-wrap').getByRole('alert').getByRole('button').click();
   await expect(page.locator('.graph-row')).toHaveCount(1);
@@ -2076,7 +2018,7 @@ test('graph advances only from a complete repository view', async ({ page }) => 
   const tip = auditSnapshot(pushedHead, 'main', [appendedRoot], 'committed together', 1);
   let advance = false;
   let viewCalls = 0;
-  const base = publicWorkspaceApi([root], [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot }]);
+  const base = publicRepositoryApi([root], [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot }]);
   const { pageErrors, unexpected } = await openGraph(page, req => {
     if (req.pathname.endsWith('/view')) {
       viewCalls++;
@@ -2106,7 +2048,7 @@ test('tag preservation and unused branch archive do not fabricate publication or
   const refs = [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot },
     { kind: 'tag', repo_id: repoId, name: 'v1', target: graftTarget },
     { kind: 'tag', repo_id: repoId, name: `cxt/branch-state/v1/00000000000000000001/archived/${appendedRoot.slice(7)}/unused`, target: appendedRoot }];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs));
   await expect(page.locator(`.graph-row[data-graph-snapshot="${graftTarget}"]`)).toHaveAttribute('aria-label', /Preserved by a server tag/);
   await expect(page.locator('.graph-status-item.tagged')).toHaveText('Tagged 1');
   await expect(page.locator('.graph-status-item.unpushed')).toHaveText('Not pushed 0');
@@ -2126,7 +2068,7 @@ test('renamed destination keeps a delayed PR completion on its main path', async
     pr: { number: 1, base_branch: 'main', head_branch: 'feature', head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40) }, created_at: at(5) };
   const rename = { ...main, id: 'rename', kind: 'rename', branch: 'trunk', previous_branch: 'main', binding_parent: main.id, created_at: at(6) };
   const refs = [{ kind: 'branch', repo_id: repoId, name: 'trunk', branch_id: 'main-id', target: pushedHead }];
-  const base = publicWorkspaceApi(snapshots, refs, [], [], [], [main, birth, done, rename]);
+  const base = publicRepositoryApi(snapshots, refs, [], [], [], [main, birth, done, rename]);
   const { pageErrors, unexpected } = await openGraph(page, req => req.pathname === '/api/v1/repos'
     ? { body: [{ id: repoId, default_branch: 'trunk' }] } : base(req));
   await expectRenderedGraphPath(page, pushedHead, 'graph:merge:done');
@@ -2146,7 +2088,7 @@ test('pending badge stays beside its active lanes in a wide sparse graph', async
   const refs = [{ kind: 'branch', repo_id: repoId, name: 'main', target: appendedRoot },
     ...heads.map(s => ({ kind: 'branch', repo_id: repoId, name: s.branch, target: s.id }))];
   const pending = [{ repo_id: repoId, branch: 'main', session_id: 'pending', provider: 'codex', target: uncommittedHead }];
-  const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, pending));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots, refs, pending));
   const viewport = page.locator('.graph-viewport');
   expect(await viewport.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
   const node = page.locator('.uncommitted-node');
@@ -2173,7 +2115,7 @@ for (const malformed of ['duplicate-id', 'cycle'] as const) {
     const refs=[{repo_id:repoId,kind:'branch',name:'main',target:current},
       {repo_id:repoId,kind:'tag',name:`cxt/branch-state/v1/00000000000000000001/archived/${hidden.slice(7)}/deleted`,target:hidden}];
     let stage=0;
-    const badApi=publicWorkspaceApi(bad,refs), goodApi=publicWorkspaceApi(good,refs);
+    const badApi=publicRepositoryApi(bad,refs), goodApi=publicRepositoryApi(good,refs);
     const pageErrors=capturePageErrors(page);
     const unexpected=await installApiFixture(page, request=>(stage===1?badApi:goodApi)(request));
     await page.goto('/alice/cxthub');
@@ -2208,7 +2150,7 @@ test('PR evidence survives every combination of archive and overlapping progress
     {repo_id:repoId,kind:'tag',name:`cxt/branch-state/v1/00000000000000000001/archived/${archived.slice(7)}/deleted`,target:archived}];
   const reflog=[{kind:'branch',name:'main',old:previous,new:root,created_at:'2026-09-18T00:00:06Z'},
     {kind:'branch',name:'main',old:source,new:root,created_at:'2026-09-18T00:00:07Z'}];
-  const {pageErrors,unexpected}=await openGraph(page,publicWorkspaceApi(snapshots,refs,[],[],reflog,history));
+  const {pageErrors,unexpected}=await openGraph(page,publicRepositoryApi(snapshots,refs,[],[],reflog,history));
   await page.locator('.graph-merge-records summary').click();
   const evidence=page.locator('.graph-merge-records li');
   const evidenceText=await evidence.innerText();
@@ -2238,7 +2180,7 @@ test('PR evidence survives every combination of archive and overlapping progress
 
 test('Git reversal history loads on demand and preserves partial and unverified outcomes', async ({page}) => {
  const snap = auditSnapshot(pushedHead, 'main', [], 'Retained merged context', 1);
- const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ const base = publicRepositoryApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
  let requests = 0;
  const row = (char: string, coverage: string) => ({id: char.repeat(64), request: {commit: char.repeat(40), target: 'f'.repeat(40)}, state: 'completed', version: '1', coverage, verified_paths: coverage === 'partial' ? 1 : 0, unverified_paths: 2, updated_at: '2026-09-19T01:00:00Z'});
  const {pageErrors, unexpected} = await openGraph(page, req => {
@@ -2267,7 +2209,7 @@ test('Git reversal history loads on demand and preserves partial and unverified 
 
 test('automatic Git discovery shows deferred work without changing graph facts', async ({page}) => {
  const snap = auditSnapshot(pushedHead, 'main', [], 'Retained context', 1);
- const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ const base = publicRepositoryApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
  let requests = 0;
  const {pageErrors, unexpected} = await openGraph(page, req => {
   if (req.pathname === `/api/v1/repos/${repoId}/git-scans`) {
@@ -2292,7 +2234,7 @@ test('automatic Git discovery shows deferred work without changing graph facts',
 
 test('code applicability uses explicit selection and server state without moving graph history', async ({page}) => {
  const snap = auditSnapshot(pushedHead, 'main', [], 'Retained merged context', 1);
- const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ const base = publicRepositoryApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
  const requests: string[] = [];
  const {pageErrors, unexpected} = await openGraph(page, req => {
   if (req.pathname === `/api/v1/repos/${repoId}/code-applicability`) {
@@ -2328,7 +2270,7 @@ test('code applicability uses explicit selection and server state without moving
 
 test('evidence-only revisions refresh applicability without downloading the graph', async ({page}) => {
  const snap = auditSnapshot(pushedHead, 'main', [], 'Historical completion retained', 1);
- const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
+ const base = publicRepositoryApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}]);
  let evidence = '1', fullReads = 0;
  page.on('request', req => {if (new URL(req.url()).pathname.endsWith('/view')) fullReads++;});
  const {pageErrors, unexpected} = await openGraph(page, req => {
@@ -2360,7 +2302,7 @@ function memoryPublication(snapshot: string, code: string, event = 'a'.repeat(32
 
 test('context keeps original memory and leaves integrated memory to agent APIs', async ({page}) => {
  const snap={...auditSnapshot(pushedHead,'main',[],'Original saved context',1),memory_hash:id('a')};
- const base=publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}],[],[],[],[memoryPublication(pushedHead,'a'.repeat(40))]);
+ const base=publicRepositoryApi([snap],[{kind:'branch',name:'main',target:pushedHead}],[],[],[],[memoryPublication(pushedHead,'a'.repeat(40))]);
  const machineReads:string[]=[];
  const {pageErrors,unexpected}=await openGraph(page,req=>{
   if(req.pathname.includes('/effective-memory')) {machineReads.push(req.pathname);return {status:500,body:{error:{message:'Unexpected automatic assessment'}}};}
@@ -2397,7 +2339,7 @@ test('main includes PR conversations and evidence refreshes the graph without au
  const inclusion=()=>({branch_id:'main-id',snapshot_id:head,code_commit:code,reason:'selected_code',roots:evidence==='1'?[head]:[a,b,head],snapshot_ids:evidence==='1'?[head,baseID]:[head,b,a,baseID],
   merges:history.map((h,i)=>({event_id:h.id,source:h.source,before:baseID,merge_sha:h.pr.merge_sha,pr_number:i+1,state:evidence==='1'?'review':'included',reason:'verified_git_order',order:1-i}))});
  const view=()=>({snapshots,refs,history,pending:[],unsync:[],reflog:[],revision:{graph:'1',pending:'1',evidence},graph:{branch_contexts:{main:inclusion()}}});
- const base=publicWorkspaceApi(snapshots,refs,[],[],[],history);
+ const base=publicRepositoryApi(snapshots,refs,[],[],[],history);
  const {pageErrors,unexpected}=await openGraph(page,req=>{
   const v=view();
   if(req.pathname.endsWith('/view')) {fullReads++;return {body:v};}
@@ -2428,7 +2370,7 @@ for(const fork of ['main','feature-parent'] as const) for(const continuation of 
   pr:{number:i+1,base_branch:'main',head_branch:i?'feature-child':'feature-first',head_sha:'a'.repeat(40),merge_sha:String(i+1).repeat(40)},created_at:`2026-01-01T00:00:0${i?7:3}Z`}));
  const history=[birth,...merges];
  const inclusion={branch_id:'main-id',snapshot_id:head,code_commit:'2'.repeat(40),reason:'selected_code',roots:[baseID,a,checkpoint,b,head],snapshot_ids:[head,b,checkpoint,parent,a,baseID],merges:merges.map((h,i)=>({event_id:h.id,source:h.source,before:h.shared_target,merge_sha:h.pr.merge_sha,pr_number:i+1,state:'included',reason:'verified_git_order',order:1-i}))};
- const base=publicWorkspaceApi(snapshots,refs,[],[],[],history);
+ const base=publicRepositoryApi(snapshots,refs,[],[],[],history);
  const {pageErrors,unexpected}=await openGraph(page,req=>req.pathname.endsWith('/view')?{body:{snapshots,refs,history,pending:[],unsync:[],reflog:[],revision:{graph:'1',pending:'1',evidence:'1'},graph:{branch_contexts:{main:inclusion}}}}:base(req));
  for(const node of [head,'graph:merge:checkpoint-merge-1',checkpoint,'graph:merge:checkpoint-merge-0']) await expect(page.locator(`[data-graph-id="${node}"]`)).toHaveAttribute('data-graph-node-lane','0');
  await expectRenderedGraphPath(page,head,'graph:merge:checkpoint-merge-1');

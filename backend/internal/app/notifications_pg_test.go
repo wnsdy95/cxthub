@@ -33,12 +33,12 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 	if err := st.UpsertUser(ctx, user); err != nil {
 		t.Fatal(err)
 	}
-	wsp := domain.Workspace{ID: domain.NewID("ws_"), Name: "Notifications", OwnerID: user.ID, OwnerUsername: user.Username, Slug: "events", CreatedAt: time.Now().UTC(), WebhookURL: "https://example.test/credential"}
-	if err := st.CreateWorkspace(ctx, wsp); err != nil {
+	repositoryRecord := domain.Repository{ID: domain.NewID("ws_"), Name: "Notifications", OwnerID: user.ID, OwnerUsername: user.Username, Slug: "events", CreatedAt: time.Now().UTC(), WebhookURL: "https://example.test/credential"}
+	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
-	repo := hh(wsp.ID)
-	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: wsp.ID}); err != nil {
+	repo := hh(repositoryRecord.ID)
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: repositoryRecord.ID}); err != nil {
 		t.Fatal(err)
 	}
 	svc := NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
@@ -52,7 +52,7 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 	if _, err := st.GetSecretsEnvelope(ctx, repo); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ciphertext escaped rollback: %v", err)
 	}
-	jobs, err := st.ListNotifications(ctx, wsp.ID)
+	jobs, err := st.ListNotifications(ctx, repositoryRecord.ID)
 	if err != nil || len(jobs) != 0 {
 		t.Fatalf("outbox escaped rollback: %+v %v", jobs, err)
 	}
@@ -76,7 +76,7 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 	if _, err := svc.SaveSecrets(ctx, inputSecrets); !errors.Is(err, domain.ErrSecretsConflict) {
 		t.Fatal("stale ciphertext CAS accepted")
 	}
-	jobs, err = st.ListNotifications(ctx, wsp.ID)
+	jobs, err = st.ListNotifications(ctx, repositoryRecord.ID)
 	if err != nil || len(jobs) != 2 {
 		t.Fatalf("replay duplicated or lost notifications: %+v %v", jobs, err)
 	}
@@ -84,14 +84,14 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 	if err := st.UpsertUser(ctx, joiner); err != nil {
 		t.Fatal(err)
 	}
-	inv := domain.Invite{Token: domain.NewID("inv_"), WorkspaceID: wsp.ID, Role: domain.RoleMember, Status: domain.InvitePending, CreatedBy: user.ID, CreatedAt: time.Now().UTC()}
+	inv := domain.Invite{Token: domain.NewID("inv_"), RepositoryID: repositoryRecord.ID, Role: domain.RoleMember, Status: domain.InvitePending, CreatedBy: user.ID, CreatedAt: time.Now().UTC()}
 	if err := st.CreateInvite(ctx, inv); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewIdentityService(nil, fail).AcceptInvite(ctx, joiner, inv.Token); err == nil {
 		t.Fatal("member enqueue failure accepted")
 	}
-	if member, err := st.IsMember(ctx, wsp.ID, joiner.ID); err != nil || member {
+	if member, err := st.IsMember(ctx, repositoryRecord.ID, joiner.ID); err != nil || member {
 		t.Fatalf("membership escaped rollback: %v %v", member, err)
 	}
 	peer, err := store.NewPostgresStore(ctx, collaborationDSN(t))
@@ -119,7 +119,7 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	jobs, err = st.ListNotifications(ctx, wsp.ID)
+	jobs, err = st.ListNotifications(ctx, repositoryRecord.ID)
 	if err != nil || len(jobs) != 3 {
 		t.Fatalf("concurrent joins duplicated notification: %+v %v", jobs, err)
 	}
@@ -148,8 +148,8 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 	// Claim uses the database clock. Make these fixtures already due so a small
 	// host/DB clock skew does not turn this lease test into a scheduling race.
 	due := time.Unix(0, 0).UTC()
-	claimJob := domain.NotificationJob{ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, State: "pending", CreatedAt: time.Now().UTC(), NextAttempt: due}
-	if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: claimJob, Destination: wsp.WebhookURL}); err != nil {
+	claimJob := domain.NotificationJob{ID: domain.NewID("evt_"), RepositoryID: repositoryRecord.ID, State: "pending", CreatedAt: time.Now().UTC(), NextAttempt: due}
+	if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: claimJob, Destination: repositoryRecord.WebhookURL}); err != nil {
 		t.Fatal(err)
 	}
 	claimed := make(chan outbound.NotificationDelivery, 2)
@@ -176,8 +176,8 @@ func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Reclaim an abandoned lease and fence its previous worker.
-	j := domain.NotificationJob{ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, Kind: "ref_updated", State: "pending", Text: "lease", CreatedAt: time.Now().UTC(), NextAttempt: due}
-	if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: j, Destination: wsp.WebhookURL}); err != nil {
+	j := domain.NotificationJob{ID: domain.NewID("evt_"), RepositoryID: repositoryRecord.ID, Kind: "ref_updated", State: "pending", Text: "lease", CreatedAt: time.Now().UTC(), NextAttempt: due}
+	if err := st.EnqueueNotification(ctx, outbound.NotificationDelivery{Job: j, Destination: repositoryRecord.WebhookURL}); err != nil {
 		t.Fatal(err)
 	}
 	old, err := st.ClaimNotification(ctx, time.Now(), time.Millisecond)

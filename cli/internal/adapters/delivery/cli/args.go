@@ -42,7 +42,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"commit":    {usage: "cxt commit [-m <message>]", flags: commandFlags([]string{"-m"}, nil)},
 	"switch":    {usage: "cxt switch [<branch>] [-c <new>] [--mode full|reconstructed|memory]", flags: commandFlags([]string{"-c", "--mode"}, nil)},
 	"config":    {usage: "cxt config <key> [value]"},
-	"login":     {usage: "cxt login [token] | -t <token>", flags: commandFlags([]string{"-t"}, nil)},
+	"login":     {usage: "cxt login [token|-t <token>] [--server <server-url>]", flags: commandFlags([]string{"-t", "--server"}, nil)},
 	"logout":    {usage: "cxt logout"},
 	"fsck":      {usage: "cxt fsck"},
 	"repair":    {usage: "cxt repair --from-server [--remote <repository-url>]", flags: commandFlags([]string{"--remote"}, []string{"--from-server"})},

@@ -1,6 +1,6 @@
 // Contribution activity — GitHub profile activity feed. Two types expressible with our data:
-//   1) Monthly context commit bundles (workspace counts + relative bars)
-//   2) Workspaces created that month (public/private·date)
+//   1) Monthly context commit bundles (repository counts + relative bars)
+//   2) Repositories created that month (public/private·date)
 // (PRs, reviews, languages omitted due to lack of data.) Data: /public/users/{username}/activity.
 import { useQuery } from '@tanstack/react-query';
 import type { ActivityMonth } from '../types';

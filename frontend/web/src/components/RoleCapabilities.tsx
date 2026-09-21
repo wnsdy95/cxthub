@@ -6,7 +6,7 @@ const CAPABILITY_KEYS: Record<RoleCapability, MsgKey> = {
   pullTeamAssets: 'settings.capabilityPullTeamAssets',
   pushContext: 'settings.capabilityPushContext',
   manageTeamAssets: 'settings.capabilityManageTeamAssets',
-  administerWorkspace: 'settings.capabilityAdministerWorkspace',
+  administerRepository: 'settings.capabilityAdministerRepository',
 };
 
 export function RoleCapabilities() {

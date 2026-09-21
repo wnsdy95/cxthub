@@ -36,7 +36,7 @@ From the repository root:
 cxt setup
 ```
 
-This initializes `.cxt`, installs Git hooks, registers the workspace remote
+This initializes `.cxt`, installs Git hooks, registers the repository remote
 when supplied, logs in unless disabled, and merges Codex lifecycle hooks.
 Hooks preserve existing configuration and are fail-open.
 

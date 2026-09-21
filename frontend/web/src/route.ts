@@ -1,183 +1,74 @@
-// History API routing:
-//   /<namespace>/<workspace>                       workspace overview / legacy repo
-//   /<namespace>/<workspace>?tab=<tab>             workspace tab / legacy repo on hold
-//   /<namespace>/<workspace>/<repository>          repository context
-//   /<namespace>/<workspace>/<repository>?tab=onhold repository on-hold view
-// The former /-/ tab namespace is retired and resolves to not-found.
-// (Switch from hash routing: dev is vite SPA fallback by default, production requires rewrite rules)
-// Click → pushState, refresh/entry → server returns index.html then path resolution, back → popstate.
-import type { Repo, Workspace } from './types';
+// Canonical product routes are /{owner}/{repository}?tab=.... Exact legacy
+// connection paths are resolved by the server, never guessed from tab names.
+import type { Repo, Repository } from './types';
 
-type WorkspaceRoute = Pick<Workspace, 'id' | 'owner_username' | 'slug'>;
-
-// Reserved segments for username (to prevent conflicts with feature routes).
-const RESERVED = new Set([
-  'invite',
-  'w',
-  'login',
-  'settings',
-  'pricing',
-  'api',
-  'assets',
-  'public',
-  'admin',
-  'static',
-  'cxt',
-  'connect',
-  'oauth',
-  'mcp',
-]);
-
-// Tabs live in the query so repository names such as "settings" stay addressable.
-export type WsTab = 'members' | 'connections' | 'onhold' | 'settings';
-
-const TABS = new Set<WsTab>(['members', 'connections', 'onhold', 'settings']);
-
+type RepositoryAddress = Pick<Repository, 'id' | 'owner_username' | 'slug'>;
+const RESERVED = new Set(['invite', 'w', 'login', 'settings', 'pricing', 'api', 'assets', 'public', 'admin', 'static', 'cxt', 'connect', 'oauth', 'mcp', 'enterprises']);
+export type RepositoryTab = 'members' | 'connections' | 'onhold' | 'settings';
+const TABS = new Set<RepositoryTab>(['members', 'connections', 'onhold', 'settings']);
 export type Route =
-  | {
-      kind: 'ws';
-      username: string;
-      slug: string;
-      repository?: string;
-      tab?: WsTab;
-      /** Three-segment pre-multi-repo tab; used only when no repository has this exact slug. */
-      legacyTab?: WsTab;
-    }
-  | { kind: 'user'; username: string } // /<username> (GitHub style profile)
-  | { kind: 'wsid'; id: string; repository?: ''; tab?: WsTab } // Legacy /w/<id>
-  | { kind: 'invite'; token: string } // /invite/<token>
-  | { kind: 'device'; code: string } // /login/device?code=XXX-XXX (CLI pairing approval)
-  | { kind: 'mcpConsent'; request: string } // /connect/mcp?request=... (remote MCP OAuth consent)
-  | { kind: 'pricing' } // /pricing — public storage pricing
-  | { kind: 'notFound' } // Retired routes must not mount a workspace view.
-  | null;
+ | { kind: 'repository'; username: string; slug: string; tab?: RepositoryTab }
+ | { kind: 'repositoryId'; id: string; tab?: RepositoryTab }
+ | { kind: 'user'; username: string }
+ | { kind: 'enterprise'; slug: string }
+ | { kind: 'invite'; token: string }
+ | { kind: 'device'; code: string }
+ | { kind: 'mcpConsent'; request: string }
+ | { kind: 'pricing' }
+ | { kind: 'notFound' }
+ | null;
 
-// Workspace's canonical path. Fallback to id path if slug is missing (legacy fix).
-export function wsPath(w: WorkspaceRoute, tab?: WsTab): string {
-  const base = w.owner_username && w.slug ? `/${w.owner_username}/${w.slug}` : `/w/${w.id}`;
-  return tab ? `${base}?tab=${tab}` : base;
+export function repositoryPath(repository: RepositoryAddress, tab?: RepositoryTab): string {
+ const base = repository.owner_username && repository.slug
+  ? `/${encodeURIComponent(repository.owner_username)}/${encodeURIComponent(repository.slug)}`
+  : `/w/${repository.id}`;
+ return tab ? `${base}?tab=${tab}` : base;
 }
-
-/** Repository URL segment. Empty means a legacy two-segment repository. */
+/** Display-only connection name. Identity comes from the server, never this segment. */
 export function repositorySlug(repo: Pick<Repo, 'remote_url'>): string {
-  try {
-    const segments = new URL(repo.remote_url).pathname.split('/').filter(Boolean);
-    if (segments.length < 3) return '';
-    return decodeURIComponent(segments.at(-1) ?? '');
-  } catch {
-    return '';
-  }
+ try { return decodeURIComponent(new URL(repo.remote_url).pathname.split('/').filter(Boolean).at(-1) ?? ''); }
+ catch { return ''; }
 }
-
-export function repoPath(
-  w: WorkspaceRoute,
-  repo: Pick<Repo, 'remote_url'>,
-  tab?: Extract<WsTab, 'onhold'>,
-): string {
-  const base = wsPath(w);
-  const repository = repositorySlug(repo);
-  if (!repository) return wsPath(w, tab);
-  const path = `${base}/${encodeURIComponent(repository)}`;
-  return tab ? `${path}?tab=${tab}` : path;
+export function repoPath(repository: RepositoryAddress, _repo: Pick<Repo, 'remote_url'>, tab?: Extract<RepositoryTab, 'onhold'>): string {
+ return repositoryPath(repository, tab);
 }
-
-// Invitation link path.
-export function invitePath(token: string): string {
-  return `/invite/${token}`;
+export function enterprisePath(slug: string): string { return `/enterprises/${encodeURIComponent(slug)}`; }
+export function invitePath(token: string): string { return `/invite/${encodeURIComponent(token)}`; }
+export function parseRoute(pathname: string = location.pathname, search: string = typeof location === 'undefined' ? '' : location.search): Route {
+ let segments: string[];
+ try { segments = pathname.split('/').filter(Boolean).map(decodeURIComponent); }
+ catch { return { kind: 'notFound' }; }
+ if (segments.length === 0) return null;
+ if (segments.some((part) => part === '.' || part === '..' || part.includes('/') || part.includes('\\'))) return { kind: 'notFound' };
+ const query = new URLSearchParams(search);
+ if (segments[0] === 'pricing' && segments.length === 1) return { kind: 'pricing' };
+ if (segments[0] === 'enterprises' && segments.length === 2) return { kind: 'enterprise', slug: segments[1] };
+ if (segments[0] === 'invite' && segments.length === 2) return { kind: 'invite', token: segments[1] };
+ if (segments[0] === 'login' && segments[1] === 'device' && segments.length === 2) return { kind: 'device', code: query.get('code') ?? '' };
+ if (segments[0] === 'connect' && segments[1] === 'mcp' && segments.length === 2) return { kind: 'mcpConsent', request: query.get('request') ?? '' };
+ const rawTab = query.get('tab') as RepositoryTab;
+ const tab = TABS.has(rawTab) ? { tab: rawTab } : {};
+ if (segments[0] === 'w' && segments.length === 2) return { kind: 'repositoryId', id: segments[1], ...tab };
+ if (RESERVED.has(segments[0])) return { kind: 'notFound' };
+ if (segments.length === 1) return { kind: 'user', username: segments[0] };
+ if (segments.length > 3 || segments[2] === '-') return { kind: 'notFound' };
+ // A three-segment address is accepted only if the backend has this exact
+ // historical alias. PublicBrowse redirects its resolved canonical address.
+ return { kind: 'repository', username: segments[0], slug: segments.slice(1).join('/'), ...tab };
 }
-
-// Parses the current path as a route.
-export function parseRoute(
-  pathname: string = location.pathname,
-  search: string = typeof location === 'undefined' ? '' : location.search,
-): Route {
-  // Unicode slug (e.g., Korean) is percent-encoded in pathname, so decode and compare.
-  const seg = pathname
-    .split('/')
-    .filter(Boolean)
-    .map((x) => {
-      try {
-        return decodeURIComponent(x);
-      } catch {
-        return x;
-      }
-    });
-  if (seg.length >= 3 && seg[2] === '-') return { kind: 'notFound' };
-  if (seg.length === 0 || seg.length > 4) return null;
-  if (seg[0] === 'pricing' && seg.length === 1) return { kind: 'pricing' };
-  if (seg[0] === 'invite' && seg.length === 2) return { kind: 'invite', token: seg[1] };
-  if (seg[0] === 'login' && seg[1] === 'device' && seg.length === 2) {
-    return { kind: 'device', code: new URLSearchParams(search).get('code') ?? '' };
-  }
-  if (seg[0] === 'connect' && seg[1] === 'mcp' && seg.length === 2) {
-    return { kind: 'mcpConsent', request: new URLSearchParams(search).get('request') ?? '' };
-  }
-  // Query tabs do not consume repository slugs. For legacy On Hold, the empty
-  // slug pins that repository even if it is not first in the list.
-  const rawTab = new URLSearchParams(search).get('tab') as WsTab;
-  const tab = TABS.has(rawTab) ? rawTab : undefined;
-  const workspaceView = tab ? { tab, ...(tab === 'onhold' ? { repository: '' as const } : {}) } : {};
-  if (seg[0] === 'w' && seg.length === 2) return { kind: 'wsid', id: seg[1], ...workspaceView };
-  if (RESERVED.has(seg[0])) return null;
-  if (seg.length === 1) return { kind: 'user', username: seg[0] }; // /<username> profile
-  if (seg.length === 2) return { kind: 'ws', username: seg[0], slug: seg[1], ...workspaceView };
-  if (seg.length === 4 && seg[3] === 'onhold') {
-    return { kind: 'ws', username: seg[0], slug: seg[1], repository: seg[2], tab: 'onhold' };
-  }
-  if (seg.length !== 3) return null;
-  const legacyTab = TABS.has(seg[2] as WsTab) ? (seg[2] as WsTab) : undefined;
-  return {
-    kind: 'ws', username: seg[0], slug: seg[1], repository: seg[2],
-    ...(legacyTab ? { legacyTab } : {}),
-    ...(tab === 'onhold' ? { tab } : {}),
-  };
+export function findByRoute(route: Route, list: Repository[]): Repository | undefined {
+ if (route?.kind === 'repositoryId') return list.find((repository) => repository.id === route.id);
+ if (route?.kind === 'repository') return list.find((repository) => repository.owner_username === route.username && repository.slug === route.slug);
+ return undefined;
 }
-
-// Finds the workspace corresponding to the route in the list.
-export function findByRoute(route: Route, list: Workspace[]): Workspace | undefined {
-  if (!route) return undefined;
-  if (route.kind === 'wsid') return list.find((w) => w.id === route.id);
-  if (route.kind === 'ws') return list.find((w) => w.owner_username === route.username && w.slug === route.slug);
-  return undefined;
-}
-
 export function findRepositoryByRoute(route: Route, list: Repo[]): Repo | undefined {
-  if (!route || (route.kind !== 'ws' && route.kind !== 'wsid')) return undefined;
-  if (route.repository === undefined && route.tab) return undefined;
-  return list.find((repo) => repositorySlug(repo) === (route.repository ?? ''));
+ if (route?.kind !== 'repository' && route?.kind !== 'repositoryId') return undefined;
+ return list.length === 1 ? list[0] : undefined;
 }
-
-/**
- * Resolves the transitional three-segment tab format. An exact repository
- * match always wins, so a repository named "settings" remains addressable.
- */
-export function resolvedWorkspaceTab(route: Route, repos: Repo[]): WsTab | undefined {
-  if (!route || (route.kind !== 'ws' && route.kind !== 'wsid')) return undefined;
-  if (route.tab) return route.tab;
-  if (route.kind === 'ws' && route.legacyTab && !findRepositoryByRoute(route, repos)) return route.legacyTab;
-  return undefined;
+export function resolvedRepositoryTab(route: Route, _repos: Repo[]): RepositoryTab | undefined {
+ return route?.kind === 'repository' || route?.kind === 'repositoryId' ? route.tab : undefined;
 }
-
-// notifyRoute synthesizes a popstate event after pushState/replaceState (the browser does not fire popstate for programmatic history changes, so it centralizes listeners).
-function notifyRoute(): void {
-  window.dispatchEvent(new PopStateEvent('popstate'));
-}
-
-// User navigation: history is pushed, back button works.
-export function navigate(path: string): void {
-  history.pushState(null, '', path);
-  notifyRoute();
-}
-
-// Non-user navigation (auto selection, correction, redirect): does not contaminate history.
-export function replacePath(path: string): void {
-  history.replaceState(null, '', path);
-  notifyRoute();
-}
-
-// Upgrades legacy hash URLs (#/w/<id>, #/<u>/<s>, #/invite/<t>) to actual paths (once on boot).
-export function upgradeLegacyHash(): void {
-  if (location.hash.startsWith('#/')) {
-    history.replaceState(null, '', location.hash.slice(1));
-  }
-}
+function notifyRoute(): void { window.dispatchEvent(new PopStateEvent('popstate')); }
+export function navigate(path: string): void { history.pushState(null, '', path); notifyRoute(); }
+export function replacePath(path: string): void { history.replaceState(null, '', path); notifyRoute(); }
+export function upgradeLegacyHash(): void { if (location.hash.startsWith('#/')) history.replaceState(null, '', location.hash.slice(1)); }

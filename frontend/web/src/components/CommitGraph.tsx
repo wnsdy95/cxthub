@@ -668,7 +668,7 @@ export function CommitGraph({
             </li>
           );
         })}
-        {rows.length === 0 && !graphLoading && !graphError && !historyError && !(positionEvent && !currentGraph) && <li className="ws-empty">{t('graph.noCommits')}</li>}
+        {rows.length === 0 && !graphLoading && !graphError && !historyError && !(positionEvent && !currentGraph) && <li className="repository-empty">{t('graph.noCommits')}</li>}
           </ul>
         </div>
       </div>

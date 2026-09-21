@@ -4,11 +4,11 @@ import { useT } from '../i18n';
 
 const reasons = ['configuration_unavailable', 'destination_disabled', 'destination_changed', 'invalid_destination', 'attempts_exhausted', 'transport_failed', 'http_retryable', 'http_rejected', 'encoding_failed'] as const;
 
-export function NotificationHistory({ workspace }: { workspace: string }) {
+export function NotificationHistory({ repository }: { repository: string }) {
   const t = useT();
   const qc = useQueryClient();
-  const query = useQuery({ queryKey: ['notifications', workspace], queryFn: ({ signal }) => api.notifications(workspace, signal), refetchInterval: 10_000 });
-  const retry = useMutation({ mutationFn: (id: string) => api.retryNotification(workspace, id), onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications', workspace] }) });
+  const query = useQuery({ queryKey: ['notifications', repository], queryFn: ({ signal }) => api.notifications(repository, signal), refetchInterval: 10_000 });
+  const retry = useMutation({ mutationFn: (id: string) => api.retryNotification(repository, id), onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications', repository] }) });
   return <section className="settings-upload notification-history" aria-label={t('notifications.title')}>
     <h3>{t('notifications.title')}</h3>
     <p className="hint">{t('notifications.hint')}</p>

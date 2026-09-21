@@ -7,7 +7,7 @@ import (
 )
 
 func TestIdentityStorageKeyValidation(t *testing.T) {
-	if err := ValidateWorkspaceID(NewID("ws_")); err != nil {
+	if err := ValidateRepositoryID(NewID("ws_")); err != nil {
 		t.Fatal(err)
 	}
 	if err := ValidateInviteToken(NewID("inv_")); err != nil {
@@ -17,8 +17,8 @@ func TestIdentityStorageKeyValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"", "../outside", "ws_ABC", "ws_1234"} {
-		if err := ValidateWorkspaceID(bad); !errors.Is(err, ErrValidation) {
-			t.Fatalf("ValidateWorkspaceID(%q) = %v", bad, err)
+		if err := ValidateRepositoryID(bad); !errors.Is(err, ErrValidation) {
+			t.Fatalf("ValidateRepositoryID(%q) = %v", bad, err)
 		}
 	}
 	if err := ValidateExternalID("firebase/user:123"); err != nil {
@@ -47,20 +47,20 @@ func TestValidateAvatarDataURL(t *testing.T) {
 }
 
 func TestIdentityRecordValidationRejectsAuthorityCorruption(t *testing.T) {
-	wsID := NewID("ws_")
+	repositoryID := NewID("ws_")
 	userID := "firebase/user:123"
 
-	if err := ValidateWorkspaceRecord(Workspace{ID: wsID, OwnerID: userID}); err != nil {
+	if err := ValidateRepositoryRecord(Repository{ID: repositoryID, OwnerID: userID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateWorkspaceRecord(Workspace{ID: wsID, OwnerID: userID, PublicRole: "owner"}); !errors.Is(err, ErrValidation) {
+	if err := ValidateRepositoryRecord(Repository{ID: repositoryID, OwnerID: userID, PublicRole: "owner"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("unsafe public role accepted: %v", err)
 	}
-	if err := ValidateMembershipRecord(Membership{WorkspaceID: wsID, UserID: userID, Role: MemberRole("root")}); !errors.Is(err, ErrValidation) {
+	if err := ValidateMembershipRecord(Membership{RepositoryID: repositoryID, UserID: userID, Role: MemberRole("root")}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("unknown membership role accepted: %v", err)
 	}
 	if err := ValidateInviteRecord(Invite{
-		Token: NewID("inv_"), WorkspaceID: wsID, CreatedBy: userID,
+		Token: NewID("inv_"), RepositoryID: repositoryID, CreatedBy: userID,
 		Role: RoleMember, Status: InviteStatus("reopened"),
 	}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("unknown invite status accepted: %v", err)

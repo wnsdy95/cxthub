@@ -31,5 +31,5 @@ auth = "oauth"
 # Team Remote Server Configuration (Optional)
 # ---------------------------------------------------------------------------
 # MCP never pushes or pulls. Configure the local working replica separately:
-#   cxt remote add origin https://<host>/<namespace>/<workspace>/<repository>
+#   cxt remote add origin https://<host>/<owner>/<repository>
 #   cxt login

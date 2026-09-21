@@ -2,7 +2,7 @@
 // Automatically displays the latest context of the default branch (main/master),
 // and provides a branch dropdown + commit log (click to show context at that point in time).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Repo, Workspace, Snapshot } from '../types';
+import type { Repo, Repository, Snapshot } from '../types';
 import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, useRepoView, useReflog } from '../hooks';
 import { navigate, repoPath } from '../route';
 import { usePaged, PageControl } from './Pagination';
@@ -81,10 +81,10 @@ function pickDefaultBranch(names: string[], preferred: string): string | null {
   return names[0] ?? null;
 }
 
-type ContextWorkspace = Pick<Workspace, 'id' | 'owner_username' | 'slug' | 'visibility'> &
-  Partial<Pick<Workspace, 'settings_policy' | 'secrets_policy'>>;
+type ContextRepository = Pick<Repository, 'id' | 'owner_username' | 'slug' | 'visibility'> &
+  Partial<Pick<Repository, 'settings_policy' | 'secrets_policy'>>;
 
-export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspace | null; role: Role | null }) {
+export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; repositoryMetadata: ContextRepository | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
   const { refs, snapshots: allSnapshots, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
@@ -328,7 +328,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
                     title={t('context.viewInOnHold')}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (ws) navigate(repoPath(ws, repo, 'onhold'));
+                      if (repositoryMetadata) navigate(repoPath(repositoryMetadata, repo, 'onhold'));
                     }}
                   >
                     {t('context.holdBadge', { count: rowHold })}
@@ -349,7 +349,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
             {compactions.has(s.id) && <div className="compaction-divider">{t('context.compactionDivider')}</div>}
           </li>
         ))}
-        {snapshots.length === 0 && <li className="ws-empty">{t('context.noCommitsBranch')}</li>}
+        {snapshots.length === 0 && <li className="repository-empty">{t('context.noCommitsBranch')}</li>}
       </ul>
 
       {selected && (
@@ -547,16 +547,16 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
         {atLeast(role, 'puller') && (
           <TeamSettings
             repoId={repo.id}
-            canWrite={canWriteAsset(role, ws?.settings_policy)}
-            showLockedControl={ws?.visibility === 'public'}
+            canWrite={canWriteAsset(role, repositoryMetadata?.settings_policy)}
+            showLockedControl={repositoryMetadata?.visibility === 'public'}
           />
         )}
         {atLeast(role, 'puller') && (
           <SecretsPanel
             key={repo.id}
             repoId={repo.id}
-            canWrite={canWriteAsset(role, ws?.secrets_policy)}
-            showLockedControl={ws?.visibility === 'public'}
+            canWrite={canWriteAsset(role, repositoryMetadata?.secrets_policy)}
+            showLockedControl={repositoryMetadata?.visibility === 'public'}
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
@@ -590,7 +590,7 @@ function ReflogPanel({ repoId }: { repoId: string }) {
             <code>{e.old ? short(e.old) : '∅'}</code>→<code>{short(e.new)}</code>
           </li>
         ))}
-        {open && !q.isLoading && (q.data ?? []).length === 0 && <li className="ws-empty">{t('context.reflogEmpty')}</li>}
+        {open && !q.isLoading && (q.data ?? []).length === 0 && <li className="repository-empty">{t('context.reflogEmpty')}</li>}
       </ul>
     </details>
   );

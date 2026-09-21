@@ -2,7 +2,7 @@
   "name": "@cxt/web-app",
   "private": true,
   "version": "0.1.0",
-  "description": "cxt web UI \u2014 Firebase auth + workspaces + invites + team session browser (React + Vite)",
+  "description": "cxt web UI \u2014 Firebase auth + repositories, organizations, teams + invites + team session browser (React + Vite)",
   "type": "module",
   "scripts": {
     "dev": "vite",

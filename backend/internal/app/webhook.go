@@ -16,8 +16,8 @@ import (
 )
 
 // Notifications contain event metadata only, never secrets ciphertext or plaintext.
-func enqueueWorkspaceNotification(ctx context.Context, store any, wsp domain.Workspace, kind, text string) error {
-	if wsp.WebhookURL == "" || wsp.Archived {
+func enqueueRepositoryNotification(ctx context.Context, store any, repositoryRecord domain.Repository, kind, text string) error {
+	if repositoryRecord.WebhookURL == "" || repositoryRecord.Archived {
 		return nil
 	}
 	outbox, ok := store.(outbound.NotificationStore)
@@ -25,23 +25,23 @@ func enqueueWorkspaceNotification(ctx context.Context, store any, wsp domain.Wor
 		return fmt.Errorf("durable notification storage unavailable")
 	}
 	now := time.Now().UTC()
-	return outbox.EnqueueNotification(ctx, outbound.NotificationDelivery{Destination: wsp.WebhookURL, Job: domain.NotificationJob{
-		ID: domain.NewID("evt_"), WorkspaceID: wsp.ID, Kind: kind, Text: text, State: "pending", CreatedAt: now, UpdatedAt: now, NextAttempt: now,
+	return outbox.EnqueueNotification(ctx, outbound.NotificationDelivery{Destination: repositoryRecord.WebhookURL, Job: domain.NotificationJob{
+		ID: domain.NewID("evt_"), RepositoryID: repositoryRecord.ID, Kind: kind, Text: text, State: "pending", CreatedAt: now, UpdatedAt: now, NextAttempt: now,
 	}})
 }
 
 func (s *Service) notifyRefUpdate(ctx context.Context, repoID domain.ContentHash, ref domain.Ref, forced, created bool) error {
-	if s.ws == nil || ref.Kind != domain.RefBranch {
+	if s.repositories == nil || ref.Kind != domain.RefBranch {
 		return nil
 	}
 	repo, err := s.meta.GetRepo(ctx, repoID)
 	if err != nil {
 		return err
 	}
-	if repo.WorkspaceID == "" {
+	if repo.RepositoryID == "" {
 		return nil
 	}
-	wsp, err := s.ws.GetWorkspace(ctx, repo.WorkspaceID)
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repo.RepositoryID)
 	if err != nil {
 		return err
 	}
@@ -56,21 +56,21 @@ func (s *Service) notifyRefUpdate(ctx context.Context, repoID domain.ContentHash
 	if forced {
 		verb += "(force)"
 	}
-	return enqueueWorkspaceNotification(ctx, s.meta, wsp, "ref_updated", fmt.Sprintf("cxthub: %s — branch %q %s → %s", name, ref.Name, verb, shortHash(ref.Target)))
+	return enqueueRepositoryNotification(ctx, s.meta, repositoryRecord, "ref_updated", fmt.Sprintf("cxthub: %s — branch %q %s → %s", name, ref.Name, verb, shortHash(ref.Target)))
 }
 
 func (s *Service) notifySecretsChanged(ctx context.Context, repoID domain.ContentHash) error {
-	if s.ws == nil {
+	if s.repositories == nil {
 		return nil
 	}
 	repo, err := s.meta.GetRepo(ctx, repoID)
 	if err != nil {
 		return err
 	}
-	if repo.WorkspaceID == "" {
+	if repo.RepositoryID == "" {
 		return nil
 	}
-	wsp, err := s.ws.GetWorkspace(ctx, repo.WorkspaceID)
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repo.RepositoryID)
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func (s *Service) notifySecretsChanged(ctx context.Context, repoID domain.Conten
 	if i := strings.LastIndex(name, "/"); i >= 0 {
 		name = name[i+1:]
 	}
-	return enqueueWorkspaceNotification(ctx, s.meta, wsp, "secrets_updated", fmt.Sprintf("cxthub: %s — secrets updated (team members run cxt secrets pull)", name))
+	return enqueueRepositoryNotification(ctx, s.meta, repositoryRecord, "secrets_updated", fmt.Sprintf("cxthub: %s — secrets updated (team members run cxt secrets pull)", name))
 }
 
 func shortHash(h domain.ContentHash) string {

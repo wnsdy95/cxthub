@@ -21,7 +21,7 @@ const notificationLease = 2 * time.Minute
 // The stable event ID lets compatible receivers deduplicate lost acknowledgments.
 func (s *Service) ProcessNotification(ctx context.Context) (bool, error) {
 	st, ok := s.meta.(outbound.NotificationStore)
-	if !ok || s.ws == nil {
+	if !ok || s.repositories == nil {
 		return false, nil
 	}
 	d, err := st.ClaimNotification(ctx, time.Now().UTC(), notificationLease)
@@ -58,17 +58,17 @@ func (s *Service) ProcessNotification(ctx context.Context) (bool, error) {
 	if j.Attempts > notificationMaxAttempts {
 		return finish("attention", "attempts_exhausted", 0, 0)
 	}
-	wsp, err := s.ws.GetWorkspace(ctx, j.WorkspaceID)
+	repositoryRecord, err := s.repositories.GetRepository(ctx, j.RepositoryID)
 	if errors.Is(err, domain.ErrNotFound) {
 		return finish("attention", "destination_disabled", 0, 0)
 	}
 	if err != nil {
 		return retry("configuration_unavailable", 0, 0)
 	}
-	if wsp.Archived || wsp.WebhookURL == "" {
+	if repositoryRecord.Archived || repositoryRecord.WebhookURL == "" {
 		return finish("attention", "destination_disabled", 0, 0)
 	}
-	if wsp.WebhookURL != d.Destination {
+	if repositoryRecord.WebhookURL != d.Destination {
 		return finish("attention", "destination_changed", 0, 0)
 	}
 	if !webhookSchemeOK(d.Destination) {
@@ -125,34 +125,34 @@ func (s *Service) RunNotificationWorker(ctx context.Context) {
 	}
 }
 
-func (s *IdentityService) notificationManager(ctx context.Context, user, workspace string) (domain.Workspace, error) {
-	role, member := s.RoleOf(ctx, workspace, user)
+func (s *IdentityService) notificationManager(ctx context.Context, user, repository string) (domain.Repository, error) {
+	role, member := s.RoleOf(ctx, repository, user)
 	if !member || !role.AtLeast(domain.RoleMaintainer) {
-		return domain.Workspace{}, domain.ErrForbidden
+		return domain.Repository{}, domain.ErrForbidden
 	}
-	return s.ws.GetWorkspace(ctx, workspace)
+	return s.repositories.GetRepository(ctx, repository)
 }
-func (s *IdentityService) ListNotifications(ctx context.Context, user, workspace string) ([]domain.NotificationJob, error) {
-	if _, err := s.notificationManager(ctx, user, workspace); err != nil {
+func (s *IdentityService) ListNotifications(ctx context.Context, user, repository string) ([]domain.NotificationJob, error) {
+	if _, err := s.notificationManager(ctx, user, repository); err != nil {
 		return nil, err
 	}
-	st, ok := s.ws.(outbound.NotificationStore)
+	st, ok := s.repositories.(outbound.NotificationStore)
 	if !ok {
 		return nil, fmt.Errorf("notification storage unavailable")
 	}
-	return st.ListNotifications(ctx, workspace)
+	return st.ListNotifications(ctx, repository)
 }
-func (s *IdentityService) RetryNotification(ctx context.Context, user, workspace, id string) error {
-	wsp, err := s.notificationManager(ctx, user, workspace)
+func (s *IdentityService) RetryNotification(ctx context.Context, user, repository, id string) error {
+	repositoryRecord, err := s.notificationManager(ctx, user, repository)
 	if err != nil {
 		return err
 	}
-	if wsp.Archived || wsp.WebhookURL == "" {
+	if repositoryRecord.Archived || repositoryRecord.WebhookURL == "" {
 		return fmt.Errorf("%w: configure an active webhook first", domain.ErrConflict)
 	}
-	st, ok := s.ws.(outbound.NotificationStore)
+	st, ok := s.repositories.(outbound.NotificationStore)
 	if !ok {
 		return fmt.Errorf("notification storage unavailable")
 	}
-	return st.RetryNotification(ctx, workspace, id, wsp.WebhookURL, time.Now().UTC())
+	return st.RetryNotification(ctx, repository, id, repositoryRecord.WebhookURL, time.Now().UTC())
 }
