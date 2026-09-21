@@ -385,6 +385,7 @@ func publishCommitCapture(ctx context.Context, c *Container, cwd string, p *comm
 	}
 	e := p.Proof
 	e.Kind = "publish"
+	e.Creation = nil // The immutable creation observation is retained separately.
 	// Eligibility carries no new memory selection. The ordinary observation
 	// above retains the exact memory tuple and is uploaded first.
 	e.MemoryHash, e.MemorySource, e.MemoryPinned = "", "", true

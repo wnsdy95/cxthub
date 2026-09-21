@@ -11,6 +11,7 @@ import (
 // content. ID is generated once before Git commits, and reused on every retry.
 // Source is conversation ancestry; MemorySource is provenance only (orphan).
 type HistoryEvent struct {
+	Creation *GitCreation `json:"creation,omitempty"`
 	// PRCompleted marks a separate server receipt issued only after successful promotion.
 	PRCompleted      bool              `json:"pr_completed,omitempty"`
 	RecoveryEvidence string            `json:"recovery_evidence,omitempty"`
@@ -38,6 +39,9 @@ type HistoryEvent struct {
 }
 
 func ValidateHistoryEvent(e HistoryEvent) error {
+	if err := ValidateGitCreation(e); err != nil {
+		return err
+	}
 	if len(e.ID) != 32 || e.ID != strings.ToLower(e.ID) {
 		return fmt.Errorf("invalid history operation ID")
 	}

@@ -1,3 +1,4 @@
+import { GitHubSyncCheck } from './GitHubSyncCheck';
 import { NotificationHistory } from './NotificationHistory';
 import { PersonalStorageUsage } from './StorageUsage';
 // Settings — Account settings (top bar ⚙) and workspace settings (title bar ⚙, owner-only).
@@ -624,6 +625,7 @@ export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator:
                 </div>
               )}
 
+              {repos.map(repo => <GitHubSyncCheck key={repo.id} repo={repo.id} />)}
               <div className="settings-upload permission-controls">
                 <span className="label">{t('settings.permissions')}</span>
                 <p className="hint">{t('settings.permissionsHint')}</p>

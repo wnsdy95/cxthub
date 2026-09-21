@@ -1232,3 +1232,11 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .effective-memory-options > summary, .effective-memory-advanced > summary { cursor: pointer; }
 .effective-memory-options label, .effective-memory-advanced { margin-top: .7rem; }
 .effective-memory-options select { min-width: 0; width: 100%; }
+
+.sync-audit-results { max-height: 32rem; overflow: auto; margin-top: 1rem; }
+.sync-audit-entry { padding: .75rem; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.sync-audit-entry code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sync-audit-entry.mismatch { border-left: 3px solid #cf4545; }
+.sync-audit-entry.incomplete, .sync-audit-entry.unavailable { border-left: 3px solid #c58b16; }
+.sync-audit label { display: flex; align-items: center; gap: .5rem; margin-top: .75rem; }
+.sync-audit label input { width: auto; }

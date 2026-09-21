@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,7 +131,7 @@ func TestBranchBirthDoesNotBorrowLaterCreationEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			ops, _ = j.List()
-			if ops[0].Phase != "prepared" || ops[0].Resolved || ops[0].Event != abandoned.Event {
+			if ops[0].Phase != "prepared" || ops[0].Resolved || !reflect.DeepEqual(ops[0].Event, abandoned.Event) {
 				t.Fatalf("abandoned operation borrowed another creation: %+v", ops[0])
 			}
 			events, err := store.ListHistoryEvents(ctx, repo)
@@ -300,6 +301,12 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 				}
 				j, _ := branchjournal.Open(ctx, cwd)
 				before, _ := j.List()
+				if tracking {
+					before[0].Event.Creation = &domain.GitCreation{Evidence: "process-argv", Command: []string{"git", "branch", "--track", "relocated", "origin/team-task"}, StartRef: "origin/team-task", StartCommit: oid, OriginBranch: "team-task", OriginBranchID: domain.LegacyContextBranchID(repo, "team-task")}
+					if err := j.Transaction(ctx, func() error { return j.Save(before[0]) }); err != nil {
+						t.Fatal(err)
+					}
+				}
 				commitBirthJournal(t, cwd, before[0].Event.ID)
 				if removal {
 					runLifecycleGit(t, cwd, "worktree", "remove", linked)
@@ -311,7 +318,7 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 					// Pruning the origin also deletes its config. No binding was
 					// resolved durably yet, so preserve the operation for recovery.
 					after, _ := j.List()
-					if err == nil || after[0].Phase != "committed" || after[0].Resolved || after[0].Event != before[0].Event || len(remote.cwds) != 0 {
+					if err == nil || after[0].Phase != "committed" || after[0].Resolved || !reflect.DeepEqual(after[0].Event, before[0].Event) || len(remote.cwds) != 0 {
 						t.Fatalf("removed owner was resolved from another worktree: %+v calls=%v err=%v", after, remote.cwds, err)
 					}
 					return
@@ -324,6 +331,9 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 					t.Fatalf("surviving native branch lost its context ref: %+v %v", ref, err)
 				}
 				after, _ := j.List()
+				if tracking && after[0].Event.Creation.OriginBranchID != "remote-identity" {
+					t.Fatalf("tracking creation retained stale local identity: %+v", after[0].Event.Creation)
+				}
 				if after[0].Phase != "applied" || after[0].Event.Kind != wantKind || after[0].Worktree != before[0].Worktree || after[0].Event.WorktreeID != before[0].Event.WorktreeID {
 					t.Fatalf("replay changed provenance or did not finish: %+v", after[0])
 				}

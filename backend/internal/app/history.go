@@ -50,6 +50,9 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		}
 		return s.wakePublishedPRJobs(ctx, event)
 	}
+	if err := domain.ValidateCreationOrigin(accepted, event); err != nil {
+		return fmt.Errorf("%w: %v", domain.ErrConflict, err)
+	}
 	if event.Kind == "pr-merge" && !serverReceipt {
 		return fmt.Errorf("%w: PR bindings are issued by PR promotion", domain.ErrForbidden)
 	}

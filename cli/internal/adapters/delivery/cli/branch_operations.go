@@ -132,7 +132,7 @@ func runBranchTransaction(ctx context.Context, c *Container, cwd string, args []
 				}
 			}
 			if phase == "prepared" && op == nil {
-				event, err := prepareBranchHistory(ctx, c, cwd, branch, oid, orphan)
+				event, err := prepareBranchHistory(ctx, c, cwd, branch, oid, orphan, gitPID)
 				if err != nil {
 					return err
 				}
@@ -180,7 +180,7 @@ func runBranchTransaction(ctx context.Context, c *Container, cwd string, args []
 	return nil
 }
 
-func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid string, orphan bool) (domain.HistoryEvent, error) {
+func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid string, orphan bool, gitPIDs ...string) (domain.HistoryEvent, error) {
 	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
 		return domain.HistoryEvent{}, err
 	}
@@ -213,9 +213,27 @@ func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid st
 	if err != nil {
 		return e, err
 	}
+	// Persist command provenance before the prepared vote. Explicit named start
+	// refs remain distinct even when they point at the same commit as HEAD.
+	var gitPID string
+	if len(gitPIDs) > 0 {
+		gitPID = gitPIDs[0]
+	}
+	e.Creation = captureGitCreation(ctx, cwd, gitPID, branch, e.GitBefore, oid, orphan)
+	sourceBranch := current
+	if e.Creation.Evidence == "process-argv" && e.Creation.OriginBranch != "" {
+		origin, err := c.History.ResolveLocalBranch(ctx, repo.ID, e.Creation.OriginBranch)
+		if err != nil {
+			return e, err
+		}
+		e.Creation.OriginBranchID = origin.BranchID
+		sourceBranch = e.Creation.OriginBranch
+		currentBinding = origin
+	}
+	useWorkingPosition := (oid == e.GitBefore && sourceBranch == current) || orphan
 	// For the current code point use the saved working branch. Explicit older
 	// start points must resolve via their actual code ancestry, never @{-1}.
-	if oid == e.GitBefore || orphan {
+	if useWorkingPosition {
 		for _, ref := range all.Refs {
 			if ref.Kind == domain.RefBranch && ref.Name == currentBinding.Branch {
 				e.Source = ref.Target
@@ -226,6 +244,16 @@ func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid st
 			e.Source = position.Snapshot
 			e.MemoryHash, e.MemoryPinned = position.MemoryHash, position.MemoryPinned
 			e.MemorySource = position.MemorySource
+		}
+	} else if e.Creation.Evidence == "process-argv" && sourceBranch != current && gitOut(cwd, "rev-parse", "--verify", "refs/heads/"+sourceBranch) == oid {
+		for _, ref := range all.Refs {
+			if ref.Kind == domain.RefBranch && ref.Name == currentBinding.Branch {
+				e.Source = ref.Target
+				break
+			}
+		}
+		if e.Source == "" && len(all.Snapshots) > 0 {
+			return e, fmt.Errorf("no verified context for source branch %s", sourceBranch)
 		}
 	} else {
 		history, err := c.History.ListHistory(ctx, repo.ID)
@@ -246,11 +274,14 @@ func prepareBranchHistory(ctx context.Context, c *Container, cwd, branch, oid st
 	// Validate the saved baseline before capturing. A provider failure can fall
 	// back to that verified baseline; it must never hide corrupt stored history.
 	e.Target = e.Source
+	creation := e.Creation
+	e.Creation = nil // Baseline proof precedes final orphan/attach classification.
 	e, err = c.History.ValidateHistorySource(ctx, e)
+	e.Creation = creation
 	if err != nil {
 		return e, err
 	}
-	if oid == e.GitBefore || orphan {
+	if useWorkingPosition {
 		if latest := checkpointBranchSource(ctx, c, cwd, current, branch, e); latest != "" && latest != e.Source {
 			e.Source, e.Target, e.MemoryHash = latest, latest, ""
 			e.MemorySource = ""
@@ -560,6 +591,13 @@ func resolveBranchOperation(ctx context.Context, c *Container, cwd string, op br
 				return e, err
 			}
 			e.BranchID = bindings.Identity(e.RepoID, remoteBranch)
+			if e.Creation != nil && e.Creation.Evidence == "process-argv" && e.Creation.OriginBranch == remoteBranch {
+				// The server binding may arrive after the prepared local vote. Resolve
+				// this retained identity together with the tracking attachment.
+				creation := *e.Creation
+				creation.OriginBranchID = e.BranchID
+				e.Creation = &creation
+			}
 			e.LocalBranch, e.Branch = e.Branch, remoteBranch
 			all, err := c.List.List(ctx, inbound.ListInput{RepoID: e.RepoID})
 			if err != nil {
