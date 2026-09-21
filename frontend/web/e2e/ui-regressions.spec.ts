@@ -1,4 +1,5 @@
 import { serverGraphWireFixture } from '../tests/serverGraphFixture';
+import { ko } from '../src/i18n/locales/ko';
 import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { capturePageErrors, installApiFixture, type ApiRequest, type ApiResponse } from './api-fixture';
@@ -1090,7 +1091,7 @@ test('sidebar keeps graph first and groups collapsed history and diagnostics at 
   await assertOrder();
   await page.locator('.ctx-side').screenshot({ path: testInfo.outputPath('sidebar-mobile.png') });
   await page.getByLabel('Language', { exact: true }).selectOption('ko');
-  await expect(details.getByRole('heading', { name: '기록 및 동기화' })).toBeVisible();
+  await expect(details.getByRole('heading', { name: ko.graph.detailsTitle })).toBeVisible();
   await assertOrder();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.locator('.ctx-side').screenshot({ path: testInfo.outputPath('sidebar-korean.png') });
@@ -1528,17 +1529,152 @@ test('context loads bounded pages and only reads inherited events when expanded'
   await expect(page.getByText('Event 0 — inherited', { exact: true })).toHaveCount(0);
   expect(reads).toHaveLength(1);
   expect(reads[0]).toContain('base=');
-  await page.locator('.doc-load-more').click();
-  await expect(page.getByText('Event 199 — current', { exact: true })).toBeVisible();
-  await page.locator('.doc-load-more').click();
-  await expect(page.getByText('Event 219 — current', { exact: true })).toBeVisible();
   await expect(page.locator('.doc-load-more')).toHaveCount(0);
-  await page.locator('.inherited-block > summary').click();
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  await expect(page.getByText('Event 199 — current', { exact: true })).toBeAttached();
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  await expect(page.getByText('Event 219 — current', { exact: true })).toBeAttached();
+  await expect(page.locator('.doc-load-trigger')).toHaveCount(0);
+  await expect(page.locator('.doc-load-more')).toHaveCount(0);
+  await page.locator('.inherited-toggle').click();
   await expect(page.getByText('Event 0 — inherited', { exact: true })).toBeVisible();
+  await expect(page.getByText('Event 100 — current', { exact: true })).toHaveCount(0);
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  await expect(page.getByText('Event 99 — inherited', { exact: true })).toBeAttached();
+  await expect(page.getByText('Event 100 — current', { exact: true })).toHaveCount(0);
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  await expect(page.getByText('Event 100 — current', { exact: true })).toBeAttached();
   expect(reads.every(url => url.includes('/events?'))).toBe(true);
   expect(reads.some(url => url.includes(`/docs/${encodeURIComponent(graftTarget)}/events`))).toBe(false);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
+});
+
+for (const view of ['context', 'onhold']) for (const width of [1440, 390]) test(`${view} appends pages only at the conversation bottom (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 800 });
+  const root = id('1'), head = id('2'), tail = id('3');
+  const snapshots = [auditSnapshot(root, 'main', [], 'Root', 0),
+    {...auditSnapshot(head, 'main', [root], 'Saved conversation', 1), session_id: 'active-session'},
+    {...auditSnapshot(tail, 'main', [head], 'hook: live continuation', 2), session_id: 'active-session'}].reverse();
+  const pending = [{repo_id:repoId,session_id:'active-session',branch:'main',target:tail,provider:'codex',updated_at:'2026-09-21T00:00:00Z'}];
+  const base = publicWorkspaceApi(snapshots, [{kind:'branch',name:'main',target:view === 'context' ? head : root}], pending,
+    view === 'onhold' ? [{repo_id:repoId,branch:'main',user:'alice',target:head,updated_at:'2026-09-21T00:00:00Z'}] : []);
+  const reads: string[] = [];
+  // Count completed transfers. React's development StrictMode may cancel the
+  // first mount's request before remounting; that is not a duplicated page.
+  page.on('requestfinished', request => {
+    const url = new URL(request.url());
+    if (!url.pathname.endsWith('/events')) return;
+    const hash = decodeURIComponent(url.pathname.split('/').at(-2)!);
+    if (hash === head || hash === tail) reads.push(`${hash === tail ? 'live' : 'saved'}:${url.searchParams.get('offset')}`);
+  });
+  const {pageErrors, unexpected} = await openGraph(page, req => {
+    if (view === 'onhold') {
+      if (req.pathname === '/api/v1/me') return {body:{id:'member',username:'alice',locale:'en'}};
+      if (req.pathname === '/api/v1/workspaces') return {body:[{id:workspaceId,name:'cxthub',slug:'cxthub',owner_username:'alice',visibility:'private'}]};
+      if (req.pathname.endsWith('/members')) return {body:[{workspace_id:workspaceId,user_id:'member',role:'member'}]};
+      if (req.pathname.includes('/settings/') || req.pathname.endsWith('/secrets')) return {body:null};
+    }
+    if (req.pathname.endsWith('/events')) {
+      const hash = decodeURIComponent(req.pathname.split('/').at(-2)!);
+      const requested = Number(req.searchParams.get('offset'));
+      const inherited = hash === tail ? 100 : 0;
+      const total = hash === tail ? 180 : hash === head ? 100 : 0;
+      const offset = requested === -1 ? inherited : requested;
+      const end = Math.min(offset + 50, total);
+      if (hash === tail) expect(req.searchParams.get('base')).toBe(head);
+      return {body:{hash,envelope:sessionDoc(hash).cir.envelope,total,inherited,offset,next:end < total ? end : -1,
+        events:Array.from({length:end-offset},(_,i)=>({seq:offset+i,kind:'message',role:i%2?'assistant':'user',
+          blocks:[{type:'text',text:`${hash === tail ? 'Live' : 'Saved'} ${offset+i}\n`+'Conversation line.\n'.repeat(4)}]}))}};
+    }
+    return base(req);
+  });
+  if (view === 'onhold') {
+    await page.getByRole('button', {name:'On Hold',exact:true}).click();
+    await page.locator(`.graph-row[data-graph-snapshot="${head}"]`).click();
+  }
+  await expect(page.getByText(/^Saved 49\b/)).toBeAttached();
+  expect(reads).toEqual(['saved:-1']);
+  await expect(page.locator('.doc-load-more')).toHaveCount(0);
+  await expect(page.locator('.doc-load-trigger')).toHaveCount(1);
+  await expect(page.locator('.viewer .pending-divider')).toHaveCount(0);
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  await expect(page.getByText(/^Saved 99\b/)).toBeAttached();
+  expect(reads).toEqual(['saved:-1','saved:50']);
+  await expect(page.locator('.viewer .pending-divider')).toHaveCount(0);
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  await expect(page.getByText(/^Live 149\b/)).toBeAttached();
+  await expect(page.locator('.viewer .pending-divider')).toHaveCount(1);
+  await expect(page.locator('.doc-load-trigger')).toHaveCount(1);
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  await expect(page.getByText(/^Live 179\b/)).toBeAttached();
+  await expect(page.locator('.doc-load-trigger')).toHaveCount(0);
+  expect(reads).toEqual(['saved:-1','saved:50','live:-1','live:150']);
+  const content = await page.locator('.viewer .msg-body').allTextContents();
+  expect(content.map(text=>Number(text.match(/^(?:Saved|Live) (\d+)/)![1]))).toEqual(Array.from({length:180},(_,i)=>i));
+  // Returning to a cached snapshot still displays a bounded prefix and reveals
+  // cached pages at the bottom without transferring the document again.
+  await page.locator(`.graph-row[data-graph-snapshot="${root}"]`).click();
+  await page.locator(`.graph-row[data-graph-snapshot="${head}"]`).click();
+  await expect(page.getByText(/^Saved 49\b/)).toBeAttached();
+  await expect(page.getByText(/^Saved 50\b/)).toHaveCount(0);
+  await expect(page.locator('.viewer .pending-divider')).toHaveCount(0);
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  await expect(page.getByText(/^Saved 99\b/)).toBeAttached();
+  expect(reads).toEqual(['saved:-1','saved:50','live:-1','live:150']);
+  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
+});
+
+test('bottom pagination keeps loaded text on failure and retries only the missing page', async ({page}) => {
+  const snap = auditSnapshot(pushedHead,'main',[],'Retryable conversation',1);
+  const base = publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}]);
+  const reads: number[] = [];
+  let fail = true;
+  const {pageErrors, unexpected} = await openGraph(page, req => {
+    if (req.pathname.endsWith('/events')) {
+      const requested = Number(req.searchParams.get('offset'));
+      reads.push(requested);
+      if (requested === 2 && fail) return {status:503,body:{error:{message:'Temporary page failure'}}};
+      const offset = Math.max(0,requested);
+      return {body:{hash:pushedHead,envelope:sessionDoc(pushedHead).cir.envelope,total:4,inherited:0,offset,next:offset===0?2:-1,
+        events:[offset,offset+1].map(seq=>({seq,kind:'message',role:'user',blocks:[{type:'text',text:`Retained ${seq}\n`+'Long visible line.\n'.repeat(40)}]}))}};
+    }
+    return base(req);
+  });
+  await expect(page.getByText(/^Retained 1\b/)).toBeAttached();
+  await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
+  const error = page.locator('.doc-load-error');
+  await expect(error).toContainText('Temporary page failure',{timeout:15_000});
+  await expect(page.getByText(/^Retained 0\b/)).toBeAttached();
+  await expect(page.locator('.doc-load-trigger')).toHaveCount(0);
+  expect(reads.filter(offset=>offset===-1)).toHaveLength(1);
+  fail = false;
+  await error.getByRole('button',{name:'Retry',exact:true}).click();
+  await expect(page.getByText(/^Retained 3\b/)).toBeAttached();
+  await expect(error).toHaveCount(0);
+  expect(reads.filter(offset=>offset===-1)).toHaveLength(1);
+  expect(await page.locator('.viewer .msg.user').count()).toBe(4);
+  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
+});
+
+test('bottom pagination fills the viewport when a page has no visible chat events', async ({page}) => {
+  const snap = auditSnapshot(pushedHead,'main',[],'Hidden work followed by conversation',1);
+  const base = publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}]);
+  const reads: number[] = [];
+  const {pageErrors, unexpected} = await openGraph(page, req => {
+    if (req.pathname.endsWith('/events')) {
+      const offset = Number(req.searchParams.get('offset'));
+      reads.push(offset);
+      return {body:{hash:pushedHead,envelope:sessionDoc(pushedHead).cir.envelope,total:51,inherited:0,offset:Math.max(0,offset),next:offset===-1?50:-1,
+        events:offset===-1?Array.from({length:50},(_,seq)=>({seq,kind:'reasoning',locked:{provider:'codex',scheme:'encrypted',blob:'fixture'}}))
+          :[{seq:50,kind:'message',role:'user',blocks:[{type:'text',text:'Visible after hidden page'}]}]}};
+    }
+    return base(req);
+  });
+  await expect(page.getByText('Visible after hidden page',{exact:true})).toBeVisible();
+  expect(reads).toEqual([-1,50]);
+  await expect(page.locator('.doc-load-trigger')).toHaveCount(0);
+  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
 });
 
 test('branch birth and completed join keep feature off the main lane', async ({ page }, testInfo) => {

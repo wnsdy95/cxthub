@@ -154,7 +154,6 @@ export const ko = {
   context: {
     retryRead: '다시 불러오기',
     loadingEvents: '대화 불러오는 중…',
-    moreEvents: '이어서 불러오기',
     storedMemory: '저장된 메모리 보기',
 
     branchCommits: '{branch} 커밋 {count}',
