@@ -401,13 +401,12 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
               </div>
             )}
             {selectedHash && (
-              <>
-                <DocEvents repoId={repo.id} hash={selectedHash!} mode={viewMode} />
+              <DocEvents key={selectedHash} repoId={repo.id} hash={selectedHash} mode={viewMode}>
                 {selected && tailPending && <>
                   <div className="session-divider pending-divider">{t('onhold.continuingConvo', { when: when(tailPending.updated_at) })}</div>
-                  <DocEvents repoId={repo.id} hash={tailPending.target} base={selected.doc_hash} mode={viewMode} />
+                  <DocEvents key={tailPending.target} repoId={repo.id} hash={tailPending.target} base={selected.doc_hash} mode={viewMode} />
                 </>}
-              </>
+              </DocEvents>
             )}
           </div>
         )}

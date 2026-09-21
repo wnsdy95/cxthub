@@ -151,7 +151,6 @@ export const en: Messages = {
   context: {
     retryRead: 'Retry',
     loadingEvents: 'Loading conversation…',
-    moreEvents: 'Load more',
     storedMemory: 'View saved memory',
 
     branchCommits: '{branch} · {count} commits',

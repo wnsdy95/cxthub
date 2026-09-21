@@ -1365,6 +1365,21 @@ code-position choices, or per-claim applicability assessments. Integrated memory
 remains available through the MCP memory tools and the documented REST/OpenAPI
 contracts; removing the automatic panel does not remove or change these APIs.
 
+Context and On Hold render a contiguous top-to-bottom transcript. The single
+bottom observer requests another bounded event page when it becomes visible,
+respecting both the desktop center scroller and the mobile viewport. A continuing
+uncommitted document is mounted only after the selected document is complete and
+the reader reaches its end; it cannot appear after an unread gap. Expanding
+inherited history restarts the visible stream at offset zero in the selected
+document, rather than creating an independently paginated block above newer text.
+Only the server chooses event order, inherited-prefix boundaries and page cursors.
+Revisiting a cached document starts with one visible page and reveals cached pages
+at the same bottom boundary, without downloading them again. No full-document
+download or background polling is needed. Hidden-event pages may
+load successively until visible content fills the viewport. A failed page leaves
+loaded text intact and presents a retry at the bottom, without an observer-driven
+retry loop. Retrying a failed next page does not reread successful earlier pages.
+
 `GET /repos/{repoID}/effective-memory/positions` resolves recorded code positions
 for API clients. A selected graph event supplies its evidence ID, not its virtual
 display-node ID. A completed PR event selects its merge SHA; a birth selects its

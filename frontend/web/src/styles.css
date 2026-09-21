@@ -401,15 +401,16 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 
 /* Context continuation collapse — prefix event like parent snapshot (email quote UX).
    Light grey render when expanded to distinguish "new content in this commit" visually. */
-.inherited-block { border-bottom: 1px solid var(--line); }
-.inherited-block summary { cursor: pointer; padding: 10px 14px; font-family: var(--mono);
-  font-size: 0.74rem; color: var(--muted); background: var(--hover); list-style: none; }
-.inherited-block summary::before { content: '⋯ '; color: var(--faint); }
-.inherited-block summary:hover { color: var(--ink); }
-.inherited-block summary code { font-size: 0.9em; }
-.inherited-block[open] summary { border-bottom: 1px dashed var(--line); }
-.inherited-block .msg { opacity: 0.45; }
-.inherited-block .msg:hover { opacity: 0.8; }
+.inherited-toggle { display: block; width: 100%; border: 0; border-radius: 0; border-bottom: 1px solid var(--line);
+  text-align: left; cursor: pointer; padding: 10px 14px; font-family: var(--mono);
+  font-size: 0.74rem; color: var(--muted); background: var(--hover); }
+.inherited-toggle:hover { color: var(--ink); }
+.inherited-toggle[aria-expanded="true"] { border-bottom-style: dashed; }
+.doc-inherited .msg { opacity: 0.45; }
+.doc-inherited .msg:hover { opacity: 0.8; }
+.doc-load-trigger { min-height: 36px; display: grid; place-items: center; padding: 6px 14px;
+  color: var(--muted); font-size: .74rem; }
+.doc-load-error { padding: 10px 14px; }
 
 /* Search — input at top of commit list + results panel (click to select corresponding snapshot). */
 .ctx-search { margin-left: auto; min-width: min(220px, 100%); max-width: 100%; flex: 1 1 220px; }

@@ -524,18 +524,18 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
             {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
           </MemoryPanel>}
           {doc && inheritedCount > 0 && (
-            <details className="inherited-block" open={inheritedOpen} onToggle={e => setInheritedOpen(e.currentTarget.open)}>
-              <summary>↰ {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}</summary>
-              {inheritedOpen && <DocEvents repoId={repo.id} hash={selected.doc_hash} start={0} end={inheritedCount} mode={viewMode} />}
-            </details>
+            <button type="button" className="inherited-toggle" aria-expanded={inheritedOpen} onClick={() => setInheritedOpen(open => !open)}>
+              {inheritedOpen ? '▾' : '▸'} {t('context.inherited', { count: inheritedCount })} {parent && t('context.inheritedFrom', { hash: short(parent.id) })}
+            </button>
           )}
-          <DocEvents key={`main-${selected.id}`} repoId={repo.id} hash={selected.doc_hash} base={parent?.doc_hash} mode={viewMode} />
-          {page && page.total > 0 && page.total === inheritedCount && <p className="empty-box">{t('context.allInherited')}</p>}
+          {!inheritedOpen && page && page.total > 0 && page.total === inheritedCount && <p className="empty-box">{t('context.allInherited')}</p>}
           {page?.total === 0 && <p className="empty-box">{t('context.noEvents')}</p>}
-          {doc && tailPending && <>
-            <div className="session-divider pending-divider">{t('onhold.continuingConvo', { when: when(tailPending.updated_at) })}</div>
-            <DocEvents repoId={repo.id} hash={tailPending.target} base={selected.doc_hash} mode={viewMode} />
-          </>}
+          <DocEvents key={`main-${selected.id}-${inheritedOpen}`} repoId={repo.id} hash={selected.doc_hash} base={parent?.doc_hash} start={inheritedOpen ? 0 : -1} mode={viewMode}>
+            {doc && tailPending && <>
+              <div className="session-divider pending-divider">{t('onhold.continuingConvo', { when: when(tailPending.updated_at) })}</div>
+              <DocEvents key={tailPending.target} repoId={repo.id} hash={tailPending.target} base={selected.doc_hash} mode={viewMode} />
+            </>}
+          </DocEvents>
 
         </div>
       )}
