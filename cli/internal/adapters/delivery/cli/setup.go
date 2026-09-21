@@ -140,10 +140,14 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 			}
 		}
 	}
-	// 3) remote origin (idempotent: re-register if not the same URL).
+	// 3) Preserve existing connections, including a migrated display alias.
 	if remoteURL != "" {
 		if cur, has := remotecfg.Origin(cwd); has {
-			if remotecfg.RepoIDFor(cur) == remotecfg.RepoIDFor(remoteURL) {
+			matches, err := setupRemoteMatches(ctx, c, cur, remoteURL)
+			if err != nil {
+				return err
+			}
+			if matches {
 				ok("remote origin already registered = %s", cur)
 			} else {
 				warn("remote origin is registered with a different URL (%s) — change: cxt remote remove origin then setup", cur)
@@ -233,6 +237,21 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 
 	fmt.Println("Complete — use Claude Code/Codex in the CLI or supported desktop apps; commits, switches, and pushes remain ordinary git")
 	return nil
+}
+
+func setupRemoteMatches(ctx context.Context, c *Container, existing, requested string) (bool, error) {
+	canonical, err := remotecfg.CanonicalURL(requested)
+	if err != nil {
+		return false, err
+	}
+	if remotecfg.RepoIDFor(existing) == remotecfg.RepoIDFor(canonical) {
+		return true, nil // An unchanged connection also works offline.
+	}
+	stable, err := resolvedRepositoryURL(ctx, c, canonical)
+	if err != nil {
+		return false, err
+	}
+	return remotecfg.RepoIDFor(existing) == remotecfg.RepoIDFor(stable), nil
 }
 
 // authTokenPresent indicates the presence of a stored token on the origin host (validity is determined by the first request).
