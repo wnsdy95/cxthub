@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,7 +131,7 @@ func TestBranchBirthDoesNotBorrowLaterCreationEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			ops, _ = j.List()
-			if ops[0].Phase != "prepared" || ops[0].Resolved || ops[0].Event != abandoned.Event {
+			if ops[0].Phase != "prepared" || ops[0].Resolved || !reflect.DeepEqual(ops[0].Event, abandoned.Event) {
 				t.Fatalf("abandoned operation borrowed another creation: %+v", ops[0])
 			}
 			events, err := store.ListHistoryEvents(ctx, repo)
@@ -311,7 +312,7 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 					// Pruning the origin also deletes its config. No binding was
 					// resolved durably yet, so preserve the operation for recovery.
 					after, _ := j.List()
-					if err == nil || after[0].Phase != "committed" || after[0].Resolved || after[0].Event != before[0].Event || len(remote.cwds) != 0 {
+					if err == nil || after[0].Phase != "committed" || after[0].Resolved || !reflect.DeepEqual(after[0].Event, before[0].Event) || len(remote.cwds) != 0 {
 						t.Fatalf("removed owner was resolved from another worktree: %+v calls=%v err=%v", after, remote.cwds, err)
 					}
 					return

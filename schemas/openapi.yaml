@@ -475,6 +475,7 @@ components:
       properties:
         repo_id: { $ref: '#/components/schemas/ContentHash' }
         git_origin: { type: string }
+        git_origin: { type: string }
         page: { type: integer }
         version: { type: string }
         next_attempt: { type: string, format: date-time }
@@ -579,6 +580,42 @@ components:
         head_sha: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
         merge_sha: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
 
+    GitCreation:
+      type: object
+      required: [evidence]
+      description: Immutable local creation observation, not a GitHub attestation. Command arguments omit global configuration and replace worktree paths; unavailable evidence never invents a command.
+      properties:
+        evidence: { type: string, enum: [process-argv, unavailable] }
+        command: { type: array, maxItems: 12, items: { type: string, maxLength: 512 } }
+        start_ref: { type: string }
+        start_commit: { type: string }
+        origin_branch: { type: string }
+        origin_branch_id: { type: string }
+    SyncAuditCheck:
+      type: object
+      required: [id, state, code]
+      properties:
+        id: { type: string }
+        event_id: { type: string }
+        snapshot: { $ref: '#/components/schemas/ContentHash' }
+        branch: { type: string }
+        state: { type: string, enum: [verified, mismatch, incomplete, unavailable] }
+        code: { type: string }
+        expected: { type: string }
+        actual: { type: string }
+        creation: { $ref: '#/components/schemas/GitCreation' }
+    SyncAuditPage:
+      type: object
+      required: [version, revision, checked_at, checks, processed, total]
+      properties:
+        version: { type: integer }
+        phase: { type: string }
+        revision: { type: string }
+        checked_at: { type: string, format: date-time }
+        checks: { type: array, items: { $ref: '#/components/schemas/SyncAuditCheck' } }
+        next_cursor: { type: string }
+        processed: { type: integer }
+        total: { type: integer }
     HistoryEvent:
       type: object
       description: |
@@ -591,6 +628,7 @@ components:
         raw observations and legacy message links do not finalize a source.
       required: [id, repo_id, branch_id, branch, kind, created_at]
       properties:
+        creation: { $ref: '#/components/schemas/GitCreation' }
         id: { type: string, pattern: '^[0-9a-f]{32}$' }
         repo_id: { $ref: '#/components/schemas/ContentHash' }
         branch_id: { type: string, maxLength: 128 }
@@ -598,8 +636,6 @@ components:
         local_branch: {type: string, description: Native branch name in the observing replica.}
         previous_branch: {type: string, description: Previous name for a verified rename.}
         binding_parent: {type: string, description: Prior identity operation required by this transition.}
-        base_branch_id: { type: string }
-        git_origin: { type: string }
         pr: { $ref: '#/components/schemas/PullRequestMerge' }
         recovery_evidence: { type: string, enum: [user-confirmed-unborn-head] }
         source_branch_id: { type: string, maxLength: 128 }
@@ -1824,6 +1860,33 @@ paths:
         '422': { description: Invalid explicit code selection or file scope }
         '503': { description: Query unavailable }
 
+  /repos/{repoID}/github-sync-check:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    post:
+      operationId: checkGitHubSync
+      summary: Check recorded context history against GitHub without AI
+      description: Maintainer access. Read-only and explicitly initiated; no graph repair. Local evidence is read from one coherent generation. Continue next_cursor until absent; changed local evidence or GitHub list anchor returns 409. Checks both recorded receipts and merged GitHub PRs. Unknown commands, unpushed commits, inaccessible objects and pre-integration PRs are not reported as corruption. No snapshot bodies, secrets or provider conversations are sent to GitHub.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cursor: { type: string }
+      responses:
+        '200':
+          description: Partial or final audit page; individual checks may be incomplete or unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncAuditPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Evidence changed during the check; restart }
+        '415': { description: JSON required }
+        '422': { description: Invalid cursor }
+        '503': { description: Audit service unavailable }
   /repos/{repoID}/git-scans:
     parameters:
       - $ref: '#/components/parameters/repoID'

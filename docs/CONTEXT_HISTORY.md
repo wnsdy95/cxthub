@@ -1442,3 +1442,57 @@ Fragment rendering is batched within one projection (backend and CLI): dedup and
 render once between legacy opaque barriers. Pairwise-fold equivalence tests keep
 original text, typed provenance and authoritative task-list semantics unchanged.
 There is no cross-request cache or relaxed hash validation.
+
+### Creation provenance and deterministic GitHub sync audit
+
+Repository settings expose **GitHub sync check** to maintainers/owners. The
+backend performs the check without an LLM. It never repairs or rewrites context
+parents, branch refs, memories, or history as a side effect.
+
+New branch checkpoints are linked through their retained history event's
+`source` (or orphan `memory_source`) to optional `creation` evidence:
+
+- `command`: observed creation arguments from the hook's actual Git parent
+  process (macOS/Linux), reduced to an allowlisted branch-creation command.
+  Global `-c`/configuration arguments are omitted and worktree paths replaced
+  with `<worktree>`; no environment, credentials, commit messages or full shell
+  command is retained.
+- `start_ref`, `start_commit`: the named start point and resolved immutable code
+  object. An explicit `main` differs from implicit `HEAD`, even at the same SHA.
+- `origin_branch`, `origin_branch_id`: local branch identity observed at birth,
+  independent of subsequent rename/archive/name reuse.
+- `evidence`: `process-argv` or `unavailable`. Unsupported invocations, APIs that
+  do not expose argv, and old events are not backfilled with invented commands.
+
+The command is a local observation, not a signature or proof against a hostile
+client. GitHub does not retain local shell commands or a universal branch-birth
+parent. A matching GitHub commit confirms the code object only, not the branch
+of origin. PR base is the merge destination, never an inferred birth origin.
+
+The read-only `POST /repos/{repoID}/github-sync-check` checks a coherent local
+read generation and returns bounded continuation pages. It verifies structural
+DAG constraints, retained creation and PR projection contracts, included context
+and memory roots, recorded GitHub commit/PR identities, and the reverse direction
+(merged GitHub PRs without exact CXTHub completion receipts). Unrecorded PRs may
+predate CXTHub integration and are reported as incomplete, not automatically
+promoted. GitHub calls use trusted repository origin and backend credentials.
+
+States are `verified`, `mismatch`, `incomplete`, and `unavailable`. A finished
+scan can contain gaps; it is not a blanket correctness certificate. Missing
+permissions, rate limits, unpublished commits, unavailable commands and older
+history must remain distinguishable from proven mismatches. Memory checks verify
+provenance and inclusion, not the semantic truth of individual summary sentences.
+
+No provider I/O holds a repository transaction. Continuation cursors include a
+fingerprint of the retained history, refs and referenced ancestry. Changed inputs
+invalidate the run; unrelated live pending captures do not. GitHub list pages are
+anchored to the first page's merged-PR identities and restart when it changes;
+GitHub does not provide a transaction spanning every REST page. The UI preserves
+partial results on failure/cancellation, never presents them as a completed scan,
+and issues no recurring audit requests when idle.
+
+Storage compatibility: the optional field is stored in existing history JSON
+(FS and PostgreSQL JSONB), outside snapshot content hashes. Existing events remain
+unchanged. Updated clients must preserve this evidence when replaying history;
+an older client attempting to replace an event without its immutable evidence
+receives a conflict rather than silently erasing provenance.

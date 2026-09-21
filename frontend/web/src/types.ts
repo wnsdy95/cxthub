@@ -375,6 +375,7 @@ export interface RefLogEntry {
 
 /** Immutable server-confirmed context operations, independent of conversation events. */
 export interface HistoryEvent {
+ creation?: GitCreation;
   pr_completed?: boolean;
   shared_target?: string;
   local_branch?: string;
@@ -568,4 +569,19 @@ export interface GraphMerge {
   id: string; event_id: string; before: string; after: string; source: string; branch: string; scope: string; from: string;
   created_at: string; pr_number?: number; historical_only: boolean; withdrawn: boolean;
   represented_grafts: string[]; redirect_children: string[]; source_birth?: string; lifecycle_birth?: string;
+}
+
+export interface GitCreation {
+ evidence: 'process-argv' | 'unavailable'; command?: string[]; start_ref?: string;
+ start_commit?: string; origin_branch?: string; origin_branch_id?: string;
+}
+export interface SyncAuditCheck {
+ id: string; event_id?: string; snapshot?: string; branch?: string;
+ state: 'verified' | 'mismatch' | 'incomplete' | 'unavailable'; code: string;
+ expected?: string; actual?: string; creation?: GitCreation;
+}
+export interface SyncAuditPage {
+ phase?: string;
+ version: number; revision: string; checked_at: string; checks: SyncAuditCheck[];
+ next_cursor?: string; processed: number; total: number;
 }

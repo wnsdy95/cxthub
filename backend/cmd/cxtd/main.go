@@ -164,6 +164,7 @@ func serve(ctx context.Context, args []string) error {
 	}
 	api := delivery.NewServer(svc, idSvc)
 	api.SetGitScans(scans)
+	api.SetGitSyncAudit(app.NewGitSyncAudit(svc, gitReader))
 	api.SetCodeApplicability(svc)
 	api.SetEffectiveMemory(svc)
 	api.SetMemoryPositions(svc)

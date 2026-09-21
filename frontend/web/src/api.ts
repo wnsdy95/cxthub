@@ -71,6 +71,7 @@ export interface DocEventPage {
 }
 
 export const api = {
+ checkGitHubSync: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').SyncAuditPage>('POST', `/repos/${encodeURIComponent(repo)}/github-sync-check`, {cursor}, undefined, signal),
  memoryPositions: (repo: string, snapshot: string, event: string | undefined, signal?: AbortSignal) => {
   const params = new URLSearchParams({snapshot_id: snapshot});
   if (event) params.set('event_id', event);
