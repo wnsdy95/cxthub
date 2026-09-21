@@ -143,7 +143,7 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
     return pendings.find((p) => p.session_id === selected.session_id && p.target !== selected.id) ?? null;
   }, [selected, selectedPending, pendings]);
 
-  const [viewMode, setViewMode] = useState<ViewMode>('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('chat');
   // Fork (checkout): can create a new branch from unpushed commits — the fork base is a git commit,
   // so running git branch <name> locally aligns the branch with this commit and connects this context.
   const forkMut = useFork();

@@ -141,7 +141,7 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   }, [branch, snapshots, allSnapshots, graphState]);
 
   // View mode — Full / Prompt only (folded) / Prompt + Response (message only).
-  const [viewMode, setViewMode] = useState<ViewMode>('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('chat');
 
   // Fork — Create a new branch from a selected commit (member or above, API POST /fork).
   const me = useMe().data;
@@ -174,10 +174,10 @@ export function ContextView({ repo, ws, role }: { repo: Repo; ws: ContextWorkspa
   const doc = page ? { cir: { envelope: page.envelope, events: page.events } } : undefined;
   const inheritedCount = page?.inherited ?? 0;
   const [inheritedOpen, setInheritedOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(true);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [downloadError, setDownloadError] = useState('');
   const [downloading, setDownloading] = useState(false);
-  useEffect(() => { setInheritedOpen(false); setMemoryOpen(true); setDownloadError(''); }, [selected?.id]);
+  useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); setDownloadError(''); }, [selected?.id]);
   const memoryQ = useMemory(repo.id, selected?.memory_hash ?? null, memoryOpen);
   const memory = memoryQ.data;
   const tailPending = selected ? continuing.get(selected.id) ?? null : null;
