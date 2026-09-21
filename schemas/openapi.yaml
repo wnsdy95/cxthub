@@ -126,7 +126,10 @@ components:
               scope: { type: string }
               target: { $ref: '#/components/schemas/ContentHash' }
               head: { type: string }
-              parents: { type: object, additionalProperties: { type: array, items: { type: string } } }
+              parents:
+                description: Display parent substitutions for merge nodes and verified destination continuations. Stored snapshot ancestry is unchanged.
+                type: object
+                additionalProperties: { type: array, items: { type: string } }
               extra_parents: { type: array, items: { type: string } }
         continuations: { type: object, additionalProperties: { type: string } }
         operations: {"$ref": "#/components/schemas/GraphOperations"}

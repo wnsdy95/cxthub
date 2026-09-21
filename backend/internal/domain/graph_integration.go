@@ -4,7 +4,8 @@ import "sort"
 
 // GraphIntegration routes a branch's verified integration history separately
 // from conversation ancestry. Parents contain virtual merge IDs and real
-// sources; Head selects a display node, never a stored ref mutation.
+// sources. Parents may also route a proven continuation through a prior merge;
+// these are display substitutions, never stored ancestry or ref mutations.
 type GraphIntegration struct {
 	Branch  string              `json:"branch"`
 	Scope   string              `json:"scope"`
@@ -75,6 +76,7 @@ func ApplyGraphIntegrations(graph *GraphState, snapshots []Snapshot) {
 		}
 		graph.Integrations = append(graph.Integrations, out)
 	}
+	routeIntegrationContinuations(graph, byID, merges)
 	// Folding follows the same inclusion facts as the branch list. A previously
 	// displaced PR cannot remain hidden in the archived/previous-only group.
 	archived := []ContentHash{}

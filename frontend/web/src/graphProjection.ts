@@ -17,6 +17,7 @@ export interface GraphEvent {
 export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], state: GraphState | undefined, pinHead?: string | null, pinBranch?: string) {
   const nodes = new Map(snapshots.map(s => [s.id, {...s, parents: [...(s.parents ?? [])], graft_parents: [...(s.graft_parents ?? [])]}]));
   const events = new Map<string, GraphEvent>();
+  const edgeBranches = new Map<string, Map<string, string>>();
   const lifecycleEdges = new Map<string, Set<string>>();
   const replacements = new Map<string,string>();
   const inactive = new Set<string>();
@@ -53,6 +54,12 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], state: Gr
     }
     if (!merge.withdrawn && pinBranch && state?.ref_scopes[pinBranch] === merge.scope && pinHead === merge.after) projectedHead = merge.id;
   }
+  // The server may route a destination capture through its preceding PR.
+  // Apply those display substitutions before inserting recorded birth nodes.
+  for (const [id, parents] of integrationParents) {
+    const node = nodes.get(id);
+    if (node && !events.has(id)) node.parents = [...parents];
+  }
   for (const birth of state?.operations.births ?? []) {
     const source = nodes.get(birth.source);
     if (!source) continue;
@@ -84,6 +91,14 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], state: Gr
     if (target) target.graft_parents = [...new Set([...target.graft_parents,...integration.extra_parents])];
     if (pinBranch === integration.branch && pinHead === integration.target) projectedHead = integration.head;
   }
+  for (const merge of state?.operations.merges ?? []) {
+    const node = nodes.get(merge.id);
+    if (!node) continue;
+    // Only the recorded source arm carries the source name. Extra destination
+    // evidence must not inherit that label merely because it opens a lane.
+    const sourceArms = new Set([merge.source, merge.source_birth, merge.lifecycle_birth]);
+    edgeBranches.set(merge.id, new Map(node.parents.map(parent => [parent, sourceArms.has(parent) ? merge.from : merge.branch])));
+  }
   const projectedRefs = refs.map(ref => {
     const integration = ref.kind === 'branch' ? integrations.find(i => i.branch === ref.name && i.target === ref.target) : undefined;
     if (integration) return {...ref,target:integration.head};
@@ -91,7 +106,7 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], state: Gr
     const target = ref.kind === 'branch' && scope ? replacements.get(key(scope,ref.target)) : undefined;
     return target && !inactive.has(target) ? {...ref,target} : ref;
   });
-  return {snapshots:[...nodes.values()],events,lifecycleEdges,pinHead:projectedHead,refs:projectedRefs};
+  return {snapshots:[...nodes.values()],events,edgeBranches,lifecycleEdges,pinHead:projectedHead,refs:projectedRefs};
 }
 
 /** Visibility is applied only after evidence and operation edges are fixed.

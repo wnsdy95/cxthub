@@ -2282,3 +2282,29 @@ test('main includes PR conversations and memory, and evidence refreshes both wit
  await expect(panel).toContainText('ORIGINAL SAVED MEMORY');
  expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
 });
+
+for(const fork of ['main','feature-parent'] as const) for(const continuation of ['contributor','local'] as const) test(`PR checkpoint keeps recorded ${fork} fork and ${continuation} continuation on main`,async({page})=>{
+ const baseID=id('9'),a=id('a'),checkpoint=id('8'),parent=id('d'),b=id('b'),head=pushedHead;
+ const origin=fork==='main'?checkpoint:parent;
+ const snapshots=[auditSnapshot(head,'main',[b],'Current main',8),auditSnapshot(b,'feature-child',[origin],'Child work',6),auditSnapshot(checkpoint,'main',[continuation==='contributor'?a:baseID],'Checkpoint on main',4),auditSnapshot(parent,'feature-parent',[baseID],'Parent branch work',3),auditSnapshot(a,'feature-first',[baseID],'Earlier PR',2),auditSnapshot(baseID,'main',[],'Base',0)];
+ const refs=[{kind:'branch',name:'main',branch_id:'main-id',target:head,repo_id:repoId},{kind:'branch',name:'feature-parent',branch_id:'parent-id',target:parent,repo_id:repoId}];
+ const birth={id:'child-birth',repo_id:repoId,branch_id:'child-id',branch:'feature-child',kind:'birth',source:origin,target:origin,created_at:'2026-01-01T00:00:05Z'};
+ const merges=[a,b].map((source,i)=>({id:`checkpoint-merge-${i}`,repo_id:repoId,branch:'main',branch_id:'main-id',source_branch_id:i?'child-id':'first-id',kind:'pr-merge',source,target:source,shared_target:i?checkpoint:baseID,pr_completed:true,
+  pr:{number:i+1,base_branch:'main',head_branch:i?'feature-child':'feature-first',head_sha:'a'.repeat(40),merge_sha:String(i+1).repeat(40)},created_at:`2026-01-01T00:00:0${i?7:3}Z`}));
+ const history=[birth,...merges];
+ const inclusion={branch_id:'main-id',snapshot_id:head,code_commit:'2'.repeat(40),reason:'selected_code',roots:[baseID,a,checkpoint,b,head],snapshot_ids:[head,b,checkpoint,parent,a,baseID],merges:merges.map((h,i)=>({event_id:h.id,source:h.source,before:h.shared_target,merge_sha:h.pr.merge_sha,pr_number:i+1,state:'included',reason:'verified_git_order',order:1-i}))};
+ const base=publicWorkspaceApi(snapshots,refs,[],[],[],history);
+ const {pageErrors,unexpected}=await openGraph(page,req=>req.pathname.endsWith('/view')?{body:{snapshots,refs,history,pending:[],unsync:[],reflog:[],revision:{graph:'1',pending:'1',evidence:'1'},graph:{branch_contexts:{main:inclusion}}}}:base(req));
+ for(const node of [head,'graph:merge:checkpoint-merge-1',checkpoint,'graph:merge:checkpoint-merge-0']) await expect(page.locator(`[data-graph-id="${node}"]`)).toHaveAttribute('data-graph-node-lane','0');
+ await expectRenderedGraphPath(page,head,'graph:merge:checkpoint-merge-1');
+ await expectRenderedGraphPath(page,'graph:merge:checkpoint-merge-1',checkpoint);
+ await expectRenderedGraphPath(page,checkpoint,'graph:merge:checkpoint-merge-0');
+ await expectRenderedGraphPath(page,'graph:merge:checkpoint-merge-1',b);
+ await expectRenderedGraphPath(page,b,'graph:birth:child-birth');
+ await expectRenderedGraphPath(page,'graph:birth:child-birth',origin);
+ const childLane=await page.locator(`[data-graph-id="${b}"]`).getAttribute('data-graph-node-lane');
+ expect(childLane).not.toBe('0');
+ await expect(page.locator(`.graph-lane-label[data-graph-lane="${childLane}"]`)).toHaveAttribute('aria-label','feature-child');
+ if(fork==='feature-parent') await expect(page.locator(`[data-graph-id="${parent}"]`)).not.toHaveAttribute('data-graph-node-lane','0');
+ expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
+});
