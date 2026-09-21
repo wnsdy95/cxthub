@@ -1482,11 +1482,15 @@ scan can contain gaps; it is not a blanket correctness certificate. Missing
 permissions, rate limits, unpublished commits, unavailable commands and older
 history must remain distinguishable from proven mismatches. Memory checks verify
 provenance and inclusion, not the semantic truth of individual summary sentences.
+Inherited PRs must remain present in a child branch's context/memory roots, but
+their merge paths belong to the original destination. The checker must not
+require another merge on every descendant branch that inherited those roots.
 
 No provider I/O holds a repository transaction. Continuation cursors include a
 fingerprint of the retained history, refs and referenced ancestry. Changed inputs
 invalidate the run; unrelated live pending captures do not. GitHub list pages are
-anchored to the first page's merged-PR identities and restart when it changes;
+anchored to every closed PR row on the first page, including update times, and
+restart when it changes;
 GitHub does not provide a transaction spanning every REST page. The UI preserves
 partial results on failure/cancellation, never presents them as a completed scan,
 and issues no recurring audit requests when idle.

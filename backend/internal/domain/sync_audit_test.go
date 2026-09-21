@@ -44,6 +44,38 @@ func TestAuditIncludedContextAndGraphAreIndependent(t *testing.T) {
 	}
 }
 
+func TestAuditInheritedPRChecksRootsWithoutDuplicatingMergeLanes(t *testing.T) {
+	source := HashContent([]byte("source"))
+	merge := BranchContextMerge{EventID: "completed", DestinationBranchID: "main-id", Source: source, State: "included"}
+	g := GraphState{
+		BranchContexts:  map[string]BranchContext{},
+		BranchSnapshots: map[string][]ContentHash{},
+		Operations:      GraphOperations{Merges: []GraphMerge{{ID: "recorded-merge-id", EventID: merge.EventID, Scope: "main-id", Source: source}}},
+	}
+	for name, id := range map[string]string{"main": "main-id", "child": "child-id"} {
+		g.BranchContexts[name] = BranchContext{BranchID: id, SnapshotID: source, SnapshotIDs: []ContentHash{source}, Roots: []ContentHash{source}, Merges: []BranchContextMerge{merge}}
+		g.BranchSnapshots[name] = []ContentHash{source}
+	}
+	ApplyGraphIntegrations(&g, []Snapshot{{ID: source}})
+	if checks := AuditIntegrationContracts(g); len(checks) != 0 {
+		t.Fatal("valid inherited PR needs no duplicate merge on the child", checks)
+	}
+	// Inheritance must still include the actual context used for memory.
+	g.BranchSnapshots["child"] = nil
+	checks := AuditIntegrationContracts(g)
+	if len(checks) != 1 || checks[0].Code != "included_context_missing" || checks[0].Branch != "child" {
+		t.Fatal("inherited context omission was not detected", checks)
+	}
+	g.BranchSnapshots["child"] = []ContentHash{source}
+	// The actual destination still needs its merge path, even if children
+	// inherit its source correctly.
+	g.Integrations = nil
+	checks = AuditIntegrationContracts(g)
+	if len(checks) != 1 || checks[0].Code != "included_merge_path_missing" || checks[0].Branch != "main" {
+		t.Fatal("destination merge omission was not detected", checks)
+	}
+}
+
 func TestCreationOriginSurvivesRenameButRejectsConflictingIdentity(t *testing.T) {
 	e := HistoryEvent{RepoID: "repo", Kind: "birth", BranchID: "new", Creation: &GitCreation{Evidence: "process-argv", OriginBranch: "old-name", OriginBranchID: "origin"}}
 	prior := HistoryEvent{RepoID: "repo", Kind: "rename", BranchID: "origin", Branch: "renamed", PreviousBranch: "old-name"}
