@@ -1,7 +1,7 @@
-// GitHub style location breadcrumb: {owner} / [lock]{workspace} [▾].
-// Lock icon is on the left (private). workspaces/onSelect opens a workspace switch dropdown — search input, current display (✓), private (lock)/public (repo) icon, keyboard navigation (↑↓/Enter/Esc).
+// GitHub style location breadcrumb: {owner} / [lock]{repository} [▾].
+// Lock icon is on the left (private). repositories/onSelect opens a repository switch dropdown — search input, current display (✓), private (lock)/public (repo) icon, keyboard navigation (↑↓/Enter/Esc).
 import { useEffect, useMemo, useState } from 'react';
-import type { Workspace } from '../types';
+import type { Repository } from '../types';
 import { navigate } from '../route';
 import { useT } from '../i18n';
 
@@ -15,7 +15,7 @@ export function LockIcon({ className }: { className?: string }) {
 }
 
 function RepoIcon({ className }: { className?: string }) {
-  // octicon repo — public workspace display (lock counterpart).
+  // octicon repo — public repository display (lock counterpart).
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" className={className}>
       <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25v3.25a.25.25 0 0 0 .4.2l1.45-1.087a.25.25 0 0 1 .3 0L8.6 15.7a.25.25 0 0 0 .4-.2v-3.25a.25.25 0 0 0-.25-.25h-3.5a.25.25 0 0 0-.25.25Z" />
@@ -23,7 +23,7 @@ function RepoIcon({ className }: { className?: string }) {
   );
 }
 
-function priv(w: Workspace): boolean {
+function priv(w: Repository): boolean {
   return w.visibility !== 'public';
 }
 
@@ -32,7 +32,7 @@ export function Breadcrumb({
   name,
   repository,
   isPrivate,
-  workspaces,
+  repositories,
   currentId,
   onSelect,
 }: {
@@ -40,40 +40,40 @@ export function Breadcrumb({
   name: string;
   repository?: string;
   isPrivate?: boolean;
-  workspaces?: Workspace[]; // If provided, opens a workspace switch dropdown (omits login public read).
+  repositories?: Repository[]; // If provided, opens a repository switch dropdown (omits login public read).
   currentId?: string;
-  onSelect?: (ws: Workspace) => void;
+  onSelect?: (repositoryMetadata: Repository) => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const hasSwitch = Boolean(workspaces && workspaces.length > 0 && onSelect);
+  const hasSwitch = Boolean(repositories && repositories.length > 0 && onSelect);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = workspaces ?? [];
+    const list = repositories ?? [];
     if (!q) return list;
     return list.filter((w) => w.name.toLowerCase().includes(q) || w.owner_username.toLowerCase().includes(q));
-  }, [workspaces, query]);
+  }, [repositories, query]);
 
-  // Initializes search and highlight on open (current workspace as active item).
+  // Initializes search and highlight on open (current repository as active item).
   useEffect(() => {
     if (!open) return;
     setQuery('');
-    const idx = (workspaces ?? []).findIndex((w) => w.id === currentId);
+    const idx = (repositories ?? []).findIndex((w) => w.id === currentId);
     setActive(idx >= 0 ? idx : 0);
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, workspaces, currentId]);
+  }, [open, repositories, currentId]);
 
   // Resets highlight to first result when search term changes.
   useEffect(() => {
     setActive(0);
   }, [query]);
 
-  function choose(w: Workspace | undefined) {
+  function choose(w: Repository | undefined) {
     if (!w) return;
     onSelect!(w);
     setOpen(false);
@@ -98,7 +98,7 @@ export function Breadcrumb({
         {owner}
       </button>
       <span className="crumb-sep">/</span>
-      <span className="crumb-ws" title={`${owner}/${name}`}>
+      <span className="crumb-repositoryMetadata" title={`${owner}/${name}`}>
         {isPrivate && <LockIcon className="crumb-lock" />}
         <span className="crumb-name">{name}</span>
       </span>
@@ -108,7 +108,7 @@ export function Breadcrumb({
             type="button"
             className="crumb-caret"
             onClick={() => setOpen((v) => !v)}
-            aria-label={t('common.switchWorkspace')}
+            aria-label={t('common.switchRepository')}
             aria-expanded={open}
           >
             ▾
@@ -116,17 +116,17 @@ export function Breadcrumb({
           {open && (
             <>
               <div className="dropdown-backdrop" onClick={() => setOpen(false)} />
-              <div className="crumb-menu" role="dialog" aria-label={t('common.switchWorkspace')}>
-                <div className="crumb-menu-head">{t('common.switchWorkspace')}</div>
+              <div className="crumb-menu" role="dialog" aria-label={t('common.switchRepository')}>
+                <div className="crumb-menu-head">{t('common.switchRepository')}</div>
                 <input
                   className="crumb-search"
-                  placeholder={t('common.searchWorkspace')}
+                  placeholder={t('common.searchRepository')}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={onSearchKey}
                   autoFocus
                   spellCheck={false}
-                  aria-label={t('common.searchWorkspace')}
+                  aria-label={t('common.searchRepository')}
                 />
                 <ul className="crumb-menu-list" role="menu">
                   {filtered.map((w, i) => (
@@ -145,7 +145,7 @@ export function Breadcrumb({
                       </button>
                     </li>
                   ))}
-                  {filtered.length === 0 && <li className="crumb-menu-empty">{t('common.noWorkspaceMatch')}</li>}
+                  {filtered.length === 0 && <li className="crumb-menu-empty">{t('common.noRepositoryMatch')}</li>}
                 </ul>
               </div>
             </>

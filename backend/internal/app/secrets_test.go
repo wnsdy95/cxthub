@@ -19,22 +19,22 @@ func secretsTestEnvelope(fp string) []byte {
 	return []byte(`{"version":1,"kdf":"PBKDF2-SHA256","iterations":600000,"salt_b64":"AAAAAAAAAAAAAAAAAAAAAA==","cipher":"AES-256-GCM","nonce_b64":"AAAAAAAAAAAAAAAA","ciphertext_b64":"AAAAAAAAAAAAAAAAAAAAAA==","fingerprint":"` + fp + `"}`)
 }
 
-func seedSecretsRepo(t *testing.T, meta outbound.MetadataStore, ws outbound.WorkspaceStore) (domain.Workspace, inbound.SaveSecretsInput) {
+func seedSecretsRepo(t *testing.T, meta outbound.MetadataStore, repositories outbound.RepositoryStore) (domain.Repository, inbound.SaveSecretsInput) {
 	t.Helper()
 	ctx := context.Background()
 	owner := domain.User{ID: domain.NewID("user_"), Username: fmt.Sprintf("secrets%d", time.Now().UnixNano()), Email: "secrets@example.test", Name: "Owner"}
-	if err := ws.UpsertUser(ctx, owner); err != nil {
+	if err := repositories.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	wsp := domain.Workspace{ID: domain.NewID("ws_"), Name: "Secrets", Slug: "secrets", OwnerID: owner.ID, OwnerUsername: owner.Username, CreatedAt: time.Now().UTC()}
-	if err := ws.CreateWorkspace(ctx, wsp); err != nil {
+	repositoryRecord := domain.Repository{ID: domain.NewID("ws_"), Name: "Secrets", Slug: "secrets", OwnerID: owner.ID, OwnerUsername: owner.Username, CreatedAt: time.Now().UTC()}
+	if err := repositories.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
-	repo := domain.HashContent([]byte(wsp.ID))
-	if _, err := meta.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: wsp.ID}); err != nil {
+	repo := domain.HashContent([]byte(repositoryRecord.ID))
+	if _, err := meta.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: repositoryRecord.ID}); err != nil {
 		t.Fatal(err)
 	}
-	return wsp, inbound.SaveSecretsInput{RepoID: repo, ActorID: owner.ID, Envelope: secretsTestEnvelope("aaaaaaaaaaaa"), Edit: domain.SecretsEdit{ExpectedRevision: "absent"}}
+	return repositoryRecord, inbound.SaveSecretsInput{RepoID: repo, ActorID: owner.ID, Envelope: secretsTestEnvelope("aaaaaaaaaaaa"), Edit: domain.SecretsEdit{ExpectedRevision: "absent"}}
 }
 
 func TestSecretsCommandRejectsChangedPassphrase(t *testing.T) {
@@ -87,18 +87,18 @@ func TestSecretsCommandAuthorizesInsideApplication(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			st := store.NewFSStore(t.TempDir())
-			wsp, in := seedSecretsRepo(t, st, st)
-			wsp.SecretsPolicy = tc.policy
-			wsp.Archived = tc.archived
-			wsp.Visibility = domain.VisibilityPublic
-			wsp.PublicRole = "puller"
-			if err := st.CreateWorkspace(ctx, wsp); err != nil {
+			repositoryRecord, in := seedSecretsRepo(t, st, st)
+			repositoryRecord.SecretsPolicy = tc.policy
+			repositoryRecord.Archived = tc.archived
+			repositoryRecord.Visibility = domain.VisibilityPublic
+			repositoryRecord.PublicRole = "puller"
+			if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 				t.Fatal(err)
 			}
 			if !tc.creator {
 				in.ActorID = domain.NewID("user_")
 				if tc.role != "" {
-					if err := st.AddMember(ctx, domain.Membership{WorkspaceID: wsp.ID, UserID: in.ActorID, Role: tc.role}); err != nil {
+					if err := st.AddMember(ctx, domain.Membership{RepositoryID: repositoryRecord.ID, UserID: in.ActorID, Role: tc.role}); err != nil {
 						t.Fatal(err)
 					}
 				}

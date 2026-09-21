@@ -85,10 +85,10 @@ for i in $(seq 1 30); do curl -sf -o /dev/null "$B/repos" && break; sleep 0.3; d
 
 J="$TMP/a.jar"
 ccurl -s -c "$J" -X POST "$B/auth/session" -H "Authorization: Bearer dev:o@t.io:O" >/dev/null
-ccurl -sb "$J" -X POST "$B/workspaces" -H 'Content-Type: application/json' -d '{"name":"SyncE2E"}' >/dev/null
+ccurl -sb "$J" -X POST "$B/repositories" -H 'Content-Type: application/json' -d '{"name":"SyncE2E"}' >/dev/null
 OWN=$(curl -sb "$J" "$B/me" | jget "['username']")
-SLUG=$(curl -sb "$J" "$B/workspaces" | jget "[0]['slug']")
-REMOTE="http://127.0.0.1:$PORT/$OWN/$SLUG"  # The two-segment workspace URL is the repository identity.
+SLUG=$(curl -sb "$J" "$B/repositories" | jget "[0]['slug']")
+REMOTE="http://127.0.0.1:$PORT/$OWN/$SLUG"  # The two-segment repository URL is the repository identity.
 git init -q --bare "$TMP/bare.git"
 
 session() { # session <cwd> <label> — write a synthetic Claude JSONL session with model and usage.
@@ -118,8 +118,7 @@ echo "── A. repo1: Session A push + memorize"
 mkdir -p "$TMP/repo1"; cd "$TMP/repo1"
 git init -q; git remote add origin "$TMP/bare.git"
 cxt init >/dev/null 2>&1
-cxt remote add origin "$REMOTE" >/dev/null 2>&1
-CXT_NO_BROWSER=1 cxt login >"$TMP/login.out" 2>&1 &
+CXT_NO_BROWSER=1 cxt login --server "$ORIGIN" >"$TMP/login.out" 2>&1 &
 LPID=$!
 DCODE=""
 for i in $(seq 1 40); do
@@ -129,6 +128,7 @@ done
 expect "device flow code output" "$([ -n "$DCODE" ] && echo yes)" yes
 ccurl -sb "$J" -X POST "$B/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE\"}" >/dev/null
 wait "$LPID"
+cxt remote add origin "$REMOTE" >/dev/null 2>&1
 if [ "${CXT_E2E_PUBLICATION_ONLY:-0}" = 1 ]; then
   source "$ROOT/scripts/e2e-publication.inc.sh"
   if [ "$FAIL" = 0 ]; then echo "PUBLICATION E2E: All passed ✓"; else echo "PUBLICATION E2E: Failures exist ✗"; fi

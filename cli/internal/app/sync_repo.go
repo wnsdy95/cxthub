@@ -301,7 +301,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
-	// repo metadata (remote URL/workspace binding) is a prerequisite for object uploads. Server fail-closed on unbound
+	// repo metadata (remote URL/repository binding) is a prerequisite for object uploads. Server fail-closed on unbound
 	// repos, so avoiding registration failures leads to 404/403 errors during subsequent negotiate, as if bypassing
 	// permission/identity validation. Cwd push must interpret the current repo and register successfully before transitioning to object transmission.
 	repoRoot := "" // promotion queue flush root (accurate for subdirectory pushes as well)
@@ -1783,8 +1783,8 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 var _ inbound.SyncRepo = (*SyncRepoService)(nil)
 
 // Connect immediately registers the origin repo with the server (without waiting for the first push) and returns a definitive record.
-// After running cxt remote add origin, it is used in the "connected" feedback. The server interprets the remote URL path to bind the workspace_id,
-// so the return value indicates whether the workspace is connected.
+// After running cxt remote add origin, it is used in the "connected" feedback. The server interprets the remote URL path to bind the repository_id,
+// so the return value indicates whether the repository is connected.
 func (s *SyncRepoService) Connect(ctx context.Context, in inbound.SyncInput) (inbound.ConnectOutput, error) {
 	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
 	if err != nil {

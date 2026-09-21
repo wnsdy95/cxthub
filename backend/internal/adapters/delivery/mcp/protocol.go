@@ -205,7 +205,7 @@ func readAnnotations() map[string]any {
 func repositoryProperty() map[string]any {
 	return map[string]any{
 		"type":        "string",
-		"description": "Repository as namespace/workspace/repository, its CXTHub URL, or an exact repo ID. Call repository_list first when unknown.",
+		"description": "Repository as namespace/repository/repository, its CXTHub URL, or an exact repo ID. Call repository_list first when unknown.",
 	}
 }
 

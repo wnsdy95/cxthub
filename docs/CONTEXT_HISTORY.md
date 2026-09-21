@@ -116,12 +116,12 @@ implies `-c` in Git, so those flags cannot define opposite identity policies.
 The server transaction and consistent graph-read guarantees are specified in
 [Collaboration transactions](COLLABORATION_TRANSACTIONS.md).
 
-Workspace tabs use `/<namespace>/<workspace>?tab=members`, `?tab=connections`,
-`?tab=settings`, and `?tab=onhold`. A named repository uses
-`/<namespace>/<workspace>/<repository>?tab=onhold`; the context tab uses the
-repository URL without a tab query. Repository names such as `settings` remain
-valid because tab selection is separate from the path. The former `/-/` tab
-URLs render a not-found screen and do not redirect or load workspace views.
+Repository tabs use `/{owner}/{repository}?tab=members`, `?tab=connections`,
+`?tab=settings`, and `?tab=onhold`. The context tab uses the repository URL
+without a tab query. Registered legacy three-segment addresses redirect to the
+canonical repository while preserving query parameters. Repository names such
+as `settings` remain valid because tabs are separate from the path. The retired
+`/-/` tab URLs render a not-found screen and do not load repository data.
 Tab URLs do not grant access; the backend's existing role checks remain the
 authorization boundary.
 
@@ -1243,7 +1243,7 @@ The user-facing `ConfirmJoin` command requires the preview's expected head and
 content-derived plan revision. The whole-segment and source-only choices have
 separate revisions. Revisions are not signed credentials and grant no rights.
 Confirmation repeats membership/archival checks inside the write transaction;
-PostgreSQL locks workspace policy and actor membership until commit. The former
+PostgreSQL locks repository policy and actor membership until commit. The former
 unapproved public Join application method is removed.
 
 A revision includes the exact segment, graft patches, branch identity and a

@@ -27,7 +27,7 @@ Prior proposals are retained here solely as design history:
 - An earlier public page proposed 10 GiB included and USD 0.07 per additional
   GiB-month, using GitHub LFS as a reference. These are **withdrawn draft values**,
   not current CXTHub allowances or prices; GitHub's current prices are not asserted.
-- Enterprise: unlimited workspaces, with 50 GiB included and excess storage
+- Enterprise: unlimited repositories, with 50 GiB included and excess storage
   metered for possible pay-as-you-go billing. The storage-policy foundation
   supports this candidate; it must remain unprovisioned during free operation.
 - Free and Team included storage, base prices, and Enterprise base price are

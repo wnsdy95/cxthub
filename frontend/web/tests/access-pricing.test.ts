@@ -4,14 +4,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nProvider } from '../src/i18n/index.tsx';
 import { RoleCapabilities } from '../src/components/RoleCapabilities.tsx';
 import { ROLE_CAPABILITIES, ROLES, atLeast } from '../src/roles.ts';
-import { parseRoute, repoPath, repositorySlug, wsPath } from '../src/route.ts';
+import { parseRoute, repoPath, repositorySlug, repositoryPath } from '../src/route.ts';
 
 assert.deepEqual(ROLE_CAPABILITIES, [
   { id: 'viewContext', minimumRole: 'viewer' },
   { id: 'pullTeamAssets', minimumRole: 'puller' },
   { id: 'pushContext', minimumRole: 'member' },
   { id: 'manageTeamAssets', minimumRole: 'maintainer' },
-  { id: 'administerWorkspace', minimumRole: 'owner' },
+  { id: 'administerRepository', minimumRole: 'owner' },
 ]);
 
 for (const [capabilityIndex, capability] of ROLE_CAPABILITIES.entries()) {
@@ -33,35 +33,32 @@ assert.equal((matrix.match(/class="denied"/g) ?? []).length, 10, 'cumulative fiv
 for (const role of ROLES) assert.match(matrix, new RegExp(`<code>${role}</code>`));
 
 assert.deepEqual(parseRoute('/pricing'), { kind: 'pricing' });
-assert.equal(parseRoute('/oauth/client'), null, 'server-owned OAuth path is not interpreted as a Workspace');
-assert.equal(parseRoute('/mcp'), null, 'server-owned MCP path is not interpreted as a user Namespace');
+assert.deepEqual(parseRoute('/oauth/client'), { kind: 'notFound' }, 'server-owned OAuth path is not interpreted as a Repository');
+assert.deepEqual(parseRoute('/mcp'), { kind: 'notFound' }, 'server-owned MCP path is not interpreted as a user Namespace');
 assert.deepEqual(parseRoute('/connect/mcp'), { kind: 'mcpConsent', request: '' });
 assert.deepEqual(parseRoute('/acme/platform/backend'), {
-  kind: 'ws',
+  kind: 'repository',
   username: 'acme',
-  slug: 'platform',
-  repository: 'backend',
+  slug: 'platform/backend',
 });
 assert.deepEqual(parseRoute('/acme/platform/-/settings'), {
   kind: 'notFound',
 });
 assert.deepEqual(parseRoute('/acme/platform/settings'), {
-  kind: 'ws',
+  kind: 'repository',
   username: 'acme',
-  slug: 'platform',
-  repository: 'settings',
-  legacyTab: 'settings',
+  slug: 'platform/settings',
 });
-const workspace = { id: 'ws_1', owner_username: 'acme', slug: 'platform' };
-assert.equal(wsPath(workspace, 'members'), '/acme/platform?tab=members');
+const repository = { id: 'ws_1', owner_username: 'acme', slug: 'platform' };
+assert.equal(repositoryPath(repository, 'members'), '/acme/platform?tab=members');
 assert.equal(repositorySlug({ remote_url: 'https://cxthub.com/acme/platform/backend' }), 'backend');
-assert.equal(repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform/backend' }), '/acme/platform/backend');
+assert.equal(repoPath(repository, { remote_url: 'https://cxthub.com/acme/platform/backend' }), '/acme/platform');
 assert.equal(
-  repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform/backend' }, 'onhold'),
-  '/acme/platform/backend?tab=onhold',
+  repoPath(repository, { remote_url: 'https://cxthub.com/acme/platform/backend' }, 'onhold'),
+  '/acme/platform?tab=onhold',
 );
 assert.equal(
-  repoPath(workspace, { remote_url: 'https://cxthub.com/acme/platform' }),
+  repoPath(repository, { remote_url: 'https://cxthub.com/acme/platform' }),
   '/acme/platform',
-  'legacy two-segment repository keeps its stable workspace URL',
+  'legacy two-segment repository keeps its stable repository URL',
 );

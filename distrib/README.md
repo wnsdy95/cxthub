@@ -31,13 +31,13 @@ builds, upgrades, removal, and `cxtd`.
 
 ## Getting started
 
-**Once per team:** create a workspace on the web (e.g. `https://cxthub.com/alice/myteam`).
-The workspace URL is itself the repo — it registers automatically on first connect (no separate repo to name).
+**Once per team:** create a repository on the web (e.g. `https://cxthub.com/alice/myteam`).
+The repository URL is itself the repo — it registers automatically on first connect (no separate repo to name).
 
 ```bash
 cd <your code repo>
-cxt setup https://cxthub.com/<username>/<workspace>
-#         └── your workspace URL (this URL is the repo identity)
+cxt setup https://cxthub.com/<owner>/<repository>
+#         └── your repository URL (this URL is the repo identity)
 # ✓ store init → git hooks → remote → login (browser approval) → agent hooks → team settings
 # From here on, just use git.
 ```

@@ -165,10 +165,10 @@ type IdentityVerifier interface {
 	Verify(ctx context.Context, idToken string) (domain.User, error)
 }
 
-// WorkspaceStore persists users, workspaces, memberships, and invitations (0002 schema).
+// RepositoryStore persists users, repositories, memberships, and invitations (0002 schema).
 //
-// Visibility boundary = workspace.owner creates invite, invited user joins with token.
-type WorkspaceStore interface {
+// Visibility boundary = repository.owner creates invite, invited user joins with token.
+type RepositoryStore interface {
 	// User
 	UpsertUser(ctx context.Context, user domain.User) error
 	GetUser(ctx context.Context, id string) (domain.User, error)
@@ -176,27 +176,27 @@ type WorkspaceStore interface {
 	// Used for global uniqueness guarantee (auto-create on first login + collision avoidance).
 	GetUserByUsername(ctx context.Context, username string) (domain.User, error)
 
-	// Workspace
-	CreateWorkspace(ctx context.Context, ws domain.Workspace) error
-	GetWorkspace(ctx context.Context, id string) (domain.Workspace, error)
-	// GetWorkspaceByPath finds workspace by URL segments (owner_username, slug) — for repo binding.
-	GetWorkspaceByPath(ctx context.Context, ownerUsername, slug string) (domain.Workspace, error)
-	// GetWorkspaceByNamespacePath resolves current and aliased Namespace slugs
+	// Repository
+	CreateRepository(ctx context.Context, repositoryRecord domain.Repository) error
+	GetRepository(ctx context.Context, id string) (domain.Repository, error)
+	// GetRepositoryByPath finds repository by URL segments (owner_username, slug) — for repo binding.
+	GetRepositoryByPath(ctx context.Context, ownerUsername, slug string) (domain.Repository, error)
+	// GetRepositoryByNamespacePath resolves current and aliased Namespace slugs
 	// without rewriting URL-derived RepoIDs.
-	GetWorkspaceByNamespacePath(ctx context.Context, namespaceID, slug string) (domain.Workspace, error)
-	ListWorkspacesForUser(ctx context.Context, userID string) ([]domain.Workspace, error)
+	GetRepositoryByNamespacePath(ctx context.Context, namespaceID, slug string) (domain.Repository, error)
+	ListRepositoriesForUser(ctx context.Context, userID string) ([]domain.Repository, error)
 
 	// Membership. AddMember upserts member (re-adds member to update role).
 	AddMember(ctx context.Context, m domain.Membership) error
-	RemoveMember(ctx context.Context, workspaceID, userID string) error
-	IsMember(ctx context.Context, workspaceID, userID string) (bool, error)
-	ListMembers(ctx context.Context, workspaceID string) ([]domain.Membership, error)
+	RemoveMember(ctx context.Context, repositoryID, userID string) error
+	IsMember(ctx context.Context, repositoryID, userID string) (bool, error)
+	ListMembers(ctx context.Context, repositoryID string) ([]domain.Membership, error)
 
 	// Invite
 	CreateInvite(ctx context.Context, inv domain.Invite) error
 	GetInvite(ctx context.Context, token string) (domain.Invite, error)
 	UpdateInviteStatus(ctx context.Context, token string, status domain.InviteStatus) error
-	ListInvites(ctx context.Context, workspaceID string) ([]domain.Invite, error)
+	ListInvites(ctx context.Context, repositoryID string) ([]domain.Invite, error)
 
 	// Session (server login session — CLI token also represented as long-lived session)
 	CreateSession(ctx context.Context, s domain.Session) error
@@ -221,54 +221,54 @@ type OAuthStore interface {
 	ConsumeOAuthAuthorizationCode(ctx context.Context, codeHash, clientID, redirectURI, codeChallenge string) (domain.OAuthAuthorizationCode, error)
 }
 
-// EnterpriseStore persists global namespaces, enterprise organization state,
-// policies, audit events, and short-lived break-glass grants. Enterprise roles
-// are intentionally separate from Workspace roles and never imply repository
+// OrganizationStore persists global namespaces, organization organization state,
+// policies, audit events, and short-lived break-glass grants. Organization roles
+// are intentionally separate from Repository roles and never imply repository
 // context access.
-type EnterpriseStore interface {
+type OrganizationStore interface {
 	CreateNamespace(ctx context.Context, ns domain.Namespace) error
 	GetNamespace(ctx context.Context, id string) (domain.Namespace, error)
 	GetNamespaceBySlug(ctx context.Context, slug string) (domain.Namespace, error)
 	RenameNamespace(ctx context.Context, id, nextSlug string) error
 
-	CreateEnterprise(
+	CreateOrganization(
 		ctx context.Context,
-		enterprise domain.Enterprise,
+		organization domain.Organization,
 		namespace domain.Namespace,
-		owner domain.EnterpriseMembership,
-		policy domain.EnterprisePolicy,
-		audit domain.EnterpriseAuditEvent,
+		owner domain.OrganizationMembership,
+		policy domain.OrganizationPolicy,
+		audit domain.OrganizationAuditEvent,
 	) error
-	GetEnterprise(ctx context.Context, id string) (domain.Enterprise, error)
-	GetEnterpriseBySlug(ctx context.Context, slug string) (domain.Enterprise, error)
-	ListEnterprisesForUser(ctx context.Context, userID string) ([]domain.Enterprise, error)
-	UpdateEnterprise(ctx context.Context, enterprise domain.Enterprise) error
-	UpdateEnterpriseWithAudit(ctx context.Context, enterprise domain.Enterprise, audit domain.EnterpriseAuditEvent) error
+	GetOrganization(ctx context.Context, id string) (domain.Organization, error)
+	GetOrganizationBySlug(ctx context.Context, slug string) (domain.Organization, error)
+	ListOrganizationsForUser(ctx context.Context, userID string) ([]domain.Organization, error)
+	UpdateOrganization(ctx context.Context, organization domain.Organization) error
+	UpdateOrganizationWithAudit(ctx context.Context, organization domain.Organization, audit domain.OrganizationAuditEvent) error
 
-	AddEnterpriseMember(ctx context.Context, membership domain.EnterpriseMembership) error
-	RemoveEnterpriseMember(ctx context.Context, enterpriseID, userID string) error
-	AddEnterpriseMemberWithAudit(ctx context.Context, membership domain.EnterpriseMembership, audit domain.EnterpriseAuditEvent) error
-	RemoveEnterpriseMemberWithAudit(ctx context.Context, enterpriseID, userID string, audit domain.EnterpriseAuditEvent) error
-	GetEnterpriseMembership(ctx context.Context, enterpriseID, userID string) (domain.EnterpriseMembership, error)
-	ListEnterpriseMembers(ctx context.Context, enterpriseID string) ([]domain.EnterpriseMembership, error)
+	AddOrganizationMember(ctx context.Context, membership domain.OrganizationMembership) error
+	RemoveOrganizationMember(ctx context.Context, organizationID, userID string) error
+	AddOrganizationMemberWithAudit(ctx context.Context, membership domain.OrganizationMembership, audit domain.OrganizationAuditEvent) error
+	RemoveOrganizationMemberWithAudit(ctx context.Context, organizationID, userID string, audit domain.OrganizationAuditEvent) error
+	GetOrganizationMembership(ctx context.Context, organizationID, userID string) (domain.OrganizationMembership, error)
+	ListOrganizationMembers(ctx context.Context, organizationID string) ([]domain.OrganizationMembership, error)
 
-	PutEnterprisePolicy(ctx context.Context, policy domain.EnterprisePolicy) error
-	PutEnterprisePolicyWithAudit(ctx context.Context, policy domain.EnterprisePolicy, audit domain.EnterpriseAuditEvent) error
-	GetEnterprisePolicy(ctx context.Context, enterpriseID string) (domain.EnterprisePolicy, error)
+	PutOrganizationPolicy(ctx context.Context, policy domain.OrganizationPolicy) error
+	PutOrganizationPolicyWithAudit(ctx context.Context, policy domain.OrganizationPolicy, audit domain.OrganizationAuditEvent) error
+	GetOrganizationPolicy(ctx context.Context, organizationID string) (domain.OrganizationPolicy, error)
 
-	ListWorkspacesForNamespace(ctx context.Context, namespaceID string) ([]domain.Workspace, error)
-	CreateEnterpriseWorkspaceWithAudit(ctx context.Context, workspace domain.Workspace, owner domain.Membership, audit domain.EnterpriseAuditEvent) error
+	ListRepositoriesForNamespace(ctx context.Context, namespaceID string) ([]domain.Repository, error)
+	CreateOrganizationRepositoryWithAudit(ctx context.Context, repository domain.Repository, owner domain.Membership, audit domain.OrganizationAuditEvent) error
 
-	AppendEnterpriseAudit(ctx context.Context, event domain.EnterpriseAuditEvent) error
-	ListEnterpriseAudit(ctx context.Context, enterpriseID string, limit int) ([]domain.EnterpriseAuditEvent, error)
+	AppendOrganizationAudit(ctx context.Context, event domain.OrganizationAuditEvent) error
+	ListOrganizationAudit(ctx context.Context, organizationID string, limit int) ([]domain.OrganizationAuditEvent, error)
 
 	CreateBreakGlassGrant(ctx context.Context, grant domain.BreakGlassGrant) error
-	GetActiveBreakGlassGrant(ctx context.Context, enterpriseID, workspaceID, userID string, now time.Time) (domain.BreakGlassGrant, error)
+	GetActiveBreakGlassGrant(ctx context.Context, organizationID, repositoryID, userID string, now time.Time) (domain.BreakGlassGrant, error)
 	// CreateBreakGlassGrantWithAudit makes exceptional access and its creation
 	// audit indivisible. UseActiveBreakGlassGrant appends the use audit before
 	// returning authorization; audit failure must therefore fail closed.
-	CreateBreakGlassGrantWithAudit(ctx context.Context, grant domain.BreakGlassGrant, event domain.EnterpriseAuditEvent) error
-	UseActiveBreakGlassGrant(ctx context.Context, enterpriseID, workspaceID, userID string, now time.Time, event domain.EnterpriseAuditEvent) (domain.BreakGlassGrant, error)
+	CreateBreakGlassGrantWithAudit(ctx context.Context, grant domain.BreakGlassGrant, event domain.OrganizationAuditEvent) error
+	UseActiveBreakGlassGrant(ctx context.Context, organizationID, repositoryID, userID string, now time.Time, event domain.OrganizationAuditEvent) (domain.BreakGlassGrant, error)
 }
 
 // RefMoveClass is the classification returned by ClassifyRefMove (sync protocol).

@@ -14,9 +14,9 @@ test('real server join preview survives query failure and requires renewed appro
   const headers={Origin:'http://127.0.0.1:4174','X-Cxt-CSRF':'1'};
   expect((await api.post('/api/v1/auth/session',{headers:{...headers,Authorization:'Bearer dev:join-e2e@example.test:Join E2E'}})).ok()).toBe(true);
   const me=await (await api.get('/api/v1/me')).json();
-  const wsResp=await api.post('/api/v1/workspaces',{headers,data:{name:`JoinPreview${info.retry}`}});
-  expect(wsResp.ok(),await wsResp.text()).toBe(true);const ws=await wsResp.json();
-  const remote=`http://cxthub.test/${me.username}/${ws.slug}`;
+  const wsResp=await api.post('/api/v1/repositories',{headers,data:{name:`JoinPreview${info.retry}`}});
+  expect(wsResp.ok(),await wsResp.text()).toBe(true);const repositoryMetadata=await wsResp.json();
+  const remote=`http://cxthub.test/${me.username}/${repositoryMetadata.slug}`;
   const repo=hash(remote.replace('http://','').toLowerCase());
   const registered=await api.post('/api/v1/repos',{headers,data:{id:repo,remote_url:remote,default_branch:'main'}});
   expect(registered.ok(),await registered.text()).toBe(true);
@@ -32,7 +32,7 @@ test('real server join preview survives query failure and requires renewed appro
   expect(objects.ok(),await objects.text()).toBe(true);
   expect((await api.post(base+`/snapshots/${encodeURIComponent(head)}/graft`,{headers,data:{parents:[tip],expected_seq:0}})).ok()).toBe(true);
   expect((await api.put(base+'/refs/branch/main',{headers,data:{target:head,expected_target:''}})).ok()).toBe(true);
-  await page.goto(`/${me.username}/${ws.slug}`);
+  await page.goto(`/${me.username}/${repositoryMetadata.slug}`);
   const row=page.locator(`.graph-row[data-graph-snapshot="${source}"]`).first();
   await expect(row).toBeVisible();
   const route='**/join/preview?**';

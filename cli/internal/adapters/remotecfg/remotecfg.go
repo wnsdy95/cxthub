@@ -314,7 +314,7 @@ func Origin(repoRoot string) (string, bool) {
 // Validate checks the repo URL format.
 //
 // Repository URL is the repo identity:
-// <host>/<namespace>/<workspace>/<repository>. Existing two-segment workspace
+// <host>/<namespace>/<repository>/<repository>. Existing two-segment repository
 // URLs remain valid legacy identities because RepoID=hash(URL); silently
 // rewriting one would fork its context DAG.
 func Validate(rawURL string) error {
@@ -342,11 +342,11 @@ func CanonicalURL(rawURL string) (string, error) {
 	}
 	pathValue := strings.TrimSuffix(u.Path, "/")
 	if !strings.HasPrefix(pathValue, "/") {
-		return "", fmt.Errorf("Repository URL must be /<namespace>/<workspace>/<repository> (or a legacy /<namespace>/<workspace> URL)")
+		return "", fmt.Errorf("Repository URL must be /<namespace>/<repository>/<repository> (or a legacy /<namespace>/<repository> URL)")
 	}
 	segments := strings.Split(strings.TrimPrefix(pathValue, "/"), "/")
 	if (len(segments) != 2 && len(segments) != 3) || !validRepositorySegments(segments) {
-		return "", fmt.Errorf("Repository URL must be /<namespace>/<workspace>/<repository> (or a legacy /<namespace>/<workspace> URL)")
+		return "", fmt.Errorf("Repository URL must be /<namespace>/<repository>/<repository> (or a legacy /<namespace>/<repository> URL)")
 	}
 	u.Host = strings.ToLower(u.Host)
 	u.Path = "/" + strings.Join(segments, "/")

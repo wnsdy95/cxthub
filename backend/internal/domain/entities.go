@@ -24,9 +24,9 @@ type Repo struct {
 	RemoteURL       string      `json:"remote_url"`
 	LocalPath       string      `json:"local_path"`
 	DefaultBranch   string      `json:"default_branch"`
-	// WorkspaceID is the containing workspace (visibility boundary). During push it is
-	// derived from /<owner_username>/<workspace-slug>/… in RemoteURL. "" means unowned (legacy).
-	WorkspaceID string `json:"workspace_id,omitempty"`
+	// RepositoryID is the containing repository (visibility boundary). During push it is
+	// derived from /<owner_username>/<repository-slug>/… in RemoteURL. "" means unowned (legacy).
+	RepositoryID string `json:"repository_id,omitempty"`
 	// GitRemoteURL is the code repository's Git origin (for example, GitHub), used by the web "Connected" tab.
 	GitRemoteURL string `json:"git_remote_url,omitempty"`
 	// About fields correspond to GitHub's repository About panel and are editable on the web.

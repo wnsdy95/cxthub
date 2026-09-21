@@ -13,8 +13,8 @@ test('live sessions precede stored captures, follow replacement, expire offline 
   const unexpected = await installApiFixture(page, ({method, pathname}) => {
     if (method !== 'GET') return undefined;
     if (pathname === '/api/v1/me') return {body:{id:'member',username:'alice',locale:'en'}};
-    if (pathname === '/api/v1/workspaces') return {body:[{id:'ws', name:'cxthub', slug:'cxthub',owner_username:'alice',visibility:'private'}]};
-    if (pathname === '/api/v1/workspaces/ws/members') return {body:[{workspace_id:'ws',user_id:'member',role:'member'}]};
+    if (pathname === '/api/v1/repositories') return {body:[{id:'repositoryMetadata', name:'cxthub', slug:'cxthub',owner_username:'alice',visibility:'private'}]};
+    if (pathname === '/api/v1/repositories/repositoryMetadata/members') return {body:[{repository_id:'repositoryMetadata',user_id:'member',role:'member'}]};
     if (pathname === '/api/v1/repos') return {body:[{id:'r',default_branch:'main',remote_url:'https://cxthub.com/alice/cxthub'}]};
     const resource = pathname.replace('/api/v1/repos/r/', '');
     if (resource === 'refs') return offline ? {status:503,body:{error:{message:'offline fixture'}}} : {body:[{kind:'branch',name:'main',repo_id:'r',target:id(1)}]};

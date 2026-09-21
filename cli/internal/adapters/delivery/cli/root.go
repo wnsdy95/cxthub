@@ -33,20 +33,21 @@ import (
 
 // Container is a bundle of inbound ports used by the CLI driver + author identifier.
 type Container struct {
-	Init     inbound.InitRepo
-	Save     inbound.SaveSession
-	Fork     inbound.ForkSession
-	Branches inbound.BranchLifecycle
-	Checkout inbound.CheckoutSession
-	Load     inbound.LoadSession
-	List     inbound.ListSessions
-	Memorize inbound.Memorize
-	Sync     inbound.SyncRepo
-	Seed     inbound.SeedBranch
-	Tag      inbound.TagRef
-	Stash    inbound.StashSession
-	Handoff  inbound.BranchHandoff
-	History  inbound.ContextHistory
+	ResolveConnection func(context.Context, string) (domain.RepositoryConnection, error)
+	Init              inbound.InitRepo
+	Save              inbound.SaveSession
+	Fork              inbound.ForkSession
+	Branches          inbound.BranchLifecycle
+	Checkout          inbound.CheckoutSession
+	Load              inbound.LoadSession
+	List              inbound.ListSessions
+	Memorize          inbound.Memorize
+	Sync              inbound.SyncRepo
+	Seed              inbound.SeedBranch
+	Tag               inbound.TagRef
+	Stash             inbound.StashSession
+	Handoff           inbound.BranchHandoff
+	History           inbound.ContextHistory
 	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
 	// can promote the source branch context into the checked-out base timeline.
 	PRMerges outbound.PullRequestMergeResolver
@@ -127,7 +128,7 @@ func Run(c *Container, args []string) error {
 			}
 		}
 		if _, ok := remotecfg.Origin(cwd); !ok {
-			fmt.Println("hint: to connect to team server → cxt setup https://<host>/<namespace>/<workspace>/<repository>")
+			fmt.Println("hint: to connect to team server → cxt setup https://<host>/<owner>/<repository>")
 		}
 		return nil
 
@@ -368,10 +369,7 @@ func Run(c *Container, args []string) error {
 		if tok == "" {
 			tok = flagVal(rest, "-t")
 		}
-		if err := requireRemote(cwd); err != nil {
-			return err
-		}
-		base, host, err := remoteAPIBase(cwd)
+		base, host, err := loginTarget(cwd, flagVal(rest, "--server"))
 		if err != nil {
 			return err
 		}
@@ -857,7 +855,7 @@ func requireRemote(cwd string) error {
 	if os.Getenv("CXT_REMOTE") != "" {
 		return nil
 	}
-	return fmt.Errorf("no origin to push/pull — first connect your repository URL:\n  cxt remote add origin https://<host>/<namespace>/<workspace>/<repository>")
+	return fmt.Errorf("no origin to push/pull — first connect your repository URL:\n  cxt remote add origin https://<host>/<owner>/<repository>")
 }
 
 // runRemote is a git-like remote management command:
@@ -879,7 +877,7 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 	switch sub {
 	case "add":
 		if len(rest) < 3 {
-			return fmt.Errorf("usage: cxt remote add <name> <url>  (e.g., cxt remote add origin https://cxthub.com/<namespace>/<workspace>/<repository>)")
+			return fmt.Errorf("usage: cxt remote add <name> <url>  (e.g., cxt remote add origin https://cxthub.com/<owner>/<repository>)")
 		}
 		name, rawURL := rest[1], rest[2]
 		canonicalURL, err := remotecfg.CanonicalURL(rawURL)
@@ -888,6 +886,19 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 		}
 		if existing, dup := remotes[name]; dup {
 			return fmt.Errorf("remote %q is already registered as %s (change: remove then add)", name, existing)
+		}
+		if c.ResolveConnection != nil {
+			resolved, rerr := c.ResolveConnection(ctx, canonicalURL)
+			if rerr != nil {
+				return fmt.Errorf("repository identity could not be verified; remote was not saved (use cxt setup <url> or cxt login --server <server-url> first): %w", rerr)
+			}
+			stable, verr := remotecfg.CanonicalURL(resolved.RemoteURL)
+			requested, _ := url.Parse(canonicalURL)
+			resolvedURL, _ := url.Parse(stable)
+			if verr != nil || resolvedURL == nil || resolvedURL.Scheme != requested.Scheme || !strings.EqualFold(resolvedURL.Host, requested.Host) || remotecfg.RepoIDFor(stable) != resolved.RepoID || resolved.RepositoryID == "" {
+				return fmt.Errorf("repository connection returned an invalid identity or a different server; remote was not saved")
+			}
+			canonicalURL = stable
 		}
 		remotes[name] = canonicalURL
 		if err := remotecfg.Save(cwd, remotes); err != nil {
@@ -901,17 +912,17 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 			switch {
 			case cerr != nil && errors.As(cerr, &he) && he.Code == "git_origin_mismatch":
 				// definitive server rejection — rollback the saved remote and exit with failure.
-				// (unlike connection failure, "auto-registration on server start" does not apply: this folder is not a git connected to this workspace repo.)
+				// (unlike connection failure, "auto-registration on server start" does not apply: this folder is not a git connected to this repository repo.)
 				delete(remotes, name)
 				_ = remotecfg.Save(cwd, remotes)
 				return fmt.Errorf("connection rejected — %w", he)
 			case cerr != nil:
 				fmt.Printf("⚠ Unable to connect to server (%v)\n  settings saved — will auto-register on first push when server is up.\n", cerr)
-			case out.Repo.WorkspaceID != "":
-				fmt.Printf("✓ Connected — server registration complete, bound to workspace (%s). Visible on the web.\n", out.Repo.WorkspaceID)
+			case out.Repo.RepositoryID != "":
+				fmt.Printf("✓ Connected — server registration complete, bound to repository (%s). Visible on the web.\n", out.Repo.RepositoryID)
 			default:
 				fmt.Println("✓ Connected — server registration complete.")
-				fmt.Println("⚠ Note: URL path does not match any workspace (/<username>/<workspace-slug>/…), so it will not be displayed in the web workspace.")
+				fmt.Println("⚠ Note: URL path does not match any repository (/<username>/<repository-slug>/…), so it will not be displayed in the web repository.")
 			}
 		}
 		return nil
@@ -1014,7 +1025,7 @@ usage: cxt <command> [flags]
   init [--no-hooks] [--remote <url>]
                             initialize the local context store and install Git hooks
   repo create <url>         initialize and connect a server repository
-  login [token|-t token]    authenticate with the configured origin
+  login [token] [--server url] authenticate before connecting, or with origin
   logout                    remove the saved origin credential
 
   Agent commands:

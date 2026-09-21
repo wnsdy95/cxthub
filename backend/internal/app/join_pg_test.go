@@ -22,12 +22,12 @@ func TestPGJoinConfirmationUsesTransaction(t *testing.T) {
 	if err := st.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	ws := domain.Workspace{ID: domain.NewID("ws_"), OwnerID: owner.ID, OwnerUsername: owner.Username, Name: "Join", Slug: "join"}
-	if err := st.CreateWorkspace(ctx, ws); err != nil {
+	repositoryRecord := domain.Repository{ID: domain.NewID("ws_"), OwnerID: owner.ID, OwnerUsername: owner.Username, Name: "Join", Slug: "join"}
+	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
-	repo := domain.HashContent([]byte(ws.ID))
-	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: ws.ID}); err != nil {
+	repo := domain.HashContent([]byte(repositoryRecord.ID))
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: repositoryRecord.ID}); err != nil {
 		t.Fatal(err)
 	}
 	p := collaborationSnapshot(t, st, repo, "P")

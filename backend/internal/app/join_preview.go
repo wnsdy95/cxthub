@@ -96,42 +96,42 @@ func (s *Service) authorizeJoin(ctx context.Context, repoID domain.ContentHash, 
 	if actor == "" {
 		return domain.ErrUnauthorized
 	}
-	if s.ws == nil {
+	if s.repositories == nil {
 		return domain.ErrForbidden
 	}
 	repo, err := s.meta.GetRepo(ctx, repoID)
 	if err != nil {
 		return err
 	}
-	if repo.WorkspaceID == "" {
+	if repo.RepositoryID == "" {
 		return domain.ErrForbidden
 	}
 	if lock {
 		if _, tx := s.meta.(outbound.RepositoryTransactions); tx {
-			locker, ok := s.ws.(outbound.WorkspaceAccessLocker)
+			locker, ok := s.repositories.(outbound.RepositoryAccessLocker)
 			if !ok {
 				return domain.ErrForbidden
 			}
-			if err := locker.LockWorkspaceAccess(ctx, repo.WorkspaceID, actor); err != nil {
+			if err := locker.LockRepositoryAccess(ctx, repo.RepositoryID, actor); err != nil {
 				return err
 			}
 		}
 	}
-	ws, err := s.ws.GetWorkspace(ctx, repo.WorkspaceID)
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repo.RepositoryID)
 	if err != nil {
 		return err
 	}
-	if ws.Archived {
+	if repositoryRecord.Archived {
 		return domain.ErrForbidden
 	}
 	var members []domain.Membership
-	if ws.OwnerID != actor {
-		members, err = s.ws.ListMembers(ctx, ws.ID)
+	if repositoryRecord.OwnerID != actor {
+		members, err = s.repositories.ListMembers(ctx, repositoryRecord.ID)
 		if err != nil {
 			return err
 		}
 	}
-	role, ok := domain.WorkspaceRole(ws, members, actor)
+	role, ok := domain.RepositoryRole(repositoryRecord, members, actor)
 	if !ok || !role.AtLeast(domain.RoleMember) {
 		return domain.ErrForbidden
 	}

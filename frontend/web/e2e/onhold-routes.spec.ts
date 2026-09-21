@@ -7,19 +7,15 @@ for (const selected of ['legacy', 'named']) {
     const head = `sha256:${'1'.repeat(64)}`;
     const held = `sha256:${'2'.repeat(64)}`;
     const base = '/alice/cxthub';
-    const contextPath = selected === 'legacy' ? base : `${base}/onhold`;
+    const contextPath = selected === 'legacy' ? base : '/alice/onhold';
     const holdPath = `${contextPath}?tab=onhold`;
-    const unexpected = await installApiFixture(page, ({ method, pathname }) => {
+    const unexpected = await installApiFixture(page, ({ method, pathname, searchParams }) => {
       if (method !== 'GET') return undefined;
       if (pathname === '/api/v1/me') return { body: { id: 'member', username: 'alice', locale: 'en' } };
-      if (pathname === '/api/v1/workspaces') return { body: [{ id: 'ws', name: 'cxthub', slug: 'cxthub', owner_username: 'alice', visibility: 'private' }] };
-      if (pathname === '/api/v1/workspaces/ws/members') return { body: [{ workspace_id: 'ws', user_id: 'member', role: 'member' }] };
-      // The named repository is deliberately first: a legacy deep link must
-      // select its own DAG, not whichever repository the API happens to return.
-      if (pathname === '/api/v1/repos') return { body: [
-        { id: 'named', default_branch: 'main', remote_url: `https://cxthub.com${base}/onhold` },
-        { id: 'legacy', default_branch: 'main', remote_url: `https://cxthub.com${base}` },
-      ] };
+      if (pathname === '/api/v1/repositories') return { body: ['legacy','named'].map(id => ({id, name: id === 'legacy' ? 'cxthub' : 'onhold', slug: id === 'legacy' ? 'cxthub' : 'onhold', owner_username:'alice',visibility:'private',effective_role:'member'})) };
+      if (decodeURIComponent(pathname) === '/api/v1/public/repositories/alice/cxthub/onhold') return {body:{id:'named',name:'onhold',slug:'onhold',owner_username:'alice',visibility:'private',effective_role:'member'}};
+      if (/^\/api\/v1\/repositories\/(legacy|named)\/members$/.test(pathname)) return { body: [{ repository_id: 'repositoryMetadata', user_id: 'member', role: 'member' }] };
+      if (pathname === '/api/v1/repos') return {body:[{id:searchParams.get('repository'),default_branch:'main',remote_url:`https://cxthub.com${searchParams.get('repository') === 'legacy' ? base : `${base}/onhold`}`}]};
       const match = pathname.match(/^\/api\/v1\/repos\/(legacy|named)\/(.+)$/);
       if (!match) return undefined;
       const [, repo, resource] = match;
@@ -40,7 +36,8 @@ for (const selected of ['legacy', 'named']) {
       return undefined;
     });
 
-    await page.goto(contextPath);
+    await page.goto(selected === 'named' ? `${base}/onhold` : contextPath);
+    await expect(page).toHaveURL(new URL(contextPath, 'http://127.0.0.1:4174').href);
     await expect(page.locator('.commit-row').first()).toContainText(`${selected} shared snapshot`);
     await page.getByRole('button', { name: 'On Hold', exact: true }).click();
     await expect(page).toHaveURL(new URL(holdPath, 'http://127.0.0.1:4174').href);
@@ -78,7 +75,7 @@ for (const selected of ['legacy', 'named']) {
 }
 
 for (const signedIn of [true, false]) {
-  test(`retired separator URLs do not load workspace data (${signedIn ? 'signed in' : 'anonymous'})`, async ({ page }) => {
+  test(`retired separator URLs do not load repository data (${signedIn ? 'signed in' : 'anonymous'})`, async ({ page }) => {
     const errors = capturePageErrors(page);
     const unexpected = await installApiFixture(page, ({ method, pathname }) => {
       if (method === 'GET' && pathname === '/api/v1/me') {

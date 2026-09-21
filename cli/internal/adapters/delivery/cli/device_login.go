@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
@@ -18,6 +19,22 @@ import (
 // device flow login — `cxt login` (no args) default path (RFC 8628 pattern, gh compatibility).
 // Token does not pass through screen/clipboard: server delivers directly to CLI.
 // Fallback is always available: `cxt login <token>` (manual), CXT_TOKEN (CI).
+
+// loginTarget allows authentication before a repository connection exists.
+// Explicit targets are server origins, never credential-bearing URLs or paths.
+func loginTarget(cwd, raw string) (base, host string, err error) {
+	if raw == "" {
+		if err = requireRemote(cwd); err != nil {
+			return "", "", err
+		}
+		return remoteAPIBase(cwd)
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", "", fmt.Errorf("--server requires a server origin, for example https://cxthub.com")
+	}
+	return u.Scheme + "://" + u.Host + "/api/v1", u.Host, nil
+}
 
 // loginWithToken validates the token (GET /me) and stores it by host — manual/auto shared.
 func loginWithToken(ctx context.Context, base, host, tok string) error {

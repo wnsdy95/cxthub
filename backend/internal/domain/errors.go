@@ -23,7 +23,7 @@ var ErrBranchArchived = errors.New("branch is archived")
 // ErrUnauthorized indicates an invalid or missing token (401).
 var ErrUnauthorized = errors.New("unauthorized")
 
-// ErrForbidden indicates authentication is valid but permission is denied (403). Example: workspace non-member.
+// ErrForbidden indicates authentication is valid but permission is denied (403). Example: repository non-member.
 var ErrForbidden = errors.New("forbidden")
 
 // ErrConflict indicates a duplicate creation/state conflict (409). Example: already used invite, occupied username.

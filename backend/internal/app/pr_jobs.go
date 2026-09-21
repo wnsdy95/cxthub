@@ -125,11 +125,11 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 		} else if normalizeGitURL(repo.GitRemoteURL) != j.GitOrigin {
 			runErr = fmt.Errorf("%w: repository origin changed", domain.ErrConflict)
 		} else {
-			if repo.WorkspaceID != "" && s.ws != nil {
-				workspace, err := s.ws.GetWorkspace(work, repo.WorkspaceID)
+			if repo.RepositoryID != "" && s.repositories != nil {
+				repository, err := s.repositories.GetRepository(work, repo.RepositoryID)
 				if err != nil {
 					runErr = err
-				} else if workspace.Archived {
+				} else if repository.Archived {
 					runErr = domain.ErrForbidden
 				}
 			}

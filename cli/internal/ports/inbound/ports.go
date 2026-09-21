@@ -75,7 +75,7 @@ type ListSessions interface {
 // Called by CLI cxt push/pull and automatic synchronization hooks.
 // ConnectOutput is the result of SyncRepo.Connect.
 type ConnectOutput struct {
-	// Repo is a server-confirmed record. Binds to workspace if WorkspaceID != "" (web display).
+	// Repo is a server-confirmed record. Binds to repository if RepositoryID != "" (web display).
 	Repo domain.Repo
 }
 

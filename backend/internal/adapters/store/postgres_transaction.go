@@ -26,10 +26,11 @@ type pgDatabase interface {
 type repositoryTxKey struct{}
 type repositoryTx struct {
 	pgx.Tx
-	owner     *PostgresStore
-	repo      domain.ContentHash
-	workspace string
-	readOnly  bool
+	owner      *PostgresStore
+	repo       domain.ContentHash
+	repository string
+	readOnly   bool
+	identity   bool
 }
 
 // Inner storage operations use savepoints; releasing one never commits the
@@ -91,6 +92,9 @@ func (s *PostgresStore) WithinRepository(ctx context.Context, repo domain.Conten
 		return err
 	}
 	defer rollbackPG(tx)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('cxt-identity-access',0))`); err != nil {
+		return err
+	}
 	if err = lockRepoGraph(ctx, tx, repo); err != nil {
 		return err
 	}

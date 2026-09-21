@@ -39,8 +39,8 @@ type Repo struct {
 	LocalPath string `json:"local_path"`
 	// DefaultBranch is the default branch name (e.g., "main").
 	DefaultBranch string `json:"default_branch"`
-	// WorkspaceID is the workspace bound by the server (for registration response — not stored locally).
-	WorkspaceID string `json:"workspace_id,omitempty"`
+	// RepositoryID is the repository bound by the server (for registration response — not stored locally).
+	RepositoryID string `json:"repository_id,omitempty"`
 	// GitRemoteURL is the git origin (e.g., github.com URL) of the code repo — for web "connected" tab link.
 	// Always read from .git, separate from RemoteURL(cxt origin, integrity).
 	GitRemoteURL string `json:"git_remote_url,omitempty"`

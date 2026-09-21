@@ -63,7 +63,7 @@ func (s *FSStore) notificationsRaw() ([]outbound.NotificationDelivery, error) {
 	})
 	return out, nil
 }
-func (s *FSStore) ListNotifications(ctx context.Context, workspace string) ([]domain.NotificationJob, error) {
+func (s *FSStore) ListNotifications(ctx context.Context, repository string) ([]domain.NotificationJob, error) {
 	l := s.oauthLock()
 	l.Lock()
 	defer l.Unlock()
@@ -73,7 +73,7 @@ func (s *FSStore) ListNotifications(ctx context.Context, workspace string) ([]do
 	}
 	out := []domain.NotificationJob{}
 	for i := len(ds) - 1; i >= 0; i-- {
-		if ds[i].Job.WorkspaceID == workspace {
+		if ds[i].Job.RepositoryID == repository {
 			out = append(out, ds[i].Job)
 			if len(out) == 100 {
 				break
@@ -118,7 +118,7 @@ func (s *FSStore) FinishNotification(ctx context.Context, j domain.NotificationJ
 	d.Job = j
 	return s.writeNotification(d)
 }
-func (s *FSStore) RetryNotification(ctx context.Context, workspace, id, destination string, now time.Time) error {
+func (s *FSStore) RetryNotification(ctx context.Context, repository, id, destination string, now time.Time) error {
 	l := s.oauthLock()
 	l.Lock()
 	defer l.Unlock()
@@ -127,7 +127,7 @@ func (s *FSStore) RetryNotification(ctx context.Context, workspace, id, destinat
 		return err
 	}
 	j := &d.Job
-	if j.WorkspaceID != workspace {
+	if j.RepositoryID != repository {
 		return domain.ErrNotFound
 	}
 	if j.State == "delivered" || j.State == "running" && j.LeaseUntil.After(now) {

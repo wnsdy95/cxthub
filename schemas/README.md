@@ -9,9 +9,12 @@ cxt keeps `cli/` and `backend/` in separate Go modules with independent domain t
 | `cir.schema.json` | CIR v1/v2, the provider-independent canonical intermediate representation decoded from raw Claude and Codex JSONL. v2 adds explicit compaction replay state, multi-agent messages, and bounded provider replay metadata. Changes require compatibility review. |
 | `manifest.schema.json` | Manifest v1: repository refs, `snapshot_index`, optional causal `memory_attachments`, and optional mutable `snapshot_states` hashes used for incremental push/pull have-want negotiation. Changes require compatibility review. |
 | `openapi.yaml` | OpenAPI 3.1 REST contract shared by CLI, backend, and frontend. Route and field drift tests keep it aligned with the server. |
-| `db/migrations/*.sql` | Ordered PostgreSQL migrations through 0036, covering repository objects, identity/workspaces, pending state, reflog, compaction, graft overlays, transcript/memory chunk storage, and scoped session refs. |
+| `db/migrations/*.sql` | Ordered PostgreSQL migrations through 0055, covering repository objects, identity/repositories, pending state, reflog, compaction, graft overlays, transcript/memory chunk storage, and scoped session refs. |
 
-## DB Schema (ERDiagram)
+Ownership migrations and recovery guarantees are documented in
+[Repository ownership](../docs/REPOSITORY_ORGANIZATIONS.md).
+
+## DB Schema (selected tables)
 
 ```mermaid
 erDiagram
@@ -19,7 +22,7 @@ erDiagram
         TEXT id PK
         TEXT remote_url
         TEXT default_branch
-        TEXT workspace_id FK
+        TEXT repository_id FK
         TEXT git_remote_url
         TEXT description
         TEXT website
@@ -89,7 +92,7 @@ erDiagram
         TEXT load_mode
         TIMESTAMPTZ created_at
     }
-    workspaces {
+    repositories {
         TEXT id PK
         TEXT name
         TEXT slug
@@ -120,8 +123,14 @@ erDiagram
     snapshots |o--o| memories : "has"
     refs }o--|| snapshots : "target"
     branches }o--|| repos : "belongs to"
-    workspaces ||--o{ repos : "contains"
-    users ||--o{ workspaces : "owns"
+    repositories ||--o| repos : "stable content identity"
+    users ||--o{ repositories : "personal ownership"
+    organizations ||--o{ repositories : "organization ownership"
+    organizations ||--o{ teams : "groups members"
+    teams ||--o{ team_repository_grants : "grants explicit access"
+    repositories ||--o{ team_repository_grants : "receives grants"
+    enterprises ||--o{ enterprise_organizations : "governs"
+    organizations ||--o| enterprise_organizations : "optional parent"
     repos ||--o{ pending_contexts : "has"
     repos ||--o{ unsync_contexts : "has"
 ```

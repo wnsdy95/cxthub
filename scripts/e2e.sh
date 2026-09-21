@@ -132,26 +132,26 @@ login owner@t.io Owner "$JA"; login owner@t.io Owner "$JA"
 expect "Single session maintained on browser re-login" "$(ls "$TMP/data/sessions" | wc -l | tr -d ' ')" 1
 expect "Current marked in web session list" "$(curl -sb "$JA" "$B/me/sessions" | jget "[0]['current']")" True
 
-echo "── C. Workspace name rules (ASCII identifier enforced)"
-wsmk() { ccurl -s -b "$JA" -o /dev/null -w '%{http_code}' -X POST "$B/workspaces" -H 'Content-Type: application/json' -d "{\"name\":\"$1\"}"; }
-expect "non-ASCII name 422" "$(wsmk café)" 422
-expect "number start 422" "$(wsmk 1abc)" 422
-expect "special character end 422" "$(wsmk abc-)" 422
-expect "valid name 200" "$(wsmk E2E_Main-1)" 200
-WS=$(curl -sb "$JA" "$B/workspaces" | jget "[0]['id']")
-SLUG=$(curl -sb "$JA" "$B/workspaces" | jget "[0]['slug']")
+echo "── C. Repository name rules (ASCII identifier enforced)"
+create_repository() { ccurl -s -b "$JA" -o /dev/null -w '%{http_code}' -X POST "$B/repositories" -H 'Content-Type: application/json' -d "{\"name\":\"$1\"}"; }
+expect "non-ASCII name 422" "$(create_repository café)" 422
+expect "number start 422" "$(create_repository 1abc)" 422
+expect "special character end 422" "$(create_repository abc-)" 422
+expect "valid name 200" "$(create_repository E2E_Main-1)" 200
+REPOSITORY_ID=$(curl -sb "$JA" "$B/repositories" | jget "[0]['id']")
+SLUG=$(curl -sb "$JA" "$B/repositories" | jget "[0]['slug']")
 OWN=$(curl -sb "$JA" "$B/me" | jget "['username']")
 expect "slug derived (lowercase and _ preserved)" "$SLUG" "e2e_main-1"
 
 echo "── D. Invitations, membership, and five-role matrix"
-inv() { ccurl -sb "$JA" -X POST "$B/workspaces/$WS/invites" -H 'Content-Type: application/json' -d "{\"role\":\"$1\"}" | jget "['token']"; }
+inv() { ccurl -sb "$JA" -X POST "$B/repositories/$REPOSITORY_ID/invites" -H 'Content-Type: application/json' -d "{\"role\":\"$1\"}" | jget "['token']"; }
 login vw@t.io Vw "$JV"; ccurl -sb "$JV" -X POST "$B/invites/$(inv viewer)/accept" >/dev/null
 login pl@t.io Pl "$JP"; ccurl -sb "$JP" -X POST "$B/invites/$(inv puller)/accept" >/dev/null
 login mb@t.io Mb "$JM"; ccurl -sb "$JM" -X POST "$B/invites/$(inv member)/accept" >/dev/null
 login mt@t.io Mt "$JT"; ccurl -sb "$JT" -X POST "$B/invites/$(inv maintainer)/accept" >/dev/null
-expect "5 members" "$(curl -sb "$JA" "$B/workspaces/$WS/members" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 5
-expect "invite list: member 403" "$(code -b "$JM" "$B/workspaces/$WS/invites")" 403
-expect "invite list: maintainer 200" "$(code -b "$JT" "$B/workspaces/$WS/invites")" 200
+expect "5 members" "$(curl -sb "$JA" "$B/repositories/$REPOSITORY_ID/members" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')" 5
+expect "invite list: member 403" "$(code -b "$JM" "$B/repositories/$REPOSITORY_ID/invites")" 403
+expect "invite list: maintainer 200" "$(code -b "$JT" "$B/repositories/$REPOSITORY_ID/invites")" 200
 
 REMOTE="$ORIGIN/$OWN/$SLUG"
 RID="$(repo_id "$REMOTE")"
@@ -182,28 +182,28 @@ expect "viewer 200/403/403/403" "$(mrow "$JV")" "200 403 403 403"
 expect "puller 200/204/403/403" "$(mrow "$JP")" "200 204 403 403"
 expect "member 200/204/200/403" "$(mrow "$JM")" "200 204 200 403"
 expect "maint. 200/204/200/200" "$(mrow "$JT")" "200 204 200 200"
-expect "policy owner narrowed → maintainer 403" "$(ccurl -sb "$JA" -o /dev/null -w '' -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"secrets_policy":"owner"}')$(ccode -b "$JT" -X PUT "$RB/secrets" -H 'Content-Type: application/json' -d "$ENVL")" 403
-ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"secrets_policy":"members"}' >/dev/null
+expect "policy owner narrowed → maintainer 403" "$(ccurl -sb "$JA" -o /dev/null -w '' -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"secrets_policy":"owner"}')$(ccode -b "$JT" -X PUT "$RB/secrets" -H 'Content-Type: application/json' -d "$ENVL")" 403
+ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"secrets_policy":"members"}' >/dev/null
 
 echo "── E. Public access, archival, and protected branches"
-ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"visibility":"public"}' >/dev/null
+ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"visibility":"public"}' >/dev/null
 expect "public → anonymous read 200" "$(code "$RB/snapshots?branch=main")" 200
-expect "public workspace resolution 200" "$(code "$B/public/workspaces/$OWN/$SLUG")" 200
+expect "public repository resolution 200" "$(code "$B/public/repositories/$OWN/$SLUG")" 200
 # Public default role (non-member): Basic viewer is denied puller action (secrets pull), allowed when promoted to puller.
 expect "public default viewer → anonymous secrets 401" "$(code "$RB/secrets")" 401
-ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"public_role":"puller"}' >/dev/null
+ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"public_role":"puller"}' >/dev/null
 expect "public puller → anonymous secrets pull allowed (200, envelope exists)" "$(code "$RB/secrets")" 200
 expect "public puller → anonymous read still 200" "$(code "$RB/snapshots?branch=main")" 200
 expect "public puller even anonymous push requires login 401" "$(code -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG")" 401
-expect "public_role invalid value 422" "$(ccode -b "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"public_role":"owner"}')" 422
-ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"public_role":"viewer"}' >/dev/null
+expect "public_role invalid value 422" "$(ccode -b "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"public_role":"owner"}')" 422
+ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"public_role":"viewer"}' >/dev/null
 expect "restoring public viewer → anonymous secrets 401" "$(code "$RB/secrets")" 401
-ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"visibility":"private"}' >/dev/null
-expect "private → anonymous public resolution 404" "$(code "$B/public/workspaces/$OWN/$SLUG")" 404
-ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"archived":true}' >/dev/null
+ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"visibility":"private"}' >/dev/null
+expect "private → anonymous public resolution 404" "$(code "$B/public/repositories/$OWN/$SLUG")" 404
+ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"archived":true}' >/dev/null
 expect "archived write 403" "$(ccode -b "$JA" -X POST "$RB/push/negotiate" -H 'Content-Type: application/json' -d "$NEG")" 403
 expect "archived read 200" "$(ccode -b "$JA" "$RB/snapshots?branch=main")" 200
-ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d '{"archived":false}' >/dev/null
+ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d '{"archived":false}' >/dev/null
 FIXTURE="$(fixture_objects "$RID")"
 H1="$(printf '%s\n' "$FIXTURE" | sed -n '1p')"
 OBJECTS="$(printf '%s\n' "$FIXTURE" | sed -n '2p')"
@@ -226,15 +226,15 @@ expect ".cxtsecrets exclude less than 4 characters" "$(grep -c '^ab$' .cxtsecret
 expect ".gitignore auto-registration" "$(grep -c -e '.cxt/' -e '.cxtsecrets' .gitignore)" 2
 # Use a fresh repository for a decryptable CLI round trip; the role matrix above
 # intentionally stores a format-valid opaque fixture which is not decryptable.
-CLISLUG=$(ccurl -sb "$JA" -X POST "$B/workspaces" -H 'Content-Type: application/json' -d '{"name":"SecretsCLI"}' | jget "['slug']")
-cxt remote add origin "http://127.0.0.1:$PORT/$OWN/$CLISLUG" >/dev/null 2>&1
-CXT_NO_BROWSER=1 cxt login >"$TMP/login.out" 2>&1 &
+CLISLUG=$(ccurl -sb "$JA" -X POST "$B/repositories" -H 'Content-Type: application/json' -d '{"name":"SecretsCLI"}' | jget "['slug']")
+CXT_NO_BROWSER=1 cxt login --server "$ORIGIN" >"$TMP/login.out" 2>&1 &
 LPID=$!
 sleep 1.5
 DCODE=$(grep -o '[B-Z2-9]\{3\}-[B-Z2-9]\{3\}' "$TMP/login.out" | head -1)
 expect "device flow code output" "$([ -n "$DCODE" ] && echo yes)" yes
 ccurl -sb "$JA" -X POST "$B/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE\"}" >/dev/null
 wait "$LPID"
+cxt remote add origin "http://127.0.0.1:$PORT/$OWN/$CLISLUG" >/dev/null 2>&1
 expect "device login complete(auth.json)" "$(python3 -c "import json;print('127.0.0.1:$PORT' in json.load(open('$HOME/.cxt/auth.json')))")" True
 # Device name label: device flow passes CLI hostname as a label → shows in token list.
 expect "device token with hostname label" "$(curl -sb "$JA" "$B/me/cli-tokens" | python3 -c "import json,socket,sys;ts=json.load(sys.stdin) or [];print(any(t.get('label')==socket.gethostname() for t in ts))")" True
@@ -267,11 +267,11 @@ PY
 STUB_PID=$!
 for i in $(seq 1 20); do code "http://127.0.0.1:$STUB_PORT/" >/dev/null 2>&1 && break; sleep 0.2; done
 hits() { cat "$HITFILE" 2>/dev/null | wc -l | tr -d ' '; }
-ccurl -sb "$JA" -X PATCH "$B/workspaces/$WS" -H 'Content-Type: application/json' -d "{\"webhook_url\":\"http://127.0.0.1:$STUB_PORT/h\"}" >/dev/null
+ccurl -sb "$JA" -X PATCH "$B/repositories/$REPOSITORY_ID" -H 'Content-Type: application/json' -d "{\"webhook_url\":\"http://127.0.0.1:$STUB_PORT/h\"}" >/dev/null
 ccurl -sb "$JA" -X PUT "$RB/refs/branch/wh-test" -H 'Content-Type: application/json' -d "{\"target\":\"$H1\"}" >/dev/null
 # Wait until the durable worker has actually attempted delivery before asserting absence.
 for i in $(seq 1 30); do
-  reason=$(curl -sb "$JA" "$B/workspaces/$WS/notifications" | python3 -c 'import json,sys;j=json.load(sys.stdin);print(j[0].get("reason", "") if j else "")')
+  reason=$(curl -sb "$JA" "$B/repositories/$REPOSITORY_ID/notifications" | python3 -c 'import json,sys;j=json.load(sys.stdin);print(j[0].get("reason", "") if j else "")')
   [ "$reason" = "transport_failed" ] && break
   sleep 0.2
 done
@@ -285,14 +285,14 @@ ccurl2() { command curl -H "Origin: $ORIGIN2" -H 'X-Cxt-CSRF: 1' "$@"; }
 ccode2() { code -H "Origin: $ORIGIN2" -H 'X-Cxt-CSRF: 1' "$@"; }
 for i in $(seq 1 20); do [ "$(code "$B2/repos")" = 200 ] && break; sleep 0.3; done
 J2="$TMP/w2.jar"; ccurl2 -s -c "$J2" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:wh@t.io:Wh" >/dev/null
-WS2=$(ccurl2 -sb "$J2" -X POST "$B2/workspaces" -H 'Content-Type: application/json' -d '{"name":"WhTest"}' | jget "['id']")
+REPOSITORY_ID2=$(ccurl2 -sb "$J2" -X POST "$B2/repositories" -H 'Content-Type: application/json' -d '{"name":"WhTest"}' | jget "['id']")
 OWN2=$(curl -sb "$J2" "$B2/me" | jget "['username']")
-SLUG2=$(curl -sb "$J2" "$B2/workspaces" | jget "[0]['slug']")
+SLUG2=$(curl -sb "$J2" "$B2/repositories" | jget "[0]['slug']")
 REMOTE2="$ORIGIN2/$OWN2/$SLUG2"
 RID2="$(repo_id "$REMOTE2")"
 ccurl2 -sb "$J2" -X POST "$B2/repos" -H 'Content-Type: application/json' -d "{\"id\":\"$RID2\",\"remote_url\":\"$REMOTE2\",\"default_branch\":\"main\"}" >/dev/null
 ccurl2 -sb "$J2" -X POST "$B2/repos/$RID2/push/objects" -H 'Content-Type: application/json' -d "$OBJECTS" >/dev/null
-ccurl2 -sb "$J2" -X PATCH "$B2/workspaces/$WS2" -H 'Content-Type: application/json' -d "{\"webhook_url\":\"http://127.0.0.1:$STUB_PORT/h\"}" >/dev/null
+ccurl2 -sb "$J2" -X PATCH "$B2/repositories/$REPOSITORY_ID2" -H 'Content-Type: application/json' -d "{\"webhook_url\":\"http://127.0.0.1:$STUB_PORT/h\"}" >/dev/null
 ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/refs/branch/main" -H 'Content-Type: application/json' -d "{\"target\":\"$H1\"}" >/dev/null
 # Transmission is asynchronous — uses polling instead of fixed sleep (stabilizes in load-heavy CI).
 for i in $(seq 1 25); do [ "$(hits)" -ge 1 ] && break; sleep 0.2; done
@@ -301,7 +301,7 @@ expect "webhook delivered when private targets are explicitly allowed" "$(hits)"
 ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/secrets?expected_revision=absent" -H 'Content-Type: application/json' -d "$ENVL" >/dev/null
 for i in $(seq 1 25); do [ "$(hits)" -ge 2 ] && break; sleep 0.2; done
 expect "Secret update webhook delivery" "$(hits)" 2
-INV2=$(ccurl2 -sb "$J2" -X POST "$B2/workspaces/$WS2/invites" -H 'Content-Type: application/json' -d '{"role":"member"}' | jget "['token']")
+INV2=$(ccurl2 -sb "$J2" -X POST "$B2/repositories/$REPOSITORY_ID2/invites" -H 'Content-Type: application/json' -d '{"role":"member"}' | jget "['token']")
 J3="$TMP/w3.jar"; ccurl2 -s -c "$J3" -X POST "$B2/auth/session" -H "Authorization: Bearer dev:joiner@t.io:Joiner" >/dev/null
 ccurl2 -sb "$J3" -X POST "$B2/invites/$INV2/accept" >/dev/null
 for i in $(seq 1 25); do [ "$(hits)" -ge 3 ] && break; sleep 0.2; done
@@ -316,7 +316,7 @@ touch "$HITFILE.fail"
 REV2=$(ccurl2 -sb "$J2" "$B2/repos/$RID2/secrets" | jget "['revision']")
 ccurl2 -sb "$J2" -X PUT "$B2/repos/$RID2/secrets?expected_revision=$REV2" -H 'Content-Type: application/json' -d "$ENVL" >/dev/null
 for i in $(seq 1 30); do
-  state=$(ccurl2 -sb "$J2" "$B2/workspaces/$WS2/notifications" | jget "[0]['state']")
+  state=$(ccurl2 -sb "$J2" "$B2/repositories/$REPOSITORY_ID2/notifications" | jget "[0]['state']")
   [ "$state" = "retrying" ] && break
   sleep 0.2
 done
@@ -328,7 +328,7 @@ SRV2_PID=$!
 for i in $(seq 1 20); do [ "$(code "$B2/repos")" = 200 ] && break; sleep 0.3; done
 # Preserve the real 30-second backoff; no test-only scheduler override.
 for i in $(seq 1 150); do
-  state=$(ccurl2 -sb "$J2" "$B2/workspaces/$WS2/notifications" | jget "[0]['state']")
+  state=$(ccurl2 -sb "$J2" "$B2/repositories/$REPOSITORY_ID2/notifications" | jget "[0]['state']")
   [ "$state" = "delivered" ] && break
   sleep 0.3
 done
@@ -339,7 +339,7 @@ expect "retry preserves stable event ID" "$(tail -2 "$HITFILE" | uniq | wc -l | 
 echo "── H. Security surface"
 expect "CORS: arbitrary origin is not reflected" "$(curl -s -H 'Origin: https://evil.com' -o /dev/null -w '%{header_json}' "$B/repos" | python3 -c "import json,sys;print(json.load(sys.stdin).get('access-control-allow-origin',['none'])[0])")" none
 expect "CORS: localhost origin is reflected" "$(curl -s -H 'Origin: http://localhost:5173' -o /dev/null -w '%{header_json}' "$B/repos" | python3 -c "import json,sys;print(json.load(sys.stdin).get('access-control-allow-origin',['none'])[0])")" "http://localhost:5173"
-expect "Content-Type forced 415" "$(ccode -b "$JA" -X POST "$B/workspaces" -H 'Content-Type: text/plain' -d '{"name":"Csrf"}')" 415
+expect "Content-Type forced 415" "$(ccode -b "$JA" -X POST "$B/repositories" -H 'Content-Type: text/plain' -d '{"name":"Csrf"}')" 415
 expect "Reserved username 409" "$(ccode -b "$JA" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"username":"api"}')" 409
 expect "device: wrong poll_token 404" "$(S=$(curl -s -X POST "$B/auth/device/start" -H 'Content-Type: application/json' -d '{}'); C=$(echo "$S"|jget "['code']"); code -X POST "$B/auth/device/poll" -H 'Content-Type: application/json' -d "{\"code\":\"$C\",\"poll_token\":\"dpoll_x\"}")" 404
 R429=$(for i in $(seq 1 25); do code -X POST "$B/auth/session" -H "Authorization: Bearer dev:rl@t.io:R"; echo; done | grep -c 429)

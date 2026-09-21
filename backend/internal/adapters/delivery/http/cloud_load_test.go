@@ -77,11 +77,11 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ws, err := ids[0].CreateWorkspace(ctx, user, "LoadTest")
+	repositoryRecord, err := ids[0].CreateRepository(ctx, user, "LoadTest")
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := domain.Repo{ID: domain.HashContent([]byte(ws.ID)), WorkspaceID: ws.ID, RemoteURL: "https://load.example.test/" + user.Username + "/load/app", DefaultBranch: "main"}
+	repo := domain.Repo{ID: domain.HashContent([]byte(repositoryRecord.ID)), RepositoryID: repositoryRecord.ID, RemoteURL: "https://load.example.test/" + user.Username + "/load/app", DefaultBranch: "main"}
 	if _, err := stores[0].PutRepo(ctx, repo); err != nil {
 		t.Fatal(err)
 	}

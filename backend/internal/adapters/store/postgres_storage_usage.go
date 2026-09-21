@@ -117,7 +117,7 @@ func (s *PostgresStore) ConfigureStoragePolicy(ctx context.Context, ns, operatio
 	if err = tx.QueryRow(ctx, `SELECT kind FROM namespaces WHERE id=$1`, ns).Scan(&kind); err != nil {
 		return err
 	}
-	if (p.Plan == "enterprise") != (kind == "enterprise") {
+	if (p.Plan == "organization") != (kind == "organization") {
 		return domain.ErrValidation
 	}
 	_, err = tx.Exec(ctx, `UPDATE storage_accounts SET plan=$2,included_bytes=$3,payg=$4,max_bytes=$5,grace_bytes=$6,grace_until=$7,policy_revision=policy_revision+1,changed_at=clock_timestamp() WHERE namespace_id=$1`, ns, p.Plan, p.IncludedBytes, p.PayAsYouGo, p.MaxBytes, p.GraceBytes, p.GraceUntil)

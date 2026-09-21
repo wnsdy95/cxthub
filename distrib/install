@@ -83,4 +83,4 @@ case ":$PATH:" in
     fi
     ;;
 esac
-echo "Next step: from a code repository, run cxt setup https://cxthub.com/<username>/<workspace>"
+echo "Next step: from a code repository, run cxt setup https://cxthub.com/<owner>/<repository>"

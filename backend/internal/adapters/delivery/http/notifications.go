@@ -19,7 +19,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, _ := userFrom(r.Context())
-	out, err := b.ListNotifications(r.Context(), u.ID, r.PathValue("wsID"))
+	out, err := b.ListNotifications(r.Context(), u.ID, r.PathValue("repositoryID"))
 	s.respond(w, out, err)
 }
 func (s *Server) retryNotification(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +33,6 @@ func (s *Server) retryNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, _ := userFrom(r.Context())
-	err := b.RetryNotification(r.Context(), u.ID, r.PathValue("wsID"), r.PathValue("notificationID"))
+	err := b.RetryNotification(r.Context(), u.ID, r.PathValue("repositoryID"), r.PathValue("notificationID"))
 	s.respond(w, map[string]string{"status": "queued"}, err)
 }

@@ -29,13 +29,13 @@ security:
   - BearerToken: []
 
 # Permission model (5-step role ladder — serial AND gates):
-#   Authentication → workspace membership → role (viewer→puller→member→maintainer→owner) → action-specific policies.
+#   Authentication → repository membership → role (viewer→puller→member→maintainer→owner) → action-specific policies.
 #   viewer     read-only (web context·graph)          — GET repos/snapshots/docs/memories/diff
 #   puller     +local synchronization of team assets  — GET settings/secrets/settings-objects, pull/objects
 #   member     +Context write (default)               — push/*, PUT refs/memories/settings-objects, fork
 #   maintainer +Team asset write·invite creation          — PUT settings/secrets, PATCH about, POST invites
-#   owner      +Operations                              — PATCH workspace, member management, transfer(creator)
-# viewer level GET is allowed for anonymous if public workspace. Policy(secrets/settings_policy) is
+#   owner      +Operations                              — PATCH repository, member management, transfer(creator)
+# viewer level GET is allowed for anonymous if public repository. Policy(secrets/settings_policy) is
 # maintainer gate can narrow down to 'owner only'.
 components:
   securitySchemes:
@@ -383,6 +383,13 @@ components:
         kind: { type: string }
         pr_number: { type: integer }
         created_at: { type: string, format: date-time }
+    MemoryCodeScope:
+      type: object
+      required: [commit, paths]
+      properties:
+        commit: { type: string, description: Full source Git commit SHA. }
+        parent: { type: string, description: Optional full source parent SHA. }
+        paths: { type: array, minItems: 1, maxItems: 20, items: { type: string } }
     EffectiveMemorySelection:
       type: object
       required: [snapshot_id, code_commit]
@@ -825,9 +832,9 @@ components:
         default_branch:
           type: string
           default: main
-        workspace_id:
+        repository_id:
           type: string
-          description: "Owning workspace (visibility boundary). Server binds the /<namespace>/<workspace> prefix of canonical /<namespace>/<workspace>/<repository> remote URLs. Existing two-segment repository identities remain supported. '' = legacy/unowned."
+          description: "Owning repository (visibility boundary). Server binds the /<namespace>/<repository> prefix of canonical /<namespace>/<repository>/<repository> remote URLs. Existing two-segment repository identities remain supported. '' = legacy/unowned."
         git_remote_url:
           type: string
           description: "Code repo's git origin (GitHub etc.) — web 'connected' link, onboarding origin validation criterion."
@@ -1076,19 +1083,20 @@ components:
           enum: ["", ko, en]
         created_at: { type: string, format: date-time }
 
-    Workspace:
+    Repository:
       type: object
       description: |
         Multi-tenancy/visibility boundary. visibility default private.
         When gh_visibility_sync is enabled, manual visibility settings are locked (409),
         It becomes public only when all connected GitHub repos are public.
       properties:
+        effective_role: { type: string, enum: ["", viewer, puller, member, maintainer, owner], readOnly: true, description: "Caller permission resolved from direct and current team grants." }
         id: { type: string }
         name: { type: string }
         owner_id: { type: string, description: "Creator — role cannot be fixed or removed, can only be changed via transfer" }
         slug: { type: string, description: "Unique URL segment within the owner" }
         owner_username: { type: string }
-        owner_namespace_id: { type: string, description: "Personal or Enterprise namespace that owns the URL. Enterprise role does not imply Workspace access." }
+        owner_namespace_id: { type: string, description: "Personal or Organization namespace that owns the URL. Organization role does not imply Repository access." }
         visibility: { type: string, enum: [private, public] }
         secrets_policy: { type: string, enum: ["", members, owner], description: "'' = members (maintainer and above)" }
         settings_policy: { type: string, enum: ["", members, owner] }
@@ -1102,55 +1110,56 @@ components:
     Membership:
       type: object
       properties:
-        workspace_id: { type: string }
+        repository_id: { type: string }
         user_id: { type: string }
         role: { $ref: "#/components/schemas/MemberRole" }
         created_at: { type: string, format: date-time }
         user: { $ref: "#/components/schemas/User" }
 
-    Enterprise:
+    Organization:
       type: object
-      description: "Enterprise namespace and administration plane. Membership never implies Workspace context access."
+      description: "Organization namespace and administration plane. Membership never implies Repository context access."
       required: [id, namespace_id, name, slug, created_by, created_at]
       properties:
+        effective_role: { type: string, enum: [member, admin, owner], description: "Caller role projected on organization lists." }
         id: { type: string }
         namespace_id: { type: string }
         name: { type: string }
         slug: { type: string }
-        logo: { type: string, description: "Enterprise logo data URL." }
+        logo: { type: string, description: "Organization logo data URL." }
         created_by: { type: string }
         created_at: { type: string, format: date-time }
 
-    EnterpriseMembership:
+    OrganizationMembership:
       type: object
-      required: [enterprise_id, user_id, role, created_at]
+      required: [organization_id, user_id, role, created_at]
       properties:
-        enterprise_id: { type: string }
+        organization_id: { type: string }
         user_id: { type: string }
         role: { type: string, enum: [member, admin, owner] }
         user: { $ref: "#/components/schemas/User" }
         created_at: { type: string, format: date-time }
 
-    EnterprisePolicy:
+    OrganizationPolicy:
       type: object
       description: "Policies currently enforced by the service; future SSO/SCIM controls are not decorative fields here."
-      required: [enterprise_id, workspace_creation, default_workspace_visibility, allow_public_workspaces, break_glass_enabled, break_glass_max_minutes]
+      required: [organization_id, repository_creation, default_repository_visibility, allow_public_repositories, break_glass_enabled, break_glass_max_minutes]
       properties:
-        enterprise_id: { type: string }
-        workspace_creation: { type: string, enum: [admins, members] }
-        default_workspace_visibility: { type: string, enum: [private, public] }
-        allow_public_workspaces: { type: boolean }
+        organization_id: { type: string }
+        repository_creation: { type: string, enum: [admins, members] }
+        default_repository_visibility: { type: string, enum: [private, public] }
+        allow_public_repositories: { type: boolean }
         break_glass_enabled: { type: boolean }
         break_glass_max_minutes: { type: integer, minimum: 5, maximum: 240 }
         updated_by: { type: string }
         updated_at: { type: string, format: date-time }
 
-    EnterpriseAuditEvent:
+    OrganizationAuditEvent:
       type: object
-      required: [id, enterprise_id, actor_id, action, created_at]
+      required: [id, organization_id, actor_id, action, created_at]
       properties:
         id: { type: string }
-        enterprise_id: { type: string }
+        organization_id: { type: string }
         actor_id: { type: string }
         action: { type: string }
         target_type: { type: string }
@@ -1160,12 +1169,12 @@ components:
 
     BreakGlassGrant:
       type: object
-      description: "Owner-only, reason-bound, expiring read access. Never grants a Workspace role or write capability."
-      required: [id, enterprise_id, workspace_id, user_id, reason, created_at, expires_at]
+      description: "Owner-only, reason-bound, expiring read access. Never grants a Repository role or write capability."
+      required: [id, organization_id, repository_id, user_id, reason, created_at, expires_at]
       properties:
         id: { type: string }
-        enterprise_id: { type: string }
-        workspace_id: { type: string }
+        organization_id: { type: string }
+        repository_id: { type: string }
         user_id: { type: string }
         reason: { type: string }
         created_at: { type: string, format: date-time }
@@ -1176,7 +1185,7 @@ components:
       description: "Shared invitation token — reusable until revoked. Role can be specified upon joining."
       properties:
         token: { type: string }
-        workspace_id: { type: string }
+        repository_id: { type: string }
         email: { type: string, description: "Anyone can accept" }
         role: { $ref: "#/components/schemas/MemberRole" }
         status: { type: string, enum: [pending, accepted, revoked] }
@@ -1234,11 +1243,11 @@ components:
 
     NotificationJob:
       type: object
-      required: [id, workspace_id, kind, state, text, attempts, version, created_at, updated_at, next_attempt, lease_until]
+      required: [id, repository_id, kind, state, text, attempts, version, created_at, updated_at, next_attempt, lease_until]
       properties:
         state: { type: string, enum: [pending, running, retrying, delivered, attention] }
         id: { type: string }
-        workspace_id: { type: string }
+        repository_id: { type: string }
         kind: { type: string }
         text: { type: string }
         attempts: { type: integer }
@@ -1279,6 +1288,81 @@ components:
   # -------------------------------------------------------------------------
   # Reusable Parameters
   # -------------------------------------------------------------------------
+    RepositoryConnection:
+      type: object
+      properties:
+        repository_id: {"type": "string"}
+        repo_id: {"$ref": "#/components/schemas/ContentHash"}
+        remote_url: {"type": "string", "format": "uri"}
+        canonical_path: {"type": "string"}
+
+    Team:
+      type: object
+      properties:
+        can_manage: { type: boolean, readOnly: true }
+        can_delete: { type: boolean, readOnly: true }
+        id: {"type": "string"}
+        organization_id: {"type": "string"}
+        name: {"type": "string"}
+        slug: {"type": "string"}
+        description: {"type": "string"}
+        created_at: {"type": "string", "format": "date-time"}
+
+    TeamMembership:
+      type: object
+      properties:
+        team_id: {"type": "string"}
+        organization_id: {"type": "string"}
+        user_id: {"type": "string"}
+        role: {"type": "string", "enum": ["member", "maintainer"]}
+        created_at: {"type": "string", "format": "date-time"}
+
+    TeamRepositoryGrant:
+      type: object
+      properties:
+        team_id: {"type": "string"}
+        organization_id: {"type": "string"}
+        repository_id: {"type": "string"}
+        role: {"$ref": "#/components/schemas/MemberRole"}
+        created_at: {"type": "string", "format": "date-time"}
+
+    EnterprisePolicy:
+      type: object
+      properties:
+        repository_creation: {"type": "string", "enum": ["admins", "members"]}
+        allow_public_repositories: {"type": "boolean"}
+        allow_break_glass: {"type": "boolean"}
+
+    Enterprise:
+      type: object
+      properties:
+        id: {"type": "string"}
+        name: {"type": "string"}
+        slug: {"type": "string"}
+        logo: {"type": "string"}
+        policy: {"$ref": "#/components/schemas/EnterprisePolicy"}
+        created_by: {"type": "string"}
+        created_at: {"type": "string", "format": "date-time"}
+
+    EnterpriseMembership:
+      type: object
+      properties:
+        user: { $ref: "#/components/schemas/User", readOnly: true }
+        enterprise_id: {"type": "string"}
+        user_id: {"type": "string"}
+        role: {"type": "string", "enum": ["owner", "admin", "member"]}
+        created_at: {"type": "string", "format": "date-time"}
+
+    EnterpriseAuditEvent:
+      type: object
+      properties:
+        id: {"type": "string"}
+        enterprise_id: {"type": "string"}
+        actor_id: {"type": "string"}
+        action: {"type": "string"}
+        target_id: {"type": "string"}
+        created_at: {"type": "string", "format": "date-time"}
+
   parameters:
     repoID:
       name: repoID
@@ -1330,6 +1414,11 @@ components:
   # Reusable Responses
   # -------------------------------------------------------------------------
   responses:
+    BadRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
     Unauthorized:
       description: "No token or invalid (unauthenticated)."
       content:
@@ -2368,7 +2457,7 @@ paths:
 
   # Implementation note: Actual route is {name...} (allows branch names with slashes). Diverged automatic fork removal —
   # Non-fast-forward is 409 non_fast_forward (only pass with force), diverged is resolved by append (lossless reordering).
-  # Authentication/Workspace API is described in the section below. Remaining unmentioned: GET /repos?workspace=(membership filter).
+  # Authentication/Repository API is described in the section below. Remaining unmentioned: GET /repos?repository=(membership filter).
   /repos/{repoID}/refs/{kind}/{name}:
     parameters:
       - $ref: "#/components/parameters/repoID"
@@ -3570,7 +3659,7 @@ paths:
                   only_revision: { type: string }
                   all_revision: { type: string }
         "401": { description: Authentication required }
-        "403": { description: Member role required or archived workspace }
+        "403": { description: Member role required or archived repository }
         "404": { description: Repository or snapshot not found }
         "422": { description: Invalid snapshot or graph integrity failure }
 
@@ -3704,7 +3793,7 @@ paths:
         for stale content revisions, even with the same fingerprint, and 428 revision_required when the precondition is omitted.
         A successful PUT returns status and a fresh revision. Legacy ciphertext reads receive a stable revision without mutation.
         Authorization, editing baseline, rotation policy and ciphertext CAS are enforced by one application command.
-        PostgreSQL pins workspace policy and membership through ciphertext, revision and notification-outbox commit.
+        PostgreSQL pins repository policy and membership through ciphertext, revision and notification-outbox commit.
       tags: [assets]
       parameters:
         - name: expected_revision
@@ -3898,7 +3987,7 @@ paths:
   /me/storage:
     get:
       summary: Read namespace retained storage and monthly excess usage
-      description: Personal owner or Enterprise Admin/Owner only. No private context is returned.
+      description: Personal owner or Organization Admin/Owner only. No private context is returned.
       parameters:
         - in: query
           name: month
@@ -3910,12 +3999,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StorageUsage' }
-        '403': { description: Not the account owner or an Enterprise administrator. }
+        '403': { description: Not the account owner or an Organization administrator. }
         '503': { description: Storage reporting unavailable; PostgreSQL required. }
   /me/storage/reconcile:
     post:
       summary: Reconcile namespace usage from retained payloads
-      description: Personal owner or Enterprise Owner only; requires application/json. Does not delete data. Rate limited to two requests per minute.
+      description: Personal owner or Organization Owner only; requires application/json. Does not delete data. Rate limited to two requests per minute.
       requestBody:
         content:
           application/json:
@@ -3933,7 +4022,7 @@ paths:
         schema: { type: string }
     get:
       summary: Read namespace retained storage and monthly excess usage
-      description: Personal owner or Enterprise Admin/Owner only. No private context is returned.
+      description: Personal owner or Organization Admin/Owner only. No private context is returned.
       parameters:
         - in: query
           name: month
@@ -3945,7 +4034,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/StorageUsage' }
-        '403': { description: Not the account owner or an Enterprise administrator. }
+        '403': { description: Not the account owner or an Organization administrator. }
         '503': { description: Storage reporting unavailable; PostgreSQL required. }
   /namespaces/{namespaceID}/storage/reconcile:
     parameters:
@@ -3955,7 +4044,7 @@ paths:
         schema: { type: string }
     post:
       summary: Reconcile namespace usage from retained payloads
-      description: Personal owner or Enterprise Owner only; requires application/json. Does not delete data. Rate limited to two requests per minute.
+      description: Personal owner or Organization Owner only; requires application/json. Does not delete data. Rate limited to two requests per minute.
       requestBody:
         content:
           application/json:
@@ -3980,7 +4069,7 @@ paths:
     patch:
       operationId: updateMe
       summary: Account Settings — nickname (free) / username (heavy, URL change) / load_mode
-      description: "username is validated as slug (422) · globally unique (409). On update, owner_username in associated workspace is synchronized. load_mode is the default CLI load mode."
+      description: "username is validated as slug (422) · globally unique (409). On update, owner_username in associated repository is synchronized. load_mode is the default CLI load mode."
       tags: [identity]
       requestBody:
         required: true
@@ -4064,7 +4153,7 @@ paths:
         "200": { description: revoked }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /public/workspaces/{username}/{slug}:
+  /public/repositories/{username}/{slug}:
     parameters:
       - name: username
         in: path
@@ -4075,20 +4164,20 @@ paths:
         required: true
         schema: { type: string }
     get:
-      operationId: publicWorkspace
-      summary: Public or explicitly authorized read-only Workspace projection
-      description: "Anonymous callers see only public Workspaces. Authenticated Workspace members and active Enterprise owner break-glass grants may resolve a private Workspace through the same allowlisted projection; unauthorized private paths remain 404."
+      operationId: publicRepository
+      summary: Public or explicitly authorized read-only Repository projection
+      description: "Anonymous callers see only public Repositories. Authenticated Repository members and active Organization owner break-glass grants may resolve a private Repository through the same allowlisted projection; unauthorized private paths remain 404."
       security:
         - {}
         - SessionCookie: []
         - BearerToken: []
-      tags: [workspaces]
+      tags: [repositories]
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Workspace" }
+              schema: { $ref: "#/components/schemas/Repository" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /public/users/{username}:
@@ -4099,8 +4188,8 @@ paths:
         schema: { type: string }
     get:
       operationId: publicUser
-      summary: User profile — user + visible workspaces
-      description: "Authentication selection (if present, determines if it is the user). Others/anonymous can only see public workspaces, user can see private. email is only for the user."
+      summary: User profile — user + visible repositories
+      description: "Authentication selection (if present, determines if it is the user). Others/anonymous can only see public repositories, user can see private. email is only for the user."
       security: []
       tags: [identity]
       responses:
@@ -4112,9 +4201,9 @@ paths:
                 type: object
                 properties:
                   user: { $ref: "#/components/schemas/User" }
-                  workspaces:
+                  repositories:
                     type: array
-                    items: { $ref: "#/components/schemas/Workspace" }
+                    items: { $ref: "#/components/schemas/Repository" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /public/users/{username}/contributions:
@@ -4125,8 +4214,8 @@ paths:
         schema: { type: string }
     get:
       operationId: userContributions
-      summary: Contribution heatmap — commits per day (visible workspaces)
-      description: "Authentication selection. Anonymous can only see public workspaces, user can see private. Excludes hook captures and stashes."
+      summary: Contribution heatmap — commits per day (visible repositories)
+      description: "Authentication selection. Anonymous can only see public repositories, user can see private. Excludes hook captures and stashes."
       security: []
       tags: [identity]
       responses:
@@ -4155,7 +4244,7 @@ paths:
         schema: { type: string }
     get:
       operationId: userActivity
-      summary: Activity feed — monthly commit bundles + workspace creation
+      summary: Activity feed — monthly commit bundles + repository creation
       description: "Authentication selection (same visibility as PublicUser). PRs, reviews, languages have no data."
       security: []
       tags: [identity]
@@ -4213,13 +4302,13 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   # =========================================================================
-  # Workspace · Member · Invite
+  # Repository · Member · Invite
   # =========================================================================
-  /workspaces:
+  /repositories:
     post:
-      operationId: createWorkspace
-      summary: Create workspace (creator = owner member registration)
-      tags: [workspaces]
+      operationId: createRepository
+      summary: Create repository (creator = owner member registration)
+      tags: [repositories]
       requestBody:
         required: true
         content:
@@ -4234,11 +4323,11 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Workspace" }
+              schema: { $ref: "#/components/schemas/Repository" }
     get:
-      operationId: listWorkspaces
-      summary: List workspaces I belong to
-      tags: [workspaces]
+      operationId: listRepositories
+      summary: List repositories I belong to
+      tags: [repositories]
       responses:
         "200":
           description: OK
@@ -4246,21 +4335,21 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Workspace" }
+                items: { $ref: "#/components/schemas/Repository" }
 
-  /workspaces/{wsID}:
+  /repositories/{wsID}:
     parameters: &wsIDParam
       - name: wsID
         in: path
         required: true
         schema: { type: string }
     patch:
-      operationId: updateWorkspace
-      summary: Update workspace settings section — owner only
+      operationId: updateRepository
+      summary: Update repository settings section — owner only
       description: |
         visibility(gh_visibility_sync on = 409 lock), secrets_policy/settings_policy,
         gh_visibility_sync(on = immediate 1-time sync run).
-      tags: [workspaces]
+      tags: [repositories]
       requestBody:
         required: true
         content:
@@ -4281,20 +4370,20 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Workspace" }
+              schema: { $ref: "#/components/schemas/Repository" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { description: "Manual visibility setting during sync" }
         "422": { description: "Invalid policy value (includes legacy 'list')" }
 
-  /workspaces/{wsID}/transfer:
+  /repositories/{wsID}/transfer:
     parameters: *wsIDParam
     post:
-      operationId: transferWorkspace
+      operationId: transferRepository
       summary: Ownership Transfer — Constructor's exclusive rights, only to existing members
       description: |
         The new owner is promoted to owner role, while the original constructor remains as owner role (GitHub style).
         URL changes with OwnerUsername change, appending -2, -3, ... on slug collision.
-      tags: [workspaces]
+      tags: [repositories]
       requestBody:
         required: true
         content:
@@ -4309,31 +4398,31 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Workspace" }
+              schema: { $ref: "#/components/schemas/Repository" }
         "403": { description: "Not the constructor" }
         "404": { description: "Target is not a member" }
 
-  /workspaces/{wsID}/sync-visibility:
+  /repositories/{wsID}/sync-visibility:
     parameters: *wsIDParam
     post:
       operationId: syncVisibility
       summary: Manual GitHub public state sync — owner exclusive
       description: "Public only when all linked GitHub repos are public (404/failure/non-GitHub = private, conservative)."
-      tags: [workspaces]
+      tags: [repositories]
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Workspace" }
+              schema: { $ref: "#/components/schemas/Repository" }
         "422": { description: "gh_visibility_sync disabled" }
 
-  /workspaces/{wsID}/members:
+  /repositories/{wsID}/members:
     parameters: *wsIDParam
     get:
       operationId: listMembers
       summary: Member List (members only)
-      tags: [workspaces]
+      tags: [repositories]
       responses:
         "200":
           description: OK
@@ -4343,7 +4432,7 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Membership" }
 
-  /workspaces/{wsID}/members/{userID}:
+  /repositories/{wsID}/members/{userID}:
     parameters:
       - name: wsID
         in: path
@@ -4356,7 +4445,7 @@ paths:
     patch:
       operationId: updateMemberRole
       summary: Role Change — owner exclusive, constructor role fixed (409)
-      tags: [workspaces]
+      tags: [repositories]
       requestBody:
         required: true
         content:
@@ -4373,17 +4462,17 @@ paths:
     delete:
       operationId: removeMember
       summary: Remove member — owner can do it, self cannot (creator cannot 409)
-      tags: [workspaces]
+      tags: [repositories]
       responses:
         "200": { description: removed }
         "409": { description: "Attempt to remove creator" }
 
-  /workspaces/{wsID}/invites:
+  /repositories/{wsID}/invites:
     parameters: *wsIDParam
     get:
       operationId: listInvites
       summary: Invite list — maintainer and above (management screen)
-      tags: [workspaces]
+      tags: [repositories]
       responses:
         "200":
           description: OK
@@ -4396,7 +4485,7 @@ paths:
     post:
       operationId: createInvite
       summary: Invite link creation — maintainer and above, role assignment possible
-      tags: [workspaces]
+      tags: [repositories]
       requestBody:
         required: true
         content:
@@ -4413,7 +4502,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Invite" }
 
-  /workspaces/{wsID}/invites/{token}/revoke:
+  /repositories/{wsID}/invites/{token}/revoke:
     parameters:
       - name: wsID
         in: path
@@ -4426,7 +4515,7 @@ paths:
     post:
       operationId: revokeInvite
       summary: Invalidate invite
-      tags: [workspaces]
+      tags: [repositories]
       responses:
         "200": { description: revoked }
 
@@ -4439,24 +4528,24 @@ paths:
     post:
       operationId: acceptInvite
       summary: Accept invite — join with role specified in invite (idempotent)
-      tags: [workspaces]
+      tags: [repositories]
       responses:
         "200":
-          description: "Return joined workspace."
+          description: "Return joined repository."
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Workspace" }
+              schema: { $ref: "#/components/schemas/Repository" }
         "403": { description: "Email specified invite mismatch" }
         "409": { description: "revoked/expired" }
 
   # =========================================================================
-  # Enterprise namespace · membership · enforced policy · audit
+  # Organization namespace · membership · enforced policy · audit
   # =========================================================================
-  /enterprises:
+  /organizations:
     get:
-      operationId: listEnterprises
-      summary: List Enterprises the current user belongs to
-      tags: [enterprises]
+      operationId: listOrganizations
+      summary: List Organizations the current user belongs to
+      tags: [organizations]
       responses:
         "200":
           description: OK
@@ -4464,11 +4553,11 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Enterprise" }
+                items: { $ref: "#/components/schemas/Organization" }
     post:
-      operationId: createEnterprise
-      summary: Create an Enterprise and globally unique namespace
-      tags: [enterprises]
+      operationId: createOrganization
+      summary: Create an Organization and globally unique namespace
+      tags: [organizations]
       requestBody:
         required: true
         content:
@@ -4484,31 +4573,31 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Enterprise" }
-        "409": { description: "Namespace already claimed by a user or Enterprise." }
+              schema: { $ref: "#/components/schemas/Organization" }
+        "409": { description: "Namespace already claimed by a user or Organization." }
 
-  /enterprises/{enterpriseID}:
-    parameters: &enterpriseIDParam
-      - name: enterpriseID
+  /organizations/{organizationID}:
+    parameters: &organizationIDParam
+      - name: organizationID
         in: path
         required: true
         schema: { type: string }
     get:
-      operationId: getEnterprise
-      summary: Get an Enterprise I belong to
-      tags: [enterprises]
+      operationId: getOrganization
+      summary: Get an Organization I belong to
+      tags: [organizations]
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Enterprise" }
+              schema: { $ref: "#/components/schemas/Organization" }
         "403": { $ref: "#/components/responses/Forbidden" }
     patch:
-      operationId: updateEnterpriseProfile
-      summary: Update Enterprise display name or logo — admin and above
+      operationId: updateOrganizationProfile
+      summary: Update Organization display name or logo — admin and above
       description: "The namespace slug is intentionally immutable here; renaming it requires a separate URL migration flow."
-      tags: [enterprises]
+      tags: [organizations]
       requestBody:
         required: true
         content:
@@ -4517,35 +4606,35 @@ paths:
               type: object
               properties:
                 name: { type: string }
-                logo: { type: string, description: "Enterprise logo data URL, or an empty string to clear it." }
+                logo: { type: string, description: "Organization logo data URL, or an empty string to clear it." }
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Enterprise" }
+              schema: { $ref: "#/components/schemas/Organization" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
-  /public/enterprises/{slug}:
+  /public/organizations/{slug}:
     parameters:
       - name: slug
         in: path
         required: true
         schema: { type: string }
     get:
-      operationId: publicEnterprise
-      summary: Public Enterprise profile and public Workspace projection
-      tags: [enterprises]
+      operationId: publicOrganization
+      summary: Public Organization profile and public Repository projection
+      tags: [organizations]
       responses:
         "200": { description: OK }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /enterprises/{enterpriseID}/members:
-    parameters: *enterpriseIDParam
+  /organizations/{organizationID}/members:
+    parameters: *organizationIDParam
     get:
-      operationId: listEnterpriseMembers
-      summary: List Enterprise members
-      tags: [enterprises]
+      operationId: listOrganizationMembers
+      summary: List Organization members
+      tags: [organizations]
       responses:
         "200":
           description: OK
@@ -4553,11 +4642,11 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/EnterpriseMembership" }
+                items: { $ref: "#/components/schemas/OrganizationMembership" }
 
-  /enterprises/{enterpriseID}/members/{userID}:
+  /organizations/{organizationID}/members/{userID}:
     parameters:
-      - name: enterpriseID
+      - name: organizationID
         in: path
         required: true
         schema: { type: string }
@@ -4566,10 +4655,10 @@ paths:
         required: true
         schema: { type: string }
     patch:
-      operationId: updateEnterpriseMember
-      summary: Add or update an Enterprise member
+      operationId: updateOrganizationMember
+      summary: Add or update an Organization member
       description: "Admins may add and remove ordinary members only. Promoting, demoting, or removing an Admin or Owner requires an Owner. At least one Owner must remain."
-      tags: [enterprises]
+      tags: [organizations]
       requestBody:
         required: true
         content:
@@ -4582,33 +4671,39 @@ paths:
       responses:
         "200": { description: updated }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { description: "The mutation would remove the final Enterprise Owner." }
+        "409": { description: "The mutation would remove the final Organization Owner." }
     delete:
-      operationId: removeEnterpriseMember
-      summary: Remove an Enterprise member
+      operationId: removeOrganizationMember
+      parameters:
+        - name: repository_access
+          in: query
+          required: true
+          schema: { type: string, enum: [revoke, retain] }
+          description: Revoke direct grants or retain outside collaborator access. Team membership is always removed.
+      summary: Remove an Organization member
       description: "Admins may remove ordinary members only; Owners manage Admins and Owners. At least one Owner must remain."
-      tags: [enterprises]
+      tags: [organizations]
       responses:
         "200": { description: removed }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { description: "The mutation would remove the final Enterprise Owner." }
+        "409": { description: "The mutation would remove the final Organization Owner." }
 
-  /enterprises/{enterpriseID}/policy:
-    parameters: *enterpriseIDParam
+  /organizations/{organizationID}/policy:
+    parameters: *organizationIDParam
     get:
-      operationId: getEnterprisePolicy
-      summary: Read enforced Enterprise policies
-      tags: [enterprises]
+      operationId: getOrganizationPolicy
+      summary: Read enforced Organization policies
+      tags: [organizations]
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/EnterprisePolicy" }
+              schema: { $ref: "#/components/schemas/OrganizationPolicy" }
     patch:
-      operationId: updateEnterprisePolicy
-      summary: Update enforced Enterprise policies (admin or owner)
-      tags: [enterprises]
+      operationId: updateOrganizationPolicy
+      summary: Update enforced Organization policies (admin or owner)
+      tags: [organizations]
       requestBody:
         required: true
         content:
@@ -4616,9 +4711,9 @@ paths:
             schema:
               type: object
               properties:
-                workspace_creation: { type: string, enum: [admins, members] }
-                default_workspace_visibility: { type: string, enum: [private, public] }
-                allow_public_workspaces: { type: boolean }
+                repository_creation: { type: string, enum: [admins, members] }
+                default_repository_visibility: { type: string, enum: [private, public] }
+                allow_public_repositories: { type: boolean }
                 break_glass_enabled: { type: boolean }
                 break_glass_max_minutes: { type: integer, minimum: 5, maximum: 240 }
       responses:
@@ -4626,15 +4721,15 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/EnterprisePolicy" }
+              schema: { $ref: "#/components/schemas/OrganizationPolicy" }
 
-  /enterprises/{enterpriseID}/workspaces:
-    parameters: *enterpriseIDParam
+  /organizations/{organizationID}/repositories:
+    parameters: *organizationIDParam
     get:
-      operationId: listEnterpriseWorkspaces
-      summary: List Workspace metadata in an Enterprise namespace
+      operationId: listOrganizationRepositories
+      summary: List Repository metadata in an Organization namespace
       description: "Does not grant access to private Repository context."
-      tags: [enterprises]
+      tags: [organizations]
       responses:
         "200":
           description: OK
@@ -4642,11 +4737,11 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Workspace" }
+                items: { $ref: "#/components/schemas/Repository" }
     post:
-      operationId: createEnterpriseWorkspace
-      summary: Create an unlimited Workspace in the Enterprise namespace
-      tags: [enterprises]
+      operationId: createOrganizationRepository
+      summary: Create an unlimited Repository in the Organization namespace
+      tags: [organizations]
       requestBody:
         required: true
         content:
@@ -4661,14 +4756,14 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Workspace" }
+              schema: { $ref: "#/components/schemas/Repository" }
 
-  /enterprises/{enterpriseID}/audit:
-    parameters: *enterpriseIDParam
+  /organizations/{organizationID}/audit:
+    parameters: *organizationIDParam
     get:
-      operationId: listEnterpriseAudit
-      summary: Read append-only Enterprise audit events (admin or owner)
-      tags: [enterprises]
+      operationId: listOrganizationAudit
+      summary: Read append-only Organization audit events (admin or owner)
+      tags: [organizations]
       responses:
         "200":
           description: OK
@@ -4676,24 +4771,24 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/EnterpriseAuditEvent" }
+                items: { $ref: "#/components/schemas/OrganizationAuditEvent" }
 
-  /enterprises/{enterpriseID}/break-glass:
-    parameters: *enterpriseIDParam
+  /organizations/{organizationID}/break-glass:
+    parameters: *organizationIDParam
     post:
       operationId: createBreakGlassGrant
       summary: Create an owner-only, reason-bound, expiring read grant
-      description: "The grant is read-only, never mutates Workspace membership, and every use is audited."
-      tags: [enterprises]
+      description: "The grant is read-only, never mutates Repository membership, and every use is audited."
+      tags: [organizations]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [workspace_id, reason, minutes]
+              required: [repository_id, reason, minutes]
               properties:
-                workspace_id: { type: string }
+                repository_id: { type: string }
                 reason: { type: string, minLength: 3, maxLength: 1000 }
                 minutes: { type: integer, minimum: 1, maximum: 240 }
       responses:
@@ -4704,7 +4799,7 @@ paths:
               schema: { $ref: "#/components/schemas/BreakGlassGrant" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
-  /workspaces/{wsID}/notifications:
+  /repositories/{wsID}/notifications:
     parameters:
       - name: wsID
         in: path
@@ -4723,7 +4818,7 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/NotificationJob" }
         "403": { $ref: "#/components/responses/Forbidden" }
-  /workspaces/{wsID}/notifications/{notificationID}/retry:
+  /repositories/{wsID}/notifications/{notificationID}/retry:
     parameters:
       - name: wsID
         in: path
@@ -4747,6 +4842,529 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { description: Active delivery, already delivered, archived repository, or webhook disabled }
 
+
+  /repository-connections:
+    get:
+      summary: "Resolve a repository address to its stable CLI connection"
+      description: "Resolves canonical and exact legacy aliases without changing content IDs. Private repositories require puller or higher; unconnected repositories require member. Existing remotes remain valid. No credentials or connection metadata are returned below the repository read boundary."
+      parameters:
+        - {"name": "remote_url", "in": "query", "required": true, "schema": {"type": "string", "format": "uri"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"$ref": "#/components/schemas/RepositoryConnection"}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /organizations/{organizationID}/teams:
+    get:
+      summary: "List organization teams"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/Team"}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+    post:
+      summary: "Create an organization team"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {"type": "object", "properties": {"name": {"type": "string"}, "slug": {"type": "string"}, "description": {"type": "string"}}, "additionalProperties": false}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"$ref": "#/components/schemas/Team"}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /organizations/{organizationID}/teams/{teamID}:
+    delete:
+      summary: "Delete a team and revoke its repository grants"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "teamID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /organizations/{organizationID}/teams/{teamID}/members:
+    get:
+      summary: "List team members"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "teamID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/TeamMembership"}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /organizations/{organizationID}/teams/{teamID}/members/{userID}:
+    put:
+      summary: "Set a current organization member’s team role"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "teamID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "userID", "in": "path", "required": true, "schema": {"type": "string"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {"type": "object", "properties": {"role": {"type": "string", "enum": ["member", "maintainer"]}}, "additionalProperties": false}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+    delete:
+      summary: "Remove a team member"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "teamID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "userID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /organizations/{organizationID}/teams/{teamID}/repositories:
+    get:
+      summary: "List team repository grants visible to the caller"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "teamID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/TeamRepositoryGrant"}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /organizations/{organizationID}/teams/{teamID}/repositories/{repositoryID}:
+    put:
+      summary: "Grant a team access to an organization repository"
+      description: "Requires team management and repository owner permission. Both must belong to the same organization. Direct collaborator grants are preserved."
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "teamID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "repositoryID", "in": "path", "required": true, "schema": {"type": "string"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {"type": "object", "properties": {"role": {"$ref": "#/components/schemas/MemberRole"}}, "additionalProperties": false}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+    delete:
+      summary: "Revoke a team repository grant"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "teamID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "repositoryID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /enterprises:
+    get:
+      summary: "List enterprises joined directly or through an organization"
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/Enterprise"}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+    post:
+      summary: "Create an enterprise account"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {"type": "object", "properties": {"name": {"type": "string"}, "slug": {"type": "string"}}, "additionalProperties": false}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"$ref": "#/components/schemas/Enterprise"}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /enterprises/{enterpriseID}:
+    get:
+      summary: "Read an enterprise account visible to the caller"
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"$ref": "#/components/schemas/Enterprise"}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+    patch:
+      summary: "Update enterprise profile or enforced parent policy"
+      description: "Administrator or owner only. Public repositories must be explicitly made private before a policy prohibiting public repositories can be enabled. Billing remains disabled."
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {"type": "object", "properties": {"name": {"type": "string"}, "logo": {"type": "string"}, "policy": {"$ref": "#/components/schemas/EnterprisePolicy"}}, "additionalProperties": false}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"$ref": "#/components/schemas/Enterprise"}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /enterprises/{enterpriseID}/members:
+    get:
+      summary: "List enterprise administration members"
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/EnterpriseMembership"}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /enterprises/{enterpriseID}/members/{userID}:
+    put:
+      summary: "Set enterprise administration role"
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "userID", "in": "path", "required": true, "schema": {"type": "string"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {"type": "object", "properties": {"role": {"type": "string", "enum": ["owner", "admin", "member"]}}, "additionalProperties": false}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+    delete:
+      summary: "Remove an enterprise administration member"
+      description: "The final owner cannot be removed. Organization and repository memberships remain independent."
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "userID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /enterprises/{enterpriseID}/organizations:
+    get:
+      summary: "List organizations in an enterprise"
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/Organization"}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /enterprises/{enterpriseID}/organizations/{organizationID}:
+    put:
+      summary: "Link an organization to an enterprise"
+      description: "The caller must own both the enterprise and organization. An organization has at most one enterprise. Existing public repositories must satisfy the parent policy."
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {"type": "object", "properties": {}, "additionalProperties": false}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+    delete:
+      summary: "Unlink an organization from an enterprise"
+      description: "The caller must own both sides. Repositories, memberships, and organization policy preferences are retained."
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"status": {"type": "string"}}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /enterprises/{enterpriseID}/audit:
+    get:
+      summary: "Read enterprise administration audit records"
+      parameters:
+        - {"name": "enterpriseID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/EnterpriseAuditEvent"}}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
+
+  /organizations/{organizationID}/effective-policy:
+    get:
+      summary: "Read organization policy after enterprise restrictions"
+      parameters:
+        - {"name": "organizationID", "in": "path", "required": true, "schema": {"type": "string"}}
+      responses:
+        "200":
+          description: Successful operation
+          content:
+            application/json:
+              schema: {"$ref": "#/components/schemas/OrganizationPolicy"}
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permission
+        "404":
+          description: Record not visible or not found
+        "409":
+          description: Ownership, policy, or uniqueness conflict
+        "422":
+          description: Invalid request
 
 tags:
   - name: repos
@@ -4773,7 +5391,7 @@ tags:
     description: "repo team assets — About / team settings bundle / E2E secret envelope / commit attachment settings object."
   - name: identity
     description: "authentication (session exchange) · account (username/nickname) · CLI token."
-  - name: workspaces
-    description: "workspace settings (publicity/policy/GitHub sync) · members (5 roles) · invite · ownership transfer."
-  - name: enterprises
-    description: "Global Enterprise namespace, separate 3-role administration plane, enforced policy, audit, and owner-only break-glass."
+  - name: repositories
+    description: "repository settings (publicity/policy/GitHub sync) · members (5 roles) · invite · ownership transfer."
+  - name: organizations
+    description: "Global Organization namespace, separate 3-role administration plane, enforced policy, audit, and owner-only break-glass."

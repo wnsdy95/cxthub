@@ -280,6 +280,23 @@ func buildContainer(cfg config) container {
 	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
 	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices)
 	clictr := &delivcli.Container{
+		ResolveConnection: func(ctx context.Context, raw string) (domain.RepositoryConnection, error) {
+			base, err := remotecfg.APIBase(raw)
+			if err != nil {
+				return domain.RepositoryConnection{}, err
+			}
+			server, err := url.Parse(base)
+			if err != nil {
+				return domain.RepositoryConnection{}, err
+			}
+			client := backendclient.NewBackendClient(func() string { return base }, func() string {
+				if cfg.RemoteToken != "" {
+					return cfg.RemoteToken
+				}
+				return authcfg.Token(server.Host)
+			}, cfg.Identity)
+			return client.ResolveRepositoryConnection(ctx, raw)
+		},
 		Init:            initSvc,
 		Save:            saveSvc,
 		Fork:            forkSvc,

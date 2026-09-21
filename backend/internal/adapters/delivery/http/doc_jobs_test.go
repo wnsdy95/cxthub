@@ -26,13 +26,13 @@ func TestDocJobHTTPDurabilityAndAuthorization(t *testing.T) {
 	if code := doJSON(t, "GET", server.URL+"/api/v1/me", nil, &me); code != 200 {
 		t.Fatal(code)
 	}
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, "POST", server.URL+"/api/v1/workspaces", map[string]any{"name": "DocumentJobs"}, &ws); code != 200 {
+	if code := doJSON(t, "POST", server.URL+"/api/v1/repositories", map[string]any{"name": "DocumentJobs"}, &repositoryRecord); code != 200 {
 		t.Fatal(code)
 	}
-	remote := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remote := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	repo := repoIDForRemoteURLForTest(remote)
 	if code := doJSON(t, "POST", server.URL+"/api/v1/repos", map[string]any{"id": repo, "remote_url": remote, "default_branch": "main"}, nil); code != 200 {
 		t.Fatal(code)

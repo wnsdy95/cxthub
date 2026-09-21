@@ -2,7 +2,7 @@
 //
 //	cxt setup [remote-url] [--no-login]
 //
-// Completes in one go after cloning: .cxt initialization → git hooks → remote registration → login (device flow)
+// Completes in one go after cloning: .cxt initialization → git hooks → login (device flow) → verified remote registration
 // → agent hooks (Claude repo setup, Codex global merge) → team basic settings pull.
 // Each step reports with a checklist (✓/✗/⚠), and completed steps are not modified.
 package cli
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,7 +102,7 @@ func mergeAgentHooks(path, provider string) (bool, error) {
 
 // runSetup runs the cxt setup.
 func runSetup(ctx context.Context, c *Container, cwd string, rest []string) error {
-	url := firstPositional(rest)
+	remoteURL := firstPositional(rest)
 	ok := func(f string, a ...interface{}) { fmt.Printf("  ✓ "+f+"\n", a...) }
 	bad := func(f string, a ...interface{}) { fmt.Printf("  ✗ "+f+"\n", a...) }
 	warn := func(f string, a ...interface{}) { fmt.Printf("  ⚠ "+f+"\n", a...) }
@@ -122,28 +123,45 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 		bad("git hook installation failed: %v", herr)
 	}
 
+	// Verify a new connection only after login, so private repository aliases
+	// cannot create a different URL-derived identity before authentication.
+	if remoteURL != "" && !flagPresent(rest, "--no-login") {
+		base, err := remotecfg.APIBase(remoteURL)
+		if err != nil {
+			return err
+		}
+		server, err := url.Parse(base)
+		if err != nil {
+			return err
+		}
+		if authcfg.Token(server.Host) == "" && os.Getenv("CXT_TOKEN") == "" {
+			if err = deviceLogin(ctx, base, server.Host); err != nil {
+				return fmt.Errorf("login before repository connection: %w", err)
+			}
+		}
+	}
 	// 3) remote origin (idempotent: re-register if not the same URL).
-	if url != "" {
+	if remoteURL != "" {
 		if cur, has := remotecfg.Origin(cwd); has {
-			if remotecfg.RepoIDFor(cur) == remotecfg.RepoIDFor(url) {
+			if remotecfg.RepoIDFor(cur) == remotecfg.RepoIDFor(remoteURL) {
 				ok("remote origin already registered = %s", cur)
 			} else {
 				warn("remote origin is registered with a different URL (%s) — change: cxt remote remove origin then setup", cur)
 			}
-		} else if rerr := runRemote(ctx, c, cwd, []string{"add", "origin", url}); rerr != nil {
+		} else if rerr := runRemote(ctx, c, cwd, []string{"add", "origin", remoteURL}); rerr != nil {
 			// Git origin mismatch is server rejection — invalid folder, so stop setup.
 			var he *backendclient.HTTPError
 			if errors.As(rerr, &he) && he.Code == "git_origin_mismatch" {
-				return fmt.Errorf("this folder cannot connect to %s — %w", url, he)
+				return fmt.Errorf("this folder cannot connect to %s — %w", remoteURL, he)
 			}
-			bad("remote registration failed: %v", rerr)
+			return fmt.Errorf("remote registration failed: %w", rerr)
 		}
 	}
 	origin, hasOrigin := remotecfg.Origin(cwd)
 	if hasOrigin {
 		ok("remote origin = %s", origin)
 	} else {
-		warn("remote not registered — repository connection: cxt setup https://<host>/<namespace>/<workspace>/<repository>")
+		warn("remote not registered — repository connection: cxt setup https://<host>/<owner>/<repository>")
 	}
 
 	// 4) Login (device flow). Keep token if already present.
@@ -192,10 +210,10 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	// 6) Team default settings pull(.claude/.agents/.codex) — only when login and origin exist.
 	if hasOrigin && authTokenPresent(cwd) {
 		if conn, cerr := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd}); cerr == nil {
-			// The server derives WorkspaceID from the URL's namespace/workspace
+			// The server derives RepositoryID from the URL's namespace/repository
 			// prefix. A missing binding is a legacy/local state worth surfacing.
-			if conn.Repo.WorkspaceID == "" {
-				warn("repository is not bound to a workspace and will not appear on the web — check <namespace>/<workspace>/<repository> in the URL: %s", origin)
+			if conn.Repo.RepositoryID == "" {
+				warn("connection has no repository ownership record and will not appear on the web — check <owner>/<repository> in the URL: %s", origin)
 			}
 			applied := 0
 			for _, kind := range []string{"claude", "agents", "codex"} {

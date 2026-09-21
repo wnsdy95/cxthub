@@ -37,12 +37,12 @@ func TestPGTransactionDeferredQuotaRollback(t *testing.T) {
 	if err := st.CreateNamespace(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
-	ws := domain.Workspace{ID: domain.NewID("ws_"), Name: name, Slug: "quota", OwnerID: u.ID, OwnerUsername: name, OwnerNamespaceID: ns.ID, CreatedAt: time.Now().UTC()}
-	if err := st.CreateWorkspace(ctx, ws); err != nil {
+	repositoryRecord := domain.Repository{ID: domain.NewID("ws_"), Name: name, Slug: "quota", OwnerID: u.ID, OwnerUsername: name, OwnerNamespaceID: ns.ID, CreatedAt: time.Now().UTC()}
+	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
-	repo := domain.HashContent([]byte(ws.ID))
-	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: ws.ID}); err != nil {
+	repo := domain.HashContent([]byte(repositoryRecord.ID))
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: repositoryRecord.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.ConfigureStoragePolicy(ctx, ns.ID, "limit-"+ns.ID, 0, domain.StoragePolicy{Plan: "free", IncludedBytes: 1}, u.ID, "test deferred quota"); err != nil {

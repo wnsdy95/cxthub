@@ -15,7 +15,7 @@ func TestOpenAPIDrift(t *testing.T) {
 	// latter owns the browser consent API under /api/v1, so the public REST
 	// contract must audit both route sources rather than treating composition-
 	// owned consent paths as phantom documentation.
-	registered := routesFromSource(t, "server.go", "identity.go", "../mcp/server.go")
+	registered := routesFromSource(t, "server.go", "identity.go", "teams.go", "enterprises.go", "../mcp/server.go")
 	specced := routesFromSpec(t, "../../../../../schemas/openapi.yaml")
 
 	for r := range registered {
@@ -34,6 +34,48 @@ func TestOpenAPIDrift(t *testing.T) {
 }
 
 var handleFuncRe = regexp.MustCompile(`mux\.HandleFunc\("([A-Z]+) (/api/v1[^"]*)"`)
+
+// Components follow the same block indentation convention as the schema-field
+// guard. Check references as well as routes and fields: a present field can
+// still point to an undefined schema or response.
+func TestOpenAPIComponentReferences(t *testing.T) {
+	b, err := os.ReadFile("../../../../../schemas/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sectionRE := regexp.MustCompile(`^  (\w+):\s*$`)
+	componentRE := regexp.MustCompile(`^    (\w+):`)
+	refRE := regexp.MustCompile(`\$ref:\s*['"](#/components/[^'"]+)['"]`)
+	components := map[string]bool{}
+	inComponents, section := false, ""
+	for _, line := range strings.Split(string(b), "\n") {
+		if line == "components:" {
+			inComponents = true
+			continue
+		}
+		if len(line) > 0 && line[0] != ' ' && line[0] != '#' {
+			inComponents = false
+		}
+		if !inComponents {
+			continue
+		}
+		if m := sectionRE.FindStringSubmatch(line); m != nil {
+			section = m[1]
+		}
+		if m := componentRE.FindStringSubmatch(line); m != nil {
+			components["#/components/"+section+"/"+m[1]] = true
+		}
+	}
+	refs := refRE.FindAllStringSubmatch(string(b), -1)
+	if len(refs) == 0 || len(components) == 0 {
+		t.Fatal("failed to parse component definitions or references")
+	}
+	for _, ref := range refs {
+		if !components[ref[1]] {
+			t.Errorf("undefined OpenAPI component: %s", ref[1])
+		}
+	}
+}
 
 // routesFromSource collects mux.HandleFunc("METHOD /api/v1/...") patterns from the source.
 func routesFromSource(t *testing.T, files ...string) map[string]bool {

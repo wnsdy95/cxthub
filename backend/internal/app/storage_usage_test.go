@@ -32,12 +32,12 @@ func TestStorageAuthorityDoesNotGrantContextOrPlanAdministration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ent, err := svc.CreateEnterprise(ctx, owner, "Metering", "metering")
+	ent, err := svc.CreateOrganization(ctx, owner, "Metering", "metering")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for u, role := range map[string]domain.EnterpriseRole{"admin": domain.EnterpriseAdmin, "member": domain.EnterpriseMember} {
-		if err := svc.UpdateEnterpriseMember(ctx, owner.ID, ent.ID, u, role); err != nil {
+	for u, role := range map[string]domain.OrganizationRole{"admin": domain.OrganizationAdmin, "member": domain.OrganizationMember} {
+		if err := svc.UpdateOrganizationMember(ctx, owner.ID, ent.ID, u, role); err != nil {
 			t.Fatal(err)
 		}
 	}

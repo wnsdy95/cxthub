@@ -24,18 +24,18 @@ code { font-family: var(--mono); }
 /* Brand logo at the top — vertically centered in the 52px topbar (topbar align-items:center). */
 .brand.sm .brand-logo { height: 40px; width: auto; display: block; }
 
-/* GitHub style breadcrumb: logo + {owner}/[lock]{workspace}[▾] to the left group. */
+/* GitHub style breadcrumb: logo + {owner}/[lock]{repository}[▾] to the left group. */
 .topbar-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .topbar-crumb { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 0.9rem; min-width: 0; }
 .crumb-owner { color: var(--muted); white-space: nowrap; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
 .crumb-owner:hover { color: var(--ink); text-decoration: underline; }
 .crumb-sep { color: var(--faint); }
-.crumb-ws { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--ink); font-weight: 500; }
+.crumb-repositoryMetadata { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--ink); font-weight: 500; }
 .crumb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34vw; }
 .crumb-repo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28vw; color: var(--ink); font-weight: 600; }
 .crumb-lock { color: var(--muted); flex: none; }
 
-/* Workspace switch dropdown (▾) */
+/* Repository switch dropdown (▾) */
 .crumb-switch { position: relative; display: inline-flex; }
 .crumb-caret { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 2px 5px; font-size: 0.7rem; line-height: 1; border-radius: 4px; }
 .crumb-caret:hover { color: var(--ink); background: var(--hover); }
@@ -131,25 +131,25 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
   position: sticky; top: 52px; height: calc(100vh - 52px); align-self: start; }
 .side-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 8px; }
 .count-badge { font-family: var(--mono); font-size: 0.7rem; color: var(--faint); }
-/* Workspace list with internal scroll — the add button (.newws) always visible. */
-.ws-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.ws-item { display: block; width: 100%; text-align: left; padding: 7px 8px; border: 0; border-radius: 5px;
+/* Repository list with internal scroll — the add button (.newws) always visible. */
+.repository-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.repository-item { display: block; width: 100%; text-align: left; padding: 7px 8px; border: 0; border-radius: 5px;
   font-size: 0.88rem; font-weight: 400; background: transparent; color: var(--muted); }
-.ws-item:hover { background: var(--hover); color: var(--text); opacity: 1; }
-.ws-item.on { color: var(--ink); font-weight: 600; }
-.ws-empty { color: var(--faint); font-size: 0.82rem; padding: 7px 8px; }
+.repository-item:hover { background: var(--hover); color: var(--text); opacity: 1; }
+.repository-item.on { color: var(--ink); font-weight: 600; }
+.repository-empty { color: var(--faint); font-size: 0.82rem; padding: 7px 8px; }
 .newws { display: flex; flex-direction: column; gap: 8px; flex: none; }
 .newws button { font-size: 0.8rem; padding: 8px 12px; }
 
 /* Main — Section + Header without card */
 .main { padding: 40px 48px 64px; max-width: 1100px; width: 100%; min-width: 0; }
-.ws-head { margin: 0 0 8px; }
-.ws-head h2 { font-family: var(--mono); letter-spacing: -0.02em; font-size: 1.25rem; font-weight: 600;
+.repository-head { margin: 0 0 8px; }
+.repository-head h2 { font-family: var(--mono); letter-spacing: -0.02em; font-size: 1.25rem; font-weight: 600;
   color: var(--ink); margin: 0 0 2px; }
-.ws-meta { font-family: var(--mono); font-size: 0.72rem; color: var(--faint); }
-.ws-meta code { color: var(--muted); }
+.repository-meta { font-family: var(--mono); font-size: 0.72rem; color: var(--faint); }
+.repository-meta code { color: var(--muted); }
 
-/* Workspace tab (Context | Members) — Syncs with URL (/<u>/<slug>/members) */
+/* Repository tab (Context | Members) — Syncs with URL (/<u>/<slug>/members) */
 .tabs { display: flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--line); }
 .tab { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
   color: var(--muted); font-size: 0.86rem; font-weight: 500; padding: 8px 12px; margin-bottom: -1px; }
@@ -158,7 +158,7 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
 .tab .count-badge { margin-left: 2px; }
 
 .panel { padding: 28px 0 4px; margin: 0; border: 0; border-top: 1px solid var(--line); background: transparent; }
-.ws-head + .panel, .ws-head + section.panel { border-top: 0; margin-top: 8px; padding-top: 20px; }
+.repository-head + .panel, .repository-head + section.panel { border-top: 0; margin-top: 8px; padding-top: 20px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .panel-head h4 { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--muted); margin: 0; font-weight: 500; display: flex; gap: 8px; align-items: baseline; }
@@ -286,7 +286,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   .cols { grid-template-columns: 1fr; }
   .app-side { position: static; top: auto; height: auto; align-self: stretch; border-right: 0; border-bottom: 1px solid var(--line);
     padding: 20px; overflow: visible; }
-  .ws-list { flex: initial; min-height: 0; overflow-y: visible; }
+  .repository-list { flex: initial; min-height: 0; overflow-y: visible; }
   .newws { margin-top: 4px; }
   .main { max-width: 100%; padding: 28px 20px 48px; overflow-y: visible; }
   .tabs { width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
@@ -614,7 +614,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .side-sec .settings-row { margin-top: 8px; flex-wrap: wrap; }
 .mini { padding: 5px 11px; font-size: 0.76rem; }
 
-/* Account · workspace settings */
+/* Account · repository settings */
 .warn-red { color: #b4452c; font-size: 0.78rem; line-height: 1.55; margin: 2px 0 0;
   border: 1px solid rgba(180, 69, 44, 0.35); border-radius: 6px; padding: 9px 11px; }
 .warn-red code { color: inherit; }
@@ -635,7 +635,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   border-radius: 6px; padding: 5px 8px; background: transparent; color: var(--text); }
 .role-capabilities { margin-top: 4px; padding: 15px 16px 13px; border: 1px solid var(--line); border-radius: 10px;
   background: color-mix(in srgb, var(--hover) 38%, var(--bg)); min-width: 0; }
-.ws-head + .role-capabilities, .invite-panel + .role-capabilities { margin-top: 24px; }
+.repository-head + .role-capabilities, .invite-panel + .role-capabilities { margin-top: 24px; }
 .role-capabilities-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .role-ladder { color: var(--muted); font-family: var(--mono); font-size: 0.68rem; white-space: nowrap; }
 .role-ladder span { color: var(--faint); padding: 0 4px; }
@@ -654,7 +654,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .role-capabilities td { color: var(--faint); font-family: var(--mono); font-size: 0.78rem; }
 .role-capabilities td.allowed { color: var(--ok); background: color-mix(in srgb, var(--ok) 4%, var(--bg)); font-weight: 700; }
 .sync-row { display: grid; gap: 6px; margin: 2px 0 0; }
-/* repo branch settings row — workspace settings tab's repo-specific default branch/protect form. */
+/* repo branch settings row — repository settings tab's repo-specific default branch/protect form. */
 .repo-branch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; }
 .repo-branch-row > label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; margin: 0; }
 .repo-branch-row select { font-family: var(--mono); font-size: 0.78rem; padding: 4px 8px;
@@ -679,7 +679,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .vis-chip { font-family: var(--mono); font-size: 0.66rem; color: #b4452c; border: 1px solid rgba(180, 69, 44, 0.45);
   border-radius: 99px; padding: 2px 8px; margin-left: 10px; vertical-align: 3px; }
 
-/* User profile (/<username>) — GitHub style: left avatar/name, right workspace card. */
+/* User profile (/<username>) — GitHub style: left avatar/name, right repository card. */
 .profile { flex: 1; min-height: 0; overflow-y: auto; padding: 32px 24px 64px; }
 .profile-grid { display: grid; grid-template-columns: 300px 1fr; gap: 36px; max-width: 1216px; margin: 0 auto; align-items: start; }
 .profile-side { display: flex; flex-direction: column; gap: 14px; }
@@ -712,37 +712,37 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .edit-profile-btn:hover { border-color: var(--faint); background: var(--hover); }
 .profile-section-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 14px; }
 .profile-section { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ink); }
-.ws-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.ws-card { display: flex; flex-direction: column; gap: 8px; text-align: left; background: transparent;
+.repository-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.repository-card { display: flex; flex-direction: column; gap: 8px; text-align: left; background: transparent;
   border: 1px solid var(--line); border-radius: 8px; padding: 16px; cursor: pointer; min-width: 0; }
-.ws-card:hover { border-color: var(--faint); background: var(--hover); }
-.ws-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.ws-card-name { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-card-path { font-family: var(--mono); font-size: 0.74rem; color: var(--faint); }
-.ws-card-vis { display: inline-flex; align-items: center; gap: 4px; flex: none; font-family: var(--mono); font-size: 0.66rem;
+.repository-card:hover { border-color: var(--faint); background: var(--hover); }
+.repository-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.repository-card-name { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repository-card-path { font-family: var(--mono); font-size: 0.74rem; color: var(--faint); }
+.repository-card-vis { display: inline-flex; align-items: center; gap: 4px; flex: none; font-family: var(--mono); font-size: 0.66rem;
   color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 2px 8px; }
 .linkish-logo { background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; }
 .crumb-user { background: none; border: 0; padding: 0; cursor: pointer; font-family: var(--mono); font-size: 0.9rem; font-weight: 500; color: var(--ink); }
 .crumb-user:hover { text-decoration: underline; }
 
-/* Enterprise namespace profile and administration. Enterprise roles stay
-   visibly separate from Workspace context permissions. */
-.enterprise-logo { border-radius: 22%; }
-.enterprise-badge { align-self: flex-start; font-family: var(--mono); font-size: 0.68rem; font-weight: 700;
+/* Organization namespace profile and administration. Organization roles stay
+   visibly separate from Repository context permissions. */
+.organization-logo { border-radius: 22%; }
+.organization-badge { align-self: flex-start; font-family: var(--mono); font-size: 0.68rem; font-weight: 700;
   color: #8250df; border: 1px solid rgba(130, 80, 223, 0.35); background: rgba(130, 80, 223, 0.08);
   border-radius: 99px; padding: 3px 9px; }
-.enterprise-access-note { margin: 0; padding: 11px 13px; border: 1px solid rgba(130, 80, 223, 0.24);
+.organization-access-note { margin: 0; padding: 11px 13px; border: 1px solid rgba(130, 80, 223, 0.24);
   border-radius: 8px; color: var(--muted); background: rgba(130, 80, 223, 0.05); font-size: 0.8rem; line-height: 1.5; }
-.enterprise-tabs { margin-top: 18px; }
-.enterprise-panel { padding-top: 22px; }
-.enterprise-inline-form { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
-.enterprise-inline-form input { flex: 1; min-width: 0; }
-.enterprise-inline-form select { min-width: 112px; }
-.enterprise-ws-card { position: relative; min-width: 0; }
-.enterprise-ws-card .ws-card { width: 100%; min-height: 112px; }
-.enterprise-ws-card .ws-card:disabled { cursor: default; opacity: 0.72; }
-.enterprise-ws-card .ws-card:disabled:hover { border-color: var(--line); background: transparent; }
-.ws-card-access { color: #b4452c; font-size: 0.72rem; line-height: 1.35; }
+.organization-tabs { margin-top: 18px; }
+.organization-panel { padding-top: 22px; }
+.organization-inline-form { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.organization-inline-form input { flex: 1; min-width: 0; }
+.organization-inline-form select { min-width: 112px; }
+.organization-repository-card { position: relative; min-width: 0; }
+.organization-repository-card .repository-card { width: 100%; min-height: 112px; }
+.organization-repository-card .repository-card:disabled { cursor: default; opacity: 0.72; }
+.organization-repository-card .repository-card:disabled:hover { border-color: var(--line); background: transparent; }
+.repository-card-access { color: #b4452c; font-size: 0.72rem; line-height: 1.35; }
 .emergency-btn { position: absolute; right: 10px; bottom: 10px; color: #b4452c; border-color: rgba(180, 69, 44, 0.35); }
 .emergency-form { display: flex; flex-direction: column; gap: 9px; margin-top: 8px; padding: 12px;
   border: 1px solid rgba(180, 69, 44, 0.35); border-radius: 8px; background: rgba(180, 69, 44, 0.04); }
@@ -751,32 +751,32 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .emergency-form label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 0.78rem; }
 .emergency-form input[type="number"] { width: 92px; }
 .vis-chip.emergency { color: #b4452c; border-color: rgba(180, 69, 44, 0.45); background: rgba(180, 69, 44, 0.06); }
-.enterprise-member-list, .enterprise-audit-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.enterprise-member-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-top: 1px solid var(--line); }
-.enterprise-member-row:first-child, .enterprise-audit-row:first-child { border-top: 0; }
-.enterprise-member-row > div:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.enterprise-member-row code { color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; }
-.enterprise-policy-list { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; }
-.enterprise-policy-list .policy-row input[type="number"] { width: 92px; }
-.enterprise-save { margin-top: 14px; }
-.enterprise-audit-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(120px, auto) auto;
+.organization-member-list, .organization-audit-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.organization-member-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.organization-member-row:first-child, .organization-audit-row:first-child { border-top: 0; }
+.organization-member-row > div:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.organization-member-row code { color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; }
+.organization-policy-list { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; }
+.organization-policy-list .policy-row input[type="number"] { width: 92px; }
+.organization-save { margin-top: 14px; }
+.organization-audit-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(120px, auto) auto;
   align-items: baseline; gap: 4px 14px; padding: 12px 14px; border-top: 1px solid var(--line); font-size: 0.76rem; }
-.enterprise-audit-row code, .enterprise-audit-row time { color: var(--muted); font-size: 0.68rem; }
-.enterprise-audit-row p { grid-column: 1 / -1; margin: 4px 0 0; color: var(--text); }
-.enterprise-settings-form { max-width: 560px; margin-top: 16px; }
-.profile-enterprises { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--line); }
-.enterprise-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.enterprise-list-card { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 11px;
+.organization-audit-row code, .organization-audit-row time { color: var(--muted); font-size: 0.68rem; }
+.organization-audit-row p { grid-column: 1 / -1; margin: 4px 0 0; color: var(--text); }
+.organization-settings-form { max-width: 560px; margin-top: 16px; }
+.profile-organizations { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--line); }
+.organization-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.organization-list-card { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 11px;
   border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); text-align: left; }
-.enterprise-list-card:hover { background: var(--hover); border-color: var(--faint); }
-.enterprise-list-card > img, .enterprise-list-card > span:first-child { width: 38px; height: 38px; border-radius: 9px;
+.organization-list-card:hover { background: var(--hover); border-color: var(--faint); }
+.organization-list-card > img, .organization-list-card > span:first-child { width: 38px; height: 38px; border-radius: 9px;
   object-fit: cover; flex: none; display: grid; place-items: center; color: #fff; font-weight: 700; }
-.enterprise-list-card > span:last-child { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
-.enterprise-list-card strong, .enterprise-list-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.enterprise-list-card code { color: var(--muted); font-size: 0.7rem; }
-.enterprise-create-form { margin-top: 14px; padding: 14px; border: 1px dashed var(--line); border-radius: 8px; }
-.enterprise-create-form h3 { margin: 0 0 10px; font-size: 0.86rem; }
-.enterprise-create-form .enterprise-inline-form { margin-bottom: 5px; }
+.organization-list-card > span:last-child { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.organization-list-card strong, .organization-list-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.organization-list-card code { color: var(--muted); font-size: 0.7rem; }
+.organization-create-form { margin-top: 14px; padding: 14px; border: 1px dashed var(--line); border-radius: 8px; }
+.organization-create-form h3 { margin: 0 0 10px; font-size: 0.86rem; }
+.organization-create-form .organization-inline-form { margin-bottom: 5px; }
 
 /* Contribution heatmap (commit graph) */
 .contrib { margin-top: 36px; }
@@ -824,15 +824,15 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 
 @media (max-width: 900px) {
   .profile-grid { grid-template-columns: 1fr; }
-  .ws-cards, .enterprise-list { grid-template-columns: 1fr; }
-  .enterprise-inline-form { align-items: stretch; flex-direction: column; }
-  .enterprise-inline-form > * { width: 100%; }
-  .enterprise-member-row { align-items: flex-start; flex-direction: column; }
-  .enterprise-audit-row { grid-template-columns: 1fr; }
-  .enterprise-audit-row p { grid-column: auto; }
+  .repository-cards, .organization-list { grid-template-columns: 1fr; }
+  .organization-inline-form { align-items: stretch; flex-direction: column; }
+  .organization-inline-form > * { width: 100%; }
+  .organization-member-row { align-items: flex-start; flex-direction: column; }
+  .organization-audit-row { grid-template-columns: 1fr; }
+  .organization-audit-row p { grid-column: auto; }
 }
-.ws-head h2 .gear { margin-left: 6px; vertical-align: 1px; }
-.ws-head h2 .ws-card-vis { margin-left: 12px; vertical-align: 4px; }
+.repository-head h2 .gear { margin-left: 6px; vertical-align: 1px; }
+.repository-head h2 .repository-card-vis { margin-left: 12px; vertical-align: 4px; }
 .who .gear { opacity: 0.75; }
 
 /* ⚙ Modal Detail Guide */
@@ -1242,3 +1242,26 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .sync-audit-entry.incomplete, .sync-audit-entry.unavailable { border-left: 3px solid #c58b16; }
 .sync-audit label { display: flex; align-items: center; gap: .5rem; margin-top: .75rem; }
 .sync-audit label input { width: auto; }
+
+/* Organization and enterprise administration share compact, responsive forms. */
+.management-grid{display:grid;grid-template-columns:minmax(130px,220px) minmax(0,1fr);gap:24px;margin-top:24px}
+.management-list{display:flex;flex-direction:column;gap:6px;align-self:start}
+.management-list>button{text-align:left;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere}
+.management-list>button.on{background:var(--surface-alt,#f3f4f6);font-weight:600}
+.management-form{display:flex;align-items:end;flex-wrap:wrap;gap:10px;margin:16px 0}
+.management-form label{display:flex;flex-direction:column;gap:6px;flex:1 1 180px;min-width:0}
+.management-form input,.management-form select{max-width:100%;min-width:0}
+.management-detail{min-width:0}.management-detail section{margin:24px 0}
+.management-rows{list-style:none;padding:0;margin:12px 0}
+.management-rows>li{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line,#e5e7eb);flex-wrap:wrap}
+.management-rows>li>span:first-child{flex:1;min-width:120px;overflow-wrap:anywhere}
+.management-policy{display:grid;gap:16px;max-width:720px;margin:24px 0}
+.management-policy label{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.management-policy label>select{margin-left:auto;max-width:100%}
+@media(max-width:700px){.management-grid{grid-template-columns:minmax(0,1fr)}.management-list{flex-direction:row;overflow-x:auto}.management-list>button{flex:0 0 auto}.management-form>select{flex:1 1 180px}}
+
+.management-form select,.management-rows select,.management-policy select { min-height:36px; padding:7px 10px; border:1px solid var(--line); border-radius:6px; background:var(--paper,#fff); color:var(--ink); font:inherit; font-size:.85rem; }
+.management-list>button { padding:10px 12px; font-size:.9rem; color:var(--ink); }
+.management-list>button small { color:var(--muted); font-weight:400; }
+.management-policy>button { justify-self:start; min-width:100px; }
+.profile-main { min-width:0; }

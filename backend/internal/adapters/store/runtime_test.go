@@ -14,7 +14,7 @@ import (
 
 func checkRuntime(t *testing.T, st interface {
 	outbound.RuntimeStore
-	outbound.WorkspaceStore
+	outbound.RepositoryStore
 }) {
 	ctx := context.Background()
 	now := time.Now().UTC()

@@ -157,7 +157,7 @@ func TestObjectStagingDoesNotPublishGraphRevision(t *testing.T) {
 	ctx := context.Background()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
-	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: "synthetic-workspace"}); err != nil {
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: domain.NewID("ws_")}); err != nil {
 		t.Fatal(err)
 	}
 	cir := pendingGCCIR(domain.ProviderCodex, "only staged bytes")

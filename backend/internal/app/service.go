@@ -27,13 +27,13 @@ type Service struct {
 	blobs  outbound.BlobStore
 	auth   outbound.AuthProvider
 	engine outbound.GitEngine
-	// ws is used for repo → workspace binding (remote URL path resolution). nil skips binding.
-	ws outbound.WorkspaceStore
+	// repositoryRecord is used for repo → repository binding (remote URL path resolution). nil skips binding.
+	repositories outbound.RepositoryStore
 }
 
 // NewService creates a Service with an outbound port injected.
-func NewService(meta outbound.MetadataStore, blobs outbound.BlobStore, auth outbound.AuthProvider, engine outbound.GitEngine, ws outbound.WorkspaceStore) *Service {
-	return &Service{meta: meta, blobs: blobs, auth: auth, engine: engine, ws: ws}
+func NewService(meta outbound.MetadataStore, blobs outbound.BlobStore, auth outbound.AuthProvider, engine outbound.GitEngine, repositories outbound.RepositoryStore) *Service {
+	return &Service{meta: meta, blobs: blobs, auth: auth, engine: engine, repositories: repositories}
 }
 
 // Inbound port implementations are guaranteed at compile time.
@@ -282,8 +282,8 @@ func (s *Service) StoreChunks(ctx context.Context, in inbound.StoreChunksInput) 
 	if err != nil {
 		return inbound.StoreChunksOutput{}, err
 	}
-	if repo.WorkspaceID == "" {
-		return inbound.StoreChunksOutput{}, fmt.Errorf("%w: repo is not bound to a workspace", domain.ErrForbidden)
+	if repo.RepositoryID == "" {
+		return inbound.StoreChunksOutput{}, fmt.Errorf("%w: repo is not bound to a repository", domain.ErrForbidden)
 	}
 	bodies := make(map[domain.ContentHash][]byte, len(in.Chunks))
 	total := 0
@@ -486,8 +486,8 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 	if err != nil {
 		return inbound.CommitOutput{}, err
 	}
-	if repo.WorkspaceID == "" {
-		return inbound.CommitOutput{}, fmt.Errorf("%w: repo is not bound to a workspace", domain.ErrForbidden)
+	if repo.RepositoryID == "" {
+		return inbound.CommitOutput{}, fmt.Errorf("%w: repo is not bound to a repository", domain.ErrForbidden)
 	}
 	existingSnaps, err := s.meta.ListSnapshots(ctx, in.RepoID, "")
 	if err != nil {
@@ -1133,28 +1133,28 @@ func (s *Service) ensureRepo(ctx context.Context, actorID string, repo domain.Re
 			return domain.Repo{}, err
 		}
 	}
-	// Binding is always interpreted by the server from the remote URL path (/<owner_username>/<workspace-slug>/…). The workspace_id in the body is untrusted — assuming RepoID from URL hash, allowing client-specified bindings can lead to arbitrary workspace takeover (repo squatting) if a matching workspace is not found (fail-closed).
+	// Binding is always interpreted by the server from the remote URL path (/<owner_username>/<repository-slug>/…). The repository_id in the body is untrusted — assuming RepoID from URL hash, allowing client-specified bindings can lead to arbitrary repository takeover (repo squatting) if a matching repository is not found (fail-closed).
 	repo.RemoteURL = domain.SanitizeRemoteURL(repo.RemoteURL)
 	repo.GitRemoteURL = domain.SanitizeRemoteURL(repo.GitRemoteURL)
-	wsID, err := s.workspaceForURL(ctx, repo.RemoteURL)
+	repositoryID, err := s.repositoryForURL(ctx, repo.RemoteURL)
 	if err != nil {
 		return domain.Repo{}, err
 	}
-	repo.WorkspaceID = wsID
+	repo.RepositoryID = repositoryID
 
-	// The authenticity of RepoID is not the Git origin but the cxthub destination URL. Connecting the same Git repo to multiple users' workspaces results in different RemoteURLs, thus different RepoIDs.
+	// The authenticity of RepoID is not the Git origin but the cxthub destination URL. Connecting the same Git repo to multiple users' repositories results in different RemoteURLs, thus different RepoIDs.
 	expectedID := domain.HashContent([]byte(normalizeGitURL(repo.RemoteURL)))
 	if repo.ID != expectedID {
 		return domain.Repo{}, fmt.Errorf("%w: repo id does not match cxthub remote URL", domain.ErrIntegrity)
 	}
 
-	// Registration itself creates the state of the target workspace. To prevent URL takeover by others before login, context write permissions (member level or above) are required for both initial registration and re-registration.
-	role, ok := s.workspaceRole(ctx, wsID, actorID)
+	// Registration itself creates the state of the target repository. To prevent URL takeover by others before login, context write permissions (member level or above) are required for both initial registration and re-registration.
+	role, ok := s.repositoryRole(ctx, repositoryID, actorID)
 	if !ok || !role.AtLeast(domain.RoleMember) {
 		return domain.Repo{}, domain.ErrForbidden
 	}
 
-	// Git origin verification (onboarding safety measure): If another team member has already connected to the same cxthub URL (same RepoID), and the git origin of the code repo is confirmed, the git origin of the newly connecting local folder must also be the same. If different, it is rejected — "A folder not connected to git in that workspace" is prevented from being attached to the same cxthub URL (same origin: URL is the destination, origin is the substance).
+	// Git origin verification (onboarding safety measure): If another team member has already connected to the same cxthub URL (same RepoID), and the git origin of the code repo is confirmed, the git origin of the newly connecting local folder must also be the same. If different, it is rejected — "A folder not connected to git in that repository" is prevented from being attached to the same cxthub URL (same origin: URL is the destination, origin is the substance).
 	// The first connector confirms the origin (empty → filled), and thereafter, that value holds authority.
 	existing, err := s.meta.GetRepo(ctx, repo.ID)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
@@ -1163,34 +1163,15 @@ func (s *Service) ensureRepo(ctx context.Context, actorID string, repo domain.Re
 	if err == nil && existing.GitRemoteURL != "" {
 		if normalizeGitURL(repo.GitRemoteURL) != normalizeGitURL(existing.GitRemoteURL) {
 			return domain.Repo{}, fmt.Errorf(
-				"%w: The git origin (%s) of this folder is different from the git (%s) connected to this workspace repo — try again in the corresponding code repo",
+				"%w: The git origin (%s) of this folder is different from the git (%s) connected to this repository — try again in the corresponding code repo",
 				domain.ErrGitOriginMismatch, gitOriginLabel(repo.GitRemoteURL), gitOriginLabel(existing.GitRemoteURL))
 		}
 	}
 	return s.meta.PutRepo(ctx, repo)
 }
 
-func (s *Service) workspaceRole(ctx context.Context, workspaceID, userID string) (domain.MemberRole, bool) {
-	if userID == "" || s.ws == nil {
-		return "", false
-	}
-	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
-	if err != nil {
-		return "", false
-	}
-	if wsp.OwnerID == userID {
-		return domain.RoleOwner, true
-	}
-	members, err := s.ws.ListMembers(ctx, workspaceID)
-	if err != nil {
-		return "", false
-	}
-	for _, member := range members {
-		if member.UserID == userID && domain.ValidRole(member.Role) {
-			return member.Role, true
-		}
-	}
-	return "", false
+func (s *Service) repositoryRole(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool) {
+	return repositoryRole(ctx, s.repositories, repositoryID, userID)
 }
 
 // normalizeGitURL is for normalizing git origin URLs (same rules as CLI gitctx.NormalizeRemoteURL:
@@ -1813,13 +1794,12 @@ func pathSegs(p string) []string {
 	return strings.Split(p, "/")
 }
 
-// workspaceForURL resolves the namespace/workspace prefix of a repository URL.
-// New repository identities have three segments
-// /<namespace>/<workspace>/<repository>. Existing two-segment identities stay
-// valid because their URL hash is their stable RepoID.
-func (s *Service) workspaceForURL(ctx context.Context, remoteURL string) (string, error) {
-	if s.ws == nil {
-		return "", fmt.Errorf("%w: workspace binding store unavailable", domain.ErrForbidden)
+// repositoryForURL resolves /<owner>/<repository> or an exact historical
+// three-segment alias. Aliases retain the original content identity and always
+// authorize against their current repository boundary.
+func (s *Service) repositoryForURL(ctx context.Context, remoteURL string) (string, error) {
+	if s.repositories == nil {
+		return "", fmt.Errorf("%w: repository binding store unavailable", domain.ErrForbidden)
 	}
 	remoteURL = strings.TrimSpace(remoteURL)
 	if remoteURL == "" {
@@ -1834,36 +1814,34 @@ func (s *Service) workspaceForURL(ctx context.Context, remoteURL string) (string
 	}
 	seg := pathSegs(u.Path)
 	if len(seg) != 2 && len(seg) != 3 {
-		return "", fmt.Errorf("%w: repo URL must be <host>/<namespace>/<workspace>/<repository> (or a legacy two-segment URL): %q", domain.ErrValidation, remoteURL)
+		return "", fmt.Errorf("%w: repo URL must be <host>/<owner>/<repository> (or an existing legacy connection alias): %q", domain.ErrValidation, remoteURL)
 	}
 	for _, part := range seg {
 		if part == "" || part == "." || part == ".." {
 			return "", fmt.Errorf("%w: repo URL contains an invalid path segment: %q", domain.ErrValidation, remoteURL)
 		}
 	}
-	var wsp domain.Workspace
-	if namespaces, ok := s.ws.(outbound.EnterpriseStore); ok {
+	var repositoryRecord domain.Repository
+	if namespaces, ok := s.repositories.(outbound.OrganizationStore); ok {
 		if namespace, nerr := namespaces.GetNamespaceBySlug(ctx, seg[0]); nerr == nil {
-			wsp, err = s.ws.GetWorkspaceByNamespacePath(ctx, namespace.ID, seg[1])
+			repositoryRecord, err = s.repositories.GetRepositoryByNamespacePath(ctx, namespace.ID, strings.Join(seg[1:], "/"))
+			if errors.Is(err, domain.ErrNotFound) {
+				repositoryRecord, err = s.repositories.GetRepositoryByPath(ctx, seg[0], strings.Join(seg[1:], "/"))
+			}
 		} else {
 			if !errors.Is(nerr, domain.ErrNotFound) {
 				return "", nerr
 			}
-			// Local FS records created before Namespace support have no registry
-			// row until the owner logs in. A legacy owner/path lookup keeps those
-			// stable RepoIDs usable without allowing an Enterprise collision.
-			wsp, err = s.ws.GetWorkspaceByPath(ctx, seg[0], seg[1])
-			if err == nil && wsp.OwnerNamespaceID != "" {
-				err = nerr
-			}
+			// The exact stored alias may use a handle predating the registry.
+			repositoryRecord, err = s.repositories.GetRepositoryByPath(ctx, seg[0], strings.Join(seg[1:], "/"))
 		}
 	} else {
-		wsp, err = s.ws.GetWorkspaceByPath(ctx, seg[0], seg[1])
+		repositoryRecord, err = s.repositories.GetRepositoryByPath(ctx, seg[0], strings.Join(seg[1:], "/"))
 	}
 	if err != nil {
-		return "", fmt.Errorf("%w: repo remote_url does not match an existing workspace: %q", domain.ErrForbidden, remoteURL)
+		return "", fmt.Errorf("%w: repo remote_url does not match an existing repository: %q", domain.ErrForbidden, remoteURL)
 	}
-	return wsp.ID, nil
+	return repositoryRecord.ID, nil
 }
 
 // normalizeAboutWebsite ensures that the About website href is stored as an XSS-safe absolute URL.
@@ -1909,20 +1887,20 @@ func (s *Service) ListRepos(ctx context.Context, team string) ([]domain.Repo, er
 }
 
 // Activity groups the "Contribution activity" feed by month (latest month first):
-// Monthly context commit bundles (workspace counts) + workspaces created that month.
-// Workspaces are already filtered by visibility in the caller (PublicUser).
-func (s *Service) Activity(ctx context.Context, workspaces []domain.Workspace) ([]domain.ActivityMonth, error) {
-	wsByID := make(map[string]domain.Workspace, len(workspaces))
-	for _, w := range workspaces {
-		wsByID[w.ID] = w
+// Monthly context commit bundles (repository counts) + repositories created that month.
+// Repositories are already filtered by visibility in the caller (PublicUser).
+func (s *Service) Activity(ctx context.Context, repositories []domain.Repository) ([]domain.ActivityMonth, error) {
+	repositoryByID := make(map[string]domain.Repository, len(repositories))
+	for _, w := range repositories {
+		repositoryByID[w.ID] = w
 	}
 	repos, err := s.meta.ListRepos(ctx, "default")
 	if err != nil {
 		return nil, err
 	}
-	commits := map[string]map[string]int{} // month -> wsID -> count
+	commits := map[string]map[string]int{} // month -> repositoryID -> count
 	for _, r := range repos {
-		if _, ok := wsByID[r.WorkspaceID]; !ok {
+		if _, ok := repositoryByID[r.RepositoryID]; !ok {
 			continue
 		}
 		snaps, err := s.meta.ListSnapshots(ctx, r.ID, "")
@@ -1937,11 +1915,11 @@ func (s *Service) Activity(ctx context.Context, workspaces []domain.Workspace) (
 			if commits[m] == nil {
 				commits[m] = map[string]int{}
 			}
-			commits[m][r.WorkspaceID]++
+			commits[m][r.RepositoryID]++
 		}
 	}
-	created := map[string][]domain.Workspace{} // month -> workspaces created
-	for _, w := range workspaces {
+	created := map[string][]domain.Repository{} // month -> repositories created
+	for _, w := range repositories {
 		if !w.CreatedAt.IsZero() {
 			created[w.CreatedAt.UTC().Format("2006-01")] = append(created[w.CreatedAt.UTC().Format("2006-01")], w)
 		}
@@ -1959,7 +1937,7 @@ func (s *Service) Activity(ctx context.Context, workspaces []domain.Workspace) (
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(months))) // latest month first
 
-	path := func(w domain.Workspace) string { return w.OwnerUsername + "/" + w.Slug }
+	path := func(w domain.Repository) string { return w.OwnerUsername + "/" + w.Slug }
 	out := make([]domain.ActivityMonth, 0, len(months))
 	for _, m := range months {
 		// These fields are required arrays in the public API. A nil Go slice is
@@ -1970,15 +1948,15 @@ func (s *Service) Activity(ctx context.Context, workspaces []domain.Workspace) (
 			CommitRepos: make([]domain.ActivityRepo, 0),
 			Created:     make([]domain.ActivityCreated, 0),
 		}
-		for wsID, c := range commits[m] {
-			w := wsByID[wsID]
+		for repositoryID, c := range commits[m] {
+			w := repositoryByID[repositoryID]
 			am.CommitTotal += c
 			am.CommitRepos = append(am.CommitRepos, domain.ActivityRepo{Name: w.Name, Path: path(w), Count: c})
 		}
 		sort.Slice(am.CommitRepos, func(i, j int) bool { return am.CommitRepos[i].Count > am.CommitRepos[j].Count })
-		cws := created[m]
-		sort.Slice(cws, func(i, j int) bool { return cws[i].CreatedAt.After(cws[j].CreatedAt) })
-		for _, w := range cws {
+		createdRepository := created[m]
+		sort.Slice(createdRepository, func(i, j int) bool { return createdRepository[i].CreatedAt.After(createdRepository[j].CreatedAt) })
+		for _, w := range createdRepository {
 			vis := string(w.Visibility)
 			if vis == "" {
 				vis = "private"
@@ -1992,16 +1970,16 @@ func (s *Service) Activity(ctx context.Context, workspaces []domain.Workspace) (
 	return out, nil
 }
 
-// Contributions aggregates repo commits by date (YYYY-MM-DD, UTC) for the given workspaces
+// Contributions aggregates repo commits by date (YYYY-MM-DD, UTC) for the given repositories
 // (for contribution heatmap). Hooks and stash are excluded — only actual context commits are counted.
 // Note: repo/snapshot full traversal, inefficient for large-scale — assumes small self-hosted (future DB aggregation optimization possible).
-func (s *Service) Contributions(ctx context.Context, workspaceIDs []string) (map[string]int, error) {
+func (s *Service) Contributions(ctx context.Context, repositoryIDs []string) (map[string]int, error) {
 	out := map[string]int{}
-	if len(workspaceIDs) == 0 {
+	if len(repositoryIDs) == 0 {
 		return out, nil
 	}
-	wanted := make(map[string]bool, len(workspaceIDs))
-	for _, id := range workspaceIDs {
+	wanted := make(map[string]bool, len(repositoryIDs))
+	for _, id := range repositoryIDs {
 		wanted[id] = true
 	}
 	repos, err := s.meta.ListRepos(ctx, "default")
@@ -2009,7 +1987,7 @@ func (s *Service) Contributions(ctx context.Context, workspaceIDs []string) (map
 		return nil, err
 	}
 	for _, r := range repos {
-		if !wanted[r.WorkspaceID] {
+		if !wanted[r.RepositoryID] {
 			continue
 		}
 		snaps, err := s.meta.ListSnapshots(ctx, r.ID, "")

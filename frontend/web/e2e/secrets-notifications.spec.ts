@@ -12,12 +12,12 @@ function envelope(plain: string, revision: string) {
 const head = `sha256:${'a'.repeat(64)}`;
 const snapshot = { id: head, doc_hash: head, repo_id: repo, branch: 'main', parents: [], provider: 'codex', created_at: '2026-09-18T00:00:00Z', message: 'Fixture context' };
 const refs = [{ kind: 'branch', name: 'main', repo_id: repo, target: head }];
-const workspace = { id: 'ws-secrets', name: 'cxthub', slug: 'cxthub', owner_id: 'owner', owner_username: 'alice', visibility: 'private' };
+const repository = { id: 'repository-secrets', name: 'cxthub', slug: 'cxthub', owner_id: 'owner', effective_role: 'owner', owner_username: 'alice', visibility: 'private' };
 function base({ method, pathname }: ApiRequest): ApiResponse | undefined {
   if (method !== 'GET') return undefined;
   if (pathname === '/api/v1/me') return { body: { id: 'owner', username: 'alice', locale: 'en', email: 'alice@example.test' } };
-  if (pathname === '/api/v1/workspaces') return { body: [workspace] };
-  if (pathname.endsWith('/members')) return { body: [{ workspace_id: workspace.id, user_id: 'owner', role: 'owner' }] };
+  if (pathname === '/api/v1/repositories') return { body: [repository] };
+  if (pathname.endsWith('/members')) return { body: [{ repository_id: repository.id, user_id: 'owner', role: 'owner' }] };
   if (pathname.endsWith('/invites')) return { body: [] };
   if (pathname === '/api/v1/repos') return { body: [{ id: repo, remote_url: 'https://cxthub.com/alice/cxthub', default_branch: 'main' }] };
   if (pathname.endsWith('/view')) return { body: { refs, snapshots: [snapshot], history: [], pending: [], unsync: [], reflog: [] } };
@@ -84,7 +84,7 @@ test('notification history shows safe failure status and retries against current
   let state = 'attention', attempts = 8;
   const unexpected = await installApiFixture(page, r => {
     if (r.pathname.endsWith('/notifications/event-1/retry')) { expect(r.method).toBe('POST'); state = 'pending'; attempts = 0; return { body: { status: 'queued' } }; }
-    if (r.pathname.endsWith('/notifications')) return { body: [{ id: 'event-1', workspace_id: workspace.id, kind: 'secrets_updated', text: 'cxthub: secrets updated', state, reason: state === 'attention' ? 'attempts_exhausted' : '', http_status: 503, attempts, created_at: '2026-09-18T00:00:00Z', next_attempt: '2026-09-18T00:00:00Z' }] };
+    if (r.pathname.endsWith('/notifications')) return { body: [{ id: 'event-1', repository_id: repository.id, kind: 'secrets_updated', text: 'cxthub: secrets updated', state, reason: state === 'attention' ? 'attempts_exhausted' : '', http_status: 503, attempts, created_at: '2026-09-18T00:00:00Z', next_attempt: '2026-09-18T00:00:00Z' }] };
     if (r.pathname.endsWith('/secrets')) return { body: null };
     return base(r);
   });

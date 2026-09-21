@@ -1,6 +1,6 @@
 // 5-tier role ladder — UI response to server gate (requireRepoRole).
 // UI gating is for usability, not security (enforcement is always done by the server).
-import type { Membership, Workspace } from './types';
+import type { Membership, Repository } from './types';
 
 export type Role = 'viewer' | 'puller' | 'member' | 'maintainer' | 'owner';
 
@@ -11,16 +11,16 @@ export const ROLE_RANK: Record<string, number> = { viewer: 1, puller: 2, member:
 
 export const ROLES: Role[] = ['viewer', 'puller', 'member', 'maintainer', 'owner'];
 
-// Cumulative workspace capability baseline. Keep this list aligned with the
+// Cumulative repository capability baseline. Keep this list aligned with the
 // server's requireRepoRole contract (backend/internal/domain/identity.go).
-// Workspace policies may narrow selected maintainer capabilities to owner,
+// Repository policies may narrow selected maintainer capabilities to owner,
 // but they never grant a capability below this baseline.
 export type RoleCapability =
   | 'viewContext'
   | 'pullTeamAssets'
   | 'pushContext'
   | 'manageTeamAssets'
-  | 'administerWorkspace';
+  | 'administerRepository';
 
 export const ROLE_CAPABILITIES: ReadonlyArray<{
   id: RoleCapability;
@@ -30,16 +30,16 @@ export const ROLE_CAPABILITIES: ReadonlyArray<{
   { id: 'pullTeamAssets', minimumRole: 'puller' },
   { id: 'pushContext', minimumRole: 'member' },
   { id: 'manageTeamAssets', minimumRole: 'maintainer' },
-  { id: 'administerWorkspace', minimumRole: 'owner' },
+  { id: 'administerRepository', minimumRole: 'owner' },
 ];
 
-/** Role within the workspace. The constructor is always owner, null for non-members. */
-export function myRole(ws: Workspace | null, userId: string | undefined, members: Membership[]): Role | null {
-  if (!ws || !userId) return null;
-  if (ws.owner_id === userId) return 'owner';
-  const m = members.find((x) => x.user_id === userId);
-  if (!m) return null;
-  return (ROLE_RANK[m.role] ? m.role : 'member') as Role; // Unknown values are displayed as the default role.
+/** Role within the repository. The constructor is always owner, null for non-members. */
+export function myRole(repositoryMetadata: Repository | null, userId: string | undefined, members: Membership[]): Role | null {
+  if (!repositoryMetadata || !userId) return null;
+  // Team and direct grants are resolved by the server. Missing/unknown roles
+  // fail closed until the authorization projection has loaded.
+  void members;
+  return repositoryMetadata.effective_role && ROLE_RANK[repositoryMetadata.effective_role] ? repositoryMetadata.effective_role : null;
 }
 
 /** Checks if role is min or above (same rules as server RoleRank — undefined/null always return false). */

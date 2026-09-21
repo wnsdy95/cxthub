@@ -37,14 +37,14 @@ func TestGitScanSignedDeliveryAuthorizationAndReadback(t *testing.T) {
 		Username string `json:"username"`
 	}
 	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
-	var ws struct {
+	var repositoryRecord struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "GitScans"}, &ws); code != 200 {
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "GitScans"}, &repositoryRecord); code != 200 {
 		t.Fatal(code)
 	}
-	remote := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remote := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	repo := repoIDForRemoteURLForTest(remote)
 	origin := "https://github.com/example/scans"
 	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": repo, "remote_url": remote, "git_remote_url": origin, "default_branch": "main"}, nil); code != 200 {
@@ -102,7 +102,7 @@ func TestGitScanSignedDeliveryAuthorizationAndReadback(t *testing.T) {
 	if res.StatusCode != 415 {
 		t.Fatal("CSRF", res.StatusCode)
 	}
-	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+ws.ID, map[string]any{"visibility": "public", "public_role": "viewer"}, nil); code != 200 {
+	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/repositories/"+repositoryRecord.ID, map[string]any{"visibility": "public", "public_role": "viewer"}, nil); code != 200 {
 		t.Fatal(code)
 	}
 	if code := doJSONAs(t, "", "GET", endpoint, nil, nil); code != 200 {

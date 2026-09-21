@@ -1,10 +1,10 @@
-// User profile — GitHub style /<username> page. Left avatar/name, right workspace list
-// (repo card space). Anonymous view (only public workspaces), owner includes private + 'Edit Profile'.
+// User profile — GitHub style /<username> page. Left avatar/name, right repository list
+// (repo card space). Anonymous view (only public repositories), owner includes private + 'Edit Profile'.
 // (Contribution graph/activity feed requires commit date aggregation — next step.)
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 import { useMe, useLogout } from '../hooks';
-import { navigate, wsPath } from '../route';
+import { navigate, repositoryPath } from '../route';
 import { Logo } from './Logo';
 import { Avatar, avatarColor } from './Avatar';
 import { useT } from '../i18n';
@@ -13,7 +13,8 @@ import { AccountSettings } from './Settings';
 import { ContributionGraph } from './ContributionGraph';
 import { ActivityFeed } from './ActivityFeed';
 import { safeAvatarUrl } from '../urls';
-import { EnterpriseProfile, MyEnterprises } from './EnterpriseProfile';
+import { MyEnterprises } from './EnterpriseProfile';
+import { OrganizationProfile, MyOrganizations } from './OrganizationProfile';
 
 export function UserProfile({ username, onLogin }: { username: string; onLogin?: () => void }) {
   const t = useT();
@@ -24,17 +25,17 @@ export function UserProfile({ username, onLogin }: { username: string; onLogin?:
     queryFn: () => api.publicUser(username),
     retry: false,
   });
-  const enterpriseQ = useQuery({
-    queryKey: ['publicEnterprise', username],
-    queryFn: () => api.publicEnterprise(username),
+  const organizationQ = useQuery({
+    queryKey: ['publicOrganization', username],
+    queryFn: () => api.publicOrganization(username),
     retry: false,
   });
 
-  if (q.isLoading || enterpriseQ.isLoading) return <div className="loading">…</div>;
+  if (q.isLoading || organizationQ.isLoading) return <div className="loading">…</div>;
 
   const data = q.data;
-  const enterprise = enterpriseQ.data;
-  const canonicalSlug = data?.user.username ?? enterprise?.slug ?? username;
+  const organization = organizationQ.data;
+  const canonicalSlug = data?.user.username ?? organization?.slug ?? username;
   return (
     <div className="app">
       <header className="topbar">
@@ -73,14 +74,14 @@ export function UserProfile({ username, onLogin }: { username: string; onLogin?:
         </div>
       </header>
 
-      {!data && !enterprise ? (
+      {!data && !organization ? (
         <div className="profile">
           <div className="empty-box">
             {t('profile.namespaceNotFound')} <code>{username}</code>
           </div>
         </div>
-      ) : enterprise ? (
-        <EnterpriseProfile data={enterprise} />
+      ) : organization ? (
+        <OrganizationProfile data={organization} />
       ) : (
         <ProfileBody data={data!} isSelf={Boolean(me && me.username === data!.user.username)} me={me ?? null} />
       )}
@@ -93,7 +94,7 @@ function ProfileBody({
   isSelf,
   me,
 }: {
-  data: { user: import('../types').PublicUser; workspaces: import('../types').PublicWorkspace[] };
+  data: { user: import('../types').PublicUser; repositories: import('../types').PublicRepository[] };
   isSelf: boolean;
   me: import('../types').User | null;
 }) {
@@ -101,7 +102,7 @@ function ProfileBody({
   const u = data.user;
   const displayName = u.nickname || u.name || u.username;
   const initial = (displayName || u.username || '?').trim().charAt(0).toUpperCase();
-  const workspaces = data.workspaces ?? [];
+  const repositories = data.repositories ?? [];
   const avatar = safeAvatarUrl(u.avatar);
 
   return (
@@ -124,20 +125,20 @@ function ProfileBody({
 
       <main className="profile-main">
         <div className="profile-section-head">
-          <h2 className="profile-section">{t('common.workspaces')}</h2>
-          <span className="count-badge">{workspaces.length}</span>
+          <h2 className="profile-section">{t('common.repositories')}</h2>
+          <span className="count-badge">{repositories.length}</span>
         </div>
-        {workspaces.length === 0 ? (
+        {repositories.length === 0 ? (
           <div className="empty-box">
-            {isSelf ? t('profile.noWorkspacesSelf') : t('profile.noWorkspacesPublic')}
+            {isSelf ? t('profile.noRepositoriesSelf') : t('profile.noRepositoriesPublic')}
           </div>
         ) : (
-          <div className="ws-cards">
-            {workspaces.map((w) => (
-              <button key={w.id} className="ws-card" onClick={() => navigate(wsPath(w))}>
-                <span className="ws-card-top">
-                  <span className="ws-card-name">{w.name}</span>
-                  <span className="ws-card-vis">
+          <div className="repository-cards">
+            {repositories.map((w) => (
+              <button key={w.id} className="repository-card" onClick={() => navigate(repositoryPath(w))}>
+                <span className="repository-card-top">
+                  <span className="repository-card-name">{w.name}</span>
+                  <span className="repository-card-vis">
                     {w.visibility === 'public' ? (
                       t('common.public')
                     ) : (
@@ -147,7 +148,7 @@ function ProfileBody({
                     )}
                   </span>
                 </span>
-                <span className="ws-card-path">
+                <span className="repository-card-path">
                   {w.owner_username}/{w.slug}
                 </span>
               </button>
@@ -155,7 +156,7 @@ function ProfileBody({
           </div>
         )}
 
-        {isSelf && <MyEnterprises />}
+        {isSelf && <><MyOrganizations /><MyEnterprises /></>}
 
         <ContributionGraph username={u.username} />
         <ActivityFeed username={u.username} />

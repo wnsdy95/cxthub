@@ -108,7 +108,7 @@ func TestMCPAllowanceSharedAcrossServerInstances(t *testing.T) {
 	}
 }
 
-func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
+func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "oauth-user", Email: "oauth@example.test", Name: "OAuth User", Username: "oauth-user"}
@@ -117,32 +117,32 @@ func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace, err := id.CreateWorkspace(ctx, user, "Project")
+	repository, err := id.CreateRepository(ctx, user, "Project")
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateOther := domain.Workspace{
+	privateOther := domain.Repository{
 		ID: domain.NewID("ws_"), Name: "Secret", OwnerID: "other-user", Slug: "secret",
 		OwnerUsername: "other", CreatedAt: time.Now().UTC(),
 	}
 	if err := st.UpsertUser(ctx, domain.User{ID: "other-user", Email: "other@example.test", Name: "Other", Username: "other"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateWorkspace(ctx, privateOther); err != nil {
+	if err := st.CreateRepository(ctx, privateOther); err != nil {
 		t.Fatal(err)
 	}
 	repoID := domain.HashContent([]byte("authorized-repository"))
 	otherRepoID := domain.HashContent([]byte("hidden-repository"))
 	backend := fakeContextBackend{repos: []domain.Repo{
-		{ID: repoID, RemoteURL: "https://cxthub.test/oauth-user/project/app", DefaultBranch: "main", WorkspaceID: workspace.ID},
-		{ID: otherRepoID, RemoteURL: "https://cxthub.test/other/secret/private", DefaultBranch: "main", WorkspaceID: privateOther.ID},
+		{ID: repoID, RemoteURL: "https://cxthub.test/oauth-user/project", DefaultBranch: "main", RepositoryID: repository.ID},
+		{ID: otherRepoID, RemoteURL: "https://cxthub.test/other/secret", DefaultBranch: "main", RepositoryID: privateOther.ID},
 	}}
 	server, err := NewServer(backend, id, st, "https://cxthub.test")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, selector := range []string{string(repoID), "oauth-user/project/app", "https://cxthub.test/oauth-user/project/app"} {
+	for _, selector := range []string{string(repoID), "oauth-user/project", "https://cxthub.test/oauth-user/project"} {
 		resolved, err := server.resolveRepository(ctx, user, selector)
 		if err != nil || resolved.ID != repoID {
 			t.Fatalf("repository selector %q: %v", selector, err)
@@ -257,10 +257,10 @@ func TestRemoteMCPDCRPKCERefreshAndWorkspaceIsolation(t *testing.T) {
 	mcpResponse := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(listCall), map[string]string{
 		"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Authorization": "Bearer " + tokens.AccessToken,
 	})
-	if mcpResponse.Code != http.StatusOK || !strings.Contains(mcpResponse.Body.String(), "oauth-user/project/app") {
+	if mcpResponse.Code != http.StatusOK || !strings.Contains(mcpResponse.Body.String(), "oauth-user/project") {
 		t.Fatalf("MCP authorized list = %d: %s", mcpResponse.Code, mcpResponse.Body.String())
 	}
-	if strings.Contains(mcpResponse.Body.String(), "other/secret/private") {
+	if strings.Contains(mcpResponse.Body.String(), "other/secret") {
 		t.Fatalf("private non-member repository leaked: %s", mcpResponse.Body.String())
 	}
 	ambiguousMCP := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(listCall+`{}`), map[string]string{
@@ -517,13 +517,13 @@ func TestRemoteMemoryOutputIsBounded(t *testing.T) {
 }
 
 func TestRemoteRepositoryListOutputIsBoundedAndFilterable(t *testing.T) {
-	repositories := make([]domain.Repo, 105)
+	repositories := make([]listedRepository, 105)
 	for i := range repositories {
-		repositories[i] = domain.Repo{
+		repositories[i] = listedRepository{Path: fmt.Sprintf("acme/repository-%03d", i), Repo: domain.Repo{
 			ID:            domain.HashContent([]byte(fmt.Sprintf("repository-%03d", i))),
 			RemoteURL:     fmt.Sprintf("https://cxthub.test/acme/platform/repository-%03d", i),
 			DefaultBranch: "main",
-		}
+		}}
 	}
 	got, err := formatRepositoryList(repositories, "", 0)
 	if err != nil {
@@ -552,4 +552,68 @@ func (f fakeProjectionSource) GetMemory(ctx context.Context, repo, hash domain.C
 }
 func (f fakeContextBackend) GetMemoryProjection(ctx context.Context, repo, id domain.ContentHash) (domain.MemoryProjection, error) {
 	return app.ProjectMemory(ctx, fakeProjectionSource{f}, repo, id)
+}
+
+func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewFSStore(t.TempDir())
+	id := app.NewIdentityService(nil, st)
+	owner := domain.User{ID: "owner", Username: "owner", Name: "Owner", Email: "owner@example.test"}
+	member := domain.User{ID: "member", Username: "member", Name: "Member", Email: "member@example.test"}
+	for _, user := range []domain.User{owner, member} {
+		if err := st.UpsertUser(ctx, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	org, err := id.CreateOrganization(ctx, owner, "Acme", "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = id.UpdateOrganizationMember(ctx, owner.ID, org.ID, member.ID, domain.OrganizationMember); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := id.CreateOrganizationRepository(ctx, owner, org.ID, "API")
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := id.CreateTeam(ctx, owner.ID, org.ID, "Backend", "backend", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = id.UpdateTeamMember(ctx, owner.ID, org.ID, team.ID, member.ID, domain.TeamMember); err != nil {
+		t.Fatal(err)
+	}
+	if err = id.SetTeamRepository(ctx, owner.ID, org.ID, team.ID, repository.ID, domain.RoleViewer); err != nil {
+		t.Fatal(err)
+	}
+	content := domain.Repo{ID: domain.HashContent([]byte("stable-content")), RepositoryID: repository.ID, RemoteURL: "https://example.test/acme/api"}
+	if _, err = st.PutRepo(ctx, content); err != nil {
+		t.Fatal(err)
+	}
+	renamed := "renamed"
+	if _, err = id.UpdateRepositorySettings(ctx, owner.ID, repository.ID, app.RepositoryPatch{Slug: &renamed}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(fakeContextBackend{repos: []domain.Repo{content}}, id, st, "https://example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := server.visibleRepositories(ctx, member)
+	if err != nil || len(visible) != 1 || visible[0].Path != "acme/renamed" {
+		t.Fatalf("canonical list: %+v %v", visible, err)
+	}
+	selectors := []string{"acme/renamed", "acme/api", string(content.ID)}
+	for _, selector := range selectors {
+		if got, err := server.resolveRepository(ctx, member, selector); err != nil || got.ID != content.ID {
+			t.Fatalf("%s: %+v %v", selector, got, err)
+		}
+	}
+	if err = id.RemoveTeamMember(ctx, owner.ID, org.ID, team.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, selector := range selectors {
+		if _, err := server.resolveRepository(ctx, member, selector); err == nil {
+			t.Fatalf("revoked grant still resolves %s", selector)
+		}
+	}
 }

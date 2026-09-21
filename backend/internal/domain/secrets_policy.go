@@ -115,6 +115,6 @@ func ValidateSecretsEdit(current, candidate []byte, edit SecretsEdit) error {
 	return nil
 }
 
-func CanEditSecrets(wsp Workspace, role MemberRole) bool {
-	return !wsp.Archived && role.AtLeast(RoleMaintainer) && PolicyAllows(wsp.SecretsPolicy, role == RoleOwner)
+func CanEditSecrets(repositoryRecord Repository, role MemberRole) bool {
+	return !repositoryRecord.Archived && role.AtLeast(RoleMaintainer) && PolicyAllows(repositoryRecord.SecretsPolicy, role == RoleOwner)
 }

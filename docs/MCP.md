@@ -22,7 +22,7 @@ https://cxthub.com/mcp
 cxtd remote MCP delivery adapter
         │
         ├─ OAuth user resolution (`mcp:read`)
-        ├─ Workspace public/member/break-glass policy
+        ├─ Repository public/member/break-glass policy
         ├─ read-only context application service
         └─ bounded response projection
         │
@@ -51,7 +51,7 @@ MCP tools for save, commit, checkout, fork, restore, push, pull, settings,
 secrets, membership, or break-glass administration.
 
 `repository_list` is the cloud discovery step. The other tools require an
-explicit repository selector (`namespace/workspace/repository` or repository
+explicit repository selector (`owner/repository` or repository
 ID). A remote client never depends on a workstation's current directory.
 
 ### History scope and working position
@@ -154,8 +154,8 @@ cannot be presented to ordinary REST endpoints.
 
 Repository visibility follows the context-viewing boundary:
 
-- public Workspace repositories are readable;
-- private Workspace repositories require at least Viewer membership;
+- public Repository repositories are readable;
+- private Repository repositories require at least Viewer membership;
 - Enterprise administration alone grants no repository context access;
 - an Enterprise Owner may use an active, reason-bound, expiring, audited
   read-only break-glass grant;

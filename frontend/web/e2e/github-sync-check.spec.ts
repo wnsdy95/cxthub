@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { installApiFixture, capturePageErrors } from './api-fixture';
 
-const repo = 'repo-audit', workspace = { id: 'ws-audit', name: 'project', slug: 'project', owner_id: 'owner', owner_username: 'alice', visibility: 'private' };
+const repo = 'repo-audit', repository = { id: 'repository-audit', name: 'project', slug: 'project', owner_id: 'owner', effective_role: 'owner', owner_username: 'alice', visibility: 'private' };
 for (const conflict of [false, true]) test(`GitHub sync audit runs only on click and preserves partial results: conflict=${conflict}`, async ({ page }) => {
  const errors = capturePageErrors(page); let calls = 0;
  const unexpected = await installApiFixture(page, r => {
@@ -12,9 +12,9 @@ for (const conflict of [false, true]) test(`GitHub sync audit runs only on click
   }
   if (r.method !== 'GET') return undefined;
   if (r.pathname === '/api/v1/me') return {body:{id:'owner',username:'alice',locale:'en',email:'alice@example.test'}};
-  if (r.pathname === '/api/v1/workspaces') return {body:[workspace]};
+  if (r.pathname === '/api/v1/repositories') return {body:[repository]};
   if (r.pathname === '/api/v1/repos') return {body:[{id:repo,default_branch:'main',context_protocol:1}]};
-  if (r.pathname.endsWith('/members')) return {body:[{workspace_id:workspace.id,user_id:'owner',role:'owner'}]};
+  if (r.pathname.endsWith('/members')) return {body:[{repository_id:repository.id,user_id:'owner',role:'owner'}]};
   if (r.pathname.endsWith('/view')) return {body:{refs:[],snapshots:[],history:[],reflog:[],pending:[],unsync:[]}};
   if (/\/(refs|snapshots|pending|unsync|history|reflog|notifications|invites)$/.test(r.pathname)) return {body:[]};
   if (r.pathname.endsWith('/secrets')) return {body:null};

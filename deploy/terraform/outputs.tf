@@ -31,5 +31,5 @@ output "dns_records" {
 
 output "cli_remote_example" {
   description = "Remote URL format for team onboarding."
-  value       = "cxt remote add origin https://${var.domain}/<username>/<workspace>/<repo>"
+  value       = "cxt remote add origin https://${var.domain}/<owner>/<repository>"
 }

@@ -5,11 +5,11 @@
 import { create } from 'zustand';
 
 interface UiState {
-  selectedWorkspaceId: string | null;
-  selectWorkspace: (id: string | null) => void;
+  selectedRepositoryId: string | null;
+  selectRepository: (id: string | null) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
-  selectedWorkspaceId: null,
-  selectWorkspace: (id) => set({ selectedWorkspaceId: id }),
+  selectedRepositoryId: null,
+  selectRepository: (id) => set({ selectedRepositoryId: id }),
 }));

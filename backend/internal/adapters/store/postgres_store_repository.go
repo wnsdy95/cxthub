@@ -4,11 +4,12 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-// PostgresStore implementation of WorkspaceStore (0002 schema: users/workspaces/memberships/invites).
+// PostgresStore implementation of RepositoryStore (0002 schema: users/repositories/memberships/invites).
 
 func (s *PostgresStore) UpsertUser(ctx context.Context, u domain.User) error {
 	if err := domain.ValidateUserRecord(u); err != nil {
@@ -54,12 +55,12 @@ func (s *PostgresStore) GetUserByUsername(ctx context.Context, username string) 
 	return u, nil
 }
 
-func (s *PostgresStore) CreateWorkspace(ctx context.Context, ws domain.Workspace) error {
-	if err := domain.ValidateWorkspaceRecord(ws); err != nil {
+func (s *PostgresStore) CreateRepository(ctx context.Context, repositoryRecord domain.Repository) error {
+	if err := domain.ValidateRepositoryRecord(repositoryRecord); err != nil {
 		return storageWriteError(err)
 	}
 	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO workspaces (id, name, owner_id, slug, owner_username, owner_namespace_id, visibility, secrets_policy, settings_policy, gh_visibility_sync, gh_synced_at, archived, webhook_url, public_role)
+		`INSERT INTO repositories (id, name, owner_id, slug, owner_username, owner_namespace_id, visibility, secrets_policy, settings_policy, gh_visibility_sync, gh_synced_at, archived, webhook_url, public_role)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		 ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, slug=EXCLUDED.slug, owner_username=EXCLUDED.owner_username,
 		 owner_namespace_id=EXCLUDED.owner_namespace_id,
@@ -67,84 +68,103 @@ func (s *PostgresStore) CreateWorkspace(ctx context.Context, ws domain.Workspace
 		 owner_id=EXCLUDED.owner_id,
 		 gh_visibility_sync=EXCLUDED.gh_visibility_sync, gh_synced_at=EXCLUDED.gh_synced_at,
 		 archived=EXCLUDED.archived, webhook_url=EXCLUDED.webhook_url, public_role=EXCLUDED.public_role`,
-		ws.ID, ws.Name, ws.OwnerID, ws.Slug, ws.OwnerUsername, pgNullableString(ws.OwnerNamespaceID), string(ws.Visibility), ws.SecretsPolicy, ws.SettingsPolicy, ws.GHVisibilitySync, ws.GHSyncedAt, ws.Archived, ws.WebhookURL, ws.PublicRole)
+		repositoryRecord.ID, repositoryRecord.Name, repositoryRecord.OwnerID, repositoryRecord.Slug, repositoryRecord.OwnerUsername, pgNullableString(repositoryRecord.OwnerNamespaceID), string(repositoryRecord.Visibility), repositoryRecord.SecretsPolicy, repositoryRecord.SettingsPolicy, repositoryRecord.GHVisibilitySync, repositoryRecord.GHSyncedAt, repositoryRecord.Archived, repositoryRecord.WebhookURL, repositoryRecord.PublicRole)
 	return storageWriteError(err)
 }
 
-func (s *PostgresStore) GetWorkspace(ctx context.Context, id string) (domain.Workspace, error) {
-	if err := domain.ValidateWorkspaceID(id); err != nil {
-		return domain.Workspace{}, err
+func (s *PostgresStore) GetRepository(ctx context.Context, id string) (domain.Repository, error) {
+	if err := domain.ValidateRepositoryID(id); err != nil {
+		return domain.Repository{}, err
 	}
-	var ws domain.Workspace
-	err := s.db(ctx).QueryRow(ctx, `SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(owner_namespace_id,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at FROM workspaces WHERE id=$1`, id).
-		Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.OwnerNamespaceID, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt)
+	var repositoryRecord domain.Repository
+	err := s.db(ctx).QueryRow(ctx, `SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(owner_namespace_id,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at FROM repositories WHERE id=$1`, id).
+		Scan(&repositoryRecord.ID, &repositoryRecord.Name, &repositoryRecord.OwnerID, &repositoryRecord.Slug, &repositoryRecord.OwnerUsername, &repositoryRecord.OwnerNamespaceID, &repositoryRecord.Visibility, &repositoryRecord.SecretsPolicy, &repositoryRecord.SettingsPolicy, &repositoryRecord.GHVisibilitySync, &repositoryRecord.GHSyncedAt, &repositoryRecord.Archived, &repositoryRecord.WebhookURL, &repositoryRecord.PublicRole, &repositoryRecord.CreatedAt)
 	if err != nil {
-		return domain.Workspace{}, mapNoRows(err)
+		return domain.Repository{}, mapNoRows(err)
 	}
-	if ws.ID != id {
-		return domain.Workspace{}, domain.ErrNotFound
+	if repositoryRecord.ID != id {
+		return domain.Repository{}, domain.ErrNotFound
 	}
-	if err := domain.ValidateWorkspaceRecord(ws); err != nil {
-		return domain.Workspace{}, storedIdentityIntegrity(err)
+	if err := domain.ValidateRepositoryRecord(repositoryRecord); err != nil {
+		return domain.Repository{}, storedIdentityIntegrity(err)
 	}
-	return ws, nil
+	return repositoryRecord, nil
 }
 
-// GetWorkspaceByPath finds a workspace by URL segments (owner_username, slug).
-func (s *PostgresStore) GetWorkspaceByPath(ctx context.Context, ownerUsername, slug string) (domain.Workspace, error) {
-	var ws domain.Workspace
+// GetRepositoryByPath finds a repository by URL segments (owner_username, slug).
+func (s *PostgresStore) GetRepositoryByPath(ctx context.Context, ownerUsername, slug string) (domain.Repository, error) {
+	var repositoryRecord domain.Repository
 	err := s.db(ctx).QueryRow(ctx,
 		`SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(owner_namespace_id,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at
-		 FROM workspaces WHERE owner_username=$1 AND slug=$2`, ownerUsername, slug).
-		Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.OwnerNamespaceID, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt)
+		 FROM repositories WHERE owner_username=$1 AND slug=$2`, ownerUsername, slug).
+		Scan(&repositoryRecord.ID, &repositoryRecord.Name, &repositoryRecord.OwnerID, &repositoryRecord.Slug, &repositoryRecord.OwnerUsername, &repositoryRecord.OwnerNamespaceID, &repositoryRecord.Visibility, &repositoryRecord.SecretsPolicy, &repositoryRecord.SettingsPolicy, &repositoryRecord.GHVisibilitySync, &repositoryRecord.GHSyncedAt, &repositoryRecord.Archived, &repositoryRecord.WebhookURL, &repositoryRecord.PublicRole, &repositoryRecord.CreatedAt)
+	if errors.Is(mapNoRows(err), domain.ErrNotFound) {
+		if alias, aliasErr := s.repositoryAlias(ctx, "handle:"+ownerUsername, slug); aliasErr == nil {
+			return s.GetRepository(ctx, alias.RepositoryID)
+		} else if !errors.Is(aliasErr, domain.ErrNotFound) {
+			return domain.Repository{}, aliasErr
+		}
+	}
 	if err != nil {
-		return domain.Workspace{}, mapNoRows(err)
+		return domain.Repository{}, mapNoRows(err)
 	}
-	if err := domain.ValidateWorkspaceRecord(ws); err != nil {
-		return domain.Workspace{}, storedIdentityIntegrity(err)
+	if err := domain.ValidateRepositoryRecord(repositoryRecord); err != nil {
+		return domain.Repository{}, storedIdentityIntegrity(err)
 	}
-	return ws, nil
+	return repositoryRecord, nil
 }
 
-func (s *PostgresStore) GetWorkspaceByNamespacePath(ctx context.Context, namespaceID, slug string) (domain.Workspace, error) {
+func (s *PostgresStore) GetRepositoryByNamespacePath(ctx context.Context, namespaceID, slug string) (domain.Repository, error) {
 	if err := domain.ValidateNamespaceID(namespaceID); err != nil {
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
-	var ws domain.Workspace
+	var repositoryRecord domain.Repository
 	err := s.db(ctx).QueryRow(ctx,
 		`SELECT id, name, owner_id, COALESCE(slug,''), COALESCE(owner_username,''), COALESCE(owner_namespace_id,''), COALESCE(visibility,''), COALESCE(secrets_policy,''), COALESCE(settings_policy,''), COALESCE(gh_visibility_sync,false), gh_synced_at, COALESCE(archived,false), COALESCE(webhook_url,''), COALESCE(public_role,''), created_at
-		 FROM workspaces WHERE owner_namespace_id=$1 AND slug=$2`, namespaceID, slug).
-		Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.OwnerNamespaceID, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt)
+		 FROM repositories WHERE owner_namespace_id=$1 AND slug=$2`, namespaceID, slug).
+		Scan(&repositoryRecord.ID, &repositoryRecord.Name, &repositoryRecord.OwnerID, &repositoryRecord.Slug, &repositoryRecord.OwnerUsername, &repositoryRecord.OwnerNamespaceID, &repositoryRecord.Visibility, &repositoryRecord.SecretsPolicy, &repositoryRecord.SettingsPolicy, &repositoryRecord.GHVisibilitySync, &repositoryRecord.GHSyncedAt, &repositoryRecord.Archived, &repositoryRecord.WebhookURL, &repositoryRecord.PublicRole, &repositoryRecord.CreatedAt)
+	if errors.Is(mapNoRows(err), domain.ErrNotFound) {
+		if alias, aliasErr := s.repositoryAlias(ctx, namespaceID, slug); aliasErr == nil {
+			return s.GetRepository(ctx, alias.RepositoryID)
+		} else if !errors.Is(aliasErr, domain.ErrNotFound) {
+			return domain.Repository{}, aliasErr
+		}
+	}
 	if err != nil {
-		return domain.Workspace{}, mapNoRows(err)
+		return domain.Repository{}, mapNoRows(err)
 	}
-	if err := domain.ValidateWorkspaceRecord(ws); err != nil {
-		return domain.Workspace{}, storedIdentityIntegrity(err)
+	if err := domain.ValidateRepositoryRecord(repositoryRecord); err != nil {
+		return domain.Repository{}, storedIdentityIntegrity(err)
 	}
-	return ws, nil
+	return repositoryRecord, nil
 }
 
-func (s *PostgresStore) ListWorkspacesForUser(ctx context.Context, userID string) ([]domain.Workspace, error) {
+func (s *PostgresStore) ListRepositoriesForUser(ctx context.Context, userID string) ([]domain.Repository, error) {
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return nil, err
 	}
 	rows, err := s.db(ctx).Query(ctx,
-		`SELECT w.id, w.name, w.owner_id, COALESCE(w.slug,''), COALESCE(w.owner_username,''), COALESCE(w.owner_namespace_id,''), COALESCE(w.visibility,''), COALESCE(w.secrets_policy,''), COALESCE(w.settings_policy,''), COALESCE(w.gh_visibility_sync,false), w.gh_synced_at, COALESCE(w.archived,false), COALESCE(w.webhook_url,''), COALESCE(w.public_role,''), w.created_at FROM workspaces w
-		 JOIN memberships m ON m.workspace_id = w.id WHERE m.user_id=$1 ORDER BY w.created_at`, userID)
+		`SELECT w.id, w.name, w.owner_id, COALESCE(w.slug,''), COALESCE(w.owner_username,''), COALESCE(w.owner_namespace_id,''), COALESCE(w.visibility,''), COALESCE(w.secrets_policy,''), COALESCE(w.settings_policy,''), COALESCE(w.gh_visibility_sync,false), w.gh_synced_at, COALESCE(w.archived,false), COALESCE(w.webhook_url,''), COALESCE(w.public_role,''), w.created_at FROM repositories w
+		 WHERE w.owner_id=$1 OR EXISTS (SELECT 1 FROM memberships m WHERE m.repository_id=w.id AND m.user_id=$1)
+ OR EXISTS (SELECT 1 FROM team_repository_grants g
+ JOIN organizations o ON o.id=g.organization_id AND o.namespace_id=w.owner_namespace_id
+ JOIN team_memberships tm ON tm.team_id=g.team_id AND tm.organization_id=g.organization_id
+ JOIN organization_memberships om ON om.organization_id=g.organization_id AND om.user_id=tm.user_id
+ WHERE g.repository_id=w.id AND tm.user_id=$1) ORDER BY w.created_at`, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.Workspace
+	var out []domain.Repository
 	for rows.Next() {
-		var ws domain.Workspace
-		if err := rows.Scan(&ws.ID, &ws.Name, &ws.OwnerID, &ws.Slug, &ws.OwnerUsername, &ws.OwnerNamespaceID, &ws.Visibility, &ws.SecretsPolicy, &ws.SettingsPolicy, &ws.GHVisibilitySync, &ws.GHSyncedAt, &ws.Archived, &ws.WebhookURL, &ws.PublicRole, &ws.CreatedAt); err != nil {
+		var repositoryRecord domain.Repository
+		if err := rows.Scan(&repositoryRecord.ID, &repositoryRecord.Name, &repositoryRecord.OwnerID, &repositoryRecord.Slug, &repositoryRecord.OwnerUsername, &repositoryRecord.OwnerNamespaceID, &repositoryRecord.Visibility, &repositoryRecord.SecretsPolicy, &repositoryRecord.SettingsPolicy, &repositoryRecord.GHVisibilitySync, &repositoryRecord.GHSyncedAt, &repositoryRecord.Archived, &repositoryRecord.WebhookURL, &repositoryRecord.PublicRole, &repositoryRecord.CreatedAt); err != nil {
 			return nil, err
 		}
-		if err := domain.ValidateWorkspaceRecord(ws); err != nil {
+		if err := domain.ValidateRepositoryRecord(repositoryRecord); err != nil {
 			return nil, storedIdentityIntegrity(err)
 		}
-		out = append(out, ws)
+		out = append(out, repositoryRecord)
 	}
 	return out, rows.Err()
 }
@@ -154,26 +174,26 @@ func (s *PostgresStore) AddMember(ctx context.Context, m domain.Membership) erro
 		return err
 	}
 	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO memberships (workspace_id, user_id, role) VALUES ($1,$2,$3)
-		 ON CONFLICT (workspace_id, user_id) DO UPDATE SET role=EXCLUDED.role`, // upsert updates the role
-		m.WorkspaceID, m.UserID, string(m.Role))
+		`INSERT INTO memberships (repository_id, user_id, role) VALUES ($1,$2,$3)
+		 ON CONFLICT (repository_id, user_id) DO UPDATE SET role=EXCLUDED.role`, // upsert updates the role
+		m.RepositoryID, m.UserID, string(m.Role))
 	return err
 }
 
-func (s *PostgresStore) RemoveMember(ctx context.Context, workspaceID, userID string) error {
-	if err := domain.ValidateWorkspaceID(workspaceID); err != nil {
+func (s *PostgresStore) RemoveMember(ctx context.Context, repositoryID, userID string) error {
+	if err := domain.ValidateRepositoryID(repositoryID); err != nil {
 		return err
 	}
 	if err := domain.ValidateExternalID(userID); err != nil {
 		return err
 	}
 	_, err := s.db(ctx).Exec(ctx,
-		`DELETE FROM memberships WHERE workspace_id=$1 AND user_id=$2`, workspaceID, userID)
+		`DELETE FROM memberships WHERE repository_id=$1 AND user_id=$2`, repositoryID, userID)
 	return err
 }
 
-func (s *PostgresStore) IsMember(ctx context.Context, workspaceID, userID string) (bool, error) {
-	if err := domain.ValidateWorkspaceID(workspaceID); err != nil {
+func (s *PostgresStore) IsMember(ctx context.Context, repositoryID, userID string) (bool, error) {
+	if err := domain.ValidateRepositoryID(repositoryID); err != nil {
 		return false, err
 	}
 	if err := domain.ValidateExternalID(userID); err != nil {
@@ -181,7 +201,7 @@ func (s *PostgresStore) IsMember(ctx context.Context, workspaceID, userID string
 	}
 	var one int
 	err := s.db(ctx).QueryRow(ctx,
-		`SELECT 1 FROM memberships WHERE workspace_id=$1 AND user_id=$2`, workspaceID, userID).Scan(&one)
+		`SELECT 1 FROM memberships WHERE repository_id=$1 AND user_id=$2`, repositoryID, userID).Scan(&one)
 	if err != nil {
 		if mapNoRows(err) == domain.ErrNotFound {
 			return false, nil
@@ -191,14 +211,14 @@ func (s *PostgresStore) IsMember(ctx context.Context, workspaceID, userID string
 	return true, nil
 }
 
-func (s *PostgresStore) ListMembers(ctx context.Context, workspaceID string) ([]domain.Membership, error) {
-	if err := domain.ValidateWorkspaceID(workspaceID); err != nil {
+func (s *PostgresStore) ListMembers(ctx context.Context, repositoryID string) ([]domain.Membership, error) {
+	if err := domain.ValidateRepositoryID(repositoryID); err != nil {
 		return nil, err
 	}
 	rows, err := s.db(ctx).Query(ctx,
-		`SELECT m.workspace_id, m.user_id, m.role, m.created_at, u.email, u.name, COALESCE(u.nickname,'')
+		`SELECT m.repository_id, m.user_id, m.role, m.created_at, u.email, u.name, COALESCE(u.nickname,'')
 		 FROM memberships m LEFT JOIN users u ON u.id = m.user_id
-		 WHERE m.workspace_id=$1 ORDER BY m.created_at`, workspaceID)
+		 WHERE m.repository_id=$1 ORDER BY m.created_at`, repositoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +227,7 @@ func (s *PostgresStore) ListMembers(ctx context.Context, workspaceID string) ([]
 	for rows.Next() {
 		var m domain.Membership
 		var role, email, name, nickname string
-		if err := rows.Scan(&m.WorkspaceID, &m.UserID, &role, &m.CreatedAt, &email, &name, &nickname); err != nil {
+		if err := rows.Scan(&m.RepositoryID, &m.UserID, &role, &m.CreatedAt, &email, &name, &nickname); err != nil {
 			return nil, err
 		}
 		m.Role = domain.MemberRole(role)
@@ -228,9 +248,9 @@ func (s *PostgresStore) CreateInvite(ctx context.Context, inv domain.Invite) err
 		return err
 	}
 	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO invites (token, workspace_id, email, role, status, created_by, expires_at)
+		`INSERT INTO invites (token, repository_id, email, role, status, created_by, expires_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		inv.Token, inv.WorkspaceID, inv.Email, string(inv.Role), string(inv.Status), inv.CreatedBy, inv.ExpiresAt)
+		inv.Token, inv.RepositoryID, inv.Email, string(inv.Role), string(inv.Status), inv.CreatedBy, inv.ExpiresAt)
 	return err
 }
 
@@ -241,8 +261,8 @@ func (s *PostgresStore) GetInvite(ctx context.Context, token string) (domain.Inv
 	var inv domain.Invite
 	var role, status string
 	err := s.db(ctx).QueryRow(ctx,
-		`SELECT token, workspace_id, email, role, status, created_by, created_at, expires_at FROM invites WHERE token=$1`, token).
-		Scan(&inv.Token, &inv.WorkspaceID, &inv.Email, &role, &status, &inv.CreatedBy, &inv.CreatedAt, &inv.ExpiresAt)
+		`SELECT token, repository_id, email, role, status, created_by, created_at, expires_at FROM invites WHERE token=$1`, token).
+		Scan(&inv.Token, &inv.RepositoryID, &inv.Email, &role, &status, &inv.CreatedBy, &inv.CreatedAt, &inv.ExpiresAt)
 	if err != nil {
 		return domain.Invite{}, mapNoRows(err)
 	}
@@ -350,13 +370,13 @@ func (s *PostgresStore) ListSessionsForUser(ctx context.Context, userID string) 
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) ListInvites(ctx context.Context, workspaceID string) ([]domain.Invite, error) {
-	if err := domain.ValidateWorkspaceID(workspaceID); err != nil {
+func (s *PostgresStore) ListInvites(ctx context.Context, repositoryID string) ([]domain.Invite, error) {
+	if err := domain.ValidateRepositoryID(repositoryID); err != nil {
 		return nil, err
 	}
 	rows, err := s.db(ctx).Query(ctx,
-		`SELECT token, workspace_id, email, role, status, created_by, created_at, expires_at
-		 FROM invites WHERE workspace_id=$1 ORDER BY created_at DESC`, workspaceID)
+		`SELECT token, repository_id, email, role, status, created_by, created_at, expires_at
+		 FROM invites WHERE repository_id=$1 ORDER BY created_at DESC`, repositoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +385,7 @@ func (s *PostgresStore) ListInvites(ctx context.Context, workspaceID string) ([]
 	for rows.Next() {
 		var inv domain.Invite
 		var role, status string
-		if err := rows.Scan(&inv.Token, &inv.WorkspaceID, &inv.Email, &role, &status, &inv.CreatedBy, &inv.CreatedAt, &inv.ExpiresAt); err != nil {
+		if err := rows.Scan(&inv.Token, &inv.RepositoryID, &inv.Email, &role, &status, &inv.CreatedBy, &inv.CreatedAt, &inv.ExpiresAt); err != nil {
 			return nil, err
 		}
 		inv.Role = domain.MemberRole(role)

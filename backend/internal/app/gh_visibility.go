@@ -12,7 +12,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-// GitHub public status sync — GHVisibilitySync determines the public status of a workspace based on the linked GitHub repos (one-way: GitHub → cxthub).
+// GitHub public status sync — GHVisibilitySync determines the public status of a repository based on the linked GitHub repos (one-way: GitHub → cxthub).
 //
 // Rule (conservative): Only public when all linked GitHub repos are public (1 or more).
 //   - Unauthenticated GitHub API: 200 = public, 404 = private or non-existent → private.
@@ -73,26 +73,26 @@ func ghRepoPublic(ctx context.Context, path string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// SyncWorkspaceVisibility updates workspace visibility based on GitHub status.
+// SyncRepositoryVisibility updates repository visibility based on GitHub status.
 // If GHVisibilitySync is off, returns ErrValidation (manual toggle is the source of truth).
-func (s *Service) SyncWorkspaceVisibility(ctx context.Context, workspaceID string) (domain.Workspace, error) {
-	if s.ws == nil {
-		return domain.Workspace{}, domain.ErrNotFound
+func (s *Service) SyncRepositoryVisibility(ctx context.Context, repositoryID string) (domain.Repository, error) {
+	if s.repositories == nil {
+		return domain.Repository{}, domain.ErrNotFound
 	}
-	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
 	if err != nil {
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
-	if !wsp.GHVisibilitySync {
-		return domain.Workspace{}, domain.ErrValidation
+	if !repositoryRecord.GHVisibilitySync {
+		return domain.Repository{}, domain.ErrValidation
 	}
 	repos, err := s.meta.ListRepos(ctx, "default")
 	if err != nil {
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
 	var paths []string
 	for _, r := range repos {
-		if r.WorkspaceID != workspaceID {
+		if r.RepositoryID != repositoryID {
 			continue
 		}
 		if p := githubRepoPath(r.GitRemoteURL); p != "" {
@@ -112,11 +112,36 @@ func (s *Service) SyncWorkspaceVisibility(ctx context.Context, workspaceID strin
 			vis = domain.VisibilityPublic
 		}
 	}
-	now := time.Now().UTC()
-	wsp.Visibility = vis
-	wsp.GHSyncedAt = &now
-	if err := s.ws.CreateWorkspace(ctx, wsp); err != nil { // upsert
-		return domain.Workspace{}, err
-	}
-	return wsp, nil
+	identity := NewIdentityService(nil, s.repositories)
+	return identityResult(ctx, identity, func(ctx context.Context) (domain.Repository, error) {
+		current, err := s.repositories.GetRepository(ctx, repositoryID)
+		if err != nil {
+			return domain.Repository{}, err
+		}
+		if !current.GHVisibilitySync {
+			return domain.Repository{}, domain.ErrConflict
+		}
+		if vis == domain.VisibilityPublic && current.OwnerNamespaceID != "" && identity.organization != nil {
+			ns, err := identity.organization.GetNamespace(ctx, current.OwnerNamespaceID)
+			if err != nil {
+				return domain.Repository{}, err
+			}
+			if ns.Kind == domain.NamespaceOrganization {
+				policy, err := identity.effectiveOrganizationPolicy(ctx, ns.OrganizationID)
+				if err != nil {
+					return domain.Repository{}, err
+				}
+				if !policy.AllowPublicRepositories {
+					vis = domain.VisibilityPrivate
+				}
+			}
+		}
+		now := time.Now().UTC()
+		current.Visibility = vis
+		current.GHSyncedAt = &now
+		if err := s.repositories.CreateRepository(ctx, current); err != nil {
+			return domain.Repository{}, err
+		}
+		return current, nil
+	})
 }

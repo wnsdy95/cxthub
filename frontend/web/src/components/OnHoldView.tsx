@@ -7,7 +7,7 @@ import { DocEvents } from './DocEvents';
 // Pending following an unsync tip is rendered as the "following thread" tail of the commit viewer.
 // Layout is similar to the context tab: branch filter bar + list/viewer + right rail (About→Settings→Secrets→Commit Graph→AI Configuration).
 import { useEffect, useMemo, useState } from 'react';
-import type { Repo, Workspace, Pending } from '../types';
+import type { Repo, Repository, Pending } from '../types';
 import {
   useDismissPending,
   useUndismissPending,
@@ -27,7 +27,7 @@ import { pendingIsLive, PENDING_LIVE_MS } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { useT, Rich } from '../i18n';
 
-export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | null; role: Role | null }) {
+export function OnHoldView({ repo, repositoryMetadata, role }: { repo: Repo; repositoryMetadata: Repository | null; role: Role | null }) {
   const t = useT();
   const me = useMe().data;
   const [now, setNow] = useState(Date.now);
@@ -418,16 +418,16 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
         {atLeast(role, 'puller') && (
           <TeamSettings
             repoId={repo.id}
-            canWrite={canWriteAsset(role, ws?.settings_policy)}
-            showLockedControl={ws?.visibility === 'public'}
+            canWrite={canWriteAsset(role, repositoryMetadata?.settings_policy)}
+            showLockedControl={repositoryMetadata?.visibility === 'public'}
           />
         )}
         {atLeast(role, 'puller') && (
           <SecretsPanel
             key={repo.id}
             repoId={repo.id}
-            canWrite={canWriteAsset(role, ws?.secrets_policy)}
-            showLockedControl={ws?.visibility === 'public'}
+            canWrite={canWriteAsset(role, repositoryMetadata?.secrets_policy)}
+            showLockedControl={repositoryMetadata?.visibility === 'public'}
           />
         )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>

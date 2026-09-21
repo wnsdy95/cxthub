@@ -11,12 +11,28 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ApplyMigrations applies *.sql files in dir in file name order (based on schema_migrations history for idempotency).
 // Each file is applied in a transaction, and its version is recorded upon success — skipped on restart for already applied versions. Returns: number of files applied this time.
 func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, error) {
-	if _, err := s.pool.Exec(ctx,
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('cxt-schema-migrations',0))`); err != nil {
+		return 0, err
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(cleanup, `SELECT pg_advisory_unlock(hashtextextended('cxt-schema-migrations',0))`); err != nil {
+			_ = conn.Conn().Close(cleanup)
+		}
+	}()
+	if _, err := conn.Exec(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    TEXT PRIMARY KEY,
 			checksum   TEXT NOT NULL DEFAULT '',
@@ -25,7 +41,7 @@ func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, e
 		return 0, fmt.Errorf("schema_migrations creation: %w", err)
 	}
 	// Add checksum column to existing tables for compatibility with deployments before 0015. Explicitly return an error to avoid a "column does not exist" error that could cause the SELECT to fail.
-	if _, err := s.pool.Exec(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := conn.Exec(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT ''`); err != nil {
 		return 0, fmt.Errorf("schema_migrations checksum column addition: %w", err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -41,17 +57,22 @@ func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, e
 	sort.Strings(files) // File names in 0001, 0002, … order are applied in that sequence
 
 	applied := map[string]string{} // version → checksum
-	rows, err := s.pool.Query(ctx, `SELECT version, checksum FROM schema_migrations`)
+	rows, err := conn.Query(ctx, `SELECT version, checksum FROM schema_migrations`)
 	if err != nil {
 		return 0, err
 	}
 	for rows.Next() {
 		var v, c string
-		if rows.Scan(&v, &c) == nil {
-			applied[v] = c
+		if err := rows.Scan(&v, &c); err != nil {
+			rows.Close()
+			return 0, err
 		}
+		applied[v] = c
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
 
 	n := 0
 	for _, f := range files {
@@ -73,7 +94,7 @@ func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, e
 			}
 			continue
 		}
-		tx, err := s.pool.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return n, err
 		}
@@ -90,5 +111,19 @@ func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, e
 		}
 		n++
 	}
+	if _, present := applied["0052_repository_organizations.sql"]; present || containsMigration(files, "0052_repository_organizations.sql") {
+		if err := s.migrateRepositoryOwnership(ctx, conn); err != nil {
+			return n, err
+		}
+	}
 	return n, nil
+}
+
+func containsMigration(files []string, name string) bool {
+	for _, f := range files {
+		if f == name {
+			return true
+		}
+	}
+	return false
 }

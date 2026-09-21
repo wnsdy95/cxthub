@@ -22,12 +22,12 @@ func TestJoinPreviewWireAndStaleConfirmation(t *testing.T) {
 	identity := app.NewIdentityService(auth.NewDevVerifier(), st)
 	ts := httptest.NewServer(NewServer(svc, identity).Handler())
 	defer ts.Close()
-	var ws domain.Workspace
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]string{"name": "JoinPreview"}, &ws); code != 200 {
-		t.Fatalf("workspace %d", code)
+	var repositoryRecord domain.Repository
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]string{"name": "JoinPreview"}, &repositoryRecord); code != 200 {
+		t.Fatalf("repository %d", code)
 	}
 	repo := domain.HashContent([]byte("wire-join"))
-	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, WorkspaceID: ws.ID}); err != nil {
+	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: repositoryRecord.ID}); err != nil {
 		t.Fatal(err)
 	}
 	ids := make([]domain.ContentHash, 4)

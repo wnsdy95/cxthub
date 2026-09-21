@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { wsPath, parseRoute, replacePath, findByRoute, navigate } from './route';
-import { useMe, useAcceptInvite, useWorkspaces } from './hooks';
+import { repositoryPath, parseRoute, replacePath, findByRoute, navigate } from './route';
+import { useMe, useAcceptInvite, useRepositories } from './hooks';
 import { useLocale, useT } from './i18n';
 import { Login } from './components/Login';
+import { EnterpriseProfile } from './components/EnterpriseProfile';
 import { Dashboard } from './components/Dashboard';
 import { PublicBrowse } from './components/PublicBrowse';
 import { UserProfile } from './components/UserProfile';
@@ -43,7 +44,7 @@ function Root() {
   const [notice, setNotice] = useState<string | null>(null);
   const [forceLogin, setForceLogin] = useState(false); // On 'Login' click in public view
 
-  // When route type changes (workspace ↔ profile, etc.), the Root is re-rendered to dispatch the correct component. Since navigate() synthesizes a popstate event, we subscribe here to re-evaluate on path changes.
+  // When route type changes (repository ↔ profile, etc.), the Root is re-rendered to dispatch the correct component. Since navigate() synthesizes a popstate event, we subscribe here to re-evaluate on path changes.
   const [, routeTick] = useState(0);
   useEffect(() => {
     const onNav = () => routeTick((n) => n + 1);
@@ -58,8 +59,8 @@ function Root() {
     if (r?.kind !== 'invite') return;
     accept.mutate(r.token, {
       onSuccess: (w) => {
-        setNotice(t('app.joinedWorkspace', { name: w.name }));
-        replacePath(wsPath(w)); // Redirect to the joined workspace path (/<owner>/<slug>)
+        setNotice(t('app.joinedRepository', { name: w.name }));
+        replacePath(repositoryPath(w)); // Redirect to the joined repository path (/<owner>/<slug>)
       },
       onError: (x) => setNotice(t('app.acceptFailed', { msg: x.message })),
     });
@@ -81,10 +82,10 @@ function Root() {
     );
   }
   if (!authed) {
-    // Non-logged in + /<username>/<slug> → public workspace: read-only view (determined by server). /login/device re-renders to approval page after login.
+    // Non-logged in + /<username>/<slug> → public repository: read-only view (determined by server). /login/device re-renders to approval page after login.
     const r = parseRoute();
     if (r?.kind === 'mcpConsent') return <Login />;
-    if (!forceLogin && r?.kind === 'ws') {
+    if (!forceLogin && r?.kind === 'repository') {
       return <PublicBrowse route={r} onLogin={() => setForceLogin(true)} />;
     }
     if (!forceLogin && r?.kind === 'user') {
@@ -105,8 +106,9 @@ function Root() {
     if (r?.kind === 'mcpConsent') return <MCPConsent requestId={r.request} />;
     if (r?.kind === 'user') return <UserProfile username={r.username} />;
     if (r?.kind === 'pricing') return <Pricing />;
-    if (r?.kind === 'ws') return <AuthenticatedWorkspace route={r} />;
-    // Home (/) shows landing even in login state — clicking logo does not redirect to workspace. (Dashboard mounts only in workspace paths, so automatic redirects do not occur)
+    if (r?.kind === 'enterprise') return <EnterpriseProfile slug={r.slug} />;
+    if (r?.kind === 'repository') return <AuthenticatedRepository route={r} />;
+    // Home (/) shows landing even in login state — clicking logo does not redirect to repository. (Dashboard mounts only in repository paths, so automatic redirects do not occur)
     if (r === null) return <Landing />;
   }
   return (
@@ -121,15 +123,15 @@ function Root() {
   );
 }
 
-function AuthenticatedWorkspace({ route }: { route: Extract<NonNullable<ReturnType<typeof parseRoute>>, { kind: 'ws' }> }) {
-  const workspaces = useWorkspaces();
-  if (workspaces.isLoading) return <div className="loading">…</div>;
-  if (workspaces.isError) return <Dashboard />;
+function AuthenticatedRepository({ route }: { route: Extract<NonNullable<ReturnType<typeof parseRoute>>, { kind: 'repository' }> }) {
+  const repositories = useRepositories();
+  if (repositories.isLoading) return <div className="loading">…</div>;
+  if (repositories.isError) return <Dashboard />;
 
-  if (findByRoute(route, workspaces.data ?? [])) return <Dashboard />;
+  if (findByRoute(route, repositories.data ?? [])) return <Dashboard />;
 
   // A signed-in non-member still uses the public read-only surface. Routing
-  // every authenticated workspace URL through Dashboard would redirect away
+  // every authenticated repository URL through Dashboard would redirect away
   // before public visibility and access-denial rules can be evaluated.
   return <PublicBrowse route={route} />;
 }

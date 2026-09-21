@@ -26,12 +26,12 @@ func TestSyncAuditRequiresMaintainerAndJSON(t *testing.T) {
 	api.SetGitSyncAudit(a)
 	ts := httptest.NewServer(api.Handler())
 	defer ts.Close()
-	var ws domain.Workspace
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "Audit", "slug": "audit"}, &ws); code != 201 && code != 200 {
+	var repositoryRecord domain.Repository
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Audit", "slug": "audit"}, &repositoryRecord); code != 201 && code != 200 {
 		t.Fatal(code)
 	}
 	repo := domain.HashContent([]byte("audit"))
-	if _, err := st.PutRepo(context.Background(), domain.Repo{ID: repo, WorkspaceID: ws.ID}); err != nil {
+	if _, err := st.PutRepo(context.Background(), domain.Repo{ID: repo, RepositoryID: repositoryRecord.ID}); err != nil {
 		t.Fatal(err)
 	}
 	endpoint := ts.URL + "/api/v1/repos/" + string(repo) + "/github-sync-check"

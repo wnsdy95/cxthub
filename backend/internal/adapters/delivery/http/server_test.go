@@ -60,8 +60,8 @@ func (p policyDownIdentity) ResolveUser(context.Context, string) (domain.User, e
 	return p.user, nil
 }
 
-func (p policyDownIdentity) GetWorkspace(context.Context, string) (domain.Workspace, error) {
-	return domain.Workspace{}, domain.ErrNotFound
+func (p policyDownIdentity) GetRepository(context.Context, string) (domain.Repository, error) {
+	return domain.Repository{}, domain.ErrNotFound
 }
 
 func (p policyDownIdentity) RoleOf(context.Context, string, string) (domain.MemberRole, bool) {
@@ -400,13 +400,13 @@ func TestDeletePendingExpectedTargetCAS(t *testing.T) {
 	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK {
 		t.Fatalf("me status=%d", code)
 	}
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/workspaces", map[string]any{"name": "PendingCAS"}, &ws); code != http.StatusOK {
-		t.Fatalf("workspace status=%d", code)
+	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repositories", map[string]any{"name": "PendingCAS"}, &repositoryRecord); code != http.StatusOK {
+		t.Fatalf("repository status=%d", code)
 	}
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	repoID := repoIDForRemoteURLForTest(remoteURL)
 	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
 		"id": repoID, "remote_url": remoteURL, "default_branch": "main",
@@ -444,13 +444,13 @@ func TestPushChunksRejectsOversizedJSONBody(t *testing.T) {
 	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK || me.Username == "" {
 		t.Fatalf("me status=%d username=%q", code, me.Username)
 	}
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/workspaces", map[string]any{"name": "ChunkLimit"}, &ws); code != http.StatusOK {
-		t.Fatalf("workspace status=%d", code)
+	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repositories", map[string]any{"name": "ChunkLimit"}, &repositoryRecord); code != http.StatusOK {
+		t.Fatalf("repository status=%d", code)
 	}
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	repoID := repoIDForRemoteURLForTest(remoteURL)
 	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
 		"id": repoID, "remote_url": remoteURL, "default_branch": "main",
@@ -479,7 +479,7 @@ func TestPushPullRoundtrip(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	// 0) Workspace creation + repo registration — actual CLI flow (web ws creation → Connect → EnsureRepo).
+	// 0) Repository creation + repo registration — actual CLI flow (web repositoryRecord creation → Connect → EnsureRepo).
 	// Unowned repos have a write rejection policy (review #5), so they must be registered with the binding remote URL.
 	var me struct {
 		Username string `json:"username"`
@@ -487,13 +487,13 @@ func TestPushPullRoundtrip(t *testing.T) {
 	if code := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); code != 200 || me.Username == "" {
 		t.Fatalf("me lookup failed (code %d, username %q)", 0, me.Username)
 	}
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "Roundtrip"}, &ws); code != 200 || ws.Slug == "" {
-		t.Fatalf("workspace creation failed (slug %q)", ws.Slug)
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Roundtrip"}, &repositoryRecord); code != 200 || repositoryRecord.Slug == "" {
+		t.Fatalf("repository creation failed (slug %q)", repositoryRecord.Slug)
 	}
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug // workspace URL (2-segment)
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug // repository URL (2-segment)
 	rid := repoIDForRemoteURLForTest(remoteURL)
 	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid))
 	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remoteURL, "default_branch": "main"}, nil); code != 200 {
@@ -653,14 +653,14 @@ func TestGitOriginMismatchRejected(t *testing.T) {
 	if code := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); code != 200 || me.Username == "" {
 		t.Fatalf("me lookup failed (code %d)", code)
 	}
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "Origin"}, &ws); code != 200 {
-		t.Fatalf("workspace creation failed (code %d)", code)
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Origin"}, &repositoryRecord); code != 200 {
+		t.Fatalf("repository creation failed (code %d)", code)
 	}
 
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug // workspace URL (2-segment)
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug // repository URL (2-segment)
 	rid := repoIDForRemoteURLForTest(remoteURL)
 	create := func(gitURL string) int {
 		return doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{
@@ -697,7 +697,7 @@ func TestGitOriginMismatchRejected(t *testing.T) {
 	}
 }
 
-func TestRepoRegistrationIsWorkspaceScopedNotGitURLScoped(t *testing.T) {
+func TestRepoRegistrationIsRepositoryScopedNotGitURLScoped(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
@@ -705,7 +705,7 @@ func TestRepoRegistrationIsWorkspaceScopedNotGitURLScoped(t *testing.T) {
 		ID       string `json:"id"`
 		Username string `json:"username"`
 	}
-	type workspaceResponse struct {
+	type repositoryResponse struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
@@ -718,11 +718,11 @@ func TestRepoRegistrationIsWorkspaceScopedNotGitURLScoped(t *testing.T) {
 	if code := doJSONAs(t, aliceToken, "GET", ts.URL+"/api/v1/me", nil, &alice); code != 200 {
 		t.Fatalf("alice me code %d", code)
 	}
-	var aliceWS workspaceResponse
-	if code := doJSONAs(t, aliceToken, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "Orders"}, &aliceWS); code != 200 {
-		t.Fatalf("alice workspace code %d", code)
+	var aliceRepository repositoryResponse
+	if code := doJSONAs(t, aliceToken, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Orders"}, &aliceRepository); code != 200 {
+		t.Fatalf("alice repository code %d", code)
 	}
-	aliceRemote := "http://cxthub.test/" + alice.Username + "/" + aliceWS.Slug
+	aliceRemote := "http://cxthub.test/" + alice.Username + "/" + aliceRepository.Slug
 	aliceRepoID := repoIDForRemoteURLForTest(aliceRemote)
 	aliceRepo := map[string]any{
 		"id": aliceRepoID, "remote_url": aliceRemote, "default_branch": "main", "git_remote_url": gitURL,
@@ -730,7 +730,7 @@ func TestRepoRegistrationIsWorkspaceScopedNotGitURLScoped(t *testing.T) {
 
 	// Logged-in non-member cannot claim Alice's cxthub namespace.
 	if code := doJSONAs(t, charlieToken, "POST", ts.URL+"/api/v1/repos", aliceRepo, nil); code != http.StatusForbidden {
-		t.Fatalf("cross-workspace registration code %d, want 403", code)
+		t.Fatalf("cross-repository registration code %d, want 403", code)
 	}
 	if code := doJSONAs(t, aliceToken, "POST", ts.URL+"/api/v1/repos", aliceRepo, nil); code != 200 {
 		t.Fatalf("alice repo registration code %d", code)
@@ -740,19 +740,19 @@ func TestRepoRegistrationIsWorkspaceScopedNotGitURLScoped(t *testing.T) {
 	if code := doJSONAs(t, bobToken, "GET", ts.URL+"/api/v1/me", nil, &bob); code != 200 {
 		t.Fatalf("bob me code %d", code)
 	}
-	var bobWS workspaceResponse
-	if code := doJSONAs(t, bobToken, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "Orders"}, &bobWS); code != 200 {
-		t.Fatalf("bob workspace code %d", code)
+	var bobRepository repositoryResponse
+	if code := doJSONAs(t, bobToken, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Orders"}, &bobRepository); code != 200 {
+		t.Fatalf("bob repository code %d", code)
 	}
-	bobRemote := "http://cxthub.test/" + bob.Username + "/" + bobWS.Slug
+	bobRemote := "http://cxthub.test/" + bob.Username + "/" + bobRepository.Slug
 	bobRepoID := repoIDForRemoteURLForTest(bobRemote)
 	if bobRepoID == aliceRepoID {
-		t.Fatal("different cxthub workspace URLs produced the same repo ID")
+		t.Fatal("different cxthub repository URLs produced the same repo ID")
 	}
 	if code := doJSONAs(t, bobToken, "POST", ts.URL+"/api/v1/repos", map[string]any{
 		"id": bobRepoID, "remote_url": bobRemote, "default_branch": "main", "git_remote_url": gitURL,
 	}, nil); code != 200 {
-		t.Fatalf("same Git origin in Bob workspace code %d, want 200", code)
+		t.Fatalf("same Git origin in Bob repository code %d, want 200", code)
 	}
 
 	badID := domain.ContentHash("sha256:" + strings.Repeat("9", 64))
@@ -766,64 +766,42 @@ func TestRepoRegistrationIsWorkspaceScopedNotGitURLScoped(t *testing.T) {
 	}
 }
 
-func TestMultipleRepositoriesCanShareWorkspace(t *testing.T) {
+func TestRepositoryRejectsUnregisteredChildPaths(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
-
 	var me struct {
 		Username string `json:"username"`
 	}
-	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK {
-		t.Fatalf("me code %d", code)
+	if code := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); code != 200 {
+		t.Fatal(code)
 	}
-	var ws struct {
-		ID   string `json:"id"`
-		Slug string `json:"slug"`
+	var repository domain.Repository
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Platform"}, &repository); code != 200 {
+		t.Fatal(code)
 	}
-	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/workspaces", map[string]any{"name": "Platform"}, &ws); code != http.StatusOK {
-		t.Fatalf("workspace code %d", code)
+	remote := "http://cxthub.test/" + me.Username + "/" + repository.Slug
+	var registered domain.Repo
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", domain.Repo{ID: repoIDForRemoteURLForTest(remote), RemoteURL: remote, DefaultBranch: "main"}, &registered); code != 200 {
+		t.Fatal(code)
 	}
-
-	register := func(repository, gitURL string) domain.Repo {
-		t.Helper()
-		remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug + "/" + repository
-		repo := domain.Repo{
-			ID:            repoIDForRemoteURLForTest(remoteURL),
-			RemoteURL:     remoteURL,
-			DefaultBranch: "main",
-			GitRemoteURL:  gitURL,
+	for _, child := range []string{"backend", "frontend"} {
+		path := remote + "/" + child
+		if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", domain.Repo{ID: repoIDForRemoteURLForTest(path), RemoteURL: path, DefaultBranch: "main"}, nil); code != 403 {
+			t.Fatalf("unknown child registered: %d", code)
 		}
-		var got domain.Repo
-		if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", repo, &got); code != http.StatusOK {
-			t.Fatalf("register %s code %d", repository, code)
-		}
-		if got.WorkspaceID != ws.ID {
-			t.Fatalf("%s workspace = %q, want %q", repository, got.WorkspaceID, ws.ID)
-		}
-		return got
 	}
-
-	backendRepo := register("backend", "https://github.com/acme/backend.git")
-	frontendRepo := register("frontend", "https://github.com/acme/frontend.git")
-	if backendRepo.ID == frontendRepo.ID {
-		t.Fatal("repositories in one workspace received the same ID")
-	}
-
 	var repos []domain.Repo
-	if code := doJSON(t, http.MethodGet, ts.URL+"/api/v1/repos?workspace="+url.QueryEscape(ws.ID), nil, &repos); code != http.StatusOK {
-		t.Fatalf("list repos code %d", code)
-	}
-	if len(repos) != 2 {
-		t.Fatalf("workspace repos = %d, want 2: %+v", len(repos), repos)
+	if code := doJSON(t, "GET", ts.URL+"/api/v1/repos?repository="+url.QueryEscape(repository.ID), nil, &repos); code != 200 || len(repos) != 1 || repos[0].ID != registered.ID {
+		t.Fatalf("repository binding: %d %+v", code, repos)
 	}
 }
 
-func TestEnterpriseBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
+func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	const ownerToken = "dev:enterprise-owner@example.com:Enterprise Owner"
-	const adminToken = "dev:enterprise-admin@example.com:Enterprise Admin"
+	const ownerToken = "dev:organization-owner@example.com:Organization Owner"
+	const adminToken = "dev:organization-admin@example.com:Organization Admin"
 	type meResponse struct {
 		ID string `json:"id"`
 	}
@@ -835,56 +813,56 @@ func TestEnterpriseBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 		t.Fatalf("admin me code %d", code)
 	}
 
-	var enterprise domain.Enterprise
-	if code := doJSONAs(t, ownerToken, http.MethodPost, ts.URL+"/api/v1/enterprises", map[string]any{
+	var organization domain.Organization
+	if code := doJSONAs(t, ownerToken, http.MethodPost, ts.URL+"/api/v1/organizations", map[string]any{
 		"name": "Acme", "slug": "acme",
-	}, &enterprise); code != http.StatusOK {
-		t.Fatalf("create enterprise code %d", code)
+	}, &organization); code != http.StatusOK {
+		t.Fatalf("create organization code %d", code)
 	}
-	memberURL := ts.URL + "/api/v1/enterprises/" + enterprise.ID + "/members/" + url.PathEscape(admin.ID)
+	memberURL := ts.URL + "/api/v1/organizations/" + organization.ID + "/members/" + url.PathEscape(admin.ID)
 	if code := doJSONAs(t, ownerToken, http.MethodPatch, memberURL, map[string]any{"role": "admin"}, nil); code != http.StatusOK {
-		t.Fatalf("add enterprise admin code %d", code)
+		t.Fatalf("add organization admin code %d", code)
 	}
 
-	var workspace domain.Workspace
-	if code := doJSONAs(t, adminToken, http.MethodPost, ts.URL+"/api/v1/enterprises/"+enterprise.ID+"/workspaces", map[string]any{
+	var repository domain.Repository
+	if code := doJSONAs(t, adminToken, http.MethodPost, ts.URL+"/api/v1/organizations/"+organization.ID+"/repositories", map[string]any{
 		"name": "Platform",
-	}, &workspace); code != http.StatusOK {
-		t.Fatalf("create enterprise workspace code %d", code)
+	}, &repository); code != http.StatusOK {
+		t.Fatalf("create organization repository code %d", code)
 	}
-	remoteURL := "http://cxthub.test/acme/" + workspace.Slug + "/backend"
+	remoteURL := "http://cxthub.test/acme/" + repository.Slug
 	repoID := repoIDForRemoteURLForTest(remoteURL)
 	if code := doJSONAs(t, adminToken, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
 		"id": repoID, "remote_url": remoteURL, "default_branch": "main",
 	}, nil); code != http.StatusOK {
-		t.Fatalf("register enterprise repo code %d", code)
+		t.Fatalf("register organization repo code %d", code)
 	}
 	repoBase := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID))
 	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusForbidden {
-		t.Fatalf("enterprise owner inherited private context read: code %d", code)
+		t.Fatalf("organization owner inherited private context read: code %d", code)
 	}
-	workspacePath := ts.URL + "/api/v1/public/workspaces/acme/" + url.PathEscape(workspace.Slug)
-	if code := doJSONAs(t, ownerToken, http.MethodGet, workspacePath, nil, nil); code != http.StatusNotFound {
-		t.Fatalf("private enterprise Workspace leaked before grant: code %d", code)
+	repositoryPath := ts.URL + "/api/v1/public/repositories/acme/" + url.PathEscape(repository.Slug)
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repositoryPath, nil, nil); code != http.StatusNotFound {
+		t.Fatalf("private organization Repository leaked before grant: code %d", code)
 	}
 
 	var grant domain.BreakGlassGrant
-	if code := doJSONAs(t, ownerToken, http.MethodPost, ts.URL+"/api/v1/enterprises/"+enterprise.ID+"/break-glass", map[string]any{
-		"workspace_id": workspace.ID, "reason": "production incident investigation", "minutes": 15,
+	if code := doJSONAs(t, ownerToken, http.MethodPost, ts.URL+"/api/v1/organizations/"+organization.ID+"/break-glass", map[string]any{
+		"repository_id": repository.ID, "reason": "production incident investigation", "minutes": 15,
 	}, &grant); code != http.StatusOK {
 		t.Fatalf("create break-glass code %d", code)
 	}
-	if grant.WorkspaceID != workspace.ID {
-		t.Fatalf("grant workspace = %q, want %q", grant.WorkspaceID, workspace.ID)
+	if grant.RepositoryID != repository.ID {
+		t.Fatalf("grant repository = %q, want %q", grant.RepositoryID, repository.ID)
 	}
 	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusOK {
 		t.Fatalf("break-glass read code %d", code)
 	}
-	if code := doJSONAs(t, ownerToken, http.MethodGet, workspacePath, nil, nil); code != http.StatusOK {
-		t.Fatalf("break-glass Workspace entry code %d", code)
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repositoryPath, nil, nil); code != http.StatusOK {
+		t.Fatalf("break-glass Repository entry code %d", code)
 	}
 	var repos []domain.Repo
-	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repos?workspace="+url.QueryEscape(workspace.ID), nil, &repos); code != http.StatusOK || len(repos) != 1 || repos[0].ID != repoID {
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repos?repository="+url.QueryEscape(repository.ID), nil, &repos); code != http.StatusOK || len(repos) != 1 || repos[0].ID != repoID {
 		t.Fatalf("break-glass repository discovery code=%d repos=%+v", code, repos)
 	}
 	if code := doJSONAs(t, ownerToken, http.MethodPut, repoBase+"/refs/branch/main", map[string]any{
@@ -893,20 +871,20 @@ func TestEnterpriseBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 		t.Fatalf("break-glass write code %d, want 403", code)
 	}
 
-	var audit []domain.EnterpriseAuditEvent
-	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/enterprises/"+enterprise.ID+"/audit", nil, &audit); code != http.StatusOK {
+	var audit []domain.OrganizationAuditEvent
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/organizations/"+organization.ID+"/audit", nil, &audit); code != http.StatusOK {
 		t.Fatalf("audit code %d", code)
 	}
 	used := false
 	for _, event := range audit {
-		used = used || event.Action == "enterprise.break_glass.used"
+		used = used || event.Action == "organization.break_glass.used"
 	}
 	if !used {
 		t.Fatalf("break-glass use not audited: %+v", audit)
 	}
 }
 
-func TestPublicWorkspaceProjectionRedactsCapabilitiesAndPolicies(t *testing.T) {
+func TestPublicRepositoryProjectionRedactsCapabilitiesAndPolicies(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
@@ -914,18 +892,18 @@ func TestPublicWorkspaceProjectionRedactsCapabilitiesAndPolicies(t *testing.T) {
 		Username string `json:"username"`
 	}
 	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
-	var ws struct {
+	var repositoryRecord struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "PublicSecure"}, &ws); code != 200 {
-		t.Fatalf("workspace create code %d", code)
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "PublicSecure"}, &repositoryRecord); code != 200 {
+		t.Fatalf("repository create code %d", code)
 	}
-	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+url.PathEscape(ws.ID), map[string]any{
+	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/repositories/"+url.PathEscape(repositoryRecord.ID), map[string]any{
 		"visibility": "public", "webhook_url": "https://hooks.slack.test/services/secret",
 		"secrets_policy": "owner", "settings_policy": "owner",
 	}, nil); code != 200 {
-		t.Fatalf("workspace patch code %d", code)
+		t.Fatalf("repository patch code %d", code)
 	}
 
 	assertRedacted := func(label string, raw map[string]any) {
@@ -936,15 +914,15 @@ func TestPublicWorkspaceProjectionRedactsCapabilitiesAndPolicies(t *testing.T) {
 			}
 		}
 	}
-	var publicWS map[string]any
-	if code := doJSONAs(t, "", "GET", ts.URL+"/api/v1/public/workspaces/"+url.PathEscape(me.Username)+"/"+url.PathEscape(ws.Slug), nil, &publicWS); code != 200 {
-		t.Fatalf("public workspace code %d", code)
+	var publicRepository map[string]any
+	if code := doJSONAs(t, "", "GET", ts.URL+"/api/v1/public/repositories/"+url.PathEscape(me.Username)+"/"+url.PathEscape(repositoryRecord.Slug), nil, &publicRepository); code != 200 {
+		t.Fatalf("public repository code %d", code)
 	}
-	assertRedacted("public workspace", publicWS)
+	assertRedacted("public repository", publicRepository)
 
 	var profile struct {
-		User       map[string]any   `json:"user"`
-		Workspaces []map[string]any `json:"workspaces"`
+		User         map[string]any   `json:"user"`
+		Repositories []map[string]any `json:"repositories"`
 	}
 	if code := doJSONAs(t, "", "GET", ts.URL+"/api/v1/public/users/"+url.PathEscape(me.Username), nil, &profile); code != 200 {
 		t.Fatalf("public profile code %d", code)
@@ -958,10 +936,10 @@ func TestPublicWorkspaceProjectionRedactsCapabilitiesAndPolicies(t *testing.T) {
 	if _, ok := profile.User["id"]; ok {
 		t.Fatalf("public user exposed account id: %+v", profile.User)
 	}
-	if len(profile.Workspaces) != 1 {
-		t.Fatalf("public workspaces: %+v", profile.Workspaces)
+	if len(profile.Repositories) != 1 {
+		t.Fatalf("public repositories: %+v", profile.Repositories)
 	}
-	assertRedacted("public profile workspace", profile.Workspaces[0])
+	assertRedacted("public profile repository", profile.Repositories[0])
 }
 
 func TestInternalErrorMessageIsRedacted(t *testing.T) {
@@ -984,11 +962,11 @@ func TestDocLessSnapshotRejected(t *testing.T) {
 		Username string `json:"username"`
 	}
 	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
-	doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "DocLess"}, &ws)
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "DocLess"}, &repositoryRecord)
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	rid := repoIDForRemoteURLForTest(remoteURL)
 	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remoteURL, "default_branch": "main"}, nil); code != 200 {
 		t.Fatalf("repo create code %d", code)
@@ -1013,12 +991,12 @@ func TestSecretsFingerprintConsistency(t *testing.T) {
 		Username string `json:"username"`
 	}
 	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
-	var ws struct {
+	var repositoryRecord struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
-	doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "Sec"}, &ws)
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "Sec"}, &repositoryRecord)
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	rid := repoIDForRemoteURLForTest(remoteURL)
 	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remoteURL, "default_branch": "main"}, nil); code != 200 {
 		t.Fatalf("repo create code %d", code)
@@ -1095,25 +1073,25 @@ func TestSecretsFingerprintConsistency(t *testing.T) {
 		t.Fatal("rejected edit changed server version")
 	}
 
-	workspaceURL := ts.URL + "/api/v1/workspaces/" + ws.ID
-	if code := doJSON(t, "PATCH", workspaceURL, map[string]any{"webhook_url": "https://example.test/private-webhook-credential"}, nil); code != 200 {
+	repositoryURL := ts.URL + "/api/v1/repositories/" + repositoryRecord.ID
+	if code := doJSON(t, "PATCH", repositoryURL, map[string]any{"webhook_url": "https://example.test/private-webhook-credential"}, nil); code != 200 {
 		t.Fatalf("configure webhook: %d", code)
 	}
 	if code := doJSON(t, "PUT", sec+"?expected_revision="+ack["revision"], env("bbbbbbbbbbbb"), nil); code != 200 {
 		t.Fatalf("write with outbox: %d", code)
 	}
 	var jobs []domain.NotificationJob
-	if code := doJSON(t, "GET", workspaceURL+"/notifications", nil, &jobs); code != 200 || len(jobs) != 1 {
+	if code := doJSON(t, "GET", repositoryURL+"/notifications", nil, &jobs); code != 200 || len(jobs) != 1 {
 		t.Fatalf("delivery list: %d %+v", code, jobs)
 	}
 	serialized, _ := json.Marshal(jobs)
 	if strings.Contains(string(serialized), "private-webhook-credential") || strings.Contains(string(serialized), "ciphertext") {
 		t.Fatal("notification metadata leaked protected values")
 	}
-	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "GET", workspaceURL+"/notifications", nil, nil); code != 403 {
+	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "GET", repositoryURL+"/notifications", nil, nil); code != 403 {
 		t.Fatalf("outsider read delivery: %d", code)
 	}
-	retryURL := workspaceURL + "/notifications/" + jobs[0].ID + "/retry"
+	retryURL := repositoryURL + "/notifications/" + jobs[0].ID + "/retry"
 	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "POST", retryURL, map[string]any{}, nil); code != 403 {
 		t.Fatalf("outsider retried: %d", code)
 	}
@@ -1131,11 +1109,11 @@ func TestOptionalTeamAssetsReturnNoContentWhenUnset(t *testing.T) {
 		Username string `json:"username"`
 	}
 	doJSON(t, http.MethodGet, ts.URL+"/api/v1/me", nil, &me)
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
-	doJSON(t, http.MethodPost, ts.URL+"/api/v1/workspaces", map[string]any{"name": "Optional"}, &ws)
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	doJSON(t, http.MethodPost, ts.URL+"/api/v1/repositories", map[string]any{"name": "Optional"}, &repositoryRecord)
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	rid := repoIDForRemoteURLForTest(remoteURL)
 	if code := doJSON(t, http.MethodPost, ts.URL+"/api/v1/repos", map[string]any{
 		"id": rid, "remote_url": remoteURL, "default_branch": "main",
@@ -1176,7 +1154,7 @@ func TestContentTypeGuard(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded"} {
-		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/workspaces", strings.NewReader(`{"name":"ctx"}`))
+		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/repositories", strings.NewReader(`{"name":"ctx"}`))
 		req.Header.Set("Authorization", "Bearer dev:ct@t.io:CT")
 		if ct != "" {
 			req.Header.Set("Content-Type", ct)
@@ -1190,7 +1168,7 @@ func TestContentTypeGuard(t *testing.T) {
 			t.Fatalf("Content-Type %q: got %d, want 415", ct, resp.StatusCode)
 		}
 	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "ctok"}, nil); code != 200 {
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "ctok"}, nil); code != 200 {
 		t.Fatalf("application/json POST: got %d, want 200", code)
 	}
 }
@@ -1283,8 +1261,8 @@ func TestCookieUnsafeMethodsRequireTrustedOriginAndCSRFHeader(t *testing.T) {
 	defer ts.Close()
 
 	request := func(origin, csrf string) int {
-		body, _ := json.Marshal(map[string]any{"name": "CookieWorkspace"})
-		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/workspaces", bytes.NewReader(body))
+		body, _ := json.Marshal(map[string]any{"name": "CookieRepository"})
+		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/repositories", bytes.NewReader(body))
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: rawToken})
 		req.Header.Set("Content-Type", "application/json")
 		if origin != "" {
@@ -1315,7 +1293,7 @@ func TestCookieUnsafeMethodsRequireTrustedOriginAndCSRFHeader(t *testing.T) {
 	}
 
 	// Bearer CLI continues to operate without Origin/header even if browser cookie CSRF surface is present.
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "BearerWorkspace"}, nil); code != http.StatusOK {
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "BearerRepository"}, nil); code != http.StatusOK {
 		t.Fatalf("Bearer request code %d", code)
 	}
 }
@@ -1338,8 +1316,8 @@ func TestConfiguredProxyOriginPassesCookieCSRF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	body, _ := json.Marshal(map[string]any{"name": "ProxyWorkspace"})
-	req := httptest.NewRequest(http.MethodPost, "https://cxtd-123456789.asia-northeast3.run.app/api/v1/workspaces", bytes.NewReader(body))
+	body, _ := json.Marshal(map[string]any{"name": "ProxyRepository"})
+	req := httptest.NewRequest(http.MethodPost, "https://cxtd-123456789.asia-northeast3.run.app/api/v1/repositories", bytes.NewReader(body))
 	req.Host = "cxtd-123456789.asia-northeast3.run.app"
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: rawToken})
 	req.Header.Set("Content-Type", "application/json")
@@ -1384,12 +1362,12 @@ func TestUnboundRepoHiddenAndRejected(t *testing.T) {
 
 	next := domain.ContentHash("sha256:" + strings.Repeat("f", 64))
 	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{
-		"id": next, "remote_url": "http://cxthub.test/missing/workspace", "default_branch": "main",
+		"id": next, "remote_url": "http://cxthub.test/missing/repository", "default_branch": "main",
 	}, nil); code != http.StatusForbidden {
-		t.Fatalf("repo create with missing workspace code %d, want 403", code)
+		t.Fatalf("repo create with missing repository code %d, want 403", code)
 	}
 	if _, err := st.GetRepo(ctx, next); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("missing-workspace repo was stored: %v", err)
+		t.Fatalf("missing-repository repo was stored: %v", err)
 	}
 }
 
@@ -1401,13 +1379,13 @@ func TestAboutWebsiteRejectsUnsafeScheme(t *testing.T) {
 		Username string `json:"username"`
 	}
 	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
-	var ws struct {
+	var repositoryRecord struct {
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "About"}, &ws); code != 200 {
-		t.Fatalf("workspace create code %d", code)
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "About"}, &repositoryRecord); code != 200 {
+		t.Fatalf("repository create code %d", code)
 	}
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	rid := repoIDForRemoteURLForTest(remoteURL)
 	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{
 		"id": rid, "remote_url": remoteURL, "default_branch": "main",
@@ -1430,7 +1408,7 @@ func TestAboutWebsiteRejectsUnsafeScheme(t *testing.T) {
 	}
 }
 
-func TestWorkspacePolicyLookupFailureBlocksAction(t *testing.T) {
+func TestRepositoryPolicyLookupFailureBlocksAction(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
@@ -1442,7 +1420,7 @@ func TestWorkspacePolicyLookupFailureBlocksAction(t *testing.T) {
 	defer ts.Close()
 
 	rid := domain.ContentHash("sha256:" + strings.Repeat("d", 63) + "1")
-	if _, err := st.PutRepo(context.Background(), domain.Repo{ID: rid, DefaultBranch: "main", WorkspaceID: "ws_missing"}); err != nil {
+	if _, err := st.PutRepo(context.Background(), domain.Repo{ID: rid, DefaultBranch: "main", RepositoryID: "ws_" + strings.Repeat("e", 32)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1454,7 +1432,7 @@ func TestWorkspacePolicyLookupFailureBlocksAction(t *testing.T) {
 	}
 }
 
-func TestPublicPullerCannotManageWorkspaceOrTeamAssets(t *testing.T) {
+func TestPublicPullerCannotManageRepositoryOrTeamAssets(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
@@ -1464,20 +1442,20 @@ func TestPublicPullerCannotManageWorkspaceOrTeamAssets(t *testing.T) {
 	if code := doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me); code != http.StatusOK {
 		t.Fatalf("owner lookup code %d", code)
 	}
-	var ws struct {
+	var repositoryRecord struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
-	if code := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "PublicAssets"}, &ws); code != http.StatusOK {
-		t.Fatalf("workspace create code %d", code)
+	if code := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "PublicAssets"}, &repositoryRecord); code != http.StatusOK {
+		t.Fatalf("repository create code %d", code)
 	}
-	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+url.PathEscape(ws.ID), map[string]any{
+	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/repositories/"+url.PathEscape(repositoryRecord.ID), map[string]any{
 		"visibility": "public", "public_role": "puller",
 	}, nil); code != http.StatusOK {
-		t.Fatalf("workspace public patch code %d", code)
+		t.Fatalf("repository public patch code %d", code)
 	}
 
-	remoteURL := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remoteURL := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	rid := repoIDForRemoteURLForTest(remoteURL)
 	if code := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{
 		"id": rid, "remote_url": remoteURL, "default_branch": "main",
@@ -1486,9 +1464,9 @@ func TestPublicPullerCannotManageWorkspaceOrTeamAssets(t *testing.T) {
 	}
 
 	outsider := "dev:outsider@t.io:Outsider"
-	workspaceURL := ts.URL + "/api/v1/workspaces/" + url.PathEscape(ws.ID)
-	if code := doJSONAs(t, outsider, "PATCH", workspaceURL, map[string]any{"name": "Hijacked"}, nil); code != http.StatusForbidden {
-		t.Fatalf("public puller workspace patch code %d, want 403", code)
+	repositoryURL := ts.URL + "/api/v1/repositories/" + url.PathEscape(repositoryRecord.ID)
+	if code := doJSONAs(t, outsider, "PATCH", repositoryURL, map[string]any{"name": "Hijacked"}, nil); code != http.StatusForbidden {
+		t.Fatalf("public puller repository patch code %d, want 403", code)
 	}
 	settingsURL := ts.URL + "/api/v1/repos/" + url.PathEscape(string(rid)) + "/settings/claude"
 	if code := doJSONAs(t, outsider, "PUT", settingsURL, map[string]any{"files": []any{}}, nil); code != http.StatusForbidden {
@@ -1507,14 +1485,14 @@ func TestPRJobRepositoryAuthorization(t *testing.T) {
 		Username string `json:"username"`
 	}
 	doJSON(t, "GET", ts.URL+"/api/v1/me", nil, &me)
-	var ws struct {
+	var repositoryRecord struct {
 		ID   string `json:"id"`
 		Slug string `json:"slug"`
 	}
-	if status := doJSON(t, "POST", ts.URL+"/api/v1/workspaces", map[string]any{"name": "PRJobs"}, &ws); status != 200 {
+	if status := doJSON(t, "POST", ts.URL+"/api/v1/repositories", map[string]any{"name": "PRJobs"}, &repositoryRecord); status != 200 {
 		t.Fatal(status)
 	}
-	remote := "http://cxthub.test/" + me.Username + "/" + ws.Slug
+	remote := "http://cxthub.test/" + me.Username + "/" + repositoryRecord.Slug
 	rid := repoIDForRemoteURLForTest(remote)
 	if status := doJSON(t, "POST", ts.URL+"/api/v1/repos", map[string]any{"id": rid, "remote_url": remote, "git_remote_url": "https://github.com/acme/queue", "default_branch": "main"}, nil); status != 200 {
 		t.Fatal(status)
@@ -1529,7 +1507,7 @@ func TestPRJobRepositoryAuthorization(t *testing.T) {
 	if code := doJSON(t, "GET", endpoint, nil, nil); code != 200 {
 		t.Fatalf("owner list=%d", code)
 	}
-	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/workspaces/"+ws.ID, map[string]any{"visibility": "public", "public_role": "viewer"}, nil); code != 200 {
+	if code := doJSON(t, "PATCH", ts.URL+"/api/v1/repositories/"+repositoryRecord.ID, map[string]any{"visibility": "public", "public_role": "viewer"}, nil); code != 200 {
 		t.Fatal(code)
 	}
 	if code := doJSONAs(t, "", "GET", endpoint, nil, nil); code != 200 {

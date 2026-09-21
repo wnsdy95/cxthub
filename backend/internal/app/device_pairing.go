@@ -11,7 +11,7 @@ import (
 )
 
 func (s *IdentityService) RuntimeStore() outbound.RuntimeStore {
-	st, _ := s.ws.(outbound.RuntimeStore)
+	st, _ := s.repositories.(outbound.RuntimeStore)
 	return st
 }
 func (s *IdentityService) RedeemDevicePairing(ctx context.Context, code, pollHash string) (domain.Session, bool, error) {
@@ -27,7 +27,7 @@ func (s *IdentityService) RedeemDevicePairing(ctx context.Context, code, pollHas
 	if p.UserID == "" {
 		return domain.Session{}, false, nil
 	}
-	if _, err := s.ws.GetUser(ctx, p.UserID); err != nil {
+	if _, err := s.repositories.GetUser(ctx, p.UserID); err != nil {
 		return domain.Session{}, false, domain.ErrUnauthorized
 	}
 	label := []rune(strings.TrimSpace(p.Label))

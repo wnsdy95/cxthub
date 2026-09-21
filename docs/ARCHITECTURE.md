@@ -28,7 +28,7 @@ claim that directory names alone prove domain correctness.
 
 `cxtd` validates the required `ProductionStore` capability set before migrations,
 workers or HTTP startup when PostgreSQL is configured or required. One concrete
-store must provide transactions, workspace access locks, revisions, durable jobs,
+store must provide transactions, repository access locks, revisions, durable jobs,
 lease fencing, outboxes, shared runtime/authentication state, immutable document
 publication, indexed reads and Git evidence. Missing capability is a startup
 error. PostgreSQL also has a build-time interface assertion.

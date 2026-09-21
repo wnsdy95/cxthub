@@ -1,23 +1,23 @@
 import { GitHubSyncCheck } from './GitHubSyncCheck';
 import { NotificationHistory } from './NotificationHistory';
 import { PersonalStorageUsage } from './StorageUsage';
-// Settings — Account settings (top bar ⚙) and workspace settings (title bar ⚙, owner-only).
+// Settings — Account settings (top bar ⚙) and repository settings (title bar ⚙, owner-only).
 //
 // Account: nickname (light alias, free to change) / username (part of URL — heavy change, red warning).
-// Workspace: public status (default private, red warning and toggle). GitHub public status sync planned.
+// Repository: public status (default private, red warning and toggle). GitHub public status sync planned.
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
-import type { Repo, User, Workspace, WorkspacePatch } from '../types';
+import type { Repo, User, Repository, RepositoryPatch } from '../types';
 import { LocaleSwitcher } from './LocaleSwitcher';
 import {
   useUpdateMe,
-  useUpdateWorkspace,
+  useUpdateRepository,
   useCreateCliToken,
   useCliTokens,
   useRevokeCliToken,
   useWebSessions,
   useRevokeWebSession,
   useMembers,
-  useTransferWorkspace,
+  useTransferRepository,
   useSyncVisibility,
   useRepos,
   useRefs,
@@ -212,10 +212,10 @@ export function AccountSettings({ user, trigger = 'gear' }: { user: User; trigge
 }
 
 // ArchiveSection — Archive toggle (read-only). Deletion in P1 is not possible, so archiving is the endpoint.
-function ArchiveSection({ ws }: { ws: Workspace }) {
+function ArchiveSection({ repositoryMetadata }: { repositoryMetadata: Repository }) {
   const t = useT();
-  const save = useUpdateWorkspace();
-  const archived = ws.archived ?? false;
+  const save = useUpdateRepository();
+  const archived = repositoryMetadata.archived ?? false;
   return (
     <div className={archived ? 'danger-zone' : 'settings-upload archive-divider'}>
       <span className={archived ? 'warn-red-label' : 'label'}>{t('settings.archive')}</span>
@@ -225,7 +225,7 @@ function ArchiveSection({ ws }: { ws: Workspace }) {
       <button
         type="button"
         className={archived ? 'ghost mini' : 'danger-btn'}
-        onClick={() => save.mutate({ wsId: ws.id, patch: { archived: !archived } })}
+        onClick={() => save.mutate({ repositoryId: repositoryMetadata.id, patch: { archived: !archived } })}
         disabled={save.isPending}
       >
         {save.isPending ? '…' : archived ? t('settings.unarchive') : t('settings.doArchive')}
@@ -236,16 +236,16 @@ function ArchiveSection({ ws }: { ws: Workspace }) {
 }
 
 // SlugSection — Danger Zone: Manual URL slug change (Korean possible — Unicode slug support).
-function SlugSection({ ws }: { ws: Workspace }) {
+function SlugSection({ repositoryMetadata }: { repositoryMetadata: Repository }) {
   const t = useT();
-  const [slug, setSlug] = useState(ws.slug);
-  const save = useUpdateWorkspace();
-  const changed = slug.trim() !== ws.slug;
+  const [slug, setSlug] = useState(repositoryMetadata.slug);
+  const save = useUpdateRepository();
+  const changed = slug.trim() !== repositoryMetadata.slug;
   return (
     <div className="danger-zone">
       <span className="warn-red-label">{t('settings.slugChange')}</span>
       <p className="warn-red">
-        <Rich>{t('settings.slugWarn', { owner: ws.owner_username, slug: ws.slug })}</Rich>
+        <Rich>{t('settings.slugWarn', { owner: repositoryMetadata.owner_username, slug: repositoryMetadata.slug })}</Rich>
       </p>
       <div className="settings-row">
         <input value={slug} onChange={(e) => setSlug(e.target.value)} spellCheck={false} />
@@ -253,7 +253,7 @@ function SlugSection({ ws }: { ws: Workspace }) {
           type="button"
           className="danger-btn"
           disabled={!changed || save.isPending}
-          onClick={() => save.mutate({ wsId: ws.id, patch: { slug: slug.trim() } })}
+          onClick={() => save.mutate({ repositoryId: repositoryMetadata.id, patch: { slug: slug.trim() } })}
         >
           {save.isPending ? '…' : t('settings.change')}
         </button>
@@ -265,29 +265,29 @@ function SlugSection({ ws }: { ws: Workspace }) {
   );
 }
 
-// TransferSection — Danger Zone: Ownership transfer (creator exclusive, workspace name typing confirmation).
+// TransferSection — Danger Zone: Ownership transfer (creator exclusive, repository name typing confirmation).
 // Transferring changes the URL (/<owner>/<slug>) to the new owner's base — existing links·CLI remote reconfiguration required.
 function TransferSection({
-  ws,
+  repositoryMetadata,
   members,
   onDone,
 }: {
-  ws: Workspace;
+  repositoryMetadata: Repository;
   members: import('../types').Membership[];
   onDone: () => void;
 }) {
   const t = useT();
   const [target, setTarget] = useState('');
   const [confirm, setConfirm] = useState('');
-  const transfer = useTransferWorkspace();
-  const candidates = members.filter((m) => m.user_id !== ws.owner_id);
-  const ready = target !== '' && confirm === ws.name;
+  const transfer = useTransferRepository();
+  const candidates = members.filter((m) => m.user_id !== repositoryMetadata.owner_id);
+  const ready = target !== '' && confirm === repositoryMetadata.name;
 
   return (
     <div className="danger-zone">
       <span className="warn-red-label">{t('settings.transferTitle')}</span>
       <p className="warn-red">
-        <Rich>{t('settings.transferWarn', { owner: ws.owner_username, slug: ws.slug })}</Rich>
+        <Rich>{t('settings.transferWarn', { owner: repositoryMetadata.owner_username, slug: repositoryMetadata.slug })}</Rich>
       </p>
       <div className="settings-row">
         <select value={target} onChange={(e) => setTarget(e.target.value)} aria-label={t('settings.transferToAria')}>
@@ -303,14 +303,14 @@ function TransferSection({
         <input
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
-          placeholder={t('settings.transferConfirm', { name: ws.name })}
+          placeholder={t('settings.transferConfirm', { name: repositoryMetadata.name })}
           spellCheck={false}
         />
         <button
           type="button"
           className="danger-btn"
           disabled={!ready || transfer.isPending}
-          onClick={() => transfer.mutate({ wsId: ws.id, toUserId: target }, { onSuccess: onDone })}
+          onClick={() => transfer.mutate({ repositoryId: repositoryMetadata.id, toUserId: target }, { onSuccess: onDone })}
         >
           {transfer.isPending ? t('settings.transferring') : t('settings.transfer')}
         </button>
@@ -426,9 +426,9 @@ function CliTokenSection() {
 type Policy = 'members' | 'owner';
 const asPolicy = (v?: string): Policy => (v === 'owner' ? 'owner' : 'members');
 
-// WorkspaceSettings is an inline workspace settings form rendered in the 'Settings' tab body.
+// RepositorySettings is an inline repository settings form rendered in the 'Settings' tab body.
 // (Not a modal — centered content area). Owner-only calls are gated by the caller (Dashboard).
-// TeamPassphraseStatus — Displays team passphrase status only in the workspace settings tab (read-only).
+// TeamPassphraseStatus — Displays team passphrase status only in the repository settings tab (read-only).
 // Fingerprint (id) is stored in an envelope and can be read instantly without calculation — the passphrase text is not exposed.
 function TeamPassphraseStatus({ repoId, label }: { repoId: string; label: string | null }) {
   const t = useT();
@@ -450,8 +450,8 @@ function TeamPassphraseStatus({ repoId, label }: { repoId: string; label: string
 }
 
 // RepoBranchSettings — One-line form for repo structure settings (default branch, protected branch). Moved from About modal:
-// Not for description/topic info like intro — it's a management setting to change push rules, so it stays in the workspace settings tab.
-// Independent storage from the workspace main form (partial PATCH — about body unchanged).
+// Not for description/topic info like intro — it's a management setting to change push rules, so it stays in the repository settings tab.
+// Independent storage from the repository main form (partial PATCH — about body unchanged).
 function RepoBranchSettings({ repo, label }: { repo: Repo; label: string | null }) {
   const t = useT();
   const [branch, setBranch] = useState(repo.default_branch);
@@ -514,43 +514,43 @@ function RepoBranchSettings({ repo, label }: { repo: Repo; label: string | null 
   );
 }
 
-export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator: boolean }) {
+export function RepositorySettings({ repositoryMetadata, isCreator }: { repositoryMetadata: Repository; isCreator: boolean }) {
   const t = useT();
-  const [pub, setPub] = useState(ws.visibility === 'public');
-  const [ghSync, setGhSync] = useState(ws.gh_visibility_sync ?? false);
-  const [secretsPolicy, setSecretsPolicy] = useState<Policy>(asPolicy(ws.secrets_policy));
-  const [settingsPolicy, setSettingsPolicy] = useState<Policy>(asPolicy(ws.settings_policy));
-  const [webhook, setWebhook] = useState(ws.webhook_url ?? '');
-  const [publicRole, setPublicRole] = useState<'viewer' | 'puller'>(ws.public_role === 'puller' ? 'puller' : 'viewer');
-  const save = useUpdateWorkspace();
+  const [pub, setPub] = useState(repositoryMetadata.visibility === 'public');
+  const [ghSync, setGhSync] = useState(repositoryMetadata.gh_visibility_sync ?? false);
+  const [secretsPolicy, setSecretsPolicy] = useState<Policy>(asPolicy(repositoryMetadata.secrets_policy));
+  const [settingsPolicy, setSettingsPolicy] = useState<Policy>(asPolicy(repositoryMetadata.settings_policy));
+  const [webhook, setWebhook] = useState(repositoryMetadata.webhook_url ?? '');
+  const [publicRole, setPublicRole] = useState<'viewer' | 'puller'>(repositoryMetadata.public_role === 'puller' ? 'puller' : 'viewer');
+  const save = useUpdateRepository();
   const syncNow = useSyncVisibility();
-  const members = useMembers(ws.id).data ?? [];
-  const repos = useRepos(ws.id).data ?? [];
+  const members = useMembers(repositoryMetadata.id).data ?? [];
+  const repos = useRepos(repositoryMetadata.id).data ?? [];
 
-  // Reinitialize form state with the values of the new workspace when switching workspaces.
+  // Reinitialize form state with the values of the new repository when switching repositories.
   useEffect(() => {
-    setPub(ws.visibility === 'public');
-    setGhSync(ws.gh_visibility_sync ?? false);
-    setSecretsPolicy(asPolicy(ws.secrets_policy));
-    setSettingsPolicy(asPolicy(ws.settings_policy));
-    setWebhook(ws.webhook_url ?? '');
-    setPublicRole(ws.public_role === 'puller' ? 'puller' : 'viewer');
+    setPub(repositoryMetadata.visibility === 'public');
+    setGhSync(repositoryMetadata.gh_visibility_sync ?? false);
+    setSecretsPolicy(asPolicy(repositoryMetadata.secrets_policy));
+    setSettingsPolicy(asPolicy(repositoryMetadata.settings_policy));
+    setWebhook(repositoryMetadata.webhook_url ?? '');
+    setPublicRole(repositoryMetadata.public_role === 'puller' ? 'puller' : 'viewer');
     save.reset();
     syncNow.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws.id]);
+  }, [repositoryMetadata.id]);
 
   // All items in this form (publicity, member role, permission policy, webhook, GH sync) only change local state,
   // and must be applied by pressing the save button — toggling or entering alone does not reflect on the server.
-  function buildPatch(): WorkspacePatch {
-    const patch: WorkspacePatch = {};
-    if (ghSync !== (ws.gh_visibility_sync ?? false)) patch.gh_visibility_sync = ghSync;
+  function buildPatch(): RepositoryPatch {
+    const patch: RepositoryPatch = {};
+    if (ghSync !== (repositoryMetadata.gh_visibility_sync ?? false)) patch.gh_visibility_sync = ghSync;
     // If synchronization is enabled (including while enabling), manual visibility is not sent — the server also rejects it.
-    if (!ghSync && pub !== (ws.visibility === 'public')) patch.visibility = pub ? 'public' : 'private';
-    if (secretsPolicy !== asPolicy(ws.secrets_policy)) patch.secrets_policy = secretsPolicy;
-    if (settingsPolicy !== asPolicy(ws.settings_policy)) patch.settings_policy = settingsPolicy;
-    if (webhook.trim() !== (ws.webhook_url ?? '')) patch.webhook_url = webhook.trim();
-    if (publicRole !== (ws.public_role === 'puller' ? 'puller' : 'viewer')) patch.public_role = publicRole;
+    if (!ghSync && pub !== (repositoryMetadata.visibility === 'public')) patch.visibility = pub ? 'public' : 'private';
+    if (secretsPolicy !== asPolicy(repositoryMetadata.secrets_policy)) patch.secrets_policy = secretsPolicy;
+    if (settingsPolicy !== asPolicy(repositoryMetadata.settings_policy)) patch.settings_policy = settingsPolicy;
+    if (webhook.trim() !== (repositoryMetadata.webhook_url ?? '')) patch.webhook_url = webhook.trim();
+    if (publicRole !== (repositoryMetadata.public_role === 'puller' ? 'puller' : 'viewer')) patch.public_role = publicRole;
     return patch;
   }
   const dirty = Object.keys(buildPatch()).length > 0; // Check if there are any unsaved changes.
@@ -559,11 +559,11 @@ export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator:
     e.preventDefault();
     const patch = buildPatch();
     if (Object.keys(patch).length === 0) return;
-    save.mutate({ wsId: ws.id, patch });
+    save.mutate({ repositoryId: repositoryMetadata.id, patch });
   }
 
   return (
-    <form onSubmit={submit} className="form ws-settings-form">
+    <form onSubmit={submit} className="form repository-settings-form">
               <div className="vis-row">
                 <span className="warn-red-label">{t('settings.visibility')}</span>
                 <button
@@ -577,7 +577,7 @@ export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator:
                 >
                   <span className="knob" />
                 </button>
-                <code>{(ghSync ? ws.visibility === 'public' : pub) ? 'public' : 'private'}</code>
+                <code>{(ghSync ? repositoryMetadata.visibility === 'public' : pub) ? 'public' : 'private'}</code>
               </div>
               {ghSync ? (
                 <p className="hint">{t('settings.ghManages')}</p>
@@ -587,7 +587,7 @@ export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator:
                 <p className="hint">{t('settings.privateHint')}</p>
               )}
 
-              {(ghSync ? ws.visibility === 'public' : pub) && (
+              {(ghSync ? repositoryMetadata.visibility === 'public' : pub) && (
                 <div className="settings-upload">
                   <span className="label">{t('settings.nonMemberRole')}</span>
                   <p className="hint">
@@ -608,13 +608,13 @@ export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator:
                 <div className="sync-row">
                   <p className="hint">
                     <Rich>{t('settings.ghSyncHint')}</Rich>
-                    {ws.gh_synced_at && ` ${t('settings.lastSync', { when: ws.gh_synced_at.slice(0, 16).replace('T', ' ') })}`}
+                    {repositoryMetadata.gh_synced_at && ` ${t('settings.lastSync', { when: repositoryMetadata.gh_synced_at.slice(0, 16).replace('T', ' ') })}`}
                   </p>
-                  {(ws.gh_visibility_sync ?? false) && (
+                  {(repositoryMetadata.gh_visibility_sync ?? false) && (
                     <button
                       type="button"
                       className="ghost mini"
-                      onClick={() => syncNow.mutate(ws.id)}
+                      onClick={() => syncNow.mutate(repositoryMetadata.id)}
                       disabled={syncNow.isPending}
                     >
                       {syncNow.isPending ? t('settings.syncing') : t('settings.syncNow')}
@@ -681,10 +681,10 @@ export function WorkspaceSettings({ ws, isCreator }: { ws: Workspace; isCreator:
               </div>
               {save.error && <p className="err">{save.error.message}</p>}
 
-              <NotificationHistory workspace={ws.id} />
-              <ArchiveSection ws={ws} />
-              {isCreator && <SlugSection ws={ws} />}
-              {isCreator && <TransferSection ws={ws} members={members} onDone={() => {}} />}
+              <NotificationHistory repository={repositoryMetadata.id} />
+              <ArchiveSection repositoryMetadata={repositoryMetadata} />
+              {isCreator && <SlugSection repositoryMetadata={repositoryMetadata} />}
+              {isCreator && <TransferSection repositoryMetadata={repositoryMetadata} members={members} onDone={() => {}} />}
     </form>
   );
 }

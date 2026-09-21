@@ -19,7 +19,7 @@ declare global {
   }
 }
 
-// GearBtn is the shared settings control used across repository, team, secrets, account, and workspace panels.
+// GearBtn is the shared settings control used across repository, team, secrets, account, and repository panels.
 export function GearBtn({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button className="gear" aria-label={label} title={label} onClick={onClick}>
@@ -99,7 +99,7 @@ export function About({ repo, canEdit }: { repo: Repo; canEdit: boolean }) {
     setTopics((repo.topics ?? []).join(' '));
   }, [repo.id, repo.description, repo.website, repo.topics]);
 
-  // Default branch protection is managed by RepoBranchSettings on the Workspace Settings tab.
+  // Default branch protection is managed by RepoBranchSettings on the Repository Settings tab.
   function submit(e: FormEvent) {
     e.preventDefault();
     const normalizedWebsite = normalizeWebsiteInput(website);
@@ -199,7 +199,7 @@ export function About({ repo, canEdit }: { repo: Repo; canEdit: boolean }) {
 
 
 // TeamSettings manages shared .claude/.agents/.codex defaults in the side rail.
-// Pullers can view status and download. Public workspaces keep the management
+// Pullers can view status and download. Public repositories keep the management
 // affordance visible, but deny it before mounting the dialog when canWrite is false.
 export function TeamSettings({
   repoId,

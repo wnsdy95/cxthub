@@ -12,20 +12,22 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-// IdentityService implements authentication (Firebase) + workspace/membership/invitation use-cases.
+// IdentityService implements authentication (Firebase) + repository/membership/invitation use-cases.
 //
-// Dependencies: IdentityVerifier (token→User), WorkspaceStore (persistence). Visibility boundary = workspace.
+// Dependencies: IdentityVerifier (token→User), RepositoryStore (persistence). Visibility boundary = repository.
 // Invitations use the "share link/code" model — tokens are reusable until revoked (member addition is idempotent).
 type IdentityService struct {
-	verifier   outbound.IdentityVerifier
-	ws         outbound.WorkspaceStore
-	enterprise outbound.EnterpriseStore
+	verifier     outbound.IdentityVerifier
+	repositories outbound.RepositoryStore
+	organization outbound.OrganizationStore
+	teams        outbound.TeamStore
 }
 
 // NewIdentityService creates an IdentityService.
-func NewIdentityService(verifier outbound.IdentityVerifier, ws outbound.WorkspaceStore) *IdentityService {
-	enterprise, _ := ws.(outbound.EnterpriseStore)
-	return &IdentityService{verifier: verifier, ws: ws, enterprise: enterprise}
+func NewIdentityService(verifier outbound.IdentityVerifier, repositories outbound.RepositoryStore) *IdentityService {
+	organization, _ := repositories.(outbound.OrganizationStore)
+	teams, _ := repositories.(outbound.TeamStore)
+	return &IdentityService{verifier: verifier, repositories: repositories, organization: organization, teams: teams}
 }
 
 // Authenticate validates a token, upserts the user, and returns it (login entry point).
@@ -36,7 +38,7 @@ func (s *IdentityService) Authenticate(ctx context.Context, idToken string) (dom
 	if err != nil {
 		return domain.User{}, err
 	}
-	if existing, gerr := s.ws.GetUser(ctx, u.ID); gerr == nil {
+	if existing, gerr := s.repositories.GetUser(ctx, u.ID); gerr == nil {
 		// Existing user: handle, alias, creation time are preserved (no regeneration on re-login).
 		u.Username = existing.Username
 		u.Nickname = existing.Nickname
@@ -53,10 +55,10 @@ func (s *IdentityService) Authenticate(ctx context.Context, idToken string) (dom
 			return domain.User{}, err
 		}
 	}
-	if err := s.ws.UpsertUser(ctx, u); err != nil {
+	if err := s.repositories.UpsertUser(ctx, u); err != nil {
 		return domain.User{}, err
 	}
-	if s.enterprise != nil {
+	if s.organization != nil {
 		if _, err := s.ensurePersonalNamespace(ctx, u); err != nil {
 			return domain.User{}, err
 		}
@@ -68,7 +70,7 @@ func (s *IdentityService) Authenticate(ctx context.Context, idToken string) (dom
 var reservedUsernames = map[string]bool{
 	"api": true, "invite": true, "w": true, "login": true, "settings": true,
 	"assets": true, "public": true, "admin": true, "static": true, "cxt": true,
-	"pricing": true, "connect": true, "oauth": true, "mcp": true,
+	"pricing": true, "connect": true, "oauth": true, "mcp": true, "enterprises": true,
 }
 
 // uniqueUsername creates a global unique handle from the email local part (or name if none) — collision handling (-2, -3, ...).
@@ -87,14 +89,14 @@ func (s *IdentityService) uniqueUsername(ctx context.Context, u domain.User) (st
 	cand := base
 	for n := 2; ; n++ {
 		if !reservedUsernames[cand] {
-			other, err := s.ws.GetUserByUsername(ctx, cand)
+			other, err := s.repositories.GetUserByUsername(ctx, cand)
 			userAvailable := errors.Is(err, domain.ErrNotFound) || err == nil && other.ID == u.ID
 			if err != nil && !errors.Is(err, domain.ErrNotFound) {
 				return "", err
 			}
 			namespaceAvailable := true
-			if s.enterprise != nil {
-				claimed, namespaceErr := s.enterprise.GetNamespaceBySlug(ctx, cand)
+			if s.organization != nil {
+				claimed, namespaceErr := s.organization.GetNamespaceBySlug(ctx, cand)
 				namespaceAvailable = errors.Is(namespaceErr, domain.ErrNotFound) ||
 					namespaceErr == nil && claimed.Kind == domain.NamespaceUser && claimed.UserID == u.ID
 				if namespaceErr != nil && !errors.Is(namespaceErr, domain.ErrNotFound) {
@@ -119,7 +121,7 @@ func (s *IdentityService) uniqueUsername(ctx context.Context, u domain.User) (st
 //   - nickname: display alias — free change (empty string = remove).
 //   - username: personal Namespace first segment. The previous slug is retained
 //     as an alias so existing URL-derived RepoIDs and CLI remotes keep working.
-func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
+func (s *IdentityService) mutateUpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
 	original := u
 	var personalNamespace domain.Namespace
 	if nickname != nil {
@@ -156,16 +158,16 @@ func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, user
 			if reservedUsernames[next] {
 				return domain.User{}, domain.ErrConflict // reserved word (route conflict)
 			}
-			if other, err := s.ws.GetUserByUsername(ctx, next); err == nil && other.ID != u.ID {
+			if other, err := s.repositories.GetUserByUsername(ctx, next); err == nil && other.ID != u.ID {
 				return domain.User{}, domain.ErrConflict // handle already in use
 			}
-			if s.enterprise != nil {
+			if s.organization != nil {
 				var err error
 				personalNamespace, err = s.ensurePersonalNamespace(ctx, u)
 				if err != nil {
 					return domain.User{}, err
 				}
-				if claimed, claimErr := s.enterprise.GetNamespaceBySlug(ctx, next); claimErr == nil && claimed.ID != personalNamespace.ID {
+				if claimed, claimErr := s.organization.GetNamespaceBySlug(ctx, next); claimErr == nil && claimed.ID != personalNamespace.ID {
 					return domain.User{}, domain.ErrConflict
 				}
 			}
@@ -173,38 +175,46 @@ func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, user
 			usernameChanged = true
 		}
 	}
-	if err := s.ws.UpsertUser(ctx, u); err != nil {
+	if err := s.repositories.UpsertUser(ctx, u); err != nil {
 		return domain.User{}, err
 	}
 	if usernameChanged {
-		if s.enterprise != nil {
-			if err := s.enterprise.RenameNamespace(ctx, personalNamespace.ID, u.Username); err != nil {
-				_ = s.ws.UpsertUser(ctx, original)
+		if s.organization != nil {
+			if err := s.organization.RenameNamespace(ctx, personalNamespace.ID, u.Username); err != nil {
+				_ = s.repositories.UpsertUser(ctx, original)
 				return domain.User{}, err
 			}
 		}
-		// Normalize only personal namespace paths. Enterprise workspaces keep the
+		// Normalize only personal namespace paths. Organization repositories keep the
 		// company slug even when their human creator renames a personal handle.
-		if list, err := s.ws.ListWorkspacesForUser(ctx, u.ID); err == nil {
+		if list, err := s.repositories.ListRepositoriesForUser(ctx, u.ID); err != nil {
+			return domain.User{}, err
+		} else {
 			for _, w := range list {
 				if w.OwnerID != u.ID || w.OwnerUsername == u.Username {
 					continue
 				}
-				if w.OwnerNamespaceID != "" && s.enterprise != nil {
-					if namespace, nerr := s.enterprise.GetNamespace(ctx, w.OwnerNamespaceID); nerr == nil && namespace.Kind == domain.NamespaceEnterprise {
+				if w.OwnerNamespaceID != "" && s.organization != nil {
+					namespace, nerr := s.organization.GetNamespace(ctx, w.OwnerNamespaceID)
+					if nerr != nil {
+						return domain.User{}, nerr
+					}
+					if namespace.Kind == domain.NamespaceOrganization {
 						continue
 					}
 				}
 				w.OwnerUsername = u.Username
-				_ = s.ws.CreateWorkspace(ctx, w) // upsert meaning (FS/PG common)
+				if err := s.repositories.CreateRepository(ctx, w); err != nil {
+					return domain.User{}, err
+				}
 			}
 		}
 	}
 	return u, nil
 }
 
-// WorkspacePatch updates workspace settings. Nil fields do not change.
-type WorkspacePatch struct {
+// RepositoryPatch updates repository settings. Nil fields do not change.
+type RepositoryPatch struct {
 	Visibility       *domain.Visibility // private|public
 	SecretsPolicy    *string            // ""|members(role-based)|owner
 	SettingsPolicy   *string            // value meaning same
@@ -215,257 +225,249 @@ type WorkspacePatch struct {
 	PublicRole       *string            // Public role for non-members ("", viewer, puller)
 }
 
-// UpdateWorkspaceSettings updates workspace settings (public scope, permission policy) — only owner can do this.
-func (s *IdentityService) UpdateWorkspaceSettings(ctx context.Context, userID, workspaceID string, p WorkspacePatch) (domain.Workspace, error) {
-	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
+// UpdateRepositorySettings updates repository settings (public scope, permission policy) — only owner can do this.
+func (s *IdentityService) mutateUpdateRepositorySettings(ctx context.Context, userID, repositoryID string, p RepositoryPatch) (domain.Repository, error) {
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
 	if err != nil {
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
-	if !s.IsOwner(ctx, workspaceID, userID) {
-		return domain.Workspace{}, domain.ErrForbidden // Workspace settings are owner exclusive
+	if !s.IsOwner(ctx, repositoryID, userID) {
+		return domain.Repository{}, domain.ErrForbidden // Repository settings are owner exclusive
 	}
 	if p.GHVisibilitySync != nil {
-		wsp.GHVisibilitySync = *p.GHVisibilitySync
+		repositoryRecord.GHVisibilitySync = *p.GHVisibilitySync
 	}
 	if p.Visibility != nil {
-		if wsp.GHVisibilitySync {
-			return domain.Workspace{}, domain.ErrConflict // Manual settings locked during sync (to prevent truth conflict)
+		if repositoryRecord.GHVisibilitySync {
+			return domain.Repository{}, domain.ErrConflict // Manual settings locked during sync (to prevent truth conflict)
 		}
 		if *p.Visibility != domain.VisibilityPrivate && *p.Visibility != domain.VisibilityPublic {
-			return domain.Workspace{}, domain.ErrValidation
+			return domain.Repository{}, domain.ErrValidation
 		}
-		if *p.Visibility == domain.VisibilityPublic && wsp.OwnerNamespaceID != "" && s.enterprise != nil {
-			if namespace, nerr := s.enterprise.GetNamespace(ctx, wsp.OwnerNamespaceID); nerr == nil && namespace.Kind == domain.NamespaceEnterprise {
-				policy, perr := s.enterprise.GetEnterprisePolicy(ctx, namespace.EnterpriseID)
-				if perr != nil || !policy.AllowPublicWorkspaces {
-					return domain.Workspace{}, domain.ErrForbidden
+		if *p.Visibility == domain.VisibilityPublic && repositoryRecord.OwnerNamespaceID != "" && s.organization != nil {
+			if namespace, nerr := s.organization.GetNamespace(ctx, repositoryRecord.OwnerNamespaceID); nerr == nil && namespace.Kind == domain.NamespaceOrganization {
+				policy, perr := s.effectiveOrganizationPolicy(ctx, namespace.OrganizationID)
+				if perr != nil || !policy.AllowPublicRepositories {
+					return domain.Repository{}, domain.ErrForbidden
 				}
 			}
 		}
-		wsp.Visibility = *p.Visibility
+		repositoryRecord.Visibility = *p.Visibility
 	}
 	validPolicy := func(v string) bool { return v == "" || v == "members" || v == "owner" }
 	if p.SecretsPolicy != nil {
 		if !validPolicy(*p.SecretsPolicy) {
-			return domain.Workspace{}, domain.ErrValidation
+			return domain.Repository{}, domain.ErrValidation
 		}
-		wsp.SecretsPolicy = *p.SecretsPolicy
+		repositoryRecord.SecretsPolicy = *p.SecretsPolicy
 	}
 	if p.SettingsPolicy != nil {
 		if !validPolicy(*p.SettingsPolicy) {
-			return domain.Workspace{}, domain.ErrValidation
+			return domain.Repository{}, domain.ErrValidation
 		}
-		wsp.SettingsPolicy = *p.SettingsPolicy
+		repositoryRecord.SettingsPolicy = *p.SettingsPolicy
 	}
 	if p.Archived != nil {
-		wsp.Archived = *p.Archived
+		repositoryRecord.Archived = *p.Archived
 	}
 	if p.PublicRole != nil {
 		if !domain.ValidPublicRole(*p.PublicRole) {
-			return domain.Workspace{}, domain.ErrValidation // Only "" | viewer | puller allowed
+			return domain.Repository{}, domain.ErrValidation // Only "" | viewer | puller allowed
 		}
-		wsp.PublicRole = *p.PublicRole
+		repositoryRecord.PublicRole = *p.PublicRole
 	}
 	if p.WebhookURL != nil {
-		wsp.WebhookURL = strings.TrimSpace(*p.WebhookURL)
+		repositoryRecord.WebhookURL = strings.TrimSpace(*p.WebhookURL)
 	}
 	if p.Slug != nil {
 		next := strings.ToLower(strings.TrimSpace(*p.Slug))
-		if !domain.ValidWorkspaceSlug(next) {
-			return domain.Workspace{}, domain.ErrValidation
+		if !domain.ValidRepositorySlug(next) {
+			return domain.Repository{}, domain.ErrValidation
 		}
-		if next != wsp.Slug {
-			// Namespace-unique check (excluding self). Enterprise workspaces may
+		if next != repositoryRecord.Slug {
+			// Namespace-unique check (excluding self). Organization repositories may
 			// have different human creators, so owner_id alone is insufficient.
-			var list []domain.Workspace
+			var list []domain.Repository
 			var lerr error
-			if wsp.OwnerNamespaceID != "" && s.enterprise != nil {
-				list, lerr = s.enterprise.ListWorkspacesForNamespace(ctx, wsp.OwnerNamespaceID)
+			if repositoryRecord.OwnerNamespaceID != "" && s.organization != nil {
+				list, lerr = s.organization.ListRepositoriesForNamespace(ctx, repositoryRecord.OwnerNamespaceID)
 			} else {
-				list, lerr = s.ws.ListWorkspacesForUser(ctx, wsp.OwnerID)
+				list, lerr = s.repositories.ListRepositoriesForUser(ctx, repositoryRecord.OwnerID)
 			}
 			if lerr == nil {
 				for _, w := range list {
-					if w.ID != wsp.ID && w.Slug == next {
-						return domain.Workspace{}, domain.ErrConflict
+					if w.ID != repositoryRecord.ID && w.Slug == next {
+						return domain.Repository{}, domain.ErrConflict
 					}
 				}
 			}
-			wsp.Slug = next
+			repositoryRecord.Slug = next
 		}
 	}
-	if err := s.ws.CreateWorkspace(ctx, wsp); err != nil { // upsert meaning
-		return domain.Workspace{}, err
+	if err := s.repositories.CreateRepository(ctx, repositoryRecord); err != nil { // upsert meaning
+		return domain.Repository{}, err
 	}
-	return wsp, nil
+	return repositoryRecord, nil
 }
 
-// TransferOwnership transfers the workspace creator (OwnerID) to an existing member — only the current creator can do this.
+// TransferOwnership transfers the repository creator (OwnerID) to an existing member — only the current creator can do this.
 //
 //   - The new owner is promoted to the owner role, and the original creator remains an owner member (GitHub style —
 //     you can later downgrade or leave).
-//   - Personal workspaces move to the target's personal Namespace and may get a
-//     collision suffix. Enterprise workspaces remain in their Enterprise
+//   - Personal repositories move to the target's personal Namespace and may get a
+//     collision suffix. Organization repositories remain in their Organization
 //     Namespace; only the human permission anchor changes.
-func (s *IdentityService) TransferOwnership(ctx context.Context, actorID, workspaceID, targetID string) (domain.Workspace, error) {
-	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
+func (s *IdentityService) mutateTransferOwnership(ctx context.Context, actorID, repositoryID, targetID string) (domain.Repository, error) {
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
 	if err != nil {
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
-	if wsp.OwnerID != actorID {
-		return domain.Workspace{}, domain.ErrForbidden // previous was exclusive to the current creator
+	if repositoryRecord.OwnerID != actorID {
+		return domain.Repository{}, domain.ErrForbidden // previous was exclusive to the current creator
 	}
 	if targetID == actorID {
-		return domain.Workspace{}, domain.ErrValidation
+		return domain.Repository{}, domain.ErrValidation
 	}
-	target, err := s.ws.GetUser(ctx, targetID)
+	target, err := s.repositories.GetUser(ctx, targetID)
 	if err != nil {
-		return domain.Workspace{}, domain.ErrNotFound
+		return domain.Repository{}, domain.ErrNotFound
 	}
-	if ok, err := s.ws.IsMember(ctx, workspaceID, targetID); err != nil || !ok {
-		return domain.Workspace{}, domain.ErrNotFound // only existing members can transfer
+	if ok, err := s.repositories.IsMember(ctx, repositoryID, targetID); err != nil || !ok {
+		return domain.Repository{}, domain.ErrNotFound // only existing members can transfer
 	}
-	enterpriseOwned := false
-	if wsp.OwnerNamespaceID != "" && s.enterprise != nil {
-		if namespace, nerr := s.enterprise.GetNamespace(ctx, wsp.OwnerNamespaceID); nerr == nil {
-			enterpriseOwned = namespace.Kind == domain.NamespaceEnterprise
+	organizationOwned := false
+	if repositoryRecord.OwnerNamespaceID != "" && s.organization != nil {
+		namespace, nerr := s.organization.GetNamespace(ctx, repositoryRecord.OwnerNamespaceID)
+		if nerr != nil {
+			return domain.Repository{}, nerr
 		}
+		organizationOwned = namespace.Kind == domain.NamespaceOrganization
 	}
-	wsp.OwnerID = targetID
-	if !enterpriseOwned {
+	repositoryRecord.OwnerID = targetID
+	if !organizationOwned {
 		taken := map[string]bool{}
-		if list, lerr := s.ws.ListWorkspacesForUser(ctx, targetID); lerr == nil {
-			for _, workspace := range list {
-				if workspace.OwnerID == targetID && workspace.ID != wsp.ID {
-					taken[workspace.Slug] = true
+		if list, lerr := s.repositories.ListRepositoriesForUser(ctx, targetID); lerr == nil {
+			for _, repository := range list {
+				if repository.OwnerID == targetID && repository.ID != repositoryRecord.ID {
+					taken[repository.Slug] = true
 				}
 			}
 		}
-		slug := wsp.Slug
+		slug := repositoryRecord.Slug
 		for n := 2; taken[slug]; n++ {
-			slug = wsp.Slug + "-" + strconv.Itoa(n)
+			slug = repositoryRecord.Slug + "-" + strconv.Itoa(n)
 		}
-		wsp.OwnerUsername = target.Username
-		wsp.Slug = slug
-		if s.enterprise != nil {
+		repositoryRecord.OwnerUsername = target.Username
+		repositoryRecord.Slug = slug
+		if s.organization != nil {
 			namespace, nerr := s.ensurePersonalNamespace(ctx, target)
 			if nerr != nil {
-				return domain.Workspace{}, nerr
+				return domain.Repository{}, nerr
 			}
-			wsp.OwnerNamespaceID = namespace.ID
+			repositoryRecord.OwnerNamespaceID = namespace.ID
+			repositoryRecord.Slug, nerr = s.uniqueNamespaceRepositorySlug(ctx, namespace.ID, repositoryRecord.Slug, repositoryRecord.ID)
+			if nerr != nil {
+				return domain.Repository{}, nerr
+			}
 		}
 	}
-	if err := s.ws.CreateWorkspace(ctx, wsp); err != nil { // upsert
-		return domain.Workspace{}, err
+	if err := s.repositories.CreateRepository(ctx, repositoryRecord); err != nil { // upsert
+		return domain.Repository{}, err
 	}
 	// Promote the new creator to the owner role (the original creator's owner membership remains unchanged).
-	if err := s.ws.AddMember(ctx, domain.Membership{WorkspaceID: workspaceID, UserID: targetID, Role: domain.RoleOwner, CreatedAt: time.Now().UTC()}); err != nil {
-		return domain.Workspace{}, err
+	if err := s.repositories.AddMember(ctx, domain.Membership{RepositoryID: repositoryID, UserID: targetID, Role: domain.RoleOwner, CreatedAt: time.Now().UTC()}); err != nil {
+		return domain.Repository{}, err
 	}
-	return wsp, nil
+	return repositoryRecord, nil
 }
 
-// GetWorkspace retrieves a workspace (used in policy decisions etc. at the delivery boundary).
-func (s *IdentityService) GetWorkspace(ctx context.Context, workspaceID string) (domain.Workspace, error) {
-	return s.ws.GetWorkspace(ctx, workspaceID)
+// GetRepository retrieves a repository (used in policy decisions etc. at the delivery boundary).
+func (s *IdentityService) GetRepository(ctx context.Context, repositoryID string) (domain.Repository, error) {
+	return s.repositories.GetRepository(ctx, repositoryID)
 }
 
-// RoleOf returns the user's role within the workspace. The constructor (OwnerID) is always owner.
+// RoleOf returns the user's role within the repository. The constructor (OwnerID) is always owner.
 // Non-members are ("", false).
-func (s *IdentityService) RoleOf(ctx context.Context, workspaceID, userID string) (domain.MemberRole, bool) {
-	if userID == "" {
-		return "", false
-	}
-	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
-	if err != nil {
-		return "", false
-	}
-	if wsp.OwnerID == userID {
-		return domain.WorkspaceRole(wsp, nil, userID)
-	}
-	members, err := s.ws.ListMembers(ctx, workspaceID)
-	if err != nil {
-		return "", false
-	}
-	return domain.WorkspaceRole(wsp, members, userID)
+func (s *IdentityService) RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool) {
+	return repositoryRole(ctx, s.repositories, repositoryID, userID)
 }
 
-// IsOwner determines owner permissions: workspace constructor (OwnerID) or owner role member (co-owner).
+// IsOwner determines owner permissions: repository constructor (OwnerID) or owner role member (co-owner).
 // Changes to settings, policy-enforced owner restrictions, and member management use this determination.
-func (s *IdentityService) IsOwner(ctx context.Context, workspaceID, userID string) bool {
-	role, ok := s.RoleOf(ctx, workspaceID, userID)
+func (s *IdentityService) IsOwner(ctx context.Context, repositoryID, userID string) bool {
+	role, ok := s.RoleOf(ctx, repositoryID, userID)
 	return ok && role == domain.RoleOwner
 }
 
 // UpdateMemberRole changes a member's role — only owner can do this.
 // The constructor's role cannot be changed (to prevent orphaned ownership — transfer is a separate feature).
-func (s *IdentityService) UpdateMemberRole(ctx context.Context, actorID, workspaceID, targetID string, role domain.MemberRole) error {
+func (s *IdentityService) mutateUpdateMemberRole(ctx context.Context, actorID, repositoryID, targetID string, role domain.MemberRole) error {
 	if !domain.ValidRole(role) {
 		return domain.ErrValidation
 	}
-	if !s.IsOwner(ctx, workspaceID, actorID) {
+	if !s.IsOwner(ctx, repositoryID, actorID) {
 		return domain.ErrForbidden
 	}
-	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
 	if err != nil {
 		return err
 	}
-	if targetID == wsp.OwnerID {
+	if targetID == repositoryRecord.OwnerID {
 		return domain.ErrConflict // Constructor role is fixed
 	}
-	ok, err := s.ws.IsMember(ctx, workspaceID, targetID)
+	ok, err := s.repositories.IsMember(ctx, repositoryID, targetID)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return domain.ErrNotFound
 	}
-	return s.ws.AddMember(ctx, domain.Membership{WorkspaceID: workspaceID, UserID: targetID, Role: role, CreatedAt: time.Now().UTC()})
+	return s.repositories.AddMember(ctx, domain.Membership{RepositoryID: repositoryID, UserID: targetID, Role: role, CreatedAt: time.Now().UTC()})
 }
 
 // RemoveMember removes a member. Owner can remove anyone, members can remove themselves.
-// Workspace constructor (OwnerID) cannot be removed.
-func (s *IdentityService) RemoveMember(ctx context.Context, actorID, workspaceID, targetID string) error {
-	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
+// Repository constructor (OwnerID) cannot be removed.
+func (s *IdentityService) mutateRemoveMember(ctx context.Context, actorID, repositoryID, targetID string) error {
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
 	if err != nil {
 		return err
 	}
-	if targetID == wsp.OwnerID {
+	if targetID == repositoryRecord.OwnerID {
 		return domain.ErrConflict // Owner cannot be removed
 	}
-	if actorID != targetID && !s.IsOwner(ctx, workspaceID, actorID) {
+	if actorID != targetID && !s.IsOwner(ctx, repositoryID, actorID) {
 		return domain.ErrForbidden // Removing others is only for owner
 	}
-	return s.ws.RemoveMember(ctx, workspaceID, targetID)
+	return s.repositories.RemoveMember(ctx, repositoryID, targetID)
 }
 
 // PublicUser returns public information for a user profile (/<username>): user + publicly visible
-// workspaces (those owned by the user). For others/anonymous, only public; for the user (viewerID==user.ID), full.
+// repositories (those owned by the user). For others/anonymous, only public; for the user (viewerID==user.ID), full.
 // email is filled in only for the user.
-func (s *IdentityService) PublicUser(ctx context.Context, username, viewerID string) (domain.User, []domain.Workspace, error) {
-	u, err := s.ws.GetUserByUsername(ctx, username)
+func (s *IdentityService) PublicUser(ctx context.Context, username, viewerID string) (domain.User, []domain.Repository, error) {
+	u, err := s.repositories.GetUserByUsername(ctx, username)
 	if err != nil {
 		return domain.User{}, nil, domain.ErrNotFound
 	}
-	list, err := s.ws.ListWorkspacesForUser(ctx, u.ID)
+	list, err := s.repositories.ListRepositoriesForUser(ctx, u.ID)
 	if err != nil {
 		return domain.User{}, nil, err
 	}
 	self := viewerID != "" && viewerID == u.ID
 	personalNamespaceID := ""
-	if s.enterprise != nil {
-		if ns, nsErr := s.enterprise.GetNamespaceBySlug(ctx, u.Username); nsErr == nil && ns.Kind == domain.NamespaceUser && ns.UserID == u.ID {
+	if s.organization != nil {
+		if ns, nsErr := s.organization.GetNamespaceBySlug(ctx, u.Username); nsErr == nil && ns.Kind == domain.NamespaceUser && ns.UserID == u.ID {
 			personalNamespaceID = ns.ID
 		}
 	}
-	out := make([]domain.Workspace, 0, len(list))
+	out := make([]domain.Repository, 0, len(list))
 	for _, w := range list {
-		if w.OwnerID != u.ID { // profiles list only owned workspaces, not workspaces joined as a member
+		if w.OwnerID != u.ID { // profiles list only owned repositories, not repositories joined as a member
 			continue
 		}
-		// Enterprise Workspace creation records the human creator as OwnerID so
-		// Workspace authorization has an initial owner. It still belongs on the
-		// Enterprise namespace profile, never on that creator's personal profile.
+		// Organization Repository creation records the human creator as OwnerID so
+		// Repository authorization has an initial owner. It still belongs on the
+		// Organization namespace profile, never on that creator's personal profile.
 		if w.OwnerNamespaceID != "" && w.OwnerNamespaceID != personalNamespaceID {
 			continue
 		}
@@ -479,59 +481,60 @@ func (s *IdentityService) PublicUser(ctx context.Context, username, viewerID str
 	return u, out, nil
 }
 
-func (s *IdentityService) workspaceByNamespacePath(ctx context.Context, namespace, slug string) (domain.Workspace, error) {
-	if s.enterprise != nil {
-		ns, err := s.enterprise.GetNamespaceBySlug(ctx, namespace)
+func (s *IdentityService) repositoryByNamespacePath(ctx context.Context, namespace, slug string) (domain.Repository, error) {
+	if s.organization != nil {
+		ns, err := s.organization.GetNamespaceBySlug(ctx, namespace)
 		if err == nil {
-			return s.ws.GetWorkspaceByNamespacePath(ctx, ns.ID, slug)
+			repository, lookupErr := s.repositories.GetRepositoryByNamespacePath(ctx, ns.ID, slug)
+			if errors.Is(lookupErr, domain.ErrNotFound) {
+				return s.repositories.GetRepositoryByPath(ctx, namespace, slug)
+			}
+			return repository, lookupErr
 		}
 		if !errors.Is(err, domain.ErrNotFound) {
-			return domain.Workspace{}, err
+			return domain.Repository{}, err
 		}
-		// The PostgreSQL migration backfills personal Namespaces. Trusted local
-		// FS stores may predate that schema and are healed lazily at the owner's
-		// next login; preserve their existing public URLs until then.
-		if legacy, legacyErr := s.ws.GetWorkspaceByPath(ctx, namespace, slug); legacyErr == nil && legacy.OwnerNamespaceID == "" {
-			return legacy, nil
-		}
-		return domain.Workspace{}, err
+		// Exact recorded aliases can predate the namespace registry, including
+		// an old owner handle. Resolve their target, then authorize that target.
+		// The store never guesses a container child or grants access by URL.
+		return s.repositories.GetRepositoryByPath(ctx, namespace, slug)
 	}
-	return s.ws.GetWorkspaceByPath(ctx, namespace, slug)
+	return s.repositories.GetRepositoryByPath(ctx, namespace, slug)
 }
 
-// PublicWorkspace interprets a public workspace by URL path (username/slug) — for anonymous viewing.
-// private workspaces return ErrNotFound to avoid leaking existence.
-func (s *IdentityService) PublicWorkspace(ctx context.Context, username, slug string) (domain.Workspace, error) {
-	wsp, err := s.workspaceByNamespacePath(ctx, username, slug)
-	if err != nil || !wsp.IsPublic() {
-		return domain.Workspace{}, domain.ErrNotFound
+// PublicRepository interprets a public repository by URL path (username/slug) — for anonymous viewing.
+// private repositories return ErrNotFound to avoid leaking existence.
+func (s *IdentityService) PublicRepository(ctx context.Context, username, slug string) (domain.Repository, error) {
+	repositoryRecord, err := s.repositoryByNamespacePath(ctx, username, slug)
+	if err != nil || !repositoryRecord.IsPublic() {
+		return domain.Repository{}, domain.ErrNotFound
 	}
-	return wsp, nil
+	return repositoryRecord, nil
 }
 
-// ReadableWorkspace resolves a public path without leaking private Workspace
+// ReadableRepository resolves a public path without leaking private Repository
 // existence. Break-glass is a narrow viewer exception and never creates a
-// durable Workspace membership.
-func (s *IdentityService) ReadableWorkspace(ctx context.Context, namespace, slug, viewerID string) (domain.Workspace, error) {
-	wsp, err := s.workspaceByNamespacePath(ctx, namespace, slug)
+// durable Repository membership.
+func (s *IdentityService) ReadableRepository(ctx context.Context, namespace, slug, viewerID string) (domain.Repository, error) {
+	repositoryRecord, err := s.repositoryByNamespacePath(ctx, namespace, slug)
 	if err != nil {
-		return domain.Workspace{}, domain.ErrNotFound
+		return domain.Repository{}, domain.ErrNotFound
 	}
-	if wsp.IsPublic() {
-		return wsp, nil
+	if repositoryRecord.IsPublic() {
+		return repositoryRecord, nil
 	}
 	if viewerID == "" {
-		return domain.Workspace{}, domain.ErrNotFound
+		return domain.Repository{}, domain.ErrNotFound
 	}
-	if role, ok := s.RoleOf(ctx, wsp.ID, viewerID); ok && role.AtLeast(domain.RoleViewer) {
-		return wsp, nil
+	if role, ok := s.RoleOf(ctx, repositoryRecord.ID, viewerID); ok && role.AtLeast(domain.RoleViewer) {
+		return repositoryRecord, nil
 	}
-	if allowed, accessErr := s.HasBreakGlassAccess(ctx, wsp.ID, viewerID); accessErr != nil {
-		return domain.Workspace{}, accessErr
+	if allowed, accessErr := s.HasBreakGlassAccess(ctx, repositoryRecord.ID, viewerID); accessErr != nil {
+		return domain.Repository{}, accessErr
 	} else if allowed {
-		return wsp, nil
+		return repositoryRecord, nil
 	}
-	return domain.Workspace{}, domain.ErrNotFound
+	return domain.Repository{}, domain.ErrNotFound
 }
 
 // cliTokenPrefix is the prefix for CLI token sessions (distinguishes from web sessions "sess_" for listing).
@@ -573,7 +576,7 @@ func (s *IdentityService) ListCLITokens(ctx context.Context, userID string) ([]C
 }
 
 func (s *IdentityService) listSessions(ctx context.Context, userID, kind string) ([]CLITokenInfo, error) {
-	sessions, err := s.ws.ListSessionsForUser(ctx, userID)
+	sessions, err := s.repositories.ListSessionsForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -608,7 +611,7 @@ func (s *IdentityService) revokeSession(ctx context.Context, userID, suffix stri
 	if cli {
 		kind = "cli"
 	}
-	sessions, err := s.ws.ListSessionsForUser(ctx, userID)
+	sessions, err := s.repositories.ListSessionsForUser(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -617,7 +620,7 @@ func (s *IdentityService) revokeSession(ctx context.Context, userID, suffix stri
 			continue
 		}
 		if sessionHint(sess) == suffix {
-			return s.ws.DeleteSession(ctx, sess.Token)
+			return s.repositories.DeleteSession(ctx, sess.Token)
 		}
 	}
 	return domain.ErrNotFound
@@ -643,7 +646,7 @@ func (s *IdentityService) CreateCLIToken(ctx context.Context, userID, label stri
 // existing session store. The refresh token deliberately does not use the
 // sess_ prefix, so it cannot be presented to ordinary API/MCP bearer gates.
 func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientID string) (domain.OAuthTokenPair, error) {
-	if _, err := s.ws.GetUser(ctx, userID); err != nil {
+	if _, err := s.repositories.GetUser(ctx, userID); err != nil {
 		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 	}
 	access, err := s.issueSession(ctx, userID, "sess_", "mcp_access", clientID, mcpAccessTokenTTL)
@@ -652,7 +655,7 @@ func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientI
 	}
 	refresh, err := s.issueSession(ctx, userID, "refresh_", "mcp_refresh", clientID, mcpRefreshTokenTTL)
 	if err != nil {
-		_ = s.ws.DeleteSession(ctx, domain.HashToken(access.Token))
+		_ = s.repositories.DeleteSession(ctx, domain.HashToken(access.Token))
 		return domain.OAuthTokenPair{}, err
 	}
 	return domain.OAuthTokenPair{
@@ -669,16 +672,16 @@ func (s *IdentityService) RefreshMCPAccessToken(ctx context.Context, refreshToke
 		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 	}
 	storedToken := domain.HashToken(refreshToken)
-	sess, err := s.ws.ConsumeSession(ctx, storedToken, "mcp_refresh", clientID)
+	sess, err := s.repositories.ConsumeSession(ctx, storedToken, "mcp_refresh", clientID)
 	if err != nil || !time.Now().UTC().Before(sess.ExpiresAt) {
 		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 	}
-	if _, err := s.ws.GetUser(ctx, sess.UserID); err != nil {
+	if _, err := s.repositories.GetUser(ctx, sess.UserID); err != nil {
 		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 	}
 	pair, err := s.IssueMCPTokenPair(ctx, sess.UserID, clientID)
 	if err != nil {
-		_ = s.ws.CreateSession(ctx, sess) // Preserve retry capability if issuance storage failed.
+		_ = s.repositories.CreateSession(ctx, sess) // Preserve retry capability if issuance storage failed.
 		return domain.OAuthTokenPair{}, err
 	}
 	return pair, nil
@@ -700,7 +703,7 @@ func (s *IdentityService) RevokeMCPToken(ctx context.Context, token, clientID st
 	default:
 		return nil
 	}
-	_, err := s.ws.ConsumeSession(ctx, domain.HashToken(token), kind, clientID)
+	_, err := s.repositories.ConsumeSession(ctx, domain.HashToken(token), kind, clientID)
 	if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrUnauthorized) {
 		return nil
 	}
@@ -724,41 +727,45 @@ func (s *IdentityService) issueSession(ctx context.Context, userID, prefix, kind
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
 	}
-	if err := s.ws.CreateSession(ctx, stored); err != nil {
+	if err := s.repositories.CreateSession(ctx, stored); err != nil {
 		return domain.Session{}, err
 	}
 	stored.Token = raw // Only the original token is passed to the caller (cookie/issue response)
 	return stored, nil
 }
 
-// IsPublicWorkspace returns the public status (used for bypassing membership checks in query paths).
-func (s *IdentityService) IsPublicWorkspace(ctx context.Context, workspaceID string) bool {
-	wsp, err := s.ws.GetWorkspace(ctx, workspaceID)
-	return err == nil && wsp.IsPublic()
+// IsPublicRepository returns the public status (used for bypassing membership checks in query paths).
+func (s *IdentityService) IsPublicRepository(ctx context.Context, repositoryID string) bool {
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
+	return err == nil && repositoryRecord.IsPublic()
 }
 
-// CreateWorkspace creates a workspace and registers its creator as an owner member.
+// CreateRepository creates a repository and registers its creator as an owner member.
 // It derives the URL slug from the name, making it unique within the owner via -2, -3, and so on.
-func (s *IdentityService) CreateWorkspace(ctx context.Context, owner domain.User, name string) (domain.Workspace, error) {
+func (s *IdentityService) mutateCreateRepository(ctx context.Context, owner domain.User, name string) (domain.Repository, error) {
 	name = strings.TrimSpace(name)
 	// Naming rules (enforced in English): starts with a letter, ends with a letter or number, middle can only contain [A-Za-z0-9_-].
-	if !domain.ValidWorkspaceName(name) {
-		return domain.Workspace{}, domain.ErrValidation
+	if !domain.ValidRepositoryName(name) {
+		return domain.Repository{}, domain.ErrValidation
 	}
 	now := time.Now().UTC()
 	var namespaceID string
-	if s.enterprise != nil {
+	if s.organization != nil {
 		namespace, err := s.ensurePersonalNamespace(ctx, owner)
 		if err != nil {
-			return domain.Workspace{}, err
+			return domain.Repository{}, err
 		}
 		namespaceID = namespace.ID
 	}
 	slug := s.uniqueSlug(ctx, owner.ID, name, "")
 	if namespaceID != "" {
-		slug = s.uniqueNamespaceWorkspaceSlug(ctx, namespaceID, name, "")
+		var err error
+		slug, err = s.uniqueNamespaceRepositorySlug(ctx, namespaceID, name, "")
+		if err != nil {
+			return domain.Repository{}, err
+		}
 	}
-	wsp := domain.Workspace{
+	repositoryRecord := domain.Repository{
 		ID:               domain.NewID("ws_"),
 		Name:             name,
 		OwnerID:          owner.ID,
@@ -767,27 +774,27 @@ func (s *IdentityService) CreateWorkspace(ctx context.Context, owner domain.User
 		OwnerNamespaceID: namespaceID,
 		CreatedAt:        now,
 	}
-	if err := s.ws.CreateWorkspace(ctx, wsp); err != nil {
-		return domain.Workspace{}, err
+	if err := s.repositories.CreateRepository(ctx, repositoryRecord); err != nil {
+		return domain.Repository{}, err
 	}
-	if err := s.ws.AddMember(ctx, domain.Membership{WorkspaceID: wsp.ID, UserID: owner.ID, Role: domain.RoleOwner, CreatedAt: now}); err != nil {
-		return domain.Workspace{}, err
+	if err := s.repositories.AddMember(ctx, domain.Membership{RepositoryID: repositoryRecord.ID, UserID: owner.ID, Role: domain.RoleOwner, CreatedAt: now}); err != nil {
+		return domain.Repository{}, err
 	}
-	return wsp, nil
+	return repositoryRecord, nil
 }
 
-// uniqueSlug generates a unique slug among the owner's workspaces.
+// uniqueSlug generates a unique slug among the owner's repositories.
 // selfID is a value to exclude self collisions during backfill (new creation is "").
 func (s *IdentityService) uniqueSlug(ctx context.Context, ownerID, name, selfID string) string {
 	taken := map[string]bool{}
-	if list, err := s.ws.ListWorkspacesForUser(ctx, ownerID); err == nil {
+	if list, err := s.repositories.ListRepositoriesForUser(ctx, ownerID); err == nil {
 		for _, w := range list {
 			if w.OwnerID == ownerID && w.ID != selfID && w.Slug != "" {
 				taken[w.Slug] = true
 			}
 		}
 	}
-	base := domain.WorkspaceSlug(name)
+	base := domain.RepositorySlug(name)
 	cand := base
 	for n := 2; taken[cand]; n++ {
 		cand = base + "-" + strconv.Itoa(n)
@@ -795,10 +802,10 @@ func (s *IdentityService) uniqueSlug(ctx context.Context, ownerID, name, selfID 
 	return cand
 }
 
-// ListWorkspaces returns the list of workspaces the user belongs to.
-// Legacy workspaces without slugs are lazily backfilled here (self-healing in query paths).
-func (s *IdentityService) ListWorkspaces(ctx context.Context, userID string) ([]domain.Workspace, error) {
-	list, err := s.ws.ListWorkspacesForUser(ctx, userID)
+// ListRepositories returns the list of repositories the user belongs to.
+// Legacy repositories without slugs are lazily backfilled here (self-healing in query paths).
+func (s *IdentityService) ListRepositories(ctx context.Context, userID string) ([]domain.Repository, error) {
+	list, err := s.repositories.ListRepositoriesForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -806,16 +813,16 @@ func (s *IdentityService) ListWorkspaces(ctx context.Context, userID string) ([]
 		if w.Slug != "" && w.OwnerUsername != "" {
 			continue
 		}
-		if fixed, ferr := s.backfillWorkspace(ctx, w); ferr == nil {
+		if fixed, ferr := s.backfillRepository(ctx, w); ferr == nil {
 			list[i] = fixed
 		}
 	}
 	return list, nil
 }
 
-// backfillWorkspace fills in legacy records with slug/owner_username.
-func (s *IdentityService) backfillWorkspace(ctx context.Context, w domain.Workspace) (domain.Workspace, error) {
-	owner, err := s.ws.GetUser(ctx, w.OwnerID)
+// backfillRepository fills in legacy records with slug/owner_username.
+func (s *IdentityService) backfillRepository(ctx context.Context, w domain.Repository) (domain.Repository, error) {
+	owner, err := s.repositories.GetUser(ctx, w.OwnerID)
 	if err != nil {
 		return w, err
 	}
@@ -824,7 +831,7 @@ func (s *IdentityService) backfillWorkspace(ctx context.Context, w domain.Worksp
 		if err != nil {
 			return w, err
 		}
-		if err := s.ws.UpsertUser(ctx, owner); err != nil {
+		if err := s.repositories.UpsertUser(ctx, owner); err != nil {
 			return w, err
 		}
 	}
@@ -832,30 +839,30 @@ func (s *IdentityService) backfillWorkspace(ctx context.Context, w domain.Worksp
 		w.Slug = s.uniqueSlug(ctx, w.OwnerID, w.Name, w.ID)
 	}
 	personalNamespace := true
-	if w.OwnerNamespaceID != "" && s.enterprise != nil {
-		if namespace, nerr := s.enterprise.GetNamespace(ctx, w.OwnerNamespaceID); nerr == nil && namespace.Kind == domain.NamespaceEnterprise {
+	if w.OwnerNamespaceID != "" && s.organization != nil {
+		if namespace, nerr := s.organization.GetNamespace(ctx, w.OwnerNamespaceID); nerr == nil && namespace.Kind == domain.NamespaceOrganization {
 			personalNamespace = false
 		}
 	}
 	if personalNamespace {
 		w.OwnerUsername = owner.Username
 	}
-	if w.OwnerNamespaceID == "" && s.enterprise != nil {
+	if w.OwnerNamespaceID == "" && s.organization != nil {
 		if namespace, nerr := s.ensurePersonalNamespace(ctx, owner); nerr == nil {
 			w.OwnerNamespaceID = namespace.ID
 		}
 	}
-	if err := s.ws.CreateWorkspace(ctx, w); err != nil { // Upsert in FS/PG.
+	if err := s.repositories.CreateRepository(ctx, w); err != nil { // Upsert in FS/PG.
 		return w, err
 	}
 	return w, nil
 }
 
-// Invite creates a workspace invitation (share token) — maintainer level (5-rung ladder).
+// Invite creates a repository invitation (share token) — maintainer level (5-rung ladder).
 // If email=="" anyone can join, otherwise only that email can accept.
 // If ttl>0 it expires after that time (AcceptInvite checks), 0 is indefinite. Negative values reject.
-func (s *IdentityService) Invite(ctx context.Context, userID, workspaceID, email string, role domain.MemberRole, ttl time.Duration) (domain.Invite, error) {
-	actor, ok := s.RoleOf(ctx, workspaceID, userID)
+func (s *IdentityService) mutateInvite(ctx context.Context, userID, repositoryID, email string, role domain.MemberRole, ttl time.Duration) (domain.Invite, error) {
+	actor, ok := s.RoleOf(ctx, repositoryID, userID)
 	if !ok || !actor.AtLeast(domain.RoleMaintainer) {
 		return domain.Invite{}, domain.ErrForbidden
 	}
@@ -877,94 +884,127 @@ func (s *IdentityService) Invite(ctx context.Context, userID, workspaceID, email
 		expires = &t
 	}
 	inv := domain.Invite{
-		Token:       domain.NewID("inv_"),
-		WorkspaceID: workspaceID,
-		Email:       strings.TrimSpace(email),
-		Role:        role,
-		Status:      domain.InvitePending,
-		CreatedBy:   userID,
-		CreatedAt:   time.Now().UTC(),
-		ExpiresAt:   expires,
+		Token:        domain.NewID("inv_"),
+		RepositoryID: repositoryID,
+		Email:        strings.TrimSpace(email),
+		Role:         role,
+		Status:       domain.InvitePending,
+		CreatedBy:    userID,
+		CreatedAt:    time.Now().UTC(),
+		ExpiresAt:    expires,
 	}
-	if err := s.ws.CreateInvite(ctx, inv); err != nil {
+	if err := s.repositories.CreateInvite(ctx, inv); err != nil {
 		return domain.Invite{}, err
 	}
 	return inv, nil
 }
 
 // AcceptInvite serializes membership changes and their notification in one transaction.
-func (s *IdentityService) AcceptInvite(ctx context.Context, user domain.User, token string) (out domain.Workspace, err error) {
-	inv, err := s.ws.GetInvite(ctx, token)
-	if err != nil {
-		return out, err
-	}
-	if tx, ok := s.ws.(outbound.WorkspaceTransactions); ok {
-		err = tx.WithinWorkspace(ctx, inv.WorkspaceID, func(ctx context.Context) error { out, err = s.acceptInvite(ctx, user, token); return err })
+func (s *IdentityService) AcceptInvite(ctx context.Context, user domain.User, token string) (out domain.Repository, err error) {
+	return identityResult(ctx, s, func(ctx context.Context) (domain.Repository, error) {
+		inv, err := s.repositories.GetInvite(ctx, token)
 		if err != nil {
-			return domain.Workspace{}, err
+			return domain.Repository{}, err
 		}
-		return out, nil
-	}
-	return s.acceptInvite(ctx, user, token)
+		if tx, ok := s.repositories.(outbound.RepositoryMetadataTransactions); ok {
+			var result domain.Repository
+			err = tx.WithinRepositoryMetadata(ctx, inv.RepositoryID, func(ctx context.Context) error { result, err = s.acceptInvite(ctx, user, token); return err })
+			return result, err
+		}
+		return s.acceptInvite(ctx, user, token)
+	})
 }
 
-// AcceptInvite joins a workspace by token (member addition is idempotent — link reuse possible).
-func (s *IdentityService) acceptInvite(ctx context.Context, user domain.User, token string) (domain.Workspace, error) {
-	inv, err := s.ws.GetInvite(ctx, token)
+// AcceptInvite joins a repository by token (member addition is idempotent — link reuse possible).
+func (s *IdentityService) acceptInvite(ctx context.Context, user domain.User, token string) (domain.Repository, error) {
+	inv, err := s.repositories.GetInvite(ctx, token)
 	if err != nil {
-		return domain.Workspace{}, err // ErrNotFound
+		return domain.Repository{}, err // ErrNotFound
 	}
 	if inv.Status != domain.InvitePending {
-		return domain.Workspace{}, domain.ErrConflict // Revoked/expired.
+		return domain.Repository{}, domain.ErrConflict // Revoked/expired.
 	}
 	if inv.ExpiresAt != nil && time.Now().After(*inv.ExpiresAt) {
-		return domain.Workspace{}, domain.ErrConflict
+		return domain.Repository{}, domain.ErrConflict
 	}
 	if inv.Email != "" && !strings.EqualFold(inv.Email, user.Email) {
-		return domain.Workspace{}, domain.ErrForbidden // Invite to specific email target
+		return domain.Repository{}, domain.ErrForbidden // Invite to specific email target
 	}
-	workspace, err := s.ws.GetWorkspace(ctx, inv.WorkspaceID)
-	if err != nil {
-		return domain.Workspace{}, err
+	targets := []string{inv.RepositoryID}
+	if bindings, ok := s.repositories.(outbound.RepositoryBindings); ok {
+		targets, err = bindings.InviteTargets(ctx, token)
+		if err != nil {
+			return domain.Repository{}, err
+		}
 	}
-	members, err := s.ws.ListMembers(ctx, inv.WorkspaceID)
+	if len(targets) == 0 {
+		return domain.Repository{}, domain.ErrIntegrity
+	}
+	// Validate every target before the first write (development adapters have no rollback).
+	for _, id := range targets {
+		if _, err := s.repositories.GetRepository(ctx, id); err != nil {
+			return domain.Repository{}, err
+		}
+	}
+	var result domain.Repository
+	for _, id := range targets {
+		joined, err := s.acceptRepositoryInvite(ctx, user, inv, id)
+		if err != nil {
+			return domain.Repository{}, err
+		}
+		if id == inv.RepositoryID {
+			result = joined
+		}
+	}
+	if result.ID == "" {
+		return domain.Repository{}, domain.ErrIntegrity
+	}
+	return result, nil
+}
+
+func (s *IdentityService) acceptRepositoryInvite(ctx context.Context, user domain.User, inv domain.Invite, repositoryID string) (domain.Repository, error) {
+	repository, err := s.repositories.GetRepository(ctx, repositoryID)
 	if err != nil {
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
+	}
+	members, err := s.repositories.ListMembers(ctx, repositoryID)
+	if err != nil {
+		return domain.Repository{}, err
 	}
 	var existingRole domain.MemberRole
 	wasMember := false
 	for _, member := range members {
 		if member.UserID == user.ID {
 			if !domain.ValidRole(member.Role) {
-				return domain.Workspace{}, domain.ErrIntegrity
+				return domain.Repository{}, domain.ErrIntegrity
 			}
 			existingRole, wasMember = member.Role, true
 			break
 		}
 	}
-	if workspace.OwnerID == user.ID {
+	if repository.OwnerID == user.ID {
 		existingRole, wasMember = domain.RoleOwner, true
 	}
 	// Reinviting an old low role invite does not downgrade the current permissions. For existing members,
 	// an invite is upserted only if it explicitly promotes, and is a no-op if it is equal or lower.
 	if !wasMember || !existingRole.AtLeast(inv.Role) {
-		if err := s.ws.AddMember(ctx, domain.Membership{
-			WorkspaceID: inv.WorkspaceID,
-			UserID:      user.ID,
-			Role:        inv.Role,
-			CreatedAt:   time.Now().UTC(),
+		if err := s.repositories.AddMember(ctx, domain.Membership{
+			RepositoryID: repositoryID,
+			UserID:       user.ID,
+			Role:         inv.Role,
+			CreatedAt:    time.Now().UTC(),
 		}); err != nil {
-			return domain.Workspace{}, err
+			return domain.Repository{}, err
 		}
 	}
-	wsp, err := s.ws.GetWorkspace(ctx, inv.WorkspaceID)
+	repositoryRecord, err := s.repositories.GetRepository(ctx, repositoryID)
 	if err != nil {
-		return domain.Workspace{}, err
+		return domain.Repository{}, err
 	}
 	// Legacy records are immediately healed for redirect URL (/<owner_username>/<slug>) for join redirection.
-	if wsp.Slug == "" || wsp.OwnerUsername == "" {
-		if fixed, ferr := s.backfillWorkspace(ctx, wsp); ferr == nil {
-			wsp = fixed
+	if repositoryRecord.Slug == "" || repositoryRecord.OwnerUsername == "" {
+		if fixed, ferr := s.backfillRepository(ctx, repositoryRecord); ferr == nil {
+			repositoryRecord = fixed
 		}
 	}
 	// Only new joins are notified — invite links are idempotent (accept), so re-clicks by existing members are silent.
@@ -973,48 +1013,45 @@ func (s *IdentityService) acceptInvite(ctx context.Context, user domain.User, to
 		if who == "" {
 			who = user.Email
 		}
-		if err := enqueueWorkspaceNotification(ctx, s.ws, wsp, "member_joined", fmt.Sprintf("cxthub: %s — %s joined as %s", wsp.Name, who, inv.Role)); err != nil {
-			return domain.Workspace{}, err
+		if err := enqueueRepositoryNotification(ctx, s.repositories, repositoryRecord, "member_joined", fmt.Sprintf("cxthub: %s — %s joined as %s", repositoryRecord.Name, who, inv.Role)); err != nil {
+			return domain.Repository{}, err
 		}
 	}
-	return wsp, nil
+	return repositoryRecord, nil
 }
 
-// ListMembers returns the list of workspace members (caller must be a member).
-func (s *IdentityService) ListMembers(ctx context.Context, userID, workspaceID string) ([]domain.Membership, error) {
-	ok, err := s.ws.IsMember(ctx, workspaceID, userID)
-	if err != nil {
-		return nil, err
-	}
+// ListMembers returns the list of repository members (caller must be a member).
+func (s *IdentityService) ListMembers(ctx context.Context, userID, repositoryID string) ([]domain.Membership, error) {
+	_, ok := s.RoleOf(ctx, repositoryID, userID)
 	if !ok {
 		return nil, domain.ErrForbidden
 	}
-	return s.ws.ListMembers(ctx, workspaceID)
+	return s.repositories.ListMembers(ctx, repositoryID)
 }
 
 // RevokeInvite invalidates the invite — requires maintainer or higher (same gate as creation). Blocks token reuse.
-func (s *IdentityService) RevokeInvite(ctx context.Context, userID, workspaceID, token string) error {
-	inv, err := s.ws.GetInvite(ctx, token)
+func (s *IdentityService) mutateRevokeInvite(ctx context.Context, userID, repositoryID, token string) error {
+	inv, err := s.repositories.GetInvite(ctx, token)
 	if err != nil {
 		return err
 	}
-	if inv.WorkspaceID != workspaceID {
+	if inv.RepositoryID != repositoryID {
 		return domain.ErrNotFound
 	}
-	actor, ok := s.RoleOf(ctx, inv.WorkspaceID, userID)
+	actor, ok := s.RoleOf(ctx, inv.RepositoryID, userID)
 	if !ok || !actor.AtLeast(domain.RoleMaintainer) {
 		return domain.ErrForbidden
 	}
-	return s.ws.UpdateInviteStatus(ctx, token, domain.InviteRevoked)
+	return s.repositories.UpdateInviteStatus(ctx, token, domain.InviteRevoked)
 }
 
-// ListInvites returns the list of workspace invites — requires maintainer or higher (for invite management screen).
-func (s *IdentityService) ListInvites(ctx context.Context, userID, workspaceID string) ([]domain.Invite, error) {
-	actor, ok := s.RoleOf(ctx, workspaceID, userID)
+// ListInvites returns the list of repository invites — requires maintainer or higher (for invite management screen).
+func (s *IdentityService) ListInvites(ctx context.Context, userID, repositoryID string) ([]domain.Invite, error) {
+	actor, ok := s.RoleOf(ctx, repositoryID, userID)
 	if !ok || !actor.AtLeast(domain.RoleMaintainer) {
 		return nil, domain.ErrForbidden
 	}
-	return s.ws.ListInvites(ctx, workspaceID)
+	return s.repositories.ListInvites(ctx, repositoryID)
 }
 
 // sessionTTL is the server session lifetime.
@@ -1036,18 +1073,18 @@ func (s *IdentityService) Login(ctx context.Context, idpToken, label string) (do
 
 // Logout deletes the session (idempotent — deletes hash record and legacy plaintext record).
 func (s *IdentityService) Logout(ctx context.Context, sessionToken string) error {
-	if err := s.ws.DeleteSession(ctx, domain.HashToken(sessionToken)); err != nil {
+	if err := s.repositories.DeleteSession(ctx, domain.HashToken(sessionToken)); err != nil {
 		return err
 	}
-	return s.ws.DeleteSession(ctx, sessionToken) // legacy residue cleanup
+	return s.repositories.DeleteSession(ctx, sessionToken) // legacy residue cleanup
 }
 
 // ResolveSession interprets a session token as a user. Expired/invalid → domain.ErrUnauthorized.
 // The storage is queried by hash, and legacy plaintext records are promoted to hash records lazily (migration — existing login/CLI tokens do not break).
 func (s *IdentityService) resolveSessionRecord(ctx context.Context, token string) (domain.Session, domain.User, error) {
-	sess, err := s.ws.GetSession(ctx, domain.HashToken(token))
+	sess, err := s.repositories.GetSession(ctx, domain.HashToken(token))
 	if err != nil {
-		legacy, lerr := s.ws.GetSession(ctx, token)
+		legacy, lerr := s.repositories.GetSession(ctx, token)
 		if lerr != nil {
 			return domain.Session{}, domain.User{}, domain.ErrUnauthorized
 		}
@@ -1060,16 +1097,16 @@ func (s *IdentityService) resolveSessionRecord(ctx context.Context, token string
 		} else {
 			upgraded.Kind = "web"
 		}
-		if uerr := s.ws.CreateSession(ctx, upgraded); uerr == nil {
-			_ = s.ws.DeleteSession(ctx, token)
+		if uerr := s.repositories.CreateSession(ctx, upgraded); uerr == nil {
+			_ = s.repositories.DeleteSession(ctx, token)
 		}
 		sess = upgraded
 	}
 	if time.Now().After(sess.ExpiresAt) {
-		_ = s.ws.DeleteSession(ctx, sess.Token)
+		_ = s.repositories.DeleteSession(ctx, sess.Token)
 		return domain.Session{}, domain.User{}, domain.ErrUnauthorized
 	}
-	u, err := s.ws.GetUser(ctx, sess.UserID)
+	u, err := s.repositories.GetUser(ctx, sess.UserID)
 	if err != nil {
 		return domain.Session{}, domain.User{}, domain.ErrUnauthorized
 	}

@@ -39,7 +39,7 @@ func (s *Service) SubmitDocFinalization(ctx context.Context, repo domain.Content
 	if err != nil {
 		return inbound.DocFinalizationStatus{}, err
 	}
-	if metadata.WorkspaceID == "" {
+	if metadata.RepositoryID == "" {
 		return inbound.DocFinalizationStatus{}, domain.ErrForbidden
 	}
 	st, err := s.docJobs()

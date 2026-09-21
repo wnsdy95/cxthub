@@ -3,422 +3,347 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"strings"
 	"time"
-
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-func (s *IdentityService) ensurePersonalNamespace(ctx context.Context, user domain.User) (domain.Namespace, error) {
-	if s.enterprise == nil {
-		return domain.Namespace{}, fmt.Errorf("%w: enterprise storage unavailable", domain.ErrForbidden)
-	}
-	if !domain.ValidNamespaceSlug(user.Username) {
-		return domain.Namespace{}, domain.ErrValidation
-	}
-	if existing, err := s.enterprise.GetNamespaceBySlug(ctx, user.Username); err == nil {
-		if existing.Kind != domain.NamespaceUser || existing.UserID != user.ID {
-			return domain.Namespace{}, domain.ErrConflict
-		}
-		return existing, nil
-	}
-	ns := domain.Namespace{
-		ID:        domain.NewID("ns_"),
-		Slug:      user.Username,
-		Kind:      domain.NamespaceUser,
-		UserID:    user.ID,
-		CreatedAt: time.Now().UTC(),
-	}
-	if err := s.enterprise.CreateNamespace(ctx, ns); err != nil {
-		// Concurrent login may have created the same personal namespace.
-		if existing, getErr := s.enterprise.GetNamespaceBySlug(ctx, user.Username); getErr == nil && existing.Kind == domain.NamespaceUser && existing.UserID == user.ID {
-			return existing, nil
-		}
-		return domain.Namespace{}, err
-	}
-	return ns, nil
-}
-
-func enterpriseAudit(enterpriseID, actorID, action, targetType, targetID, reason string, now time.Time) domain.EnterpriseAuditEvent {
-	return domain.EnterpriseAuditEvent{
-		ID:           domain.NewID("aud_"),
-		EnterpriseID: enterpriseID,
-		ActorID:      actorID,
-		Action:       action,
-		TargetType:   targetType,
-		TargetID:     targetID,
-		Reason:       reason,
-		CreatedAt:    now,
-	}
-}
-
-func (s *IdentityService) CreateEnterprise(ctx context.Context, creator domain.User, name, requestedSlug string) (domain.Enterprise, error) {
-	if s.enterprise == nil {
-		return domain.Enterprise{}, fmt.Errorf("%w: enterprise storage unavailable", domain.ErrForbidden)
-	}
-	name = strings.TrimSpace(name)
-	if name == "" || len(name) > 128 {
-		return domain.Enterprise{}, domain.ErrValidation
-	}
-	slug := strings.ToLower(strings.TrimSpace(requestedSlug))
-	if slug == "" {
-		slug = domain.Slugify(name, "enterprise")
-	}
-	if !domain.ValidNamespaceSlug(slug) || reservedUsernames[slug] {
-		return domain.Enterprise{}, domain.ErrValidation
-	}
-	if _, err := s.enterprise.GetNamespaceBySlug(ctx, slug); err == nil {
-		return domain.Enterprise{}, domain.ErrConflict
-	}
-	// FS records created before namespace support are also checked. PostgreSQL
-	// migration backfills them, but this closes the lazy/local compatibility gap.
-	if user, err := s.ws.GetUserByUsername(ctx, slug); err == nil && user.ID != "" {
-		return domain.Enterprise{}, domain.ErrConflict
-	}
-	now := time.Now().UTC()
-	ent := domain.Enterprise{
-		ID:          domain.NewID("ent_"),
-		NamespaceID: domain.NewID("ns_"),
-		Name:        name,
-		Slug:        slug,
-		CreatedBy:   creator.ID,
-		CreatedAt:   now,
-	}
-	ns := domain.Namespace{ID: ent.NamespaceID, Slug: slug, Kind: domain.NamespaceEnterprise, EnterpriseID: ent.ID, CreatedAt: now}
-	owner := domain.EnterpriseMembership{EnterpriseID: ent.ID, UserID: creator.ID, Role: domain.EnterpriseOwner, CreatedAt: now}
-	policy := domain.DefaultEnterprisePolicy(ent.ID)
-	policy.UpdatedBy, policy.UpdatedAt = creator.ID, now
-	audit := enterpriseAudit(ent.ID, creator.ID, "enterprise.created", "enterprise", ent.ID, "", now)
-	if err := s.enterprise.CreateEnterprise(ctx, ent, ns, owner, policy, audit); err != nil {
-		return domain.Enterprise{}, err
-	}
-	return ent, nil
-}
-
-func (s *IdentityService) ListEnterprises(ctx context.Context, userID string) ([]domain.Enterprise, error) {
-	if s.enterprise == nil {
-		return []domain.Enterprise{}, nil
-	}
-	return s.enterprise.ListEnterprisesForUser(ctx, userID)
-}
-
-func (s *IdentityService) GetEnterprise(ctx context.Context, enterpriseID string) (domain.Enterprise, error) {
-	if s.enterprise == nil {
-		return domain.Enterprise{}, domain.ErrNotFound
-	}
-	return s.enterprise.GetEnterprise(ctx, enterpriseID)
-}
-
-// UpdateEnterpriseProfile changes display-only organization metadata. The
-// namespace slug is intentionally excluded: renaming a namespace changes every
-// canonical Workspace/Repository URL and requires a dedicated alias-aware flow.
-func (s *IdentityService) UpdateEnterpriseProfile(ctx context.Context, actorID, enterpriseID string, name, logo *string) (domain.Enterprise, error) {
-	role, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actorID)
-	if !ok || !role.AtLeast(domain.EnterpriseAdmin) {
-		return domain.Enterprise{}, domain.ErrForbidden
-	}
-	ent, err := s.enterprise.GetEnterprise(ctx, enterpriseID)
-	if err != nil {
-		return domain.Enterprise{}, err
-	}
-	if name != nil {
-		ent.Name = strings.TrimSpace(*name)
-	}
-	if logo != nil {
-		ent.Logo = strings.TrimSpace(*logo)
-	}
-	if err := domain.ValidateEnterpriseRecord(ent); err != nil {
-		return domain.Enterprise{}, err
-	}
-	now := time.Now().UTC()
-	audit := enterpriseAudit(enterpriseID, actorID, "enterprise.profile.updated", "enterprise", enterpriseID, "", now)
-	if err := s.enterprise.UpdateEnterpriseWithAudit(ctx, ent, audit); err != nil {
-		return domain.Enterprise{}, err
-	}
-	return ent, nil
-}
-
-func (s *IdentityService) PublicEnterprise(ctx context.Context, slug string) (domain.Enterprise, []domain.Workspace, error) {
-	if s.enterprise == nil {
-		return domain.Enterprise{}, nil, domain.ErrNotFound
-	}
-	ent, err := s.enterprise.GetEnterpriseBySlug(ctx, slug)
-	if err != nil {
-		return domain.Enterprise{}, nil, err
-	}
-	workspaces, err := s.enterprise.ListWorkspacesForNamespace(ctx, ent.NamespaceID)
-	if err != nil {
-		return domain.Enterprise{}, nil, err
-	}
-	public := make([]domain.Workspace, 0, len(workspaces))
-	for _, workspace := range workspaces {
-		if workspace.IsPublic() {
-			public = append(public, workspace)
-		}
-	}
-	return ent, public, nil
-}
-
-func (s *IdentityService) EnterpriseRoleOf(ctx context.Context, enterpriseID, userID string) (domain.EnterpriseRole, bool) {
-	if s.enterprise == nil || userID == "" {
-		return "", false
-	}
-	member, err := s.enterprise.GetEnterpriseMembership(ctx, enterpriseID, userID)
-	if err != nil || !domain.ValidEnterpriseRole(member.Role) {
-		return "", false
-	}
-	return member.Role, true
-}
-
-func (s *IdentityService) ListEnterpriseMembers(ctx context.Context, actorID, enterpriseID string) ([]domain.EnterpriseMembership, error) {
-	if role, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actorID); !ok || !role.AtLeast(domain.EnterpriseMember) {
+func (s *IdentityService) enterpriseStore() (outbound.EnterpriseStore, error) {
+	st, ok := s.repositories.(outbound.EnterpriseStore)
+	if !ok {
 		return nil, domain.ErrForbidden
 	}
-	return s.enterprise.ListEnterpriseMembers(ctx, enterpriseID)
+	return st, nil
 }
-
-func (s *IdentityService) UpdateEnterpriseMember(ctx context.Context, actorID, enterpriseID, targetID string, role domain.EnterpriseRole) error {
-	if !domain.ValidEnterpriseRole(role) {
-		return domain.ErrValidation
+func (s *IdentityService) EnterpriseRoleOf(ctx context.Context, id, user string) (domain.EnterpriseRole, bool) {
+	st, err := s.enterpriseStore()
+	if err != nil || user == "" {
+		return "", false
 	}
-	actorRole, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actorID)
-	if !ok || !actorRole.AtLeast(domain.EnterpriseAdmin) {
-		return domain.ErrForbidden
+	members, err := st.ListEnterpriseMembers(ctx, id)
+	if err != nil {
+		return "", false
 	}
-	targetRole, targetExists := s.EnterpriseRoleOf(ctx, enterpriseID, targetID)
-	if actorRole != domain.EnterpriseOwner {
-		// Admins manage ordinary members only. Admin/Owner promotion,
-		// demotion, and removal stay inside the Owner boundary.
-		if role != domain.EnterpriseMember || targetExists && targetRole != domain.EnterpriseMember {
-			return domain.ErrForbidden
+	for _, m := range members {
+		if m.UserID == user && domain.ValidEnterpriseRole(m.Role) {
+			return m.Role, true
 		}
 	}
-	if targetExists && targetRole == domain.EnterpriseOwner && role != domain.EnterpriseOwner {
-		members, err := s.enterprise.ListEnterpriseMembers(ctx, enterpriseID)
-		if err != nil {
-			return err
-		}
-		owners := 0
-		for _, member := range members {
-			if member.Role == domain.EnterpriseOwner {
-				owners++
-			}
-		}
-		if owners <= 1 {
-			return domain.ErrConflict
+	return "", false
+}
+func (s *IdentityService) canReadEnterprise(ctx context.Context, id, user string) bool {
+	st, err := s.enterpriseStore()
+	if err != nil || user == "" {
+		return false
+	}
+	if _, ok := s.EnterpriseRoleOf(ctx, id, user); ok {
+		return true
+	}
+	orgs, err := st.ListEnterpriseOrganizations(ctx, id)
+	if err != nil {
+		return false
+	}
+	for _, o := range orgs {
+		if _, ok := s.OrganizationRoleOf(ctx, o.ID, user); ok {
+			return true
 		}
 	}
-	if _, err := s.ws.GetUser(ctx, targetID); err != nil {
+	return false
+}
+func (s *IdentityService) enterpriseAudit(ctx context.Context, id, actor, action, target string) error {
+	st, err := s.enterpriseStore()
+	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	membership := domain.EnterpriseMembership{EnterpriseID: enterpriseID, UserID: targetID, Role: role, CreatedAt: now}
-	audit := enterpriseAudit(enterpriseID, actorID, "enterprise.member.updated", "user", targetID, string(role), now)
-	return s.enterprise.AddEnterpriseMemberWithAudit(ctx, membership, audit)
+	return st.AppendEnterpriseAudit(ctx, domain.EnterpriseAuditEvent{ID: domain.NewID("aud_"), EnterpriseID: id, ActorID: actor, Action: action, TargetID: target, CreatedAt: time.Now().UTC()})
 }
-
-func (s *IdentityService) RemoveEnterpriseMember(ctx context.Context, actorID, enterpriseID, targetID string) error {
-	actorRole, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actorID)
-	if !ok || !actorRole.AtLeast(domain.EnterpriseAdmin) {
-		return domain.ErrForbidden
-	}
-	targetRole, exists := s.EnterpriseRoleOf(ctx, enterpriseID, targetID)
-	if !exists {
-		return domain.ErrNotFound
-	}
-	if actorRole != domain.EnterpriseOwner && targetRole != domain.EnterpriseMember {
-		return domain.ErrForbidden
-	}
-	if targetRole == domain.EnterpriseOwner {
-		members, err := s.enterprise.ListEnterpriseMembers(ctx, enterpriseID)
+func (s *IdentityService) CreateEnterprise(ctx context.Context, user domain.User, name, slug string) (domain.Enterprise, error) {
+	return identityResult(ctx, s, func(ctx context.Context) (domain.Enterprise, error) {
+		st, err := s.enterpriseStore()
 		if err != nil {
-			return err
+			return domain.Enterprise{}, err
 		}
-		owners := 0
-		for _, member := range members {
-			if member.Role == domain.EnterpriseOwner {
-				owners++
-			}
+		name = strings.TrimSpace(name)
+		slug = strings.ToLower(strings.TrimSpace(slug))
+		if slug == "" {
+			slug = domain.Slugify(name, "enterprise")
 		}
-		if owners <= 1 {
-			return domain.ErrConflict
+		e := domain.Enterprise{ID: domain.NewID("ep_"), Name: name, Slug: slug, Policy: domain.DefaultEnterprisePolicy(), CreatedBy: user.ID, CreatedAt: time.Now().UTC()}
+		if err = domain.ValidateEnterprise(e); err != nil {
+			return domain.Enterprise{}, err
 		}
-	}
-	audit := enterpriseAudit(enterpriseID, actorID, "enterprise.member.removed", "user", targetID, "", time.Now().UTC())
-	return s.enterprise.RemoveEnterpriseMemberWithAudit(ctx, enterpriseID, targetID, audit)
-}
-
-func (s *IdentityService) GetEnterprisePolicy(ctx context.Context, actorID, enterpriseID string) (domain.EnterprisePolicy, error) {
-	if role, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actorID); !ok || !role.AtLeast(domain.EnterpriseMember) {
-		return domain.EnterprisePolicy{}, domain.ErrForbidden
-	}
-	return s.enterprise.GetEnterprisePolicy(ctx, enterpriseID)
-}
-
-func (s *IdentityService) UpdateEnterprisePolicy(ctx context.Context, actorID string, policy domain.EnterprisePolicy) (domain.EnterprisePolicy, error) {
-	role, ok := s.EnterpriseRoleOf(ctx, policy.EnterpriseID, actorID)
-	if !ok || !role.AtLeast(domain.EnterpriseAdmin) {
-		return domain.EnterprisePolicy{}, domain.ErrForbidden
-	}
-	policy.UpdatedBy, policy.UpdatedAt = actorID, time.Now().UTC()
-	if err := domain.ValidateEnterprisePolicy(policy); err != nil {
-		return domain.EnterprisePolicy{}, err
-	}
-	audit := enterpriseAudit(policy.EnterpriseID, actorID, "enterprise.policy.updated", "enterprise", policy.EnterpriseID, "", policy.UpdatedAt)
-	if err := s.enterprise.PutEnterprisePolicyWithAudit(ctx, policy, audit); err != nil {
-		return domain.EnterprisePolicy{}, err
-	}
-	return policy, nil
-}
-
-func (s *IdentityService) CreateEnterpriseWorkspace(ctx context.Context, actor domain.User, enterpriseID, name string) (domain.Workspace, error) {
-	if s.enterprise == nil {
-		return domain.Workspace{}, domain.ErrForbidden
-	}
-	role, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actor.ID)
-	if !ok {
-		return domain.Workspace{}, domain.ErrForbidden
-	}
-	policy, err := s.enterprise.GetEnterprisePolicy(ctx, enterpriseID)
-	if err != nil {
-		return domain.Workspace{}, err
-	}
-	required := domain.EnterpriseAdmin
-	if policy.WorkspaceCreation == domain.EnterpriseWorkspaceMembers {
-		required = domain.EnterpriseMember
-	}
-	if !role.AtLeast(required) {
-		return domain.Workspace{}, domain.ErrForbidden
-	}
-	name = strings.TrimSpace(name)
-	if !domain.ValidWorkspaceName(name) {
-		return domain.Workspace{}, domain.ErrValidation
-	}
-	ent, err := s.enterprise.GetEnterprise(ctx, enterpriseID)
-	if err != nil {
-		return domain.Workspace{}, err
-	}
-	now := time.Now().UTC()
-	workspace := domain.Workspace{
-		ID:               domain.NewID("ws_"),
-		Name:             name,
-		OwnerID:          actor.ID,
-		OwnerUsername:    ent.Slug,
-		OwnerNamespaceID: ent.NamespaceID,
-		Slug:             s.uniqueNamespaceWorkspaceSlug(ctx, ent.NamespaceID, name, ""),
-		Visibility:       policy.DefaultWorkspaceVisibility,
-		CreatedAt:        now,
-	}
-	owner := domain.Membership{WorkspaceID: workspace.ID, UserID: actor.ID, Role: domain.RoleOwner, CreatedAt: now}
-	audit := enterpriseAudit(enterpriseID, actor.ID, "enterprise.workspace.created", "workspace", workspace.ID, "", now)
-	if err := s.enterprise.CreateEnterpriseWorkspaceWithAudit(ctx, workspace, owner, audit); err != nil {
-		return domain.Workspace{}, err
-	}
-	return workspace, nil
-}
-
-func (s *IdentityService) uniqueNamespaceWorkspaceSlug(ctx context.Context, namespaceID, name, selfID string) string {
-	taken := map[string]bool{}
-	if workspaces, err := s.enterprise.ListWorkspacesForNamespace(ctx, namespaceID); err == nil {
-		for _, workspace := range workspaces {
-			if workspace.ID != selfID && workspace.Slug != "" {
-				taken[workspace.Slug] = true
-			}
+		owner := domain.EnterpriseMembership{EnterpriseID: e.ID, UserID: user.ID, Role: domain.EnterpriseOwner, CreatedAt: e.CreatedAt}
+		if err = st.CreateEnterprise(ctx, e, owner); err != nil {
+			return domain.Enterprise{}, err
 		}
-	}
-	base, candidate := domain.WorkspaceSlug(name), domain.WorkspaceSlug(name)
-	for suffix := 2; taken[candidate]; suffix++ {
-		candidate = fmt.Sprintf("%s-%d", base, suffix)
-	}
-	return candidate
+		return e, s.enterpriseAudit(ctx, e.ID, user.ID, "enterprise.created", e.ID)
+	})
 }
-
-func (s *IdentityService) ListEnterpriseWorkspaces(ctx context.Context, actorID, enterpriseID string) ([]domain.Workspace, error) {
-	if role, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actorID); !ok || !role.AtLeast(domain.EnterpriseMember) {
-		return nil, domain.ErrForbidden
-	}
-	ent, err := s.enterprise.GetEnterprise(ctx, enterpriseID)
+func (s *IdentityService) ListEnterprises(ctx context.Context, user string) ([]domain.Enterprise, error) {
+	st, err := s.enterpriseStore()
 	if err != nil {
 		return nil, err
 	}
-	return s.enterprise.ListWorkspacesForNamespace(ctx, ent.NamespaceID)
+	return st.ListEnterprisesForUser(ctx, user)
+}
+func (s *IdentityService) GetEnterprise(ctx context.Context, user, slug string) (domain.Enterprise, error) {
+	st, err := s.enterpriseStore()
+	if err != nil {
+		return domain.Enterprise{}, err
+	}
+	var e domain.Enterprise
+	if domain.ValidateEnterpriseID(slug) == nil {
+		e, err = st.GetEnterprise(ctx, slug)
+	} else {
+		e, err = st.GetEnterpriseBySlug(ctx, slug)
+	}
+	if err != nil {
+		return e, err
+	}
+	if !s.canReadEnterprise(ctx, e.ID, user) {
+		return domain.Enterprise{}, domain.ErrNotFound
+	}
+	return e, nil
 }
 
-func (s *IdentityService) CreateBreakGlassGrant(ctx context.Context, actorID, enterpriseID, workspaceID, reason string, minutes int) (domain.BreakGlassGrant, error) {
-	role, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actorID)
-	if !ok || role != domain.EnterpriseOwner {
-		return domain.BreakGlassGrant{}, domain.ErrForbidden
-	}
-	policy, err := s.enterprise.GetEnterprisePolicy(ctx, enterpriseID)
-	if err != nil {
-		return domain.BreakGlassGrant{}, err
-	}
-	if !policy.BreakGlassEnabled || minutes < 1 || minutes > policy.BreakGlassMaxMinutes {
-		return domain.BreakGlassGrant{}, domain.ErrForbidden
-	}
-	ent, err := s.enterprise.GetEnterprise(ctx, enterpriseID)
-	if err != nil {
-		return domain.BreakGlassGrant{}, err
-	}
-	workspace, err := s.ws.GetWorkspace(ctx, workspaceID)
-	if err != nil {
-		return domain.BreakGlassGrant{}, err
-	}
-	if workspace.OwnerNamespaceID != ent.NamespaceID {
-		return domain.BreakGlassGrant{}, domain.ErrForbidden
-	}
-	now := time.Now().UTC()
-	grant := domain.BreakGlassGrant{
-		ID:           domain.NewID("bg_"),
-		EnterpriseID: enterpriseID,
-		WorkspaceID:  workspaceID,
-		UserID:       actorID,
-		Reason:       strings.TrimSpace(reason),
-		CreatedAt:    now,
-		ExpiresAt:    now.Add(time.Duration(minutes) * time.Minute),
-	}
-	if err := domain.ValidateBreakGlassGrant(grant); err != nil {
-		return domain.BreakGlassGrant{}, err
-	}
-	created := enterpriseAudit(enterpriseID, actorID, "enterprise.break_glass.created", "workspace", workspaceID, grant.Reason, now)
-	if err := s.enterprise.CreateBreakGlassGrantWithAudit(ctx, grant, created); err != nil {
-		return domain.BreakGlassGrant{}, err
-	}
-	return grant, nil
+type EnterprisePatch struct {
+	Name   *string                  `json:"name"`
+	Logo   *string                  `json:"logo"`
+	Policy *domain.EnterprisePolicy `json:"policy"`
 }
 
-func (s *IdentityService) HasBreakGlassAccess(ctx context.Context, workspaceID, userID string) (bool, error) {
-	if s.enterprise == nil || workspaceID == "" || userID == "" {
-		return false, nil
-	}
-	workspace, err := s.ws.GetWorkspace(ctx, workspaceID)
-	if err != nil || workspace.OwnerNamespaceID == "" {
-		return false, nil
-	}
-	ns, err := s.enterprise.GetNamespace(ctx, workspace.OwnerNamespaceID)
-	if err != nil || ns.Kind != domain.NamespaceEnterprise {
-		return false, nil
-	}
-	role, ok := s.EnterpriseRoleOf(ctx, ns.EnterpriseID, userID)
-	if !ok || role != domain.EnterpriseOwner {
-		return false, nil
-	}
-	now := time.Now().UTC()
-	used := enterpriseAudit(ns.EnterpriseID, userID, "enterprise.break_glass.used", "workspace", workspaceID, "", now)
-	_, err = s.enterprise.UseActiveBreakGlassGrant(ctx, ns.EnterpriseID, workspaceID, userID, now, used)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return false, nil
+func (s *IdentityService) UpdateEnterprise(ctx context.Context, user, id string, patch EnterprisePatch) (domain.Enterprise, error) {
+	return identityResult(ctx, s, func(ctx context.Context) (domain.Enterprise, error) {
+		role, ok := s.EnterpriseRoleOf(ctx, id, user)
+		if !ok || !role.AtLeast(domain.EnterpriseAdmin) {
+			return domain.Enterprise{}, domain.ErrForbidden
 		}
-		return false, err
-	}
-	return true, nil
+		st, _ := s.enterpriseStore()
+		e, err := st.GetEnterprise(ctx, id)
+		if err != nil {
+			return e, err
+		}
+		if patch.Name != nil {
+			e.Name = strings.TrimSpace(*patch.Name)
+		}
+		if patch.Logo != nil {
+			e.Logo = strings.TrimSpace(*patch.Logo)
+		}
+		if patch.Policy != nil {
+			// Public records cannot silently become private as a side effect of parent
+			// policy. Owners must explicitly change their repositories before tightening.
+			if !patch.Policy.AllowPublicRepositories {
+				orgs, err := st.ListEnterpriseOrganizations(ctx, id)
+				if err != nil {
+					return e, err
+				}
+				for _, o := range orgs {
+					if err = s.checkEnterpriseOrganizationPolicy(ctx, o, *patch.Policy); err != nil {
+						return e, err
+					}
+				}
+			}
+			e.Policy = *patch.Policy
+		}
+		if err = domain.ValidateEnterprise(e); err != nil {
+			return domain.Enterprise{}, err
+		}
+		if err = st.UpdateEnterprise(ctx, e); err != nil {
+			return e, err
+		}
+		return e, s.enterpriseAudit(ctx, id, user, "enterprise.updated", id)
+	})
 }
-
-func (s *IdentityService) ListEnterpriseAudit(ctx context.Context, actorID, enterpriseID string, limit int) ([]domain.EnterpriseAuditEvent, error) {
-	if role, ok := s.EnterpriseRoleOf(ctx, enterpriseID, actorID); !ok || !role.AtLeast(domain.EnterpriseAdmin) {
+func (s *IdentityService) ListEnterpriseMembers(ctx context.Context, user, id string) ([]domain.EnterpriseMembership, error) {
+	if !s.canReadEnterprise(ctx, id, user) {
 		return nil, domain.ErrForbidden
 	}
-	return s.enterprise.ListEnterpriseAudit(ctx, enterpriseID, limit)
+	st, err := s.enterpriseStore()
+	if err != nil {
+		return nil, err
+	}
+	members, err := st.ListEnterpriseMembers(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	for i := range members {
+		user, err := s.repositories.GetUser(ctx, members[i].UserID)
+		if err != nil {
+			return nil, err
+		}
+		members[i].User = &domain.User{ID: user.ID, Username: user.Username, Name: user.Name, Nickname: user.Nickname}
+	}
+	return members, nil
+}
+func (s *IdentityService) UpdateEnterpriseMember(ctx context.Context, user, id, target string, next domain.EnterpriseRole) error {
+	return s.withIdentity(ctx, func(ctx context.Context) error {
+		if !domain.ValidEnterpriseRole(next) {
+			return domain.ErrValidation
+		}
+		actor, ok := s.EnterpriseRoleOf(ctx, id, user)
+		if !ok || !actor.AtLeast(domain.EnterpriseAdmin) {
+			return domain.ErrForbidden
+		}
+		resolved, err := s.memberSubject(ctx, target)
+		if err != nil {
+			return err
+		}
+		target = resolved
+		old, exists := s.EnterpriseRoleOf(ctx, id, target)
+		if actor != domain.EnterpriseOwner && (next != domain.EnterpriseMember || exists && old != domain.EnterpriseMember) {
+			return domain.ErrForbidden
+		}
+		st, _ := s.enterpriseStore()
+		members, err := st.ListEnterpriseMembers(ctx, id)
+		if err != nil {
+			return err
+		}
+		if old == domain.EnterpriseOwner && next != domain.EnterpriseOwner {
+			owners := 0
+			for _, m := range members {
+				if m.Role == domain.EnterpriseOwner {
+					owners++
+				}
+			}
+			if owners <= 1 {
+				return domain.ErrConflict
+			}
+		}
+		if _, err = s.repositories.GetUser(ctx, target); err != nil {
+			return err
+		}
+		if err = st.PutEnterpriseMember(ctx, domain.EnterpriseMembership{EnterpriseID: id, UserID: target, Role: next, CreatedAt: time.Now().UTC()}); err != nil {
+			return err
+		}
+		return s.enterpriseAudit(ctx, id, user, "enterprise.member.updated", target)
+	})
+}
+func (s *IdentityService) RemoveEnterpriseMember(ctx context.Context, user, id, target string) error {
+	return s.withIdentity(ctx, func(ctx context.Context) error {
+		actor, ok := s.EnterpriseRoleOf(ctx, id, user)
+		if !ok || !actor.AtLeast(domain.EnterpriseAdmin) {
+			return domain.ErrForbidden
+		}
+		old, exists := s.EnterpriseRoleOf(ctx, id, target)
+		if !exists {
+			return domain.ErrNotFound
+		}
+		if actor != domain.EnterpriseOwner && old != domain.EnterpriseMember {
+			return domain.ErrForbidden
+		}
+		st, _ := s.enterpriseStore()
+		members, err := st.ListEnterpriseMembers(ctx, id)
+		if err != nil {
+			return err
+		}
+		if old == domain.EnterpriseOwner {
+			owners := 0
+			for _, m := range members {
+				if m.Role == domain.EnterpriseOwner {
+					owners++
+				}
+			}
+			if owners <= 1 {
+				return domain.ErrConflict
+			}
+		}
+		if err = st.RemoveEnterpriseMember(ctx, id, target); err != nil {
+			return err
+		}
+		return s.enterpriseAudit(ctx, id, user, "enterprise.member.removed", target)
+	})
+}
+func (s *IdentityService) ListEnterpriseOrganizations(ctx context.Context, user, id string) ([]domain.Organization, error) {
+	if !s.canReadEnterprise(ctx, id, user) {
+		return nil, domain.ErrForbidden
+	}
+	st, err := s.enterpriseStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.ListEnterpriseOrganizations(ctx, id)
+}
+func (s *IdentityService) checkEnterpriseOrganizationPolicy(ctx context.Context, o domain.Organization, p domain.EnterprisePolicy) error {
+	if p.AllowPublicRepositories {
+		return nil
+	}
+	repositories, err := s.organization.ListRepositoriesForNamespace(ctx, o.NamespaceID)
+	if err != nil {
+		return err
+	}
+	for _, r := range repositories {
+		if r.IsPublic() {
+			return domain.ErrConflict
+		}
+	}
+	return nil
+}
+func (s *IdentityService) LinkEnterpriseOrganization(ctx context.Context, user, id, org string, link bool) error {
+	return s.withIdentity(ctx, func(ctx context.Context) error {
+		if role, ok := s.EnterpriseRoleOf(ctx, id, user); !ok || role != domain.EnterpriseOwner {
+			return domain.ErrForbidden
+		}
+		if role, ok := s.OrganizationRoleOf(ctx, org, user); !ok || role != domain.OrganizationOwner {
+			return domain.ErrForbidden
+		}
+		st, _ := s.enterpriseStore()
+		enterprise, err := st.GetEnterprise(ctx, id)
+		if err != nil {
+			return err
+		}
+		prior, err := st.OrganizationEnterprise(ctx, org)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		if err == nil && prior.ID != id {
+			return domain.ErrConflict
+		}
+		target, action := "", "enterprise.organization.removed"
+		if link {
+			organization, err := s.organization.GetOrganization(ctx, org)
+			if err != nil {
+				return err
+			}
+			if err = s.checkEnterpriseOrganizationPolicy(ctx, organization, enterprise.Policy); err != nil {
+				return err
+			}
+			target, action = id, "enterprise.organization.added"
+		}
+		if err = st.SetOrganizationEnterprise(ctx, org, target); err != nil {
+			return err
+		}
+		return s.enterpriseAudit(ctx, id, user, action, org)
+	})
+}
+func (s *IdentityService) ListEnterpriseAudit(ctx context.Context, user, id string) ([]domain.EnterpriseAuditEvent, error) {
+	if role, ok := s.EnterpriseRoleOf(ctx, id, user); !ok || !role.AtLeast(domain.EnterpriseAdmin) {
+		return nil, domain.ErrForbidden
+	}
+	st, _ := s.enterpriseStore()
+	return st.ListEnterpriseAudit(ctx, id, 100)
+}
+func (s *IdentityService) effectiveOrganizationPolicy(ctx context.Context, org string) (domain.OrganizationPolicy, error) {
+	policy, err := s.organization.GetOrganizationPolicy(ctx, org)
+	if err != nil {
+		return policy, err
+	}
+	st, ok := s.repositories.(outbound.EnterpriseStore)
+	if !ok {
+		return policy, nil
+	}
+	parent, err := st.OrganizationEnterprise(ctx, org)
+	if errors.Is(err, domain.ErrNotFound) {
+		return policy, nil
+	}
+	if err != nil {
+		return policy, err
+	}
+	return domain.EffectiveOrganizationPolicy(policy, &parent.Policy), nil
+}
+func (s *IdentityService) EffectiveOrganizationPolicy(ctx context.Context, user, org string) (domain.OrganizationPolicy, error) {
+	if _, ok := s.OrganizationRoleOf(ctx, org, user); !ok {
+		return domain.OrganizationPolicy{}, domain.ErrForbidden
+	}
+	return s.effectiveOrganizationPolicy(ctx, org)
 }

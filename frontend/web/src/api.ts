@@ -6,7 +6,7 @@ import { validateGraphState } from './graphState';
 // All requests include 'credentials: 'include' to automatically send cookies to the browser.
 // Exception: exchangeSession only sends the IDP token in the Authorization header once,
 // and the server sets the session cookie in the Set-Cookie response.
-import type { StorageUsageReport, RefLogEntry, User, PublicUser, Workspace, PublicWorkspace, WorkspacePatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Enterprise, PublicEnterprise, EnterpriseMembership, EnterprisePolicy, EnterpriseAuditEvent, BreakGlassGrant, EnterpriseRole } from './types';
+import type { StorageUsageReport, RefLogEntry, User, PublicUser, Repository, PublicRepository, RepositoryPatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Organization, PublicOrganization, OrganizationMembership, OrganizationPolicy, OrganizationAuditEvent, BreakGlassGrant, OrganizationRole } from './types';
 import { normalizeActivityResponse } from './activity';
 import { validateContextSemantics } from './graphEvidence';
 
@@ -101,8 +101,8 @@ export const api = {
     validateGraphState(graph, view.revision);
     return {...view, graph};
   },
-  notifications: (workspace: string, signal?: AbortSignal) => call<import('./types').NotificationJob[]>('GET', `/workspaces/${encodeURIComponent(workspace)}/notifications`, undefined, undefined, signal),
-  retryNotification: (workspace: string, id: string) => call('POST', `/workspaces/${encodeURIComponent(workspace)}/notifications/${encodeURIComponent(id)}/retry`, {}),
+  notifications: (repository: string, signal?: AbortSignal) => call<import('./types').NotificationJob[]>('GET', `/repositories/${encodeURIComponent(repository)}/notifications`, undefined, undefined, signal),
+  retryNotification: (repository: string, id: string) => call('POST', `/repositories/${encodeURIComponent(repository)}/notifications/${encodeURIComponent(id)}/retry`, {}),
   storageUsage: (namespace: string, month: string, signal?: AbortSignal) => call<StorageUsageReport>('GET', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage?month=${encodeURIComponent(month)}`, undefined, undefined, signal),
   reconcileStorage: (namespace: string) => call<{ reconciled: boolean }>('POST', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage/reconcile`, {}),
   prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
@@ -117,18 +117,39 @@ export const api = {
   decideOAuthConsent: (requestId: string, approve: boolean) =>
     call<{ redirect_url: string }>('POST', `/oauth/requests/${encodeURIComponent(requestId)}`, { approve }),
 
-  // Workspace · Member · Invite
-  listWorkspaces: () => call<Workspace[]>('GET', '/workspaces'),
+  listTeams: (organization: string) => call<import('./types').Team[]>('GET', `/organizations/${encodeURIComponent(organization)}/teams`),
+  createTeam: (organization: string, name: string, slug: string, description: string) => call<import('./types').Team>('POST', `/organizations/${encodeURIComponent(organization)}/teams`, { name, slug, description }),
+  deleteTeam: (organization: string, team: string) => call('DELETE', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}`),
+  listTeamMembers: (organization: string, team: string) => call<import('./types').TeamMembership[]>('GET', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/members`),
+  setTeamMember: (organization: string, team: string, user: string, role: 'member' | 'maintainer') => call('PUT', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/members/${encodeURIComponent(user)}`, { role }),
+  removeTeamMember: (organization: string, team: string, user: string) => call('DELETE', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/members/${encodeURIComponent(user)}`),
+  listTeamRepositories: (organization: string, team: string) => call<import('./types').TeamRepositoryGrant[]>('GET', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/repositories`),
+  setTeamRepository: (organization: string, team: string, repository: string, role: import('./roles').Role) => call('PUT', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/repositories/${encodeURIComponent(repository)}`, { role }),
+  removeTeamRepository: (organization: string, team: string, repository: string) => call('DELETE', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/repositories/${encodeURIComponent(repository)}`),
+  effectiveOrganizationPolicy: (organization: string) => call<OrganizationPolicy>('GET', `/organizations/${encodeURIComponent(organization)}/effective-policy`),
+  listEnterprises: () => call<import('./types').Enterprise[]>('GET', '/enterprises'),
+  createEnterprise: (name: string, slug: string) => call<import('./types').Enterprise>('POST', '/enterprises', { name, slug }),
+  getEnterprise: (slug: string) => call<import('./types').Enterprise>('GET', `/enterprises/${encodeURIComponent(slug)}`),
+  updateEnterprise: (id: string, patch: { name?: string; logo?: string; policy?: import('./types').EnterprisePolicy }) => call<import('./types').Enterprise>('PATCH', `/enterprises/${encodeURIComponent(id)}`, patch),
+  listEnterpriseMembers: (id: string) => call<import('./types').EnterpriseMembership[]>('GET', `/enterprises/${encodeURIComponent(id)}/members`),
+  setEnterpriseMember: (id: string, user: string, role: 'owner' | 'admin' | 'member') => call('PUT', `/enterprises/${encodeURIComponent(id)}/members/${encodeURIComponent(user)}`, { role }),
+  removeEnterpriseMember: (id: string, user: string) => call('DELETE', `/enterprises/${encodeURIComponent(id)}/members/${encodeURIComponent(user)}`),
+  listEnterpriseOrganizations: (id: string) => call<Organization[]>('GET', `/enterprises/${encodeURIComponent(id)}/organizations`),
+  linkEnterpriseOrganization: (id: string, organization: string) => call('PUT', `/enterprises/${encodeURIComponent(id)}/organizations/${encodeURIComponent(organization)}`, {}),
+  unlinkEnterpriseOrganization: (id: string, organization: string) => call('DELETE', `/enterprises/${encodeURIComponent(id)}/organizations/${encodeURIComponent(organization)}`),
+  listEnterpriseAudit: (id: string) => call<import('./types').EnterpriseAuditEvent[]>('GET', `/enterprises/${encodeURIComponent(id)}/audit`),
+  // Repository · Member · Invite
+  listRepositories: () => call<Repository[]>('GET', '/repositories'),
   updateMe: (patch: { username?: string; nickname?: string; load_mode?: string; avatar?: string; locale?: string }) =>
     call<User>('PATCH', '/me', patch),
   createCliToken: () => call<{ token: string; expires_at: string }>('POST', '/me/cli-tokens'),
   listSessions: () =>
     call<{ suffix: string; label?: string; created_at: string; expires_at: string; current: boolean }[] | null>('GET', '/me/sessions'),
   revokeSession: (suffix: string) => call<{ status: string }>('DELETE', `/me/sessions/${encodeURIComponent(suffix)}`),
-  publicWorkspace: (username: string, slug: string) =>
-    call<PublicWorkspace>('GET', `/public/workspaces/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`),
+  publicRepository: (username: string, slug: string) =>
+    call<PublicRepository>('GET', `/public/repositories/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`),
   publicUser: (username: string) =>
-    call<{ user: PublicUser; workspaces: PublicWorkspace[] }>('GET', `/public/users/${encodeURIComponent(username)}`),
+    call<{ user: PublicUser; repositories: PublicRepository[] }>('GET', `/public/users/${encodeURIComponent(username)}`),
   userContributions: (username: string) =>
     call<{ total: number; days: { date: string; count: number }[] }>(
       'GET',
@@ -141,66 +162,66 @@ export const api = {
   listCliTokens: () =>
     call<{ suffix: string; label?: string; created_at: string; expires_at: string }[] | null>('GET', '/me/cli-tokens'),
   revokeCliToken: (suffix: string) => call<{ status: string }>('DELETE', `/me/cli-tokens/${encodeURIComponent(suffix)}`),
-  updateMemberRole: (wsId: string, userId: string, role: 'owner' | 'member') =>
-    call<{ status: string }>('PATCH', `/workspaces/${encodeURIComponent(wsId)}/members/${encodeURIComponent(userId)}`, { role }),
-  removeMember: (wsId: string, userId: string) =>
-    call<{ status: string }>('DELETE', `/workspaces/${encodeURIComponent(wsId)}/members/${encodeURIComponent(userId)}`),
-  createWorkspace: (name: string) => call<Workspace>('POST', '/workspaces', { name }),
-  updateWorkspace: (wsId: string, patch: WorkspacePatch) =>
-    call<Workspace>('PATCH', `/workspaces/${encodeURIComponent(wsId)}`, patch),
-  transferWorkspace: (wsId: string, toUserId: string) =>
-    call<Workspace>('POST', `/workspaces/${encodeURIComponent(wsId)}/transfer`, { to_user_id: toUserId }),
-  syncVisibility: (wsId: string) => call<Workspace>('POST', `/workspaces/${encodeURIComponent(wsId)}/sync-visibility`),
-  listMembers: (wsId: string) => call<Membership[]>('GET', `/workspaces/${encodeURIComponent(wsId)}/members`),
-  listInvites: (wsId: string) => call<Invite[] | null>('GET', `/workspaces/${encodeURIComponent(wsId)}/invites`),
-  revokeInvite: (wsId: string, token: string) =>
-    call<{ status: string }>('POST', `/workspaces/${encodeURIComponent(wsId)}/invites/${encodeURIComponent(token)}/revoke`),
-  createInvite: (wsId: string, email: string, role: string, expiresInDays: number) =>
-    call<Invite>('POST', `/workspaces/${encodeURIComponent(wsId)}/invites`, { email, role, expires_in_days: expiresInDays }),
-  acceptInvite: (token: string) => call<Workspace>('POST', `/invites/${encodeURIComponent(token)}/accept`),
+  updateMemberRole: (repositoryId: string, userId: string, role: 'owner' | 'member') =>
+    call<{ status: string }>('PATCH', `/repositories/${encodeURIComponent(repositoryId)}/members/${encodeURIComponent(userId)}`, { role }),
+  removeMember: (repositoryId: string, userId: string) =>
+    call<{ status: string }>('DELETE', `/repositories/${encodeURIComponent(repositoryId)}/members/${encodeURIComponent(userId)}`),
+  createRepository: (name: string) => call<Repository>('POST', '/repositories', { name }),
+  updateRepository: (repositoryId: string, patch: RepositoryPatch) =>
+    call<Repository>('PATCH', `/repositories/${encodeURIComponent(repositoryId)}`, patch),
+  transferRepository: (repositoryId: string, toUserId: string) =>
+    call<Repository>('POST', `/repositories/${encodeURIComponent(repositoryId)}/transfer`, { to_user_id: toUserId }),
+  syncVisibility: (repositoryId: string) => call<Repository>('POST', `/repositories/${encodeURIComponent(repositoryId)}/sync-visibility`),
+  listMembers: (repositoryId: string) => call<Membership[]>('GET', `/repositories/${encodeURIComponent(repositoryId)}/members`),
+  listInvites: (repositoryId: string) => call<Invite[] | null>('GET', `/repositories/${encodeURIComponent(repositoryId)}/invites`),
+  revokeInvite: (repositoryId: string, token: string) =>
+    call<{ status: string }>('POST', `/repositories/${encodeURIComponent(repositoryId)}/invites/${encodeURIComponent(token)}/revoke`),
+  createInvite: (repositoryId: string, email: string, role: string, expiresInDays: number) =>
+    call<Invite>('POST', `/repositories/${encodeURIComponent(repositoryId)}/invites`, { email, role, expires_in_days: expiresInDays }),
+  acceptInvite: (token: string) => call<Repository>('POST', `/invites/${encodeURIComponent(token)}/accept`),
 
-  // Enterprise administration. Enterprise roles manage this plane only; they
-  // never imply access to a Workspace's repository context.
-  listEnterprises: () => call<Enterprise[]>('GET', '/enterprises'),
-  publicEnterprise: (slug: string) =>
-    call<PublicEnterprise>('GET', `/public/enterprises/${encodeURIComponent(slug)}`),
-  getEnterprise: (enterpriseId: string) =>
-    call<Enterprise>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}`),
-  createEnterprise: (name: string, slug: string) => call<Enterprise>('POST', '/enterprises', { name, slug }),
-  updateEnterprise: (enterpriseId: string, patch: { name?: string; logo?: string }) =>
-    call<Enterprise>('PATCH', `/enterprises/${encodeURIComponent(enterpriseId)}`, patch),
-  listEnterpriseMembers: (enterpriseId: string) =>
-    call<EnterpriseMembership[]>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}/members`),
-  updateEnterpriseMember: (enterpriseId: string, userId: string, role: EnterpriseRole) =>
+  // Organization administration. Organization roles manage this plane only; they
+  // never imply access to a repository's context.
+  listOrganizations: () => call<Organization[]>('GET', '/organizations'),
+  publicOrganization: (slug: string) =>
+    call<PublicOrganization>('GET', `/public/organizations/${encodeURIComponent(slug)}`),
+  getOrganization: (organizationId: string) =>
+    call<Organization>('GET', `/organizations/${encodeURIComponent(organizationId)}`),
+  createOrganization: (name: string, slug: string) => call<Organization>('POST', '/organizations', { name, slug }),
+  updateOrganization: (organizationId: string, patch: { name?: string; logo?: string }) =>
+    call<Organization>('PATCH', `/organizations/${encodeURIComponent(organizationId)}`, patch),
+  listOrganizationMembers: (organizationId: string) =>
+    call<OrganizationMembership[]>('GET', `/organizations/${encodeURIComponent(organizationId)}/members`),
+  updateOrganizationMember: (organizationId: string, userId: string, role: OrganizationRole) =>
     call<{ status: string }>(
       'PATCH',
-      `/enterprises/${encodeURIComponent(enterpriseId)}/members/${encodeURIComponent(userId)}`,
+      `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
       { role },
     ),
-  removeEnterpriseMember: (enterpriseId: string, userId: string) =>
+  removeOrganizationMember: (organizationId: string, userId: string, access: 'revoke' | 'retain') =>
     call<{ status: string }>(
       'DELETE',
-      `/enterprises/${encodeURIComponent(enterpriseId)}/members/${encodeURIComponent(userId)}`,
+      `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}?repository_access=${access}`,
     ),
-  getEnterprisePolicy: (enterpriseId: string) =>
-    call<EnterprisePolicy>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}/policy`),
-  updateEnterprisePolicy: (enterpriseId: string, patch: Partial<Omit<EnterprisePolicy, 'enterprise_id' | 'updated_by' | 'updated_at'>>) =>
-    call<EnterprisePolicy>('PATCH', `/enterprises/${encodeURIComponent(enterpriseId)}/policy`, patch),
-  listEnterpriseWorkspaces: (enterpriseId: string) =>
-    call<Workspace[]>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}/workspaces`),
-  createEnterpriseWorkspace: (enterpriseId: string, name: string) =>
-    call<Workspace>('POST', `/enterprises/${encodeURIComponent(enterpriseId)}/workspaces`, { name }),
-  listEnterpriseAudit: (enterpriseId: string) =>
-    call<EnterpriseAuditEvent[]>('GET', `/enterprises/${encodeURIComponent(enterpriseId)}/audit`),
-  createBreakGlassGrant: (enterpriseId: string, workspaceId: string, reason: string, minutes: number) =>
-    call<BreakGlassGrant>('POST', `/enterprises/${encodeURIComponent(enterpriseId)}/break-glass`, {
-      workspace_id: workspaceId,
+  getOrganizationPolicy: (organizationId: string) =>
+    call<OrganizationPolicy>('GET', `/organizations/${encodeURIComponent(organizationId)}/policy`),
+  updateOrganizationPolicy: (organizationId: string, patch: Partial<Omit<OrganizationPolicy, 'organization_id' | 'updated_by' | 'updated_at'>>) =>
+    call<OrganizationPolicy>('PATCH', `/organizations/${encodeURIComponent(organizationId)}/policy`, patch),
+  listOrganizationRepositories: (organizationId: string) =>
+    call<Repository[]>('GET', `/organizations/${encodeURIComponent(organizationId)}/repositories`),
+  createOrganizationRepository: (organizationId: string, name: string) =>
+    call<Repository>('POST', `/organizations/${encodeURIComponent(organizationId)}/repositories`, { name }),
+  listOrganizationAudit: (organizationId: string) =>
+    call<OrganizationAuditEvent[]>('GET', `/organizations/${encodeURIComponent(organizationId)}/audit`),
+  createBreakGlassGrant: (organizationId: string, repositoryId: string, reason: string, minutes: number) =>
+    call<BreakGlassGrant>('POST', `/organizations/${encodeURIComponent(organizationId)}/break-glass`, {
+      repository_id: repositoryId,
       reason,
       minutes,
     }),
 
   // Session Browser — repo branch/commit log/context body
-  listRepos: (workspaceId: string) => call<Repo[]>('GET', `/repos?workspace=${encodeURIComponent(workspaceId)}`),
+  listRepos: (repositoryId: string) => call<Repo[]>('GET', `/repos?repository=${encodeURIComponent(repositoryId)}`),
   listRefs: (repoId: string) => call<Ref[]>('GET', `/repos/${encodeURIComponent(repoId)}/refs`),
   listSnapshots: (repoId: string, branch: string) =>
     call<Snapshot[]>('GET', `/repos/${encodeURIComponent(repoId)}/snapshots?branch=${encodeURIComponent(branch)}`),

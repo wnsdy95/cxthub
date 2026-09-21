@@ -94,7 +94,7 @@ func TestSaveRefusesSymlinkedCxtDirectory(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	// New repositories use <host>/<namespace>/<workspace>/<repository>.
+	// New repositories use <host>/<namespace>/<repository>/<repository>.
 	// Existing two-segment remotes remain valid because RepoID is derived from
 	// the URL and rewriting one would fork its existing context DAG.
 	valid := []string{
@@ -162,7 +162,7 @@ func TestRepoIDConvergence(t *testing.T) {
 	backend := RepoIDFor("http://host:8907/acme/platform/backend")
 	frontend := RepoIDFor("http://host:8907/acme/platform/frontend")
 	if backend == frontend {
-		t.Fatal("Repositories in the same workspace must have distinct IDs")
+		t.Fatal("Repositories in the same repository must have distinct IDs")
 	}
 }
 

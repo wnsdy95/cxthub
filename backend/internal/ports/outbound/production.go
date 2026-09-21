@@ -8,12 +8,16 @@ type ProductionStore interface {
 	MetadataStore
 	BlobStore
 	VerifiedDocStore
-	WorkspaceStore
+	RepositoryStore
+	OrganizationStore
 	EnterpriseStore
+	TeamStore
+	IdentityTransactions
+	RepositoryBindings
 	OAuthStore
 	RepositoryTransactions
-	WorkspaceTransactions
-	WorkspaceAccessLocker
+	RepositoryMetadataTransactions
+	RepositoryAccessLocker
 	RepositoryRevisions
 	EvidenceRevisions
 	HistoryStore
