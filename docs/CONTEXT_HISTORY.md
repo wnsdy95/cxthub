@@ -1405,6 +1405,25 @@ and completion events are never rewritten by a read. Graph folds cannot hide
 included sources as previous-only/archived-only records. Display merge nodes follow
 verified Git order, while original placement/withdrawal facts stay available.
 
+Branch origin is the source recorded at Git branch creation, not a later PR's
+destination. The command contract is: `git checkout -b feature` / `git switch -c
+feature` forks the current selected code/context; an explicit start reference
+selects that reference's code/context. A shared commit SHA alone cannot identify
+which branch supplied the context. The graph consumes the immutable birth source
+and never infers an origin from the current lane label, branch name, or PR base.
+
+Between verified PR integrations, the server keeps a destination checkpoint on
+the destination's continuation when its natural first-parent chain reaches the
+previous integration's source/result or their natural first-parent ancestry.
+The shared ancestor stays in place; only the new continuation's display parent
+references that preceding virtual merge. This removes a redundant incoming arm without
+changing any stored parent, birth source, inclusion root or memory attachment.
+Missing ancestry, another PR source, legacy destructive grafts, conflicting
+branch ownership or a projected cycle keep the conservative evidence plan. The
+browser labels only the recorded PR source arm with the incoming branch name;
+additional destination evidence retains the destination name. Nested feature
+branch births remain on their recorded source even when the PR target is main.
+
 The browser selects the actual branch context head and automatically shows its
 integrated memory. A selected historical event or saved-object checkbox still
 reads the original attachment. Code applicability separately marks typed claims;

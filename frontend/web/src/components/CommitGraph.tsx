@@ -343,9 +343,9 @@ export function CommitGraph({
       const current = [...active];
       for (const lane of row.branchesOut) {
         const parent = projectedIndex.byId.get(row.outgoing[lane] ?? '');
-        const event = projection.events.get(row.snap.id);
-        current[lane] = event?.kind === 'merge' && event.sourceBranch
-          ? { text: event.sourceBranch, archived: false }
+        const edgeBranch = projection.edgeBranches.get(row.snap.id)?.get(row.outgoing[lane] ?? '');
+        current[lane] = edgeBranch
+          ? { text: edgeBranch, archived: false }
           : parent ? labelForSnapshot(parent, lane) : labelForSnapshot(row.snap, lane);
       }
       active = row.outgoing.map((target, lane) => (target ? current[lane] ?? null : null));
