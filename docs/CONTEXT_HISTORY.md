@@ -1357,26 +1357,30 @@ rollback cannot grant access because each later read repeats its ownership and
 physical-byte checks. Adapters without the capability retain full domain/engine
 validation; failure of an available verifier never falls back to weaker evidence.
 
-### Browser memory position selection
+### Human context viewer and agent memory queries
 
-The context viewer displays the snapshot's saved memory immediately. Effective
-memory is queried automatically when the server resolves an exact recorded code
-position through `GET /repos/{repoID}/effective-memory/positions`. The browser
-passes the selected graph event's evidence ID, not its virtual display-node ID.
-A completed PR event selects its merge SHA; a birth selects its recorded code SHA.
-Without an explicit event, automatic selection requires exactly one distinct
-recorded SHA associated with the snapshot. Concurrent workers' different positions
-remain separate choices; shared `main`, creation timestamps, graph adjacency and
-unfinished PR requests are never substitutes for missing evidence.
+The context viewer shows the selected snapshot's original saved memory and
+conversation. It does not automatically query or render composed branch memory,
+code-position choices, or per-claim applicability assessments. Integrated memory
+remains available through the MCP memory tools and the documented REST/OpenAPI
+contracts; removing the automatic panel does not remove or change these APIs.
 
-Ambiguous associations offer a branch/commit selector. Missing associations leave
-the saved memory visible with unknown applicability. Full-SHA input is available
-only in the advanced comparison controls. The saved memory hash is pinned by
-default; changing this checkbox requests the composed lineage projection instead.
-Selecting another graph event at the same snapshot resets comparison state.
-Graph/history changes refresh the code choices; pending-only activity does not.
-The existing effective-memory query still requires an explicit immutable SHA,
-and server evidence remains responsible for all applicability assessments.
+`GET /repos/{repoID}/effective-memory/positions` resolves recorded code positions
+for API clients. A selected graph event supplies its evidence ID, not its virtual
+display-node ID. A completed PR event selects its merge SHA; a birth selects its
+recorded code SHA. Without an explicit event, selection requires exactly one
+recorded SHA associated with the snapshot. Concurrent workers' positions stay
+separate; shared `main`, timestamps, graph adjacency and unfinished PR requests
+cannot substitute for missing evidence. Effective-memory assessment still
+requires an explicit immutable SHA and server-verified applicability evidence.
+
+The right sidebar places repository tools, the graph, and AI participants before
+a bottom **History & sync** section. Sync counts, folded-connection notices,
+browsing positions, PR records, branch events, previous progress, archived
+branches and diagnostics live in that section. Long record lists are collapsed
+by default; disclosing a list is independent of expanding its graph paths.
+Graph read/integrity errors remain beside the graph. These presentation choices
+do not alter inclusion, completion, memory composition or retained history.
 
 ### Integrated branch knowledge (2026-09-21)
 
@@ -1397,7 +1401,8 @@ identity disambiguates reused names; multiple code associations remain unknown.
 The server returns ordered `branch_snapshots`, `branch_contexts`, and a virtual
 `integrations` graph plan from the same repository read snapshot. Full and live
 responses use the identical projector. Evidence-only notifications refresh this
-compact graph plan as well as memory, without downloading all records again.
+compact graph plan without downloading all records again. Memory API clients
+use the evidence revision when refreshing their assessed projections.
 
 Named branch memory combines these roots with the checked, provenance-deduplicated
 memory projector. The original snapshot attachments, conversation parents, refs,
@@ -1424,9 +1429,9 @@ browser labels only the recorded PR source arm with the incoming branch name;
 additional destination evidence retains the destination name. Nested feature
 branch births remain on their recorded source even when the PR target is main.
 
-The browser selects the actual branch context head and automatically shows its
-integrated memory. A selected historical event or saved-object checkbox still
-reads the original attachment. Code applicability separately marks typed claims;
+The browser selects the actual branch context head and shows the original
+snapshot attachment. Agent API clients can request integrated memory for that
+branch/code position. Code applicability separately marks typed claims;
 including a reverted PR preserves its history without declaring its code applied.
 Opaque legacy summaries remain unverified rather than being classified as true.
 

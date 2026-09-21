@@ -1029,6 +1029,75 @@ test('branch labels exist only for visible graph lanes and share horizontal scro
   expect(second.unexpected).toEqual([]);
 });
 
+test('sidebar keeps graph first and groups collapsed history and diagnostics at the bottom', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const root = id('1'), source = id('2'), current = id('3'), previous = id('4'), archived = id('5');
+  const snapshots = [
+    auditSnapshot(current, 'main', [source], 'Current main context', 5),
+    auditSnapshot(source, 'feature/context-sidebar', [root], 'Integrated feature context', 4),
+    auditSnapshot(previous, 'main', [root], 'Retained previous progress', 3),
+    auditSnapshot(archived, 'feature/archived', [root], 'Archived context', 2),
+    auditSnapshot(root, 'main', [], 'Project origin', 1),
+  ];
+  const refs = [
+    { kind: 'branch', name: 'main', branch_id: 'main-id', target: current },
+    { kind: 'tag', name: 'cxt/history/v1/sidebar-advance/source', target: previous },
+    { kind: 'tag', name: `cxt/branch-state/v1/00000000000000000001/archived/${archived.slice(7)}/feature/archived`, target: archived },
+  ];
+  const common = { repo_id: repoId, branch_id: 'main-id', branch: 'main', created_at: '2026-09-21T00:00:00Z' };
+  const history = [
+    { ...common, id: 'sidebar-birth', kind: 'birth', branch_id: 'topic-id', branch: 'feature/context-sidebar', source: root, target: root },
+    { ...common, id: 'sidebar-merge', kind: 'pr-merge', source_branch_id: 'topic-id', source, target: source, shared_target: root, pr_completed: true,
+      pr: { number: 42, head_branch: 'feature/context-sidebar', base_branch: 'main', head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40) } },
+    { ...common, id: 'sidebar-position', kind: 'position', source: previous, target: root, git_after: 'c'.repeat(40) },
+    { ...common, id: 'sidebar-advance', kind: 'advance', source: previous, target: current },
+  ];
+  const base = publicWorkspaceApi(snapshots, refs, [], [], [], history);
+  const { pageErrors, unexpected } = await openGraph(page, request => request.pathname.endsWith('/prs/promotions')
+    ? { body: [{ id: 'waiting', repo_id: repoId, pr: { number: 43, base_branch: 'main', head_branch: 'feature/pending' }, state: 'waiting', reason: 'source_context_pending', attempts: 1 }] }
+    : base(request));
+  const details = page.locator('.graph-details');
+  await expect(details.getByRole('heading', { name: 'History & sync' })).toBeVisible();
+  const panels = ['.graph-merge-records', '.graph-births', '.graph-previous', '.graph-archive-panel', '.pr-promotions', '.code-applicability', '.git-scans', '.git-changes', '.reflog'];
+  for (const selector of panels) {
+    await expect(details.locator(selector)).toHaveCount(1);
+    await expect(details.locator(selector)).not.toHaveAttribute('open');
+  }
+  await expect(details.locator('.graph-history-scope')).toHaveCount(1);
+  await expect(details.locator('.graph-status')).toHaveCount(1);
+  await expect(details.locator('.pr-promotions > summary')).toContainText('1 pending');
+  const assertOrder = async () => {
+    const bounds = await page.locator('.ctx-side').evaluate(side => {
+      const graph = side.querySelector('.graph-viewport')!.getBoundingClientRect();
+      const ai = side.querySelector('.aibar')!.getBoundingClientRect();
+      const footer = side.querySelector('.graph-details')!.getBoundingClientRect();
+      return { graphBottom: graph.bottom, aiTop: ai.top, aiBottom: ai.bottom, footerTop: footer.top,
+        overflow: document.documentElement.scrollWidth > window.innerWidth };
+    });
+    expect(bounds.graphBottom).toBeLessThanOrEqual(bounds.aiTop);
+    expect(bounds.aiBottom).toBeLessThanOrEqual(bounds.footerTop);
+    expect(bounds.overflow).toBe(false);
+  };
+  await assertOrder();
+  await page.locator('.ctx-side').screenshot({ path: testInfo.outputPath('sidebar-desktop.png') });
+  const nodes = await page.locator('.graph-row').count();
+  await details.locator('.graph-previous > summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(details.locator('.graph-previous .graph-history-view').first()).toBeVisible();
+  await expect(page.locator('.graph-row')).toHaveCount(nodes);
+  await details.locator('.graph-previous > summary').click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertOrder();
+  await page.locator('.ctx-side').screenshot({ path: testInfo.outputPath('sidebar-mobile.png') });
+  await page.getByLabel('Language', { exact: true }).selectOption('ko');
+  await expect(details.getByRole('heading', { name: '기록 및 동기화' })).toBeVisible();
+  await assertOrder();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator('.ctx-side').screenshot({ path: testInfo.outputPath('sidebar-korean.png') });
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('previous progress folds independently and preserves shared paths and sync status', async ({ page }, testInfo) => {
   const root = id('1'), shared = id('2'), previous = id('3'), current = id('4'), other = id('5');
   const snapshots = [
@@ -1047,7 +1116,8 @@ test('previous progress folds independently and preserves shared paths and sync 
     { kind: 'branch', name: 'main', old: other, new: root, created_at: '2026-09-15T04:00:00Z' },
   ];
   const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], reflog));
-  const panel = page.locator('.graph-history-panel');
+  const panel = page.locator('.graph-previous');
+  await panel.locator(':scope > summary').click();
   await expect(panel).toContainText('3 saved snapshots');
   await expect(page.locator('.graph-row')).toHaveCount(2);
   await expect(page.locator('.graph-status-item.pushed')).toHaveText('Pushed 5');
@@ -1133,6 +1203,7 @@ test('server history exposes births and explicit past positions without write re
   await expect(page.locator('.graph-row.on')).toHaveAttribute('aria-label', /^selected old code/);
   await expect(page.locator('.graph-history-scope')).toContainText('Browsing only');
   await page.screenshot({ path: testInfo.outputPath('recorded-context-position.png'), fullPage: true });
+  await page.locator('.graph-previous > summary').click();
   for (const button of await page.locator('.graph-history-toggle').all()) await button.click();
   await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(3);
   await page.getByLabel('View from', { exact: true }).selectOption('');
@@ -1160,9 +1231,10 @@ test('renamed history stays with its identity when the old name is reused', asyn
   ];
   const { pageErrors, unexpected } = await openGraph(page, publicWorkspaceApi(snapshots, refs, [], [], [], history));
   await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(2);
-  await expect(page.locator('section.graph-history-panel .graph-history-branch')).toHaveText('main');
+  await expect(page.locator('.graph-previous .graph-history-branch')).toHaveText('main');
   await page.getByLabel('View from', { exact: true }).selectOption('position');
   await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(1);
+  await page.locator('.graph-previous > summary').click();
   for (const button of await page.locator('.graph-history-toggle').all()) await button.click();
   await expect(page.locator('.graph-row:not([data-graph-event])')).toHaveCount(3);
   expect(pageErrors).toEqual([]);
@@ -1520,10 +1592,6 @@ test('graph activation reveals context and distinguishes events at the same snap
     pr:{number:42,base_branch:'main',head_branch:'feature/same',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:'2026-09-16T01:00:00Z'};
   const base = publicWorkspaceApi(snapshots,[{repo_id:repoId,kind:'branch',name:'main',target:pushedHead}],[],[],[],[birth,done]);
   const {pageErrors,unexpected} = await openGraph(page, req => {
-    if (req.pathname.endsWith('/effective-memory')) {
-      const code=req.searchParams.get('code_commit')!;
-      return {body:{selection:{snapshot_id:appendedRoot,code_commit:code},state_hash:id('f'),lineage_hash:id('e'),revision:{graph:'1',pending:'1'},items:[{id:id('d'),source_snapshot:appendedRoot,text:`Code basis ${code}`,state:'review',reason:'source_publication_missing',kind:'code'}],total:1,next_cursor:''}};
-    }
     if (req.pathname.endsWith('/events')) {
       const result = docResponse(req.pathname,req.searchParams).body as ReturnType<typeof sessionDoc> & { events: unknown[]; total:number };
       result.events = Array.from({length:60},(_,seq)=>({kind:'message',role:'user',seq,blocks:[{type:'text',text:`Long context message ${seq}`}]}));
@@ -1555,10 +1623,10 @@ test('graph activation reveals context and distinguishes events at the same snap
   await expect(page.locator('.context-selection-notice')).toHaveCount(0);
   await born.click();
   await expect(page.locator('.context-selection-notice')).toContainText('feature/same');
-  await expect(page.locator('.effective-memory')).toContainText(`Code basis ${'a'.repeat(40)}`);
+  await expect(page.locator('.effective-memory')).toHaveCount(0);
   await merged.click();
   await expect(page.locator('.context-selection-notice')).toContainText('PR #42');
-  await expect(page.locator('.effective-memory')).toContainText(`Code basis ${'b'.repeat(40)}`);
+  await expect(page.locator('.effective-memory')).toHaveCount(0);
   await page.locator('.graph-merge-records summary').click();
   await expect(page.locator('[data-branch-lineage="unchanged"]')).toContainText('does not establish whether later conversation was included');
   // Narrow screens use page scrolling; the sticky application header must
@@ -2006,6 +2074,7 @@ test('PR evidence survives every combination of archive and overlapping progress
   const evidence=page.locator('.graph-merge-records li');
   const evidenceText=await evidence.innerText();
   await page.locator('.graph-archive-panel summary').click();
+  await page.locator('.graph-previous > summary').click();
   const controls=[page.locator('.graph-history-toggle').nth(0),page.locator('.graph-history-toggle').nth(1),page.locator('.graph-archive-toggle')];
   await expect(controls[1]).toBeVisible();
   // Gray-code traversal visits all 8 states, changing only one control each time.
@@ -2146,95 +2215,27 @@ test('evidence-only revisions refresh applicability without downloading the grap
  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
 });
 
-test('effective memory displays server assessments and rejects mixed cursor generations', async ({page}) => {
- const snap = {...auditSnapshot(pushedHead, 'main', [], 'Retained merged context', 1), memory_hash: id('a')};
- const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}], [], [], [], [memoryPublication(pushedHead, 'a'.repeat(40))]);
- let calls = 0, changed = false;
- const {pageErrors, unexpected} = await openGraph(page, req => {
-  if (!req.pathname.endsWith('/effective-memory')) return base(req);
-  calls++;
-  const code = req.searchParams.get('code_commit');
-  expect(req.searchParams.get('snapshot_id')).toBe(pushedHead);
-  expect(req.searchParams.get('memory_hash')).toBe(id('a'));
-  if (changed && req.searchParams.get('cursor')) return {status: 409, body: {error: {code: 'conflict', message: 'effective memory changed'}}};
-  return {body: {selection: {snapshot_id: pushedHead, code_commit: code}, revision: {graph: '1', pending: '1', evidence: '1'}, state_hash: changed ? id('b') : id('f'), lineage_hash: id('e'), total: 2,
-   items: [{id: id('d'), source_snapshot: pushedHead, kind: 'code', text: changed ? 'Reapplied claim' : 'Original claim', state: changed ? 'applied' : 'inactive', reason: changed ? 'declared_scope_matches' : 'declared_scope_before'}], next_cursor: changed ? '' : 'generation-one'}};
- });
- const panel = page.locator('.effective-memory');
- await expect(panel.locator('input[name=code]')).not.toBeVisible();
- await expect(panel).toContainText('Inactive scope');await expect(panel).toContainText('Original claim');
- changed = true;await panel.getByRole('button', {name: 'Load more items'}).click();
- await expect(panel.getByRole('alert')).toBeVisible();await expect(panel).not.toContainText('Original claim');
- await panel.getByRole('button', {name: 'Start again'}).click();
- await expect(panel).toContainText('Reapplied claim');await expect(panel).toContainText('Applied scope');
- await expect(page.locator(`.graph-row[data-graph-id="${pushedHead}"]`)).toHaveCount(1);
- expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
-});
-
-test('effective memory ignores pending activity and refreshes on evidence arrival', async ({page}) => {
- const snap = auditSnapshot(pushedHead, 'main', [], 'Stable historical context', 1);
- const base = publicWorkspaceApi([snap], [{kind: 'branch', name: 'main', target: pushedHead, repo_id: repoId}], [], [], [], [memoryPublication(pushedHead, 'a'.repeat(40))]);
- let evidence = '1', pending = '1', memoryReads = 0, pendingReads = 0, fullReads = 0;
- page.on('request', req => {if (new URL(req.url()).pathname.endsWith('/view')) fullReads++;});
- const {pageErrors, unexpected} = await openGraph(page, req => {
-  const revision = {graph: '1', pending, evidence};
-  if (req.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
-  if (req.pathname.endsWith('/revision')) return {body: revision};
-  if (req.pathname.endsWith('/pending-view')) {pendingReads++;const graph=serverGraphWireFixture({revision,snapshots:[snap],refs:[{kind:'branch',name:'main',target:pushedHead,repo_id:repoId}]}).graph;return {body:{revision,graph,pending:[],snapshots:[]}};}
-  if (req.pathname.endsWith('/effective-memory')) {memoryReads++;return {body:{selection:{snapshot_id:pushedHead,code_commit:'a'.repeat(40)},revision,state_hash:id('f'),lineage_hash:id('e'),total:1,items:[{id:id('d'),source_snapshot:pushedHead,kind:'code',text:'Scoped claim',state:evidence==='1'?'review':'applied',reason:evidence==='1'?'source_publication_missing':'declared_scope_matches'}],next_cursor:''}};}
-  return base(req);
- });
- const panel=page.locator('.effective-memory');
- await expect(panel).toContainText('Needs review');const reads=memoryReads,graphs=fullReads;
- pending='2';await expect.poll(()=>pendingReads,{timeout:10000}).toBeGreaterThan(0);expect(memoryReads).toBe(reads);
- evidence='2';await expect(panel).toContainText('Applied scope',{timeout:10000});
- expect(fullReads).toBe(graphs);expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
-});
-
 function memoryPublication(snapshot: string, code: string, event = 'a'.repeat(32), branch = 'main') {
  return {id:event, repo_id:repoId, branch_id:branch, branch, kind:'publish', source:snapshot, target:snapshot, git_after:code, created_at:'2026-09-20T00:00:00Z'};
 }
 
-test('memory with no code association stays visible and never guesses shared main', async ({page}) => {
- const snap={...auditSnapshot(pushedHead,'main',[],'No publication',1),memory_hash:id('a')};
- const base=publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}],[],[],[],[memoryPublication(graftTarget,'b'.repeat(40))]);
- let reads=0;
+test('context keeps original memory and leaves integrated memory to agent APIs', async ({page}) => {
+ const snap={...auditSnapshot(pushedHead,'main',[],'Original saved context',1),memory_hash:id('a')};
+ const base=publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}],[],[],[],[memoryPublication(pushedHead,'a'.repeat(40))]);
+ const machineReads:string[]=[];
  const {pageErrors,unexpected}=await openGraph(page,req=>{
-  if(req.pathname.endsWith('/effective-memory')) {reads++;return {status:500,body:{error:{message:'Unexpected assessment'}}};}
+  if(req.pathname.includes('/effective-memory')) {machineReads.push(req.pathname);return {status:500,body:{error:{message:'Unexpected automatic assessment'}}};}
   return base(req);
  });
  await expect(page.locator('.memory-box')).toContainText('fixture memory');
- await expect(page.locator('.effective-memory')).toContainText('No code position is linked');
- expect(reads).toBe(0);
- await expect(page.locator('.effective-memory input[name=code]')).not.toBeVisible();
+ await expect(page.getByText('Visible fixture prompt',{exact:true})).toBeVisible();
+ await expect(page.locator('.effective-memory')).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'↓ memory'})).toBeVisible();
+ expect(machineReads).toEqual([]);
  expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
 });
 
-test('ambiguous memory positions offer branch and commit choices without a required SHA', async ({page}) => {
- const snap={...auditSnapshot(pushedHead,'main',[],'Two recorded positions',1),memory_hash:id('a')};
- const a='a'.repeat(40),b='b'.repeat(40);
- const base=publicWorkspaceApi([snap],[{kind:'branch',name:'main',target:pushedHead}],[],[],[],[
-  memoryPublication(pushedHead,a),memoryPublication(pushedHead,b,'b'.repeat(32),'topic')]);
- const selections:string[]=[];
- const {pageErrors,unexpected}=await openGraph(page,req=>{
-  if(req.pathname.endsWith('/effective-memory')) {
-   const code=req.searchParams.get('code_commit')!;selections.push(code);
-   return {body:{selection:{snapshot_id:pushedHead,code_commit:code},state_hash:id('f'),lineage_hash:id('e'),revision:{graph:'1',pending:'1'},items:[{id:id('d'),source_snapshot:pushedHead,text:code===a?'First position':'Second position',state:'review',reason:'source_publication_missing',kind:'code'}],total:1,next_cursor:''}};
-  }
-  return base(req);
- });
- const panel=page.locator('.effective-memory');
- await expect(panel).toContainText('linked to several code positions');expect(selections).toEqual([]);
- await expect(page.locator('.memory-box')).toContainText('fixture memory');
- await panel.getByRole('combobox',{name:'Code position',exact:true}).selectOption(b);
- await expect(panel).toContainText('Second position');
- await panel.locator('.effective-memory-options > summary').click();
- await panel.getByRole('combobox',{name:'Code position',exact:true}).selectOption(a);
- await expect(panel).toContainText('First position');
- expect(selections).toEqual([b,a]);expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
-});
-
-test('main includes PR conversations and memory, and evidence refreshes both without a full reload', async ({page}) => {
+test('main includes PR conversations and evidence refreshes the graph without automatic memory reads', async ({page}) => {
  const head=pushedHead, a=appendedRoot, b=graftTarget, baseID=id('9');
  const code='3'.repeat(40);
  const snapshots=[
@@ -2257,29 +2258,17 @@ test('main includes PR conversations and memory, and evidence refreshes both wit
   if(req.pathname.endsWith('/revision')) return {body:v.revision};
   if(req.pathname.endsWith('/changes')) return {contentType:'text/event-stream',body:`event: revision\ndata: ${JSON.stringify(v.revision)}\n\n`};
   if(req.pathname.endsWith('/pending-view')) {patchReads++;const full=serverGraphWireFixture(v as any);return {body:{graph:full.graph,revision:v.revision,pending:[],snapshots:[]}};}
-  if(req.pathname.endsWith('/effective-memory')) {
-   const stored=req.searchParams.has('memory_hash');
-   expect(req.searchParams.get('branch')).toBe(stored?null:'main');
-   expect(req.searchParams.get('code_commit')).toBe(code);
-   return {body:{content:'',selection:{snapshot_id:head,code_commit:code},revision:v.revision,state_hash:id(evidence==='1'?'f':'e'),lineage_hash:id('d'),inclusion:stored?undefined:inclusion(),total:1,items:[{id:id('7'),source_snapshot:stored?head:b,kind:'legacy_summary',text:stored?'ORIGINAL SAVED MEMORY':evidence==='1'?'AWAITING INTEGRATION EVIDENCE':'BOTH PR MEMORIES AVAILABLE',state:'review',reason:'untyped_historical_text'}],next_cursor:''}};
-  }
+  if(req.pathname.includes('/effective-memory')) throw new Error('Context must not assess agent memory');
   return base(req);
  });
- const panel=page.locator('.effective-memory');
- await expect(panel).toContainText('Integrated branch memory');
- await expect(panel).toContainText('AWAITING INTEGRATION EVIDENCE');
- await expect(panel.locator('form')).not.toBeVisible();
+ await expect(page.locator('.effective-memory')).toHaveCount(0);
+ await expect(page.locator('.commits .commit-msg')).toHaveText(['Continued main','Prior main context']);
  const before=fullReads;
  evidence='2';
- await expect(panel).toContainText('BOTH PR MEMORIES AVAILABLE',{timeout:10_000});
- await expect(panel).toContainText('2 PRs included');
  await expect(page.locator('.commits .commit-msg')).toHaveText(['Continued main','Second integrated PR context','First integrated PR context','Prior main context']);
  await expectRenderedGraphPath(page,head,'graph:merge:integration-1');
  await expectRenderedGraphPath(page,'graph:merge:integration-1','graph:merge:integration-0');
  expect(fullReads).toBe(before);expect(patchReads).toBeGreaterThan(0);
- await panel.getByText('Compare at another code position',{exact:true}).click();
- await panel.getByLabel('Assess only this saved memory object').check();
- await expect(panel).toContainText('ORIGINAL SAVED MEMORY');
  expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
 });
 

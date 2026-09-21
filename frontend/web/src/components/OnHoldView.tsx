@@ -443,8 +443,8 @@ export function OnHoldView({ repo, ws, role }: { repo: Repo; ws: Workspace | nul
           uncommitted={uncommittedIds}
           pinBranch={repo.default_branch || 'main'}
           repoId={atLeast(role, 'member') ? repo.id : null}
+          afterGraph={<AIBar snapshots={committedSnapshots} />}
         />
-        <AIBar snapshots={committedSnapshots} />
       </aside>
     </div>
   );
