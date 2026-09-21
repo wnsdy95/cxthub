@@ -1736,6 +1736,7 @@ test('memory attachment changes load the new immutable blob at the same snapshot
     return base(request);
   });
   const panel = page.locator('.memory-box');
+  await panel.locator('summary').click();
   await expect(panel).toContainText('memory version 1');
   generation = 2;
   await expect(panel).toContainText('memory version 2', {timeout:15_000});
@@ -1795,10 +1796,12 @@ test('context shows saved memory with one toggle, scrollable badges and independ
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(outerBefore);
   expect(await center.evaluate(e => e.scrollTop)).toBe(centerBefore);
 
-  expect(memoryReads).toBe(1);
+  expect(memoryReads).toBe(0);
   const memory = page.locator('.memory-box');
   await expect(memory).toHaveCount(1);
   expect(await memory.evaluate(e => e.parentElement?.closest('details') === null)).toBe(true);
+  await expect(memory).not.toHaveAttribute('open');
+  await memory.locator('summary').click();
   await expect(memory).toContainText('fixture memory');
   expect(memoryReads).toBe(1);
   await memory.locator('summary').click();
@@ -2227,10 +2230,17 @@ test('context keeps original memory and leaves integrated memory to agent APIs',
   if(req.pathname.includes('/effective-memory')) {machineReads.push(req.pathname);return {status:500,body:{error:{message:'Unexpected automatic assessment'}}};}
   return base(req);
  });
+ await expect(page.locator('.memory-box')).not.toHaveAttribute('open');
+ await expect(page.getByLabel('View mode', {exact:true})).toHaveValue('chat');
+ await page.locator('.memory-box > summary').click();
  await expect(page.locator('.memory-box')).toContainText('fixture memory');
  await expect(page.getByText('Visible fixture prompt',{exact:true})).toBeVisible();
  await expect(page.locator('.effective-memory')).toHaveCount(0);
  await expect(page.getByRole('button',{name:'↓ memory'})).toBeVisible();
+ await page.getByLabel('View mode', {exact:true}).selectOption('all');
+ await page.reload();
+ await expect(page.locator('.memory-box')).not.toHaveAttribute('open');
+ await expect(page.getByLabel('View mode', {exact:true})).toHaveValue('chat');
  expect(machineReads).toEqual([]);
  expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
 });
