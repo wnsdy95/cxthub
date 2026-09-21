@@ -132,10 +132,23 @@ func AuditIntegrationContracts(g GraphState) []SyncAuditCheck {
 			if !has(c.Roots, m.Source) || !has(c.SnapshotIDs, m.Source) || !has(g.BranchSnapshots[name], m.Source) {
 				add("included_context_missing")
 			}
+			// A child inherits the destination's integrated context, not a new
+			// merge operation on the child's lane. Its roots still need checking,
+			// but only the original destination owns the rendered merge path.
+			if m.DestinationBranchID != "" && m.DestinationBranchID != c.BranchID {
+				continue
+			}
+			mergeID := ""
+			for _, operation := range g.Operations.Merges {
+				if operation.EventID == m.EventID && operation.Scope == c.BranchID && operation.Source == m.Source {
+					mergeID = operation.ID
+					break
+				}
+			}
 			represented := false
 			for _, integration := range g.Integrations {
-				if integration.Scope == c.BranchID {
-					if _, ok := integration.Parents["graph:merge:"+m.EventID]; ok {
+				if mergeID != "" && integration.Scope == c.BranchID {
+					if _, ok := integration.Parents[mergeID]; ok {
 						represented = true
 					}
 				}
