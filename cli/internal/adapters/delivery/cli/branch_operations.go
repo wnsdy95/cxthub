@@ -424,6 +424,12 @@ func branchCheckpointTarget(ctx context.Context, cwd string) (commandCaptureTarg
 // Replay uses the durable prepared record and observed Git state. A timeout or
 // server failure leaves the operation pending; neither is an acknowledgement.
 func replayBranchOperations(ctx context.Context, c *Container, cwd string) error {
+	return replayBranchOperationsForRef(ctx, c, cwd, "")
+}
+
+// Foreground capture only needs its own branch birth. Unrelated unresolved
+// tracking branches remain durable and are retried by the detached replay.
+func replayBranchOperationsForRef(ctx context.Context, c *Container, cwd, gitRef string) error {
 	if c.History == nil {
 		return nil
 	}
@@ -451,6 +457,9 @@ func replayBranchOperations(ctx context.Context, c *Container, cwd string) error
 	applied := false
 	var failures []error
 	for _, op := range ops {
+		if gitRef != "" && op.GitRef != gitRef {
+			continue
+		}
 		if op.Event.RepoID != repo.ID {
 			return domain.ErrHashMismatch
 		}

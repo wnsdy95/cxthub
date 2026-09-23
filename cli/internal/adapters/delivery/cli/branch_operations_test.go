@@ -951,3 +951,49 @@ func TestCodeSelectionFollowsIdentityThroughRenameAndReusedName(t *testing.T) {
 		}
 	}
 }
+
+func TestForegroundReplayKeepsOtherBranchesDurableForBackground(t *testing.T) {
+	cwd, c, st, repo, _ := historyFixture(t)
+	ctx := context.Background()
+	oid := gitOut(cwd, "rev-parse", "HEAD")
+	for _, name := range []string{"current", "unrelated"} {
+		if err := runBirthVote(t, cwd, c, "prepared", strings.Repeat("0", 40)+" "+oid+" refs/heads/"+name); err != nil {
+			t.Fatal(err)
+		}
+		runLifecycleGit(t, cwd, "branch", name)
+	}
+	journal, err := branchjournal.Open(ctx, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, err := journal.List()
+	if err != nil || len(ops) != 2 {
+		t.Fatalf("journal: %+v %v", ops, err)
+	}
+	for _, op := range ops {
+		commitBirthJournal(t, cwd, op.Event.ID)
+	}
+	if err := replayBranchOperationsForRef(ctx, c, cwd, "refs/heads/current"); err != nil {
+		t.Fatal(err)
+	}
+	events, err := st.ListHistoryEvents(ctx, repo)
+	if err != nil || len(events) != 1 || events[0].Branch != "current" {
+		t.Fatalf("foreground applied unrelated birth: %+v %v", events, err)
+	}
+	ops, err = journal.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range ops {
+		if op.GitRef == "refs/heads/unrelated" && op.Phase != "committed" {
+			t.Fatalf("deferred birth lost: %+v", op)
+		}
+	}
+	if err := replayBranchOperations(ctx, c, cwd); err != nil {
+		t.Fatal(err)
+	}
+	events, err = st.ListHistoryEvents(ctx, repo)
+	if err != nil || len(events) != 2 {
+		t.Fatalf("background failed to drain: %+v %v", events, err)
+	}
+}
