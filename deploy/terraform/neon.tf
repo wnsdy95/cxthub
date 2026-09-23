@@ -35,3 +35,16 @@ resource "google_secret_manager_secret_iam_member" "cxtd_github_webhook" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.cxtd.email}"
 }
+
+data "google_secret_manager_secret" "resend" {
+  count     = var.resend_secret_id == "" ? 0 : 1
+  project   = var.gcp_project
+  secret_id = var.resend_secret_id
+}
+resource "google_secret_manager_secret_iam_member" "cxtd_resend" {
+  count     = var.resend_secret_id == "" ? 0 : 1
+  project   = var.gcp_project
+  secret_id = data.google_secret_manager_secret.resend[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cxtd.email}"
+}

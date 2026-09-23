@@ -22,3 +22,8 @@ vercel_team_id = null
 
 # The Vercel GitHub App must be able to read it.
 github_repository = "wnsdy95/cxthub"
+
+# Optional invitation email: pre-create this secret and add its API key outside
+# Terraform. Keep empty to use invitation inboxes/links without sending email.
+resend_secret_id = ""
+resend_from      = "CXTHub <noreply@cxthub.com>"

@@ -239,3 +239,19 @@ The operator still checks readiness before any GitHub mutation and requires a
 successful signed ping. Branch reconciliation recovers reachable history when
 webhook delivery is missed; per-repository page positions survive restarts.
 REST/Web and MCP expose both per-commit and remote reconciliation states.
+
+### Optional Resend invitation email
+
+Local servers may read a backend `.env`; Cloud Run uses Secret Manager instead.
+Create a Resend key and verify the sender domain, then store the key as an enabled
+version of an existing secret outside Terraform. Set `resend_secret_id` to that
+secret's ID, and optionally `resend_from` for another verified domain. Terraform
+only looks up metadata, grants the runtime access and injects `RESEND_API_KEY`;
+the key never enters tfstate or frontend builds. The default empty secret ID
+preserves inbox/link invitations without email. No paid resource or email is
+created merely by adding the configuration to this repository.
+
+All replicas must use the same settings and Resend account. `CXT_WEB_URL` points
+to the public frontend domain; invitation URLs never use the private API host.
+The existing warm instance/CPU setting also keeps the email outbox worker alive
+without an incoming request. Restart/redeploy after key or sender changes.

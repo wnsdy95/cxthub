@@ -17,10 +17,11 @@ import (
 // Dependencies: IdentityVerifier (token→User), RepositoryStore (persistence). Visibility boundary = repository.
 // Invitations use the "share link/code" model — tokens are reusable until revoked (member addition is idempotent).
 type IdentityService struct {
-	verifier     outbound.IdentityVerifier
-	repositories outbound.RepositoryStore
-	organization outbound.OrganizationStore
-	teams        outbound.TeamStore
+	verifier        outbound.IdentityVerifier
+	repositories    outbound.RepositoryStore
+	organization    outbound.OrganizationStore
+	teams           outbound.TeamStore
+	invitationEmail *invitationEmailConfig
 }
 
 // NewIdentityService creates an IdentityService.

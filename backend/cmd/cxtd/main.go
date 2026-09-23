@@ -90,6 +90,9 @@ func main() {
 
 // serve wires up the adapter and starts a REST server with graceful shutdown.
 func serve(ctx context.Context, args []string) error {
+	if err := loadServerEnv(); err != nil {
+		return err
+	}
 	addr := flagOr(args, "--addr", os.Getenv("CXT_ADDR"), ":8080")
 	dataDir := flagOr(args, "--data", os.Getenv("CXT_DATA"), "./cxt-data")
 	dsn := os.Getenv("CXT_POSTGRES_DSN")
@@ -176,6 +179,9 @@ func serve(ctx context.Context, args []string) error {
 	if publicURL == "" {
 		return fmt.Errorf("CXT_PUBLIC_URL is required when cxtd is not bound to loopback")
 	}
+	if err := configureInvitationEmail(idSvc, addr, publicURL); err != nil {
+		return err
+	}
 	mcpServer, err := deliverymcp.NewServer(svc, idSvc, st, publicURL)
 	if err != nil {
 		return fmt.Errorf("configure remote MCP: %w", err)
@@ -226,6 +232,7 @@ func serve(ctx context.Context, args []string) error {
 	go svc.RunDocFinalizationWorker(ctx)
 	go svc.RunPRPromotionWorker(ctx)
 	go svc.RunNotificationWorker(ctx)
+	go idSvc.RunInvitationEmailWorker(ctx)
 	go idSvc.RunRuntimeMaintenance(ctx)
 	go idSvc.RunStorageMaintenance(ctx)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

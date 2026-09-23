@@ -400,3 +400,39 @@ Existing installations must follow the coordinated backup and migration steps in
 [Repository ownership upgrade](REPOSITORY_ORGANIZATIONS.md#upgrade-and-recovery).
 The migration preserves content repository IDs and existing CLI remotes while
 flattening old containers into independently owned repositories.
+
+## Invitation email with Resend
+
+The backend reads `.env` from its working directory on `cxtd serve` startup.
+For the repository's local daemon, this is the repository root:
+
+```sh
+cp .env.example .env
+chmod 600 .env
+```
+
+Set `RESEND_API_KEY` in that file, then restart `cxtd` (for local dogfooding,
+`bash scripts/dogfood-daemon.sh restart`). With no key, inbox and link invitations
+continue to work. The key belongs only to the backend: never use `VITE_` or put
+it in a frontend environment file.
+
+The default sender is `CXTHub <noreply@cxthub.com>`. Its domain must first be
+[verified in Resend](https://resend.com/docs/dashboard/domains/introduction).
+If your account uses another verified domain, set `RESEND_FROM`. `CXT_WEB_URL`
+can override the invitation link origin: its default is `http://localhost:5173`
+for a loopback backend and `CXT_PUBLIC_URL` for a hosted backend. A custom
+frontend port or domain needs that override. Hosted links require HTTPS.
+
+An explicit `CXT_ENV_FILE` selects another file; a missing explicit file is an
+error. A missing default `.env` is allowed. Existing process variables take
+precedence, including an empty key used to disable delivery. The parser supports
+literal `KEY=value`, optional `export`, comments, and single/double quotes;
+it does not execute shell commands or expand variables. Configuration changes
+require a restart. Real `.env` files are ignored by Git.
+
+Only newly created or explicitly renewed Organization/Enterprise invitations
+queue mail. Enabling a key never mails the historical inbox. Repository share
+links remain share links. Check status in the space's invitation list, using
+Refresh when needed. `Resend accepted` means the provider acknowledged the
+request, not that the recipient received or opened it. Wrong credentials or an
+unverified sender require fixing configuration and renewing the invitation.
