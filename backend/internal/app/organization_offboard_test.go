@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 
 func runOrganizationOffboard(t *testing.T, st teamTestStore) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	for _, access := range []string{"revoke", "retain"} {
 		f := makeTeamFixture(t, st)
 		s := f.identity

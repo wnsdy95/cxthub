@@ -255,7 +255,7 @@ func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	repoID := domain.HashContent([]byte("github.com/acme/project"))
-	if _, err := st.PutRepo(context.Background(), domain.Repo{
+	if _, err := st.PutRepo(systemTestContext(), domain.Repo{
 		ID:            repoID,
 		DefaultBranch: "main",
 		GitRemoteURL:  "git@github.com:acme/project.git",
@@ -272,10 +272,10 @@ func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		doc.Hash = domain.HashContent(raw)
-		if _, err := st.PutDoc(context.Background(), repoID, doc); err != nil {
+		if _, err := st.PutDoc(systemTestContext(), repoID, doc); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.PutSnapshot(context.Background(), domain.Snapshot{ID: doc.Hash, RepoID: repoID, DocHash: doc.Hash, Branch: map[bool]string{true: "feature/x", false: "main"}[text == "feature"], Message: "work [git aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]", Parents: parents}); err != nil {
+		if err := st.PutSnapshot(systemTestContext(), domain.Snapshot{ID: doc.Hash, RepoID: repoID, DocHash: doc.Hash, Branch: map[bool]string{true: "feature/x", false: "main"}[text == "feature"], Message: "work [git aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]", Parents: parents}); err != nil {
 			t.Fatal(err)
 		}
 		return doc.Hash
@@ -284,16 +284,16 @@ func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
 	mainTip := put("main", base)
 	featureTip := put("feature", base)
 	observation := domain.HistoryEvent{ID: strings.Repeat("1", 32), RepoID: string(repoID), BranchID: "feature", Branch: "feature/x", Kind: "position", Source: featureTip, Target: featureTip, GitAfter: strings.Repeat("a", 40), CreatedAt: time.Now().UTC()}
-	if err := svc.RecordHistory(context.Background(), observation); err != nil {
+	if err := svc.RecordHistory(systemTestContext(), observation); err != nil {
 		t.Fatal(err)
 	}
 	publication := observation
 	publication.ID, publication.Kind = strings.Repeat("2", 32), "publish"
-	if err := svc.RecordHistory(context.Background(), publication); err != nil {
+	if err := svc.RecordHistory(systemTestContext(), publication); err != nil {
 		t.Fatal(err)
 	}
 	for name, target := range map[string]domain.ContentHash{"main": mainTip, "feature/x": featureTip} {
-		if err := st.CompareAndSwapRef(context.Background(), repoID, domain.Ref{
+		if err := st.CompareAndSwapRef(systemTestContext(), repoID, domain.Ref{
 			Kind: domain.RefBranch, Name: name, RepoID: repoID, Target: target,
 		}, ""); err != nil {
 			t.Fatal(err)
@@ -330,14 +330,14 @@ func TestGitHubWebhookPromotesDivergedContextEndToEnd(t *testing.T) {
 		}
 	}
 
-	if err := svc.ProcessPRPromotions(context.Background(), 8); err != nil {
+	if err := svc.ProcessPRPromotions(systemTestContext(), 8); err != nil {
 		t.Fatal(err)
 	}
-	mainRef, err := st.GetRef(context.Background(), repoID, domain.RefBranch, "main")
+	mainRef, err := st.GetRef(systemTestContext(), repoID, domain.RefBranch, "main")
 	if err != nil || mainRef.Target != featureTip {
 		t.Fatalf("main ref = (%s, %v), want feature tip %s", mainRef.Target, err, featureTip)
 	}
-	promoted, err := st.GetSnapshot(context.Background(), repoID, featureTip)
+	promoted, err := st.GetSnapshot(systemTestContext(), repoID, featureTip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,12 +414,12 @@ func TestDeletePendingExpectedTargetCAS(t *testing.T) {
 		t.Fatalf("repo status=%d", code)
 	}
 	target := domain.HashContent([]byte("pending target"))
-	if err := st.PutSnapshot(context.Background(), domain.Snapshot{
+	if err := st.PutSnapshot(systemTestContext(), domain.Snapshot{
 		ID: target, RepoID: repoID, DocHash: target, Branch: "main", Message: "fixture",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.PutPending(context.Background(), repoID, "session-cas", domain.Pending{Target: target, Branch: "main"}); err != nil {
+	if err := svc.PutPending(systemTestContext(), repoID, "session-cas", domain.Pending{Target: target, Branch: "main"}); err != nil {
 		t.Fatal(err)
 	}
 	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID)) + "/pending/session-cas"
@@ -796,7 +796,7 @@ func TestRepositoryRejectsUnregisteredChildPaths(t *testing.T) {
 	}
 }
 
-func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
+func TestOrganizationOwnerReadsWritesAndDiscoversAllRepositories(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
@@ -838,12 +838,12 @@ func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 		t.Fatalf("register organization repo code %d", code)
 	}
 	repoBase := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID))
-	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusForbidden {
-		t.Fatalf("organization owner inherited private context read: code %d", code)
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusOK {
+		t.Fatalf("organization owner denied private context read: code %d", code)
 	}
 	repositoryPath := ts.URL + "/api/v1/public/repositories/acme/" + url.PathEscape(repository.Slug)
-	if code := doJSONAs(t, ownerToken, http.MethodGet, repositoryPath, nil, nil); code != http.StatusNotFound {
-		t.Fatalf("private organization Repository leaked before grant: code %d", code)
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repositoryPath, nil, nil); code != http.StatusOK {
+		t.Fatalf("private organization Repository denied owner: code %d", code)
 	}
 
 	var grant domain.BreakGlassGrant
@@ -865,10 +865,23 @@ func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repos?repository="+url.QueryEscape(repository.ID), nil, &repos); code != http.StatusOK || len(repos) != 1 || repos[0].ID != repoID {
 		t.Fatalf("break-glass repository discovery code=%d repos=%+v", code, repos)
 	}
-	if code := doJSONAs(t, ownerToken, http.MethodPut, repoBase+"/refs/branch/main", map[string]any{
-		"target": domain.ContentHash("sha256:" + strings.Repeat("a", 64)),
-	}, nil); code != http.StatusForbidden {
-		t.Fatalf("break-glass write code %d, want 403", code)
+	var access struct {
+		EffectiveRole string `json:"effective_role"`
+		CanTransfer   bool   `json:"can_transfer_ownership"`
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodPatch, ts.URL+"/api/v1/repositories/"+repository.ID, map[string]any{"secrets_policy": "owner"}, &access); code != http.StatusOK {
+		t.Fatalf("owner settings: %d", code)
+	}
+	var repositories []struct {
+		ID            string `json:"id"`
+		EffectiveRole string `json:"effective_role"`
+		CanTransfer   bool   `json:"can_transfer_ownership"`
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repositories", nil, &repositories); code != 200 || len(repositories) != 1 || repositories[0].ID != repository.ID || repositories[0].EffectiveRole != "owner" || !repositories[0].CanTransfer {
+		t.Fatalf("owner projection: %d %+v", code, repositories)
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repository-connections?remote_url="+url.QueryEscape(remoteURL), nil, nil); code != http.StatusOK {
+		t.Fatalf("CLI connection: %d", code)
 	}
 
 	var audit []domain.OrganizationAuditEvent
@@ -877,10 +890,10 @@ func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 	}
 	used := false
 	for _, event := range audit {
-		used = used || event.Action == "organization.break_glass.used"
+		used = used || event.Action == "organization.break_glass.created"
 	}
 	if !used {
-		t.Fatalf("break-glass use not audited: %+v", audit)
+		t.Fatalf("explicit grant creation not audited: %+v", audit)
 	}
 }
 
@@ -1247,11 +1260,11 @@ func TestCookieUnsafeMethodsRequireTrustedOriginAndCSRFHeader(t *testing.T) {
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	user := domain.User{ID: "cookie-user", Email: "cookie@example.com", Name: "Cookie", Username: "cookie"}
-	if err := st.UpsertUser(context.Background(), user); err != nil {
+	if err := st.UpsertUser(systemTestContext(), user); err != nil {
 		t.Fatal(err)
 	}
 	rawToken := domain.NewID("sess_")
-	if err := st.CreateSession(context.Background(), domain.Session{
+	if err := st.CreateSession(systemTestContext(), domain.Session{
 		Token: domain.HashToken(rawToken), UserID: user.ID, Kind: "web",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
 	}); err != nil {
@@ -1305,11 +1318,11 @@ func TestConfiguredProxyOriginPassesCookieCSRF(t *testing.T) {
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
 	user := domain.User{ID: "proxy-user", Email: "proxy@example.com", Name: "Proxy", Username: "proxy"}
-	if err := st.UpsertUser(context.Background(), user); err != nil {
+	if err := st.UpsertUser(systemTestContext(), user); err != nil {
 		t.Fatal(err)
 	}
 	rawToken := domain.NewID("sess_")
-	if err := st.CreateSession(context.Background(), domain.Session{
+	if err := st.CreateSession(systemTestContext(), domain.Session{
 		Token: domain.HashToken(rawToken), UserID: user.ID, Kind: "web",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
 	}); err != nil {
@@ -1341,7 +1354,7 @@ func TestUnboundRepoHiddenAndRejected(t *testing.T) {
 	ts := httptest.NewServer(NewServer(svc, idSvc).Handler())
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := systemTestContext()
 	rid := domain.ContentHash("sha256:" + strings.Repeat("e", 64))
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: rid, DefaultBranch: "main"}); err != nil {
 		t.Fatal(err)
@@ -1420,7 +1433,7 @@ func TestRepositoryPolicyLookupFailureBlocksAction(t *testing.T) {
 	defer ts.Close()
 
 	rid := domain.ContentHash("sha256:" + strings.Repeat("d", 63) + "1")
-	if _, err := st.PutRepo(context.Background(), domain.Repo{ID: rid, DefaultBranch: "main", RepositoryID: "ws_" + strings.Repeat("e", 32)}); err != nil {
+	if _, err := st.PutRepo(systemTestContext(), domain.Repo{ID: rid, DefaultBranch: "main", RepositoryID: "ws_" + strings.Repeat("e", 32)}); err != nil {
 		t.Fatal(err)
 	}
 

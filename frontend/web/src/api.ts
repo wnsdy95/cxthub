@@ -96,7 +96,7 @@ export const api = {
   repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes`,
   repositoryRevision: (repo: string) => call<import('./types').RepositoryRevision>('GET', `/repos/${encodeURIComponent(repo)}/revision`),
   pendingView: async (repo: string) => {
-    const view = await call<Omit<import('./types').PendingView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repo)}/pending-view`);
+    const view = await call<Omit<import('./types').PendingView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repo)}/pending-view?graph_encoding=indexed-v2`);
     const graph = decodeGraphState(view.graph);
     validateGraphState(graph, view.revision);
     return {...view, graph};
@@ -279,13 +279,13 @@ export const api = {
       {},
     ),
   graphState: async (repoId: string, position: string, signal?: AbortSignal) => {
-    const wire = await call<GraphWire>('GET', `/repos/${encodeURIComponent(repoId)}/graph-state?${new URLSearchParams({position})}`, undefined, undefined, signal);
+    const wire = await call<GraphWire>('GET', `/repos/${encodeURIComponent(repoId)}/graph-state?${new URLSearchParams({position, graph_encoding: 'indexed-v2'})}`, undefined, undefined, signal);
     const g = decodeGraphState(wire);
     validateGraphState(g, g.revision);
     return g;
   },
   repositoryView: async (repoId: string) => {
-    const wire = await call<Omit<import('./types').RepositoryView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repoId)}/view`);
+    const wire = await call<Omit<import('./types').RepositoryView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repoId)}/view?graph_encoding=indexed-v2`);
     const view = {...wire, graph: decodeGraphState(wire.graph)};
     validateContextSemantics(view.history, view.semantics);
     validateGraphState(view.graph, view.revision);

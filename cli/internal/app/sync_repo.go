@@ -301,6 +301,10 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	if err := s.flushPRDeliveries(ctx, repoID); err != nil {
+		return inbound.SyncOutput{}, err
+	}
+
 	// repo metadata (remote URL/repository binding) is a prerequisite for object uploads. Server fail-closed on unbound
 	// repos, so avoiding registration failures leads to 404/403 errors during subsequent negotiate, as if bypassing
 	// permission/identity validation. Cwd push must interpret the current repo and register successfully before transitioning to object transmission.

@@ -265,8 +265,8 @@ function SlugSection({ repositoryMetadata }: { repositoryMetadata: Repository })
   );
 }
 
-// TransferSection — Danger Zone: Ownership transfer (creator exclusive, repository name typing confirmation).
-// Transferring changes the URL (/<owner>/<slug>) to the new owner's base — existing links·CLI remote reconfiguration required.
+// TransferSection — server-authorized ownership transfer with name confirmation.
+// Organization repositories keep their namespace; personal repositories move.
 function TransferSection({
   repositoryMetadata,
   members,
@@ -514,7 +514,7 @@ function RepoBranchSettings({ repo, label }: { repo: Repo; label: string | null 
   );
 }
 
-export function RepositorySettings({ repositoryMetadata, isCreator }: { repositoryMetadata: Repository; isCreator: boolean }) {
+export function RepositorySettings({ repositoryMetadata }: { repositoryMetadata: Repository }) {
   const t = useT();
   const [pub, setPub] = useState(repositoryMetadata.visibility === 'public');
   const [ghSync, setGhSync] = useState(repositoryMetadata.gh_visibility_sync ?? false);
@@ -683,8 +683,8 @@ export function RepositorySettings({ repositoryMetadata, isCreator }: { reposito
 
               <NotificationHistory repository={repositoryMetadata.id} />
               <ArchiveSection repositoryMetadata={repositoryMetadata} />
-              {isCreator && <SlugSection repositoryMetadata={repositoryMetadata} />}
-              {isCreator && <TransferSection repositoryMetadata={repositoryMetadata} members={members} onDone={() => {}} />}
+              <SlugSection repositoryMetadata={repositoryMetadata} />
+              {repositoryMetadata.can_transfer_ownership && <TransferSection repositoryMetadata={repositoryMetadata} members={members} onDone={() => {}} />}
     </form>
   );
 }

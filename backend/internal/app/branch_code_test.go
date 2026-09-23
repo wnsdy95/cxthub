@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -51,7 +50,7 @@ func TestBranchCodeUsesCompletedPRToDisambiguateTrackingAlias(t *testing.T) {
 
 func TestTrackingAliasPromotionKeepsSharedGraphAndMemoryIncluded(t *testing.T) {
 	f, ref, history := branchContextFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	ref.Target = f.b
 	if err := f.st.CompareAndSwapRef(ctx, f.repo, ref, ""); err != nil {
 		t.Fatal(err)

@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitevidence"
@@ -97,7 +96,7 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 		t.Fatal("mutable code selection accepted", status)
 	}
 	// Effective memory uses the same viewer guard and application service.
-	ctx := context.Background()
+	ctx := systemTestContext()
 	snapshotID := domain.HashContent([]byte("synthetic effective memory"))
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
 		t.Fatal(err)
@@ -139,7 +138,7 @@ func TestGitChangeAuthorizationAndDurableReadback(t *testing.T) {
 	if status := doJSONAs(t, "dev:outsider@example.test:Other", "GET", positionsURL, nil, nil); status != 403 {
 		t.Fatal("private code positions leaked", status)
 	}
-	history, err := svc.ListHistory(context.Background(), repo)
+	history, err := svc.ListHistory(systemTestContext(), repo)
 	if err != nil || len(history) != 0 {
 		t.Fatal("verification acceptance changed history", history, err)
 	}

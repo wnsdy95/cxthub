@@ -18,9 +18,9 @@ export function serverGraphFixture(input: Partial<RepositoryView>, position = ''
   return JSON.parse(execFileSync(state.__cxtGraphFixture,[],{input:JSON.stringify({view,position,mode,snapshot},(key,value) => value === '' && /(_at|_until)$/.test(key) ? '1970-01-01T00:00:00Z' : value),encoding:'utf8',stdio:['pipe','pipe','pipe'],maxBuffer:64<<20}));
 }
 
-export function serverGraphWireFixture(input: Partial<RepositoryView>, position = ''): Omit<RepositoryView, 'graph'> & {graph: GraphWire} {
+export function serverGraphWireFixture(input: Partial<RepositoryView>, position = '', version: 1 | 2 = 1): Omit<RepositoryView, 'graph'> & {graph: GraphWire} {
   // The Go HTTP adapter encodes this response; tests never duplicate the encoder.
-  return serverGraphFixture(input, position, input.graph?.branch_contexts ? 'integrations-wire' : 'wire') as unknown as Omit<RepositoryView, 'graph'> & {graph: GraphWire};
+  return serverGraphFixture(input, position, (input.graph?.branch_contexts ? 'integrations-wire' : 'wire') + (version === 2 ? '-v2' : '')) as unknown as Omit<RepositoryView, 'graph'> & {graph: GraphWire};
 }
 
 // Existing layout regressions now exercise Go's business plan plus TS rendering.

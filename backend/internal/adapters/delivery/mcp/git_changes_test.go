@@ -32,7 +32,7 @@ func TestGitChangesMCPBoundedFragmentsAndSelectionBinding(t *testing.T) {
 	firstCursor := ""
 	count := 0
 	for {
-		raw, err := s.gitChangesPage(context.Background(), repo, a)
+		raw, err := s.gitChangesPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,15 +66,15 @@ func TestGitChangesMCPBoundedFragmentsAndSelectionBinding(t *testing.T) {
 	}
 	a.Cursor = firstCursor
 	a.ChangeID = strings.Repeat("b", 64)
-	if _, err := s.gitChangesPage(context.Background(), repo, a); err == nil {
+	if _, err := s.gitChangesPage(systemTestContext(), repo, a); err == nil {
 		t.Fatal("cursor rebound to another proof")
 	}
 	a.ChangeID = q.job.ID
 	q.job.Version++
-	if _, err := s.gitChangesPage(context.Background(), repo, a); err == nil {
+	if _, err := s.gitChangesPage(systemTestContext(), repo, a); err == nil {
 		t.Fatal("mixed mutable verification generations")
 	}
-	raw, err := s.gitChangesPage(context.Background(), repo, toolArgs{Repository: string(repo.ID)})
+	raw, err := s.gitChangesPage(systemTestContext(), repo, toolArgs{Repository: string(repo.ID)})
 	if err != nil || strings.Contains(raw, "\ubcc0\uacbd\ub41c") || !strings.Contains(raw, "partial") {
 		t.Fatalf("summary leaked unbounded paths %d %v", len(raw), err)
 	}
@@ -93,7 +93,7 @@ func TestGitObservationsMCPReadOnlyCursorBoundToRepository(t *testing.T) {
 	s := &Server{}
 	s.SetGitScans(scanQuery{repo: repo.ID})
 	a := toolArgs{Repository: string(repo.ID)}
-	raw, err := s.gitScansPage(context.Background(), repo, a)
+	raw, err := s.gitScansPage(systemTestContext(), repo, a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestGitObservationsMCPReadOnlyCursorBoundToRepository(t *testing.T) {
 		t.Fatal("lost pagination")
 	}
 	a.Cursor = page.Cursor
-	if _, err = s.gitScansPage(context.Background(), domain.Repo{ID: pageHash(2)}, a); err == nil {
+	if _, err = s.gitScansPage(systemTestContext(), domain.Repo{ID: pageHash(2)}, a); err == nil {
 		t.Fatal("cross repository cursor accepted")
 	}
 }

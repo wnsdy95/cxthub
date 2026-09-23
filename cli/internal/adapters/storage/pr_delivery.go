@@ -7,20 +7,22 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 type prDelivery struct {
-	Repo     string                  `json:"repo"`
-	PR       domain.PullRequestMerge `json:"pr"`
-	Accepted bool                    `json:"accepted"`
+	Repo        string                  `json:"repo"`
+	PR          domain.PullRequestMerge `json:"pr"`
+	LastAttempt time.Time               `json:"last_attempt,omitempty"`
+	Accepted    bool                    `json:"accepted"`
 }
 
 func (s *FileStore) prDeliveryPath(repo string, n int) string {
 	return filepath.Join(s.storeDir(), "pr-deliveries", fmt.Sprintf("%s-%020d.json", hexOf(domain.ContentHash(repo)), n))
 }
-func (s *FileStore) mutatePRDelivery(ctx context.Context, repo string, pr domain.PullRequestMerge, accept bool) error {
+func (s *FileStore) mutatePRDelivery(ctx context.Context, repo string, pr domain.PullRequestMerge, accept, attempt bool) error {
 	if err := domain.ValidateContentHash(domain.ContentHash(repo)); err != nil {
 		return err
 	}
@@ -38,6 +40,9 @@ func (s *FileStore) mutatePRDelivery(ctx context.Context, repo string, pr domain
 		} else if !os.IsNotExist(err) {
 			return err
 		}
+		if attempt {
+			record.LastAttempt = time.Now().UTC()
+		}
 		if accept {
 			record.Accepted = true
 		}
@@ -49,10 +54,13 @@ func (s *FileStore) mutatePRDelivery(ctx context.Context, repo string, pr domain
 	})
 }
 func (s *FileStore) QueuePRDelivery(ctx context.Context, repo string, pr domain.PullRequestMerge) error {
-	return s.mutatePRDelivery(ctx, repo, pr, false)
+	return s.mutatePRDelivery(ctx, repo, pr, false, false)
 }
 func (s *FileStore) AcceptPRDelivery(ctx context.Context, repo string, pr domain.PullRequestMerge) error {
-	return s.mutatePRDelivery(ctx, repo, pr, true)
+	return s.mutatePRDelivery(ctx, repo, pr, true, false)
+}
+func (s *FileStore) AttemptPRDelivery(ctx context.Context, repo string, pr domain.PullRequestMerge) error {
+	return s.mutatePRDelivery(ctx, repo, pr, false, true)
 }
 func (s *FileStore) PendingPRDeliveries(ctx context.Context, repo string) ([]domain.PullRequestMerge, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repo)); err != nil {
@@ -69,7 +77,7 @@ func (s *FileStore) PendingPRDeliveries(ctx context.Context, repo string) ([]dom
 	if err != nil {
 		return nil, err
 	}
-	out := []domain.PullRequestMerge{}
+	records := []prDelivery{}
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -83,9 +91,18 @@ func (s *FileStore) PendingPRDeliveries(ctx context.Context, repo string) ([]dom
 			return nil, domain.ErrHashMismatch
 		}
 		if record.Repo == repo && !record.Accepted {
-			out = append(out, record.PR)
+			records = append(records, record)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Number < out[j].Number })
+	sort.Slice(records, func(i, j int) bool {
+		if !records[i].LastAttempt.Equal(records[j].LastAttempt) {
+			return records[i].LastAttempt.Before(records[j].LastAttempt)
+		}
+		return records[i].PR.Number < records[j].PR.Number
+	})
+	out := make([]domain.PullRequestMerge, 0, len(records))
+	for _, record := range records {
+		out = append(out, record.PR)
+	}
 	return out, nil
 }

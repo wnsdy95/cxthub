@@ -23,7 +23,7 @@ func (s *usageStore) ConfigureStoragePolicy(context.Context, string, string, int
 	return errors.New("not exposed to customers")
 }
 func TestStorageAuthorityDoesNotGrantContextOrPlanAdministration(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := &usageStore{FSStore: store.NewFSStore(t.TempDir())}
 	svc := NewIdentityService(nil, st)
 	owner := domain.User{ID: "owner", Username: "owner", Name: "Owner", Email: "owner@test.example"}

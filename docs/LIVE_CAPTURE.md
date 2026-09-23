@@ -67,3 +67,8 @@ transient failures do not trigger this compatibility fallback.
 
 The filesystem development backend persists counters but does not provide
 PostgreSQL's cross-file transactional guarantee. Production uses PostgreSQL.
+
+`pending-view` returns only current capture metadata, but its graph still derives
+from a coherent complete metadata read. Committed branch inclusion can be reused
+by graph/evidence revision and negotiated V2 avoids retransmitting raw timelines.
+This endpoint is smaller than a full view; it is not a constant-cost database read.

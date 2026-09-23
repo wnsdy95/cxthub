@@ -30,7 +30,7 @@ func (s *Service) docJobs() (outbound.DocJobStore, error) {
 func docJobStatus(j domain.DocFinalizationJob) inbound.DocFinalizationStatus {
 	return inbound.DocFinalizationStatus{ID: j.ID, DocHash: j.DocHash, State: j.State, Reason: j.Reason, UpdatedAt: j.UpdatedAt}
 }
-func (s *Service) SubmitDocFinalization(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {
+func (s *Service) submitDocFinalizationCommand(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {
 	j, err := domain.NewDocFinalizationJob(repo, doc.Hash, domain.DocChunkManifest{Format: doc.Format, Envelope: doc.Envelope, Chunks: doc.Chunks}, time.Now().UTC())
 	if err != nil {
 		return inbound.DocFinalizationStatus{}, err
@@ -184,6 +184,7 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 	return errors.Join(err, st.FinishDocJob(finish, j, now))
 }
 func (s *Service) ProcessDocFinalizations(ctx context.Context, limit int) error {
+	ctx = inbound.WithSystemActor(ctx)
 	st, err := s.docJobs()
 	if err != nil {
 		return err
@@ -221,4 +222,10 @@ func (s *Service) RunDocFinalizationWorker(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+func (s *Service) SubmitDocFinalization(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {
+	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repo, func(ctx context.Context) (inbound.DocFinalizationStatus, error) {
+		return s.submitDocFinalizationCommand(ctx, repo, doc)
+	})
 }

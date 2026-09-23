@@ -42,10 +42,10 @@ func TestCommitCancellationStopsChunkValidationBeforePublication(t *testing.T) {
 	if !ok || len(plan.Manifest.Chunks) < 2 {
 		t.Fatal("expected multiple chunks")
 	}
-	if _, _, err := st.PutChunks(context.Background(), repo, plan.Bodies); err != nil {
+	if _, _, err := st.PutChunks(systemTestContext(), repo, plan.Bodies); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(systemTestContext())
 	defer cancel()
 	spy := &cancelChunkRead{BlobStore: st, cancel: cancel}
 	svc.blobs = spy
@@ -56,10 +56,10 @@ func TestCommitCancellationStopsChunkValidationBeforePublication(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || spy.reads != 1 || out.StoredDocs != 0 || out.StoredSnapshots != 0 {
 		t.Fatalf("canceled finalization: reads=%d out=%+v err=%v", spy.reads, out, err)
 	}
-	if _, err := st.GetDoc(context.Background(), repo, hash); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := st.GetDoc(systemTestContext(), repo, hash); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("document published: %v", err)
 	}
-	if _, err := st.GetSnapshot(context.Background(), repo, hash); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := st.GetSnapshot(systemTestContext(), repo, hash); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("snapshot published: %v", err)
 	}
 }
@@ -68,7 +68,7 @@ func TestCommitAlreadyCanceledHasNoSuccessfulReceipt(t *testing.T) {
 	svc, st := newFsckSvc(t)
 	repo := hh("canceled-empty-finalization")
 	bindCommitTestRepo(t, st, repo)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(systemTestContext())
 	cancel()
 	if _, err := svc.Commit(ctx, inbound.CommitInput{RepoID: repo}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("already canceled returned %v", err)
@@ -81,7 +81,7 @@ func wireChunk(body []byte) inbound.ChunkObject {
 
 func TestBoundedChunkStorePullAndRepoScope(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("bounded-chunks-repo")
 	otherRepo := hh("bounded-chunks-other-repo")
 	bindCommitTestRepo(t, st, repo)
@@ -142,7 +142,7 @@ func TestBoundedChunkStorePullAndRepoScope(t *testing.T) {
 
 func TestPullCIRV2RequiresExplicitClientCapability(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("cir-v2-pull-capability")
 	bindCommitTestRepo(t, st, repo)
 	cir := domain.CIRDocument{
@@ -187,7 +187,7 @@ func containsString(values []string, want string) bool {
 
 func TestBoundedChunkStoreRejectsInvalidBatchBeforeWriting(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("bounded-chunks-invalid-repo")
 	bindCommitTestRepo(t, st, repo)
 
@@ -212,7 +212,7 @@ func TestBoundedChunkStoreRejectsInvalidBatchBeforeWriting(t *testing.T) {
 
 func TestCommitUsesPreviouslyStagedChunks(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("bounded-chunks-commit-repo")
 	bindCommitTestRepo(t, st, repo)
 
@@ -268,7 +268,7 @@ func TestCommitUsesPreviouslyStagedChunks(t *testing.T) {
 
 func TestPullOversizedEventRequiresExplicitV2Capability(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("v2-capability-repo")
 	bindCommitTestRepo(t, st, repo)
 	cir := domain.CIRDocument{

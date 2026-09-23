@@ -12,7 +12,7 @@ import (
 
 func TestDocFinalizationAcceptanceSurvivesCallerAndValidatesBeforePublish(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	bindCommitTestRepo(t, st, repo)
 	cir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1"}, Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "durable upload"}}}}}
@@ -80,7 +80,7 @@ func TestDocFinalizationInterruptedWorkerIsReclaimable(t *testing.T) {
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	bindCommitTestRepo(t, st, repo)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	cir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1"}, Events: []domain.CIREvent{{Kind: domain.EventMessage, Seq: 0, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "retry"}}}}}
 	cb, _ := domain.CanonicalBytes(cir)
 	plan, _ := domain.PlanDocChunks(cb)

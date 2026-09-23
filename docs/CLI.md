@@ -355,9 +355,9 @@ Lists local snapshots, optionally restricted to a branch. `log` is an alias for
 
 The accepted behavior for exact code/context positions, orphan memory
 inheritance, retained progress, and retryable branch creation is tracked in
-[Context history](CONTEXT_HISTORY.md), including implementation gaps. A shared
-local object store does not yet provide an independent cxt HEAD for each
-worktree.
+[Context history](CONTEXT_HISTORY.md). Worktrees share immutable objects but
+retain independent code/context positions; moving one worktree does not rewind
+another worker or delete server history.
 
 ### `cxt checkout`
 
@@ -780,3 +780,14 @@ requires reconciliation; force-push does not override branch identity.
 Use `cxt log`, `cxt branch list`, or `cxt doctor` instead of interpreting the
 replica's internal files as a public interface. Existing plaintext refs remain
 readable; only a first proven cloud identity can be adopted automatically.
+
+### PR discovery and delivery recovery
+
+Git merge ranges are durable discovery records. Discovery queues each verified
+PR request before considering the range delivered. Server acceptance transfers
+retry responsibility; it does not mean context or memory is already merged.
+Offline requests remain in the local delivery queue and retry on synchronization.
+Discovery and delivery rotate by their last durable attempt, so an older failing
+request cannot monopolize the per-run budget. Corrupt discovery records remain
+available for diagnosis while independent valid ranges continue. Exact source
+publication, Git order and idempotent completion remain server responsibilities.

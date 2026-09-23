@@ -154,11 +154,11 @@ cannot be presented to ordinary REST endpoints.
 
 Repository visibility follows the context-viewing boundary:
 
-- public Repository repositories are readable;
-- private Repository repositories require at least Viewer membership;
-- Enterprise administration alone grants no repository context access;
-- an Enterprise Owner may use an active, reason-bound, expiring, audited
-  read-only break-glass grant;
+- public repositories are readable;
+- private repositories require an effective repository role of at least Viewer;
+- Organization Owners inherit Owner access to all repositories in their organization;
+- current Team grants and direct repository memberships contribute to effective access;
+- Enterprise account administration alone grants no repository context access;
 - all other private repositories are omitted without leaking their contents.
 
 ## Codex and ChatGPT desktop

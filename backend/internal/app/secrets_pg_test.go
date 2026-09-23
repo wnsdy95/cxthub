@@ -17,12 +17,12 @@ import (
 
 func TestPGSecretsConcurrentEditingBaseline(t *testing.T) {
 	_, st, _ := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repositoryRecord, in := seedSecretsRepo(t, st, st)
 	// This fixture checks enqueue only. Remove its own undelivered test jobs so
 	// repeated suites do not feed them to another worker test's global queue.
 	t.Cleanup(func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanup, cancel := context.WithTimeout(systemTestContext(), 5*time.Second)
 		defer cancel()
 		conn, err := pgxpool.New(cleanup, collaborationDSN(t))
 		if err != nil {
@@ -107,7 +107,7 @@ func (s pausedSecretsPG) CompareAndSwapSecrets(ctx context.Context, repo domain.
 
 func TestPGSecretsAuthorizationPinnedUntilCommit(t *testing.T) {
 	_, st, _ := collaborationPG(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 15*time.Second)
 	defer cancel()
 	repositoryRecord, in := seedSecretsRepo(t, st, st)
 	member := domain.User{ID: domain.NewID("user_"), Username: "m" + domain.NewID("")[:12], Email: "maintainer@example.test", Name: "Maintainer"}

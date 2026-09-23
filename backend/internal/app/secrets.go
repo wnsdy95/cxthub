@@ -16,6 +16,7 @@ var _ inbound.SaveSecrets = (*Service)(nil)
 // envelope, repository revision and notification outbox share the PostgreSQL
 // transaction. Development FS storage only guarantees the ciphertext byte CAS.
 func (s *Service) SaveSecrets(ctx context.Context, in inbound.SaveSecretsInput) (inbound.SaveSecretsOutput, error) {
+	ctx = inbound.WithRepositoryActor(ctx, in.ActorID)
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.SaveSecretsOutput{}, err
 	}
@@ -87,14 +88,10 @@ func (s *Service) authorizeSecretsEdit(ctx context.Context, in inbound.SaveSecre
 	if err != nil {
 		return err
 	}
-	var members []domain.Membership
-	if repositoryRecord.OwnerID != in.ActorID {
-		members, err = s.repositories.ListMembers(ctx, repositoryRecord.ID)
-		if err != nil {
-			return err
-		}
+	role, ok, err := repositoryRoleFor(ctx, s.repositories, repositoryRecord, in.ActorID)
+	if err != nil {
+		return err
 	}
-	role, ok := domain.RepositoryRole(repositoryRecord, members, in.ActorID)
 	if !ok || !domain.CanEditSecrets(repositoryRecord, role) {
 		return domain.ErrForbidden
 	}

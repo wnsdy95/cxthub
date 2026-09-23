@@ -53,7 +53,7 @@ func TestProjectMemoryRetriesConcurrentGraftChange(t *testing.T) {
 		s.snapshots[1].GraftParents = []domain.ContentHash{s.snapshots[0].ID}
 		s.snapshots[1].GraftSeq++
 	}
-	got, err := ProjectMemory(context.Background(), s, repo, tip)
+	got, err := ProjectMemory(systemTestContext(), s, repo, tip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestProjectMemoryRejectsBrokenLineage(t *testing.T) {
 			case "corrupt memory":
 				s.memories[s.snapshots[1].MemoryHash] = domain.MemoryDigest{SnapshotID: tip, Summary: "tampered"}
 			}
-			if _, err := ProjectMemory(context.Background(), s, repo, tip); err == nil {
+			if _, err := ProjectMemory(systemTestContext(), s, repo, tip); err == nil {
 				t.Fatal("invalid lineage presented as complete")
 			}
 		})
@@ -90,10 +90,10 @@ func TestProjectMemoryInvalidatesTransitiveCoverage(t *testing.T) {
 	s, repo, tip := projectionSource()
 	s.snapshots[1].Parents = []domain.ContentHash{s.snapshots[0].ID}
 	reader := &projectionReader{source: s, repoID: repo, memories: map[domain.ContentHash]domain.MemoryDigest{}}
-	if _, err := reader.readState(context.Background(), tip); err != nil {
+	if _, err := reader.readState(systemTestContext(), tip); err != nil {
 		t.Fatal(err)
 	}
-	fp, ok := newMemoryProjectionFingerprinter(context.Background(), reader).root(s.snapshots[1])
+	fp, ok := newMemoryProjectionFingerprinter(systemTestContext(), reader).root(s.snapshots[1])
 	if !ok {
 		t.Fatal("incomplete fixture")
 	}
@@ -102,7 +102,7 @@ func TestProjectMemoryInvalidatesTransitiveCoverage(t *testing.T) {
 	hash, _ := domain.MemoryDigestHash(digest)
 	s.memories[hash] = digest
 	s.snapshots[1].MemoryHash = hash
-	first, err := ProjectMemory(context.Background(), s, repo, tip)
+	first, err := ProjectMemory(systemTestContext(), s, repo, tip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestProjectMemoryInvalidatesTransitiveCoverage(t *testing.T) {
 	s.snapshots = append(s.snapshots, domain.Snapshot{ID: late, RepoID: repo, MemoryHash: dh})
 	s.snapshots[0].GraftParents = []domain.ContentHash{late}
 	s.snapshots[0].GraftSeq++
-	next, err := ProjectMemory(context.Background(), s, repo, tip)
+	next, err := ProjectMemory(systemTestContext(), s, repo, tip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestProjectMemoryInvalidatesTransitiveCoverage(t *testing.T) {
 }
 func TestProjectMemoryBoundsAndCancellation(t *testing.T) {
 	s, repo, _ := projectionSource()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(systemTestContext())
 	cancel()
 	if _, err := ProjectMemory(ctx, s, repo, s.snapshots[0].ID); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation: %v", err)
@@ -149,17 +149,17 @@ func TestProjectMemoryBoundsAndCancellation(t *testing.T) {
 		s.snapshots = append(s.snapshots, snap)
 		prev = id
 	}
-	if _, err := ProjectMemory(context.Background(), s, repo, prev); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := ProjectMemory(systemTestContext(), s, repo, prev); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("unbounded graph: %v", err)
 	}
 	reader := &projectionReader{source: s, repoID: repo, bytes: maxProjectionMemoryBytes, memories: map[domain.ContentHash]domain.MemoryDigest{}}
-	if _, err := reader.GetMemory(context.Background(), s.snapshots[0].MemoryHash); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := reader.GetMemory(systemTestContext(), s.snapshots[0].MemoryHash); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("unbounded memory: %v", err)
 	}
 }
 
 func TestPRPromotionProjectsMergedMemoryBeforeAnyMemorize(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh("projection promotion")
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/a/b"}); err != nil {

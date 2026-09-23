@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,7 +15,7 @@ import (
 // hook prefix → commit message promotion allowed, non-prefixed snapshots only allow the same message (idempotent),
 // any rewriting or reverse promotion to hook prefix is denied.
 func TestPromoteSnapshotMessage(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := NewService(st, st, nil, nil, st)
 	repo := domain.HashContent([]byte("repo"))
@@ -76,7 +75,7 @@ func TestPromoteSnapshotMessage(t *testing.T) {
 // TestPromoteRuneLength ensures that the length limit is in runes, not bytes —
 // to prevent regressions where multi-byte messages like Korean were rejected even though they were shorter than the document limit (2000 characters).
 func TestPromoteRuneLength(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := NewService(st, st, nil, nil, st)
 	repo := domain.HashContent([]byte("rune-repo"))
@@ -110,7 +109,7 @@ func TestPromoteRuneLength(t *testing.T) {
 // only one side should win (last-write-wins blocking), and the other side should return ErrConflict. Both updates must not be lost even when running concurrently with AddGraftParents (review P1 —
 // by locking only the promotion function, lost-update conflicts with other meta updates remain).
 func TestUpdateSnapshotMessageStoreCAS(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	repo := domain.HashContent([]byte("cas-repo"))
 	id := domain.HashContent([]byte("cas-snap"))

@@ -29,7 +29,7 @@ func (s failingOffboardAudit) RemoveOrganizationMemberWithAudit(context.Context,
 }
 func TestPGOrganizationOffboardingRollsBackAllDirectGrants(t *testing.T) {
 	_, st, _ := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	if err := st.AddMember(ctx, domain.Membership{RepositoryID: f.repository.ID, UserID: f.member.ID, Role: domain.RolePuller}); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestPGOrganizationOffboardingRollsBackAllDirectGrants(t *testing.T) {
 
 func TestPGEnterpriseConcurrentOwnersAndOrganizationLink(t *testing.T) {
 	_, st, _ := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	e, err := f.identity.CreateEnterprise(ctx, f.owner, "Group", "group-"+domain.NewID("")[:12])
 	if err != nil {

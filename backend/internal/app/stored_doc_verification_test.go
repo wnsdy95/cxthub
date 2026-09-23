@@ -28,7 +28,7 @@ func (s *referenceOnlyBlobs) VerifyStoredDoc(context.Context, domain.ContentHash
 	return s.proof, s.fail
 }
 func TestHistoryAndMetadataUseStoredDocumentVerification(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	bindCommitTestRepo(t, st, repo)

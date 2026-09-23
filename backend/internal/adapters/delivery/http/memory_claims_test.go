@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,7 +14,7 @@ import (
 )
 
 func TestTypedMemoryAttachmentVersionGateAndAuthorization(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	ts := httptest.NewServer(NewServer(svc, app.NewIdentityService(auth.NewDevVerifier(), st)).Handler())

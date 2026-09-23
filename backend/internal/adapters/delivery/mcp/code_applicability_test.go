@@ -29,7 +29,7 @@ func TestCodeApplicabilityMCPForwardsExplicitSelection(t *testing.T) {
 	s := &Server{}
 	s.SetCodeApplicability(q)
 	a := toolArgs{CodeCommit: strings.Repeat("a", 40), SourceCommit: strings.Repeat("b", 40), SourceParent: strings.Repeat("c", 40), Paths: []string{"file.go"}}
-	raw, e := s.codeApplicabilityPage(context.Background(), repo, a)
+	raw, e := s.codeApplicabilityPage(systemTestContext(), repo, a)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -40,11 +40,11 @@ func TestCodeApplicabilityMCPForwardsExplicitSelection(t *testing.T) {
 	if got.Relation != "unknown" || got.Paths[0].State != "unknown" || q.received.CodeCommit != a.CodeCommit || q.received.SourceParent != a.SourceParent {
 		t.Fatal("adapter reinterpreted server evidence", got)
 	}
-	if _, e = s.codeApplicabilityPage(context.Background(), domain.Repo{ID: pageHash(2)}, a); e == nil {
+	if _, e = s.codeApplicabilityPage(systemTestContext(), domain.Repo{ID: pageHash(2)}, a); e == nil {
 		t.Fatal("repository binding lost")
 	}
 	a.Paths = make([]string, 21)
-	if _, e = s.codeApplicabilityPage(context.Background(), repo, a); e == nil {
+	if _, e = s.codeApplicabilityPage(systemTestContext(), repo, a); e == nil {
 		t.Fatal("unbounded path scope")
 	}
 }

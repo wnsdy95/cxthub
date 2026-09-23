@@ -25,7 +25,7 @@ func (s *rejectPublicationMemoryPG) CompareAndSwapSnapshotMemory(context.Context
 
 func TestPGMemoryPublicationCollectionAndRollback(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 30*time.Second)
 	defer cancel()
 	username := fmt.Sprintf("memory%d", time.Now().UnixNano())
 	user := domain.User{ID: "dev:" + username, Name: "Memory", Username: username, Email: username + "@example.com"}

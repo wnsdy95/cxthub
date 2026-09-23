@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -9,7 +8,7 @@ import (
 )
 
 func TestPutPendingRejectsCrossProviderCollisionBeforeGC(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh("pending provider collision")
 	old, other := hh("claude capture"), hh("codex capture")

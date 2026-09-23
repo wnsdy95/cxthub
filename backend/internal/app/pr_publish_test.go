@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -23,7 +22,7 @@ func prPublication(observation domain.HistoryEvent) domain.HistoryEvent {
 
 func publishPRSource(t *testing.T, svc *Service, observation domain.HistoryEvent) {
 	t.Helper()
-	if err := svc.RecordHistory(context.Background(), prPublication(observation)); err != nil {
+	if err := svc.RecordHistory(systemTestContext(), prPublication(observation)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -31,7 +30,7 @@ func publishPRSource(t *testing.T, svc *Service, observation domain.HistoryEvent
 func TestPRSourceWaitsForFinalizedPublication(t *testing.T) {
 	for _, preexisting := range []bool{false, true} {
 		t.Run(fmt.Sprintf("preexisting-raw-ancestor=%t", preexisting), func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			svc, st := newFsckSvc(t)
 			repo := hh(t.Name())
 			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/publication"}); err != nil {
@@ -129,7 +128,7 @@ func TestPublishRequiresAcceptedExactObservation(t *testing.T) {
 	for _, field := range []string{"missing", "branch", "identity", "local-branch", "worktree", "empty-worktree", "git", "target", "publish-only", "valid"} {
 		t.Run(field, func(t *testing.T) {
 			svc, st := newFsckSvc(t)
-			ctx := context.Background()
+			ctx := systemTestContext()
 			repo := hh(t.Name())
 			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
 				t.Fatal(err)
@@ -186,7 +185,7 @@ func TestHistoricalPRBindingRequiresPublishUntilCompleted(t *testing.T) {
 	for _, completed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("completed=%t", completed), func(t *testing.T) {
 			svc, st := newFsckSvc(t)
-			ctx := context.Background()
+			ctx := systemTestContext()
 			repo := hh(t.Name())
 			origin := "https://github.com/acme/historical"
 			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: origin}); err != nil {
@@ -242,7 +241,7 @@ func TestHistoricalPRBindingRequiresPublishUntilCompleted(t *testing.T) {
 
 func TestPRLegacyGitMessageAndCurrentRefDoNotFinalizeSource(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/legacy"}); err != nil {
 		t.Fatal(err)

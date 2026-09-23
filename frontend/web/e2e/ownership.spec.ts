@@ -1,6 +1,48 @@
 import { expect, test } from '@playwright/test';
 import { capturePageErrors } from './api-fixture';
 
+test('organization owner administers an admin-created private repository and loses inheritance after demotion', async ({ page, playwright }, testInfo) => {
+ test.skip(!process.env.CXT_E2E_FULLSTACK, 'requires the real development backend');
+ const errors = capturePageErrors(page);
+ const origin = 'http://127.0.0.1:4174';
+ const headers = { Origin: origin, 'X-Cxt-CSRF': '1' };
+ const owner = page.context().request;
+ const admin = await playwright.request.newContext({ baseURL: origin, extraHTTPHeaders: headers });
+ const suffix = `${Date.now()}-${testInfo.retry}`;
+ try {
+  expect((await owner.post('/api/v1/auth/session', {headers:{...headers, Authorization:`Bearer dev:org-owner-${suffix}@example.test:Organization Owner`}})).ok()).toBeTruthy();
+  const me = await (await owner.get('/api/v1/me')).json();
+  expect((await owner.patch('/api/v1/me', {headers,data:{locale:'en'}})).ok()).toBeTruthy();
+  expect((await admin.post('/api/v1/auth/session', {headers:{Authorization:`Bearer dev:org-admin-${suffix}@example.test:Organization Admin`}})).ok()).toBeTruthy();
+  const teammate = await (await admin.get('/api/v1/me')).json();
+  const org = await (await owner.post('/api/v1/organizations', {headers,data:{name:'Owner Access',slug:`owner-access-${suffix}`}})).json();
+  expect((await owner.patch(`/api/v1/organizations/${org.id}/members/${teammate.id}`,{headers,data:{role:'admin'}})).ok()).toBeTruthy();
+  const response = await admin.post(`/api/v1/organizations/${org.id}/repositories`,{data:{name:'private-api'}});
+  expect(response.ok(),await response.text()).toBeTruthy();
+  const repo = await response.json();
+  expect(repo.owner_id).toBe(teammate.id);
+  const inherited = (await (await owner.get('/api/v1/repositories')).json()).find((r: {id:string}) => r.id===repo.id);
+  expect(inherited.effective_role).toBe('owner');
+  expect(inherited.can_transfer_ownership).toBe(true);
+  await page.goto(`/${org.slug}/${repo.slug}?tab=settings`);
+  await expect(page.getByText('Change URL (slug)',{exact:true})).toBeVisible();
+  await expect(page.getByText('Danger Zone — transfer ownership',{exact:true})).toBeVisible();
+  expect((await owner.patch(`/api/v1/repositories/${repo.id}`,{headers,data:{secrets_policy:'owner'}})).ok()).toBeTruthy();
+  await page.screenshot({path:testInfo.outputPath('organization-owner-settings.png'),fullPage:true});
+  // Give another person ownership first, then demote the original owner.
+  expect((await owner.patch(`/api/v1/organizations/${org.id}/members/${teammate.id}`,{headers,data:{role:'owner'}})).ok()).toBeTruthy();
+  await page.goto(`/${org.slug}`);
+  await page.getByRole('tab',{name:'People',exact:true}).click();
+  await page.getByRole('combobox',{name:`Change ${me.name}'s Organization role`}).selectOption('member');
+  await expect.poll(async () => (await (await owner.get('/api/v1/repositories')).json()).length).toBe(0);
+  await page.getByRole('tab',{name:'Repositories',exact:true}).click();
+  await expect(page.getByRole('button').filter({has:page.locator('.repository-card-name',{hasText:'private-api'})})).toBeDisabled();
+  expect((await owner.patch(`/api/v1/repositories/${repo.id}`,{headers,data:{secrets_policy:'members'}})).status()).toBe(403);
+  expect((await owner.get(`/api/v1/public/repositories/${org.slug}/${repo.slug}`)).status()).toBe(404);
+  expect(errors).toEqual([]);
+ } finally { await admin.dispose(); }
+});
+
 test('real server enforces organization teams and enterprise policy through the browser', async ({ page, playwright }, testInfo) => {
  test.skip(!process.env.CXT_E2E_FULLSTACK, 'requires the real development backend');
  const errors = capturePageErrors(page);

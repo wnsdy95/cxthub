@@ -19,8 +19,10 @@ The terminology follows the official GitHub documentation for
 [organizations](https://docs.github.com/en/organizations/collaborating-with-groups-in-organizations/about-organizations),
 [teams](https://docs.github.com/en/organizations/organizing-members-into-teams/about-teams),
 and [enterprise accounts](https://docs.github.com/en/enterprise-cloud@latest/admin/concepts/enterprise-fundamentals/enterprise-accounts).
-Existing CXTHub repository roles and explicit private-access rules remain the
-security contract; terminology alignment does not silently enlarge privileges.
+Repository roles remain unchanged. The September 23 owner-access decision
+explicitly gives every current Organization Owner the owner role on all of that
+Organization's existing and future repositories. This is derived authority, not
+a migration that copies direct memberships.
 
 ## Migration invariants
 
@@ -53,14 +55,20 @@ security contract; terminology alignment does not silently enlarge privileges.
 
 ## Access and concurrency
 
-Repository access combines direct collaborator grants and valid team grants.
+Repository access combines direct collaborator grants, valid team grants, and
+current Organization Owner authority.
 Each team grant requires current membership in both the Team and its owning
 Organization, and the target repository must belong to that Organization.
-Use the highest explicit valid repository role, then apply archive state and
-repository/organization/enterprise restrictions. Administration membership alone
-does not grant private context access. Public baseline access remains explicit.
+An Organization Owner receives the repository owner role even with no direct or
+team grant. Use the highest valid role, then apply archive state and
+repository/organization/enterprise restrictions. Organization Admin, Member, and
+Enterprise Owner roles alone do not grant private context access. Public baseline
+access remains explicit. Removing or demoting an Organization Owner immediately
+removes inherited authority; independent direct/team grants still apply.
+Organization Owners can change the human ownership anchor without changing the
+Organization namespace. Personal ownership transfer remains creator-only.
 
-Membership removal, team deletion, and grant revocation must take effect on REST,
+Organization Owner demotion, membership removal, team deletion, and grant revocation must take effect on REST,
 MCP, lists, and context writes through the same application policy. Writers lock
 the governing records in a consistent order and recheck access inside the write
 transaction; a revoked grant cannot authorize a later write. The final owner
@@ -87,7 +95,7 @@ modify their own grant or acquire organization administration privileges.
   `/enterprises/{enterprise}`. Exact legacy three-segment repository aliases
   redirect to the canonical page. Retired `/-/` routes remain unavailable.
 - Repository lists project `effective_role` from the server. REST, MCP and CLI
-  connections apply the same direct/team access policy. MCP lists the canonical
+  connections apply the same direct/team/Organization Owner access policy. MCP lists the canonical
   address and accepts authorized historical aliases or immutable IDs.
 
 Organization removal requires an explicit `repository_access=revoke|retain`

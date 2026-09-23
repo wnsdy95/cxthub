@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -16,7 +15,7 @@ type enterpriseTestStore interface {
 
 func runEnterpriseContract(t *testing.T, st enterpriseTestStore) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	s := f.identity
 	enterprise, err := s.CreateEnterprise(ctx, f.owner, "Acme Group", "group-"+domain.NewID("")[:10])
@@ -49,6 +48,12 @@ func runEnterpriseContract(t *testing.T, st enterpriseTestStore) {
 	}
 	if err = s.RemoveEnterpriseMember(ctx, f.owner.ID, enterprise.ID, f.owner.ID); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("last enterprise owner removed: %v", err)
+	}
+	if err = s.UpdateEnterpriseMember(ctx, f.owner.ID, enterprise.ID, f.outsider.ID, domain.EnterpriseOwner); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.RoleOf(ctx, f.repository.ID, f.outsider.ID); ok {
+		t.Fatal("upper Enterprise Owner inherited Organization repository access")
 	}
 	policy, err := s.GetOrganizationPolicy(ctx, f.owner.ID, f.organization.ID)
 	if err != nil {

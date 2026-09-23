@@ -39,7 +39,7 @@ func TestCompletedPRReplayPreservesLaterBasePosition(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				svc, st := newFsckSvc(t)
-				ctx := context.Background()
+				ctx := systemTestContext()
 				repo := hh(t.Name())
 				if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/replay"}); err != nil {
 					t.Fatal(err)

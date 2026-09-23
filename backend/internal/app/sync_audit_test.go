@@ -37,7 +37,7 @@ func (r *auditReader) ListAuditPRs(_ context.Context, _ string, _ int) (outbound
 }
 func TestSyncAuditReadOnlyPagedAndRevisionFenced(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("audit-repo")
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/org/project"}); err != nil {
 		t.Fatal(err)

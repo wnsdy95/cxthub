@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -11,7 +10,7 @@ import (
 
 func TestQueryMemoryPositionsIsReadOnlyAndScoped(t *testing.T) {
 	f := newEffectiveFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	before, _ := f.svc.RepositoryRevision(ctx, f.repo)
 	history, _ := f.svc.ListHistory(ctx, f.repo)
 	reads := f.reader.reads

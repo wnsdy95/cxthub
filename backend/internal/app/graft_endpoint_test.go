@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 // Only adds existing parents (preventing reachability poisoning with arbitrary hashes), ensures idempotency, and rejects self-grafts and empty lists.
 // Background: The only path for local to reflect a reachability overlay in a server replica during sibling advancement in multi-session commits (inventory-only push does not resend existing object metadata).
 func TestGraftSnapshotParents(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := NewService(st, st, nil, nil, st)
 	repo := domain.HashContent([]byte("graft-repo"))

@@ -3,7 +3,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -21,7 +20,7 @@ func TestPGMemoryProjectionAcrossServerInstances(t *testing.T) {
 	if dsn == "" {
 		t.Skip("CXT_TEST_DSN unset")
 	}
-	ctx := context.Background()
+	ctx := systemTestContext()
 	first, err := store.NewPostgresStore(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)

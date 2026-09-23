@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -14,7 +13,7 @@ import (
 // maintainers may invite only their own role or lower, owner invitations are rejected,
 // invalid roles return ErrValidation instead of silently falling back, and owners may invite owners.
 func TestInviteNoPrivilegeEscalation(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	fs := store.NewFSStore(t.TempDir())
 	svc := NewIdentityService(nil, fs)
 
@@ -72,7 +71,7 @@ func TestInviteNoPrivilegeEscalation(t *testing.T) {
 }
 
 func TestAcceptInviteNeverDowngradesExistingMember(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	fs := store.NewFSStore(t.TempDir())
 	svc := NewIdentityService(nil, fs)
 	owner := domain.User{ID: "u_owner", Email: "owner@example.com", Username: "owner"}
@@ -105,7 +104,7 @@ func TestAcceptInviteNeverDowngradesExistingMember(t *testing.T) {
 }
 
 func TestRevokeInviteCannotCrossRepositoryBoundary(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	fs := store.NewFSStore(t.TempDir())
 	svc := NewIdentityService(nil, fs)
 	ownerA := domain.User{ID: "u_owner_a", Email: "a@example.com", Username: "a"}

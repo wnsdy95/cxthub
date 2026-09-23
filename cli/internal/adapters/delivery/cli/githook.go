@@ -1436,6 +1436,14 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 			return
 		}
 	}
+	// A durable handoff is independent of fetching context objects. Older sync
+	// implementations retain the synchronous path below after baseline capture.
+	_, queued := c.Sync.(interface {
+		QueuePullRequest(context.Context, inbound.SyncInput, outbound.MergedPullRequest) error
+	})
+	if queued {
+		replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, origin, nil)
+	}
 	out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, FetchOnly: true})
 	if err != nil {
 		syncWarn(cwd, "pull", err)
@@ -1472,7 +1480,10 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	// PR merge context promotion: First resolve host-side squash/rebase/merge
 	// commits back to their source branches. Then retain the generic [git sha]
 	// path for non-GitHub and direct merge histories.
-	prReflected := replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, origin, nil)
+	prReflected := false
+	if !queued {
+		prReflected = replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, origin, nil)
+	}
 	mergeReflected := appendMergedContexts(ctx, c, cwd, branch, shas)
 	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
 		hookWarn("completed PR context position remains pending: %v", err)
@@ -1586,6 +1597,15 @@ func processMergedPRContexts(
 	}
 	for _, pull := range pulls {
 		if pull.BaseBranch != branch || pull.HeadBranch == "" || pull.HeadBranch == branch {
+			continue
+		}
+		if queued, ok := syncer.(interface {
+			QueuePullRequest(context.Context, inbound.SyncInput, outbound.MergedPullRequest) error
+		}); ok {
+			if err := queued.QueuePullRequest(ctx, inbound.SyncInput{Cwd: cwd}, pull); err != nil {
+				complete = false
+				hookWarn("PR #%d discovery handoff remains pending: %v", pull.Number, err)
+			}
 			continue
 		}
 		if exact, ok := syncer.(interface {

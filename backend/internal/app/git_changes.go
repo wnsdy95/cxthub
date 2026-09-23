@@ -160,6 +160,7 @@ func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
 	return errors.Join(err, e)
 }
 func (g *GitChanges) Process(ctx context.Context, limit int) error {
+	ctx = inbound.WithSystemActor(ctx)
 	for i := 0; i < limit; i++ {
 		if err := ctx.Err(); err != nil {
 			return err

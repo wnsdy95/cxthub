@@ -59,7 +59,12 @@ export function useUpdateOrganizationMember() {
   return useMutation({
     mutationFn: (v: { organizationId: string; userId: string; role: import('./types').OrganizationRole }) =>
       api.updateOrganizationMember(v.organizationId, v.userId, v.role),
-    onSuccess: (_result, v) => void qc.invalidateQueries({ queryKey: ['organization-members', v.organizationId] }),
+    onSuccess: (_result, v) => {
+      void qc.invalidateQueries({ queryKey: ['organization-members', v.organizationId] });
+      void qc.invalidateQueries({ queryKey: ['organization-repositories', v.organizationId] });
+      void qc.invalidateQueries({ queryKey: ['repositories'] });
+      void qc.invalidateQueries({ queryKey: ['organizations'] });
+    },
   });
 }
 export function useRemoveOrganizationMember() {
@@ -69,6 +74,7 @@ export function useRemoveOrganizationMember() {
     onSuccess: (_result, v) => {
       void qc.invalidateQueries({ queryKey: ['organization-members', v.organizationId] });
       void qc.invalidateQueries({ queryKey: ['teams', v.organizationId] });
+      void qc.invalidateQueries({ queryKey: ['organization-repositories', v.organizationId] });
       void qc.invalidateQueries({ queryKey: ['teamMembers', v.organizationId] });
       void qc.invalidateQueries({ queryKey: ['repositories'] });
       void qc.invalidateQueries({ queryKey: ['organizations'] });
@@ -144,7 +150,7 @@ export function useUpdateRepository() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['repositories'] }),
   });
 }
-// Ownership transfer (creator's sole right) — URL changes, so refresh repository list on success.
+// Creator or Organization Owner transfer; refresh server-projected permissions.
 export function useTransferRepository() {
   const qc = useQueryClient();
   return useMutation({
