@@ -330,3 +330,44 @@ func TestInvitationEmailCancellationAndRejection(t *testing.T) {
 		})
 	}
 }
+
+type unavailableInvitationAuthority struct {
+	*store.FSStore
+	unavailable bool
+}
+
+func (s *unavailableInvitationAuthority) GetOrganizationMembership(ctx context.Context, org, user string) (domain.OrganizationMembership, error) {
+	if s.unavailable {
+		return domain.OrganizationMembership{}, errors.New("membership store unavailable")
+	}
+	return s.FSStore.GetOrganizationMembership(ctx, org, user)
+}
+func TestInvitationEmailAuthorityOutageDoesNotCancel(t *testing.T) {
+	st := &unavailableInvitationAuthority{FSStore: store.NewFSStore(t.TempDir())}
+	f := makeTeamFixture(t, st)
+	ctx := systemTestContext()
+	m := &fakeInvitationMailer{}
+	if err := f.identity.ConfigureInvitationEmail(m, "from@example.test", "https://example.test"); err != nil {
+		t.Fatal(err)
+	}
+	i, err := f.identity.CreateCollaborationInvitation(ctx, f.owner.ID, "organization", f.organization.ID, f.outsider.Email, domain.OrganizationMember, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.unavailable = true
+	if _, err := f.identity.ProcessInvitationEmail(ctx); err == nil {
+		t.Fatal("storage error ignored")
+	}
+	j, _ := st.GetInvitationEmail(ctx, i.ID)
+	if j.State != "queued" || j.Attempts != 0 || len(m.keys) != 0 {
+		t.Fatal("temporary error cancelled mail", j)
+	}
+	st.unavailable = false
+	if _, err := f.identity.ProcessInvitationEmail(ctx); err != nil {
+		t.Fatal(err)
+	}
+	j, _ = st.GetInvitationEmail(ctx, i.ID)
+	if j.State != "accepted" {
+		t.Fatal(j)
+	}
+}

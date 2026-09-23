@@ -150,7 +150,7 @@ export const ko = {
   invitations: {
     "email_paused": "이메일 발송 비활성화",
     "email_cancelled": "이메일 발송 취소",
-    "email_attention": "이메일 확인 필요 · 서버 설정을 확인한 뒤 초대를 갱신하세요",
+    "email_attention": "이메일 확인 필요 · 서버 설정을 확인하세요",
     "email_accepted": "Resend 발송 요청 완료 · 수신 여부는 미확인",
     "email_retrying": "이메일 자동 재시도 예정",
     "email_sending": "이메일 발송 중",

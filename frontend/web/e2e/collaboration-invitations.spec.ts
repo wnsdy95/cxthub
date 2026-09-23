@@ -51,7 +51,7 @@ for (const kind of ['organization', 'enterprise'] as const) {
     const response=await route.fetch();const rows=await response.json();
     await route.fulfill({response,json:rows.map((row:object)=>({...row,email_enabled:true,email_status:mailState}))});
    });
-   for(const [state,label] of [['queued','Email queued'],['retrying','Email will retry automatically'],['accepted','Resend accepted the email · inbox delivery not confirmed'],['attention','Email needs attention · check server configuration, then renew invitation']]){
+   for(const [state,label] of [['queued','Email queued'],['retrying','Email will retry automatically'],['accepted','Resend accepted the email · inbox delivery not confirmed'],['attention','Email needs attention · check server configuration']]){
     mailState=state;await page.getByRole('button',{name:'Refresh invitations',exact:true}).click();
     await expect(page.locator('.invitation-email-status')).toHaveText(label);
    }

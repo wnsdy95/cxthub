@@ -147,7 +147,7 @@ export const en: Messages = {
   invitations: {
     "email_paused": "Email delivery is disabled",
     "email_cancelled": "Email cancelled",
-    "email_attention": "Email needs attention · check server configuration, then renew invitation",
+    "email_attention": "Email needs attention · check server configuration",
     "email_accepted": "Resend accepted the email · inbox delivery not confirmed",
     "email_retrying": "Email will retry automatically",
     "email_sending": "Sending email",
