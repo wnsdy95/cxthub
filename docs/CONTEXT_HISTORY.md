@@ -533,12 +533,15 @@ source lookup. Jobs freeze the PR tuple, Git origin, and base branch identity.
 Missing exact source history remains waiting; identity/integrity failures require
 attention. Retries never substitute the current head of a same-named branch.
 
-PostgreSQL workers claim the oldest unfinished job per repository using row
+PostgreSQL workers claim the oldest due job per repository using row
 locks and leases. Execution is bounded to 90 seconds with a two-minute lease;
 expired claims recover after restart, and claim versions fence stale completion
 writes. Retry delay grows to 256 seconds. Temporary failures stop after 20 attempts;
-late-source waiting remains eligible until the source arrives. An earlier waiting
-job holds later jobs in that repository to preserve acceptance order.
+late-source waiting enters attention after eight attempts and is woken by a
+matching source publication. A job in backoff does not block ready successors.
+Only one job may run per repository; an expired running lease must be recovered
+before another job is claimed. Context and memory order follows verified Git
+ancestry and immutable completion evidence, independently of job arrival order.
 
 Processing is at least once. Immutable source/completion receipts and existing ref
 CAS make repeated execution idempotent. Delivery status is separate from graph

@@ -62,7 +62,7 @@ const claimPRJobSQL = `SELECT j.payload FROM pr_promotion_jobs j
  AND j.state IN ('waiting','retrying','running') AND j.next_attempt<=$3
  AND (j.state<>'running' OR j.lease_until<=$3)
  AND NOT EXISTS(SELECT 1 FROM pr_promotion_jobs p WHERE p.repo_id=j.repo_id AND p.id<>j.id AND p.state='running')
- AND (j.state='running' OR NOT EXISTS(SELECT 1 FROM pr_promotion_jobs p WHERE p.repo_id=j.repo_id AND p.state IN ('waiting','retrying','running') AND (p.created_at,p.id)<(j.created_at,j.id)))
+ AND (j.state='running' OR NOT EXISTS(SELECT 1 FROM pr_promotion_jobs p WHERE p.repo_id=j.repo_id AND p.state IN ('waiting','retrying','running') AND p.next_attempt<=$3 AND (p.created_at,p.id)<(j.created_at,j.id)))
  ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`
 
 func (s *PostgresStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash, id string, now time.Time, lease time.Duration) (domain.PRPromotionJob, error) {
