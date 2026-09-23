@@ -43,6 +43,7 @@ for (const kind of ['organization', 'enterprise'] as const) {
    await expect(other.locator('.profile-name')).toHaveText('Invitation Space');
    await page.getByRole('button',{name:'Refresh invitations',exact:true}).click();
    await expect(page.locator('.collaboration-invitations .management-rows')).toContainText('Accepted');
+   if (kind === 'organization') await expect(page.locator('.organization-member-list')).toContainText(guest.username);
    await page.screenshot({path:testInfo.outputPath(`${kind}-invitations.png`),fullPage:true});
    expect(errors).toEqual([]);expect(guestErrors).toEqual([]);
   } finally {await recipientContext.close();}

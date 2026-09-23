@@ -398,7 +398,7 @@ export const en: Messages = {
     emergencySessionNotice: 'This is a break-glass session. It is read-only, time-limited, and every use is audited.',
     userId: 'Username (@handle)',
     addMember: 'Add member',
-    memberAccessNote: 'Organization Owners administer every repository in the organization, including private repositories. Admins and members need separate repository or team grants.',
+    memberAccessNote: 'Organization Owners administer every repository in the organization, including private repositories. Admins and members receive access from the organization baseline, teams, or direct repository grants.',
     changeRole: "Change {name}'s Organization role",
     lastOwnerRequired: 'An Organization must always retain at least one Owner.',
     policyEnforcedOnly: 'Only policies actively enforced by the server appear here.',

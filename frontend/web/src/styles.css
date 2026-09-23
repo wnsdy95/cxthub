@@ -759,8 +759,10 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .organization-policy-list { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; }
 .organization-policy-list .policy-row input[type="number"] { width: 92px; }
 .organization-save { margin-top: 14px; }
-.organization-audit-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(120px, auto) auto;
-  align-items: baseline; gap: 4px 14px; padding: 12px 14px; border-top: 1px solid var(--line); font-size: 0.76rem; }
+.organization-audit-row { display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  padding: 12px 14px; border-top: 1px solid var(--line); font-size: 0.76rem; overflow-wrap: anywhere; }
+.organization-audit-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; }
+.organization-audit-meta time { white-space: nowrap; }
 .organization-audit-row code, .organization-audit-row time { color: var(--muted); font-size: 0.68rem; }
 .organization-audit-row p { grid-column: 1 / -1; margin: 4px 0 0; color: var(--text); }
 .organization-settings-form { max-width: 560px; margin-top: 16px; }
@@ -1272,3 +1274,5 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .invitation-page { max-width: 48rem; margin: 4rem auto; padding: 1.5rem; }
 .invitation-page small { display: block; color: var(--muted); }
 .invitation-page .management-form { margin-top: 1.5rem; }
+
+.management-rows small { display: block; margin-top: 4px; color: var(--muted); font-size: .76rem; }

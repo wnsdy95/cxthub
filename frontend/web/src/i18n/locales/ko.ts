@@ -401,7 +401,7 @@ export const ko = {
     emergencySessionNotice: 'Break-glass 세션입니다. 읽기만 가능하며 모든 사용이 감사 로그에 남습니다.',
     userId: '사용자 이름 (@handle)',
     addMember: '멤버 추가',
-    memberAccessNote: '조직 소유자는 비공개를 포함한 조직의 모든 레포지토리를 관리합니다. 관리자와 멤버는 별도의 레포지토리 또는 팀 권한이 필요합니다.',
+    memberAccessNote: '조직 소유자는 비공개를 포함한 조직의 모든 레포지토리를 관리합니다. 관리자와 멤버의 접근 권한은 조직 기본 권한, 팀 권한, 직접 부여한 레포지토리 권한으로 결정됩니다.',
     changeRole: '{name} 조직 역할 변경',
     lastOwnerRequired: '조직에는 Owner가 최소 한 명 있어야 합니다.',
     policyEnforcedOnly: '아래에는 현재 서버에서 실제로 강제하는 정책만 표시됩니다.',

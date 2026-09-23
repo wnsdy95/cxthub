@@ -526,8 +526,10 @@ function OrganizationAudit({ organizationId }: { organizationId: string }) {
                 <span>{[event.target_type, event.target_id].filter(Boolean).join(' · ')}</span>
               )}
               {event.reason && <p>{event.reason}</p>}
-              {event.correlation_id && <code>{event.correlation_id}</code>}
-              <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString()}</time>
+              <div className="organization-audit-meta">
+                {event.correlation_id && <code>{event.correlation_id}</code>}
+                <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString()}</time>
+              </div>
             </div>
           ))}
         </div>

@@ -27,7 +27,7 @@ export function InvitationManager({ kind, spaceId, owner }: { kind: 'organizatio
    <button disabled={create.isPending || !recipient.trim()}>{t('invitations.create')}</button>
   </form>
   {error && <p className="err" role="alert">{error.message}</p>}
-  <button className="ghost mini" onClick={()=>void query.refetch()} disabled={query.isFetching}>{t('invitations.refresh')}</button>
+  <button className="ghost mini" onClick={()=>void Promise.all([query.refetch(), qc.invalidateQueries({queryKey: [kind === 'organization' ? 'organization-members' : 'enterpriseMembers', spaceId]})])} disabled={query.isFetching}>{t('invitations.refresh')}</button>
   <ul className="management-rows">{query.data?.map(invite=><li key={invite.id}>
    <InvitationDescription invite={invite} />
    {invite.status === 'pending' && <CopyInvitation invite={invite} />}
