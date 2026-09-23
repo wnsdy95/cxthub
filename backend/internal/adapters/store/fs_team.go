@@ -63,6 +63,27 @@ func (s *FSStore) GetTeam(_ context.Context, id string) (domain.Team, error) {
 	}
 	return t, nil
 }
+
+func (s *FSStore) UpdateTeam(ctx context.Context, team domain.Team) error {
+	if err := domain.ValidateTeam(team); err != nil {
+		return err
+	}
+	lock := s.organizationMutationLock()
+	lock.Lock()
+	defer lock.Unlock()
+	current, err := s.GetTeam(ctx, team.ID)
+	if err != nil {
+		return err
+	}
+	if current.OrganizationID != team.OrganizationID || current.Slug != team.Slug || !current.CreatedAt.Equal(team.CreatedAt) {
+		return domain.ErrConflict
+	}
+	data, err := json.Marshal(team)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(s.teamPath(team.ID), data)
+}
 func readTeamRecords[T any](dir string, validate func(string, T) error) ([]T, error) {
 	out := []T{}
 	entries, err := os.ReadDir(dir)

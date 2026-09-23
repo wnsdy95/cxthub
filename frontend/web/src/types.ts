@@ -102,6 +102,7 @@ export interface OrganizationPolicy {
   organization_id: string;
   repository_creation: 'admins' | 'members';
   default_repository_visibility: 'private' | 'public';
+  default_repository_role?: '' | import('./roles').Role;
   allow_public_repositories: boolean;
   break_glass_enabled: boolean;
   break_glass_max_minutes: number;
@@ -110,6 +111,7 @@ export interface OrganizationPolicy {
 }
 
 export interface OrganizationAuditEvent {
+  correlation_id?: string;
   id: string;
   organization_id: string;
   actor_id: string;
@@ -600,3 +602,21 @@ export interface EnterprisePolicy { repository_creation: 'admins' | 'members'; a
 export interface Enterprise { id: string; name: string; slug: string; logo?: string; policy: EnterprisePolicy; created_by: string; created_at: string }
 export interface EnterpriseMembership { user?: Pick<User, 'id' | 'username' | 'name' | 'nickname'>; enterprise_id: string; user_id: string; role: 'owner' | 'admin' | 'member'; created_at: string }
 export interface EnterpriseAuditEvent { id: string; enterprise_id: string; actor_id: string; action: string; target_id: string; created_at: string }
+
+export interface CollaborationInvitation {
+ id: string;
+ kind: 'organization' | 'enterprise';
+ space_id: string;
+ space_name: string;
+ space_path: string;
+ email: string;
+ recipient_id?: string;
+ role: OrganizationRole;
+ status: 'pending' | 'accepted' | 'revoked' | 'expired';
+ created_at: string;
+ expires_at: string;
+ updated_at: string;
+}
+
+export interface MCPApplication { client_id:string; name:string; scope:string; created_at:string; expires_at:string }
+export interface AccountAuditEvent { id:string; user_id:string; client_id:string; action:string; created_at:string }

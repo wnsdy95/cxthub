@@ -1170,16 +1170,25 @@ components:
         organization_id: { type: string }
         repository_creation: { type: string, enum: [admins, members] }
         default_repository_visibility: { type: string, enum: [private, public] }
+        default_repository_role: { type: string, enum: ["", viewer, puller, member, maintainer, owner], description: "Baseline for current organization members; only an owner may change it. Empty means none." }
         allow_public_repositories: { type: boolean }
         break_glass_enabled: { type: boolean }
         break_glass_max_minutes: { type: integer, minimum: 5, maximum: 240 }
         updated_by: { type: string }
         updated_at: { type: string, format: date-time }
 
+    OrganizationAuditPage:
+      type: object
+      required: [events]
+      properties:
+        events: { type: array, items: { $ref: "#/components/schemas/OrganizationAuditEvent" } }
+        next_cursor: { type: string }
+
     OrganizationAuditEvent:
       type: object
       required: [id, organization_id, actor_id, action, created_at]
       properties:
+        correlation_id: { type: string, description: "Server request identifier; never an authorization or retry token." }
         id: { type: string }
         organization_id: { type: string }
         actor_id: { type: string }
@@ -1318,6 +1327,42 @@ components:
         remote_url: {"type": "string", "format": "uri"}
         canonical_path: {"type": "string"}
 
+    CollaborationInvitation:
+      type: object
+      required: [id, kind, space_id, email, role, status, created_by, created_at, expires_at, updated_at, space_name, space_path]
+      properties:
+        id: {type: string, pattern: '^ci_[a-f0-9]{32}$'}
+        kind: {type: string, enum: [organization, enterprise]}
+        space_id: {type: string}
+        email: {type: string, format: email}
+        recipient_id: {type: string}
+        role: {type: string, enum: [member, admin, owner]}
+        status: {type: string, enum: [pending, accepted, revoked, expired]}
+        created_by: {type: string}
+        accepted_by: {type: string}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        space_name: {type: string}
+        space_path: {type: string}
+    MCPApplication:
+      type: object
+      required: [client_id, name, scope, created_at, expires_at]
+      properties:
+        client_id: {type: string}
+        name: {type: string}
+        scope: {type: string, const: 'mcp:read'}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+    AccountAuditEvent:
+      type: object
+      required: [id, user_id, client_id, action, created_at]
+      properties:
+        id: {type: string}
+        user_id: {type: string}
+        client_id: {type: string}
+        action: {type: string, enum: [mcp.authorized, mcp.revoked]}
+        created_at: {type: string, format: date-time}
     Team:
       type: object
       properties:
@@ -4747,6 +4792,8 @@ paths:
               properties:
                 repository_creation: { type: string, enum: [admins, members] }
                 default_repository_visibility: { type: string, enum: [private, public] }
+                default_repository_role: { type: string, enum: ["", viewer, puller, member, maintainer, owner] }
+                expected_updated_at: { type: string, format: date-time }
                 allow_public_repositories: { type: boolean }
                 break_glass_enabled: { type: boolean }
                 break_glass_max_minutes: { type: integer, minimum: 5, maximum: 240 }
@@ -4791,6 +4838,42 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Repository" }
+
+  /organizations/{organizationID}/audit/page:
+    parameters: *organizationIDParam
+    get:
+      operationId: organizationAuditPage
+      summary: Read a stable page of organization audit records (admin or owner)
+      tags: [organizations]
+      parameters: &auditPageParameters
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        "200":
+          description: Newest first by timestamp and event ID; follow next_cursor for older records.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizationAuditPage" }
+        "400": { description: Invalid limit or cursor }
+        "403": { description: Current organization admin or owner required }
+
+  /organizations/{organizationID}/audit/export:
+    parameters: *organizationIDParam
+    get:
+      operationId: exportOrganizationAudit
+      summary: Export one authorized audit page as JSONL
+      tags: [organizations]
+      parameters: *auditPageParameters
+      responses:
+        "200":
+          description: Follow X-Next-Cursor for the next export page. No secret payloads are recorded.
+          headers:
+            X-Next-Cursor: { schema: { type: string } }
+          content:
+            application/x-ndjson:
+              schema: { type: string }
+        "400": { description: Invalid limit or cursor }
+        "403": { description: Current organization admin or owner required }
 
   /organizations/{organizationID}/audit:
     parameters: *organizationIDParam
@@ -4948,6 +5031,38 @@ paths:
           description: Invalid request
 
   /organizations/{organizationID}/teams/{teamID}:
+    patch:
+      summary: "Edit team display name and description with an editing baseline"
+      parameters:
+        - {name: organizationID, in: path, required: true, schema: {type: string}}
+        - {name: teamID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, expected]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 100}
+                description: {type: string, maxLength: 1000}
+                expected:
+                  type: object
+                  required: [name]
+                  properties:
+                    name: {type: string}
+                    description: {type: string}
+      responses:
+        "200":
+          description: Team updated; membership, slug and grants preserved
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Team'}
+        "401": {description: Authentication required}
+        "403": {description: Team maintainer or organization administrator required}
+        "404": {description: Team not found in this organization}
+        "409": {description: Team changed since editing began; preserve the draft and reload}
+        "422": {description: Invalid profile or missing editing baseline}
     delete:
       summary: "Delete a team and revoke its repository grants"
       parameters:
@@ -5429,3 +5544,256 @@ tags:
     description: "repository settings (publicity/policy/GitHub sync) · members (5 roles) · invite · ownership transfer."
   - name: organizations
     description: "Global Organization namespace, separate 3-role administration plane, enforced policy, audit, and owner-only break-glass."
+
+  /organizations/{organizationID}/invitations:
+    parameters:
+      - name: organizationID
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      summary: List invitations for administrators of this space
+      responses:
+        "200":
+          description: Invitations, including expired and cancelled records
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/CollaborationInvitation'}
+        "403": {description: Current administrator role required}
+    post:
+      summary: Invite a specific verified account; no email is sent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipient]
+              properties:
+                recipient: {type: string, description: 'Email or @username'}
+                role: {type: string, enum: [member, admin, owner], default: member}
+                days: {type: integer, minimum: 1, maximum: 30, default: 7}
+      responses:
+        "200":
+          description: Invitation created without granting membership
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CollaborationInvitation'}
+        "403": {description: Insufficient current authority to grant this role}
+        "409": {description: An unexpired invitation for this recipient already exists}
+
+  /enterprises/{enterpriseID}/invitations:
+    parameters:
+      - name: enterpriseID
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      summary: List invitations for administrators of this space
+      responses:
+        "200":
+          description: Invitations, including expired and cancelled records
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/CollaborationInvitation'}
+        "403": {description: Current administrator role required}
+    post:
+      summary: Invite a specific verified account; no email is sent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipient]
+              properties:
+                recipient: {type: string, description: 'Email or @username'}
+                role: {type: string, enum: [member, admin, owner], default: member}
+                days: {type: integer, minimum: 1, maximum: 30, default: 7}
+      responses:
+        "200":
+          description: Invitation created without granting membership
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CollaborationInvitation'}
+        "403": {description: Insufficient current authority to grant this role}
+        "409": {description: An unexpired invitation for this recipient already exists}
+
+  /me/invitations:
+    get:
+      summary: List pending unexpired invitations addressed to the signed-in account
+      responses:
+        "200":
+          description: Recipient inbox
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/CollaborationInvitation'}
+  /invitations/{invitationID}:
+    parameters:
+      - name: invitationID
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      summary: Read an invitation as its recipient or a space administrator
+      responses:
+        "200":
+          description: Invitation details
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CollaborationInvitation'}
+        "404": {description: Not found or not visible to this account}
+  /invitations/{invitationID}/{action}:
+    parameters:
+      - name: invitationID
+        in: path
+        required: true
+        schema: {type: string}
+      - name: action
+        in: path
+        required: true
+        schema: {type: string, enum: [accept, decline, revoke, resend]}
+    post:
+      summary: Accept, decline, cancel, or renew an invitation atomically with membership and audit
+      description: Acceptance rechecks the inviter's current authority. Renewing cancels the old ID and creates a new seven-day invitation. A consumed link cannot restore removed membership.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false}
+      responses:
+        "200":
+          description: Updated invitation, or the new invitation when renewing
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CollaborationInvitation'}
+        "403": {description: Wrong recipient or inviter no longer authorized}
+        "409": {description: Expired, cancelled, consumed, or conflicting invitation}
+
+  /organizations/{organizationID}/rename:
+    parameters:
+      - name: organizationID
+        in: path
+        required: true
+        schema: {type: string}
+    post:
+      summary: Owner renames the space with historical URL aliases retained
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_slug, slug]
+              properties:
+                expected_slug: {type: string}
+                slug: {type: string}
+      responses:
+        "200":
+          description: Canonical navigation target
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: {type: string}
+        "403": {description: Space owner required}
+        "409": {description: Stale editing baseline or reserved URL}
+
+  /enterprises/{enterpriseID}/rename:
+    parameters:
+      - name: enterpriseID
+        in: path
+        required: true
+        schema: {type: string}
+    post:
+      summary: Owner renames the space with historical URL aliases retained
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_slug, slug]
+              properties:
+                expected_slug: {type: string}
+                slug: {type: string}
+      responses:
+        "200":
+          description: Canonical navigation target
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: {type: string}
+        "403": {description: Space owner required}
+        "409": {description: Stale editing baseline or reserved URL}
+
+  /repositories/{repositoryID}/transfer-namespace:
+    parameters:
+      - name: repositoryID
+        in: path
+        required: true
+        schema: {type: string}
+    post:
+      summary: Move a repository between spaces controlled by the caller
+      description: Requires personal ownership or Organization Owner on both sides. Retains stable content and repository IDs, historical aliases and direct members. Removes source organization team grants. Public repositories cannot move into organizations forbidding public repositories.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_namespace_id, expected_slug, destination]
+              properties:
+                expected_namespace_id: {type: string}
+                expected_slug: {type: string}
+                destination: {type: string, description: Destination personal or organization slug}
+      responses:
+        "200":
+          description: Transferred repository
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Repository'}
+        "403": {description: Caller does not control both spaces}
+        "409": {description: Stale baseline, destination policy, or URL conflict}
+
+  /me/mcp-applications:
+    get:
+      summary: List the signed-in user's active MCP applications without token values
+      responses:
+        "200":
+          description: One entry per OAuth client
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/MCPApplication'}
+  /me/mcp-applications/{clientID}:
+    parameters:
+      - name: clientID
+        in: path
+        required: true
+        schema: {type: string}
+    delete:
+      summary: Revoke all access/refresh tokens and unused authorization codes for this user and client
+      responses:
+        "200": {description: Revoked with an account audit event; other users and clients are unaffected}
+  /me/audit:
+    get:
+      summary: List the signed-in user's most recent 100 MCP authorization and revocation events
+      responses:
+        "200":
+          description: Account audit records with no token values
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/AccountAuditEvent'}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 func (s *IdentityService) ensurePersonalNamespace(ctx context.Context, user domain.User) (domain.Namespace, error) {
@@ -40,9 +41,10 @@ func (s *IdentityService) ensurePersonalNamespace(ctx context.Context, user doma
 	return ns, nil
 }
 
-func organizationAudit(organizationID, actorID, action, targetType, targetID, reason string, now time.Time) domain.OrganizationAuditEvent {
+func organizationAudit(ctx context.Context, organizationID, actorID, action, targetType, targetID, reason string, now time.Time) domain.OrganizationAuditEvent {
 	return domain.OrganizationAuditEvent{
 		ID:             domain.NewID("aud_"),
+		CorrelationID:  inbound.Correlation(ctx),
 		OrganizationID: organizationID,
 		ActorID:        actorID,
 		Action:         action,
@@ -89,7 +91,7 @@ func (s *IdentityService) mutateCreateOrganization(ctx context.Context, creator 
 	owner := domain.OrganizationMembership{OrganizationID: organizationRecord.ID, UserID: creator.ID, Role: domain.OrganizationOwner, CreatedAt: now}
 	policy := domain.DefaultOrganizationPolicy(organizationRecord.ID)
 	policy.UpdatedBy, policy.UpdatedAt = creator.ID, now
-	audit := organizationAudit(organizationRecord.ID, creator.ID, "organization.created", "organization", organizationRecord.ID, "", now)
+	audit := organizationAudit(ctx, organizationRecord.ID, creator.ID, "organization.created", "organization", organizationRecord.ID, "", now)
 	if err := s.organization.CreateOrganization(ctx, organizationRecord, ns, owner, policy, audit); err != nil {
 		return domain.Organization{}, err
 	}
@@ -132,7 +134,7 @@ func (s *IdentityService) mutateUpdateOrganizationProfile(ctx context.Context, a
 		return domain.Organization{}, err
 	}
 	now := time.Now().UTC()
-	audit := organizationAudit(organizationID, actorID, "organization.profile.updated", "organization", organizationID, "", now)
+	audit := organizationAudit(ctx, organizationID, actorID, "organization.profile.updated", "organization", organizationID, "", now)
 	if err := s.organization.UpdateOrganizationWithAudit(ctx, organizationRecord, audit); err != nil {
 		return domain.Organization{}, err
 	}
@@ -216,7 +218,7 @@ func (s *IdentityService) mutateUpdateOrganizationMember(ctx context.Context, ac
 	}
 	now := time.Now().UTC()
 	membership := domain.OrganizationMembership{OrganizationID: organizationID, UserID: targetID, Role: role, CreatedAt: now}
-	audit := organizationAudit(organizationID, actorID, "organization.member.updated", "user", targetID, string(role), now)
+	audit := organizationAudit(ctx, organizationID, actorID, "organization.member.updated", "user", targetID, string(role), now)
 	return s.organization.AddOrganizationMemberWithAudit(ctx, membership, audit)
 }
 
@@ -253,7 +255,7 @@ func (s *IdentityService) mutateRemoveOrganizationMember(ctx context.Context, ac
 	if err := s.checkOrganizationRemoval(ctx, actorID, organizationID, targetID); err != nil {
 		return err
 	}
-	audit := organizationAudit(organizationID, actorID, "organization.member.removed", "user", targetID, "", time.Now().UTC())
+	audit := organizationAudit(ctx, organizationID, actorID, "organization.member.removed", "user", targetID, "", time.Now().UTC())
 	return s.organization.RemoveOrganizationMemberWithAudit(ctx, organizationID, targetID, audit)
 }
 
@@ -269,11 +271,21 @@ func (s *IdentityService) mutateUpdateOrganizationPolicy(ctx context.Context, ac
 	if !ok || !role.AtLeast(domain.OrganizationAdmin) {
 		return domain.OrganizationPolicy{}, domain.ErrForbidden
 	}
+	current, err := s.organization.GetOrganizationPolicy(ctx, policy.OrganizationID)
+	if err != nil {
+		return domain.OrganizationPolicy{}, err
+	}
+	if current.DefaultRepositoryRole != policy.DefaultRepositoryRole && role != domain.OrganizationOwner {
+		return domain.OrganizationPolicy{}, domain.ErrForbidden
+	}
+	if !policy.UpdatedAt.IsZero() && !policy.UpdatedAt.Equal(current.UpdatedAt) {
+		return domain.OrganizationPolicy{}, domain.ErrConflict
+	}
 	policy.UpdatedBy, policy.UpdatedAt = actorID, time.Now().UTC()
 	if err := domain.ValidateOrganizationPolicy(policy); err != nil {
 		return domain.OrganizationPolicy{}, err
 	}
-	audit := organizationAudit(policy.OrganizationID, actorID, "organization.policy.updated", "organization", policy.OrganizationID, "", policy.UpdatedAt)
+	audit := organizationAudit(ctx, policy.OrganizationID, actorID, "organization.policy.updated", "organization", policy.OrganizationID, "", policy.UpdatedAt)
 	if err := s.organization.PutOrganizationPolicyWithAudit(ctx, policy, audit); err != nil {
 		return domain.OrganizationPolicy{}, err
 	}
@@ -323,7 +335,7 @@ func (s *IdentityService) mutateCreateOrganizationRepository(ctx context.Context
 		CreatedAt:        now,
 	}
 	owner := domain.Membership{RepositoryID: repository.ID, UserID: actor.ID, Role: domain.RoleOwner, CreatedAt: now}
-	audit := organizationAudit(organizationID, actor.ID, "organization.repository.created", "repository", repository.ID, "", now)
+	audit := organizationAudit(ctx, organizationID, actor.ID, "organization.repository.created", "repository", repository.ID, "", now)
 	if err := s.organization.CreateOrganizationRepositoryWithAudit(ctx, repository, owner, audit); err != nil {
 		return domain.Repository{}, err
 	}
@@ -393,7 +405,7 @@ func (s *IdentityService) mutateCreateBreakGlassGrant(ctx context.Context, actor
 	if err := domain.ValidateBreakGlassGrant(grant); err != nil {
 		return domain.BreakGlassGrant{}, err
 	}
-	created := organizationAudit(organizationID, actorID, "organization.break_glass.created", "repository", repositoryID, grant.Reason, now)
+	created := organizationAudit(ctx, organizationID, actorID, "organization.break_glass.created", "repository", repositoryID, grant.Reason, now)
 	if err := s.organization.CreateBreakGlassGrantWithAudit(ctx, grant, created); err != nil {
 		return domain.BreakGlassGrant{}, err
 	}
@@ -424,7 +436,7 @@ func (s *IdentityService) HasBreakGlassAccess(ctx context.Context, repositoryID,
 		return false, nil
 	}
 	now := time.Now().UTC()
-	used := organizationAudit(ns.OrganizationID, userID, "organization.break_glass.used", "repository", repositoryID, "", now)
+	used := organizationAudit(ctx, ns.OrganizationID, userID, "organization.break_glass.used", "repository", repositoryID, "", now)
 	_, err = s.organization.UseActiveBreakGlassGrant(ctx, ns.OrganizationID, repositoryID, userID, now, used)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -484,7 +496,7 @@ func (s *IdentityService) OffboardOrganizationMember(ctx context.Context, actor,
 				return err
 			}
 		}
-		audit := organizationAudit(org, actor, "organization.member.removed", "user", target, "repository_access="+access, time.Now().UTC())
+		audit := organizationAudit(ctx, org, actor, "organization.member.removed", "user", target, "repository_access="+access, time.Now().UTC())
 		return s.organization.RemoveOrganizationMemberWithAudit(ctx, org, target, audit)
 	})
 }

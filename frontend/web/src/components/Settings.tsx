@@ -1,3 +1,5 @@
+import { MCPApplications } from './MCPApplications';
+import { TransferNamespace } from './NamespaceAdministration';
 import { GitHubSyncCheck } from './GitHubSyncCheck';
 import { NotificationHistory } from './NotificationHistory';
 import { PersonalStorageUsage } from './StorageUsage';
@@ -188,6 +190,7 @@ export function AccountSettings({ user, trigger = 'gear' }: { user: User; trigge
               <PersonalStorageUsage />
               <CliTokenSection />
               <WebSessionSection />
+              <MCPApplications />
 
               <div className="modal-actions">
                 <button type="button" className="ghost" onClick={() => setOpen(false)}>
@@ -684,6 +687,7 @@ export function RepositorySettings({ repositoryMetadata }: { repositoryMetadata:
               <NotificationHistory repository={repositoryMetadata.id} />
               <ArchiveSection repositoryMetadata={repositoryMetadata} />
               <SlugSection repositoryMetadata={repositoryMetadata} />
+              <TransferNamespace key={repositoryMetadata.owner_namespace_id} repository={repositoryMetadata} />
               {repositoryMetadata.can_transfer_ownership && <TransferSection repositoryMetadata={repositoryMetadata} members={members} onDone={() => {}} />}
     </form>
   );

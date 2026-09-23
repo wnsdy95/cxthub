@@ -93,9 +93,15 @@ export function useUpdateOrganizationPolicy() {
   return useMutation({
     mutationFn: (v: {
       organizationId: string;
-      patch: Partial<Omit<import('./types').OrganizationPolicy, 'organization_id' | 'updated_by' | 'updated_at'>>;
+      patch: Partial<Omit<import('./types').OrganizationPolicy, 'organization_id' | 'updated_by' | 'updated_at'>> & { expected_updated_at?: string };
     }) => api.updateOrganizationPolicy(v.organizationId, v.patch),
-    onSuccess: (policy) => qc.setQueryData(['organization-policy', policy.organization_id], policy),
+    onSuccess: async (policy) => {
+      qc.setQueryData(['organization-policy', policy.organization_id], policy);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['repositories'] }),
+        qc.invalidateQueries({ queryKey: ['organization-repositories', policy.organization_id] }),
+      ]);
+    },
   });
 }
 export function useOrganizationRepositories(organizationId: string | null) {

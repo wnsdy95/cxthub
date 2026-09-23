@@ -649,32 +649,11 @@ func (s *FSStore) AppendOrganizationAudit(_ context.Context, event domain.Organi
 	return writeAtomic(filepath.Join(s.organizationAuditDir(), event.OrganizationID, name), data)
 }
 
-func (s *FSStore) ListOrganizationAudit(_ context.Context, organizationID string, limit int) ([]domain.OrganizationAuditEvent, error) {
-	if err := domain.ValidateOrganizationID(organizationID); err != nil {
-		return nil, err
-	}
+func (s *FSStore) ListOrganizationAudit(ctx context.Context, organizationID string, limit int) ([]domain.OrganizationAuditEvent, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	entries, err := os.ReadDir(filepath.Join(s.organizationAuditDir(), organizationID))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []domain.OrganizationAuditEvent{}, nil
-		}
-		return nil, err
-	}
-	var out []domain.OrganizationAuditEvent
-	for i := len(entries) - 1; i >= 0 && len(out) < limit; i-- {
-		entry := entries[i]
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		var event domain.OrganizationAuditEvent
-		if readJSON(filepath.Join(s.organizationAuditDir(), organizationID, entry.Name()), &event) == nil {
-			out = append(out, event)
-		}
-	}
-	return out, nil
+	return s.OrganizationAuditBefore(ctx, domain.AuditCursor{OrganizationID: organizationID}, limit)
 }
 
 func (s *FSStore) CreateBreakGlassGrant(_ context.Context, grant domain.BreakGlassGrant) error {

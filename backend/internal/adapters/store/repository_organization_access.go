@@ -40,8 +40,12 @@ func readRepositoryOrganizationAccess(ctx context.Context, st repositoryOrganiza
 	if err != nil {
 		return empty, err
 	}
+	policy, err := st.GetOrganizationPolicy(ctx, organization.ID)
+	if err != nil {
+		return empty, err
+	}
 	return domain.OrganizationRepositoryAccess{
-		RepositoryID: id, OrganizationNamespaceID: namespace.ID, UserID: member.UserID, Role: member.Role,
+		RepositoryID: id, OrganizationNamespaceID: namespace.ID, UserID: member.UserID, Role: member.Role, DefaultRepositoryRole: policy.DefaultRepositoryRole,
 	}, nil
 }
 

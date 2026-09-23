@@ -97,6 +97,9 @@ func EffectiveRepositoryRole(repository Repository, members []Membership, actor 
 	if organization.IsOwnerOf(repository, actor) {
 		return RoleOwner, true
 	}
+	if base, present := organization.BaseRoleFor(repository, actor); present && (!ok || RoleRank(base) > RoleRank(role)) {
+		role, ok = base, true
+	}
 	for _, grant := range teams {
 		if grant.UserID != actor || grant.RepositoryID != repository.ID || !grant.OrganizationMember || !grant.TeamMember || grant.OrganizationNamespaceID == "" || grant.OrganizationNamespaceID != repository.OwnerNamespaceID || !ValidRole(grant.Role) {
 			continue

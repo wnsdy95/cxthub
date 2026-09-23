@@ -75,6 +75,12 @@ test('real server enforces organization teams and enterprise policy through the 
   await page.getByLabel('Team slug',{exact:true}).fill('backend');
   await page.getByRole('button',{name:'Create team',exact:true}).click();
   await expect(page.locator('.management-detail h3')).toHaveText('Backend');
+  await page.getByText('Edit team details', {exact:true}).click();
+  const edit = page.locator('.management-detail details');
+  await edit.getByLabel('Team name', {exact:true}).fill('Platform');
+  await edit.getByLabel('Description', {exact:true}).fill('API and storage');
+  await edit.getByRole('button', {name:'Save',exact:true}).click();
+  await expect(page.locator('.management-detail h3')).toHaveText('Platform');
   await page.getByRole('combobox',{name:'Select an organization member'}).selectOption(teammate.id);
   await page.getByRole('button',{name:'Add member',exact:true}).click();
   await expect(page.locator('.management-rows').first()).toContainText('Team Member');

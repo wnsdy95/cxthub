@@ -58,7 +58,7 @@ func (s *IdentityService) CreateTeam(ctx context.Context, actor, org, name, slug
 		if err := s.teams.CreateTeam(ctx, team); err != nil {
 			return domain.Team{}, err
 		}
-		err := s.organization.AppendOrganizationAudit(ctx, organizationAudit(org, actor, "team.created", "team", team.ID, "", time.Now().UTC()))
+		err := s.organization.AppendOrganizationAudit(ctx, organizationAudit(ctx, org, actor, "team.created", "team", team.ID, "", time.Now().UTC()))
 		return team, err
 	})
 }
@@ -70,6 +70,36 @@ func (s *IdentityService) ListTeams(ctx context.Context, actor, org string) ([]d
 		return nil, domain.ErrForbidden
 	}
 	return s.teams.ListTeams(ctx, org)
+}
+
+// TeamProfile is an editing baseline as well as a replacement. Slug/identity,
+// memberships and grants are outside the display-profile edit contract.
+type TeamProfile struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func (s *IdentityService) UpdateTeam(ctx context.Context, actor, org, id string, expected, next TeamProfile) (domain.Team, error) {
+	return identityResult(ctx, s, func(ctx context.Context) (domain.Team, error) {
+		team, err := s.teamForActor(ctx, actor, org, id, true)
+		if err != nil {
+			return domain.Team{}, err
+		}
+		if team.Name != expected.Name || team.Description != expected.Description {
+			return domain.Team{}, domain.ErrConflict
+		}
+		team.Name, team.Description = strings.TrimSpace(next.Name), strings.TrimSpace(next.Description)
+		if err := domain.ValidateTeam(team); err != nil {
+			return domain.Team{}, err
+		}
+		if err := s.teams.UpdateTeam(ctx, team); err != nil {
+			return domain.Team{}, err
+		}
+		if err := s.organization.AppendOrganizationAudit(ctx, organizationAudit(ctx, org, actor, "team.profile.updated", "team", id, "", time.Now().UTC())); err != nil {
+			return domain.Team{}, err
+		}
+		return team, nil
+	})
 }
 func (s *IdentityService) DeleteTeam(ctx context.Context, actor, org, id string) error {
 	return s.withIdentity(ctx, func(ctx context.Context) error {
@@ -83,7 +113,7 @@ func (s *IdentityService) DeleteTeam(ctx context.Context, actor, org, id string)
 		if err := s.teams.DeleteTeam(ctx, id); err != nil {
 			return err
 		}
-		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(org, actor, "team.deleted", "team", id, "", time.Now().UTC()))
+		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(ctx, org, actor, "team.deleted", "team", id, "", time.Now().UTC()))
 	})
 }
 func (s *IdentityService) ListTeamMembers(ctx context.Context, actor, org, id string) ([]domain.TeamMembership, error) {
@@ -107,7 +137,7 @@ func (s *IdentityService) UpdateTeamMember(ctx context.Context, actor, org, id, 
 		if err := s.teams.PutTeamMember(ctx, m); err != nil {
 			return err
 		}
-		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(org, actor, "team.member.updated", "team", id, target+":"+string(role), time.Now().UTC()))
+		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(ctx, org, actor, "team.member.updated", "team", id, target+":"+string(role), time.Now().UTC()))
 	})
 }
 func (s *IdentityService) RemoveTeamMember(ctx context.Context, actor, org, id, target string) error {
@@ -118,7 +148,7 @@ func (s *IdentityService) RemoveTeamMember(ctx context.Context, actor, org, id, 
 		if err := s.teams.RemoveTeamMember(ctx, id, target); err != nil {
 			return err
 		}
-		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(org, actor, "team.member.removed", "team", id, target, time.Now().UTC()))
+		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(ctx, org, actor, "team.member.removed", "team", id, target, time.Now().UTC()))
 	})
 }
 func (s *IdentityService) ListTeamRepositories(ctx context.Context, actor, org, id string) ([]domain.TeamRepositoryGrant, error) {
@@ -168,7 +198,7 @@ func (s *IdentityService) SetTeamRepository(ctx context.Context, actor, org, id,
 		if err := s.teams.PutTeamRepositoryGrant(ctx, grant); err != nil {
 			return err
 		}
-		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(org, actor, "team.repository.updated", "team", id, repository+":"+string(role), time.Now().UTC()))
+		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(ctx, org, actor, "team.repository.updated", "team", id, repository+":"+string(role), time.Now().UTC()))
 	})
 }
 func (s *IdentityService) RemoveTeamRepository(ctx context.Context, actor, org, id, repository string) error {
@@ -182,7 +212,7 @@ func (s *IdentityService) RemoveTeamRepository(ctx context.Context, actor, org, 
 		if err := s.teams.RemoveTeamRepositoryGrant(ctx, id, repository); err != nil {
 			return err
 		}
-		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(org, actor, "team.repository.removed", "team", id, repository, time.Now().UTC()))
+		return s.organization.AppendOrganizationAudit(ctx, organizationAudit(ctx, org, actor, "team.repository.removed", "team", id, repository, time.Now().UTC()))
 	})
 }
 

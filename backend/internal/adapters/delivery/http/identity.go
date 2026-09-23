@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"net"
 	"net/http"
 	"strings"
@@ -12,10 +11,14 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 // IdentityBackend is a set of actions called by authentication/repository/invite handlers (app.IdentityService implements).
 type IdentityBackend interface {
+	MCPApplications
+	NamespaceAdministration
+	CollaborationInvitations
 	TeamIdentity
 	EnterpriseIdentity
 	ResolveRepositoryConnection(context.Context, string, string) (app.RepositoryConnection, error)
@@ -67,6 +70,7 @@ type IdentityBackend interface {
 	CreateBreakGlassGrant(ctx context.Context, actorID, organizationID, repositoryID, reason string, minutes int) (domain.BreakGlassGrant, error)
 	HasBreakGlassAccess(ctx context.Context, repositoryID, userID string) (bool, error)
 	ListOrganizationAudit(ctx context.Context, actorID, organizationID string, limit int) ([]domain.OrganizationAuditEvent, error)
+	OrganizationAuditPage(ctx context.Context, actor, organization, cursor string, limit int) (domain.OrganizationAuditPage, error)
 }
 
 type ctxKey int
@@ -208,6 +212,9 @@ func (s *Server) optionalUser(fn http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) registerIdentity(mux *http.ServeMux) {
+	s.registerCollaborationInvitations(mux)
+	s.registerNamespaceAdministration(mux)
+	s.registerMCPApplications(mux)
 	// Session exchange: IDP token (Bearer) → server session token issuance (requireUser not applied — login entry point).
 	mux.HandleFunc("POST /api/v1/auth/session", s.rateLimit(20, time.Minute, s.createSession))
 	// Device flow (CLI token issuance automation) — start is unauthenticated (rate limit), approve is login required.
@@ -265,6 +272,8 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/v1/organizations/{organizationID}/policy", s.requireUser(s.patchOrganizationPolicy))
 	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/repositories", s.requireUser(s.listOrganizationRepositories))
 	mux.HandleFunc("POST /api/v1/organizations/{organizationID}/repositories", s.requireUser(s.createOrganizationRepository))
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/audit/page", s.requireUser(s.organizationAuditPage))
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/audit/export", s.requireUser(s.exportOrganizationAudit))
 	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/audit", s.requireUser(s.listOrganizationAudit))
 	mux.HandleFunc("POST /api/v1/organizations/{organizationID}/break-glass", s.requireUser(s.createBreakGlassGrant))
 }
@@ -795,6 +804,8 @@ func (s *Server) patchOrganizationPolicy(w http.ResponseWriter, r *http.Request)
 	var body struct {
 		RepositoryCreation          *domain.OrganizationRepositoryCreation `json:"repository_creation"`
 		DefaultRepositoryVisibility *domain.Visibility                     `json:"default_repository_visibility"`
+		DefaultRepositoryRole       *domain.MemberRole                     `json:"default_repository_role"`
+		ExpectedUpdatedAt           *time.Time                             `json:"expected_updated_at"`
 		AllowPublicRepositories     *bool                                  `json:"allow_public_repositories"`
 		BreakGlassEnabled           *bool                                  `json:"break_glass_enabled"`
 		BreakGlassMaxMinutes        *int                                   `json:"break_glass_max_minutes"`
@@ -813,6 +824,12 @@ func (s *Server) patchOrganizationPolicy(w http.ResponseWriter, r *http.Request)
 	}
 	if body.DefaultRepositoryVisibility != nil {
 		policy.DefaultRepositoryVisibility = *body.DefaultRepositoryVisibility
+	}
+	if body.DefaultRepositoryRole != nil {
+		policy.DefaultRepositoryRole = *body.DefaultRepositoryRole
+	}
+	if body.ExpectedUpdatedAt != nil {
+		policy.UpdatedAt = *body.ExpectedUpdatedAt
 	}
 	if body.AllowPublicRepositories != nil {
 		policy.AllowPublicRepositories = *body.AllowPublicRepositories

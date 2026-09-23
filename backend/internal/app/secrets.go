@@ -16,7 +16,7 @@ var _ inbound.SaveSecrets = (*Service)(nil)
 // envelope, repository revision and notification outbox share the PostgreSQL
 // transaction. Development FS storage only guarantees the ciphertext byte CAS.
 func (s *Service) SaveSecrets(ctx context.Context, in inbound.SaveSecretsInput) (inbound.SaveSecretsOutput, error) {
-	ctx = inbound.WithRepositoryActor(ctx, in.ActorID)
+	ctx = auditOperation(inbound.WithRepositoryActor(ctx, in.ActorID), "repository.secrets.updated")
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.SaveSecretsOutput{}, err
 	}

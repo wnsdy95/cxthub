@@ -1,3 +1,5 @@
+import { RenameSpace } from './NamespaceAdministration';
+import { InvitationManager } from './CollaborationInvitations';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
@@ -42,7 +44,6 @@ function EnterpriseBody({ enterprise }: { enterprise: Enterprise }) {
  const canAdmin = role === 'owner' || role === 'admin';
  const [tab, setTab] = useState<'organizations' | 'members' | 'policies' | 'audit' | 'settings'>('organizations');
  const [organizationId, setOrganizationId] = useState('');
- const [user, setUser] = useState(''); const [newRole, setNewRole] = useState<EnterpriseMembership['role']>('member');
  const audit = useQuery({ queryKey: ['enterpriseAudit', enterprise.id], queryFn: () => api.listEnterpriseAudit(enterprise.id), enabled: canAdmin && tab === 'audit' });
  const mutation = useMutation({ mutationFn: (run: () => Promise<unknown>) => run(), onSuccess: async () => { await Promise.all([
   qc.invalidateQueries({ queryKey: ['enterprise', enterprise.slug] }), qc.invalidateQueries({ queryKey: ['enterprises'] }),
@@ -65,13 +66,12 @@ function EnterpriseBody({ enterprise }: { enterprise: Enterprise }) {
     <ul className="management-rows">{organizations.data?.map((organization) => <li key={organization.id}><span><button className="linkish" onClick={() => navigate(`/${organization.slug}`)}>{organization.name}</button></span>{role === 'owner' && <button className="ghost mini" disabled={busy} onClick={() => mutation.mutate(() => api.unlinkEnterpriseOrganization(enterprise.id, organization.id))}>{t('enterprise.unlink')}</button>}</li>)}</ul>
    </section>}
    {tab === 'members' && <section>
-    {canAdmin && <form className="management-form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(async () => { await api.setEnterpriseMember(enterprise.id, user.startsWith('@') ? user : `@${user}`, newRole); setUser(''); }); }}>
-     <label>{t('enterprise.userId')}<input value={user} onChange={(event) => setUser(event.target.value)} placeholder="@alice" required /></label><select aria-label={t('dashboard.roleChangeAria')} value={newRole} onChange={(event) => setNewRole(event.target.value as EnterpriseMembership['role'])}>{(role === 'owner' ? ['member', 'admin', 'owner'] : ['member']).map((item) => <option key={item} value={item}>{item}</option>)}</select><button disabled={busy || !user.trim()}>{t('enterprise.addMember')}</button>
-    </form>}
+    {canAdmin && <InvitationManager kind="enterprise" spaceId={enterprise.id} owner={role === 'owner'} />}
     <ul className="management-rows">{members.data?.map((member) => <li key={member.user_id}><span>{memberLabel(member)}</span>{role === 'owner' || role === 'admin' && member.role === 'member' ? <><select aria-label={`${memberLabel(member)} ${t('dashboard.roleChangeAria')}`} value={member.role} disabled={busy} onChange={(event) => { const value = event.target.value as EnterpriseMembership['role']; mutation.mutate(() => api.setEnterpriseMember(enterprise.id, member.user_id, value)); }}>{(role === 'owner' ? ['member', 'admin', 'owner'] : ['member']).map((item) => <option key={item} value={item}>{item}</option>)}</select><button className="ghost mini" disabled={busy} onClick={() => mutation.mutate(() => api.removeEnterpriseMember(enterprise.id, member.user_id))}>{t('common.remove')}</button></> : <span className="role">{member.role}</span>}</li>)}</ul>
    </section>}
    {tab === 'policies' && <EnterprisePolicies key={JSON.stringify(enterprise.policy)} value={enterprise.policy} disabled={!canAdmin || busy} onSave={(policy) => mutation.mutate(() => api.updateEnterprise(enterprise.id, { policy }))} />}
    {tab === 'audit' && canAdmin && <ul className="management-rows">{audit.data?.map((event) => <li key={event.id}><span>{event.action}<small> · {event.target_id}</small></span><time>{new Date(event.created_at).toLocaleString()}</time></li>)}</ul>}
+   {tab === 'settings' && role === 'owner' && <RenameSpace key={enterprise.slug} kind="enterprise" id={enterprise.id} slug={enterprise.slug} />}
    {tab === 'settings' && canAdmin && <EnterpriseSettings enterprise={enterprise} disabled={busy} onSave={(patch) => mutation.mutate(() => api.updateEnterprise(enterprise.id, patch))} />}
   </main>
  </div></div>;

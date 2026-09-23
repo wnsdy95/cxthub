@@ -51,6 +51,20 @@ func (s *PostgresStore) GetTeam(ctx context.Context, id string) (domain.Team, er
 	}
 	return t, domain.ValidateTeam(t)
 }
+
+func (s *PostgresStore) UpdateTeam(ctx context.Context, team domain.Team) error {
+	if err := domain.ValidateTeam(team); err != nil {
+		return err
+	}
+	result, err := s.db(ctx).Exec(ctx, `UPDATE teams SET name=$1,description=$2 WHERE id=$3 AND organization_id=$4 AND slug=$5`, team.Name, team.Description, team.ID, team.OrganizationID, team.Slug)
+	if err != nil {
+		return mapPGConstraint(err)
+	}
+	if result.RowsAffected() != 1 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
 func (s *PostgresStore) ListTeams(ctx context.Context, org string) ([]domain.Team, error) {
 	if err := domain.ValidateOrganizationID(org); err != nil {
 		return nil, err

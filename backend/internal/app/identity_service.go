@@ -660,6 +660,11 @@ func (s *IdentityService) CreateCLIToken(ctx context.Context, userID, label stri
 // existing session store. The refresh token deliberately does not use the
 // sess_ prefix, so it cannot be presented to ordinary API/MCP bearer gates.
 func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientID string) (domain.OAuthTokenPair, error) {
+	return identityResult(ctx, s, func(ctx context.Context) (domain.OAuthTokenPair, error) {
+		return s.issueMCPTokenPair(ctx, userID, clientID)
+	})
+}
+func (s *IdentityService) issueMCPTokenPair(ctx context.Context, userID, clientID string) (domain.OAuthTokenPair, error) {
 	if _, err := s.repositories.GetUser(ctx, userID); err != nil {
 		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 	}
@@ -682,6 +687,11 @@ func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientI
 // returns a new access/refresh pair while atomically consuming the old refresh
 // capability. Refresh tokens are never accepted by ordinary bearer gates.
 func (s *IdentityService) RefreshMCPAccessToken(ctx context.Context, refreshToken, clientID string) (domain.OAuthTokenPair, error) {
+	return identityResult(ctx, s, func(ctx context.Context) (domain.OAuthTokenPair, error) {
+		return s.refreshMCPAccessToken(ctx, refreshToken, clientID)
+	})
+}
+func (s *IdentityService) refreshMCPAccessToken(ctx context.Context, refreshToken, clientID string) (domain.OAuthTokenPair, error) {
 	if !strings.HasPrefix(refreshToken, "refresh_") || clientID == "" {
 		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 	}
@@ -693,7 +703,7 @@ func (s *IdentityService) RefreshMCPAccessToken(ctx context.Context, refreshToke
 	if _, err := s.repositories.GetUser(ctx, sess.UserID); err != nil {
 		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 	}
-	pair, err := s.IssueMCPTokenPair(ctx, sess.UserID, clientID)
+	pair, err := s.issueMCPTokenPair(ctx, sess.UserID, clientID)
 	if err != nil {
 		_ = s.repositories.CreateSession(ctx, sess) // Preserve retry capability if issuance storage failed.
 		return domain.OAuthTokenPair{}, err
@@ -1008,6 +1018,9 @@ func (s *IdentityService) acceptRepositoryInvite(ctx context.Context, user domai
 			Role:         inv.Role,
 			CreatedAt:    time.Now().UTC(),
 		}); err != nil {
+			return domain.Repository{}, err
+		}
+		if err := appendRepositoryAudit(ctx, s.repositories, user.ID, repositoryID, "repository.invitation.accepted"); err != nil {
 			return domain.Repository{}, err
 		}
 	}

@@ -8,12 +8,15 @@ import (
 )
 
 func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error) {
+	ctx = auditOperation(ctx, "context.objects.stored")
 	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, in.RepoID, func(ctx context.Context) (inbound.CommitOutput, error) { return s.commit(ctx, in) })
 }
 func (s *Service) UpdateRef(ctx context.Context, in inbound.UpdateRefInput) (inbound.UpdateRefOutput, error) {
+	ctx = auditOperation(ctx, "context.ref.updated")
 	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.UpdateRefOutput, error) { return s.updateRefWithPending(ctx, in) })
 }
 func (s *Service) UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (inbound.UpdateRefsOutput, error) {
+	ctx = auditOperation(ctx, "context.refs.updated")
 	if len(in.Updates) == 0 {
 		// Legacy capture clients send empty batches. They can reconcile shared
 		// pending pointers, but cannot move a ref or change graph history.
@@ -22,6 +25,7 @@ func (s *Service) UpdateRefs(ctx context.Context, in inbound.UpdateRefsInput) (i
 	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.UpdateRefsOutput, error) { return s.updateRefs(ctx, in) })
 }
 func (s *Service) Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error) {
+	ctx = auditOperation(ctx, "context.forked")
 	return repositoryWrite(ctx, s, in.RepoID, func(ctx context.Context) (inbound.ForkOutput, error) { return s.fork(ctx, in) })
 }
 
@@ -31,9 +35,11 @@ func (s *Service) promoteBoundPR(ctx context.Context, repo domain.ContentHash, p
 	})
 }
 func (s *Service) SubmitPRPromotion(ctx context.Context, repo domain.ContentHash, pr domain.PullRequestMerge) (domain.PRPromotionJob, error) {
+	ctx = auditOperation(ctx, "context.promotion.submitted")
 	return repositoryWrite(ctx, s, repo, func(ctx context.Context) (domain.PRPromotionJob, error) { return s.submitPRPromotion(ctx, repo, pr) })
 }
 func (s *Service) PutPending(ctx context.Context, repo domain.ContentHash, session string, p domain.Pending) error {
+	ctx = auditOperation(ctx, "context.pending.updated")
 	return repositoryWriteError(pendingWriteContext(ctx), s, repo, func(ctx context.Context) error { return s.putPending(ctx, repo, session, p) })
 }
 func (s *Service) GraftSnapshotParents(ctx context.Context, repo, id domain.ContentHash, parents []domain.ContentHash, seq uint64) error {
@@ -71,34 +77,42 @@ func (s *Service) GetMemoryDigest(ctx context.Context, repo, id domain.ContentHa
 	return repositoryRead(ctx, s, func(ctx context.Context) (domain.MemoryDigest, error) { return s.getMemoryDigest(ctx, repo, id) })
 }
 func (s *Service) PutUnsync(ctx context.Context, repo domain.ContentHash, user, branch string, u domain.Unsync) error {
+	ctx = auditOperation(ctx, "context.unsync.updated")
 	return repositoryWriteError(ctx, s, repo, func(ctx context.Context) error { return s.putUnsync(ctx, repo, user, branch, u) })
 }
 
 func (s *Service) StoreChunks(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error) {
+	ctx = auditOperation(ctx, "context.chunks.stored")
 	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, in.RepoID, func(ctx context.Context) (inbound.StoreChunksOutput, error) { return s.storeChunksCommand(ctx, in) })
 }
 func (s *Service) PromoteSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error {
 	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error { return s.promoteSnapshotMessageCommand(ctx, repoID, id, message) })
 }
 func (s *Service) UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error {
+	ctx = auditOperation(ctx, "repository.about.updated")
 	return repositoryWriteError(writeAction(ctx, "manage"), s, repoID, func(ctx context.Context) error {
 		return s.updateAboutCommand(ctx, repoID, description, website, topics)
 	})
 }
 func (s *Service) UpdateRepoConfig(ctx context.Context, repoID domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
+	ctx = auditOperation(ctx, "repository.config.updated")
 	return repositoryWriteError(writeAction(ctx, "manage"), s, repoID, func(ctx context.Context) error {
 		return s.updateRepoConfigCommand(ctx, repoID, defaultBranch, protectDefault)
 	})
 }
 func (s *Service) PutSettings(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error {
+	ctx = auditOperation(ctx, "repository.settings.updated")
 	return repositoryWriteError(writeAction(ctx, "settings"), s, repoID, func(ctx context.Context) error { return s.putSettingsCommand(ctx, repoID, bundle) })
 }
 func (s *Service) PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error {
+	ctx = auditOperation(ctx, "repository.settings.object.stored")
 	return repositoryWriteError(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repoID, func(ctx context.Context) error { return s.putSettingsObjectCommand(ctx, repoID, hash, bundle) })
 }
 func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+	ctx = auditOperation(ctx, "context.memory.updated")
 	return s.putMemoryDigestCommand(ctx, repoID, d)
 }
 func (s *Service) PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+	ctx = auditOperation(ctx, "context.memory.updated")
 	return s.putMemoryDigestCASCommand(ctx, repoID, d)
 }

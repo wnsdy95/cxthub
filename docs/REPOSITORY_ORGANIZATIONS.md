@@ -170,3 +170,46 @@ Pricing remains free; future pricing is documented separately in
 Release CI, merge and live cutover evidence are recorded in the pull request
 linked to issue #251. The upgrade sequence above is required for every existing
 deployment; the filesystem development adapter is not a production substitute.
+
+## Collaboration administration
+
+Organization Owners can set a base repository role (`none`, `viewer`, `puller`,
+`member`, `maintainer`, or `owner`). It applies to current organization members
+and existing/future repositories. Direct and Team grants can increase it. Removing
+membership or lowering the baseline takes effect at the application transaction
+boundary; it does not remove independent direct grants. Owners always inherit
+repository owner access. Enterprise administration remains separate.
+
+Organization and Enterprise invitations appear in the recipient's profile inbox
+and at `/invite/ci_…`. Creating an invitation never creates membership. Acceptance
+requires the authenticated recipient's verified email; an `@username` invitation
+also binds the account ID. IDs locate invitations and are not bearer credentials.
+The issuer's current authority is rechecked when accepting. Invitations expire
+(default seven days), may be cancelled or renewed, and a consumed link cannot
+restore a subsequently removed member. Renewal replaces the old link. Email
+transport is deliberately absent until a provider is configured.
+
+Team maintainers and organization administrators can edit the Team display name
+and description using an exact editing baseline. A stale edit returns conflict;
+the UI retains the draft and offers an explicit reload. Team IDs, slugs, members
+and repository grants are unchanged.
+
+Only a space Owner can rename its namespace. Only an Owner of both source and
+destination namespaces can move a repository. A personal destination must belong
+to the actor. Repository IDs, bound context IDs, snapshots and memory are retained;
+old URLs remain reserved aliases. Direct collaborators remain. Organization-wide
+access follows the destination, and old Team grants are removed so moving back
+cannot silently revive them. The destination's visibility policy applies. Slug
+collisions and stale expected namespaces/slugs fail without overwriting data.
+
+These commands and audit records commit together in PostgreSQL. Migrations
+`0056`–`0060` add the default role, invitations, Enterprise URL aliases, account
+OAuth audit and organization audit pagination. Stop old backend instances before
+using the new contracts; an older server would ignore the new access baseline.
+Use the backup/restore procedure above for a coordinated rollback.
+
+Moving a repository into an Organization preserves its recorded creator and
+existing direct grants. The operator does not receive a new direct Owner grant
+just because they performed the move; demoting an inherited Organization Owner
+therefore still withdraws their inherited repository access. Moving into a
+personal namespace makes that namespace owner the repository owner.

@@ -71,6 +71,16 @@ export interface DocEventPage {
 }
 
 export const api = {
+ mcpApplications: () => call<import('./types').MCPApplication[]>('GET', '/me/mcp-applications'),
+ revokeMCPApplication: (id:string) => call('DELETE', `/me/mcp-applications/${encodeURIComponent(id)}`),
+ accountAudit: () => call<import('./types').AccountAuditEvent[]>('GET', '/me/audit'),
+ renameSpace: (kind: 'organization' | 'enterprise', id: string, expected_slug: string, slug: string) => call<{path:string}>('POST', `/${kind}s/${encodeURIComponent(id)}/rename`, {expected_slug,slug}),
+ transferRepositoryNamespace: (repository: Repository, destination: string) => call<Repository>('POST', `/repositories/${encodeURIComponent(repository.id)}/transfer-namespace`, {destination,expected_namespace_id:repository.owner_namespace_id,expected_slug:repository.slug}),
+ invitationInbox: () => call<import('./types').CollaborationInvitation[]>('GET', '/me/invitations'),
+ getCollaborationInvitation: (id: string) => call<import('./types').CollaborationInvitation>('GET', `/invitations/${encodeURIComponent(id)}`),
+ listCollaborationInvitations: (kind: 'organization' | 'enterprise', id: string) => call<import('./types').CollaborationInvitation[]>('GET', `/${kind}s/${encodeURIComponent(id)}/invitations`),
+ createCollaborationInvitation: (kind: 'organization' | 'enterprise', id: string, recipient: string, role: OrganizationRole) => call<import('./types').CollaborationInvitation>('POST', `/${kind}s/${encodeURIComponent(id)}/invitations`, { recipient, role }),
+ actOnCollaborationInvitation: (id: string, action: 'accept' | 'decline' | 'revoke' | 'resend') => call<import('./types').CollaborationInvitation>('POST', `/invitations/${encodeURIComponent(id)}/${action}`, {}),
  checkGitHubSync: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').SyncAuditPage>('POST', `/repos/${encodeURIComponent(repo)}/github-sync-check`, {cursor}, undefined, signal),
  memoryPositions: (repo: string, snapshot: string, event: string | undefined, signal?: AbortSignal) => {
   const params = new URLSearchParams({snapshot_id: snapshot});
@@ -120,6 +130,7 @@ export const api = {
   listTeams: (organization: string) => call<import('./types').Team[]>('GET', `/organizations/${encodeURIComponent(organization)}/teams`),
   createTeam: (organization: string, name: string, slug: string, description: string) => call<import('./types').Team>('POST', `/organizations/${encodeURIComponent(organization)}/teams`, { name, slug, description }),
   deleteTeam: (organization: string, team: string) => call('DELETE', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}`),
+  updateTeam: (organization: string, team: string, expected: Pick<Team, 'name' | 'description'>, profile: Pick<Team, 'name' | 'description'>) => call<Team>('PATCH', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}`, { ...profile, expected }),
   listTeamMembers: (organization: string, team: string) => call<import('./types').TeamMembership[]>('GET', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/members`),
   setTeamMember: (organization: string, team: string, user: string, role: 'member' | 'maintainer') => call('PUT', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/members/${encodeURIComponent(user)}`, { role }),
   removeTeamMember: (organization: string, team: string, user: string) => call('DELETE', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/members/${encodeURIComponent(user)}`),
@@ -181,7 +192,7 @@ export const api = {
   acceptInvite: (token: string) => call<Repository>('POST', `/invites/${encodeURIComponent(token)}/accept`),
 
   // Organization administration. Organization roles manage this plane only; they
-  // never imply access to a repository's context.
+  // grant repository-wide authority only to Organization owners.
   listOrganizations: () => call<Organization[]>('GET', '/organizations'),
   publicOrganization: (slug: string) =>
     call<PublicOrganization>('GET', `/public/organizations/${encodeURIComponent(slug)}`),
@@ -205,12 +216,14 @@ export const api = {
     ),
   getOrganizationPolicy: (organizationId: string) =>
     call<OrganizationPolicy>('GET', `/organizations/${encodeURIComponent(organizationId)}/policy`),
-  updateOrganizationPolicy: (organizationId: string, patch: Partial<Omit<OrganizationPolicy, 'organization_id' | 'updated_by' | 'updated_at'>>) =>
+  updateOrganizationPolicy: (organizationId: string, patch: Partial<Omit<OrganizationPolicy, 'organization_id' | 'updated_by' | 'updated_at'>> & { expected_updated_at?: string }) =>
     call<OrganizationPolicy>('PATCH', `/organizations/${encodeURIComponent(organizationId)}/policy`, patch),
   listOrganizationRepositories: (organizationId: string) =>
     call<Repository[]>('GET', `/organizations/${encodeURIComponent(organizationId)}/repositories`),
   createOrganizationRepository: (organizationId: string, name: string) =>
     call<Repository>('POST', `/organizations/${encodeURIComponent(organizationId)}/repositories`, { name }),
+  organizationAuditPage: (organizationId: string, cursor = '') =>
+    call<{ events: OrganizationAuditEvent[]; next_cursor?: string }>('GET', `/organizations/${encodeURIComponent(organizationId)}/audit/page?limit=100&cursor=${encodeURIComponent(cursor)}`),
   listOrganizationAudit: (organizationId: string) =>
     call<OrganizationAuditEvent[]>('GET', `/organizations/${encodeURIComponent(organizationId)}/audit`),
   createBreakGlassGrant: (organizationId: string, repositoryId: string, reason: string, minutes: number) =>
@@ -305,3 +318,4 @@ export const api = {
   dismissPending: (repoId: string, sessionId: string) =>
     call<{ status: string }>('POST', `/repos/${encodeURIComponent(repoId)}/pending/${encodeURIComponent(sessionId)}/dismiss`, {}),
 };
+import type { Team } from './types';

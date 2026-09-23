@@ -93,7 +93,7 @@ type IdentityBackend interface {
 	GetRepository(ctx context.Context, repositoryID string) (domain.Repository, error)
 	RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool)
 	HasBreakGlassAccess(ctx context.Context, repositoryID, userID string) (bool, error)
-	IssueMCPTokenPair(ctx context.Context, userID, clientID string) (domain.OAuthTokenPair, error)
+	ExchangeMCPAuthorizationCode(context.Context, string, string, string, string, string) (domain.OAuthTokenPair, error)
 	RefreshMCPAccessToken(ctx context.Context, refreshToken, clientID string) (domain.OAuthTokenPair, error)
 	RevokeMCPToken(ctx context.Context, token, clientID string) error
 }

@@ -1265,3 +1265,10 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .management-list>button small { color:var(--muted); font-weight:400; }
 .management-policy>button { justify-self:start; min-width:100px; }
 .profile-main { min-width:0; }
+
+.collaboration-invitations { margin-block: 1rem 2rem; }
+.collaboration-invitations .management-rows > li { flex-wrap: wrap; }
+.collaboration-invitations .management-rows > li > span:first-child { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
+.invitation-page { max-width: 48rem; margin: 4rem auto; padding: 1.5rem; }
+.invitation-page small { display: block; color: var(--muted); }
+.invitation-page .management-form { margin-top: 1.5rem; }

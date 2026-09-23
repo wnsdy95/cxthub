@@ -318,3 +318,18 @@ An exact snapshot/tag still reads that archived lineage; `mode="stored"` or an
 explicit memory hash keeps the immutable original. Effective mode assesses typed
 claims against explicit code; historical prose remains unverified. None of these
 queries moves shared refs, worktree positions or provider conversations.
+
+## Connected application management
+
+Account settings list active MCP clients by client ID/name and scope, without
+exposing token values. Disconnecting a client invalidates every current access
+and refresh token for that user/client and all unexchanged authorization codes.
+Code exchange, refresh and application revocation share the identity transaction,
+so a racing refresh cannot leave an authorized token after revocation commits.
+Fresh user consent may authorize the app again. Other users' client connections
+are unaffected. Already executing reads cannot be recalled.
+
+`GET /api/v1/me/mcp-applications`, `DELETE /api/v1/me/mcp-applications/{clientID}`
+and `GET /api/v1/me/audit` expose this management surface to the signed-in user.
+Authorization and disconnection are audited without token or secret contents.
+The account UI shows the most recent 100 events; it is not a retention policy.
