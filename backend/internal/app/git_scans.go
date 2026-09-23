@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 	"log"
 	"reflect"
@@ -207,6 +208,7 @@ func planGitIndex(p *domain.GitScanFinish, deltas []domain.GitCommitDelta) error
 	return p.Validate()
 }
 func (g *GitScans) Process(ctx context.Context, limit int) error {
+	ctx = inbound.WithSystemActor(ctx)
 	for i := 0; i < limit; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -332,6 +334,7 @@ func (g *GitScans) RetryScan(ctx context.Context, repo domain.ContentHash, id st
 // Reconcile observes one durable page per repository on each pass. Failed or
 // canceled reads retain their page; other repositories continue independently.
 func (g *GitScans) Reconcile(ctx context.Context) error {
+	ctx = inbound.WithSystemActor(ctx)
 	st, ok := g.core.meta.(outbound.GitHeadScanStore)
 	if !ok {
 		return domain.ErrValidation

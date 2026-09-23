@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -29,7 +28,7 @@ type effectiveFixture struct {
 func effectiveOID(n int) string { return fmt.Sprintf("%040x", n) }
 func newEffectiveFixture(t *testing.T) *effectiveFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	f := &effectiveFixture{svc: svc, st: st, repo: hh(t.Name()), root: hh("root"), a: hh("A"), b: hh("B")}
 	origin := "https://github.com/example/effective-memory"
@@ -94,18 +93,18 @@ func (f *effectiveFixture) publish(t *testing.T, snap domain.ContentHash, code i
 	t.Helper()
 	f.next++
 	e := domain.HistoryEvent{ID: fmt.Sprintf("%032x", f.next), RepoID: string(f.repo), BranchID: branch, Branch: branch, Kind: "position", Target: snap, GitAfter: effectiveOID(code), CreatedAt: time.Date(2026, 1, 1, 0, 0, f.next, 0, time.UTC)}
-	if err := f.st.ApplyHistoryEvent(context.Background(), e); err != nil {
+	if err := f.st.ApplyHistoryEvent(systemTestContext(), e); err != nil {
 		t.Fatal(err)
 	}
 	p := prPublication(e)
-	if err := f.st.ApplyHistoryEvent(context.Background(), p); err != nil {
+	if err := f.st.ApplyHistoryEvent(systemTestContext(), p); err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 func (f *effectiveFixture) query(t *testing.T, code int) domain.EffectiveMemoryPage {
 	t.Helper()
-	out, err := f.svc.QueryEffectiveMemory(context.Background(), f.repo, domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(code)}, Limit: 50})
+	out, err := f.svc.QueryEffectiveMemory(systemTestContext(), f.repo, domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(code)}, Limit: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +122,7 @@ func itemByText(t *testing.T, out domain.EffectiveMemoryPage, text string) domai
 }
 func TestEffectiveMemoryReversalAndIndependentSelections(t *testing.T) {
 	f := newEffectiveFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	history, _ := f.svc.ListHistory(ctx, f.repo)
 	refs, _ := f.svc.ListRefs(ctx, f.repo)
 	revision, _ := f.svc.RepositoryRevision(ctx, f.repo)
@@ -158,7 +157,7 @@ func (f *effectiveFixture) receipt(t *testing.T, source domain.ContentHash) doma
 	t.Helper()
 	f.next++
 	e := domain.HistoryEvent{ID: fmt.Sprintf("%032x", f.next), RepoID: string(f.repo), BranchID: "base", Branch: "main", SourceBranchID: "branch-a", Kind: "pr-merge", Source: source, Target: source, CreatedAt: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), PR: &domain.PullRequestMerge{Number: 1, HeadBranch: "branch-a", BaseBranch: "main", HeadSHA: effectiveOID(2), MergeSHA: effectiveOID(9)}}
-	if err := f.st.ApplyHistoryEvent(context.Background(), e); err != nil {
+	if err := f.st.ApplyHistoryEvent(systemTestContext(), e); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -168,7 +167,7 @@ func (f *effectiveFixture) complete(t *testing.T, e domain.HistoryEvent) {
 	id := sha256.Sum256([]byte(e.ID + ":completed"))
 	e.ID = fmt.Sprintf("%x", id[:16])
 	e.PRCompleted = true
-	if err := f.st.ApplyHistoryEvent(context.Background(), e); err != nil {
+	if err := f.st.ApplyHistoryEvent(systemTestContext(), e); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -186,7 +185,7 @@ func TestEffectiveMemorySquashRequiresCompletedImmutableProof(t *testing.T) {
 					snap.GraftParents = []domain.ContentHash{f.a}
 					snap.GraftSeq = 1
 				}
-				if err := f.st.PutSnapshot(context.Background(), snap); err != nil {
+				if err := f.st.PutSnapshot(systemTestContext(), snap); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -206,7 +205,7 @@ func TestEffectiveMemorySquashRequiresCompletedImmutableProof(t *testing.T) {
 				} else {
 					receipt.SourceBranchID = "another-branch"
 				}
-				if err := f.st.ApplyHistoryEvent(context.Background(), receipt); err != nil {
+				if err := f.st.ApplyHistoryEvent(systemTestContext(), receipt); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -229,7 +228,7 @@ func TestEffectiveMemoryRequiresExactSourcePublication(t *testing.T) {
 	f := newEffectiveFixture(t)
 	f.digest.PreviousMemoryHash = f.memory
 	f.digest.Fragments[0].Claims[0].Code.Commit = effectiveOID(8)
-	if _, err := f.svc.PutMemoryDigestCAS(context.Background(), f.repo, f.digest); err != nil {
+	if _, err := f.svc.PutMemoryDigestCAS(systemTestContext(), f.repo, f.digest); err != nil {
 		t.Fatal(err)
 	}
 	if got := itemByText(t, f.query(t, 8), "A feature"); got.Reason != "source_publication_missing" {
@@ -239,7 +238,7 @@ func TestEffectiveMemoryRequiresExactSourcePublication(t *testing.T) {
 	if got := itemByText(t, f.query(t, 8), "A feature"); got.State != "applied" {
 		t.Fatal(got)
 	}
-	old, err := f.svc.QueryEffectiveMemory(context.Background(), f.repo, domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(8), MemoryHash: f.memory}})
+	old, err := f.svc.QueryEffectiveMemory(systemTestContext(), f.repo, domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(8), MemoryHash: f.memory}})
 	if err != nil || itemByText(t, old, "A feature").State != "review" {
 		t.Fatal(old, err)
 	}
@@ -248,7 +247,7 @@ func TestEffectiveMemoryCursorPinsStateExceptPending(t *testing.T) {
 	for _, change := range []string{"pending", "memory", "history", "evidence", "code", "graph"} {
 		t.Run(change, func(t *testing.T) {
 			f := newEffectiveFixture(t)
-			ctx := context.Background()
+			ctx := systemTestContext()
 			req := domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(3)}, Limit: 1}
 			first, err := f.svc.QueryEffectiveMemory(ctx, f.repo, req)
 			if err != nil || first.NextCursor == "" {
@@ -287,7 +286,7 @@ func TestEffectiveMemoryCursorPinsStateExceptPending(t *testing.T) {
 }
 func TestEffectiveMemoryLegacyPaginationPreservesUTF8AndRepeatedPieces(t *testing.T) {
 	f := newEffectiveFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	text := strings.Repeat("\ud55c\uad6d\uc5b4 ", 100000)
 	d := domain.MemoryDigest{SnapshotID: f.root, ClaimsVersion: 1, PreviousMemoryHash: f.memory, Summary: text}
 	hash, err := f.svc.PutMemoryDigestCAS(ctx, f.repo, d)
@@ -334,7 +333,7 @@ func TestEffectiveMemoryLegacyPaginationPreservesUTF8AndRepeatedPieces(t *testin
 
 func TestEffectiveMemoryReadBoundEndsPageBeforeChangingLaterClaim(t *testing.T) {
 	f := newEffectiveFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	evidence, err := f.svc.newCodeEvidence(ctx, f.repo)
 	if err != nil {
 		t.Fatal(err)
@@ -384,7 +383,7 @@ func TestEffectiveMemoryReadBoundEndsPageBeforeChangingLaterClaim(t *testing.T) 
 
 func TestEffectiveMemoryCursorRejectsNewOriginBinding(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	id := hh("origin-binding-root")
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
@@ -414,7 +413,7 @@ func TestEffectiveMemoryCursorRejectsNewOriginBinding(t *testing.T) {
 
 func TestEffectiveMemoryClaimsFilterSkipsLargeHistoryAndBindsCursor(t *testing.T) {
 	f := newEffectiveFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	d := f.digest
 	d.PreviousMemoryHash = f.memory
 	d.Fragments = append([]domain.MemoryFragment{{SourceSnapshot: f.root, Summary: strings.Repeat("legacy prose\n", 100000)}}, d.Fragments...)

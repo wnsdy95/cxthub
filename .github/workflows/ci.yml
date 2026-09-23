@@ -61,13 +61,14 @@ jobs:
       - name: vulnerability scan
         working-directory: backend
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-      - name: test (PG smoke — real Postgres)
+      - name: test (PG contracts — real Postgres)
         working-directory: backend
         env:
           CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
         run: |
-          go test -tags postgres ./internal/adapters/store/ -run 'TestPostgresOwnership|TestPGSmoke|TestPGTransaction|TestPGRepositoryRevision|TestPGGitChanges|TestPGGitScans|TestPGGitTree|TestPGVerifiedDoc|TestPGStoredDocProof' -timeout=120s -v
-          go test -tags postgres ./internal/app/ -race -run 'TestPGEnterprise|TestPGTeam|TestPGLegacyInvitation|TestPGOrganizationOffboard|TestPGOrganizationOwner|TestPGSyncAudit|TestPGMemoryProjection|TestPGCollaboration|TestPGNotification|TestPGSecrets|TestPGJoin|TestPGContextQuery|TestPGGraphQueries|TestPGCodeApplicability|TestPGTypedMemory|TestPGEffectiveMemory|TestPGMemoryPublication' -count=3 -timeout=120s -v
+          go test -tags postgres ./internal/adapters/store/ -timeout=120s -v
+          go test -tags postgres ./internal/app/ -race -run '^TestPG' -count=3 -timeout=120s -v
+          go test -tags postgres ./internal/adapters/delivery/http/ -race -run '^TestPG' -count=3 -timeout=120s -v
 
   cli:
     runs-on: ubuntu-latest

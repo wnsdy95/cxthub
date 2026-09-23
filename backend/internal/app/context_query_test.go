@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"reflect"
 	"testing"
 
@@ -10,7 +9,7 @@ import (
 
 func TestContextQueryUsesFullGenerationAndExplicitPosition(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo, a, b := hh(t.Name()), hh("selected"), hh("retained")
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "trunk"}); err != nil {
 		t.Fatal(err)

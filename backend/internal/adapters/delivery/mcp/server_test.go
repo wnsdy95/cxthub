@@ -109,7 +109,7 @@ func TestMCPAllowanceSharedAcrossServerInstances(t *testing.T) {
 }
 
 func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "oauth-user", Email: "oauth@example.test", Name: "OAuth User", Username: "oauth-user"}
 	id := app.NewIdentityService(fixedVerifier{user: user}, st)
@@ -343,7 +343,7 @@ func TestOAuthMetadataAdvertisesReadOnlyResourceAndRevocation(t *testing.T) {
 }
 
 func TestTokenExchangeRejectsAuthorizationCodeWithoutMCPReadScope(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "legacy-scope-user", Email: "legacy@example.test", Name: "Legacy", Username: "legacy"}
 	if err := st.UpsertUser(ctx, user); err != nil {
@@ -391,10 +391,10 @@ func TestStreamableHTTPTransportGuards(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "transport-user", Email: "transport@example.test", Name: "Transport", Username: "transport"}
 	id := app.NewIdentityService(fixedVerifier{user: user}, st)
-	if err := st.UpsertUser(context.Background(), user); err != nil {
+	if err := st.UpsertUser(systemTestContext(), user); err != nil {
 		t.Fatal(err)
 	}
-	pair, err := id.IssueMCPTokenPair(context.Background(), user.ID, "transport-client")
+	pair, err := id.IssueMCPTokenPair(systemTestContext(), user.ID, "transport-client")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +507,7 @@ func TestRemoteMemoryOutputIsBounded(t *testing.T) {
 		},
 	}
 	s := &Server{context: backend}
-	got, err := s.toolMemoryLoad(context.Background(), domain.Repo{ID: repoID, DefaultBranch: "main"}, string(snapshotID))
+	got, err := s.toolMemoryLoad(systemTestContext(), domain.Repo{ID: repoID, DefaultBranch: "main"}, string(snapshotID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +555,7 @@ func (f fakeContextBackend) GetMemoryProjection(ctx context.Context, repo, id do
 }
 
 func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	id := app.NewIdentityService(nil, st)
 	owner := domain.User{ID: "owner", Username: "owner", Name: "Owner", Email: "owner@example.test"}
@@ -619,7 +619,7 @@ func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {
 }
 
 func TestMCPOrganizationOwnerAccessRevokesAfterDemotion(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	id := app.NewIdentityService(nil, st)
 	owner := domain.User{ID: "owner", Username: "owner", Name: "Owner", Email: "owner@example.test"}

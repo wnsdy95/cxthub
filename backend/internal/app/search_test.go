@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -15,7 +14,7 @@ import (
 // event body match (kind=event, case-insensitive), deduplication of inheritance events (doc sharing·prefix duplication) to the first snapshot,
 // rejection of messages shorter than 2 characters.
 func TestSearch(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	fs := store.NewFSStore(t.TempDir())
 	svc := NewService(fs, fs, nil, nil, nil)
 	repoID := h('0')

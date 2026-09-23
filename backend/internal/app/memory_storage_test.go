@@ -13,7 +13,7 @@ import (
 
 func TestMemoryDigestUsesSnapshotPointerWithoutMetaDoubleWrite(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("memory-pointer-repo")
 	snapshotID := hh("memory-pointer-snapshot")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
@@ -57,7 +57,7 @@ func TestMemoryDigestUsesSnapshotPointerWithoutMetaDoubleWrite(t *testing.T) {
 
 func TestMemoryDigestCASRejectsStaleAndLegacyReplacement(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("memory-cas-repo")
 	snapshotID := hh("memory-cas-snapshot")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
@@ -100,7 +100,7 @@ func TestMemoryDigestCASRejectsStaleAndLegacyReplacement(t *testing.T) {
 
 func TestMemoryDigestCASRejectsParentFromAnotherSnapshot(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("memory-parent-repo")
 	firstSnapshot := hh("memory-parent-first")
 	secondSnapshot := hh("memory-parent-second")
@@ -130,7 +130,7 @@ func TestMemoryDigestCASRejectsParentFromAnotherSnapshot(t *testing.T) {
 
 func TestMemoryDigestAcceptsExplicitIncompleteProjectionWithoutFingerprint(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("incomplete-memory-coverage-repo")
 	snapshotID := hh("incomplete-memory-coverage-snapshot")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
@@ -150,7 +150,7 @@ func TestMemoryDigestAcceptsExplicitIncompleteProjectionWithoutFingerprint(t *te
 
 func TestMemoryDigestRejectsInvalidGraftCoverageBeforeStorage(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("invalid-memory-coverage-repo")
 	snapshotID := hh("invalid-memory-coverage-snapshot")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: snapshotID, RepoID: repo, DocHash: snapshotID}); err != nil {
@@ -175,7 +175,7 @@ func TestMemoryDigestRejectsInvalidGraftCoverageBeforeStorage(t *testing.T) {
 }
 
 func TestMemoryDigestFallsBackOnlyForPointerlessLegacySnapshot(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("legacy-memory-repo")
 	snapshotID := hh("legacy-memory-snapshot")
 	base := store.NewFSStore(t.TempDir())
@@ -216,7 +216,7 @@ func (s *missingMemoryBlob) GetMemory(context.Context, domain.ContentHash, domai
 
 func TestTypedMemoryRejectsDowngradeBeforeBlobOrPointerMutation(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("typed-repo")
 	id := hh("typed-snapshot")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: id, RepoID: repo, DocHash: id}); err != nil {

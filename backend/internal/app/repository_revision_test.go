@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -10,7 +9,7 @@ import (
 )
 
 func TestFullAndPendingViewMembershipOwnership(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo, id := hh(t.Name()), hh("shared pending capture")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{RepoID: repo, ID: id, DocHash: id, Branch: "main", Branches: []string{"legacy-stale"}}); err != nil {
@@ -59,7 +58,7 @@ func TestFullAndPendingViewMembershipOwnership(t *testing.T) {
 }
 
 func TestPendingViewDoesNotRetransmitOldAncestorMetadata(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	var parent domain.ContentHash
@@ -89,7 +88,7 @@ func TestPendingViewDoesNotRetransmitOldAncestorMetadata(t *testing.T) {
 }
 
 func TestEmptyRefBatchReconcilesPendingWithoutGraphRevision(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	snap := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderCodex, "shared capture"))
@@ -115,7 +114,7 @@ func TestEmptyRefBatchReconcilesPendingWithoutGraphRevision(t *testing.T) {
 }
 
 func TestPendingRevisionDoesNotInvalidateGraph(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	snap := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderCodex, "hello"))
@@ -154,7 +153,7 @@ func TestPendingRevisionDoesNotInvalidateGraph(t *testing.T) {
 }
 
 func TestObjectStagingDoesNotPublishGraphRevision(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: domain.NewID("ws_")}); err != nil {
@@ -185,7 +184,7 @@ func TestObjectStagingDoesNotPublishGraphRevision(t *testing.T) {
 }
 
 func TestGraphQuerySeesStagingAcrossIndependentReads(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	first, err := svc.GetRepositoryView(ctx, repo)

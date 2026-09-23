@@ -79,3 +79,26 @@ graph portion fell from 1,321,475 bytes to 311,121 bytes with dictionary encodin
 gzip at the fastest level reduced it to 78,017 bytes. These are payload/CPU
 measurements, not cloud throughput or browser paint guarantees. Neither this
 transport nor the cache changes stored ancestry, history, memory, or access rules.
+
+## Branch timeline transport and projection reuse (2026-09-23)
+
+The web client negotiates `graph_encoding=indexed-v2` on view, pending-view and
+graph-state. Older clients continue receiving indexed-v1. V2 encodes branch roots
+as dictionary indices and references branch_snapshots when the ordered timeline
+is identical. Independent timelines remain representable. A Go-to-TypeScript
+contract test checks full semantic equality, invalid references and input ownership.
+
+On the same saved 1,043-snapshot / 40-branch response, compact JSON pending-view
+fell from 2,181,913 to 1,056,980 bytes. Gzip level 1 fell from 701,885 to 171,175
+bytes (76% reduction). Full view fell from 4,208,352 to 3,083,419 bytes, or
+1,004,216 to 470,157 bytes with gzip level 1. These compare serialization of the
+same data, not separate live generations or cloud response times.
+
+The application caches committed branch inclusion by repository, graph revision
+and evidence revision. Pending-only changes reuse this projection but recompute
+current display integration against the fresh coherent view. Historical position
+queries and in-transaction writes bypass it. Copies prevent response mutation
+from changing cached facts. The process-local cache keeps at most eight repositories
+and 250,000 weighted identifiers; oversized projections are not cached. It stores
+neither permissions nor document bodies. Full metadata reads and base domain
+projection still occur; this is not database pagination or an O(1) pending query.

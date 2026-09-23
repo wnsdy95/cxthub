@@ -45,7 +45,7 @@ func collaborationDSN(t *testing.T) string {
 func collaborationPG(t *testing.T) (*Service, *store.PostgresStore, domain.ContentHash) {
 	t.Helper()
 	dsn := collaborationDSN(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st, err := store.NewPostgresStore(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func collaborationPR(t *testing.T, svc *Service, st *store.PostgresStore, repo d
 	tip := collaborationSnapshot(t, st, repo, fmt.Sprintf("feature-%d", n), base)
 	pr := domain.PullRequestMerge{Number: n, BaseBranch: "main", HeadBranch: fmt.Sprintf("feature/%d", n), HeadSHA: fmt.Sprintf("%040x", n), MergeSHA: fmt.Sprintf("%040x", n+100)}
 	birth := domain.HistoryEvent{ID: fmt.Sprintf("%032x", n), RepoID: string(repo), BranchID: pr.HeadBranch, Branch: pr.HeadBranch, Kind: "birth", Source: base, Target: tip, GitAfter: pr.HeadSHA, CreatedAt: time.Now().UTC()}
-	if err := svc.RecordHistory(context.Background(), birth); err != nil {
+	if err := svc.RecordHistory(systemTestContext(), birth); err != nil {
 		t.Fatal(err)
 	}
 	publishPRSource(t, svc, birth)
@@ -75,7 +75,7 @@ func collaborationPR(t *testing.T, svc *Service, st *store.PostgresStore, repo d
 
 func TestPGCollaborationConcurrentPRsAndPushes(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 30*time.Second)
 	defer cancel()
 	peer, err := store.NewPostgresStore(ctx, collaborationDSN(t))
 	if err != nil {
@@ -164,7 +164,7 @@ func (s *rejectJobFinishPG) FinishPRJob(ctx context.Context, j domain.PRPromotio
 
 func TestPGCollaborationWorkerFencingAndCompletion(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	base := collaborationSnapshot(t, st, repo, "base")
 	if err := st.CompareAndSwapRef(ctx, repo, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: base}, ""); err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestPGCollaborationWorkerFencingAndCompletion(t *testing.T) {
 
 func TestPGCollaborationStaleForceAndMemoryCAS(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	a := collaborationSnapshot(t, st, repo, "a")
 	b := collaborationSnapshot(t, st, repo, "b", a)
 	c := collaborationSnapshot(t, st, repo, "c", a)
@@ -295,10 +295,10 @@ func collaborationSnapshot(t *testing.T, st *store.PostgresStore, repo domain.Co
 		t.Fatal(err)
 	}
 	doc.Hash = domain.HashContent(raw)
-	if _, err = st.PutDoc(context.Background(), repo, doc); err != nil {
+	if _, err = st.PutDoc(systemTestContext(), repo, doc); err != nil {
 		t.Fatal(err)
 	}
-	if err = st.PutSnapshot(context.Background(), domain.Snapshot{ID: doc.Hash, RepoID: repo, DocHash: doc.Hash, Parents: parents, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
+	if err = st.PutSnapshot(systemTestContext(), domain.Snapshot{ID: doc.Hash, RepoID: repo, DocHash: doc.Hash, Parents: parents, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull}); err != nil {
 		t.Fatal(err)
 	}
 	return doc.Hash
@@ -306,7 +306,7 @@ func collaborationSnapshot(t *testing.T, st *store.PostgresStore, repo domain.Co
 
 func TestPGCollaborationRefBatchRollback(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	a := collaborationSnapshot(t, st, repo, "a")
 	b := collaborationSnapshot(t, st, repo, "b", a)
 	ref := domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "main", Target: a}
@@ -339,7 +339,7 @@ func (s *rejectPendingCleanupPG) CompareAndDeletePending(context.Context, domain
 
 func TestPGCollaborationPendingResolutionRollback(t *testing.T) {
 	_, st, repo := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	base := collaborationSnapshot(t, st, repo, "base")
 	tip := collaborationSnapshot(t, st, repo, "tip", base)
 	if err := st.CompareAndSwapRef(ctx, repo, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: base}, ""); err != nil {
@@ -373,7 +373,7 @@ func (s *rejectCompletionPG) ApplyHistoryEvent(ctx context.Context, e domain.His
 
 func TestPGCollaborationPromotionRollback(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	base := collaborationSnapshot(t, st, repo, "base")
 	main := collaborationSnapshot(t, st, repo, "main", base)
 	feature := collaborationSnapshot(t, st, repo, "feature", base)
@@ -417,7 +417,7 @@ func (s *pausedViewPG) ListRefs(ctx context.Context, repo domain.ContentHash) ([
 
 func TestPGCollaborationGraphViewIsOneGeneration(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 10*time.Second)
 	defer cancel()
 	base := collaborationSnapshot(t, st, repo, "base")
 	if err := st.CompareAndSwapRef(ctx, repo, domain.Ref{Kind: domain.RefBranch, Name: "main", Target: base}, ""); err != nil {
@@ -481,7 +481,7 @@ func (s *rejectSnapshotPG) PutSnapshot(ctx context.Context, snap domain.Snapshot
 
 func TestPGCollaborationObjectBatchRollbackAndAfterCommit(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	username := fmt.Sprintf("acid%d", time.Now().UnixNano())
 	user := domain.User{ID: "dev:" + username, Name: "ACID", Email: username + "@example.com", Username: username}
 	if err := st.UpsertUser(ctx, user); err != nil {

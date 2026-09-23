@@ -91,7 +91,7 @@ func TestRepositoryChangesAuthorizationAndPendingDelivery(t *testing.T) {
 	if code := doJSON(t, "GET", base+"/context-query?scope=previous", nil, nil); code != 422 {
 		t.Fatalf("implicit past selection accepted: %d", code)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/changes", nil)
 	req.Header.Set("Authorization", "Bearer dev:test@t.io:Test")

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"os"
@@ -34,7 +33,7 @@ func TestMemoryProjectionSharedFixtures(t *testing.T) {
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.Name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			hash := func(s string) domain.ContentHash { return domain.HashContent([]byte(s)) }
 			hashes := func(items []string) []domain.ContentHash {
 				var ids []domain.ContentHash

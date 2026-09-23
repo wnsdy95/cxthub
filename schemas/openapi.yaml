@@ -112,10 +112,16 @@ components:
       type: object
       required: ["branch_snapshots", "continuations", "operations", "encoding", "dictionary", "version", "revision", "primary_branch", "snapshot_ids", "graph_ids", "committed_ids", "historical_ids", "shared_ids", "pushed_ids", "unpushed_ids", "uncommitted_ids", "tagged_ids", "archived_only_ids", "ahead_ids", "ahead_tips", "markers", "branch_heads", "ref_scopes", "snapshot_scopes", "scope_labels", "hold", "orphan_sessions", "hold_counts", "positions", "previous"]
       properties:
-        encoding: { type: string, const: indexed-v1 }
+        encoding: { type: string, enum: [indexed-v1, indexed-v2] }
         dictionary: { type: array, items: { type: string } }
         branch_snapshots: { type: object, additionalProperties: { type: array, items: { type: integer, minimum: 0 } } }
-        branch_contexts: { type: object, additionalProperties: { $ref: '#/components/schemas/BranchContext' } }
+        branch_contexts:
+          description: V1 uses BranchContext; negotiated V2 uses dictionary indices and can reference branch_snapshots.
+          type: object
+          additionalProperties:
+            oneOf:
+              - { $ref: '#/components/schemas/BranchContext' }
+              - { $ref: '#/components/schemas/IndexedBranchContext' }
         integrations:
           type: array
           items:
@@ -159,6 +165,20 @@ components:
         hold_counts: {"type": "object", "additionalProperties": {"type": "integer"}}
         positions: {"type": "array", "items": {"$ref": "#/components/schemas/GraphPosition"}}
         previous: {"type": "array", "items": {"$ref": "#/components/schemas/GraphProgressGroup"}}
+    IndexedBranchContext:
+      type: object
+      required: [branch_id, snapshot_id, reason, roots, merges]
+      properties:
+        branch_id: { type: string }
+        snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        code_commit: { type: string }
+        reason: { type: string }
+        roots: { type: array, items: { type: integer, minimum: 0 } }
+        snapshot_ids: { type: array, items: { type: integer, minimum: 0 } }
+        snapshot_ids_ref:
+          type: string
+          description: Key in branch_snapshots; mutually exclusive with snapshot_ids. Neither means an empty timeline.
+        merges: { $ref: '#/components/schemas/BranchContextMerges' }
     BranchContext:
       type: object
       required: [branch_id, snapshot_id, reason, roots, snapshot_ids, merges]
@@ -169,21 +189,22 @@ components:
         reason: { type: string }
         roots: { type: array, items: { $ref: '#/components/schemas/ContentHash' } }
         snapshot_ids: { type: array, items: { $ref: '#/components/schemas/ContentHash' } }
-        merges:
-          type: array
-          items:
-            type: object
-            required: [event_id, destination_branch_id, source, merge_sha, pr_number, state, reason, order]
-            properties:
-              event_id: { type: string }
-              source: { $ref: '#/components/schemas/ContentHash' }
-              destination_branch_id: { type: string }
-              before: { $ref: '#/components/schemas/ContentHash' }
-              merge_sha: { type: string }
-              pr_number: { type: integer }
-              state: { type: string, enum: [included, not_selected, review] }
-              reason: { type: string }
-              order: { type: integer, minimum: -1 }
+        merges: { $ref: '#/components/schemas/BranchContextMerges' }
+    BranchContextMerges:
+      type: array
+      items:
+        type: object
+        required: [event_id, destination_branch_id, source, merge_sha, pr_number, state, reason, order]
+        properties:
+          event_id: { type: string }
+          source: { $ref: '#/components/schemas/ContentHash' }
+          destination_branch_id: { type: string }
+          before: { $ref: '#/components/schemas/ContentHash' }
+          merge_sha: { type: string }
+          pr_number: { type: integer }
+          state: { type: string, enum: [included, not_selected, review] }
+          reason: { type: string }
+          order: { type: integer, minimum: -1 }
     GraphBranchHead:
       type: object
       required: ["branch", "event_id", "archived"]
@@ -1838,6 +1859,10 @@ paths:
   /repos/{repoID}/pending-view:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - name: graph_encoding
+        in: query
+        description: Optional compact branch timeline encoding; old clients receive indexed-v1.
+        schema: { type: string, enum: [indexed-v1, indexed-v2], default: indexed-v1 }
     get:
       operationId: getPendingView
       summary: Read pending pointers and their target snapshot metadata
@@ -2114,6 +2139,10 @@ paths:
   /repos/{repoID}/graph-state:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - name: graph_encoding
+        in: query
+        description: Optional compact branch timeline encoding; old clients receive indexed-v1.
+        schema: { type: string, enum: [indexed-v1, indexed-v2], default: indexed-v1 }
     get:
       operationId: getGraphState
       summary: Read server-classified graph state at an optional browsing position
@@ -2134,6 +2163,10 @@ paths:
   /repos/{repoID}/view:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - name: graph_encoding
+        in: query
+        description: Optional compact branch timeline encoding; old clients receive indexed-v1.
+        schema: { type: string, enum: [indexed-v1, indexed-v2], default: indexed-v1 }
     get:
       operationId: getRepositoryView
       summary: Read a complete committed graph generation

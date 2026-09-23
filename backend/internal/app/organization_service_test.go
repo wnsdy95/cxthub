@@ -29,7 +29,7 @@ func (s *auditFailOrganizationStore) UseActiveBreakGlassGrant(ctx context.Contex
 }
 
 func TestOrganizationOwnerAccessAndExplicitBreakGlassAudit(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := &auditFailOrganizationStore{FSStore: store.NewFSStore(t.TempDir())}
 	svc := NewIdentityService(nil, st)
 
@@ -171,7 +171,7 @@ func TestOrganizationOwnerAccessAndExplicitBreakGlassAudit(t *testing.T) {
 }
 
 func TestOrganizationOwnershipTransfersWithoutPinningCreator(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := NewIdentityService(nil, st)
 	founder := domain.User{ID: "organization-founder", Email: "founder@example.test", Name: "Founder", Username: "organization-founder"}
@@ -218,7 +218,7 @@ func TestOrganizationOwnershipTransfersWithoutPinningCreator(t *testing.T) {
 }
 
 func TestOrganizationSlugCannotClaimPersonalNamespace(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := NewIdentityService(nil, st)
 	owner := domain.User{ID: "owner", Email: "owner@example.test", Name: "Owner", Username: "owner"}
@@ -257,7 +257,7 @@ func TestOrganizationSlugCannotClaimPersonalNamespace(t *testing.T) {
 }
 
 func TestOrganizationNamespaceRejectsServerOwnedRouteSegments(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := NewIdentityService(nil, st)
 	owner := domain.User{ID: "route-owner", Email: "route@example.test", Name: "Route Owner", Username: "route-owner"}
@@ -272,7 +272,7 @@ func TestOrganizationNamespaceRejectsServerOwnedRouteSegments(t *testing.T) {
 }
 
 func TestLegacyFSRepositoryRemainsAddressableBeforeNamespaceBackfill(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	owner := domain.User{ID: "legacy-owner", Email: "legacy@example.test", Name: "Legacy", Username: "legacy"}
 	repository := domain.Repository{
@@ -297,7 +297,7 @@ func TestLegacyFSRepositoryRemainsAddressableBeforeNamespaceBackfill(t *testing.
 }
 
 func TestAutomaticUsernameSkipsClaimedOrganizationNamespace(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	owner := domain.User{ID: "organization-owner", Email: "owner@example.test", Name: "Owner", Username: "owner"}
 	if err := st.UpsertUser(ctx, owner); err != nil {

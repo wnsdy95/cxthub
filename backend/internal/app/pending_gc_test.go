@@ -26,7 +26,7 @@ func pendingGCCIR(provider domain.ProviderKind, messages ...string) domain.CIRDo
 
 func putPendingGCCapture(t *testing.T, st *store.FSStore, repo domain.ContentHash, cir domain.CIRDocument) domain.Snapshot {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	raw, err := domain.CanonicalBytes(cir)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func putPendingGCCapture(t *testing.T, st *store.FSStore, repo domain.ContentHas
 
 func assertPendingGCCapture(t *testing.T, st *store.FSStore, snap domain.Snapshot) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	if _, err := st.GetSnapshot(ctx, snap.RepoID, snap.ID); err != nil {
 		t.Errorf("capture metadata lost: %s: %v", snap.ID, err)
 	}
@@ -67,7 +67,7 @@ func TestPutPendingLateCapturePreservesNewerData(t *testing.T) {
 			{name: "longer divergent", messages: []string{"first", "offline fork", "more offline work"}},
 		} {
 			t.Run(string(provider)+"/"+tc.name, func(t *testing.T) {
-				ctx := context.Background()
+				ctx := systemTestContext()
 				svc, st := newFsckSvc(t)
 				repo := hh("late pending gc")
 				newer := putPendingGCCapture(t, st, repo, pendingGCCIR(provider, "first", "newer work"))
@@ -94,7 +94,7 @@ func TestPutPendingLateCapturePreservesNewerData(t *testing.T) {
 func TestPutPendingGCRequiresUnreferencedSupersededLeaf(t *testing.T) {
 	for _, guard := range []string{"none", "branch", "tag", "pending", "natural child", "graft child", "memory", "legacy memory"} {
 		t.Run(guard, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			svc, st := newFsckSvc(t)
 			repo := hh("pending gc references")
 			old := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderClaude, "first"))
@@ -194,7 +194,7 @@ func (s *unreadablePendingGCDoc) GetDoc(ctx context.Context, repo, hash domain.C
 func TestGCHookLeafPreservesUnverifiedReplacement(t *testing.T) {
 	for _, reason := range []string{"missing successor", "old doc unreadable", "new doc unreadable", "different provider", "different session"} {
 		t.Run(reason, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			svc, st := newFsckSvc(t)
 			repo := hh("unverified gc successor")
 			old := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderClaude, "first"))
@@ -225,7 +225,7 @@ func TestGCHookLeafPreservesUnverifiedReplacement(t *testing.T) {
 func TestPendingReleaseWithoutSuccessorPreservesCapture(t *testing.T) {
 	for _, mode := range []string{"legacy", "CAS"} {
 		t.Run(mode, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			svc, st := newFsckSvc(t)
 			repo := hh("pending release gc")
 			snap := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderClaude, "uncommitted data"))

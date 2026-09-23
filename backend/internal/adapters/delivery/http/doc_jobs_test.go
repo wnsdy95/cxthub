@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -68,7 +67,7 @@ func TestDocJobHTTPDurabilityAndAuthorization(t *testing.T) {
 	if code := doJSONAs(t, "dev:outsider@t.io:Outsider", "GET", status, nil, nil); code != 403 && code != 404 {
 		t.Fatalf("foreign read %d", code)
 	}
-	if err := svc.ProcessDocFinalizations(context.Background(), 1); err != nil {
+	if err := svc.ProcessDocFinalizations(systemTestContext(), 1); err != nil {
 		t.Fatal(err)
 	}
 	if code := doJSON(t, "GET", status, nil, &job); code != 200 || job.State != "completed" {

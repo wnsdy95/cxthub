@@ -122,6 +122,24 @@ func (s *Service) projectGraphState(ctx context.Context, v domain.RepositoryView
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return graph, err
 	}
+	// Only committed graph/evidence generations can reuse derived branch facts.
+	// Pending captures still rebuild their current display projection below.
+	key := branchProjectionKey{repo: repo, graph: v.Revision.Graph, evidence: v.Revision.Evidence}
+	if evidence != nil {
+		key.origin = evidence.origin
+	}
+	_, insideWrite := ctx.Value(afterCommitKey{}).(*afterCommitActions)
+	cacheable := v.Revision.Graph > 0 && !insideWrite
+	if cacheable {
+		if cached, ok := s.branchCache.get(key); ok {
+			graph.BranchContexts = cached
+			for branch, c := range cached {
+				graph.BranchSnapshots[branch] = append([]domain.ContentHash{}, c.SnapshotIDs...)
+			}
+			domain.ApplyGraphIntegrations(&graph, v.Snapshots)
+			return graph, nil
+		}
+	}
 	for _, ref := range v.Refs {
 		if ref.Kind != domain.RefBranch || ref.Target == "" {
 			continue
@@ -139,6 +157,9 @@ func (s *Service) projectGraphState(ctx context.Context, v domain.RepositoryView
 		}
 		graph.BranchSnapshots[ref.Name] = inclusion.SnapshotIDs
 		graph.BranchContexts[ref.Name] = inclusion
+	}
+	if cacheable {
+		s.branchCache.put(key, graph.BranchContexts)
 	}
 	domain.ApplyGraphIntegrations(&graph, v.Snapshots)
 	return graph, nil

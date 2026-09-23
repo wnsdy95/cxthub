@@ -27,7 +27,7 @@ func (s *failedInviteTargetStore) AddMember(ctx context.Context, m domain.Member
 
 func TestPGLegacyInvitationAcceptsAllOriginalTargetsAtomically(t *testing.T) {
 	_, st, _ := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	other, err := f.identity.CreateOrganizationRepository(ctx, f.owner, f.organization.ID, "Second")
 	if err != nil {

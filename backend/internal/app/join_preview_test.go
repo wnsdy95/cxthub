@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -12,7 +11,7 @@ import (
 
 func joinPreviewFixture(t *testing.T) (*Service, *store.FSStore, inbound.JoinPreviewInput, map[string]domain.ContentHash) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	repositoryRecord := domain.Repository{ID: domain.NewID("ws_"), OwnerID: domain.NewID("user_"), Slug: "join", Name: "Join"}
 	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
@@ -56,7 +55,7 @@ func confirmPreview(in inbound.JoinPreviewInput, p inbound.JoinPreviewOutput, al
 }
 
 func TestJoinPreviewConfirmation(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	for _, all := range []bool{false, true} {
 		t.Run(map[bool]string{false: "partial", true: "whole"}[all], func(t *testing.T) {
 			svc, st, in, n := joinPreviewFixture(t)
@@ -84,7 +83,7 @@ func TestJoinPreviewConfirmation(t *testing.T) {
 }
 
 func TestJoinPreviewRejectsChangedApproval(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	for _, change := range []string{"new child", "foreign ref", "head", "missing approval", "changed choice", "revoked access"} {
 		t.Run(change, func(t *testing.T) {
 			svc, st, in, n := joinPreviewFixture(t)
@@ -139,7 +138,7 @@ func TestJoinPreviewRejectsChangedApproval(t *testing.T) {
 }
 
 func TestJoinPreviewStoreRejectsRaceAfterPlanning(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st, in, n := joinPreviewFixture(t)
 	g, err := svc.loadJoinGraph(ctx, in.RepoID)
 	if err != nil {

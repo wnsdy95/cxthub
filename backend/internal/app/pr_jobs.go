@@ -80,7 +80,7 @@ func (s *Service) ListPRPromotions(ctx context.Context, repo domain.ContentHash)
 	}
 	return st.ListPRJobs(ctx, repo)
 }
-func (s *Service) RetryPRPromotion(ctx context.Context, repo domain.ContentHash, id string) error {
+func (s *Service) retryPRPromotionCommand(ctx context.Context, repo domain.ContentHash, id string) error {
 	st, err := s.prJobs()
 	if err != nil {
 		return err
@@ -198,6 +198,7 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 
 // ProcessPRPromotions is bounded per tick, safe to run on multiple instances.
 func (s *Service) ProcessPRPromotions(ctx context.Context, limit int) error {
+	ctx = inbound.WithSystemActor(ctx)
 	st, err := s.prJobs()
 	if err != nil {
 		return err
@@ -238,4 +239,8 @@ func (s *Service) RunPRPromotionWorker(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Service) RetryPRPromotion(ctx context.Context, repo domain.ContentHash, id string) error {
+	return repositoryWriteError(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repo, func(ctx context.Context) error { return s.retryPRPromotionCommand(ctx, repo, id) })
 }

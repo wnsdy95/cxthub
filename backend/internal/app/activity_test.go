@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -12,7 +11,7 @@ import (
 )
 
 func TestActivitySerializesEmptyCollectionsAsArrays(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := NewService(st, st, nil, nil, st)
 

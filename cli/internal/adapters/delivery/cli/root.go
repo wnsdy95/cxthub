@@ -659,6 +659,7 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
+		replaySavedPRDiscovery(ctx, c, cwd)
 		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
 			return fmt.Errorf("rewritten context associations remain pending: %w", err)
 		}
@@ -674,7 +675,6 @@ func Run(c *Container, args []string) error {
 			}
 			return err
 		}
-		replaySavedPRDiscovery(ctx, c, cwd)
 		fmt.Printf("pushed %d snapshot(s), %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
 		if appendDiverged {
 			// Server grafted remote head onto local ancestry — pull will reflect in local history.
@@ -686,12 +686,12 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
+		replaySavedPRDiscovery(ctx, c, cwd)
 		force := flagPresent(rest, "--force") || flagPresent(rest, "-f")
 		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Force: force})
 		if err != nil {
 			return err
 		}
-		replaySavedPRDiscovery(ctx, c, cwd)
 		fmt.Printf("pulled %d snapshot(s), %d ref(s) from origin\n", out.Pulled, len(out.NewRefs))
 		if len(out.Conflicts) > 0 {
 			return fmt.Errorf("! [conflict] %s — merge canceled (local kept)\nhint: To adopt remote state, use 'cxt pull --force'", strings.Join(out.Conflicts, ", "))

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 
 func TestUpdateRefAppliesBranchLifecycleAndRejectsStaleBranch(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("branch-lifecycle-service-repo")
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
 		t.Fatal(err)
@@ -59,7 +58,7 @@ func TestUpdateRefAppliesBranchLifecycleAndRejectsStaleBranch(t *testing.T) {
 
 func TestUpdateRefRejectsLifecycleForceAndAppend(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("branch-lifecycle-policy-repo")
 	target := hh("branch-lifecycle-policy-target")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: target, RepoID: repo, DocHash: target}); err != nil {
@@ -81,7 +80,7 @@ func TestUpdateRefRejectsLifecycleForceAndAppend(t *testing.T) {
 
 func TestUpdateRefRejectsArchiveOfProtectedDefaultBranch(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("protected-default-lifecycle-repo")
 	target := hh("protected-default-lifecycle-target")
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", ProtectDefault: true}); err != nil {
@@ -108,7 +107,7 @@ func TestUpdateRefRejectsArchiveOfProtectedDefaultBranch(t *testing.T) {
 
 func TestEmptyRefBatchSelfHealsInterruptedPendingReconciliation(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("deferred-lifecycle-reconciliation-repo")
 	target := hh("deferred-lifecycle-reconciliation-target")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: target, RepoID: repo, DocHash: target}); err != nil {

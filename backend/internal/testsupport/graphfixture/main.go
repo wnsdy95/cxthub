@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/graphwire"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -46,7 +47,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	if (input.Mode == "integrations" || input.Mode == "integrations-wire") && input.View.Graph != nil {
+	if strings.HasPrefix(input.Mode, "integrations") && input.View.Graph != nil {
 		g.BranchContexts = input.View.Graph.BranchContexts
 		for name, c := range g.BranchContexts {
 			g.BranchSnapshots[name] = c.SnapshotIDs
@@ -55,11 +56,15 @@ func main() {
 	}
 	v.Graph = &g
 	var result any = v
-	if input.Mode == "wire" || input.Mode == "integrations-wire" {
+	if strings.Contains(input.Mode, "wire") {
+		var encoded any = graphwire.Encode(g)
+		if strings.HasSuffix(input.Mode, "-v2") {
+			encoded = graphwire.EncodeV2(g)
+		}
 		result = struct {
 			domain.RepositoryView
-			Graph graphwire.State `json:"graph"`
-		}{v, graphwire.Encode(g)}
+			Graph any `json:"graph"`
+		}{v, encoded}
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
 		fail(err)

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"reflect"
@@ -15,7 +14,7 @@ import (
 func branchContextFixture(t *testing.T) (*effectiveFixture, domain.Ref, []domain.HistoryEvent) {
 	t.Helper()
 	f := newEffectiveFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	// Main's later conversation intentionally does not reach either PR. Its
 	// code still includes both merges. This models a same-code continuation.
 	ref := domain.Ref{RepoID: f.repo, Kind: domain.RefBranch, Name: "main", BranchID: "main-id", Target: hh("continued-main")}
@@ -49,7 +48,7 @@ func branchContextFixture(t *testing.T) (*effectiveFixture, domain.Ref, []domain
 
 func TestBranchContextIncludesCompletedSourcesInGitOrderAfterContinuation(t *testing.T) {
 	f, ref, history := branchContextFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	snaps, _ := f.st.ListSnapshots(ctx, f.repo, "")
 	evidence, _ := f.svc.newCodeEvidence(ctx, f.repo)
 	got, err := f.svc.branchContext(ctx, ref, effectiveOID(3), snaps, history, evidence)
@@ -90,7 +89,7 @@ func TestBranchContextIncludesCompletedSourcesInGitOrderAfterContinuation(t *tes
 
 func TestBranchContextKeepsPastCodeUnknownEvidenceAndIdentitySeparate(t *testing.T) {
 	f, ref, history := branchContextFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	snaps, _ := f.st.ListSnapshots(ctx, f.repo, "")
 	for _, tt := range []struct {
 		name, code, identity string
@@ -126,7 +125,7 @@ func TestBranchContextKeepsPastCodeUnknownEvidenceAndIdentitySeparate(t *testing
 
 func TestBranchContextSharedViewAndMemoryContract(t *testing.T) {
 	f, ref, history := branchContextFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	if err := f.st.CompareAndSwapRef(ctx, f.repo, ref, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +192,7 @@ func TestBranchContextSharedViewAndMemoryContract(t *testing.T) {
 
 func TestBranchContextDoesNotImportFutureSourceGrafts(t *testing.T) {
 	f, ref, history := branchContextFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	// A's later placement now points at B. At A's merge revision B must stay out.
 	if err := f.st.AddGraftParents(ctx, f.repo, f.a, []domain.ContentHash{f.b}); err != nil {
 		t.Fatal(err)
@@ -215,7 +214,7 @@ func TestBranchContextDoesNotImportFutureSourceGrafts(t *testing.T) {
 
 func TestBranchPromptIncludesMergedHistoryWithoutArchiveSizedPrompts(t *testing.T) {
 	f, ref, history := branchContextFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	for _, h := range history {
 		if err := f.st.ApplyHistoryEvent(ctx, h); err != nil {
 			t.Fatal(err)
@@ -249,7 +248,7 @@ func TestBranchPromptIncludesMergedHistoryWithoutArchiveSizedPrompts(t *testing.
 
 func TestBranchInheritsCompletedMainKnowledgeAtItsRecordedBirth(t *testing.T) {
 	f, main, history := branchContextFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	publication := domain.HistoryEvent{ID: fmt.Sprintf("%032x", 300), RepoID: string(f.repo), Branch: "main", BranchID: main.BranchID, Kind: "publish", Source: main.Target, Target: main.Target, GitAfter: effectiveOID(3)}
 	birth := domain.HistoryEvent{ID: fmt.Sprintf("%032x", 301), RepoID: string(f.repo), Branch: "new-feature", BranchID: "new-feature-id", Kind: "birth", Source: main.Target, Target: main.Target, GitAfter: effectiveOID(3)}
 	history = append(history, publication, birth)

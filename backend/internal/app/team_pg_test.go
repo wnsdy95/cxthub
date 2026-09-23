@@ -16,7 +16,7 @@ func TestPGTeamAccessContract(t *testing.T) { _, st, _ := collaborationPG(t); ru
 func TestPGTeamRevocationSerializesWithContextWrites(t *testing.T) {
 	_, st, repo := collaborationPG(t)
 	f := makeTeamFixture(t, st)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 10*time.Second)
 	defer cancel()
 	if err := f.identity.UpdateTeamMember(ctx, f.owner.ID, f.organization.ID, f.team.ID, f.member.ID, domain.TeamMember); err != nil {
 		t.Fatal(err)
@@ -92,11 +92,11 @@ func TestPGTeamGrantRollsBackWithAuditFailure(t *testing.T) {
 	_, st, _ := collaborationPG(t)
 	f := makeTeamFixture(t, st)
 	svc := NewIdentityService(nil, failedTeamAuditStore{st})
-	err := svc.SetTeamRepository(context.Background(), f.owner.ID, f.organization.ID, f.team.ID, f.repository.ID, domain.RoleOwner)
+	err := svc.SetTeamRepository(systemTestContext(), f.owner.ID, f.organization.ID, f.team.ID, f.repository.ID, domain.RoleOwner)
 	if err == nil {
 		t.Fatal("failed audit was ignored")
 	}
-	grants, err := st.ListTeamRepositoryGrants(context.Background(), f.team.ID)
+	grants, err := st.ListTeamRepositoryGrants(systemTestContext(), f.team.ID)
 	if err != nil || len(grants) != 0 {
 		t.Fatalf("grant escaped rollback: %+v %v", grants, err)
 	}

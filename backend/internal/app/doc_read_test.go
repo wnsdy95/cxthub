@@ -28,7 +28,7 @@ func (s *countedReadStore) GetChunk(ctx context.Context, r, h domain.ContentHash
 }
 
 func TestIndexedReadPagesPreserveEveryEventAndOnlyReadNeededChunks(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := h('1')
 	fs := store.NewFSStore(t.TempDir())
 	doc := domain.SessionDoc{CIR: domain.CIRDocument{Events: []domain.CIREvent{}}}
@@ -98,7 +98,7 @@ func TestIndexedReadPagesPreserveEveryEventAndOnlyReadNeededChunks(t *testing.T)
 }
 
 func TestIndexedFragmentsBoundOversizedUnicodeEventAndPreserveBytes(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := h('1')
 	fs := store.NewFSStore(t.TempDir())
 	doc := domain.SessionDoc{CIR: domain.CIRDocument{Events: []domain.CIREvent{{Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: strings.Repeat("\uac80\uc0c9🌿", 200000)}}}}}}

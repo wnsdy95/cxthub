@@ -424,7 +424,7 @@ func (s *Server) guard(min domain.MemberRole, fn http.HandlerFunc) http.HandlerF
 	return func(w http.ResponseWriter, r *http.Request) {
 		if token := s.requestToken(r); token != "" {
 			if u, err := s.id.ResolveUser(r.Context(), token); err == nil {
-				r = r.WithContext(context.WithValue(r.Context(), userCtxKey, u))
+				r = r.WithContext(inbound.WithRepositoryActor(context.WithValue(r.Context(), userCtxKey, u), u.ID))
 			}
 		}
 		if !s.requireRepoRole(w, r, min) {
@@ -1005,7 +1005,7 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	}); ok {
 		promote = durable.SubmitMergedPR
 	}
-	n, perr := promote(r.Context(), gitURL, domain.PullRequestMerge{Number: payload.Number, BaseBranch: payload.PullRequest.Base.Ref, HeadBranch: payload.PullRequest.Head.Ref, HeadSHA: payload.PullRequest.Head.SHA, MergeSHA: payload.PullRequest.MergeSHA})
+	n, perr := promote(inbound.WithSystemActor(r.Context()), gitURL, domain.PullRequestMerge{Number: payload.Number, BaseBranch: payload.PullRequest.Base.Ref, HeadBranch: payload.PullRequest.Head.Ref, HeadSHA: payload.PullRequest.Head.SHA, MergeSHA: payload.PullRequest.MergeSHA})
 	s.respond(w, map[string]interface{}{"status": "accepted", "queued": n}, perr)
 }
 
