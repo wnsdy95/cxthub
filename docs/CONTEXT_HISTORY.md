@@ -44,6 +44,16 @@ The graph retains the completed operation and distinguishes historical placement
 from current conversation ancestry; it must not redirect current refs/children
 through a superseded placement or reconstruct a cycle.
 
+A late PR completion may append an older contribution after a newer PR has
+already completed. Automatic branch-code selection follows the immutable
+completion records' pre-append targets and selects a Git revision only when
+stored ancestry proves it contains all candidate revisions. Receipt timestamps,
+PR numbers, and the last arriving source do not select the code revision. Full
+view, pending view, context queries, and branch memory use this same resolver.
+Missing or contradictory evidence stays unresolved. Explicit historical code
+and worktree selections retain their requested scope; no records or edges are
+rewritten by the query.
+
 `RepositoryView` owns projected branch memberships. `PendingView` supplies raw
 capture patches at a matching graph revision and intentionally omits `branches`;
 clients preserve that field from the full generation. Stored memory is fetched
