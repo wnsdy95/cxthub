@@ -54,7 +54,7 @@ func TestEffectiveMemoryMCPFragmentsAndSelection(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		s := &Server{context: f}
 		s.SetEffectiveMemory(q)
-		raw, err := s.memoryPage(context.Background(), repo, a)
+		raw, err := s.memoryPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,17 +102,17 @@ func TestEffectiveMemoryMCPFragmentsAndSelection(t *testing.T) {
 	a.Cursor = first
 	changed := a
 	changed.CodeCommit = strings.Repeat("b", 40)
-	if _, err := s.memoryPage(context.Background(), repo, changed); err == nil {
+	if _, err := s.memoryPage(systemTestContext(), repo, changed); err == nil {
 		t.Fatal("cursor accepted different code")
 	}
 	changed = a
 	changed.CodeCommit = ""
 	changed.Cursor = ""
-	if _, err := s.memoryPage(context.Background(), repo, changed); err == nil {
+	if _, err := s.memoryPage(systemTestContext(), repo, changed); err == nil {
 		t.Fatal("code position inferred")
 	}
 	q.state = pageHash(8)
-	if _, err := s.memoryPage(context.Background(), repo, a); err == nil {
+	if _, err := s.memoryPage(systemTestContext(), repo, a); err == nil {
 		t.Fatal("mixed evidence generations")
 	}
 }

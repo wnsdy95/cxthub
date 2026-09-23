@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -14,7 +13,7 @@ func TestPRTrackingAliasUsesExactHeadAndCanonicalIdentity(t *testing.T) {
 	for _, crossWorktree := range []bool{false, true} {
 		t.Run(map[bool]string{false: "renamed alias", true: "shared alias in linked worktree"}[crossWorktree], func(t *testing.T) {
 			svc, st := newFsckSvc(t)
-			ctx := context.Background()
+			ctx := systemTestContext()
 			repo := hh("tracking-pr")
 			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/a/b"}); err != nil {
 				t.Fatal(err)
@@ -81,7 +80,7 @@ func TestPRTrackingAliasUsesExactHeadAndCanonicalIdentity(t *testing.T) {
 
 func TestPRTrackingAliasRejectsUnprovenOrAmbiguousAssociations(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("alias-resolution")
 	st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main"})
 	source := prSnapshot(t, st, repo, "source")
@@ -122,7 +121,7 @@ func TestPRTrackingAliasRejectsUnprovenOrAmbiguousAssociations(t *testing.T) {
 func TestPRTrackingAliasPublicationUsesOrdinaryProofTime(t *testing.T) {
 	for _, beforeAttachment := range []bool{false, true} {
 		t.Run(map[bool]string{false: "publication clock rollback", true: "late publication cannot authorize early proof"}[beforeAttachment], func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			svc, st := newFsckSvc(t)
 			repo := hh(t.Name())
 			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/alias"}); err != nil {

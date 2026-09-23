@@ -2,7 +2,6 @@ package http
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +15,7 @@ import (
 )
 
 func TestJoinPreviewWireAndStaleConfirmation(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	svc := app.NewService(st, st, nil, nil, st)
 	identity := app.NewIdentityService(auth.NewDevVerifier(), st)

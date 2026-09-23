@@ -2,7 +2,7 @@
 //
 // In the hexagonal architecture, this is the interface that the app(use-case) calls to the infrastructure.
 //
-//   - MetadataStore: repo/branch/ref/snapshot meta/manifest metadata (Postgres; currently stub).
+//   - MetadataStore: repo/branch/ref/snapshot meta/manifest metadata (PostgreSQL in production; filesystem in development).
 //   - BlobStore:     content-addressed body (CIR doc / memory; v1 Postgres BYTEA, later S3).
 //   - AuthProvider:  team token ↔ team mapping, repo visibility (sync protocol).
 //   - GitEngine:     git semantic engine (commit/branch/fork/diff/ref; CIR/hash-based, format-agnostic).
@@ -17,9 +17,8 @@ import (
 
 // MetadataStore persists metadata (immutable snapshot metadata + mutable ref/manifest).
 //
-// Implementation (impl step): PostgreSQL. Tables (repos, branches, refs, snapshots(meta),
-// memories(meta), team_identities) source DDL = schemas/db/migrations/*.sql.
-// Currently, it is a stdlib-only stub (pgx not imported).
+// PostgreSQL adapters implement production persistence and transactions; the
+// filesystem adapter supports development. DDL lives in schemas/db/migrations.
 //
 // The body (CIR doc / memory) is not stored here but in BlobStore (meta/body separation, data model).
 // Mutable state (ref/manifest) is protected by manifest version-CAS boundaries (immutable invariant C1/M2).

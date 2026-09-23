@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -14,7 +13,7 @@ import (
 // an orphan session with no node in the graph.
 func TestPutPendingRejectsMissingTarget(t *testing.T) {
 	svc, _ := newFsckSvc(t)
-	err := svc.PutPending(context.Background(), hh("r"), "sess-y", domain.Pending{Target: hh("z"), Branch: "main"})
+	err := svc.PutPending(systemTestContext(), hh("r"), "sess-y", domain.Pending{Target: hh("z"), Branch: "main"})
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("err=%v, want ErrValidation (missing target requires object push)", err)
 	}
@@ -26,7 +25,7 @@ func TestPutPendingRejectsMissingTarget(t *testing.T) {
 // This is the core defense against the "deleted but still appearing" issue.
 func TestDismissPendingSticky(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("r")
 	sid := "sess-x"
 	// PutPending validates target object existence (fail-closed) — mirror hook capture snapshot push.
@@ -64,7 +63,7 @@ func TestDismissPendingSticky(t *testing.T) {
 // sticky is cleared (pendingDismissed=false path).
 func TestUndismissPending(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("r")
 	sid := "sess-u"
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: hh("u"), RepoID: repo, DocHash: hh("u"), Message: "hook: wip"}); err != nil {
@@ -95,7 +94,7 @@ func TestUndismissPending(t *testing.T) {
 
 func TestCompareAndDeletePendingPreservesNewerCapture(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("r")
 	oldTarget := hh("o")
 	newTarget := hh("n")
@@ -132,7 +131,7 @@ func TestUpdateRefReconcilesReachablePendingWithoutDeletingHistory(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, st := newFsckSvc(t)
-			ctx := context.Background()
+			ctx := systemTestContext()
 			repo := hh("r")
 			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
 				t.Fatal(err)

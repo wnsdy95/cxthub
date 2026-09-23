@@ -21,7 +21,7 @@ func TestPGSyncAuditCreationPersistenceAndConcurrentWriter(t *testing.T) {
 	if dsn == "" {
 		t.Skip("CXT_TEST_DSN unset")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 20*time.Second)
 	defer cancel()
 	st, err := store.NewPostgresStore(ctx, dsn)
 	if err != nil {

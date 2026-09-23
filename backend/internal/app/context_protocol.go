@@ -7,7 +7,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-func (s *Service) EnableContextProtocol(ctx context.Context, repo domain.ContentHash) error {
+func (s *Service) enableContextProtocolCommand(ctx context.Context, repo domain.ContentHash) error {
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return err
 	}
@@ -46,4 +46,8 @@ func (s *Service) checkContextWrite(ctx context.Context, repoID domain.ContentHa
 		return err
 	}
 	return domain.ValidateContextRefWrite(repo.ContextProtocol, events, current, next)
+}
+
+func (s *Service) EnableContextProtocol(ctx context.Context, repo domain.ContentHash) error {
+	return repositoryWriteError(writeAction(ctx, "manage"), s, repo, func(ctx context.Context) error { return s.enableContextProtocolCommand(ctx, repo) })
 }

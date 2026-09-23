@@ -13,7 +13,7 @@ import (
 
 func finalizationJobFixture(t *testing.T) (*Service, *store.FSStore, domain.PRPromotionJob, domain.HistoryEvent) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/finalization"}); err != nil {
@@ -38,7 +38,7 @@ func finalizationJobFixture(t *testing.T) (*Service, *store.FSStore, domain.PRPr
 
 func exhaustSourceAttempts(t *testing.T, svc *Service, st *store.FSStore, job domain.PRPromotionJob) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	for attempt := 1; attempt <= prSourcePendingAttempts; attempt++ {
 		claimed, err := st.ClaimPRJob(ctx, job.RepoID, job.ID, time.Now().Add(time.Hour), prJobLease)
 		if err != nil {
@@ -62,7 +62,7 @@ func exhaustSourceAttempts(t *testing.T, svc *Service, st *store.FSStore, job do
 }
 
 func TestPRFinalizationAttentionAllowsLaterJobAndExactPublicationRecovery(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st, old, proof := finalizationJobFixture(t)
 	exhaustSourceAttempts(t, svc, st, old)
 	rows, _ := svc.ListHistory(ctx, old.RepoID)
@@ -128,7 +128,7 @@ func (s *publicationBeforeAttentionStore) FinishPRJob(ctx context.Context, j dom
 func TestPRFinalizationWakeSurvivesAttentionRaceAndRestart(t *testing.T) {
 	for _, scenario := range []string{"publication before attention commit", "crash after publication commit", "acknowledged publication retry"} {
 		t.Run(scenario, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			svc, st, job, proof := finalizationJobFixture(t)
 			if scenario == "publication before attention commit" {
 				wrapped := &publicationBeforeAttentionStore{FSStore: st}

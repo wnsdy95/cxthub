@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"net"
 	"net/http"
 	"strings"
@@ -31,6 +32,7 @@ type IdentityBackend interface {
 	GetRepository(ctx context.Context, repositoryID string) (domain.Repository, error)
 	IsPublicRepository(ctx context.Context, repositoryID string) bool
 	IsOwner(ctx context.Context, repositoryID, userID string) bool
+	CanTransferOwnership(ctx context.Context, repositoryID, userID string) bool
 	RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool)
 	TransferOwnership(ctx context.Context, actorID, repositoryID, targetID string) (domain.Repository, error)
 	UpdateMemberRole(ctx context.Context, actorID, repositoryID, targetID string, role domain.MemberRole) error
@@ -189,7 +191,7 @@ func (s *Server) requireUser(fn http.HandlerFunc) http.HandlerFunc {
 			s.writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid or expired token")
 			return
 		}
-		fn(w, r.WithContext(context.WithValue(r.Context(), userCtxKey, u)))
+		fn(w, r.WithContext(inbound.WithRepositoryActor(context.WithValue(r.Context(), userCtxKey, u), u.ID)))
 	}
 }
 
@@ -198,7 +200,7 @@ func (s *Server) optionalUser(fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if token := s.requestToken(r); token != "" {
 			if u, err := s.id.ResolveUser(r.Context(), token); err == nil {
-				r = r.WithContext(context.WithValue(r.Context(), userCtxKey, u))
+				r = r.WithContext(inbound.WithRepositoryActor(context.WithValue(r.Context(), userCtxKey, u), u.ID))
 			}
 		}
 		fn(w, r)

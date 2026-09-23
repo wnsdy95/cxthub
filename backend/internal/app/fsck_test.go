@@ -43,7 +43,7 @@ func hh(c string) domain.ContentHash {
 // TestFsckReachability: Reachability audit — classification of reachable/unreachable/root/dangling-parent nodes.
 func TestFsckReachability(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("r")
 	mk := func(id string, parents ...domain.ContentHash) {
 		if err := st.PutSnapshot(ctx, domain.Snapshot{ID: hh(id), RepoID: repo, Parents: parents, DocHash: hh(id)}); err != nil {
@@ -82,7 +82,7 @@ func TestFsckReachability(t *testing.T) {
 
 func TestFsckTreatsPendingAsReachabilityRoot(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("pending-root-repo")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: hh("base"), RepoID: repo, DocHash: hh("base")}); err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestFsckTreatsPendingAsReachabilityRoot(t *testing.T) {
 // edges pointing to nonexistent snapshots in overlay grafts should be reported as corruption (overlay grafts can create exactly this corruption class that the auditor might have missed).
 func TestFsckDanglingGraftParent(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("q")
 	if err := st.PutSnapshot(ctx, domain.Snapshot{ID: hh("a"), RepoID: repo, DocHash: hh("a")}); err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestFsckDanglingGraftParent(t *testing.T) {
 // An unreachable leaf is collected only after a verified prefix extension.
 func TestGCHookLeafReachabilityGuard(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("g")
 	must := func(err error) {
 		if err != nil {
@@ -163,7 +163,7 @@ func TestGCHookLeafReachabilityGuard(t *testing.T) {
 }
 
 func TestGCHookLeafKeepsDocWhenSnapshotDeleteFails(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	base := store.NewFSStore(t.TempDir())
 	st := &deleteFailStore{FSStore: base}
 	svc := NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(base), base)

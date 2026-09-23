@@ -33,10 +33,10 @@ export const ROLE_CAPABILITIES: ReadonlyArray<{
   { id: 'administerRepository', minimumRole: 'owner' },
 ];
 
-/** Role within the repository. The constructor is always owner, null for non-members. */
+/** Server-computed repository role, including inherited Organization Owner access. */
 export function myRole(repositoryMetadata: Repository | null, userId: string | undefined, members: Membership[]): Role | null {
   if (!repositoryMetadata || !userId) return null;
-  // Team and direct grants are resolved by the server. Missing/unknown roles
+  // Organization, team and direct authority are resolved by the server. Missing/unknown roles
   // fail closed until the authorization projection has loaded.
   void members;
   return repositoryMetadata.effective_role && ROLE_RANK[repositoryMetadata.effective_role] ? repositoryMetadata.effective_role : null;

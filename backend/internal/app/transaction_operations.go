@@ -55,6 +55,7 @@ func (s *Service) GetManifest(ctx context.Context, repo domain.ContentHash) (dom
 }
 
 func (s *Service) EnsureRepo(ctx context.Context, actor string, repo domain.Repo) (domain.Repo, error) {
+	ctx = writeAction(inbound.WithRepositoryActor(ctx, actor), "register")
 	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repo.ID, func(ctx context.Context) (domain.Repo, error) { return s.ensureRepo(ctx, actor, repo) })
 }
 func (s *Service) ListRefs(ctx context.Context, repo domain.ContentHash) ([]domain.Ref, error) {
@@ -71,4 +72,33 @@ func (s *Service) GetMemoryDigest(ctx context.Context, repo, id domain.ContentHa
 }
 func (s *Service) PutUnsync(ctx context.Context, repo domain.ContentHash, user, branch string, u domain.Unsync) error {
 	return repositoryWriteError(ctx, s, repo, func(ctx context.Context) error { return s.putUnsync(ctx, repo, user, branch, u) })
+}
+
+func (s *Service) StoreChunks(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error) {
+	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, in.RepoID, func(ctx context.Context) (inbound.StoreChunksOutput, error) { return s.storeChunksCommand(ctx, in) })
+}
+func (s *Service) PromoteSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error {
+	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error { return s.promoteSnapshotMessageCommand(ctx, repoID, id, message) })
+}
+func (s *Service) UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error {
+	return repositoryWriteError(writeAction(ctx, "manage"), s, repoID, func(ctx context.Context) error {
+		return s.updateAboutCommand(ctx, repoID, description, website, topics)
+	})
+}
+func (s *Service) UpdateRepoConfig(ctx context.Context, repoID domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
+	return repositoryWriteError(writeAction(ctx, "manage"), s, repoID, func(ctx context.Context) error {
+		return s.updateRepoConfigCommand(ctx, repoID, defaultBranch, protectDefault)
+	})
+}
+func (s *Service) PutSettings(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error {
+	return repositoryWriteError(writeAction(ctx, "settings"), s, repoID, func(ctx context.Context) error { return s.putSettingsCommand(ctx, repoID, bundle) })
+}
+func (s *Service) PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error {
+	return repositoryWriteError(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repoID, func(ctx context.Context) error { return s.putSettingsObjectCommand(ctx, repoID, hash, bundle) })
+}
+func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+	return s.putMemoryDigestCommand(ctx, repoID, d)
+}
+func (s *Service) PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+	return s.putMemoryDigestCASCommand(ctx, repoID, d)
 }

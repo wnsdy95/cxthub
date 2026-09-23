@@ -22,3 +22,24 @@ assert.throws(()=>decodeGraphState({...wire,dictionary:['a','a']}),/Invalid grap
 assert.throws(()=>decodeGraphState({...wire,branch_snapshots:{main:[wire.dictionary.length]}}),/Invalid graph index/);
 assert.throws(()=>decodeGraphState({...wire,hold:[{tips:[],ids:[-1]}]}),/Invalid graph index/);
 assert.throws(()=>decodeGraphState({...wire,previous:[{key:'x',branch:'main',before:'b',after:'a',created_at:'',snapshot_ids:[-1],collapsible_ids:[]}]}),/Invalid graph index/);
+
+const integrationInput: Partial<RepositoryView> = {...input, graph: {...serverGraphFixture(input).graph, branch_contexts: {
+  main: {branch_id: 'main', snapshot_id: 'b', reason: 'current', roots: ['b'], snapshot_ids: ['a','b'], merges: []},
+}}};
+const v2 = serverGraphWireFixture(integrationInput, '', 2).graph;
+assert.equal(v2.encoding, 'indexed-v2');
+if (v2.encoding !== 'indexed-v2') throw new Error('expected v2');
+assert.equal(v2.branch_contexts.main.snapshot_ids_ref, 'main');
+assert.equal(v2.branch_contexts.main.snapshot_ids, undefined);
+const savedV2 = JSON.stringify(v2);
+assert.deepEqual(decodeGraphState(v2), serverGraphFixture(integrationInput, '', 'integrations').graph);
+assert.equal(JSON.stringify(v2), savedV2);
+for (const invalid of [
+  {...v2.branch_contexts.main, roots: [-1]},
+  {...v2.branch_contexts.main, snapshot_ids_ref: 'absent'},
+  {...v2.branch_contexts.main, snapshot_ids: []},
+]) assert.throws(()=>decodeGraphState({...v2, branch_contexts: {main: invalid}}));
+const decodedV2 = decodeGraphState(v2);
+decodedV2.branch_contexts!.main.snapshot_ids.push('changed');
+assert.equal(decodedV2.branch_snapshots.main.includes('changed'), false);
+assert.equal(JSON.stringify(v2), savedV2);

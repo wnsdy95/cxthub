@@ -32,7 +32,7 @@ func TestCommitUsesVerifiedDocumentAndRejectsForgedDuplicate(t *testing.T) {
 	doc := makeCommitDoc(t, "original")
 	snap := domain.Snapshot{ID: doc.Hash, RepoID: repo, DocHash: doc.Hash}
 	input := inbound.CommitInput{RepoID: repo, Docs: []domain.SessionDoc{doc}, Snapshots: []domain.Snapshot{snap}}
-	if _, err := svc.Commit(context.Background(), input); err != nil {
+	if _, err := svc.Commit(systemTestContext(), input); err != nil {
 		t.Fatal(err)
 	}
 	if writer.writes != 1 {
@@ -41,7 +41,7 @@ func TestCommitUsesVerifiedDocumentAndRejectsForgedDuplicate(t *testing.T) {
 	forged := makeCommitDoc(t, "different")
 	forged.Hash = doc.Hash
 	input.Docs = append(input.Docs, forged)
-	if _, err := svc.Commit(context.Background(), input); !errors.Is(err, domain.ErrIntegrity) {
+	if _, err := svc.Commit(systemTestContext(), input); !errors.Is(err, domain.ErrIntegrity) {
 		t.Fatalf("forged duplicate: %v", err)
 	}
 	if writer.writes != 1 {
@@ -64,7 +64,7 @@ func makeCommitDoc(t *testing.T, text string) domain.SessionDoc {
 
 func TestCommitRejectsDocHashMismatchBeforeStore(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("commit-integrity-repo")
 	doc := makeCommitDoc(t, "actual body")
 	doc.Hash = hh("claimed-doc-hash")
@@ -84,7 +84,7 @@ func TestCommitRejectsDocHashMismatchBeforeStore(t *testing.T) {
 
 func TestCommitDoesNotPartiallyStoreDocsWhenSnapshotValidationFails(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("partial-store-repo")
 	doc := makeCommitDoc(t, "valid but unrelated")
 	missing := hh("missing-doc")
@@ -101,7 +101,7 @@ func TestCommitDoesNotPartiallyStoreDocsWhenSnapshotValidationFails(t *testing.T
 
 func TestPutSettingsObjectRejectsHashMismatch(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("settings-object-repo")
 	bundle := domain.SettingsBundle{
 		Kind:  "claude",
@@ -129,7 +129,7 @@ func TestPutSettingsObjectRejectsHashMismatch(t *testing.T) {
 
 func TestCommitRejectsMissingSettingsObjectBeforeStore(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("missing-settings-repo")
 	bindCommitTestRepo(t, st, repo)
 	doc := makeCommitDoc(t, "snapshot with absent settings")
@@ -151,7 +151,7 @@ func bindCommitTestRepo(t *testing.T, st interface {
 	PutRepo(context.Context, domain.Repo) (domain.Repo, error)
 }, repo domain.ContentHash) {
 	t.Helper()
-	if _, err := st.PutRepo(context.Background(), domain.Repo{
+	if _, err := st.PutRepo(systemTestContext(), domain.Repo{
 		ID: repo, DefaultBranch: "main", RepositoryID: domain.NewID("ws_"),
 	}); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func bindCommitTestRepo(t *testing.T, st interface {
 
 func TestCommitRejectsMissingParentBeforeStore(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("missing-parent-repo")
 	bindCommitTestRepo(t, st, repo)
 	doc := makeCommitDoc(t, "child")
@@ -177,7 +177,7 @@ func TestCommitRejectsMissingParentBeforeStore(t *testing.T) {
 
 func TestCommitRejectsCyclicBatchBeforeStore(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("cycle-repo")
 	bindCommitTestRepo(t, st, repo)
 	docA := makeCommitDoc(t, "cycle-a")
@@ -198,7 +198,7 @@ func TestCommitRejectsCyclicBatchBeforeStore(t *testing.T) {
 
 func TestCommitRejectsDuplicateSnapshotBeforeStore(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("duplicate-snapshot-repo")
 	bindCommitTestRepo(t, st, repo)
 	doc := makeCommitDoc(t, "duplicate snapshot")
@@ -221,7 +221,7 @@ func TestCommitRejectsDuplicateSnapshotBeforeStore(t *testing.T) {
 
 func TestCommitRejectsClientOwnedGraftMetadata(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("client-graft-repo")
 	bindCommitTestRepo(t, st, repo)
 	parentDoc := makeCommitDoc(t, "parent")
@@ -245,7 +245,7 @@ func TestCommitRejectsClientOwnedGraftMetadata(t *testing.T) {
 
 func TestCommitRejectsClientOwnedGraftSequence(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("client-graft-seq-repo")
 	bindCommitTestRepo(t, st, repo)
 	doc := makeCommitDoc(t, "malicious graft sequence")

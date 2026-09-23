@@ -16,10 +16,11 @@ import (
 )
 
 type prDiscovery struct {
-	Origin    string    `json:"origin"`
-	Branch    string    `json:"branch"`
-	SHAs      []string  `json:"shas"`
-	CreatedAt time.Time `json:"created_at"`
+	Origin      string    `json:"origin"`
+	Branch      string    `json:"branch"`
+	SHAs        []string  `json:"shas"`
+	CreatedAt   time.Time `json:"created_at"`
+	LastAttempt time.Time `json:"last_attempt,omitempty"`
 }
 
 // persistPRDiscovery records the Git range before any remote IO can consume the
@@ -58,7 +59,6 @@ func replayPRDiscovery(ctx context.Context, resolver outbound.PullRequestMergeRe
 	}
 	if err := persistPRDiscovery(ctx, cwd, branch, origin, shas); err != nil {
 		hookWarn("%v", err)
-		return false
 	}
 	root := cxtRepoRoot(ctx, cwd)
 	rel := filepath.Join(".cxt", "pr-discovery")
@@ -86,27 +86,42 @@ func replayPRDiscovery(ctx context.Context, resolver outbound.PullRequestMergeRe
 		raw, err := providerfs.ReadRepoFile(root, path)
 		if err != nil {
 			hookWarn("PR discovery queue read failed: %v", err)
-			return false
+			continue
 		}
 		var item prDiscovery
 		if json.Unmarshal(raw, &item) != nil || len(item.SHAs) == 0 || len(item.SHAs) > 200 {
 			hookWarn("PR discovery record is corrupt: %s", entry.Name())
-			return false
+			continue
 		}
 		if item.Origin == origin && item.Branch == branch {
 			work = append(work, pending{path, item})
 		}
 	}
-	sort.Slice(work, func(i, j int) bool { return work[i].item.CreatedAt.Before(work[j].item.CreatedAt) })
+	sort.Slice(work, func(i, j int) bool {
+		a, b := work[i].item, work[j].item
+		if !a.LastAttempt.Equal(b.LastAttempt) {
+			return a.LastAttempt.Before(b.LastAttempt)
+		}
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+		return work[i].path < work[j].path
+	})
 	reflected := false
 	for i, w := range work {
 		if i >= 4 || ctx.Err() != nil {
 			break
 		}
+		w.item.LastAttempt = time.Now().UTC()
+		raw, _ := json.Marshal(w.item)
+		if err := providerfs.WriteRepoFileDurable(root, w.path, raw, 0600); err != nil {
+			hookWarn("PR discovery retry state failed: %v", err)
+			continue
+		}
 		did, done := processMergedPRContexts(ctx, resolver, syncer, cwd, branch, origin, w.item.SHAs)
 		reflected = reflected || did
 		if !done {
-			break
+			continue
 		}
 		if err := providerfs.RemoveRepoFile(root, w.path); err != nil {
 			hookWarn("PR discovery acknowledgement failed: %v", err)

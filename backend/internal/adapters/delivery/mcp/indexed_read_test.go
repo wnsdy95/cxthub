@@ -33,7 +33,7 @@ func (b *indexedPageBackend) SearchDocEvents(ctx context.Context, r, h domain.Co
 }
 
 func TestIndexedMCPFetchAndSearchPreserveCursorContract(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := domain.Repo{ID: pageHash(1)}
 	fs := store.NewFSStore(t.TempDir())
 	doc := domain.SessionDoc{CIR: domain.CIRDocument{Events: []domain.CIREvent{}}}

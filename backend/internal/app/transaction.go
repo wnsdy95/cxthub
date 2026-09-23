@@ -37,6 +37,14 @@ type afterCommitKey struct{}
 type afterCommitActions struct{ actions []func() }
 
 func repositoryWrite[T any](ctx context.Context, s *Service, repo domain.ContentHash, fn func(context.Context) (T, error)) (out T, err error) {
+	original := fn
+	fn = func(ctx context.Context) (T, error) {
+		if e := s.authorizeRepositoryWrite(ctx, repo); e != nil {
+			var zero T
+			return zero, e
+		}
+		return original(ctx)
+	}
 	tx, ok := s.meta.(outbound.RepositoryTransactions)
 	if !ok {
 		out, err = fn(ctx)

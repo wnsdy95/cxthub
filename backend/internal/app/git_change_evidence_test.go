@@ -30,7 +30,7 @@ func (f fakeGitEvidence) IsGitAncestor(_ context.Context, origin, ancestor, desc
 }
 func TestVerifyGitReversalChecksOwnershipAncestryAndImmutableResponse(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	origin := "git@github.com:example/project.git"
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, GitRemoteURL: origin}); err != nil {

@@ -10,6 +10,7 @@ type ProductionStore interface {
 	VerifiedDocStore
 	RepositoryStore
 	OrganizationStore
+	RepositoryOrganizationAccess
 	EnterpriseStore
 	TeamStore
 	IdentityTransactions

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -10,7 +9,7 @@ import (
 )
 
 func TestRepositoryConnectionPreservesIdentityAcrossRenameAndTeamAccess(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	f := makeTeamFixture(t, st)
 	original := "https://cxthub.example/" + f.organization.Slug + "/" + f.repository.Slug
@@ -60,7 +59,7 @@ func TestRepositoryConnectionPreservesIdentityAcrossRenameAndTeamAccess(t *testi
 }
 
 func TestRepositoryConnectionKeepsHistoricalHandleWithoutNamespaceRecord(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "owner", Username: "alice", Name: "Alice", Email: "alice@example.test"}
 	if err := st.UpsertUser(ctx, user); err != nil {

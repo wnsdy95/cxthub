@@ -109,7 +109,7 @@ func TestMCPAllowanceSharedAcrossServerInstances(t *testing.T) {
 }
 
 func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "oauth-user", Email: "oauth@example.test", Name: "OAuth User", Username: "oauth-user"}
 	id := app.NewIdentityService(fixedVerifier{user: user}, st)
@@ -343,7 +343,7 @@ func TestOAuthMetadataAdvertisesReadOnlyResourceAndRevocation(t *testing.T) {
 }
 
 func TestTokenExchangeRejectsAuthorizationCodeWithoutMCPReadScope(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "legacy-scope-user", Email: "legacy@example.test", Name: "Legacy", Username: "legacy"}
 	if err := st.UpsertUser(ctx, user); err != nil {
@@ -391,10 +391,10 @@ func TestStreamableHTTPTransportGuards(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "transport-user", Email: "transport@example.test", Name: "Transport", Username: "transport"}
 	id := app.NewIdentityService(fixedVerifier{user: user}, st)
-	if err := st.UpsertUser(context.Background(), user); err != nil {
+	if err := st.UpsertUser(systemTestContext(), user); err != nil {
 		t.Fatal(err)
 	}
-	pair, err := id.IssueMCPTokenPair(context.Background(), user.ID, "transport-client")
+	pair, err := id.IssueMCPTokenPair(systemTestContext(), user.ID, "transport-client")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,7 +507,7 @@ func TestRemoteMemoryOutputIsBounded(t *testing.T) {
 		},
 	}
 	s := &Server{context: backend}
-	got, err := s.toolMemoryLoad(context.Background(), domain.Repo{ID: repoID, DefaultBranch: "main"}, string(snapshotID))
+	got, err := s.toolMemoryLoad(systemTestContext(), domain.Repo{ID: repoID, DefaultBranch: "main"}, string(snapshotID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +555,7 @@ func (f fakeContextBackend) GetMemoryProjection(ctx context.Context, repo, id do
 }
 
 func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	id := app.NewIdentityService(nil, st)
 	owner := domain.User{ID: "owner", Username: "owner", Name: "Owner", Email: "owner@example.test"}
@@ -609,6 +609,63 @@ func TestMCPTeamAccessUsesCanonicalIdentityAndRevokesAliases(t *testing.T) {
 		}
 	}
 	if err = id.RemoveTeamMember(ctx, owner.ID, org.ID, team.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, selector := range selectors {
+		if _, err := server.resolveRepository(ctx, member, selector); err == nil {
+			t.Fatalf("revoked grant still resolves %s", selector)
+		}
+	}
+}
+
+func TestMCPOrganizationOwnerAccessRevokesAfterDemotion(t *testing.T) {
+	ctx := systemTestContext()
+	st := store.NewFSStore(t.TempDir())
+	id := app.NewIdentityService(nil, st)
+	owner := domain.User{ID: "owner", Username: "owner", Name: "Owner", Email: "owner@example.test"}
+	member := domain.User{ID: "member", Username: "member", Name: "Member", Email: "member@example.test"}
+	for _, user := range []domain.User{owner, member} {
+		if err := st.UpsertUser(ctx, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	org, err := id.CreateOrganization(ctx, owner, "Acme", "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = id.UpdateOrganizationMember(ctx, owner.ID, org.ID, member.ID, domain.OrganizationMember); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := id.CreateOrganizationRepository(ctx, owner, org.ID, "API")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = id.UpdateOrganizationMember(ctx, owner.ID, org.ID, member.ID, domain.OrganizationOwner); err != nil {
+		t.Fatal(err)
+	}
+	content := domain.Repo{ID: domain.HashContent([]byte("stable-content")), RepositoryID: repository.ID, RemoteURL: "https://example.test/acme/api"}
+	if _, err = st.PutRepo(ctx, content); err != nil {
+		t.Fatal(err)
+	}
+	renamed := "renamed"
+	if _, err = id.UpdateRepositorySettings(ctx, owner.ID, repository.ID, app.RepositoryPatch{Slug: &renamed}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(fakeContextBackend{repos: []domain.Repo{content}}, id, st, "https://example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := server.visibleRepositories(ctx, member)
+	if err != nil || len(visible) != 1 || visible[0].Path != "acme/renamed" {
+		t.Fatalf("canonical list: %+v %v", visible, err)
+	}
+	selectors := []string{"acme/renamed", "acme/api", string(content.ID)}
+	for _, selector := range selectors {
+		if got, err := server.resolveRepository(ctx, member, selector); err != nil || got.ID != content.ID {
+			t.Fatalf("%s: %+v %v", selector, got, err)
+		}
+	}
+	if err = id.UpdateOrganizationMember(ctx, owner.ID, org.ID, member.ID, domain.OrganizationAdmin); err != nil {
 		t.Fatal(err)
 	}
 	for _, selector := range selectors {

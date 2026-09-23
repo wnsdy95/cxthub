@@ -28,7 +28,7 @@ func (s failedNotificationPG) EnqueueNotification(ctx context.Context, d outboun
 }
 func TestPGNotificationAtomicBusinessWritesAndConcurrentInvite(t *testing.T) {
 	_, st, _ := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	user := domain.User{ID: domain.NewID("user_"), Username: fmt.Sprintf("notify%d", time.Now().UnixNano()), Email: "owner@example.test", Name: "Owner"}
 	if err := st.UpsertUser(ctx, user); err != nil {
 		t.Fatal(err)

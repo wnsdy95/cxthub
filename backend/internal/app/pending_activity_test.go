@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -9,7 +8,7 @@ import (
 )
 
 func TestPendingReplayDoesNotManufactureLiveActivity(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh("activity")
 	snap := domain.Snapshot{ID: hh("old capture"), DocHash: hh("old capture"), RepoID: repo, SessionID: "native-session", Provider: domain.ProviderCodex}
@@ -53,7 +52,7 @@ func TestPendingReplayDoesNotManufactureLiveActivity(t *testing.T) {
 }
 
 func TestLateLiveCaptureCannotRewindPendingPointer(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh("late activity")
 	newer := putPendingGCCapture(t, st, repo, pendingGCCIR(domain.ProviderCodex, "first", "second"))

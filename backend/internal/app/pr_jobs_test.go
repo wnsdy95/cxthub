@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -13,7 +12,7 @@ import (
 )
 
 func TestPRJobSurvivesRestartAndLateSource(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	dir := t.TempDir()
 	st := store.NewFSStore(dir)
 	svc := NewService(st, st, nil, gitengine.NewEngine(st), st)
@@ -82,7 +81,7 @@ func TestPRJobSurvivesRestartAndLateSource(t *testing.T) {
 
 func TestQueuedPRFollowsBaseIdentityAcrossRenameAndReuse(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("queued-base-rename")
 	_, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/rename"})
 	if err != nil {

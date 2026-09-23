@@ -659,6 +659,7 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
+		replaySavedPRDiscovery(ctx, c, cwd)
 		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
 			return fmt.Errorf("rewritten context associations remain pending: %w", err)
 		}
@@ -674,7 +675,6 @@ func Run(c *Container, args []string) error {
 			}
 			return err
 		}
-		replaySavedPRDiscovery(ctx, c, cwd)
 		fmt.Printf("pushed %d snapshot(s), %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
 		if appendDiverged {
 			// Server grafted remote head onto local ancestry — pull will reflect in local history.
@@ -686,12 +686,12 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
+		replaySavedPRDiscovery(ctx, c, cwd)
 		force := flagPresent(rest, "--force") || flagPresent(rest, "-f")
 		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Force: force})
 		if err != nil {
 			return err
 		}
-		replaySavedPRDiscovery(ctx, c, cwd)
 		fmt.Printf("pulled %d snapshot(s), %d ref(s) from origin\n", out.Pulled, len(out.NewRefs))
 		if len(out.Conflicts) > 0 {
 			return fmt.Errorf("! [conflict] %s — merge canceled (local kept)\nhint: To adopt remote state, use 'cxt pull --force'", strings.Join(out.Conflicts, ", "))
@@ -858,6 +858,26 @@ func requireRemote(cwd string) error {
 	return fmt.Errorf("no origin to push/pull — first connect your repository URL:\n  cxt remote add origin https://<host>/<owner>/<repository>")
 }
 
+// resolvedRepositoryURL validates a display/legacy address against the server's
+// immutable content identity before callers save or compare a connection.
+func resolvedRepositoryURL(ctx context.Context, c *Container, rawURL string) (string, error) {
+	canonical, err := remotecfg.CanonicalURL(rawURL)
+	if err != nil || c.ResolveConnection == nil {
+		return canonical, err
+	}
+	resolved, err := c.ResolveConnection(ctx, canonical)
+	if err != nil {
+		return "", fmt.Errorf("repository identity could not be verified; remote was not saved (use cxt setup <url> or cxt login --server <server-url> first): %w", err)
+	}
+	stable, err := remotecfg.CanonicalURL(resolved.RemoteURL)
+	requested, _ := url.Parse(canonical)
+	resolvedURL, _ := url.Parse(stable)
+	if err != nil || resolvedURL == nil || resolvedURL.Scheme != requested.Scheme || !strings.EqualFold(resolvedURL.Host, requested.Host) || remotecfg.RepoIDFor(stable) != resolved.RepoID || resolved.RepositoryID == "" {
+		return "", fmt.Errorf("repository connection returned an invalid identity or a different server; remote was not saved")
+	}
+	return stable, nil
+}
+
 // runRemote is a git-like remote management command:
 //
 //	cxt remote [-v]                 list registered remotes
@@ -887,18 +907,9 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 		if existing, dup := remotes[name]; dup {
 			return fmt.Errorf("remote %q is already registered as %s (change: remove then add)", name, existing)
 		}
-		if c.ResolveConnection != nil {
-			resolved, rerr := c.ResolveConnection(ctx, canonicalURL)
-			if rerr != nil {
-				return fmt.Errorf("repository identity could not be verified; remote was not saved (use cxt setup <url> or cxt login --server <server-url> first): %w", rerr)
-			}
-			stable, verr := remotecfg.CanonicalURL(resolved.RemoteURL)
-			requested, _ := url.Parse(canonicalURL)
-			resolvedURL, _ := url.Parse(stable)
-			if verr != nil || resolvedURL == nil || resolvedURL.Scheme != requested.Scheme || !strings.EqualFold(resolvedURL.Host, requested.Host) || remotecfg.RepoIDFor(stable) != resolved.RepoID || resolved.RepositoryID == "" {
-				return fmt.Errorf("repository connection returned an invalid identity or a different server; remote was not saved")
-			}
-			canonicalURL = stable
+		canonicalURL, err = resolvedRepositoryURL(ctx, c, canonicalURL)
+		if err != nil {
+			return err
 		}
 		remotes[name] = canonicalURL
 		if err := remotecfg.Save(cwd, remotes); err != nil {

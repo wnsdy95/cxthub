@@ -4,7 +4,6 @@ package http
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,7 +31,7 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 	if dsn == "" {
 		t.Skip("CXT_LOAD_DSN unset")
 	}
-	ctx := context.Background()
+	ctx := systemTestContext()
 	stores := make([]*store.PostgresStore, 2)
 	for i := range stores {
 		s, err := store.NewPostgresStore(ctx, dsn)

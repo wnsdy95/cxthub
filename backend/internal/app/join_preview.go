@@ -81,6 +81,7 @@ func (s *Service) PreviewJoin(ctx context.Context, in inbound.JoinPreviewInput) 
 // ConfirmJoin is the user-facing command. A preview is never an authorization
 // capability: membership and the exact plan are checked again inside the write.
 func (s *Service) ConfirmJoin(ctx context.Context, in inbound.ConfirmJoinInput) (inbound.JoinOutput, error) {
+	ctx = inbound.WithRepositoryActor(ctx, in.ActorID)
 	if in.PlanRevision == "" || in.ExpectedHead == "" {
 		return inbound.JoinOutput{}, domain.ErrJoinPreviewChanged
 	}
@@ -124,14 +125,10 @@ func (s *Service) authorizeJoin(ctx context.Context, repoID domain.ContentHash, 
 	if repositoryRecord.Archived {
 		return domain.ErrForbidden
 	}
-	var members []domain.Membership
-	if repositoryRecord.OwnerID != actor {
-		members, err = s.repositories.ListMembers(ctx, repositoryRecord.ID)
-		if err != nil {
-			return err
-		}
+	role, ok, err := repositoryRoleFor(ctx, s.repositories, repositoryRecord, actor)
+	if err != nil {
+		return err
 	}
-	role, ok := domain.RepositoryRole(repositoryRecord, members, actor)
 	if !ok || !role.AtLeast(domain.RoleMember) {
 		return domain.ErrForbidden
 	}

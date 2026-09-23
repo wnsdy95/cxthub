@@ -13,7 +13,7 @@ import (
 
 func prSnapshot(t *testing.T, st *store.FSStore, repo domain.ContentHash, text string, parents ...domain.ContentHash) domain.ContentHash {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	doc := domain.SessionDoc{CIR: domain.CIRDocument{}}
 	doc.CIR.Envelope.CIRVersion = "1"
 	doc.CIR.Envelope.SourceProvider = "claude"
@@ -34,7 +34,7 @@ func prSnapshot(t *testing.T, st *store.FSStore, repo domain.ContentHash, text s
 
 func TestPRBindingSurvivesRenameReuseAndConcurrentReplay(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("pr-repo")
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "git@github.com:acme/proj.git"}); err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestPRBindingSurvivesRenameReuseAndConcurrentReplay(t *testing.T) {
 
 func TestPRBindingRejectsAmbiguousSourceAndUntrustedReceipt(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("ambiguous-pr")
 	st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/a/b"})
 	m := prSnapshot(t, st, repo, "main")
@@ -152,7 +152,7 @@ func TestPRBindingRejectsAmbiguousSourceAndUntrustedReceipt(t *testing.T) {
 
 func TestPRConcurrentFirstDeliveryFreezesExactCommit(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("pr-first-race")
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/acme/race"}); err != nil {
 		t.Fatal(err)
@@ -228,7 +228,7 @@ func (s *failingCompletionStore) ApplyHistoryEvent(ctx context.Context, e domain
 }
 func TestPRNoOpCompletionRetriesWithoutRefMove(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("same-hash-pr")
 	st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/a/b"})
 	m := prSnapshot(t, st, repo, "shared content")

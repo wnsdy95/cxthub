@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -21,7 +20,7 @@ func TestMemoryLoadIncludesPreviousMainImmediatelyAfterPromotion(t *testing.T) {
 		{ID: source, RepoID: repo.ID, MemoryHash: sh, GraftSeq: 1, GraftParents: []domain.ContentHash{base}},
 	}}, memories: map[domain.ContentHash]domain.MemoryDigest{bh: previous, sh: feature}}}
 	s := &Server{context: f}
-	got, err := s.memoryPage(context.Background(), repo, toolArgs{Ref: string(source)})
+	got, err := s.memoryPage(systemTestContext(), repo, toolArgs{Ref: string(source)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +45,7 @@ func TestProjectedMemoryPagesAreStatelessAndRejectDependencyChanges(t *testing.T
 	var projection domain.ContentHash
 	for i := 0; i < 100; i++ {
 		// Each page goes through a fresh MCP server instance (no sticky replica).
-		raw, err := (&Server{context: f}).memoryPage(context.Background(), repo, a)
+		raw, err := (&Server{context: f}).memoryPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +91,7 @@ func TestProjectedMemoryPagesAreStatelessAndRejectDependencyChanges(t *testing.T
 	}
 	bad := cursor
 	bad.FragmentFormat = "future-format"
-	if _, err := (&Server{context: f}).memoryPage(context.Background(), repo, toolArgs{Ref: string(source), Cursor: encodeCursor(bad)}); err == nil {
+	if _, err := (&Server{context: f}).memoryPage(systemTestContext(), repo, toolArgs{Ref: string(source), Cursor: encodeCursor(bad)}); err == nil {
 		t.Fatal("mixed projection rendering versions")
 	}
 
@@ -102,11 +101,11 @@ func TestProjectedMemoryPagesAreStatelessAndRejectDependencyChanges(t *testing.T
 	f.memories[newHash] = changed
 	f.snapshots[repo.ID][0].MemoryHash = newHash
 	a.Cursor = firstCursor
-	if _, err := (&Server{context: f}).memoryPage(context.Background(), repo, a); err == nil || !strings.Contains(err.Error(), "restart") {
+	if _, err := (&Server{context: f}).memoryPage(systemTestContext(), repo, a); err == nil || !strings.Contains(err.Error(), "restart") {
 		t.Fatalf("mixed projection revisions: %v", err)
 	}
 	// Explicit history remains the exact archived object after later changes.
-	exact, err := (&Server{context: f}).memoryPage(context.Background(), repo, toolArgs{Ref: string(base), MemoryHash: string(hash)})
+	exact, err := (&Server{context: f}).memoryPage(systemTestContext(), repo, toolArgs{Ref: string(base), MemoryHash: string(hash)})
 	if err != nil || !strings.Contains(exact, string(hash)) {
 		t.Fatalf("historical memory lost: %s %v", exact, err)
 	}
@@ -120,7 +119,7 @@ func TestMemoryModeValidationAndLegacyCursor(t *testing.T) {
 	f := fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {{ID: id, RepoID: repo.ID, MemoryHash: hash}}}, memories: map[domain.ContentHash]domain.MemoryDigest{hash: d}}
 	s := &Server{context: f}
 	for _, a := range []toolArgs{{Mode: "invalid"}, {Mode: "project", MemoryHash: string(hash)}} {
-		if _, err := s.memoryPage(context.Background(), repo, a); err == nil {
+		if _, err := s.memoryPage(systemTestContext(), repo, a); err == nil {
 			t.Fatal("invalid mode accepted")
 		}
 	}
@@ -130,7 +129,7 @@ func TestMemoryModeValidationAndLegacyCursor(t *testing.T) {
 	cur.Memory = hash
 	cur.Offset = pageBytes
 	a.Cursor = encodeCursor(cur)
-	got, err := s.memoryPage(context.Background(), repo, a)
+	got, err := s.memoryPage(systemTestContext(), repo, a)
 	if err != nil || !strings.Contains(got, `"mode":"stored"`) {
 		t.Fatalf("pre-upgrade exact cursor broken: %s %v", got, err)
 	}
@@ -146,7 +145,7 @@ func TestMergedConversationsRemainDiscoverableAndFetchable(t *testing.T) {
 		f.docs[id] = domain.SessionDoc{Hash: id, CIR: domain.CIRDocument{Events: []domain.CIREvent{{Seq: 0, Kind: "message", Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "conversation " + string(id)}}}}}}
 	}
 	s := &Server{context: f}
-	raw, err := s.contextPage(context.Background(), repo, toolArgs{Scope: "current", Position: "main"})
+	raw, err := s.contextPage(systemTestContext(), repo, toolArgs{Scope: "current", Position: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +153,7 @@ func TestMergedConversationsRemainDiscoverableAndFetchable(t *testing.T) {
 		if !strings.Contains(raw, string(id)) {
 			t.Fatalf("merged context not discoverable: %s", raw)
 		}
-		body, err := s.eventPage(context.Background(), repo, toolArgs{Ref: string(id)})
+		body, err := s.eventPage(systemTestContext(), repo, toolArgs{Ref: string(id)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -172,14 +171,14 @@ func TestProjectMemoryCollapsesRepeatedProviderGenerationsWithoutChangingArchive
 	hash, _ := domain.MemoryDigestHash(d)
 	f := fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {{ID: id, RepoID: repo.ID, MemoryHash: hash}}}, memories: map[domain.ContentHash]domain.MemoryDigest{hash: d}}
 	server := &Server{context: f}
-	got, err := server.memoryPage(context.Background(), repo, toolArgs{Ref: string(id)})
+	got, err := server.memoryPage(systemTestContext(), repo, toolArgs{Ref: string(id)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(got, "OLD GENERATION") || !strings.Contains(got, "LATEST DECISION") {
 		t.Fatalf("recursive generation leaked into active memory: %s", got)
 	}
-	stored, err := server.memoryPage(context.Background(), repo, toolArgs{Ref: string(id), MemoryHash: string(hash)})
+	stored, err := server.memoryPage(systemTestContext(), repo, toolArgs{Ref: string(id), MemoryHash: string(hash)})
 	if err != nil || !strings.Contains(stored, "OLD GENERATION") {
 		t.Fatalf("original generation lost: %s %v", stored, err)
 	}

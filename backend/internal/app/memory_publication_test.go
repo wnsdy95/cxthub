@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -11,7 +10,7 @@ import (
 )
 
 func TestMemoryPublicationUsesStagedChunkedDocument(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: domain.NewID("ws_")}); err != nil {
@@ -50,7 +49,7 @@ func TestMemoryPublicationUsesStagedChunkedDocument(t *testing.T) {
 }
 
 func TestMemoryPublicationRestoresCollectedCaptureAndPreservesArchive(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: domain.NewID("ws_")}); err != nil {
@@ -123,7 +122,7 @@ func TestMemoryPublicationRestoresCollectedCaptureAndPreservesArchive(t *testing
 func TestMemoryPublicationRejectsInvalidArchiveBeforePersistence(t *testing.T) {
 	for _, reason := range []string{"different memory source", "causal child", "forged graft", "invalid memory", "invalid doc", "foreign repo", "extra document"} {
 		t.Run(reason, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			svc, st := newFsckSvc(t)
 			repo := hh(t.Name())
 			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, RepositoryID: domain.NewID("ws_")}); err != nil {

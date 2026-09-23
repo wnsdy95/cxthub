@@ -67,3 +67,31 @@ func TestLoginTargetBeforeConnection(t *testing.T) {
 		t.Fatalf("server URL treated as token: %s", got)
 	}
 }
+
+func TestSetupRecognizesMigratedDisplayAddress(t *testing.T) {
+	const original = "https://cxthub.example/acme/platform/backend"
+	const display = "https://cxthub.example/acme/backend"
+	calls := 0
+	c := &Container{ResolveConnection: func(_ context.Context, address string) (domain.RepositoryConnection, error) {
+		calls++
+		if address != display {
+			t.Fatalf("resolving unexpected address %s", address)
+		}
+		return domain.RepositoryConnection{RepositoryID: "ws_0123456789abcdef0123456789abcdef", RemoteURL: original, RepoID: remotecfg.RepoIDFor(original)}, nil
+	}}
+	if same, err := setupRemoteMatches(context.Background(), c, original, display); err != nil || !same || calls != 1 {
+		t.Fatalf("migrated connection same=%v calls=%d err=%v", same, calls, err)
+	}
+	if same, err := setupRemoteMatches(context.Background(), c, original, original); err != nil || !same || calls != 1 {
+		t.Fatalf("unchanged connection should not need the server: same=%v calls=%d err=%v", same, calls, err)
+	}
+	if same, err := setupRemoteMatches(context.Background(), c, "https://cxthub.example/acme/other", display); err != nil || same {
+		t.Fatalf("distinct repository matched: same=%v err=%v", same, err)
+	}
+	c.ResolveConnection = func(context.Context, string) (domain.RepositoryConnection, error) {
+		return domain.RepositoryConnection{}, errors.New("offline")
+	}
+	if same, err := setupRemoteMatches(context.Background(), c, original, display); err == nil || same {
+		t.Fatalf("unverified alias matched: same=%v err=%v", same, err)
+	}
+}

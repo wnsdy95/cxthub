@@ -366,7 +366,7 @@ export function Dashboard() {
                   <div className="panel-head">
                     <h4>{t('dashboard.repositorySettings')}</h4>
                   </div>
-                  <RepositorySettings repositoryMetadata={selected} isCreator={user.id === selected.owner_id} />
+                  <RepositorySettings repositoryMetadata={selected} />
                 </section>
               )}
               {tab === 'settings' && (!user || !atLeast(role, 'owner')) && (

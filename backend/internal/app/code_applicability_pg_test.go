@@ -3,7 +3,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
@@ -20,7 +19,7 @@ func TestPGCodeApplicabilityAcrossServerInstances(t *testing.T) {
 	if dsn == "" {
 		t.Skip("CXT_TEST_DSN unset")
 	}
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st, e := store.NewPostgresStore(ctx, dsn)
 	if e != nil {
 		t.Fatal(e)

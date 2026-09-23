@@ -49,7 +49,7 @@ func TestRenamedBranchPagesPreserveIdentityAndExcludeReusedName(t *testing.T) {
 	}}}, refs: []domain.Ref{{Kind: domain.RefBranch, Name: "new", Target: b}, {Kind: domain.RefBranch, Name: "old", Target: c}}, events: []domain.HistoryEvent{reuse, rename, birth}}
 	s := &Server{context: f}
 	for _, name := range []string{"new", "old"} {
-		got, err := s.scopeSnapshots(context.Background(), repo, toolArgs{Branch: name}, &pageCursor{})
+		got, err := s.scopeSnapshots(systemTestContext(), repo, toolArgs{Branch: name}, &pageCursor{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +60,7 @@ func TestRenamedBranchPagesPreserveIdentityAndExcludeReusedName(t *testing.T) {
 		if len(got) != want {
 			t.Fatalf("%s snapshots: %+v", name, got)
 		}
-		raw, err := s.historyPage(context.Background(), repo, toolArgs{Branch: name})
+		raw, err := s.historyPage(systemTestContext(), repo, toolArgs{Branch: name})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -93,7 +93,7 @@ func TestMemoryPagesPinTheFirstVersionAndReassembleUnicode(t *testing.T) {
 	a := toolArgs{Repository: string(repo.ID), Ref: string(id), Mode: "stored"}
 	var combined strings.Builder
 	for calls := 0; calls < 100; calls++ {
-		raw, err := s.memoryPage(context.Background(), repo, a)
+		raw, err := s.memoryPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +151,7 @@ func TestSearchContinuesPastEmptyPagesAndMidDocument(t *testing.T) {
 	seen := map[int]bool{}
 	emptyPages := 0
 	for calls := 0; calls < 20; calls++ {
-		raw, err := s.searchPage(context.Background(), repo, a)
+		raw, err := s.searchPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +190,7 @@ func TestBranchScopeIncludesSharedContentAndRetainedAncestors(t *testing.T) {
 	f := pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}, refs: []domain.Ref{{Kind: domain.RefBranch, Name: "shared", Target: b}}, events: []domain.HistoryEvent{{Branch: "shared", Source: c, Target: b}}}
 	s := &Server{context: f}
 	cur := pageCursor{}
-	got, err := s.scopeSnapshots(context.Background(), repo, toolArgs{Branch: "shared"}, &cur)
+	got, err := s.scopeSnapshots(systemTestContext(), repo, toolArgs{Branch: "shared"}, &cur)
 	if err != nil || len(got) != 3 {
 		t.Fatalf("deduplicated branch content lost: %+v %v", got, err)
 	}
@@ -206,7 +206,7 @@ func TestContextPaginationVisitsBeyond100WithStableTieOrder(t *testing.T) {
 	a := toolArgs{Repository: string(repo.ID), Limit: 17}
 	seen := map[domain.ContentHash]bool{}
 	for calls := 0; calls < 20; calls++ {
-		raw, err := s.contextPage(context.Background(), repo, a)
+		raw, err := s.contextPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,10 +231,10 @@ func TestContextPaginationVisitsBeyond100WithStableTieOrder(t *testing.T) {
 		a.Cursor = page.Next
 		wrong := a
 		wrong.Scope = "previous"
-		if _, err := s.contextPage(context.Background(), repo, wrong); err == nil {
+		if _, err := s.contextPage(systemTestContext(), repo, wrong); err == nil {
 			t.Fatal("changed cursor filter accepted")
 		}
-		if _, err := s.contextPage(context.Background(), domain.Repo{ID: pageHash(999)}, a); err == nil {
+		if _, err := s.contextPage(systemTestContext(), domain.Repo{ID: pageHash(999)}, a); err == nil {
 			t.Fatal("cross-repository cursor accepted")
 		}
 	}
@@ -266,7 +266,7 @@ func TestEventPagesReassembleEveryOldAndOversizedEvent(t *testing.T) {
 	reassembled := make([]string, len(doc.CIR.Events))
 	completed := 0
 	for calls := 0; calls < 100; calls++ {
-		raw, err := s.eventPage(context.Background(), repo, a)
+		raw, err := s.eventPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -312,10 +312,10 @@ func TestPreviousScopeRequiresPositionAndPreservesRealReachability(t *testing.T)
 	a, b, d := pageHash(2), pageHash(3), pageHash(4)
 	snaps := []domain.Snapshot{{ID: a, RepoID: repo.ID}, {ID: b, RepoID: repo.ID, Parents: []domain.ContentHash{a}}, {ID: d, RepoID: repo.ID, Parents: []domain.ContentHash{a}}}
 	s := &Server{context: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: snaps}}, refs: []domain.Ref{{Kind: domain.RefBranch, Name: "main", Target: d}, {Kind: domain.RefTag, Name: "cxt/history/v1/retained/source", Target: b}}}}
-	if _, err := s.contextPage(context.Background(), repo, toolArgs{Scope: "previous"}); err == nil {
+	if _, err := s.contextPage(systemTestContext(), repo, toolArgs{Scope: "previous"}); err == nil {
 		t.Fatal("inferred local HEAD")
 	}
-	raw, err := s.contextPage(context.Background(), repo, toolArgs{Scope: "previous", Position: string(d)})
+	raw, err := s.contextPage(systemTestContext(), repo, toolArgs{Scope: "previous", Position: string(d)})
 	if err != nil {
 		t.Fatal(err)
 	}

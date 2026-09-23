@@ -378,7 +378,11 @@ func (s *FSStore) ListRepositoriesForUser(ctx context.Context, userID string) ([
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := domain.EffectiveRepositoryRole(repository, members, userID, grants); ok {
+		organization, err := s.RepositoryOrganizationAccess(ctx, id, userID)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := domain.EffectiveRepositoryRole(repository, members, userID, grants, organization); ok {
 			out = append(out, repository)
 		}
 	}

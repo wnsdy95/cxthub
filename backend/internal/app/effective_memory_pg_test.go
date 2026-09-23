@@ -20,7 +20,7 @@ func TestPGEffectiveMemoryCoherentReplicaRead(t *testing.T) {
 	if dsn == "" {
 		t.Skip("CXT_TEST_DSN unset")
 	}
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st, err := store.NewPostgresStore(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)

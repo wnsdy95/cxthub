@@ -4,6 +4,7 @@ package graphwire
 
 import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"slices"
 	"sort"
 )
 
@@ -80,6 +81,57 @@ func Encode(g domain.GraphState) State {
 	}
 	for _, p := range g.Previous {
 		out.Previous = append(out.Previous, Progress{GraphProgressGroup: p, SnapshotIDs: encode(p.SnapshotIDs), CollapsibleIDs: encode(p.CollapsibleIDs)})
+	}
+	return out
+}
+
+// V2 reuses branch_snapshots rather than transmitting each timeline twice.
+// V1 remains the default for clients that have not negotiated V2.
+type StateV2 struct {
+	State
+	Encoding       string                   `json:"encoding"`
+	BranchContexts map[string]BranchContext `json:"branch_contexts"`
+}
+type BranchContext struct {
+	domain.BranchContext
+	Roots          []uint32 `json:"roots"`
+	SnapshotIDs    []uint32 `json:"snapshot_ids,omitempty"`
+	SnapshotIDsRef string   `json:"snapshot_ids_ref,omitempty"`
+}
+
+func EncodeV2(g domain.GraphState) StateV2 {
+	out := StateV2{State: Encode(g), Encoding: "indexed-v2", BranchContexts: map[string]BranchContext{}}
+	indices := map[domain.ContentHash]uint32{}
+	for i, h := range out.Dictionary {
+		indices[h] = uint32(i)
+	}
+	encode := func(ids []domain.ContentHash) []uint32 {
+		result := make([]uint32, 0, len(ids))
+		for _, id := range ids {
+			index, ok := indices[id]
+			if !ok {
+				index = uint32(len(out.Dictionary))
+				indices[id] = index
+				out.Dictionary = append(out.Dictionary, id)
+			}
+			result = append(result, index)
+		}
+		return result
+	}
+	branches := make([]string, 0, len(g.BranchContexts))
+	for branch := range g.BranchContexts {
+		branches = append(branches, branch)
+	}
+	sort.Strings(branches)
+	for _, branch := range branches {
+		c := g.BranchContexts[branch]
+		wire := BranchContext{BranchContext: c, Roots: encode(c.Roots)}
+		if ids, ok := g.BranchSnapshots[branch]; ok && slices.Equal(ids, c.SnapshotIDs) {
+			wire.SnapshotIDsRef = branch
+		} else {
+			wire.SnapshotIDs = encode(c.SnapshotIDs)
+		}
+		out.BranchContexts[branch] = wire
 	}
 	return out
 }
