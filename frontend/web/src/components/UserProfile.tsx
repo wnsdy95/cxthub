@@ -1,3 +1,4 @@
+import { InvitationInbox } from './CollaborationInvitations';
 // User profile — GitHub style /<username> page. Left avatar/name, right repository list
 // (repo card space). Anonymous view (only public repositories), owner includes private + 'Edit Profile'.
 // (Contribution graph/activity feed requires commit date aggregation — next step.)
@@ -156,7 +157,7 @@ function ProfileBody({
           </div>
         )}
 
-        {isSelf && <><MyOrganizations /><MyEnterprises /></>}
+        {isSelf && <><InvitationInbox /><MyOrganizations /><MyEnterprises /></>}
 
         <ContributionGraph username={u.username} />
         <ActivityFeed username={u.username} />

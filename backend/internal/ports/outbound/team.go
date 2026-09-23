@@ -8,6 +8,7 @@ import (
 
 type TeamStore interface {
 	CreateTeam(context.Context, domain.Team) error
+	UpdateTeam(context.Context, domain.Team) error
 	GetTeam(context.Context, string) (domain.Team, error)
 	ListTeams(context.Context, string) ([]domain.Team, error)
 	DeleteTeam(context.Context, string) error

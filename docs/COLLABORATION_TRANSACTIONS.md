@@ -178,3 +178,58 @@ CI runs real PostgreSQL tests, including repeated Go race-detector runs:
 
 These are explicit guarantees for the tested paths, not a claim that every
 future implementation or infrastructure failure is impossible.
+
+## Authorization and audit completion (2026-09-24)
+
+The HTTP body-read race suite covers 13 mutations against five access changes:
+ref/batch-ref, settings, About, config, memory/causal-memory/typed-memory, pending,
+unsync, promotion, objects and chunks; direct membership removal, Organization
+Owner demotion, Team removal, archival and base-access withdrawal. A separate
+Owner-only settings-policy transition makes 66 scenarios. Each checks denied
+in-flight writes, fresh denial, unchanged revisions/outbox/view, and an authorized
+control. This is a defined coverage matrix, not a proof of every possible race.
+
+Pending session ownership and authenticated unsync usernames are checked inside
+the write transaction. Concurrent first writes cannot claim another user's
+pending session. About and repository config edits now validate and commit as one
+command. Organization metadata audit is appended inside ordinary repository,
+settings, secrets and membership write transactions; audit failure rolls the
+write back. Internal system workflows retain their dedicated history/outbox
+records rather than impersonating a human actor. `X-Request-ID` correlates REST
+operations with audit entries; it never grants authority or idempotency.
+
+Organization administrators can page `/organizations/{id}/audit/page` with a
+`(created_at, id)` cursor. The organization is bound into the cursor and current
+access is checked on every request. `/audit/export` exports one page as JSONL;
+follow `X-Next-Cursor` for older pages. The UI explicitly exports loaded records.
+No plaintext settings, webhook credentials or secret envelopes enter this log.
+
+### Reproducible validation
+
+Use only disposable PostgreSQL 16 databases. Do not point fixtures at production.
+
+- `CXT_TEST_DSN=… go test -tags postgres ./internal/adapters/store -timeout=120s`
+  uses fixed smoke fixtures and must run once against a fresh database.
+- `CXT_TEST_DSN=… go test -tags postgres ./internal/app ./internal/adapters/delivery/http -run '^TestPG' -race -count=3`
+  checks transactions, rollback, revocation, invitations and MCP token races.
+- `CXT_LOAD_DSN=… CXT_LOAD_MULTIPROCESS=1 go test -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresMultiInstanceLoad$' -v`
+  starts separate server processes sharing only PostgreSQL, restarts one during
+  authentication pairing, checks tenant isolation and executes REST/MCP load.
+- From the repository root, `CXT_RECOVERY_DSN=… CXT_RECOVERY_RESTORE_DSN=… bash scripts/verify-postgres-recovery.sh`
+  backs up and restores into an explicitly empty target, then compares every
+  public table's row count and sorted row-content digests. It refuses a nonempty
+  target; temporary dumps are permission-restricted and removed afterwards.
+
+Local validation: 100 MiB text, 4,096 events, 1,001 snapshots, 16 concurrent readers,
+320 successful requests across two server processes. Observed p95 REST 12.6 ms,
+MCP 344.9 ms. Backup/restore matched all 67 tables. These measurements are local;
+they do not validate WAN latency, managed database failover, public OAuth or webhook
+configuration. Keep deployment limits unchanged until staging is explicitly
+configured and tested.
+
+An upgrade rehearsal started the previous `c5d17aa` PostgreSQL binary against an
+empty database, created an Organization, repository, member, Team and maintainer
+grant through HTTP, and restarted with this revision. Migrations 0056–0060 applied
+once; a second restart applied zero. Repository/namespace IDs, owner and member
+access, Team membership/grants and the existing URL were unchanged; base access
+defaulted to none. This is a forward migration check, not a downgrade guarantee.

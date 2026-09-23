@@ -7,6 +7,14 @@ type OrganizationRepositoryAccess struct {
 	OrganizationNamespaceID string
 	UserID                  string
 	Role                    OrganizationRole
+	DefaultRepositoryRole   MemberRole
+}
+
+func (a OrganizationRepositoryAccess) BaseRoleFor(repository Repository, actor string) (MemberRole, bool) {
+	if actor == "" || a.UserID != actor || a.RepositoryID != repository.ID || a.OrganizationNamespaceID == "" || a.OrganizationNamespaceID != repository.OwnerNamespaceID || !ValidOrganizationRole(a.Role) || !ValidRole(a.DefaultRepositoryRole) {
+		return "", false
+	}
+	return a.DefaultRepositoryRole, true
 }
 
 func (a OrganizationRepositoryAccess) IsOwnerOf(repository Repository, actor string) bool {

@@ -525,7 +525,7 @@ test('profile survives nullable activity arrays and keeps the legend inside the 
   expect(unexpected).toEqual([]);
 });
 
-test('Organization profile keeps administration separate from Repository context and opens audited emergency read', async ({ page }) => {
+test('Organization owner opens repositories directly and retains audited administration', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
   const organizationId = 'ent_11111111111111111111111111111111';
   const organizationRepositoryId = 'ws_11111111111111111111111111111111';
@@ -541,7 +541,7 @@ test('Organization profile keeps administration separate from Repository context
     id: organizationRepositoryId,
     name: 'Platform',
     slug: 'platform',
-    owner_id: 'admin-1', effective_role: '',
+    owner_id: 'admin-1', effective_role: 'owner',
     owner_namespace_id: organization.namespace_id,
     owner_username: 'acme',
     visibility: 'private',
@@ -592,20 +592,8 @@ test('Organization profile keeps administration separate from Repository context
       };
     }
     if (method === 'GET' && pathname === `/api/v1/organizations/${organizationId}/repositories`) return { body: [repository] };
-    if (method === 'GET' && pathname === '/api/v1/repositories') return { body: [] };
-    if (method === 'POST' && pathname === `/api/v1/organizations/${organizationId}/break-glass`) {
-      return {
-        body: {
-          id: 'bg_11111111111111111111111111111111',
-          organization_id: organizationId,
-          repository_id: organizationRepositoryId,
-          user_id: 'owner-1',
-          reason: 'production incident',
-          created_at: '2026-09-03T00:00:00Z',
-          expires_at: '2026-09-03T00:15:00Z',
-        },
-      };
-    }
+    if (method === 'GET' && pathname === '/api/v1/repositories') return { body: [repository] };
+    if (method === 'GET' && pathname === `/api/v1/organizations/${organizationId}/invitations`) return {body:[]};
     if (method === 'GET' && pathname === '/api/v1/public/repositories/acme/platform') return { body: repository };
     if (method === 'GET' && pathname === '/api/v1/repos' && searchParams.get('repository') === organizationRepositoryId) {
       return { body: [] };
@@ -615,11 +603,11 @@ test('Organization profile keeps administration separate from Repository context
 
   await page.goto('/acme');
   await expect(page.locator('.profile-name')).toHaveText('Acme Engineering');
-  await expect(page.locator('.organization-access-note')).toContainText('explicit role on each Repository');
+  await expect(page.locator('.organization-access-note')).toContainText('owners have owner access to every repository');
   await expect(page.getByRole('tab', { name: 'People' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Audit log' })).toBeVisible();
-  await expect(page.locator('.repository-card')).toBeDisabled();
-  await expect(page.locator('.repository-card-access')).toContainText('explicit Repository role');
+  await expect(page.locator('.repository-card')).toBeEnabled();
+  await expect(page.getByRole('button',{name:'Emergency read access'})).toHaveCount(0);
 
   expect(usageReads).toBe(0);
   await page.getByRole('tab', { name: 'Storage usage' }).click();
@@ -636,15 +624,10 @@ test('Organization profile keeps administration separate from Repository context
 	const lastOwnerRole = page.getByRole('combobox', { name: "Change Owner's Organization role" });
 	await expect(lastOwnerRole).toBeDisabled();
 	await expect(lastOwnerRole).toHaveAttribute('title', 'An Organization must always retain at least one Owner.');
-	await expect(page.locator('.organization-inline-form select option')).toHaveCount(3);
+	await expect(page.getByLabel('Email or @username')).toBeVisible();
+  await expect(page.getByRole('button', {name:'Create invitation',exact:true})).toBeVisible();
 	await page.getByRole('tab', { name: 'Repositories' }).click();
 
-  await page.getByRole('button', { name: 'Emergency read access' }).click();
-  await page.getByPlaceholder('Specific reason recorded in the audit log').fill('production incident');
-  await page.getByRole('button', { name: 'Grant time-limited read access' }).click();
-  await expect(page).toHaveURL(/\/acme\/platform$/);
-  await expect(page.getByText('Emergency read-only', { exact: true })).toBeVisible();
-  await expect(page.locator('.warn-red')).toContainText('every use is audited');
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
 });
@@ -1401,10 +1384,16 @@ test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and re
   expect(catalogue.repositories).toEqual([]);
   expect(catalogue.next_cursor).toBe('');
 
-  const revoke = await api.post('/oauth/revoke', {
-    form: { client_id: client.client_id, token: tokens.access_token, token_type_hint: 'access_token' },
-  });
-  expect(revoke.ok()).toBe(true);
+  const me = await (await api.get('/api/v1/me')).json();
+  await api.patch('/api/v1/me', {headers:{Origin:origin,'X-Cxt-CSRF':'1'},data:{locale:'en'}});
+  await page.goto(`/${me.username}`);
+  await page.getByRole('button', {name:'Account settings',exact:true}).click();
+  await expect(page.getByText('Connected MCP applications', {exact:true})).toBeVisible();
+  await expect(page.getByRole('dialog', {name:'Account settings',exact:true})).toContainText('Codex App E2E');
+  await page.getByRole('button', {name:'Disconnect application',exact:true}).click();
+  await expect(page.getByText('No connected applications', {exact:true})).toBeVisible();
+  const refresh = await api.post('/oauth/token', {form:{grant_type:'refresh_token',client_id:client.client_id,refresh_token:tokens.refresh_token,resource:`${origin}/mcp`}});
+  expect(refresh.status()).toBe(400);
   const afterRevoke = await api.post('/mcp', {
     headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/json, text/event-stream' },
     data: { jsonrpc: '2.0', id: 2, method: 'ping' },

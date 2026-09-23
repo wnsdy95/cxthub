@@ -335,14 +335,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "valid PKCE verifier required")
 			return
 		}
-		code, consumeErr := s.oauth.ConsumeOAuthAuthorizationCode(
-			r.Context(), domain.HashToken(r.PostForm.Get("code")), clientID, r.PostForm.Get("redirect_uri"), pkceChallenge(verifier),
-		)
-		if consumeErr != nil || code.Resource != s.resource || code.Scope != readScope {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid, expired, or already used")
-			return
-		}
-		pair, err = s.identity.IssueMCPTokenPair(r.Context(), code.UserID, clientID)
+		pair, err = s.identity.ExchangeMCPAuthorizationCode(r.Context(), domain.HashToken(r.PostForm.Get("code")), clientID, r.PostForm.Get("redirect_uri"), pkceChallenge(verifier), s.resource)
 	case "refresh_token":
 		pair, err = s.identity.RefreshMCPAccessToken(r.Context(), r.PostForm.Get("refresh_token"), clientID)
 	default:

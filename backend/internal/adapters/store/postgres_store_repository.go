@@ -23,11 +23,12 @@ func (s *PostgresStore) RepositoryOrganizationAccess(ctx context.Context, id, ac
 		return empty, err
 	}
 	var access domain.OrganizationRepositoryAccess
-	err := s.db(ctx).QueryRow(ctx, `SELECT r.id, n.id, m.user_id, m.role FROM repositories r
+	err := s.db(ctx).QueryRow(ctx, `SELECT r.id, n.id, m.user_id, m.role, p.default_repository_role FROM repositories r
 		JOIN namespaces n ON n.id=r.owner_namespace_id AND n.kind='organization'
 		JOIN organizations o ON o.id=n.organization_id AND o.namespace_id=n.id
 		JOIN organization_memberships m ON m.organization_id=o.id AND m.user_id=$2
-		WHERE r.id=$1`, id, actor).Scan(&access.RepositoryID, &access.OrganizationNamespaceID, &access.UserID, &access.Role)
+		JOIN organization_policies p ON p.organization_id=o.id
+		WHERE r.id=$1`, id, actor).Scan(&access.RepositoryID, &access.OrganizationNamespaceID, &access.UserID, &access.Role, &access.DefaultRepositoryRole)
 	if errors.Is(mapNoRows(err), domain.ErrNotFound) {
 		return empty, nil
 	}
@@ -177,7 +178,8 @@ func (s *PostgresStore) ListRepositoriesForUser(ctx context.Context, userID stri
  OR EXISTS (SELECT 1 FROM namespaces n
  JOIN organizations o ON o.id=n.organization_id AND o.namespace_id=n.id
  JOIN organization_memberships om ON om.organization_id=o.id
- WHERE n.id=w.owner_namespace_id AND n.kind='organization' AND om.user_id=$1 AND om.role='owner')
+ JOIN organization_policies op ON op.organization_id=o.id
+ WHERE n.id=w.owner_namespace_id AND n.kind='organization' AND om.user_id=$1 AND (om.role='owner' OR op.default_repository_role<>''))
  ORDER BY w.created_at`, userID)
 	if err != nil {
 		return nil, err

@@ -90,6 +90,7 @@ type OrganizationPolicy struct {
 	OrganizationID              string                         `json:"organization_id"`
 	RepositoryCreation          OrganizationRepositoryCreation `json:"repository_creation"`
 	DefaultRepositoryVisibility Visibility                     `json:"default_repository_visibility"`
+	DefaultRepositoryRole       MemberRole                     `json:"default_repository_role"`
 	AllowPublicRepositories     bool                           `json:"allow_public_repositories"`
 	BreakGlassEnabled           bool                           `json:"break_glass_enabled"`
 	BreakGlassMaxMinutes        int                            `json:"break_glass_max_minutes"`
@@ -109,6 +110,7 @@ func DefaultOrganizationPolicy(organizationID string) OrganizationPolicy {
 }
 
 type OrganizationAuditEvent struct {
+	CorrelationID  string    `json:"correlation_id,omitempty"`
 	ID             string    `json:"id"`
 	OrganizationID string    `json:"organization_id"`
 	ActorID        string    `json:"actor_id"`
@@ -201,6 +203,9 @@ func ValidateOrganizationMembershipRecord(m OrganizationMembership) error {
 }
 
 func ValidateOrganizationPolicy(p OrganizationPolicy) error {
+	if p.DefaultRepositoryRole != "" && !ValidRole(p.DefaultRepositoryRole) {
+		return fmt.Errorf("%w: invalid default repository role", ErrValidation)
+	}
 	if err := ValidateOrganizationID(p.OrganizationID); err != nil {
 		return err
 	}

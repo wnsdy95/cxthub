@@ -80,6 +80,9 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
       return {body: serverMemoryPositionsFixture(input.searchParams.get('snapshot_id') ?? '', input.searchParams.get('event_id') ?? '', Array.isArray(history) ? history : [])};
     };
     const response = projected(input) ?? responder(input) ?? graphViewFixture(input, responder) ?? memoryPositions()
+      // Personal-repository fixtures have no organization membership or pending
+      // invitation. Collaboration contracts use explicit fixtures or real cxtd.
+      ?? (input.method === 'GET' && ['/api/v1/organizations','/api/v1/me/invitations'].includes(input.pathname) ? {body:[]} : undefined)
       // Graph-only fixtures contain no effective memory items. Memory behavior
       // tests supply their own response and consume Go's real position resolver.
       ?? (input.method === 'GET' && input.pathname.endsWith('/effective-memory') ? {body:{selection:{snapshot_id:input.searchParams.get('snapshot_id'),code_commit:input.searchParams.get('code_commit')},revision:{graph:'1',pending:'1'},state_hash:'fixture',lineage_hash:'fixture',items:[],total:0,next_cursor:''}} : undefined)

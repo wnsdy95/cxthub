@@ -45,23 +45,27 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids := make([]*app.IdentityService, 2)
-	servers := make([]*httptest.Server, 2)
-	makeServer := func(i int) *httptest.Server {
+	servers := make([]cloudTestServer, 2)
+	makeServer := func(i int) cloudTestServer {
 		s := stores[i]
 		svc := app.NewService(s, s, nil, gitengine.NewEngine(s), s)
 		ids[i] = app.NewIdentityService(auth.NewDevVerifier(), s)
+		if os.Getenv("CXT_LOAD_MULTIPROCESS") == "1" {
+			return startCloudTestProcess(t, dsn)
+		}
 		m, err := mcpserver.NewServer(svc, ids[i], s, "https://load.example.test")
 		if err != nil {
 			t.Fatal(err)
 		}
 		rest := NewServer(svc, ids[i]).Handler()
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/mcp" {
 				m.Handler().ServeHTTP(w, r)
 			} else {
 				rest.ServeHTTP(w, r)
 			}
 		}))
+		return cloudTestServer{URL: local.URL, Close: local.Close}
 	}
 	for i := range servers {
 		servers[i] = makeServer(i)
@@ -112,6 +116,17 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 		t.Fatal(status)
 	}
 
+	// A valid credential from another tenant cannot enumerate or fetch this repo.
+	_, outsiderSession, err := ids[0].Login(ctx, "dev:"+domain.NewID("outsider-")+"@example.test", "isolation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range servers {
+		status := doJSONAs(t, outsiderSession.Token, "GET", server.URL+"/api/v1/repos/"+string(repo.ID)+"/manifest", nil, nil)
+		if status != 403 && status != 404 {
+			t.Fatalf("cross-tenant manifest status=%d", status)
+		}
+	}
 	put := func(doc domain.SessionDoc, parent domain.ContentHash) domain.ContentHash {
 		raw, err := domain.CanonicalBytes(doc.CIR)
 		if err != nil {

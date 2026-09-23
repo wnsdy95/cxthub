@@ -7,6 +7,8 @@
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
  teams: {
+  reload: '편집 내용 버리고 최신 값 불러오기',
+  edit: '팀 정보 수정',
   title: "팀",
   create: "팀 만들기",
   name: "팀 이름",
@@ -145,6 +147,49 @@ export const ko = {
     retry: '지금 재시도',
   },
 
+  invitations: {
+    "title": "초대",
+    "inbox": "받은 초대",
+    "recipient": "이메일 또는 @사용자이름",
+    "create": "초대 만들기",
+    "note": "받는 사람이 수신함이나 링크에서 수락하면 가입됩니다. 이메일은 발송하지 않습니다.",
+    "empty": "초대가 없습니다",
+    "pending": "수락 대기",
+    "accepted": "수락 완료",
+    "revoked": "취소됨",
+    "expired": "만료됨",
+    "accept": "초대 수락",
+    "decline": "거절",
+    "revoke": "초대 취소",
+    "resend": "초대 링크 갱신",
+    "copy": "초대 링크 복사",
+    "copied": "링크를 복사했습니다",
+    "expires": "{date} 만료",
+    "account": "초대받은 계정으로 로그인해야 수락할 수 있습니다.",
+    "refresh": "초대 새로고침",
+    "joined": "가입이 확인되었습니다",
+    "open": "공간으로 이동",
+    "role": "초대 권한"
+},
+  namespace: {
+    "rename": "공간 URL 변경",
+    "slug": "새 URL 이름",
+    "renameHint": "ID와 기존 링크는 유지됩니다. 조직 이름을 바꾸면 레포지토리 주소도 함께 변경됩니다.",
+    "confirmRename": "현재 공간 {slug}의 URL을 변경합니다",
+    "transfer": "레포지토리 이전",
+    "transferHint": "내 개인 공간이나 내가 소유한 조직으로 이전합니다. 컨텍스트와 기존 링크는 유지됩니다. 직접 초대한 구성원의 권한은 유지되며, 이전 조직·팀의 권한은 이동하지 않습니다.",
+    "destination": "이전할 소유자",
+    "choose": "이전 대상 선택",
+    "confirmTransfer": "{path}을 선택한 소유자에게 이전합니다"
+},
+  mcpApplications: {
+    "title": "연결된 MCP 앱",
+    "hint": "연결을 해제하면 이 앱의 access·refresh 토큰과 미사용 승인 코드를 모두 무효화합니다. MCP 요청마다 현재 레포지토리 권한을 확인합니다.",
+    "empty": "연결된 앱이 없습니다",
+    "revoke": "앱 연결 해제",
+    "audit": "최근 MCP 승인 기록 (최대 100건)",
+    "refresh": "앱 목록 새로고침"
+},
   common: {
     yes: '예',
     no: '아니요',
@@ -316,6 +361,11 @@ export const ko = {
     noRepositoriesPublic: '공개된 레포지토리가 없습니다.',
   },
   organization: {
+    auditExport: '불러온 기록 내보내기 (JSONL)',
+    auditMore: '이전 기록 불러오기',
+    baseAccess: '레포지토리 기본 권한',
+    noBaseAccess: '접근 권한 없음',
+    baseAccessHint: '현재 조직 구성원 모두에게 비공개를 포함한 기존·새 레포지토리의 기본 권한을 부여합니다. 직접·팀 권한은 추가로 적용되며 조직 소유자는 항상 owner입니다. 이 설정은 조직 소유자만 변경할 수 있습니다.',
     removalAccess: '직접 부여된 레포지토리 권한',
     chooseRemovalAccess: '제거 후 접근권한 선택',
     revokeDirectAccess: '직접 부여된 권한도 모두 회수',
@@ -326,7 +376,7 @@ export const ko = {
     publicProfile: '공개 조직 프로필',
     roleLabel: '조직 역할 · {role}',
     roleLoading: '확인 중',
-    accessSeparation: '조직 역할은 사람·정책·네임스페이스를 관리합니다. 비공개 컨텍스트를 보려면 각 레포지토리 역할이 별도로 필요합니다.',
+    accessSeparation: '조직 소유자는 모든 레포지토리에 소유자 권한을 가집니다. 나머지 구성원은 조직 기본 권한, 팀 또는 개별 레포지토리 권한으로 접근합니다.',
     tabsAria: '조직 관리 탭',
     people: '사람',
     policies: '정책',
@@ -351,7 +401,7 @@ export const ko = {
     emergencySessionNotice: 'Break-glass 세션입니다. 읽기만 가능하며 모든 사용이 감사 로그에 남습니다.',
     userId: '사용자 이름 (@handle)',
     addMember: '멤버 추가',
-    memberAccessNote: '조직 소유자는 비공개를 포함한 조직의 모든 레포지토리를 관리합니다. 관리자와 멤버는 별도의 레포지토리 또는 팀 권한이 필요합니다.',
+    memberAccessNote: '조직 소유자는 비공개를 포함한 조직의 모든 레포지토리를 관리합니다. 관리자와 멤버의 접근 권한은 조직 기본 권한, 팀 권한, 직접 부여한 레포지토리 권한으로 결정됩니다.',
     changeRole: '{name} 조직 역할 변경',
     lastOwnerRequired: '조직에는 Owner가 최소 한 명 있어야 합니다.',
     policyEnforcedOnly: '아래에는 현재 서버에서 실제로 강제하는 정책만 표시됩니다.',

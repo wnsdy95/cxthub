@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -23,6 +24,11 @@ func (s *PostgresStore) CreateEnterprise(ctx context.Context, e domain.Enterpris
 		return domain.ErrValidation
 	}
 	return s.WithinIdentity(ctx, func(ctx context.Context) error {
+		if _, err := s.GetEnterpriseBySlug(ctx, e.Slug); err == nil {
+			return domain.ErrConflict
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
 		data, err := json.Marshal(e)
 		if err != nil {
 			return err
@@ -52,7 +58,7 @@ func (s *PostgresStore) GetEnterpriseBySlug(ctx context.Context, slug string) (d
 		return domain.Enterprise{}, domain.ErrValidation
 	}
 	var id string
-	if err := s.db(ctx).QueryRow(ctx, `SELECT id FROM enterprises WHERE slug=$1`, slug).Scan(&id); err != nil {
+	if err := s.db(ctx).QueryRow(ctx, `SELECT id FROM enterprises WHERE slug=$1 UNION ALL SELECT enterprise_id FROM enterprise_slug_aliases WHERE slug=$1 LIMIT 1`, slug).Scan(&id); err != nil {
 		return domain.Enterprise{}, mapNoRows(err)
 	}
 	return s.GetEnterprise(ctx, id)

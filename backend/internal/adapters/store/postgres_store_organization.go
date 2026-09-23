@@ -20,9 +20,9 @@ func pgNullableString(value string) any {
 
 func insertOrganizationAuditTx(ctx context.Context, tx pgx.Tx, event domain.OrganizationAuditEvent) error {
 	_, err := tx.Exec(ctx,
-		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		event.ID, event.OrganizationID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt)
+		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at,correlation_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		event.ID, event.OrganizationID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt, event.CorrelationID)
 	return err
 }
 
@@ -206,16 +206,16 @@ func (s *PostgresStore) CreateOrganization(
 		return err
 	}
 	if _, err = tx.Exec(ctx,
-		`INSERT INTO organization_policies (organization_id,repository_creation,default_repository_visibility,allow_public_repositories,break_glass_enabled,break_glass_max_minutes,updated_by,updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		`INSERT INTO organization_policies (organization_id,repository_creation,default_repository_visibility,allow_public_repositories,break_glass_enabled,break_glass_max_minutes,updated_by,updated_at,default_repository_role)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		policy.OrganizationID, string(policy.RepositoryCreation), string(policy.DefaultRepositoryVisibility), policy.AllowPublicRepositories,
-		policy.BreakGlassEnabled, policy.BreakGlassMaxMinutes, policy.UpdatedBy, policy.UpdatedAt); err != nil {
+		policy.BreakGlassEnabled, policy.BreakGlassMaxMinutes, policy.UpdatedBy, policy.UpdatedAt, policy.DefaultRepositoryRole); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx,
-		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		audit.ID, audit.OrganizationID, audit.ActorID, audit.Action, audit.TargetType, audit.TargetID, audit.Reason, audit.CreatedAt); err != nil {
+		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at,correlation_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		audit.ID, audit.OrganizationID, audit.ActorID, audit.Action, audit.TargetType, audit.TargetID, audit.Reason, audit.CreatedAt, audit.CorrelationID); err != nil {
 		return err
 	}
 	return mapPGConstraint(tx.Commit(ctx))
@@ -448,14 +448,14 @@ func (s *PostgresStore) PutOrganizationPolicy(ctx context.Context, policy domain
 		return err
 	}
 	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO organization_policies (organization_id,repository_creation,default_repository_visibility,allow_public_repositories,break_glass_enabled,break_glass_max_minutes,updated_by,updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		`INSERT INTO organization_policies (organization_id,repository_creation,default_repository_visibility,allow_public_repositories,break_glass_enabled,break_glass_max_minutes,updated_by,updated_at,default_repository_role)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		 ON CONFLICT (organization_id) DO UPDATE SET repository_creation=EXCLUDED.repository_creation,
 		 default_repository_visibility=EXCLUDED.default_repository_visibility,allow_public_repositories=EXCLUDED.allow_public_repositories,
 		 break_glass_enabled=EXCLUDED.break_glass_enabled,break_glass_max_minutes=EXCLUDED.break_glass_max_minutes,
-		 updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at`,
+		 updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,default_repository_role=EXCLUDED.default_repository_role`,
 		policy.OrganizationID, string(policy.RepositoryCreation), string(policy.DefaultRepositoryVisibility), policy.AllowPublicRepositories,
-		policy.BreakGlassEnabled, policy.BreakGlassMaxMinutes, pgNullableString(policy.UpdatedBy), policy.UpdatedAt)
+		policy.BreakGlassEnabled, policy.BreakGlassMaxMinutes, pgNullableString(policy.UpdatedBy), policy.UpdatedAt, policy.DefaultRepositoryRole)
 	return err
 }
 
@@ -472,14 +472,14 @@ func (s *PostgresStore) PutOrganizationPolicyWithAudit(ctx context.Context, poli
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO organization_policies (organization_id,repository_creation,default_repository_visibility,allow_public_repositories,break_glass_enabled,break_glass_max_minutes,updated_by,updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		`INSERT INTO organization_policies (organization_id,repository_creation,default_repository_visibility,allow_public_repositories,break_glass_enabled,break_glass_max_minutes,updated_by,updated_at,default_repository_role)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		 ON CONFLICT (organization_id) DO UPDATE SET repository_creation=EXCLUDED.repository_creation,
 		 default_repository_visibility=EXCLUDED.default_repository_visibility,allow_public_repositories=EXCLUDED.allow_public_repositories,
 		 break_glass_enabled=EXCLUDED.break_glass_enabled,break_glass_max_minutes=EXCLUDED.break_glass_max_minutes,
-		 updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at`,
+		 updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at,default_repository_role=EXCLUDED.default_repository_role`,
 		policy.OrganizationID, string(policy.RepositoryCreation), string(policy.DefaultRepositoryVisibility), policy.AllowPublicRepositories,
-		policy.BreakGlassEnabled, policy.BreakGlassMaxMinutes, pgNullableString(policy.UpdatedBy), policy.UpdatedAt); err != nil {
+		policy.BreakGlassEnabled, policy.BreakGlassMaxMinutes, pgNullableString(policy.UpdatedBy), policy.UpdatedAt, policy.DefaultRepositoryRole); err != nil {
 		return mapPGConstraint(err)
 	}
 	if err := insertOrganizationAuditTx(ctx, tx, event); err != nil {
@@ -494,10 +494,10 @@ func (s *PostgresStore) GetOrganizationPolicy(ctx context.Context, organizationI
 	}
 	var policy domain.OrganizationPolicy
 	err := s.db(ctx).QueryRow(ctx,
-		`SELECT organization_id,repository_creation,default_repository_visibility,allow_public_repositories,break_glass_enabled,break_glass_max_minutes,COALESCE(updated_by,''),updated_at
+		`SELECT organization_id,repository_creation,default_repository_visibility,allow_public_repositories,break_glass_enabled,break_glass_max_minutes,COALESCE(updated_by,''),updated_at,default_repository_role
 		 FROM organization_policies WHERE organization_id=$1`, organizationID).
 		Scan(&policy.OrganizationID, &policy.RepositoryCreation, &policy.DefaultRepositoryVisibility, &policy.AllowPublicRepositories,
-			&policy.BreakGlassEnabled, &policy.BreakGlassMaxMinutes, &policy.UpdatedBy, &policy.UpdatedAt)
+			&policy.BreakGlassEnabled, &policy.BreakGlassMaxMinutes, &policy.UpdatedBy, &policy.UpdatedAt, &policy.DefaultRepositoryRole)
 	if err != nil {
 		return domain.OrganizationPolicy{}, mapNoRows(err)
 	}
@@ -577,38 +577,17 @@ func (s *PostgresStore) AppendOrganizationAudit(ctx context.Context, event domai
 		return err
 	}
 	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING`,
-		event.ID, event.OrganizationID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt)
+		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at,correlation_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
+		event.ID, event.OrganizationID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt, event.CorrelationID)
 	return err
 }
 
 func (s *PostgresStore) ListOrganizationAudit(ctx context.Context, organizationID string, limit int) ([]domain.OrganizationAuditEvent, error) {
-	if err := domain.ValidateOrganizationID(organizationID); err != nil {
-		return nil, err
-	}
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db(ctx).Query(ctx,
-		`SELECT id,organization_id,actor_id,action,target_type,target_id,reason,created_at
-		 FROM organization_audit_events WHERE organization_id=$1 ORDER BY created_at DESC LIMIT $2`, organizationID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []domain.OrganizationAuditEvent
-	for rows.Next() {
-		var event domain.OrganizationAuditEvent
-		if err := rows.Scan(&event.ID, &event.OrganizationID, &event.ActorID, &event.Action, &event.TargetType, &event.TargetID, &event.Reason, &event.CreatedAt); err != nil {
-			return nil, err
-		}
-		if err := domain.ValidateOrganizationAuditEvent(event); err != nil {
-			return nil, storedIdentityIntegrity(err)
-		}
-		out = append(out, event)
-	}
-	return out, rows.Err()
+	return s.OrganizationAuditBefore(ctx, domain.AuditCursor{OrganizationID: organizationID}, limit)
 }
 
 func (s *PostgresStore) CreateBreakGlassGrant(ctx context.Context, grant domain.BreakGlassGrant) error {
@@ -641,9 +620,9 @@ func (s *PostgresStore) CreateBreakGlassGrantWithAudit(ctx context.Context, gran
 		return err
 	}
 	if _, err = tx.Exec(ctx,
-		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		event.ID, event.OrganizationID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt); err != nil {
+		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at,correlation_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		event.ID, event.OrganizationID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt, event.CorrelationID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -708,9 +687,9 @@ func (s *PostgresStore) UseActiveBreakGlassGrant(ctx context.Context, organizati
 		return domain.BreakGlassGrant{}, domain.ErrValidation
 	}
 	if _, err = tx.Exec(ctx,
-		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		event.ID, event.OrganizationID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt); err != nil {
+		`INSERT INTO organization_audit_events (id,organization_id,actor_id,action,target_type,target_id,reason,created_at,correlation_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		event.ID, event.OrganizationID, event.ActorID, event.Action, event.TargetType, event.TargetID, event.Reason, event.CreatedAt, event.CorrelationID); err != nil {
 		return domain.BreakGlassGrant{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

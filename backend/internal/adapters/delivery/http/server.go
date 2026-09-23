@@ -68,6 +68,7 @@ type Backend interface {
 	GetMemoryObject(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error)
 	// About + team default settings bundle (web editing).
 	UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error
+	PatchRepoProfile(context.Context, domain.ContentHash, inbound.RepoProfilePatch) (domain.Repo, error)
 	PutSettings(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error
 	GetSettings(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error)
 	inbound.SaveSecrets
@@ -264,7 +265,7 @@ func (s *Server) Handler() http.Handler {
 	// Authentication · Repository · Invite (all Firebase/dev tokens required — requireUser middleware).
 	s.registerIdentity(mux)
 
-	return s.withSecurityHeaders(s.withCORS(s.withCSRF(mux)))
+	return s.withSecurityHeaders(s.withCORS(s.withCSRF(s.withCorrelation(mux))))
 }
 
 func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
@@ -548,48 +549,11 @@ func (s *Server) requireRepoAction(w http.ResponseWriter, r *http.Request, actio
 // patchAbout updates repo About (description/website/topics) + structure settings (default branch, protected branches)
 // (route with maintainer gate).
 func (s *Server) patchAbout(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Description    *string  `json:"description"`
-		Website        *string  `json:"website"`
-		Topics         []string `json:"topics"`
-		DefaultBranch  *string  `json:"default_branch"`
-		ProtectDefault *bool    `json:"protect_default"`
-	}
+	var body inbound.RepoProfilePatch
 	if !s.decode(w, r, &body) {
 		return
 	}
-	if body.DefaultBranch != nil || body.ProtectDefault != nil {
-		if err := s.b.UpdateRepoConfig(r.Context(), s.repoID(r), body.DefaultBranch, body.ProtectDefault); err != nil {
-			code, status := mapError(err)
-			s.writeError(w, status, code, err.Error())
-			return
-		}
-	}
-	// about field is true PATCH semantics — missing fields maintain existing values (repository settings save does not overwrite About body with empty value).
-	if body.Description != nil || body.Website != nil || body.Topics != nil {
-		cur, gerr := s.b.GetRepo(r.Context(), s.repoID(r))
-		if gerr != nil {
-			code, status := mapError(gerr)
-			s.writeError(w, status, code, gerr.Error())
-			return
-		}
-		desc, web, topics := cur.Description, cur.Website, cur.Topics
-		if body.Description != nil {
-			desc = *body.Description
-		}
-		if body.Website != nil {
-			web = *body.Website
-		}
-		if body.Topics != nil {
-			topics = body.Topics
-		}
-		if err := s.b.UpdateAbout(r.Context(), s.repoID(r), desc, web, topics); err != nil {
-			code, status := mapError(err)
-			s.writeError(w, status, code, err.Error())
-			return
-		}
-	}
-	repo, err := s.b.GetRepo(r.Context(), s.repoID(r))
+	repo, err := s.b.PatchRepoProfile(r.Context(), s.repoID(r), body)
 	s.respond(w, repo, err)
 }
 

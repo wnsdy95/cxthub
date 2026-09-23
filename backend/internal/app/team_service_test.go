@@ -56,6 +56,18 @@ func runTeamContract(t *testing.T, st teamTestStore) {
 	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	s := f.identity
+	baseline := TeamProfile{Name: f.team.Name, Description: f.team.Description}
+	next := TeamProfile{Name: "Backend Platform", Description: "Owns the API"}
+	if _, err := s.UpdateTeam(ctx, f.member.ID, f.organization.ID, f.team.ID, baseline, next); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("member edited team: %v", err)
+	}
+	updated, err := s.UpdateTeam(ctx, f.owner.ID, f.organization.ID, f.team.ID, baseline, next)
+	if err != nil || updated.Name != next.Name || updated.Description != next.Description || updated.ID != f.team.ID || updated.Slug != f.team.Slug {
+		t.Fatalf("team edit: %+v %v", updated, err)
+	}
+	if _, err := s.UpdateTeam(ctx, f.owner.ID, f.organization.ID, f.team.ID, baseline, TeamProfile{Name: "Stale"}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale edit succeeded: %v", err)
+	}
 	if _, ok := s.RoleOf(ctx, f.repository.ID, f.member.ID); ok {
 		t.Fatal("organization membership granted private access")
 	}

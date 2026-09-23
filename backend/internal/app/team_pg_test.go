@@ -13,6 +13,10 @@ import (
 )
 
 func TestPGTeamAccessContract(t *testing.T) { _, st, _ := collaborationPG(t); runTeamContract(t, st) }
+func TestPGOrganizationDefaultAccess(t *testing.T) {
+	_, st, _ := collaborationPG(t)
+	runOrganizationDefaultAccess(t, st)
+}
 func TestPGTeamRevocationSerializesWithContextWrites(t *testing.T) {
 	_, st, repo := collaborationPG(t)
 	f := makeTeamFixture(t, st)

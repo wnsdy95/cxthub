@@ -83,24 +83,40 @@ func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, user
 
 func (s *IdentityService) UpdateRepositorySettings(ctx context.Context, userID, repositoryID string, p RepositoryPatch) (domain.Repository, error) {
 	return identityResult(ctx, s, func(ctx context.Context) (domain.Repository, error) {
-		return s.mutateUpdateRepositorySettings(ctx, userID, repositoryID, p)
+		result, err := s.mutateUpdateRepositorySettings(ctx, userID, repositoryID, p)
+		if err == nil {
+			err = appendRepositoryAudit(ctx, s.repositories, userID, repositoryID, "repository.access_settings.updated")
+		}
+		return result, err
 	})
 }
 
 func (s *IdentityService) TransferOwnership(ctx context.Context, actorID, repositoryID, targetID string) (domain.Repository, error) {
 	return identityResult(ctx, s, func(ctx context.Context) (domain.Repository, error) {
-		return s.mutateTransferOwnership(ctx, actorID, repositoryID, targetID)
+		result, err := s.mutateTransferOwnership(ctx, actorID, repositoryID, targetID)
+		if err == nil {
+			err = appendRepositoryAudit(ctx, s.repositories, actorID, repositoryID, "repository.ownership.updated")
+		}
+		return result, err
 	})
 }
 
 func (s *IdentityService) UpdateMemberRole(ctx context.Context, actorID, repositoryID, targetID string, role domain.MemberRole) error {
 	return s.withIdentity(ctx, func(ctx context.Context) error {
-		return s.mutateUpdateMemberRole(ctx, actorID, repositoryID, targetID, role)
+		if err := s.mutateUpdateMemberRole(ctx, actorID, repositoryID, targetID, role); err != nil {
+			return err
+		}
+		return appendRepositoryAudit(ctx, s.repositories, actorID, repositoryID, "repository.member.updated")
 	})
 }
 
 func (s *IdentityService) RemoveMember(ctx context.Context, actorID, repositoryID, targetID string) error {
-	return s.withIdentity(ctx, func(ctx context.Context) error { return s.mutateRemoveMember(ctx, actorID, repositoryID, targetID) })
+	return s.withIdentity(ctx, func(ctx context.Context) error {
+		if err := s.mutateRemoveMember(ctx, actorID, repositoryID, targetID); err != nil {
+			return err
+		}
+		return appendRepositoryAudit(ctx, s.repositories, actorID, repositoryID, "repository.member.removed")
+	})
 }
 
 func (s *IdentityService) CreateRepository(ctx context.Context, owner domain.User, name string) (domain.Repository, error) {

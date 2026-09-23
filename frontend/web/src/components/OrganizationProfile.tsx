@@ -1,13 +1,13 @@
+import { RenameSpace } from './NamespaceAdministration';
+import { InvitationManager } from './CollaborationInvitations';
 import { OrganizationTeams } from './OrganizationTeams';
 import { StorageUsage } from './StorageUsage';
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 import {
-  useCreateBreakGlassGrant,
   useCreateOrganization,
   useCreateOrganizationRepository,
-  useOrganizationAudit,
   useOrganizationMembers,
   useOrganizationPolicy,
   useOrganizations,
@@ -133,11 +133,11 @@ export function OrganizationProfile({ data }: { data: PublicOrganization }) {
           {tab === 'people' && joined && (
             <OrganizationPeople organization={organization as Organization} members={members.data ?? []} role={role} />
           )}
-          {tab === 'policies' && joined && <OrganizationPolicies organizationId={joined.id} canAdmin={canAdmin} />}
+          {tab === 'policies' && joined && <OrganizationPolicies organizationId={joined.id} canAdmin={canAdmin} canOwner={role === 'owner'} />}
           {tab === 'audit' && joined && canAdmin && <OrganizationAudit organizationId={joined.id} />}
           {tab === 'storage' && joined && canAdmin && <StorageUsage namespace={joined.namespace_id} canReconcile={role === 'owner'} />}
           {tab === 'settings' && joined && canAdmin && (
-            <OrganizationSettings organization={organization as Organization} />
+            <><OrganizationSettings organization={organization as Organization} />{role === 'owner' && <RenameSpace key={organization.slug} kind="organization" id={organization.id} slug={organization.slug} />}</>
           )}
         </main>
       </div>
@@ -235,11 +235,7 @@ function OrganizationRepositories({
   const privateRepositories = useOrganizationRepositories(organizationId);
   const personalAccess = useRepositories();
   const create = useCreateOrganizationRepository();
-  const grant = useCreateBreakGlassGrant();
   const [name, setName] = useState('');
-  const [emergencyRepository, setEmergencyRepository] = useState<string | null>(null);
-  const [reason, setReason] = useState('');
-  const [minutes, setMinutes] = useState(15);
   const repositories: Array<Repository | PublicRepository> = organizationId
     ? privateRepositories.data ?? []
     : publicRepositories;
@@ -291,7 +287,6 @@ function OrganizationRepositories({
         <div className="repository-cards">
           {repositories.map((repository) => {
             const canOpen = repository.visibility === 'public' || accessible.has(repository.id);
-            const canBreakGlass = organizationId && role === 'owner' && !canOpen && policy.data?.break_glass_enabled;
             return (
               <div className="organization-repository-card" key={repository.id}>
                 <button className="repository-card" disabled={!canOpen} onClick={() => openRepository(repository)}>
@@ -308,50 +303,7 @@ function OrganizationRepositories({
                   <span className="repository-card-path">{repository.owner_username}/{repository.slug}</span>
                   {!canOpen && <span className="repository-card-access">{t('organization.explicitRepositoryRole')}</span>}
                 </button>
-                {canBreakGlass && emergencyRepository !== repository.id && (
-                  <button className="ghost mini emergency-btn" onClick={() => setEmergencyRepository(repository.id)}>
-                    {t('organization.emergencyRead')}
-                  </button>
-                )}
-                {canBreakGlass && emergencyRepository === repository.id && (
-                  <form
-                    className="emergency-form"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      if (!organizationId) return;
-                      grant.mutate(
-                        { organizationId, repositoryId: repository.id, reason: reason.trim(), minutes },
-                        { onSuccess: () => navigate(repositoryPath(repository)) },
-                      );
-                    }}
-                  >
-                    <strong>{t('organization.emergencyTitle')}</strong>
-                    <textarea
-                      value={reason}
-                      onChange={(event) => setReason(event.target.value)}
-                      placeholder={t('organization.emergencyReason')}
-                    />
-                    <label>
-                      {t('organization.emergencyMinutes')}
-                      <input
-                        type="number"
-                        min={5}
-                        max={policy.data?.break_glass_max_minutes ?? 60}
-                        value={minutes}
-                        onChange={(event) => setMinutes(Number(event.target.value))}
-                      />
-                    </label>
-                    <div className="settings-row">
-                      <button className="danger-btn" disabled={reason.trim().length < 3 || grant.isPending}>
-                        {t('organization.grantEmergencyRead')}
-                      </button>
-                      <button type="button" className="ghost mini" onClick={() => setEmergencyRepository(null)}>
-                        {t('common.cancel')}
-                      </button>
-                    </div>
-                    {grant.isError && <p className="err">{grant.error.message}</p>}
-                  </form>
-                )}
+
               </div>
             );
           })}
@@ -375,8 +327,6 @@ function OrganizationPeople({
   const remove = useRemoveOrganizationMember();
   const [removing, setRemoving] = useState('');
   const [removalAccess, setRemovalAccess] = useState<'' | 'revoke' | 'retain'>('');
-  const [userId, setUserId] = useState('');
-  const [newRole, setNewRole] = useState<OrganizationRole>('member');
   const canAdmin = roleRank(role) >= roleRank('admin');
   const canAssignOwner = role === 'owner';
   const ownerCount = members.filter((member) => member.role === 'owner').length;
@@ -387,34 +337,7 @@ function OrganizationPeople({
         <h2 className="profile-section">{t('organization.people')}</h2>
         <span className="count-badge">{members.length}</span>
       </div>
-      {canAdmin && (
-        <form
-          className="organization-inline-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!userId.trim()) return;
-            update.mutate(
-              { organizationId: organization.id, userId: userId.trim().startsWith("@") ? userId.trim() : `@${userId.trim()}`, role: newRole },
-              { onSuccess: () => setUserId('') },
-            );
-          }}
-        >
-          <input
-            value={userId}
-            onChange={(event) => setUserId(event.target.value)}
-            placeholder={t('organization.userId')}
-            aria-label={t('organization.userId')}
-          />
-          <select value={newRole} onChange={(event) => setNewRole(event.target.value as OrganizationRole)}>
-            <option value="member">member</option>
-            {canAssignOwner && <option value="admin">admin</option>}
-            {canAssignOwner && <option value="owner">owner</option>}
-          </select>
-          <button className="primary" disabled={!userId.trim() || update.isPending}>
-            {t('organization.addMember')}
-          </button>
-        </form>
-      )}
+      {canAdmin && <InvitationManager kind="organization" spaceId={organization.id} owner={canAssignOwner} />}
       <p className="hint">{t('organization.memberAccessNote')}</p>
       {(update.isError || remove.isError) && <p className="err">{update.error?.message ?? remove.error?.message}</p>}
       {removing && <form className="management-form" onSubmit={event => {
@@ -482,14 +405,14 @@ function OrganizationPeople({
   );
 }
 
-function OrganizationPolicies({ organizationId, canAdmin }: { organizationId: string; canAdmin: boolean }) {
+function OrganizationPolicies({ organizationId, canAdmin, canOwner }: { organizationId: string; canAdmin: boolean; canOwner: boolean }) {
   const t = useT();
   const query = useOrganizationPolicy(organizationId);
   const effective = useQuery({ queryKey: ['organizationEffectivePolicy', organizationId, query.data], queryFn: () => api.effectiveOrganizationPolicy(organizationId) });
   const update = useUpdateOrganizationPolicy();
   const [draft, setDraft] = useState<OrganizationPolicy | null>(null);
   useEffect(() => {
-    if (query.data) setDraft(query.data);
+    if (query.data) setDraft((previous) => previous ?? query.data);
   }, [query.data]);
   if (!draft) return <div className="loading">…</div>;
 
@@ -500,7 +423,6 @@ function OrganizationPolicies({ organizationId, canAdmin }: { organizationId: st
       {effective.data && <details className="organization-access-note"><summary>{t('enterprise.inherited')}</summary><ul>
         <li>{t('enterprise.creation')}: {effective.data.repository_creation === 'admins' ? t('enterprise.adminsOnly') : t('organization.allMembers')}</li>
         <li>{t('organization.allowPublic')}: {effective.data.allow_public_repositories ? t('common.yes') : t('common.no')}</li>
-        <li>{t('organization.breakGlass')}: {effective.data.break_glass_enabled ? t('common.yes') : t('common.no')}</li>
       </ul></details>}
       {effective.error && <p className="err" role="alert">{effective.error.message}</p>}
       <div className="organization-policy-list">
@@ -544,25 +466,13 @@ function OrganizationPolicies({ organizationId, canAdmin }: { organizationId: st
           />
         </label>
         <label className="policy-row">
-          <span>{t('organization.breakGlass')}</span>
-          <input
-            type="checkbox"
-            disabled={!canAdmin}
-            checked={draft.break_glass_enabled}
-            onChange={(event) => setDraft({ ...draft, break_glass_enabled: event.target.checked })}
-          />
+          <span>{t('organization.baseAccess')}</span>
+          <select disabled={!canOwner} value={draft.default_repository_role ?? ''} onChange={(event) => setDraft({ ...draft, default_repository_role: event.target.value as OrganizationPolicy['default_repository_role'] })}>
+            <option value="">{t('organization.noBaseAccess')}</option>
+            {['viewer', 'puller', 'member', 'maintainer', 'owner'].map((role) => <option key={role} value={role}>{role}</option>)}
+          </select>
         </label>
-        <label className="policy-row">
-          <span>{t('organization.breakGlassMax')}</span>
-          <input
-            type="number"
-            min={5}
-            max={240}
-            disabled={!canAdmin || !draft.break_glass_enabled}
-            value={draft.break_glass_max_minutes}
-            onChange={(event) => setDraft({ ...draft, break_glass_max_minutes: Number(event.target.value) })}
-          />
-        </label>
+        <p className="hint">{t('organization.baseAccessHint')}</p>
       </div>
       {canAdmin && (
         <button
@@ -572,13 +482,13 @@ function OrganizationPolicies({ organizationId, canAdmin }: { organizationId: st
             update.mutate({
               organizationId,
               patch: {
+                expected_updated_at: draft.updated_at,
+                default_repository_role: draft.default_repository_role ?? '',
                 repository_creation: draft.repository_creation,
                 default_repository_visibility: draft.default_repository_visibility,
                 allow_public_repositories: draft.allow_public_repositories,
-                break_glass_enabled: draft.break_glass_enabled,
-                break_glass_max_minutes: draft.break_glass_max_minutes,
               },
-            })
+            }, { onSuccess: (policy) => setDraft(policy) })
           }
         >
           {update.isPending ? t('common.saving') : t('common.save')}
@@ -591,17 +501,24 @@ function OrganizationPolicies({ organizationId, canAdmin }: { organizationId: st
 
 function OrganizationAudit({ organizationId }: { organizationId: string }) {
   const t = useT();
-  const audit = useOrganizationAudit(organizationId, true);
+  const audit = useInfiniteQuery({ queryKey: ['organization-audit', organizationId, 'pages'], initialPageParam: '', queryFn: ({ pageParam }) => api.organizationAuditPage(organizationId, pageParam), getNextPageParam: page => page.next_cursor || undefined });
+  const events = audit.data?.pages.flatMap(page => page.events) ?? [];
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([events.map(event => JSON.stringify(event)).join('\n') + '\n'], { type: 'application/x-ndjson' }));
+    const link = document.createElement('a'); link.href = url; link.download = 'organization-audit.jsonl'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   return (
     <section className="organization-panel">
       <h2 className="profile-section">{t('organization.audit')}</h2>
+      <button className="ghost mini" disabled={!events.length} onClick={download}>{t('organization.auditExport')}</button>
+      {audit.error && <p className="err" role="alert">{audit.error.message}</p>}
       {audit.isLoading ? (
         <div className="loading">…</div>
-      ) : (audit.data ?? []).length === 0 ? (
+      ) : events.length === 0 ? (
         <div className="empty-box">{t('organization.noAudit')}</div>
       ) : (
         <div className="organization-audit-list">
-          {(audit.data ?? []).map((event) => (
+          {events.map((event) => (
             <div className="organization-audit-row" key={event.id}>
               <strong>{event.action}</strong>
               <code>{event.actor_id}</code>
@@ -609,11 +526,15 @@ function OrganizationAudit({ organizationId }: { organizationId: string }) {
                 <span>{[event.target_type, event.target_id].filter(Boolean).join(' · ')}</span>
               )}
               {event.reason && <p>{event.reason}</p>}
-              <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString()}</time>
+              <div className="organization-audit-meta">
+                {event.correlation_id && <code>{event.correlation_id}</code>}
+                <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString()}</time>
+              </div>
             </div>
           ))}
         </div>
       )}
+      {audit.hasNextPage && <button className="ghost" disabled={audit.isFetchingNextPage} onClick={() => void audit.fetchNextPage()}>{t('organization.auditMore')}</button>}
     </section>
   );
 }

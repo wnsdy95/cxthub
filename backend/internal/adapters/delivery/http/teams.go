@@ -11,6 +11,7 @@ import (
 type TeamIdentity interface {
 	TeamPermissions(context.Context, string, string, string) (app.TeamPermissions, error)
 	CreateTeam(context.Context, string, string, string, string, string) (domain.Team, error)
+	UpdateTeam(context.Context, string, string, string, app.TeamProfile, app.TeamProfile) (domain.Team, error)
 	ListTeams(context.Context, string, string) ([]domain.Team, error)
 	DeleteTeam(context.Context, string, string, string) error
 	ListTeamMembers(context.Context, string, string, string) ([]domain.TeamMembership, error)
@@ -24,6 +25,7 @@ type TeamIdentity interface {
 func (s *Server) registerTeamRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/teams", s.requireUser(s.listTeams))
 	mux.HandleFunc("POST /api/v1/organizations/{organizationID}/teams", s.requireUser(s.createTeam))
+	mux.HandleFunc("PATCH /api/v1/organizations/{organizationID}/teams/{teamID}", s.requireUser(s.updateTeam))
 	mux.HandleFunc("DELETE /api/v1/organizations/{organizationID}/teams/{teamID}", s.requireUser(s.deleteTeam))
 	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/teams/{teamID}/members", s.requireUser(s.listTeamMembers))
 	mux.HandleFunc("PUT /api/v1/organizations/{organizationID}/teams/{teamID}/members/{userID}", s.requireUser(s.putTeamMember))
@@ -75,6 +77,23 @@ func (s *Server) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
 	err := s.id.DeleteTeam(r.Context(), u.ID, r.PathValue("organizationID"), r.PathValue("teamID"))
 	s.respond(w, map[string]string{"status": "deleted"}, err)
+}
+
+func (s *Server) updateTeam(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Expected *app.TeamProfile `json:"expected"`
+		app.TeamProfile
+	}
+	if !s.decode(w, r, &body) {
+		return
+	}
+	if body.Expected == nil {
+		s.respond(w, nil, domain.ErrValidation)
+		return
+	}
+	u, _ := userFrom(r.Context())
+	team, err := s.id.UpdateTeam(r.Context(), u.ID, r.PathValue("organizationID"), r.PathValue("teamID"), *body.Expected, body.TeamProfile)
+	s.respond(w, team, err)
 }
 func (s *Server) listTeamMembers(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())

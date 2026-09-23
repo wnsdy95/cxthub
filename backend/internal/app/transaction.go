@@ -50,6 +50,9 @@ func repositoryWrite[T any](ctx context.Context, s *Service, repo domain.Content
 		out, err = fn(ctx)
 		if err == nil {
 			err = revisionWrite(ctx, s, repo)
+			if err == nil {
+				err = s.auditRepositoryWrite(ctx, repo)
+			}
 		}
 		return out, err
 	}
@@ -62,6 +65,9 @@ func repositoryWrite[T any](ctx context.Context, s *Service, repo domain.Content
 				out, err = fn(context.WithValue(bound, afterCommitKey{}, after))
 				if err == nil {
 					err = revisionWrite(bound, s, repo)
+					if err == nil {
+						err = s.auditRepositoryWrite(bound, repo)
+					}
 				}
 				return err
 			})

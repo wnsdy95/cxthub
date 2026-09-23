@@ -11,6 +11,7 @@ import { UserProfile } from './components/UserProfile';
 import { Landing } from './components/Landing';
 import { Pricing } from './components/Pricing';
 import { DeviceApprove } from './components/DeviceApprove';
+import { InvitationPage } from './components/CollaborationInvitations';
 import { MCPConsent } from './components/MCPConsent';
 
 const queryClient = new QueryClient({
@@ -56,7 +57,7 @@ function Root() {
   useEffect(() => {
     if (!authed) return;
     const r = parseRoute();
-    if (r?.kind !== 'invite') return;
+    if (r?.kind !== 'invite' || r.token.startsWith('ci_')) return;
     accept.mutate(r.token, {
       onSuccess: (w) => {
         setNotice(t('app.joinedRepository', { name: w.name }));
@@ -102,6 +103,7 @@ function Root() {
   }
   {
     const r = parseRoute();
+    if (r?.kind === 'invite' && r.token.startsWith('ci_')) return <InvitationPage key={r.token} id={r.token} />;
     if (r?.kind === 'device') return <DeviceApprove code={r.code} />;
     if (r?.kind === 'mcpConsent') return <MCPConsent requestId={r.request} />;
     if (r?.kind === 'user') return <UserProfile username={r.username} />;

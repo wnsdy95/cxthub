@@ -4,7 +4,7 @@ import { api } from '../api';
 import { useOrganizationMembers, useOrganizationRepositories } from '../hooks';
 import { useT } from '../i18n';
 import { ROLES, type Role } from '../roles';
-import type { TeamMembership } from '../types';
+import type { Team, TeamMembership } from '../types';
 
 export function OrganizationTeams({ organizationId, canCreate }: { organizationId: string; canCreate: boolean }) {
  const t = useT();
@@ -58,6 +58,7 @@ export function OrganizationTeams({ organizationId, canCreate }: { organizationI
    {team && <div className="management-detail">
     <div className="panel-head"><h3>{team.name}</h3>{team.can_delete && <button className="ghost mini danger" disabled={busy} onClick={() => mutation.mutate(() => api.deleteTeam(organizationId, teamId))}>{t('teams.delete')}</button>}</div>
     {team.description && <p>{team.description}</p>}
+    {team.can_manage && <TeamProfileEditor key={team.id} organizationId={organizationId} team={team} />}
     <section><h4>{t('teams.members')}</h4>
      {team.can_manage && <form className="management-form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(() => api.setTeamMember(organizationId, teamId, person, memberRole)); }}>
       <select aria-label={t('teams.chooseMember')} value={person} onChange={(event) => setPerson(event.target.value)} required><option value="">{t('teams.chooseMember')}</option>{people.data?.filter((item) => !members.data?.some((member) => member.user_id === item.user_id)).map((item) => <option key={item.user_id} value={item.user_id}>{personLabel(item.user_id)}</option>)}</select>
@@ -79,4 +80,33 @@ export function OrganizationTeams({ organizationId, canCreate }: { organizationI
    </div>}
   </div>}
  </section>;
+}
+
+function TeamProfileEditor({ organizationId, team }: { organizationId: string; team: Team }) {
+ const t = useT();
+ const qc = useQueryClient();
+ const [baseline, setBaseline] = useState({ name: team.name, description: team.description ?? '' });
+ const [name, setName] = useState(baseline.name);
+ const [description, setDescription] = useState(baseline.description);
+ const reload = useMutation({ mutationFn: () => qc.fetchQuery({ queryKey: ['teams', organizationId], queryFn: () => api.listTeams(organizationId), staleTime: 0 }), onSuccess: teams => {
+  const current = teams.find(item => item.id === team.id);
+  if (current) { const next = { name: current.name, description: current.description ?? '' }; setBaseline(next); setName(next.name); setDescription(next.description); save.reset(); }
+ } });
+ const save = useMutation({
+  mutationFn: () => api.updateTeam(organizationId, team.id, baseline, { name, description }),
+  onSuccess: async (updated) => {
+   const next = { name: updated.name, description: updated.description ?? '' };
+   setBaseline(next); setName(next.name); setDescription(next.description);
+   await qc.invalidateQueries({ queryKey: ['teams', organizationId] });
+  },
+ });
+ return <details><summary>{t('teams.edit')}</summary>
+  <form className="management-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
+   <label>{t('teams.name')}<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label>
+   <label>{t('teams.description')}<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} /></label>
+   <button disabled={save.isPending || !name.trim() || (name === baseline.name && description === baseline.description)}>{t('common.save')}</button>
+  </form>
+  {(save.error || reload.error) && <><p role="alert" className="err">{(reload.error ?? save.error)?.message}</p><button type="button" className="ghost" disabled={save.isPending || reload.isPending} onClick={() => reload.mutate()}>{t('teams.reload')}</button></>}
+
+ </details>;
 }

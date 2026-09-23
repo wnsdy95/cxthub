@@ -4,6 +4,8 @@ import type { Messages } from './ko';
 
 export const en: Messages = {
  teams: {
+  reload: 'Discard draft and reload current values',
+  edit: 'Edit team details',
   title: "Teams",
   create: "Create team",
   name: "Team name",
@@ -142,6 +144,49 @@ export const en: Messages = {
     retry: 'Retry now',
   },
 
+  invitations: {
+    "title": "Invitations",
+    "inbox": "Invitation inbox",
+    "recipient": "Email or @username",
+    "create": "Create invitation",
+    "note": "The recipient accepts in their inbox or through a link. Email delivery is not enabled.",
+    "empty": "No invitations",
+    "pending": "Pending",
+    "accepted": "Accepted",
+    "revoked": "Cancelled",
+    "expired": "Expired",
+    "accept": "Accept invitation",
+    "decline": "Decline",
+    "revoke": "Cancel invitation",
+    "resend": "Renew invitation link",
+    "copy": "Copy invitation link",
+    "copied": "Link copied",
+    "expires": "Expires {date}",
+    "account": "Sign in with the invited account to accept.",
+    "refresh": "Refresh invitations",
+    "joined": "Membership confirmed",
+    "open": "Open space",
+    "role": "Invited role"
+},
+  namespace: {
+    "rename": "Rename space URL",
+    "slug": "New URL slug",
+    "renameHint": "IDs and existing links stay valid. Repository addresses follow an organization rename.",
+    "confirmRename": "Rename the current space {slug}",
+    "transfer": "Move repository",
+    "transferHint": "Choose your personal space or an organization you own. Context and existing links stay intact. Direct collaborators keep access; source organization and team access do not move.",
+    "destination": "Destination owner",
+    "choose": "Choose destination",
+    "confirmTransfer": "Move {path} to the selected owner"
+},
+  mcpApplications: {
+    "title": "Connected MCP applications",
+    "hint": "Disconnecting removes all access and refresh tokens for this app, including unused authorization codes. Repository permissions are checked on every MCP request.",
+    "empty": "No connected applications",
+    "revoke": "Disconnect application",
+    "audit": "Recent MCP authorization activity (up to 100)",
+    "refresh": "Refresh applications"
+},
   common: {
     yes: 'Yes',
     no: 'No',
@@ -313,6 +358,11 @@ export const en: Messages = {
     noRepositoriesPublic: 'No public repositories.',
   },
   organization: {
+    auditExport: 'Export loaded records (JSONL)',
+    auditMore: 'Load older records',
+    baseAccess: 'Base repository permission',
+    noBaseAccess: 'No access',
+    baseAccessHint: 'Applies to every current member across existing and future repositories, including private ones. Direct and team grants can add access. Organization owners always retain owner access. Only an organization owner can change this setting.',
     removalAccess: 'Direct repository access',
     chooseRemovalAccess: 'Choose access after removal',
     revokeDirectAccess: 'Revoke all direct grants',
@@ -323,7 +373,7 @@ export const en: Messages = {
     publicProfile: 'Public Organization profile',
     roleLabel: 'Organization role · {role}',
     roleLoading: 'checking',
-    accessSeparation: 'Organization roles manage people, policy, and the namespace. Private context still requires an explicit role on each Repository.',
+    accessSeparation: 'Organization owners have owner access to every repository. Other members receive access through the organization baseline, teams, or direct repository grants.',
     tabsAria: 'Organization administration',
     people: 'People',
     policies: 'Policies',
@@ -348,7 +398,7 @@ export const en: Messages = {
     emergencySessionNotice: 'This is a break-glass session. It is read-only, time-limited, and every use is audited.',
     userId: 'Username (@handle)',
     addMember: 'Add member',
-    memberAccessNote: 'Organization Owners administer every repository in the organization, including private repositories. Admins and members need separate repository or team grants.',
+    memberAccessNote: 'Organization Owners administer every repository in the organization, including private repositories. Admins and members receive access from the organization baseline, teams, or direct repository grants.',
     changeRole: "Change {name}'s Organization role",
     lastOwnerRequired: 'An Organization must always retain at least one Owner.',
     policyEnforcedOnly: 'Only policies actively enforced by the server appear here.',

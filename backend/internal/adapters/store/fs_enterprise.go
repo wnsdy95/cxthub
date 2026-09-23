@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -15,6 +16,7 @@ import (
 var _ outbound.EnterpriseStore = (*FSStore)(nil)
 
 type enterpriseAccount struct {
+	Aliases    []string                      `json:"aliases,omitempty"`
 	Enterprise domain.Enterprise             `json:"enterprise"`
 	Members    []domain.EnterpriseMembership `json:"members"`
 	Audit      []domain.EnterpriseAuditEvent `json:"audit"`
@@ -97,7 +99,7 @@ func (s *FSStore) GetEnterpriseBySlug(_ context.Context, slug string) (domain.En
 		return domain.Enterprise{}, err
 	}
 	for _, a := range all {
-		if a.Enterprise.Slug == slug {
+		if a.Enterprise.Slug == slug || slices.Contains(a.Aliases, slug) {
 			return a.Enterprise, nil
 		}
 	}

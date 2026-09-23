@@ -12,10 +12,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: proxyTarget, changeOrigin: true },
-      '/mcp': { target: proxyTarget, changeOrigin: true },
-      '/oauth': { target: proxyTarget, changeOrigin: true },
-      '/.well-known': { target: proxyTarget, changeOrigin: true },
+      '^/api(?:/|$)': { target: proxyTarget, changeOrigin: true },
+      '^/mcp(?:\\?|$)': { target: proxyTarget, changeOrigin: true },
+      '^/oauth(?:/|$)': { target: proxyTarget, changeOrigin: true },
+      '^/\\.well-known/': { target: proxyTarget, changeOrigin: true },
     },
   },
 });

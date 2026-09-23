@@ -1384,6 +1384,17 @@ func (s *Service) putSettingsCommand(ctx context.Context, repoID domain.ContentH
 // PutPending upserts the session-specific context pointer (CLI hook capture mirror). The sessionID is authoritative — the body's session/repo is overwritten (push's RepoID normalization equivalent).
 // The previous hook leaf is collected only if the replacement verifiably contains its complete event prefix.
 func (s *Service) putPending(ctx context.Context, repoID domain.ContentHash, sessionID string, p domain.Pending) error {
+	user, err := s.authorizePendingWrite(ctx, repoID, sessionID)
+	if err != nil {
+		return err
+	}
+	if user.ID != "" {
+		name := user.Name
+		if name == "" {
+			name = user.Username
+		}
+		p.Author = domain.TeamIdentity{Name: name, Email: user.Email}
+	}
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1429,6 +1440,9 @@ func (s *Service) DismissPending(ctx context.Context, repoID domain.ContentHash,
 	return repositoryWriteError(pendingWriteContext(ctx), s, repoID, func(ctx context.Context) error { return s.dismissPending(ctx, repoID, sessionID) })
 }
 func (s *Service) dismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
+	if _, err := s.authorizePendingWrite(ctx, repoID, sessionID); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1443,6 +1457,9 @@ func (s *Service) UndismissPending(ctx context.Context, repoID domain.ContentHas
 	return repositoryWriteError(pendingWriteContext(ctx), s, repoID, func(ctx context.Context) error { return s.undismissPending(ctx, repoID, sessionID) })
 }
 func (s *Service) undismissPending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
+	if _, err := s.authorizePendingWrite(ctx, repoID, sessionID); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1477,6 +1494,9 @@ func (s *Service) DeletePending(ctx context.Context, repoID domain.ContentHash, 
 	return repositoryWriteError(pendingWriteContext(ctx), s, repoID, func(ctx context.Context) error { return s.deletePending(ctx, repoID, sessionID) })
 }
 func (s *Service) deletePending(ctx context.Context, repoID domain.ContentHash, sessionID string) error {
+	if _, err := s.authorizePendingWrite(ctx, repoID, sessionID); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1497,6 +1517,9 @@ func (s *Service) CompareAndDeletePending(ctx context.Context, repoID domain.Con
 	})
 }
 func (s *Service) compareAndDeletePending(ctx context.Context, repoID domain.ContentHash, sessionID string, expected domain.ContentHash) (bool, error) {
+	if _, err := s.authorizePendingWrite(ctx, repoID, sessionID); err != nil {
+		return false, err
+	}
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return false, err
 	}
@@ -1704,6 +1727,9 @@ func (s *Service) gcHookLeaf(ctx context.Context, repoID domain.ContentHash, old
 // user/branch are authoritative — overwrites body value. If ref is already target,
 // it's effectively synced, so instead of upsert, it resolves (deletes).
 func (s *Service) putUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string, u domain.Unsync) error {
+	if err := s.authorizeUnsyncWrite(ctx, user); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1747,6 +1773,9 @@ func (s *Service) DeleteUnsync(ctx context.Context, repoID domain.ContentHash, u
 	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error { return s.deleteUnsync(ctx, repoID, user, branch) })
 }
 func (s *Service) deleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error {
+	if err := s.authorizeUnsyncWrite(ctx, user); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
