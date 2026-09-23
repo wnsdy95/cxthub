@@ -807,3 +807,10 @@ they no longer make an ordinary current-branch hook restore another branch's
 context first. Existing hook deadlines are unchanged. Full explicit push/pull
 still synchronize retained history and may take longer on first synchronization;
 this change does not claim constant-time synchronization of a large archive.
+
+Git reference transactions describe both logical changes and storage maintenance.
+A zero-old-OID event for an already existing branch at the same target is packed
+storage creation, not branch birth. It must not create a context branch or enter
+the replay writer lock. Terminal callbacks without a matching durable vote do
+not schedule a replay. Real `git pack-refs --all` and a contended-journal fixture
+cover this distinction; genuine new branches retain the fail-closed birth vote.
