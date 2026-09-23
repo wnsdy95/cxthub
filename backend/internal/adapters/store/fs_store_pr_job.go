@@ -116,11 +116,16 @@ func (s *FSStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash, id st
 		if active := running[j.RepoID]; active != "" && active != j.ID {
 			continue
 		}
+		// Backoff delays this job, not unrelated ready work in its repository.
+		// Running leases still reserve the repository via the check above.
+		if j.NextAttempt.After(now) {
+			continue
+		}
 		if blocked[j.RepoID] {
 			continue
 		}
 		blocked[j.RepoID] = true
-		if (repo != "" && j.RepoID != repo) || (id != "" && j.ID != id) || j.NextAttempt.After(now) || (j.State == "running" && j.LeaseUntil.After(now)) {
+		if (repo != "" && j.RepoID != repo) || (id != "" && j.ID != id) || (j.State == "running" && j.LeaseUntil.After(now)) {
 			continue
 		}
 		j.State = "running"

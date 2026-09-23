@@ -78,6 +78,7 @@ func TestPGSmoke(t *testing.T) {
 	defer t.Run("storage accounting", func(t *testing.T) { checkStorageAccountingPG(t, st) })
 	defer t.Run("shared runtime", func(t *testing.T) { checkRuntime(t, st) })
 	defer t.Run("durable PR jobs", func(t *testing.T) { checkPRJobs(t, st) })
+	defer t.Run("ready PR jobs", func(t *testing.T) { checkPRReadyJobs(t, st) })
 	defer t.Run("PR source wake", func(t *testing.T) { checkPRSourceWake(t, st) })
 	defer t.Run("PR reawakened serialization", func(t *testing.T) { checkPRReawakenedSerialization(t, st) })
 	defer t.Run("PR concurrent wake and claim", func(t *testing.T) { checkPGPRClaimWakeRace(t, st) })
