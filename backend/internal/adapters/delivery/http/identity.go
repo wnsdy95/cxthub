@@ -31,6 +31,7 @@ type IdentityBackend interface {
 	GetRepository(ctx context.Context, repositoryID string) (domain.Repository, error)
 	IsPublicRepository(ctx context.Context, repositoryID string) bool
 	IsOwner(ctx context.Context, repositoryID, userID string) bool
+	CanTransferOwnership(ctx context.Context, repositoryID, userID string) bool
 	RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool)
 	TransferOwnership(ctx context.Context, actorID, repositoryID, targetID string) (domain.Repository, error)
 	UpdateMemberRole(ctx context.Context, actorID, repositoryID, targetID string, role domain.MemberRole) error

@@ -44,18 +44,35 @@ func repositoryRole(ctx context.Context, repositories outbound.RepositoryStore, 
 	if err != nil {
 		return "", false
 	}
-	members, err := repositories.ListMembers(ctx, id)
+	role, ok, _ := repositoryRoleFor(ctx, repositories, repository, actor)
+	return role, ok
+}
+
+func repositoryOrganizationAccess(ctx context.Context, repositories outbound.RepositoryStore, id, actor string) (domain.OrganizationRepositoryAccess, error) {
+	if reader, ok := repositories.(outbound.RepositoryOrganizationAccess); ok {
+		return reader.RepositoryOrganizationAccess(ctx, id, actor)
+	}
+	return domain.OrganizationRepositoryAccess{}, nil
+}
+
+func repositoryRoleFor(ctx context.Context, repositories outbound.RepositoryStore, repository domain.Repository, actor string) (domain.MemberRole, bool, error) {
+	members, err := repositories.ListMembers(ctx, repository.ID)
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	var grants []domain.TeamRepositoryAccess
 	if teams, ok := repositories.(outbound.TeamStore); ok {
-		grants, err = teams.RepositoryTeamAccess(ctx, id, actor)
+		grants, err = teams.RepositoryTeamAccess(ctx, repository.ID, actor)
 		if err != nil {
-			return "", false
+			return "", false, err
 		}
 	}
-	return domain.EffectiveRepositoryRole(repository, members, actor, grants)
+	organization, err := repositoryOrganizationAccess(ctx, repositories, repository.ID, actor)
+	if err != nil {
+		return "", false, err
+	}
+	role, ok := domain.EffectiveRepositoryRole(repository, members, actor, grants, organization)
+	return role, ok, nil
 }
 
 func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {

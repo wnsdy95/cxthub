@@ -50,6 +50,12 @@ func runEnterpriseContract(t *testing.T, st enterpriseTestStore) {
 	if err = s.RemoveEnterpriseMember(ctx, f.owner.ID, enterprise.ID, f.owner.ID); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("last enterprise owner removed: %v", err)
 	}
+	if err = s.UpdateEnterpriseMember(ctx, f.owner.ID, enterprise.ID, f.outsider.ID, domain.EnterpriseOwner); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.RoleOf(ctx, f.repository.ID, f.outsider.ID); ok {
+		t.Fatal("upper Enterprise Owner inherited Organization repository access")
+	}
 	policy, err := s.GetOrganizationPolicy(ctx, f.owner.ID, f.organization.ID)
 	if err != nil {
 		t.Fatal(err)

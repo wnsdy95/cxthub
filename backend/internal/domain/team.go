@@ -89,10 +89,13 @@ func ValidateTeamRepositoryGrant(g TeamRepositoryGrant) error {
 	return nil
 }
 
-func EffectiveRepositoryRole(repository Repository, members []Membership, actor string, teams []TeamRepositoryAccess) (MemberRole, bool) {
+func EffectiveRepositoryRole(repository Repository, members []Membership, actor string, teams []TeamRepositoryAccess, organization OrganizationRepositoryAccess) (MemberRole, bool) {
 	role, ok := RepositoryRole(repository, members, actor)
 	if actor == "" {
 		return "", false
+	}
+	if organization.IsOwnerOf(repository, actor) {
+		return RoleOwner, true
 	}
 	for _, grant := range teams {
 		if grant.UserID != actor || grant.RepositoryID != repository.ID || !grant.OrganizationMember || !grant.TeamMember || grant.OrganizationNamespaceID == "" || grant.OrganizationNamespaceID != repository.OwnerNamespaceID || !ValidRole(grant.Role) {

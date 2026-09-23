@@ -28,7 +28,7 @@ func (s *auditFailOrganizationStore) UseActiveBreakGlassGrant(ctx context.Contex
 	return s.FSStore.UseActiveBreakGlassGrant(ctx, organizationID, repositoryID, userID, now, event)
 }
 
-func TestOrganizationRolesDoNotImplicitlyGrantRepositoryContext(t *testing.T) {
+func TestOrganizationOwnerAccessAndExplicitBreakGlassAudit(t *testing.T) {
 	ctx := context.Background()
 	st := &auditFailOrganizationStore{FSStore: store.NewFSStore(t.TempDir())}
 	svc := NewIdentityService(nil, st)
@@ -82,8 +82,8 @@ func TestOrganizationRolesDoNotImplicitlyGrantRepositoryContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if role, ok := svc.RoleOf(ctx, repository.ID, owner.ID); ok || role != "" {
-		t.Fatalf("organization owner inherited repository role: role=%q ok=%v", role, ok)
+	if role, ok := svc.RoleOf(ctx, repository.ID, owner.ID); !ok || role != domain.RoleOwner {
+		t.Fatalf("organization owner missing inherited repository role: role=%q ok=%v", role, ok)
 	}
 	renamedAdmin := "renamed-admin"
 	if _, err := svc.UpdateProfile(ctx, admin, &renamedAdmin, nil, nil, nil, nil); err != nil {
@@ -102,8 +102,8 @@ func TestOrganizationRolesDoNotImplicitlyGrantRepositoryContext(t *testing.T) {
 	if allowed, err := svc.HasBreakGlassAccess(ctx, repository.ID, owner.ID); err != nil || allowed {
 		t.Fatal("owner had break-glass access without an explicit grant")
 	}
-	if _, err := svc.ReadableRepository(ctx, organization.Slug, repository.Slug, owner.ID); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("private Repository leaked before grant: %v", err)
+	if _, err := svc.ReadableRepository(ctx, organization.Slug, repository.Slug, owner.ID); err != nil {
+		t.Fatalf("organization owner cannot read private Repository: %v", err)
 	}
 	if _, err := svc.CreateBreakGlassGrant(ctx, admin.ID, organization.ID, repository.ID, "investigate incident", 15); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("admin break-glass err=%v, want forbidden", err)
@@ -124,8 +124,8 @@ func TestOrganizationRolesDoNotImplicitlyGrantRepositoryContext(t *testing.T) {
 		t.Fatalf("break-glass did not fail closed when use audit failed: allowed=%v err=%v", allowed, err)
 	}
 	st.failUseAudit = false
-	if role, ok := svc.RoleOf(ctx, repository.ID, owner.ID); ok || role != "" {
-		t.Fatal("break-glass must not mutate durable repository membership")
+	if direct, err := st.IsMember(ctx, repository.ID, owner.ID); err != nil || direct {
+		t.Fatal("inherited access and break-glass must not create durable repository membership")
 	}
 
 	policy, err := svc.GetOrganizationPolicy(ctx, owner.ID, organization.ID)

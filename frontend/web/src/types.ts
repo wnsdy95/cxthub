@@ -26,8 +26,9 @@ export interface PublicUser {
 }
 
 export interface Repository {
-  /** Server-computed direct/team permission for the signed-in caller. */
+  /** Server-computed direct/team/Organization Owner permission for the caller. */
   effective_role?: '' | 'viewer' | 'puller' | 'member' | 'maintainer' | 'owner';
+  can_transfer_ownership?: boolean;
   id: string;
   name: string;
   owner_id: string;
