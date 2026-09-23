@@ -51,12 +51,15 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 			}
 			ref.Target = out.Position
 			code := in.CodeCommit
-			if code == "" {
-				code = branchCode(ref, view.History)
-			}
 			evidence, e := s.newCodeEvidence(ctx, repo)
 			if e != nil {
 				return out, e
+			}
+			if code == "" {
+				code, e = resolvedBranchCode(ctx, ref, view.History, evidence)
+				if e != nil {
+					return out, e
+				}
 			}
 			included, e := s.branchContext(ctx, ref, code, view.Snapshots, view.History, evidence)
 			if e != nil {

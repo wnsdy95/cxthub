@@ -4,12 +4,23 @@ import (
 	"context"
 	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"sort"
 )
 
 // branchCode selects only exact associations with this context and identity.
 // A shared content hash may have different source and merged code associations;
 // branch identity disambiguates them without guessing from wall-clock order.
 func branchCode(ref domain.Ref, history []domain.HistoryEvent) string {
+	codes := branchCodeCandidates(ref, history)
+	if len(codes) == 1 {
+		for code := range codes {
+			return code
+		}
+	}
+	return ""
+}
+
+func branchCodeCandidates(ref domain.Ref, history []domain.HistoryEvent) map[string]bool {
 	codes := map[string]bool{}
 	mergedSources := map[string]bool{}
 	for _, h := range history {
@@ -44,13 +55,109 @@ func branchCode(ref domain.Ref, history []domain.HistoryEvent) string {
 	for code := range mergedSources {
 		delete(codes, code)
 	}
-	if len(codes) == 1 {
-		for code := range codes {
-			return code
+	return codes
+}
+
+// A completed append moves the context pointer, but its arrival time does not
+// select a Git revision. Follow only the recorded pre-append selections, then
+// choose a revision proven to contain every candidate. Explicit code requests
+// bypass this resolver. Ordinary conflicting observations remain ambiguous.
+func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.HistoryEvent, evidence *codeEvidence) (string, error) {
+	if evidence == nil {
+		return branchCode(ref, history), nil
+	}
+	byTarget := map[domain.ContentHash][]domain.HistoryEvent{}
+	for _, h := range history {
+		if h.BranchID == ref.BranchID {
+			byTarget[h.Target] = append(byTarget[h.Target], h)
 		}
 	}
-	return ""
+	candidates := map[string]bool{}
+	visited, active := map[domain.ContentHash]bool{}, map[domain.ContentHash]bool{}
+	var collect func(domain.ContentHash) error
+	collect = func(target domain.ContentHash) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if active[target] {
+			return errAmbiguousBranchCode
+		}
+		if visited[target] {
+			return nil
+		}
+		if len(visited) >= maxCodeEvidenceReads {
+			return errAmbiguousBranchCode
+		}
+		visited[target], active[target] = true, true
+		defer delete(active, target)
+		r := ref
+		r.Target = target
+		rows := byTarget[target]
+		codes := branchCodeCandidates(r, rows)
+		merges := map[string]bool{}
+		for _, h := range rows {
+			if h.Kind == "pr-merge" && h.PRCompleted && h.PR != nil && domain.ValidateGitOID(h.PR.MergeSHA) == nil {
+				merges[h.PR.MergeSHA] = true
+			}
+		}
+		for code := range codes {
+			if target == ref.Target && len(merges) != 0 && !merges[code] {
+				return errAmbiguousBranchCode
+			}
+			candidates[code] = true
+		}
+		if len(merges) == 0 {
+			if target == ref.Target && len(codes) > 1 {
+				return errAmbiguousBranchCode
+			}
+			return nil
+		}
+		for _, h := range rows {
+			if h.Kind == "pr-merge" && h.PRCompleted && h.PR != nil && h.SharedTarget != "" && h.SharedTarget != target {
+				if err := collect(h.SharedTarget); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := collect(ref.Target); err != nil {
+		if errors.Is(err, errAmbiguousBranchCode) {
+			return "", nil
+		}
+		return "", err
+	}
+	codes := make([]string, 0, len(candidates))
+	for c := range candidates {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	if len(codes) == 0 {
+		return "", nil
+	}
+	selected := codes[0]
+	for _, c := range codes[1:] {
+		relation, err := evidence.relation(ctx, selected, c)
+		if err != nil {
+			return "", err
+		}
+		if relation == "ancestor" {
+			selected = c
+		}
+	}
+	for _, c := range codes {
+		relation, err := evidence.relation(ctx, c, selected)
+		if err != nil {
+			return "", err
+		}
+		if relation != "ancestor" {
+			return "", nil
+		}
+	}
+	return selected, nil
 }
+
+var errAmbiguousBranchCode = errors.New("ambiguous ordinary branch code observations")
 
 func (s *Service) QueryBranchMemory(ctx context.Context, repo domain.ContentHash, branch string, snapshot domain.ContentHash, code string) (domain.MemoryProjection, error) {
 	if domain.ValidateContentHash(repo) != nil || domain.ValidateContentHash(snapshot) != nil || domain.ValidateBranchName(branch) != nil || (code != "" && domain.ValidateGitOID(code) != nil) {
@@ -77,9 +184,6 @@ func (s *Service) queryBranchMemory(ctx context.Context, repo domain.ContentHash
 		ref.BranchID = bindings.Identity(string(repo), branch)
 	}
 	ref.Target = snapshot
-	if code == "" {
-		code = branchCode(ref, history)
-	}
 	snaps, err := s.meta.ListSnapshots(ctx, repo, "")
 	if err != nil {
 		return domain.MemoryProjection{}, err
@@ -87,6 +191,12 @@ func (s *Service) queryBranchMemory(ctx context.Context, repo domain.ContentHash
 	evidence, err := s.newCodeEvidence(ctx, repo)
 	if err != nil {
 		return domain.MemoryProjection{}, err
+	}
+	if code == "" {
+		code, err = resolvedBranchCode(ctx, ref, history, evidence)
+		if err != nil {
+			return domain.MemoryProjection{}, err
+		}
 	}
 	inclusion, err := s.branchContext(ctx, ref, code, snaps, history, evidence)
 	if err != nil {
@@ -147,7 +257,10 @@ func (s *Service) projectGraphState(ctx context.Context, v domain.RepositoryView
 		if ref.BranchID == "" {
 			ref.BranchID = graph.RefScopes[ref.Name]
 		}
-		code := branchCode(ref, v.History)
+		code, err := resolvedBranchCode(ctx, ref, v.History, evidence)
+		if err != nil {
+			return graph, err
+		}
 		if evidence == nil {
 			code = ""
 		} // legacy metadata without a bound Git origin
