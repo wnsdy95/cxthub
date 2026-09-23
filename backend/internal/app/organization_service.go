@@ -281,7 +281,14 @@ func (s *IdentityService) mutateUpdateOrganizationPolicy(ctx context.Context, ac
 	if !policy.UpdatedAt.IsZero() && !policy.UpdatedAt.Equal(current.UpdatedAt) {
 		return domain.OrganizationPolicy{}, domain.ErrConflict
 	}
-	policy.UpdatedBy, policy.UpdatedAt = actorID, time.Now().UTC()
+	// PostgreSQL persists microseconds. Return that exact precision so a fresh
+	// response is a usable editing baseline on nanosecond-resolution hosts too.
+	// Keep revisions distinct even if the clock repeats or moves backwards.
+	revision := time.Now().UTC().Truncate(time.Microsecond)
+	if !revision.After(current.UpdatedAt) {
+		revision = current.UpdatedAt.UTC().Truncate(time.Microsecond).Add(time.Microsecond)
+	}
+	policy.UpdatedBy, policy.UpdatedAt = actorID, revision
 	if err := domain.ValidateOrganizationPolicy(policy); err != nil {
 		return domain.OrganizationPolicy{}, err
 	}

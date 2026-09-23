@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -41,6 +42,10 @@ func runOrganizationDefaultAccess(t *testing.T, st teamTestStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	persisted, err := s.GetOrganizationPolicy(ctx, f.owner.ID, f.organization.ID)
+	if err != nil || !policy.UpdatedAt.Equal(persisted.UpdatedAt) || policy.UpdatedAt.Nanosecond()%int(time.Microsecond) != 0 {
+		t.Fatalf("returned revision differs from persisted editing baseline: %s / %s (%v)", policy.UpdatedAt, persisted.UpdatedAt, err)
+	}
 	check(domain.RolePuller)
 	if role, _ := s.RoleOf(ctx, f.repository.ID, f.owner.ID); role != domain.RoleOwner {
 		t.Fatal("base role reduced owner authority")
@@ -57,6 +62,9 @@ func runOrganizationDefaultAccess(t *testing.T, st teamTestStore) {
 	policy, err = s.UpdateOrganizationPolicy(ctx, f.owner.ID, policy)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !policy.UpdatedAt.After(old.UpdatedAt) {
+		t.Fatal("accepted write reused the preceding editing revision")
 	}
 	check(domain.RoleMember)
 	if _, err := s.UpdateOrganizationPolicy(ctx, f.owner.ID, old); !errors.Is(err, domain.ErrConflict) {
