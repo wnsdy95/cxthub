@@ -87,14 +87,10 @@ func (s *Service) authorizeSecretsEdit(ctx context.Context, in inbound.SaveSecre
 	if err != nil {
 		return err
 	}
-	var members []domain.Membership
-	if repositoryRecord.OwnerID != in.ActorID {
-		members, err = s.repositories.ListMembers(ctx, repositoryRecord.ID)
-		if err != nil {
-			return err
-		}
+	role, ok, err := repositoryRoleFor(ctx, s.repositories, repositoryRecord, in.ActorID)
+	if err != nil {
+		return err
 	}
-	role, ok := domain.RepositoryRole(repositoryRecord, members, in.ActorID)
 	if !ok || !domain.CanEditSecrets(repositoryRecord, role) {
 		return domain.ErrForbidden
 	}

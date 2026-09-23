@@ -11,6 +11,29 @@ import (
 
 // PostgresStore implementation of RepositoryStore (0002 schema: users/repositories/memberships/invites).
 
+func (s *PostgresStore) RepositoryOrganizationAccess(ctx context.Context, id, actor string) (domain.OrganizationRepositoryAccess, error) {
+	empty := domain.OrganizationRepositoryAccess{}
+	if actor == "" {
+		return empty, nil
+	}
+	if err := domain.ValidateRepositoryID(id); err != nil {
+		return empty, err
+	}
+	if err := domain.ValidateExternalID(actor); err != nil {
+		return empty, err
+	}
+	var access domain.OrganizationRepositoryAccess
+	err := s.db(ctx).QueryRow(ctx, `SELECT r.id, n.id, m.user_id, m.role FROM repositories r
+		JOIN namespaces n ON n.id=r.owner_namespace_id AND n.kind='organization'
+		JOIN organizations o ON o.id=n.organization_id AND o.namespace_id=n.id
+		JOIN organization_memberships m ON m.organization_id=o.id AND m.user_id=$2
+		WHERE r.id=$1`, id, actor).Scan(&access.RepositoryID, &access.OrganizationNamespaceID, &access.UserID, &access.Role)
+	if errors.Is(mapNoRows(err), domain.ErrNotFound) {
+		return empty, nil
+	}
+	return access, err
+}
+
 func (s *PostgresStore) UpsertUser(ctx context.Context, u domain.User) error {
 	if err := domain.ValidateUserRecord(u); err != nil {
 		return err
@@ -150,7 +173,12 @@ func (s *PostgresStore) ListRepositoriesForUser(ctx context.Context, userID stri
  JOIN organizations o ON o.id=g.organization_id AND o.namespace_id=w.owner_namespace_id
  JOIN team_memberships tm ON tm.team_id=g.team_id AND tm.organization_id=g.organization_id
  JOIN organization_memberships om ON om.organization_id=g.organization_id AND om.user_id=tm.user_id
- WHERE g.repository_id=w.id AND tm.user_id=$1) ORDER BY w.created_at`, userID)
+ WHERE g.repository_id=w.id AND tm.user_id=$1)
+ OR EXISTS (SELECT 1 FROM namespaces n
+ JOIN organizations o ON o.id=n.organization_id AND o.namespace_id=n.id
+ JOIN organization_memberships om ON om.organization_id=o.id
+ WHERE n.id=w.owner_namespace_id AND n.kind='organization' AND om.user_id=$1 AND om.role='owner')
+ ORDER BY w.created_at`, userID)
 	if err != nil {
 		return nil, err
 	}

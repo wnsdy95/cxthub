@@ -124,14 +124,10 @@ func (s *Service) authorizeJoin(ctx context.Context, repoID domain.ContentHash, 
 	if repositoryRecord.Archived {
 		return domain.ErrForbidden
 	}
-	var members []domain.Membership
-	if repositoryRecord.OwnerID != actor {
-		members, err = s.repositories.ListMembers(ctx, repositoryRecord.ID)
-		if err != nil {
-			return err
-		}
+	role, ok, err := repositoryRoleFor(ctx, s.repositories, repositoryRecord, actor)
+	if err != nil {
+		return err
 	}
-	role, ok := domain.RepositoryRole(repositoryRecord, members, actor)
 	if !ok || !role.AtLeast(domain.RoleMember) {
 		return domain.ErrForbidden
 	}

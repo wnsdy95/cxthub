@@ -1090,7 +1090,8 @@ components:
         When gh_visibility_sync is enabled, manual visibility settings are locked (409),
         It becomes public only when all connected GitHub repos are public.
       properties:
-        effective_role: { type: string, enum: ["", viewer, puller, member, maintainer, owner], readOnly: true, description: "Caller permission resolved from direct and current team grants." }
+        effective_role: { type: string, enum: ["", viewer, puller, member, maintainer, owner], readOnly: true, description: "Caller permission resolved from direct grants, current team grants, and Organization Owner authority." }
+        can_transfer_ownership: { type: boolean, readOnly: true, description: "Caller is the personal ownership anchor or an Owner of the repository's Organization." }
         id: { type: string }
         name: { type: string }
         owner_id: { type: string, description: "Creator — role cannot be fixed or removed, can only be changed via transfer" }

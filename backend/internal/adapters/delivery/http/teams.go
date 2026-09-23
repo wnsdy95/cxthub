@@ -123,12 +123,13 @@ func (s *Server) deleteTeamRepository(w http.ResponseWriter, r *http.Request) {
 // this projection instead of rebuilding team membership rules in TypeScript.
 type repositoryAccessView struct {
 	domain.Repository
-	EffectiveRole domain.MemberRole `json:"effective_role"`
+	EffectiveRole        domain.MemberRole `json:"effective_role"`
+	CanTransferOwnership bool              `json:"can_transfer_ownership"`
 }
 
 func (s *Server) repositoryAccess(ctx context.Context, actor string, repository domain.Repository) repositoryAccessView {
 	role, _ := s.id.RoleOf(ctx, repository.ID, actor)
-	return repositoryAccessView{Repository: repository, EffectiveRole: role}
+	return repositoryAccessView{Repository: repository, EffectiveRole: role, CanTransferOwnership: s.id.CanTransferOwnership(ctx, repository.ID, actor)}
 }
 func (s *Server) repositoryAccessList(ctx context.Context, actor string, repositories []domain.Repository) []repositoryAccessView {
 	out := make([]repositoryAccessView, 0, len(repositories))

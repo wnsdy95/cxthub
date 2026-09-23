@@ -796,7 +796,7 @@ func TestRepositoryRejectsUnregisteredChildPaths(t *testing.T) {
 	}
 }
 
-func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
+func TestOrganizationOwnerReadsWritesAndDiscoversAllRepositories(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
@@ -838,12 +838,12 @@ func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 		t.Fatalf("register organization repo code %d", code)
 	}
 	repoBase := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repoID))
-	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusForbidden {
-		t.Fatalf("organization owner inherited private context read: code %d", code)
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repoBase+"/refs", nil, nil); code != http.StatusOK {
+		t.Fatalf("organization owner denied private context read: code %d", code)
 	}
 	repositoryPath := ts.URL + "/api/v1/public/repositories/acme/" + url.PathEscape(repository.Slug)
-	if code := doJSONAs(t, ownerToken, http.MethodGet, repositoryPath, nil, nil); code != http.StatusNotFound {
-		t.Fatalf("private organization Repository leaked before grant: code %d", code)
+	if code := doJSONAs(t, ownerToken, http.MethodGet, repositoryPath, nil, nil); code != http.StatusOK {
+		t.Fatalf("private organization Repository denied owner: code %d", code)
 	}
 
 	var grant domain.BreakGlassGrant
@@ -865,10 +865,23 @@ func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repos?repository="+url.QueryEscape(repository.ID), nil, &repos); code != http.StatusOK || len(repos) != 1 || repos[0].ID != repoID {
 		t.Fatalf("break-glass repository discovery code=%d repos=%+v", code, repos)
 	}
-	if code := doJSONAs(t, ownerToken, http.MethodPut, repoBase+"/refs/branch/main", map[string]any{
-		"target": domain.ContentHash("sha256:" + strings.Repeat("a", 64)),
-	}, nil); code != http.StatusForbidden {
-		t.Fatalf("break-glass write code %d, want 403", code)
+	var access struct {
+		EffectiveRole string `json:"effective_role"`
+		CanTransfer   bool   `json:"can_transfer_ownership"`
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodPatch, ts.URL+"/api/v1/repositories/"+repository.ID, map[string]any{"secrets_policy": "owner"}, &access); code != http.StatusOK {
+		t.Fatalf("owner settings: %d", code)
+	}
+	var repositories []struct {
+		ID            string `json:"id"`
+		EffectiveRole string `json:"effective_role"`
+		CanTransfer   bool   `json:"can_transfer_ownership"`
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repositories", nil, &repositories); code != 200 || len(repositories) != 1 || repositories[0].ID != repository.ID || repositories[0].EffectiveRole != "owner" || !repositories[0].CanTransfer {
+		t.Fatalf("owner projection: %d %+v", code, repositories)
+	}
+	if code := doJSONAs(t, ownerToken, http.MethodGet, ts.URL+"/api/v1/repository-connections?remote_url="+url.QueryEscape(remoteURL), nil, nil); code != http.StatusOK {
+		t.Fatalf("CLI connection: %d", code)
 	}
 
 	var audit []domain.OrganizationAuditEvent
@@ -877,10 +890,10 @@ func TestOrganizationBreakGlassIsExplicitReadOnlyAndAudited(t *testing.T) {
 	}
 	used := false
 	for _, event := range audit {
-		used = used || event.Action == "organization.break_glass.used"
+		used = used || event.Action == "organization.break_glass.created"
 	}
 	if !used {
-		t.Fatalf("break-glass use not audited: %+v", audit)
+		t.Fatalf("explicit grant creation not audited: %+v", audit)
 	}
 }
 

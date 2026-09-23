@@ -310,7 +310,7 @@ func (s *IdentityService) mutateUpdateRepositorySettings(ctx context.Context, us
 	return repositoryRecord, nil
 }
 
-// TransferOwnership transfers the repository creator (OwnerID) to an existing member — only the current creator can do this.
+// TransferOwnership transfers the repository creator (OwnerID) to an existing member, authorized by the current creator or Organization Owner.
 //
 //   - The new owner is promoted to the owner role, and the original creator remains an owner member (GitHub style —
 //     you can later downgrade or leave).
@@ -322,10 +322,14 @@ func (s *IdentityService) mutateTransferOwnership(ctx context.Context, actorID, 
 	if err != nil {
 		return domain.Repository{}, err
 	}
-	if repositoryRecord.OwnerID != actorID {
-		return domain.Repository{}, domain.ErrForbidden // previous was exclusive to the current creator
+	organizationAccess, err := repositoryOrganizationAccess(ctx, s.repositories, repositoryID, actorID)
+	if err != nil {
+		return domain.Repository{}, err
 	}
-	if targetID == actorID {
+	if !domain.CanTransferRepository(repositoryRecord, actorID, organizationAccess) {
+		return domain.Repository{}, domain.ErrForbidden
+	}
+	if targetID == repositoryRecord.OwnerID {
 		return domain.Repository{}, domain.ErrValidation
 	}
 	target, err := s.repositories.GetUser(ctx, targetID)
@@ -386,17 +390,27 @@ func (s *IdentityService) GetRepository(ctx context.Context, repositoryID string
 	return s.repositories.GetRepository(ctx, repositoryID)
 }
 
-// RoleOf returns the user's role within the repository. The constructor (OwnerID) is always owner.
-// Non-members are ("", false).
+// RoleOf combines direct/team grants and current Organization Owner authority.
 func (s *IdentityService) RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool) {
 	return repositoryRole(ctx, s.repositories, repositoryID, userID)
 }
 
-// IsOwner determines owner permissions: repository constructor (OwnerID) or owner role member (co-owner).
+// IsOwner includes inherited Organization Owner permissions.
 // Changes to settings, policy-enforced owner restrictions, and member management use this determination.
 func (s *IdentityService) IsOwner(ctx context.Context, repositoryID, userID string) bool {
 	role, ok := s.RoleOf(ctx, repositoryID, userID)
 	return ok && role == domain.RoleOwner
+}
+
+// CanTransferOwnership preserves personal creator authority while allowing an
+// Organization Owner to change the human anchor of an organization repository.
+func (s *IdentityService) CanTransferOwnership(ctx context.Context, repositoryID, actor string) bool {
+	repository, err := s.repositories.GetRepository(ctx, repositoryID)
+	if err != nil {
+		return false
+	}
+	organization, err := repositoryOrganizationAccess(ctx, s.repositories, repositoryID, actor)
+	return err == nil && domain.CanTransferRepository(repository, actor, organization)
 }
 
 // UpdateMemberRole changes a member's role — only owner can do this.
