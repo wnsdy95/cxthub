@@ -1109,6 +1109,18 @@ func (c *BackendClient) Pull(
 	snapshotStates map[domain.ContentHash]domain.ContentHash,
 	docHaves []domain.ContentHash,
 ) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
+	return c.pull(ctx, repoID, snapshotStates, docHaves, nil)
+}
+
+func (c *BackendClient) PullTo(ctx context.Context, repoID string, states map[domain.ContentHash]domain.ContentHash, haves []domain.ContentHash, receiver outbound.PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error) {
+	if receiver == nil {
+		return nil, nil, fmt.Errorf("pull document receiver is required")
+	}
+	snaps, _, refs, err := c.pull(ctx, repoID, states, haves, receiver)
+	return snaps, refs, err
+}
+
+func (c *BackendClient) pull(ctx context.Context, repoID string, snapshotStates map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash, receiver outbound.PullDocumentReceiver) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return nil, nil, nil, err
 	}
@@ -1187,6 +1199,33 @@ func (c *BackendClient) Pull(
 	}
 	if len(seenSnapshots) != len(wantedSnapshots) {
 		return nil, nil, nil, domain.ErrHashMismatch
+	}
+	if receiver != nil {
+		for _, id := range docWants {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, nil, err
+			}
+			// A prior attempt may have staged the body but not its snapshot.
+			// Such bodies are deliberately absent from the metadata manifest.
+			has, err := receiver.HasVerifiedDoc(ctx, id)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if has {
+				continue
+			}
+			docs, err := c.pullDocs(ctx, repoID, []domain.ContentHash{id}, map[domain.ContentHash]bool{id: true})
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if len(docs) != 1 || docs[0].Hash != id {
+				return nil, nil, nil, domain.ErrHashMismatch
+			}
+			if err := receiver.ReceiveDoc(ctx, docs[0]); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		return snapResp.Snapshots, nil, man.Refs, ctx.Err()
 	}
 	pulledDocs, err := c.pullDocs(ctx, repoID, docWants, docWantSet)
 	if err != nil {
@@ -1291,6 +1330,13 @@ func (c *BackendClient) pullDocs(ctx context.Context, repoID string, docWants []
 				if co.Hash != wants[i] || !needSet[co.Hash] || domain.HashContent(co.Data) != co.Hash {
 					return nil, domain.ErrHashMismatch
 				}
+				if sink, ok := c.chunks.(interface {
+					PutChunk(context.Context, domain.ContentHash, []byte) error
+				}); ok {
+					if err := sink.PutChunk(ctx, co.Hash, co.Data); err != nil {
+						return nil, err
+					}
+				}
 				bodies[co.Hash] = co.Data
 			}
 			pending = pending[len(chunkResp.ChunkObjects):]
@@ -1303,6 +1349,13 @@ func (c *BackendClient) pullDocs(ctx context.Context, repoID string, docWants []
 		for _, co := range chunkResp.ChunkObjects {
 			if !needSet[co.Hash] || domain.HashContent(co.Data) != co.Hash {
 				return nil, domain.ErrHashMismatch
+			}
+			if sink, ok := c.chunks.(interface {
+				PutChunk(context.Context, domain.ContentHash, []byte) error
+			}); ok {
+				if err := sink.PutChunk(ctx, co.Hash, co.Data); err != nil {
+					return nil, err
+				}
 			}
 			bodies[co.Hash] = co.Data
 		}

@@ -115,6 +115,10 @@ func sameParents(left, right []domain.ContentHash) bool {
 // validatePullBatch validates the entire remote response before local write. The same snapshot ID's natural
 // parent is immutable across replicas, and GraftParents can only be added as server overlays.
 func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID string, snaps []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref) error {
+	return validatePullBatchWithVerified(ctx, store, repoID, snaps, docs, refs, nil)
+}
+
+func validatePullBatchWithVerified(ctx context.Context, store outbound.SessionStore, repoID string, snaps []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, verified map[domain.ContentHash]bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -157,6 +161,9 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 		}
 	}
 	for _, snap := range snaps {
+		if verified[snap.DocHash] {
+			continue
+		}
 		if _, ok := docByHash[snap.DocHash]; ok {
 			continue
 		}
@@ -1404,11 +1411,19 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	if contextProtocol < 0 || contextProtocol > 1 {
 		return inbound.SyncOutput{}, domain.ErrSyncConflict
 	}
-	snaps, docs, refs, err := s.remote.Pull(ctx, repoID, advertisedSnapshotStates, docHaves)
+	var snaps []domain.Snapshot
+	var docs []domain.SessionDoc
+	var refs []domain.Ref
+	verified := make(map[domain.ContentHash]bool)
+	if streaming, ok := s.remote.(outbound.StreamingRemotePull); ok {
+		snaps, refs, err = streaming.PullTo(ctx, repoID, advertisedSnapshotStates, docHaves, &pullDocumentReceiver{store: s.store, verified: verified})
+	} else {
+		snaps, docs, refs, err = s.remote.Pull(ctx, repoID, advertisedSnapshotStates, docHaves)
+	}
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
-	if err := validatePullBatch(ctx, s.store, repoID, snaps, docs, refs); err != nil {
+	if err := validatePullBatchWithVerified(ctx, s.store, repoID, snaps, docs, refs, verified); err != nil {
 		return inbound.SyncOutput{}, err
 	}
 	history, err := s.readRemoteHistory(ctx, repoID)
@@ -1580,7 +1595,8 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, domain.ErrHashMismatch
 		}
 	}
-	// Start local write only after all remote objects preflight complete.
+	// Publish metadata only after complete preflight. The streaming transport
+	// may already have staged reusable immutable document bodies under retention.
 	for _, d := range docs {
 		stored, err := s.store.PutDoc(ctx, d)
 		if err != nil {

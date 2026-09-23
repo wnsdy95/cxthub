@@ -70,7 +70,13 @@ func runBranchTransaction(ctx context.Context, c *Container, cwd string, args []
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()
-		branch, _, symbolic := branchOperationCandidate(line)
+		branch, oid, symbolic := branchOperationCandidate(line)
+		// pack-refs creates entries in the packed storage with a zero old OID,
+		// even though the logical branch already exists as a loose ref. It is
+		// not a branch birth. Decide before entering the durable journal lock.
+		if phase == "prepared" && !symbolic && branch != "" && gitOut(cwd, "rev-parse", "--verify", "refs/heads/"+branch) == oid {
+			continue
+		}
 		// Recent Git versions report ordinary symbolic HEAD changes using a
 		// zero old object ID too. Only an absent native branch is unborn.
 		if symbolic && gitOut(cwd, "rev-parse", "--verify", "refs/heads/"+branch) != "" {
@@ -90,6 +96,27 @@ func runBranchTransaction(ctx context.Context, c *Container, cwd string, args []
 	}
 	if !hasBirth {
 		return nil
+	}
+	if phase != "prepared" {
+		// Terminal callbacks for storage-only transactions have no durable vote.
+		// Prepared writes finish before Git can emit this callback, so an atomic
+		// read is sufficient to skip them without taking the replay writer lock.
+		ops, err := j.List()
+		if err != nil {
+			return err
+		}
+		matched := false
+		for _, line := range lines {
+			branch, oid, _ := branchOperationCandidate(line)
+			for _, op := range ops {
+				if op.GitRef == "refs/heads/"+branch && op.Event.GitAfter == oid && op.Worktree == cwd && op.GitPID == gitPID && (op.Phase == "prepared" || op.Phase == "committed") {
+					matched = true
+				}
+			}
+		}
+		if !matched {
+			return nil
+		}
 	}
 	if c.History == nil {
 		return fmt.Errorf("CXTHub branch creation stopped: history service unavailable")
@@ -424,6 +451,12 @@ func branchCheckpointTarget(ctx context.Context, cwd string) (commandCaptureTarg
 // Replay uses the durable prepared record and observed Git state. A timeout or
 // server failure leaves the operation pending; neither is an acknowledgement.
 func replayBranchOperations(ctx context.Context, c *Container, cwd string) error {
+	return replayBranchOperationsForRef(ctx, c, cwd, "")
+}
+
+// Foreground capture only needs its own branch birth. Unrelated unresolved
+// tracking branches remain durable and are retried by the detached replay.
+func replayBranchOperationsForRef(ctx context.Context, c *Container, cwd, gitRef string) error {
 	if c.History == nil {
 		return nil
 	}
@@ -451,6 +484,9 @@ func replayBranchOperations(ctx context.Context, c *Container, cwd string) error
 	applied := false
 	var failures []error
 	for _, op := range ops {
+		if gitRef != "" && op.GitRef != gitRef {
+			continue
+		}
 		if op.Event.RepoID != repo.ID {
 			return domain.ErrHashMismatch
 		}

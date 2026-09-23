@@ -1069,7 +1069,14 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 	}
 	repoRoot := state.Root
 	if event == "post-checkout" || event == "pre-push" || event == "post-commit" {
-		if err := replayBranchOperations(ctx, c, cwd); err != nil {
+		ref := gitOut(cwd, "symbolic-ref", "--quiet", "HEAD")
+		// Detached capture has no branch birth to resolve. The full journal is
+		// handled separately; it must not consume this commit's capture budget.
+		var replayErr error
+		if ref != "" {
+			replayErr = replayBranchOperationsForRef(ctx, c, cwd, ref)
+		}
+		if err := replayErr; err != nil {
 			hookWarn("branch operation remains queued: %v", err)
 			if event == "post-checkout" {
 				return nil

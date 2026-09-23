@@ -118,6 +118,35 @@ func (s *FileStore) GetChunk(hash domain.ContentHash) ([]byte, error) {
 	return docDecompress(raw)
 }
 
+// PutChunk stages a verified immutable chunk before the document completes.
+// A retry can reuse it; collection may reclaim unreferenced staging after the
+// active retention lease ends, in which case the next pull safely refetches it.
+func (s *FileStore) PutChunk(ctx context.Context, hash domain.ContentHash, body []byte) error {
+	if err := domain.ValidateContentHash(hash); err != nil {
+		return err
+	}
+	if len(body) == 0 || domain.HashContent(body) != hash {
+		return domain.ErrHashMismatch
+	}
+	return s.WithObjectsRetained(ctx, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		path := s.objectPath("chunks", hash)
+		if fileExists(path) {
+			current, err := s.GetChunk(hash)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(current, body) {
+				return domain.ErrHashMismatch
+			}
+			return nil
+		}
+		return writeAtomic(path, docCompress(body))
+	})
+}
+
 // RepackDocs converts legacy full doc to chunk storage with the same hash, cleans up orphan chunks (leftover from DeleteDoc).
 // Returns: (number of conversions, bytes saved). Each conversion is only replaced after reassembly==original validation (lossless).
 func (s *FileStore) RepackDocs() (converted int, saved int64, err error) {

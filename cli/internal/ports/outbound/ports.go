@@ -258,6 +258,17 @@ type RemoteSync interface {
 	DeleteUnsyncRemote(ctx context.Context, repoID string, branch string) error
 }
 
+// PullDocumentReceiver stages immutable, hash-verified bodies independently of
+// metadata/ref publication. Completed bodies survive a failed or canceled pull.
+type PullDocumentReceiver interface {
+	HasVerifiedDoc(context.Context, domain.ContentHash) (bool, error)
+	ReceiveDoc(context.Context, domain.SessionDoc) error
+}
+
+type StreamingRemotePull interface {
+	PullTo(context.Context, string, map[domain.ContentHash]domain.ContentHash, []domain.ContentHash, PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error)
+}
+
 // PushObjectWants is the server-proven missing subset of a local push
 // inventory. Snapshot metadata and document bodies are independent objects: a
 // damaged server may have one without the other, so both sets remain explicit.

@@ -791,3 +791,26 @@ Discovery and delivery rotate by their last durable attempt, so an older failing
 request cannot monopolize the per-run budget. Corrupt discovery records remain
 available for diagnosis while independent valid ranges continue. Exact source
 publication, Git order and idempotent completion remain server responsibilities.
+
+### Interrupted synchronization
+
+Pull stages each verified document before proceeding to the next. Verified
+chunks are also persisted before a large document finishes, so restarting the
+client can reuse progress after a network failure. Snapshot/ref publication waits
+until the entire selected pull passes integrity checks. Staged bodies are not
+published partial history. Unreferenced staging may later be garbage-collected;
+a retry then downloads it again safely.
+
+Foreground Git hooks replay durable branch operations for the current symbolic
+Git ref. Unrelated pending operations remain in the journal for background replay;
+they no longer make an ordinary current-branch hook restore another branch's
+context first. Existing hook deadlines are unchanged. Full explicit push/pull
+still synchronize retained history and may take longer on first synchronization;
+this change does not claim constant-time synchronization of a large archive.
+
+Git reference transactions describe both logical changes and storage maintenance.
+A zero-old-OID event for an already existing branch at the same target is packed
+storage creation, not branch birth. It must not create a context branch or enter
+the replay writer lock. Terminal callbacks without a matching durable vote do
+not schedule a replay. Real `git pack-refs --all` and a contended-journal fixture
+cover this distinction; genuine new branches retain the fail-closed birth vote.

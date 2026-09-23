@@ -951,3 +951,129 @@ func TestCodeSelectionFollowsIdentityThroughRenameAndReusedName(t *testing.T) {
 		}
 	}
 }
+
+func TestForegroundReplayKeepsOtherBranchesDurableForBackground(t *testing.T) {
+	cwd, c, st, repo, _ := historyFixture(t)
+	ctx := context.Background()
+	oid := gitOut(cwd, "rev-parse", "HEAD")
+	for _, name := range []string{"current", "unrelated"} {
+		if err := runBirthVote(t, cwd, c, "prepared", strings.Repeat("0", 40)+" "+oid+" refs/heads/"+name); err != nil {
+			t.Fatal(err)
+		}
+		runLifecycleGit(t, cwd, "branch", name)
+	}
+	journal, err := branchjournal.Open(ctx, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, err := journal.List()
+	if err != nil || len(ops) != 2 {
+		t.Fatalf("journal: %+v %v", ops, err)
+	}
+	for _, op := range ops {
+		commitBirthJournal(t, cwd, op.Event.ID)
+	}
+	if err := replayBranchOperationsForRef(ctx, c, cwd, "refs/heads/current"); err != nil {
+		t.Fatal(err)
+	}
+	events, err := st.ListHistoryEvents(ctx, repo)
+	if err != nil || len(events) != 1 || events[0].Branch != "current" {
+		t.Fatalf("foreground applied unrelated birth: %+v %v", events, err)
+	}
+	ops, err = journal.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range ops {
+		if op.GitRef == "refs/heads/unrelated" && op.Phase != "committed" {
+			t.Fatalf("deferred birth lost: %+v", op)
+		}
+	}
+	if err := replayBranchOperations(ctx, c, cwd); err != nil {
+		t.Fatal(err)
+	}
+	events, err = st.ListHistoryEvents(ctx, repo)
+	if err != nil || len(events) != 2 {
+		t.Fatalf("background failed to drain: %+v %v", events, err)
+	}
+}
+
+func TestPackedStorageCreationIsNotLogicalBranchBirth(t *testing.T) {
+	cwd, c, _, _, _ := historyFixture(t)
+	oid := gitOut(cwd, "rev-parse", "HEAD")
+	j, err := branchjournal.Open(context.Background(), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A storage-only event must not wait for an unrelated branch replay holding
+	// the journal. This is the lock inversion observed during git auto maintenance.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() { done <- j.Transaction(ctx, func() error { close(locked); <-release; return nil }) }()
+	<-locked
+	defer func() {
+		close(release)
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	input, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	_, _ = fmt.Fprintf(input, "%s %s refs/heads/main\n", strings.Repeat("0", len(oid)), oid)
+	_, _ = input.Seek(0, 0)
+	previous := os.Stdin
+	os.Stdin = input
+	defer func() { os.Stdin = previous }()
+	vote, cancelVote := context.WithTimeout(context.Background(), time.Second)
+	defer cancelVote()
+	for _, phase := range []string{"prepared", "committed", "aborted"} {
+		_, _ = input.Seek(0, 0)
+		if err = runBranchTransaction(vote, c, cwd, []string{phase, "10003"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ops, err := j.List()
+	if err != nil || len(ops) != 0 {
+		t.Fatalf("storage operation fabricated history: %+v %v", ops, err)
+	}
+}
+
+func TestRealPackRefsDoesNotCreateBranchJournalEntries(t *testing.T) {
+	cwd, c, _, _, _ := historyFixture(t)
+	hooks := filepath.Join(cwd, "hooks")
+	if err := os.MkdirAll(hooks, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "reference-transaction"), []byte("#!/bin/sh\ncat >> \"$CXT_TEST_REF_LOG/$1\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	logs := t.TempDir()
+	t.Setenv("CXT_TEST_REF_LOG", logs)
+	runLifecycleGit(t, cwd, "config", "core.hooksPath", hooks)
+	runLifecycleGit(t, cwd, "pack-refs", "--all")
+	raw, err := os.ReadFile(filepath.Join(logs, "prepared"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	births := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if branch, _, _ := branchOperationCandidate(line); branch != "" {
+			births++
+			if err = runBirthVote(t, cwd, c, "prepared", line, "10004"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if births == 0 {
+		t.Fatal("Git fixture did not exercise packed-storage creation")
+	}
+	j, _ := branchjournal.Open(context.Background(), cwd)
+	ops, err := j.List()
+	if err != nil || len(ops) != 0 {
+		t.Fatalf("pack-refs recorded birth: %+v %v", ops, err)
+	}
+}
