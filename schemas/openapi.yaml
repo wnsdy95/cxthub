@@ -1331,6 +1331,9 @@ components:
       type: object
       required: [id, kind, space_id, email, role, status, created_by, created_at, expires_at, updated_at, space_name, space_path]
       properties:
+        email_enabled: {type: boolean, description: Whether this server is configured to send invitation email.}
+        email_status: {type: string, enum: [not_sent, queued, sending, retrying, accepted, attention, cancelled], description: accepted means Resend acknowledged the send request; it does not confirm inbox delivery.}
+        email_reason: {type: string, description: Sanitized diagnostic code; never raw provider response text.}
         id: {type: string, pattern: '^ci_[a-f0-9]{32}$'}
         kind: {type: string, enum: [organization, enterprise]}
         space_id: {type: string}

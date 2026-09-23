@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -11,8 +12,11 @@ import (
 
 type CollaborationInvitation struct {
 	domain.CollaborationInvite
-	SpaceName string `json:"space_name"`
-	SpacePath string `json:"space_path"`
+	SpaceName    string `json:"space_name"`
+	SpacePath    string `json:"space_path"`
+	EmailEnabled bool   `json:"email_enabled"`
+	EmailStatus  string `json:"email_status"`
+	EmailReason  string `json:"email_reason,omitempty"`
 }
 
 func (s *IdentityService) invitationStore() (outbound.CollaborationInviteStore, error) {
@@ -37,7 +41,37 @@ func (s *IdentityService) authorizeInvitation(ctx context.Context, actor, kind, 
 	if err := domain.ValidateCollaborationScope(kind, id); err != nil {
 		return err
 	}
-	role := s.collaborationRole(ctx, actor, kind, id)
+	// Preserve storage failures; a worker must not treat an unavailable
+	// membership store as a permanent revocation.
+	var role domain.OrganizationRole
+	if kind == "organization" {
+		if s.organization == nil {
+			return domain.ErrForbidden
+		}
+		member, err := s.organization.GetOrganizationMembership(ctx, id, actor)
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.ErrForbidden
+		}
+		if err != nil {
+			return err
+		}
+		role = member.Role
+	} else {
+		st, err := s.enterpriseStore()
+		if err != nil {
+			return err
+		}
+		members, err := st.ListEnterpriseMembers(ctx, id)
+		if err != nil {
+			return err
+		}
+		for _, member := range members {
+			if member.UserID == actor {
+				role = domain.OrganizationRole(member.Role)
+				break
+			}
+		}
+	}
 	if !role.AtLeast(domain.OrganizationAdmin) || (target != domain.OrganizationMember && role != domain.OrganizationOwner) {
 		return domain.ErrForbidden
 	}
@@ -50,7 +84,16 @@ func (s *IdentityService) invitationAudit(ctx context.Context, i domain.Collabor
 	return s.organization.AppendOrganizationAudit(ctx, organizationAudit(ctx, i.SpaceID, actor, "invitation."+action, "invitation", i.ID, "", time.Now().UTC()))
 }
 func (s *IdentityService) invitationView(ctx context.Context, i domain.CollaborationInvite) (CollaborationInvitation, error) {
-	v := CollaborationInvitation{CollaborationInvite: i}
+	v := CollaborationInvitation{CollaborationInvite: i, EmailEnabled: s.invitationEmail != nil, EmailStatus: "not_sent"}
+	if st, ok := s.repositories.(outbound.InvitationEmailStore); ok {
+		j, err := st.GetInvitationEmail(ctx, i.ID)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return v, err
+		}
+		if err == nil {
+			v.EmailStatus, v.EmailReason = j.State, j.Reason
+		}
+	}
 	if i.Status == "pending" && !time.Now().Before(i.ExpiresAt) {
 		v.Status = "expired"
 	}
@@ -122,6 +165,9 @@ func (s *IdentityService) CreateCollaborationInvitation(ctx context.Context, act
 			return CollaborationInvitation{}, err
 		}
 		if err := s.invitationAudit(ctx, i, actor, "created"); err != nil {
+			return CollaborationInvitation{}, err
+		}
+		if err := s.enqueueInvitationEmail(ctx, i); err != nil {
 			return CollaborationInvitation{}, err
 		}
 		return s.invitationView(ctx, i)
@@ -292,6 +338,9 @@ func (s *IdentityService) ActOnCollaborationInvitation(ctx context.Context, acto
 				return CollaborationInvitation{}, err
 			}
 			if err = s.invitationAudit(ctx, i, actor, "created"); err != nil {
+				return CollaborationInvitation{}, err
+			}
+			if err := s.enqueueInvitationEmail(ctx, i); err != nil {
 				return CollaborationInvitation{}, err
 			}
 		}

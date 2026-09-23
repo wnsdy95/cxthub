@@ -233,3 +233,42 @@ grant through HTTP, and restarted with this revision. Migrations 0056–0060 app
 once; a second restart applied zero. Repository/namespace IDs, owner and member
 access, Team membership/grants and the existing URL were unchanged; base access
 defaulted to none. This is a forward migration check, not a downgrade guarantee.
+
+## Invitation email delivery
+
+Migration `0061` adds an invitation email outbox. A new or renewed invitation,
+its audit event and its frozen email payload commit in one PostgreSQL identity
+transaction. Failure to queue rolls them all back. The FS development adapter
+uses atomic files and in-process command serialization; it does not promise
+multi-file crash rollback or coordination between separate server processes.
+
+Workers claim jobs and recheck invitation expiry, status and issuer authority
+under the identity transaction, then release it before network IO. A two-minute
+lease and attempt fencing prevent old workers from overwriting newer outcomes.
+Provider requests time out after ten seconds. All replicas use the database
+clock for claims. Revocation before claiming suppresses delivery. Revocation
+after a send begins cannot recall an email, but its link still cannot confer
+membership: acceptance checks current invitation/issuer/recipient state.
+
+The email payload and `collaboration-invite/<invitation-id>` idempotency key
+remain unchanged across restarts and configuration edits. Transport failures,
+408/425/429/5xx and an in-flight idempotent request retry with bounded backoff,
+respecting Retry-After. Other provider rejections need attention. There are at
+most twelve attempts, and none begin at or after 23 hours from the first claim,
+inside Resend's [24-hour deduplication window](https://resend.com/docs/dashboard/emails/idempotency-keys).
+A request with a lost response may already have sent mail; do not claim
+unconditional exactly-once delivery across a provider retention boundary.
+Manual renewal revokes the old invitation and creates a new ID and mail request.
+
+API/UI status separates invitation acceptance from email state (`queued`,
+`sending`, `retrying`, `accepted` by Resend, `attention`, `cancelled`, `not_sent`).
+No delivery webhook is configured, so inbox delivery and bounce events are not
+asserted. No key or raw provider error response is persisted or returned. The
+outbox contains recipient and body data and belongs inside the same protected
+backup/access boundary as invitations. Keep the same Resend account for queued
+retries; account migration requires reconciling in-flight requests first.
+
+During a rolling upgrade, only upgraded instances enqueue emails. Upgrade every
+instance before enabling Resend on any of them. Do not downgrade to a version
+without this worker while there are unresolved sends; pending jobs remain
+persisted but will pause. Existing invitations are not automatically emailed.

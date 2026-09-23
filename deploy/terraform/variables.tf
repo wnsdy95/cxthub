@@ -132,3 +132,18 @@ variable "max_instances" {
     error_message = "max_instances must be an integer from 1 to 20."
   }
 }
+
+variable "resend_secret_id" {
+  description = "Optional existing Secret Manager ID containing RESEND_API_KEY; empty disables invitation email. No secret value is stored in Terraform."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.resend_secret_id == "" || can(regex("^[A-Za-z0-9_-]{1,255}$", var.resend_secret_id))
+    error_message = "resend_secret_id must be empty or a valid Secret Manager ID."
+  }
+}
+variable "resend_from" {
+  description = "Sender address on a Resend-verified domain."
+  type        = string
+  default     = "CXTHub <noreply@cxthub.com>"
+}

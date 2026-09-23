@@ -604,6 +604,9 @@ export interface EnterpriseMembership { user?: Pick<User, 'id' | 'username' | 'n
 export interface EnterpriseAuditEvent { id: string; enterprise_id: string; actor_id: string; action: string; target_id: string; created_at: string }
 
 export interface CollaborationInvitation {
+ email_enabled?: boolean;
+ email_status?: 'not_sent' | 'queued' | 'sending' | 'retrying' | 'accepted' | 'attention' | 'cancelled';
+ email_reason?: string;
  id: string;
  kind: 'organization' | 'enterprise';
  space_id: string;

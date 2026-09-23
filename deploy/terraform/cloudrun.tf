@@ -95,6 +95,27 @@ resource "google_cloud_run_v2_service" "cxtd" {
         value = "/app/migrations"
       }
 
+      dynamic "env" {
+        for_each = var.resend_secret_id == "" ? [] : [var.resend_secret_id]
+        content {
+          name = "RESEND_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = data.google_secret_manager_secret.resend[0].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+      env {
+        name  = "RESEND_FROM"
+        value = var.resend_from
+      }
+      env {
+        name  = "CXT_WEB_URL"
+        value = "https://${var.domain}"
+      }
+
       ports {
         container_port = 8907
       }
@@ -128,6 +149,7 @@ resource "google_cloud_run_v2_service" "cxtd" {
   depends_on = [
     google_secret_manager_secret_iam_member.cxtd_postgres,
     google_secret_manager_secret_iam_member.cxtd_github_webhook,
+    google_secret_manager_secret_iam_member.cxtd_resend,
   ]
 }
 

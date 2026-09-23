@@ -40,7 +40,7 @@ export function InvitationManager({ kind, spaceId, owner }: { kind: 'organizatio
 }
 function InvitationDescription({invite}:{invite:CollaborationInvitation}) {
  const t=useT();
- return <span><strong>{invite.space_name}</strong> · {invite.email} · {invite.role}<small>{t(`invitations.${invite.status}`)} · {t('invitations.expires',{date:new Date(invite.expires_at).toLocaleString()})}</small></span>;
+ return <span><strong>{invite.space_name}</strong> · {invite.email} · {invite.role}<small>{t(`invitations.${invite.status}`)} · {t('invitations.expires',{date:new Date(invite.expires_at).toLocaleString()})}</small>{invite.email_status && <small className="invitation-email-status">{t(`invitations.email_${invite.email_status}`)}{invite.email_reason && invite.email_status === 'attention' && ` · ${invite.email_reason}`}{!invite.email_enabled && ['queued','sending','retrying'].includes(invite.email_status) && ` · ${t('invitations.email_paused')}`}</small>}</span>;
 }
 function CopyInvitation({invite}:{invite:CollaborationInvitation}) {
  const t=useT(); const [copied,setCopied]=useState(false); const [error,setError]=useState('');

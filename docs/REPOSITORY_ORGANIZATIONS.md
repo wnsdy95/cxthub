@@ -186,8 +186,8 @@ requires the authenticated recipient's verified email; an `@username` invitation
 also binds the account ID. IDs locate invitations and are not bearer credentials.
 The issuer's current authority is rechecked when accepting. Invitations expire
 (default seven days), may be cancelled or renewed, and a consumed link cannot
-restore a subsequently removed member. Renewal replaces the old link. Email
-transport is deliberately absent until a provider is configured.
+restore a subsequently removed member. Renewal replaces the old link. Optional Resend
+delivery is enabled by a backend `RESEND_API_KEY`; see [installation](INSTALLATION.md#invitation-email-with-resend). Email never substitutes for recipient consent.
 
 Team maintainers and organization administrators can edit the Team display name
 and description using an exact editing baseline. A stale edit returns conflict;

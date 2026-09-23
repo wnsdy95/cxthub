@@ -23,6 +23,7 @@ for (const kind of ['organization', 'enterprise'] as const) {
    await page.getByRole('button',{name:'Create invitation',exact:true}).click();
    await expect(page.locator('.collaboration-invitations .management-rows')).toContainText(guest.email);
    await expect(page.locator('.collaboration-invitations .management-rows')).toContainText('Pending');
+   await expect(page.locator('.invitation-email-status')).toHaveText('Email not requested · share the link');
    const members=await(await owner.get(`/api/v1/${kind}s/${space.id}/members`)).json();
    expect(members.some((m:{user_id:string})=>m.user_id===guest.id)).toBe(false);
    const inbox=await(await recipient.get('/api/v1/me/invitations')).json();expect(inbox).toHaveLength(1);
@@ -44,6 +45,16 @@ for (const kind of ['organization', 'enterprise'] as const) {
    await page.getByRole('button',{name:'Refresh invitations',exact:true}).click();
    await expect(page.locator('.collaboration-invitations .management-rows')).toContainText('Accepted');
    if (kind === 'organization') await expect(page.locator('.organization-member-list')).toContainText(guest.username);
+   // Rendering contract: provider acceptance must not claim inbox delivery.
+   let mailState='queued';
+   await page.route(`**/api/v1/${kind}s/${space.id}/invitations`,async route=>{
+    const response=await route.fetch();const rows=await response.json();
+    await route.fulfill({response,json:rows.map((row:object)=>({...row,email_enabled:true,email_status:mailState}))});
+   });
+   for(const [state,label] of [['queued','Email queued'],['retrying','Email will retry automatically'],['accepted','Resend accepted the email · inbox delivery not confirmed'],['attention','Email needs attention · check server configuration, then renew invitation']]){
+    mailState=state;await page.getByRole('button',{name:'Refresh invitations',exact:true}).click();
+    await expect(page.locator('.invitation-email-status')).toHaveText(label);
+   }
    await page.screenshot({path:testInfo.outputPath(`${kind}-invitations.png`),fullPage:true});
    expect(errors).toEqual([]);expect(guestErrors).toEqual([]);
   } finally {await recipientContext.close();}
