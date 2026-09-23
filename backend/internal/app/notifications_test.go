@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,13 +18,13 @@ func notificationFixture(t *testing.T) (*Service, *store.FSStore, domain.Reposit
 	t.Helper()
 	svc, st := newFsckSvc(t)
 	repositoryRecord := domain.Repository{ID: domain.NewID("ws_"), Name: "test", OwnerID: "dev:notification-test", Visibility: domain.VisibilityPrivate, CreatedAt: time.Now().UTC(), WebhookURL: "https://example.test/hook"}
-	if err := st.CreateRepository(context.Background(), repositoryRecord); err != nil {
+	if err := st.CreateRepository(systemTestContext(), repositoryRecord); err != nil {
 		t.Fatal(err)
 	}
 	return svc, st, repositoryRecord
 }
 func TestNotificationRetryRestartAndCredentialIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st, repositoryRecord := notificationFixture(t)
 	var ids []string
 	status := 503
@@ -70,7 +69,7 @@ func TestNotificationRetryRestartAndCredentialIsolation(t *testing.T) {
 	}
 }
 func TestNotificationClaimsAreExclusiveAndExpiredWorkersCannotFinish(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	dir := t.TempDir()
 	first := store.NewFSStore(dir)
 	peer := store.NewFSStore(dir)
@@ -118,7 +117,7 @@ func TestNotificationClaimsAreExclusiveAndExpiredWorkersCannotFinish(t *testing.
 	}
 }
 func TestNotificationChangedDestinationRequiresExplicitRetry(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	svc, st, repositoryRecord := notificationFixture(t)
 	if err := enqueueRepositoryNotification(ctx, st, repositoryRecord, "ref_updated", "safe metadata"); err != nil {
 		t.Fatal(err)
@@ -145,7 +144,7 @@ func TestNotificationHTTPOutcomeAndExhaustion(t *testing.T) {
 		{408, 0, "retrying", "http_retryable"}, {429, 0, "retrying", "http_retryable"}, {500, 7, "attention", "attempts_exhausted"},
 	} {
 		t.Run(fmt.Sprint(tc.code), func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			svc, st, repositoryRecord := notificationFixture(t)
 			receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Location", "https://example.test/unexpected")

@@ -39,14 +39,14 @@ func TestMemoryLoadBranchUsesCloudInclusionButHashReadsArchive(t *testing.T) {
 	f := &branchPageBackend{ref: domain.Ref{Kind: domain.RefBranch, Name: "main", Target: id}, pageBackend: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {{ID: id, RepoID: repo.ID}}}}}}
 	s := &Server{context: f}
 	code := ""
-	raw, err := s.memoryPage(context.Background(), repo, toolArgs{Ref: "main"})
+	raw, err := s.memoryPage(systemTestContext(), repo, toolArgs{Ref: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if f.calls != 1 || f.code != code || !strings.Contains(raw, "retained PR contribution") || !strings.Contains(raw, "inclusion") {
 		t.Fatal(raw, f.calls)
 	}
-	if _, err := s.memoryPage(context.Background(), repo, toolArgs{Ref: string(id)}); err != nil {
+	if _, err := s.memoryPage(systemTestContext(), repo, toolArgs{Ref: string(id)}); err != nil {
 		t.Fatal(err)
 	}
 	if f.calls != 1 {
@@ -61,7 +61,7 @@ func TestContextListUsesGitOrderCursorInsteadOfCaptureClock(t *testing.T) {
 	var ids []domain.ContentHash
 	var first string
 	for i := 0; i < 3; i++ {
-		raw, err := s.contextPage(context.Background(), repo, a)
+		raw, err := s.contextPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,7 +86,7 @@ func TestContextListUsesGitOrderCursorInsteadOfCaptureClock(t *testing.T) {
 	}
 	f.generation = "two"
 	a.Cursor = first
-	if _, err := s.contextPage(context.Background(), repo, a); err == nil {
+	if _, err := s.contextPage(systemTestContext(), repo, a); err == nil {
 		t.Fatal("mixed timeline generations accepted")
 	}
 }
@@ -109,7 +109,7 @@ func TestBranchSearchKeepsIncludedSourcesAcrossPages(t *testing.T) {
 		a := toolArgs{Scope: "current", Position: "main", Query: "needle", Limit: 1}
 		var found []domain.ContentHash
 		for calls := 0; calls < 10; calls++ {
-			raw, err := s.searchPage(context.Background(), domain.Repo{ID: pageHash(1)}, a)
+			raw, err := s.searchPage(systemTestContext(), domain.Repo{ID: pageHash(1)}, a)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -139,7 +139,7 @@ func TestBranchSearchKeepsIncludedSourcesAcrossPages(t *testing.T) {
 			}
 		}
 		f.generation = "changed"
-		if _, err := s.searchPage(context.Background(), domain.Repo{ID: pageHash(1)}, a); err == nil {
+		if _, err := s.searchPage(systemTestContext(), domain.Repo{ID: pageHash(1)}, a); err == nil {
 			t.Fatal("changed inclusion accepted")
 		}
 	}

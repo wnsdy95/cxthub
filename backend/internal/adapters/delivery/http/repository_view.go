@@ -14,8 +14,8 @@ func (s *Server) repositoryView(w http.ResponseWriter, r *http.Request) {
 	}
 	s.respond(w, struct {
 		domain.RepositoryView
-		Graph graphwire.State `json:"graph"`
-	}{v, graphwire.Encode(*v.Graph)}, nil)
+		Graph any `json:"graph"`
+	}{v, encodeGraphResponse(r, *v.Graph)}, nil)
 }
 
 func (s *Server) contextQuery(w http.ResponseWriter, r *http.Request) {
@@ -30,5 +30,12 @@ func (s *Server) graphState(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, nil, err)
 		return
 	}
-	s.respond(w, graphwire.Encode(v), nil)
+	s.respond(w, encodeGraphResponse(r, v), nil)
+}
+
+func encodeGraphResponse(r *http.Request, g domain.GraphState) any {
+	if r.URL.Query().Get("graph_encoding") == "indexed-v2" {
+		return graphwire.EncodeV2(g)
+	}
+	return graphwire.Encode(g)
 }

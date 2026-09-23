@@ -13,7 +13,7 @@ import (
 
 func TestGitChangesDurableAcceptanceRetryAndNoHistoryMutation(t *testing.T) {
 	core, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	origin := "https://github.com/example/repo"
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, GitRemoteURL: origin}); err != nil {

@@ -72,6 +72,21 @@ IDs, PR completion receipts and CAS make operation-specific reconciliation
 possible after reconnecting. A completed PR replay never reapplies an old merge
 over a later deliberate rewind.
 
+## Authorization belongs to the write transaction
+
+Authenticated HTTP requests carry an application actor. Each repository command
+rechecks the current direct, organization and team role after entering the same
+PostgreSQL transaction that mutates data. Archived repositories reject writes;
+management and team-default writes also recheck their operation-specific policy.
+Missing identity fails closed. Verified host webhooks and internal workers use
+an explicit system identity, never a caller-supplied system flag.
+
+Body decoding happens before the transaction. A request paused while uploading
+cannot use a role revoked before its write starts. Conversely, identity changes
+wait for an already-authorized transaction to finish. Notification retries use
+the identity transaction boundary as well. Filesystem development storage
+rechecks current authority but does not promise PostgreSQL cross-process ACID.
+
 ## A graph read is one generation
 
 `GET /api/v1/repos/{repoID}/view` reads refs, snapshots, reflog, history, pending
@@ -80,7 +95,7 @@ viewer permission boundary as the existing graph APIs. Each response therefore
 contains one committed database generation, even while another server appends
 a PR. One failed component fails the whole response.
 
-Context and On Hold use one React Query cache entry for this response. Polling
+Context and On Hold use one React Query cache entry for this response. Revision-driven refresh
 replaces the complete bundle; it cannot combine new refs with old snapshots or
 completion receipts. Document bodies remain fetched separately by immutable
 hash. Memory projections, manifests, pull responses and integrity audits also

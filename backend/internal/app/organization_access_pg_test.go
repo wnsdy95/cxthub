@@ -22,7 +22,7 @@ func TestPGOrganizationOwnerCommands(t *testing.T) {
 func TestPGOrganizationOwnerDemotionSerializesWithContextWrites(t *testing.T) {
 	_, st, repo := collaborationPG(t)
 	f := makeTeamFixture(t, st)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(systemTestContext(), 10*time.Second)
 	defer cancel()
 	if err := f.identity.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationOwner); err != nil {
 		t.Fatal(err)

@@ -21,7 +21,7 @@ func secretsTestEnvelope(fp string) []byte {
 
 func seedSecretsRepo(t *testing.T, meta outbound.MetadataStore, repositories outbound.RepositoryStore) (domain.Repository, inbound.SaveSecretsInput) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	owner := domain.User{ID: domain.NewID("user_"), Username: fmt.Sprintf("secrets%d", time.Now().UnixNano()), Email: "secrets@example.test", Name: "Owner"}
 	if err := repositories.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func seedSecretsRepo(t *testing.T, meta outbound.MetadataStore, repositories out
 }
 
 func TestSecretsCommandRejectsChangedPassphrase(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	_, in := seedSecretsRepo(t, st, st)
 	svc := NewService(st, st, nil, nil, st)
@@ -85,7 +85,7 @@ func TestSecretsCommandAuthorizesInsideApplication(t *testing.T) {
 		{name: "outsider"}, {name: "archived owner", creator: true, archived: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := systemTestContext()
 			st := store.NewFSStore(t.TempDir())
 			repositoryRecord, in := seedSecretsRepo(t, st, st)
 			repositoryRecord.SecretsPolicy = tc.policy
@@ -127,7 +127,7 @@ func (s secretsReadFailure) GetSecretsEnvelope(context.Context, domain.ContentHa
 }
 
 func TestSecretsCommandFailsClosed(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	_, in := seedSecretsRepo(t, st, st)
 	broken := secretsReadFailure{st}
@@ -145,7 +145,7 @@ func TestSecretsCommandFailsClosed(t *testing.T) {
 }
 
 func TestSecretsConcurrentSameBaseline(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	_, in := seedSecretsRepo(t, st, st)
 	svc := NewService(st, st, nil, nil, st)

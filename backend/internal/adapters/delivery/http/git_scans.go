@@ -79,6 +79,6 @@ func (s *Server) githubPush(w http.ResponseWriter, r *http.Request, body []byte)
 	if origin == "" {
 		origin = p.Repository.HTMLURL
 	}
-	n, err := s.gitScans.ObservePush(r.Context(), origin, p.Ref, zero(p.Before), zero(p.After), p.Forced, r.Header.Get("X-GitHub-Delivery"))
+	n, err := s.gitScans.ObservePush(inbound.WithSystemActor(r.Context()), origin, p.Ref, zero(p.Before), zero(p.After), p.Forced, r.Header.Get("X-GitHub-Delivery"))
 	s.respond(w, map[string]interface{}{"status": "accepted", "queued": n}, err)
 }

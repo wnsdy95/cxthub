@@ -2,7 +2,6 @@ package http
 
 import (
 	"bytes"
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -115,8 +114,8 @@ func TestGitScanSignedDeliveryAuthorizationAndReadback(t *testing.T) {
 	if code := push("delivery-delete", before, strings.Repeat("0", 40), true); code != 200 {
 		t.Fatal("deleted ref", code)
 	}
-	refs, _ := svc.ListRefs(context.Background(), repo)
-	events, _ := svc.ListHistory(context.Background(), repo)
+	refs, _ := svc.ListRefs(systemTestContext(), repo)
+	events, _ := svc.ListHistory(systemTestContext(), repo)
 	if len(refs) != 0 || len(events) != 0 {
 		t.Fatal("push moved context state")
 	}

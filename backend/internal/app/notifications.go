@@ -143,6 +143,10 @@ func (s *IdentityService) ListNotifications(ctx context.Context, user, repositor
 	return st.ListNotifications(ctx, repository)
 }
 func (s *IdentityService) RetryNotification(ctx context.Context, user, repository, id string) error {
+	return s.withIdentity(ctx, func(ctx context.Context) error { return s.retryNotification(ctx, user, repository, id) })
+}
+
+func (s *IdentityService) retryNotification(ctx context.Context, user, repository, id string) error {
 	repositoryRecord, err := s.notificationManager(ctx, user, repository)
 	if err != nil {
 		return err

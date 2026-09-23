@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 
 func TestUpdateRefRequiresExistingTargetOnDirectPaths(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("ref-target-repo")
 	missing := hh("missing-ref-target")
 
@@ -53,7 +52,7 @@ func TestUpdateRefRequiresExistingTargetOnDirectPaths(t *testing.T) {
 
 func TestUpdateRefCannotForgeJoinSessionScope(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("session-ref-scope-repo")
 	left := hh("session-ref-left")
 	right := hh("session-ref-right")

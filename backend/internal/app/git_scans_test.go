@@ -94,7 +94,7 @@ func (f *scanReader) IsGitAncestor(_ context.Context, _, a, b string) (bool, err
 }
 func TestGitScansDiscoverUnlabelledReversalAndReapplication(t *testing.T) {
 	core, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	origin := "https://github.com/example/project"
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, GitRemoteURL: origin}); err != nil {
@@ -184,7 +184,7 @@ func TestGitScansDiscoverUnlabelledReversalAndReapplication(t *testing.T) {
 }
 func TestGitScanOfflineRetryAndOriginFence(t *testing.T) {
 	core, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	origin := "https://github.com/example/project"
 	sha := strings.Repeat("a", 40)
@@ -242,7 +242,7 @@ func TestGitScanRejectsPartialParentEvidence(t *testing.T) {
 
 func TestAcceptedHistoryQueuesWithoutChangingWorktreeSelection(t *testing.T) {
 	core, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	origin := "https://github.com/example/project"
 	st.PutRepo(ctx, domain.Repo{ID: repo, GitRemoteURL: origin})
@@ -265,7 +265,7 @@ func TestAcceptedHistoryQueuesWithoutChangingWorktreeSelection(t *testing.T) {
 
 func TestGitHeadReconciliationResumesPagesAndPublishesFailures(t *testing.T) {
 	core, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh(t.Name())
 	origin := "https://github.com/example/project"
 	st.PutRepo(ctx, domain.Repo{ID: repo, GitRemoteURL: origin})

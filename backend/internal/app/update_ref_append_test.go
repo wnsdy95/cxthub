@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -23,7 +22,7 @@ func h(c byte) domain.ContentHash {
 // Core invariant: Parents (original) are never changed — local/server maintain same Parents for the same snapshot ID to prevent replica disagreement (permanent divergence removal).
 // Diverge with common ancestor and missing merge are rejected/handled by append.
 func TestUpdateRefAppend(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	fs := store.NewFSStore(t.TempDir())
 	engine := gitengine.NewEngine(fs)
 	svc := NewService(fs, fs, nil, engine, nil)
@@ -103,7 +102,7 @@ func TestUpdateRefAppend(t *testing.T) {
 
 // TestOverlayGraftNoOrphanNoDivergence ensures that an overlay graft does not create orphans (fsck 0 unreachable — removing the cause of the break in the web graph) and that the subsequent normal ancestor continues fast-forwarding from it without leaving any permanent divergence.
 func TestOverlayGraftNoOrphanNoDivergence(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	fs := store.NewFSStore(t.TempDir())
 	engine := gitengine.NewEngine(fs)
 	svc := NewService(fs, fs, nil, engine, nil)

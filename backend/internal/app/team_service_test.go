@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -25,7 +24,7 @@ type teamFixture struct {
 
 func makeTeamFixture(t *testing.T, st teamTestStore) teamFixture {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	suffix := domain.NewID("")[:10]
 	f := teamFixture{identity: NewIdentityService(nil, st)}
 	for i, p := range []*domain.User{&f.owner, &f.member, &f.outsider} {
@@ -54,7 +53,7 @@ func makeTeamFixture(t *testing.T, st teamTestStore) teamFixture {
 }
 func runTeamContract(t *testing.T, st teamTestStore) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	s := f.identity
 	if _, ok := s.RoleOf(ctx, f.repository.ID, f.member.ID); ok {

@@ -9,7 +9,7 @@ import (
 
 func TestCodeEvidenceCacheIsLazyScopedAndBounded(t *testing.T) {
 	f := newEffectiveFixture(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	e, err := f.svc.newCodeEvidence(ctx, f.repo)
 	if err != nil {
 		t.Fatal(err)

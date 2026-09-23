@@ -23,11 +23,13 @@ import (
 
 // Service implements all server inbound use-cases and HTTP read-through.
 type Service struct {
-	meta   outbound.MetadataStore
-	blobs  outbound.BlobStore
-	auth   outbound.AuthProvider
-	engine outbound.GitEngine
-	// repositoryRecord is used for repo → repository binding (remote URL path resolution). nil skips binding.
+	branchCache branchProjectionCache
+	meta        outbound.MetadataStore
+	blobs       outbound.BlobStore
+	auth        outbound.AuthProvider
+	engine      outbound.GitEngine
+	// repositories resolves bindings and current write authority. A missing adapter
+	// denies user writes; explicit trusted system jobs may operate without one.
 	repositories outbound.RepositoryStore
 }
 
@@ -271,7 +273,7 @@ func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) 
 }
 
 // StoreChunks is the content-addressed staging phase before a complete doc commit. It limits the sum of each request's raw content, ensuring it stays within the operational proxy body limit even with JSON base64 overhead.
-func (s *Service) StoreChunks(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error) {
+func (s *Service) storeChunksCommand(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error) {
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.StoreChunksOutput{}, err
 	}
@@ -919,7 +921,7 @@ func requestedChunkFormats(formats []string) map[string]bool {
 // PromoteSnapshotMessage: hook label → commit message one-way promotion (idempotent).
 // The only exception to immutable snapshot meta message — any rule-breaking rewrite is rejected:
 // If the stored message does not have the hook prefix, only the same message (idempotent retry) is allowed.
-func (s *Service) PromoteSnapshotMessage(ctx context.Context, repoID, id domain.ContentHash, message string) error {
+func (s *Service) promoteSnapshotMessageCommand(ctx context.Context, repoID, id domain.ContentHash, message string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1149,6 +1151,13 @@ func (s *Service) ensureRepo(ctx context.Context, actorID string, repo domain.Re
 	}
 
 	// Registration itself creates the state of the target repository. To prevent URL takeover by others before login, context write permissions (member level or above) are required for both initial registration and re-registration.
+	record, err := s.repositories.GetRepository(ctx, repositoryID)
+	if err != nil {
+		return domain.Repo{}, err
+	}
+	if record.Archived {
+		return domain.Repo{}, domain.ErrForbidden
+	}
 	role, ok := s.repositoryRole(ctx, repositoryID, actorID)
 	if !ok || !role.AtLeast(domain.RoleMember) {
 		return domain.Repo{}, domain.ErrForbidden
@@ -1203,7 +1212,7 @@ func gitOriginLabel(raw string) string {
 // PutMemoryDigest is the rolling-upgrade endpoint for legacy clients. It may
 // create an empty attachment or retry the exact current digest, but it cannot
 // replace a non-empty pointer because old clients provide no causal parent.
-func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+func (s *Service) putMemoryDigestCommand(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
 	if d.ClaimsVersion != 0 || d.HasMemoryClaims() {
 		return "", fmt.Errorf("%w: typed memory requires the typed attachment endpoint", domain.ErrValidation)
 	}
@@ -1216,7 +1225,7 @@ func (s *Service) PutMemoryDigest(ctx context.Context, repoID domain.ContentHash
 // PutMemoryDigestCAS advances Snapshot.MemoryHash only from the digest's
 // PreviousMemoryHash. The immutable blob is retained even when the pointer CAS
 // loses, so neither concurrent memory is destroyed.
-func (s *Service) PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
+func (s *Service) putMemoryDigestCASCommand(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error) {
 	return s.putMemoryDigest(ctx, repoID, d, d.PreviousMemoryHash, true)
 }
 
@@ -1280,7 +1289,7 @@ func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash
 			return "", fmt.Errorf("%w: memory claims cannot be downgraded; upgrade the client and pull before retrying", domain.ErrValidation)
 		}
 	}
-	hash, err := s.blobs.PutMemory(ctx, repoID, d)
+	hash, err := repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repoID, func(ctx context.Context) (domain.ContentHash, error) { return s.blobs.PutMemory(ctx, repoID, d) })
 	if err != nil {
 		return "", err
 	}
@@ -1328,8 +1337,8 @@ func (s *Service) getMemoryDigest(ctx context.Context, repoID, snapshotID domain
 	return digest, nil
 }
 
-// UpdateAbout updates the repo About (web-only — membership check at call site).
-func (s *Service) UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error {
+// updateAboutCommand runs behind the application management permission gate.
+func (s *Service) updateAboutCommand(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1344,7 +1353,7 @@ func (s *Service) UpdateAbout(ctx context.Context, repoID domain.ContentHash, de
 }
 
 // UpdateRepoConfig updates the repo structure settings (default branch, protected branch).
-func (s *Service) UpdateRepoConfig(ctx context.Context, repoID domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
+func (s *Service) updateRepoConfigCommand(ctx context.Context, repoID domain.ContentHash, defaultBranch *string, protectDefault *bool) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1361,7 +1370,7 @@ func settingsKindOK(kind string) bool { return domain.ValidSettingsKind(kind) }
 
 // PutSettings stores team default settings bundles. It validates path safety (no relative/parent directory traversal) and
 // total size (2MB) — these files are directly unpacked into team members' local .claude/.agents/.codex directories.
-func (s *Service) PutSettings(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error {
+func (s *Service) putSettingsCommand(ctx context.Context, repoID domain.ContentHash, bundle domain.SettingsBundle) error {
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return err
 	}
@@ -1756,7 +1765,7 @@ func (s *Service) GetSecrets(ctx context.Context, repoID domain.ContentHash) ([]
 }
 
 // PutSettingsObject stores a commit attachment settings object (path/size validation, content-addressed idempotency).
-func (s *Service) PutSettingsObject(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error {
+func (s *Service) putSettingsObjectCommand(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash, bundle domain.SettingsBundle) error {
 	if err := validateHashes(repoID, hash); err != nil {
 		return err
 	}

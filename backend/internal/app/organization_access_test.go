@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -15,7 +14,7 @@ import (
 // have identical access to one present at creation, without copied memberships.
 func runOrganizationOwnerAccess(t *testing.T, st teamTestStore) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	s := f.identity
 	check := func(want domain.MemberRole) {
@@ -131,7 +130,7 @@ func runOrganizationOwnerCommands(t *testing.T, st interface {
 	outbound.BlobStore
 }) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	if err := f.identity.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationOwner); err != nil {
 		t.Fatal(err)
@@ -195,7 +194,7 @@ func TestOrganizationOwnerCommands(t *testing.T) {
 func TestOrganizationOwnerTransferKeepsNamespace(t *testing.T) {
 	st := store.NewFSStore(t.TempDir())
 	f := makeTeamFixture(t, st)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	if err := f.identity.UpdateOrganizationMember(ctx, f.owner.ID, f.organization.ID, f.member.ID, domain.OrganizationOwner); err != nil {
 		t.Fatal(err)
 	}

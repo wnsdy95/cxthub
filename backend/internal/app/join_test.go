@@ -26,7 +26,7 @@ func inbound_JoinInput(repo domain.ContentHash, branch string, snap domain.Conte
 // Full join: main head advances to T, H is preserved as X's graft parent.
 // Partial join: main head advances to X, T remains as scoped session ref and branches from X.
 func TestJoinSnapshot(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 
 	mkSession := func(st *store.FSStore, repo domain.ContentHash, seed, session string, parents ...domain.ContentHash) domain.ContentHash {
 		id := domain.HashContent([]byte(seed))

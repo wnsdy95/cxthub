@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -16,7 +15,7 @@ type enterpriseTestStore interface {
 
 func runEnterpriseContract(t *testing.T, st enterpriseTestStore) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := systemTestContext()
 	f := makeTeamFixture(t, st)
 	s := f.identity
 	enterprise, err := s.CreateEnterprise(ctx, f.owner, "Acme Group", "group-"+domain.NewID("")[:10])

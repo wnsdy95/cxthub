@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -10,7 +9,7 @@ import (
 )
 
 func TestMCPTokensAreHashedClientBoundAndRefreshIsNotBearer(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "mcp-user", Email: "mcp@example.test", Name: "MCP User", Username: "mcp-user"}
 	if err := st.UpsertUser(ctx, user); err != nil {

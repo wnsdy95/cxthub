@@ -30,7 +30,7 @@ func TestPRPromotionVerifiesEachImmutableArchiveOnce(t *testing.T) {
 	for _, same := range []bool{true, false} {
 		t.Run(map[bool]string{true: "same snapshot", false: "different source"}[same], func(t *testing.T) {
 			svc, st := newFsckSvc(t)
-			ctx := context.Background()
+			ctx := systemTestContext()
 			repo := hh("verify-once")
 			st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/a/b"})
 			base := prSnapshot(t, st, repo, "base")
@@ -71,7 +71,7 @@ func TestPRPromotionVerifiesEachImmutableArchiveOnce(t *testing.T) {
 
 func TestHistoryVerificationDoesNotTrustSeparateRequestsOrFailures(t *testing.T) {
 	svc, st := newFsckSvc(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	repo := hh("verification-scope")
 	st.PutRepo(ctx, domain.Repo{ID: repo})
 	id := prSnapshot(t, st, repo, "original")

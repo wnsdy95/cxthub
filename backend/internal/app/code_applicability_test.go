@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -9,7 +8,7 @@ import (
 )
 
 func TestCodeApplicabilityReversalReapplyAndIndependentSelections(t *testing.T) {
-	ctx := context.Background()
+	ctx := systemTestContext()
 	core, st := newFsckSvc(t)
 	repo := hh(t.Name())
 	origin := "https://github.com/example/applicability"

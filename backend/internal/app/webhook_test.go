@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"testing"
@@ -38,7 +37,7 @@ func TestBlockedIP(t *testing.T) {
 // are also blocked using the same mechanism (H1). It only connects using validated IPs, preventing rebinding (H2).
 func TestSafeWebhookClientBlocksLoopback(t *testing.T) {
 	c := safeWebhookClient()
-	req, _ := http.NewRequestWithContext(context.Background(), "POST", "http://127.0.0.1:9/hook", nil)
+	req, _ := http.NewRequestWithContext(systemTestContext(), "POST", "http://127.0.0.1:9/hook", nil)
 	if _, err := c.Do(req); err == nil {
 		t.Fatal("loopback webhook connection not blocked (SSRF vulnerability)")
 	}

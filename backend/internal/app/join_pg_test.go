@@ -3,7 +3,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -17,7 +16,7 @@ import (
 
 func TestPGJoinConfirmationUsesTransaction(t *testing.T) {
 	svc, st, _ := collaborationPG(t)
-	ctx := context.Background()
+	ctx := systemTestContext()
 	owner := domain.User{ID: domain.NewID("user_"), Username: fmt.Sprintf("join%d", time.Now().UnixNano()), Email: "join@example.test"}
 	if err := st.UpsertUser(ctx, owner); err != nil {
 		t.Fatal(err)
@@ -86,7 +85,7 @@ func TestPGJoinPolicyAndConcurrentWriters(t *testing.T) {
 	for _, scenario := range []string{"whole", "partial", "foreign attachment", "new child", "two writers"} {
 		t.Run(scenario, func(t *testing.T) {
 			svc, st, repo := collaborationPG(t)
-			ctx := context.Background()
+			ctx := systemTestContext()
 			p := collaborationSnapshot(t, st, repo, "P")
 			h := collaborationSnapshot(t, st, repo, "H", p)
 			x := collaborationSnapshot(t, st, repo, "X", p)
