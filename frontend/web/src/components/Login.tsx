@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { firebaseEnabled } from '../auth';
+import { firebaseEnabled, githubLoginEnabled, AuthStepError } from '../auth';
 import { useLogin, useSignUp } from '../hooks';
 import { useT, Rich } from '../i18n';
 
@@ -15,6 +15,7 @@ export function Login() {
 
   const busy = login.isPending || signUp.isPending;
   const err = login.error || signUp.error;
+  const step = err instanceof AuthStepError ? err.step : null;
 
   function switchMode(mode: 'login' | 'signup') {
     setAuthMode(mode);
@@ -131,6 +132,17 @@ export function Login() {
             {t('auth.google')}
           </button>
         )}
+        {githubLoginEnabled && (
+          <button className="google" type="button" disabled={busy} onClick={() => login.mutate({ mode: 'github' })}>
+            {t('auth.github')}
+          </button>
+        )}
+        {(step === 'verify-email' || step === 'missing-email') && <div className="form">
+          {step === 'missing-email' && <button type="button" disabled={busy || !email.trim()} onClick={() => login.mutate({ mode: 'verification', action: 'email', email })}>{t('auth.verifyAddress')}</button>}
+          <button type="button" disabled={busy} onClick={() => login.mutate({ mode: 'verification', action: 'check' })}>{t('auth.verificationDone')}</button>
+          {step === 'verify-email' && <button type="button" className="ghost" disabled={busy} onClick={() => login.mutate({ mode: 'verification', action: 'resend' })}>{t('auth.resendVerification')}</button>}
+        </div>}
+
         {!firebaseEnabled && (
           <p className="hint">
             <Rich>{t('auth.firebaseHint')}</Rich>

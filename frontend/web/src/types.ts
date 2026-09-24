@@ -596,7 +596,7 @@ export interface Team {
   id: string; organization_id: string; name: string; slug: string; description?: string; created_at: string;
   can_manage: boolean; can_delete: boolean;
 }
-export interface TeamMembership { team_id: string; organization_id: string; user_id: string; role: 'member' | 'maintainer'; created_at: string }
+export interface TeamMembership { source?: 'github'; team_id: string; organization_id: string; user_id: string; role: 'member' | 'maintainer'; created_at: string }
 export interface TeamRepositoryGrant { team_id: string; organization_id: string; repository_id: string; role: import('./roles').Role; created_at: string }
 export interface EnterprisePolicy { repository_creation: 'admins' | 'members'; allow_public_repositories: boolean; allow_break_glass: boolean }
 export interface Enterprise { id: string; name: string; slug: string; logo?: string; policy: EnterprisePolicy; created_by: string; created_at: string }

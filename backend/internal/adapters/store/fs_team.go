@@ -160,7 +160,7 @@ func (s *FSStore) PutTeamMember(ctx context.Context, m domain.TeamMembership) er
 	if _, err = s.GetOrganizationMembership(ctx, m.OrganizationID, m.UserID); err != nil {
 		return err
 	}
-	members, err := s.ListTeamMembers(ctx, m.TeamID)
+	members, err := s.manualTeamMembers(ctx, m.TeamID)
 	if err != nil {
 		return err
 	}
@@ -188,7 +188,7 @@ func (s *FSStore) RemoveTeamMember(_ context.Context, team, user string) error {
 	}
 	return err
 }
-func (s *FSStore) ListTeamMembers(_ context.Context, team string) ([]domain.TeamMembership, error) {
+func (s *FSStore) manualTeamMembers(_ context.Context, team string) ([]domain.TeamMembership, error) {
 	if err := domain.ValidateTeamID(team); err != nil {
 		return nil, err
 	}

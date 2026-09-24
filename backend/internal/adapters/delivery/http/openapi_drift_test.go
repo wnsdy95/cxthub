@@ -15,7 +15,7 @@ func TestOpenAPIDrift(t *testing.T) {
 	// latter owns the browser consent API under /api/v1, so the public REST
 	// contract must audit both route sources rather than treating composition-
 	// owned consent paths as phantom documentation.
-	registered := routesFromSource(t, "server.go", "identity.go", "teams.go", "enterprises.go", "../mcp/server.go")
+	registered := routesFromSource(t, "server.go", "identity.go", "teams.go", "enterprises.go", "github_connections.go", "../mcp/server.go")
 	specced := routesFromSpec(t, "../../../../../schemas/openapi.yaml")
 
 	for r := range registered {

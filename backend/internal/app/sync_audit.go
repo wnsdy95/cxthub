@@ -112,6 +112,7 @@ func auditRevision(v auditView) string {
 }
 
 func (a *GitSyncAudit) CheckGitHubSync(ctx context.Context, repo domain.ContentHash, cursor string) (domain.SyncAuditPage, error) {
+	ctx = outbound.WithGitRepository(ctx, repo)
 	out := domain.SyncAuditPage{Version: 1, Checks: []domain.SyncAuditCheck{}, CheckedAt: time.Now().UTC()}
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return out, err

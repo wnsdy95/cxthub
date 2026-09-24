@@ -26,6 +26,7 @@ import (
 
 // Store is the union of storage capabilities the server requires (factory return type).
 type Store interface {
+	outbound.GitHubStore
 	outbound.MetadataStore
 	outbound.BlobStore
 	outbound.VerifiedDocStore

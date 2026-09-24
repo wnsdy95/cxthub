@@ -5,6 +5,7 @@ package outbound
 // One instance supplies all ports so callback contexts bind every operation to
 // the same transaction; implementing the interface does not itself prove ACID.
 type ProductionStore interface {
+	GitHubStore
 	MetadataStore
 	BlobStore
 	VerifiedDocStore

@@ -97,6 +97,9 @@ type Backend interface {
 
 // Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/repository).
 type Server struct {
+	githubConnections GitHubConnections
+	githubAppSecret   string
+	githubReturnURL   string
 	gitSyncAudit      inbound.GitSyncAudit
 	docFinalization   inbound.DocFinalization
 	effectiveMemory   inbound.EffectiveMemoryQuery

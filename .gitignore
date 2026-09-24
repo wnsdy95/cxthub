@@ -116,6 +116,7 @@ Thumbs.db
 /docs/internal/
 /docs/*.md
 !/docs/ARCHITECTURE.md
+!/docs/GITHUB_CONNECTIONS.md
 !/docs/BRANCHING.md
 !/docs/CLI.md
 !/docs/CONTEXT_HISTORY.md

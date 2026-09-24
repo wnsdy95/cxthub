@@ -27,3 +27,13 @@ github_repository = "wnsdy95/cxthub"
 # Terraform. Keep empty to use invitation inboxes/links without sending email.
 resend_secret_id = ""
 resend_from      = "CXTHub <noreply@cxthub.com>"
+
+# Optional server GitHub App. Register first; values below are Secret Manager IDs.
+# github_app = {
+#   id                    = "123456"
+#   client_id             = "Iv1.example"
+#   slug                  = "cxthub-example"
+#   client_secret_id      = "cxt-app-client-secret"
+#   private_key_secret_id = "cxt-app-private-key"
+#   webhook_secret_id     = "cxt-app-webhook-secret"
+# }

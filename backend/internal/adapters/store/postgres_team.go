@@ -115,7 +115,7 @@ func (s *PostgresStore) ListTeamMembers(ctx context.Context, team string) ([]dom
 	if err := domain.ValidateTeamID(team); err != nil {
 		return nil, err
 	}
-	rows, err := s.db(ctx).Query(ctx, `SELECT team_id,organization_id,user_id,role,created_at FROM team_memberships WHERE team_id=$1 ORDER BY user_id`, team)
+	rows, err := s.db(ctx).Query(ctx, `SELECT team_id,organization_id,user_id,role,created_at,source FROM effective_team_memberships WHERE team_id=$1 ORDER BY user_id`, team)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (s *PostgresStore) ListTeamMembers(ctx context.Context, team string) ([]dom
 	out := []domain.TeamMembership{}
 	for rows.Next() {
 		var m domain.TeamMembership
-		if err = rows.Scan(&m.TeamID, &m.OrganizationID, &m.UserID, &m.Role, &m.CreatedAt); err != nil {
+		if err = rows.Scan(&m.TeamID, &m.OrganizationID, &m.UserID, &m.Role, &m.CreatedAt, &m.Source); err != nil {
 			return nil, err
 		}
 		if err = domain.ValidateTeamMembership(m); err != nil {
@@ -179,7 +179,7 @@ func (s *PostgresStore) RepositoryTeamAccess(ctx context.Context, repository, us
 	if err := domain.ValidateExternalID(user); err != nil {
 		return nil, err
 	}
-	rows, err := s.db(ctx).Query(ctx, `SELECT g.team_id,g.repository_id,o.namespace_id,m.user_id,g.role FROM team_repository_grants g JOIN teams t ON t.id=g.team_id AND t.organization_id=g.organization_id JOIN organizations o ON o.id=t.organization_id JOIN team_memberships m ON m.team_id=t.id AND m.organization_id=t.organization_id JOIN organization_memberships om ON om.organization_id=t.organization_id AND om.user_id=m.user_id WHERE g.repository_id=$1 AND m.user_id=$2`, repository, user)
+	rows, err := s.db(ctx).Query(ctx, `SELECT g.team_id,g.repository_id,o.namespace_id,m.user_id,g.role FROM team_repository_grants g JOIN teams t ON t.id=g.team_id AND t.organization_id=g.organization_id JOIN organizations o ON o.id=t.organization_id JOIN effective_team_memberships m ON m.team_id=t.id AND m.organization_id=t.organization_id JOIN organization_memberships om ON om.organization_id=t.organization_id AND om.user_id=m.user_id WHERE g.repository_id=$1 AND m.user_id=$2`, repository, user)
 	if err != nil {
 		return nil, err
 	}

@@ -156,7 +156,33 @@ func serve(ctx context.Context, args []string) error {
 
 	idSvc := app.NewIdentityService(verifier, st)
 
+	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_PUBLIC_URL")), "/")
+	if publicURL == "" && isLoopback(addr) {
+		publicURL = loopbackPublicURL(addr)
+	}
+	if publicURL == "" {
+		return fmt.Errorf("CXT_PUBLIC_URL is required when cxtd is not bound to loopback")
+	}
+	githubConnections, githubClient, err := configureGitHub(idSvc, svc, st, publicURL)
+	if err != nil {
+		return err
+	}
+
 	gitReader := gitevidence.NewGitHub(func() string { return os.Getenv("CXT_GITHUB_TOKEN") })
+	if githubConnections != nil {
+		gitReader = gitevidence.NewAuthenticated(func(ctx context.Context, path string) (string, string, string, error) {
+			id, resolved, e := githubConnections.EvidenceInstallation(ctx, path)
+			if e != nil {
+				return "", "", "", e
+			}
+			if id == 0 {
+				return os.Getenv("CXT_GITHUB_TOKEN"), "operator", resolved, nil
+			}
+			token, e := githubClient.InstallationToken(ctx, id)
+			return token, fmt.Sprintf("installation:%d", id), resolved, e
+		})
+	}
+
 	changes, err := app.NewGitChanges(svc, gitReader)
 	if err != nil {
 		return err
@@ -165,20 +191,22 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if githubConnections != nil {
+		changes.SetSourceAuthorizer(githubConnections)
+		scans.SetSourceAuthorizer(githubConnections)
+	}
 	api := delivery.NewServer(svc, idSvc)
+	if githubConnections != nil {
+		returnURL, _ := githubReturnURL(publicURL) // validated during configuration
+		api.SetGitHubConnections(githubConnections, os.Getenv("CXT_GITHUB_APP_WEBHOOK_SECRET"), returnURL)
+	}
 	api.SetGitScans(scans)
 	api.SetGitSyncAudit(app.NewGitSyncAudit(svc, gitReader))
 	api.SetCodeApplicability(svc)
 	api.SetEffectiveMemory(svc)
 	api.SetMemoryPositions(svc)
 	api.SetGitChanges(changes)
-	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_PUBLIC_URL")), "/")
-	if publicURL == "" && isLoopback(addr) {
-		publicURL = loopbackPublicURL(addr)
-	}
-	if publicURL == "" {
-		return fmt.Errorf("CXT_PUBLIC_URL is required when cxtd is not bound to loopback")
-	}
+
 	if err := configureInvitationEmail(idSvc, addr, publicURL); err != nil {
 		return err
 	}
@@ -226,6 +254,9 @@ func serve(ctx context.Context, args []string) error {
 		backend = "postgres"
 	}
 	fmt.Fprintf(os.Stderr, "cxtd: listening on %s (store=%s, auth=%s, data=%s)\n", addr, backend, authMode, dataDir)
+	if githubConnections != nil {
+		go githubConnections.Run(ctx)
+	}
 	go changes.Run(ctx)
 	go scans.Run(ctx)
 	go scans.RunReconciler(ctx)

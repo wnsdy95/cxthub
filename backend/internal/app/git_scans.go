@@ -15,9 +15,10 @@ import (
 // GitScans turns durable observations into immutable evidence. It owns no
 // context ref writes, so late or local observations cannot move shared state.
 type GitScans struct {
-	core   *Service
-	store  outbound.GitScanStore
-	reader outbound.GitCommitReader
+	sourceAccess GitSourceAuthorizer
+	core         *Service
+	store        outbound.GitScanStore
+	reader       outbound.GitCommitReader
 }
 
 func NewGitScans(core *Service, reader outbound.GitCommitReader) (*GitScans, error) {
@@ -28,7 +29,7 @@ func NewGitScans(core *Service, reader outbound.GitCommitReader) (*GitScans, err
 	if !ok || !headStore || !treeStore || !treeReader || reader == nil {
 		return nil, domain.ErrValidation
 	}
-	return &GitScans{core, st, reader}, nil
+	return &GitScans{core: core, store: st, reader: reader}, nil
 }
 func (s *Service) queueHistoryGitScan(ctx context.Context, e domain.HistoryEvent) error {
 	st, ok := s.meta.(outbound.GitScanStore)
@@ -90,7 +91,7 @@ func (g *GitScans) ObservePush(ctx context.Context, origin, ref, before, after s
 	return n, nil
 }
 func (g *GitScans) run(ctx context.Context, j domain.GitScanJob) error {
-	work, cancel := context.WithTimeout(ctx, 90*time.Second)
+	work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 90*time.Second)
 	defer cancel()
 	p := domain.GitScanFinish{Job: j}
 	p.Job.LeaseUntil = time.Time{}
@@ -100,6 +101,10 @@ func (g *GitScans) run(ctx context.Context, j domain.GitScanJob) error {
 	repo, err := g.core.meta.GetRepo(work, j.RepoID)
 	if err == nil && repo.GitRemoteURL != j.GitOrigin {
 		err = domain.ErrConflict
+	}
+	var fence GitReadFence
+	if err == nil {
+		fence, err = authorizeGitRead(work, g.sourceAccess, j.RepoID)
 	}
 	if err == nil && !j.TreeIndexed {
 		var evidence domain.GitTreeEvidence
@@ -147,6 +152,9 @@ func (g *GitScans) run(ctx context.Context, j domain.GitScanJob) error {
 			}
 			if r.GitRemoteURL != j.GitOrigin {
 				return domain.ErrConflict
+			}
+			if e := fence(tx); e != nil {
+				return e
 			}
 			return g.store.FinishGitScan(tx, p)
 		})
@@ -257,7 +265,7 @@ func (c cachedGitEvidence) ReadCommitDelta(ctx context.Context, origin, commit, 
 	if !errors.Is(err, domain.ErrNotFound) {
 		return d, err
 	}
-	return c.reader.ReadCommitDelta(ctx, origin, commit, parent)
+	return c.reader.ReadCommitDelta(outbound.WithGitRepository(ctx, c.repo), origin, commit, parent)
 }
 func (c cachedGitEvidence) IsGitAncestor(ctx context.Context, origin, ancestor, descendant string) (bool, error) {
 	// Cached complete parent edges are authoritative immutable evidence. A
@@ -288,7 +296,7 @@ func (c cachedGitEvidence) IsGitAncestor(ctx context.Context, origin, ancestor, 
 	if len(todo) == 0 && !unknown {
 		return false, nil
 	}
-	return c.reader.IsGitAncestor(ctx, origin, ancestor, descendant)
+	return c.reader.IsGitAncestor(outbound.WithGitRepository(ctx, c.repo), origin, ancestor, descendant)
 }
 
 func (g *GitScans) ListScans(ctx context.Context, repo domain.ContentHash, cursor string, limit int) (domain.GitScanPage, error) {
@@ -357,8 +365,13 @@ func (g *GitScans) Reconcile(ctx context.Context) error {
 		if e != nil {
 			return e
 		}
-		work, cancel := context.WithTimeout(ctx, 30*time.Second)
-		heads, more, e := g.reader.ListGitHeads(work, j.GitOrigin, j.Page)
+		work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 30*time.Second)
+		fence, e := authorizeGitRead(work, g.sourceAccess, j.RepoID)
+		var heads []outbound.GitHead
+		var more bool
+		if e == nil {
+			heads, more, e = g.reader.ListGitHeads(work, j.GitOrigin, j.Page)
+		}
 		if e == nil {
 			observations := []domain.GitRefObservation{}
 			for _, h := range heads {
@@ -371,6 +384,9 @@ func (g *GitScans) Reconcile(ctx context.Context) error {
 				}
 				if r.GitRemoteURL != j.GitOrigin {
 					return domain.ErrConflict
+				}
+				if e := fence(tx); e != nil {
+					return e
 				}
 				return st.FinishGitHeadScan(tx, j, observations, more, time.Now().UTC())
 			})
@@ -441,3 +457,6 @@ func (g *GitScans) validateIndexTree(ctx context.Context, j domain.GitScanJob, d
 	}
 	return nil
 }
+
+// SetSourceAuthorizer configures source policy before workers start.
+func (g *GitScans) SetSourceAuthorizer(a GitSourceAuthorizer) { g.sourceAccess = a }

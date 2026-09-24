@@ -14,9 +14,10 @@ import (
 // GitChanges owns evidence delivery. Provider I/O is never performed while
 // holding a repository transaction. It cannot move refs or remove raw history.
 type GitChanges struct {
-	core   *Service
-	store  outbound.GitChangeStore
-	reader outbound.GitEvidenceReader
+	sourceAccess GitSourceAuthorizer
+	core         *Service
+	store        outbound.GitChangeStore
+	reader       outbound.GitEvidenceReader
 }
 
 var _ inbound.GitChanges = (*GitChanges)(nil)
@@ -26,7 +27,7 @@ func NewGitChanges(core *Service, reader outbound.GitEvidenceReader) (*GitChange
 	if !ok || reader == nil {
 		return nil, fmt.Errorf("durable Git change verification unavailable")
 	}
-	return &GitChanges{core, st, reader}, nil
+	return &GitChanges{core: core, store: st, reader: reader}, nil
 }
 func (g *GitChanges) Submit(ctx context.Context, repo domain.ContentHash, r domain.GitChangeRequest) (domain.GitChangeJob, error) {
 	if err := domain.ValidateContentHash(repo); err != nil {
@@ -92,11 +93,15 @@ func (g *GitChanges) Retry(ctx context.Context, repo domain.ContentHash, id stri
 	return repositoryWriteError(evidenceWriteContext(ctx), g.core, repo, func(ctx context.Context) error { return g.store.RetryGitChange(ctx, repo, id, time.Now().UTC()) })
 }
 func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
-	work, cancel := context.WithTimeout(ctx, 90*time.Second)
+	work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 90*time.Second)
 	defer cancel()
 	repo, err := g.core.meta.GetRepo(work, j.RepoID)
 	if err == nil && repo.GitRemoteURL != j.GitOrigin {
 		err = domain.ErrConflict
+	}
+	var fence GitReadFence
+	if err == nil {
+		fence, err = authorizeGitRead(work, g.sourceAccess, j.RepoID)
 	}
 	var proof domain.GitReversalEvidence
 	if err == nil {
@@ -124,6 +129,9 @@ func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
 			}
 			// CAS and result publication are one store transition. A lost commit ack is
 			// safe: retries see the terminal row and cannot overwrite its evidence.
+			if e := fence(tx); e != nil {
+				return e
+			}
 			return g.store.FinishGitChange(tx, next)
 		})
 		if err == nil {
@@ -192,3 +200,6 @@ func (g *GitChanges) Run(ctx context.Context) {
 		}
 	}
 }
+
+// SetSourceAuthorizer configures source policy before workers start.
+func (g *GitChanges) SetSourceAuthorizer(a GitSourceAuthorizer) { g.sourceAccess = a }

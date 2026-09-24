@@ -1,3 +1,4 @@
+import { EnterpriseGitHubConnections } from './GitHubConnections';
 import { RenameSpace } from './NamespaceAdministration';
 import { InvitationManager } from './CollaborationInvitations';
 import { useState, type FormEvent } from 'react';
@@ -59,7 +60,7 @@ function EnterpriseBody({ enterprise }: { enterprise: Enterprise }) {
   <main className="profile-main"><p className="organization-access-note">{t('enterprise.note')}</p>
    <nav className="tabs organization-tabs" aria-label={t('enterprise.title')}>{(['organizations', 'members', 'policies', 'audit', 'settings'] as const).filter((item) => canAdmin || (item !== 'audit' && item !== 'settings')).map((item) => <button key={item} className={`tab${tab === item ? ' on' : ''}`} onClick={() => setTab(item)}>{t(`enterprise.${item}`)}</button>)}</nav>
    {error && <p className="err" role="alert">{error.message}</p>}
-   {tab === 'organizations' && <section>
+   {tab === 'organizations' && <section><EnterpriseGitHubConnections id={enterprise.id} />
     {role === 'owner' && <form className="management-form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(() => api.linkEnterpriseOrganization(enterprise.id, organizationId)); }}>
      <select aria-label={t('enterprise.chooseOrganization')} value={organizationId} onChange={(event) => setOrganizationId(event.target.value)} required><option value="">{t('enterprise.chooseOrganization')}</option>{mine.data?.filter((organization) => organization.effective_role === 'owner' && !organizations.data?.some((item) => item.id === organization.id)).map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select><button disabled={busy || !organizationId}>{t('enterprise.link')}</button>
     </form>}

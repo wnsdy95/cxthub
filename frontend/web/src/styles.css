@@ -1276,3 +1276,17 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .invitation-page .management-form { margin-top: 1.5rem; }
 
 .management-rows small { display: block; margin-top: 4px; color: var(--muted); font-size: .76rem; }
+
+.github-connections-body { width: min(960px, 100%); margin: 0 auto; padding: 32px 24px; }
+.github-owner, .github-identity { border: 1px solid var(--line); border-radius: 12px; padding: 24px; margin: 24px 0; }
+.github-owner-heading, .github-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between; }
+.github-actions { justify-content: flex-start; }
+.github-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; margin-top: 16px; }
+.github-controls label { display: flex; flex: 1 1 230px; flex-direction: column; gap: 8px; min-width: 0; }
+.github-controls select { max-width: 100%; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); padding: 9px 12px; font: inherit; }
+.github-controls .github-sync-choice { flex-direction: row; align-items: center; }
+.github-sync-choice input { width: auto; }
+.github-binding-list { list-style: none; padding: 0; }
+.github-binding-list li { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.github-binding-list li span { overflow-wrap: anywhere; }
+.github-enterprise { padding: 16px 0; }

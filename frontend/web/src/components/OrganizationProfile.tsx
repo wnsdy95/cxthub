@@ -1,3 +1,4 @@
+import { GitHubConnectionsLink } from './GitHubConnections';
 import { RenameSpace } from './NamespaceAdministration';
 import { InvitationManager } from './CollaborationInvitations';
 import { OrganizationTeams } from './OrganizationTeams';
@@ -137,7 +138,7 @@ export function OrganizationProfile({ data }: { data: PublicOrganization }) {
           {tab === 'audit' && joined && canAdmin && <OrganizationAudit organizationId={joined.id} />}
           {tab === 'storage' && joined && canAdmin && <StorageUsage namespace={joined.namespace_id} canReconcile={role === 'owner'} />}
           {tab === 'settings' && joined && canAdmin && (
-            <><OrganizationSettings organization={organization as Organization} />{role === 'owner' && <RenameSpace key={organization.slug} kind="organization" id={organization.id} slug={organization.slug} />}</>
+            <><GitHubConnectionsLink namespace={joined.namespace_id} /><OrganizationSettings organization={organization as Organization} />{role === 'owner' && <RenameSpace key={organization.slug} kind="organization" id={organization.id} slug={organization.slug} />}</>
           )}
         </main>
       </div>

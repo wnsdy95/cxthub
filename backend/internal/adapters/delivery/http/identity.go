@@ -255,6 +255,7 @@ func (s *Server) registerIdentity(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/invites/{token}/accept", s.requireUser(s.acceptInvite))
 
 	s.registerTeamRoutes(mux)
+	s.registerGitHubRoutes(mux)
 	s.registerEnterpriseRoutes(mux)
 	mux.HandleFunc("GET /api/v1/repository-connections", s.optionalUser(s.resolveRepositoryConnection))
 

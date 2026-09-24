@@ -8,7 +8,7 @@ import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tansta
 import { api } from './api';
 import { useRepositoryUpdates } from './useRepositoryUpdates';
 import type { User } from './types';
-import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseGoogleIdToken, firebaseSignOut } from './auth';
+import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseSocialIdToken, firebaseVerification, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 
 // ── Authentication/Query ─────────────────────────────────────────
@@ -558,7 +558,9 @@ export function usePutSettings() {
 export type LoginInput =
   | { mode: 'dev'; email: string; name: string }
   | { mode: 'email'; email: string; password: string }
-  | { mode: 'google' };
+  | { mode: 'google' }
+  | { mode: 'github' }
+  | { mode: 'verification'; action: 'check' | 'resend' | 'email'; email?: string };
 
 export function useLogin() {
   const qc = useQueryClient();
@@ -566,7 +568,8 @@ export function useLogin() {
   return useMutation({
     mutationFn: async (input: LoginInput) => {
       let idp: string;
-      if (input.mode === 'google') idp = await firebaseGoogleIdToken(t);
+      if (input.mode === 'google' || input.mode === 'github') idp = await firebaseSocialIdToken(input.mode, t);
+      else if (input.mode === 'verification') idp = await firebaseVerification(input.action, input.email ?? '', t);
       else if (input.mode === 'email') idp = await firebaseEmailIdToken(input.email, input.password, t);
       else idp = devIdpToken(input.email, input.name);
       return api.exchangeSession(idp); // Server sets session cookie via Set-Cookie

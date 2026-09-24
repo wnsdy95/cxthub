@@ -437,6 +437,9 @@ func (s *FSStore) removeOrganizationMemberUnlocked(ctx context.Context, organiza
 			return err
 		}
 	}
+	if err := s.removeGitHubOrganizationMember(ctx, organizationID, userID); err != nil {
+		return err
+	}
 	err = os.Remove(filepath.Join(s.organizationMembersDir(), organizationID, opaqueName(userID)+".json"))
 	if os.IsNotExist(err) {
 		return nil
@@ -461,7 +464,7 @@ func (s *FSStore) RemoveOrganizationMemberWithAudit(ctx context.Context, organiz
 	}
 	var previousTeams []domain.TeamMembership
 	for _, team := range teams {
-		members, err := s.ListTeamMembers(ctx, team.ID)
+		members, err := s.manualTeamMembers(ctx, team.ID)
 		if err != nil {
 			return err
 		}
