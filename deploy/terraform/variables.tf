@@ -147,3 +147,25 @@ variable "resend_from" {
   type        = string
   default     = "CXTHub <noreply@cxthub.com>"
 }
+
+variable "github_app" {
+  description = "Optional GitHub App registration. Secret Manager IDs only; never private key/client secret values."
+  type = object({
+    id                    = string
+    client_id             = string
+    slug                  = string
+    client_secret_id      = string
+    private_key_secret_id = string
+    webhook_secret_id     = string
+  })
+  default = null
+  validation {
+    condition = var.github_app == null ? true : (
+      can(regex("^[0-9]+$", var.github_app.id)) &&
+      can(regex("^[A-Za-z0-9_-]+$", var.github_app.slug)) &&
+      length(var.github_app.client_id) > 0 &&
+      alltrue([for id in [var.github_app.client_secret_id, var.github_app.private_key_secret_id, var.github_app.webhook_secret_id] : can(regex("^[A-Za-z0-9_-]{1,255}$", id))])
+    )
+    error_message = "GitHub App registration and all three existing secret IDs must be provided together."
+  }
+}

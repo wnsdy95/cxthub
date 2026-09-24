@@ -96,6 +96,26 @@ resource "google_cloud_run_v2_service" "cxtd" {
       }
 
       dynamic "env" {
+        for_each = local.github_app_public
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+      dynamic "env" {
+        for_each = data.google_secret_manager_secret.github_app
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      dynamic "env" {
         for_each = var.resend_secret_id == "" ? [] : [var.resend_secret_id]
         content {
           name = "RESEND_API_KEY"
@@ -150,6 +170,7 @@ resource "google_cloud_run_v2_service" "cxtd" {
     google_secret_manager_secret_iam_member.cxtd_postgres,
     google_secret_manager_secret_iam_member.cxtd_github_webhook,
     google_secret_manager_secret_iam_member.cxtd_resend,
+    google_secret_manager_secret_iam_member.cxtd_github_app,
   ]
 }
 

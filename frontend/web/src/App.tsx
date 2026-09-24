@@ -1,3 +1,4 @@
+import { GitHubConnectionsPage } from './components/GitHubConnections';
 import { useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { repositoryPath, parseRoute, replacePath, findByRoute, navigate } from './route';
@@ -104,6 +105,7 @@ function Root() {
   {
     const r = parseRoute();
     if (r?.kind === 'invite' && r.token.startsWith('ci_')) return <InvitationPage key={r.token} id={r.token} />;
+    if (r?.kind === 'githubConnections') return <GitHubConnectionsPage />;
     if (r?.kind === 'device') return <DeviceApprove code={r.code} />;
     if (r?.kind === 'mcpConsent') return <MCPConsent requestId={r.request} />;
     if (r?.kind === 'user') return <UserProfile username={r.username} />;

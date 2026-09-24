@@ -21,15 +21,25 @@ import (
 )
 
 type GitHub struct {
-	rateMu   sync.Mutex
-	resumeAt time.Time
-	client   *http.Client
-	base     string
-	token    func() string
+	rateMu       sync.Mutex
+	credential   func(context.Context, string) (string, string, string, error)
+	scopedLimits map[string]time.Time
+	resumeAt     time.Time
+	client       *http.Client
+	base         string
+	token        func() string
 }
 
 func NewGitHub(token func() string) *GitHub {
 	return &GitHub{client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, base: "https://api.github.com", token: token}
+}
+
+// NewAuthenticated obtains repository-scoped credentials on every request.
+func NewAuthenticated(resolve func(context.Context, string) (string, string, string, error)) *GitHub {
+	g := NewGitHub(nil)
+	g.credential = resolve
+	g.scopedLimits = map[string]time.Time{}
+	return g
 }
 
 var _ outbound.GitEvidenceReader = (*GitHub)(nil)
@@ -65,8 +75,22 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	token, bucket := "", ""
+	if g.credential != nil {
+		var err error
+		token, bucket, path, err = g.credential(ctx, path)
+		if err != nil {
+			return err
+		}
+	} else if g.token != nil {
+		token = g.token()
+	}
 	g.rateMu.Lock()
-	blocked := time.Now().Before(g.resumeAt)
+	until := g.resumeAt
+	if bucket != "" {
+		until = g.scopedLimits[bucket]
+	}
+	blocked := time.Now().Before(until)
 	g.rateMu.Unlock()
 	if blocked {
 		return fmt.Errorf("Git evidence provider rate limit; retry later")
@@ -79,10 +103,8 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "cxthub-git-evidence")
-	if g.token != nil {
-		if token := g.token(); token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -99,7 +121,11 @@ func (g *GitHub) get(ctx context.Context, path string, out any) error {
 				resume = time.Unix(epoch, 0)
 			}
 			g.rateMu.Lock()
-			if resume.After(g.resumeAt) {
+			if bucket != "" {
+				if resume.After(g.scopedLimits[bucket]) {
+					g.scopedLimits[bucket] = resume
+				}
+			} else if resume.After(g.resumeAt) {
 				g.resumeAt = resume
 			}
 			g.rateMu.Unlock()

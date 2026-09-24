@@ -172,7 +172,7 @@ func (s *PostgresStore) ListRepositoriesForUser(ctx context.Context, userID stri
 		 WHERE w.owner_id=$1 OR EXISTS (SELECT 1 FROM memberships m WHERE m.repository_id=w.id AND m.user_id=$1)
  OR EXISTS (SELECT 1 FROM team_repository_grants g
  JOIN organizations o ON o.id=g.organization_id AND o.namespace_id=w.owner_namespace_id
- JOIN team_memberships tm ON tm.team_id=g.team_id AND tm.organization_id=g.organization_id
+ JOIN effective_team_memberships tm ON tm.team_id=g.team_id AND tm.organization_id=g.organization_id
  JOIN organization_memberships om ON om.organization_id=g.organization_id AND om.user_id=tm.user_id
  WHERE g.repository_id=w.id AND tm.user_id=$1)
  OR EXISTS (SELECT 1 FROM namespaces n

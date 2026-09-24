@@ -1,4 +1,6 @@
+import { GitHubConnectionsLink } from './GitHubConnections';
 import { MCPApplications } from './MCPApplications';
+import { GitHubAccount } from './GitHubAccount';
 import { TransferNamespace } from './NamespaceAdministration';
 import { GitHubSyncCheck } from './GitHubSyncCheck';
 import { NotificationHistory } from './NotificationHistory';
@@ -188,6 +190,8 @@ export function AccountSettings({ user, trigger = 'gear' }: { user: User; trigge
               </p>
 
               <PersonalStorageUsage />
+              <GitHubAccount uid={user.id} />
+              <GitHubConnectionsLink />
               <CliTokenSection />
               <WebSessionSection />
               <MCPApplications />

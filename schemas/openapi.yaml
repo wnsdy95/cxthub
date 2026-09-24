@@ -72,6 +72,189 @@ components:
   # Reusable Schemas
   # -------------------------------------------------------------------------
   schemas:
+    Namespace: {type: object, properties: {id: {type: string}, slug: {type: string}, kind: {type: string, enum: [user, organization]}, user_id: {type: string}, organization_id: {type: string}, created_at: {type: string, format: date-time}}}
+    GitHubStart:
+      type: "object"
+      properties:
+        url:
+          type: "string"
+          format: "uri"
+    GitHubIdentity:
+      type: "object"
+      properties:
+        user_id:
+          type: "string"
+        external_id:
+          type: "integer"
+          format: "int64"
+        login:
+          type: "string"
+    GitHubInstallation:
+      type: "object"
+      properties:
+        id:
+          type: "integer"
+          format: "int64"
+        account_id:
+          type: "integer"
+          format: "int64"
+        login:
+          type: "string"
+        kind:
+          type: "string"
+          enum: ["User", "Organization"]
+        suspended:
+          type: "boolean"
+    GitHubRepository:
+      type: "object"
+      properties:
+        id:
+          type: "integer"
+          format: "int64"
+        account_id:
+          type: "integer"
+          format: "int64"
+        full_name:
+          type: "string"
+        private:
+          type: "boolean"
+    GitHubBinding:
+      type: "object"
+      properties:
+        repository_id:
+          type: "string"
+        context_repo_id:
+          type: "string"
+        external_id:
+          type: "integer"
+          format: "int64"
+        git_origin:
+          type: "string"
+          readOnly: true
+    GitHubTeam:
+      type: "object"
+      properties:
+        id:
+          type: "integer"
+          format: "int64"
+        slug:
+          type: "string"
+        name:
+          type: "string"
+    GitHubTeamMapping:
+      type: "object"
+      properties:
+        team_id:
+          type: "string"
+        external_id:
+          type: "integer"
+          format: "int64"
+        sync_members:
+          type: "boolean"
+    GitHubConnection:
+      type: "object"
+      properties:
+        namespace_id:
+          type: "string"
+        installation:
+          $ref: "#/components/schemas/GitHubInstallation"
+        generation:
+          type: "integer"
+          format: "int64"
+        enabled:
+          type: "boolean"
+        status:
+          type: "string"
+          enum: ["connected", "pending", "retrying", "access_removed", "disconnected", "team_access_required"]
+        repositories:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/GitHubRepository"
+        bindings:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/GitHubBinding"
+        teams:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/GitHubTeam"
+        mappings:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/GitHubTeamMapping"
+        updated_by:
+          type: "string"
+        checked_at:
+          type: "string"
+          format: "date-time"
+        next_sync:
+          type: "string"
+          format: "date-time"
+        pr_pages:
+          type: "object"
+          additionalProperties:
+            type: "integer"
+        unresolved_members:
+          type: "integer"
+    GitHubOwnerView:
+      type: "object"
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        connection:
+          anyOf: [{"$ref": "#/components/schemas/GitHubConnection"}, {"type": "null"}]
+        repositories:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/Repository"
+        context_repos:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/Repo"
+        teams:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/Team"
+    GitHubOverview:
+      type: "object"
+      properties:
+        enabled:
+          type: "boolean"
+        identity:
+          anyOf: [{"$ref": "#/components/schemas/GitHubIdentity"}, {"type": "null"}]
+        owners:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/GitHubOwnerView"
+    GitHubEnterpriseConnection:
+      type: "object"
+      properties:
+        organization_id:
+          type: "string"
+        namespace_id:
+          type: "string"
+        slug:
+          type: "string"
+        status:
+          type: "string"
+        checked_at:
+          type: "string"
+          format: "date-time"
+        can_manage:
+          type: "boolean"
+    GitHubConnectionEdit:
+      type: "object"
+      properties:
+        generation:
+          type: "integer"
+          format: "int64"
+        action:
+          type: "string"
+          enum: ["refresh", "disconnect", "bind", "unbind", "map-team", "unmap-team"]
+        binding:
+          $ref: "#/components/schemas/GitHubBinding"
+        mapping:
+          $ref: "#/components/schemas/GitHubTeamMapping"
     RepositoryRevision:
       type: object
       required: [graph, pending]
@@ -1381,6 +1564,7 @@ components:
     TeamMembership:
       type: object
       properties:
+        source: {type: string, enum: [github], description: Present for imported GitHub membership; omitted for manual membership.}
         team_id: {"type": "string"}
         organization_id: {"type": "string"}
         user_id: {"type": "string"}
@@ -1514,6 +1698,148 @@ components:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+  /github/connections:
+    get:
+      summary: "List manageable personal and organization GitHub connections"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubOverview"
+        "401":
+          description: "Authentication required"
+        "403":
+          description: "Current local or GitHub authority is insufficient"
+        "409":
+          description: "Stale configuration or identity collision"
+        "503":
+          description: "GitHub App is not configured"
+  /github/requests:
+    post:
+      summary: "Begin actor-bound, expiring GitHub App authorization"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubStart"
+        "401":
+          description: "Authentication required"
+        "403":
+          description: "Current local or GitHub authority is insufficient"
+        "409":
+          description: "Stale configuration or identity collision"
+        "503":
+          description: "GitHub App is not configured"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: "object"
+              properties:
+                namespace_id:
+                  type: "string"
+                installation_id:
+                  type: "integer"
+                  format: "int64"
+  /github/connections/{namespaceID}:
+    post:
+      summary: "Change a connection with generation compare-and-swap"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  saved:
+                    type: "boolean"
+        "401":
+          description: "Authentication required"
+        "403":
+          description: "Current local or GitHub authority is insufficient"
+        "409":
+          description: "Stale configuration or identity collision"
+        "503":
+          description: "GitHub App is not configured"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitHubConnectionEdit"
+      parameters: [{"in": "path", "name": "namespaceID", "required": true, "schema": {"type": "string"}}]
+  /enterprises/{enterpriseID}/github-connections:
+    get:
+      summary: "Show organization connection health without repository authority"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                type: "array"
+                items:
+                  $ref: "#/components/schemas/GitHubEnterpriseConnection"
+        "401":
+          description: "Authentication required"
+        "403":
+          description: "Current local or GitHub authority is insufficient"
+        "409":
+          description: "Stale configuration or identity collision"
+        "503":
+          description: "GitHub App is not configured"
+      parameters: [{"in": "path", "name": "enterpriseID", "required": true, "schema": {"type": "string"}}]
+  /github/setup:
+    get:
+      summary: "Continue GitHub App installation with a one-time actor-bound state"
+      parameters: [{"in": "query", "name": "state", "required": true, "schema": {"type": "string"}}, {"in": "query", "name": "installation_id", "required": true, "schema": {"type": "integer", "format": "int64"}}]
+      responses:
+        "303":
+          description: "GitHub user authorization with PKCE"
+        "403":
+          description: "Invalid state or actor"
+  /github/callback:
+    get:
+      summary: "Verify GitHub identity and installation authority; consume state once"
+      parameters: [{"in": "query", "name": "state", "required": true, "schema": {"type": "string"}}, {"in": "query", "name": "code", "required": true, "schema": {"type": "string"}}]
+      responses:
+        "303":
+          description: "Return to the fixed connection page with success/failure status"
+  /github/webhook:
+    post:
+      summary: "Durably accept signed GitHub App events; idempotent by delivery ID"
+      security: []
+      parameters: [{"in": "header", "name": "X-Hub-Signature-256", "required": true, "schema": {"type": "string"}}, {"in": "header", "name": "X-GitHub-Delivery", "required": true, "schema": {"type": "string"}}, {"in": "header", "name": "X-GitHub-Event", "required": true, "schema": {"type": "string"}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: "object"
+      responses:
+        "200":
+          description: "Success"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  accepted:
+                    type: "boolean"
+        "401":
+          description: "Invalid signature"
+        "409":
+          description: "Reused delivery ID with different payload"
+        "413":
+          description: "Payload exceeds one MiB"
+        "503":
+          description: "GitHub App is not configured"
 
   /health:
     get:

@@ -19,6 +19,7 @@ const (
 )
 
 type TeamMembership struct {
+	Source         string    `json:"source,omitempty"`
 	TeamID         string    `json:"team_id"`
 	OrganizationID string    `json:"organization_id"`
 	UserID         string    `json:"user_id"`

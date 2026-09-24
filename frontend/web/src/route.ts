@@ -7,6 +7,7 @@ const RESERVED = new Set(['invite', 'w', 'login', 'settings', 'pricing', 'api', 
 export type RepositoryTab = 'members' | 'connections' | 'onhold' | 'settings';
 const TABS = new Set<RepositoryTab>(['members', 'connections', 'onhold', 'settings']);
 export type Route =
+ | { kind: 'githubConnections' }
  | { kind: 'repository'; username: string; slug: string; tab?: RepositoryTab }
  | { kind: 'repositoryId'; id: string; tab?: RepositoryTab }
  | { kind: 'user'; username: string }
@@ -45,6 +46,7 @@ export function parseRoute(pathname: string = location.pathname, search: string 
  if (segments[0] === 'enterprises' && segments.length === 2) return { kind: 'enterprise', slug: segments[1] };
  if (segments[0] === 'invite' && segments.length === 2) return { kind: 'invite', token: segments[1] };
  if (segments[0] === 'login' && segments[1] === 'device' && segments.length === 2) return { kind: 'device', code: query.get('code') ?? '' };
+ if (segments[0] === 'connect' && segments[1] === 'github' && segments.length === 2) return { kind: 'githubConnections' };
  if (segments[0] === 'connect' && segments[1] === 'mcp' && segments.length === 2) return { kind: 'mcpConsent', request: query.get('request') ?? '' };
  const rawTab = query.get('tab') as RepositoryTab;
  const tab = TABS.has(rawTab) ? { tab: rawTab } : {};

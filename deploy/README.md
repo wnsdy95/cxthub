@@ -81,10 +81,18 @@ scripts/deploy-preflight.sh ready
 
 It fails closed when either secret is absent or has no enabled version.
 
-## GitHub pull-request webhook
+## GitHub App connections
 
-Each GitHub repository whose context is hosted by this deployment needs one
-repository webhook:
+The normal account/organization installation flow is documented in
+[GitHub connections](../docs/GITHUB_CONNECTIONS.md). It uses a separate App
+webhook at `/api/v1/github/webhook` and installation-scoped credentials. Enable
+Terraform's optional `github_app` input with existing Secret Manager IDs after
+registering the App. Firebase GitHub sign-in is configured separately.
+
+## Legacy GitHub pull-request webhook
+
+For deployments without App connections, each GitHub repository can use one
+operator-managed repository webhook:
 
 - Payload URL: `https://<domain>/api/v1/hooks/github`
 - Content type: `application/json`

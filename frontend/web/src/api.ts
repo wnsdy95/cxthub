@@ -71,6 +71,11 @@ export interface DocEventPage {
 }
 
 export const api = {
+  githubOverview: () => call<import('./github').GitHubOverview>('GET', '/github/connections'),
+  githubStart: (namespace_id = '', installation_id = 0) => call<{ url: string }>('POST', '/github/requests', { namespace_id, installation_id }),
+  githubEdit: (namespace: string, edit: import('./github').GitHubEdit) => call<{ saved: boolean }>('POST', `/github/connections/${encodeURIComponent(namespace)}`, edit),
+  githubEnterprise: (id: string) => call<import('./github').EnterpriseGitHubConnection[]>('GET', `/enterprises/${encodeURIComponent(id)}/github-connections`),
+
  mcpApplications: () => call<import('./types').MCPApplication[]>('GET', '/me/mcp-applications'),
  revokeMCPApplication: (id:string) => call('DELETE', `/me/mcp-applications/${encodeURIComponent(id)}`),
  accountAudit: () => call<import('./types').AccountAuditEvent[]>('GET', '/me/audit'),
