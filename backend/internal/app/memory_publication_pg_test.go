@@ -121,4 +121,30 @@ func TestPGMemoryPublicationCollectionAndRollback(t *testing.T) {
 	if _, err := peer.GetMemory(ctx, repo, hash); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("memory escaped rollback: %v", err)
 	}
+	// A prepared document survives a failed attachment; snapshot, memory and
+	// revision must still roll back together. Another process can replay safely.
+	if _, err := st.PutDoc(ctx, repo, in.Objects.Docs[0]); err != nil {
+		t.Fatal(err)
+	}
+	in.Objects.Docs = nil
+	if _, err := failing.PublishMemoryArchive(ctx, in); !errors.Is(err, domain.ErrIntegrity) {
+		t.Fatalf("prepared publication failure: %v", err)
+	}
+	if _, err := peer.GetSnapshot(ctx, repo, in.Memory.SnapshotID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("prepared snapshot escaped rollback: %v", err)
+	}
+	if _, err := peer.GetMemory(ctx, repo, hash); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("prepared memory escaped rollback: %v", err)
+	}
+	if current, err := peer.RepositoryRevision(ctx, repo); err != nil || current != before {
+		t.Fatalf("prepared revision escaped rollback: %+v %v", current, err)
+	}
+	if _, err := peer.GetDoc(ctx, repo, in.Memory.SnapshotID); err != nil {
+		t.Fatalf("prepared document lost: %v", err)
+	}
+	for _, writer := range []*Service{other, svc} {
+		if got, err := writer.PublishMemoryArchive(ctx, in); err != nil || got != hash {
+			t.Fatalf("prepared publication replay: %s %v", got, err)
+		}
+	}
 }

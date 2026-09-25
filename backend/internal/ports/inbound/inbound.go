@@ -260,9 +260,10 @@ type PushNegotiateInput struct {
 
 // PushNegotiateOutput: missing parts (want) the server actually needs. (wire: snake_case)
 type PushNegotiateOutput struct {
-	AsyncDocsSupported bool                 `json:"async_docs_supported,omitempty"`
-	SnapshotWants      []domain.ContentHash `json:"snapshot_wants"`
-	DocWants           []domain.ContentHash `json:"doc_wants"`
+	PreparedMemoryArchivesSupported bool                 `json:"prepared_memory_archives_supported,omitempty"`
+	AsyncDocsSupported              bool                 `json:"async_docs_supported,omitempty"`
+	SnapshotWants                   []domain.ContentHash `json:"snapshot_wants"`
+	DocWants                        []domain.ContentHash `json:"doc_wants"`
 	// ChunksSupported true = chunk wire support (GCS ignores — operates as-is).
 	ChunksSupported bool `json:"chunks_supported,omitempty"`
 	// BoundedChunksSupported true if chunk bodies are sent as bounded batches to /push/chunks·/pull/chunks. For old servers, the existing push/objects compatibility paths are used.

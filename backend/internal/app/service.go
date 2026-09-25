@@ -260,15 +260,17 @@ func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) 
 		chunkWants = difference(in.ChunkHaves, haveChunks)
 	}
 	_, asyncDocs := s.blobs.(outbound.DocJobStore)
+	_, storedDocVerification := s.blobs.(outbound.StoredDocVerifier)
 	return inbound.PushNegotiateOutput{
-		AsyncDocsSupported:     asyncDocs,
-		SnapshotWants:          difference(in.SnapshotHaves, haveSnaps),
-		DocWants:               difference(in.DocHaves, haveDocs),
-		ChunksSupported:        true,
-		BoundedChunksSupported: true,
-		ChunkFormatsSupported:  []string{domain.ChunkFormatV1, domain.ChunkFormatV2},
-		CIRVersionsSupported:   domain.SupportedCIRVersions(),
-		ChunkWants:             chunkWants,
+		PreparedMemoryArchivesSupported: asyncDocs && storedDocVerification,
+		AsyncDocsSupported:              asyncDocs,
+		SnapshotWants:                   difference(in.SnapshotHaves, haveSnaps),
+		DocWants:                        difference(in.DocHaves, haveDocs),
+		ChunksSupported:                 true,
+		BoundedChunksSupported:          true,
+		ChunkFormatsSupported:           []string{domain.ChunkFormatV1, domain.ChunkFormatV2},
+		CIRVersionsSupported:            domain.SupportedCIRVersions(),
+		ChunkWants:                      chunkWants,
 	}, nil
 }
 

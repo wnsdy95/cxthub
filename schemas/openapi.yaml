@@ -3041,8 +3041,12 @@ paths:
       summary: Atomically restore a collected snapshot with its first memory
       description: |
         Member-only recovery after transient capture collection. Accepts exactly
-        one snapshot, its complete document (or a manifest of already-staged
-        chunks), and a root memory with no previous_memory_hash. Typed claims
+        one snapshot and a root memory with no previous_memory_hash. When
+        prepared_memory_archives_supported is advertised, callers should first
+        complete /push/doc-jobs and omit docs/chunked_docs here. The server checks
+        current document ownership and integrity inside the publication transaction.
+        A complete document or staged-chunk manifest remains accepted for older
+        clients. Typed claims
         are validated and preserved. Snapshot metadata must not contain graft
         state or a memory_hash. Does not move refs or pending pointers.
         Existing divergent memory returns 409; identical root replay is idempotent.
@@ -3303,6 +3307,9 @@ paths:
                   async_docs_supported:
                     type: boolean
                     description: "Durable document acceptance at POST /push/doc-jobs. Caller cancellation does not cancel accepted work."
+                  prepared_memory_archives_supported:
+                    type: boolean
+                    description: "Memory archive publication accepts an omitted body after durable document preparation; current owned content is reverified transactionally."
                   bounded_chunks_supported:
                     type: boolean
                     description: "If true, chunk bodies are sent to /push/chunks and /pull/chunks paths."
