@@ -5,6 +5,12 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
+// PushCatalogReader fixes refs and their immutable history together before
+// object collection. Network work must run after releasing the local lock.
+type PushCatalogReader interface {
+	ReadPushCatalog(context.Context, string) (domain.Manifest, []domain.HistoryEvent, error)
+}
+
 // History records are immutable and independent of provider session files.
 type HistoryStore interface {
 	PutHistoryEvent(context.Context, domain.HistoryEvent) error

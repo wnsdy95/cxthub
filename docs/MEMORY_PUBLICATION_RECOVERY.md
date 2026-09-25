@@ -73,3 +73,23 @@ Fork PR context import needs both immutable source/destination repository IDs
 and a separate source-context sharing contract. A code merge alone does not
 prove authorization to transfer private conversations. Do not remove the current
 cross-repository exclusion before that contract and transactional import exist.
+
+## Concurrent history selection
+
+Tracking: #270. Once large archive publication succeeded, live replay exposed a
+second boundary: push selected objects/memory first but reread history after the
+upload. A concurrent commit's position event could then reference a pinned memory
+that this push had never selected, failing history publication with 404 before
+refs could advance.
+
+`ReadPushCatalog` selects the manifest/ref projections and immutable history under
+the same local cross-process ref lock. History writes and branch lifecycle
+changes use that lock too. Network uploads run after the lock is released; only
+the selected event set is submitted. Later commits remain durable and enter the
+next push with their object prerequisites. Existing content equality, publication
+ordering, causal memory and server authority checks remain unchanged.
+
+A regression inserts a new snapshot, pinned memory, position and branch during
+object upload. The earlier flow fails by publishing its unuploaded memory. The
+fixed flow completes the original set and publishes the late set on the next push.
+This does not eliminate the separate cost of processing all retained archives.

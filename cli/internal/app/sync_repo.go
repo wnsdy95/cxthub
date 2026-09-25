@@ -332,7 +332,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err := s.store.ReconcileBranchLifecycleRefs(ctx, repoID); err != nil {
 		return inbound.SyncOutput{}, err
 	}
-	man, err := s.store.Manifest(ctx, repoID)
+	man, history, err := s.readPushCatalog(ctx, repoID)
 	if err != nil {
 		return inbound.SyncOutput{}, fmt.Errorf("read local push manifest: %w", err)
 	}
@@ -470,7 +470,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, err
 		}
 	}
-	if err := s.pushHistory(ctx, repoID); err != nil {
+	if err := s.pushSelectedHistory(ctx, repoID, history); err != nil {
 		return inbound.SyncOutput{}, err
 	}
 	if err := s.remote.Push(ctx, repoID, nil, nil, refs, in.Force, in.Append); err != nil {
