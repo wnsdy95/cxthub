@@ -13,6 +13,22 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
+// Ref mutations and history writes use the same cross-process lock. Selecting
+// both together prevents a concurrent branch birth or commit from entering the
+// final publication without the objects chosen for this push.
+func (s *FileStore) ReadPushCatalog(ctx context.Context, repo string) (man domain.Manifest, events []domain.HistoryEvent, err error) {
+	err = s.withRefMutationLock(ctx, func() error {
+		var e error
+		events, e = s.listHistoryEventsAndPositions(repo)
+		if e != nil {
+			return e
+		}
+		man, e = s.Manifest(ctx, repo)
+		return e
+	})
+	return
+}
+
 func (s *FileStore) PutHistoryEvent(ctx context.Context, event domain.HistoryEvent) error {
 	if err := domain.ValidateHistoryEvent(event); err != nil {
 		return err
@@ -121,9 +137,9 @@ func (s *FileStore) listHistoryEvents(repoID string) ([]domain.HistoryEvent, err
 	return out, nil
 }
 
-func (s *FileStore) ListHistoryEvents(ctx context.Context, repoID string) ([]domain.HistoryEvent, error) {
+func (s *FileStore) listHistoryEventsAndPositions(repoID string) ([]domain.HistoryEvent, error) {
 	var out []domain.HistoryEvent
-	err := s.withRefMutationLock(ctx, func() error {
+	err := func() error {
 		var err error
 		out, err = s.listHistoryEvents(repoID)
 		if err != nil {
@@ -176,7 +192,7 @@ func (s *FileStore) ListHistoryEvents(ctx context.Context, repoID string) ([]dom
 			}
 		}
 		return nil
-	})
+	}()
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].ID < out[j].ID
@@ -187,4 +203,13 @@ func (s *FileStore) ListHistoryEvents(ctx context.Context, repoID string) ([]dom
 		return nil, err
 	}
 	return domain.OrderHistoryEvents(out)
+}
+
+func (s *FileStore) ListHistoryEvents(ctx context.Context, repoID string) (out []domain.HistoryEvent, err error) {
+	err = s.withRefMutationLock(ctx, func() error {
+		var e error
+		out, e = s.listHistoryEventsAndPositions(repoID)
+		return e
+	})
+	return
 }

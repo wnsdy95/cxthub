@@ -44,15 +44,36 @@ func (s *SyncRepoService) ResolveRemotePRBranch(ctx context.Context, in inbound.
 	return ref, nil
 }
 
-func (s *SyncRepoService) pushHistory(ctx context.Context, repoID string) error {
+func (s *SyncRepoService) localPushHistory(ctx context.Context, repoID string) ([]domain.HistoryEvent, error) {
 	local, ok := s.store.(outbound.HistoryStore)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	events, err := local.ListHistoryEvents(ctx, repoID)
+	return local.ListHistoryEvents(ctx, repoID)
+}
+
+func (s *SyncRepoService) readPushCatalog(ctx context.Context, repoID string) (domain.Manifest, []domain.HistoryEvent, error) {
+	if reader, ok := s.store.(outbound.PushCatalogReader); ok {
+		return reader.ReadPushCatalog(ctx, repoID)
+	}
+	// Narrow adapters without concurrent writers retain the existing contract.
+	events, err := s.localPushHistory(ctx, repoID)
+	if err != nil {
+		return domain.Manifest{}, nil, err
+	}
+	man, err := s.store.Manifest(ctx, repoID)
+	return man, events, err
+}
+
+func (s *SyncRepoService) pushHistory(ctx context.Context, repoID string) error {
+	events, err := s.localPushHistory(ctx, repoID)
 	if err != nil {
 		return err
 	}
+	return s.pushSelectedHistory(ctx, repoID, events)
+}
+
+func (s *SyncRepoService) pushSelectedHistory(ctx context.Context, repoID string, events []domain.HistoryEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
