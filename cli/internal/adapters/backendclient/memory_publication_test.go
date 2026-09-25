@@ -13,11 +13,11 @@ import (
 )
 
 func TestMemoryArchivePublicationProtocol(t *testing.T) {
-	for _, mode := range []string{"envelope only", "chunked", "old server", "wrong acknowledgement"} {
+	for _, mode := range []string{"envelope only", "chunked", "old server", "wrong acknowledgement", "legacy preparation", "rejected preparation", "cancelled preparation"} {
 		t.Run(mode, func(t *testing.T) {
 			repo := string(domain.HashContent([]byte("publication-repo")))
 			text := "archive"
-			if mode == "chunked" {
+			if mode != "envelope only" {
 				text = strings.Repeat("large archive ", 150000)
 			}
 			doc := domain.SessionDoc{CIR: domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex}, Events: []domain.Event{{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: text}}}}}}
@@ -35,7 +35,9 @@ func TestMemoryArchivePublicationProtocol(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			publications := 0
+			publications, preparations := 0, 0
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			chunks := map[domain.ContentHash][]byte{}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -44,7 +46,7 @@ func TestMemoryArchivePublicationProtocol(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 						t.Error(err)
 					}
-					_ = json.NewEncoder(w).Encode(negotiateResp{ChunksSupported: true, BoundedChunksSupported: true, ChunkFormatsSupported: []string{chunkcas.FormatV2}, ChunkWants: req.ChunkHaves})
+					_ = json.NewEncoder(w).Encode(negotiateResp{AsyncDocsSupported: true, PreparedMemoryArchivesSupported: mode != "legacy preparation", ChunksSupported: true, BoundedChunksSupported: true, ChunkFormatsSupported: []string{chunkcas.FormatV2}, ChunkWants: req.ChunkHaves})
 				case strings.HasSuffix(r.URL.Path, "/push/chunks"):
 					var req chunksReq
 					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -54,6 +56,29 @@ func TestMemoryArchivePublicationProtocol(t *testing.T) {
 						chunks[ch.Hash] = ch.Data
 					}
 					_, _ = w.Write([]byte(`{}`))
+				case strings.HasSuffix(r.URL.Path, "/push/doc-jobs"):
+					preparations++
+					var req chunkedDocWire
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						t.Error(err)
+					}
+					if req.Hash != doc.Hash || len(req.Chunks) == 0 {
+						t.Error("wrong prepared archive")
+					}
+					for _, h := range req.Chunks {
+						if _, ok := chunks[h]; !ok {
+							t.Error("preparation before chunk upload")
+						}
+					}
+					state := "completed"
+					if mode == "rejected preparation" {
+						state = "rejected"
+					}
+					if mode == "cancelled preparation" {
+						state = "waiting"
+						cancel()
+					}
+					_ = json.NewEncoder(w).Encode(docJobStatus{ID: string(doc.Hash), DocHash: doc.Hash, State: state})
 				case strings.HasSuffix(r.URL.Path, "/memory-publications"):
 					publications++
 					if mode == "old server" {
@@ -74,8 +99,8 @@ func TestMemoryArchivePublicationProtocol(t *testing.T) {
 						t.Error("unchunkable envelope not preserved")
 					}
 					if mode == "chunked" {
-						if len(req.Objects.Docs) != 0 || len(req.Objects.ChunkedDocs) != 1 || len(chunks) == 0 {
-							t.Error("large archive did not use staged chunks")
+						if len(req.Objects.Docs) != 0 || len(req.Objects.ChunkedDocs) != 0 || len(chunks) == 0 || preparations != 1 {
+							t.Error("publication repeated a prepared document or bypassed preparation")
 						}
 					}
 					ack := hash
@@ -90,15 +115,20 @@ func TestMemoryArchivePublicationProtocol(t *testing.T) {
 			}))
 			defer srv.Close()
 			client := NewBackendClient(func() string { return srv.URL }, func() string { return "test" }, domain.TeamIdentity{})
-			err = client.PublishMemoryArchive(context.Background(), repo, snap, doc, root)
-			if mode == "old server" || mode == "wrong acknowledgement" {
+			err = client.PublishMemoryArchive(ctx, repo, snap, doc, root)
+			blocked := mode == "legacy preparation" || mode == "rejected preparation" || mode == "cancelled preparation"
+			if mode == "old server" || mode == "wrong acknowledgement" || blocked {
 				if err == nil {
 					t.Fatal("unsafe success")
 				}
 			} else if err != nil {
 				t.Fatal(err)
 			}
-			if publications != 1 {
+			wantPublications := 1
+			if blocked {
+				wantPublications = 0
+			}
+			if publications != wantPublications {
 				t.Fatalf("publication count=%d", publications)
 			}
 		})

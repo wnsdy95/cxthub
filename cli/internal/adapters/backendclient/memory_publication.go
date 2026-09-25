@@ -49,6 +49,9 @@ func (c *BackendClient) PublishMemoryArchive(ctx context.Context, repoID string,
 		if !neg.BoundedChunksSupported || !containsString(neg.ChunkFormatsSupported, plan.Manifest.Format) {
 			return fmt.Errorf("remote does not support bounded memory archive publication")
 		}
+		if !neg.AsyncDocsSupported || !neg.PreparedMemoryArchivesSupported {
+			return fmt.Errorf("remote does not support prepared memory archives; upgrade the server before retrying")
+		}
 		seen := map[domain.ContentHash]bool{}
 		var chunks []chunkObjWire
 		for _, hash := range neg.ChunkWants {
@@ -62,7 +65,11 @@ func (c *BackendClient) PublishMemoryArchive(ctx context.Context, repoID string,
 		if err := c.pushChunkBatches(ctx, repoID, chunks); err != nil {
 			return err
 		}
-		objects.ChunkedDocs = []chunkedDocWire{{Hash: doc.Hash, Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}}
+		if err := c.finalizeDocument(ctx, repoID, chunkedDocWire{Hash: doc.Hash, Format: plan.Manifest.Format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}); err != nil {
+			return err
+		}
+		// Only metadata and memory enter the final transaction. Replaying a full
+		// manifest here would redo the expensive validation inside the HTTP limit.
 	} else {
 		objects.Docs = []domain.SessionDoc{doc}
 	}

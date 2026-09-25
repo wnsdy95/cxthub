@@ -163,3 +163,57 @@ func TestMemoryPublicationRejectsInvalidArchiveBeforePersistence(t *testing.T) {
 		})
 	}
 }
+
+// Preparation may be expensive; the final publication must only verify the
+// stored reference, never parse or transfer the complete archive again.
+func TestMemoryPublicationUsesPreparedOwnedDocument(t *testing.T) {
+	ctx := systemTestContext()
+	svc, st := newFsckSvc(t)
+	repo := hh(t.Name())
+	bindCommitTestRepo(t, st, repo)
+	cir := pendingGCCIR(domain.ProviderCodex, "prepared archive")
+	raw, err := domain.CanonicalBytes(cir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.HashContent(raw)
+	doc := domain.SessionDoc{Hash: id, CIR: cir}
+	if _, err := st.PutDoc(ctx, repo, doc); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := domain.VerifySessionDoc(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs := &referenceOnlyBlobs{BlobStore: st, proof: verified.Reference()}
+	svc.blobs = blobs
+	in := inbound.MemoryPublication{Objects: inbound.CommitInput{RepoID: repo, Snapshots: []domain.Snapshot{{ID: id, DocHash: id, RepoID: repo}}}, Memory: domain.MemoryDigest{SnapshotID: id, Summary: "preserved"}}
+	want, _ := domain.MemoryDigestHash(in.Memory)
+	for i := 0; i < 2; i++ {
+		got, err := svc.PublishMemoryArchive(ctx, in)
+		if err != nil || got != want {
+			t.Fatalf("publication/retry = %s %v", got, err)
+		}
+	}
+	if blobs.verified != 2 || blobs.decoded != 0 {
+		t.Fatalf("verification=%d full decodes=%d", blobs.verified, blobs.decoded)
+	}
+	for _, cause := range []error{domain.ErrNotFound, domain.ErrIntegrity} {
+		blobs.fail = cause
+		if _, err := svc.PublishMemoryArchive(ctx, in); err == nil {
+			t.Fatalf("accepted invalid prepared body: %v", cause)
+		}
+	}
+	// A completed job/proof in another repository grants no ownership here.
+	svc.blobs = st
+	foreign := hh("foreign prepared publication")
+	bindCommitTestRepo(t, st, foreign)
+	in.Objects.RepoID = foreign
+	in.Objects.Snapshots[0].RepoID = foreign
+	if _, err := svc.PublishMemoryArchive(ctx, in); err == nil {
+		t.Fatal("foreign document accepted")
+	}
+	if _, err := st.GetSnapshot(ctx, foreign, id); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("foreign snapshot published: %v", err)
+	}
+}

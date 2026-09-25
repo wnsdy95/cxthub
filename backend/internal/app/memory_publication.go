@@ -15,8 +15,8 @@ import (
 // still sent through ordinary causal CAS, never through a reset to the root.
 func (s *Service) PublishMemoryArchive(ctx context.Context, in inbound.MemoryPublication) (domain.ContentHash, error) {
 	objects, d := in.Objects, in.Memory
-	if len(objects.Snapshots) != 1 || len(objects.Docs)+len(objects.ChunkedDocs) != 1 || len(objects.ChunkObjects) != 0 || d.PreviousMemoryHash != "" {
-		return "", fmt.Errorf("%w: one snapshot, one document and a root memory are required", domain.ErrValidation)
+	if len(objects.Snapshots) != 1 || len(objects.Docs)+len(objects.ChunkedDocs) > 1 || len(objects.ChunkObjects) != 0 || d.PreviousMemoryHash != "" {
+		return "", fmt.Errorf("%w: one snapshot, at most one document and a root memory are required", domain.ErrValidation)
 	}
 	snap := objects.Snapshots[0]
 	if snap.ID != d.SnapshotID || snap.RepoID != objects.RepoID || snap.DocHash != snap.ID || snap.Grafted || len(snap.GraftParents) != 0 || snap.GraftSeq != 0 || snap.MemoryHash != "" {
@@ -40,6 +40,9 @@ func (s *Service) PublishMemoryArchive(ctx context.Context, in inbound.MemoryPub
 		if err == nil && existing.MemoryHash != "" && existing.MemoryHash != hash {
 			return "", domain.ErrConflict
 		}
+		// An omitted body refers to a repository-owned document prepared by the
+		// durable document worker. commit verifies its current content/ownership
+		// inside this transaction; a job receipt alone never authorizes attachment.
 		if _, err := s.commit(ctx, objects); err != nil {
 			return "", err
 		}

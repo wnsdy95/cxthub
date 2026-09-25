@@ -49,9 +49,10 @@ type negotiateReq struct {
 	ChunkHaves []domain.ContentHash `json:"chunk_haves,omitempty"`
 }
 type negotiateResp struct {
-	AsyncDocsSupported bool                 `json:"async_docs_supported,omitempty"`
-	SnapshotWants      []domain.ContentHash `json:"snapshot_wants"`
-	DocWants           []domain.ContentHash `json:"doc_wants"`
+	PreparedMemoryArchivesSupported bool                 `json:"prepared_memory_archives_supported,omitempty"`
+	AsyncDocsSupported              bool                 `json:"async_docs_supported,omitempty"`
+	SnapshotWants                   []domain.ContentHash `json:"snapshot_wants"`
+	DocWants                        []domain.ContentHash `json:"doc_wants"`
 	// ChunksSupported true = chunk wire support server (old servers lack field → false — blanket fallback).
 	ChunksSupported        bool                 `json:"chunks_supported,omitempty"`
 	BoundedChunksSupported bool                 `json:"bounded_chunks_supported,omitempty"`

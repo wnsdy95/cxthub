@@ -117,6 +117,7 @@ Thumbs.db
 /docs/*.md
 !/docs/ARCHITECTURE.md
 !/docs/GITHUB_CONNECTIONS.md
+!/docs/MEMORY_PUBLICATION_RECOVERY.md
 !/docs/BRANCHING.md
 !/docs/CLI.md
 !/docs/CONTEXT_HISTORY.md
