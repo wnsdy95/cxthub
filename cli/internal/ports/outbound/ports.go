@@ -110,6 +110,21 @@ type SessionStore interface {
 	GetMemory(ctx context.Context, hash domain.ContentHash) (domain.MemoryDigest, error)
 }
 
+// StoredDocumentVerifier verifies a local document's complete canonical identity
+// and CIR semantics without requiring the application to materialize its body.
+// Implementations may reuse authenticated proofs only after checking current bytes.
+// Missing objects return ErrNotFound; cancellation never certifies partial work.
+type StoredDocumentVerifier interface {
+	VerifyStoredDoc(ctx context.Context, hash domain.ContentHash) error
+}
+
+// ExistingTagVerifier recognizes idempotent tag updates in one local ref
+// transaction. Returned names matched their complete expected value while
+// serialized against writers. Branch lifecycle/identity policy is not bypassed.
+type ExistingTagVerifier interface {
+	MatchingTagRefs(ctx context.Context, refs []domain.Ref) (map[string]bool, error)
+}
+
 // RemoteSnapshotStateCursorStore persists optional pull negotiation hints.
 // It is deliberately separate from SessionStore: cursors never alter local
 // snapshot truth, refs, reachability, or push negotiation.

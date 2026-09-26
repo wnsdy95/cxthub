@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -37,10 +38,11 @@ import (
 // Write: Immutable objects are written using write-temp + atomic-rename. Mutable refs/HEADs are also atomic-rename.
 type FileStore struct {
 	// repoRoot is the root of the repo working tree where .cxt/ is located (store = repoRoot/.cxt).
-	repoRoot   string
-	worktreeID string
-	gitBranch  string
-	gitCommit  string
+	repoRoot        string
+	worktreeID      string
+	gitBranch       string
+	gitCommit       string
+	docProofKeyPath string // optional, outside the replica; configured before concurrent use
 }
 
 // NewFileStore creates a FileStore.
@@ -315,23 +317,13 @@ func (s *FileStore) GetDoc(ctx context.Context, hash domain.ContentHash) (domain
 	if err := domain.ValidateContentHash(hash); err != nil {
 		return domain.SessionDoc{}, err
 	}
-	data, err := readCxtFile(s.objectPath("docs", hash))
+	data, chunked, err := s.readStoredDoc(ctx, hash, nil)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return domain.SessionDoc{}, domain.ErrNotFound
-		}
 		return domain.SessionDoc{}, err
 	}
-	data, err = docDecompress(data)
-	if err != nil {
-		return domain.SessionDoc{}, domain.ErrInvalidCIR
-	}
-	if cb, isManifest, cerr := s.getDocChunked(ctx, hash, data); isManifest {
-		if cerr != nil {
-			return domain.SessionDoc{}, cerr
-		}
+	if chunked {
 		var cir domain.CIRDocument
-		if err := json.Unmarshal(cb, &cir); err != nil {
+		if err := json.Unmarshal(data, &cir); err != nil {
 			return domain.SessionDoc{}, domain.ErrInvalidCIR
 		}
 		if err := ctx.Err(); err != nil {
@@ -780,14 +772,29 @@ func (s *FileStore) putRefRaw(ref domain.Ref) error {
 				return err
 			}
 		}
-		return writeAtomic(s.refPath("heads", ref.Name), encodeRef(ref))
+		return writeRefIfChanged(s.refPath("heads", ref.Name), encodeRef(ref))
 	case domain.RefSession:
-		return writeAtomic(s.refPath("sessions", ref.Name), []byte(string(ref.Target)+"\n"))
+		return writeRefIfChanged(s.refPath("sessions", ref.Name), []byte(string(ref.Target)+"\n"))
 	case domain.RefTag:
-		return writeAtomic(s.refPath("tags", ref.Name), []byte(string(ref.Target)+"\n"))
+		return writeRefIfChanged(s.refPath("tags", ref.Name), []byte(string(ref.Target)+"\n"))
 	default:
 		return domain.ErrNotFound
 	}
+}
+
+// Called inside the existing ref transaction, after lifecycle/identity checks.
+// An already-installed identical projection needs no new write transaction;
+// changes still use the durable atomic replacement path. In particular, never
+// use equality outside that lock to bypass archive or branch-identity policy.
+func writeRefIfChanged(path string, data []byte) error {
+	current, err := readCxtFile(path)
+	if err == nil && bytes.Equal(current, data) {
+		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return writeAtomic(path, data)
 }
 
 func (s *FileStore) refPath(kind, name string) string {

@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
@@ -189,6 +190,9 @@ func buildContainer(cfg config) container {
 	// --- driven adapters (outbound implementations) ---
 	// Local store: repo root .cxt/ content-addressed file store (client-only).
 	store := storage.NewWorktreeFileStore(cfg.RepoRoot, cfg.GitDir, cfg.GitBranch, cfg.GitCommit)
+	if cacheDir, err := os.UserCacheDir(); err == nil {
+		store.EnableDocVerificationCache(filepath.Join(cacheDir, "cxthub", "doc-verification", "key-v1"))
+	}
 	// Remote sync: central server REST client (net/http stdlib). Server role is backend module.
 	// Like git, origin remote URL is the destination — server address is derived from URL at request time.
 	// (Immediate registration after remote add also works), otherwise CXT_REMOTE env fallback.
