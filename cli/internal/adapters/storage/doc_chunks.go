@@ -65,6 +65,12 @@ func (s *FileStore) putDocChunked(h domain.ContentHash, cb []byte) (bool, int64,
 // getDocChunked reconstructs canonical bytes from manifest in chunks.
 // Returns (bytes, isManifest, err) — isManifest=false means data is not a manifest (legacy full).
 func (s *FileStore) getDocChunked(ctx context.Context, hash domain.ContentHash, data []byte) ([]byte, bool, error) {
+	return s.getDocChunkedObserved(ctx, hash, data, nil)
+}
+
+// observe sees exactly the stored bytes used for reconstruction, before decoding.
+// A verification receipt must never describe a separate, potentially raced read.
+func (s *FileStore) getDocChunkedObserved(ctx context.Context, hash domain.ContentHash, data []byte, observe func(string, domain.ContentHash, []byte)) ([]byte, bool, error) {
 	man, isMan := chunkcas.ParseManifest(data)
 	if !isMan {
 		return nil, false, nil
@@ -81,6 +87,9 @@ func (s *FileStore) getDocChunked(ctx context.Context, hash domain.ContentHash, 
 		if err != nil {
 			return nil, true, fmt.Errorf("%w: doc %s missing chunk %s", domain.ErrNotFound, hash, ch)
 		}
+		if observe != nil {
+			observe("chunks", ch, raw)
+		}
 		c, err := docDecompress(raw)
 		if err != nil {
 			return nil, true, domain.ErrInvalidCIR
@@ -93,6 +102,27 @@ func (s *FileStore) getDocChunked(ctx context.Context, hash domain.ContentHash, 
 		return nil, true, err
 	}
 	return cb, true, ctx.Err()
+}
+
+func (s *FileStore) readStoredDoc(ctx context.Context, hash domain.ContentHash, observe func(string, domain.ContentHash, []byte)) ([]byte, bool, error) {
+	raw, err := readCxtFile(s.objectPath("docs", hash))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, domain.ErrNotFound
+		}
+		return nil, false, err
+	}
+	if observe != nil {
+		observe("docs", hash, raw)
+	}
+	data, err := docDecompress(raw)
+	if err != nil {
+		return nil, false, domain.ErrInvalidCIR
+	}
+	if cb, isManifest, err := s.getDocChunkedObserved(ctx, hash, data, observe); isManifest {
+		return cb, true, err
+	}
+	return data, false, ctx.Err()
 }
 
 // HasChunk checks local chunk existence (pull delta negotiation — body retrieval).

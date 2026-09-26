@@ -119,6 +119,9 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 }
 
 func validatePullBatchWithVerified(ctx context.Context, store outbound.SessionStore, repoID string, snaps []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, verified map[domain.ContentHash]bool) error {
+	if verified == nil {
+		verified = make(map[domain.ContentHash]bool)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -167,13 +170,10 @@ func validatePullBatchWithVerified(ctx context.Context, store outbound.SessionSt
 		if _, ok := docByHash[snap.DocHash]; ok {
 			continue
 		}
-		doc, err := store.GetDoc(ctx, snap.DocHash)
-		if err != nil {
+		if err := verifyStoredPullDoc(ctx, store, snap.DocHash); err != nil {
 			return pullReadError(err, fmt.Sprintf("snapshot %s doc %s", snap.ID, snap.DocHash))
 		}
-		if err := domain.ValidateSessionDocHash(doc); err != nil {
-			return err
-		}
+		verified[snap.DocHash] = true
 	}
 
 	getSnapshot := func(id domain.ContentHash) (domain.Snapshot, error) {
@@ -1738,6 +1738,19 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	}
 	// Ref merge — git policy (fast-forward only): move local head only if it is an ancestor of remote head. If diverged, cancel that ref (local kept) and report Conflicts. --force adopts remote.
 	// HEAD is local.
+	var matchingTags map[string]bool
+	if verifier, ok := s.store.(outbound.ExistingTagVerifier); ok {
+		var tags []domain.Ref
+		for _, ref := range refs {
+			if ref.Kind == domain.RefTag {
+				tags = append(tags, ref)
+			}
+		}
+		matchingTags, err = verifier.MatchingTagRefs(ctx, tags)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+	}
 	var newRefs []domain.Ref
 	for _, r := range refs {
 		if r.Kind == domain.RefHEAD || r.Target == "" {
@@ -1746,6 +1759,10 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 		if _, lifecycle, err := domain.ParseBranchLifecycleRef(r); err != nil {
 			return inbound.SyncOutput{}, err
 		} else if lifecycle {
+			newRefs = append(newRefs, r)
+			continue
+		}
+		if r.Kind == domain.RefTag && matchingTags[r.Name] {
 			newRefs = append(newRefs, r)
 			continue
 		}
