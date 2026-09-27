@@ -1,8 +1,13 @@
 # Deploying CXTHub
 
-The production template runs the web application on Vercel and `cxtd` on
-Cloud Run with PostgreSQL. It is an operator-run template, not an automatic
-deployment performed by the release workflow.
+The production topology is **Vercel frontend + Render API (`cxtd`) + Render
+MCP (`cxt-mcp`) + shared PostgreSQL**. Start with [Render deployment](RENDER.md)
+and the repository-root `render.yaml`. These templates do not create resources
+until an operator imports/applies them.
+
+The Terraform configuration below is retained for existing Cloud Run API
+installations. It requires `mcp_origin` for a separately deployed MCP service;
+`cxtd` no longer hosts MCP. New installations should use the Render guide.
 
 ## Runtime secrets
 
@@ -35,12 +40,14 @@ IDs.
 ## Remote MCP routing
 
 Codex app and Claude app connect to `https://<domain>/mcp`. Vercel keeps that
-public same-origin URL and proxies these server-owned paths to Cloud Run:
+public same-origin URL and proxies these paths to the independent MCP service:
 
 - `/mcp`
 - `/oauth/*`
 - `/.well-known/*`
-- `/api/*`
+- `/api/v1/oauth/requests/*` (before the broad API rule)
+
+Other `/api/*` requests go to the API service.
 
 The web-owned `/connect/mcp` path is intentionally not proxied; it renders the
 login and consent screen. OAuth client/request/code state and access/refresh

@@ -19,7 +19,7 @@ Codex / Claude / ChatGPT
 https://cxthub.com/mcp
         │
         ▼
-cxtd remote MCP delivery adapter
+Render cxt-mcp service (independent process)
         │
         ├─ OAuth user resolution (`mcp:read`)
         ├─ Repository public/member/break-glass policy
@@ -30,10 +30,23 @@ cxtd remote MCP delivery adapter
 Cloud PostgreSQL
 ```
 
-The MCP adapter and REST adapter are composed in the same `cxtd` process for
-now. They share application services, repository objects, identity policy, and
-the production PostgreSQL store. This is a composition boundary, so MCP can be
-moved to a separate service later without changing its tool contract.
+`cxt-mcp` and `cxtd` are independent executables, HTTP listeners, container
+images, and Render services. They use the same application query rules,
+identity policy, and PostgreSQL database through separate connection pools.
+Neither process calls the other for context reads. API downtime therefore does
+not stop already-authorized MCP reads; new web logins still require the API.
+
+Vercel routes `/mcp`, `/oauth/*`, `/.well-known/*`, and
+`/api/v1/oauth/requests/*` to MCP. Other `/api/*` traffic goes to `cxtd`.
+`/connect/mcp` remains the frontend consent page. Both servers use the same
+`CXT_PUBLIC_URL` and Firebase project, preserving the public issuer, resource
+and browser cookie boundary. The API no longer exposes MCP/OAuth routes.
+
+MCP starts no GitHub, promotion, email, notification or maintenance workers.
+Its tools are read-only; OAuth registration, consent, token rotation and shared
+rate limits still write their operational records to PostgreSQL. MCP always
+requires the PostgreSQL build and DSN, including during local development.
+See [Render deployment](../deploy/RENDER.md) for setup and migration steps.
 
 ## Read-only tools
 

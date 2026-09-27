@@ -1,5 +1,6 @@
 # Example of non-sensitive deployment input. The actual terraform.tfvars is gitignored.
 domain           = "example.com"
+mcp_origin       = "https://mcp-service.example.com"
 gcp_project      = "replace-with-gcp-project-id"
 image_tag        = "replace-with-40-character-git-commit-sha"
 firebase_project = "replace-with-firebase-project"

@@ -1,23 +1,23 @@
-// Vercel executes this configuration at build time. Terraform injects the
-// Cloud Run service URI as CXT_API_ORIGIN, so the browser still talks only to
-// https://cxthub.com while Vercel proxies /api/* to the run.app origin.
-export function normalizeApiOrigin(raw) {
+// Vercel keeps one public origin while forwarding API and MCP/OAuth requests
+// to independent services. Missing or identical origins fail the deployment.
+export function normalizeApiOrigin(raw, name = 'CXT_API_ORIGIN') {
   const value = raw?.trim();
   if (!value) {
-    throw new Error('CXT_API_ORIGIN is required for a Vercel deployment');
+    throw new Error(`${name} is required for a Vercel deployment`);
   }
 
   const parsed = new URL(value);
   if (
     parsed.protocol !== 'https:' ||
-    !parsed.hostname.endsWith('.run.app') ||
+    !(/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?\/?$/i.test(value)) ||
+    !parsed.hostname.includes('.') ||
     parsed.username ||
     parsed.password ||
     parsed.pathname !== '/' ||
-    parsed.search ||
+    (parsed.search || value.includes('?')) ||
     parsed.hash
   ) {
-    throw new Error('CXT_API_ORIGIN must be an HTTPS Cloud Run origin without a path');
+    throw new Error(`${name} must be an HTTPS service origin without credentials, path, query or fragment`);
   }
   return parsed.origin;
 }
@@ -46,14 +46,18 @@ export function normalizeFirebaseWebConfig(env) {
 }
 
 const apiOrigin = normalizeApiOrigin(process.env.CXT_API_ORIGIN);
+const mcpOrigin = normalizeApiOrigin(process.env.CXT_MCP_ORIGIN, 'CXT_MCP_ORIGIN');
+if (apiOrigin === mcpOrigin) throw new Error('API and MCP must use independent service origins');
 normalizeFirebaseWebConfig(process.env);
 
 export const config = {
   rewrites: [
+    // Consent uses the API cookie but is handled by the MCP OAuth service.
+    { source: '/api/v1/oauth/requests/:path*', destination: `${mcpOrigin}/api/v1/oauth/requests/:path*` },
     { source: '/api/:path*', destination: `${apiOrigin}/api/:path*` },
-    { source: '/mcp', destination: `${apiOrigin}/mcp` },
-    { source: '/oauth/:path*', destination: `${apiOrigin}/oauth/:path*` },
-    { source: '/.well-known/:path*', destination: `${apiOrigin}/.well-known/:path*` },
+    { source: '/mcp', destination: `${mcpOrigin}/mcp` },
+    { source: '/oauth/:path*', destination: `${mcpOrigin}/oauth/:path*` },
+    { source: '/.well-known/:path*', destination: `${mcpOrigin}/.well-known/:path*` },
     { source: '/((?!assets/).*)', destination: '/index.html' },
   ],
   headers: [

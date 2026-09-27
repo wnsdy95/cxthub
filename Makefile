@@ -2,7 +2,7 @@
 #
 # Monorepo build/test entry point. Manages two Go modules and a web frontend:
 #   cli/          → binary cxt  (local CLI — the context layer beside Git)
-#   backend/      → binary cxtd (shared context server)
+#   backend/      → binaries cxtd (API) + cxt-mcp (remote MCP)
 #   frontend/web/ → React+Vite web UI (cxthub website)
 #   frontend/     → framework-independent clean layered core (contract stub)
 
@@ -18,16 +18,18 @@ help: ## List available make targets
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
-build: ## Build cxt + cxtd binaries to ./bin/
+build: ## Build cxt + cxtd + PostgreSQL cxt-mcp binaries to ./bin/
 	@mkdir -p $(BINARY_DIR)
 	cd cli && $(GO) build $(LDFLAGS) -o ../$(BINARY_DIR)/cxt ./cmd/cxt
 	cd backend && $(GO) build $(LDFLAGS) -o ../$(BINARY_DIR)/cxtd ./cmd/cxtd
-	@echo "[build] complete: $(BINARY_DIR)/cxt, $(BINARY_DIR)/cxtd"
+	cd backend && $(GO) build -tags postgres $(LDFLAGS) -o ../$(BINARY_DIR)/cxt-mcp ./cmd/cxt-mcp
+	@echo "[build] complete: $(BINARY_DIR)/cxt, $(BINARY_DIR)/cxtd, $(BINARY_DIR)/cxt-mcp"
 
 .PHONY: install
-install: ## Install cxt + cxtd using go install (GOPATH/bin)
+install: ## Install cxt + cxtd + cxt-mcp using go install (GOPATH/bin)
 	cd cli && $(GO) install ./cmd/cxt
 	cd backend && $(GO) install ./cmd/cxtd
+	cd backend && $(GO) install -tags postgres ./cmd/cxt-mcp
 
 .PHONY: test
 test: ## Run unit tests for the CLI, backend, and web UI

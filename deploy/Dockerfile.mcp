@@ -1,21 +1,21 @@
-# cxtd container — API deployment (Render or Cloud Run) (multi-stage, postgres tag build).
-# build (from repo root): docker build -f deploy/Dockerfile -t <registry>/cxtd:<git-sha> .
+# cxt-mcp container — MCP deployment (Render or Cloud Run) (multi-stage, postgres tag build).
+# build (from repo root): docker build -f deploy/Dockerfile.mcp -t <registry>/cxt-mcp:<git-sha> .
 
 FROM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS build
 WORKDIR /src
 COPY backend/ backend/
-RUN cd backend && CGO_ENABLED=0 go build -tags postgres -o /out/cxtd ./cmd/cxtd
+RUN cd backend && CGO_ENABLED=0 go build -tags postgres -o /out/cxt-mcp ./cmd/cxt-mcp
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:b7bb25d9f7c31d2bdd1982feb4dafcaf137703c7075dbe2febb41c24212b946f
 WORKDIR /app
-COPY --from=build /out/cxtd /app/cxtd
+COPY --from=build /out/cxt-mcp /app/cxt-mcp
 # Migration SQL bundled — automatically applied on startup (CXT_MIGRATIONS_DIR=/app/migrations)
 COPY schemas/db/migrations/ /app/migrations/
 ENV CXT_MIGRATIONS_DIR=/app/migrations
 ENV CXT_REQUIRE_POSTGRES=1
 USER nonroot:nonroot
-EXPOSE 8907
-# Production required env vars are injected by terraform (cloudrun.tf): CXT_AUTH/CXT_POSTGRES_DSN/…
+EXPOSE 8908
+# Production required env vars are injected by Render Blueprint (render.yaml): CXT_AUTH/CXT_POSTGRES_DSN/…
 # Binding to 0.0.0.0 requires both verified auth and PostgreSQL; missing DSN
-# fails before the HTTP listener starts (cmd/cxtd/main.go).
-ENTRYPOINT ["/app/cxtd", "serve", "--addr", "0.0.0.0:8907"]
+# fails before the HTTP listener starts (cmd/cxt-mcp/main.go).
+ENTRYPOINT ["/app/cxt-mcp", "serve", "--addr", "0.0.0.0:8908"]

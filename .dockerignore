@@ -1,10 +1,11 @@
-# Restrict the cxtd production build context to an explicit allowlist. This keeps local
+# Restrict the API/MCP production build context to an explicit allowlist. This keeps local
 # cxt-data, agent sessions, node_modules, Git metadata, and credentials out of the Docker
 # daemon or remote builder context by construction.
 **
 
 !deploy/
 !deploy/Dockerfile
+!deploy/Dockerfile.mcp
 
 !backend/
 !backend/go.mod

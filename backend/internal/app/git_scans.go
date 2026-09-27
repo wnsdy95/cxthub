@@ -15,9 +15,8 @@ import (
 // GitScans turns durable observations into immutable evidence. It owns no
 // context ref writes, so late or local observations cannot move shared state.
 type GitScans struct {
+	*gitScanQuery
 	sourceAccess GitSourceAuthorizer
-	core         *Service
-	store        outbound.GitScanStore
 	reader       outbound.GitCommitReader
 }
 
@@ -29,7 +28,7 @@ func NewGitScans(core *Service, reader outbound.GitCommitReader) (*GitScans, err
 	if !ok || !headStore || !treeStore || !treeReader || reader == nil {
 		return nil, domain.ErrValidation
 	}
-	return &GitScans{core: core, store: st, reader: reader}, nil
+	return &GitScans{gitScanQuery: &gitScanQuery{core: core, store: st}, reader: reader}, nil
 }
 func (s *Service) queueHistoryGitScan(ctx context.Context, e domain.HistoryEvent) error {
 	st, ok := s.meta.(outbound.GitScanStore)
@@ -299,39 +298,6 @@ func (c cachedGitEvidence) IsGitAncestor(ctx context.Context, origin, ancestor, 
 	return c.reader.IsGitAncestor(outbound.WithGitRepository(ctx, c.repo), origin, ancestor, descendant)
 }
 
-func (g *GitScans) ListScans(ctx context.Context, repo domain.ContentHash, cursor string, limit int) (domain.GitScanPage, error) {
-	return repositoryRead(ctx, g.core, func(ctx context.Context) (domain.GitScanPage, error) {
-		out := domain.GitScanPage{Items: []domain.GitScanJob{}}
-		if domain.ValidateContentHash(repo) != nil || limit < 1 || limit > 100 {
-			return out, domain.ErrValidation
-		}
-		if cursor != "" && domain.ValidateGitChangeID(cursor) != nil {
-			return out, domain.ErrValidation
-		}
-		items, err := g.store.ListGitScans(ctx, repo, cursor, limit+1)
-		if err != nil {
-			return out, err
-		}
-		if len(items) > limit {
-			out.NextCursor = items[limit-1].ID
-			items = items[:limit]
-		}
-		out.Items = items
-		if st, ok := g.core.meta.(outbound.GitHeadScanStore); ok {
-			r, e := g.core.meta.GetRepo(ctx, repo)
-			if e != nil {
-				return out, e
-			}
-			head, e := st.GetGitHeadScan(ctx, repo, r.GitRemoteURL)
-			if e == nil {
-				out.Reconciliation = &head
-			} else if !errors.Is(e, domain.ErrNotFound) {
-				return out, e
-			}
-		}
-		return out, nil
-	})
-}
 func (g *GitScans) RetryScan(ctx context.Context, repo domain.ContentHash, id string) error {
 	if domain.ValidateContentHash(repo) != nil || domain.ValidateGitChangeID(id) != nil {
 		return domain.ErrValidation

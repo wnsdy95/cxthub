@@ -5,11 +5,34 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 )
+
+// Guard executable boundaries as well as domain dependency direction. A
+// shared bootstrap must not silently pull MCP back into API or bring provider
+// credentials and mutation handlers into the MCP process.
+func TestIndependentServerDependencies(t *testing.T) {
+	for command, forbidden := range map[string][]string{
+		"cxtd":    {"/internal/mcpserver", "/internal/adapters/delivery/mcp"},
+		"cxt-mcp": {"/internal/adapters/delivery/http", "/internal/adapters/githubapp", "/internal/adapters/gitevidence", "/internal/adapters/resend"},
+	} {
+		cmd := exec.Command("go", "list", "-f", `{{join .Deps "\n"}}`, "./cmd/"+command)
+		cmd.Dir = "../.."
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("dependency inspection: %v\n%s", err, out)
+		}
+		for _, path := range forbidden {
+			if strings.Contains(string(out), "github.com/wnsdy95/cxthub/backend"+path+"\n") {
+				t.Errorf("%s imports forbidden server dependency %s", command, path)
+			}
+		}
+	}
+}
 
 func forbidden(layer, module, dependency string) bool {
 	prefix := "github.com/wnsdy95/cxthub/" + module + "/internal/"

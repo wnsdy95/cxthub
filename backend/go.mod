@@ -1,4 +1,4 @@
-// Module cxt-backend: server-only Go module for cxt (binary cxtd).
+// Module cxt-backend: server-only Go module for cxt (binaries cxtd and cxt-mcp).
 //
 // Complete-separation principle (the module boundary): the CLI and backend share no Go module.
 // Each side owns its domain types (intentional duplication); schemas/ is the contract source of truth.

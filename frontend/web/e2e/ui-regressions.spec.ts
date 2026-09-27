@@ -1304,7 +1304,7 @@ test('real cxtd wire renders a newly created public profile', async ({ page }, t
   expect(pageErrors).toEqual([]);
 });
 
-test('real cxtd completes remote MCP OAuth consent, PKCE, read-only call, and revocation', async ({ page }) => {
+test('independent API and MCP complete remote OAuth consent, PKCE, read-only call, and revocation', async ({ page }) => {
   test.skip(!process.env.CXT_E2E_FULLSTACK, 'full-stack smoke runs in CI or with CXT_E2E_FULLSTACK=1');
 
   const pageErrors = capturePageErrors(page);

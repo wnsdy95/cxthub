@@ -59,6 +59,9 @@ func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
 // Close releases this instance's connection pool.
 func (s *PostgresStore) Close() { s.pool.Close() }
 
+// Ping checks this process's database connection for deployment readiness.
+func (s *PostgresStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 var _ Store = (*PostgresStore)(nil)
 
 func mapNoRows(err error) error {
