@@ -85,6 +85,9 @@ neither migrates nor deletes existing FS data. Export/import and verify it befor
 moving that dataset to PostgreSQL. Never run two processes against the same FS
 store. A standalone MCP server refuses startup without PostgreSQL even locally.
 
+For an existing personal-repository FS dataset, use the offline
+[FS transfer rehearsal](FS_TRANSFER.md) before planning the production cutover.
+
 ## Local verification
 
 Use a disposable PostgreSQL database and build both binaries with `postgres`:

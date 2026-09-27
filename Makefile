@@ -105,13 +105,17 @@ deploy-check: ## Fast static check for deployment configuration (no external cha
 deploy-check-full: ## Full test/PG migration/Docker build for deployment (no push)
 	bash scripts/deploy-preflight.sh full
 
+.PHONY: deploy-check-config
+deploy-check-config: ## Validate planned Vercel/Render origins and Firebase configuration
+	bash scripts/deploy-preflight.sh config
+
 .PHONY: deploy-check-accounts
-deploy-check-accounts: ## Read-only check for GCP/Vercel account credentials
-	bash scripts/deploy-preflight.sh accounts
+deploy-check-accounts: ## Legacy Cloud Run: read-only GCP/Vercel credential check
+	bash scripts/deploy-preflight.sh cloudrun-accounts
 
 .PHONY: deploy-check-ready
-deploy-check-ready: ## Run final read-only checks for bootstrap resources and the image
-	bash scripts/deploy-preflight.sh ready
+deploy-check-ready: ## Legacy Cloud Run: check bootstrap resources and image
+	bash scripts/deploy-preflight.sh cloudrun-ready
 
 .PHONY: webhook-check webhook-apply
 webhook-check: ## Verify the production signed GitHub PR webhook without changes

@@ -218,6 +218,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 - [Installation](docs/INSTALLATION.md)
 - [CLI reference](docs/CLI.md)
 - [MCP connections](docs/MCP.md)
+- [GitHub connections](docs/GITHUB_CONNECTIONS.md)
 
 ## Project policy
 
