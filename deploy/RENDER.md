@@ -35,7 +35,8 @@ public Vercel origin throughout login and consent.
 ## Provision
 
 1. Import the root `render.yaml` as a Render Blueprint. It declares two paid
-   `starter` web services and a PostgreSQL 16 `0.1c-256mb` instance in Singapore.
+   web services (`pro`: API 4 GB; `standard`: MCP 2 GB) and a PostgreSQL 16
+   `0.1c-256mb` instance in Singapore.
    Review current plans before provisioning; these are starting sizes, not a
    production load guarantee. Use the same region for services and database.
 2. Enter `CXT_FIREBASE_PROJECT` and `CXT_PUBLIC_URL` on the API service. The latter
@@ -118,6 +119,22 @@ absence of API mutation routes on MCP. The browser test covers API login,
 MCP OAuth consent, PKCE, read-only calls and account-screen disconnection.
 
 ## Operations
+
+The predeployment PostgreSQL rehearsal verified one 163 MiB stored conversation
+with a peak resident set of about 1.45 GiB. This is already above the 512 MB
+`starter` limit. The API budget also leaves room for publication/indexing and
+other requests; the MCP budget covers cold index reads after data transfer.
+These are initial validation budgets, not concurrency/load guarantees. Warm the
+selected branch reads and measure representative concurrent traffic in staging
+before launch. Separating services does not remove per-request allocation costs.
+
+Render's current equivalent plan IDs are `2c-4g` and `1c-2g`; legacy names remain
+supported. As of 2026-09-28, these service plans list at $85 and $25/month, plus
+the separate PostgreSQL plan (currently $6/month), storage, traffic and any Vercel
+charges. Review pricing before importing the paid Blueprint. Editing this file
+does not provision resources. See [compute specifications](https://render.com/docs/compute-plans),
+[plan naming compatibility](https://render.com/docs/compute-plans-update), and
+[current pricing](https://render.com/pricing).
 
 API workers need an always-running service; the Blueprint uses paid services
 rather than a sleeping free instance. Keep at least one API instance alive for
