@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate the product's deployment contract without contacting Render."""
 import pathlib
+import re
 import sys
 
 try:
@@ -17,6 +18,16 @@ assert set(by_name) == {"cxthub-api", "cxthub-mcp"}
 assert len(blueprint["databases"]) == 1
 db = blueprint["databases"][0]
 assert db["name"] == "cxthub-postgres" and db["ipAllowList"] == []
+
+def memory_mib(plan):
+    legacy = {"starter": 512, "standard": 2048, "pro": 4096,
+              "pro_plus": 8192, "pro_max": 16384, "pro_ultra": 32768}
+    if plan in legacy:
+        return legacy[plan]
+    match = re.fullmatch(r"[0-9.]+c-([0-9]+)(g|mb)", plan)
+    assert match, "Unknown compute plan; review its memory specification"
+    return int(match[1]) * (1024 if match[2] == "g" else 1)
+
 for name, port, dockerfile in (
     ("cxthub-api", "8907", "./deploy/Dockerfile"),
     ("cxthub-mcp", "8908", "./deploy/Dockerfile.mcp"),
@@ -24,6 +35,8 @@ for name, port, dockerfile in (
     service = by_name[name]
     assert service["runtime"] == "docker" and service["type"] == "web"
     assert service["plan"] != "free", "Workers must not sleep"
+    required = 4096 if name == "cxthub-api" else 2048
+    assert memory_mib(service["plan"]) >= required, "Plan is below the measured rehearsal memory budget"
     assert service["region"] == db["region"]
     assert service["dockerfilePath"] == dockerfile and service["dockerContext"] == "."
     assert service["healthCheckPath"] == "/healthz"
