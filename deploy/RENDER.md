@@ -135,3 +135,19 @@ Preserve the public domain when reconnecting a custom domain or rolling back.
 References: [Render Blueprint specification](https://render.com/docs/blueprint-spec),
 [Render health checks](https://render.com/docs/health-checks),
 [Vercel external rewrites](https://vercel.com/docs/routing/rewrites).
+
+## Before provisioning
+
+Create a local virtual environment, install `deploy/requirements-preflight.txt`,
+and set `CXT_PREFLIGHT_PYTHON` to that environment's Python executable.
+Run `scripts/deploy-preflight.sh full` from the repository root. It checks the
+Render contract, frontend routes, Go tests, real PostgreSQL migrations, both
+Docker images, route isolation, independent API shutdown and database failure.
+It creates only disposable local containers; it never pushes an image or creates
+cloud resources. CI also exercises the two real Docker images.
+
+With planned deployment values exported, run `scripts/deploy-preflight.sh config`.
+It checks the two service origins, public origin and matching Firebase project
+without printing credentials. Service URLs assigned during provisioning can be
+validated again then. The legacy GCP checks are explicitly named
+`cloudrun-accounts` and `cloudrun-ready`; they do not gate Render preparation.

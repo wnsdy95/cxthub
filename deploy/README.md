@@ -83,7 +83,7 @@ then load the public gateway separately before increasing the replica cap.
 Run the read-only readiness check before applying:
 
 ```bash
-scripts/deploy-preflight.sh ready
+scripts/deploy-preflight.sh cloudrun-ready
 ```
 
 It fails closed when either secret is absent or has no enabled version.
