@@ -3,8 +3,9 @@
 #
 #   scripts/deploy-preflight.sh static    # Fast static/config check
 #   scripts/deploy-preflight.sh full      # Full test + PG migration + Docker build
-#   scripts/deploy-preflight.sh accounts  # GCP/Vercel account identity read-only check
-#   scripts/deploy-preflight.sh ready     # Check before deploying bootstrap resources/images
+#   scripts/deploy-preflight.sh config    # Render/Vercel runtime environment check
+#   scripts/deploy-preflight.sh cloudrun-accounts # Legacy GCP account check
+#   scripts/deploy-preflight.sh cloudrun-ready # Legacy GCP readiness check
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -63,6 +64,7 @@ actual = [line.strip() for line in path.read_text().splitlines() if line.strip()
 expected = [
     "!deploy/",
     "!deploy/Dockerfile",
+    "!deploy/Dockerfile.mcp",
     "!backend/",
     "!backend/go.mod",
     "!backend/go.sum",
@@ -90,7 +92,7 @@ PY
     reject_placeholder TF_VAR_firebase_web_api_key)
   pass "Firebase placeholder rejection gate"
 
-  terraform_check
+  "${CXT_PREFLIGHT_PYTHON:-python3}" "$ROOT/scripts/check-render-blueprint.py"
 
   (
     cd frontend/web
@@ -151,7 +153,7 @@ postgres_smoke() (
   (
     cd "$ROOT/backend"
     CXT_TEST_DSN="postgres://cxt:cxt@127.0.0.1:${port}/cxthub_test?sslmode=disable" \
-      go test -tags postgres ./internal/adapters/store/ -run TestPGSmoke -count=1 -v
+      go test -tags postgres ./internal/adapters/store/ ./internal/mcpserver/ -run 'TestPGSmoke|TestPGIndependentMCP' -count=1 -v
   )
   pass "All migrations apply idempotently on a real PostgreSQL instance"
 )
@@ -159,74 +161,80 @@ postgres_smoke() (
 image_smoke() (
   need curl
   need docker
-  local name="cxt-preflight-app-$$"
-  local missing_name="cxt-preflight-app-missing-dsn-$$"
-  local postgres_name="cxt-preflight-app-pg-$$"
-  local network_name="cxt-preflight-net-$$"
-  local port=""
+  local prefix="cxt-preflight-$$"
+  local network="${prefix}-net" postgres="${prefix}-pg"
   cleanup_app() {
-    docker rm -f "$name" "$missing_name" "$postgres_name" >/dev/null 2>&1 || true
-    docker network rm "$network_name" >/dev/null 2>&1 || true
+    docker rm -f "${prefix}-api" "${prefix}-mcp" "${prefix}-missing-api" "${prefix}-missing-mcp" "$postgres" >/dev/null 2>&1 || true
+    docker network rm "$network" >/dev/null 2>&1 || true
   }
   trap cleanup_app EXIT
-
-  docker network create "$network_name" >/dev/null
-
-  docker run -d --name "$missing_name" \
-    -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
-    -e CXT_PUBLIC_URL=http://localhost:8907 \
-    cxtd:preflight --data /tmp/cxt-data >/dev/null
-  for _ in $(seq 1 40); do
-    [ "$(docker inspect "$missing_name" --format '{{.State.Running}}' 2>/dev/null || true)" = "false" ] && break
-    sleep 0.25
-  done
-  if [ "$(docker inspect "$missing_name" --format '{{.State.Running}}' 2>/dev/null || true)" != "false" ]; then
-    docker logs "$missing_name" >&2 || true
-    die "Production image served externally without PostgreSQL"
-  fi
-  if ! docker logs "$missing_name" 2>&1 | grep -q 'CXT_POSTGRES_DSN is required'; then
-    docker logs "$missing_name" >&2 || true
-    die "Production image did not explain its missing PostgreSQL DSN"
-  fi
-  pass "Production image fails closed without PostgreSQL"
-
-  docker run -d --name "$postgres_name" --network "$network_name" --network-alias postgres \
-    -e POSTGRES_USER=cxt -e POSTGRES_PASSWORD=cxt -e POSTGRES_DB=cxthub_test \
-    postgres:16 >/dev/null
+  docker network create "$network" >/dev/null
+  docker run -d --name "$postgres" --network "$network" --network-alias postgres \
+    -e POSTGRES_USER=cxt -e POSTGRES_PASSWORD=cxt -e POSTGRES_DB=cxthub_test postgres:16 >/dev/null
   for _ in $(seq 1 120); do
-    if docker exec "$postgres_name" psql -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null 2>&1; then
-      break
-    fi
+    if docker exec "$postgres" psql -h 127.0.0.1 -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null 2>&1; then break; fi
     sleep 0.5
   done
-  if ! docker exec "$postgres_name" psql -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null 2>&1; then
-    docker logs "$postgres_name" >&2 || true
-    die "Production image PostgreSQL is not ready"
-  fi
+  docker exec "$postgres" psql -h 127.0.0.1 -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null || die "PostgreSQL not ready"
 
-  docker run -d --name "$name" --network "$network_name" \
-    -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
-    -e CXT_PUBLIC_URL=http://localhost:8907 \
-    -e CXT_REQUIRE_POSTGRES=1 \
-    -e CXT_POSTGRES_DSN='postgres://cxt:cxt@postgres:5432/cxthub_test?sslmode=disable' \
-    -e CXT_MIGRATIONS_DIR=/app/migrations \
-    -p 127.0.0.1::8907 cxtd:preflight --data /tmp/cxt-data >/dev/null
-  port="$(docker port "$name" 8907/tcp 2>/dev/null | awk -F: 'NR==1 {print $NF}' || true)"
-  if [ -z "$port" ]; then
-    docker logs "$name" >&2 || true
-    die "cxtd temporary port not found"
-  fi
-  for _ in $(seq 1 60); do
-    if curl -fsS "http://127.0.0.1:${port}/api/v1/health" 2>/dev/null \
-      | grep -q '"status":"ok"'; then
-      pass "Production image starts against PostgreSQL"
-      return
+  local kind image internal name missing port status
+  for kind in api mcp; do
+    if [ "$kind" = api ]; then image=cxtd:preflight; internal=8907; else image=cxt-mcp:preflight; internal=8908; fi
+    name="${prefix}-${kind}"; missing="${prefix}-missing-${kind}"
+    docker run -d --name "$missing" \
+      -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
+      -e CXT_PUBLIC_URL=https://cxthub.example "$image" >/dev/null
+    for _ in $(seq 1 40); do
+      [ "$(docker inspect "$missing" --format '{{.State.Running}}')" = false ] && break
+      sleep 0.25
+    done
+    [ "$(docker inspect "$missing" --format '{{.State.Running}}')" = false ] || die "$kind served without PostgreSQL"
+    docker logs "$missing" 2>&1 | grep -q 'CXT_POSTGRES_DSN is required' || die "$kind missing DSN diagnostic failed"
+    docker run -d --name "$name" --network "$network" \
+      -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
+      -e CXT_PUBLIC_URL=https://cxthub.example \
+      -e CXT_POSTGRES_DSN='postgres://cxt:cxt@postgres:5432/cxthub_test?sslmode=disable' \
+      -p "127.0.0.1::${internal}" "$image" >/dev/null
+    port="$(docker port "$name" "$internal/tcp" | awk -F: 'NR==1 {print $NF}')"
+    for _ in $(seq 1 80); do
+      if curl --max-time 3 -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then break; fi
+      sleep 0.25
+    done
+    curl --max-time 3 -fsS "http://127.0.0.1:${port}/healthz" >/dev/null || die "$kind readiness failed"
+    if [ "$kind" = api ]; then
+      status="$(curl --max-time 3 -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/mcp")"
+      [ "$status" = 404 ] || die "API still serves MCP"
+    else
+      curl --max-time 3 -fsS "http://127.0.0.1:${port}/.well-known/oauth-authorization-server" | grep -q 'https://cxthub.example' || die "MCP issuer drift"
+      status="$(curl --max-time 3 -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/api/v1/me")"
+      [ "$status" = 404 ] || die "MCP serves ordinary REST"
+      docker stop "${prefix}-api" >/dev/null
+      curl --max-time 3 -fsS "http://127.0.0.1:${port}/healthz" >/dev/null || die "MCP depends on API process"
     fi
-    sleep 0.25
+    pass "$kind image: migrations, readiness, route isolation, PostgreSQL requirement"
   done
-  docker logs "$name" >&2 || true
-  die "Production image health failure"
+  docker stop "$postgres" >/dev/null
+  status="$(curl --max-time 5 -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/healthz")"
+  [ "$status" = 503 ] || die "MCP readiness did not detect database loss"
+  pass "MCP survives API stop and fails readiness on database loss"
 )
+
+config_check() {
+  need node
+  (cd "$ROOT/frontend/web" && node --input-type=module <<'NODE'
+import { normalizeApiOrigin } from './vercel.mjs';
+const publicOrigin = normalizeApiOrigin(process.env.CXT_PUBLIC_URL, 'CXT_PUBLIC_URL');
+if (process.env.CXT_FIREBASE_PROJECT !== process.env.VITE_FIREBASE_PROJECT_ID) {
+  throw new Error('API/MCP and frontend Firebase projects must match');
+}
+if (process.env.VITE_API_BASE) throw new Error('VITE_API_BASE must be absent for same-origin routing');
+if ([process.env.CXT_API_ORIGIN, process.env.CXT_MCP_ORIGIN].map(x => new URL(x).origin).includes(publicOrigin)) {
+  throw new Error('The public frontend origin must differ from both private service origins');
+}
+console.log('  ✓ Vercel routes, public origin and Firebase project agree (no secrets printed)');
+NODE
+  )
+}
 
 full_check() {
   static_check
@@ -241,7 +249,8 @@ full_check() {
 
   postgres_smoke
   docker build -f "$ROOT/deploy/Dockerfile" -t cxtd:preflight "$ROOT"
-  pass "Production Docker image build (no push)"
+  docker build -f "$ROOT/deploy/Dockerfile.mcp" -t cxt-mcp:preflight "$ROOT"
+  pass "Both production Docker images built (no push)"
   image_smoke
 }
 
@@ -369,10 +378,12 @@ ready_check() {
 case "$MODE" in
   static) static_check ;;
   full) full_check ;;
-  accounts) account_identity_check ;;
-  ready) ready_check ;;
+  config) config_check ;;
+  images) image_smoke ;;
+  cloudrun-accounts) account_identity_check ;;
+  cloudrun-ready) ready_check ;;
   *)
-    echo "Usage: $0 {static|full|accounts|ready}" >&2
+    echo "Usage: $0 {static|full|config|images|cloudrun-accounts|cloudrun-ready}" >&2
     exit 2
     ;;
 esac

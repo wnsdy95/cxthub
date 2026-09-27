@@ -178,7 +178,7 @@ may have entered an agent session or Git history, revoke it immediately. See
 | Path | Purpose |
 |---|---|
 | `cli/` | Go `cxt` CLI, capture adapters, codecs, local working replica, and explicit offline stdio MCP helper |
-| `backend/` | Go `cxtd` REST and remote Streamable HTTP MCP server with filesystem and PostgreSQL stores |
+| `backend/` | Independent Go `cxtd` API and `cxt-mcp` remote MCP servers; shared PostgreSQL in production |
 | `frontend/web/` | Sole web runtime: React and TypeScript application, tests, and deployment config |
 | `schemas/` | OpenAPI, JSON Schema, and ordered PostgreSQL migrations |
 | `integrations/` | Claude Code and Codex integration assets |

@@ -1,23 +1,23 @@
 import assert from 'node:assert/strict';
 
-process.env.CXT_API_ORIGIN = 'https://cxtd-123456789.asia-northeast3.run.app';
+process.env.CXT_API_ORIGIN = 'https://cxthub-api.onrender.com';
+process.env.CXT_MCP_ORIGIN = 'https://cxthub-mcp.onrender.com';
 process.env.VITE_FIREBASE_API_KEY = 'AIzaSyExampleFirebaseWebApiKey123456';
 process.env.VITE_FIREBASE_AUTH_DOMAIN = 'example-firebase-project.firebaseapp.com';
 process.env.VITE_FIREBASE_PROJECT_ID = 'example-firebase-project';
 const { config, normalizeApiOrigin, normalizeFirebaseWebConfig } = await import('../vercel.mjs');
 
-assert.equal(
-  config.rewrites[0].destination,
-  'https://cxtd-123456789.asia-northeast3.run.app/api/:path*',
-);
-assert.deepEqual(config.rewrites.slice(1, 4), [
-  { source: '/mcp', destination: 'https://cxtd-123456789.asia-northeast3.run.app/mcp' },
-  { source: '/oauth/:path*', destination: 'https://cxtd-123456789.asia-northeast3.run.app/oauth/:path*' },
-  {
-    source: '/.well-known/:path*',
-    destination: 'https://cxtd-123456789.asia-northeast3.run.app/.well-known/:path*',
-  },
+assert.deepEqual(config.rewrites.slice(0, 5), [
+  { source: '/api/v1/oauth/requests/:path*', destination: 'https://cxthub-mcp.onrender.com/api/v1/oauth/requests/:path*' },
+  { source: '/api/:path*', destination: 'https://cxthub-api.onrender.com/api/:path*' },
+  { source: '/mcp', destination: 'https://cxthub-mcp.onrender.com/mcp' },
+  { source: '/oauth/:path*', destination: 'https://cxthub-mcp.onrender.com/oauth/:path*' },
+  { source: '/.well-known/:path*', destination: 'https://cxthub-mcp.onrender.com/.well-known/:path*' },
 ]);
+assert.equal(config.rewrites[5].destination, '/index.html');
+assert.equal(normalizeApiOrigin('https://api.example.com'), 'https://api.example.com');
+assert.equal(normalizeApiOrigin('https://cxthub-mcp.onrender.com/'), 'https://cxthub-mcp.onrender.com');
+
 assert.equal(
   normalizeApiOrigin(' https://cxtd-123456789.asia-northeast3.run.app/ '),
   'https://cxtd-123456789.asia-northeast3.run.app',
@@ -27,7 +27,9 @@ for (const invalid of [
   undefined,
   '',
   'http://cxtd-123456789.asia-northeast3.run.app',
-  'https://evil.example',
+  'https://localhost',
+  'https://service.example/#fragment',
+  'https://service.example/?',
   'https://user:pass@cxtd-123456789.asia-northeast3.run.app',
   'https://cxtd-123456789.asia-northeast3.run.app/api',
   'https://cxtd-123456789.asia-northeast3.run.app/?query=1',
@@ -74,4 +76,13 @@ for (const invalid of [
   assert.throws(() => normalizeFirebaseWebConfig(invalid));
 }
 
-console.log('✓ Vercel config: Cloud Run origin · Firebase production auth · fail-closed');
+
+const { spawnSync } = await import('node:child_process');
+for (const mcp of ['', process.env.CXT_API_ORIGIN]) {
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', "import('./vercel.mjs')"], {
+    cwd: new URL('..', import.meta.url), env: { ...process.env, CXT_MCP_ORIGIN: mcp }, encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0, 'missing or co-located MCP origin must fail deployment');
+}
+
+console.log('✓ Vercel config: independent API/MCP origins · Firebase production auth · fail-closed');

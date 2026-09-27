@@ -14,9 +14,9 @@ import (
 // GitChanges owns evidence delivery. Provider I/O is never performed while
 // holding a repository transaction. It cannot move refs or remove raw history.
 type GitChanges struct {
+	*gitChangeQuery
 	sourceAccess GitSourceAuthorizer
 	core         *Service
-	store        outbound.GitChangeStore
 	reader       outbound.GitEvidenceReader
 }
 
@@ -27,7 +27,7 @@ func NewGitChanges(core *Service, reader outbound.GitEvidenceReader) (*GitChange
 	if !ok || reader == nil {
 		return nil, fmt.Errorf("durable Git change verification unavailable")
 	}
-	return &GitChanges{core: core, store: st, reader: reader}, nil
+	return &GitChanges{core: core, gitChangeQuery: &gitChangeQuery{store: st}, reader: reader}, nil
 }
 func (g *GitChanges) Submit(ctx context.Context, repo domain.ContentHash, r domain.GitChangeRequest) (domain.GitChangeJob, error) {
 	if err := domain.ValidateContentHash(repo); err != nil {
@@ -49,39 +49,6 @@ func (g *GitChanges) Submit(ctx context.Context, repo domain.ContentHash, r doma
 		j.ID = domain.GitChangeID(repo, j.GitOrigin, r)
 		return g.store.EnqueueGitChange(ctx, j)
 	})
-}
-func (g *GitChanges) Get(ctx context.Context, repo domain.ContentHash, id string) (domain.GitChangeJob, error) {
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return domain.GitChangeJob{}, err
-	}
-	if err := domain.ValidateGitChangeID(id); err != nil {
-		return domain.GitChangeJob{}, err
-	}
-	return g.store.GetGitChange(ctx, repo, id)
-}
-func (g *GitChanges) List(ctx context.Context, repo domain.ContentHash, cursor string, limit int) (domain.GitChangePage, error) {
-	out := domain.GitChangePage{Items: []domain.GitChangeSummary{}}
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return out, err
-	}
-	if cursor != "" {
-		if err := domain.ValidateGitChangeID(cursor); err != nil {
-			return out, err
-		}
-	}
-	if limit < 1 || limit > 100 {
-		return out, domain.ErrValidation
-	}
-	jobs, err := g.store.ListGitChanges(ctx, repo, cursor, limit+1)
-	if err != nil {
-		return out, err
-	}
-	if len(jobs) > limit {
-		out.NextCursor = jobs[limit-1].ID
-		jobs = jobs[:limit]
-	}
-	out.Items = jobs
-	return out, nil
 }
 func (g *GitChanges) Retry(ctx context.Context, repo domain.ContentHash, id string) error {
 	if err := domain.ValidateContentHash(repo); err != nil {

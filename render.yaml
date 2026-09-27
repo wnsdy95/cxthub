@@ -1,0 +1,59 @@
+# Import this Blueprint only when ready to provision paid services.
+# Vercel hosts the frontend; both Render services share this PostgreSQL DB.
+services:
+  - type: web
+    name: cxthub-api
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: PORT
+        value: "8907"
+      - key: CXT_AUTH
+        value: firebase
+      - key: CXT_FIREBASE_PROJECT
+        sync: false
+      - key: CXT_PUBLIC_URL
+        sync: false
+      - key: CXT_POSTGRES_DSN
+        fromDatabase:
+          name: cxthub-postgres
+          property: connectionString
+  - type: web
+    name: cxthub-mcp
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./deploy/Dockerfile.mcp
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: PORT
+        value: "8908"
+      - key: CXT_AUTH
+        value: firebase
+      - key: CXT_FIREBASE_PROJECT
+        fromService:
+          type: web
+          name: cxthub-api
+          envVarKey: CXT_FIREBASE_PROJECT
+      - key: CXT_PUBLIC_URL
+        fromService:
+          type: web
+          name: cxthub-api
+          envVarKey: CXT_PUBLIC_URL
+      - key: CXT_POSTGRES_DSN
+        fromDatabase:
+          name: cxthub-postgres
+          property: connectionString
+databases:
+  - name: cxthub-postgres
+    region: singapore
+    plan: 0.1c-256mb
+    postgresMajorVersion: "16"
+    databaseName: cxthub
+    user: cxt
+    ipAllowList: []

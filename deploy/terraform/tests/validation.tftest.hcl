@@ -1,3 +1,7 @@
+variables {
+  mcp_origin = "https://cxthub-mcp.onrender.com"
+}
+
 mock_provider "google" {}
 mock_provider "vercel" {}
 

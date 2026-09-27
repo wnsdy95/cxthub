@@ -12,37 +12,20 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
-	"time"
 
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/auth"
 	delivery "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/http"
-	deliverymcp "github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/mcp"
-	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitengine"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/gitevidence"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub/backend/internal/serverruntime"
 )
 
 // isLoopback determines if the bind address is limited to loopback (127.0.0.1/localhost/::1).
 // Omitting the host (e.g., ":8907") means binding to all interfaces, so it returns false.
-func isLoopback(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil || host == "" {
-		return false
-	}
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
+func isLoopback(addr string) bool { return serverruntime.IsLoopback(addr) }
 
 func postgresRequired(addr, configured string) bool {
 	return envBool(configured) || !isLoopback(addr)
@@ -95,74 +78,12 @@ func serve(ctx context.Context, args []string) error {
 	}
 	addr := flagOr(args, "--addr", os.Getenv("CXT_ADDR"), ":8080")
 	dataDir := flagOr(args, "--data", os.Getenv("CXT_DATA"), "./cxt-data")
-	dsn := os.Getenv("CXT_POSTGRES_DSN")
-	requirePostgres := postgresRequired(addr, os.Getenv("CXT_REQUIRE_POSTGRES"))
-
-	// Resolve and validate authentication before opening either storage backend.
-	// In particular, an unsafe dev-auth bind must fail without touching the FS
-	// store or running PostgreSQL migrations first.
-	var verifier outbound.IdentityVerifier
-	authMode := "dev"
-	if os.Getenv("CXT_AUTH") == "firebase" && os.Getenv("CXT_FIREBASE_PROJECT") != "" {
-		verifier = auth.NewFirebaseVerifier(os.Getenv("CXT_FIREBASE_PROJECT"))
-		authMode = "firebase:" + os.Getenv("CXT_FIREBASE_PROJECT")
-	} else {
-		// Dev validator accepts any token — a safety measure to prevent accidental external exposure:
-		// to bind to an address other than loopback, explicitly start with CXT_AUTH=dev.
-		if !isLoopback(addr) && os.Getenv("CXT_AUTH") != "dev" {
-			log.Fatalf("refusing to bind dev authentication to external address %s — "+
-				"set CXT_AUTH=firebase and CXT_FIREBASE_PROJECT, or explicitly opt in with CXT_AUTH=dev", addr)
-		}
-		verifier = auth.NewDevVerifier()
-		log.Printf("warning: dev authentication trusts every token without verification (local development only)")
-	}
-
-	// Outbound adapter: only loopback development may use FS. External binds
-	// require PostgreSQL even when an operator accidentally omits the explicit
-	// production assertion, and fail before serving if the binary, DSN, or
-	// database connection is unavailable.
-	st, err := store.Open(dataDir, dsn, requirePostgres)
+	runtime, err := serverruntime.Open(ctx, addr, dataDir, postgresRequired(addr, os.Getenv("CXT_REQUIRE_POSTGRES")))
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
-	if requirePostgres || dsn != "" {
-		if err := app.ValidateProductionStore(st); err != nil {
-			return err
-		}
-	}
-	// Automatic PostgreSQL schema migration is idempotent through schema_migrations history (FS is a no-op).
-	// Default search: CXT_MIGRATIONS_DIR > ./schemas/db/migrations (if exists).
-	if dsn != "" {
-		mdir := os.Getenv("CXT_MIGRATIONS_DIR")
-		if mdir == "" {
-			if _, serr := os.Stat("schemas/db/migrations"); serr == nil {
-				mdir = "schemas/db/migrations"
-			}
-		}
-		if mdir != "" {
-			n, merr := st.ApplyMigrations(context.Background(), mdir)
-			if merr != nil {
-				return fmt.Errorf("apply migrations: %w", merr)
-			}
-			log.Printf("migrations: applied %d (%s)", n, mdir)
-		} else if requirePostgres {
-			return fmt.Errorf("migration directory not found while PostgreSQL storage is enforced — set CXT_MIGRATIONS_DIR")
-		} else {
-			log.Printf("warning: migration directory not found — set CXT_MIGRATIONS_DIR")
-		}
-	}
-	engine := gitengine.NewEngine(st) // GitEngine computes DAG reachability from parent metadata.
-	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), engine, st)
-
-	idSvc := app.NewIdentityService(verifier, st)
-
-	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_PUBLIC_URL")), "/")
-	if publicURL == "" && isLoopback(addr) {
-		publicURL = loopbackPublicURL(addr)
-	}
-	if publicURL == "" {
-		return fmt.Errorf("CXT_PUBLIC_URL is required when cxtd is not bound to loopback")
-	}
+	defer runtime.Close()
+	st, svc, idSvc, publicURL := runtime.Store, runtime.Context, runtime.Identity, runtime.PublicURL
 	githubConnections, githubClient, err := configureGitHub(idSvc, svc, st, publicURL)
 	if err != nil {
 		return err
@@ -210,50 +131,9 @@ func serve(ctx context.Context, args []string) error {
 	if err := configureInvitationEmail(idSvc, addr, publicURL); err != nil {
 		return err
 	}
-	mcpServer, err := deliverymcp.NewServer(svc, idSvc, st, publicURL)
-	if err != nil {
-		return fmt.Errorf("configure remote MCP: %w", err)
-	}
-	mcpServer.SetGitChanges(changes)
-	mcpServer.SetGitScans(scans)
-	mcpServer.SetCodeApplicability(svc)
-	mcpServer.SetEffectiveMemory(svc)
-	root := http.NewServeMux()
-	for _, path := range []string{
-		"/mcp",
-		"/.well-known/oauth-protected-resource",
-		"/.well-known/oauth-protected-resource/mcp",
-		"/.well-known/oauth-authorization-server",
-		"/oauth/register",
-		"/oauth/authorize",
-		"/oauth/token",
-		"/oauth/revoke",
-	} {
-		root.Handle(path, mcpServer.Handler())
-	}
-	root.Handle("/api/v1/oauth/requests/", mcpServer.Handler())
-	root.Handle("/", api.Handler())
-
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           root,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    1 << 20,
-	}
-
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-	}()
-
-	backend := "fs"
-	if dsn != "" {
-		backend = "postgres"
-	}
-	fmt.Fprintf(os.Stderr, "cxtd: listening on %s (store=%s, auth=%s, data=%s)\n", addr, backend, authMode, dataDir)
+	fmt.Fprintf(os.Stderr, "cxtd: listening on %s (auth=%s)\n", addr, runtime.AuthMode)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if githubConnections != nil {
 		go githubConnections.Run(ctx)
 	}
@@ -266,37 +146,10 @@ func serve(ctx context.Context, args []string) error {
 	go idSvc.RunInvitationEmailWorker(ctx)
 	go idSvc.RunRuntimeMaintenance(ctx)
 	go idSvc.RunStorageMaintenance(ctx)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
+	return serverruntime.Serve(ctx, addr, runtime.HealthHandler(api.Handler()))
 }
 
-func loopbackPublicURL(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return ""
-	}
-	if host == "" || host == "::" {
-		host = "127.0.0.1"
-	}
-	if host == "localhost" {
-		return "http://localhost:" + port
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return "http://" + net.JoinHostPort(ip.String(), port)
-	}
-	return ""
-}
-
-func envBool(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
+func envBool(value string) bool { return serverruntime.EnvBool(value) }
 
 // flagOr selects the first non-empty value from args --name, envVal, or def.
 func flagOr(args []string, name, envVal, def string) string {

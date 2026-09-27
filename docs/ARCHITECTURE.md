@@ -4,6 +4,18 @@ CXTHub stores shared repository facts in the cloud backend. The CLI's `.cxt`
 store is a local replica, recovery outbox and worktree selection cache. It is not
 the authoritative database for Web or remote MCP queries.
 
+## Server deployment boundary
+
+Production uses Vercel for the frontend, independent Render `cxtd` API and
+`cxt-mcp` services, and shared PostgreSQL. `internal/serverruntime` initializes
+common store/authentication/lifecycle dependencies without starting workers.
+`internal/mcpserver` composes only remote MCP/OAuth and query ports. API keeps
+all GitHub, ingestion, promotion, notification and maintenance workers. A
+transitive import test prevents recombining these executable dependencies.
+Both services reuse application rules and PostgreSQL transaction contracts;
+separation does not introduce a second authorization model or copied data.
+See [deployment](../deploy/RENDER.md) for routing and rollout order.
+
 ## Ownership
 
 - **Domain:** immutable history/evidence values, branch identities, applicability,

@@ -169,3 +169,13 @@ variable "github_app" {
     error_message = "GitHub App registration and all three existing secret IDs must be provided together."
   }
 }
+
+# Legacy Cloud Run API template: MCP is now deployed independently.
+variable "mcp_origin" {
+  description = "HTTPS origin of the independently deployed MCP service (Render or another host)."
+  type        = string
+  validation {
+    condition     = can(regex("^https://[a-zA-Z0-9.-]+(:[0-9]+)?/?$", var.mcp_origin))
+    error_message = "mcp_origin must be an HTTPS origin without a path, query or credentials."
+  }
+}

@@ -69,6 +69,7 @@ jobs:
           go test -tags postgres ./internal/adapters/store/ -timeout=120s -v
           go test -tags postgres ./internal/app/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/adapters/delivery/http/ -race -run '^TestPG' -count=3 -timeout=120s -v
+          go test -tags postgres ./internal/mcpserver/ -race -run '^TestPG' -timeout=120s -v
 
   cli:
     runs-on: ubuntu-latest
@@ -111,6 +112,17 @@ jobs:
           npx vite build
 
   web-browser-e2e:
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cxt
+          POSTGRES_PASSWORD: cxt
+          POSTGRES_DB: cxthub_browser_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cxt"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -135,6 +147,7 @@ jobs:
         run: npm run test:e2e
         env:
           CXT_E2E_FULLSTACK: "1"
+          CXT_E2E_DSN: postgres://cxt:cxt@localhost:5432/cxthub_browser_test?sslmode=disable
       - name: Upload Playwright failure report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -170,12 +183,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Deployment image build validation (no push)
-        run: docker build -f deploy/Dockerfile -t cxtd:ci .
+        run: |
+          docker build -f deploy/Dockerfile -t cxtd:preflight .
+          docker build -f deploy/Dockerfile.mcp -t cxt-mcp:preflight .
+          bash scripts/deploy-preflight.sh images
 
   deployment-config:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Render Blueprint contract (no provisioning)
+        run: |
+          python3 -m pip install -r deploy/requirements-preflight.txt
+          python3 scripts/check-render-blueprint.py
       - name: Terraform fmt · provider lock · schema/input tests (no apply)
         run: |
           mkdir -p "$RUNNER_TEMP/terraform-data"

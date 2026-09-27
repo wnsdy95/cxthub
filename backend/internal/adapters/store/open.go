@@ -10,7 +10,7 @@ import "fmt"
 // always request PostgreSQL, so this build fails closed instead of serving FS.
 func Open(dataDir, dsn string, requirePostgres bool) (Store, error) {
 	if dsn != "" || requirePostgres {
-		return nil, fmt.Errorf("PostgreSQL storage requested but this cxtd binary was built without the postgres tag")
+		return nil, fmt.Errorf("PostgreSQL storage requested but this server binary was built without the postgres tag")
 	}
 	return OpenFSStore(dataDir)
 }

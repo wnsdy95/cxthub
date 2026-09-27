@@ -1,4 +1,4 @@
-# Vercel hosts the SPA and rewrites /api/* to Cloud Run's default run.app URI.
+# Legacy Cloud Run API template. Vercel routes MCP to its independent origin.
 # This provides a same-origin proxy; see frontend/web/vercel.mjs for the cookie/CORS rationale.
 # Cloud Run custom-domain mapping is not supported in the Seoul region and is in preview, so it is not used.
 
@@ -17,6 +17,12 @@ resource "vercel_project" "web" {
   # vercel.mjs generates a rewrite to this public origin at build time. Cloud Run must exist
   # first, so the initial Git deployment fails closed instead of using a placeholder origin.
   environment = [
+    {
+      key       = "CXT_MCP_ORIGIN"
+      value     = var.mcp_origin
+      target    = ["production"]
+      sensitive = true
+    },
     {
       key       = "CXT_API_ORIGIN"
       value     = google_cloud_run_v2_service.cxtd.uri

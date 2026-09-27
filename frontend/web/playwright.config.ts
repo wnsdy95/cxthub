@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 const port = 4174;
 const backendPort = 18_907;
+const mcpPort = 18_908;
 const fullStack = Boolean(process.env.CXT_E2E_FULLSTACK);
 
 export default defineConfig({
@@ -41,7 +42,7 @@ export default defineConfig({
       : []),
     {
       name: 'web',
-      command: `${fullStack ? `VITE_DEV_PROXY=http://127.0.0.1:${backendPort} ` : ''}npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+      command: `${fullStack ? `VITE_DEV_PROXY=http://127.0.0.1:${backendPort} VITE_DEV_MCP_PROXY=http://127.0.0.1:${mcpPort} ` : ''}npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
       url: `http://127.0.0.1:${port}`,
       // Full-stack mode must own the Vite process so its proxy cannot silently
       // reuse a developer server pointed at a different backend.
