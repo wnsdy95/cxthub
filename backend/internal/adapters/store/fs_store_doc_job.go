@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -14,6 +15,57 @@ import (
 )
 
 var _ outbound.DocJobStore = (*FSStore)(nil)
+
+// FS mode has one writer process. Rebuild the scheduling index once from durable
+// receipts after restart; completed manifests must not be reparsed on each poll.
+// Share the index between handles, and isolate it from OAuth/runtime locks.
+var fsDocQueues sync.Map
+
+type fsDocQueue struct {
+	sync.Mutex
+	loaded  bool
+	pending map[string]domain.DocFinalizationJob
+}
+
+func (s *FSStore) docQueue() *fsDocQueue {
+	q, _ := fsDocQueues.LoadOrStore(s.dataDir, &fsDocQueue{})
+	return q.(*fsDocQueue)
+}
+func (s *FSStore) pendingDocJobs() ([]domain.DocFinalizationJob, error) {
+	q := s.docQueue() // caller holds this lock
+	if !q.loaded {
+		all, err := s.docJobsRaw()
+		if err != nil {
+			return nil, err
+		}
+		q.pending = make(map[string]domain.DocFinalizationJob)
+		for _, j := range all {
+			q.record(j)
+		}
+		q.loaded = true
+	}
+	jobs := make([]domain.DocFinalizationJob, 0, len(q.pending))
+	for _, j := range q.pending {
+		jobs = append(jobs, j)
+	}
+	sort.Slice(jobs, func(i, k int) bool {
+		if jobs[i].CreatedAt.Equal(jobs[k].CreatedAt) {
+			return jobs[i].ID < jobs[k].ID
+		}
+		return jobs[i].CreatedAt.Before(jobs[k].CreatedAt)
+	})
+	return jobs, nil
+}
+func (q *fsDocQueue) record(j domain.DocFinalizationJob) {
+	if !j.Pending() {
+		delete(q.pending, j.ID)
+		return
+	}
+	// Scheduling uses only metadata. The selected job is read and validated from
+	// its durable receipt before execution; mutable manifest slices never escape.
+	j.Manifest = domain.DocChunkManifest{}
+	q.pending[j.ID] = j
+}
 
 func (s *FSStore) docJobPath(repo domain.ContentHash, id string) string {
 	return filepath.Join(s.dataDir, "doc-jobs", opaqueName(string(repo)+":"+id)+".json")
@@ -26,7 +78,13 @@ func (s *FSStore) writeDocJob(j domain.DocFinalizationJob) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.docJobPath(j.RepoID, j.ID), b)
+	if err := writeAtomic(s.docJobPath(j.RepoID, j.ID), b); err != nil {
+		return err
+	}
+	if q := s.docQueue(); q.loaded {
+		q.record(j)
+	}
+	return nil
 }
 func (s *FSStore) readDocJob(repo domain.ContentHash, id string) (j domain.DocFinalizationJob, err error) {
 	err = readJSON(s.docJobPath(repo, id), &j)
@@ -78,7 +136,7 @@ func (s *FSStore) EnqueueDocJob(ctx context.Context, j domain.DocFinalizationJob
 	if j.State != "waiting" || j.Version != 0 || j.Attempts != 0 {
 		return j, domain.ErrValidation
 	}
-	l := s.oauthLock()
+	l := s.docQueue()
 	l.Lock()
 	defer l.Unlock()
 	old, err := s.readDocJob(j.RepoID, j.ID)
@@ -97,7 +155,7 @@ func (s *FSStore) EnqueueDocJob(ctx context.Context, j domain.DocFinalizationJob
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return j, err
 	}
-	jobs, err := s.docJobsRaw()
+	jobs, err := s.pendingDocJobs()
 	if err != nil {
 		return j, err
 	}
@@ -113,22 +171,19 @@ func (s *FSStore) EnqueueDocJob(ctx context.Context, j domain.DocFinalizationJob
 	return j, s.writeDocJob(j)
 }
 func (s *FSStore) GetDocJob(ctx context.Context, repo domain.ContentHash, id string) (domain.DocFinalizationJob, error) {
-	l := s.oauthLock()
-	l.Lock()
-	defer l.Unlock()
 	if err := ctx.Err(); err != nil {
 		return domain.DocFinalizationJob{}, err
 	}
 	return s.readDocJob(repo, id)
 }
 func (s *FSStore) ClaimDocJob(ctx context.Context, repo domain.ContentHash, now time.Time, lease time.Duration) (domain.DocFinalizationJob, error) {
-	l := s.oauthLock()
+	l := s.docQueue()
 	l.Lock()
 	defer l.Unlock()
 	if err := ctx.Err(); err != nil {
 		return domain.DocFinalizationJob{}, err
 	}
-	jobs, err := s.docJobsRaw()
+	jobs, err := s.pendingDocJobs()
 	if err != nil {
 		return domain.DocFinalizationJob{}, err
 	}
@@ -142,13 +197,17 @@ func (s *FSStore) ClaimDocJob(ctx context.Context, repo domain.ContentHash, now 
 		if (repo != "" && repo != j.RepoID) || (running[j.RepoID] != "" && running[j.RepoID] != j.ID) || !j.Due(now) {
 			continue
 		}
-		j = j.Claim(now, lease)
+		persisted, err := s.readDocJob(j.RepoID, j.ID)
+		if err != nil {
+			return domain.DocFinalizationJob{}, err
+		}
+		j = persisted.Claim(now, lease)
 		return j, s.writeDocJob(j)
 	}
 	return domain.DocFinalizationJob{}, domain.ErrNotFound
 }
 func (s *FSStore) RenewDocJob(ctx context.Context, j domain.DocFinalizationJob, now time.Time, lease time.Duration) error {
-	l := s.oauthLock()
+	l := s.docQueue()
 	l.Lock()
 	defer l.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -169,7 +228,7 @@ func (s *FSStore) FinishDocJob(ctx context.Context, j domain.DocFinalizationJob,
 	if j.State != "retrying" && j.State != "rejected" {
 		return domain.ErrValidation
 	}
-	l := s.oauthLock()
+	l := s.docQueue()
 	l.Lock()
 	defer l.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -188,7 +247,7 @@ func (s *FSStore) FinishDocJob(ctx context.Context, j domain.DocFinalizationJob,
 // Development only: serialization + idempotent recovery, not cross-file ACID.
 // A crash after the body write leaves a reclaimable job; replay verifies/dedups it.
 func (s *FSStore) CompleteDocJob(ctx context.Context, j domain.DocFinalizationJob, doc domain.VerifiedSessionDoc, now time.Time) error {
-	l := s.oauthLock()
+	l := s.docQueue()
 	l.Lock()
 	defer l.Unlock()
 	if err := ctx.Err(); err != nil {

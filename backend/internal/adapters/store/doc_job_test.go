@@ -157,6 +157,7 @@ func TestFSDocJobRestartAndGC(t *testing.T) {
 		}
 	}
 	restarted := NewFSStore(dir)
+	fsDocQueues.Delete(dir) // new process: no scheduling cache survives restart
 	if _, _, err := restarted.repackRepo(repo); err != nil {
 		t.Fatal(err)
 	}
@@ -171,5 +172,75 @@ func TestFSDocJobRestartAndGC(t *testing.T) {
 	}
 	if err := restarted.CompleteDocJob(ctx, claim, doc, time.Now().UTC()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFSDocJobStatusIndependentOfWorkersAndOAuth(t *testing.T) {
+	s := NewFSStore(t.TempDir())
+	ctx := context.Background()
+	j, _, _ := docJobFixture(t, domain.HashContent([]byte(t.Name())), "receipt")
+	if _, err := s.EnqueueDocJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	// A long document write and unrelated OAuth transaction cannot block polling.
+	s.docQueue().Lock()
+	s.oauthLock().Lock()
+	defer s.docQueue().Unlock()
+	defer s.oauthLock().Unlock()
+	done := make(chan error, 1)
+	go func() { _, err := s.GetDocJob(ctx, j.RepoID, j.ID); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("status polling blocked behind worker or OAuth lock")
+	}
+}
+
+func TestFSDocJobSchedulingSkipsCompletedArchiveButVerifiesSelectedReceipt(t *testing.T) {
+	s := NewFSStore(t.TempDir())
+	ctx := context.Background()
+	repo := domain.HashContent([]byte(t.Name()))
+	done, _, _ := docJobFixture(t, repo, "completed history")
+	done.State = "completed"
+	if err := s.writeDocJob(done); err != nil {
+		t.Fatal(err)
+	}
+	j, _, _ := docJobFixture(t, repo, "new work")
+	if _, err := s.EnqueueDocJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an unavailable historical receipt after scheduling recovered. It
+	// must not stop new work; explicit reads and a fresh recovery still validate it.
+	if err := os.WriteFile(s.docJobPath(repo, done.ID), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.oauthLock().Lock()
+	claimed := make(chan error, 1)
+	go func() { _, err := s.ClaimDocJob(ctx, repo, time.Now(), time.Minute); claimed <- err }()
+	select {
+	case err := <-claimed:
+		s.oauthLock().Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		s.oauthLock().Unlock()
+		t.Fatal("queue admission waits for unrelated OAuth operation")
+	}
+	if _, err := s.GetDocJob(ctx, repo, done.ID); err == nil {
+		t.Fatal("corrupt historical receipt accepted")
+	}
+	if err := os.WriteFile(s.docJobPath(repo, j.ID), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimDocJob(ctx, repo, time.Now().Add(2*time.Minute), time.Minute); err == nil {
+		t.Fatal("cached metadata bypassed selected receipt integrity")
+	}
+	fsDocQueues.Delete(s.dataDir)
+	if _, err := s.ClaimDocJob(ctx, repo, time.Now(), time.Minute); err == nil {
+		t.Fatal("cold recovery ignored corrupted durable data")
 	}
 }
