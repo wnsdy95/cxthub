@@ -72,6 +72,32 @@ components:
   # Reusable Schemas
   # -------------------------------------------------------------------------
   schemas:
+    SAMLConnection:
+      type: object
+      properties:
+        enterprise_id: {type: string}
+        domain: {type: string}
+        issuer: {type: string}
+        revision: {type: string}
+        certificate: {type: string, description: Public SP signing certificate}
+    SAMLView:
+      type: object
+      required: [available, configured, entity_id, acs, linked]
+      properties:
+        available: {type: boolean}
+        configured: {type: boolean}
+        connection: {$ref: '#/components/schemas/SAMLConnection'}
+        entity_id: {type: string}
+        acs: {type: string}
+        linked: {type: boolean}
+        verified_until: {type: string, format: date-time}
+    SAMLConnectionInput:
+      type: object
+      required: [domain, metadata, revision]
+      properties:
+        domain: {type: string}
+        metadata: {type: string, maxLength: 262144, writeOnly: true, description: Pinned IdP EntityDescriptor with current signing certificates}
+        revision: {type: string}
     OIDCConnection:
       type: object
       properties:
@@ -5854,6 +5880,140 @@ paths:
           description: Ownership, policy, or uniqueness conflict
         "422":
           description: Invalid request
+
+  /enterprises/{enterpriseID}/saml:
+    get:
+      summary: Read SAML connection and current browser verification
+      description: Enterprise and linked organization members only. No private keys or identity subjects are returned. Unconfigured operators return available=false.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SAMLView'}
+        '401': {description: Current browser login required}
+        '403': {description: Enterprise authority required}
+        '409': {description: Stale revision or domain observation}
+        '422': {description: Unsupported or invalid configuration}
+        '429': {description: Rate limited}
+        '503': {description: Identity service unavailable}
+    post:
+      summary: Configure SAML (Enterprise owner)
+      description: Verified company domain and current revision required. Pinned IdP XML is validated, the SP signing key is encrypted outside PostgreSQL, and owner/domain/revision are rechecked with audit in one transaction. Existing keys are preserved across metadata updates. No membership grants.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SAMLConnectionInput'}
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SAMLView'}
+        '401': {description: Current browser login required}
+        '403': {description: Enterprise authority required}
+        '409': {description: Stale revision or domain observation}
+        '422': {description: Unsupported or invalid configuration}
+        '429': {description: Rate limited}
+        '503': {description: Identity service unavailable}
+  /enterprises/{enterpriseID}/saml/disable:
+    post:
+      summary: Disable SAML (Enterprise owner)
+      description: Revision checked. Existing identity and audit records are retained.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [revision], properties: {revision: {type: string}}}
+      responses:
+        '200':
+          description: Successful operation
+        '401': {description: Current browser login required}
+        '403': {description: Enterprise authority required}
+        '409': {description: Stale revision or domain observation}
+        '422': {description: Unsupported or invalid configuration}
+        '429': {description: Rate limited}
+        '503': {description: Identity service unavailable}
+  /enterprises/{enterpriseID}/saml/authorize:
+    post:
+      summary: Start SP-initiated SAML browser verification
+      description: Signed redirect request with persistent NameID and ForceAuthn. Browser login is required; initial explicit linking requires login within ten minutes. No CLI or MCP token approval.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: {type: object, properties: {url: {type: string}}}
+        '401': {description: Current browser login required}
+        '403': {description: Enterprise authority required}
+        '409': {description: Stale revision or domain observation}
+        '422': {description: Unsupported or invalid configuration}
+        '429': {description: Rate limited}
+        '503': {description: Identity service unavailable}
+  /auth/enterprise/saml/{enterpriseID}/metadata:
+    get:
+      summary: Read public SP metadata for a configured SAML connection
+      security: []
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: SP signing certificate and implemented redirect/POST profile (no private key)
+          content:
+            application/samlmetadata+xml:
+              schema: {type: string}
+        '404': {description: No configured connection}
+        '409': {description: Domain observation expired}
+        '429': {description: Rate limited}
+        '503': {description: Identity service unavailable}
+  /auth/enterprise/saml/{enterpriseID}/acs:
+    post:
+      summary: Stage a signed SAML proof without cookie authority
+      description: Bounded form POST. Requires durable RelayState and signed assertion/request correlation. Atomically consumes the assertion and stages a two-minute completion ticket. Does not link or authenticate an account until completion in the initiating browser. Raw assertions are discarded. This exact endpoint is exempt from cookie CSRF checks because it never uses cookie authority.
+      security: []
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [SAMLResponse, RelayState]
+              additionalProperties: false
+              properties:
+                SAMLResponse: {type: string, description: Base64 signed plaintext assertion response}
+                RelayState: {type: string, minLength: 64, maxLength: 64}
+      responses:
+        '303': {description: Same-origin completion redirect (no-store and no-referrer)}
+        '401': {description: Verification failed; restart from Enterprise page}
+        '429': {description: Rate limited}
+        '503': {description: Identity service unavailable}
+  /auth/enterprise/saml/finish:
+    get:
+      summary: Complete SAML in the initiating authenticated browser
+      description: Requires the same browser credential as the start. Rechecks membership, domain, connection revision and session in the identity transaction, then records binding, proof, ticket consumption and audit together. CLI and MCP credentials gain no approval. Mandatory SSO remains disabled.
+      parameters:
+        - {name: ticket, in: query, required: true, schema: {type: string, minLength: 64, maxLength: 64}}
+      responses:
+        '303': {description: Enterprise identity page}
+        '401': {description: Expired, replayed or wrong-browser completion; no authority change}
+        '429': {description: Rate limited}
+        '503': {description: Identity service unavailable}
 
   /enterprises/{enterpriseID}/oidc:
     get:

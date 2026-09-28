@@ -6,6 +6,11 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+ enterpriseSAML: {
+  title: 'SAML 2.0 계정 인증', configure: 'SAML 설정', verify: 'SAML로 인증', download: '서비스 제공자 메타데이터 열기',
+  entity: '서비스 제공자 식별자', acs: '인증 응답 수신 주소', metadata: '인증 제공자 메타데이터 XML',
+  setup: '먼저 설정에서 회사 도메인을 검증하세요. 인증 제공자에 아래 주소를 등록하고, 유효한 서명 인증서가 포함된 메타데이터를 붙여 넣으세요. 영구 식별자(persistent NameID)와 최대 10분간 유효한 서명된 평문 응답을 사용해야 합니다. 저장 후 서비스 제공자 메타데이터를 인증 제공자에 등록해 요청 서명을 신뢰하도록 설정하세요. 제공자에서 먼저 시작하는 로그인, 암호화 응답, 통합 로그아웃은 아직 지원하지 않습니다. 메타데이터를 바꾸면 이전 인증은 무효화됩니다.',
+ },
  enterpriseIdentity: {
   "title": "기업 계정 인증",
   "note": "조직의 인증 제공자로 현재 브라우저 세션을 확인합니다. 구성원 권한을 추가하거나 SSO 로그인을 강제하지 않습니다.",

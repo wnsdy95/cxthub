@@ -3,6 +3,11 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+ enterpriseSAML: {
+  title: 'SAML 2.0 identity', configure: 'Configure SAML', verify: 'Verify with SAML', download: 'Open service provider metadata',
+  entity: 'Service provider entity ID', acs: 'Assertion consumer URL', metadata: 'Identity provider metadata XML',
+  setup: 'Verify a company domain in Settings first. Enter these URLs at your provider, then paste its metadata with current signing certificates. Configure a persistent NameID and signed plaintext assertions, valid for at most 10 minutes. After saving, import our service provider metadata to trust signed requests. Unsolicited login, encrypted assertions and single logout are not supported. Metadata changes invalidate previous verifications.',
+ },
  enterpriseIdentity: {
   "title": "Enterprise identity",
   "note": "Verify your current browser session with your organization’s identity provider. This does not grant membership or enable mandatory SSO.",

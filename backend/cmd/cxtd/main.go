@@ -91,6 +91,7 @@ func serve(ctx context.Context, args []string) error {
 			return fmt.Errorf("CXT_IDENTITY_ENCRYPTION_KEY must contain a base64-encoded 32-byte key")
 		}
 		idSvc.WithOIDC(federation.NewOIDC(), vault, publicURL)
+		idSvc.WithSAML(federation.NewSAML(), vault, publicURL)
 	}
 	githubConnections, githubClient, err := configureGitHub(idSvc, svc, st, publicURL)
 	if err != nil {

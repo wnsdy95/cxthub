@@ -19,6 +19,7 @@ type federationBackend interface {
 }
 
 func (s *Server) registerFederationRoutes(mux *http.ServeMux) {
+	s.registerSAMLRoutes(mux)
 	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/oidc", s.requireUser(s.oidcView))
 	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/oidc", s.requireUser(s.rateLimit(10, time.Minute, s.oidcConfigure)))
 	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/oidc/disable", s.requireUser(s.rateLimit(10, time.Minute, s.oidcDisable)))

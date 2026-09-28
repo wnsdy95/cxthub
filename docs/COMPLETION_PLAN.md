@@ -122,3 +122,12 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   browser session. Existing membership and repository access do not change.
   Mandatory SSO, SAML, CLI/MCP assurance renewal and security policies are not yet
   enabled; detailed boundaries are recorded in ENTERPRISE_IDENTITY.md.
+
+- Synchronization proof/repair changes merged in #306 after nine green CI checks.
+  Main-source `e2946ba` CLI, API and MCP binaries are installed locally and both
+  independent services are healthy. Live retained-history publication is being
+  measured; upload progress is not a substitute for ref acknowledgment.
+- SAML browser verification (#307) is implemented with pinned metadata, signed
+  requests/assertions, durable replay records and a browser-bound two-step
+  callback. Local PostgreSQL and signed protocol fixtures are under validation.
+  It is not mandatory SSO, SCIM, policy enforcement or customer IdP acceptance.

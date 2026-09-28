@@ -24,6 +24,7 @@ type IdentityService struct {
 	invitationEmail *invitationEmailConfig
 	domainResolver  outbound.DomainTXTResolver
 	federation      *federationConfig
+	saml            *samlConfig
 }
 
 // NewIdentityService creates an IdentityService.
