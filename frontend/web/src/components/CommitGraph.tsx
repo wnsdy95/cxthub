@@ -1,7 +1,7 @@
 // CommitGraph — GitHub network graph style commit tree.
 // Text-free pure graph: lane colors, top branch labels, node tooltips on hover, viewer integration on click.
 // Lane layout is handled in graph.ts (pure function), this file renders only the SVG.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { ContextSemantics, GraphState, HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
 import { layoutGraph, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
@@ -12,6 +12,7 @@ import { graphStatus, graphProgress } from '../graphState';
 import { hiddenProgressIds } from '../contextHistory';
 import { useGraphPosition, useJoinPreview, useJoinSnapshot } from '../hooks';
 import { useT } from '../i18n';
+import { useGraphWindow } from './useGraphWindow';
 
 const LANE_W = 22; // Lane width
 const ROW_H = 26; // Row height (text-free — compact)
@@ -362,51 +363,19 @@ export function CommitGraph({
   // always-on legend. Keep only labels whose lane has a visible node/segment.
   // Horizontal clipping and movement are handled by placing the label header
   // in the same scroll canvas as the SVG rows below.
-  const graphViewportRef = useRef<HTMLDivElement>(null);
-  const [visibleRows, setVisibleRows] = useState<Set<number> | null>(null);
-  useEffect(() => {
-    const viewport = graphViewportRef.current;
-    // Do not project row indices from the previous repo/layout onto this one
-    // while the new observer is collecting its first intersections.
-    setVisibleRows(null);
-    if (!viewport || typeof IntersectionObserver === 'undefined') {
-      return;
-    }
-
-    const intersectingRows = new Set<number>();
-    const publish = () => {
-      const next = new Set(intersectingRows);
-      setVisibleRows((current) => {
-        if (current && current.size === next.size && [...current].every((row) => next.has(row))) return current;
-        return next;
-      });
-    };
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const rowIndex = Number((entry.target as HTMLElement).dataset.graphRowIndex);
-          if (!Number.isInteger(rowIndex)) continue;
-          if (entry.isIntersecting) intersectingRows.add(rowIndex);
-          else intersectingRows.delete(rowIndex);
-        }
-        publish();
-      },
-      {
-        root: viewport,
-        // A row hidden behind the sticky label header is not graph-visible.
-        rootMargin: `-${HEAD_H}px 0px 0px 0px`,
-        threshold: 0.01,
-      },
-    );
-    viewport.querySelectorAll<HTMLElement>('[data-graph-row-index]').forEach((row) => observer.observe(row));
-    return () => observer.disconnect();
-  }, [rows]);
+  const blockEnds = useMemo(() => rows.map((row, index) => {
+    const id = row.snap.id, next = rows[index + 1]?.snap.id;
+    return unpushed.has(id) && !uncommittedIds.has(id) && next !== undefined
+      && !(unpushed.has(next) && !uncommittedIds.has(next));
+  }), [rows, unpushed, uncommittedIds]);
+  const rowIds = useMemo(() => rows.map(row => row.snap.id), [rows]);
+  const rowHeights = useMemo(() => blockEnds.map(end => ROW_H + (end ? 20 : 0)), [blockEnds]);
+  const selectedRowId = useMemo(() => selectedEventId && rowIds.includes(selectedEventId) ? selectedEventId : selectedId, [rowIds, selectedEventId, selectedId]);
+  const windowed = useGraphWindow(rowIds, rowHeights, selectedRowId,
+    graphIdentity, dragId, HEAD_H, ROW_H);
   const laneLabels = useMemo(() => {
     const labels: (LaneLabel | null)[] = Array(laneCount).fill(null);
-    const rowIndices = visibleRows === null
-      ? rows.map((_row, index) => index)
-      : [...visibleRows].sort((left, right) => left - right);
-    for (const rowIndex of rowIndices) {
+    for (let rowIndex = windowed.visible.start; rowIndex < windowed.visible.end; rowIndex++) {
       const row = rows[rowIndex];
       if (!row) continue;
       for (const lane of occupiedLanes(row)) {
@@ -414,7 +383,7 @@ export function CommitGraph({
       }
     }
     return labels;
-  }, [rows, laneCount, laneLabelsByRow, visibleRows]);
+  }, [rows, laneCount, laneLabelsByRow, windowed.visible.start, windowed.visible.end]);
 
   return (
     <div className="graph-wrap">
@@ -432,7 +401,7 @@ export function CommitGraph({
       {missingParents.size > 0 && <p role="status" className="graph-history-error">{t('graph.missingParents', { count: missingParents.size })}</p>}
       {positionEvent && !currentGraph && selectedPosition.isPending && <p role="status">{t('graph.loading')}</p>}
       {selectedPosition.error && <p role="alert">{selectedPosition.error.message} <button onClick={() => { void selectedPosition.refetch(); }}>{t('context.retryRead')}</button></p>}
-      <div className="graph-viewport" ref={graphViewportRef}>
+      <div className="graph-viewport" ref={windowed.viewportRef} data-virtualized={windowed.virtualized}>
         <div className="graph-canvas" style={{ width: svgW + (uncommittedIds.size ? 100 : 0) }}>
           {/* Top: branch labels per currently visible track. The header and SVG rows share one scroll canvas. */}
           <div className="graph-head">
@@ -457,8 +426,9 @@ export function CommitGraph({
             )}
           </div>
 
-          <ul className="graph">
-        {rows.map((r, rowIdx) => {
+          <ul className="graph" style={windowed.virtualized ? { position: 'relative', height: windowed.offsets[rows.length] } : undefined}>
+        {windowed.mounted.map(rowIdx => {
+          const r = rows[rowIdx];
           const x = cx(r.lane);
           const mid = ROW_H / 2;
           const rid = r.snap.id.replace(/^sha256:/, '').slice(0, 10); // Gradient ID (document-wide unique)
@@ -575,14 +545,12 @@ export function CommitGraph({
           // 3rd layer distinction: Uncommitted (hook capture, before commit) ⊂ Unreachable, so uncommitted determination takes precedence over push.
           const isUncommitted = uncommittedIds.has(r.snap.id);
           const isUnpushed = !isUncommitted && unpushed.has(r.snap.id);
-          const next = rowIdx + 1 < rows.length ? rows[rowIdx + 1].snap.id : null;
-          // Bottom boundary of the push block — distinguished by a truncation line. Uncommitted lines also enter the unpushed set (unreachable), so "is the next line a push commit" must be determined without uncommitted lines — otherwise, uncommitted lines between would be mistaken for the truncation line.
-          const nextIsUnpushedCommit = next !== null && unpushed.has(next) && !uncommittedIds.has(next);
-          const blockEnd = isUnpushed && next !== null && !nextIsUnpushedCommit;
+          const blockEnd = blockEnds[rowIdx];
           // Join branch: shared (pushed) node but not part of any branch's mainline — light tone.
           const isSide = !graphEvent && !isUncommitted && !isUnpushed && (refs?.length ?? 0) > 0 && !mainlines.has(r.snap.id);
           return (
-            <li key={r.snap.id}>
+            <li key={r.snap.id} aria-posinset={rowIdx + 1} aria-setsize={rows.length}
+              style={windowed.virtualized ? { position: 'absolute', top: windowed.offsets[rowIdx], width: '100%', height: rowHeights[rowIdx] } : undefined}>
               <button
                 data-graph-row-index={rowIdx}
                 data-graph-id={r.snap.id}
@@ -596,8 +564,10 @@ export function CommitGraph({
                 onClick={() => onSelect(selectId, graphEvent)}
                 onMouseEnter={(e) => showTip(r.snap.id, e.currentTarget)}
                 onMouseLeave={() => setTip(null)}
-                onFocus={(e) => showTip(r.snap.id, e.currentTarget)}
-                onBlur={() => setTip(null)}
+                tabIndex={windowed.virtualized ? (windowed.tabStop === r.snap.id ? 0 : -1) : undefined}
+                onKeyDown={e => windowed.onKeyDown(e, rowIdx)}
+                onFocus={(e) => { windowed.setFocusedId(r.snap.id); showTip(r.snap.id, e.currentTarget); }}
+                onBlur={() => { windowed.setFocusedId(null); setTip(null); }}
                 aria-label={graphEvent ? `${graphEvent.branch} · ${graphEvent.kind === 'birth' ? t(graphEvent.orphan ? 'graph.orphanBirth' : 'graph.branchBorn') : t('graph.branchMerged', { branch: graphEvent.sourceBranch ?? '' })}` : `${r.snap.message || '(no message)'} · ${isUncommitted ? t('graph.uncommitted') : isUnpushed ? t('graph.unpushed') : status.tagged.has(r.snap.id) ? t('graph.tagged') : status.pushed.has(r.snap.id) ? t('graph.pushed') : t('graph.archivedLane', { branch: r.snap.branch })}`}
                 draggable={joinEnabled && !isUncommitted && !graphEvent}
                 onDragStart={(e) => {

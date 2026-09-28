@@ -34,9 +34,10 @@ parents can actually be redirected by that merge.
 These are CPU observations, not browser paint or network latency guarantees.
 Very wide graphs still produce row-by-lane layout output. Many overlapping
 retention groups can contain the same IDs: the cache bound does not bound the
-size of the input, group results, layout output or DOM. Browser virtualization,
-remote pagination and real cloud load/failover measurements remain separate
-work. A repeated view object is cached by React; a new coherent server view
+size of the input, group results or layout output. Browser windowing now bounds
+mounted graph rows as described below; remote pagination and real cloud
+load/failover measurements remain separate work. A repeated view object is
+cached by React; a new coherent server view
 invalidates the index and evidence together.
 
 ## Correctness guards
@@ -102,3 +103,33 @@ from changing cached facts. The process-local cache keeps at most eight reposito
 and 250,000 weighted identifiers; oversized projections are not cached. It stores
 neither permissions nor document bodies. Full metadata reads and base domain
 projection still occur; this is not database pagination or an O(1) pending query.
+
+## Browser row window (2026-09-29)
+
+Graphs above 80 rows mount the visible rows plus six rows of overscan on each
+side. The focused row and native drag source stay mounted until the interaction
+ends. The complete server projection, validation, folded-edge evidence, lane
+layout and per-segment labels remain available; windowing does not infer or
+remove a branch, merge, snapshot or permission.
+
+Prefix offsets include the 20px unpushed dividers as well as 26px node rows.
+Binary search finds the visible interval; one scroll listener and one resize
+observer replace an intersection observer for every node. Labels use the visible
+interval rather than overscan or pinned offscreen rows. Horizontal scrolling
+still moves labels and SVG lines in the same canvas.
+
+External selection reveals its row. Arrow keys, Home/End and Page Up/Down can
+focus records outside the mounted window; Enter retains normal button selection.
+Live insertion preserves the first visible row by identity and pixel offset,
+while readers at the top see new work. A replaced focused observation transfers
+focus to a surviving row. Small graphs keep their existing complete DOM.
+
+Regression evidence includes exact visible intervals across 10,000 variable
+height rows and browser tests with 1,000 snapshots. The latter retain fewer than
+32 mounted rows at the standard viewport, select an offscreen search result,
+check SVG paths across the window/divider, preserve scroll position on live
+insertion and traverse historical PR operations and long branch labels. Existing
+folding, invalid-input, archived-path and horizontal-scroll regressions remain.
+This bounds browser DOM work; it is not server pagination or a cloud latency
+claim, and extremely wide lane layouts still consume memory proportional to
+their complete layout.
