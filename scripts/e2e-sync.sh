@@ -15,6 +15,7 @@
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
 # CXT_E2E_PUBLICATION_ONLY=1 runs just the promotion/next-commit regression.
 # CXT_E2E_CXT_BIN=/absolute/path tests a saved baseline CLI against that scenario.
+# CXT_E2E_DSN=<disposable PostgreSQL DSN> exercises production storage instead of FS.
 set -u
 
 # A fixture must not claim the host desktop app's real command session.
@@ -62,7 +63,9 @@ PYBIRTH
 }
 
 echo "── build(isolated bin) · server start :$PORT"
-( cd "$ROOT/backend" && go build -o "$TMP/bin/cxtd" ./cmd/cxtd ) || { echo "cxtd build failed"; exit 1; }
+tags=()
+if [ -n "${CXT_E2E_DSN:-}" ]; then tags=(-tags postgres); fi
+( cd "$ROOT/backend" && go build "${tags[@]}" -o "$TMP/bin/cxtd" ./cmd/cxtd ) || { echo "cxtd build failed"; exit 1; }
 if [ -n "${CXT_E2E_CXT_BIN:-}" ]; then
   cp "$CXT_E2E_CXT_BIN" "$TMP/bin/cxt" || exit 1
 else
@@ -79,7 +82,11 @@ git config --global user.email e2e@test.local
 git config --global user.name E2E
 git config --global init.defaultBranch main
 
-CXT_AUTH=dev "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data" >"$TMP/srv.log" 2>&1 &
+CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
+  CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" CXT_PUBLIC_URL="$ORIGIN" \
+  CXT_COOKIE_SECURE=0 CXT_COOKIE_DOMAIN= CXT_CORS_ORIGINS="$ORIGIN" \
+  RESEND_API_KEY= CXT_GITHUB_TOKEN= \
+  "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data" >"$TMP/srv.log" 2>&1 &
 SRV_PID=$!
 for i in $(seq 1 30); do curl -sf -o /dev/null "$B/repos" && break; sleep 0.3; done
 

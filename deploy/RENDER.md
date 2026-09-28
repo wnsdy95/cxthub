@@ -126,8 +126,8 @@ MCP OAuth consent, PKCE, read-only calls and account-screen disconnection.
 
 ## Operations
 
-The predeployment PostgreSQL rehearsal verified one 163 MiB stored conversation
-with a peak resident set of about 1.45 GiB. This is already above the 512 MB
+The [sync validation](SYNC_VALIDATION.md) reduced peak resident memory for one
+163 MiB stored conversation from about 1.45 GiB to 1.08 GiB. This remains above the 512 MB
 `starter` limit. The API budget also leaves room for publication/indexing and
 other requests; the MCP budget covers cold index reads after data transfer.
 These are initial validation budgets, not concurrency/load guarantees. Warm the
@@ -168,7 +168,9 @@ Create a local virtual environment, install `deploy/requirements-preflight.txt`,
 and set `CXT_PREFLIGHT_PYTHON` to that environment's Python executable.
 Run `scripts/deploy-preflight.sh full` from the repository root. It checks the
 Render contract, frontend routes, Go tests, real PostgreSQL migrations, both
-Docker images, route isolation, independent API shutdown and database failure.
+Docker images, route isolation, independent API shutdown, and database failure
+and recovery. The [sync validation plan and results](SYNC_VALIDATION.md) include
+the separate large-document, concurrent-read and PostgreSQL CLI checks.
 It creates only disposable local containers; it never pushes an image or creates
 cloud resources. CI also exercises the two real Docker images.
 

@@ -46,16 +46,13 @@ type DocChunkPlan struct {
 
 // PlanDocChunks emits the current bounded stream format. It is independent of event size.
 func PlanDocChunks(cb []byte) (DocChunkPlan, bool) {
-	env, events, err := splitCanonicalDocBytes(cb)
-	if err != nil || len(env) == 0 || len(events) == 0 {
+	env, stream, ok := canonicalStream(cb)
+	if !ok || len(stream) == 0 {
 		return DocChunkPlan{}, false
 	}
-	stream := joinEventStream(events)
-	raw := chunkByteStream(stream)
-	if !bytes.Equal(assembleCanonicalEventStream(env, bytes.Join(raw, nil)), cb) {
-		return DocChunkPlan{}, false
-	}
-	return buildDocChunkPlan(ChunkFormatV2, env, raw), true
+	// V2 is the exact array interior. Do not decode/copy every event, join the
+	// entire transcript, then assemble another whole copy merely to split it.
+	return buildDocChunkPlan(ChunkFormatV2, env, chunkByteStream(stream)), true
 }
 
 // PlanDocChunksV1 retains the old event-boundary wire plan for peers that do not advertise v2.
@@ -135,7 +132,20 @@ func AssembleDocChunks(man DocChunkManifest, chunks [][]byte, want ContentHash) 
 		}
 		cb = AssembleCanonicalDoc(man.Envelope, events)
 	case ChunkFormatV2:
-		cb = assembleCanonicalEventStream(man.Envelope, bytes.Join(chunks, nil))
+		size := len(man.Envelope) + 25
+		for _, chunk := range chunks {
+			size += len(chunk)
+		}
+		var body bytes.Buffer
+		body.Grow(size)
+		body.WriteString(`{"envelope":`)
+		body.Write(man.Envelope)
+		body.WriteString(`,"events":[`)
+		for _, chunk := range chunks {
+			body.Write(chunk)
+		}
+		body.WriteString(`]}`)
+		cb = body.Bytes()
 	default:
 		return nil, ErrIntegrity
 	}
@@ -205,24 +215,48 @@ func chunkByteStream(stream []byte) [][]byte {
 	return chunks
 }
 
-func joinEventStream(events []json.RawMessage) []byte {
-	var b bytes.Buffer
-	for i, event := range events {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.Write(event)
+// canonicalStream checks the complete JSON and its canonical outer framing.
+// Returned envelope is owned by the plan; the event stream is only borrowed
+// while chunkByteStream makes independently owned bounded bodies.
+func canonicalStream(cb []byte) (json.RawMessage, []byte, bool) {
+	const prefix = `{"envelope":`
+	const middle = `,"events":[`
+	if !bytes.HasPrefix(cb, []byte(prefix)) || !bytes.HasSuffix(cb, []byte(`]}`)) {
+		return nil, nil, false
 	}
-	return b.Bytes()
-}
-
-func assembleCanonicalEventStream(env json.RawMessage, stream []byte) []byte {
-	var b bytes.Buffer
-	b.Grow(len(env) + len(stream) + 32)
-	b.WriteString(`{"envelope":`)
-	b.Write(env)
-	b.WriteString(`,"events":[`)
-	b.Write(stream)
-	b.WriteString(`]}`)
-	return b.Bytes()
+	dec := json.NewDecoder(bytes.NewReader(cb[len(prefix):]))
+	var env json.RawMessage
+	if dec.Decode(&env) != nil {
+		return nil, nil, false
+	}
+	offset := len(prefix) + int(dec.InputOffset())
+	if !bytes.HasPrefix(cb[offset:], []byte(middle)) {
+		return nil, nil, false
+	}
+	start := offset + len(middle)
+	if start > len(cb)-2 || !json.Valid(cb[start-1:len(cb)-1]) {
+		return nil, nil, false
+	}
+	stream := cb[start : len(cb)-2]
+	// The old planner removed whitespace between events. Keep the v2 wire
+	// boundaries unchanged by accepting only compact canonical framing here.
+	quoted, escaped := false, false
+	for _, ch := range stream {
+		if quoted {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				quoted = false
+			}
+		} else {
+			if ch == '"' {
+				quoted = true
+			} else if ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' {
+				return nil, nil, false
+			}
+		}
+	}
+	return env, stream, true
 }

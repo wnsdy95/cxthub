@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fail-closed production deployment checks. This script never creates or modifies resources.
+# Fail-closed deployment checks. Creates disposable local fixtures, never cloud resources.
 #
 #   scripts/deploy-preflight.sh static    # Fast static/config check
 #   scripts/deploy-preflight.sh full      # Full test + PG migration + Docker build
@@ -177,7 +177,7 @@ image_smoke() (
   done
   docker exec "$postgres" psql -h 127.0.0.1 -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null || die "PostgreSQL not ready"
 
-  local kind image internal name missing port status
+  local kind image internal name missing port status api_port mcp_port
   for kind in api mcp; do
     if [ "$kind" = api ]; then image=cxtd:preflight; internal=8907; else image=cxt-mcp:preflight; internal=8908; fi
     name="${prefix}-${kind}"; missing="${prefix}-missing-${kind}"
@@ -196,6 +196,7 @@ image_smoke() (
       -e CXT_POSTGRES_DSN='postgres://cxt:cxt@postgres:5432/cxthub_test?sslmode=disable' \
       -p "127.0.0.1::${internal}" "$image" >/dev/null
     port="$(docker port "$name" "$internal/tcp" | awk -F: 'NR==1 {print $NF}')"
+    if [ "$kind" = api ]; then api_port="$port"; else mcp_port="$port"; fi
     for _ in $(seq 1 80); do
       if curl --max-time 3 -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then break; fi
       sleep 0.25
@@ -213,10 +214,28 @@ image_smoke() (
     fi
     pass "$kind image: migrations, readiness, route isolation, PostgreSQL requirement"
   done
+  docker start "${prefix}-api" >/dev/null
+  # Docker can assign a new ephemeral host port when a container restarts.
+  api_port="$(docker port "${prefix}-api" 8907/tcp | awk -F: 'NR==1 {print $NF}')"
+  for _ in $(seq 1 80); do
+    if curl --max-time 3 -fsS "http://127.0.0.1:${api_port}/healthz" >/dev/null 2>&1; then break; fi
+    sleep 0.25
+  done
+  curl --max-time 3 -fsS "http://127.0.0.1:${api_port}/healthz" >/dev/null || die "API did not restart"
   docker stop "$postgres" >/dev/null
-  status="$(curl --max-time 5 -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/healthz")"
-  [ "$status" = 503 ] || die "MCP readiness did not detect database loss"
-  pass "MCP survives API stop and fails readiness on database loss"
+  for port in "$api_port" "$mcp_port"; do
+    status="$(curl --max-time 5 -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/healthz")"
+    [ "$status" = 503 ] || die "Service readiness did not detect database loss"
+  done
+  docker start "$postgres" >/dev/null
+  for port in "$api_port" "$mcp_port"; do
+    for _ in $(seq 1 80); do
+      if curl --max-time 3 -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then break; fi
+      sleep 0.25
+    done
+    curl --max-time 3 -fsS "http://127.0.0.1:${port}/healthz" >/dev/null || die "Service did not recover after database restart"
+  done
+  pass "MCP survives API stop; both services detect and recover from database loss"
 )
 
 config_check() {

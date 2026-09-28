@@ -155,7 +155,7 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 	}
 	hash := put(doc, parent)
 	doc = domain.SessionDoc{}
-	t.Log("fixture: 100 MiB message text, 4096 events, 1001 snapshots, 2 server pools, 16 readers")
+	t.Logf("fixture: 100 MiB message text, 4096 events, 1001 snapshots, 2 replicas, 16 readers; separate API/MCP processes=%t", os.Getenv("CXT_LOAD_MULTIPROCESS") == "1")
 	if err := stores[0].CompareAndSwapRef(ctx, repo.ID, domain.Ref{RepoID: repo.ID, Kind: domain.RefBranch, Name: "main", Target: hash}, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +165,7 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 		kind    string
 	}
 	results := make(chan result, 320)
+	client := &http.Client{Timeout: 30 * time.Second}
 	var wg sync.WaitGroup
 	for worker := 0; worker < 16; worker++ {
 		wg.Add(1)
@@ -188,7 +189,7 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Accept", "application/json, text/event-stream")
 				start := time.Now()
-				resp, err := http.DefaultClient.Do(req)
+				resp, err := client.Do(req)
 				if err != nil {
 					t.Error(err)
 					continue
