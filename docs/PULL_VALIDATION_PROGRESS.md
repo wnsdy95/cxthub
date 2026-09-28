@@ -408,3 +408,57 @@ after cache warmup; PostgreSQL proof use cannot escape a rolled-back ownership
 transaction. Reference checks, publication/deletion boundaries, authorization,
 timeouts and external contracts remain unchanged. This change alone does not
 claim the entire live backfill is complete or eliminate all index-lock cost.
+
+# Shared event-location blocks (2026-09-29)
+
+Read-only PostgreSQL observation isolated the remaining slow operation as
+`COPY doc_read_events_v2`: each cumulative capture copied all event locations
+while holding the repository publication transaction. Existing archival chunks
+and search text were shared, but a roughly 50,000-event prefix still meant roughly
+50,000 new location rows per capture. This is distinct from schema validation.
+
+The v3 read projection groups 128 canonical events into a content-addressed index
+block. Its identity includes the read-projection/CIR version and exact ordered
+event hashes. Each document stores only block references, first event and byte
+base. Sequence, role and relative offsets are reused only with an exact block;
+changed blocks are derived from the verified document. New index/text rows,
+document ownership, finalization status and references still commit atomically.
+
+Migration 0066 adds projections and compatibility views without rewriting or
+removing archives or v2 indexes. Reads prefer v3 when present and otherwise use
+v2; a read does not need to rebuild an already valid v2 index. Old replicas can
+still build v2 projections. Both versions honor the other's search-text owners.
+Block and search-row retention locks fence concurrent publication/deletion.
+Cleanup serializes ownership decisions and rechecks after waiting, including two
+simultaneous final-owner deletions. No archive/ref/memory hash or API contract
+changes, and no timeout is extended.
+
+On the local Apple M5 Pro/PostgreSQL 16 development host, three fresh-document
+iterations after a 50,000-event synthetic prefix (about 8.38 MB) was indexed:
+
+| Durable index publication only | Time/op | Bytes allocated/op |
+| --- | ---: | ---: |
+| v2 repeated event locations | 4.923 s | 102,627,394 |
+| v3 shared index blocks | 60.56 ms | 64,203,082 |
+
+Canonical verification and blob transfer/storage were outside these timings.
+Fixtures were unique across benchmark calibration and each timed document was
+new. This is not a cloud throughput or percentile claim. For that append shape,
+new persistence needs 391 block references and 81 changed-block event locations
+instead of 50,001 repeated event locations. The new path is reproducible with
+`BenchmarkPGReadBlockAppend` and an empty disposable `CXT_TEST_DSN`; it reports
+actual stored reference/location counts. Full-byte verification and read-plan
+construction still scale with document bytes, so cold and end-to-end costs remain
+separate. Existing v2 storage is retained until its normal owning-document cleanup.
+
+A separate run of the committed benchmark under concurrent local test load
+reported 96.36 ms and measured exactly 391 references / 81 new event locations
+per append. The 60.56 ms comparison above uses the same private side-by-side
+baseline harness for both physical representations. Neither number promises an
+end-to-end request deadline on a busy or remote database.
+
+Design choice: share rebuildable location blocks inside the existing atomic
+publication, rather than raising the request timeout or publishing an incomplete
+index in another transaction. This removes repeated prefix writes while retaining
+the existing authority and rollback boundaries. Cold first-time blocks still
+require indexing; old v2 cleanup and full-byte planning remain measurable costs.

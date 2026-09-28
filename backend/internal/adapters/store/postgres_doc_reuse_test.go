@@ -78,7 +78,7 @@ func TestPGSharedSearchReuseSurvivesPublicationAndDeletion(t *testing.T) {
 	if _, err := deleting.Exec(ctx, `SET LOCAL lock_timeout='100ms'`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = deleting.Exec(ctx, `DELETE FROM doc_read_indexes_v2 WHERE hash=$1`, parent.Hash())
+	_, err = deleting.Exec(ctx, `DELETE FROM doc_read_indexes_v3 WHERE hash=$1`, parent.Hash())
 	var pgerr *pgconn.PgError
 	if !errors.As(err, &pgerr) || pgerr.Code != "55P03" {
 		t.Fatal("reused text was not retained", err)

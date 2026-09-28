@@ -58,7 +58,7 @@ func checkReadIndexPG(t *testing.T, s *PostgresStore, repo domain.ContentHash) {
 		t.Fatalf("shared event dedup: %d %v", n, err)
 	}
 	// Simulate a pre-migration document, then prove lazy rebuilding is lossless.
-	if _, err = s.pool.Exec(ctx, `DELETE FROM doc_read_indexes_v2 WHERE hash=$1`, child.Hash); err != nil {
+	if _, err = s.pool.Exec(ctx, `DELETE FROM doc_read_indexes_v3 WHERE hash=$1`, child.Hash); err != nil {
 		t.Fatal(err)
 	}
 	rebuilt, err := s.DocReadIndex(ctx, repo, child.Hash)
