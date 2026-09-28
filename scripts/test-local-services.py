@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import subprocess
+import socket
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -103,8 +104,9 @@ class LocalServicesTests(unittest.TestCase):
             self.run_main("configure")
         self.assertTrue(all(call[0] == "print" for call in calls))
         calls.clear()
-        with patch.object(module, "launch", side_effect=lambda *args, **kwargs: calls.append(args) or True):
+        with patch.object(module, "launch", side_effect=lambda *args, **kwargs: calls.append(args) or True), patch.object(module,"wait_stopped") as wait:
             self.run_main("stop")
+        wait.assert_called_once_with(f"gui/{os.getuid()}", [("com.cxthub.api",8907),("com.cxthub.mcp",8908)])
         stops = [call[1] for call in calls if call[0] == "bootout"]
         self.assertEqual(stops, [f"gui/{os.getuid()}/com.cxthub.api", f"gui/{os.getuid()}/com.cxthub.mcp"])
         self.assertFalse(any("com.cxthub.cxtd" in str(call) or "postgres" in str(call) for call in calls))
@@ -134,6 +136,27 @@ class LocalServicesTests(unittest.TestCase):
                 subprocess.CompletedProcess([], 0, listener, b""),
             ]):
                 self.assertEqual(module.service_listens("gui/501", "com.cxthub.api", 8907), want)
+
+    def test_shutdown_waits_for_unload_and_listener_release(self):
+        with patch.object(module,"launch",side_effect=[True,False,False]) as launch, patch.object(module,"port_available",side_effect=[False,True]), patch.object(module.time,"sleep") as sleep:
+            module.wait_stopped("gui/501",[("com.cxthub.api",8907)])
+        self.assertEqual(launch.call_count,3)
+        self.assertEqual(sleep.call_count,2)
+        with patch.object(module,"launch",return_value=True), patch.object(module.time,"monotonic",side_effect=[0,31]):
+            with self.assertRaises(module.ConfigurationError):
+                module.wait_stopped("gui/501",[("com.cxthub.api",8907)])
+
+    def test_port_probe_rejects_listener_but_allows_closed_connections(self):
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            listener.bind(("127.0.0.1",0));listener.listen(1)
+            port=listener.getsockname()[1]
+            self.assertFalse(module.port_available(port))
+            with socket.create_connection(("127.0.0.1",port)) as client:
+                accepted,_=listener.accept()
+                accepted.close() # server actively closes; accepted socket may remain TIME_WAIT
+                self.assertEqual(client.recv(1),b"")
+        self.assertTrue(module.port_available(port))
 
 
 if __name__ == "__main__":
