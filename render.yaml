@@ -19,6 +19,13 @@ services:
         sync: false
       - key: CXT_PUBLIC_URL
         sync: false
+      - key: CXT_COOKIE_SECURE
+        value: "1"
+      - key: CXT_CORS_ORIGINS
+        fromService:
+          type: web
+          name: cxthub-api
+          envVarKey: CXT_PUBLIC_URL
       - key: CXT_POSTGRES_DSN
         fromDatabase:
           name: cxthub-postgres
