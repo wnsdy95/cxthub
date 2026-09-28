@@ -85,11 +85,11 @@ func serve(ctx context.Context, args []string) error {
 	}
 	defer runtime.Close()
 	st, svc, idSvc, publicURL := runtime.Store, runtime.Context, runtime.Identity, runtime.PublicURL
-	if key := os.Getenv("CXT_IDENTITY_ENCRYPTION_KEY"); key != "" {
-		vault, err := federation.NewVault(key)
-		if err != nil {
-			return fmt.Errorf("CXT_IDENTITY_ENCRYPTION_KEY must contain a base64-encoded 32-byte key")
-		}
+	vault, err := federation.ConfiguredVault(os.Getenv("CXT_IDENTITY_ENCRYPTION_KEY"), os.Getenv("CXT_IDENTITY_ENCRYPTION_KEYRING"))
+	if err != nil {
+		return fmt.Errorf("invalid identity encryption key configuration")
+	}
+	if vault != nil {
 		idSvc.WithOIDC(federation.NewOIDC(), vault, publicURL)
 		idSvc.WithSAML(federation.NewSAML(), vault, publicURL)
 	}

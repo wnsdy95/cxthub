@@ -154,3 +154,10 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   #309 now shares derived event-location blocks while preserving v2 reads and
   atomic publication. Synthetic indexing measurements are recorded separately
   from full synchronization progress in PULL_VALIDATION_PROGRESS.md.
+
+- Shared event-location blocks merged in #311 after nine green CI checks. Exact
+  main-source `f144228` API/MCP binaries are installed and healthy. Live retained
+  history upload is under observation; completion is not inferred from indexing
+  benchmarks. Enterprise encryption-key lifecycle #312 adds staged read/write
+  keys and a transactional, auditable operator rewrap workflow. Mandatory policy,
+  credential assurance, SCIM, retention and security delivery remain outstanding.
