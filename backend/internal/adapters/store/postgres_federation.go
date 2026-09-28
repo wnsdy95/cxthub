@@ -118,7 +118,7 @@ func (s *PostgresStore) PutFederationIdentity(ctx context.Context, d domain.Fede
 	if err := s.requireIdentityTx(ctx); err != nil {
 		return err
 	}
-	if domain.ValidateEnterpriseID(d.EnterpriseID) != nil || domain.ValidateExternalID(d.UserID) != nil || d.Protocol != "oidc" || d.Issuer == "" || d.Subject == "" {
+	if domain.ValidateEnterpriseID(d.EnterpriseID) != nil || domain.ValidateExternalID(d.UserID) != nil || (d.Protocol != "oidc" && d.Protocol != "saml") || d.Issuer == "" || d.Subject == "" {
 		return domain.ErrValidation
 	}
 	old, err := s.GetFederationIdentity(ctx, d.EnterpriseID, d.Protocol, d.UserID)
@@ -152,7 +152,7 @@ func (s *PostgresStore) PutFederationSession(ctx context.Context, d domain.Feder
 	if err := s.requireIdentityTx(ctx); err != nil {
 		return err
 	}
-	if domain.ValidateEnterpriseID(d.EnterpriseID) != nil || d.SessionHash == "" || d.ConnectionRevision == "" || d.UserID == "" || d.Protocol != "oidc" || !d.ExpiresAt.After(time.Now()) {
+	if domain.ValidateEnterpriseID(d.EnterpriseID) != nil || d.SessionHash == "" || d.ConnectionRevision == "" || d.UserID == "" || (d.Protocol != "oidc" && d.Protocol != "saml") || !d.ExpiresAt.After(time.Now()) {
 		return domain.ErrValidation
 	}
 	b, err := json.Marshal(d)

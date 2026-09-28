@@ -3,8 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { useT } from '../i18n';
 import type { OIDCInput, OIDCView } from '../federation';
+import { EnterpriseSAML } from './EnterpriseSAML';
 
 export function EnterpriseIdentity({ id, owner }: { id: string; owner: boolean }) {
+ return <><OIDCIdentity id={id} owner={owner} /><EnterpriseSAML id={id} owner={owner} /></>;
+}
+function OIDCIdentity({ id, owner }: { id: string; owner: boolean }) {
  const t = useT(); const qc = useQueryClient();
  const key = ['enterpriseOIDC', id];
  const query = useQuery({ queryKey: key, queryFn: () => api.oidcView(id) });

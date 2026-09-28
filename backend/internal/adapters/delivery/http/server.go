@@ -1300,7 +1300,7 @@ func unsafeMethod(method string) bool {
 func (s *Server) withCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(sessionCookie)
-		if !unsafeMethod(r.Method) || err != nil || cookie.Value == "" {
+		if !unsafeMethod(r.Method) || err != nil || cookie.Value == "" || isSAMLACS(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

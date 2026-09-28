@@ -14,7 +14,7 @@ func TestOpenAPIDrift(t *testing.T) {
 	// Vercel routes API and MCP to independent services. MCP owns the browser
 	// consent API under /api/v1, so the public contract must audit both route
 	// sources even though cxtd itself no longer registers consent handlers.
-	registered := routesFromSource(t, "server.go", "identity.go", "teams.go", "enterprises.go", "enterprise_domains.go", "federation.go", "github_connections.go", "../mcp/server.go")
+	registered := routesFromSource(t, "server.go", "identity.go", "teams.go", "enterprises.go", "enterprise_domains.go", "federation.go", "saml.go", "github_connections.go", "../mcp/server.go")
 	specced := routesFromSpec(t, "../../../../../schemas/openapi.yaml")
 
 	for r := range registered {

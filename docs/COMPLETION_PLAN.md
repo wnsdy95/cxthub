@@ -130,3 +130,12 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   preserving full hashes, CIR-version checks and current chunk ownership. Cold
   and warm costs and limits are recorded in PULL_VALIDATION_PROGRESS.md. Neither
   change claims that the entire live synchronization backlog is drained.
+
+- Synchronization proof/repair changes merged in #306 after nine green CI checks.
+  Main-source `e2946ba` CLI, API and MCP binaries are installed locally and both
+  independent services are healthy. Live retained-history publication is being
+  measured; upload progress is not a substitute for ref acknowledgment.
+- SAML browser verification (#307) is implemented with pinned metadata, signed
+  requests/assertions, durable replay records and a browser-bound two-step
+  callback. Local PostgreSQL and signed protocol fixtures are under validation.
+  It is not mandatory SSO, SCIM, policy enforcement or customer IdP acceptance.
