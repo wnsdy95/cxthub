@@ -2,6 +2,10 @@ package domain
 
 import "errors"
 
+var ErrFederationUnavailable = errors.New("enterprise identity connection unavailable")
+var ErrVerifiedDomainRequired = errors.New("verify or renew this Enterprise domain before using its identity connection")
+var ErrRecentIdentityLogin = errors.New("sign in to CXTHub again before linking an external identity for the first time")
+
 // Server domain sentinel errors. Mapped from sync protocol error codes/HTTP status at delivery/http boundary.
 
 // ErrNotFound indicates the absence of repo/snapshot/doc/ref (404).

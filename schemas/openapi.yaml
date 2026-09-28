@@ -72,6 +72,35 @@ components:
   # Reusable Schemas
   # -------------------------------------------------------------------------
   schemas:
+    OIDCConnection:
+      type: object
+      properties:
+        enterprise_id: {type: string}
+        domain: {type: string}
+        issuer: {type: string}
+        client_id: {type: string}
+        auth_method: {type: string, enum: [client_secret_basic, client_secret_post]}
+        revision: {type: string}
+    OIDCView:
+      type: object
+      required: [available, configured, callback_uri, linked]
+      properties:
+        available: {type: boolean}
+        configured: {type: boolean}
+        connection: {$ref: '#/components/schemas/OIDCConnection'}
+        callback_uri: {type: string}
+        linked: {type: boolean}
+        verified_until: {type: string, format: date-time}
+    OIDCConnectionInput:
+      type: object
+      required: [domain, issuer, client_id, client_secret, revision]
+      properties:
+        domain: {type: string, description: Exact company domain with a current Enterprise DNS observation}
+        issuer: {type: string, description: Exact HTTPS issuer URL without query or fragment}
+        client_id: {type: string, maxLength: 256}
+        client_secret: {type: string, maxLength: 4096, writeOnly: true}
+        auth_method: {type: string, enum: [client_secret_basic, client_secret_post], default: client_secret_basic}
+        revision: {type: string, description: Current revision or empty for a new connection}
     EnterpriseDomainCommand:
       type: object
       required: [domain, revision]
@@ -5825,6 +5854,95 @@ paths:
           description: Ownership, policy, or uniqueness conflict
         "422":
           description: Invalid request
+
+  /enterprises/{enterpriseID}/oidc:
+    get:
+      summary: Read identity connection and current browser verification
+      description: Available to Enterprise members and members of its organizations. No secrets or external subjects are returned. Unconfigured operators return available=false.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Connection availability and session-specific status
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OIDCView'}
+        '401': {description: Authentication required}
+        '403': {description: Enterprise access required}
+    post:
+      summary: Configure an OIDC identity provider (Enterprise owner)
+      description: Requires a verified company domain. Validates discovery outside the transaction, then rechecks owner/domain/revision and commits encrypted credentials with audit. Email never links accounts; existing session verifications are invalidated by the new revision.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/OIDCConnectionInput'}
+      responses:
+        '200':
+          description: Public connection view
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OIDCView'}
+        '401': {description: Authentication required}
+        '403': {description: Owner required}
+        '409': {description: Stale revision or expired domain observation}
+        '422': {description: Invalid provider configuration}
+        '429': {description: Rate limited}
+        '503': {description: Identity connection unavailable}
+  /enterprises/{enterpriseID}/oidc/disable:
+    post:
+      summary: Disable OIDC and invalidate its session evidence (Enterprise owner)
+      description: Requires current revision. Account bindings and audit history remain; this does not alter membership or grant access.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [revision], properties: {revision: {type: string}}}
+      responses:
+        '200': {description: Connection disabled}
+        '401': {description: Authentication required}
+        '403': {description: Owner required}
+        '409': {description: Stale revision}
+        '429': {description: Rate limited}
+        '503': {description: Identity connection unavailable}
+  /enterprises/{enterpriseID}/oidc/authorize:
+    post:
+      summary: Start OIDC verification for the initiating browser session
+      description: Authorization code with S256 PKCE and nonce. A first account link requires a CXTHub browser login within 10 minutes. State is persisted and bound to that session and connection revision; CLI/MCP tokens cannot start this browser flow.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '200':
+          description: Provider authorization URL
+          content:
+            application/json:
+              schema: {type: object, properties: {url: {type: string}}}
+        '401': {description: Recent browser login required}
+        '403': {description: Enterprise access required}
+        '409': {description: Connection or domain changed}
+        '429': {description: Rate limited}
+        '503': {description: Provider or identity connection unavailable}
+  /auth/enterprise/oidc/callback:
+    get:
+      summary: Complete the initiating browser's OIDC verification
+      description: Requires its HttpOnly session cookie. Consumes state before exchange, verifies signed identity, rechecks session/membership/connection/domain, and atomically records an explicit issuer/subject binding, session evidence and audit. Grants no membership and does not enable mandatory SSO.
+      parameters:
+        - {name: state, in: query, required: true, schema: {type: string}}
+        - {name: code, in: query, required: true, schema: {type: string}}
+      responses:
+        '303': {description: Redirect to the recorded Enterprise page}
+        '401': {description: Verification not applied; restart with a current login}
+        '429': {description: Rate limited}
+        '503': {description: Identity connection unavailable}
 
   /enterprises/{enterpriseID}/domains:
     get:

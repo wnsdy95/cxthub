@@ -1,5 +1,6 @@
 import { EnterpriseGitHubConnections } from './GitHubConnections';
 import { EnterpriseDomains } from './EnterpriseDomains';
+import { EnterpriseIdentity } from './EnterpriseIdentity';
 import { RenameSpace } from './NamespaceAdministration';
 import { InvitationManager } from './CollaborationInvitations';
 import { useState, type FormEvent } from 'react';
@@ -44,7 +45,7 @@ function EnterpriseBody({ enterprise }: { enterprise: Enterprise }) {
  const mine = useOrganizations();
  const role = members.data?.find((member) => member.user_id === me?.id)?.role;
  const canAdmin = role === 'owner' || role === 'admin';
- const [tab, setTab] = useState<'organizations' | 'members' | 'policies' | 'audit' | 'settings'>('organizations');
+ const [tab, setTab] = useState<'organizations' | 'members' | 'policies' | 'identity' | 'audit' | 'settings'>(() => new URLSearchParams(window.location.search).get('tab') === 'identity' ? 'identity' : 'organizations');
  const [organizationId, setOrganizationId] = useState('');
  const audit = useQuery({ queryKey: ['enterpriseAudit', enterprise.id], queryFn: () => api.listEnterpriseAudit(enterprise.id), enabled: canAdmin && tab === 'audit' });
  const mutation = useMutation({ mutationFn: (run: () => Promise<unknown>) => run(), onSuccess: async () => { await Promise.all([
@@ -59,7 +60,8 @@ function EnterpriseBody({ enterprise }: { enterprise: Enterprise }) {
  return <div className="profile"><div className="profile-grid">
   <aside className="profile-side">{logo ? <img className="avatar-lg avatar-img organization-logo" src={logo} alt={enterprise.name} /> : <div className="avatar-lg organization-logo" style={{ background: avatarColor(enterprise.slug) }} aria-hidden="true">{enterprise.name.charAt(0)}</div>}<h1 className="profile-name">{enterprise.name}</h1><p className="profile-handle">{enterprise.slug}</p><span className="organization-badge">{t('enterprise.title')}</span></aside>
   <main className="profile-main"><p className="organization-access-note">{t('enterprise.note')}</p>
-   <nav className="tabs organization-tabs" aria-label={t('enterprise.title')}>{(['organizations', 'members', 'policies', 'audit', 'settings'] as const).filter((item) => canAdmin || (item !== 'audit' && item !== 'settings')).map((item) => <button key={item} className={`tab${tab === item ? ' on' : ''}`} onClick={() => setTab(item)}>{t(`enterprise.${item}`)}</button>)}</nav>
+   <nav className="tabs organization-tabs" aria-label={t('enterprise.title')}>{(['organizations', 'members', 'policies', 'identity', 'audit', 'settings'] as const).filter((item) => canAdmin || (item !== 'audit' && item !== 'settings')).map((item) => <button key={item} className={`tab${tab === item ? ' on' : ''}`} onClick={() => setTab(item)}>{t(`enterprise.${item}`)}</button>)}</nav>
+   {tab === 'identity' && <EnterpriseIdentity id={enterprise.id} owner={role === 'owner'} />}
    {error && <p className="err" role="alert">{error.message}</p>}
    {tab === 'organizations' && <section><EnterpriseGitHubConnections id={enterprise.id} />
     {role === 'owner' && <form className="management-form" onSubmit={(event) => { event.preventDefault(); mutation.mutate(() => api.linkEnterpriseOrganization(enterprise.id, organizationId)); }}>

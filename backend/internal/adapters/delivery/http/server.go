@@ -1221,6 +1221,12 @@ func (s *Server) respond(w http.ResponseWriter, v any, err error) {
 
 func mapError(err error) (code string, status int) {
 	switch {
+	case errors.Is(err, domain.ErrFederationUnavailable):
+		return "identity_connection_unavailable", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrVerifiedDomainRequired):
+		return "verified_domain_required", http.StatusConflict
+	case errors.Is(err, domain.ErrRecentIdentityLogin):
+		return "recent_identity_login_required", http.StatusUnauthorized
 	case errors.Is(err, domain.ErrDomainVerificationUnavailable):
 		return "domain_verification_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrSecretsRevisionRequired):

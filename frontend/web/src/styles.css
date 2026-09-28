@@ -1297,3 +1297,12 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .enterprise-domain-card h3 { overflow-wrap: anywhere; }
 .enterprise-domain-card label { display: grid; gap: 6px; margin: 10px 0; }
 .enterprise-domain-card input { width: 100%; min-width: 0; box-sizing: border-box; }
+
+.enterprise-identity { margin-bottom: 24px; }
+.enterprise-identity > h2, .enterprise-identity > p { margin: 0; }
+.enterprise-identity code { overflow-wrap: anywhere; }
+.identity-editor { margin-top: 16px; }
+.identity-editor summary { cursor: pointer; }
+.identity-editor form { display: grid; gap: 12px; margin-top: 12px; }
+.identity-editor label { display: grid; gap: 6px; }
+.identity-editor input, .identity-editor select { width: 100%; min-width: 0; box-sizing: border-box; }

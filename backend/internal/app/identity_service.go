@@ -23,6 +23,7 @@ type IdentityService struct {
 	teams           outbound.TeamStore
 	invitationEmail *invitationEmailConfig
 	domainResolver  outbound.DomainTXTResolver
+	federation      *federationConfig
 }
 
 // NewIdentityService creates an IdentityService.

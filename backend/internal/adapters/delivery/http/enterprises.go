@@ -25,6 +25,7 @@ type EnterpriseIdentity interface {
 
 func (s *Server) registerEnterpriseRoutes(mux *http.ServeMux) {
 	s.registerEnterpriseDomainRoutes(mux)
+	s.registerFederationRoutes(mux)
 	mux.HandleFunc("GET /api/v1/enterprises", s.requireUser(s.listEnterprises))
 	mux.HandleFunc("POST /api/v1/enterprises", s.requireUser(s.createEnterprise))
 	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}", s.requireUser(s.getEnterprise))
