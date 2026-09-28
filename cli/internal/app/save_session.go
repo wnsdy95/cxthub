@@ -452,6 +452,12 @@ func (s *SaveSessionService) collectHookLeaf(ctx context.Context, repoID string,
 	if snap.MemoryHash != "" {
 		return true
 	}
+	if backfill, ok := s.store.(outbound.HistoricalBackfillStore); ok {
+		pinned, err := backfill.HasBackfillPin(ctx, old)
+		if err != nil || pinned {
+			return false // retry collection after durable historical publication
+		}
+	}
 	replacement, err := s.store.GetSnapshot(ctx, current)
 	if err != nil {
 		return false

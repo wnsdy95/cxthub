@@ -360,6 +360,10 @@ type BranchHandoffInput struct {
 
 // SyncInput is an input DTO for SyncRepo.Push / SyncRepo.Pull.
 type SyncInput struct {
+	// ForegroundOnly publishes current ref/history/pending dependencies first and
+	// durably queues other retained snapshots when the local adapter supports it.
+	// The default full push keeps the existing synchronous contract.
+	ForegroundOnly bool
 	// PendingSessionID scopes live capture sync; skips unrelated pending/unsync publication.
 	PendingSessionID string
 	// RepoID is the ID of the sync target repo (empty means Cwd gitctx interpretation).
@@ -376,6 +380,8 @@ type SyncInput struct {
 
 // SyncOutput is the DTO for SyncRepo.Push / SyncRepo.Pull.
 type SyncOutput struct {
+	// BackfillPending counts retained historical snapshots still queued locally.
+	BackfillPending int
 	// Pushed is the number of snapshots pushed.
 	Pushed int
 	// Pulled is the number of snapshots pulled.

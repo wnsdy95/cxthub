@@ -58,7 +58,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"checkout":  {usage: "cxt checkout [<ref>] [-b <new>] [--provider claude|codex] [--mode full|reconstructed|memory]", flags: commandFlags([]string{"-b", "--provider", "--mode"}, nil)},
 	"fork":      {usage: "cxt fork <ref> --as <branch> [--provider claude|codex] [--mode full|reconstructed|memory]", flags: commandFlags([]string{"--as", "--provider", "--mode"}, nil)},
 	"load":      {usage: "cxt load [<ref>] [--provider claude|codex] [--mode full|reconstructed|memory]", flags: commandFlags([]string{"--provider", "--mode"}, nil)},
-	"push":      {usage: "cxt push [--force|-f|--append]", flags: commandFlags(nil, []string{"--force", "-f", "--append"})},
+	"push":      {usage: "cxt push [--force|-f|--append] [--wait-history]", flags: commandFlags(nil, []string{"--force", "-f", "--append", "--wait-history"})},
 	"pull":      {usage: "cxt pull [--force|-f]", flags: commandFlags(nil, []string{"--force", "-f"})},
 	"stash":     {usage: "cxt stash [push [-m <message>] [--provider claude|codex]|pop|list]", flags: commandFlags([]string{"-m", "--provider"}, nil)},
 	"memorize":  {usage: "cxt memorize [<ref>] [--provider claude|codex] [--claims <json-file>]", flags: commandFlags([]string{"--provider", "--claims"}, nil)},

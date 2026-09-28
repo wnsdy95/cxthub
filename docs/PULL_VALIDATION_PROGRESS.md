@@ -223,3 +223,45 @@ slots directly rather than allocating one uint32 per source byte. A synthetic
 15 MiB string measured approximately 30 ms with zero loop allocations. Legacy
 bit-parity tests prevent false negatives against existing filter files. FS is
 still the development compatibility adapter pending the PostgreSQL cutover.
+
+## Foreground publication and retained history
+
+Ordinary `cxt push` and Git pre-push now publish the prerequisite closure of
+refs, durable history, pending pointers and queued graft/promotion operations.
+Selection includes natural and overlay parents, memory fragments, pinned sources
+and earlier memory generations. An authenticated server memory attachment can
+satisfy an already-published immutable memory dependency without decoding it
+again locally. A missing or changed attachment still follows full validation.
+
+Unrelated retained snapshots are not a prerequisite for moving current refs.
+Their missing objects and memory attachments are first recorded in
+`.cxt/historical-backfill/<repository>/<snapshot>.json`, before foreground
+history or ref publication. A failed queue write stops foreground publication.
+The records pin local documents against sliding-capture collection. They contain
+hashes, attempt counts, retry times and safe reason codes, not transcript text or
+credentials. Changed requested state increments a version, so a delayed worker
+cannot acknowledge newer work. No source document is removed by this queue.
+
+A separate local helper uploads up to eight jobs per batch with exponential
+backoff capped at 256 seconds. It holds an OS worker lock during each batch,
+releases object-retention leases between jobs, and never changes refs, history
+events or pending pointers. Existing causal memory CAS and conflict checks are
+shared with foreground sync. The helper has a 30-minute lifetime; the queue
+survives exits, cancellation and machine restarts, and the next push wakes it.
+This is durable local retry, not an always-on OS scheduler. Git hook timeouts
+are unchanged. Narrow adapters without coordinated retention retain full push.
+
+`cxt doctor` / `cxt doctor --json` report pending records, attempts, failure
+categories and next retry times without starting any worker or changing files.
+`cxt push --wait-history` explicitly waits for the original full publication
+path and reports failures synchronously. Neither command turns a failed upload
+into a successful ref publication. Fresh dependencies that arrive during a push
+remain the next sync's obligation; an existing publication never consumes a
+newer pending pointer accidentally.
+
+Failure tests cover unavailable queue storage, required document failure,
+unrelated archival failure, process/store restart, cancellation, worker exclusion,
+stale acknowledgement, corrupt/symlinked queue records and capture collection
+before/after acknowledgment. Memory-only provenance and remote proof reuse have
+separate selection regressions. Synthetic tests prove ordering and durability;
+they do not claim that every live historical upload has completed.

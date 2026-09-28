@@ -75,6 +75,9 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   the exact main-source CLI was installed locally. PostgreSQL indexing now reuses
   current-version event search rows by verified event hash, retaining them against
   concurrent deletion. FS filters stream trigrams without a transcript-sized
-  intermediate array. Foreground/backfill separation remains pending.
+  intermediate array. PR #292 merged with nine green CI checks. Foreground/backfill
+  separation is implemented with a durable versioned queue, capture-retention
+  pins, bounded retries and read-only doctor diagnostics. CLI suite/vet, focused
+  race tests and full Git-hook E2E passed; PR/CI and local installation remain.
 - PostgreSQL cutover, UI and Enterprise phases remain pending implementation
   and validation; this document is not a completion claim.

@@ -1025,6 +1025,9 @@ func shouldSupersedeSession(path, preparedSeedPath string) bool {
 // Total limit: 60 seconds: Hooks block git commands, so they must finish in finite time for network operations.
 // (Individual HTTPs have a 30-second client timeout as a first defense — this is the total safety net).
 func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) error {
+	if len(rest) > 0 && rest[0] == "historical-sync" {
+		return runHistoricalSync(ctx, c, cwd)
+	}
 	if len(rest) > 0 && rest[0] == "live-watch" {
 		return runLiveObserver(ctx, cwd, rest[1:])
 	}
@@ -1155,12 +1158,13 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		}
 
 	case "branch-state-sync":
+		defer wakeHistoricalSync(c, cwd)
 		if _, ok := remotecfg.Origin(repoRoot); !ok && os.Getenv("CXT_REMOTE") == "" {
 			return nil
 		}
 		release := acquireSyncLock(repoRoot)
 		defer release()
-		if _, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd}); err != nil {
+		if _, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true}); err != nil {
 			hookWarn("branch archive sync: %v", err)
 		}
 
@@ -1238,6 +1242,7 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		}
 
 	case "pre-push":
+		defer wakeHistoricalSync(c, cwd)
 		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
 			hookWarn("rewritten context associations remain pending: %v", err)
 			return nil
@@ -1247,13 +1252,13 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 			hookWarn("Context not pushed — connect with cxt remote add origin <url>")
 			return nil
 		}
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd})
+		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true})
 		if err != nil && strings.Contains(err.Error(), domain.ErrSyncConflict.Error()) {
 			// A non-fast-forward rejection triggers an automatic append retry. Context does not force replicas
 			// to converge (the local lineage is authoritative for this session; pulling is the user's choice), so
 			// every divergent push must succeed without loss. The server leaves natural Parents unchanged and adds
 			// the remote head as a graft overlay at the new segment boundary, preserving and only expanding reachability.
-			out2, aerr := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Append: true})
+			out2, aerr := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Append: true, ForegroundOnly: true})
 			if aerr == nil {
 				out, err = out2, nil
 				fmt.Println("cxt: repositioned and appended after the remote head — no history lost")
@@ -1269,6 +1274,9 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		}
 		clearAuthHint(cwd)
 		fmt.Printf("cxt: pushed %d snapshot(s), %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
+		if out.BackfillPending > 0 {
+			fmt.Printf("cxt: %d retained historical snapshot(s) remain queued; current publication completed\n", out.BackfillPending)
+		}
 
 	case "ref-sync":
 		// reference-transaction(committed) branch ref change. stdin: "<old> <new> <ref>" lines.

@@ -33,22 +33,24 @@ import (
 
 // Container is a bundle of inbound ports used by the CLI driver + author identifier.
 type Container struct {
-	CaptureRecovery   inbound.CaptureRecovery
-	ResolveConnection func(context.Context, string) (domain.RepositoryConnection, error)
-	Init              inbound.InitRepo
-	Save              inbound.SaveSession
-	Fork              inbound.ForkSession
-	Branches          inbound.BranchLifecycle
-	Checkout          inbound.CheckoutSession
-	Load              inbound.LoadSession
-	List              inbound.ListSessions
-	Memorize          inbound.Memorize
-	Sync              inbound.SyncRepo
-	Seed              inbound.SeedBranch
-	Tag               inbound.TagRef
-	Stash             inbound.StashSession
-	Handoff           inbound.BranchHandoff
-	History           inbound.ContextHistory
+	// WakeHistoricalSync is process lifecycle wiring, absent in embedded/test drivers.
+	WakeHistoricalSync func(string)
+	CaptureRecovery    inbound.CaptureRecovery
+	ResolveConnection  func(context.Context, string) (domain.RepositoryConnection, error)
+	Init               inbound.InitRepo
+	Save               inbound.SaveSession
+	Fork               inbound.ForkSession
+	Branches           inbound.BranchLifecycle
+	Checkout           inbound.CheckoutSession
+	Load               inbound.LoadSession
+	List               inbound.ListSessions
+	Memorize           inbound.Memorize
+	Sync               inbound.SyncRepo
+	Seed               inbound.SeedBranch
+	Tag                inbound.TagRef
+	Stash              inbound.StashSession
+	Handoff            inbound.BranchHandoff
+	History            inbound.ContextHistory
 	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
 	// can promote the source branch context into the checked-out base timeline.
 	PRMerges outbound.PullRequestMergeResolver
@@ -674,7 +676,8 @@ func Run(c *Container, args []string) error {
 		}
 		force := flagPresent(rest, "--force") || flagPresent(rest, "-f")
 		appendDiverged := flagPresent(rest, "--append")
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged})
+		defer wakeHistoricalSync(c, cwd)
+		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged, ForegroundOnly: !flagPresent(rest, "--wait-history")})
 		if err != nil {
 			if strings.Contains(err.Error(), "sync conflict") {
 				if strings.Contains(err.Error(), "memory attachment") {
@@ -685,6 +688,9 @@ func Run(c *Container, args []string) error {
 			return err
 		}
 		fmt.Printf("pushed %d snapshot(s), %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
+		if out.BackfillPending > 0 {
+			fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt doctor' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
+		}
 		if appendDiverged {
 			// Server grafted remote head onto local ancestry — pull will reflect in local history.
 			fmt.Println("appended: rebased onto remote head — 'cxt pull' will connect local history")
@@ -1077,7 +1083,8 @@ usage: cxt <command> [flags]
                             restore or branch context (also run automatically by Git checkout)
   switch [<branch>] [-c new] [--mode full|reconstructed|memory]
                             alias for checkout (equivalent to Git switch)
-  push [--force|--append]   synchronize local context to origin
+  push [--force|--append] [--wait-history]
+                            publish current context; retain and retry historical uploads
   pull [--force]            synchronize origin context locally
   tag [<name> [ref]]        list or create immutable tags (equivalent to Git tags)
   stash [push|pop|list]     save or restore a session (push accepts --provider)
