@@ -148,3 +148,9 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   history and uses verified canonical prefixes for eligible supersession checks.
   Synthetic comparison costs and the observed live lock limitation are recorded
   in PULL_VALIDATION_PROGRESS.md. Backlog completion remains a separate live check.
+
+- Pending-maintenance PR #310 merged with nine green CI checks; the exact
+  main-source API/MCP binaries were installed and passed health checks. Follow-up
+  #309 now shares derived event-location blocks while preserving v2 reads and
+  atomic publication. Synthetic indexing measurements are recorded separately
+  from full synchronization progress in PULL_VALIDATION_PROGRESS.md.

@@ -48,7 +48,7 @@ func TestPGVerifiedDocTransactionAndIntegrity(t *testing.T) {
 		t.Fatal("body/ownership escaped rollback", err)
 	}
 	var count int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM doc_read_indexes_v2 WHERE hash=$1`, doc.Hash).Scan(&count); err != nil || count != 0 {
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM doc_read_indexes_v3 WHERE hash=$1`, doc.Hash).Scan(&count); err != nil || count != 0 {
 		t.Fatal("index escaped rollback", count, err)
 	}
 	if fresh, err := s.PutVerifiedDoc(ctx, repo, v); err != nil || !fresh {
@@ -62,7 +62,7 @@ func TestPGVerifiedDocTransactionAndIntegrity(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `INSERT INTO doc_read_indexes(hash,version,envelope,event_count) VALUES($1,1,'{}',999)`, doc.Hash); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM doc_read_indexes_v2 WHERE hash=$1`, doc.Hash); err != nil {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM doc_read_indexes_v3 WHERE hash=$1`, doc.Hash); err != nil {
 		t.Fatal(err)
 	}
 	hits, err := s.SearchDocEvents(ctx, repo, doc.Hash, "earlier", -1, 10)

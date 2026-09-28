@@ -43,7 +43,7 @@ func checkDocJobRollback(t *testing.T, s *PostgresStore) {
 		t.Fatalf("body escaped rollback %v %v", have, err)
 	}
 	var indexes int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM doc_read_indexes_v2 WHERE hash=$1`, doc.Hash()).Scan(&indexes); err != nil || indexes != 0 {
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM doc_read_indexes_v3 WHERE hash=$1`, doc.Hash()).Scan(&indexes); err != nil || indexes != 0 {
 		t.Fatalf("index escaped rollback %d %v", indexes, err)
 	}
 	if err := s.CompleteDocJob(ctx, claim, doc, time.Now().UTC()); err != nil {
