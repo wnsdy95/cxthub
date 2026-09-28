@@ -170,7 +170,7 @@ func validatePullBatchWithVerified(ctx context.Context, store outbound.SessionSt
 		if _, ok := docByHash[snap.DocHash]; ok {
 			continue
 		}
-		if err := verifyStoredPullDoc(ctx, store, snap.DocHash); err != nil {
+		if err := verifyStoredDocument(ctx, store, snap.DocHash); err != nil {
 			return pullReadError(err, fmt.Sprintf("snapshot %s doc %s", snap.ID, snap.DocHash))
 		}
 		verified[snap.DocHash] = true

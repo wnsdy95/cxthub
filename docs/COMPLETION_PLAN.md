@@ -66,7 +66,11 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
 - Capture recovery CLI and failure-path tests implemented. Two retained failures
   were resolved through verified replacement evidence; all three original attempt
   files remained byte-for-byte unchanged. One unprovable gap remains unresolved
-  pending an explicit operator acknowledgment. CLI suite/vet/race passed; real
-  Git-hook sync E2E and PR checks are in progress.
-- All other phases pending implementation and validation; this document is a plan,
-  not a completion claim.
+  pending an explicit operator acknowledgment. CLI suite/vet/race and real
+  Git-hook sync E2E passed. PR #289 merged after all nine CI checks passed.
+- Synchronization phase: #290 tracks remaining latency. History verification
+  now reuses authenticated storage receipts and removes per-operation duplicate
+  validation; synthetic cold/warm measurements and corruption tests are recorded
+  in PULL_VALIDATION_PROGRESS.md. Foreground/backfill separation remains pending.
+- PostgreSQL cutover, UI and Enterprise phases remain pending implementation
+  and validation; this document is not a completion claim.

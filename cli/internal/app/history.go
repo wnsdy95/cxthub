@@ -25,22 +25,14 @@ func (s *ContextHistoryService) ValidateHistorySource(ctx context.Context, e dom
 	if err := domain.ValidateHistoryEvent(e); err != nil {
 		return e, err
 	}
+	// This verifier belongs to one operation. Every new operation checks current
+	// stored bytes again, including when the adapter reuses an authenticated receipt.
+	verified := historySourceVerification{store: s.store, repo: e.RepoID, documents: map[domain.ContentHash]bool{}}
 	for _, id := range []domain.ContentHash{e.Source, e.Target, e.SharedTarget, e.MemorySource} {
 		if id == "" {
 			continue
 		}
-		snap, err := s.store.GetSnapshot(ctx, id)
-		if err != nil {
-			return e, fmt.Errorf("source snapshot %s: %w", id, err)
-		}
-		if snap.RepoID != e.RepoID {
-			return e, domain.ErrHashMismatch
-		}
-		doc, err := s.store.GetDoc(ctx, snap.DocHash)
-		if err != nil {
-			return e, err
-		}
-		if err = domain.ValidateSessionDocHash(doc); err != nil {
+		if _, err := verified.snapshot(ctx, id); err != nil {
 			return e, err
 		}
 	}
@@ -49,7 +41,7 @@ func (s *ContextHistoryService) ValidateHistorySource(ctx context.Context, e dom
 		if e.MemorySource != "" {
 			from = e.MemorySource
 		}
-		memory, owner, err := s.inheritedMemory(ctx, e.RepoID, from)
+		memory, owner, err := s.inheritedMemory(ctx, from, &verified)
 		if err != nil {
 			return e, err
 		}
@@ -74,7 +66,7 @@ func (s *ContextHistoryService) ValidateHistorySource(ctx context.Context, e dom
 // Resolve project memory from verified ancestry only. Keep the owning snapshot
 // as explicit provenance, rather than pretending its digest belongs to the
 // descendant or importing its conversation into an orphan branch.
-func (s *ContextHistoryService) inheritedMemory(ctx context.Context, repo string, from domain.ContentHash) (domain.ContentHash, domain.ContentHash, error) {
+func (s *ContextHistoryService) inheritedMemory(ctx context.Context, from domain.ContentHash, verified *historySourceVerification) (domain.ContentHash, domain.ContentHash, error) {
 	seen := map[domain.ContentHash]bool{}
 	queue := []domain.ContentHash{from}
 	for len(queue) > 0 {
@@ -84,18 +76,8 @@ func (s *ContextHistoryService) inheritedMemory(ctx context.Context, repo string
 			continue
 		}
 		seen[id] = true
-		snap, err := s.store.GetSnapshot(ctx, id)
+		snap, err := verified.snapshot(ctx, id)
 		if err != nil {
-			return "", "", err
-		}
-		if snap.RepoID != repo {
-			return "", "", domain.ErrHashMismatch
-		}
-		doc, err := s.store.GetDoc(ctx, snap.DocHash)
-		if err != nil {
-			return "", "", err
-		}
-		if err := domain.ValidateSessionDocHash(doc); err != nil {
 			return "", "", err
 		}
 		if snap.MemoryHash != "" {
@@ -293,4 +275,32 @@ func selectedMemory(ctx context.Context, store MemoryReader, id domain.ContentHa
 	}
 	memory, err := store.GetMemory(ctx, p.MemoryHash)
 	return memory, true, err
+}
+
+// Snapshot ownership is checked independently from immutable document identity.
+// Sharing a document hash never authorizes a different repository's metadata.
+type historySourceVerification struct {
+	store     outbound.SessionStore
+	repo      string
+	documents map[domain.ContentHash]bool
+}
+
+func (v *historySourceVerification) snapshot(ctx context.Context, id domain.ContentHash) (domain.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Snapshot{}, err
+	}
+	snap, err := v.store.GetSnapshot(ctx, id)
+	if err != nil {
+		return snap, fmt.Errorf("source snapshot %s: %w", id, err)
+	}
+	if snap.ID != id || snap.RepoID != v.repo {
+		return snap, domain.ErrHashMismatch
+	}
+	if !v.documents[snap.DocHash] {
+		if err := verifyStoredDocument(ctx, v.store, snap.DocHash); err != nil {
+			return snap, err
+		}
+		v.documents[snap.DocHash] = true
+	}
+	return snap, ctx.Err()
 }
