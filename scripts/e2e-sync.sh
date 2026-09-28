@@ -63,9 +63,9 @@ PYBIRTH
 }
 
 echo "── build(isolated bin) · server start :$PORT"
-tags=()
-if [ -n "${CXT_E2E_DSN:-}" ]; then tags=(-tags postgres); fi
-( cd "$ROOT/backend" && go build "${tags[@]}" -o "$TMP/bin/cxtd" ./cmd/cxtd ) || { echo "cxtd build failed"; exit 1; }
+server_build=(go build -o "$TMP/bin/cxtd")
+if [ -n "${CXT_E2E_DSN:-}" ]; then server_build+=(-tags postgres); fi
+( cd "$ROOT/backend" && "${server_build[@]}" ./cmd/cxtd ) || { echo "cxtd build failed"; exit 1; }
 if [ -n "${CXT_E2E_CXT_BIN:-}" ]; then
   cp "$CXT_E2E_CXT_BIN" "$TMP/bin/cxt" || exit 1
 else

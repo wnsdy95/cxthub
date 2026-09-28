@@ -111,6 +111,30 @@ runs, frontend unit/i18n/routing/type/build checks, and the browser MCP OAuth
 flow passed locally. A browser SDK login with real Firebase or GitHub accounts
 was not exercised; local auth fixtures are deliberately isolated.
 
+## Collection during an in-flight push
+
+The subsequent live-data run exposed another failure after about 24 minutes:
+a document advertised as present at negotiation was collected by a concurrent
+live-capture replacement before snapshot batch 26 of 31 was published. The
+server rejected that batch with 422 and the client sent no ref updates. This
+was a failed synchronization, not a successful latency measurement.
+
+Negotiation does not provide a retention lease. The CLI now rechecks the full
+original offered object graph when snapshot publication fails. It retries only
+when that recheck proves a document or a previously-present snapshot has gone
+missing. Only missing bodies are reopened, and existing chunk/job identities
+are reused. The server already requeues a completed finalization job if its
+body has been collected. Recovery is limited to two attempts and respects
+caller cancellation and the ordinary request deadlines. Unrelated metadata
+validation errors and body upload errors do not trigger blind retries. Refs,
+pending pointers and unsync pointers remain after successful prerequisites.
+
+Synthetic regressions cover lost documents, lost parents outside the initial
+upload set, snapshot-only collection, repeated collection, cancellation and
+unrelated validation failures. The same recovery path serves ordinary push,
+pending synchronization and unsync preparation. This is bounded recovery, not
+an indefinite server-side object retention promise.
+
 ## Launch gate after deployment
 
 Local proxies and containers cannot establish Vercel gateway behavior, Render

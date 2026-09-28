@@ -439,7 +439,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	// Objects are resumable prerequisites. Refs remain a separate final phase
 	// so incomplete uploads cannot publish unreachable sibling-session history.
 	if len(pushSnaps) > 0 || len(pushDocs) > 0 {
-		if err := s.pushSelectedObjects(ctx, repoID, pushSnaps, pushDocs); err != nil {
+		if err := s.pushSelectedObjects(ctx, repoID, snaps, pushSnaps, pushDocs); err != nil {
 			return inbound.SyncOutput{}, err
 		}
 	}
@@ -994,22 +994,64 @@ func pushDocumentHashes(snaps []domain.Snapshot, wanted map[domain.ContentHash]b
 // unsync pointers advance until the entire prerequisite object phase succeeds.
 // Peak decoded-body retention is proportional to the largest document, not the
 // sum of the backlog. Chunk negotiation still reuses prior uploads on retry.
-func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string, snaps []domain.Snapshot, hashes []domain.ContentHash) error {
-	for _, hash := range hashes {
+func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string, offered, snaps []domain.Snapshot, hashes []domain.ContentHash) error {
+	// Negotiation is an observation, not a remote retention lease. A concurrent
+	// pending replacement can collect a previously present prefix while large
+	// bodies upload. Recover only newly missing prerequisites, at most twice.
+	for recovery := 0; ; recovery++ {
+		for _, hash := range hashes {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.pushDocument(ctx, repoID, hash); err != nil {
+				return err
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.pushDocument(ctx, repoID, hash); err != nil {
+		if len(snaps) == 0 {
+			return nil
+		}
+		publicationErr := s.remote.Push(ctx, repoID, snaps, nil, nil, false, false)
+		if publicationErr == nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if _, ok := s.remote.(outbound.PushObjectNegotiator); !ok || recovery == 2 {
+			return publicationErr
+		}
+		repairSnaps, repairDocs, err := s.selectPushObjects(ctx, repoID, offered)
+		if err != nil {
+			return errors.Join(publicationErr, fmt.Errorf("recheck push prerequisites: %w", err))
+		}
+		// Missing snapshots already in this attempted batch can be an ordinary
+		// metadata validation failure. Only disappeared docs or snapshots that
+		// were previously present establish a collection race worth recovering.
+		attempted := make(map[domain.ContentHash]bool, len(snaps))
+		for _, snap := range snaps {
+			attempted[snap.ID] = true
+		}
+		disappeared := len(repairDocs) > 0
+		for _, snap := range repairSnaps {
+			disappeared = disappeared || !attempted[snap.ID]
+		}
+		if !disappeared {
+			return publicationErr
+		}
+		// Retain the rejected metadata as well as recovered dependencies. A
+		// concurrent writer must not let recovery silently discard the original
+		// publication request or its validation errors.
+		retry := append([]domain.Snapshot(nil), snaps...)
+		for _, snap := range repairSnaps {
+			if !attempted[snap.ID] {
+				retry = append(retry, snap)
+			}
+		}
+		snaps, hashes = retry, repairDocs
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if len(snaps) == 0 {
-		return nil
-	}
-	return s.remote.Push(ctx, repoID, snaps, nil, nil, false, false)
 }
 
 func (s *SyncRepoService) pushDocument(ctx context.Context, repoID string, hash domain.ContentHash) error {
@@ -1131,7 +1173,7 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 			if err := s.pushSettingsObjects(ctx, repoID, selected); err != nil {
 				return err
 			}
-			return s.pushSelectedObjects(ctx, repoID, selected, docs)
+			return s.pushSelectedObjects(ctx, repoID, snaps, selected, docs)
 		}
 		pushed := len(chainSnaps) > 0 && push(chainSnaps) == nil
 		if !pushed {
@@ -1168,7 +1210,7 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 					pushSnaps, pushDocs, perr := s.selectPushObjects(ctx, repoID, snaps)
 					objectsReady := perr == nil
 					if objectsReady && (len(pushSnaps) > 0 || len(pushDocs) > 0) {
-						objectsReady = s.pushSelectedObjects(ctx, repoID, pushSnaps, pushDocs) == nil
+						objectsReady = s.pushSelectedObjects(ctx, repoID, snaps, pushSnaps, pushDocs) == nil
 					}
 					if objectsReady {
 						for _, r := range ahead {
