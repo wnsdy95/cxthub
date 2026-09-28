@@ -110,3 +110,6 @@ Start MCP and API against the **same** verified PostgreSQL database, Firebase
 project and public origin. Follow [Render deployment](RENDER.md) for route order,
 readiness and rollback. Provisioning, production transfer, DNS, GitHub/Firebase
 registration and external email/webhook smoke tests are outside this rehearsal.
+
+For the local development cutover and private macOS service configuration, use
+[Independent local PostgreSQL services](LOCAL_POSTGRES.md).
