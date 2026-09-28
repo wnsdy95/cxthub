@@ -230,7 +230,7 @@ func (*SAML) Keys(ctx context.Context) (string, string, error) {
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})), nil
 }
-func samlSP(s outbound.SAMLSettings) (*saml.ServiceProvider, error) {
+func samlSP(s outbound.SAMLSettings, metadataOnly ...bool) (*saml.ServiceProvider, error) {
 	md, err := samlIDP(s.Metadata)
 	if err != nil {
 		return nil, err
@@ -248,7 +248,8 @@ func samlSP(s outbound.SAMLSettings) (*saml.ServiceProvider, error) {
 		return nil, errProvider
 	}
 	cert, err := x509.ParseCertificate(cb.Bytes)
-	if err != nil || time.Now().Before(cert.NotBefore) || !time.Now().Before(cert.NotAfter) {
+	allowExpired := len(metadataOnly) > 0 && metadataOnly[0]
+	if err != nil || (!allowExpired && (time.Now().Before(cert.NotBefore) || !time.Now().Before(cert.NotAfter))) {
 		return nil, errProvider
 	}
 	kb, rest := pem.Decode([]byte(s.PrivateKey))
@@ -276,15 +277,33 @@ func (*SAML) Validate(ctx context.Context, s outbound.SAMLSettings) (string, err
 	}
 	return sp.IDPMetadata.EntityID, nil
 }
+
+// Configuration recovery may update expired IdP trust while the current SP
+// signer also needs renewal. This does not authorize a login with expired keys.
+func (*SAML) ValidateMetadata(ctx context.Context, s outbound.SAMLSettings) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	sp, err := samlSP(s, true)
+	if err != nil {
+		return "", err
+	}
+	return sp.IDPMetadata.EntityID, nil
+}
 func (*SAML) Metadata(ctx context.Context, s outbound.SAMLSettings) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	sp, err := samlSP(s)
+	// Expired current certificates must not prevent publishing a replacement.
+	// Authorize/Verify still require the active signing certificate to be valid.
+	sp, err := samlSP(s, true)
 	if err != nil {
 		return "", err
 	}
 	md := sp.Metadata()
+	if len(s.AdditionalCertificates) > 1 {
+		return "", errProvider
+	}
 	// This profile accepts signed plaintext assertions only. Do not advertise
 	// encryption/SLO endpoints that the application does not implement.
 	for i := range md.SPSSODescriptors {
@@ -296,6 +315,20 @@ func (*SAML) Metadata(ctx context.Context, s outbound.SAMLSettings) (string, err
 			}
 		}
 		d.KeyDescriptors = keys
+		for _, raw := range s.AdditionalCertificates {
+			block, rest := pem.Decode([]byte(raw))
+			if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+				return "", errProvider
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return "", errProvider
+			}
+			if bytes.Equal(cert.Raw, sp.Certificate.Raw) {
+				return "", errProvider
+			}
+			d.KeyDescriptors = append(d.KeyDescriptors, saml.KeyDescriptor{Use: "signing", KeyInfo: saml.KeyInfo{X509Data: saml.X509Data{X509Certificates: []saml.X509Certificate{{Data: base64.StdEncoding.EncodeToString(cert.Raw)}}}}})
+		}
 		d.SingleLogoutServices = nil
 	}
 	b, err := xml.Marshal(md)

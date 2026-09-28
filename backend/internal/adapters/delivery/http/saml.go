@@ -17,6 +17,7 @@ type samlBackend interface {
 	GetSAMLView(context.Context, string, string, string) (app.SAMLView, error)
 	ConfigureSAML(context.Context, string, string, app.SAMLConnectionInput) (app.SAMLView, error)
 	DisableSAML(context.Context, string, string, string) error
+	ChangeSAMLSigning(context.Context, string, string, app.SAMLSigningInput) (app.SAMLView, error)
 	BeginSAML(context.Context, string, string, string) (app.OIDCAuthorization, error)
 	SAMLMetadata(context.Context, string) (string, error)
 	ReceiveSAML(context.Context, string, string, []byte) (string, error)
@@ -27,10 +28,24 @@ func (s *Server) registerSAMLRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/saml", s.requireUser(s.samlView))
 	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/saml", s.requireUser(s.rateLimit(10, time.Minute, s.samlConfigure)))
 	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/saml/disable", s.requireUser(s.rateLimit(10, time.Minute, s.samlDisable)))
+	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/saml/signing", s.requireUser(s.rateLimit(10, time.Minute, s.samlSigning)))
 	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/saml/authorize", s.requireUser(s.rateLimit(10, time.Minute, s.samlAuthorize)))
 	mux.HandleFunc("GET /api/v1/auth/enterprise/saml/{enterpriseID}/metadata", s.rateLimit(30, time.Minute, s.samlMetadata))
 	mux.HandleFunc("POST /api/v1/auth/enterprise/saml/{enterpriseID}/acs", s.rateLimit(30, time.Minute, s.samlACS))
 	mux.HandleFunc("GET /api/v1/auth/enterprise/saml/finish", s.rateLimit(30, time.Minute, s.samlFinish))
+}
+func (s *Server) samlSigning(w http.ResponseWriter, r *http.Request) {
+	b := s.samlBackend(w)
+	if b == nil {
+		return
+	}
+	var in app.SAMLSigningInput
+	if !s.decode(w, r, &in) {
+		return
+	}
+	u, _ := userFrom(r.Context())
+	out, err := b.ChangeSAMLSigning(r.Context(), u.ID, r.PathValue("enterpriseID"), in)
+	s.respond(w, out, err)
 }
 func (s *Server) samlBackend(w http.ResponseWriter) samlBackend {
 	b, ok := s.id.(samlBackend)

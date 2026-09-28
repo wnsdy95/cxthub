@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { capturePageErrors } from './api-fixture';
+import type { SAMLConnection } from '../src/federation';
 
 test('identity UI reports availability and clears secrets after a revisioned save', async ({ page }, testInfo) => {
  test.skip(!process.env.CXT_E2E_FULLSTACK, 'requires real base identity API');
@@ -58,7 +59,7 @@ test('SAML settings keep metadata edits revisioned and show supported scope', as
  const section = page.getByRole('region', { name: 'SAML 2.0 identity' });
  await expect(section).toContainText('Your operator has not enabled identity connections yet.');
  const endpoint = `/api/v1/enterprises/${e.id}/saml`;
- let connection: Record<string, string> | undefined; let submitted: Record<string, string> | undefined;
+ let connection: SAMLConnection | undefined; let submitted: Record<string, string> | undefined;
  await page.route(`**${endpoint}`, async route => {
   if (route.request().method() === 'POST') {
    submitted = route.request().postDataJSON();
@@ -76,6 +77,33 @@ test('SAML settings keep metadata edits revisioned and show supported scope', as
  await expect(section.getByLabel('Identity provider metadata XML')).toHaveValue('');
  await expect(section).toContainText('Unsolicited login, encrypted assertions and single logout are not supported.');
  await expect(section.getByRole('link', { name: 'Open service provider metadata' })).toHaveAttribute('href', `${origin}/api/v1/auth/enterprise/saml/${e.id}/metadata`);
+ let revision = 0;
+ await page.route(`**${endpoint}/signing`, async route => {
+  const input = route.request().postDataJSON(); expect(input.revision).toBe(connection!.revision);
+  connection = { ...connection!, revision: `sc_signing_${++revision}` };
+  if (input.action === 'prepare') connection.rotation = { id: 'sr_fixture', state: 'prepared', certificate: 'next-public', created_at: new Date().toISOString() };
+  else if (input.action === 'activate') {
+   expect(input.trust_confirmed).toBe(true);
+   connection.certificate = 'next-public';
+   connection.rotation = { ...connection.rotation!, state: 'active', certificate: 'old-public', activated_at: new Date().toISOString() };
+  } else if (input.action === 'retire') { expect(connection.rotation?.verified_at).toBeTruthy(); delete connection.rotation; }
+  else throw new Error(`Unexpected action ${input.action}`);
+  await route.fulfill({ json: { available: true, configured: true, connection, entity_id: `${origin}/api/v1/auth/enterprise/saml/${e.id}/metadata`, acs: `${origin}/api/v1/auth/enterprise/saml/${e.id}/acs`, linked: false } });
+ });
+ const signing = section.getByRole('region', { name: 'Request signing certificate' });
+ await signing.getByRole('button', { name: 'Prepare new certificate' }).click();
+ await expect(signing.getByRole('button', { name: 'Activate new certificate' })).toBeDisabled();
+ await signing.getByRole('checkbox').check();
+ await signing.getByRole('button', { name: 'Activate new certificate' }).click();
+ await expect(signing.getByRole('button', { name: 'Retire previous key' })).toBeDisabled();
+ await expect(signing.getByRole('button', { name: 'Restore previous certificate' })).toBeEnabled();
+ // This simulates the query after the real signed callback, exercised in PG tests.
+ connection!.rotation!.verified_at = new Date().toISOString();
+ await page.reload();
+ await expect(signing).toContainText('This does not prove that the provider enforces request signatures.');
+ await signing.getByRole('button', { name: 'Retire previous key' }).click();
+ await expect(signing.getByRole('button', { name: 'Prepare new certificate' })).toBeVisible();
+ expect(connection!.rotation).toBeUndefined();
  await section.screenshot({ path: testInfo.outputPath('enterprise-saml.png') });
  expect(submitted?.metadata).toContain('synthetic UI fixture'); expect(errors).toEqual([]);
 });

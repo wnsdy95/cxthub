@@ -148,6 +148,7 @@ export const api = {
   samlConfigure: (id: string, input: import('./federation').SAMLInput) => call<import('./federation').SAMLView>('POST', `/enterprises/${encodeURIComponent(id)}/saml`, input),
   samlDisable: (id: string, revision: string) => call<{ status: string }>('POST', `/enterprises/${encodeURIComponent(id)}/saml/disable`, { revision }),
   samlAuthorize: (id: string) => call<{ url: string }>('POST', `/enterprises/${encodeURIComponent(id)}/saml/authorize`, {}),
+  samlSigning: (id: string, input: import('./federation').SAMLSigningInput) => call<import('./federation').SAMLView>('POST', `/enterprises/${encodeURIComponent(id)}/saml/signing`, input),
   oidcView: (id: string) => call<import('./federation').OIDCView>('GET', `/enterprises/${encodeURIComponent(id)}/oidc`),
   oidcConfigure: (id: string, input: import('./federation').OIDCInput) => call<import('./federation').OIDCView>('POST', `/enterprises/${encodeURIComponent(id)}/oidc`, input),
   oidcDisable: (id: string, revision: string) => call<{ status: string }>('POST', `/enterprises/${encodeURIComponent(id)}/oidc/disable`, { revision }),

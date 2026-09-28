@@ -80,6 +80,31 @@ components:
         issuer: {type: string}
         revision: {type: string}
         certificate: {type: string, description: Public SP signing certificate}
+        rotation: {$ref: '#/components/schemas/SAMLSigningRotation'}
+    SAMLSigningRotation:
+      type: object
+      required: [id, state, certificate, created_at]
+      properties:
+        id: {type: string}
+        state: {type: string, enum: [prepared, active]}
+        certificate: {type: string, description: Upcoming certificate before activation; previous certificate after activation}
+        created_at: {type: string, format: date-time}
+        activated_at: {type: string, format: date-time}
+        verified_at: {type: string, format: date-time, description: A browser completed verification at the activated revision; does not prove IdP request-signature enforcement}
+    SAMLCertificateInfo:
+      type: object
+      properties:
+        fingerprint: {type: string, description: SHA-256 of DER certificate}
+        not_before: {type: string, format: date-time}
+        not_after: {type: string, format: date-time}
+        status: {type: string, enum: [valid, expiring, expired, not_yet_valid]}
+    SAMLSigningInput:
+      type: object
+      required: [revision, action]
+      properties:
+        revision: {type: string}
+        action: {type: string, enum: [prepare, activate, cancel, rollback, retire]}
+        trust_confirmed: {type: boolean, description: Required true for activation after owner confirms IdP trust of both certificates}
     SAMLView:
       type: object
       required: [available, configured, entity_id, acs, linked]
@@ -91,6 +116,8 @@ components:
         acs: {type: string}
         linked: {type: boolean}
         verified_until: {type: string, format: date-time}
+        signing_certificate: {$ref: '#/components/schemas/SAMLCertificateInfo'}
+        alternate_certificate: {$ref: '#/components/schemas/SAMLCertificateInfo'}
     SAMLConnectionInput:
       type: object
       required: [domain, metadata, revision]
@@ -5921,6 +5948,31 @@ paths:
         '422': {description: Unsupported or invalid configuration}
         '429': {description: Rate limited}
         '503': {description: Identity service unavailable}
+  /enterprises/{enterpriseID}/saml/signing:
+    post:
+      summary: Transition SP signing-certificate rollover (Enterprise owner)
+      description: Revision-checked prepare, confirmed activation, cancellation, rollback or retirement. Retirement requires a current-revision completed browser flow. No private keys are returned. Authority, state and audit commit atomically.
+      security: [{SessionCookie: []}, {BearerToken: []}]
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SAMLSigningInput'}
+      responses:
+        '200':
+          description: Updated public signing state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SAMLView'}
+        '422': {description: Invalid action, unconfirmed activation or unusable signing material}
+        '429': {description: Rate limited}
+        '401': {description: Authentication required}
+        '403': {description: Enterprise owner required}
+        '404': {description: Connection not found}
+        '409': {description: Stale revision or invalid lifecycle transition}
+        '503': {description: Identity connection unavailable}
   /enterprises/{enterpriseID}/saml/disable:
     post:
       summary: Disable SAML (Enterprise owner)

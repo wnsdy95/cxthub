@@ -169,3 +169,20 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   at the final ref batch. Ordinary pull preserved local-ahead branch work. #309
   now also bounds CLI snapshot publication per transaction and reports distinct
   memory/history progress; live backlog acceptance is still pending.
+
+- Bounded snapshot publication merged in #314 after nine green CI checks. Exact
+  main-source `7af904e` CLI is installed. A live run completed 12 documents and
+  all snapshot/memory/history stages; final refs encountered concurrent remote
+  progress. Pull preserved 14 local-ahead branches, verified against both graphs.
+  A subsequent ordinary push completed 16 snapshots and all 2,534 refs; all 14
+  previously retained branch tips match the server. The historical upload queue
+  is empty. No force/append or manual data repair was used. Full sync still
+  selects superseded, unreferenced hook captures retained locally; recurring
+  capture traffic/performance remains in #290 rather than claiming cloud readiness.
+- SAML signing lifecycle #315 adds owner-confirmed preparation/activation,
+  current-revision browser verification before retirement, cancellation and valid
+  previous-key rollback. IdP trust repair preserves both keys and resets verification.
+  Expired SP certificates do not prevent publishing recovery metadata. Alternate
+  keys participate in operator encryption rewrap. Local signed fixture and race
+  checks passed, along with 82 browser regressions, focused UI recheck and full
+  backend/PostgreSQL test/vet. No customer IdP or mandatory policy is enabled.

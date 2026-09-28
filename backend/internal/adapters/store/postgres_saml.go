@@ -15,11 +15,20 @@ func (s *PostgresStore) GetSAMLConnection(ctx context.Context, id string) (d dom
 	if domain.ValidateEnterpriseID(id) != nil {
 		return d, domain.ErrValidation
 	}
-	err = s.db(ctx).QueryRow(ctx, `SELECT record,metadata,sealed_key FROM enterprise_saml_connections WHERE enterprise_id=$1`, id).Scan(&d, &d.Metadata, &d.PrivateKey)
+	var alternate string
+	err = s.db(ctx).QueryRow(ctx, `SELECT record,metadata,sealed_key,sealed_alternate_key FROM enterprise_saml_connections WHERE enterprise_id=$1`, id).Scan(&d, &d.Metadata, &d.PrivateKey, &alternate)
 	if err != nil {
 		return d, mapNoRows(err)
 	}
 	if d.EnterpriseID != id || d.Revision == "" {
+		return d, domain.ErrIntegrity
+	}
+	if d.Rotation != nil {
+		if d.Rotation.ID == "" || alternate == "" || (d.Rotation.State != "prepared" && d.Rotation.State != "active") {
+			return d, domain.ErrIntegrity
+		}
+		d.Rotation.PrivateKey = alternate
+	} else if alternate != "" {
 		return d, domain.ErrIntegrity
 	}
 	return d, nil
@@ -35,7 +44,14 @@ func (s *PostgresStore) PutSAMLConnection(ctx context.Context, d domain.SAMLConn
 	if err != nil {
 		return err
 	}
-	_, err = s.db(ctx).Exec(ctx, `INSERT INTO enterprise_saml_connections(enterprise_id,record,metadata,sealed_key) VALUES($1,$2,$3,$4) ON CONFLICT(enterprise_id) DO UPDATE SET record=$2,metadata=$3,sealed_key=$4`, d.EnterpriseID, b, d.Metadata, d.PrivateKey)
+	alternate := ""
+	if d.Rotation != nil {
+		if d.Rotation.ID == "" || d.Rotation.PrivateKey == "" || (d.Rotation.State != "prepared" && d.Rotation.State != "active") {
+			return domain.ErrValidation
+		}
+		alternate = d.Rotation.PrivateKey
+	}
+	_, err = s.db(ctx).Exec(ctx, `INSERT INTO enterprise_saml_connections(enterprise_id,record,metadata,sealed_key,sealed_alternate_key) VALUES($1,$2,$3,$4,$5) ON CONFLICT(enterprise_id) DO UPDATE SET record=$2,metadata=$3,sealed_key=$4,sealed_alternate_key=$5`, d.EnterpriseID, b, d.Metadata, d.PrivateKey, alternate)
 	return mapPGConstraint(err)
 }
 func (s *PostgresStore) DeleteSAMLConnection(ctx context.Context, id string) error {

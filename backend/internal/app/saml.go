@@ -26,13 +26,15 @@ type SAMLConnectionInput struct {
 	Revision string `json:"revision"`
 }
 type SAMLView struct {
-	Available     bool                   `json:"available"`
-	Configured    bool                   `json:"configured"`
-	Connection    *domain.SAMLConnection `json:"connection,omitempty"`
-	EntityID      string                 `json:"entity_id"`
-	ACS           string                 `json:"acs"`
-	Linked        bool                   `json:"linked"`
-	VerifiedUntil *time.Time             `json:"verified_until,omitempty"`
+	Available            bool                        `json:"available"`
+	Configured           bool                        `json:"configured"`
+	Connection           *domain.SAMLConnection      `json:"connection,omitempty"`
+	EntityID             string                      `json:"entity_id"`
+	ACS                  string                      `json:"acs"`
+	Linked               bool                        `json:"linked"`
+	VerifiedUntil        *time.Time                  `json:"verified_until,omitempty"`
+	SigningCertificate   *domain.SAMLCertificateInfo `json:"signing_certificate,omitempty"`
+	AlternateCertificate *domain.SAMLCertificateInfo `json:"alternate_certificate,omitempty"`
 }
 
 func (s *IdentityService) samlStore() (outbound.SAMLStore, error) {
@@ -52,7 +54,11 @@ func (s *IdentityService) samlSettings(c domain.SAMLConnection) (outbound.SAMLSe
 		return outbound.SAMLSettings{}, domain.ErrFederationUnavailable
 	}
 	entity, acs := s.samlEndpoints(c.EnterpriseID)
-	return outbound.SAMLSettings{Metadata: c.Metadata, EntityID: entity, ACS: acs, Certificate: c.Certificate, PrivateKey: key}, nil
+	settings := outbound.SAMLSettings{Metadata: c.Metadata, EntityID: entity, ACS: acs, Certificate: c.Certificate, PrivateKey: key}
+	if c.Rotation != nil {
+		settings.AdditionalCertificates = []string{c.Rotation.Certificate}
+	}
+	return settings, nil
 }
 func (s *IdentityService) verifiedSAMLDomain(ctx context.Context, c domain.SAMLConnection) error {
 	return s.verifiedConnectionDomain(ctx, domain.OIDCConnection{EnterpriseID: c.EnterpriseID, Domain: c.Domain})
@@ -79,6 +85,19 @@ func (s *IdentityService) GetSAMLView(ctx context.Context, actor, id, token stri
 		return out, err
 	}
 	out.Configured = true
+	info, err := domain.InspectSAMLCertificate(c.Certificate, time.Now())
+	if err != nil {
+		return out, err
+	}
+	out.SigningCertificate = &info
+	if c.Rotation != nil {
+		alternate, err := domain.InspectSAMLCertificate(c.Rotation.Certificate, time.Now())
+		if err != nil {
+			return out, err
+		}
+		out.AlternateCertificate = &alternate
+		c.Rotation.PrivateKey = ""
+	}
 	c.Metadata = ""
 	c.PrivateKey = ""
 	out.Connection = &c
@@ -141,7 +160,7 @@ func (s *IdentityService) ConfigureSAML(ctx context.Context, actor, id string, i
 		}
 	}
 	entity, acs := s.samlEndpoints(id)
-	c.Issuer, err = s.saml.provider.Validate(ctx, outbound.SAMLSettings{Metadata: c.Metadata, EntityID: entity, ACS: acs, Certificate: c.Certificate, PrivateKey: key})
+	c.Issuer, err = s.saml.provider.ValidateMetadata(ctx, outbound.SAMLSettings{Metadata: c.Metadata, EntityID: entity, ACS: acs, Certificate: c.Certificate, PrivateKey: key})
 	if err != nil {
 		return SAMLView{}, domain.ErrValidation
 	}
@@ -162,6 +181,14 @@ func (s *IdentityService) ConfigureSAML(ctx context.Context, actor, id string, i
 		}
 		if cur.Revision != in.Revision {
 			return domain.ErrConflict
+		}
+		// IdP trust can change during rollover. Preserve both SP keys, including
+		// any concurrent encryption rewrap, and require a new verification at
+		// the updated revision before retiring the previous signer.
+		if cur.Rotation != nil {
+			r := *cur.Rotation
+			r.VerifiedAt = nil
+			c.Rotation = &r
 		}
 		if err = st.PutSAMLConnection(ctx, c); err != nil {
 			return err
@@ -384,6 +411,16 @@ func (s *IdentityService) CompleteSAML(ctx context.Context, token, finish string
 		}
 		if err = st.FinishSAMLAttempt(ctx, a.Hash); err != nil {
 			return "", err
+		}
+		// Current-revision completion proves a post-activation roundtrip. It
+		// does not prove the IdP enforced request signatures; the owner still
+		// controls retirement. This write shares binding/consumption/audit.
+		if current.Rotation != nil && current.Rotation.State == "active" && current.Rotation.VerifiedAt == nil {
+			now := time.Now().UTC()
+			current.Rotation.VerifiedAt = &now
+			if err = st.PutSAMLConnection(ctx, current); err != nil {
+				return "", err
+			}
 		}
 		if err = s.enterpriseAudit(ctx, a.EnterpriseID, a.UserID, "enterprise.saml.authenticated", a.EnterpriseID); err != nil {
 			return "", err

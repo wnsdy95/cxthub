@@ -30,6 +30,15 @@ import (
 type samlGate struct {
 	*SAML
 	afterVerify func()
+	afterKeys   func()
+}
+
+func (p *samlGate) Keys(ctx context.Context) (string, string, error) {
+	c, k, err := p.SAML.Keys(ctx)
+	if p.afterKeys != nil {
+		p.afterKeys()
+	}
+	return c, k, err
 }
 
 func (p *samlGate) Verify(ctx context.Context, s outbound.SAMLSettings, id string, raw []byte, at time.Time) (outbound.SAMLProof, error) {
