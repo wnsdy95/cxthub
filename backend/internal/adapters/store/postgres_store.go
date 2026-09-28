@@ -1367,6 +1367,25 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	if err := validateHashes(repoID, hash); err != nil {
 		return domain.DocChunkManifest{}, err
 	}
+	// Normal pulls are read-only snapshots. Existing manifests need neither a
+	// write lock nor a savepoint, and must remain readable during publication.
+	var current []byte
+	if err := s.db(ctx).QueryRow(ctx, `SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
+	 WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2`, string(repoID), string(hash)).Scan(&current); err != nil {
+		return domain.DocChunkManifest{}, mapNoRows(err)
+	}
+	current, err := docDecompress(current)
+	if err != nil {
+		return domain.DocChunkManifest{}, domain.ErrIntegrity
+	}
+	if man, ok := domain.ParseDocChunkManifest(current); ok {
+		return man, nil
+	}
+	if tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx); ok && tx.readOnly {
+		// The caller falls back to the legacy body in the same consistent read.
+		// Lazy repacking belongs to a writable maintenance operation.
+		return domain.DocChunkManifest{}, domain.ErrNotFound
+	}
 	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return domain.DocChunkManifest{}, err

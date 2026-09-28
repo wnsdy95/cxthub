@@ -171,6 +171,17 @@ jobs:
 
   e2e-sync:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cxt
+          POSTGRES_PASSWORD: cxt
+          POSTGRES_DB: cxthub_sync
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cxt"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -179,6 +190,12 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Synchronized E2E deep dive (append/graft · memory promotion · session boundary · fetch-only)
         run: make e2e-sync
+      - name: Production PostgreSQL CLI push/pull and hook contracts
+        env:
+          CXT_E2E_DSN: postgres://cxt:cxt@localhost:5432/cxthub_sync?sslmode=disable
+        run: |
+          CXT_LOAD_DSN="$CXT_E2E_DSN" go test -C backend -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresDocumentPipeline$' -count=1 -v
+          make e2e-sync
 
   docker:
     runs-on: ubuntu-latest

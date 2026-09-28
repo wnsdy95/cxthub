@@ -22,9 +22,32 @@ func CanonicalBytes(doc CIRDocument) ([]byte, error) {
 	if err := ValidateCIRVersion(doc); err != nil {
 		return nil, fmt.Errorf("canonical bytes: %w", err)
 	}
-	doc.Events = canonicalEvents(doc.Events)
+	// Normalize one event at a time. Whole-document generic JSON otherwise
+	// duplicates every cumulative transcript string during each hash check.
+	env, err := canonicalJSON(doc.Envelope)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	out.WriteString(`{"envelope":`)
+	out.Write(env)
+	out.WriteString(`,"events":[`)
+	for i, event := range canonicalEvents(doc.Events) {
+		raw, err := canonicalJSON(event)
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(raw)
+	}
+	out.WriteString(`]}`)
+	return out.Bytes(), nil
+}
 
-	first, err := json.Marshal(doc)
+func canonicalJSON(value any) ([]byte, error) {
+	first, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("canonical bytes: marshal: %w", err)
 	}
