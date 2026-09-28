@@ -189,3 +189,37 @@ Failure tests cover altered bytes with unchanged size/time, deleted documents,
 foreign repository metadata, wrong fallback hashes, cancellation and mandatory
 re-verification on the next operation. The existing storage receipt suite covers
 forgery, repacking, private-key placement and concurrent key creation.
+
+## Incremental server search projections
+
+The PostgreSQL search table already deduplicated canonical event hashes, but a
+new document still decoded, extracted, lowercased and transmitted every inherited
+event's text before `ON CONFLICT DO NOTHING`. A verified document now produces a
+read plan first. The adapter asks for existing v2 search hashes, retains those rows
+with transaction-scoped key-share locks, and extracts/transmits text only for new
+events. Offsets, sequence and role still come from the new document. A search row
+never confers document ownership or skips whole-document verification.
+
+The namespace/version remains unchanged because projection semantics are exactly
+the same. Concurrent last-owner deletion cannot invalidate a reused row before
+publication; document ownership, event locations and new search rows still commit
+or roll back together. Tests cover parallel append documents, retained cache rows,
+parent deletion, last-owner cleanup, literal Unicode/wildcard search, foreign
+repository rejection, canonical order, escapes and unverified plan rejection.
+
+For a synthetic 16 MiB inherited prefix on an Apple M5 Pro, constructing the read
+projection measured 177–183 ms / 67.4 MB allocated for cold text extraction versus
+84–85 ms / 33.7 MB with existing search rows (3 iterations, two samples). These
+numbers exclude initial schema/hash validation, SQL, compression and network;
+they are not end-to-end push or production throughput claims. Reproduce with:
+
+```sh
+cd backend
+go test ./internal/domain -run '^$' -bench BenchmarkReadPlanInheritedPrefix -benchtime=3x -count=2
+```
+
+FS search filters retain their persisted FNV-1a byte-trigram layout but visit
+slots directly rather than allocating one uint32 per source byte. A synthetic
+15 MiB string measured approximately 30 ms with zero loop allocations. Legacy
+bit-parity tests prevent false negatives against existing filter files. FS is
+still the development compatibility adapter pending the PostgreSQL cutover.

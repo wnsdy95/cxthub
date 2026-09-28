@@ -39,9 +39,10 @@ func (s *FSStore) putVerifiedReadIndex(repo domain.ContentHash, doc domain.Verif
 	}
 	bits := make([]byte, 32768)
 	for i := range idx.Events {
-		for _, slot := range searchTrigrams(strings.ToLower(idx.Events[i].Text)) {
+		visitSearchTrigrams(strings.ToLower(idx.Events[i].Text), func(slot uint32) bool {
 			bits[slot/8] |= 1 << (slot % 8)
-		}
+			return true
+		})
 		idx.Events[i].Text = ""
 	}
 	if err = writeAtomic(s.readIndexPath(repo, doc.Hash())+".filter", bits); err != nil {
@@ -129,10 +130,8 @@ func (s *FSStore) SearchDocEvents(ctx context.Context, repo, hash domain.Content
 		return nil, domain.ErrIntegrity
 	}
 	// Bloom filtering has no false negatives; exact matching still happens below.
-	for _, slot := range searchTrigrams(q) {
-		if bits[slot/8]&(1<<(slot%8)) == 0 {
-			return []domain.DocEventIndex{}, nil
-		}
+	if !visitSearchTrigrams(q, func(slot uint32) bool { return bits[slot/8]&(1<<(slot%8)) != 0 }) {
+		return []domain.DocEventIndex{}, nil
 	}
 	raw, err := os.ReadFile(path + ".search")
 	if err != nil {
@@ -166,15 +165,16 @@ func (s *FSStore) SearchDocEvents(ctx context.Context, repo, hash domain.Content
 
 // Byte trigrams also preserve literal Unicode substring matching. Queries shorter
 // than three bytes bypass this accelerator and use the exact search projection.
-func searchTrigrams(s string) []uint32 {
-	out := make([]uint32, 0, len(s))
+func visitSearchTrigrams(s string, visit func(uint32) bool) bool {
 	h := fnv.New32a()
 	for i := 0; i+3 <= len(s); i++ {
 		h.Reset()
 		_, _ = h.Write([]byte(s[i : i+3]))
-		out = append(out, h.Sum32()%(32768*8))
+		if !visit(h.Sum32() % (32768 * 8)) {
+			return false
+		}
 	}
-	return out
+	return true
 }
 
 // BackfillReadIndexes walks doc ownership, including pending and retained bodies.
