@@ -53,6 +53,12 @@ for name, port, dockerfile in (
             assert env[key]["fromService"] == {
                 "type": "web", "name": "cxthub-api", "envVarKey": key
             }
+    if name == "cxthub-api":
+        assert env["CXT_COOKIE_SECURE"] == {"key": "CXT_COOKIE_SECURE", "value": "1"}
+        assert env["CXT_CORS_ORIGINS"] == {
+            "key": "CXT_CORS_ORIGINS",
+            "fromService": {"type": "web", "name": "cxthub-api", "envVarKey": "CXT_PUBLIC_URL"},
+        }, "API must trust the exact public origin used by the Vercel proxy"
     if name == "cxthub-mcp":
         assert set(env) == {"PORT", "CXT_AUTH", "CXT_PUBLIC_URL", "CXT_FIREBASE_PROJECT", "CXT_POSTGRES_DSN"}
-print("  ✓ Render service isolation, shared database, health and identity configuration")
+print("  ✓ Render isolation, shared database, identity, secure cookies and proxy origin")

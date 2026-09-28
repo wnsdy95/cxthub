@@ -19,8 +19,10 @@ Browser / CLI / MCP client
 ```
 
 The consent-specific API rule precedes `/api/*`. `/connect/mcp` is a frontend
-route. No CORS or cross-site cookie configuration is needed: browsers use the
-public Vercel origin throughout login and consent.
+route. Browsers use the public Vercel origin throughout login and consent.
+The API still validates that browser Origin behind the proxy: the Blueprint
+sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
+`CXT_COOKIE_SECURE=1`. Keep SameSite=Lax and leave the cookie domain unset.
 
 - `cxtd`: REST, sessions, ingestion, GitHub callbacks/webhooks and all background
   workers (promotion, Git evidence, email, notifications, maintenance).
@@ -42,6 +44,10 @@ public Vercel origin throughout login and consent.
 2. Enter `CXT_FIREBASE_PROJECT` and `CXT_PUBLIC_URL` on the API service. The latter
    is the HTTPS **Vercel frontend/custom domain**, without a path, not a Render
    service origin. MCP references these values from API; both must stay equal.
+   After changing the public URL, sync the Blueprint so both MCP and the API's
+   trusted Origin reference update. References refresh on Blueprint sync, not
+   immediately when a source environment value changes. Do not replace the
+   exact Origin with a wildcard or disable CSRF validation.
 3. The Blueprint injects the same internal PostgreSQL connection string into
    both services. External DB access is disabled (`ipAllowList: []`). Docker
    images enforce PostgreSQL and bundle the migration directory. Concurrent

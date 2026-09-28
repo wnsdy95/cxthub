@@ -58,9 +58,11 @@ jobs:
       - name: test (FS) + openapi drift guard
         working-directory: backend
         run: go test ./...
-      - name: vulnerability scan
+      - name: vulnerability scan (FS and production PostgreSQL)
         working-directory: backend
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -tags postgres ./...
       - name: test (PG contracts — real Postgres)
         working-directory: backend
         env:
