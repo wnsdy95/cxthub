@@ -33,7 +33,7 @@ func TestCommitPublicationSurvivesFailedHistoryWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pass.recordOutcome(cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
+	if err := pass.recordOutcome(ctx, cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := recordCommitPublication(ctx, c, cwd, pass); err == nil {
@@ -219,7 +219,7 @@ func TestCommitPublicationUsesOwnOutputsDuringConcurrentPass(t *testing.T) {
 	// worktree selection while the first pass's Save is still in progress.
 	second, err := beginCommitCapture(ctx, c, cwd, []string{domain.ProviderClaude, domain.ProviderCodex})
 	if err == nil {
-		err = second.recordOutcome(cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: other}, nil)
+		err = second.recordOutcome(ctx, cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: other}, nil)
 	}
 	if err == nil {
 		err = c.History.SelectPosition(ctx, domain.WorkingPosition{RepoID: repo, Branch: "main", GitCommit: gitOut(cwd, "rev-parse", "HEAD"), Snapshot: other})
@@ -319,7 +319,7 @@ func TestCommitCaptureCrashBeforeCompletionCannotBeInferred(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i := 0; i < outcomes; i++ {
-				if err := pass.recordOutcome(cwd, i, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
+				if err := pass.recordOutcome(ctx, cwd, i, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -411,7 +411,7 @@ func TestCommitPublicationPreservesMemorySelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := pass.recordOutcome(cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
+			if err := pass.recordOutcome(ctx, cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
 				t.Fatal(err)
 			}
 			before, _ := c.History.ListHistory(ctx, repo)
@@ -449,7 +449,7 @@ func TestCommitCaptureRecoveryUsesOnlyFrozenOutcomesAndObservations(t *testing.T
 		if err := c.History.SelectPosition(ctx, domain.WorkingPosition{RepoID: repo, Branch: "main", Snapshot: target, GitCommit: pass.Proof.GitAfter}); err != nil {
 			t.Fatal(err)
 		}
-		if err := pass.recordOutcome(cwd, i, filepath.Join(cwd, "removed-native-transcript"), "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
+		if err := pass.recordOutcome(ctx, cwd, i, filepath.Join(cwd, "removed-native-transcript"), "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -482,7 +482,7 @@ func TestPublicationReplayRetainsFailedPassWithoutBlockingOtherBranch(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := failed.recordOutcome(cwd, 0, "selected.jsonl", "failed", inbound.SaveOutput{}, errors.New("selected transcript disappeared")); err != nil {
+	if err := failed.recordOutcome(ctx, cwd, 0, "selected.jsonl", "failed", inbound.SaveOutput{}, errors.New("selected transcript disappeared")); err != nil {
 		t.Fatal(err)
 	}
 	runLifecycleGit(t, cwd, "switch", "-qc", "independent")
@@ -493,7 +493,7 @@ func TestPublicationReplayRetainsFailedPassWithoutBlockingOtherBranch(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := completed.recordOutcome(cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
+	if err := completed.recordOutcome(ctx, cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
 		t.Fatal(err)
 	}
 	history := c.History
@@ -566,7 +566,7 @@ func TestCommitPublicationLiveCompletionAndReplayAgree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pass.recordOutcome(cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
+	if err := pass.recordOutcome(ctx, cwd, 0, "", "saved", inbound.SaveOutput{SnapshotID: target}, nil); err != nil {
 		t.Fatal(err)
 	}
 	ready, resume := make(chan struct{}, 2), make(chan struct{})

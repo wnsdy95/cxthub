@@ -33,6 +33,7 @@ import (
 
 // Container is a bundle of inbound ports used by the CLI driver + author identifier.
 type Container struct {
+	CaptureRecovery   inbound.CaptureRecovery
 	ResolveConnection func(context.Context, string) (domain.RepositoryConnection, error)
 	Init              inbound.InitRepo
 	Save              inbound.SaveSession
@@ -76,6 +77,14 @@ func Run(c *Container, args []string) error {
 	ctx := context.Background()
 	rest := args[2:]
 	cwd, _ := os.Getwd()
+	if cmd == "capture" {
+		root := cxtRepoRoot(ctx, cwd)
+		repo, err := remotecfg.Wrap(root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+		if err != nil {
+			return err
+		}
+		return RunCaptureRecovery(ctx, c, cwd, string(repo.ID), rest, os.Stdout)
+	}
 	if cmd == "doctor" || (cmd == "branch" && firstPositional(rest) == "operations") {
 		return RunDiagnostics(ctx, cwd, args[1:], os.Stdout)
 	}
@@ -1022,13 +1031,23 @@ func firstPositional(args []string) string {
 var publicCommandNames = []string{
 	"setup", "init", "repo", "claude", "codex", "remote", "repack",
 	"branch", "add", "commit", "switch", "config", "login", "logout", "fsck",
-	"doctor", "reflog", "secrets", "settings", "hooks", "save", "list", "log",
+	"doctor", "capture", "reflog", "secrets", "settings", "hooks", "save", "list", "log",
 	"checkout", "fork", "load", "push", "pull", "stash", "memorize",
 	"memory", "tag", "mcp", "hook", "version", "help",
 }
 
 const usageText = `cxt — Git-style version control for coding-agent sessions
 usage: cxt <command> [flags]
+
+  Capture recovery:
+  capture list [--json]      inspect durable capture attempts without replay or network
+  capture show <id>          show evidence and expected fingerprint
+  capture retry <id> --expect <hash>
+                            retry publication using only frozen capture outcomes
+  capture resolve <id> --expect <hash>
+                            record a verified later successful capture
+  capture acknowledge <id> --expect <hash> --reason <text>
+                            retain an explicitly acknowledged gap, not successful capture
 
   Getting started:
   setup [remote-url]        initialize everything: repository → Git hooks → remote → login → agent hooks → team settings

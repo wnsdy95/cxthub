@@ -18,34 +18,18 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
 
-type commitCaptureOutcome struct {
-	Provider    string             `json:"provider"`
-	State       string             `json:"state"` // pending, saved, absent, failed
-	SessionPath string             `json:"session_path,omitempty"`
-	Target      domain.ContentHash `json:"target,omitempty"`
-	Error       string             `json:"error,omitempty"`
-}
+type commitCaptureOutcome = domain.CaptureOutcome
 
-// A Save transaction proves only one provider finished. This journal is written
-// before the first Save and remains incomplete across any unprovable crash gap.
-// Complete proofs can be replayed without inspecting a position or transcript.
-type commitCapturePass struct {
-	Version  int                    `json:"version"`
-	Proof    domain.HistoryEvent    `json:"proof"`
-	Initial  domain.ContentHash     `json:"initial,omitempty"`
-	Outcomes []commitCaptureOutcome `json:"outcomes"`
-	// Reuse an immutable ordinary observation rather than manufacturing a
-	// newer position that could change the selected memory at this Git SHA.
-	Observation *domain.HistoryEvent `json:"observation,omitempty"`
-	Complete    bool                 `json:"complete"`
-}
+// Preserve the existing journal wire format and driver methods; shared recovery
+// policy and validation live in the domain/application layers.
+type commitCapturePass domain.CaptureAttempt
 
 func (p *commitCapturePass) relativePath() string {
 	return filepath.Join(".cxt", "worktrees", p.Proof.WorktreeID, "capture-passes", p.Proof.ID+".json")
 }
 
 func (p *commitCapturePass) pending(cause error) error {
-	return fmt.Errorf("capture pass %s for Git %s remains pending (%s); automatic replay cannot infer missing capture completion: %w", p.Proof.ID, p.Proof.GitAfter, p.relativePath(), cause)
+	return fmt.Errorf("capture pass %s for Git %s remains pending (%s); run cxt capture show %s to inspect frozen evidence; automatic replay cannot infer missing capture completion: %w", p.Proof.ID, p.Proof.GitAfter, p.relativePath(), p.Proof.ID, cause)
 }
 
 func (p *commitCapturePass) write(root string) error {
@@ -112,11 +96,14 @@ func beginCommitCapture(ctx context.Context, c *Container, cwd string, providers
 	return p, nil
 }
 
-func (p *commitCapturePass) recordOutcome(root string, index int, path, state string, out inbound.SaveOutput, cause error) error {
+func (p *commitCapturePass) recordOutcome(ctx context.Context, root string, index int, path, state string, out inbound.SaveOutput, cause error) error {
 	if p == nil {
 		return nil
 	}
-	o := &p.Outcomes[index]
+	expected := domain.CaptureAttempt(*p).Fingerprint()
+	next := *p
+	next.Outcomes = append([]commitCaptureOutcome(nil), p.Outcomes...)
+	o := &next.Outcomes[index]
 	o.State, o.SessionPath, o.Target = state, path, out.SnapshotID
 	if state == "failed" && domain.ValidateContentHash(o.Target) != nil {
 		o.Target = "" // A malformed Save result is a failed pass, not corrupt journal metadata.
@@ -124,7 +111,28 @@ func (p *commitCapturePass) recordOutcome(root string, index int, path, state st
 	if cause != nil {
 		o.Error = cause.Error()
 	}
-	return p.write(root)
+	j, err := branchjournal.Open(ctx, root)
+	if err != nil {
+		return err
+	}
+	return j.Transaction(ctx, func() error {
+		raw, err := providerfs.ReadRepoFile(root, p.relativePath())
+		if err != nil {
+			return err
+		}
+		var current domain.CaptureAttempt
+		if json.Unmarshal(raw, &current) != nil {
+			return domain.ErrHashMismatch
+		}
+		if current.Fingerprint() != expected {
+			return domain.ErrSyncConflict
+		}
+		if err := next.write(root); err != nil {
+			return err
+		}
+		*p = next
+		return nil
+	})
 }
 
 // Only the frozen baseline and this pass's Save outputs can become its final
@@ -235,62 +243,11 @@ func prepareCommitProof(ctx context.Context, c *Container, p *commitCapturePass)
 }
 
 func (p *commitCapturePass) validate() error {
-	if p.Version != 1 || p.Proof.Kind != "position" || p.Proof.WorktreeID == "" ||
-		!validNonZeroGitOID(p.Proof.GitAfter) || p.Proof.Source != p.Proof.Target || len(p.Outcomes) == 0 {
-		return domain.ErrHashMismatch
-	}
-	if err := domain.ValidateHistoryEvent(p.Proof); err != nil {
-		return err
-	}
-	if err := domain.ValidateOptionalContentHash(p.Initial); err != nil {
-		return err
-	}
-	member := p.Proof.Target == p.Initial
-	hasTarget := p.Initial != ""
-	for _, o := range p.Outcomes {
-		if o.Provider != domain.ProviderClaude && o.Provider != domain.ProviderCodex {
-			return domain.ErrHashMismatch
-		}
-		switch o.State {
-		case "saved":
-			if err := domain.ValidateContentHash(o.Target); err != nil {
-				return err
-			}
-			member = member || p.Proof.Target == o.Target
-			hasTarget = true
-		case "absent", "pending":
-			if o.Target != "" {
-				return domain.ErrHashMismatch
-			}
-		case "failed":
-			if err := domain.ValidateOptionalContentHash(o.Target); err != nil {
-				return err
-			}
-		default:
-			return domain.ErrHashMismatch
-		}
-		if p.Complete && o.State != "saved" && o.State != "absent" {
-			return domain.ErrHashMismatch
-		}
-	}
-	if p.Complete && (!member || hasTarget && p.Proof.Target == "") {
-		return domain.ErrHashMismatch
-	}
-	if p.Observation != nil {
-		if !p.matchesObservation(p.Proof.Target, *p.Observation) {
-			return domain.ErrHashMismatch
-		}
-		if err := domain.ValidateHistoryEvent(*p.Observation); err != nil {
-			return err
-		}
-	}
-	return nil
+	return domain.CaptureAttempt(*p).Validate()
 }
 
 func (p *commitCapturePass) matchesObservation(target domain.ContentHash, e domain.HistoryEvent) bool {
-	return e.Kind != "publish" && e.Kind != "pr-merge" && e.RepoID == p.Proof.RepoID &&
-		e.BranchID == p.Proof.BranchID && e.Branch == p.Proof.Branch && e.LocalBranch == p.Proof.LocalBranch &&
-		e.WorktreeID == p.Proof.WorktreeID && e.GitAfter == p.Proof.GitAfter && e.Target == target
+	return domain.CaptureAttempt(*p).MatchesObservation(target, e)
 }
 
 func (p *commitCapturePass) observation(target domain.ContentHash, accepted map[string]domain.HistoryEvent) *domain.HistoryEvent {
@@ -392,7 +349,7 @@ func publishCommitCapture(ctx context.Context, c *Container, cwd string, p *comm
 	return persistPublicationKnown(ctx, c, cwd, e, accepted)
 }
 
-func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, worktree string, accepted map[string]domain.HistoryEvent) error {
+func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, worktree string, accepted map[string]domain.HistoryEvent, resolutions map[string]domain.CaptureResolution) error {
 	rel := filepath.Join(".cxt", "worktrees", worktree, "capture-passes")
 	dir, err := providerfs.EnsureRepoDir(root, rel, 0700)
 	if err != nil {
@@ -419,6 +376,12 @@ func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, wo
 		if err := p.validate(); err != nil {
 			return err
 		}
+		if r, ok := resolutions[p.Proof.ID]; ok {
+			if r.AttemptHash != domain.CaptureAttempt(p).Fingerprint() {
+				return domain.ErrSyncConflict
+			}
+			continue // Historical resolution does not manufacture a publication.
+		}
 		if !p.Complete {
 			if err := recoverCommitCapture(ctx, c, cwd, root, &p, accepted); err != nil {
 				if errors.Is(err, errCaptureCompletionUnproven) {
@@ -436,10 +399,7 @@ func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, wo
 }
 
 func publicationID(e domain.HistoryEvent) string {
-	e.ID, e.CreatedAt = "", time.Time{}
-	raw, _ := json.Marshal(e)
-	h := sha256.Sum256(append([]byte("publication\x00"), raw...))
-	return fmt.Sprintf("%x", h[:16])
+	return domain.CapturePublicationID(e)
 }
 
 func persistPublication(ctx context.Context, c *Container, cwd string, e domain.HistoryEvent) error {
@@ -564,12 +524,19 @@ func replayPublications(ctx context.Context, c *Container, cwd string) error {
 	if err != nil {
 		return err
 	}
+	var resolutions map[string]domain.CaptureResolution
+	if c.CaptureRecovery != nil {
+		resolutions, err = c.CaptureRecovery.RecordedResolutions(ctx, p.RepoID)
+		if err != nil {
+			return err
+		}
+	}
 	var pending []error
 	for _, wt := range worktrees {
 		if !wt.IsDir() {
 			return domain.ErrHashMismatch
 		}
-		if err := replayCommitCaptures(ctx, c, cwd, root, p.RepoID, wt.Name(), accepted); err != nil {
+		if err := replayCommitCaptures(ctx, c, cwd, root, p.RepoID, wt.Name(), accepted, resolutions); err != nil {
 			pending = append(pending, err)
 		}
 		rel := filepath.Join(".cxt", "worktrees", wt.Name(), "publication-journal")

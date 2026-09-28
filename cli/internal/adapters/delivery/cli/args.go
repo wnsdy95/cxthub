@@ -46,6 +46,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"logout":    {usage: "cxt logout"},
 	"fsck":      {usage: "cxt fsck"},
 	"repair":    {usage: "cxt repair --from-server [--remote <repository-url>]", flags: commandFlags([]string{"--remote"}, []string{"--from-server"})},
+	"capture":   {usage: "cxt capture list [--all] [--json] | show <id> [--json] | retry|resolve <id> --expect <hash> | acknowledge <id> --expect <hash> --reason <text>", flags: commandFlags([]string{"--expect", "--reason"}, []string{"--all", "--json"})},
 	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"reflog":    {usage: "cxt reflog"},
 	"secrets":   {usage: "cxt secrets push|pull [-p <passphrase>] [--remember] [--rotate]", flags: commandFlags([]string{"-p"}, []string{"--remember", "--rotate"})},
@@ -171,6 +172,26 @@ func validateCommandFlags(cmd string, args []string, spec commandArgSpec) error 
 
 	pos := positionals(args)
 	switch cmd {
+	case "capture":
+		if len(pos) == 0 {
+			return fmt.Errorf("usage: %s", spec.usage)
+		}
+		switch pos[0] {
+		case "list":
+			if len(pos) != 1 || flagVal(args, "--expect") != "" || flagVal(args, "--reason") != "" {
+				return fmt.Errorf("usage: %s", spec.usage)
+			}
+		case "show":
+			if len(pos) != 2 || flagPresent(args, "--all") || flagVal(args, "--expect") != "" || flagVal(args, "--reason") != "" {
+				return fmt.Errorf("usage: %s", spec.usage)
+			}
+		case "retry", "resolve", "acknowledge":
+			if len(pos) != 2 || flagPresent(args, "--all") || flagVal(args, "--expect") == "" || (pos[0] == "acknowledge") != (flagVal(args, "--reason") != "") || pos[0] == "retry" && flagPresent(args, "--json") {
+				return fmt.Errorf("usage: %s", spec.usage)
+			}
+		default:
+			return fmt.Errorf("usage: %s", spec.usage)
+		}
 	case "mcp":
 		if len(pos) != 0 || !flagPresent(args, "--local") {
 			return fmt.Errorf("mcp: the product connector is https://cxthub.com/mcp; the stdio helper requires --local\nusage: %s", spec.usage)
