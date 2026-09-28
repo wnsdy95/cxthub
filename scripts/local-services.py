@@ -142,6 +142,33 @@ def service_listens(gui, label, port):
     return owner.returncode == 0 and pid[1] in owner.stdout.splitlines()
 
 
+def port_available(port):
+    # Match the servers' restart semantics: closed accepted connections may
+    # remain in TIME_WAIT, but a live listener must still prevent startup.
+    try:
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", port))
+            probe.listen(1)
+        return True
+    except OSError:
+        return False
+
+
+def wait_stopped(gui, services):
+    # bootout acknowledges the request before launchd has finished unloading.
+    # Do not return success while an old worker or its listener can still run.
+    deadline = time.monotonic() + 30
+    while True:
+        pending = [label for label, port in services
+                   if launch("print", gui + "/" + label, check=False) or not port_available(port)]
+        if not pending:
+            return
+        if time.monotonic() >= deadline:
+            raise ConfigurationError("Service shutdown is still in progress or its port is occupied; no data was changed. Check status before restarting")
+        time.sleep(0.2)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("check", "configure", "start", "stop", "status"))
@@ -178,8 +205,8 @@ def main():
             path = agent_dir / (label + ".plist")
             if path.is_symlink() or path.stat().st_mode & 0o077 or plistlib.loads(path.read_bytes()) != plists[label]:
                 raise ConfigurationError("Private launch-agent configuration differs; run configure before start")
-            with socket.socket() as probe:
-                probe.bind(("127.0.0.1", port))
+            if not port_available(port):
+                raise ConfigurationError("An API/MCP port has a live listener; stop it before starting these services")
         started = []
         try:
             for _, label, _ in SERVICES:
@@ -205,12 +232,16 @@ def main():
         except Exception:
             for label in reversed(started):
                 launch("bootout", gui + "/" + label, check=False)
+            wait_stopped(gui, [(label, port) for _, label, port in SERVICES if label in started])
             raise
         print("API :8907 and MCP :8908 are ready against PostgreSQL.")
     elif args.action == "stop":
-        for _, label, _ in reversed(SERVICES):
+        stopping = []
+        for _, label, port in reversed(SERVICES):
             if loaded[label]:
                 launch("bootout", gui + "/" + label)
+                stopping.append((label, port))
+        wait_stopped(gui, stopping)
         print("Independent services stopped. PostgreSQL, FS backups and provider sessions preserved.")
     else:
         for kind, label, _ in SERVICES:
