@@ -1133,14 +1133,15 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 	// Lock order is doc → chunks, matching GetDocManifest. A new manifest row is
 	// invisible until this transaction also stores its chunks and commits.
 	plan, chunked := domain.PlanDocChunks(canonical)
-	payload := docCompress(canonical)
+	payloadSource := canonical
 	if chunked {
 		mb, merr := json.Marshal(plan.Manifest)
 		if merr != nil {
 			return false, merr
 		}
-		payload = docCompress(mb)
+		payloadSource = mb
 	}
+	payload := docCompress(payloadSource)
 	ct, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
 		string(doc.Hash()), payload)
 	if err != nil {
@@ -1168,17 +1169,8 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 	}
 	if chunked {
 		for _, ch := range plan.Order {
-			if _, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
-				string(ch), docCompress(plan.Bodies[ch])); err != nil {
+			if err := retainOrPutDocChunkPG(ctx, tx, ch, plan.Bodies[ch]); err != nil {
 				return false, err
-			}
-			var existing []byte
-			if err := tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1`, string(ch)).Scan(&existing); err != nil {
-				return false, err
-			}
-			existing, err = docDecompress(existing)
-			if err != nil || !bytes.Equal(existing, plan.Bodies[ch]) {
-				return false, domain.ErrIntegrity
 			}
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO repo_blobs (repo_id, kind, hash) VALUES ($1,'chunk',$2) ON CONFLICT DO NOTHING`,
@@ -1229,6 +1221,38 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 		return false, err
 	}
 	return created, nil
+}
+
+// Finalization normally receives chunks already uploaded by negotiation. Read
+// and retain those bytes instead of compressing/sending them to a losing INSERT.
+// Presence alone is never integrity proof; compare decompressed bytes even on
+// reuse. The key-share lock protects the ownership grant from concurrent GC.
+func retainOrPutDocChunkPG(ctx context.Context, tx pgx.Tx, hash domain.ContentHash, body []byte) error {
+	var stored []byte
+	read := func() error {
+		return tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1 FOR KEY SHARE`, string(hash)).Scan(&stored)
+	}
+	err := read()
+	if errors.Is(err, pgx.ErrNoRows) {
+		result, insertErr := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`, string(hash), docCompress(body))
+		if insertErr != nil {
+			return insertErr
+		}
+		if result.RowsAffected() == 1 {
+			return nil // This transaction inserted the verified bytes and owns the row.
+		}
+		// A competing writer won insertion. Validate its bytes under retention,
+		// exactly as for a chunk present before this transaction started.
+		err = read()
+	}
+	if err != nil {
+		return err
+	}
+	stored, err = docDecompress(stored)
+	if err != nil || !bytes.Equal(stored, body) {
+		return domain.ErrIntegrity
+	}
+	return nil
 }
 
 // reassembleManifestTx reassembles canonical bytes from chunks in blobs if the stored blob is a manifest (for PutDoc blob validation — transaction integrity check, unnecessary owner join).
