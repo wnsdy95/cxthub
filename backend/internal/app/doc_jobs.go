@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -110,14 +109,7 @@ func (s *Service) verifyDocJob(ctx context.Context, j domain.DocFinalizationJob)
 	if len(cb) > domain.MaxFinalizedDocBytes {
 		return zero, fmt.Errorf("%w: assembled document exceeds finalization limit", domain.ErrValidation)
 	}
-	var cir domain.CIRDocument
-	if err = json.Unmarshal(cb, &cir); err != nil {
-		return zero, domain.ErrIntegrity
-	}
-	if err := ctx.Err(); err != nil {
-		return zero, err
-	}
-	verified, err := domain.VerifySessionDoc(domain.SessionDoc{Hash: j.DocHash, CIR: cir})
+	verified, err := s.docVerifier.Verify(ctx, j.DocHash, cb)
 	if err != nil {
 		return zero, err
 	}
