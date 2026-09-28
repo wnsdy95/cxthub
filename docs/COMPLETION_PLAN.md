@@ -88,7 +88,7 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   vet, focused race checks and real Git-hook E2E. Queue-only inspection completed
   in 1.18 seconds with 85 retained jobs in the local development repository;
   it deliberately does not claim server acknowledgment or full integrity.
-  Publication of this follow-up is in progress.
+  PR #299 merged after nine green CI checks.
 - PostgreSQL cutover: #294. The independent local service launcher, private
   configuration, credential separation and startup rollback have synthetic tests.
   PR #296 merged, followed by the actual local cutover. The frozen FS backup
@@ -99,5 +99,10 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   Original FS data/binary/config and verified backups are retained privately.
   The old FS launch agent is disabled to prevent an accidental dual start.
   Issue #294 is complete; this is local acceptance, not cloud load certification.
-- UI and Enterprise phases remain pending implementation and validation; this
-  document is not a completion claim.
+- Large graph presentation: #297. Full server evidence and lane layout are
+  preserved while visible rows, overscan and focused/dragged rows bound the DOM.
+  Unit geometry checks, build/i18n/architecture and all 79 browser regressions
+  passed with independent API/MCP and a disposable PostgreSQL database. Focused
+  replacement coverage also passed; PR publication is in progress.
+- Enterprise identity/security remains pending implementation and validation;
+  this document is not a completion claim for the overall plan.

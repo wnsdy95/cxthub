@@ -528,7 +528,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   background: transparent; color: var(--muted); font: inherit; }
 .graph-history-actions button:hover { color: var(--ink); border-color: var(--ink); }
 .graph-history-actions button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-.graph-viewport { max-height: 344px; overflow: auto; overscroll-behavior: contain;
+.graph-viewport { max-height: 344px; overflow: auto; overscroll-behavior: contain; overflow-anchor: none;
   scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
 .graph-viewport::-webkit-scrollbar { width: 6px; height: 6px; }
 .graph-viewport::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }

@@ -124,6 +124,116 @@ async function openGraph(page: Page, responder: ReturnType<typeof publicReposito
   return { pageErrors, unexpected };
 }
 
+test('large graph windows preserve paths, external selection, keyboard access and live scroll anchors', async ({ page }, testInfo) => {
+  const hash = (i: number) => `sha256:${i.toString(16).padStart(64, '0')}`;
+  let snapshots = Array.from({ length: 1000 }, (_, i) => auditSnapshot(hash(i + 1), 'main', i < 999 ? [hash(i + 2)] : [], `Large graph row ${i}`, 1000 - i));
+  const target = snapshots[750];
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (request.pathname.endsWith('/search')) return { body: { hits: [{ snapshot_id: target.id, kind: 'commit', snippet: target.message, branch: 'main', created_at: target.created_at }], truncated: false } };
+    return publicRepositoryApi(snapshots, [{ repo_id: repoId, kind: 'branch', name: 'main', target: snapshots[0].id }])(request);
+  });
+  const viewport = page.locator('.graph-viewport');
+  await expect(viewport).toHaveAttribute('data-virtualized', 'true');
+  expect(await page.locator('.graph-row').count()).toBeLessThan(32);
+  await expectRenderedGraphPath(page, hash(1), hash(2));
+  await page.getByRole('textbox', { name: 'Search context' }).fill('Large graph row 750');
+  await page.locator('.search-hit').click();
+  const selected = page.locator(`.graph-row[data-graph-id="${target.id}"]`);
+  await expect(selected).toBeVisible();
+  await expect(selected).toHaveAttribute('aria-pressed', 'true');
+  await expectRenderedGraphPath(page, hash(751), hash(752));
+  await selected.focus();
+  await page.keyboard.press('End');
+  await expect(page.locator('.graph-row:focus')).toHaveAttribute('data-graph-id', hash(1000));
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.graph-row.on')).toHaveAttribute('data-graph-id', hash(1000));
+  await page.keyboard.press('Home');
+  await expect(page.locator('.graph-row:focus')).toHaveAttribute('data-graph-id', hash(1));
+  await page.keyboard.press('PageDown');
+  const pageIndex = Number(await page.locator('.graph-row:focus').getAttribute('data-graph-row-index'));
+  expect(pageIndex).toBeGreaterThan(5);
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('.graph-row:focus')).toHaveAttribute('data-graph-row-index', String(pageIndex + 1));
+
+  await viewport.evaluate(el => { el.scrollTop = 500 * 26 + 7; el.dispatchEvent(new Event('scroll')); });
+  const anchor = page.locator(`.graph-row[data-graph-id="${hash(501)}"]`);
+  await expect(anchor).toBeAttached();
+  const before = (await anchor.boundingBox())!.y;
+  const oldTop = await viewport.evaluate(el => el.scrollTop);
+  snapshots = [auditSnapshot(hash(1001), 'main', [hash(1)], 'New live context', 1001), ...snapshots];
+  await expect(page.locator('.graph-status-item.pushed')).toContainText('1001', { timeout: 15_000 });
+  await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBe(oldTop + 26);
+  expect(Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThan(1);
+  await expectRenderedGraphPath(page, hash(501), hash(502));
+  expect(await page.locator('.graph-row').count()).toBeLessThan(32);
+  await viewport.screenshot({ path: testInfo.outputPath('large-graph-window.png') });
+  // Sliding observations can replace a focused row. Keep a keyboard entry
+  // point and focus the surviving successor without mounting the full graph.
+  await page.locator('.graph-row:focus').press('Home');
+  await expect(page.locator('.graph-row:focus')).toHaveAttribute('data-graph-id', hash(1001));
+  snapshots = snapshots.slice(1);
+  await expect(page.locator('.graph-status-item.pushed')).toContainText('1000', { timeout: 15_000 });
+  await expect(page.locator('.graph-row:focus')).toHaveAttribute('data-graph-id', hash(1));
+  await expect(page.locator('.graph-row[tabindex="0"]')).toHaveCount(1);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('virtual graph keeps historical PR evidence and sticky branch labels beyond the first window', async ({ page }) => {
+  const root = auditSnapshot(pushedHead, 'main', [], 'Shared branch source', 1);
+  const hash = (i: number) => `sha256:${(2000 + i).toString(16).padStart(64, '0')}`;
+  const newer = Array.from({ length: 300 }, (_, i) => auditSnapshot(hash(i), 'main', [i === 299 ? pushedHead : hash(i + 1)], `Later main ${i}`, 1000 - i));
+  const branch = 'feature/historical-shared-source';
+  const birth = { id: 'older-birth', repo_id: repoId, branch_id: 'feature-id', branch, kind: 'birth', source: pushedHead, target: pushedHead, created_at: '2026-09-18T00:00:02Z' };
+  const completed = { ...birth, id: 'older-merge', kind: 'pr-merge', branch: 'main', branch_id: 'main-id', source_branch_id: 'feature-id', shared_target: pushedHead, pr_completed: true,
+    pr: { number: 1, base_branch: 'main', head_branch: branch, head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40) }, created_at: '2026-09-18T00:00:03Z' };
+  const refs = [{ repo_id: repoId, kind: 'branch', name: 'main', target: newer[0].id }, { repo_id: repoId, kind: 'branch', name: branch, target: pushedHead }];
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi([...newer, root], refs, [], [], [], [birth, completed]));
+  await expect(page.locator('.graph-merge-records summary')).toContainText('1');
+  await expect(page.locator('[data-graph-event="merge"]')).toHaveCount(0);
+  await page.locator('.graph-row').first().focus();
+  await page.keyboard.press('End');
+  const merge = page.locator('[data-graph-event="merge"]');
+  await expect(merge).toBeVisible();
+  const label = page.locator(`.graph-lane-label[aria-label="${branch}"]`);
+  await label.hover();
+  await expect(page.locator('.graph-lane-tip')).toHaveText(branch);
+  // This shared snapshot has a verified natural path; it needs no separate
+  // dashed operation-only edge. Check physical SVG continuity in either style.
+  await expectRenderedGraphPath(page, 'graph:merge:older-merge', 'graph:birth:older-birth');
+  await expectRenderedGraphPath(page, 'graph:birth:older-birth', pushedHead);
+  await merge.focus();
+  await page.keyboard.press('Enter');
+  await expect(merge).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('Visible fixture prompt', { exact: true })).toBeVisible();
+  await page.keyboard.press('Home');
+  await expect(label).toHaveCount(0);
+  await expect(page.locator('.graph-merge-records summary')).toContainText('1');
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
+test('virtual graph preserves line continuity through a variable-height unpushed divider', async ({ page }) => {
+  const hash = (i: number) => `sha256:${(4000 + i).toString(16).padStart(64, '0')}`;
+  const snapshots = Array.from({ length: 100 }, (_, i) => auditSnapshot(hash(i), 'main', i < 99 ? [hash(i + 1)] : [], `Divider row ${i}`, 100 - i));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots,
+    [{ repo_id: repoId, kind: 'branch', name: 'main', target: hash(50) }], [],
+    [{ repo_id: repoId, branch: 'main', target: hash(0), user: 'alice', updated_at: snapshots[0].created_at }]));
+  const viewport = page.locator('.graph-viewport');
+  await expect(viewport).toHaveAttribute('data-virtualized', 'true');
+  const above = page.locator(`.graph-row[data-graph-id="${hash(49)}"]`);
+  const below = page.locator(`.graph-row[data-graph-id="${hash(50)}"]`);
+  await expect(below).toBeVisible();
+  expect((await below.boundingBox())!.y - (await above.boundingBox())!.y).toBe(46);
+  await expectRenderedGraphPath(page, hash(49), hash(50));
+  await below.focus();
+  await page.keyboard.press('End');
+  await expect(page.locator('.graph-row:focus')).toHaveAttribute('data-graph-id', hash(99));
+  await expectRenderedGraphPath(page, hash(98), hash(99));
+  expect(await viewport.locator('.graph').evaluate(el => el.clientHeight)).toBe(2620);
+  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
+});
+
 test('legacy repository alias resolves to one canonical DAG across reload', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
   const responder = publicRepositoryApi([{id:pushedHead,repo_id:repoId,doc_hash:pushedHead,branch:'main',parents:[],message:'frontend context',created_at:'2026-09-03T00:00:00Z'}], [{kind:'branch',name:'main',target:pushedHead}]);
