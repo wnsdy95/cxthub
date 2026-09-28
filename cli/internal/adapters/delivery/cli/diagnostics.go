@@ -12,6 +12,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -93,9 +94,23 @@ func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer,
 		issues = append(issues, "registered Git repository has no initialized .cxt replica; preserve damaged files and recover a verified copy before replay")
 	}
 	inspection := storage.ReplicaInspection{Issues: []string{}}
+	backfills := []domain.SnapshotBackfill{}
 	if state.Exists {
-		inspection = storage.NewFileStore(state.Root).InspectReplica(ctx)
+		store := storage.NewFileStore(state.Root)
+		inspection = store.InspectReplica(ctx)
 		issues = append(issues, inspection.Issues...)
+		if repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd); err != nil {
+			issues = append(issues, "Historical uploads: cannot establish repository identity: "+err.Error())
+		} else if jobs, err := store.ListBackfills(ctx, string(repo.ID)); err != nil {
+			issues = append(issues, "Historical uploads: "+err.Error())
+		} else {
+			backfills = jobs
+			for _, job := range jobs {
+				if job.Reason != "" {
+					issues = append(issues, fmt.Sprintf("historical upload %s: %s; retained for retry", job.Snapshot, job.Reason))
+				}
+			}
+		}
 	}
 	for _, op := range operations {
 		if op.LocalState != "applied" && op.LocalState != "aborted" {
@@ -120,6 +135,7 @@ func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer,
 		}
 	}
 	report := struct {
+		Backfills      []domain.SnapshotBackfill      `json:"historical_uploads"`
 		Captures       []domain.CaptureRecoveryStatus `json:"captures"`
 		GitRepository  bool                           `json:"git_repository"`
 		Registered     bool                           `json:"registered"`
@@ -129,13 +145,17 @@ func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer,
 		HistoryEvents  int                            `json:"history_events"`
 		Operations     []branchOperationStatus        `json:"operations"`
 		Issues         []string                       `json:"issues"`
-	}{captures, state.GitRepository, registered, state.Exists, state.Initialized, inspection.Snapshots, inspection.HistoryEvents, operations, issues}
+	}{backfills, captures, state.GitRepository, registered, state.Exists, state.Initialized, inspection.Snapshots, inspection.HistoryEvents, operations, issues}
 	if flagPresent(args, "--json") {
 		if err := json.NewEncoder(w).Encode(report); err != nil {
 			return err
 		}
 	} else {
 		fmt.Fprintf(w, "Local replica: present=%t initialized=%t · %d snapshots · %d history events\n", state.Exists, state.Initialized, inspection.Snapshots, inspection.HistoryEvents)
+		fmt.Fprintf(w, "Retained historical uploads: %d queued. Retry with cxt push; wait for all records with cxt push --wait-history.\n", len(backfills))
+		for _, job := range backfills {
+			fmt.Fprintf(w, "  %s  attempts=%d reason=%s next=%s\n", job.Snapshot, job.Attempts, job.Reason, job.NextAttempt.Format(time.RFC3339))
+		}
 		for _, issue := range issues {
 			fmt.Fprintf(w, "- %s\n", issue)
 		}

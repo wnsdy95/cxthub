@@ -26,6 +26,7 @@ func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 		child          bool
 		failDelete     bool
 		attachedMemory bool
+		backfill       bool
 		wantDeleted    bool
 	}{
 		{name: "same native session moves worktrees", wantDeleted: true},
@@ -36,10 +37,12 @@ func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 		{name: "unreferenced child still needs parent", child: true},
 		{name: "snapshot delete fails", failDelete: true},
 		{name: "attached memory absent from successor", attachedMemory: true},
+		{name: "historical upload pins superseded capture", backfill: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			st := storage.NewFileStore(t.TempDir())
+			root := t.TempDir()
+			st := storage.NewFileStore(root)
 			repo := string(domain.HashContent([]byte("gc repo")))
 			put := func(cir domain.CIRDocument) domain.ContentHash {
 				t.Helper()
@@ -86,10 +89,19 @@ func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 				sessionStore = &failHookSnapshotDeleteStore{FileStore: st}
 			}
 			svc := newTestSaveService(nil, nil, nil, sessionStore)
+			if tc.backfill {
+				snap, err := st.GetSnapshot(ctx, old)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := st.StageBackfills(ctx, repo, []domain.Snapshot{snap}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			svc.gcHookLeaf(ctx, repo, old, current)
 			jobs, queueErr := st.CaptureCollections(ctx, repo, 32)
 			wantJobs := 0
-			if tc.failDelete {
+			if tc.failDelete || tc.backfill {
 				wantJobs = 1
 			}
 			if queueErr != nil || len(jobs) != wantJobs {
@@ -103,6 +115,21 @@ func TestGCHookLeafRequiresSupersedingCapture(t *testing.T) {
 				}
 			} else if snapErr != nil || docErr != nil {
 				t.Fatalf("original data deleted without proof of supersession: snapshot=%v doc=%v", snapErr, docErr)
+			}
+			if tc.backfill {
+				queued, err := st.ListBackfills(ctx, repo)
+				if err != nil || len(queued) != 1 {
+					t.Fatal(queued, err)
+				}
+				if err := st.UpdateBackfill(ctx, queued[0], nil); err != nil {
+					t.Fatal(err)
+				}
+				// A restarted collector can retire a proven duplicate only after
+				// the durable upload obligation was acknowledged.
+				newTestSaveService(nil, nil, nil, storage.NewFileStore(root)).gcHookLeaf(ctx, repo, old, current)
+				if _, err := st.GetDoc(ctx, old); !errors.Is(err, domain.ErrNotFound) {
+					t.Fatal("completed pin leaked", err)
+				}
 			}
 		})
 	}

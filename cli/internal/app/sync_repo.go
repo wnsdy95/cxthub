@@ -345,6 +345,46 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err != nil {
 		return inbound.SyncOutput{}, fmt.Errorf("prepare push objects: %w", err)
 	}
+	var retained []domain.Snapshot
+	var remoteMemoryAttachments map[domain.ContentHash]domain.ContentHash
+	memoryCatalogRead := false
+	backfill, canBackfill := s.store.(outbound.HistoricalBackfillStore)
+	_, retainsObjects := s.store.(outbound.ObjectRetention)
+	canBackfill = canBackfill && retainsObjects
+	wanted := map[domain.ContentHash]bool{}
+	for _, snap := range pushSnaps {
+		wanted[snap.ID] = true
+	}
+	for _, hash := range pushDocs {
+		wanted[hash] = true
+	}
+	if in.ForegroundOnly && canBackfill {
+		remoteMemoryAttachments, err = s.remoteMemoryCatalog(ctx, repoID)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		memoryCatalogRead = true
+		snaps, retained, err = s.foregroundSnapshots(ctx, repoID, repoRoot, snaps, man.Refs, history, remoteMemoryAttachments)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		selected := map[domain.ContentHash]bool{}
+		for _, snap := range snaps {
+			selected[snap.ID], selected[snap.DocHash] = true, true
+		}
+		keptSnaps, keptDocs := pushSnaps[:0], pushDocs[:0]
+		for _, snap := range pushSnaps {
+			if selected[snap.ID] {
+				keptSnaps = append(keptSnaps, snap)
+			}
+		}
+		for _, hash := range pushDocs {
+			if selected[hash] {
+				keptDocs = append(keptDocs, hash)
+			}
+		}
+		pushSnaps, pushDocs = keptSnaps, keptDocs
+	}
 
 	var refs []domain.Ref
 	for _, r := range man.Refs {
@@ -392,47 +432,29 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 			memorySnapshots = append(memorySnapshots, snap)
 		}
 	}
-	var remoteMemoryAttachments map[domain.ContentHash]domain.ContentHash
-	remoteMemoryAhead := map[domain.ContentHash]bool{}
-	if len(memorySnapshots) > 0 {
-		remoteManifest, err := s.remote.RemoteManifest(ctx, repoID)
+	if !memoryCatalogRead && (len(memorySnapshots) > 0 || len(retained) > 0) {
+		remoteMemoryAttachments, err = s.remoteMemoryCatalog(ctx, repoID)
 		if err != nil {
 			return inbound.SyncOutput{}, err
 		}
-		if remoteManifest.RepoID != "" && remoteManifest.RepoID != repoID {
-			return inbound.SyncOutput{}, domain.ErrHashMismatch
-		}
-		for snapshotID, memoryHash := range remoteManifest.MemoryAttachments {
-			if err := domain.ValidateContentHash(snapshotID); err != nil {
-				return inbound.SyncOutput{}, err
-			}
-			if err := domain.ValidateContentHash(memoryHash); err != nil {
-				return inbound.SyncOutput{}, err
+	}
+	if len(retained) > 0 {
+		queued := make([]domain.Snapshot, 0, len(retained))
+		for _, snap := range retained {
+			if wanted[snap.ID] || wanted[snap.DocHash] || (snap.MemoryHash != "" && remoteMemoryAttachments[snap.ID] != snap.MemoryHash) {
+				queued = append(queued, snap)
 			}
 		}
-		remoteMemoryAttachments = remoteManifest.MemoryAttachments
+		// Persistence precedes every ref/history publication. A partial queue
+		// write fails the foreground operation, retaining any already-staged work.
+		if err := backfill.StageBackfills(ctx, repoID, queued); err != nil {
+			return inbound.SyncOutput{}, fmt.Errorf("retain historical upload obligations: %w", err)
+		}
 	}
 
-	// Validate every changed local chain before publishing raw objects so a
-	// missing or corrupt predecessor cannot leave a partially advanced ref.
-	var memoryPlans []memoryPushPlan
-	for _, snap := range memorySnapshots {
-		if remoteMemoryAttachments != nil && remoteMemoryAttachments[snap.ID] == snap.MemoryHash {
-			continue
-		}
-		plan, err := s.localMemoryPushPlan(ctx, snap.ID, snap.MemoryHash)
-		if err != nil {
-			return inbound.SyncOutput{}, fmt.Errorf("read memory chain %s for snapshot %s: %w", snap.MemoryHash, snap.ID, err)
-		}
-		if remoteMemoryAttachments != nil {
-			remoteHash := remoteMemoryAttachments[plan.snapshotID]
-			ahead, err := s.preflightKnownRemoteMemory(ctx, repoID, plan, remoteHash)
-			if err != nil {
-				return inbound.SyncOutput{}, err
-			}
-			remoteMemoryAhead[plan.snapshotID] = ahead
-		}
-		memoryPlans = append(memoryPlans, plan)
+	memoryPlans, remoteMemoryAhead, err := s.prepareMemoryPushPlans(ctx, repoID, memorySnapshots, remoteMemoryAttachments)
+	if err != nil {
+		return inbound.SyncOutput{}, err
 	}
 
 	// Publish order is documents → snapshots → memory/graft/history → refs.
@@ -443,26 +465,10 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, err
 		}
 	}
-	for _, plan := range memoryPlans {
-		// Another terminal or machine already advanced this snapshot's memory.
-		// Do not rewind it, and do not let one stale historical attachment block
-		// publishing otherwise independent snapshots and refs.
-		if remoteMemoryAhead[plan.snapshotID] {
-			continue
-		}
-		var err error
-		if remoteMemoryAttachments != nil {
-			err = s.pushMemoryPlanFromKnown(ctx, repoID, plan, remoteMemoryAttachments[plan.snapshotID])
-		} else {
-			err = s.pushMemoryPlan(ctx, repoID, plan)
-		}
-		if isMemoryAttachmentNotFound(err) {
-			err = s.restoreMemoryArchive(ctx, repoID, plan)
-		}
-		if err != nil {
-			return inbound.SyncOutput{}, err
-		}
+	if err := s.sendMemoryPushPlans(ctx, repoID, memoryPlans, remoteMemoryAttachments, remoteMemoryAhead); err != nil {
+		return inbound.SyncOutput{}, err
 	}
+
 	// Message promotion is a best-effort display metadata, but graft is a prerequisite for the reachability of the ref to be published. If stale/cycle adjustment occurs, the current ref publish is interrupted, and it retries after confirming the local/server state.
 	if repoRoot != "" {
 		s.flushPromotions(ctx, repoRoot, repoID)
@@ -512,7 +518,30 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err := s.flushPRDeliveries(ctx, repoID); err != nil {
 		return inbound.SyncOutput{}, errors.Join(pendingErr, err)
 	}
-	return inbound.SyncOutput{Pushed: len(pushSnaps), NewRefs: refs}, pendingErr
+	out := inbound.SyncOutput{Pushed: len(pushSnaps), NewRefs: refs}
+	if canBackfill {
+		jobs, err := backfill.ListBackfills(ctx, repoID)
+		if err != nil {
+			return out, errors.Join(pendingErr, err)
+		}
+		states := map[domain.ContentHash]domain.ContentHash{}
+		for _, snap := range snaps {
+			states[snap.ID], _ = domain.SnapshotStateHash(snap)
+		}
+		for _, job := range jobs {
+			if states[job.Snapshot] == job.StateHash {
+				if err := backfill.UpdateBackfill(ctx, job, nil); err != nil {
+					return out, errors.Join(pendingErr, err)
+				}
+			}
+		}
+		jobs, err = backfill.ListBackfills(ctx, repoID)
+		if err != nil {
+			return out, errors.Join(pendingErr, err)
+		}
+		out.BackfillPending = len(jobs)
+	}
+	return out, pendingErr
 }
 
 // flushPromotions flushes the <repoRoot>/.cxt/promotions.json queue to the server, removing successful items.

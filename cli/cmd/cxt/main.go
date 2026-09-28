@@ -304,6 +304,7 @@ func buildContainer(cfg config) container {
 	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
 	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices)
 	clictr := &delivcli.Container{
+		WakeHistoricalSync: delivcli.SpawnHistoricalSync,
 		ResolveConnection: func(ctx context.Context, raw string) (domain.RepositoryConnection, error) {
 			base, err := remotecfg.APIBase(raw)
 			if err != nil {

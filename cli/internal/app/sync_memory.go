@@ -300,3 +300,72 @@ func (s *SyncRepoService) restoreMemoryArchive(ctx context.Context, repoID strin
 	}
 	return s.pushMemoryPlanFromKnown(ctx, repoID, plan, root.hash)
 }
+
+// Preflight changed attachments before any document metadata or ref publication.
+func (s *SyncRepoService) prepareMemoryPushPlans(ctx context.Context, repoID string, memorySnapshots []domain.Snapshot, remoteMemoryAttachments map[domain.ContentHash]domain.ContentHash) ([]memoryPushPlan, map[domain.ContentHash]bool, error) {
+	remoteMemoryAhead := map[domain.ContentHash]bool{}
+	var memoryPlans []memoryPushPlan
+	for _, snap := range memorySnapshots {
+		if remoteMemoryAttachments != nil && remoteMemoryAttachments[snap.ID] == snap.MemoryHash {
+			continue
+		}
+		plan, err := s.localMemoryPushPlan(ctx, snap.ID, snap.MemoryHash)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read memory chain %s for snapshot %s: %w", snap.MemoryHash, snap.ID, err)
+		}
+		if remoteMemoryAttachments != nil {
+			remoteHash := remoteMemoryAttachments[plan.snapshotID]
+			ahead, err := s.preflightKnownRemoteMemory(ctx, repoID, plan, remoteHash)
+			if err != nil {
+				return nil, nil, err
+			}
+			remoteMemoryAhead[plan.snapshotID] = ahead
+		}
+		memoryPlans = append(memoryPlans, plan)
+	}
+
+	return memoryPlans, remoteMemoryAhead, nil
+}
+
+func (s *SyncRepoService) sendMemoryPushPlans(ctx context.Context, repoID string, memoryPlans []memoryPushPlan, remoteMemoryAttachments map[domain.ContentHash]domain.ContentHash, remoteMemoryAhead map[domain.ContentHash]bool) error {
+	for _, plan := range memoryPlans {
+		// Another terminal or machine already advanced this snapshot's memory.
+		// Do not rewind it, and do not let one stale historical attachment block
+		// publishing otherwise independent snapshots and refs.
+		if remoteMemoryAhead[plan.snapshotID] {
+			continue
+		}
+		var err error
+		if remoteMemoryAttachments != nil {
+			err = s.pushMemoryPlanFromKnown(ctx, repoID, plan, remoteMemoryAttachments[plan.snapshotID])
+		} else {
+			err = s.pushMemoryPlan(ctx, repoID, plan)
+		}
+		if isMemoryAttachmentNotFound(err) {
+			err = s.restoreMemoryArchive(ctx, repoID, plan)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SyncRepoService) remoteMemoryCatalog(ctx context.Context, repoID string) (map[domain.ContentHash]domain.ContentHash, error) {
+	remoteManifest, err := s.remote.RemoteManifest(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	if remoteManifest.RepoID != "" && remoteManifest.RepoID != repoID {
+		return nil, domain.ErrHashMismatch
+	}
+	for snapshotID, memoryHash := range remoteManifest.MemoryAttachments {
+		if err := domain.ValidateContentHash(snapshotID); err != nil {
+			return nil, err
+		}
+		if err := domain.ValidateContentHash(memoryHash); err != nil {
+			return nil, err
+		}
+	}
+	return remoteManifest.MemoryAttachments, nil
+}

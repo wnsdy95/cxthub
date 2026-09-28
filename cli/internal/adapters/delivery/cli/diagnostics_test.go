@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 func treeBytes(t *testing.T, root string) map[string]string {
@@ -33,6 +37,47 @@ func treeBytes(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func TestDoctorReportsRetainedUploadsWithoutMutation(t *testing.T) {
+	cwd, _, st, repo, id := historyFixture(t)
+	ctx := context.Background()
+	snap, err := st.GetSnapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StageBackfills(ctx, repo, []domain.Snapshot{snap}); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := st.ListBackfills(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := jobs[0]
+	next.Version++
+	next.Attempts++
+	next.Reason = "unavailable"
+	next.NextAttempt = time.Now().UTC().Add(time.Minute)
+	if err := st.UpdateBackfill(ctx, jobs[0], &next); err != nil {
+		t.Fatal(err)
+	}
+	before := treeBytes(t, cwd)
+	var out bytes.Buffer
+	if err := RunDiagnostics(ctx, cwd, []string{"doctor", "--json"}, &out); err == nil {
+		t.Fatal("failed upload not reported")
+	}
+	var report struct {
+		Backfills []domain.SnapshotBackfill `json:"historical_uploads"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Backfills) != 1 || report.Backfills[0] != next {
+		t.Fatal(report)
+	}
+	if !reflect.DeepEqual(before, treeBytes(t, cwd)) {
+		t.Fatal("doctor mutated durable queue")
+	}
 }
 
 func TestDiagnosticsSurvivesDamagedReplicaWithoutReplayOrWrites(t *testing.T) {
