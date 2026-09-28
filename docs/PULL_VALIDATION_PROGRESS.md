@@ -151,3 +151,41 @@ no-ops at that serialized observation point. Missing or changed tags still follo
 the existing conflict checks and writes. Branches cannot use this path; lifecycle
 events are applied through their existing policy before ordinary ref adoption.
 There is no batch of deferred mutations or new partial-ref commit protocol.
+
+
+## Reusing the verifier during history selection
+
+Tracking: #290. History source validation previously decoded the same document
+separately for Source, Target, SharedTarget, MemorySource and inherited memory.
+A synthetic event naming the same document in all four roles performed five
+full decodes. This bypassed the authenticated receipt already available to pull.
+
+History selection now uses the same `StoredDocumentVerifier` capability. A
+per-operation set removes repeated verification of one immutable document; a new
+operation always checks current stored bytes again. Snapshot repository ownership
+is checked before document verification, memory provenance remains exact, and
+narrow stores retain a full decode/hash/semantic-validation fallback. The fallback
+also verifies that the returned document hash is the requested hash.
+
+A repeated-text 16 MiB synthetic transcript on a local Apple M5 Pro measured:
+
+| History validation | Before | After |
+| --- | --- | --- |
+| Cold, no receipt reuse | 1.24-1.31 s | 0.26-0.28 s |
+| Warm authenticated receipt | 1.21-1.22 s | 1.0-2.9 ms |
+| Allocated bytes, cold | 1.13-1.24 GB | 0.22-0.27 GB |
+| Allocated bytes, warm | 1.23-1.28 GB | 0.17 MB |
+
+Allocation totals are not peak RSS. The highly compressible fixture measures the
+history verification path, not whole-push latency or cloud throughput. Cold work
+still fully validates the canonical document. Reproduce with:
+
+```sh
+cd cli
+go test ./internal/app -run '^$' -bench '^BenchmarkHistorySourceVerification$' -benchtime=1x -count=3
+```
+
+Failure tests cover altered bytes with unchanged size/time, deleted documents,
+foreign repository metadata, wrong fallback hashes, cancellation and mandatory
+re-verification on the next operation. The existing storage receipt suite covers
+forgery, repacking, private-key placement and concurrent key creation.
