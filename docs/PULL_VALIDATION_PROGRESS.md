@@ -322,3 +322,53 @@ This measures persistence only. Network transfer, canonical verification,
 worker scheduling and queue wait remain separate costs; it is not an end-to-end
 latency or cloud throughput guarantee. Live synchronization may still time out
 and retain durable work for retry.
+
+## Reusing canonical event verification
+
+Document finalization now checks canonical wire bytes one event at a time and
+keeps at most 65,536 process-local event proofs. Each key includes the hash of
+the exact current bytes and the CIR version; its value is the validated sequence
+number. No transcript, untrusted `verified` flag or repository authority is cached.
+Eviction and process restarts fall back to ordinary typed event validation.
+
+Every call still checks the complete document hash, exact envelope/framing and
+event order. A cold event passes the same typed union, optional-field, replacement
+history and canonical JSON rules as `VerifySessionDoc`. A warm event cannot move
+v2-only fields into a v1 envelope. The returned document owns an immutable copy.
+Chunk ownership and current chunk bytes are verified before this optimization;
+transactional publication and lease fencing remain unchanged. Legacy stored
+noncanonical representations retain their existing decoder path.
+
+The borrowed event scanner runs only after JSON framing validation. Differential
+fuzzing compares acceptance with the prior full-document decoder/canonicalizer.
+Regressions cover changed hashes/bytes, unknown fields, duplicate JSON keys,
+sequence and replacement order, CIR downgrades, numeric normalization, eviction,
+concurrent callers, canceled work and foreign or corrupted chunks after warming.
+
+Run the synthetic benchmark without private transcripts:
+
+```sh
+go -C backend test ./internal/domain -run '^$' \
+  -bench BenchmarkCanonicalDocVerification -benchtime=3x -count=1
+```
+
+An 18.9 MB cumulative fixture on the local Apple M5 Pro measured 256.8 ms /
+250.8 MB allocated for the previous typed pipeline, 330.8 ms / 209.2 MB for a
+cold verifier, and 72.0 ms / 19.0 MB after a verified prefix plus a new event.
+The warm path saves about 72% time and 92% allocated bytes; the cold path costs
+about 29% more time. This deliberately preserves first-time semantic validation.
+Workloads exceeding the cache capacity may not benefit. These numbers isolate
+verification; they exclude transfer, persistence and queue wait.
+
+## Repair uses one verified ref observation
+
+The repair command previously fetched and verified objects, then fetched a newer
+remote manifest for its ref list. A concurrent push between those reads could
+select an object absent from the staging directory. `SyncOutput.FetchedRefs`
+now carries the refs verified by that exact pull, separately from adopted local
+refs. Repair consumes this observation without a second manifest read. A newer
+server tip is left for the next synchronization, and healthy local-ahead refs
+remain intact. A missing prerequisite names the ref and target before live writes.
+A deterministic regression advances the server manifest after pull and proves
+that the verified observation repairs successfully while the newer one is refused.
+Tracking: #305.

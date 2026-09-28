@@ -24,6 +24,7 @@ import (
 // Service implements all server inbound use-cases and HTTP read-through.
 type Service struct {
 	branchCache branchProjectionCache
+	docVerifier domain.CanonicalDocVerifier
 	meta        outbound.MetadataStore
 	blobs       outbound.BlobStore
 	auth        outbound.AuthProvider

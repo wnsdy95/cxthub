@@ -8,6 +8,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func TestDocFinalizationAcceptanceSurvivesCallerAndValidatesBeforePublish(t *testing.T) {
@@ -74,6 +75,50 @@ func TestDocFinalizationAcceptanceSurvivesCallerAndValidatesBeforePublish(t *tes
 	}
 	if refs, err := st.ListRefs(ctx, repo); err != nil || len(refs) != 0 {
 		t.Fatalf("refs prematurely published %v %v", refs, err)
+	}
+}
+
+type changedFinalizationChunks struct{ outbound.BlobStore }
+
+func (s changedFinalizationChunks) GetChunk(ctx context.Context, repo, hash domain.ContentHash) ([]byte, error) {
+	raw, err := s.BlobStore.GetChunk(ctx, repo, hash)
+	if err != nil {
+		return nil, err
+	}
+	copy := append([]byte{}, raw...)
+	copy[0] ^= 1
+	return copy, nil
+}
+
+func TestDocFinalizationWarmProofStillChecksCurrentOwnedChunks(t *testing.T) {
+	svc, st := newFsckSvc(t)
+	ctx := systemTestContext()
+	repo := hh(t.Name())
+	bindCommitTestRepo(t, st, repo)
+	cir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1"}, Events: []domain.CIREvent{{Kind: domain.EventMessage, Role: domain.RoleUser}}}
+	raw, err := domain.CanonicalBytes(cir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := domain.PlanDocChunks(raw)
+	if _, _, err := st.PutChunks(ctx, repo, plan.Bodies); err != nil {
+		t.Fatal(err)
+	}
+	j, err := domain.NewDocFinalizationJob(repo, domain.HashContent(raw), plan.Manifest, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.verifyDocJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	other := j
+	other.RepoID = hh("unowned chunks")
+	if proof, err := svc.verifyDocJob(ctx, other); err == nil || proof.Valid() {
+		t.Fatal("proof granted foreign ownership")
+	}
+	svc.blobs = changedFinalizationChunks{st}
+	if proof, err := svc.verifyDocJob(ctx, j); !errors.Is(err, domain.ErrIntegrity) || proof.Valid() {
+		t.Fatal("warm proof hid chunk corruption", err)
 	}
 }
 func TestDocFinalizationInterruptedWorkerIsReclaimable(t *testing.T) {

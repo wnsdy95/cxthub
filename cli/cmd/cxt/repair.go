@@ -85,15 +85,9 @@ func runRepair(args []string) error {
 	remote := backendclient.NewBackendClient(func() string { return endpoint }, token, domain.TeamIdentity{})
 	remote.SetChunkLocal(stage)
 	syncer := app.NewSyncRepoService(stage, remote, nil, storage.NewSyncOutbox())
-	if _, err := syncer.Pull(ctx, inbound.SyncInput{RepoID: repoID, FetchOnly: true}); err != nil {
-		return fmt.Errorf("server verification failed; live replica unchanged (recovery evidence: %s): %w", backup, err)
-	}
-	manifest, err := remote.RemoteManifest(ctx, repoID)
+	fetched, err := syncer.Pull(ctx, inbound.SyncInput{RepoID: repoID, FetchOnly: true})
 	if err != nil {
-		return err
-	}
-	if manifest.RepoID != repoID {
-		return domain.ErrHashMismatch
+		return fmt.Errorf("server verification failed; live replica unchanged (recovery evidence: %s): %w", backup, err)
 	}
 	cloudRepo, err := remote.Repository(ctx, repoID)
 	if err != nil {
@@ -101,9 +95,9 @@ func runRepair(args []string) error {
 	}
 	// Server HEAD is not a user's worktree cursor. Use the configured default only
 	// as the shared initialization marker; preserve any existing healthy HEAD.
-	filtered := make([]domain.Ref, 0, len(manifest.Refs)+1)
+	filtered := make([]domain.Ref, 0, len(fetched.FetchedRefs)+1)
 	defaultPresent := false
-	for _, ref := range manifest.Refs {
+	for _, ref := range fetched.FetchedRefs {
 		if ref.Kind == domain.RefHEAD {
 			continue
 		}

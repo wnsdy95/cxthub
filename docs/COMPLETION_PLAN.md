@@ -123,6 +123,14 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   Mandatory SSO, SAML, CLI/MCP assurance renewal and security policies are not yet
   enabled; detailed boundaries are recorded in ENTERPRISE_IDENTITY.md.
 
+- OIDC PR #304 merged after nine green CI checks. The first sync E2E run failed
+  during a second repair and passed on rerun; investigation exposed the separate
+  two-observation repair gap in #305. Repair now uses the refs from its verified
+  pull. Cumulative document validation reuses bounded exact-event proofs while
+  preserving full hashes, CIR-version checks and current chunk ownership. Cold
+  and warm costs and limits are recorded in PULL_VALIDATION_PROGRESS.md. Neither
+  change claims that the entire live synchronization backlog is drained.
+
 - Synchronization proof/repair changes merged in #306 after nine green CI checks.
   Main-source `e2946ba` CLI, API and MCP binaries are installed locally and both
   independent services are healthy. Live retained-history publication is being
