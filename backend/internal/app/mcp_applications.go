@@ -38,7 +38,7 @@ func (s *IdentityService) ExchangeMCPAuthorizationCode(ctx context.Context, hash
 		if err != nil {
 			return domain.OAuthTokenPair{}, err
 		}
-		err = audit.AppendAccountAudit(ctx, domain.AccountAuditEvent{ID: domain.NewID("aud_"), UserID: code.UserID, ClientID: client, Action: "mcp.authorized", CreatedAt: time.Now().UTC()})
+		err = audit.AppendAccountAudit(ctx, domain.AccountAuditEvent{ID: domain.NewID("aud_"), UserID: code.UserID, ClientID: client, GrantID: pair.GrantID, Action: "mcp.authorized", CreatedAt: time.Now().UTC()})
 		return pair, err
 	})
 }
@@ -52,9 +52,24 @@ func (s *IdentityService) ListMCPApplications(ctx context.Context, user string) 
 		return nil, domain.ErrForbidden
 	}
 	byClient := map[string]MCPApplication{}
+	checkedGrants := map[string]bool{}
 	for _, session := range sessions {
 		if session.Kind != "mcp_access" && session.Kind != "mcp_refresh" || !time.Now().Before(session.ExpiresAt) {
 			continue
+		}
+		if session.GrantID != "" {
+			active, checked := checkedGrants[session.GrantID]
+			if !checked {
+				err := s.checkMCPGrant(ctx, session)
+				if err != nil && !errors.Is(err, domain.ErrUnauthorized) {
+					return nil, err
+				}
+				active = err == nil
+				checkedGrants[session.GrantID] = active
+			}
+			if !active {
+				continue
+			}
 		}
 		item, ok := byClient[session.Label]
 		if !ok {
@@ -95,6 +110,30 @@ func (s *IdentityService) RevokeMCPApplication(ctx context.Context, user, client
 		sessions, err := s.repositories.ListSessionsForUser(ctx, user)
 		if err != nil {
 			return err
+		}
+		grants, err := s.grantStore()
+		if err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for _, session := range sessions {
+			if session.Label == client && session.GrantID != "" && !seen[session.GrantID] {
+				g, err := grants.GetOAuthGrant(ctx, session.GrantID)
+				if err != nil {
+					return err
+				}
+				if g.UserID != user || g.ClientID != client {
+					return domain.ErrIntegrity
+				}
+				if g.RevokedAt == nil {
+					now := time.Now().UTC()
+					g.RevokedAt = &now
+					if err = grants.UpdateOAuthGrant(ctx, g); err != nil {
+						return err
+					}
+				}
+				seen[g.ID] = true
+			}
 		}
 		for _, session := range sessions {
 			if session.Label == client && (session.Kind == "mcp_access" || session.Kind == "mcp_refresh") {

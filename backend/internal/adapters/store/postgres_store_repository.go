@@ -323,9 +323,9 @@ func (s *PostgresStore) CreateSession(ctx context.Context, sess domain.Session) 
 		return err
 	}
 	_, err := s.db(ctx).Exec(ctx,
-		`INSERT INTO sessions (token, user_id, expires_at, hint, kind, label) VALUES ($1,$2,$3,$4,$5,$6)
-		 ON CONFLICT (token) DO UPDATE SET hint=EXCLUDED.hint, kind=EXCLUDED.kind, label=EXCLUDED.label`,
-		sess.Token, sess.UserID, sess.ExpiresAt, sess.Hint, sess.Kind, sess.Label)
+		`INSERT INTO sessions (token, user_id, expires_at, hint, kind, label, grant_id) VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''))
+		 ON CONFLICT (token) DO UPDATE SET hint=EXCLUDED.hint, kind=EXCLUDED.kind, label=EXCLUDED.label, grant_id=COALESCE(sessions.grant_id, EXCLUDED.grant_id)`,
+		sess.Token, sess.UserID, sess.ExpiresAt, sess.Hint, sess.Kind, sess.Label, sess.GrantID)
 	return err
 }
 
@@ -335,8 +335,8 @@ func (s *PostgresStore) GetSession(ctx context.Context, token string) (domain.Se
 	}
 	var sess domain.Session
 	err := s.db(ctx).QueryRow(ctx,
-		`SELECT token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,'') FROM sessions WHERE token=$1`, token).
-		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label)
+		`SELECT token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,'') FROM sessions WHERE token=$1`, token).
+		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID)
 	if err != nil {
 		return domain.Session{}, mapNoRows(err)
 	}
@@ -356,9 +356,9 @@ func (s *PostgresStore) ConsumeSession(ctx context.Context, token, kind, label s
 	var sess domain.Session
 	err := s.db(ctx).QueryRow(ctx,
 		`DELETE FROM sessions WHERE token=$1 AND kind=$2 AND label=$3
-		 RETURNING token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,'')`,
+		 RETURNING token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,'')`,
 		token, kind, label).
-		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label)
+		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID)
 	if err != nil {
 		return domain.Session{}, mapNoRows(err)
 	}
@@ -381,7 +381,7 @@ func (s *PostgresStore) ListSessionsForUser(ctx context.Context, userID string) 
 		return nil, err
 	}
 	rows, err := s.db(ctx).Query(ctx,
-		`SELECT token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,'') FROM sessions WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+		`SELECT token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,'') FROM sessions WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +389,7 @@ func (s *PostgresStore) ListSessionsForUser(ctx context.Context, userID string) 
 	var out []domain.Session
 	for rows.Next() {
 		var sess domain.Session
-		if err := rows.Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label); err != nil {
+		if err := rows.Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID); err != nil {
 			return nil, err
 		}
 		if err := domain.ValidateSessionRecord(sess); err != nil {

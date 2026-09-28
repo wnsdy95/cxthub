@@ -165,6 +165,32 @@ The consent page uses the user's ordinary Firebase-backed CXTHub web session.
 MCP access and refresh capabilities are separately hashed, client-bound, and
 cannot be presented to ordinary REST endpoints.
 
+Each new consent creates an independent authorization (grant). Access and refresh
+tokens share its random ID; rotation keeps that ID and the original issuance time.
+It does not renew any SSO authentication evidence. Another consent by the same
+user and client has a different ID. Tokens and retained refresh references contain
+only hashes at rest; grant IDs are identifiers, not bearer credentials.
+
+Presenting an already consumed, unexpired refresh token revokes its authorization,
+including its replacement refresh and related access tokens, before returning
+`invalid_grant`. A foreign client cannot trigger this revocation. Clients must
+serialize refreshes and persist the replacement pair: simultaneous refreshes, or
+retrying an old token after losing a successful response, require fresh consent.
+There is no replay grace period. `/oauth/revoke` similarly revokes the associated
+authorization, even when given a previously consumed refresh token. Other grants
+remain valid. The account audit distinguishes explicit grant revocation from
+refresh reuse, without recording bearer values. PostgreSQL commits lifecycle,
+session writes and audit together across API/MCP replicas.
+
+Legacy access sessions keep their existing expiry. A legacy refresh acquires a
+grant on its first successful rotation; an older access token cannot be linked
+merely by matching user/client labels. Browser and CLI sessions are unchanged.
+Roll out migration 0069 and compatible API/MCP binaries together: old readers do
+not enforce grant revocation. Do not serve mixed versions or roll back to an old
+MCP binary with live new grants. Grant/replay records are retained; this change
+does not activate automatic deletion. FS development storage serializes in one
+process only and does not promise PostgreSQL rollback or multi-process atomicity.
+
 Repository visibility follows the context-viewing boundary:
 
 - public repositories are readable;

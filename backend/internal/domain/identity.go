@@ -276,11 +276,15 @@ type Invite struct {
 type Session struct {
 	Token  string `json:"token"`
 	UserID string `json:"user_id"`
+	// GrantID is the stable MCP authorization. Empty means a legacy credential
+	// or a non-MCP session; it never implies federated authentication evidence.
+	GrantID string `json:"grant_id,omitempty"`
 	// Hint is the last 8 characters of the original token (for list display, discard identification — the original is not stored).
 	Hint string `json:"hint,omitempty"`
-	// Kind is the session type: "web" | "cli" (hash storage makes prefix differentiation impossible, so it is explicitly specified).
+	// Kind separates web, cli, mcp_access and mcp_refresh capabilities.
 	Kind string `json:"kind,omitempty"`
-	// Label is the device display name (which device session it is — CLI is hostname, web is User-Agent summary). It is for display and identification only and is not used for access control.
+	// Label is the display name for web/CLI devices. For MCP it stores the exact
+	// OAuth client ID used for token binding, not a freely editable display label.
 	Label     string    `json:"label,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -455,6 +459,9 @@ func ValidateInviteRecord(inv Invite) error {
 func ValidateSessionRecord(sess Session) error {
 	if err := ValidateStoredSessionToken(sess.Token); err != nil {
 		return err
+	}
+	if sess.GrantID != "" && (ValidateExternalID(sess.GrantID) != nil || (sess.Kind != "mcp_access" && sess.Kind != "mcp_refresh")) {
+		return ErrValidation
 	}
 	return ValidateExternalID(sess.UserID)
 }

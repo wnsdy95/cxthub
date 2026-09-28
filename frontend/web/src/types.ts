@@ -622,4 +622,4 @@ export interface CollaborationInvitation {
 }
 
 export interface MCPApplication { client_id:string; name:string; scope:string; created_at:string; expires_at:string }
-export interface AccountAuditEvent { id:string; user_id:string; client_id:string; action:string; created_at:string }
+export interface AccountAuditEvent { grant_id?:string; id:string; user_id:string; client_id:string; action:string; created_at:string }

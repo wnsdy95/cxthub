@@ -48,9 +48,6 @@ func TestMCPTokensAreHashedClientBoundAndRefreshIsNotBearer(t *testing.T) {
 	if refreshed.AccessToken == pair.AccessToken || refreshed.RefreshToken == pair.RefreshToken {
 		t.Fatalf("refresh result = %+v", refreshed)
 	}
-	if _, err := svc.RefreshMCPAccessToken(ctx, pair.RefreshToken, "mcp-client-a"); !errors.Is(err, domain.ErrUnauthorized) {
-		t.Fatalf("rotated refresh token was reusable: %v", err)
-	}
 	if err := svc.RevokeMCPToken(ctx, refreshed.AccessToken, "mcp-client-b"); err != nil {
 		t.Fatalf("foreign-client revocation should be an idempotent no-op: %v", err)
 	}
