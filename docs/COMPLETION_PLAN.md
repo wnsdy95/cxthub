@@ -89,6 +89,12 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   in 1.18 seconds with 85 retained jobs in the local development repository;
   it deliberately does not claim server acknowledgment or full integrity.
   PR #299 merged after nine green CI checks.
+  Uploaded-chunk finalization now avoids discarded whole-document compression
+  and repeated compression/upload of existing chunks while retaining exact byte
+  validation and transaction locks. Local PostgreSQL persistence benchmarks and
+  corruption/concurrent insertion/deletion regressions passed; see
+  PULL_VALIDATION_PROGRESS.md. This does not yet resolve queue wait or establish
+  completion of the live backlog.
 - PostgreSQL cutover: #294. The independent local service launcher, private
   configuration, credential separation and startup rollback have synthetic tests.
   PR #296 merged, followed by the actual local cutover. The frozen FS backup
@@ -103,6 +109,6 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   preserved while visible rows, overscan and focused/dragged rows bound the DOM.
   Unit geometry checks, build/i18n/architecture and all 79 browser regressions
   passed with independent API/MCP and a disposable PostgreSQL database. Focused
-  replacement coverage also passed; PR publication is in progress.
+  replacement coverage also passed. PR #300 merged after nine green CI checks.
 - Enterprise identity/security remains pending implementation and validation;
   this document is not a completion claim for the overall plan.

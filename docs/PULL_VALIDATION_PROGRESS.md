@@ -284,3 +284,41 @@ A concurrent collection retry starts a new prerequisite pass; failed or cancelle
 publication never reports synchronization complete. Hook/background calls omit
 the optional observer. Foreground completion does not claim historical backfill
 is finished: the resulting retained queue count remains separate.
+# Uploaded-chunk persistence cost (2026-09-29)
+
+PostgreSQL finalization previously compressed the entire canonical document even
+when it immediately replaced that result with a small chunk manifest. It also
+compressed and sent every already-uploaded chunk to an INSERT that would lose
+its conflict, before reading and verifying the existing bytes.
+
+Finalization now compresses only the selected storage representation. Existing
+chunks are read under a key-share lock, decompressed and compared with the
+verified canonical plan before ownership is granted. Missing chunks are inserted;
+if another writer wins that insertion, its bytes are read and checked too.
+Manifest, chunk ownership and index publication remain in the same transaction.
+No stored hash, wire contract or migration changes. Presence is not integrity
+proof, and sharing a chunk does not grant access to another repository's document.
+
+Run against a disposable PostgreSQL 16 database, never a development/user DB:
+
+```sh
+go -C backend test -tags postgres ./internal/adapters/store -run '^$' \
+  -bench BenchmarkPGUploadedChunkFinalization -benchtime=3x -count=3 -benchmem
+```
+
+`CXT_TEST_DSN` supplies the disposable database connection. The synthetic 8.2 MB
+fixture has compression-resistant event bodies. Uploaded chunks and matching
+event indexes are already present; each iteration changes only its envelope.
+Canonical verification is outside the timer. On the same local machine, the
+median of three runs changed from 160.6 ms / 99.8 MB allocated to
+110.2 ms / 51.8 MB allocated (about 31% less time and 48% fewer allocated bytes).
+The ranges were 150.4-165.7 ms before and 108.0-129.1 ms after. These are total
+allocations, not retained heap measurements.
+
+The full backend suite and vet passed with and without PostgreSQL. Focused race
+tests verify corrupt reused bytes, transactional rollback, foreign-document
+isolation, GC blocking and concurrent insertion with matching/corrupt winners.
+This measures persistence only. Network transfer, canonical verification,
+worker scheduling and queue wait remain separate costs; it is not an end-to-end
+latency or cloud throughput guarantee. Live synchronization may still time out
+and retain durable work for retry.
