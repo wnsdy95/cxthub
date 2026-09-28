@@ -1,13 +1,46 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"hash/fnv"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestStreamingSearchFilterPreservesLegacyBits(t *testing.T) {
+	for _, text := range []string{"", "a", "ab", "abcdef", "\ud55c\uad6d\uc5b4 caf\u00e9 \U0001f44b", strings.Repeat("large seed ", 10000)} {
+		want, got := make([]byte, 32768), make([]byte, 32768)
+		for i := 0; i+3 <= len(text); i++ {
+			h := fnv.New32a()
+			_, _ = h.Write([]byte(text[i : i+3]))
+			slot := h.Sum32() % (32768 * 8)
+			want[slot/8] |= 1 << (slot % 8)
+		}
+		visitSearchTrigrams(text, func(slot uint32) bool { got[slot/8] |= 1 << (slot % 8); return true })
+		if !bytes.Equal(got, want) {
+			t.Fatal("filter incompatible with stored documents")
+		}
+	}
+	if visitSearchTrigrams("missing", func(uint32) bool { return false }) {
+		t.Fatal("missing trigram did not stop query")
+	}
+}
+
+func BenchmarkStreamingSearchFilter(b *testing.B) {
+	text := strings.Repeat("synthetic seed ", 1<<20)
+	bits := make([]byte, 32768)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(text)))
+	b.ResetTimer()
+	for b.Loop() {
+		visitSearchTrigrams(text, func(slot uint32) bool { bits[slot/8] |= 1 << (slot % 8); return true })
+	}
+}
 
 func TestLegacyDocReadProjectionBackfillIsLosslessAndOwned(t *testing.T) {
 	ctx := context.Background()

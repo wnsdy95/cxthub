@@ -71,6 +71,10 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
 - Synchronization phase: #290 tracks remaining latency. History verification
   now reuses authenticated storage receipts and removes per-operation duplicate
   validation; synthetic cold/warm measurements and corruption tests are recorded
-  in PULL_VALIDATION_PROGRESS.md. Foreground/backfill separation remains pending.
+  in PULL_VALIDATION_PROGRESS.md. PR #291 merged with nine green CI checks and
+  the exact main-source CLI was installed locally. PostgreSQL indexing now reuses
+  current-version event search rows by verified event hash, retaining them against
+  concurrent deletion. FS filters stream trigrams without a transcript-sized
+  intermediate array. Foreground/backfill separation remains pending.
 - PostgreSQL cutover, UI and Enterprise phases remain pending implementation
   and validation; this document is not a completion claim.

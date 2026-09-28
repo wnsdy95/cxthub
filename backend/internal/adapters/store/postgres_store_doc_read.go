@@ -19,7 +19,15 @@ func putReadIndexPG(ctx context.Context, tx pgx.Tx, doc domain.VerifiedSessionDo
 	if exists {
 		return nil
 	}
-	idx, err := doc.ReadIndex()
+	plan, err := doc.PlanReadIndex()
+	if err != nil {
+		return err
+	}
+	known, err := retainSearchEventsPG(ctx, tx, plan.EventHashes())
+	if err != nil {
+		return err
+	}
+	idx, err := plan.Build(known)
 	if err != nil {
 		return err
 	}
@@ -32,6 +40,10 @@ func putReadIndexPG(ctx context.Context, tx pgx.Tx, doc domain.VerifiedSessionDo
 	}
 	hashes, texts, lower := []string{}, []string{}, []string{}
 	for _, e := range idx.Events {
+		if known[e.Hash] {
+			continue
+		}
+		known[e.Hash] = true
 		hashes = append(hashes, string(e.Hash))
 		texts = append(texts, e.Text)
 		lower = append(lower, strings.ToLower(e.Text))
@@ -47,6 +59,27 @@ func putReadIndexPG(ctx context.Context, tx pgx.Tx, doc domain.VerifiedSessionDo
 		return []any{string(doc.Hash()), i, int64(e.Offset), e.Length, string(e.Hash), e.Seq, e.Role}, nil
 	}))
 	return err
+}
+
+// Reuse only rows from the canonical-event projection namespace. Key-share
+// locks keep concurrent last-owner deletion from removing a reused search row
+// before this transaction publishes its event locations. No text crosses the
+// database connection for an unchanged inherited event.
+func retainSearchEventsPG(ctx context.Context, tx pgx.Tx, hashes []domain.ContentHash) (map[domain.ContentHash]bool, error) {
+	rows, err := tx.Query(ctx, `SELECT hash FROM doc_search_events_v2 WHERE hash=ANY($1::text[]) ORDER BY hash FOR KEY SHARE`, hashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	known := make(map[domain.ContentHash]bool)
+	for rows.Next() {
+		var hash domain.ContentHash
+		if err := rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		known[hash] = true
+	}
+	return known, rows.Err()
 }
 
 func (s *PostgresStore) DocReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {
