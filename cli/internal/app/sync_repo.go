@@ -468,19 +468,19 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, err
 		}
 	}
-	syncProgress(in, "push", "memory-and-history", 0, 0)
-	if err := s.sendMemoryPushPlans(ctx, repoID, memoryPlans, remoteMemoryAttachments, remoteMemoryAhead); err != nil {
+	if err := s.sendMemoryPushPlans(ctx, repoID, memoryPlans, remoteMemoryAttachments, remoteMemoryAhead, in.Progress); err != nil {
 		return inbound.SyncOutput{}, err
 	}
 
 	// Message promotion is a best-effort display metadata, but graft is a prerequisite for the reachability of the ref to be published. If stale/cycle adjustment occurs, the current ref publish is interrupted, and it retries after confirming the local/server state.
 	if repoRoot != "" {
+		syncProgress(in, "push", "publish-lineage", 0, 0)
 		s.flushPromotions(ctx, repoRoot, repoID)
 		if err := s.flushGrafts(ctx, repoRoot, repoID); err != nil {
 			return inbound.SyncOutput{}, err
 		}
 	}
-	if err := s.pushSelectedHistory(ctx, repoID, history); err != nil {
+	if err := s.pushSelectedHistory(ctx, repoID, history, in.Progress); err != nil {
 		return inbound.SyncOutput{}, err
 	}
 	syncProgress(in, "push", "publish-refs", 0, len(refs))
@@ -1042,6 +1042,10 @@ func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string
 		progress.Progress = observers[0]
 	}
 	for recovery := 0; ; recovery++ {
+		ordered, err := orderSnapshotPublication(snaps)
+		if err != nil {
+			return err
+		}
 		syncProgress(progress, "push", "upload-and-verify-documents", 0, len(hashes))
 		for index, hash := range hashes {
 			if err := ctx.Err(); err != nil {
@@ -1059,9 +1063,8 @@ func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string
 			return nil
 		}
 		syncProgress(progress, "push", "publish-snapshots", 0, len(snaps))
-		publicationErr := s.remote.Push(ctx, repoID, snaps, nil, nil, false, false)
+		publicationErr := s.publishSnapshotObjects(ctx, repoID, ordered, progress)
 		if publicationErr == nil {
-			syncProgress(progress, "push", "publish-snapshots", len(snaps), len(snaps))
 			return nil
 		}
 		if err := ctx.Err(); err != nil {

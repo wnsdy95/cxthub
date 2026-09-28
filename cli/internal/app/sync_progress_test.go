@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -49,6 +50,28 @@ func TestPushProgressNeverClaimsPublicationAfterFailure(t *testing.T) {
 		if complete == failure {
 			t.Fatalf("completion=%v failure=%v", complete, failure)
 		}
+	}
+}
+
+type failedProgressMemory struct{ outbound.RemoteSync }
+
+func (failedProgressMemory) PushMemory(context.Context, string, domain.MemoryDigest) error {
+	return errors.New("memory not acknowledged")
+}
+
+func TestMemoryProgressCountsPreservedRemoteAheadButNotFailedAttachment(t *testing.T) {
+	svc := newTestSyncService(nil, failedProgressMemory{}, nil)
+	first, second := domain.HashContent([]byte("first")), domain.HashContent([]byte("second"))
+	plans := []memoryPushPlan{{snapshotID: first}, {snapshotID: second, chain: []memoryAttachmentObject{{digest: domain.MemoryDigest{SnapshotID: second}}}}}
+	var counts []int
+	err := svc.sendMemoryPushPlans(context.Background(), "fixture", plans, nil, map[domain.ContentHash]bool{first: true}, func(p inbound.SyncProgress) {
+		if p.Phase != "publish-memory" || p.Total != 2 {
+			t.Fatal(p)
+		}
+		counts = append(counts, p.Completed)
+	})
+	if err == nil || !reflect.DeepEqual(counts, []int{0, 1}) {
+		t.Fatal("failed memory counted", counts, err)
 	}
 }
 

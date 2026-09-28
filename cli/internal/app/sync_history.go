@@ -73,7 +73,7 @@ func (s *SyncRepoService) pushHistory(ctx context.Context, repoID string) error 
 	return s.pushSelectedHistory(ctx, repoID, events)
 }
 
-func (s *SyncRepoService) pushSelectedHistory(ctx context.Context, repoID string, events []domain.HistoryEvent) error {
+func (s *SyncRepoService) pushSelectedHistory(ctx context.Context, repoID string, events []domain.HistoryEvent, observers ...func(inbound.SyncProgress)) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -89,7 +89,12 @@ func (s *SyncRepoService) pushSelectedHistory(ctx context.Context, repoID string
 	if err != nil {
 		return err
 	}
-	for _, e := range events {
+	progress := inbound.SyncInput{}
+	if len(observers) > 0 {
+		progress.Progress = observers[0]
+	}
+	syncProgress(progress, "push", "publish-history", 0, len(events))
+	for index, e := range events {
 		if e.Kind == "advance" {
 			// The previous local tip may never have been pushed. Publish that
 			// prerequisite only as a normal fast-forward before the retained
@@ -118,6 +123,7 @@ func (s *SyncRepoService) pushSelectedHistory(ctx context.Context, repoID string
 		if err := remote.PushHistoryEvent(ctx, e); err != nil {
 			return fmt.Errorf("history %s (%s) remains pending: %w", e.ID, e.Kind, err)
 		}
+		syncProgress(progress, "push", "publish-history", index+1, len(events))
 	}
 	return nil
 }

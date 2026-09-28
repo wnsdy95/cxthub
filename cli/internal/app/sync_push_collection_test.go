@@ -118,13 +118,15 @@ func TestPushRecoversCollectedPrerequisitesBeforeRefs(t *testing.T) {
 					t.Fatal(err)
 				}
 				wantReads, wantID := 1, ids[0]
+				wantPublications := 3 // failed child, recovered parent, then child
 				if mode == "current" {
 					wantID = ids[1]
+					wantPublications = 2 // only the current document disappeared
 				}
 				if mode == "snapshot-only" {
 					wantReads = 0
 				}
-				if remote.refCalls != 1 || remote.publications != 2 || len(counting.reads) != wantReads || (wantReads > 0 && counting.reads[0] != wantID) {
+				if remote.refCalls != 1 || remote.publications != wantPublications || len(counting.reads) != wantReads || (wantReads > 0 && counting.reads[0] != wantID) {
 					t.Fatalf("refs=%d publications=%d reads=%v", remote.refCalls, remote.publications, counting.reads)
 				}
 				return
@@ -133,7 +135,7 @@ func TestPushRecoversCollectedPrerequisitesBeforeRefs(t *testing.T) {
 				t.Fatalf("failure advanced refs: %v / %d", err, remote.refCalls)
 			}
 			if mode == "conflict" {
-				if !errors.Is(err, errUnrelatedPublication) || remote.publications != 2 {
+				if !errors.Is(err, errUnrelatedPublication) || remote.publications != 3 {
 					t.Fatalf("recovery hid metadata error: %v / %d", err, remote.publications)
 				}
 				return

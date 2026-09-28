@@ -234,10 +234,7 @@ func TestPushLoadsOnlyServerRequestedDocuments(t *testing.T) {
 			if len(remote.objectSnapshots) != test.wantSnapshots || len(remote.objectDocs) != test.wantDocs {
 				t.Fatalf("objects snapshots=%d docs=%d, want %d/%d", len(remote.objectSnapshots), len(remote.objectDocs), test.wantSnapshots, test.wantDocs)
 			}
-			wantObjectCalls := test.wantDocs
-			if test.wantSnapshots > 0 {
-				wantObjectCalls++
-			}
+			wantObjectCalls := test.wantDocs + test.wantSnapshots
 			if remote.objectCalls != wantObjectCalls || remote.refCalls != 1 {
 				t.Fatalf("calls objects=%d refs=%d, want %d/1", remote.objectCalls, remote.refCalls, wantObjectCalls)
 			}

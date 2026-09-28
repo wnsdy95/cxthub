@@ -97,18 +97,22 @@ func TestSyncPendingsPushesUnpushedAncestorChain(t *testing.T) {
 	remote := &pendingChainRemote{manifest: domain.Manifest{Refs: []domain.Ref{{Kind: domain.RefBranch, Name: "main", RepoID: repoID, Target: a}}}}
 	svc := newTestSyncService(st, remote, nil)
 
-	if _, err := svc.SyncPendings(ctx, inbound.SyncInput{RepoID: repoID}, nil); err != nil {
+	// Scope this test to pending publication; the legacy remote's separate
+	// unsync fallback intentionally republishes its broader object inventory.
+	if _, err := svc.SyncPendings(ctx, inbound.SyncInput{RepoID: repoID, PendingSessionID: "s1"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(remote.pushes) == 0 {
 		t.Fatal("pending push did not occur")
 	}
 	got := map[domain.ContentHash]bool{}
-	for _, s := range remote.pushes[0] {
-		got[s.ID] = true
+	for _, batch := range remote.pushes {
+		for _, s := range batch {
+			got[s.ID] = true
+		}
 	}
 	if !got[p] || !got[b] {
-		t.Fatalf("missing unpushed ancestor in pending chain push: got %v, want {%s,%s}", remote.pushes[0], p, b)
+		t.Fatalf("missing unpushed ancestor in pending chain push: got %v, want {%s,%s}", remote.pushes, p, b)
 	}
 	if got[a] {
 		t.Fatalf("remote already knows ancestor %s included in retransmission target", a)

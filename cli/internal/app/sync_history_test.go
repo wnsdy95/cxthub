@@ -10,6 +10,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
@@ -70,8 +71,17 @@ func TestHistoryPushPublishesUnpushedSourceBeforeRetentionAndRejectsConcurrentWo
 	for _, initial := range []domain.ContentHash{"", ids[0], ids[1], ids[3]} {
 		r := &historyPushRemote{target: initial}
 		svc := newTestSyncService(st, r, nil)
-		err := svc.pushHistory(ctx, repo)
+		var completed []int
+		err := svc.pushSelectedHistory(ctx, repo, []domain.HistoryEvent{e}, func(p inbound.SyncProgress) {
+			if p.Phase != "publish-history" || p.Total != 1 {
+				t.Fatal(p)
+			}
+			completed = append(completed, p.Completed)
+		})
 		if initial == ids[3] {
+			if !reflect.DeepEqual(completed, []int{0}) {
+				t.Fatal("conflicting history counted", completed)
+			}
 			if !errors.Is(err, domain.ErrSyncConflict) || len(r.calls) != 0 || r.target != initial {
 				t.Fatalf("peer overwritten: %+v %v", r, err)
 			}
@@ -79,6 +89,9 @@ func TestHistoryPushPublishesUnpushedSourceBeforeRetentionAndRejectsConcurrentWo
 		}
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(completed, []int{0, 1}) {
+			t.Fatal("history acknowledgment missing", completed)
 		}
 		want := []string{"prerequisite", "retention"}
 		if initial == ids[1] {
