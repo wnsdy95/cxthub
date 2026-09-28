@@ -131,7 +131,7 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 				lastErr = err
 				hookWarn("%s command session could not be selected: %v", p, err)
 			}
-			if werr := pass.recordOutcome(root, i, "", state, inbound.SaveOutput{}, err); werr != nil {
+			if werr := pass.recordOutcome(ctx, root, i, "", state, inbound.SaveOutput{}, err); werr != nil {
 				lastErr = errors.Join(err, werr)
 				break
 			}
@@ -154,7 +154,7 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 				lastErr = fmt.Errorf("%s selected session capture failed: %w", p, err)
 				hookWarn("%v", lastErr)
 			}
-			if werr := pass.recordOutcome(root, i, target.SessionPath, state, inbound.SaveOutput{}, err); werr != nil {
+			if werr := pass.recordOutcome(ctx, root, i, target.SessionPath, state, inbound.SaveOutput{}, err); werr != nil {
 				lastErr = errors.Join(err, werr)
 				break
 			}
@@ -162,10 +162,10 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 		}
 		if pass != nil && (out.Branch != pass.Proof.Branch || domain.ValidateContentHash(out.SnapshotID) != nil) {
 			lastErr = fmt.Errorf("%s Save result does not match the frozen capture branch", p)
-			lastErr = errors.Join(lastErr, pass.recordOutcome(root, i, target.SessionPath, "failed", out, lastErr))
+			lastErr = errors.Join(lastErr, pass.recordOutcome(ctx, root, i, target.SessionPath, "failed", out, lastErr))
 			break
 		}
-		if err := pass.recordOutcome(root, i, target.SessionPath, "saved", out, nil); err != nil {
+		if err := pass.recordOutcome(ctx, root, i, target.SessionPath, "saved", out, nil); err != nil {
 			lastErr = err
 			break
 		}

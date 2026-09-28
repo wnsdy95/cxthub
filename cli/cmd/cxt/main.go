@@ -26,6 +26,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/capturejournal"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
 	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
 	delivhook "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/hook"
@@ -67,7 +68,26 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		return delivcli.RunDiagnostics(context.Background(), cwd, args[1:], os.Stdout)
+		return delivcli.RunDiagnostics(context.Background(), cwd, args[1:], os.Stdout, inspectCaptureRecovery)
+	}
+	if args[1] == "capture" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		ctx := context.Background()
+		state := gitctx.InspectContextRoot(ctx, cwd)
+		if !state.Initialized {
+			return fmt.Errorf("no initialized local replica; run cxt doctor")
+		}
+		store := storage.NewFileStore(state.Root)
+		repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+		if err != nil {
+			return err
+		}
+		service := app.NewCaptureRecoveryService(capturejournal.New(state.Root, cwd), store)
+		c := &delivcli.Container{CaptureRecovery: service, History: app.NewContextHistoryService(store, store), List: app.NewListSessionsService(store)}
+		return delivcli.RunCaptureRecovery(ctx, c, cwd, string(repo.ID), args[2:], os.Stdout)
 	}
 	if args[1] == "repair" {
 		return runRepair(args[2:])
@@ -87,7 +107,7 @@ func run(args []string) error {
 	switch args[1] {
 	case "mcp":
 		// PreflightArgs requires --local before adapter construction. The product
-		// MCP is the OAuth-protected remote cxtd endpoint, not this process.
+		// MCP is the OAuth-protected independent cxt-mcp endpoint, not this process.
 		return ctr.mcpServer.Run()
 	case "hook":
 		// hook safety contract (capture path): capture failures must not block agent sessions —
@@ -315,6 +335,7 @@ func buildContainer(cfg config) container {
 		Stash:           stashSvc,
 		Handoff:         handoffSvc,
 		History:         app.NewContextHistoryService(store, store),
+		CaptureRecovery: app.NewCaptureRecoveryService(capturejournal.New(cfg.RepoRoot, cfg.RepoRoot), store),
 		PRMerges:        gitctx.NewGitHubPRMergeResolver(),
 		Settings:        remote,
 		SettingsObjects: store,
@@ -346,4 +367,17 @@ func parseHookFlags(args []string) (domain.ProviderKind, string) {
 		}
 	}
 	return provider, event
+}
+
+func inspectCaptureRecovery(ctx context.Context, cwd string) ([]domain.CaptureRecoveryStatus, error) {
+	state := gitctx.InspectContextRoot(ctx, cwd)
+	if !state.Initialized {
+		return nil, nil
+	}
+	repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+	if err != nil {
+		return nil, err
+	}
+	service := app.NewCaptureRecoveryService(capturejournal.New(state.Root, cwd), storage.NewFileStore(state.Root))
+	return service.Inspect(ctx, string(repo.ID))
 }

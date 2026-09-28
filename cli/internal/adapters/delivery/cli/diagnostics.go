@@ -13,6 +13,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 type branchOperationStatus struct {
@@ -55,7 +56,7 @@ func inspectBranchOperations(ctx context.Context, cwd string) ([]branchOperation
 // RunDiagnostics is dispatched before the ordinary composition root and its
 // automatic replay. It remains available with a missing or corrupt .cxt and
 // never authenticates, writes, contacts the server, or controls a provider.
-func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer) error {
+func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer, captureChecks ...func(context.Context, string) ([]domain.CaptureRecoveryStatus, error)) error {
 	operations, opErr := inspectBranchOperations(ctx, cwd)
 	if args[0] == "branch" {
 		if opErr != nil {
@@ -101,16 +102,34 @@ func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer)
 			issues = append(issues, fmt.Sprintf("branch operation %s: %s", op.ID, op.LocalState))
 		}
 	}
+	captures := []domain.CaptureRecoveryStatus{}
+	for _, check := range captureChecks {
+		states, err := check(ctx, cwd)
+		if err != nil {
+			issues = append(issues, "Capture recovery: "+err.Error())
+			continue
+		}
+		for _, st := range states {
+			if st.State == "completed" {
+				continue
+			}
+			captures = append(captures, st)
+			if st.Resolution == nil {
+				issues = append(issues, fmt.Sprintf("capture %s: %s; inspect with cxt capture show %s", st.ID, st.State, st.ID))
+			}
+		}
+	}
 	report := struct {
-		GitRepository  bool                    `json:"git_repository"`
-		Registered     bool                    `json:"registered"`
-		ReplicaPresent bool                    `json:"replica_present"`
-		Initialized    bool                    `json:"initialized"`
-		Snapshots      int                     `json:"snapshots"`
-		HistoryEvents  int                     `json:"history_events"`
-		Operations     []branchOperationStatus `json:"operations"`
-		Issues         []string                `json:"issues"`
-	}{state.GitRepository, registered, state.Exists, state.Initialized, inspection.Snapshots, inspection.HistoryEvents, operations, issues}
+		Captures       []domain.CaptureRecoveryStatus `json:"captures"`
+		GitRepository  bool                           `json:"git_repository"`
+		Registered     bool                           `json:"registered"`
+		ReplicaPresent bool                           `json:"replica_present"`
+		Initialized    bool                           `json:"initialized"`
+		Snapshots      int                            `json:"snapshots"`
+		HistoryEvents  int                            `json:"history_events"`
+		Operations     []branchOperationStatus        `json:"operations"`
+		Issues         []string                       `json:"issues"`
+	}{captures, state.GitRepository, registered, state.Exists, state.Initialized, inspection.Snapshots, inspection.HistoryEvents, operations, issues}
 	if flagPresent(args, "--json") {
 		if err := json.NewEncoder(w).Encode(report); err != nil {
 			return err
@@ -123,7 +142,7 @@ func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer)
 		if len(issues) == 0 {
 			fmt.Fprintln(w, "No failures found in local snapshot references, documents, memory attachments, or branch journal.")
 		}
-		fmt.Fprintln(w, "Server integrity: cxt fsck. Queued operations: cxt branch operations. Verified replay: cxt branch replay.")
+		fmt.Fprintln(w, "Capture history (including acknowledged gaps): cxt capture list. Server integrity: cxt fsck. Queued operations: cxt branch operations. Verified replay: cxt branch replay.")
 	}
 	if len(issues) > 0 {
 		return fmt.Errorf("local inspection found %d issue(s); no files changed", len(issues))

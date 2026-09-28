@@ -814,3 +814,40 @@ storage creation, not branch birth. It must not create a context branch or enter
 the replay writer lock. Terminal callbacks without a matching durable vote do
 not schedule a replay. Real `git pack-refs --all` and a contended-journal fixture
 cover this distinction; genuine new branches retain the fail-closed birth vote.
+
+
+## Capture recovery
+
+`cxt capture list [--all] [--json]` inspects retained commit-capture attempts across
+all worktrees, without network access, live capture, automatic replay or changing
+refs. `show <id>` displays recorded outcomes and an expected fingerprint. Doctor
+also reports unresolved attempts; acknowledged gaps remain visible in its JSON.
+
+| State | Meaning | Action |
+| --- | --- | --- |
+| `needs-review` | A saved output or completion proof is missing | Inspect original evidence; never substitute today's transcript |
+| `ready-to-retry` | Every provider outcome was recorded | Retry exact finalization; immutable observations are still required |
+| `ready-to-publish` | Completion is durable; publication is missing | Retry publication |
+| `superseded` | A later completed publication covers this attempt at the same code/worktree/branch position | Record the verified replacement |
+| `acknowledged-gap` | An operator explicitly acknowledged unprovable missing capture | Preserve the gap and its reason |
+| `completed` | This attempt has its own accepted publication (or no context to publish) | No recovery needed |
+
+```sh
+cxt capture show <id>
+cxt capture retry <id> --expect <fingerprint>
+cxt capture resolve <id> --expect <fingerprint>
+cxt capture acknowledge <id> --expect <fingerprint> --reason "Evidence unavailable after investigation"
+```
+
+`resolve` requires the same repository, branch generation, local branch, worktree
+and Git SHA, a later completed attempt, matching provider/session evidence, a
+publication receipt and coverage of the original baseline and saved outputs.
+Inspection alone does not suppress retries. An immutable resolution sidecar records
+the original and replacement fingerprints; journal writers serialize and compare
+expected state. Stale reviews or conflicting decisions fail. Original attempts
+and their completion bits are never rewritten by resolve/acknowledge.
+
+`acknowledge` is not successful recovery and creates no publication. It retains
+an auditable gap and stops repeating an impossible automatic retry. `retry` never
+rescans the current provider; successful local publication still needs `cxt push`
+for delivery. These are local replica diagnostics, not server completion receipts.
