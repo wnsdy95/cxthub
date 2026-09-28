@@ -45,6 +45,30 @@ func parseCreationCommand(argv []string, target string) (*domain.GitCreation, bo
 		}
 		args = args[1:]
 	}
+	// Git accepts combined short options and attached branch names, including
+	// checkout -qb x and switch -cfeature. Normalize only this allowlisted set;
+	// do not retain unknown option values or arbitrary process arguments.
+	var normalized []string
+	for _, arg := range args {
+		if len(arg) < 3 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+			normalized = append(normalized, arg)
+			continue
+		}
+		for i := 1; i < len(arg); i++ {
+			flag := arg[i]
+			if !strings.ContainsRune("qtfbBcC", rune(flag)) {
+				return nil, false
+			}
+			normalized = append(normalized, "-"+string(flag))
+			if strings.ContainsRune("bBcC", rune(flag)) {
+				if i+1 < len(arg) {
+					normalized = append(normalized, arg[i+1:])
+				}
+				break
+			}
+		}
+	}
+	args = normalized
 	command := []string{"git", op}
 	if op == "worktree" {
 		command = append(command, "add")
@@ -61,7 +85,7 @@ func parseCreationCommand(argv []string, target string) (*domain.GitCreation, bo
 			n++
 			name = args[n]
 			command = append(command, a, name)
-		case "--track", "--track=direct", "--track=inherit", "-t", "--no-track", "--no-guess", "-q", "--quiet":
+		case "--track", "--track=direct", "--track=inherit", "-t", "--no-track", "--no-guess", "-q", "--quiet", "-f", "--force":
 			command = append(command, a)
 		case "--":
 			positional = append(positional, args[n+1:]...)

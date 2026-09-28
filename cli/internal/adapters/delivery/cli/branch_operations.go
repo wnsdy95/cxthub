@@ -170,7 +170,7 @@ func runBranchTransaction(ctx context.Context, c *Container, cwd string, args []
 				if err != nil {
 					return err
 				}
-				ops = append(ops, branchjournal.Operation{Event: event, Phase: "prepared", GitRef: "refs/heads/" + branch, Worktree: cwd, GitPID: gitPID, LogBytes: len(log), LogHash: domain.HashContent(log)})
+				ops = append(ops, branchjournal.Operation{Event: event, Binding: freezeBranchBinding(cwd, event, gitPID), Phase: "prepared", GitRef: "refs/heads/" + branch, Worktree: cwd, GitPID: gitPID, LogBytes: len(log), LogHash: domain.HashContent(log)})
 				op = &ops[len(ops)-1]
 			}
 			if op == nil {
@@ -585,106 +585,65 @@ func replayBranchOperationsForRef(ctx context.Context, c *Container, cwd, gitRef
 
 func resolveBranchOperation(ctx context.Context, c *Container, cwd string, op branchjournal.Operation) (domain.HistoryEvent, error) {
 	e := op.Event
-	gitDir, err := branchOperationGitDir(ctx, cwd, op)
-	if err != nil {
-		return e, err
+	binding := op.Binding
+	if binding == nil {
+		// Old records may prove a direct creation command. Never use a current
+		// upstream to fill gaps in historical evidence.
+		binding = legacyBranchBinding(e)
 	}
-	upstream, err := branchGitOutput(ctx, cwd, "--git-dir="+gitDir, "for-each-ref", "--format=%(upstream)", op.GitRef)
-	if err != nil {
-		return e, err
+	if binding.Kind == "unavailable" {
+		return e, fmt.Errorf("creation-time branch binding is unavailable for %s; operation remains queued; current upstream cannot prove the original command", e.Branch)
 	}
-	if upstream != "" && e.Kind != "orphan" {
-		remoteName, err := branchGitOutput(ctx, cwd, "--git-dir="+gitDir, "config", "--get", "branch."+e.Branch+".remote")
+	if binding.Kind == "attach" && e.Kind != "orphan" {
+		remoteBranch := binding.RemoteBranch
+		if c.Sync == nil {
+			return e, fmt.Errorf("tracking context attachment awaits sync service")
+		}
+		ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, remoteBranch)
+		if err != nil {
+			return e, fmt.Errorf("tracking context attachment awaits server: %w", err)
+		}
+		e.Kind = "attach"
+		e.Source = ref.Target
+		e.Target = ref.Target
+		e.SharedTarget = ref.Target
+		e.MemoryHash, e.MemoryPinned = "", false
+		e.MemorySource = ""
+		e.BindingParent = ""
+		history, err := c.History.ListHistory(ctx, e.RepoID)
 		if err != nil {
 			return e, err
 		}
-		merge, err := branchGitOutput(ctx, cwd, "--git-dir="+gitDir, "config", "--get", "branch."+e.Branch+".merge")
+		bindings, err := domain.ProjectContextBranches(history)
 		if err != nil {
 			return e, err
 		}
-		remoteBranch := strings.TrimPrefix(merge, "refs/heads/")
-		if remoteName != "" && remoteName != "." && remoteBranch != "" {
-			if c.Sync == nil {
-				return e, fmt.Errorf("tracking context attachment awaits sync service")
-			}
-			ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, remoteBranch)
-			if err != nil {
-				return e, fmt.Errorf("tracking context attachment awaits server: %w", err)
-			}
-			e.Kind = "attach"
-			e.Source = ref.Target
-			e.Target = ref.Target
-			e.SharedTarget = ref.Target
-			e.MemoryHash, e.MemoryPinned = "", false
-			e.MemorySource = ""
-			e.BindingParent = ""
-			history, err := c.History.ListHistory(ctx, e.RepoID)
-			if err != nil {
-				return e, err
-			}
-			bindings, err := domain.ProjectContextBranches(history)
-			if err != nil {
-				return e, err
-			}
-			e.BranchID = bindings.Identity(e.RepoID, remoteBranch)
-			if e.Creation != nil && e.Creation.Evidence == "process-argv" && e.Creation.OriginBranch == remoteBranch {
-				// The server binding may arrive after the prepared local vote. Resolve
-				// this retained identity together with the tracking attachment.
-				creation := *e.Creation
-				creation.OriginBranchID = e.BranchID
-				e.Creation = &creation
-			}
-			e.LocalBranch, e.Branch = e.Branch, remoteBranch
-			all, err := c.List.List(ctx, inbound.ListInput{RepoID: e.RepoID})
-			if err != nil {
-				return e, err
-			}
-			selected := contextSelectionAtCode(cwd, e.GitAfter, remoteBranch, all.Snapshots, history)
-			selected, err = resolveCompletedPRMemory(ctx, c, remoteBranch, e.BranchID, selected, history)
-			if err != nil {
-				return e, err
-			}
-			if selected.Snapshot != "" {
-				e.Source, e.Target = selected.Snapshot, selected.Snapshot
-				e.MemoryHash, e.MemorySource, e.MemoryPinned = selected.MemoryHash, selected.MemorySource, selected.MemoryPinned
-			} else {
-				return e, fmt.Errorf("tracking context has no verified association with Git %s; operation remains queued", e.GitAfter)
-			}
+		e.BranchID = bindings.Identity(e.RepoID, remoteBranch)
+		if e.Creation != nil && e.Creation.Evidence == "process-argv" && e.Creation.OriginBranch == remoteBranch {
+			// The server binding may arrive after the prepared local vote. Resolve
+			// this retained identity together with the tracking attachment.
+			creation := *e.Creation
+			creation.OriginBranchID = e.BranchID
+			e.Creation = &creation
+		}
+		e.LocalBranch, e.Branch = e.Branch, remoteBranch
+		all, err := c.List.List(ctx, inbound.ListInput{RepoID: e.RepoID})
+		if err != nil {
+			return e, err
+		}
+		selected := contextSelectionAtCode(cwd, e.GitAfter, remoteBranch, all.Snapshots, history)
+		selected, err = resolveCompletedPRMemory(ctx, c, remoteBranch, e.BranchID, selected, history)
+		if err != nil {
+			return e, err
+		}
+		if selected.Snapshot != "" {
+			e.Source, e.Target = selected.Snapshot, selected.Snapshot
+			e.MemoryHash, e.MemorySource, e.MemoryPinned = selected.MemoryHash, selected.MemorySource, selected.MemoryPinned
+		} else {
+			return e, fmt.Errorf("tracking context has no verified association with Git %s; operation remains queued", e.GitAfter)
 		}
 	}
 	return c.History.ValidateHistorySource(ctx, e)
-}
-
-// Worktree IDs were frozen from Git's absolute admin directory before birth.
-// That directory survives a worktree move and owns config.worktree. The
-// replaying worktree is only a route to shared refs, never a source of binding
-// configuration. Once the origin admin directory is pruned, an unresolved
-// binding cannot be reconstructed safely from another worktree's settings.
-func branchOperationGitDir(ctx context.Context, cwd string, op branchjournal.Operation) (string, error) {
-	common, err := branchGitOutput(ctx, cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return "", err
-	}
-	matches := func(path string) bool {
-		id := sha256.Sum256([]byte(path))
-		return fmt.Sprintf("%x", id[:16]) == op.Event.WorktreeID
-	}
-	if matches(common) {
-		return common, nil
-	}
-	entries, err := os.ReadDir(filepath.Join(common, "worktrees"))
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			path := filepath.Join(common, "worktrees", entry.Name())
-			if matches(path) {
-				return path, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("origin worktree Git configuration is unavailable for %s; branch binding remains queued", op.Event.WorktreeID)
 }
 
 func applyBranchOperation(ctx context.Context, c *Container, cwd string, op branchjournal.Operation, branchExists bool) error {

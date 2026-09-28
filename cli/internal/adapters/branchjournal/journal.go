@@ -22,6 +22,7 @@ import (
 )
 
 type Operation struct {
+	Binding   *BindingIntent      `json:"binding,omitempty"`
 	Event     domain.HistoryEvent `json:"event"`
 	Phase     string              `json:"phase"`
 	GitRef    string              `json:"git_ref"`
@@ -31,6 +32,30 @@ type Operation struct {
 	GitPID    string              `json:"git_pid,omitempty"`
 	LogBytes  int                 `json:"log_bytes,omitempty"`
 	LogHash   domain.ContentHash  `json:"log_hash,omitempty"`
+}
+
+// BindingIntent is the local creation-time decision, not the branch's mutable
+// upstream configuration. Unavailable evidence stays queued rather than guessed.
+type BindingIntent struct {
+	Kind         string `json:"kind"`
+	RemoteBranch string `json:"remote_branch,omitempty"`
+}
+
+func (b *BindingIntent) validate() error {
+	if b == nil { // Records written before creation-time binding was introduced.
+		return nil
+	}
+	switch b.Kind {
+	case "birth", "unavailable":
+		if b.RemoteBranch == "" {
+			return nil
+		}
+	case "attach":
+		if domain.ValidateBranchName(b.RemoteBranch) == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid frozen branch binding")
 }
 
 type Journal struct{ gitDir string }
@@ -171,6 +196,9 @@ func (j *Journal) List() ([]Operation, error) {
 		if err = domain.ValidateHistoryEvent(op.Event); err != nil {
 			return nil, err
 		}
+		if err = op.Binding.validate(); err != nil {
+			return nil, err
+		}
 		if entry.Name() != op.Event.ID+".json" {
 			return nil, fmt.Errorf("branch journal identity mismatch")
 		}
@@ -195,6 +223,9 @@ func NewID() (string, error) {
 // audit; replay changes only phase/error, never the prepared source or ID.
 func (j *Journal) Save(op Operation) error {
 	if err := domain.ValidateHistoryEvent(op.Event); err != nil {
+		return err
+	}
+	if err := op.Binding.validate(); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(op)

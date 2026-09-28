@@ -759,10 +759,17 @@ background discovery still requires its exact worktree registration.
 Branch creation replay requires the durable committed transaction callback.
 A later reflog entry with the same name and Git hash is insufficient to identify
 an earlier prepared operation. Committed operations remain replayable after the
-original worktree is moved or removed, using the shared Git repository. Tracking
-resolution uses the originating Git admin directory, including `config.worktree`.
-If that directory was pruned before a binding was resolved, the operation stays
-queued; the replaying worktree's different upstream is not substituted. An
+original worktree is moved or removed, using the shared Git repository. The
+prepared vote freezes whether the command starts a new task or explicitly tracks
+an existing remote task. `switch -c feature origin/main` is a new context branch;
+Git's automatic upstream and a later `push -u` cannot turn it into participation
+in main. Explicit `--track` joins the recorded source branch; `--track=inherit`
+reads the source worktree's upstream during preparation and retains that decision.
+Replay never consults a later upstream or another worktree's configuration.
+Legacy records with complete direct-command evidence can recover that decision.
+Missing creation evidence, ambiguous selectors, and legacy inherited tracking
+without a frozen source remain queued with an explicit diagnostic; no relationship
+is invented. Already applied history is not rewritten. An
 unchanged owner snapshot that is an ancestor of the verified current head keeps
 that head and its memory selection as the birth baseline. Failure to inspect Git
 is an error, not a successful claim that the branch disappeared.
