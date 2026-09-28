@@ -668,85 +668,23 @@ func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientI
 		return s.issueMCPTokenPair(ctx, userID, clientID)
 	})
 }
-func (s *IdentityService) issueMCPTokenPair(ctx context.Context, userID, clientID string) (domain.OAuthTokenPair, error) {
-	if _, err := s.repositories.GetUser(ctx, userID); err != nil {
-		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
-	}
-	access, err := s.issueSession(ctx, userID, "sess_", "mcp_access", clientID, mcpAccessTokenTTL)
-	if err != nil {
-		return domain.OAuthTokenPair{}, err
-	}
-	refresh, err := s.issueSession(ctx, userID, "refresh_", "mcp_refresh", clientID, mcpRefreshTokenTTL)
-	if err != nil {
-		_ = s.repositories.DeleteSession(ctx, domain.HashToken(access.Token))
-		return domain.OAuthTokenPair{}, err
-	}
-	return domain.OAuthTokenPair{
-		AccessToken: access.Token, RefreshToken: refresh.Token,
-		ExpiresIn: int(mcpAccessTokenTTL.Seconds()), Scope: "mcp:read",
-	}, nil
-}
-
-// RefreshMCPAccessToken validates a client-bound refresh capability and
-// returns a new access/refresh pair while atomically consuming the old refresh
-// capability. Refresh tokens are never accepted by ordinary bearer gates.
-func (s *IdentityService) RefreshMCPAccessToken(ctx context.Context, refreshToken, clientID string) (domain.OAuthTokenPair, error) {
-	return identityResult(ctx, s, func(ctx context.Context) (domain.OAuthTokenPair, error) {
-		return s.refreshMCPAccessToken(ctx, refreshToken, clientID)
-	})
-}
-func (s *IdentityService) refreshMCPAccessToken(ctx context.Context, refreshToken, clientID string) (domain.OAuthTokenPair, error) {
-	if !strings.HasPrefix(refreshToken, "refresh_") || clientID == "" {
-		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
-	}
-	storedToken := domain.HashToken(refreshToken)
-	sess, err := s.repositories.ConsumeSession(ctx, storedToken, "mcp_refresh", clientID)
-	if err != nil || !time.Now().UTC().Before(sess.ExpiresAt) {
-		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
-	}
-	if _, err := s.repositories.GetUser(ctx, sess.UserID); err != nil {
-		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
-	}
-	pair, err := s.issueMCPTokenPair(ctx, sess.UserID, clientID)
-	if err != nil {
-		_ = s.repositories.CreateSession(ctx, sess) // Preserve retry capability if issuance storage failed.
-		return domain.OAuthTokenPair{}, err
-	}
-	return pair, nil
-}
-
-// RevokeMCPToken invalidates an MCP access or refresh token only when it is
-// bound to the requesting public OAuth client. Invalid, foreign, and already
-// revoked tokens are intentionally idempotent no-ops.
-func (s *IdentityService) RevokeMCPToken(ctx context.Context, token, clientID string) error {
-	if clientID == "" {
-		return domain.ErrUnauthorized
-	}
-	kind := ""
-	switch {
-	case strings.HasPrefix(token, "sess_"):
-		kind = "mcp_access"
-	case strings.HasPrefix(token, "refresh_"):
-		kind = "mcp_refresh"
-	default:
-		return nil
-	}
-	_, err := s.repositories.ConsumeSession(ctx, domain.HashToken(token), kind, clientID)
-	if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrUnauthorized) {
-		return nil
-	}
-	return err
-}
 
 // issueSession issues a session: storage is HashToken(original)+hint+kind+label, the returned Token is the original.
-// The label is a client-provided string, truncated to a maximum of 64 characters.
+// Device display labels are truncated to 64 bytes; MCP client IDs remain exact.
 func (s *IdentityService) issueSession(ctx context.Context, userID, prefix, kind, label string, ttl time.Duration) (domain.Session, error) {
+	return s.issueGrantedSession(ctx, userID, prefix, kind, label, ttl, "")
+}
+
+func (s *IdentityService) issueGrantedSession(ctx context.Context, userID, prefix, kind, label string, ttl time.Duration, grantID string) (domain.Session, error) {
 	now := time.Now().UTC()
 	raw := domain.NewID(prefix)
-	if label = strings.TrimSpace(label); len(label) > 64 {
-		label = label[:64]
+	if kind != "mcp_access" && kind != "mcp_refresh" {
+		if label = strings.TrimSpace(label); len(label) > 64 {
+			label = label[:64]
+		}
 	}
 	stored := domain.Session{
+		GrantID:   grantID,
 		Token:     domain.HashToken(raw),
 		UserID:    userID,
 		Hint:      domain.TokenHint(raw),
@@ -1183,6 +1121,9 @@ func (s *IdentityService) ResolveMCPUser(ctx context.Context, bearer string) (do
 	sess, user, err := s.resolveSessionRecord(ctx, bearer)
 	if err != nil || sess.Kind != "mcp_access" {
 		return domain.User{}, domain.ErrUnauthorized
+	}
+	if err := s.checkMCPGrant(ctx, sess); err != nil {
+		return domain.User{}, err
 	}
 	return user, nil
 }

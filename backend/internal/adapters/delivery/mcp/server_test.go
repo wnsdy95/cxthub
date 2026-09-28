@@ -290,6 +290,20 @@ func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 		t.Fatalf("refresh replay = %d: %s", refreshReplay.Code, refreshReplay.Body.String())
 	}
 
+	// Replay detection must revoke the replacement pair before any explicit
+	// revocation request; rejecting only the old token leaves the breach active.
+	replayAccess := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(listCall), map[string]string{
+		"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Authorization": "Bearer " + refreshedTokens.AccessToken,
+	})
+	if replayAccess.Code != http.StatusUnauthorized {
+		t.Fatalf("replay left replacement access live: %d", replayAccess.Code)
+	}
+	refreshForm.Set("refresh_token", refreshedTokens.RefreshToken)
+	replayReplacement := mcpRequest(t, server.Handler(), http.MethodPost, "/oauth/token", strings.NewReader(refreshForm.Encode()), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	if replayReplacement.Code != http.StatusBadRequest || !strings.Contains(replayReplacement.Body.String(), "invalid_grant") {
+		t.Fatal("replay left replacement refresh live")
+	}
+
 	revokeAccess := url.Values{"client_id": {client.ClientID}, "token": {refreshedTokens.AccessToken}, "token_type_hint": {"access_token"}}
 	revoked := mcpRequest(t, server.Handler(), http.MethodPost, "/oauth/revoke", strings.NewReader(revokeAccess.Encode()), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
 	if revoked.Code != http.StatusOK {

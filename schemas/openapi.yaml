@@ -1671,7 +1671,8 @@ components:
         id: {type: string}
         user_id: {type: string}
         client_id: {type: string}
-        action: {type: string, enum: [mcp.authorized, mcp.revoked]}
+        grant_id: {type: string, description: Authorization identifier; never a bearer credential.}
+        action: {type: string, enum: [mcp.authorized, mcp.revoked, mcp.grant_revoked, mcp.refresh_reused]}
         created_at: {type: string, format: date-time}
     Team:
       type: object

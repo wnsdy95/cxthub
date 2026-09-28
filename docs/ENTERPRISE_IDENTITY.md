@@ -199,6 +199,14 @@ not permission to discard a connection or bind a different identity.
 
 ## Remaining implementation slices
 
+The credential foundation now persists a separate MCP authorization per consent,
+retains its identity through rotation, and revokes that authorization on refresh
+reuse. CLI credentials already have individual stored token hashes. These are
+identifiers for a future explicit assurance flow, not IdP verification or MFA
+proof. Browser verification remains bound to its exact browser session. No SSO
+evidence is copied to either CLI or MCP by this foundation. See [MCP lifecycle](MCP.md#authentication-and-authorization)
+and [OAuth refresh security](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14.2).
+
 These are planned boundaries, not enabled policies or delivered SSO features:
 
 1. Extend OIDC/SAML browser verification into policy-enforced sign-in. The

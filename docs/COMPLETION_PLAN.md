@@ -201,3 +201,16 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   Existing memory identity, projection, source provenance and retention stay
   unchanged. Local synthetic transfer measurements and limits are recorded in
   PULL_VALIDATION_PROGRESS.md; this does not close the remaining #290 latency work.
+- Memory-body reuse merged in #319 with nine green CI checks. Exact main-source
+  `4dc2e63` CLI/API/MCP/operator binaries are installed. All three local services
+  respond successfully and the context audit reports Missing 0. Synthetic transfer
+  savings do not certify end-to-end cloud latency or close #290.
+- Enterprise prerequisite #320 fixes MCP refresh relationships before credential
+  assurance is added: one grant per consent, stable identity through rotation,
+  committed replay revocation and audit, separate legacy-token handling, and no
+  cross-device SSO inference. This does not enable mandatory SSO/MFA, SCIM,
+  retention or external security-audit delivery. Those remain implementation work.
+  Local full backend/PostgreSQL test and vet, focused FS/PG race repetitions,
+  OAuth wire regressions, OpenAPI drift, public-tree checks and real Git-hook
+  PostgreSQL E2E passed. The pre-change replay regression failed as expected;
+  the fixed version blocks the entire affected grant while retaining peers.

@@ -47,6 +47,9 @@ type OAuthAuthorizationCode struct {
 // OAuthTokenPair is returned only at issuance. Stores retain token hashes in
 // the existing session table/files, never the bearer values.
 type OAuthTokenPair struct {
+	// GrantID is server-side authorization metadata; OAuth transport does not
+	// include it in the token response, and it is not an authentication proof.
+	GrantID      string
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int
