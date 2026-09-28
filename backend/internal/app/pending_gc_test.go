@@ -142,9 +142,14 @@ func TestPutPendingGCRequiresUnreferencedSupersededLeaf(t *testing.T) {
 			if err := svc.PutPending(ctx, repo, p.SessionID, p); err != nil {
 				t.Fatal(err)
 			}
+			reads := &countPendingGCReads{BlobStore: st}
+			svc.blobs = reads
 			p.Branch, p.Target = next.Branch, next.ID
 			if err := svc.PutPending(ctx, repo, p.SessionID, p); err != nil {
 				t.Fatal(err)
+			}
+			if guard != "none" && reads.calls != 0 {
+				t.Errorf("protected %s capture decoded %d documents before retention guard", guard, reads.calls)
 			}
 			if guard == "none" {
 				if _, err := st.GetSnapshot(ctx, repo, old.ID); !errors.Is(err, domain.ErrNotFound) {
@@ -182,6 +187,17 @@ func TestPutPendingGCRequiresUnreferencedSupersededLeaf(t *testing.T) {
 type unreadablePendingGCDoc struct {
 	outbound.BlobStore
 	hash domain.ContentHash
+}
+
+// Protected history must be rejected before loading either transcript.
+type countPendingGCReads struct {
+	outbound.BlobStore
+	calls int
+}
+
+func (s *countPendingGCReads) GetDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.SessionDoc, error) {
+	s.calls++
+	return s.BlobStore.GetDoc(ctx, repo, hash)
 }
 
 func (s *unreadablePendingGCDoc) GetDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.SessionDoc, error) {

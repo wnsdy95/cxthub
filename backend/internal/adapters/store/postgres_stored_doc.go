@@ -39,3 +39,9 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 }
 
 var _ outbound.StoredDocVerifier = (*PostgresStore)(nil)
+
+func (s *PostgresStore) CaptureSupersedes(ctx context.Context, repo, old, next domain.ContentHash, provider domain.ProviderKind, session string) (bool, error) {
+	return compareStoredCaptures(ctx, s, &s.docProofs, repo, old, next, provider, session)
+}
+
+var _ outbound.StoredCaptureComparator = (*PostgresStore)(nil)
