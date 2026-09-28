@@ -81,10 +81,23 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   race tests and full Git-hook E2E passed. PR #295 merged after nine green CI
   checks; its exact main-source CLI was installed. Live backlog completion has
   not yet been established. Delayed upstream-based branch reclassification was
-  separately identified and is tracked in #293.
+  fixed in PR #298 (nine green checks): the prepared journal freezes the binding,
+  and the retained live birth replayed successfully through the CLI. Missing
+  historical evidence remains queued rather than borrowing current upstreams.
+  Fast queue-only status and explicit push/pull progress passed the CLI suite,
+  vet, focused race checks and real Git-hook E2E. Queue-only inspection completed
+  in 1.18 seconds with 85 retained jobs in the local development repository;
+  it deliberately does not claim server acknowledgment or full integrity.
+  Publication of this follow-up is in progress.
 - PostgreSQL cutover: #294. The independent local service launcher, private
   configuration, credential separation and startup rollback have synthetic tests.
-  A persistent loopback PostgreSQL instance is prepared separately from rehearsal
-  databases. Fresh import/restore and actual API/MCP cutover remain pending.
+  PR #296 merged, followed by the actual local cutover. The frozen FS backup
+  matched all 25,036 files (8,963,611,276 bytes); independent dump/restore matched
+  all 73 PostgreSQL tables and 27,701 rows before workers started. API and MCP
+  run as separate persistent loopback services. Authenticated API and MCP reads,
+  OAuth PKCE and revocation passed; the server audit reported Missing 0.
+  Original FS data/binary/config and verified backups are retained privately.
+  The old FS launch agent is disabled to prevent an accidental dual start.
+  Issue #294 is complete; this is local acceptance, not cloud load certification.
 - UI and Enterprise phases remain pending implementation and validation; this
   document is not a completion claim.

@@ -304,6 +304,7 @@ func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbou
 }
 
 func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+	syncProgress(in, "push", "prepare", 0, 0)
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return inbound.SyncOutput{}, err
@@ -341,6 +342,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	syncProgress(in, "push", "negotiate", 0, 0)
 	pushSnaps, pushDocs, err := s.selectPushObjects(ctx, repoID, snaps)
 	if err != nil {
 		return inbound.SyncOutput{}, fmt.Errorf("prepare push objects: %w", err)
@@ -452,6 +454,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 		}
 	}
 
+	syncProgress(in, "push", "verify-memory", 0, 0)
 	memoryPlans, remoteMemoryAhead, err := s.prepareMemoryPushPlans(ctx, repoID, memorySnapshots, remoteMemoryAttachments)
 	if err != nil {
 		return inbound.SyncOutput{}, err
@@ -461,10 +464,11 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	// Objects are resumable prerequisites. Refs remain a separate final phase
 	// so incomplete uploads cannot publish unreachable sibling-session history.
 	if len(pushSnaps) > 0 || len(pushDocs) > 0 {
-		if err := s.pushSelectedObjects(ctx, repoID, snaps, pushSnaps, pushDocs); err != nil {
+		if err := s.pushSelectedObjects(ctx, repoID, snaps, pushSnaps, pushDocs, in.Progress); err != nil {
 			return inbound.SyncOutput{}, err
 		}
 	}
+	syncProgress(in, "push", "memory-and-history", 0, 0)
 	if err := s.sendMemoryPushPlans(ctx, repoID, memoryPlans, remoteMemoryAttachments, remoteMemoryAhead); err != nil {
 		return inbound.SyncOutput{}, err
 	}
@@ -479,9 +483,12 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err := s.pushSelectedHistory(ctx, repoID, history); err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	syncProgress(in, "push", "publish-refs", 0, len(refs))
 	if err := s.remote.Push(ctx, repoID, nil, nil, refs, in.Force, in.Append); err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	syncProgress(in, "push", "publish-refs", len(refs), len(refs))
+	syncProgress(in, "push", "reconcile-pending", 0, 0)
 	// Reachability is the only safe implicit pending resolution signal. The
 	// expected-target CAS prevents a delayed push from deleting a newer capture
 	// from the same session. Session data and snapshots remain immutable.
@@ -540,6 +547,9 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 			return out, errors.Join(pendingErr, err)
 		}
 		out.BackfillPending = len(jobs)
+	}
+	if pendingErr == nil {
+		syncProgress(in, "push", "complete", 0, 0)
 	}
 	return out, pendingErr
 }
@@ -1023,18 +1033,24 @@ func pushDocumentHashes(snaps []domain.Snapshot, wanted map[domain.ContentHash]b
 // unsync pointers advance until the entire prerequisite object phase succeeds.
 // Peak decoded-body retention is proportional to the largest document, not the
 // sum of the backlog. Chunk negotiation still reuses prior uploads on retry.
-func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string, offered, snaps []domain.Snapshot, hashes []domain.ContentHash) error {
+func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string, offered, snaps []domain.Snapshot, hashes []domain.ContentHash, observers ...func(inbound.SyncProgress)) error {
 	// Negotiation is an observation, not a remote retention lease. A concurrent
 	// pending replacement can collect a previously present prefix while large
 	// bodies upload. Recover only newly missing prerequisites, at most twice.
+	progress := inbound.SyncInput{}
+	if len(observers) > 0 {
+		progress.Progress = observers[0]
+	}
 	for recovery := 0; ; recovery++ {
-		for _, hash := range hashes {
+		syncProgress(progress, "push", "upload-and-verify-documents", 0, len(hashes))
+		for index, hash := range hashes {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			if err := s.pushDocument(ctx, repoID, hash); err != nil {
 				return err
 			}
+			syncProgress(progress, "push", "upload-and-verify-documents", index+1, len(hashes))
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1042,8 +1058,10 @@ func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string
 		if len(snaps) == 0 {
 			return nil
 		}
+		syncProgress(progress, "push", "publish-snapshots", 0, len(snaps))
 		publicationErr := s.remote.Push(ctx, repoID, snaps, nil, nil, false, false)
 		if publicationErr == nil {
+			syncProgress(progress, "push", "publish-snapshots", len(snaps), len(snaps))
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -1052,6 +1070,7 @@ func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string
 		if _, ok := s.remote.(outbound.PushObjectNegotiator); !ok || recovery == 2 {
 			return publicationErr
 		}
+		syncProgress(progress, "push", "recover-prerequisites", 0, 0)
 		repairSnaps, repairDocs, err := s.selectPushObjects(ctx, repoID, offered)
 		if err != nil {
 			return errors.Join(publicationErr, fmt.Errorf("recheck push prerequisites: %w", err))
@@ -1450,6 +1469,7 @@ func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbou
 }
 
 func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+	syncProgress(in, "pull", "prepare", 0, 0)
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
 		return inbound.SyncOutput{}, err
@@ -1485,6 +1505,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	var snaps []domain.Snapshot
 	var docs []domain.SessionDoc
 	var refs []domain.Ref
+	syncProgress(in, "pull", "download-and-verify-documents", 0, 0)
 	verified := make(map[domain.ContentHash]bool)
 	if streaming, ok := s.remote.(outbound.StreamingRemotePull); ok {
 		snaps, refs, err = streaming.PullTo(ctx, repoID, advertisedSnapshotStates, docHaves, &pullDocumentReceiver{store: s.store, verified: verified})
@@ -1494,6 +1515,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	syncProgress(in, "pull", "verify-history-and-memory", 0, 0)
 	if err := validatePullBatchWithVerified(ctx, s.store, repoID, snaps, docs, refs, verified); err != nil {
 		return inbound.SyncOutput{}, err
 	}
@@ -1666,6 +1688,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, domain.ErrHashMismatch
 		}
 	}
+	syncProgress(in, "pull", "store-verified-objects", 0, 0)
 	// Publish metadata only after complete preflight. The streaming transport
 	// may already have staged reusable immutable document bodies under retention.
 	for _, d := range docs {
@@ -1757,6 +1780,11 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 				ahead = append(ahead, r.Name)
 			}
 		}
+		if len(conflicts) == 0 {
+			syncProgress(in, "pull", "complete", 0, 0)
+		} else {
+			syncProgress(in, "pull", "conflicts", 0, 0)
+		}
 		return inbound.SyncOutput{Pulled: len(snaps), RemoteAhead: ahead}, nil
 	}
 
@@ -1788,6 +1816,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, fmt.Errorf("%w: local Git branch inventory is unavailable", domain.ErrNotGitRepo)
 		}
 	}
+	syncProgress(in, "pull", "adopt-refs", 0, 0)
 	for _, ref := range refs {
 		event, lifecycle, err := domain.ParseBranchLifecycleRef(ref)
 		if err != nil {
@@ -1884,6 +1913,11 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	// stale tail before the next hook sync or push. Conflicted refs were not
 	// adopted and therefore cannot resolve a pointer here.
 	s.reconcileCurrentSharedPendings(ctx, repoID)
+	if len(conflicts) == 0 {
+		syncProgress(in, "pull", "complete", 0, 0)
+	} else {
+		syncProgress(in, "pull", "conflicts", 0, 0)
+	}
 	return inbound.SyncOutput{Pulled: len(snaps), NewRefs: newRefs, Conflicts: conflicts}, nil
 }
 

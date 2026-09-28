@@ -79,6 +79,9 @@ func Run(c *Container, args []string) error {
 	ctx := context.Background()
 	rest := args[2:]
 	cwd, _ := os.Getwd()
+	if cmd == "sync" {
+		return RunSyncStatus(ctx, cwd, flagPresent(rest, "--json"), os.Stdout)
+	}
 	if cmd == "capture" {
 		root := cxtRepoRoot(ctx, cwd)
 		repo, err := remotecfg.Wrap(root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
@@ -98,6 +101,9 @@ func Run(c *Container, args []string) error {
 	}
 	if cmd == "branch" && firstPositional(rest) == "replay" {
 		return replayBranchCommand(ctx, c, cwd)
+	}
+	if cmd == "push" || cmd == "pull" {
+		fmt.Fprintf(os.Stderr, "%s: checking queued branch and PR operations\n", cmd)
 	}
 	if cmd != "git-hook" && cmd != "init" && cmd != "setup" && c.History != nil {
 		if err := replayBranchOperations(ctx, c, cwd); err != nil {
@@ -677,7 +683,7 @@ func Run(c *Container, args []string) error {
 		force := flagPresent(rest, "--force") || flagPresent(rest, "-f")
 		appendDiverged := flagPresent(rest, "--append")
 		defer wakeHistoricalSync(c, cwd)
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged, ForegroundOnly: !flagPresent(rest, "--wait-history")})
+		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged, ForegroundOnly: !flagPresent(rest, "--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
 			if strings.Contains(err.Error(), "sync conflict") {
 				if strings.Contains(err.Error(), "memory attachment") {
@@ -689,7 +695,7 @@ func Run(c *Container, args []string) error {
 		}
 		fmt.Printf("pushed %d snapshot(s), %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
 		if out.BackfillPending > 0 {
-			fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt doctor' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
+			fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt sync status' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
 		}
 		if appendDiverged {
 			// Server grafted remote head onto local ancestry — pull will reflect in local history.
@@ -703,7 +709,7 @@ func Run(c *Container, args []string) error {
 		}
 		replaySavedPRDiscovery(ctx, c, cwd)
 		force := flagPresent(rest, "--force") || flagPresent(rest, "-f")
-		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Force: force})
+		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
 			return err
 		}
@@ -1037,7 +1043,7 @@ func firstPositional(args []string) string {
 var publicCommandNames = []string{
 	"setup", "init", "repo", "claude", "codex", "remote", "repack",
 	"branch", "add", "commit", "switch", "config", "login", "logout", "fsck",
-	"doctor", "capture", "reflog", "secrets", "settings", "hooks", "save", "list", "log",
+	"sync", "doctor", "capture", "reflog", "secrets", "settings", "hooks", "save", "list", "log",
 	"checkout", "fork", "load", "push", "pull", "stash", "memorize",
 	"memory", "tag", "mcp", "hook", "version", "help",
 }
@@ -1107,6 +1113,7 @@ usage: cxt <command> [flags]
                             share .cxtsecrets with end-to-end encryption
   hooks install|uninstall   manage Git hooks manually
   config <key> [value]      inspect or set checkout, load, boundary, capture, or scrub behavior
+  sync status [--json]      inspect local upload queues without reading objects
   doctor [--json]           inspect the local replica and Git journal without writes
   branch operations         inspect durable local operations (--json available)
   branch replay             retry verified operations and queue server synchronization

@@ -175,7 +175,11 @@ func TestPullRejectsMemoryHashMismatchBeforeAnyWrite(t *testing.T) {
 	}
 	st := storage.NewFileStore(t.TempDir())
 	svc := newTestSyncService(st, remote, nil)
-	_, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repo})
+	_, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repo, Progress: func(p inbound.SyncProgress) {
+		if p.Phase == "store-verified-objects" || p.Phase == "adopt-refs" || p.Phase == "complete" {
+			t.Fatalf("unverified memory reported as accepted: %+v", p)
+		}
+	}})
 	if !errors.Is(err, domain.ErrHashMismatch) {
 		t.Fatalf("pull error = %v", err)
 	}

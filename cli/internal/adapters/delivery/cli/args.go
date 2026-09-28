@@ -47,6 +47,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"fsck":      {usage: "cxt fsck"},
 	"repair":    {usage: "cxt repair --from-server [--remote <repository-url>]", flags: commandFlags([]string{"--remote"}, []string{"--from-server"})},
 	"capture":   {usage: "cxt capture list [--all] [--json] | show <id> [--json] | retry|resolve <id> --expect <hash> | acknowledge <id> --expect <hash> --reason <text>", flags: commandFlags([]string{"--expect", "--reason"}, []string{"--all", "--json"})},
+	"sync":      {usage: "cxt sync status [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
 	"reflog":    {usage: "cxt reflog"},
 	"secrets":   {usage: "cxt secrets push|pull [-p <passphrase>] [--remember] [--rotate]", flags: commandFlags([]string{"-p"}, []string{"--remember", "--rotate"})},
@@ -198,6 +199,10 @@ func validateCommandFlags(cmd string, args []string, spec commandArgSpec) error 
 		}
 	case "repair":
 		if len(pos) != 0 || !flagPresent(args, "--from-server") {
+			return fmt.Errorf("usage: %s", spec.usage)
+		}
+	case "sync":
+		if len(pos) != 1 || pos[0] != "status" {
 			return fmt.Errorf("usage: %s", spec.usage)
 		}
 	case "doctor":
