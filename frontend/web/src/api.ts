@@ -144,6 +144,8 @@ export const api = {
   removeTeamRepository: (organization: string, team: string, repository: string) => call('DELETE', `/organizations/${encodeURIComponent(organization)}/teams/${encodeURIComponent(team)}/repositories/${encodeURIComponent(repository)}`),
   effectiveOrganizationPolicy: (organization: string) => call<OrganizationPolicy>('GET', `/organizations/${encodeURIComponent(organization)}/effective-policy`),
   listEnterprises: () => call<import('./types').Enterprise[]>('GET', '/enterprises'),
+  enterpriseDomains: (id: string) => call<import('./enterpriseDomains').EnterpriseDomain[]>('GET', `/enterprises/${encodeURIComponent(id)}/domains`),
+  enterpriseDomainCommand: (id: string, action: 'request' | 'verify' | 'release', domain: string, revision: string) => call<import('./enterpriseDomains').EnterpriseDomain | { status: string }>('POST', `/enterprises/${encodeURIComponent(id)}/domains${action === 'request' ? '' : `/${action}`}`, { domain, revision }),
   createEnterprise: (name: string, slug: string) => call<import('./types').Enterprise>('POST', '/enterprises', { name, slug }),
   getEnterprise: (slug: string) => call<import('./types').Enterprise>('GET', `/enterprises/${encodeURIComponent(slug)}`),
   updateEnterprise: (id: string, patch: { name?: string; logo?: string; policy?: import('./types').EnterprisePolicy }) => call<import('./types').Enterprise>('PATCH', `/enterprises/${encodeURIComponent(id)}`, patch),

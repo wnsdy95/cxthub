@@ -110,5 +110,9 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   Unit geometry checks, build/i18n/architecture and all 79 browser regressions
   passed with independent API/MCP and a disposable PostgreSQL database. Focused
   replacement coverage also passed. PR #300 merged after nine green CI checks.
-- Enterprise identity/security remains pending implementation and validation;
-  this document is not a completion claim for the overall plan.
+- Enterprise domain verification now has a PostgreSQL transaction boundary,
+  owner-managed DNS challenges, audited release and an administration UI.
+  Race tests cover competing tenants, owner revocation, rotation and release
+  during DNS lookup. This grants no identity or repository authority. Remaining
+  federation, provisioning and enforcement slices are in ENTERPRISE_IDENTITY.md;
+  the overall Enterprise identity/security plan is not complete.

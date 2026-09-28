@@ -26,6 +26,7 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"TeamMembership", reflect.TypeOf(domain.TeamMembership{})},
 		{"TeamRepositoryGrant", reflect.TypeOf(domain.TeamRepositoryGrant{})},
 		{"Enterprise", reflect.TypeOf(domain.Enterprise{})},
+		{"EnterpriseDomain", reflect.TypeOf(app.EnterpriseDomainView{})},
 		{"EnterprisePolicy", reflect.TypeOf(domain.EnterprisePolicy{})},
 		{"EnterpriseMembership", reflect.TypeOf(domain.EnterpriseMembership{})},
 		{"EnterpriseAuditEvent", reflect.TypeOf(domain.EnterpriseAuditEvent{})},

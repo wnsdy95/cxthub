@@ -123,7 +123,7 @@ func Open(ctx context.Context, addr, dataDir string, requirePostgres bool) (_ *R
 		log.Printf("migrations: applied %d", n)
 	}
 	r.Context = app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
-	r.Identity = app.NewIdentityService(verifier, st)
+	r.Identity = app.NewIdentityService(verifier, st).WithDomainResolver(net.DefaultResolver)
 	return r, nil
 }
 

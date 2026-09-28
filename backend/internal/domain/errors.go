@@ -42,3 +42,4 @@ var ErrGitOriginMismatch = errors.New("git origin mismatch")
 // ErrStorageLimit rejects net growth while preserving existing read access.
 var ErrStorageLimit = errors.New("storage limit reached; existing context remains readable")
 var ErrUsageUnavailable = errors.New("storage reporting is unavailable")
+var ErrDomainVerificationUnavailable = errors.New("domain verification requires transactional storage and a working DNS resolver")

@@ -6,6 +6,13 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+ enterpriseDomains: {
+  title: '도메인 소유 확인', name: '회사 도메인', request: 'DNS 확인 코드 만들기',
+  note: 'DNS 관리 서비스에 아래 TXT 레코드를 추가한 뒤 확인하세요. 확인 결과는 30일간 이 도메인에만 유효합니다. 계정 연결, 멤버 추가, SSO 활성화는 별도입니다. 영문 또는 퓨니코드 도메인을 입력하세요.',
+  empty: '등록한 도메인이 없습니다.', pending: 'DNS 확인 대기', verified: '확인됨', expired: '만료됨',
+  recordName: 'TXT 레코드 이름', recordValue: 'TXT 레코드 값', challengeExpiry: '확인 코드 만료:', verifiedUntil: '소유 확인 유효기간:',
+  verify: 'DNS 레코드 확인', renew: '확인 코드 새로 만들기', release: '도메인 등록 해제',
+ },
  teams: {
   reload: '편집 내용 버리고 최신 값 불러오기',
   edit: '팀 정보 수정',

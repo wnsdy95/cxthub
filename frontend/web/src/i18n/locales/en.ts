@@ -3,6 +3,13 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+ enterpriseDomains: {
+  title: 'Verified domains', name: 'Company domain', request: 'Create DNS challenge',
+  note: 'Add the TXT record below in your DNS provider, then verify it. Verification lasts 30 days and covers this exact domain only. It does not connect accounts, add members or enable SSO. Use an ASCII or punycode domain name.',
+  empty: 'No domain claims yet.', pending: 'Awaiting DNS', verified: 'Verified', expired: 'Expired',
+  recordName: 'TXT record name', recordValue: 'TXT record value', challengeExpiry: 'Challenge expires:', verifiedUntil: 'Verification valid until:',
+  verify: 'Verify DNS record', renew: 'Generate new challenge', release: 'Release domain claim',
+ },
  teams: {
   reload: 'Discard draft and reload current values',
   edit: 'Edit team details',
