@@ -932,33 +932,36 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 		})
 	}
 	batchFallback := false
-	batchRejected := false
+	var rejected []error
 	for _, batch := range refUpdateBatches(updates) {
 		err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/refs/batch", batchRefsReq{Updates: batch}, nil)
+		classified := classifyRefPushError(err)
 		switch {
 		case err == nil:
 		case batchRefsUnsupported(err):
 			batchFallback = true
-		case strings.Contains(err.Error(), "non_fast_forward"):
-			batchRejected = true
+		case errors.Is(classified, domain.ErrSyncConflict):
+			// Keep the server's ref names and typed cause. Other batches may
+			// succeed; a rejected batch must not erase their progress or hide
+			// which refs require reconciliation.
+			rejected = append(rejected, classified)
 		default:
-			return classifyRefPushError(err)
+			return refPushTerminalError(classified, rejected)
 		}
 		if batchFallback {
 			break
 		}
 	}
 	if !batchFallback {
-		if batchRejected {
-			return fmt.Errorf("%w: ref batch", domain.ErrSyncConflict)
-		}
-		return nil
+		return errors.Join(rejected...)
 	}
 
 	// Compatibility fallback for servers predating the batch endpoint. Server
 	// determines update policy by ref kind. Non-fast-forward rejections are
 	// collected and reported in git style at the end (other refs continue).
-	var rejected []string
+	// The fallback retries the complete requested set. Only its latest results
+	// are authoritative; an earlier batch rejection may now have converged.
+	rejected = nil
 	for _, ref := range refsToPush {
 		_, lifecycle, _ := domain.ParseBranchLifecycleRef(ref)
 		path := c.reposPath(repoID) + "/refs/" + string(ref.Kind) + "/" + escapePathName(ref.Name)
@@ -969,17 +972,14 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 		}
 		if err := c.do(ctx, http.MethodPut, path, request, nil); err != nil {
 			classified := classifyRefPushError(err)
-			if strings.Contains(err.Error(), "non_fast_forward") {
-				rejected = append(rejected, string(ref.Kind)+"/"+ref.Name)
+			if errors.Is(classified, domain.ErrSyncConflict) {
+				rejected = append(rejected, fmt.Errorf("%s/%s: %w", ref.Kind, ref.Name, classified))
 				continue
 			}
-			return classified
+			return refPushTerminalError(classified, rejected)
 		}
 	}
-	if len(rejected) > 0 {
-		return fmt.Errorf("%w: %s", domain.ErrSyncConflict, strings.Join(rejected, ", "))
-	}
-	return nil
+	return errors.Join(rejected...)
 }
 
 func pushableRefs(refs []domain.Ref) []domain.Ref {
@@ -1047,13 +1047,24 @@ func refUpdateBatches(updates []batchRefUpdate) [][]batchRefUpdate {
 
 func classifyRefPushError(err error) error {
 	var httpErr *HTTPError
-	if errors.As(err, &httpErr) && httpErr.Code == "branch_archived" {
-		return fmt.Errorf("%w: %s", domain.ErrBranchArchived, httpErr.Message)
-	}
-	if strings.Contains(err.Error(), "non_fast_forward") {
-		return fmt.Errorf("%w: %v", domain.ErrSyncConflict, err)
+	if errors.As(err, &httpErr) {
+		switch httpErr.Code {
+		case "branch_archived":
+			return fmt.Errorf("%w: %w", domain.ErrBranchArchived, err)
+		case "non_fast_forward":
+			return fmt.Errorf("%w: %w", domain.ErrSyncConflict, err)
+		}
 	}
 	return err
+}
+
+func refPushTerminalError(err error, rejected []error) error {
+	if len(rejected) == 0 {
+		return err
+	}
+	// Earlier conflicts remain useful diagnostics, but must not turn a later
+	// authorization/transport failure into a retryable ErrSyncConflict.
+	return fmt.Errorf("%w\nprevious ref rejections:\n%v", err, errors.Join(rejected...))
 }
 
 func containsString(values []string, want string) bool {

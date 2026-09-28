@@ -186,3 +186,12 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   keys participate in operator encryption rewrap. Local signed fixture and race
   checks passed, along with 82 browser regressions, focused UI recheck and full
   backend/PostgreSQL test/vet. No customer IdP or mandatory policy is enabled.
+- SAML signing lifecycle merged in #316 after nine green CI checks. Exact
+  main-source `472a99e` API/MCP/operator binaries are installed and healthy;
+  migration 0068 is applied. No live identity configuration was changed.
+- Sync conflict diagnostics now retain the server's rejected ref names and typed
+  causes across bounded batches and legacy single-ref requests. A later terminal
+  failure keeps earlier diagnostics without becoming a retryable conflict. The
+  next #290 storage-cost investigation must distinguish inherited pinned memory
+  from independently authored attachments; memory-bearing captures are not
+  disposable merely because their conversation is a prefix of a newer capture.

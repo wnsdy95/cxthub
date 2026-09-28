@@ -494,3 +494,44 @@ planning is preserved and counts as reconciled, without rewriting its pointer.
 This limits the work in a metadata request, not the time required to validate one
 very large document; cold verification and concurrent server progress remain
 independent constraints.
+
+# Live backlog acceptance and remaining capture cost (2026-09-29)
+
+With the main-source `7af904e` CLI, an ordinary pull preserved 14 local-ahead
+branch tips after a final ref-batch conflict. Both local and server graph walks
+confirmed the remote tips were ancestors of their local counterparts with the
+same branch identities. A subsequent ordinary push completed 16 snapshots and
+acknowledged the requested 2,534 refs; an independent manifest read matched all
+14 retained tips. This count includes already-current refs: the client sends
+only missing/changed refs on the wire. The historical queue had no ready or
+retry-waiting jobs, and the server metadata audit reported Missing 0. No force,
+manual graph edit, or timeout increase was used. Continuous capture can create
+new work after that observation; this does not certify cloud load performance.
+
+Ref-batch diagnostics previously discarded the server's rejected ref names.
+The client now retains each non-fast-forward response and its typed cause,
+including when other batches succeed. It classifies the error code, not words
+in a branch name or diagnostic message. A later permission/transport failure
+remains the primary failure while earlier rejections remain visible. Compatibility
+fallback retries the full requested set and reports those latest results. This
+changes reporting, not transaction scope or ref movement policy: success in one
+batch does not imply success in another.
+
+The next remaining cost is capture memory inheritance. Every new capture from a
+selected worktree memory clones that digest into a snapshot-bound attachment.
+Even identical content gets a new hash because `SnapshotID` changes. Both local
+and server collection correctly retain captures with separate memory attachments;
+conversation-prefix equivalence alone cannot establish memory equivalence. In a
+static comparison before the successful retry, all 41 recent missing snapshot
+records carried memory. This does not prove that server GC removed previously
+uploaded snapshots, and they must not be discarded as redundant uploads.
+
+Removing inheritance would violate frozen code-position memory and orphan-branch
+project memory. Reusing another snapshot's `MemoryHash` directly would violate
+the attachment ownership/hash contract. Local and PostgreSQL memory storage
+already share large body components; the full attachment is still sent on the
+wire. Investigate exact body reuse during transfer before changing that model.
+A future separation of inherited-memory selection from authored memory would
+need backend/CLI/MCP reads, dependency retention, wire-version compatibility and
+promotion covered together. Existing attachments and original records remain
+preserved; no automatic data rewrite or deletion is enabled here.
