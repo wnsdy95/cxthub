@@ -78,6 +78,13 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   intermediate array. PR #292 merged with nine green CI checks. Foreground/backfill
   separation is implemented with a durable versioned queue, capture-retention
   pins, bounded retries and read-only doctor diagnostics. CLI suite/vet, focused
-  race tests and full Git-hook E2E passed; PR/CI and local installation remain.
-- PostgreSQL cutover, UI and Enterprise phases remain pending implementation
-  and validation; this document is not a completion claim.
+  race tests and full Git-hook E2E passed. PR #295 merged after nine green CI
+  checks; its exact main-source CLI was installed. Live backlog completion has
+  not yet been established. Delayed upstream-based branch reclassification was
+  separately identified and is tracked in #293.
+- PostgreSQL cutover: #294. The independent local service launcher, private
+  configuration, credential separation and startup rollback have synthetic tests.
+  A persistent loopback PostgreSQL instance is prepared separately from rehearsal
+  databases. Fresh import/restore and actual API/MCP cutover remain pending.
+- UI and Enterprise phases remain pending implementation and validation; this
+  document is not a completion claim.
