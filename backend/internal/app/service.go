@@ -1651,23 +1651,6 @@ func (s *Service) gcHookLeaf(ctx context.Context, repoID domain.ContentHash, old
 		replacement.Provider != snap.Provider || replacement.SessionID != snap.SessionID {
 		return
 	}
-	oldDoc, err := s.blobs.GetDoc(ctx, repoID, snap.DocHash)
-	if err != nil {
-		return
-	}
-	newDoc, err := s.blobs.GetDoc(ctx, repoID, replacement.DocHash)
-	if err != nil || oldDoc.CIR.Envelope.SourceProvider != snap.Provider ||
-		newDoc.CIR.Envelope.SourceProvider != snap.Provider ||
-		oldDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
-		newDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
-		len(newDoc.CIR.Events) < len(oldDoc.CIR.Events) {
-		return
-	}
-	for i, event := range oldDoc.CIR.Events {
-		if !reflect.DeepEqual(event, newDoc.CIR.Events[i]) {
-			return
-		}
-	}
 	refs, err := s.meta.ListRefs(ctx, repoID)
 	if err != nil {
 		return
@@ -1720,10 +1703,40 @@ func (s *Service) gcHookLeaf(ctx context.Context, repoID domain.ContentHash, old
 			return
 		}
 	}
+	// Only an unreferenced leaf reaches transcript verification. Keep all guards
+	// and deletion within this same repository transaction.
+	if !s.captureSupersedes(ctx, repoID, snap, replacement) {
+		return
+	}
 	if err := s.meta.DeleteSnapshot(ctx, repoID, old); err != nil {
 		return
 	}
 	_ = s.blobs.DeleteDoc(ctx, repoID, snap.DocHash)
+}
+
+func (s *Service) captureSupersedes(ctx context.Context, repoID domain.ContentHash, snap, replacement domain.Snapshot) bool {
+	if comparator, ok := s.blobs.(outbound.StoredCaptureComparator); ok {
+		supersedes, err := comparator.CaptureSupersedes(ctx, repoID, snap.DocHash, replacement.DocHash, snap.Provider, snap.SessionID)
+		return err == nil && supersedes
+	}
+	oldDoc, err := s.blobs.GetDoc(ctx, repoID, snap.DocHash)
+	if err != nil {
+		return false
+	}
+	newDoc, err := s.blobs.GetDoc(ctx, repoID, replacement.DocHash)
+	if err != nil || oldDoc.CIR.Envelope.SourceProvider != snap.Provider ||
+		newDoc.CIR.Envelope.SourceProvider != snap.Provider ||
+		oldDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
+		newDoc.CIR.Envelope.SessionOriginID != snap.SessionID ||
+		len(newDoc.CIR.Events) < len(oldDoc.CIR.Events) {
+		return false
+	}
+	for i, event := range oldDoc.CIR.Events {
+		if !reflect.DeepEqual(event, newDoc.CIR.Events[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // PutUnsync updates (user, branch) push wait pointers (shadow sync mirror).

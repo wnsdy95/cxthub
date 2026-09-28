@@ -372,3 +372,39 @@ remain intact. A missing prerequisite names the ref and target before live write
 A deterministic regression advances the server manifest after pull and proves
 that the verified observation repairs successfully while the newer one is refused.
 Tracking: #305.
+
+# Pending capture maintenance (2026-09-29)
+
+Follow-up #309 isolates a second repository-lock cost from finalization itself.
+A read-only observation of the development repository found a 185,000,180-byte,
+50,223-event pending document: current-byte read/reassembly took 0.97 s, typed
+JSON decode 1.97 s, and typed canonical hash validation another 1.62 s. These are
+local single observations, not cloud percentile measurements. A live push earlier
+stopped after 24/49 documents because a later finalization submission exceeded
+the unchanged client deadline while awaiting the repository lock. Accepted jobs
+continued durably; no ref batch was published by that failed invocation.
+
+Hook-leaf collection previously decoded both documents before checking refs,
+children, other document owners or pending pointers. Those retention guards now
+run first, under the same repository transaction. Protected leaves do not read
+transcripts. Unreferenced leaves compare their complete canonical event streams
+using schema-verified content identities and hashes of the currently owned bytes.
+The native provider/session must match. Branch/worktree changes remain allowed;
+shorter and divergent captures cannot collect a successor. Legacy representations
+are canonicalized and validated; errors preserve the older capture. Read indexes,
+file timestamps and a previous ownership grant never establish deletion proof.
+
+Synthetic 5,000-event captures (~18.4 MB each), Apple M5 Pro, three iterations:
+
+| Prefix comparison only | Time/op | Bytes allocated/op |
+| --- | ---: | ---: |
+| Decode both typed documents and compare events | 285.0 ms | 110,726,546 |
+| Verify current bytes against schema proofs and compare canonical prefix | 10.94 ms | 2,736 |
+
+This comparison excludes storage IO, cold schema-proof construction, index
+cleanup and queue wait. The optimized adapter still reads owned bytes on every
+call. Both FS and PostgreSQL reject stale grants, removed bodies and corruption
+after cache warmup; PostgreSQL proof use cannot escape a rolled-back ownership
+transaction. Reference checks, publication/deletion boundaries, authorization,
+timeouts and external contracts remain unchanged. This change alone does not
+claim the entire live backfill is complete or eliminate all index-lock cost.

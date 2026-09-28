@@ -13,3 +13,11 @@ import (
 type StoredDocVerifier interface {
 	VerifyStoredDoc(context.Context, domain.ContentHash, domain.ContentHash) (domain.VerifiedDocReference, error)
 }
+
+// StoredCaptureComparator checks complete same-session event containment from
+// currently owned, hash-verified bytes. A read/search projection alone is not
+// evidence for deleting an older capture. Callers retain reference guards and
+// the repository transaction around verification and collection.
+type StoredCaptureComparator interface {
+	CaptureSupersedes(context.Context, domain.ContentHash, domain.ContentHash, domain.ContentHash, domain.ProviderKind, string) (bool, error)
+}

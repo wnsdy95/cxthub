@@ -139,3 +139,12 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   requests/assertions, durable replay records and a browser-bound two-step
   callback. Local PostgreSQL and signed protocol fixtures are under validation.
   It is not mandatory SSO, SCIM, policy enforcement or customer IdP acceptance.
+
+- SAML PR #308 merged after nine green CI checks. The exact main-source API and
+  MCP binaries were installed and both PostgreSQL-backed services passed health
+  checks. Browser verification does not enable mandatory SSO, CLI/MCP assurance,
+  MFA/IP/session enforcement or customer IdP activation.
+- Sync follow-up #309 removes full transcript reads for already-protected pending
+  history and uses verified canonical prefixes for eligible supersession checks.
+  Synthetic comparison costs and the observed live lock limitation are recorded
+  in PULL_VALIDATION_PROGRESS.md. Backlog completion remains a separate live check.

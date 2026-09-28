@@ -43,3 +43,9 @@ func (s *FSStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.Content
 }
 
 var _ outbound.StoredDocVerifier = (*FSStore)(nil)
+
+func (s *FSStore) CaptureSupersedes(ctx context.Context, repo, old, next domain.ContentHash, provider domain.ProviderKind, session string) (bool, error) {
+	return compareStoredCaptures(ctx, s, &s.docProofs, repo, old, next, provider, session)
+}
+
+var _ outbound.StoredCaptureComparator = (*FSStore)(nil)

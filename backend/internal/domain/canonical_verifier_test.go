@@ -23,7 +23,7 @@ func canonicalVerificationOracle(raw []byte) error {
 func verifierFixture(t testing.TB) []byte {
 	t.Helper()
 	doc := CIRDocument{Envelope: CIREnvelope{CIRVersion: "2"}, Events: []CIREvent{
-		{Kind: EventMessage, Seq: 0, Role: RoleUser, Blocks: []ContentBlock{{Type: "text", Text: "original <한글> \\\""}}},
+		{Kind: EventMessage, Seq: 0, Role: RoleUser, Blocks: []ContentBlock{{Type: "text", Text: "original <\uD55C\uAE00> \\\""}}},
 		{Kind: EventToolCall, Seq: 1, CallID: "call", ToolName: "tool", Input: map[string]any{"n": json.Number("9007199254740992")}},
 		{Kind: EventCompaction, Seq: 2, Replacement: []CIREvent{{Kind: EventMessage, Seq: 3, Role: RoleAssistant}, {Kind: EventMessage, Seq: 0, Role: RoleUser}}, ReplacementComplete: true},
 	}}
