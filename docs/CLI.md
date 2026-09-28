@@ -90,6 +90,25 @@ context store.
 
 ## Repository and authentication
 
+### `cxt sync status`
+
+```text
+cxt sync status [--json]
+```
+
+Reads local retained-history upload jobs and unresolved branch operations without
+opening context or memory bodies, contacting the server, or retrying work. Use it
+for a quick queue inspection while a large synchronization is in progress.
+Eligible jobs can be retried now; that count does not mean a worker is running.
+An empty queue does not establish server acknowledgement or object integrity.
+Unreadable queue metadata produces a nonzero exit status without repairing it.
+
+Run `cxt push` to retry current work and wake retained-history uploads, or
+`cxt push --wait-history` to wait for the retained backlog. Explicit `push` and
+`pull` print phase progress to stderr. Item counts advance after acknowledgement
+and apply only to the named phase, not to the entire synchronization. Use
+`cxt doctor` for a complete local object audit and `cxt fsck` for a server audit.
+
 ### `cxt doctor`
 
 ```text

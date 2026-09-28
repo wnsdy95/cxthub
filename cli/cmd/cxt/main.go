@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
@@ -62,6 +63,13 @@ func run(args []string) error {
 	if args[1] == "version" || args[1] == "--version" {
 		fmt.Println("cxt", version)
 		return nil
+	}
+	if args[1] == "sync" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		return delivcli.RunSyncStatus(context.Background(), cwd, slices.Contains(args[2:], "--json"), os.Stdout)
 	}
 	if args[1] == "doctor" || (args[1] == "branch" && len(args) > 2 && args[2] == "operations") {
 		cwd, err := os.Getwd()

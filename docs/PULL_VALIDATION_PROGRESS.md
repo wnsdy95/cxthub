@@ -251,8 +251,14 @@ survives exits, cancellation and machine restarts, and the next push wakes it.
 This is durable local retry, not an always-on OS scheduler. Git hook timeouts
 are unchanged. Narrow adapters without coordinated retention retain full push.
 
-`cxt doctor` / `cxt doctor --json` report pending records, attempts, failure
-categories and next retry times without starting any worker or changing files.
+`cxt sync status` / `cxt sync status --json` read only the local queue and branch
+journal metadata. They show eligible/waiting jobs, attempts, safe failure categories
+and retry times without loading document or memory bodies, contacting the server,
+starting a worker, or changing files. Eligibility does not claim that a worker is
+currently running. Empty queues do not prove server acknowledgement or integrity;
+JSON explicitly reports those checks as false. Missing/corrupt metadata is an
+error, not an empty successful queue. `cxt doctor` remains the separate full local
+object/reference audit and also includes these queue details.
 `cxt push --wait-history` explicitly waits for the original full publication
 path and reports failures synchronously. Neither command turns a failed upload
 into a successful ref publication. Fresh dependencies that arrive during a push
@@ -265,3 +271,16 @@ stale acknowledgement, corrupt/symlinked queue records and capture collection
 before/after acknowledgment. Memory-only provenance and remote proof reuse have
 separate selection regressions. Synthetic tests prove ordering and durability;
 they do not claim that every live historical upload has completed.
+
+
+## Explicit synchronization progress
+
+User-invoked push/pull reports application phases to stderr: preparing the
+catalog, negotiating missing objects, validating dependencies, transferring and
+verifying documents, recording snapshots/memory/history, and publishing or
+adopting refs. Document and snapshot counters advance only after successful
+acknowledgement. Counters are phase-local, not a fabricated overall percentage.
+A concurrent collection retry starts a new prerequisite pass; failed or cancelled
+publication never reports synchronization complete. Hook/background calls omit
+the optional observer. Foreground completion does not claim historical backfill
+is finished: the resulting retained queue count remains separate.

@@ -360,6 +360,9 @@ type BranchHandoffInput struct {
 
 // SyncInput is an input DTO for SyncRepo.Push / SyncRepo.Pull.
 type SyncInput struct {
+	// Progress observes acknowledged phase progress, never changes publication
+	// ordering. It is optional and called synchronously; totals are phase-local.
+	Progress func(SyncProgress)
 	// ForegroundOnly publishes current ref/history/pending dependencies first and
 	// durably queues other retained snapshots when the local adapter supports it.
 	// The default full push keeps the existing synchronous contract.
@@ -376,6 +379,13 @@ type SyncInput struct {
 	Append bool
 	// FetchOnly is for pull only: fetches objects (snapshot/doc/memory) only and does not move local refs (git fetch meaning). Hooks' auto-pull is used — context does not force convergence (local history = truth of my session, ref movement is user's choice with cxt pull).
 	FetchOnly bool
+}
+
+type SyncProgress struct {
+	Operation string
+	Phase     string
+	Completed int
+	Total     int // Zero means the phase has no known item total, not 100% complete.
 }
 
 // SyncOutput is the DTO for SyncRepo.Push / SyncRepo.Pull.
