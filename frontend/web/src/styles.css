@@ -1290,3 +1290,10 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .github-binding-list li { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .github-binding-list li span { overflow-wrap: anywhere; }
 .github-enterprise { padding: 16px 0; }
+.enterprise-domains { margin-bottom: 24px; }
+.enterprise-domains > h2, .enterprise-domains > .hint, .enterprise-domains .management-form { margin: 0; }
+.enterprise-domains label { align-items: stretch; }
+.enterprise-domain-card { min-width: 0; padding: 16px 0; border-top: 1px solid var(--line); }
+.enterprise-domain-card h3 { overflow-wrap: anywhere; }
+.enterprise-domain-card label { display: grid; gap: 6px; margin: 10px 0; }
+.enterprise-domain-card input { width: 100%; min-width: 0; box-sizing: border-box; }

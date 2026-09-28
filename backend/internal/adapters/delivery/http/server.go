@@ -1221,6 +1221,8 @@ func (s *Server) respond(w http.ResponseWriter, v any, err error) {
 
 func mapError(err error) (code string, status int) {
 	switch {
+	case errors.Is(err, domain.ErrDomainVerificationUnavailable):
+		return "domain_verification_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrSecretsRevisionRequired):
 		return "revision_required", http.StatusPreconditionRequired
 	case errors.Is(err, domain.ErrSecretsConflict):

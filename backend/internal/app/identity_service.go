@@ -22,6 +22,7 @@ type IdentityService struct {
 	organization    outbound.OrganizationStore
 	teams           outbound.TeamStore
 	invitationEmail *invitationEmailConfig
+	domainResolver  outbound.DomainTXTResolver
 }
 
 // NewIdentityService creates an IdentityService.

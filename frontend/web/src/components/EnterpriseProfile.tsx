@@ -1,4 +1,5 @@
 import { EnterpriseGitHubConnections } from './GitHubConnections';
+import { EnterpriseDomains } from './EnterpriseDomains';
 import { RenameSpace } from './NamespaceAdministration';
 import { InvitationManager } from './CollaborationInvitations';
 import { useState, type FormEvent } from 'react';
@@ -73,7 +74,7 @@ function EnterpriseBody({ enterprise }: { enterprise: Enterprise }) {
    {tab === 'policies' && <EnterprisePolicies key={JSON.stringify(enterprise.policy)} value={enterprise.policy} disabled={!canAdmin || busy} onSave={(policy) => mutation.mutate(() => api.updateEnterprise(enterprise.id, { policy }))} />}
    {tab === 'audit' && canAdmin && <ul className="management-rows">{audit.data?.map((event) => <li key={event.id}><span>{event.action}<small> · {event.target_id}</small></span><time>{new Date(event.created_at).toLocaleString()}</time></li>)}</ul>}
    {tab === 'settings' && role === 'owner' && <RenameSpace key={enterprise.slug} kind="enterprise" id={enterprise.id} slug={enterprise.slug} />}
-   {tab === 'settings' && canAdmin && <EnterpriseSettings enterprise={enterprise} disabled={busy} onSave={(patch) => mutation.mutate(() => api.updateEnterprise(enterprise.id, patch))} />}
+   {tab === 'settings' && canAdmin && <><EnterpriseDomains id={enterprise.id} owner={role === 'owner'} /><EnterpriseSettings enterprise={enterprise} disabled={busy} onSave={(patch) => mutation.mutate(() => api.updateEnterprise(enterprise.id, patch))} /></>}
   </main>
  </div></div>;
 }

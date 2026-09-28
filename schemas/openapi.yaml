@@ -72,6 +72,25 @@ components:
   # Reusable Schemas
   # -------------------------------------------------------------------------
   schemas:
+    EnterpriseDomainCommand:
+      type: object
+      required: [domain, revision]
+      properties:
+        domain: {type: string, description: Exact ASCII DNS name or punycode; no wildcard or URL}
+        revision: {type: string, description: Empty only for a new claim; otherwise the observed revision}
+    EnterpriseDomain:
+      type: object
+      required: [enterprise_id, domain, challenge, revision, challenge_expires_at, verified_at, verified_until, record_name, state]
+      properties:
+        enterprise_id: {type: string}
+        domain: {type: string}
+        challenge: {type: string, description: Public DNS TXT value; not a login credential}
+        revision: {type: string}
+        challenge_expires_at: {type: string, format: date-time}
+        verified_at: {type: string, format: date-time}
+        verified_until: {type: string, format: date-time}
+        record_name: {type: string}
+        state: {type: string, enum: [pending, verified, expired]}
     Namespace: {type: object, properties: {id: {type: string}, slug: {type: string}, kind: {type: string, enum: [user, organization]}, user_id: {type: string}, organization_id: {type: string}, created_at: {type: string, format: date-time}}}
     GitHubStart:
       type: "object"
@@ -5806,6 +5825,93 @@ paths:
           description: Ownership, policy, or uniqueness conflict
         "422":
           description: Invalid request
+
+  /enterprises/{enterpriseID}/domains:
+    get:
+      summary: List exact-domain DNS observations (Enterprise administrator)
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Server-derived verification state; no login or membership grant
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/EnterpriseDomain'}}
+        '401': {description: Authentication required}
+        '403': {description: Enterprise administrator required}
+        '503': {description: Transactional domain verification unavailable}
+    post:
+      summary: Create or renew an exact-domain DNS challenge (Enterprise owner)
+      description: Empty revision creates a new claim. Existing claims require the observed revision. Challenges expire after 24 hours; renewal retains a still-valid prior observation. Maximum 20 claims per enterprise.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EnterpriseDomainCommand'}
+      responses:
+        '200':
+          description: Challenge created; no change to memberships, identities or access
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EnterpriseDomain'}
+        '401': {description: Authentication required}
+        '403': {description: Enterprise owner required}
+        '409': {description: Stale revision or domain limit}
+        '422': {description: Invalid DNS name}
+        '429': {description: Rate limited}
+        '503': {description: Transactional domain verification unavailable}
+
+  /enterprises/{enterpriseID}/domains/verify:
+    post:
+      summary: Verify DNS TXT and publish a 30-day observation
+      description: Rechecks authority and revision after DNS lookup. Only one Enterprise can hold an unexpired observation for the exact name. Parent and child names are independent. This neither merges accounts nor enables SSO.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EnterpriseDomainCommand'}
+      responses:
+        '200':
+          description: Verified observation with a new revision
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EnterpriseDomain'}
+        '401': {description: Authentication required}
+        '403': {description: Enterprise owner required}
+        '404': {description: Challenge released or absent}
+        '409': {description: Stale or expired challenge, or another Enterprise holds the domain}
+        '422': {description: DNS TXT did not match or name is invalid}
+        '429': {description: Rate limited}
+        '503': {description: DNS lookup failed or transactional storage unavailable}
+
+  /enterprises/{enterpriseID}/domains/release:
+    post:
+      summary: Release a domain claim with an audit record (Enterprise owner)
+      description: Requires the current revision. Preserves all accounts, context and membership; the owner can create a fresh claim later.
+      parameters:
+        - {name: enterpriseID, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EnterpriseDomainCommand'}
+      responses:
+        '200':
+          description: Claim released and audit committed atomically
+          content:
+            application/json:
+              schema: {type: object, properties: {status: {type: string}}}
+        '401': {description: Authentication required}
+        '403': {description: Enterprise owner required}
+        '404': {description: Claim absent}
+        '409': {description: Stale revision}
+        '422': {description: Invalid DNS name}
+        '429': {description: Rate limited}
+        '503': {description: Transactional storage unavailable}
 
   /enterprises/{enterpriseID}/audit:
     get:
