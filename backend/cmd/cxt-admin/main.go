@@ -17,6 +17,9 @@ import (
 )
 
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "identity-keys" {
+		return runIdentityKeys(os.Args[2:], os.Stdout, os.Stderr)
+	}
 	ns := flag.String("namespace", "", "immutable namespace ID")
 	policyFile := flag.String("policy", "", "JSON StoragePolicy file")
 	operation := flag.String("operation", "", "stable idempotency ID; reuse when retrying")

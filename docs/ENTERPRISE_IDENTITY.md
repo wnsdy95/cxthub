@@ -47,8 +47,8 @@ Operator setup: set `CXT_IDENTITY_ENCRYPTION_KEY` in the API service environment
 Preserve the same key across API replicas and restarts; keep it out of PostgreSQL,
 frontend builds and the MCP environment. No key means the UI reports unavailable;
 an invalid configured key fails API startup. Back up the key separately from the
-database. Rotation/recovery tooling is not yet provided: do not replace a key
-while its encrypted connections or pending attempts are needed.
+database. Use the staged rotation procedure below; replacing the legacy key
+in place makes existing encrypted connections and attempts unreadable.
 
 An Enterprise owner first verifies a company domain, then opens **Identity** and
 registers the displayed callback URL with the IdP. Enter the exact HTTPS issuer,
@@ -129,20 +129,80 @@ and attributes are discarded. The database retains only identity/authentication
 evidence, hashes of state/tickets and replay IDs. Callback pages are no-store and
 no-referrer; operators must exclude callback query strings and form bodies from
 proxy/access logs. SP signing keys are generated in the API, encrypted at rest,
-and never returned. Certificates expire after three years; automatic rotation
-and key-recovery tooling remain outstanding, so do not enable mandatory policy
-before that lifecycle and owner recovery are available.
+and never returned. Certificates expire after three years; replacing the SP
+signing key/certificate still requires a separate coordinated IdP lifecycle.
+Encryption-key rewrap below preserves that signing key and certificate. Mandatory
+policy remains disabled until signing-key lifecycle and owner recovery are ready.
 
 Local signed IdP fixtures exercise API/PostgreSQL, duplicate callbacks, wrong
 browser, restart, replay and revocation. These fixtures do not replace acceptance
 against a customer's real IdP configuration.
+
+## Encryption key rotation and recovery
+
+`CXT_IDENTITY_ENCRYPTION_KEYRING` is API/operator-only JSON with `active` and
+`keys` fields. `keys` maps immutable IDs (1–48 ASCII letters, digits, `_`, `-`)
+to independent random base64-encoded 32-byte keys; at most 16 IDs are supported.
+`legacy` is reserved for `CXT_IDENTITY_ENCRYPTION_KEY`. Unknown fields, duplicate
+JSON keys, missing active keys and invalid material fail startup without printing
+the supplied configuration. Never put this value in MCP/frontend configuration,
+command-line arguments, audit reasons or Git. A key ID is not a secret; its
+material must never be replaced under the same ID.
+
+The legacy-only setting remains compatible with existing `v1` ciphertext. A
+keyring writer uses `v2`, authenticating its key ID together with the existing
+tenant/revision or attempt purpose. An unknown ID, incorrect key, changed header
+or ciphertext fails authentication. The rotation workflow never changes external
+bindings, memberships, connection revisions, browser proofs or SP certificates.
+
+Use this order for every API replica:
+
+1. Back up PostgreSQL and the exact current keys separately. Rehearse restoring
+   both in an isolated environment. Losing all copies of a required key cannot
+   be repaired from ciphertext or account email.
+2. Roll out keyring-capable code while retaining the legacy setting. Add the new
+   key to every replica's read set, with `active` still `legacy`. For example,
+   the configuration shape is `{"active":"legacy","keys":{"rotation-1":"<base64 key>"}}`;
+   the placeholder is deliberately invalid. Verify every replica before step 3.
+3. Change `active` to `rotation-1` on all replicas, retaining the old read key.
+   Do not run rewrap while old binaries or old-only readers remain. Existing
+   requests may have loaded old ciphertext and still need the old key.
+4. Build `go build -tags postgres -o cxt-admin ./cmd/cxt-admin` from `backend`.
+   Give this operator process the database DSN and exact API key configuration
+   through its private environment. It does not load `.env` automatically or
+   print configuration. Run `cxt-admin identity-keys` to inspect up to 100 values.
+   Follow each returned `next` cursor with `--after` until `complete` is true.
+   Inspection authenticates values but writes neither credentials nor receipts.
+5. Apply with `cxt-admin identity-keys --apply --operation rotation-1 --actor <operator-id> --reason <reason>`.
+   Repeat using the returned cursor until complete. Each bounded page commits
+   replacements and its audit receipt together. A failed page rolls back; earlier
+   completed pages remain valid. If the outcome is unknown, retry the exact same
+   operation/cursor/limit/actor/reason to retrieve its receipt. A changed request
+   conflicts. No values, plaintext or ciphertext appear in the receipt.
+6. Run a fresh inspection from the beginning after all writers have switched.
+   New rows may have appeared behind an earlier cursor. `--enterprise <ep_id>`
+   can limit a rehearsal or rollout, but that is not a global retirement check.
+   Inspect all pages and all Enterprises before considering retirement.
+7. Retain old keys while any replica, in-flight request, database backup or
+   rollback version needs them. A zero old-key count proves only the inspected
+   database view; it cannot certify replica state or backup retention. Remove a
+   read key only after those independent conditions are verified. Restoring an
+   older backup also requires restoring its matching keys before opening traffic.
+
+The operator command requires the migrated schema. Its audit receipts are stored
+in `identity_key_batches`; retries recover committed progress after process
+restart. Inspection/apply includes OIDC client secrets, all retained OIDC PKCE
+verifiers (including consumed attempts), and SAML SP private keys. Unreadable
+material stops that page instead of silently omitting it. No deletion or automatic
+key generation/retirement occurs. An unavailable backup is a recovery limitation,
+not permission to discard a connection or bind a different identity.
 
 ## Remaining implementation slices
 
 These are planned boundaries, not enabled policies or delivered SSO features:
 
 1. Extend OIDC/SAML browser verification into policy-enforced sign-in. Add tested
-   key rotation/recovery and any additional SAML interoperability profiles before
+   SP signing-key lifecycle and any additional SAML interoperability profiles before
    advertising them. Mandatory policy remains disabled.
 2. Bind the external issuer/subject to an explicitly authenticated existing account;
    never merge accounts solely on matching email. Carry credential-specific
