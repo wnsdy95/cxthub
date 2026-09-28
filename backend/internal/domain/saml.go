@@ -3,13 +3,26 @@ package domain
 import "time"
 
 type SAMLConnection struct {
-	EnterpriseID string `json:"enterprise_id"`
-	Domain       string `json:"domain"`
-	Issuer       string `json:"issuer"`
-	Revision     string `json:"revision"`
-	Certificate  string `json:"certificate"`
-	Metadata     string `json:"-"`
-	PrivateKey   string `json:"-"`
+	EnterpriseID string               `json:"enterprise_id"`
+	Domain       string               `json:"domain"`
+	Issuer       string               `json:"issuer"`
+	Revision     string               `json:"revision"`
+	Certificate  string               `json:"certificate"`
+	Metadata     string               `json:"-"`
+	PrivateKey   string               `json:"-"`
+	Rotation     *SAMLSigningRotation `json:"rotation,omitempty"`
+}
+
+// The alternate is the upcoming key while prepared, then the previous key
+// while active. Its encryption purpose uses ID, independently of config edits.
+type SAMLSigningRotation struct {
+	ID          string     `json:"id"`
+	State       string     `json:"state"`
+	Certificate string     `json:"certificate"`
+	PrivateKey  string     `json:"-"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ActivatedAt *time.Time `json:"activated_at,omitempty"`
+	VerifiedAt  *time.Time `json:"verified_at,omitempty"`
 }
 
 // The raw response is never persisted. A validated proof awaits a separate

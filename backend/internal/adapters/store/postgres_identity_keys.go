@@ -26,6 +26,8 @@ func (s *PostgresStore) ListIdentitySecrets(ctx context.Context, enterprise, aft
  SELECT 'oidc_verifier',hash,enterprise_id,record->>'ConnectionRevision',record->>'Verifier' FROM enterprise_oidc_attempts
  UNION ALL
  SELECT 'saml_key',enterprise_id,enterprise_id,record->>'revision',sealed_key FROM enterprise_saml_connections
+ UNION ALL
+ SELECT 'saml_alternate',enterprise_id,enterprise_id,record->'rotation'->>'id',sealed_alternate_key FROM enterprise_saml_connections WHERE record->'rotation' IS NOT NULL OR sealed_alternate_key<>''
 ) x WHERE (kind,id)>($1,$2) AND ($4='' OR enterprise_id=$4) ORDER BY kind,id LIMIT $3`, k, id, limit, enterprise)
 	if err != nil {
 		return nil, err
@@ -61,6 +63,8 @@ func (s *PostgresStore) ReplaceIdentitySecret(ctx context.Context, old domain.Id
 		query = `UPDATE enterprise_oidc_connections SET sealed_secret=$3 WHERE enterprise_id=$1 AND sealed_secret=$2 AND record->>'revision'=$4`
 	case "saml_key":
 		query = `UPDATE enterprise_saml_connections SET sealed_key=$3 WHERE enterprise_id=$1 AND sealed_key=$2 AND record->>'revision'=$4`
+	case "saml_alternate":
+		query = `UPDATE enterprise_saml_connections SET sealed_alternate_key=$3 WHERE enterprise_id=$1 AND sealed_alternate_key=$2 AND record->'rotation'->>'id'=$4`
 	case "oidc_verifier":
 		query = `UPDATE enterprise_oidc_attempts SET record=jsonb_set(record,'{Verifier}',to_jsonb($3::text)) WHERE hash=$1 AND record->>'Verifier'=$2 AND record->>'ConnectionRevision'=$4`
 	default:

@@ -10,6 +10,9 @@ export interface OIDCInput {
  domain: string; issuer: string; client_id: string; client_secret: string;
  auth_method: OIDCConnection['auth_method']; revision: string;
 }
-export interface SAMLConnection { enterprise_id: string; domain: string; issuer: string; revision: string; certificate: string }
-export interface SAMLView { available: boolean; configured: boolean; connection?: SAMLConnection; entity_id: string; acs: string; linked: boolean; verified_until?: string }
+export interface SAMLSigningRotation { id: string; state: 'prepared' | 'active'; certificate: string; created_at: string; activated_at?: string; verified_at?: string }
+export interface SAMLCertificateInfo { fingerprint: string; not_before: string; not_after: string; status: 'valid' | 'expiring' | 'expired' | 'not_yet_valid' }
+export interface SAMLSigningInput { revision: string; action: 'prepare' | 'activate' | 'cancel' | 'rollback' | 'retire'; trust_confirmed: boolean }
+export interface SAMLConnection { enterprise_id: string; domain: string; issuer: string; revision: string; certificate: string; rotation?: SAMLSigningRotation }
+export interface SAMLView { available: boolean; configured: boolean; connection?: SAMLConnection; entity_id: string; acs: string; linked: boolean; verified_until?: string; signing_certificate?: SAMLCertificateInfo; alternate_certificate?: SAMLCertificateInfo }
 export interface SAMLInput { domain: string; metadata: string; revision: string }

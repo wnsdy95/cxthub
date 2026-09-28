@@ -4,6 +4,13 @@ import type { Messages } from './ko';
 
 export const en: Messages = {
  enterpriseSAML: {
+  signing: 'Request signing certificate', current: 'Current certificate', upcoming: 'Upcoming certificate', previous: 'Previous certificate',
+  valid: 'Valid', expiring: 'Expires within 90 days', expired: 'Expired', not_yet_valid: 'Not yet valid',
+  prepare: 'Prepare new certificate', activate: 'Activate new certificate', cancel: 'Cancel preparation', rollback: 'Restore previous certificate', retire: 'Retire previous key',
+  preparedNote: 'Both certificates are now in the public metadata. Import them into your identity provider before activation. The current key still signs requests. Updating provider metadata preserves both keys and requires a new verification.',
+  confirmTrust: 'I have configured the identity provider to trust both certificates.',
+  testRequired: 'Use Verify with SAML above to complete a browser login with the new key. Keep the previous key until verification succeeds. You can restore it while its certificate is valid.',
+  roundtrip: 'A browser completed verification after activation. This does not prove that the provider enforces request signatures. Retiring removes the previous private key and the rollback option; retain the required backups.',
   title: 'SAML 2.0 identity', configure: 'Configure SAML', verify: 'Verify with SAML', download: 'Open service provider metadata',
   entity: 'Service provider entity ID', acs: 'Assertion consumer URL', metadata: 'Identity provider metadata XML',
   setup: 'Verify a company domain in Settings first. Enter these URLs at your provider, then paste its metadata with current signing certificates. Configure a persistent NameID and signed plaintext assertions, valid for at most 10 minutes. After saving, import our service provider metadata to trust signed requests. Unsolicited login, encrypted assertions and single logout are not supported. Metadata changes invalidate previous verifications.',

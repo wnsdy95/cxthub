@@ -29,6 +29,10 @@ func (s IdentitySecret) Purpose() (string, error) {
 		if s.ID == s.EnterpriseID {
 			return "saml:" + s.ID + ":" + s.Revision, nil
 		}
+	case "saml_alternate":
+		if s.ID == s.EnterpriseID {
+			return "saml-rotation:" + s.ID + ":" + s.Revision, nil
+		}
 	}
 	return "", ErrIntegrity
 }
@@ -41,7 +45,7 @@ func IdentitySecretCursor(after string) (string, string, error) {
 	if !ok || id == "" || len(id) > 256 || strings.ContainsAny(id, ":\x00\r\n") {
 		return "", "", ErrValidation
 	}
-	if k != "oidc_connection" && k != "oidc_verifier" && k != "saml_key" {
+	if k != "oidc_connection" && k != "oidc_verifier" && k != "saml_key" && k != "saml_alternate" {
 		return "", "", ErrValidation
 	}
 	return k, id, nil

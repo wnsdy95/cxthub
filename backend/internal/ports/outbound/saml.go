@@ -11,6 +11,7 @@ import (
 type SAMLSettings struct {
 	Metadata, EntityID, ACS, Certificate string
 	PrivateKey                           string `json:"-"`
+	AdditionalCertificates               []string
 }
 
 type SAMLStore interface {
@@ -30,6 +31,7 @@ type SAMLProof struct {
 }
 type SAMLProvider interface {
 	Validate(context.Context, SAMLSettings) (string, error)
+	ValidateMetadata(context.Context, SAMLSettings) (string, error)
 	Keys(context.Context) (certificate, privateKey string, err error)
 	Metadata(context.Context, SAMLSettings) (string, error)
 	Authorize(context.Context, SAMLSettings, string, string) (string, error)

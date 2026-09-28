@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { useT } from '../i18n';
-import type { SAMLInput, SAMLView } from '../federation';
+import type { SAMLInput, SAMLView, SAMLSigningInput } from '../federation';
 
 export function EnterpriseSAML({ id, owner }: { id: string; owner: boolean }) {
  const t = useT(); const qc = useQueryClient(); const key = ['enterpriseSAML', id];
@@ -24,9 +24,32 @@ export function EnterpriseSAML({ id, owner }: { id: string; owner: boolean }) {
     <p><a href={view.entity_id} target="_blank" rel="noreferrer">{t('enterpriseSAML.download')}</a></p>
    </> : <p className="hint">{t('enterpriseIdentity.empty')}</p>}
    {owner && <>
-    <SAMLEditor key={view.connection?.revision ?? 'new'} id={id} view={view} onSaved={refresh} />
+    {view.connection && <SAMLSigning key={`signing:${view.connection.revision}`} id={id} view={view} onSaved={refresh} />}
+    <SAMLEditor key={`editor:${view.connection?.revision ?? 'new'}`} id={id} view={view} onSaved={refresh} />
     {view.connection && <button className="ghost" disabled={disable.isPending} onClick={() => disable.mutate(view.connection!.revision)}>{t('enterpriseIdentity.disable')}</button>}
    </>}
+  </>}
+ </section>;
+}
+function SAMLSigning({ id, view, onSaved }: { id: string; view: SAMLView; onSaved: () => Promise<unknown> }) {
+ const t = useT(); const [confirmed, setConfirmed] = useState(false);
+ const c = view.connection!; const r = c.rotation;
+ const change = useMutation({ mutationFn: (action: SAMLSigningInput['action']) => api.samlSigning(id, { action, revision: c.revision, trust_confirmed: confirmed }), onSettled: onSaved });
+ const button = (action: SAMLSigningInput['action'], label: string, blocked = false) => <button disabled={change.isPending || blocked} onClick={() => change.mutate(action)}>{label}</button>;
+ return <section aria-label={t('enterpriseSAML.signing')}>
+  <h3>{t('enterpriseSAML.signing')}</h3>
+  {view.signing_certificate && <p className="hint">{t('enterpriseSAML.current')} · {t(`enterpriseSAML.${view.signing_certificate.status}`)} · <time>{new Date(view.signing_certificate.not_after).toLocaleString()}</time><br /><code style={{ overflowWrap: 'anywhere' }}>{view.signing_certificate.fingerprint}</code></p>}
+  {view.alternate_certificate && <p className="hint">{r?.state === 'prepared' ? t('enterpriseSAML.upcoming') : t('enterpriseSAML.previous')} · <time>{new Date(view.alternate_certificate.not_after).toLocaleString()}</time><br /><code style={{ overflowWrap: 'anywhere' }}>{view.alternate_certificate.fingerprint}</code></p>}
+  {change.error && <p className="err" role="alert">{change.error.message}</p>}
+  {!r && button('prepare', t('enterpriseSAML.prepare'))}
+  {r?.state === 'prepared' && <>
+   <p className="hint">{t('enterpriseSAML.preparedNote')}</p>
+   <label><input type="checkbox" checked={confirmed} disabled={change.isPending} onChange={e => setConfirmed(e.target.checked)} />{t('enterpriseSAML.confirmTrust')}</label>
+   {button('activate', t('enterpriseSAML.activate'), !confirmed)} {button('cancel', t('enterpriseSAML.cancel'))}
+  </>}
+  {r?.state === 'active' && <>
+   <p className="hint">{r.verified_at ? t('enterpriseSAML.roundtrip') : t('enterpriseSAML.testRequired')}</p>
+   {button('rollback', t('enterpriseSAML.rollback'))} {button('retire', t('enterpriseSAML.retire'), !r.verified_at)}
   </>}
  </section>;
 }
