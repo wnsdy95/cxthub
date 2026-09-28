@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
@@ -327,12 +328,18 @@ func (s *SyncRepoService) prepareMemoryPushPlans(ctx context.Context, repoID str
 	return memoryPlans, remoteMemoryAhead, nil
 }
 
-func (s *SyncRepoService) sendMemoryPushPlans(ctx context.Context, repoID string, memoryPlans []memoryPushPlan, remoteMemoryAttachments map[domain.ContentHash]domain.ContentHash, remoteMemoryAhead map[domain.ContentHash]bool) error {
-	for _, plan := range memoryPlans {
+func (s *SyncRepoService) sendMemoryPushPlans(ctx context.Context, repoID string, memoryPlans []memoryPushPlan, remoteMemoryAttachments map[domain.ContentHash]domain.ContentHash, remoteMemoryAhead map[domain.ContentHash]bool, observers ...func(inbound.SyncProgress)) error {
+	progress := inbound.SyncInput{}
+	if len(observers) > 0 {
+		progress.Progress = observers[0]
+	}
+	syncProgress(progress, "push", "publish-memory", 0, len(memoryPlans))
+	for index, plan := range memoryPlans {
 		// Another terminal or machine already advanced this snapshot's memory.
 		// Do not rewind it, and do not let one stale historical attachment block
 		// publishing otherwise independent snapshots and refs.
 		if remoteMemoryAhead[plan.snapshotID] {
+			syncProgress(progress, "push", "publish-memory", index+1, len(memoryPlans))
 			continue
 		}
 		var err error
@@ -347,6 +354,7 @@ func (s *SyncRepoService) sendMemoryPushPlans(ctx context.Context, repoID string
 		if err != nil {
 			return err
 		}
+		syncProgress(progress, "push", "publish-memory", index+1, len(memoryPlans))
 	}
 	return nil
 }

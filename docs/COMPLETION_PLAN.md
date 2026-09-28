@@ -161,3 +161,11 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   benchmarks. Enterprise encryption-key lifecycle #312 adds staged read/write
   keys and a transactional, auditable operator rewrap workflow. Mandatory policy,
   credential assurance, SCIM, retention and security delivery remain outstanding.
+
+- Encryption-key lifecycle #312 merged in #313 after nine green checks. Exact
+  main-source `c5f24a4` API/MCP/operator binaries are installed; API/MCP are healthy.
+  No live IdP or key configuration was activated. The actual synchronization run
+  completed its document/snapshot stages but encountered concurrent remote progress
+  at the final ref batch. Ordinary pull preserved local-ahead branch work. #309
+  now also bounds CLI snapshot publication per transaction and reports distinct
+  memory/history progress; live backlog acceptance is still pending.

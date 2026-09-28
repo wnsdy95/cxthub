@@ -462,3 +462,35 @@ publication, rather than raising the request timeout or publishing an incomplete
 index in another transaction. This removes repeated prefix writes while retaining
 the existing authority and rollback boundaries. Cold first-time blocks still
 require indexing; old v2 cleanup and full-byte planning remain measurable costs.
+
+Local acceptance with the merged API/MCP built from `f144228` stored 24 v3
+documents using 419 blocks, 9,454 block references and 52,115 event locations in
+one observation. A retained-history push uploaded/verified its 24 missing docs
+and recorded 32 snapshots. Its final ref batch was rejected after remote progress;
+ordinary pull preserved local-ahead branch records rather than overwriting them.
+These observations do not establish that every historical obligation is drained.
+
+# Bounded snapshot publication (2026-09-29)
+
+The same live run exposed a remaining transaction-size problem: after separately
+finalizing documents, the CLI sent 32 snapshot records in one request. Metadata
+creation still rechecks each complete stored body under the repository lock.
+The API's atomic batch contract is retained; the CLI now issues one snapshot per
+request, ordered with natural parents before children. Overlay registers are
+server-owned, omitted on creation, and synchronized in the later graft phase.
+
+Duplicate IDs and natural-parent cycles fail before any upload. Parent objects
+outside the selected set remain server prerequisites. If collection races with
+publication, the existing bounded renegotiation recovers missing prerequisites
+and reorders the retry. Successful objects remain reusable after cancellation or
+failure; the final ref batch is still gated on all objects, memory and history.
+The optimization does not skip body validation, raise timeouts, overwrite refs
+or claim atomicity across separate resumable object requests.
+
+Snapshot progress now counts each acknowledged request. Memory, queued lineage
+operations and history have separate phases; memory/history counters never count
+a failed attachment or event. A remote-ahead memory already verified during
+planning is preserved and counts as reconciled, without rewriting its pointer.
+This limits the work in a metadata request, not the time required to validate one
+very large document; cold verification and concurrent server progress remain
+independent constraints.
