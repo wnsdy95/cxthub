@@ -1785,7 +1785,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 		} else {
 			syncProgress(in, "pull", "conflicts", 0, 0)
 		}
-		return inbound.SyncOutput{Pulled: len(snaps), RemoteAhead: ahead}, nil
+		return inbound.SyncOutput{Pulled: len(snaps), FetchedRefs: append([]domain.Ref{}, refs...), RemoteAhead: ahead}, nil
 	}
 
 	// Apply immutable branch lifecycle events before ordinary refs. The local
@@ -1918,7 +1918,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	} else {
 		syncProgress(in, "pull", "conflicts", 0, 0)
 	}
-	return inbound.SyncOutput{Pulled: len(snaps), NewRefs: newRefs, Conflicts: conflicts}, nil
+	return inbound.SyncOutput{Pulled: len(snaps), NewRefs: newRefs, FetchedRefs: append([]domain.Ref{}, refs...), Conflicts: conflicts}, nil
 }
 
 // Ensure SyncRepoService implements inbound.SyncRepo.
