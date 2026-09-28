@@ -59,7 +59,7 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 	handler := NewServer(svc, ids).Handler()
 	var scenarios []string
 	for _, cause := range []string{"direct", "organization", "team", "archive", "base"} {
-		for _, command := range []string{"ref", "refs", "settings", "about", "config", "memory", "memory-cas", "typed-memory", "pending", "unsync", "promote", "objects", "chunks"} {
+		for _, command := range []string{"ref", "refs", "settings", "about", "config", "memory", "memory-cas", "typed-memory", "memory-reuse", "pending", "unsync", "promote", "objects", "chunks"} {
 			scenarios = append(scenarios, cause+"/"+command)
 		}
 	}
@@ -146,6 +146,14 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 				t.Fatal(err)
 			}
 			method, suffix, value := revocationRequest(kind, target, doc)
+			if kind == "memory-reuse" {
+				d := domain.MemoryDigest{SnapshotID: target, Summary: "review race"}
+				base, err := st.PutMemory(ctx, repo.ID, d)
+				if err != nil {
+					t.Fatal(err)
+				}
+				value = inbound.MemoryReuse{Version: 1, BaseHash: base, MemoryHash: base}
+			}
 			path := fmt.Sprintf("/api/v1/repos/%s%s", repo.ID, suffix)
 			payload, err := json.Marshal(value)
 			if err != nil {
@@ -280,6 +288,8 @@ func revocationRequest(kind string, target domain.ContentHash, doc domain.Sessio
 			d.ClaimsVersion = domain.MemoryClaimsVersion
 		}
 		return "PUT", path + string(target), d
+	case "memory-reuse":
+		return "PUT", "/memory-reuses/" + string(target), nil // source prepared by fixture
 	case "pending":
 		return "PUT", "/pending/review-race", domain.Pending{SessionID: "review-race", Target: target, Branch: "main"}
 	case "unsync":

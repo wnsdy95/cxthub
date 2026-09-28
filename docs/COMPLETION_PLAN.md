@@ -195,3 +195,9 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   next #290 storage-cost investigation must distinguish inherited pinned memory
   from independently authored attachments; memory-bearing captures are not
   disposable merely because their conversation is a prefix of a newer capture.
+- Typed ref diagnostics merged in #318 after nine green CI checks. The exact
+  main-source `dd6cf9b` CLI is installed. Follow-up #317 reduces repeated memory
+  request bodies using exact-hash reuse of an immutable repository-owned base.
+  Existing memory identity, projection, source provenance and retention stay
+  unchanged. Local synthetic transfer measurements and limits are recorded in
+  PULL_VALIDATION_PROGRESS.md; this does not close the remaining #290 latency work.

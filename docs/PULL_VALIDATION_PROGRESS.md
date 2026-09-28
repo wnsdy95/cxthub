@@ -535,3 +535,38 @@ A future separation of inherited-memory selection from authored memory would
 need backend/CLI/MCP reads, dependency retention, wire-version compatibility and
 promotion covered together. Existing attachments and original records remain
 preserved; no automatic data rewrite or deletion is enabled here.
+
+# Exact memory-body reuse (2026-09-29)
+
+`PUT /memory-reuses/{snapshotID}` version 1 reconstructs an attachment from an
+immutable memory object already owned by the same repository. Only the target
+snapshot, previous attachment hash and provider may differ. All body fields,
+typed claims, original source IDs, nil/empty collections and graft coverage are
+retained. The server verifies the complete expected digest hash before ordinary
+claim validation and causal CAS. On PostgreSQL, source read, authority recheck,
+object/pointer publication, revision and audit share the repository transaction.
+The source memory remains unchanged, including when its own snapshot has since
+received newer memory. This introduces no new memory identity or storage format.
+
+The CLI keeps at most 16 acknowledged body/object hash hints, scoped to the exact
+remote URL, repository and credential. The cache contains neither raw tokens
+nor memory bodies. A request pins its URL/credential through reuse and fallback;
+concurrent scope changes cannot publish hints into another scope. Bodies under
+4 KiB use the original transfer. A missing base or unsupported endpoint (404/405)
+falls back to the original typed/untyped attachment route and disables further
+reuse probes for that scope in the current client. CAS, authority, integrity,
+transport and acknowledgment failures never fall back or count as success.
+
+`TestMemoryReuseReducesWireBytesPreservingIdentity` sends 12 synthetic attachments
+of the same approximately 520 KB typed body with distinct target snapshots and
+alternating providers through the real HTTP client. Complete-body transfer would
+send 6,244,224 JSON bytes; reuse sent 522,623 bytes: one 520,352-byte full body and
+2,271 bytes in 11 reuse requests (91.6% less). Every resulting complete memory
+hash was verified. This measures request JSON bytes, excluding HTTP/TLS overhead,
+server hashing, storage, document transfer and queue wait. It is not a full-sync
+latency or cloud-throughput benchmark.
+
+Each new client process starts without hints. The first body, changed content,
+new scope and unsupported peer still use complete transfer. A process handling
+only one capture receives no reuse benefit. Existing at-rest chunk sharing and
+retention remain unchanged; independently stored capture memories are preserved.

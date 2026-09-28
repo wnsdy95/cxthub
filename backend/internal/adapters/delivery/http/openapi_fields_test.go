@@ -60,6 +60,7 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"RepositoryRevision", reflect.TypeOf(domain.RepositoryRevision{})},
 		{"EffectiveMemorySelection", reflect.TypeOf(domain.EffectiveMemorySelection{})},
 		{"MemoryPositions", reflect.TypeOf(domain.MemoryPositions{})},
+		{"MemoryReuse", reflect.TypeOf(inbound.MemoryReuse{})},
 		{"MemoryCodePosition", reflect.TypeOf(domain.MemoryCodePosition{})},
 		{"MemoryCodeScope", reflect.TypeOf(domain.MemoryCodeScope{})},
 		{"EffectiveMemoryPage", reflect.TypeOf(domain.EffectiveMemoryPage{})},

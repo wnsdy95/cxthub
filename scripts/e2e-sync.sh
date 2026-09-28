@@ -71,6 +71,9 @@ if [ -n "${CXT_E2E_CXT_BIN:-}" ]; then
 else
   ( cd "$ROOT/cli" && go build -o "$TMP/bin/cxt" ./cmd/cxt ) || { echo "cxt build failed"; exit 1; }
 fi
+if [ "${CXT_E2E_PUBLICATION_ONLY:-0}" != 1 ]; then
+  ( cd "$ROOT/cli" && go test -c -o "$TMP/bin/memory-reuse-test" ./internal/adapters/backendclient ) || exit 1
+fi
 export PATH="$TMP/bin:$PATH"
 export HOME="$TMP/home"; mkdir -p "$HOME"
 # The fixture must prove wrapper ownership through a real process ancestry.
@@ -590,6 +593,23 @@ source "$ROOT/scripts/e2e-context-history.inc.sh"
 source "$ROOT/scripts/e2e-publication.inc.sh"
 
 source "$ROOT/scripts/e2e-live-capture.inc.sh"
+
+echo "── R. Exact memory-body reuse through the real CLI client and API"
+REUSE_TOKEN=$(python3 - "$J" <<'PYREUSE'
+import pathlib,sys
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    fields=line.split('\t')
+    if len(fields)==7 and fields[5]=='cxt_session':
+        print(fields[6]); break
+PYREUSE
+)
+CXT_MEMORY_REUSE_TEST_URL="$B" CXT_MEMORY_REUSE_TEST_TOKEN="$REUSE_TOKEN" \
+  CXT_MEMORY_REUSE_TEST_REPO="$RID" "$TMP/bin/memory-reuse-test" \
+  -test.run '^TestMemoryReuseLiveProtocol$' -test.v >"$TMP/memory-reuse.out" 2>&1
+REUSE_EXIT=$?
+if [ "$REUSE_EXIT" != 0 ]; then cat "$TMP/memory-reuse.out"; fi
+expect "exact typed memory reused and verified by server" "$REUSE_EXIT" 0
+unset REUSE_TOKEN
 
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: All passed ✓"; else echo "SYNC E2E: Failures exist ✗"; fi
 exit "$FAIL"

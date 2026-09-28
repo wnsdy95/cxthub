@@ -28,7 +28,8 @@ type BackendClient struct {
 	identity domain.TeamIdentity
 	httpc    *http.Client
 	// chunks accesses local chunk store (optional — for pull delta, inject with SetChunkLocal).
-	chunks ChunkLocal
+	chunks      ChunkLocal
+	memoryReuse memoryReuseCache
 }
 
 // NewBackendClient creates a BackendClient.
@@ -375,6 +376,10 @@ func (c *BackendClient) PushMemory(ctx context.Context, repoID string, digest do
 	if err != nil {
 		return err
 	}
+	return c.pushMemoryWithReuse(ctx, repoID, digest, want)
+}
+
+func (c *BackendClient) pushMemoryFull(ctx context.Context, repoID string, digest domain.MemoryDigest, want domain.ContentHash) error {
 	var out struct {
 		MemoryHash domain.ContentHash `json:"memory_hash"`
 	}
