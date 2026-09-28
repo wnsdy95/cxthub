@@ -20,6 +20,9 @@ func TestCreationCommandSanitizesWithoutGuessing(t *testing.T) {
 		valid         bool
 	}{
 		{[]string{"git", "checkout", "-b", "x"}, "x", "HEAD", true},
+		{[]string{"git", "checkout", "-qb", "x"}, "x", "HEAD", true},
+		{[]string{"git", "switch", "-qc", "x", "main"}, "x", "main", true},
+		{[]string{"git", "switch", "-cx", "main"}, "x", "main", true},
 		{[]string{"git", "switch", "-c", "x", "main"}, "x", "main", true},
 		{[]string{"git", "-c", "http.extraHeader=secret", "-C", "/private/path", "branch", "x", "main"}, "x", "main", true},
 		{[]string{"git", "worktree", "add", "-b", "x", "/private/path with spaces", "main"}, "x", "main", true},

@@ -71,7 +71,34 @@ func runBirthVote(t *testing.T, cwd string, c *Container, phase, line string, gi
 	old := os.Stdin
 	os.Stdin = f
 	defer func() { os.Stdin = old }()
-	return runBranchTransaction(context.Background(), c, cwd, append([]string{phase}, gitPID...))
+	err = runBranchTransaction(context.Background(), c, cwd, append([]string{phase}, gitPID...))
+	// Unit fixtures have no creating Git process. Supply explicit synthetic
+	// creation evidence; tests for unavailable evidence clear it deliberately.
+	if err == nil && phase == "prepared" && len(gitPID) == 0 {
+		j, openErr := branchjournal.Open(context.Background(), cwd)
+		if openErr != nil {
+			return openErr
+		}
+		err = j.Transaction(context.Background(), func() error {
+			ops, readErr := j.List()
+			if readErr != nil {
+				return readErr
+			}
+			fields := strings.Fields(line)
+			for _, op := range ops {
+				if len(fields) != 3 || op.GitRef != fields[2] || op.Phase != "prepared" {
+					continue
+				}
+				op.Event.Creation = &domain.GitCreation{Evidence: "process-argv", Command: []string{"git", "branch", op.Event.Branch}, StartRef: "HEAD", StartCommit: op.Event.GitAfter}
+				op.Binding = freezeBranchBinding(cwd, op.Event)
+				if saveErr := j.Save(op); saveErr != nil {
+					return saveErr
+				}
+			}
+			return nil
+		})
+	}
+	return err
 }
 
 // Model the durable committed callback without starting the detached CLI helper
@@ -123,6 +150,10 @@ func TestBranchBirthDoesNotBorrowLaterCreationEvidence(t *testing.T) {
 				t.Fatalf("separate transactions collapsed: %+v", ops)
 			}
 			later := ops[1]
+			later.Binding = &branchjournal.BindingIntent{Kind: "birth"} // Independent fixture's creation-time decision.
+			if err := j.Transaction(ctx, func() error { return j.Save(later) }); err != nil {
+				t.Fatal(err)
+			}
 			runLifecycleGit(t, cwd, "branch", "reused")
 			if laterCallback {
 				commitBirthJournal(t, cwd, later.Event.ID)
@@ -192,7 +223,7 @@ func (s *birthTrackingSync) ResolveRemoteBranch(_ context.Context, in inbound.Sy
 	return s.target, nil
 }
 
-func TestBranchBirthReplayUsesOriginWorktreeConfig(t *testing.T) {
+func TestBranchBirthReplayUsesFrozenOriginWorktreeConfig(t *testing.T) {
 	for _, state := range []string{"present", "moved", "removed"} {
 		for _, tracking := range []bool{false, true} {
 			t.Run(state+"/tracking="+strconv.FormatBool(tracking), func(t *testing.T) {
@@ -228,7 +259,18 @@ func TestBranchBirthReplayUsesOriginWorktreeConfig(t *testing.T) {
 				runLifecycleGit(t, linked, "branch", "created")
 				j, _ := branchjournal.Open(ctx, cwd)
 				before, _ := j.List()
+				// Capture the source's inherited upstream during preparation.
+				runLifecycleGit(t, linked, "config", "--worktree", "branch.worktree-source.remote", ownerRemote)
+				runLifecycleGit(t, linked, "config", "--worktree", "branch.worktree-source.merge", "refs/heads/owner-task")
+				before[0].Event.Creation = &domain.GitCreation{Evidence: "process-argv", Command: []string{"git", "branch", "--track=inherit", "created", "worktree-source"}, StartRef: "worktree-source", StartCommit: oid, OriginBranch: "worktree-source", OriginBranchID: domain.LegacyContextBranchID(repo, "worktree-source")}
+				before[0].Binding = freezeBranchBinding(linked, before[0].Event)
+				if err := j.Transaction(ctx, func() error { return j.Save(before[0]) }); err != nil {
+					t.Fatal(err)
+				}
 				commitBirthJournal(t, cwd, before[0].Event.ID)
+				// Later config cannot reinterpret the retained birth or attachment.
+				runLifecycleGit(t, linked, "config", "--worktree", "branch.created.merge", "refs/heads/replay-task")
+				runLifecycleGit(t, linked, "config", "--worktree", "branch.worktree-source.merge", "refs/heads/replay-task")
 				if state == "moved" {
 					runLifecycleGit(t, cwd, "worktree", "move", linked, filepath.Join(t.TempDir(), "moved"))
 				} else if state == "removed" {
@@ -240,12 +282,6 @@ func TestBranchBirthReplayUsesOriginWorktreeConfig(t *testing.T) {
 				after, readErr := j.List()
 				if readErr != nil || len(after) != 1 {
 					t.Fatalf("journal: %+v %v", after, readErr)
-				}
-				if state == "removed" {
-					if err == nil || after[0].Phase != "committed" || after[0].Resolved || after[0].LastError == "" || len(remote.branches) != 0 {
-						t.Fatalf("missing owner configuration guessed an attachment: %+v calls=%v err=%v", after, remote.branches, err)
-					}
-					return
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -302,6 +338,7 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 				j, _ := branchjournal.Open(ctx, cwd)
 				before, _ := j.List()
 				if tracking {
+					before[0].Binding = nil // Legacy record: complete direct command evidence suffices.
 					before[0].Event.Creation = &domain.GitCreation{Evidence: "process-argv", Command: []string{"git", "branch", "--track", "relocated", "origin/team-task"}, StartRef: "origin/team-task", StartCommit: oid, OriginBranch: "team-task", OriginBranchID: domain.LegacyContextBranchID(repo, "team-task")}
 					if err := j.Transaction(ctx, func() error { return j.Save(before[0]) }); err != nil {
 						t.Fatal(err)
@@ -314,15 +351,7 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 					runLifecycleGit(t, cwd, "worktree", "move", linked, filepath.Join(t.TempDir(), "moved"))
 				}
 				err := replayBranchOperations(ctx, c, cwd)
-				if removal {
-					// Pruning the origin also deletes its config. No binding was
-					// resolved durably yet, so preserve the operation for recovery.
-					after, _ := j.List()
-					if err == nil || after[0].Phase != "committed" || after[0].Resolved || !reflect.DeepEqual(after[0].Event, before[0].Event) || len(remote.cwds) != 0 {
-						t.Fatalf("removed owner was resolved from another worktree: %+v calls=%v err=%v", after, remote.cwds, err)
-					}
-					return
-				}
+
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -866,6 +895,10 @@ func TestTrackingReplayDoesNotHoldTheGitCreationVoteDuringNetwork(t *testing.T) 
 	runLifecycleGit(t, cwd, "branch", "--track", "team-task", "origin/team-task")
 	journal, _ := branchjournal.Open(ctx, cwd)
 	operations, _ := journal.List()
+	operations[0].Binding = &branchjournal.BindingIntent{Kind: "attach", RemoteBranch: "team-task"}
+	if err := journal.Transaction(ctx, func() error { return journal.Save(operations[0]) }); err != nil {
+		t.Fatal(err)
+	}
 	commitBirthJournal(t, cwd, operations[0].Event.ID)
 	entered, release := make(chan struct{}), make(chan struct{})
 	c.Sync = waitingTrackingSync{entered: entered, release: release, target: domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: "team-task", Target: source}}
