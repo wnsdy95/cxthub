@@ -6,6 +6,26 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+ enterpriseIdentity: {
+  "title": "기업 계정 인증",
+  "note": "조직의 인증 제공자로 현재 브라우저 세션을 확인합니다. 구성원 권한을 추가하거나 SSO 로그인을 강제하지 않습니다.",
+  "unavailable": "운영자가 아직 기업 계정 연동을 활성화하지 않았습니다.",
+  "provider": "인증 제공자",
+  "verified": "현재 브라우저 인증 유효 기한",
+  "unverified": "현재 브라우저에서 인증하지 않았습니다. 최초 계정 연결은 CXTHub에 다시 로그인한 뒤 10분 이내에 진행해 주세요.",
+  "verify": "기업 계정으로 인증",
+  "empty": "연결된 인증 제공자가 없습니다.",
+  "configure": "OpenID Connect 설정",
+  "setupNote": "먼저 설정에서 회사 도메인을 검증하세요. 인증 제공자에 아래 콜백 주소를 등록하고 발급자 주소와 클라이언트 정보를 입력하세요. 저장하면 이전 세션의 인증은 무효화됩니다.",
+  "callback": "콜백 주소",
+  "domain": "검증된 회사 도메인",
+  "issuer": "발급자 주소",
+  "client_id": "클라이언트 ID",
+  "client_secret": "클라이언트 시크릿",
+  "method": "클라이언트 인증 방식",
+  "save": "인증 연결 저장",
+  "disable": "인증 연결 해제"
+},
  enterpriseDomains: {
   title: '도메인 소유 확인', name: '회사 도메인', request: 'DNS 확인 코드 만들기',
   note: 'DNS 관리 서비스에 아래 TXT 레코드를 추가한 뒤 확인하세요. 확인 결과는 30일간 이 도메인에만 유효합니다. 계정 연결, 멤버 추가, SSO 활성화는 별도입니다. 영문 또는 퓨니코드 도메인을 입력하세요.',
@@ -35,6 +55,7 @@ export const ko = {
   note: "조직 구성원만 팀에 참여할 수 있습니다. 레포지토리 권한은 직접 부여된 권한과 팀 권한 중 높은 권한이 적용됩니다.",
  },
  enterprise: {
+  identity: "계정 인증",
   title: "엔터프라이즈",
   create: "엔터프라이즈 만들기",
   name: "엔터프라이즈 이름",

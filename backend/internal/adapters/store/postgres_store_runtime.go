@@ -72,7 +72,7 @@ func (s *PostgresStore) AllowRequest(ctx context.Context, key string, limit int,
 	return tag.RowsAffected() == 1, err
 }
 func (s *PostgresStore) PruneRuntimeState(ctx context.Context, now time.Time) error {
-	for _, q := range []string{`DELETE FROM device_pairings WHERE code IN (SELECT code FROM device_pairings WHERE expires_at<=$1 LIMIT 1000)`, `DELETE FROM request_allowances WHERE key IN (SELECT key FROM request_allowances WHERE expires_at<=$1 LIMIT 1000)`} {
+	for _, q := range []string{`DELETE FROM enterprise_oidc_attempts WHERE hash IN (SELECT hash FROM enterprise_oidc_attempts WHERE expires_at<=$1 LIMIT 1000)`, `DELETE FROM enterprise_federation_sessions WHERE (enterprise_id,session_hash) IN (SELECT enterprise_id,session_hash FROM enterprise_federation_sessions WHERE expires_at<=$1 LIMIT 1000)`, `DELETE FROM device_pairings WHERE code IN (SELECT code FROM device_pairings WHERE expires_at<=$1 LIMIT 1000)`, `DELETE FROM request_allowances WHERE key IN (SELECT key FROM request_allowances WHERE expires_at<=$1 LIMIT 1000)`} {
 		if _, err := s.db(ctx).Exec(ctx, q, now); err != nil {
 			return err
 		}

@@ -35,13 +35,62 @@ The API uses the configured system DNS resolver; DNS provider credentials and
 automated DNS record creation are unnecessary. Test DNS responses are injected
 through the outbound resolver port, never through a production bypass flag.
 
+## OIDC browser verification
+
+The API can configure an Enterprise OIDC provider and explicitly link an existing
+CXTHub account to its signed issuer/subject. This is browser identity verification,
+not mandatory SSO enforcement or a new unauthenticated sign-in method. Existing
+repository grants remain authoritative. SAML and SCIM are still separate work.
+
+Operator setup: set `CXT_IDENTITY_ENCRYPTION_KEY` in the API service environment
+(or its private `.env`) to a cryptographically random, base64-encoded 32-byte key.
+Preserve the same key across API replicas and restarts; keep it out of PostgreSQL,
+frontend builds and the MCP environment. No key means the UI reports unavailable;
+an invalid configured key fails API startup. Back up the key separately from the
+database. Rotation/recovery tooling is not yet provided: do not replace a key
+while its encrypted connections or pending attempts are needed.
+
+An Enterprise owner first verifies a company domain, then opens **Identity** and
+registers the displayed callback URL with the IdP. Enter the exact HTTPS issuer,
+client ID, client secret and supported client authentication method. Configuration
+checks discovery and does not assert that client credentials have successfully
+logged in. A real authorization flow tests those credentials. Only public HTTPS
+provider endpoints on port 443 are supported; private-network IdPs are rejected.
+
+Members of the Enterprise or its organizations can verify their current browser.
+The initial explicit account link requires a CXTHub login within 10 minutes.
+Subsequent verification must return the same external subject; matching email
+never merges accounts or replaces a binding. Reconfiguration changes the revision
+and invalidates earlier session evidence. Disabling retains bindings/audit while
+removing the active connection; it grants no access. Moving a binding to a new
+external subject is not automatically supported.
+
+Authorization uses S256 PKCE, nonce and `max_age=0`. Signed RS256/ES256 identity
+tokens must match the exact issuer, audience/authorized party, nonce, expiry and
+recent authentication time. Only `openid` is requested. Access, refresh and ID
+tokens are discarded after verification. The server retains minimal issuer/subject
+and authentication evidence, with encrypted client credentials and PKCE material.
+
+The initiating browser session, connection revision and membership are rechecked
+before state consumption and again after exchange. Concurrent callbacks exchange
+only once. State consumption remains durable if the exchange fails; start again
+instead of replaying a code. Binding, session evidence and audit commit together.
+A different browser, CLI or MCP token gains no approval from this flow. MFA claims
+are retained as evidence but are not advertised as an enforced MFA policy.
+
+Provider discovery, token and key requests have bounded time/body sizes. Every
+network connection pins a validated public IP; environment proxies, redirects,
+private-address exceptions and insecure issuer/signature bypasses are disabled.
+Callback responses never echo provider errors/codes and prohibit caching/referrers.
+Reverse-proxy operators must also avoid logging callback query strings.
+
 ## Remaining implementation slices
 
 These are planned boundaries, not enabled policies or delivered SSO features:
 
-1. OIDC authorization code with PKCE and SP-initiated SAML. Validate issuer/entity,
-   audience, nonce/request correlation, signatures and replay. Keep attempts and
-   encrypted connection credentials server-side. Reject unsolicited SAML login.
+1. SP-initiated SAML, with entity/audience, request correlation, signature and
+   replay validation. Reject unsolicited login; retain encrypted connection keys.
+   Extend the implemented OIDC verification into policy-enforced sign-in.
 2. Bind the external issuer/subject to an explicitly authenticated existing account;
    never merge accounts solely on matching email. Carry credential-specific
    authentication time and MFA evidence into API, CLI and MCP authorization.

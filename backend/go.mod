@@ -2,17 +2,20 @@
 //
 // Complete-separation principle (the module boundary): the CLI and backend share no Go module.
 // Each side owns its domain types (intentional duplication); schemas/ is the contract source of truth.
-// External dependencies are limited to the PostgreSQL adapter (pgx) and at-rest compression.
+// External dependencies cover PostgreSQL, compression and maintained OIDC/JOSE protocol verification.
 module github.com/wnsdy95/cxthub/backend
 
 go 1.26.6
 
 require (
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/klauspost/compress v1.20.0
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

@@ -3,6 +3,26 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+ enterpriseIdentity: {
+  "title": "Enterprise identity",
+  "note": "Verify your current browser session with your organization’s identity provider. This does not grant membership or enable mandatory SSO.",
+  "unavailable": "Your operator has not enabled identity connections yet.",
+  "provider": "Identity provider",
+  "verified": "This browser session is verified until",
+  "unverified": "This browser session has not been verified. For a first-time account link, sign in to CXTHub again within 10 minutes.",
+  "verify": "Verify with identity provider",
+  "empty": "No identity provider is configured.",
+  "configure": "Configure OpenID Connect",
+  "setupNote": "Verify a company domain in Settings first. Register the callback below with your provider and enter its exact issuer and client credentials. Saving invalidates previous session verifications.",
+  "callback": "Callback URL",
+  "domain": "Verified company domain",
+  "issuer": "Issuer URL",
+  "client_id": "Client ID",
+  "client_secret": "Client secret",
+  "method": "Client authentication method",
+  "save": "Save identity connection",
+  "disable": "Disable identity connection"
+},
  enterpriseDomains: {
   title: 'Verified domains', name: 'Company domain', request: 'Create DNS challenge',
   note: 'Add the TXT record below in your DNS provider, then verify it. Verification lasts 30 days and covers this exact domain only. It does not connect accounts, add members or enable SSO. Use an ASCII or punycode domain name.',
@@ -32,6 +52,7 @@ export const en: Messages = {
   note: "Teams contain organization members. Repository access uses the highest valid direct or team grant.",
  },
  enterprise: {
+  identity: "Identity",
   title: "Enterprises",
   create: "Create enterprise",
   name: "Enterprise name",

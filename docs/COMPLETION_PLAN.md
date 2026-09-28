@@ -116,3 +116,9 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   during DNS lookup. This grants no identity or repository authority. Remaining
   federation, provisioning and enforcement slices are in ENTERPRISE_IDENTITY.md;
   the overall Enterprise identity/security plan is not complete.
+
+- OIDC browser verification adds encrypted provider credentials, PKCE/nonce,
+  durable single-use attempts and explicit issuer/subject binding to the initiating
+  browser session. Existing membership and repository access do not change.
+  Mandatory SSO, SAML, CLI/MCP assurance renewal and security policies are not yet
+  enabled; detailed boundaries are recorded in ENTERPRISE_IDENTITY.md.
