@@ -64,6 +64,7 @@ type Backend interface {
 	// MemoryDigest: snapshot derivative carried with the raw document (compatibility rules).
 	PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error)
 	PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error)
+	inbound.MemoryReuser
 	GetMemoryDigest(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error)
 	GetMemoryObject(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error)
 	// About + team default settings bundle (web editing).
@@ -236,6 +237,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putMemoryAttachment))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/memory-publications", s.guard(domain.RoleMember, s.publishMemoryArchive))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/typed-memory-attachments/{snapshotID}", s.guard(domain.RoleMember, s.putTypedMemoryAttachment))
+	mux.HandleFunc("PUT /api/v1/repos/{repoID}/memory-reuses/{snapshotID}", s.guard(domain.RoleMember, s.putMemoryReuse))
 	// In-progress context pointer: Write/Delete = context push layer (member), Read = pull/web layer (puller).
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending", s.guard(domain.RolePuller, s.listPending))
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/pending/{sessionID}", s.guard(domain.RoleMember, s.putPending))
@@ -814,6 +816,15 @@ func (s *Server) putMemoryAttachment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putTypedMemoryAttachment(w http.ResponseWriter, r *http.Request) {
 	s.putMemoryAttachmentVersion(w, r, true)
+}
+
+func (s *Server) putMemoryReuse(w http.ResponseWriter, r *http.Request) {
+	var in inbound.MemoryReuse
+	if !s.decode(w, r, &in) {
+		return
+	}
+	hash, err := s.b.ReuseMemoryDigest(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("snapshotID")), in)
+	s.respond(w, map[string]any{"memory_hash": hash}, err)
 }
 
 func (s *Server) putMemoryAttachmentVersion(w http.ResponseWriter, r *http.Request, typed bool) {

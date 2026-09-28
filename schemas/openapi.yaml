@@ -1198,6 +1198,29 @@ components:
           type: string
           format: date-time
 
+    MemoryReuse:
+      type: object
+      additionalProperties: false
+      required: [version, base_hash, memory_hash, provider]
+      properties:
+        version:
+          type: integer
+          enum: [1]
+        base_hash:
+          $ref: "#/components/schemas/ContentHash"
+        memory_hash:
+          $ref: "#/components/schemas/ContentHash"
+        previous_memory_hash:
+          $ref: "#/components/schemas/ContentHash"
+        provider:
+          type: string
+      description: |
+        Copy an immutable memory body owned by this repository to the path's
+        target snapshot. Version 1 changes only snapshot_id, previous_memory_hash
+        and provider. Every other field, including claims, provenance and graft
+        coverage, is preserved. memory_hash must match the reconstructed complete
+        digest exactly; this is not a request to project or merge memory.
+
     MemoryDigest:
       type: object
       description: "Summary of snapshot memory growth."
@@ -3264,6 +3287,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /repos/{repoID}/memory-reuses/{snapshotID}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - name: snapshotID
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/ContentHash"
+    put:
+      operationId: putMemoryReuse
+      summary: Reuse an identical repository-owned memory body
+      description: |
+        Requires member write authority, rechecked in the repository transaction.
+        Reads and verifies base_hash in this repository, reconstructs the exact
+        expected memory_hash, and advances the target attachment with normal
+        causal CAS. Source ownership, target blob/pointer, revision and audit are
+        protected by the PostgreSQL transaction. No refs or source memory change.
+        Exact retries are idempotent; divergent target parents return 409.
+        A missing base or old server endpoint permits full-body transfer through
+        the existing typed/untyped attachment route. Integrity, permission and
+        CAS failures must not be treated as successful reuse.
+      tags: [memories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryReuse"
+      responses:
+        "200":
+          description: Attachment advanced or already current.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [memory_hash]
+                properties:
+                  memory_hash:
+                    $ref: "#/components/schemas/ContentHash"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Current memory pointer differs from previous_memory_hash.
+        "422":
+          description: Invalid version, digest, claims, hash or causal parent.
 
   /repos/{repoID}/typed-memory-attachments/{snapshotID}:
     parameters:
