@@ -51,7 +51,7 @@ func (s *FileStore) RepairFromReplica(ctx context.Context, source *FileStore, re
 		}
 		if ref.Target != "" {
 			if _, err := source.GetSnapshot(ctx, ref.Target); err != nil {
-				return report, err
+				return report, fmt.Errorf("repair ref %s/%s points to %s absent from the verified source: %w", ref.Kind, ref.Name, ref.Target, err)
 			}
 		}
 	}

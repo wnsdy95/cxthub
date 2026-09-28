@@ -398,6 +398,10 @@ type SyncOutput struct {
 	Pulled int
 	// NewRefs is the list of refs updated/added after synchronization (includes branches created by forks).
 	NewRefs []domain.Ref
+	// FetchedRefs are the remote refs whose dependencies were verified by this
+	// pull, including fetch-only mode. They do not imply local ref adoption.
+	// Repair must use this observation, never fetch a newer independent manifest.
+	FetchedRefs []domain.Ref
 	// Conflicts is the list of ref names skipped during pull due to non-fast-forward. If not empty, the caller is advised to abort merge like git (can be adopted remotely with --force).
 	Conflicts []string
 	// RemoteAhead is the list of branches in the remote that have new context after the local — used by caller to hint "pull/load if needed" (not enforced).
