@@ -30,6 +30,44 @@ func NewAgentContextService(history inbound.HistoryQuery, memory outbound.Effect
 var _ inbound.PrepareAgentContext = (*AgentContextService)(nil)
 
 func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inbound.PrepareAgentContextInput) (domain.AgentContextPackage, error) {
+	// Only a repository revision race is retryable. Each attempt reauthorizes
+	// every source, while the first code/context selection remains fixed. Never
+	// treat a moved worktree, revoked permission or malformed source as contention.
+	var anchor *agentPreparationAnchor
+	if in.MemoryPin != nil {
+		pin := *in.MemoryPin
+		in.MemoryPin = &pin
+	}
+	var p domain.AgentContextPackage
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		p, err = s.prepareAgentContext(ctx, in, &anchor)
+		var contention *agentRevisionContention
+		// Explicit personal work is imported and authorized outside this service.
+		// Do not retry its cached reader without a fresh provenance check.
+		if !errors.As(err, &contention) || in.PersonalScope.Complete() || in.WorkStatePath != "" {
+			return p, err
+		}
+	}
+	return p, err
+}
+
+type agentPreparationAnchor struct {
+	position domain.ContentHash
+	branch   string
+	code     string
+	state    domain.ContentHash
+}
+
+type agentRevisionContention struct{ error }
+
+func (e *agentRevisionContention) Unwrap() error { return e.error }
+
+func retryAgentRevision(message string) error {
+	return &agentRevisionContention{fmt.Errorf("%w: %s", domain.ErrSelectionChanged, message)}
+}
+
+func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inbound.PrepareAgentContextInput, anchor **agentPreparationAnchor) (domain.AgentContextPackage, error) {
 	var p domain.AgentContextPackage
 	if err := ctx.Err(); err != nil {
 		return p, err
@@ -85,6 +123,12 @@ func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inboun
 	}
 	if err = validAgentHistory(view, in); err != nil {
 		return p, err
+	}
+	selected := agentPreparationAnchor{view.Position, view.Selection.Branch, view.Selection.CodeCommit, view.StateHash}
+	if *anchor == nil {
+		*anchor = &selected
+	} else if **anchor != selected {
+		return p, fmt.Errorf("%w: original code/context selection changed between preparation attempts", domain.ErrSelectionChanged)
 	}
 	p = domain.AgentContextPackage{Version: domain.AgentContextVersion, Policy: policy, Delivery: "prepared", Capability: "not_verified_for_native_replay", ArtifactOnly: in.ArtifactOnly}
 	if in.ArtifactOnly {
@@ -169,11 +213,17 @@ func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inboun
 		if err != nil {
 			return domain.AgentContextPackage{}, err
 		}
-		if !validEffectivePromptPage(page, req) || page.Revision.Graph != view.Revision.Graph || page.Revision.Evidence != view.Revision.Evidence || (state != "" && (page.StateHash != state || page.LineageHash != lineage || page.Total != total)) {
+		if !validEffectivePromptPage(page, req) {
 			return domain.AgentContextPackage{}, fmt.Errorf("%w: memory and context must share the same server revision", domain.ErrSelectionChanged)
 		}
 		if in.MemoryPin != nil && page.LineageHash != in.MemoryPin.MemoryHash {
 			return domain.AgentContextPackage{}, domain.ErrHashMismatch
+		}
+		if page.Revision.Graph != view.Revision.Graph || page.Revision.Evidence != view.Revision.Evidence {
+			return domain.AgentContextPackage{}, retryAgentRevision("memory and context revisions changed during preparation")
+		}
+		if state != "" && (page.StateHash != state || page.LineageHash != lineage || page.Total != total) {
+			return domain.AgentContextPackage{}, domain.ErrSelectionChanged
 		}
 		state, lineage, total = page.StateHash, page.LineageHash, page.Total
 		p.Content.Selection.MemoryStateHash = state
@@ -239,8 +289,11 @@ func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inboun
 	if err = validAgentHistory(after, in); err != nil {
 		return domain.AgentContextPackage{}, err
 	}
-	if after.StateHash != view.StateHash || after.Position != view.Position || after.Selection.Branch != view.Selection.Branch || after.Selection.CodeCommit != view.Selection.CodeCommit || after.Revision.Graph != view.Revision.Graph || after.Revision.Evidence != view.Revision.Evidence {
-		return domain.AgentContextPackage{}, domain.ErrSelectionChanged
+	if after.StateHash != view.StateHash || after.Position != view.Position || after.Selection.Branch != view.Selection.Branch || after.Selection.CodeCommit != view.Selection.CodeCommit {
+		return domain.AgentContextPackage{}, fmt.Errorf("%w: context revalidation (content_changed=%t, position_changed=%t, branch_changed=%t, code_changed=%t, graph_revision=%d->%d, evidence_revision=%d->%d)", domain.ErrSelectionChanged, after.StateHash != view.StateHash, after.Position != view.Position, after.Selection.Branch != view.Selection.Branch, after.Selection.CodeCommit != view.Selection.CodeCommit, view.Revision.Graph, after.Revision.Graph, view.Revision.Evidence, after.Revision.Evidence)
+	}
+	if after.Revision.Graph != view.Revision.Graph || after.Revision.Evidence != view.Revision.Evidence {
+		return domain.AgentContextPackage{}, retryAgentRevision(fmt.Sprintf("context revalidation (graph_revision=%d->%d, evidence_revision=%d->%d)", view.Revision.Graph, after.Revision.Graph, view.Revision.Evidence, after.Revision.Evidence))
 	}
 	if !emptyMemory {
 		req.Cursor = ""
@@ -248,7 +301,13 @@ func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inboun
 		if err != nil {
 			return domain.AgentContextPackage{}, err
 		}
-		if !validEffectivePromptPage(check, req) || check.StateHash != state || check.LineageHash != lineage || check.Revision.Graph != view.Revision.Graph || check.Revision.Evidence != view.Revision.Evidence {
+		if !validEffectivePromptPage(check, req) || check.LineageHash != lineage {
+			return domain.AgentContextPackage{}, fmt.Errorf("%w: memory revalidation (content_changed=%t, lineage_changed=%t, graph_revision=%d->%d, evidence_revision=%d->%d)", domain.ErrSelectionChanged, check.StateHash != state, check.LineageHash != lineage, view.Revision.Graph, check.Revision.Graph, view.Revision.Evidence, check.Revision.Evidence)
+		}
+		if check.Revision.Graph != view.Revision.Graph || check.Revision.Evidence != view.Revision.Evidence {
+			return domain.AgentContextPackage{}, retryAgentRevision("memory revision changed during revalidation")
+		}
+		if check.StateHash != state {
 			return domain.AgentContextPackage{}, domain.ErrSelectionChanged
 		}
 	}
