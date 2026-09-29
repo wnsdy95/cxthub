@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
 	"strings"
 
@@ -13,18 +12,22 @@ import (
 )
 
 func putReadIndexPG(ctx context.Context, tx pgx.Tx, doc domain.VerifiedSessionDoc) error {
+	plan, err := prepareReadIndexPG(ctx, doc)
+	if err != nil {
+		return err
+	}
+	return putPreparedReadIndexPG(ctx, tx, plan)
+}
+
+func putPreparedReadIndexPG(ctx context.Context, tx pgx.Tx, plan preparedReadIndexPG) error {
 	var exists bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM doc_read_indexes_v3 WHERE hash=$1)`, doc.Hash()).Scan(&exists); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM doc_read_indexes_v3 WHERE hash=$1)`, plan.hash).Scan(&exists); err != nil {
 		return err
 	}
 	if exists {
 		return nil
 	}
-	plan, err := doc.PlanReadIndex()
-	if err != nil {
-		return err
-	}
-	blocks := plan.Blocks()
+	blocks := plan.blocks
 	// Retain existing shared blocks until this document's references commit.
 	// Hash ordering also orders competing insertion of previously unseen blocks.
 	hashes := make([]domain.ContentHash, len(blocks))
@@ -85,16 +88,12 @@ func putReadIndexPG(ctx context.Context, tx pgx.Tx, doc domain.VerifiedSessionDo
 	if err = putReadBlockEventsPG(ctx, tx, fresh); err != nil {
 		return err
 	}
-	env, err := json.Marshal(plan.Envelope())
-	if err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO doc_read_indexes_v3(hash,version,envelope,event_count) VALUES($1,1,$2,$3)`, doc.Hash(), env, plan.EventCount()); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO doc_read_indexes_v3(hash,version,envelope,event_count) VALUES($1,1,$2,$3)`, plan.hash, plan.envelope, plan.eventCount); err != nil {
 		return err
 	}
 	_, err = tx.CopyFrom(ctx, pgx.Identifier{"doc_read_block_locations_v3"}, []string{"doc_hash", "first_event", "byte_offset", "block_hash"}, pgx.CopyFromSlice(len(blocks), func(i int) ([]any, error) {
 		b := blocks[i]
-		return []any{string(doc.Hash()), b.FirstEvent, int64(b.Offset), string(b.Hash)}, nil
+		return []any{string(plan.hash), b.FirstEvent, int64(b.Offset), string(b.Hash)}, nil
 	}))
 	return err
 }

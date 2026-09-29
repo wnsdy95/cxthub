@@ -1118,13 +1118,18 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 	if err := validateHash(repoID); err != nil {
 		return false, err
 	}
+	prepared, err := prepareVerifiedDocPG(ctx, doc)
+	if err != nil {
+		return false, err
+	}
+	return s.putPreparedDoc(ctx, repoID, prepared)
+}
+
+func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.ContentHash, prepared preparedDocPG) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if !doc.Valid() {
-		return false, domain.ErrIntegrity
-	}
-	canonical := doc.Bytes()
+	doc, canonical := prepared.doc, prepared.canonical
 	s.docProofs.put(docProofKey{repo: repoID, expected: doc.Hash(), representation: doc.Hash()}, doc.Reference())
 	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
@@ -1133,18 +1138,9 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 	defer tx.Rollback(ctx)
 	// Lock order is doc → chunks, matching GetDocManifest. A new manifest row is
 	// invisible until this transaction also stores its chunks and commits.
-	plan, chunked := domain.PlanDocChunks(canonical)
-	payloadSource := canonical
-	if chunked {
-		mb, merr := json.Marshal(plan.Manifest)
-		if merr != nil {
-			return false, merr
-		}
-		payloadSource = mb
-	}
-	payload := docCompress(payloadSource)
+	plan, chunked := prepared.chunks, prepared.chunked
 	ct, err := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`,
-		string(doc.Hash()), payload)
+		string(doc.Hash()), prepared.payload)
 	if err != nil {
 		return false, err
 	}
@@ -1192,11 +1188,7 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 				return false, err
 			}
 		}
-		mb, merr := json.Marshal(plan.Manifest)
-		if merr != nil {
-			return false, merr
-		}
-		if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, docCompress(mb), string(doc.Hash())); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE blobs SET bytes=$1 WHERE hash=$2`, prepared.payload, string(doc.Hash())); err != nil {
 			return false, err
 		}
 	} else if isMan {
@@ -1215,7 +1207,7 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 		string(repoID), string(doc.Hash())); err != nil {
 		return false, err
 	}
-	if err := putReadIndexPG(ctx, tx, doc); err != nil {
+	if err := putPreparedReadIndexPG(ctx, tx, prepared.read); err != nil {
 		return false, err
 	}
 	if err := storageWriteError(tx.Commit(ctx)); err != nil {

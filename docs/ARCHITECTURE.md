@@ -50,6 +50,18 @@ transaction boundary. Interface conformance is necessary but does not prove
 ACID: real PostgreSQL tests cover rollback, racing commands, authorization changes,
 revisions, leases and duplicate delivery against shared state.
 
+Document finalization separates pure preparation from publication. The worker
+renews its durable lease while the PostgreSQL adapter derives chunk boundaries
+and read-index blocks from an immutable verified document. Preparation acquires
+no database transaction and grants no ownership. A private prepared-publication
+handle then rechecks the current job version, lease and document hash inside the
+repository transaction. Chunk retention/integrity checks, selective search-row
+construction, quota accounting, ownership and the completion receipt still
+commit together. The lease is not renewed concurrently with the locked job row.
+An expired or replaced worker cannot publish its prepared result. This reduces
+CPU work under the repository lock; it does not remove database contention or
+make document publication cost-independent of document size.
+
 ## CLI native capture and local retry work
 
 `SessionCapture` is injected into save/stash use cases. Its adapter owns native

@@ -150,10 +150,18 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 		}
 	}()
 	verified, err := s.verifyDocJob(work, j)
+	var publication outbound.PreparedDocPublication
+	if err == nil {
+		publication, err = st.PrepareDocJob(work, verified)
+	}
 	stop()
 	<-renewed
+	// Preparation may succeed before an in-flight renewal cancels the work.
 	if err == nil {
-		err = st.CompleteDocJob(work, j, verified, time.Now().UTC())
+		err = work.Err()
+	}
+	if err == nil {
+		err = publication.Complete(work, j, time.Now().UTC())
 	}
 	if err == nil {
 		return nil

@@ -273,3 +273,22 @@ func (s *FSStore) CompleteDocJob(ctx context.Context, j domain.DocFinalizationJo
 	old.LeaseUntil = time.Time{}
 	return s.writeDocJob(old)
 }
+
+type fsDocPublication struct {
+	store *FSStore
+	doc   domain.VerifiedSessionDoc
+}
+
+func (s *FSStore) PrepareDocJob(ctx context.Context, doc domain.VerifiedSessionDoc) (outbound.PreparedDocPublication, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !doc.Valid() {
+		return nil, domain.ErrIntegrity
+	}
+	return fsDocPublication{s, doc}, nil
+}
+
+func (p fsDocPublication) Complete(ctx context.Context, j domain.DocFinalizationJob, now time.Time) error {
+	return p.store.CompleteDocJob(ctx, j, p.doc, now)
+}
