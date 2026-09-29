@@ -214,3 +214,13 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   OAuth wire regressions, OpenAPI drift, public-tree checks and real Git-hook
   PostgreSQL E2E passed. The pre-change replay regression failed as expected;
   the fixed version blocks the entire affected grant while retaining peers.
+- Prerequisite #320 shipped in #321; independent API/MCP processes use the shared
+  PostgreSQL grant state and the local services run the merged binaries.
+- Credential-assurance work #322 adds explicit per-Enterprise CLI/MCP approvals,
+  exact browser/credential binding, a revisioned 1–24 hour lifetime (default 8),
+  and audit in the identity transaction. Protocol-envelope validity and recorded
+  session life are distinct; SAML IdP session limits still apply. Refresh preserves
+  original authentication and cannot renew approval. API/UI expose server-computed
+  state and non-bearer selectors. Mandatory policy enforcement and recoverable-owner
+  activation remain the next security boundary; this feature alone does not
+  restrict repository reads/writes or declare SSO/MFA enforced.

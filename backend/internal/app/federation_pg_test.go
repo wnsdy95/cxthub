@@ -25,6 +25,7 @@ type fakeOIDC struct {
 	exchanges      atomic.Int32
 	beforeExchange func()
 	subject        string
+	proofTTL       time.Duration
 }
 
 func (f *fakeOIDC) Authorize(_ context.Context, c outbound.OIDCSettings, state, nonce, verifier string) (string, error) {
@@ -35,7 +36,11 @@ func (f *fakeOIDC) Exchange(_ context.Context, c outbound.OIDCSettings, code, no
 	if f.beforeExchange != nil {
 		f.beforeExchange()
 	}
-	return outbound.FederationProof{Issuer: c.Issuer, Subject: f.subject, AuthenticatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour), AMR: []string{"mfa"}}, nil
+	ttl := f.proofTTL
+	if ttl == 0 {
+		ttl = time.Hour
+	}
+	return outbound.FederationProof{Issuer: c.Issuer, Subject: f.subject, AuthenticatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(ttl), AMR: []string{"mfa"}}, nil
 }
 
 type federationFixture struct {

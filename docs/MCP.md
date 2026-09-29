@@ -171,6 +171,12 @@ It does not renew any SSO authentication evidence. Another consent by the same
 user and client has a different ID. Tokens and retained refresh references contain
 only hashes at rest; grant IDs are identifiers, not bearer credentials.
 
+An Enterprise member can explicitly approve one own grant after recent browser
+OIDC/SAML verification. This records credential-specific identity evidence; refresh
+does not extend its original authentication time or approval deadline. It neither
+grants repository access nor activates mandatory SSO/MFA. See
+[Enterprise credential approvals](ENTERPRISE_IDENTITY.md#cli-and-mcp-identity-approvals).
+
 Presenting an already consumed, unexpired refresh token revokes its authorization,
 including its replacement refresh and related access tokens, before returning
 `invalid_grant`. A foreign client cannot trigger this revocation. Clients must

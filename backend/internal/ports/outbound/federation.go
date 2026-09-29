@@ -19,6 +19,8 @@ type FederationProof struct {
 	Issuer, Subject, ACR       string
 	AMR                        []string
 	AuthenticatedAt, ExpiresAt time.Time
+	// Optional SAML SessionNotOnOrAfter. Distinct from assertion/token expiry.
+	SessionExpiresAt *time.Time
 }
 
 // OIDCProvider validates the protocol. The application must separately bind and

@@ -84,6 +84,54 @@ private-address exceptions and insecure issuer/signature bypasses are disabled.
 Callback responses never echo provider errors/codes and prohibit caching/referrers.
 Reverse-proxy operators must also avoid logging callback query strings.
 
+## CLI and MCP identity approvals
+
+Enterprise **Identity → CLI and MCP identity approvals** lists only the current
+browser user's live CLI credentials and individual MCP grants. Select a connection
+you recognize after verifying this exact browser with OIDC or SAML within ten
+minutes. One approval applies to one credential and one Enterprise. Matching email,
+user, client name, token creation time or device label never transfers approval.
+CLI selectors are random non-bearer IDs, not display hints or token hashes. Legacy
+MCP credentials appear only after a successful refresh upgrade or fresh consent.
+
+An owner can set **Maximum approval duration** from 1 to 24 hours (default 8).
+Time starts at the provider's original signed authentication time. The browser's
+original expiry, the target credential/grant expiry and any SAML
+`SessionNotOnOrAfter` bound it further. Token refresh and repeated approval do not
+renew authentication or extend that deadline. Changing the duration invalidates
+previous evidence; it does not stretch existing approvals. A shorter credential
+expiry captured at approval remains a bound even if the MCP grant later refreshes.
+
+ID-token `exp` and SAML assertion/confirmation `NotOnOrAfter` govern initial
+protocol acceptance, not the separately recorded authenticated session lifetime.
+All protocol expiry checks still run. In SAML the pending, single-use browser
+completion is also capped by the assertion deadline and two minutes. Only a fully
+completed, verified flow creates usable evidence. Existing pre-0070 proofs have
+no policy/domain provenance and require verification again; they are never
+silently extended. The optional IdP session bound is retained independently.
+See [OIDC Core §2](https://openid.net/specs/openid-connect-core-1_0.html#IDToken)
+and [SAML Core §2.7.2](https://docs.oasis-open.org/security/saml/v2.0/saml-core-2.0-os.pdf).
+
+Approval and audit commit atomically with fresh checks of browser ownership,
+membership, identity binding, connection/policy revision, DNS observation and
+target lifecycle. Reads recompute validity; they do not trust a stored `approved`
+flag. Domain challenge renewal changes provenance and requires new verification.
+Revoking an approval preserves the CLI/MCP credential, data, membership and audit.
+Revoking the credential itself makes its approval unusable. Browser logout prevents
+new approvals; it does not undo approvals already issued to separate credentials.
+
+Apply migration 0070 before the compatible API/MCP binaries. This is PostgreSQL-only
+and uses the shared identity transaction; the FS adapter reports unavailable.
+No machine token/hash, external subject or bearer proof is returned to the UI.
+The UI refreshes on focus, manual refresh and displayed deadlines, without a
+periodic polling loop.
+
+This is explicit verification evidence, **not mandatory SSO/MFA enforcement**.
+No repository permission changes. ACR/AMR are retained without inferring MFA.
+Common authenticated-credential checks for reads and transactional writes,
+recoverable-owner policy activation, SCIM and customer IdP acceptance remain
+separate delivery steps. No customer IdP or enforced policy is activated locally.
+
 ## SAML browser verification
 
 SAML uses the same API-only `CXT_IDENTITY_ENCRYPTION_KEY` and PostgreSQL identity
@@ -202,9 +250,9 @@ not permission to discard a connection or bind a different identity.
 The credential foundation now persists a separate MCP authorization per consent,
 retains its identity through rotation, and revokes that authorization on refresh
 reuse. CLI credentials already have individual stored token hashes. These are
-identifiers for a future explicit assurance flow, not IdP verification or MFA
-proof. Browser verification remains bound to its exact browser session. No SSO
-evidence is copied to either CLI or MCP by this foundation. See [MCP lifecycle](MCP.md#authentication-and-authorization)
+identifiers, not IdP verification or MFA proof. The explicit approval flow above
+can attach recent browser evidence to one of these credentials. Issuance and refresh
+never copy evidence automatically. See [MCP lifecycle](MCP.md#authentication-and-authorization)
 and [OAuth refresh security](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14.2).
 
 These are planned boundaries, not enabled policies or delivered SSO features:

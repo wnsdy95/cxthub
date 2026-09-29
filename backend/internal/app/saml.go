@@ -113,8 +113,18 @@ func (s *IdentityService) GetSAMLView(ctx context.Context, actor, id, token stri
 			if err != nil && !errors.Is(err, domain.ErrNotFound) {
 				return out, err
 			}
-			if err == nil && proof.Protocol == "saml" && proof.UserID == actor && proof.ConnectionRevision == c.Revision && time.Now().Before(proof.ExpiresAt) && s.verifiedSAMLDomain(ctx, c) == nil {
-				out.VerifiedUntil = &proof.ExpiresAt
+			if err == nil && proof.Protocol == "saml" && proof.UserID == actor {
+				as, err := s.assuranceStore()
+				if err != nil {
+					return out, err
+				}
+				valid, err := s.federationProofCurrent(ctx, as, proof, time.Now())
+				if err != nil {
+					return out, err
+				}
+				if valid {
+					out.VerifiedUntil = &proof.ExpiresAt
+				}
 			}
 		}
 	}
@@ -360,11 +370,16 @@ func (s *IdentityService) ReceiveSAML(ctx context.Context, id, state string, raw
 		if proof.Issuer != current.Issuer || proof.Subject == "" || len(proof.Subject) > 1024 || proof.AssertionID == "" || len(proof.AssertionID) > 256 || !time.Now().Before(proof.ExpiresAt) {
 			return domain.ErrUnauthorized
 		}
-		expires := proof.ExpiresAt
-		if sess.ExpiresAt.Before(expires) {
-			expires = sess.ExpiresAt
+		a.Proof, err = s.makeFederationSession(ctx, id, "saml", current.Revision, current.Domain, sess, proof.FederationProof)
+		if err != nil {
+			return err
 		}
-		a.Proof = domain.FederationSession{EnterpriseID: id, Protocol: "saml", SessionHash: a.SessionHash, ConnectionRevision: current.Revision, UserID: a.UserID, Issuer: proof.Issuer, Subject: proof.Subject, AuthenticatedAt: proof.AuthenticatedAt, ExpiresAt: expires, ACR: proof.ACR}
+		// The short assertion acceptance window still bounds the pending
+		// browser completion. It does not become the final assurance lifetime.
+		expires := proof.ExpiresAt
+		if a.Proof.ExpiresAt.Before(expires) {
+			expires = a.Proof.ExpiresAt
+		}
 		a.AssertionID = proof.AssertionID
 		a.Received = true
 		a.FinishHash = domain.HashToken(finish)
@@ -405,6 +420,17 @@ func (s *IdentityService) CompleteSAML(ctx context.Context, token, finish string
 		identity := domain.FederationIdentity{EnterpriseID: a.EnterpriseID, Protocol: "saml", Issuer: a.Proof.Issuer, Subject: a.Proof.Subject, UserID: a.UserID, CreatedAt: time.Now().UTC()}
 		if err = st.PutFederationIdentity(ctx, identity); err != nil {
 			return "", err
+		}
+		as, err := s.assuranceStore()
+		if err != nil {
+			return "", err
+		}
+		valid, err := s.federationProofCurrent(ctx, as, a.Proof, time.Now())
+		if err != nil {
+			return "", err
+		}
+		if !valid {
+			return "", domain.ErrConflict
 		}
 		if err = st.PutFederationSession(ctx, a.Proof); err != nil {
 			return "", err

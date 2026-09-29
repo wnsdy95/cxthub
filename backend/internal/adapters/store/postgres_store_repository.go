@@ -335,8 +335,8 @@ func (s *PostgresStore) GetSession(ctx context.Context, token string) (domain.Se
 	}
 	var sess domain.Session
 	err := s.db(ctx).QueryRow(ctx,
-		`SELECT token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,'') FROM sessions WHERE token=$1`, token).
-		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID)
+		`SELECT token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,''), credential_id FROM sessions WHERE token=$1`, token).
+		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID, &sess.CredentialID)
 	if err != nil {
 		return domain.Session{}, mapNoRows(err)
 	}
@@ -356,9 +356,9 @@ func (s *PostgresStore) ConsumeSession(ctx context.Context, token, kind, label s
 	var sess domain.Session
 	err := s.db(ctx).QueryRow(ctx,
 		`DELETE FROM sessions WHERE token=$1 AND kind=$2 AND label=$3
-		 RETURNING token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,'')`,
+		 RETURNING token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,''), credential_id`,
 		token, kind, label).
-		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID)
+		Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID, &sess.CredentialID)
 	if err != nil {
 		return domain.Session{}, mapNoRows(err)
 	}
@@ -381,7 +381,7 @@ func (s *PostgresStore) ListSessionsForUser(ctx context.Context, userID string) 
 		return nil, err
 	}
 	rows, err := s.db(ctx).Query(ctx,
-		`SELECT token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,'') FROM sessions WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+		`SELECT token, user_id, created_at, expires_at, COALESCE(hint,''), COALESCE(kind,''), COALESCE(label,''), COALESCE(grant_id,''), credential_id FROM sessions WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +389,7 @@ func (s *PostgresStore) ListSessionsForUser(ctx context.Context, userID string) 
 	var out []domain.Session
 	for rows.Next() {
 		var sess domain.Session
-		if err := rows.Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID); err != nil {
+		if err := rows.Scan(&sess.Token, &sess.UserID, &sess.CreatedAt, &sess.ExpiresAt, &sess.Hint, &sess.Kind, &sess.Label, &sess.GrantID, &sess.CredentialID); err != nil {
 			return nil, err
 		}
 		if err := domain.ValidateSessionRecord(sess); err != nil {
