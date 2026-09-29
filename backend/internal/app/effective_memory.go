@@ -125,7 +125,7 @@ func (s *Service) queryEffectiveMemory(ctx context.Context, repo domain.ContentH
 			return out, domain.ErrValidation
 		}
 		if cursor.State != out.StateHash {
-			return out, fmt.Errorf("%w: effective memory changed; restart without cursor", domain.ErrConflict)
+			return out, domain.ErrEffectiveMemoryCursorStale
 		}
 		offset = cursor.Index
 	}

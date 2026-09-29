@@ -2,6 +2,8 @@ package backendclient
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 	"net/http"
@@ -29,5 +31,9 @@ func (c *BackendClient) QueryEffectiveMemory(ctx context.Context, repo string, i
 	// Server item pages are <=256 KiB; reserve bounded space for metadata and
 	// JSON string escaping. A proxy or old server cannot force an archive download.
 	err := c.doLimited(ctx, http.MethodGet, c.reposPath(repo)+"/effective-memory?"+q.Encode(), nil, &out, 320<<10)
+	var responseErr *HTTPError
+	if errors.As(err, &responseErr) && responseErr.Status == http.StatusConflict && responseErr.Code == "memory_cursor_stale" {
+		return out, fmt.Errorf("%w: %w", domain.ErrEffectiveMemoryCursorStale, err)
+	}
 	return out, err
 }

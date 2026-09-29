@@ -51,11 +51,7 @@ func selectedPullApplication(store *storage.FileStore, remote *backendclient.Bac
 		if err := service.InitializeSelection(ctx, app.SelectedPullInput{Cwd: cwd}); err != nil {
 			return outbound.SelectedPullReceipt{}, err
 		}
-		plan, err := service.Preview(ctx, app.SelectedPullInput{Cwd: cwd})
-		if err != nil {
-			return outbound.SelectedPullReceipt{}, err
-		}
-		return service.Apply(ctx, cwd, plan)
+		return service.ApplyCurrent(ctx, app.SelectedPullInput{Cwd: cwd})
 	}
 }
 

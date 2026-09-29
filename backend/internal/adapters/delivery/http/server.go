@@ -1280,6 +1280,8 @@ func mapError(err error) (code string, status int) {
 		return "unsupported_cir_version", http.StatusConflict
 	case errors.Is(err, domain.ErrJoinPreviewChanged):
 		return "join_preview_changed", http.StatusConflict
+	case errors.Is(err, domain.ErrEffectiveMemoryCursorStale):
+		return "memory_cursor_stale", http.StatusConflict
 	case errors.Is(err, domain.ErrConflict):
 		return "conflict", http.StatusConflict
 	case errors.Is(err, domain.ErrValidation):

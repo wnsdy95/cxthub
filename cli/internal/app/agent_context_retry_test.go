@@ -409,3 +409,60 @@ func TestAgentPreparationRetryAttemptTwoReauthorizesEveryRead(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentPreparationStaleMemoryCursorRestartsOnlyContinuation(t *testing.T) {
+	for _, kind := range []string{"stale", "generic", "initial"} {
+		t.Run(kind, func(t *testing.T) {
+			svc, in, h, m, _ := agentServiceFixture(t)
+			calls := 0
+			stale := false
+			conflict := errors.New("generic conflict")
+			svc.memory = promptReadFunc(func(ctx context.Context, repo string, req domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
+				calls++
+				if kind == "initial" {
+					return domain.EffectiveMemoryPage{}, domain.ErrEffectiveMemoryCursorStale
+				}
+				if req.Cursor != "" && !stale {
+					if kind == "generic" {
+						return domain.EffectiveMemoryPage{}, conflict
+					}
+					stale = true
+					revision := *h.view.Revision
+					revision.Evidence++
+					h.view.Revision = &revision
+					m.rev = revision
+					return domain.EffectiveMemoryPage{}, domain.ErrEffectiveMemoryCursorStale
+				}
+				page, err := m.QueryEffectiveMemory(ctx, repo, req)
+				index := 0
+				if req.Cursor != "" {
+					index = 1
+				}
+				page.Items = []domain.EffectiveMemoryItem{{ID: agentHash(fmt.Sprint("claim", index)), SourceSnapshot: in.SnapshotID, Kind: "decision", Text: fmt.Sprint("decision ", index), State: "retained", Reason: "project_decision"}}
+				page.Total = 2
+				page.StateHash = agentHash(fmt.Sprint("memory rev", m.rev.Evidence))
+				if req.Cursor == "" {
+					page.NextCursor = fmt.Sprint("cursor-", m.rev.Evidence)
+				} else if req.Cursor != fmt.Sprint("cursor-", m.rev.Evidence) {
+					t.Fatal("reused stale cursor")
+				}
+				return page, err
+			})
+			got, err := svc.PrepareAgentContext(context.Background(), in)
+			switch kind {
+			case "stale":
+				if err != nil || len(got.Content.ProjectMemory) != 2 || got.Content.Selection.EvidenceRevision != 5 || calls != 5 || h.calls != 3 {
+					t.Fatalf("mixed or incomplete retry: %v memory=%d query=%d", err, calls, h.calls)
+				}
+			case "generic":
+				if !errors.Is(err, conflict) || calls != 2 || h.calls != 1 {
+					t.Fatalf("retried generic conflict: %v memory=%d", err, calls)
+				}
+			case "initial":
+				if !errors.Is(err, domain.ErrEffectiveMemoryCursorStale) || calls != 1 || h.calls != 1 {
+					t.Fatalf("retried initial cursor error: %v memory=%d", err, calls)
+				}
+			}
+		})
+	}
+}

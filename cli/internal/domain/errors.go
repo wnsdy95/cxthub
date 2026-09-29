@@ -60,6 +60,10 @@ var ErrNotGitRepo = errors.New("not a git repository (or any of the parent direc
 // ErrSelectionChanged stops prompt installation after a concurrent worktree move.
 var ErrSelectionChanged = errors.New("context selection changed")
 
+// ErrEffectiveMemoryCursorStale identifies the server's explicit stale effective-memory
+// cursor response. Callers must revalidate selection and content before retrying.
+var ErrEffectiveMemoryCursorStale = errors.New("effective memory cursor stale")
+
 // ErrMemoryContention means concurrent writers prevented bounded replay; it
 // does not establish divergence and must never suggest a forced pull.
 var ErrMemoryContention = errors.New("memory attachment kept changing during upload")
