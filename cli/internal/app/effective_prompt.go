@@ -200,6 +200,11 @@ func validEffectivePromptPage(p domain.EffectiveMemoryPage, r domain.EffectiveMe
 	if p.Content != r.Content || (p.Content != "claims" && p.Content != "prompt") || p.Selection != r.Selection || domain.ValidateContentHash(p.StateHash) != nil || domain.ValidateContentHash(p.LineageHash) != nil || p.Total < 0 || p.Total > 16384 || len(p.Items) > r.Limit || len(p.NextCursor) > 1024 || (p.NextCursor != "" && len(p.Items) == 0) {
 		return false
 	}
+	// Reject impossible page counts before interpreting a different revision as
+	// retryable contention. The first page also proves whether a cursor is needed.
+	if len(p.Items) > p.Total || (r.Cursor == "" && ((p.NextCursor == "" && len(p.Items) != p.Total) || (p.NextCursor != "" && len(p.Items) >= p.Total))) {
+		return false
+	}
 	seen := map[domain.ContentHash]bool{}
 	for _, i := range p.Items {
 		if domain.ValidateContentHash(i.ID) != nil || domain.ValidateContentHash(i.SourceSnapshot) != nil || seen[i.ID] || len(i.Text) > 8192 || strings.TrimSpace(i.Text) == "" || !utf8.ValidString(i.Text) || len(i.Reason) > 128 {

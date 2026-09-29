@@ -113,6 +113,14 @@ chronological order. A turn exceeding the transfer byte bound is reported as
 such, separately from token capacity. No source archive is shortened. Context
 and memory authorization/revisions are checked again before materialization.
 
+If only the server revision changes while preparing input, the reader makes at
+most three complete attempts. It fixes the original snapshot, branch, code and
+context content across those attempts, discards partial pages, and reauthorizes
+the reads. An observed selection change, denied access or invalid source stops
+immediately. Persistent contention still returns `position_changed`. Explicit
+personal work does not use this retry because its imported provenance must be
+checked again by a new invocation.
+
 Strict native history delivery requires verified host/model capacity, tokenizer,
 framing reservations and compaction threshold. **This build does not yet ship a
 verified native combination**, so the three launch examples above currently
