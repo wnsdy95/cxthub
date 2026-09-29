@@ -20,7 +20,7 @@ func verifiedAssuranceFixture(t *testing.T) (federationFixture, domain.Session, 
 	ctx := systemTestContext()
 	s := f.team.identity
 	actor := f.team.owner.ID
-	cli, err := s.issueSession(ctx, actor, "cxt_", "cli", "test terminal", 24*time.Hour)
+	cli, err := s.issueSession(ctx, actor, "sess_cli_", "cli", "test terminal", 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestPGCredentialAssuranceRejectsWrongCredentialAndStaleProof(t *testing.T) 
 	if err = s.ApproveCredential(ctx, actor, ep, f.session.Token, c.ID, bad); !errors.Is(err, domain.ErrConflict) {
 		t.Fatal("stale", err)
 	}
-	foreign, err := s.issueSession(ctx, f.team.outsider.ID, "cxt_", "cli", "foreign", time.Hour)
+	foreign, err := s.issueSession(ctx, f.team.outsider.ID, "sess_cli_", "cli", "foreign", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
