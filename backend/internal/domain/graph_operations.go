@@ -247,8 +247,13 @@ func graphOperations(v RepositoryView, x *graphStateIndex, state GraphState, sem
 		m := &out.Merges[i]
 		m.RepresentedGrafts = []ContentHash{}
 		m.RedirectChildren = []ContentHash{}
+		activeIDs := x.from(branchTargets[m.Scope]).ids
 		for _, r := range movements[m.Scope] {
-			if r.at.After(m.CreatedAt) && r.next != "" && reaches(r.old, m.After) && !reaches(r.next, r.old) {
+			// A rewind removes the old placement only while the destination
+			// no longer contains its displaced tip. Returning to that tip (or
+			// a descendant) restores the checkpoint path. A peer branch's
+			// reachability and the mere presence of the PR source do not.
+			if r.at.After(m.CreatedAt) && r.next != "" && reaches(r.old, m.After) && !reaches(r.next, r.old) && !activeIDs.has(r.old) {
 				m.Withdrawn = true
 			}
 		}
@@ -262,7 +267,6 @@ func graphOperations(v RepositoryView, x *graphStateIndex, state GraphState, sem
 				}
 			}
 		}
-		activeIDs := x.from(branchTargets[m.Scope]).ids
 		for _, s := range v.Snapshots {
 			if m.HistoricalOnly || m.Withdrawn || segment.has(s.ID) || (!publications[m.Scope][s.ID] && state.SnapshotScopes[s.Branch] != m.Scope) || !activeIDs.has(s.ID) {
 				continue

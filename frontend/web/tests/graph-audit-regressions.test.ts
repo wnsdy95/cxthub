@@ -39,6 +39,14 @@ const rewound = projectBranchGraph([...source, current], [ref('main', 'feature',
 assert.equal(rewound.pinHead, 'feature', 'rewind must not reactivate an old completed placement');
 assert.deepEqual(rewound.snapshots.find(s => s.id === 'current')?.parents, ['feature']);
 
+const returned = snap('returned', 'main', ['current'], 9);
+const restored = projectBranchGraph([...source, current, returned], [ref('main', 'returned', 'main-id')],
+  [mainBirth, birth, done, rewind, { ...rewind, id: 'return', source: 'feature', target: 'returned', created_at: at(9) }], [], 'returned', 'main');
+assert.deepEqual(restored.snapshots.find(s => s.id === 'current')?.parents, [merged], 'return restores the displaced checkpoint placement');
+for (const id of ['returned', 'current', merged]) {
+  assert.equal(layoutGraph(restored.snapshots, restored.pinHead).rows.find(r => r.snap.id === id)?.lane, 0, `${id} must remain on main`);
+}
+
 const pending: Pending = { repo_id: 'repo', session_id: 'live', branch: 'main', provider: 'codex', target: 'C', updated_at: at(3) };
 const chain = [snap('A', 'main', [], 0), snap('B', 'main', ['A'], 1, 'hook: older'), snap('C', 'main', ['B'], 2, 'hook: latest')];
 const refs = [ref('main', 'A')];
