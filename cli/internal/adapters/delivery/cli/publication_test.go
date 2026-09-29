@@ -189,7 +189,10 @@ func TestCommitPublicationUsesOwnOutputsDuringConcurrentPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	read, release := make(chan struct{}), make(chan struct{})
-	c.Save = publicationSaveFunc(func(_ context.Context, _ inbound.SaveInput) (inbound.SaveOutput, error) {
+	c.Save = publicationSaveFunc(func(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+		if in.Provider != domain.ProviderClaude {
+			return inbound.SaveOutput{}, domain.ErrNoActiveSession
+		}
 		// A real successful Save durably records this exact observation before
 		// returning, even if another pass subsequently changes the cursor.
 		if err := c.History.SelectPosition(ctx, domain.WorkingPosition{RepoID: repo, Branch: "main", GitCommit: gitOut(cwd, "rev-parse", "HEAD"), Snapshot: own}); err != nil {
@@ -256,7 +259,10 @@ func TestCommitPublicationRejectsChangedGitIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			old := gitOut(cwd, "rev-parse", "HEAD")
-			c.Save = publicationSaveFunc(func(_ context.Context, _ inbound.SaveInput) (inbound.SaveOutput, error) {
+			c.Save = publicationSaveFunc(func(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+				if in.Provider != domain.ProviderClaude {
+					return inbound.SaveOutput{}, domain.ErrNoActiveSession
+				}
 				if change == "sha" {
 					runLifecycleGit(t, cwd, "commit", "--allow-empty", "-qm", "concurrent commit")
 				} else {
@@ -286,6 +292,9 @@ func TestCommitSelectedTranscriptDisappearingRemainsPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Save = publicationSaveFunc(func(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+		if in.Provider != domain.ProviderCodex {
+			return inbound.SaveOutput{}, domain.ErrNoActiveSession
+		}
 		if in.SessionPath != path {
 			t.Fatalf("exact session was not selected: %+v", in)
 		}
@@ -299,7 +308,7 @@ func TestCommitSelectedTranscriptDisappearingRemainsPending(t *testing.T) {
 		t.Fatalf("missing selected transcript was treated as inactive: %v", err)
 	}
 	passes := capturePasses(t, cwd)
-	if len(passes) != 1 || passes[0].Complete || passes[0].Outcomes[0].State != "failed" {
+	if len(passes) != 1 || passes[0].Complete || passes[0].Outcomes[len(passes[0].Outcomes)-1].State != "failed" {
 		t.Fatalf("capture failure not retained: %+v", passes)
 	}
 	if err := replayPublications(context.Background(), c, cwd); err != nil {

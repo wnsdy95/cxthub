@@ -1,0 +1,156 @@
+{
+  "segments": {
+    "version": 1,
+    "state_hash": "sha256:fed62f9c5ec5ee3d03e6e7156aa8a3c1acf38f04b048ebbe19b1c62409457c7b",
+    "page_hash": "sha256:3eb3231a53f1c330d1ae7bf5c7f688fb75e38eeac8fb7fe5d8e0747544f992c7",
+    "offset": 0,
+    "next": -1,
+    "total": 3,
+    "complete": true,
+    "entries": [
+      {
+        "snapshot_id": "sha256:42c206dd3501f8c23f9f25b4b39d64e9cdefbb0a3e0a84a2a2d52a787c790e02",
+        "segment": {
+          "id": "sha256:7fdf274a1413268d35ae378a73aa1e5537934bc8fa7826c3fcc610558d83a069",
+          "repo_id": "sha256:f1a93b6fc50499fa59481d73330c702ab0ae505f87e0c77e872feadeae84361d",
+          "doc_hash": "sha256:42c206dd3501f8c23f9f25b4b39d64e9cdefbb0a3e0a84a2a2d52a787c790e02",
+          "provider": "codex",
+          "session_id": "wire-session",
+          "event_start": 1,
+          "event_end": 2
+        },
+        "bindings": [
+          {
+            "event_id": "dddddddddddddddddddddddddddddddd",
+            "git_commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "branch_id": "main-identity",
+            "worktree_id": "cccccccccccccccccccccccccccccccc",
+            "segment_ids": [
+              "sha256:7fdf274a1413268d35ae378a73aa1e5537934bc8fa7826c3fcc610558d83a069"
+            ]
+          }
+        ],
+        "kind": "verified_prefix",
+        "reason": "finalized_natural_parent_prefix",
+        "total_events": 2,
+        "baseline_snapshot_id": "sha256:77ee0efc61de33925f97f77d334b2f859fab04d43a3e82fa9a25edcf74a2969d",
+        "baseline_doc_hash": "sha256:77ee0efc61de33925f97f77d334b2f859fab04d43a3e82fa9a25edcf74a2969d"
+      },
+      {
+        "snapshot_id": "sha256:77ee0efc61de33925f97f77d334b2f859fab04d43a3e82fa9a25edcf74a2969d",
+        "segment": {
+          "id": "sha256:35fec6c7648191f0199569fa0ec6843187c0eca484535aeb20cf0c378cb34f91",
+          "repo_id": "sha256:f1a93b6fc50499fa59481d73330c702ab0ae505f87e0c77e872feadeae84361d",
+          "doc_hash": "sha256:77ee0efc61de33925f97f77d334b2f859fab04d43a3e82fa9a25edcf74a2969d",
+          "provider": "codex",
+          "session_id": "wire-session",
+          "event_start": 0,
+          "event_end": 1
+        },
+        "bindings": [
+          {
+            "event_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "git_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "branch_id": "main-identity",
+            "worktree_id": "cccccccccccccccccccccccccccccccc",
+            "segment_ids": [
+              "sha256:35fec6c7648191f0199569fa0ec6843187c0eca484535aeb20cf0c378cb34f91"
+            ]
+          }
+        ],
+        "kind": "full_source",
+        "reason": "no_verified_selected_baseline",
+        "total_events": 1
+      },
+      {
+        "snapshot_id": "sha256:f4f2ac52e31d8351429594156ece7b2fca25c068b95bf2042dbd39731e6e8ad6",
+        "bindings": [],
+        "kind": "unavailable",
+        "reason": "source_unavailable",
+        "total_events": -1
+      }
+    ]
+  },
+  "branch": "main",
+  "state_hash": "sha256:fed62f9c5ec5ee3d03e6e7156aa8a3c1acf38f04b048ebbe19b1c62409457c7b",
+  "inclusion": {
+    "branch_id": "main-identity",
+    "snapshot_id": "sha256:42c206dd3501f8c23f9f25b4b39d64e9cdefbb0a3e0a84a2a2d52a787c790e02",
+    "code_commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "reason": "selected_code",
+    "merges": [],
+    "roots": [
+      "sha256:42c206dd3501f8c23f9f25b4b39d64e9cdefbb0a3e0a84a2a2d52a787c790e02",
+      "sha256:f4f2ac52e31d8351429594156ece7b2fca25c068b95bf2042dbd39731e6e8ad6"
+    ],
+    "snapshot_ids": [
+      "sha256:42c206dd3501f8c23f9f25b4b39d64e9cdefbb0a3e0a84a2a2d52a787c790e02",
+      "sha256:77ee0efc61de33925f97f77d334b2f859fab04d43a3e82fa9a25edcf74a2969d",
+      "sha256:f4f2ac52e31d8351429594156ece7b2fca25c068b95bf2042dbd39731e6e8ad6"
+    ]
+  },
+  "semantics": {
+    "version": 1,
+    "merges": []
+  },
+  "version": 1,
+  "revision": {
+    "evidence": "9007199254740993",
+    "graph": "42",
+    "pending": "7"
+  },
+  "position": "sha256:42c206dd3501f8c23f9f25b4b39d64e9cdefbb0a3e0a84a2a2d52a787c790e02",
+  "snapshots": [
+    {
+      "id": "sha256:42c206dd3501f8c23f9f25b4b39d64e9cdefbb0a3e0a84a2a2d52a787c790e02",
+      "repo_id": "sha256:f1a93b6fc50499fa59481d73330c702ab0ae505f87e0c77e872feadeae84361d",
+      "branch": "",
+      "parents": [
+        "sha256:77ee0efc61de33925f97f77d334b2f859fab04d43a3e82fa9a25edcf74a2969d"
+      ],
+      "doc_hash": "sha256:42c206dd3501f8c23f9f25b4b39d64e9cdefbb0a3e0a84a2a2d52a787c790e02",
+      "provider": "",
+      "fidelity": "",
+      "message": "",
+      "author": {
+        "name": "",
+        "email": "",
+        "team": ""
+      },
+      "created_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "sha256:77ee0efc61de33925f97f77d334b2f859fab04d43a3e82fa9a25edcf74a2969d",
+      "repo_id": "sha256:f1a93b6fc50499fa59481d73330c702ab0ae505f87e0c77e872feadeae84361d",
+      "branch": "",
+      "parents": null,
+      "doc_hash": "sha256:77ee0efc61de33925f97f77d334b2f859fab04d43a3e82fa9a25edcf74a2969d",
+      "provider": "",
+      "fidelity": "",
+      "message": "",
+      "author": {
+        "name": "",
+        "email": "",
+        "team": ""
+      },
+      "created_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "sha256:f4f2ac52e31d8351429594156ece7b2fca25c068b95bf2042dbd39731e6e8ad6",
+      "repo_id": "sha256:f1a93b6fc50499fa59481d73330c702ab0ae505f87e0c77e872feadeae84361d",
+      "branch": "",
+      "parents": null,
+      "doc_hash": "sha256:f4f2ac52e31d8351429594156ece7b2fca25c068b95bf2042dbd39731e6e8ad6",
+      "provider": "",
+      "fidelity": "",
+      "message": "",
+      "author": {
+        "name": "",
+        "email": "",
+        "team": ""
+      },
+      "created_at": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "history": []
+}

@@ -291,3 +291,34 @@ func TestBranchInheritsCompletedMainKnowledgeAtItsRecordedBirth(t *testing.T) {
 		t.Fatal("orphan acquired inherited conversation history")
 	}
 }
+
+func TestBranchContextExcludesFuturePRThroughMutableOverlay(t *testing.T) {
+	f, ref, history := branchContextFixture(t)
+	ctx := systemTestContext()
+	if err := f.st.AddGraftParents(ctx, f.repo, ref.Target, []domain.ContentHash{f.b}); err != nil {
+		t.Fatal(err)
+	}
+	snaps, _ := f.st.ListSnapshots(ctx, f.repo, "")
+	evidence, _ := f.svc.newCodeEvidence(ctx, f.repo)
+	got, err := f.svc.branchContext(ctx, ref, effectiveOID(1), snaps, history, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range got.SnapshotIDs {
+		if id == f.b {
+			t.Fatal("future PR re-entered through overlay")
+		}
+	}
+	memory, err := f.svc.projectBranchMemory(ctx, f.repo, got, snaps)
+	if err != nil || strings.Contains(memory.Digest.Summary, "MERGED B") {
+		t.Fatalf("future memory: %s %v", memory.Digest.Summary, err)
+	}
+	original, _ := f.st.GetSnapshot(ctx, f.repo, ref.Target)
+	if len(original.GraftParents) != 1 {
+		t.Fatal("query changed the preserved archive")
+	}
+	detached, err := f.svc.QueryContext(ctx, f.repo, domain.ContextSelection{Position: string(ref.Target), Scope: "current"})
+	if err != nil || domain.ValidateContentHash(detached.StateHash) != nil {
+		t.Fatalf("detached read receipt: %+v %v", detached, err)
+	}
+}

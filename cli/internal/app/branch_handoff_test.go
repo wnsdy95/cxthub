@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +10,26 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
+
+func TestBranchHandoffUsesSharedPackageAndDoesNotFallbackOnServerFailure(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	target := putBranchSeedSnapshot(t, ctx, store, "repo", "feature", []domain.Event{agentMessage("user", "RAW ARCHIVE", 0)}, nil, &domain.MemoryDigest{Summary: "LOCAL FALLBACK"})
+	packages := &agentPackageFixture{}
+	svc := NewBranchHandoffService(store).WithAgentContext(packages, agentCodeFixture{})
+	input := inbound.BranchHandoffInput{Cwd: "/fixture", FromBranch: "main", ToBranch: "feature", Target: target}
+	text, err := svc.RenderBranchHandoff(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !domain.IsAgentContextPackageText(text) || strings.Contains(text, "RAW ARCHIVE") || strings.Contains(text, "LOCAL FALLBACK") || !packages.seen.ArtifactOnly || packages.seen.SnapshotID != target || packages.seen.Branch != "feature" || packages.seen.Cwd != "/fixture" {
+		t.Fatalf("wrong handoff %s %+v", text, packages.seen)
+	}
+	packages.err = errors.New("authorization revoked")
+	if text, err = svc.RenderBranchHandoff(ctx, input); err == nil || text != "" {
+		t.Fatal("fell back to local memory after permission failure")
+	}
+}
 
 func TestBranchHandoffIsBoundedMemoryOnly(t *testing.T) {
 	ctx := context.Background()

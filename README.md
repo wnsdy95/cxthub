@@ -33,9 +33,9 @@ CXTHub follows Git actions developers already use:
 
 | Git action | CXTHub behavior |
 |---|---|
-| `git commit` | Capture staged active agent sessions and link them to the commit |
+| `git commit` | Capture eligible active agent sessions and link them to the commit, independently of the manual CXT index |
 | `git switch` / `git checkout` | Restore the destination branch context |
-| `git switch -c` / `git checkout -b` | Seed a new context branch with main memory and the current session |
+| `git switch -c` / `git checkout -b` | Record the branch birth at its actual Git start point and prepare the selected context and memory |
 | `git branch` | Create the corresponding context branch from the current context |
 | `git rebase` / `git commit --amend` | Track rewritten commit links |
 | `git stash` / `git stash pop` | Preserve or restore unfinished agent work |

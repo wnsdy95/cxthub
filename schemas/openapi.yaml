@@ -450,10 +450,59 @@ components:
       properties:
         version: { type: integer, const: 1 }
         merges: { type: array, items: { $ref: '#/components/schemas/ContextMergeEvidence' } }
+    ConversationSegment:
+      description: Immutable canonical event range scoped by repository and native provider/session provenance. event_end is exclusive; equal start and end denote an empty contribution. This identity is independent of physical byte chunks.
+      type: object
+      required: [id, repo_id, doc_hash, provider, session_id, event_start, event_end]
+      properties:
+        id: { $ref: '#/components/schemas/ContentHash' }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        doc_hash: { $ref: '#/components/schemas/ContentHash' }
+        provider: { type: string }
+        session_id: { type: string }
+        event_start: { type: integer }
+        event_end: { type: integer }
+    CommitContextBinding:
+      description: An accepted finalized publication receipt for this source, backed by an exact stored observation. Multiple Git commits may refer to one segment. These historical receipts do not assert current code applicability; the enclosing inclusion result owns that decision.
+      type: object
+      required: [event_id, git_commit, branch_id, segment_ids]
+      properties:
+        event_id: { type: string }
+        git_commit: { type: string }
+        branch_id: { type: string }
+        worktree_id: { type: string }
+        segment_ids: { type: array, items: { $ref: '#/components/schemas/ContentHash' } }
+    ContextSegmentCoverage:
+      description: full_source preserves the full immutable document without guessing a commit delta. verified_prefix requires a selected finalized natural parent and exact provider/session/event-prefix equality. unavailable has total_events -1 and no segment.
+      type: object
+      required: [snapshot_id, bindings, kind, reason, total_events]
+      properties:
+        snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        segment: { $ref: '#/components/schemas/ConversationSegment' }
+        bindings: { type: array, items: { $ref: '#/components/schemas/CommitContextBinding' } }
+        kind: { type: string, enum: [verified_prefix,full_source,unavailable] }
+        reason: { type: string }
+        total_events: { type: integer }
+        baseline_snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        baseline_doc_hash: { $ref: '#/components/schemas/ContentHash' }
+    ContextSegmentPage:
+      description: Entries follow the shared snapshot order. When segments are requested, snapshots contains only this page; history, semantics, and inclusion are omitted or empty. Baseline dependencies may appear on a later page. complete and next -1 mean page exhaustion, not completeness of all Git or worker activity.
+      type: object
+      required: [version, state_hash, page_hash, offset, next, total, complete, entries]
+      properties:
+        version: { type: integer }
+        state_hash: { $ref: '#/components/schemas/ContentHash' }
+        page_hash: { $ref: '#/components/schemas/ContentHash' }
+        offset: { type: integer }
+        next: { type: integer }
+        total: { type: integer }
+        complete: { type: boolean }
+        entries: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/ContextSegmentCoverage' } }
     ContextQueryView:
       type: object
       required: [version, revision, snapshots, history, semantics]
       properties:
+        segments: { $ref: '#/components/schemas/ContextSegmentPage' }
         branch: { type: string }
         state_hash: { $ref: '#/components/schemas/ContentHash' }
         inclusion: { $ref: '#/components/schemas/BranchContext' }
@@ -1142,6 +1191,31 @@ components:
         offset: { type: integer, minimum: 0 }
         next: { type: integer, minimum: -1, description: "Next event offset; -1 means exhausted." }
         inherited: { type: integer, minimum: 0, description: "Exact shared event prefix with base." }
+
+    AgentHistoryTurn:
+      type: object
+      additionalProperties: false
+      required: [start, end, hash, events]
+      properties:
+        start: { type: integer, minimum: 0, description: "Inclusive event ordinal." }
+        end: { type: integer, minimum: 1, description: "Exclusive event ordinal." }
+        hash: { $ref: "#/components/schemas/ContentHash", description: "SHA-256 of json.Marshal(events) in the CIR wire representation; not a canonical document hash proof." }
+        events: { type: array, minItems: 1, items: { type: object } }
+
+    AgentHistoryPage:
+      type: object
+      additionalProperties: false
+      required: [version, hash, provider, session_id, total, before, next_before, covered, turns]
+      properties:
+        version: { type: integer, enum: [1] }
+        hash: { $ref: "#/components/schemas/ContentHash", description: "Source document identity; a partial page does not independently prove this canonical hash." }
+        provider: { type: string, enum: [claude, codex] }
+        session_id: { type: string }
+        total: { type: integer, minimum: 0, description: "Total document events, not turns." }
+        before: { type: integer, minimum: 0, description: "Resolved exclusive event cursor; requested -1 resolves to total." }
+        next_before: { type: integer, minimum: -1, description: "Oldest returned turn start, or -1 when no older user turns remain." }
+        covered: { type: boolean, description: "Entire source is an exact event-hash prefix of covered_by in the same native provider and nonempty session; at most 250000 source events." }
+        turns: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/AgentHistoryTurn" }, description: "Newest turns first; events within each turn stay in chronological order. Empty when covered." }
 
     DocFinalizationStatus:
       type: object
@@ -2874,6 +2948,9 @@ paths:
       description: Viewer access is required. PostgreSQL selects position, refs, history, and snapshots in one repeatable-read transaction. Current and previous require an explicit position. History and semantics preserve operation facts independently of snapshot scope. All includes stored pending captures; previous contains retained context outside the selected ancestry, not chronological speculation. Branch names resolve to their logical identity when known.
       tags: [snapshots]
       parameters:
+        - { name: segment_limit, in: query, schema: { type: integer, minimum: 1, maximum: 50 }, description: Opt in to half-open canonical event ranges and finalized publication bindings. Ordinary queries do not read document indexes. A full_source is not an inferred commit delta. A verified_prefix depends on an older selected baseline that may be on a later page. }
+        - { name: segment_offset, in: query, schema: { type: integer, minimum: 0, default: 0 }, description: Snapshot offset in shared query order. Continuations require segment_state_hash. }
+        - { name: segment_state_hash, in: query, schema: { $ref: '#/components/schemas/ContentHash' }, description: Pin selection and publication evidence across segment pages. Changes return 409. page_hash identifies exact page metadata. Complete means page exhaustion only and never guarantees that every worker or Git commit was captured. }
         - { name: code_commit, in: query, schema: { type: string }, description: Optional full Git SHA for a current branch timeline. Without it only unambiguous recorded code associations are used. }
         - { name: branch, in: query, schema: { type: string } }
         - { name: position, in: query, schema: { type: string } }
@@ -3110,6 +3187,38 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { description: "Invalid event range or hash." }
+
+  /repos/{repoID}/docs/{hash}/turns:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/docHash"
+    get:
+      operationId: getDocTurns
+      summary: Read bounded complete history turns newest first
+      description: |
+        Read-only projection from the verified read index and hash-verified v2 chunks.
+        Uses the same per-request viewer authorization and repository ownership as events.
+        Missing read indexes or legacy unindexed bodies are unavailable; reads never repair or repack them.
+        Whole user turns and tool pairs are preserved. The newest candidate is never skipped.
+        covered_by proves only complete prefix containment in the same native provider/session;
+        a shared text fragment or an incomplete prefix never authorizes deduplication.
+      tags: [docs]
+      parameters:
+        - { in: query, name: before, schema: { type: integer, minimum: -1, default: -1 }, description: "Exclusive complete-turn boundary; -1 starts at total events." }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 16 } }
+        - { in: query, name: max_bytes, schema: { type: integer, minimum: 1, maximum: 4194304, default: 4194304 }, description: "Maximum sum of json.Marshal(turn.events) bytes. This range cap is independent of token budgets." }
+        - { in: query, name: covered_by, schema: { $ref: "#/components/schemas/ContentHash" }, description: "Optional newer document owned by this repository." }
+      responses:
+        "200":
+          description: "Bounded newest-first complete turns, or covered=true with no turns. Per-turn wire hashes detect event body corruption without proving the full source document hash."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentHistoryPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "Invalid cursor, corrupt event/chunk, or context_budget_exceeded when the newest complete turn exceeds max_bytes. No turn is skipped." }
+        "503": { description: "Verified read index or v2 range storage unavailable. Maintenance must prepare it without mutating this read." }
 
   /repos/{repoID}/docs/{hash}:
     parameters:

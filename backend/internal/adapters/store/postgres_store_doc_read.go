@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // Reuse only rows from the canonical-event projection namespace. Key-share
@@ -45,9 +46,17 @@ func (s *PostgresStore) DocReadIndex(ctx context.Context, repo, hash domain.Cont
 		return idx, domain.ErrNotFound
 	}
 	if !ready {
+		if outbound.DocReadOnly(ctx) {
+			return idx, domain.ErrAgentHistoryUnavailable
+		}
 		doc, err := s.GetDoc(ctx, repo, hash)
 		if err != nil {
 			return idx, err
+		}
+		if tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx); ok && tx.readOnly {
+			// A pinned reader must not publish a lazy index or repack the archive.
+			// Rebuild the verified projection in memory; maintenance can persist it.
+			return domain.BuildDocReadIndex(doc)
 		}
 		// PutDoc validates/repackages legacy manifests and publishes the index in
 		// the same document transaction. Concurrent readers serialize on the blob.
@@ -94,8 +103,28 @@ func (s *PostgresStore) SearchDocEvents(ctx context.Context, repo, hash domain.C
 		return nil, domain.ErrNotFound
 	}
 	if !ready {
-		if _, err := s.DocReadIndex(ctx, repo, hash); err != nil {
+		idx, err := s.DocReadIndex(ctx, repo, hash)
+		if err != nil {
 			return nil, err
+		}
+		if tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx); ok && tx.readOnly {
+			// DocReadIndex intentionally did not persist rows. Query its verified
+			// in-memory text instead of incorrectly reporting an empty SQL result.
+			out := []domain.DocEventIndex{}
+			for i, e := range idx.Events {
+				if i%1024 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+				}
+				if len(out) >= limit {
+					break
+				}
+				if e.Index > after && e.Text != "" && strings.Contains(strings.ToLower(e.Text), q) {
+					out = append(out, e)
+				}
+			}
+			return out, nil
 		}
 	}
 	pattern := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(q) + "%"

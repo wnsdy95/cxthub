@@ -21,14 +21,32 @@ PUB_MAIN="$TMP/publication-main"
 if ! CXT_KEEP_SESSION=1 git worktree add -q "$PUB_MAIN" main >"$TMP/pub-main-worktree.out" 2>&1; then cat "$TMP/pub-main-worktree.out"; FAIL=1; return; fi
 cd "$PUB_MAIN"
 session "$PWD" PUBCONTINUE
-PUB_NATIVE="$D/s-PUBCONTINUE.jsonl"
+PUB_NATIVE="$D/sess-PUBCONTINUE.jsonl"
+PUB_STORE="$TMP/publication-client/.cxt"
+PUB_UNSTAGED_REF=$(ref_target "$PUB_STORE/refs/heads/main")
+# A manual commit must consume a frozen index, never capture the live app.
+if cxt commit -m must-not-capture-live >"$TMP/pub-empty-index.out" 2>&1; then
+  expect "manual commit rejects an empty index" succeeded rejected
+else
+  expect "manual commit explains the required add" "$(grep -c 'no frozen sessions staged' "$TMP/pub-empty-index.out")" 1
+fi
+expect "rejected manual commit leaves main unchanged" "$(ref_target "$PUB_STORE/refs/heads/main")" "$PUB_UNSTAGED_REF"
+if ! cxt add claude >"$TMP/pub-main-add.out" 2>&1; then cat "$TMP/pub-main-add.out"; FAIL=1; return; fi
+# Prove that commit publishes the add-time bytes even while the app continues.
+python3 - "$PUB_NATIVE" "$PWD" <<'PYUNSTAGED'
+import json,sys
+with open(sys.argv[1],'a') as f:
+    f.write(json.dumps({'type':'user','cwd':sys.argv[2],'sessionId':'sess-PUBCONTINUE',
+                       'gitBranch':'main','timestamp':'2026-07-05T00:00:30Z',
+                       'message':{'role':'user','content':'conversation after add remains unstaged'}})+'\n')
+PYUNSTAGED
 if ! cxt commit -m main-before-promotion >"$TMP/pub-main-before.out" 2>&1; then cat "$TMP/pub-main-before.out"; FAIL=1; return; fi
 if ! cxt push >"$TMP/pub-main-before-push.out" 2>&1; then cat "$TMP/pub-main-before-push.out"; FAIL=1; return; fi
-PUB_STORE="$TMP/publication-client/.cxt"
 PUB_WORKTREE=$(git rev-parse --absolute-git-dir | python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.stdin.read().strip().encode()).hexdigest()[:32])')
 PUB_POSITION="$PUB_STORE/worktrees/$PUB_WORKTREE/position.json"
 PUB_BEFORE=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["snapshot"])' "$PUB_POSITION")
 PUB_CODE_BEFORE=$(git rev-parse HEAD)
+expect "manual commit publishes only the add-time conversation" "$(curl -sb "$J" "$B/repos/$PUB_RID/docs/$PUB_BEFORE" | python3 -c 'import json,sys;body=json.dumps(json.load(sys.stdin));print("frozen" if "task PUBCONTINUE" in body and "conversation after add remains unstaged" not in body else "wrong contents")')" frozen
 expect "main has a captured position before the Git move" "$(python3 - "$PUB_POSITION" "$PUB_BEFORE" "$PUB_CODE_BEFORE" <<'PYBEFORE'
 import json,sys
 p=json.load(open(sys.argv[1]))
@@ -46,6 +64,7 @@ PUB_SECOND=$(ref_target .cxt/refs/heads/finalized-feature)
 # A second completed capture at the same Git SHA must not let the worker bind
 # the older eligible source halfway through the eventual publication upload.
 session "$PWD" PUBFOLLOWUP
+if ! cxt add claude >"$TMP/pub-followup-add.out" 2>&1; then cat "$TMP/pub-followup-add.out"; FAIL=1; return; fi
 if ! cxt commit -m final-source-followup >"$TMP/pub-followup.out" 2>&1; then cat "$TMP/pub-followup.out"; FAIL=1; return; fi
 PUB_LAST=$(ref_target .cxt/refs/heads/finalized-feature)
 cat > "$TMP/squash-editor" <<'PYEDITOR'
@@ -127,7 +146,7 @@ print('ready' if ready else json.dumps(p,sort_keys=True))
 PYPOSITION
 )" ready
 # The existing app keeps writing its existing native file after the pull.
-# Enlarge that transcript, then exercise the public command and normal push.
+# Enlarge that transcript, then freeze the new state and publish it normally.
 python3 - "$PUB_NATIVE" "$PWD" <<'PYTAIL'
 import json,sys
 with open(sys.argv[1],'a') as f:
@@ -136,12 +155,13 @@ with open(sys.argv[1],'a') as f:
                            'gitBranch':'main','timestamp':'2026-07-05T00:01:00Z',
                            'message':{'role':role,'content':text}})+'\n')
 PYTAIL
+if ! cxt add claude >"$TMP/pub-next-add.out" 2>&1; then cat "$TMP/pub-next-add.out"; FAIL=1; return; fi
 if ! cxt commit -m post-promotion-continuation >"$TMP/pub-next-commit.out" 2>&1; then
   cat "$TMP/pub-next-commit.out"
-  expect "next actual cxt commit captures enlarged native transcript" failed succeeded
+  expect "next manual commit publishes the newly frozen transcript" failed succeeded
   return
 fi
-expect "next actual cxt commit captures enlarged native transcript" succeeded succeeded
+expect "next manual commit publishes the newly frozen transcript" succeeded succeeded
 PUB_NEXT=$(ref_target "$PUB_STORE/refs/heads/main")
 expect "next capture is a new snapshot" "$([ "$PUB_NEXT" != "$PUB_BEFORE" ] && [ "$PUB_NEXT" != "$PUB_PROMOTED" ] && echo yes)" yes
 expect "next snapshot directly continues the promoted context" "$(python3 - "$PUB_STORE/objects/snapshots/${PUB_NEXT#sha256:}" "$PUB_PROMOTED" <<'PYNEXT'
@@ -152,7 +172,7 @@ PYNEXT
 )" continued
 if ! cxt push >"$TMP/pub-next-push.out" 2>&1; then cat "$TMP/pub-next-push.out"; FAIL=1; return; fi
 expect "normal push publishes the next continuation on main" "$(curl -sb "$J" "$B/repos/$PUB_RID/refs" | python3 -c 'import json,sys;print(next(r["target"] for r in json.load(sys.stdin) if r["kind"]=="branch" and r["name"]=="main"))')" "$PUB_NEXT"
-expect "pushed document contains the enlarged native transcript" "$(curl -sb "$J" "$B/repos/$PUB_RID/docs/$PUB_NEXT" | python3 -c 'import json,sys;body=json.dumps(json.load(sys.stdin));print("captured" if "task PUBCONTINUE" in body and "post-promotion continuation captured" in body else "missing")')" captured
+expect "re-add includes both formerly unstaged and post-promotion conversation" "$(curl -sb "$J" "$B/repos/$PUB_RID/docs/$PUB_NEXT" | python3 -c 'import json,sys;body=json.dumps(json.load(sys.stdin));print("captured" if all(s in body for s in ["task PUBCONTINUE", "conversation after add remains unstaged", "post-promotion continuation captured"]) else "missing")')" captured
 expect "server continuation retains promoted and earlier main ancestry" "$(curl -sb "$J" "$B/repos/$PUB_RID/snapshots" | python3 -c '
 import json,sys
 snaps={s["id"]:s for s in json.load(sys.stdin)};q=[sys.argv[1]];seen=set()
@@ -162,3 +182,23 @@ while q:
  seen.add(h);s=snaps.get(h,{})
  q.extend((s.get("parents") or [])+(s.get("graft_parents") or []))
 print("retained" if all(h in seen for h in sys.argv[2:]) else "lost")' "$PUB_NEXT" "$PUB_PROMOTED" "$PUB_BEFORE" "$PUB_LAST")" retained
+
+# Exercise the real cloud input reader, including its turn-page wire contract.
+# Artifact preparation never starts a provider or moves the selected context.
+if ! cxt load --provider codex --context-budget 200k --output "$TMP/publication-context.json" >"$TMP/pub-package.out" 2>&1; then
+  cat "$TMP/pub-package.out"
+  expect "cloud history package prepares through bounded turn pages" failed prepared
+  return
+fi
+expect "cloud history package prepares through bounded turn pages" "$(python3 - "$TMP/publication-context.json" "$PUB_NEXT" "$PUB_MERGE" <<'PYPACKAGE'
+import json,sys
+p=json.load(open(sys.argv[1]));c=p['content'];selection=c['selection']
+text=json.dumps(c.get('historical_evidence',[]))
+ready=(p['version']==1 and p['artifact_only'] and p['delivery']=='prepared'
+       and p['usage']['exact'] is False and p['usage']['tokens']<=200000
+       and selection['snapshot_id']==sys.argv[2] and selection['code_commit']==sys.argv[3]
+       and 'post-promotion continuation captured' in text and 'task PUBLAST' in text)
+print('prepared' if ready else 'incorrect package selection or missing contributions')
+PYPACKAGE
+)" prepared
+expect "package preparation preserves active context" "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["snapshot"])' "$PUB_POSITION")" "$PUB_NEXT"

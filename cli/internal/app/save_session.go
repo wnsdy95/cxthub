@@ -448,6 +448,22 @@ func (s *SaveSessionService) collectHookLeaf(ctx context.Context, repoID string,
 	if !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
 		return true
 	}
+	// A crashed checkout has released its live retention lease but still owns
+	// the exact source until its journal publishes refs and the worktree cursor.
+	if pins, ok := s.store.(outbound.CheckoutPins); ok {
+		pinned, err := pins.HasCheckoutPin(ctx, snap.DocHash)
+		if err != nil || pinned {
+			return false
+		}
+	}
+	// Manual staging and its durable commit receipts may still reference this
+	// exact frozen capture after the live pending pointer has advanced.
+	if pins, ok := s.store.(outbound.StagingPins); ok {
+		pinned, err := pins.HasStagingPin(ctx, snap.DocHash)
+		if err != nil || pinned {
+			return false
+		}
+	}
 	// Session-prefix coverage cannot prove coverage of a separate memory object.
 	if snap.MemoryHash != "" {
 		return true

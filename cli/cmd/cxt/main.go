@@ -48,8 +48,7 @@ var version = "dev"
 
 func main() {
 	if err := run(os.Args); err != nil {
-		fmt.Fprintf(os.Stderr, "cxt: %v\n", err)
-		os.Exit(1)
+		os.Exit(delivcli.WriteCommandFailure(os.Stderr, os.Args, err))
 	}
 }
 
@@ -97,7 +96,7 @@ func run(args []string) error {
 		c := &delivcli.Container{CaptureRecovery: service, History: app.NewContextHistoryService(store, store), List: app.NewListSessionsService(store)}
 		return delivcli.RunCaptureRecovery(ctx, c, cwd, string(repo.ID), args[2:], os.Stdout)
 	}
-	if args[1] == "repair" {
+	if args[1] == "repair" && slices.Contains(args[2:], "--from-server") {
 		return runRepair(args[2:])
 	}
 	// Process-level configuration resolves the shared repo root and environment
@@ -257,11 +256,24 @@ func buildRepositoryAdapters(cfg config) (*storage.FileStore, *backendclient.Bac
 // dispatch cannot reach capture, checkout, sync mutation or branch replay.
 func buildReadContainer(cfg config) container {
 	store, remote, gitCtx := buildRepositoryAdapters(cfg)
+	history := app.NewHistoryQueryService(gitCtx, gitctx.NewGitContextAdapter(), store, remote)
+	working := app.NewWorkingStateService(gitCtx, gitctx.NewGitContextAdapter(), store, store, history).WithAppliedPullReader(store, remote.SyncRemoteIdentity())
 	c := &delivcli.Container{
-		ResolveRepo: gitCtx.CurrentRepo,
-		List:        app.NewListSessionsService(store),
-		Queries:     app.NewLocalRefQueryService(gitCtx, store),
-		Settings:    remote,
+		ResolveRepo:  gitCtx.CurrentRepo,
+		List:         app.NewListSessionsService(store),
+		Queries:      app.NewLocalRefQueryService(gitCtx, store),
+		HistoryQuery: history,
+		WorkingState: working,
+		ContextDiff:  working,
+		CodePosition: gitctx.NewGitContextAdapter(),
+		ListIndexStashes: func(ctx context.Context, cwd string) ([]domain.StagingStash, error) {
+			repo, err := gitCtx.CurrentRepo(ctx, cwd)
+			if err != nil {
+				return nil, err
+			}
+			return store.ListIndexStashes(ctx, repo.ID)
+		},
+		Settings: remote,
 	}
 	out := container{clictr: c}
 	out.cliHandler.Run = delivcli.Run
@@ -315,11 +327,12 @@ func buildContainer(cfg config) container {
 	// --- use-case services (inbound implementation, outbound injection) ---
 	initSvc := app.NewInitRepoService(gitCtx, store)
 	saveSvc := app.NewSaveSessionService(gitCtx, captures, codecs, store, capture.NewSessionCapture(store), storage.NewSyncOutbox())
+	stagingSvc := app.NewStagingService(gitCtx, gitctx.NewGitContextAdapter(), store, store, captures, codecs, capture.NewSessionCapture(store), storage.NewSyncOutbox())
 	forkSvc := app.NewForkSessionService(store)
 	branchLifecycleSvc := app.NewBranchLifecycleService(gitCtx, store)
 	prompts := app.NewMemoryPromptService(remote, gitctx.NewGitContextAdapter(), store)
 	loadSvc := app.NewLoadSessionService(store, codecs, materializers, memSources, distiller, memSinks).WithMemoryPrompts(prompts)
-	checkoutSvc := app.NewCheckoutSessionService(forkSvc, loadSvc, store)
+	checkoutSvc := app.NewCheckoutSessionService(forkSvc, loadSvc, store).WithCodePosition(gitctx.NewGitContextAdapter())
 	listSvc := app.NewListSessionsService(store)
 	memorizeSvc := app.NewMemorizeService(gitCtx, captures, codecs, memSources, distiller, store)
 	handoffSvc := app.NewBranchHandoffService(store)
@@ -337,24 +350,27 @@ func buildContainer(cfg config) container {
 	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
 	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
 	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices)
+	history := app.NewHistoryQueryService(gitCtx, gitctx.NewGitContextAdapter(), store, remote)
+	working := app.NewWorkingStateService(gitCtx, gitctx.NewGitContextAdapter(), store, store, history).WithAppliedPullReader(store, remote.SyncRemoteIdentity())
 	clictr := &delivcli.Container{
+		ProviderLaunch:     providerLaunchHooks(cfg),
 		WakeHistoricalSync: delivcli.SpawnHistoricalSync,
 		ResolveRepo:        gitCtx.CurrentRepo,
 		Queries:            app.NewLocalRefQueryService(gitCtx, store),
+		HistoryQuery:       history,
+		WorkingState:       working,
+		ContextDiff:        working,
+		CodePosition:       gitctx.NewGitContextAdapter(),
+		Staging:            stagingSvc,
+		IndexStash:         stagingSvc,
+		ListIndexStashes:   stagingSvc.ListIndexStashes,
 		ResolveConnection: func(ctx context.Context, raw string) (domain.RepositoryConnection, error) {
 			base, err := remotecfg.APIBase(raw)
 			if err != nil {
 				return domain.RepositoryConnection{}, err
 			}
-			server, err := url.Parse(base)
-			if err != nil {
-				return domain.RepositoryConnection{}, err
-			}
 			client := backendclient.NewBackendClient(func() string { return base }, func() string {
-				if cfg.RemoteToken != "" {
-					return cfg.RemoteToken
-				}
-				return authcfg.Token(server.Host)
+				return tokenForSyncDestination(cfg, base)
 			}, cfg.Identity)
 			return client.ResolveRepositoryConnection(ctx, raw)
 		},
@@ -379,6 +395,22 @@ func buildContainer(cfg config) container {
 		Repack:          store.RepackObjects,
 		Identity:        cfg.Identity,
 	}
+	preparer := runtimeAgentPreparer{gitCtx, store, remote, history}
+	loadSvc.WithAgentContext(preparer).WithAgentCodePosition(gitctx.NewGitContextAdapter())
+	seedSvc.WithAgentContext(preparer)
+	handoffSvc.WithAgentContext(preparer, gitctx.NewGitContextAdapter())
+	clictr.PrepareAgent = preparer
+	clictr.ApplySelectedPull = selectedPullApplication(store, remote, gitCtx)
+	clictr.ResolveSyncDestination = namedSyncDestination(cfg, store, gitCtx)
+	remoteRepair := app.NewRemoteRepairService(syncSvc, store, gitctx.NewGitContextAdapter())
+	clictr.PreviewRemoteRepair = func(ctx context.Context, cwd, ref string, snapshot domain.ContentHash, reason string) (outbound.RemoteRepairPlan, error) {
+		in := app.RemoteRepairInput{Cwd: cwd, Reason: reason, Snapshot: snapshot, RefName: ref}
+		if ref != "" {
+			in.RefKind = domain.RefBranch
+		}
+		return remoteRepair.Preview(ctx, in)
+	}
+	clictr.ApplyRemoteRepair = remoteRepair.Apply
 
 	return container{
 		mcpServer:   mcpSrv,

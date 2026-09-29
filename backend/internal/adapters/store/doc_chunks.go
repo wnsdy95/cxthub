@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func (s *FSStore) chunkPath(repoID, hash domain.ContentHash) string {
@@ -186,6 +187,9 @@ func (s *FSStore) GetDocManifest(ctx context.Context, repoID, hash domain.Conten
 	}
 	if man, isMan := domain.ParseDocChunkManifest(data); isMan {
 		return man, nil
+	}
+	if outbound.DocReadOnly(ctx) {
+		return domain.DocChunkManifest{}, domain.ErrAgentHistoryUnavailable
 	}
 	// Legacy comprehensive: canonical normalization then plan calculation — chunks are not stored,
 	// so save chunks here for GetChunk fallback (lazy repack on request).

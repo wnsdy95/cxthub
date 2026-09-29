@@ -180,7 +180,8 @@ export function AccountSettings({ user, trigger = 'gear' }: { user: User; trigge
               <label>
                 {t('settings.loadModeLabel')}
                 <select value={loadMode} onChange={(e) => setLoadMode(e.target.value)}>
-                  <option value="">{t('settings.loadFull')}</option>
+                  <option value="">{t('settings.loadDefault')}</option>
+                  <option value="full">{t('settings.loadFull')}</option>
                   <option value="reconstructed">{t('settings.loadReconstructed')}</option>
                   <option value="memory">{t('settings.loadMemory')}</option>
                 </select>

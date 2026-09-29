@@ -8,11 +8,12 @@
 // config / login / logout / secrets / settings / hooks / claude·codex(agent wrapper) /
 // git-hook(internal).
 // There is no separate CLI memory-load command: `cxt memorize` writes memory,
-// while MCP memory_load reads it. Diff remains a web/server action.
+// while MCP memory_load reads it. CLI diff compares captured events with the frozen index.
 package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -35,26 +36,39 @@ import (
 // Container is a bundle of inbound ports used by the CLI driver + author identifier.
 type Container struct {
 	// WakeHistoricalSync is process lifecycle wiring, absent in embedded/test drivers.
-	WakeHistoricalSync func(string)
-	CaptureRecovery    inbound.CaptureRecovery
-	ResolveConnection  func(context.Context, string) (domain.RepositoryConnection, error)
+	WakeHistoricalSync     func(string)
+	ProviderLaunch         ProviderLaunchHooks
+	PrepareAgent           inbound.PrepareAgentContext
+	ApplySelectedPull      func(context.Context, string) (outbound.SelectedPullReceipt, error)
+	PreviewRemoteRepair    func(context.Context, string, string, domain.ContentHash, string) (outbound.RemoteRepairPlan, error)
+	ApplyRemoteRepair      func(context.Context, string, domain.ContentHash, outbound.RemoteRepairPlan) (outbound.RemoteRepairReceipt, error)
+	CaptureRecovery        inbound.CaptureRecovery
+	ResolveConnection      func(context.Context, string) (domain.RepositoryConnection, error)
+	ResolveSyncDestination func(context.Context, string, string) (SyncDestination, error)
 	// ResolveRepo identifies a configured replica without registering or mutating it.
-	ResolveRepo func(context.Context, string) (domain.Repo, error)
-	Init        inbound.InitRepo
-	Save        inbound.SaveSession
-	Fork        inbound.ForkSession
-	Branches    inbound.BranchLifecycle
-	Checkout    inbound.CheckoutSession
-	Load        inbound.LoadSession
-	List        inbound.ListSessions
-	Memorize    inbound.Memorize
-	Sync        inbound.SyncRepo
-	Seed        inbound.SeedBranch
-	Tag         inbound.TagRef
-	Queries     inbound.LocalRefQueries
-	Stash       inbound.StashSession
-	Handoff     inbound.BranchHandoff
-	History     inbound.ContextHistory
+	ResolveRepo      func(context.Context, string) (domain.Repo, error)
+	Init             inbound.InitRepo
+	Save             inbound.SaveSession
+	Fork             inbound.ForkSession
+	Branches         inbound.BranchLifecycle
+	Checkout         inbound.CheckoutSession
+	Load             inbound.LoadSession
+	List             inbound.ListSessions
+	HistoryQuery     inbound.HistoryQuery
+	WorkingState     inbound.WorkingStateQuery
+	ContextDiff      inbound.ContextDiffQuery
+	Staging          inbound.Staging
+	IndexStash       inbound.StagingStash
+	ListIndexStashes func(context.Context, string) ([]domain.StagingStash, error)
+	CodePosition     outbound.CodePosition
+	Memorize         inbound.Memorize
+	Sync             inbound.SyncRepo
+	Seed             inbound.SeedBranch
+	Tag              inbound.TagRef
+	Queries          inbound.LocalRefQueries
+	Stash            inbound.StashSession
+	Handoff          inbound.BranchHandoff
+	History          inbound.ContextHistory
 	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
 	// can promote the source branch context into the checked-out base timeline.
 	PRMerges outbound.PullRequestMergeResolver
@@ -77,6 +91,19 @@ type Container struct {
 func Run(c *Container, args []string) error {
 	if handled, err := PreflightArgs(args); handled || err != nil {
 		return err
+	}
+	if intent, recognized, err := ParseLaunchIntent(args[1:]); recognized {
+		if err != nil {
+			return err
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		if c == nil {
+			return fmt.Errorf("provider launch composition unavailable")
+		}
+		return RunProviderLaunch(context.Background(), cwd, intent, c.ProviderLaunch)
 	}
 	cmd := args[1]
 	parsed := parsedCommand{name: cmd}
@@ -164,10 +191,6 @@ func Run(c *Container, args []string) error {
 	case "setup":
 		// Onboarding single command (idempotent): init→git hook→remote→login→agent hook→team setting pull.
 		return runSetup(ctx, c, cwd, rest)
-
-	case "claude", "codex":
-		// Agent wrapper (default execution path): fresh start seeds the current branch context, and automatically restarts with the seed session on context switch.
-		return runAgentWrapper(ctx, c, cwd, cmd, providerPassthroughArgs(rest))
 
 	case "remote":
 		return runRemote(ctx, c, cwd, rest)
@@ -264,41 +287,17 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "add":
-		// git add response: stages the session provider to be included in the next commit. No arguments/"." = default (all active session providers — commit staging default). Prevents the reversal of capturing a narrower scope than staging.
-		var provs []string
-		for _, a := range parsed.positionals {
-			if strings.HasPrefix(a, "-") || a == "." {
-				continue
-			}
-			if a != domain.ProviderClaude && a != domain.ProviderCodex {
-				return fmt.Errorf("unknown provider %q (claude|codex)", a)
-			}
-			provs = append(provs, a)
-		}
-		if len(provs) == 0 {
-			provs = []string{domain.ProviderClaude, domain.ProviderCodex}
-		}
-		if err := remotecfg.SetStagedProviders(cwd, provs); err != nil {
-			return err
-		}
-		fmt.Printf("staged for next commit: %s\n", strings.Join(provs, ", "))
-		return nil
+		return runStage(ctx, c, cwd, parsed)
 
 	case "commit":
-		// git commit response: snapshots the active session of the staged (or default) provider.
-		msg := parsed.flags["-m"]
-		n, lastErr := snapshotForCommit(ctx, c, cwd, msg)
-		if lastErr != nil {
-			return lastErr
-		}
-		if n == 0 {
-			return fmt.Errorf("no active session to snapshot (agent session must have run in this directory)")
-		}
-		return nil
+		return runStagedCommit(ctx, c, cwd, parsed)
+
+	case "restore":
+		return runUnstage(ctx, c, cwd, parsed)
 
 	case "switch":
 		// git switch equivalent: switch <branch> = checkout, switch -c <new> = checkout -b.
-		out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
+		out, err := manualCheckout(ctx, c, inbound.CheckoutInput{
 			From:      parsed.first(),
 			NewBranch: parsed.flags["-c"],
 			Mode:      loadModeOr(cwd, parsed.flags["--mode"]),
@@ -596,7 +595,13 @@ func Run(c *Container, args []string) error {
 		for _, kind := range []string{"claude", "agents", "codex"} {
 			n, aerr := applySettings(ctx, c, cwd, string(repo.Repo.ID), kind)
 			if aerr != nil {
-				continue // no-op (404) — next type
+				if errors.Is(aerr, domain.ErrNotFound) {
+					continue
+				}
+				if applied > 0 {
+					return fmt.Errorf("settings pull %s failed after applying %d file(s); earlier bundles remain applied: %w", kind, applied, aerr)
+				}
+				return fmt.Errorf("settings pull %s: %w", kind, aerr)
 			}
 			if n > 0 {
 				fmt.Printf("applied .%s/ — %d files overwritten\n", kind, n)
@@ -657,22 +662,60 @@ func Run(c *Container, args []string) error {
 		}
 		return nil
 
-	case "list", "log":
-		out, err := c.List.List(ctx, inbound.ListInput{RepoID: "", Branch: parsed.flags["--branch"]})
+	case "status":
+		if c.WorkingState == nil {
+			return fmt.Errorf("working state query unavailable")
+		}
+		out, err := c.WorkingState.Status(ctx, cwd)
 		if err != nil {
 			return err
 		}
+		if parsed.has("--json") {
+			return json.NewEncoder(os.Stdout).Encode(out)
+		}
+		printWorkingState(out)
+		return nil
+
+	case "diff":
+		if c.ContextDiff == nil {
+			return fmt.Errorf("context diff query unavailable")
+		}
+		out, err := c.ContextDiff.Diff(ctx, inbound.ContextDiffInput{Cwd: cwd, Staged: parsed.has("--staged")})
+		if err != nil {
+			return err
+		}
+		if parsed.has("--json") {
+			return json.NewEncoder(os.Stdout).Encode(out)
+		}
+		printContextDiff(out)
+		return nil
+
+	case "list", "log":
+		if c.HistoryQuery == nil {
+			return fmt.Errorf("history query service unavailable")
+		}
+		out, err := c.HistoryQuery.QueryHistory(ctx, inbound.HistoryQueryInput{Cwd: cwd, Ref: parsed.first(), Branch: parsed.flags["--branch"], All: parsed.has("--all"), Retained: parsed.has("--retained"), Server: parsed.has("--server")})
+		if err != nil {
+			return err
+		}
+		if parsed.has("--json") {
+			return json.NewEncoder(os.Stdout).Encode(out)
+		}
+		fmt.Printf("history: %s · %s · %d snapshots\n", out.Selection.Source, out.Selection.Scope, len(out.Snapshots))
+		if !out.Complete {
+			fmt.Printf("coverage incomplete: %d missing ancestors; inspect --json for server review reasons\n", len(out.Missing))
+		}
 		if len(out.Snapshots) == 0 {
-			fmt.Println("(no snapshots yet — run 'cxt save')")
+			fmt.Println("(no snapshots in this scope)")
 			return nil
 		}
-		for _, s := range out.Snapshots {
-			fmt.Printf("%s  %-20s  %s\n", shortHash(s.ID), s.Branch, s.Message)
+		for _, snap := range out.Snapshots {
+			fmt.Printf("%s  %-20s  %s\n", shortHash(snap.ID), snap.Branch, snap.Message)
 		}
 		return nil
 
 	case "checkout":
-		out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
+		out, err := manualCheckout(ctx, c, inbound.CheckoutInput{
 			From:           parsed.first(),
 			NewBranch:      parsed.flags["-b"],
 			TargetProvider: parsed.flags["--provider"],
@@ -690,7 +733,7 @@ func Run(c *Container, args []string) error {
 
 	case "fork":
 		// fork = checkout -b (branch + restore). NewBranch is --as.
-		out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
+		out, err := manualCheckout(ctx, c, inbound.CheckoutInput{
 			From:           parsed.first(),
 			NewBranch:      parsed.flags["--as"],
 			TargetProvider: parsed.flags["--provider"],
@@ -705,10 +748,18 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "load":
+		if parsed.has("--output") || parsed.has("--context-budget") {
+			return runAgentArtifact(ctx, c, cwd, parsed)
+		}
+		mode := ""
+		if !parsed.has("--work-state") {
+			mode = loadModeOr(cwd, parsed.flags["--mode"])
+		}
 		out, err := c.Load.Load(ctx, inbound.LoadInput{
 			Ref:            parsed.first(),
 			TargetProvider: parsed.flags["--provider"],
-			Mode:           loadModeOr(cwd, parsed.flags["--mode"]),
+			Mode:           mode,
+			WorkStatePath:  parsed.flags["--work-state"],
 			Cwd:            cwd,
 		})
 		if err != nil {
@@ -721,27 +772,33 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "push":
-		if err := requireRemote(cwd); err != nil {
+		selected, remoteName, selectedRef, err := syncDestination(ctx, c, cwd, parsed)
+		if err != nil {
 			return err
 		}
-		replaySavedPRDiscovery(ctx, c, cwd)
-		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
-			return fmt.Errorf("rewritten context associations remain pending: %w", err)
+		c = selected
+		if selectedRef == "" {
+			replaySavedPRDiscovery(ctx, c, cwd)
+		}
+		if selectedRef == "" {
+			if err := replayRewriteHistory(ctx, c, cwd); err != nil {
+				return fmt.Errorf("rewritten context associations remain pending: %w", err)
+			}
 		}
 		force := parsed.has("--force") || parsed.has("-f")
 		appendDiverged := parsed.has("--append")
 		defer wakeHistoricalSync(c, cwd)
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged, ForegroundOnly: !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
+		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Append: appendDiverged, ForegroundOnly: len(parsed.positionals) == 0 && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
-			if strings.Contains(err.Error(), "sync conflict") {
+			if errors.Is(err, domain.ErrSyncConflict) {
 				if strings.Contains(err.Error(), "memory attachment") {
-					return fmt.Errorf("! [rejected] %s (memory fork)\nhint: Run 'cxt pull --force' to adopt the remote memory pointer; immutable local memory and raw sessions are retained.\nhint: Then run 'cxt memorize' and 'cxt push' to project the local session again", strings.TrimPrefix(err.Error(), "sync conflict: "))
+					return fmt.Errorf("! [rejected] %w (memory fork)\nhint: Preview the specific memory pointer with 'cxt repair --preview --snapshot <hash> --reason <text> --output <file>', then apply its exact plan ID.\nhint: Then run 'cxt memorize' and 'cxt push' to project the local session again", err)
 				}
-				return fmt.Errorf("! [rejected] %s (non-fast-forward)\nhint: Remote commit not found in local. Use 'cxt push --append' to rebase (amend) onto remote head,\nor 'cxt pull' followed by push again.\nhint: To force overwrite, use 'cxt push --force' (remote history may be lost)", strings.TrimPrefix(err.Error(), "sync conflict: "))
+				return fmt.Errorf("! [rejected] %w (non-fast-forward)\nhint: Remote commit not found in local. Use 'cxt push --append' to rebase (amend) onto remote head,\nor 'cxt pull' followed by push again.\nhint: To force overwrite, use 'cxt push --force' (remote history may be lost)", err)
 			}
 			return err
 		}
-		fmt.Printf("pushed %d snapshot(s), %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
+		fmt.Printf("pushed %d snapshot(s), %d ref(s) → %s\n", out.Pushed, len(out.NewRefs), remoteName)
 		if out.BackfillPending > 0 {
 			fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt sync status' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
 		}
@@ -752,22 +809,58 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "pull":
-		if err := requireRemote(cwd); err != nil {
-			return err
-		}
-		replaySavedPRDiscovery(ctx, c, cwd)
-		force := parsed.has("--force") || parsed.has("-f")
-		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Progress: syncProgressPrinter(os.Stderr)})
+		selected, remoteName, selectedRef, err := syncDestination(ctx, c, cwd, parsed)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("pulled %d snapshot(s), %d ref(s) from origin\n", out.Pulled, len(out.NewRefs))
-		if len(out.Conflicts) > 0 {
-			return fmt.Errorf("! [conflict] %s — merge canceled (local kept)\nhint: To adopt remote state, use 'cxt pull --force'", strings.Join(out.Conflicts, ", "))
+		c = selected
+		if selectedRef == "" {
+			replaySavedPRDiscovery(ctx, c, cwd)
 		}
-		return reconcileCompletedPRPosition(ctx, c, cwd)
+		force := parsed.has("--force") || parsed.has("-f")
+		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Progress: syncProgressPrinter(os.Stderr)})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("pulled %d snapshot(s), %d ref(s) from %s\n", out.Pulled, len(out.NewRefs), remoteName)
+		if len(out.Conflicts) > 0 {
+			return fmt.Errorf("%w: ! [conflict] %s — merge canceled (local kept)\nhint: Preview a specific pointer with 'cxt repair --preview --ref <branch> --reason <text> --output <file>' before applying its exact plan ID", domain.ErrSyncConflict, strings.Join(out.Conflicts, ", "))
+		}
+		if selectedRef == "" {
+			if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
+				return err
+			}
+		}
+		if c.ApplySelectedPull == nil {
+			return fmt.Errorf("selected-code pull application unavailable")
+		}
+		receipt, err := c.ApplySelectedPull(ctx, cwd)
+		if err != nil {
+			return fmt.Errorf("remote observation updated; selected context was not applied: %w", err)
+		}
+		fmt.Printf("applied selected-code context and memory receipt %s (provider conversation unchanged)\n", receipt.Plan.ID)
+		return nil
+
+	case "fetch":
+		selected, remoteName, selectedRef, err := syncDestination(ctx, c, cwd, parsed)
+		if err != nil {
+			return err
+		}
+		c = selected
+		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, FetchOnly: true, Progress: syncProgressPrinter(os.Stderr)})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("fetched %d snapshot(s) from %s; working context, memory and branch refs unchanged\n", out.Pulled, remoteName)
+		return nil
+
+	case "repair":
+		return runRemoteRepair(ctx, c, cwd, parsed)
 
 	case "stash":
+		if parsed.has("--staged") {
+			return runIndexStash(ctx, c, cwd, parsed)
+		}
 		// git stash equivalent: save active session and return to branch head (commit chain) context.
 		switch parsed.first() {
 		case "", "push":
@@ -1154,22 +1247,26 @@ usage: cxt <command> [flags]
   branch [list]             list local context branches
   branch archive <name>     hide a deleted Git branch pointer while preserving all context history
   branch restore <name>     restore an archived context branch and record a new active generation
-  add [claude|codex]        stage providers for the next commit (defaults to both)
-  commit [-m msg]           capture the active session (also run automatically by the Git commit hook)
+  add [claude|codex|.]      freeze matching worktree sources in the additive index
+  commit [-m msg]           publish only the frozen index; --resume retries its operation
+  restore --staged <key>|.  unstage frozen sources without deleting their archives
+  status [--json]           inspect worktree selection, memory, index and stored captures
+  diff [--staged] [--json]   compare stored captures/index against selected history
   checkout [<ref>] [-b new] [--provider claude|codex] [--mode full|reconstructed|memory]
                             restore or branch context (also run automatically by Git checkout)
   switch [<branch>] [-c new] [--mode full|reconstructed|memory]
                             alias for checkout (equivalent to Git switch)
-  push [--force|--append] [--wait-history]
+  push [remote [branch]] [--force|--append] [--wait-history]
                             publish current context; retain and retry historical uploads
-  pull [--force]            synchronize origin context locally
+  fetch [remote [branch]]   observe remote state without applying refs or memory
+  pull [remote [branch]]    synchronize and apply the selected-code projection
   tag [<name> [ref]]        list or create immutable tags (equivalent to Git tags)
   stash [push|pop|list]     save or restore a session (push accepts --provider)
 
   Context commands:
   save [-m msg] [--provider claude|codex]
                             create a single-provider snapshot without commit staging or remote pending sync
-  list | log [--branch B]   list snapshots
+  list | log [ref]          inspect HEAD/ref ancestry (--all, --retained, --server, --json)
   fork <ref> --as <branch> [--provider claude|codex] [--mode full|reconstructed|memory]
                             fork and restore a context branch
   load [<ref>] [--provider claude|codex] [--mode full|reconstructed|memory]
@@ -1201,7 +1298,7 @@ func printUsage() {
 }
 
 // loadModeOr interprets the priority of load fidelity:
-// --mode flag (per invocation) > local load.mode (checkout-specific) > server personal setting (account global) > full.
+// --mode flag (per invocation) > local load.mode (checkout-specific) > server personal setting (account global) > structured memory input.
 func loadModeOr(cwd, explicit string) string {
 	if explicit != "" {
 		return explicit

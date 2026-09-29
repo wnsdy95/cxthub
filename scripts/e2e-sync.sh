@@ -104,7 +104,7 @@ git init -q --bare "$TMP/bare.git"
 session() { # session <cwd> <label> — write a synthetic Claude JSONL session with model and usage.
   D="$HOME/.claude/projects/$(python3 -c "import re,sys;print(re.sub(r'[^A-Za-z0-9]','-',sys.argv[1]))" "$1")"
   mkdir -p "$D"
-  cat > "$D/s-$2.jsonl" <<EOF
+  cat > "$D/sess-$2.jsonl" <<EOF
 {"type":"user","cwd":"$1","sessionId":"sess-$2","gitBranch":"main","timestamp":"2026-07-05T00:00:00Z","message":{"role":"user","content":"task $2"}}
 {"type":"assistant","cwd":"$1","sessionId":"sess-$2","gitBranch":"main","timestamp":"2026-07-05T00:00:01Z","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"text","text":"done $2"}],"usage":{"input_tokens":100,"output_tokens":10}}}
 EOF
@@ -113,7 +113,7 @@ EOF
 large_session() { # large_session <cwd> <label> — one event exceeds the v1 2MiB bound.
   session "$1" "$2"
   D="$HOME/.claude/projects/$(python3 -c "import re,sys;print(re.sub(r'[^A-Za-z0-9]','-',sys.argv[1]))" "$1")"
-  python3 - "$D/s-$2.jsonl" <<'PY'
+  python3 - "$D/sess-$2.jsonl" <<'PY'
 import json,sys
 path=sys.argv[1]
 rows=[json.loads(line) for line in open(path)]
@@ -318,11 +318,14 @@ expect "app switch does not supersede provider files" "$(find "$PROJ" -maxdepth 
 expect "app switch does not materialize orphan native seed" "$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')" "$APP_JSONL_BEFORE"
 expect "app session file remains at original path" "$([ -f "$APP_SESSION" ] && echo yes)" yes
 APP_HANDOFF=$(echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"continue\"}" | cxt hook --provider claude --event UserPromptSubmit)
+printf '%s\n' "$APP_HANDOFF" > "$TMP/app-handoff.json"
 expect "app handoff is one bounded project-memory injection" "$(echo "$APP_HANDOFF" | python3 -c "
 import json,sys
 try:
     text=json.load(sys.stdin)['hookSpecificOutput']['additionalContext']
-    print('yes' if 'cxthub branch context handoff' in text and len(text.encode()) <= 16*1024 else 'no')
+    prefix='[cxt context package v1]'
+    package,end=json.JSONDecoder().raw_decode(text.split(prefix,1)[1].lstrip())
+    print('yes' if prefix in text and len(text.encode()) <= 16*1024 and package['selection']['branch']=='app-feature-x' and package['selection']['repository_id']=='$RID' and not package.get('historical_evidence') else 'no')
 except Exception: print('no')")" yes
 expect "app handoff is consumed once" "$(find .cxt/handoffs -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" 0
 git checkout -q main >/dev/null 2>&1
@@ -414,8 +417,8 @@ expect "isolated session holder killed" "$(kill -0 "$TPID" 2>/dev/null && echo a
 expect "wrapper automatically restarts as seed (--resume)" "$(grep -c -- "--resume $SEEDID" "$CLAUDELOG")" 1
 expect "restart target = new seed ID" "$(tail -1 "$CLAUDELOG" | grep -c -- "--resume $SEEDID")" 1
 expect "wrapper carries proven Claude memory profile" "$(grep -c '^MEMORY_PROFILE v1 64 ' "$CLAUDELOG")" 2
-expect "initial child carries its custom Claude memory directory" "$(grep -c "^MEMORY_PROFILE v1 64 $CLAUDE_MEMORY_OVERRIDE$" "$CLAUDELOG")" 1
-expect "restarted child drops settings no longer present in its arguments" "$(grep -c '^MEMORY_PROFILE v1 64 default$' "$CLAUDELOG")" 1
+expect "both children retain the invocation's custom Claude memory directory" "$(grep -c "^MEMORY_PROFILE v1 64 $CLAUDE_MEMORY_OVERRIDE$" "$CLAUDELOG")" 2
+expect "restart does not silently revert the invocation to default settings" "$(grep -c '^MEMORY_PROFILE v1 64 default$' "$CLAUDELOG")" 0
 if [ -f "$CXT_E2E_AGENT_PID" ]; then kill "$(cat "$CXT_E2E_AGENT_PID")" 2>/dev/null; fi
 wait "$WPID" 2>/dev/null
 
@@ -482,7 +485,7 @@ ccurl -sb "$J" -X POST "$B/repos/$RID/fork" -H 'Content-Type: application/json' 
   -d "{\"from\":\"$FORK_FROM\",\"new_branch\":\"web-fork-y\",\"author\":{\"name\":\"E2E\",\"email\":\"e2e@test.local\",\"team\":\"\"}}" >/dev/null
 session "$TMP/repo1" WFY
 # A real app reports the new conversation through its official prompt hook.
-printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s","prompt":"continue"}\n' "$TMP/repo1" "$D/s-WFY.jsonl" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
+printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s","prompt":"continue"}\n' "$TMP/repo1" "$D/sess-WFY.jsonl" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
 git checkout -qb web-fork-y >"$TMP/wfy.out" 2>&1
 expect "switch -c records its own observed birth" "$(birth_field web-fork-y kind)" birth
 WFY_BIRTH_TARGET=$(birth_field web-fork-y target)

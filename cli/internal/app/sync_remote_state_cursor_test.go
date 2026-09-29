@@ -113,8 +113,12 @@ func TestPullRemoteStateCursorRefetchesRemoteAndLocalMutations(t *testing.T) {
 			t.Fatalf("changed remote pull=%d snapshots, want 1", got)
 		}
 		local, err := f.store.GetSnapshot(f.ctx, f.id)
-		if err != nil || local.GraftSeq != 2 || len(local.GraftParents) != 1 || local.GraftParents[0] != parentDoc.Hash {
-			t.Fatalf("remote mutation not adopted: %+v err=%v", local, err)
+		if err != nil || local.GraftSeq != 1 {
+			t.Fatalf("fetch applied remote mutation: %+v err=%v", local, err)
+		}
+		observed, err := f.store.ReadRemoteObservation(f.ctx, f.repoID, "configured")
+		if err != nil || len(observed.Snapshots) != 1 || observed.Snapshots[0].GraftSeq != 2 || observed.Snapshots[0].GraftParents[0] != parentDoc.Hash {
+			t.Fatalf("remote mutation not observed: %+v err=%v", observed, err)
 		}
 		if got := f.pull(t).Pulled; got != 0 {
 			t.Fatalf("settled remote pull=%d snapshots, want 0", got)

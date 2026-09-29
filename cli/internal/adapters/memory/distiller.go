@@ -172,7 +172,7 @@ func isSyntheticSeedText(text string) bool {
 	// provider rollout and re-capturing them yields plain user messages (measured
 	// in real Codex digests) — match the boilerplate by prefix as well. Harness
 	// environment_context blocks are machine-generated state, not user intent.
-	return strings.HasPrefix(t, "[cxt seed] Branch-switch context:") ||
+	return domain.IsAgentContextPackageText(t) || strings.HasPrefix(t, "[cxt seed] Branch-switch context:") ||
 		strings.HasPrefix(t, "[cxt] This session was resumed from a branch context seed.") ||
 		strings.HasPrefix(t, "<environment_context>")
 }
@@ -187,7 +187,8 @@ func containsSyntheticSeedText(text string) bool {
 		return true
 	}
 	return strings.Contains(text, "[cxt] This session was resumed from a branch context seed.") ||
-		strings.Contains(text, "[cxt seed] Branch-switch context:")
+		strings.Contains(text, "[cxt seed] Branch-switch context:") ||
+		strings.Contains(text, "[cxt context package v1]\n")
 }
 
 func appendRecentDistinct(items []string, text string, limit int) []string {

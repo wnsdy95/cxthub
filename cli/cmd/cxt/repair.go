@@ -12,6 +12,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
+	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
@@ -24,6 +25,10 @@ import (
 // Repair has its own composition root: damaged replica metadata must not run
 // ordinary replay, capture or provider setup before cloud objects are verified.
 func runRepair(args []string) error {
+	options, err := delivcli.ParseRepairFromServerArgs(args)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	cwd, err := os.Getwd()
@@ -42,14 +47,8 @@ func runRepair(args []string) error {
 	if err != nil {
 		return fmt.Errorf("cannot establish repository identity from the Git journal: %w; preserve .cxt and run cxt doctor", err)
 	}
-	var explicit string
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "--remote" {
-			explicit = args[i+1]
-		}
-	}
 	remotes, configErr := remotecfg.Load(roots.SharedRoot)
-	origin := explicit
+	origin := options.RemoteURL
 	if origin == "" {
 		origin = remotes["origin"]
 	}

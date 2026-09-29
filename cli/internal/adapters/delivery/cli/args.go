@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 type commandFlagKind uint8
@@ -84,30 +86,34 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"remote":    {usage: "cxt remote [-v] | add <name> <url> | remove <name>", maxArgs: 3, flags: commandFlags(nil, []string{"-v"})},
 	"branch":    {usage: "cxt branch [list] | operations [--json] | replay | recover <operation-id> --confirm-orphan | archive <name> | restore <name> [--provider claude|codex] [--mode full|reconstructed|memory]", maxArgs: 2, flags: commandFlags([]string{"--provider", "--mode"}, []string{"--json", "--confirm-orphan"})},
 	"repack":    {usage: "cxt repack", effect: commandLocalWrite},
-	"add":       {usage: "cxt add [claude|codex|.]...", maxArgs: -1, effect: commandLocalWrite},
-	"commit":    {usage: "cxt commit [-m <message>]", effect: commandContextWrite, flags: commandFlags([]string{"-m"}, nil)},
+	"add":       {usage: "cxt add [claude|codex|.]... [--expect <index-revision>] [--json]", maxArgs: -1, effect: commandContextWrite, flags: commandFlags([]string{"--expect"}, []string{"--json"})},
+	"commit":    {usage: "cxt commit [-m <message>] [--expect <index-revision>] [--json] | --resume <operation-id> [--json]", effect: commandContextWrite, flags: commandFlags([]string{"-m", "--expect", "--resume"}, []string{"--json"})},
+	"restore":   {usage: "cxt restore --staged <source-key>...|. [--expect <index-revision>] [--json]", minArgs: 1, maxArgs: -1, effect: commandLocalWrite, flags: commandFlags([]string{"--expect"}, []string{"--staged", "--json"})},
 	"switch":    {usage: "cxt switch [<branch>] [-c <new>] [--mode full|reconstructed|memory]", maxArgs: 1, effect: commandContextWrite, flags: commandFlags([]string{"-c", "--mode"}, nil)},
 	"config":    {usage: "cxt config <key> [value]", minArgs: 1, maxArgs: 2},
 	"login":     {usage: "cxt login [token|-t <token>] [--server <server-url>]", maxArgs: 1, effect: commandLocalWrite, flags: commandFlags([]string{"-t", "--server"}, nil)},
 	"logout":    {usage: "cxt logout", effect: commandLocalWrite},
 	"fsck":      {usage: "cxt fsck"},
-	"repair":    {usage: "cxt repair --from-server [--remote <repository-url>]", effect: commandLocalWrite, flags: commandFlags([]string{"--remote"}, []string{"--from-server"})},
+	"repair":    {usage: "cxt repair --from-server [--remote <repository-url>] | --preview --ref <branch>|--snapshot <hash> --reason <text> --output <file> | --apply <file> --expect <plan-id>", effect: commandLocalWrite, flags: commandFlags([]string{"--remote", "--ref", "--snapshot", "--reason", "--output", "--apply", "--expect"}, []string{"--from-server", "--preview"})},
 	"capture":   {usage: "cxt capture list [--all] [--json] | show <id> [--json] | retry|resolve <id> --expect <hash> | acknowledge <id> --expect <hash> --reason <text>", minArgs: 1, maxArgs: 2, flags: commandFlags([]string{"--expect", "--reason"}, []string{"--all", "--json"})},
 	"sync":      {usage: "cxt sync status [--json]", minArgs: 1, maxArgs: 1, flags: commandFlags(nil, []string{"--json"})},
 	"doctor":    {usage: "cxt doctor [--json]", flags: commandFlags(nil, []string{"--json"})},
+	"status":    {usage: "cxt status [--json]", flags: commandFlags(nil, []string{"--json"})},
+	"diff":      {usage: "cxt diff [--staged] [--json]", flags: commandFlags(nil, []string{"--staged", "--json"})},
 	"reflog":    {usage: "cxt reflog"},
 	"secrets":   {usage: "cxt secrets push|pull [-p <passphrase>] [--remember] [--rotate (push only)] [--force (pull only)]", minArgs: 1, maxArgs: 1, effect: commandLocalWrite, flags: commandFlags([]string{"-p"}, []string{"--remember", "--rotate", "--force"})},
 	"settings":  {usage: "cxt settings pull|list|restore [n]", minArgs: 1, maxArgs: 2},
 	"hooks":     {usage: "cxt hooks install|uninstall", minArgs: 1, maxArgs: 1, effect: commandLocalWrite},
 	"save":      {usage: "cxt save [-m <message>] [--provider claude|codex]", effect: commandContextWrite, flags: commandFlags([]string{"-m", "--provider"}, nil)},
-	"list":      {usage: "cxt list [--branch <branch>]", flags: commandFlags([]string{"--branch"}, nil)},
-	"log":       {usage: "cxt log [--branch <branch>]", flags: commandFlags([]string{"--branch"}, nil)},
+	"list":      {usage: "cxt list [<ref>|--branch <branch>|--all|--retained] [--server] [--json]", maxArgs: 1, flags: commandFlags([]string{"--branch"}, []string{"--all", "--retained", "--server", "--json"})},
+	"log":       {usage: "cxt log [<ref>|--branch <branch>|--all|--retained] [--server] [--json]", maxArgs: 1, flags: commandFlags([]string{"--branch"}, []string{"--all", "--retained", "--server", "--json"})},
 	"checkout":  {usage: "cxt checkout [<ref>] [-b <new>] [--provider claude|codex] [--mode full|reconstructed|memory]", maxArgs: 1, effect: commandContextWrite, flags: commandFlags([]string{"-b", "--provider", "--mode"}, nil)},
 	"fork":      {usage: "cxt fork <ref> --as <branch> [--provider claude|codex] [--mode full|reconstructed|memory]", minArgs: 1, maxArgs: 1, effect: commandContextWrite, flags: commandFlags([]string{"--as", "--provider", "--mode"}, nil)},
-	"load":      {usage: "cxt load [<ref>] [--provider claude|codex] [--mode full|reconstructed|memory]", maxArgs: 1, effect: commandProvider, flags: commandFlags([]string{"--provider", "--mode"}, nil)},
-	"push":      {usage: "cxt push [--force|-f|--append] [--wait-history]", effect: commandSync, flags: commandFlags(nil, []string{"--force", "-f", "--append", "--wait-history"})},
-	"pull":      {usage: "cxt pull [--force|-f]", effect: commandSync, flags: commandFlags(nil, []string{"--force", "-f"})},
-	"stash":     {usage: "cxt stash [push [-m <message>] [--provider claude|codex]|pop|list]", maxArgs: 1, effect: commandContextWrite, flags: commandFlags([]string{"-m", "--provider"}, nil)},
+	"load":      {usage: "cxt load [<ref>] [--work-state <file>] [--provider claude|codex] [--mode full|reconstructed|memory] | [--context-budget 200k|full] --output <file> [--model <model>]", maxArgs: 1, effect: commandProvider, flags: commandFlags([]string{"--provider", "--mode", "--context-budget", "--output", "--model", "--work-state"}, nil)},
+	"push":      {maxArgs: 2, usage: "cxt push [remote [branch]] [--force|-f|--append] [--wait-history]", effect: commandSync, flags: commandFlags(nil, []string{"--force", "-f", "--append", "--wait-history"})},
+	"pull":      {maxArgs: 2, usage: "cxt pull [remote [branch]]", effect: commandSync, flags: commandFlags(nil, []string{"--force", "-f"})},
+	"fetch":     {maxArgs: 2, usage: "cxt fetch [remote [branch]]", effect: commandLocalWrite},
+	"stash":     {usage: "cxt stash [push [-m <message>] [--provider claude|codex]|pop|list] | push|pop|list --staged [--expect <index-revision>] [--id <stash-id>] [--json]", maxArgs: 1, effect: commandContextWrite, flags: commandFlags([]string{"-m", "--provider", "--expect", "--id"}, []string{"--staged", "--json"})},
 	"memorize":  {usage: "cxt memorize [<ref>] [--provider claude|codex] [--claims <json-file>]", maxArgs: 1, effect: commandContextWrite, flags: commandFlags([]string{"--provider", "--claims"}, nil)},
 	"memory":    {usage: "cxt memory [<ref>] [--provider claude|codex] [--claims <json-file>]", maxArgs: 1, effect: commandContextWrite, flags: commandFlags([]string{"--provider", "--claims"}, nil)},
 	"tag":       {usage: "cxt tag [<name> [ref]]", maxArgs: 2},
@@ -119,10 +125,18 @@ var commandArgSpecs = map[string]commandArgSpec{
 
 // PreflightArgs must run before composition. It only parses and prints help;
 // invalid input cannot touch repository state, providers, or the network.
-func PreflightArgs(args []string) (bool, error) {
+func PreflightArgs(args []string) (handled bool, err error) {
+	defer func() {
+		if err != nil {
+			err = argumentError{err}
+		}
+	}()
 	if len(args) < 2 {
 		printUsage()
 		return true, nil
+	}
+	if _, recognized, err := ParseLaunchIntent(args[1:]); recognized {
+		return false, err
 	}
 	cmd := args[1]
 	if cmd == "-h" || cmd == "--help" {
@@ -268,8 +282,27 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 		}
 		return true
 	}
+	if (cmd == "add" || cmd == "commit" || cmd == "restore" || cmd == "stash") && p.has("--expect") && domain.ValidateContentHash(domain.ContentHash(flags["--expect"])) != nil {
+		return fail("--expect requires a full index revision hash")
+	}
 	valid := true
 	switch cmd {
+	case "log", "list":
+		choices := 0
+		if len(pos) > 0 {
+			choices++
+		}
+		for _, flag := range []string{"--branch", "--all", "--retained"} {
+			if p.has(flag) {
+				choices++
+			}
+		}
+		if choices > 1 {
+			return fail("select one ref, --branch, --all, or --retained")
+		}
+		if p.has("--server") && (p.has("--all") || p.has("--retained")) {
+			return fail("--server requires one selected history")
+		}
 	case "repo":
 		valid = sub == "create"
 	case "add":
@@ -278,9 +311,53 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 				return fail("provider must be claude or codex (or . for both)")
 			}
 		}
+	case "commit":
+		if p.has("--resume") && (p.has("-m") || p.has("--expect")) {
+			return fail("--resume replays the saved operation; it cannot change its message or revision")
+		}
+	case "restore":
+		if !p.has("--staged") {
+			return fail("restore requires --staged; provider conversations are never deleted")
+		}
+		for _, key := range pos {
+			if key == "." && len(pos) != 1 {
+				return fail("use . alone to unstage every source")
+			}
+			if key != "." && domain.ValidateContentHash(domain.ContentHash(key)) != nil {
+				return fail("source keys must be full sha256 hashes from cxt status")
+			}
+		}
 	case "fork":
 		valid = flags["--as"] != ""
+	case "load":
+		if p.has("--work-state") && p.has("--mode") {
+			return fail("personal handoff cannot be combined with legacy replay --mode")
+		}
+		if p.has("--context-budget") {
+			if _, err := domain.ParseHistoryBudget(flags["--context-budget"]); err != nil {
+				return fail(err.Error())
+			}
+			if !p.has("--output") {
+				return fail("history artifact preparation requires --output; use cxt --pull <provider> for verified native delivery")
+			}
+		}
+		if p.has("--output") && p.has("--mode") {
+			return fail("artifact input policy is separate from legacy replay --mode")
+		}
+		if p.has("--model") && !p.has("--output") {
+			return fail("--model requires --output")
+		}
+	case "pull", "fetch":
+		if cmd == "pull" && p.has("--force") {
+			return fail("--force is no longer supported; preview an exact pointer with cxt repair --preview, then apply the reviewed plan")
+		}
+		if len(p.positionals) == 2 && domain.ValidateBranchName(p.positionals[1]) != nil {
+			return fmt.Errorf("expected a branch name; refspec mappings are not supported")
+		}
 	case "push":
+		if len(p.positionals) == 2 && domain.ValidateBranchName(p.positionals[1]) != nil {
+			return fmt.Errorf("expected a branch name; refspec mappings are not supported")
+		}
 		valid = flags["--force"] == "" || flags["--append"] == ""
 	case "login":
 		valid = len(pos) == 0 || flags["-t"] == ""
@@ -289,7 +366,16 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 			return fail("the product connector is https://cxthub.com/mcp; the stdio helper requires --local")
 		}
 	case "repair":
-		valid = flags["--from-server"] != ""
+		switch {
+		case p.has("--from-server"):
+			valid = only("--from-server", "--remote")
+		case p.has("--preview"):
+			valid = only("--preview", "--ref", "--snapshot", "--reason", "--output") && p.has("--reason") && p.has("--output") && p.has("--ref") != p.has("--snapshot")
+		case p.has("--apply"):
+			valid = only("--apply", "--expect") && domain.ValidateContentHash(domain.ContentHash(flags["--expect"])) == nil
+		default:
+			valid = false
+		}
 	case "hook":
 		valid = flags["--provider"] != "" && flags["--event"] != ""
 	case "sync":
@@ -383,8 +469,23 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 			valid = false
 		}
 	case "stash":
+		if p.has("--staged") {
+			switch sub {
+			case "", "push":
+				valid = only("--staged", "--expect", "--json")
+			case "pop":
+				valid = only("--staged", "--expect", "--id", "--json") && p.has("--id")
+			case "list":
+				valid = only("--staged", "--json")
+				p.effect = commandRead
+			default:
+				valid = false
+			}
+			break
+		}
 		switch sub {
 		case "", "push":
+			valid = only("-m", "--provider")
 		case "pop":
 			valid = only()
 		case "list":

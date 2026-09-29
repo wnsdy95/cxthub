@@ -112,6 +112,28 @@ func (s *Service) branchContext(ctx context.Context, ref domain.Ref, code string
 	// pull an unrelated/future PR into a past code selection.
 	allowed := map[domain.ContentHash]bool{}
 	ranks := map[domain.ContentHash]int{}
+	// An overlay is a preservation link, not proof that a PR is applied at this
+	// code position. Prevent known unselected/review sources from re-entering via
+	// that link after their integration receipt has already excluded them. Shared
+	// natural ancestors are still admitted by the selected roots themselves.
+	unselected := map[domain.ContentHash]bool{}
+	for _, m := range out.Merges {
+		if m.State == "included" {
+			continue
+		}
+		stack := []domain.ContentHash{m.Source}
+		for len(stack) > 0 {
+			id := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if unselected[id] {
+				continue
+			}
+			unselected[id] = true
+			if snap, ok := byID[id]; ok {
+				stack = append(stack, snap.Parents...)
+			}
+		}
+	}
 	visit := func(root domain.ContentHash, natural bool, rank int) error {
 		stack, seen := []domain.ContentHash{root}, map[domain.ContentHash]bool{}
 		for len(stack) > 0 {
@@ -135,11 +157,14 @@ func (s *Service) branchContext(ctx context.Context, ref domain.Ref, code string
 			if len(allowed) > maxProjectionSnapshots {
 				return fmt.Errorf("branch context exceeds %d snapshots", maxProjectionSnapshots)
 			}
-			parents := snap.ReachabilityParents()
-			if natural {
-				parents = snap.Parents
+			stack = append(stack, snap.Parents...)
+			if !natural {
+				for _, parent := range snap.GraftParents {
+					if !unselected[parent] {
+						stack = append(stack, parent)
+					}
+				}
 			}
-			stack = append(stack, parents...)
 		}
 		return nil
 	}

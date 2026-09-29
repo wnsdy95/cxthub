@@ -7,12 +7,15 @@ import (
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub/cli/internal/app"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 func TestCommandContractRejectsInvalidArguments(t *testing.T) {
 	cases := [][]string{
-		{"pull", "upstream", "feature"}, {"push", "origin"},
+		{"pull", "upstream", "feature:main"}, {"push", "origin", "main", "extra"},
 		{"load", "main", "extra"}, {"load", "--mode", "typo"},
 		{"load", "--mode", "memory", "--mode=full"},
 		{"fork", "main"}, {"fork", "--as", "feature"},
@@ -107,6 +110,7 @@ func TestReadCommandsDoNotReplayCommittedBranchOperations(t *testing.T) {
 	for _, args := range [][]string{{"log"}, {"list"}, {"config", "load.mode"}, {"remote", "-v"}, {"branch", "list"}} {
 		t.Run(strings.Join(args, "/"), func(t *testing.T) {
 			cwd, c, store, repoID, _ := historyFixture(t)
+			c.HistoryQuery = app.NewHistoryQueryService(remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()), gitctx.NewGitContextAdapter(), store, nil)
 			t.Chdir(cwd)
 			t.Setenv("CXT_KEEP_SESSION", "1")
 			ctx := context.Background()

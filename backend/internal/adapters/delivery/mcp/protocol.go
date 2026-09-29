@@ -260,6 +260,13 @@ func toolDefinitions() []map[string]any {
 			props["scope"] = map[string]any{"type": "string", "enum": []string{"all", "current", "previous", "archived"}, "description": "Default all. Current/previous require position; visibility does not modify the live app."}
 			props["position"] = map[string]any{"type": "string", "description": "Explicit context snapshot or cloud branch used as the working position. The server cannot infer local Git HEAD."}
 		}
+		if name == "context_list" {
+			props["mode"] = map[string]any{"type": "string", "enum": []string{"segments"}, "description": "Opt in to versioned source ranges and finalized commit bindings from the shared server query. Returns one snapshot page in bounded JSON fragments; concatenate fragments until page_complete, then continue. A full_source range is not an inferred commit delta; verified_prefix depends on baseline_snapshot_id. limit does not enlarge segment pages."}
+		}
+		if name == "context_fetch" {
+			props["event_start"] = map[string]any{"type": "integer", "minimum": 0, "description": "Optional start of a canonical event range from context_list mode=segments; requires event_end."}
+			props["event_end"] = map[string]any{"type": "integer", "minimum": 0, "description": "Exclusive end of the requested event range. Keep both range arguments unchanged across cursors."}
+		}
 		if name == "memory_load" {
 			props["code_commit"] = map[string]any{"type": "string", "description": "Full selected Git SHA, required only in effective mode. The server cannot infer a local worktree position."}
 			props["mode"] = map[string]any{"type": "string", "enum": []string{"project", "stored", "effective"}, "description": "Default project returns archived lineage. Effective requires code_commit and returns per-item JSON fragments with server-assessed states. Stored reads an immutable attachment. memory_hash pins ref for stored/effective; historical rewind requires its exact memory_hash."}

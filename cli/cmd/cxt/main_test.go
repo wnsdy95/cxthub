@@ -27,7 +27,7 @@ func mainTestGit(t *testing.T, cwd string, args ...string) {
 
 func TestReadCompositionDoesNotExposeCommandServices(t *testing.T) {
 	c := buildReadContainer(config{RepoRoot: t.TempDir()}).clictr
-	if c.Save != nil || c.Checkout != nil || c.Load != nil || c.Fork != nil || c.Sync != nil || c.History != nil || c.Memorize != nil || c.Init != nil || c.Tag != nil || c.Stash != nil || c.SettingsObjects != nil || c.WakeHistoricalSync != nil {
+	if c.Save != nil || c.Checkout != nil || c.Load != nil || c.Fork != nil || c.Sync != nil || c.History != nil || c.Memorize != nil || c.Init != nil || c.Tag != nil || c.Stash != nil || c.Staging != nil || c.IndexStash != nil || c.PrepareAgent != nil || c.ProviderLaunch.Prepare != nil || c.SettingsObjects != nil || c.WakeHistoricalSync != nil {
 		t.Fatal("read composition exposes mutation services")
 	}
 	if c.List == nil || c.Queries == nil || c.ResolveRepo == nil {
@@ -42,6 +42,7 @@ func TestReadCommandsDoNotCreateReplicaOrRegisterRepository(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	mainTestGit(t, root, "init", "-q", "-b", "main")
+	mainTestGit(t, root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-qm", "fixture")
 	if err := os.MkdirAll(filepath.Join(root, ".claude"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestReadCommandsDoNotCreateReplicaOrRegisterRepository(t *testing.T) {
 	defer server.Close()
 	t.Setenv("CXT_REMOTE", server.URL+"/api/v1")
 	t.Setenv("CXT_TOKEN", "fixture")
-	for _, command := range [][]string{{"log"}, {"branch"}, {"branch", "list"}, {"remote", "-v"}, {"config", "load.mode"}, {"tag"}, {"stash", "list"}, {"settings", "list"}, {"fsck"}, {"reflog"}} {
+	for _, command := range [][]string{{"status", "--json"}, {"diff", "--staged", "--json"}, {"diff", "--json"}, {"stash", "list", "--staged"}, {"log"}, {"branch"}, {"branch", "list"}, {"remote", "-v"}, {"config", "load.mode"}, {"tag"}, {"stash", "list"}, {"settings", "list"}, {"fsck"}, {"reflog"}} {
 		if err := run(append([]string{"cxt"}, command...)); err != nil {
 			t.Fatalf("%v: %v", command, err)
 		}

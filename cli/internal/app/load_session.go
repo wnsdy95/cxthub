@@ -43,6 +43,8 @@ import (
 //
 // CIR is the single source of truth (compatibility rules).
 type LoadSessionService struct {
+	agentContext  inbound.PrepareAgentContext
+	agentCode     outbound.CodePosition
 	prompts       *MemoryPromptService
 	store         outbound.SessionStore
 	codecs        map[domain.ProviderKind]outbound.ProviderCodec
@@ -77,19 +79,52 @@ func (s *LoadSessionService) WithMemoryPrompts(prompts *MemoryPromptService) *Lo
 	return s
 }
 
+// WithAgentContext makes unqualified load/checkout use the shared memory policy.
+// Explicit session-stash replay and memory export stay separate.
+func (s *LoadSessionService) WithAgentContext(preparer inbound.PrepareAgentContext) *LoadSessionService {
+	s.agentContext = preparer
+	return s
+}
+
+// WithAgentCodePosition enables the last read before native file publication.
+func (s *LoadSessionService) WithAgentCodePosition(code outbound.CodePosition) *LoadSessionService {
+	s.agentCode = code
+	return s
+}
+
 // Load restores a snapshot to a target provider session file.
 // Mode=full/reconstructed performs full-context restoration (fallback to memory mode on failure), Mode=memory injects memory-form summary.
 func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (inbound.LoadOutput, error) {
+	personal := in.WorkStatePath != "" || in.PersonalScope != (domain.PersonalWorkScope{})
+	if personal && (in.Mode != "" || in.PreferPendingTail || s.agentContext == nil) {
+		return inbound.LoadOutput{}, fmt.Errorf("%w: explicit personal handoff requires agent context preparation without legacy replay or pending-tail selection", domain.ErrAgentContextUnavailable)
+	}
 	snapID, err := resolveRef(ctx, s.store, in.RepoID, in.Ref)
 	if err != nil {
 		return inbound.LoadOutput{}, err
 	}
+	sourceID := snapID
 	if in.PreferPendingTail {
 		snapID = s.pendingTailOf(ctx, in.RepoID, in.Ref, snapID, in.PreferredSessionID)
 	}
 	snap, err := s.store.GetSnapshot(ctx, snapID)
 	if err != nil {
 		return inbound.LoadOutput{}, err
+	}
+	if in.Mode == "" && s.agentContext != nil {
+		branch, err := loadAgentSourceBranch(ctx, s.store, snap.RepoID, in.Ref, in.Branch, sourceID)
+		if err != nil {
+			return inbound.LoadOutput{}, err
+		}
+		target := in.TargetProvider
+		if target == "" {
+			target = snap.Provider
+		}
+		return s.LoadAgentContext(ctx, inbound.PrepareAgentContextInput{
+			RepoID: snap.RepoID, Cwd: in.Cwd, Branch: branch, SnapshotID: snap.ID, MemoryPin: in.MemoryPin,
+			Provider: target, Policy: domain.MemoryInputPolicy(),
+			WorkStatePath: in.WorkStatePath, PersonalScope: in.PersonalScope,
+		})
 	}
 	if _, _, err := selectedMemory(ctx, s.store, snapID); err != nil {
 		return inbound.LoadOutput{}, err
@@ -202,6 +237,9 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 		}
 	}
 	// Fallback (compatibility rules): full restoration failure → memory mode downgrade.
+	if in.RequireConversation {
+		return inbound.LoadOutput{}, fmt.Errorf("%w: resumable conversation could not be prepared; memory files were not changed", domain.ErrAgentContextUnavailable)
+	}
 	return s.loadMemory(ctx, cir, snap, target, in.Cwd, prompt)
 }
 

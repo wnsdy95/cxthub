@@ -414,7 +414,11 @@ func TestCheckoutByArchivedBranchNameRestoresActiveProjection(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
 	repoID := string(domain.HashContent([]byte("checkout archived repo")))
-	target := domain.HashContent([]byte("checkout archived target"))
+	doc := pullDoc(t, "checkout archived target")
+	target, err := store.PutDoc(ctx, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
 	branch := domain.Ref{Kind: domain.RefBranch, Name: "feature/restore", RepoID: repoID, Target: target}
 	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: target, RepoID: repoID, DocHash: target}); err != nil {
 		t.Fatal(err)
@@ -524,7 +528,11 @@ func TestDesktopCheckoutSkipsProviderMaterialization(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
 	repoID := string(domain.HashContent([]byte("desktop checkout repo")))
-	target := domain.HashContent([]byte("desktop checkout target"))
+	doc := pullDoc(t, "desktop checkout target")
+	target, err := store.PutDoc(ctx, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
 	branch := domain.Ref{Kind: domain.RefBranch, Name: "feature/app", RepoID: repoID, Target: target}
 	if err := store.PutSnapshot(ctx, domain.Snapshot{ID: target, RepoID: repoID, DocHash: target}); err != nil {
 		t.Fatal(err)
