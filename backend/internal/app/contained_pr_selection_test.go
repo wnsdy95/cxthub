@@ -34,11 +34,22 @@ func containedSelectionFixture(t *testing.T) (*effectiveFixture, domain.Ref, []d
 }
 
 func TestContainedSquashResolvesOnlyCausalSourceCode(t *testing.T) {
-	for _, scenario := range []string{"contained source", "reversed history", "unrelated older code", "different source", "different destination", "missing receipt", "missing completion", "source selected before merge", "missing Git evidence"} {
+	for _, scenario := range []string{"contained source", "reversed history", "unchanged Git SHA", "unrelated older code", "different source", "different destination", "missing receipt", "missing completion", "source selected before merge", "missing Git evidence"} {
 		t.Run(scenario, func(t *testing.T) {
 			f, ref, history := containedSelectionFixture(t)
 			want := effectiveOID(3)
 			switch scenario {
+			case "unchanged Git SHA":
+				filtered := []domain.HistoryEvent{}
+				for _, h := range history {
+					if h.PR != nil && h.PR.Number == 11 {
+						pr := *h.PR
+						pr.HeadSHA = pr.MergeSHA
+						h.PR = &pr
+						filtered = append(filtered, h)
+					}
+				}
+				history = filtered
 			case "reversed history":
 				for i, j := 0, len(history)-1; i < j; i, j = i+1, j-1 {
 					history[i], history[j] = history[j], history[i]

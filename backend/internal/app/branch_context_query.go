@@ -140,7 +140,7 @@ func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.Hi
 	// account for that source SHA. An unrelated/future receipt cannot advance a
 	// historical selection; unrelated observations still participate below.
 	for _, receipt := range history {
-		if receipt.Kind != "pr-merge" || receipt.PRCompleted || receipt.PR == nil || receipt.BranchID != ref.BranchID {
+		if receipt.Kind != "pr-merge" || receipt.PRCompleted || receipt.PR == nil || receipt.BranchID != ref.BranchID || receipt.PR.HeadSHA == receipt.PR.MergeSHA {
 			continue
 		}
 		key := sha256.Sum256([]byte(receipt.ID + ":completed"))
