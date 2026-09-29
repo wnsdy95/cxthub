@@ -6,6 +6,17 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+ ownerRecovery: {
+  title: '소유자 복구 준비',
+  note: '소유자 계정에 묶인 일회용 복구 코드를 준비합니다. 현재는 준비·확인 기능이며 필수 SSO 정책을 켜거나 끄지 않습니다.',
+  unprepared: '확인된 복구 코드가 없습니다.', ready: '저장 확인을 마친 복구 코드가 있습니다.', consumed: '복구 코드를 사용했습니다. 다시 준비하려면 본인 인증이 필요합니다.', revoked: '복구 코드가 폐기됐습니다.',
+  repairUntil: '이 브라우저의 복구 확인 유효 시각:', verifyFirst: '코드 준비·교체·폐기는 이 브라우저에서 10분 이내에 OIDC 또는 SAML 인증을 완료해야 합니다.',
+  refresh: '복구 상태 새로고침', prepare: '복구 코드 준비', replace: '새 복구 코드 준비',
+  saveNote: '이 코드는 다시 표시되지 않습니다. 안전한 곳에 저장한 뒤 아래에 다시 입력해 확인하세요. 확인 전까지 기존 코드는 유지됩니다.',
+  confirmCode: '저장한 새 코드 다시 입력', confirm: '저장 확인 후 코드 활성화', revoke: '복구 코드 폐기',
+  use: '저장한 복구 코드 사용', useNote: '한 번 사용하면 코드는 소진됩니다. 현재 소유자 계정과 이 브라우저에 최대 10분간 복구 확인만 남으며, 저장소 접근권한이나 SSO 인증 승인은 부여하지 않습니다.',
+  savedCode: '저장한 복구 코드', redeem: '코드 사용 및 복구 확인',
+ },
  credentialAssurance: {
   "title": "CLI·MCP 연결별 본인 인증 승인",
   "note": "본인이 확인한 연결만 승인하세요. 이 Enterprise의 본인 인증 근거를 저장하며, 레포지토리 권한을 부여하거나 SSO를 강제하지 않습니다. 승인을 회수해도 연결과 데이터는 유지됩니다.",

@@ -115,4 +115,47 @@ func TestPGSignedOIDCBrowserCallbackAndReplay(t *testing.T) {
 	if json.Unmarshal(w.Body.Bytes(), &view) != nil || !view.Linked || view.VerifiedUntil == nil {
 		t.Fatal("session proof", w.Code, w.Body.String())
 	}
+	// Recovery uses the real signed callback above. It must not accept only a
+	// claimed browser identity or turn recovery evidence into SSO verification.
+	root := "/api/v1/enterprises/" + e.ID
+	recovery := root + "/owner-recovery"
+	var current app.OwnerRecoveryView
+	w = request("GET", recovery, nil)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &current) != nil || current.Ready {
+		t.Fatal("initial recovery", w.Code, w.Body.String())
+	}
+	w = request("POST", recovery+"/prepare", map[string]string{"revision": current.Revision})
+	var prepared app.PreparedOwnerRecovery
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &prepared) != nil || len(prepared.Code) != 56 {
+		t.Fatal("prepare recovery", w.Code)
+	}
+	if w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatal("recovery secret response can be retained")
+	}
+	w = request("POST", recovery+"/confirm", map[string]string{"revision": prepared.Revision, "code": prepared.Code})
+	if w.Code != 200 {
+		t.Fatal("confirm recovery", w.Code, w.Body.String())
+	}
+	w = request("GET", recovery, nil)
+	if json.Unmarshal(w.Body.Bytes(), &current) != nil || !current.Ready || strings.Contains(w.Body.String(), prepared.Code) || strings.Contains(w.Body.String(), "orh_") {
+		t.Fatal("confirmed recovery view leaks or loses state")
+	}
+	// A saved code remains usable during provider unavailability, but does not
+	// manufacture federation approval. Disabling the connection models this.
+	if err = ids.DisableOIDC(ctx, u.ID, e.ID, view.Connection.Revision); err != nil {
+		t.Fatal(err)
+	}
+	w = request("POST", recovery+"/redeem", map[string]string{"code": prepared.Code})
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &current) != nil || current.RepairUntil == nil || current.Ready {
+		t.Fatal("redeem recovery", w.Code, w.Body.String())
+	}
+	w = request("GET", root+"/credential-assessment", nil)
+	var proof app.CredentialAssessment
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &proof) != nil || proof.State == "verified" {
+		t.Fatal("recovery must not restore SSO approval", w.Code, w.Body.String())
+	}
+	w = request("POST", recovery+"/redeem", map[string]string{"code": prepared.Code})
+	if w.Code != 401 {
+		t.Fatal("recovery replay", w.Code)
+	}
 }

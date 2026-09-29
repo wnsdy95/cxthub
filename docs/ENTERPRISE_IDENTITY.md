@@ -128,9 +128,69 @@ periodic polling loop.
 
 This is explicit verification evidence, **not mandatory SSO/MFA enforcement**.
 No repository permission changes. ACR/AMR are retained without inferring MFA.
-Common authenticated-credential checks for reads and transactional writes,
-recoverable-owner policy activation, SCIM and customer IdP acceptance remain
-separate delivery steps. No customer IdP or enforced policy is activated locally.
+Credential assessment is available as described below. Applying it to repository
+reads and transactional writes, recoverable-owner policy activation, SCIM and
+customer IdP acceptance remain separate delivery steps. No customer IdP or enforced policy is activated locally.
+
+## Credential assessment and owner recovery preparation
+
+`GET /enterprises/{id}/credential-assessment` evaluates the exact current
+credential. Browser evidence, a CLI credential approval, and an MCP grant approval
+share the same policy, connection, binding, domain and expiry checks. Refresh does
+not renew approval. The REST boundary accepts browser/CLI credentials; the MCP
+application boundary can use the same evaluator for an MCP access token. Refresh
+tokens and raw identity-provider tokens are not assessment credentials.
+
+Assessment is **not authorization**. This prerequisite does not yet enforce SSO,
+MFA, IP or session restrictions on repository operations. Recovery evidence is
+never interpreted as federation evidence or membership. Ordinary role and
+repository permissions are unchanged.
+
+Migration 0071 adds PostgreSQL-only recovery records. In Enterprise **Identity →
+Owner recovery preparation**, a current Enterprise owner with an active browser
+session and OIDC/SAML verification within the last ten minutes can:
+
+1. Prepare a 256-bit random code. It appears once, and only its account/Enterprise-
+   bound SHA-256 hash is stored. The unconfirmed draft expires after ten minutes
+   or browser expiry, whichever comes first.
+2. Save the code and re-enter it in the same browser. Confirmation atomically
+   replaces the previous code; preparation alone leaves the previous code usable.
+3. Replace or revoke the saved code after fresh verification. Revision checks
+   reject stale editors in other browser windows.
+4. Use the saved code during an identity-provider outage. This still requires an
+   authenticated CXTHub browser session and current Enterprise ownership. It
+   consumes the code exactly once and records recovery verification for this
+   browser for at most ten minutes.
+
+This release prepares and verifies recovery. **It does not yet let recovery
+verification change an enforced identity policy**, and does not provide account
+login recovery when the owner cannot authenticate to CXTHub. The later enforcement
+slice must restrict its use to explicit identity repair commands, recheck ownership
+and validity inside their transaction, and guard last-owner policy activation.
+
+Code consumption, browser-bound recovery evidence and audit commit together under
+the shared identity transaction. A server restart or another API replica cannot
+replay the code. Audit failure rolls the operation back. Logout, session expiry,
+code revocation/replacement and loss of ownership invalidate recovery evidence.
+Removing and re-adding ownership cannot revive old codes. GET never returns codes
+or hashes; secret responses are `no-store`. The browser keeps a newly prepared code
+only in component memory, not persistent storage or React Query mutation data.
+
+The main counterargument is that recovery can become a weaker alternate sign-in
+path. This implementation requires an already authenticated owner plus a saved
+high-entropy code and grants no repository access. External security notifications
+and actual policy repair remain separate work. Recovery designs must retain this
+narrow scope when enforcement is added; a global owner bypass is not acceptable.
+See [NIST recovery guidance](https://pages.nist.gov/800-63-4/sp800-63b/events/) and
+[OWASP MFA recovery guidance](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html).
+These references inform the design; they are not a compliance certification.
+
+Validation covers real signed OIDC callback → HTTP recovery, stale confirmation,
+cross-browser and CLI rejection, code rotation, lease invalidation, concurrent
+redemption and ownership loss across PostgreSQL connections, audit rollback,
+credential assessment after MCP refresh/revocation, and browser UI transitions.
+The positive UI cases use explicit transport fixtures; signed protocol and
+transaction behavior are validated separately against PostgreSQL.
 
 ## SAML browser verification
 

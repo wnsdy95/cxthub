@@ -17,9 +17,24 @@ test('base access, namespace rename, repository move and audit use the real serv
   expect(await(await guest.get('/api/v1/repositories')).json()).toEqual([]);
   await page.goto(`/${source.slug}`);
   await page.getByRole('tab',{name:'Policies',exact:true}).click();
+  // Hold the real successful response after the server commits. An edit made
+  // now used to be overwritten by the delayed mutation success callback.
+  let releaseSave!: () => void;
+  const savedResponse = new Promise<void>(resolve => { releaseSave = resolve; });
+  let firstSave = true;
+  await page.route(`**/api/v1/organizations/${source.id}/policy`, async route => {
+   if (route.request().method() !== 'PATCH' || !firstSave) { await route.continue(); return; }
+   firstSave = false;
+   const response = await route.fetch();
+   await savedResponse;
+   await route.fulfill({ response });
+  });
   await page.getByRole('combobox',{name:'Base repository permission',exact:true}).selectOption('puller');
   await page.getByRole('button',{name:'Save',exact:true}).click();
   await expect.poll(async()=>(await(await guest.get('/api/v1/repositories')).json())[0]?.effective_role).toBe('puller');
+  await expect(page.getByRole('combobox',{name:'Base repository permission',exact:true})).toBeDisabled();
+  releaseSave();
+  await expect(page.getByRole('combobox',{name:'Base repository permission',exact:true})).toBeEnabled();
   await page.getByRole('combobox',{name:'Base repository permission',exact:true}).selectOption('');
   await page.getByRole('button',{name:'Save',exact:true}).click();
   await expect.poll(async()=>(await(await guest.get('/api/v1/repositories')).json()).length).toBe(0);

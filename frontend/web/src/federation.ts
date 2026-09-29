@@ -27,3 +27,12 @@ export interface CredentialAssurancesView {
  available: boolean; policy?: AssurancePolicy; browser_proof?: CredentialApprovalInput;
  approval_available_until?: string; credentials: CredentialAssurance[];
 }
+export interface CredentialAssessment {
+ state: 'unverified' | 'verified' | 'expired' | 'revoked' | 'verification_changed';
+ protocol?: 'oidc' | 'saml'; authenticated_at?: string; verified_until?: string;
+}
+export interface OwnerRecoveryView {
+ available: boolean; revision: string; state: 'unprepared' | 'ready' | 'consumed' | 'revoked';
+ ready: boolean; pending_until?: string; repair_until?: string;
+}
+export interface PreparedOwnerRecovery { revision: string; code: string; pending_until: string }

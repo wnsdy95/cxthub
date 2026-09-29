@@ -5,9 +5,10 @@ import { useT } from '../i18n';
 import type { OIDCInput, OIDCView } from '../federation';
 import { EnterpriseSAML } from './EnterpriseSAML';
 import { EnterpriseCredentialAssurances } from './EnterpriseCredentialAssurances';
+import { EnterpriseOwnerRecovery } from './EnterpriseOwnerRecovery';
 
 export function EnterpriseIdentity({ id, owner }: { id: string; owner: boolean }) {
- return <><OIDCIdentity id={id} owner={owner} /><EnterpriseSAML id={id} owner={owner} /><EnterpriseCredentialAssurances id={id} owner={owner} /></>;
+ return <><OIDCIdentity id={id} owner={owner} /><EnterpriseSAML id={id} owner={owner} /><EnterpriseCredentialAssurances id={id} owner={owner} />{owner && <EnterpriseOwnerRecovery key={id} id={id} />}</>;
 }
 function OIDCIdentity({ id, owner }: { id: string; owner: boolean }) {
  const t = useT(); const qc = useQueryClient();

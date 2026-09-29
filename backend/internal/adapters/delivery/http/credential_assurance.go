@@ -17,6 +17,7 @@ type credentialAssuranceBackend interface {
 }
 
 func (s *Server) registerCredentialAssuranceRoutes(mux *http.ServeMux) {
+	s.registerOwnerRecoveryRoutes(mux)
 	mux.HandleFunc("GET /api/v1/enterprises/{enterpriseID}/credential-assurances", s.requireUser(s.credentialAssurances))
 	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/assurance-policy", s.requireUser(s.rateLimit(10, time.Minute, s.assurancePolicy)))
 	mux.HandleFunc("POST /api/v1/enterprises/{enterpriseID}/credential-assurances/{credentialID}", s.requireUser(s.rateLimit(20, time.Minute, s.credentialApprove)))

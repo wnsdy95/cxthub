@@ -209,6 +209,9 @@ func (s *IdentityService) UpdateEnterpriseMember(ctx context.Context, user, id, 
 			if owners <= 1 {
 				return domain.ErrConflict
 			}
+			if err := s.invalidateOwnerRecovery(ctx, id, target); err != nil {
+				return err
+			}
 		}
 		if _, err = s.repositories.GetUser(ctx, target); err != nil {
 			return err
@@ -249,6 +252,9 @@ func (s *IdentityService) RemoveEnterpriseMember(ctx context.Context, user, id, 
 			}
 		}
 		if err = st.RemoveEnterpriseMember(ctx, id, target); err != nil {
+			return err
+		}
+		if err = s.invalidateOwnerRecovery(ctx, id, target); err != nil {
 			return err
 		}
 		return s.enterpriseAudit(ctx, id, user, "enterprise.member.removed", target)

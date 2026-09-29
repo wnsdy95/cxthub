@@ -1301,6 +1301,9 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .enterprise-identity { margin-bottom: 24px; }
 .enterprise-identity > h2, .enterprise-identity > p { margin: 0; }
 .enterprise-identity code { overflow-wrap: anywhere; }
+.owner-recovery { min-width: 0; }
+.recovery-code { display: block; padding: 12px; user-select: all; overflow-wrap: anywhere; }
+.recovery-draft { min-width: 0; }
 .identity-editor { margin-top: 16px; }
 .identity-editor summary { cursor: pointer; }
 .identity-editor form { display: grid; gap: 12px; margin-top: 12px; }

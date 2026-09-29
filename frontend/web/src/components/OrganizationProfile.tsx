@@ -430,7 +430,7 @@ function OrganizationPolicies({ organizationId, canAdmin, canOwner }: { organiza
         <label className="policy-row">
           <span>{t('organization.repositoryCreation')}</span>
           <select
-            disabled={!canAdmin}
+            disabled={!canAdmin || update.isPending}
             value={draft.repository_creation}
             onChange={(event) => setDraft({ ...draft, repository_creation: event.target.value as 'admins' | 'members' })}
           >
@@ -441,7 +441,7 @@ function OrganizationPolicies({ organizationId, canAdmin, canOwner }: { organiza
         <label className="policy-row">
           <span>{t('organization.defaultVisibility')}</span>
           <select
-            disabled={!canAdmin}
+            disabled={!canAdmin || update.isPending}
             value={draft.default_repository_visibility}
             onChange={(event) =>
               setDraft({ ...draft, default_repository_visibility: event.target.value as 'private' | 'public' })
@@ -455,7 +455,7 @@ function OrganizationPolicies({ organizationId, canAdmin, canOwner }: { organiza
           <span>{t('organization.allowPublic')}</span>
           <input
             type="checkbox"
-            disabled={!canAdmin}
+            disabled={!canAdmin || update.isPending}
             checked={draft.allow_public_repositories}
             onChange={(event) =>
               setDraft({
@@ -468,7 +468,7 @@ function OrganizationPolicies({ organizationId, canAdmin, canOwner }: { organiza
         </label>
         <label className="policy-row">
           <span>{t('organization.baseAccess')}</span>
-          <select disabled={!canOwner} value={draft.default_repository_role ?? ''} onChange={(event) => setDraft({ ...draft, default_repository_role: event.target.value as OrganizationPolicy['default_repository_role'] })}>
+          <select disabled={!canOwner || update.isPending} value={draft.default_repository_role ?? ''} onChange={(event) => setDraft({ ...draft, default_repository_role: event.target.value as OrganizationPolicy['default_repository_role'] })}>
             <option value="">{t('organization.noBaseAccess')}</option>
             {['viewer', 'puller', 'member', 'maintainer', 'owner'].map((role) => <option key={role} value={role}>{role}</option>)}
           </select>
