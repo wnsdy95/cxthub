@@ -17,18 +17,18 @@ import (
 //  2. SessionStore.ListRefs(repoID) → ref list
 //  3. Return ListOutput{Snapshots, Refs}
 type ListSessionsService struct {
-	store outbound.SessionStore
+	store outbound.SnapshotListReader
 }
 
 // NewListSessionsService creates and injects dependencies for ListSessionsService.
-func NewListSessionsService(store outbound.SessionStore) *ListSessionsService {
+func NewListSessionsService(store outbound.SnapshotListReader) *ListSessionsService {
 	return &ListSessionsService{store: store}
 }
 
 // List retrieves the snapshot and ref lists for a repo/branch.
 func (s *ListSessionsService) List(ctx context.Context, in inbound.ListInput) (inbound.ListOutput, error) {
 	if in.Branch != "" {
-		if bindings, ok := s.store.(outbound.LocalBranchStore); ok {
+		if bindings, ok := s.store.(outbound.LocalBranchReader); ok {
 			binding, err := bindings.ResolveLocalBranch(ctx, in.RepoID, in.Branch)
 			if err != nil {
 				return inbound.ListOutput{}, err

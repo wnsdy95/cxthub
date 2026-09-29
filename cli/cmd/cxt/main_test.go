@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
@@ -19,6 +22,72 @@ func mainTestGit(t *testing.T, cwd string, args ...string) {
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func TestReadCompositionDoesNotExposeCommandServices(t *testing.T) {
+	c := buildReadContainer(config{RepoRoot: t.TempDir()}).clictr
+	if c.Save != nil || c.Checkout != nil || c.Load != nil || c.Fork != nil || c.Sync != nil || c.History != nil || c.Memorize != nil || c.Init != nil || c.Tag != nil || c.Stash != nil || c.SettingsObjects != nil || c.WakeHistoricalSync != nil {
+		t.Fatal("read composition exposes mutation services")
+	}
+	if c.List == nil || c.Queries == nil || c.ResolveRepo == nil {
+		t.Fatal("missing read services")
+	}
+}
+
+func TestReadCommandsDoNotCreateReplicaOrRegisterRepository(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	mainTestGit(t, root, "init", "-q", "-b", "main")
+	if err := os.MkdirAll(filepath.Join(root, ".claude"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(root, ".claude", "settings.json")
+	if err := os.WriteFile(settings, []byte("{\"permissions\":{}}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var requests []string
+	var requestsMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestsMu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		requestsMu.Unlock()
+		if r.Method != http.MethodGet {
+			t.Errorf("read made a write request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/fsck") {
+			_, _ = w.Write([]byte(`{"total":0,"reachable":0}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/reflog") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		t.Errorf("unexpected read request: %s", r.URL.Path)
+		http.Error(w, "unexpected endpoint", http.StatusNotFound)
+	}))
+	defer server.Close()
+	t.Setenv("CXT_REMOTE", server.URL+"/api/v1")
+	t.Setenv("CXT_TOKEN", "fixture")
+	for _, command := range [][]string{{"log"}, {"branch"}, {"branch", "list"}, {"remote", "-v"}, {"config", "load.mode"}, {"tag"}, {"stash", "list"}, {"settings", "list"}, {"fsck"}, {"reflog"}} {
+		if err := run(append([]string{"cxt"}, command...)); err != nil {
+			t.Fatalf("%v: %v", command, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, ".cxt")); !os.IsNotExist(err) {
+			t.Fatalf("%v created replica: %v", command, err)
+		}
+	}
+	requestsMu.Lock()
+	defer requestsMu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("read requests: %v", requests)
+	}
+	if raw, err := os.ReadFile(settings); err != nil || string(raw) != "{\"permissions\":{}}" {
+		t.Fatalf("settings changed: %s %v", raw, err)
 	}
 }
 
