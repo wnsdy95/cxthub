@@ -2484,3 +2484,29 @@ for(const fork of ['main','feature-parent'] as const) for(const continuation of 
  if(fork==='feature-parent') await expect(page.locator(`[data-graph-id="${parent}"]`)).not.toHaveAttribute('data-graph-node-lane','0');
  expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
 });
+
+// No supplied integration plan: exercise the server's actual placement rule
+// when the Git code position is unavailable and only context history is known.
+test('returning from a rewind restores the checkpoint SVG path through main after live refresh and reload', async ({page}) => {
+ const baseID=id('9'),source=id('a'),checkpoint=id('8'),head=pushedHead;
+ const snapshots=[auditSnapshot(head,'main',[checkpoint],'Returned main',8),auditSnapshot(checkpoint,'main',[source],'Main checkpoint',4),auditSnapshot(source,'feature',[baseID],'Merged branch',2),auditSnapshot(baseID,'main',[],'Base',0)];
+ const birth={id:'return-birth',repo_id:repoId,branch_id:'feature-id',branch:'feature',kind:'birth',source:baseID,target:baseID,created_at:'2026-09-18T00:00:01Z'};
+ const done={id:'return-merge',repo_id:repoId,branch_id:'main-id',branch:'main',kind:'pr-merge',source_branch_id:'feature-id',source,target:source,shared_target:baseID,pr_completed:true,pr:{number:1,base_branch:'main',head_branch:'feature',head_sha:'a'.repeat(40),merge_sha:'b'.repeat(40)},created_at:'2026-09-18T00:00:03Z'};
+ let restored=false;
+ const view=()=>({snapshots,refs:[{repo_id:repoId,kind:'branch',name:'main',branch_id:'main-id',target:restored?head:baseID}],history:[birth,done],pending:[],unsync:[],
+  reflog:[{kind:'branch',name:'main',old:checkpoint,new:baseID,created_at:'2026-09-18T00:00:05Z'},...(restored?[{kind:'branch',name:'main',old:baseID,new:head,created_at:'2026-09-18T00:00:08Z'}]:[])]});
+ const {pageErrors,unexpected}=await openGraph(page,req=>req.pathname.endsWith('/view')?{body:view()}:publicRepositoryApi(snapshots,view().refs,[],[],view().reflog,view().history)(req));
+ restored=true;
+ const assertPaths=async()=>{
+  for(const node of [head,checkpoint,'graph:merge:return-merge']) await expect(page.locator(`[data-graph-id="${node}"]`)).toHaveAttribute('data-graph-node-lane','0');
+  await expectRenderedGraphPath(page,head,checkpoint);
+  await expectRenderedGraphPath(page,checkpoint,'graph:merge:return-merge');
+  await expectRenderedGraphPath(page,'graph:merge:return-merge',baseID);
+  await expectRenderedGraphPath(page,'graph:merge:return-merge',source);
+  await expectRenderedGraphPath(page,source,'graph:birth:return-birth');
+ };
+ await assertPaths();
+ await page.reload();
+ await assertPaths();
+ expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
+});

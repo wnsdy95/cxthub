@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"fmt"
 	"sort"
+
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
 // branchCode selects only exact associations with this context and identity.
@@ -72,7 +75,10 @@ func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.Hi
 			byTarget[h.Target] = append(byTarget[h.Target], h)
 		}
 	}
-	candidates := map[string]bool{}
+	// Keep each code association tied to its exact context. A squash receipt
+	// for one source must not normalize an unrelated worker's same-code record.
+	associations := map[domain.ContentHash]map[string]bool{}
+	causalCompletions := map[string]bool{}
 	visited, active := map[domain.ContentHash]bool{}, map[domain.ContentHash]bool{}
 	var collect func(domain.ContentHash) error
 	collect = func(target domain.ContentHash) error {
@@ -98,14 +104,15 @@ func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.Hi
 		for _, h := range rows {
 			if h.Kind == "pr-merge" && h.PRCompleted && h.PR != nil && domain.ValidateGitOID(h.PR.MergeSHA) == nil {
 				merges[h.PR.MergeSHA] = true
+				causalCompletions[h.ID] = true
 			}
 		}
 		for code := range codes {
 			if target == ref.Target && len(merges) != 0 && !merges[code] {
 				return errAmbiguousBranchCode
 			}
-			candidates[code] = true
 		}
+		associations[target] = codes
 		if len(merges) == 0 {
 			if target == ref.Target && len(codes) > 1 {
 				return errAmbiguousBranchCode
@@ -126,6 +133,35 @@ func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.Hi
 			return "", nil
 		}
 		return "", err
+	}
+	// An already-contained promotion can leave its destination ref unchanged,
+	// so its completion target differs from the source carrying HeadSHA. Only
+	// exact receipt/completion pairs encountered in this causal selection can
+	// account for that source SHA. An unrelated/future receipt cannot advance a
+	// historical selection; unrelated observations still participate below.
+	for _, receipt := range history {
+		if receipt.Kind != "pr-merge" || receipt.PRCompleted || receipt.PR == nil || receipt.BranchID != ref.BranchID {
+			continue
+		}
+		key := sha256.Sum256([]byte(receipt.ID + ":completed"))
+		if !causalCompletions[fmt.Sprintf("%x", key[:16])] || !associations[receipt.Source][receipt.PR.HeadSHA] {
+			continue
+		}
+		complete, err := hasPRCompletion(history, receipt)
+		if err != nil {
+			return "", err
+		}
+		if complete {
+			delete(associations[receipt.Source], receipt.PR.HeadSHA)
+			// MergeSHA already participates at this causal completion's target.
+			// Do not create new source associations while iterating receipts.
+		}
+	}
+	candidates := map[string]bool{}
+	for _, codes := range associations {
+		for code := range codes {
+			candidates[code] = true
+		}
 	}
 	codes := make([]string, 0, len(candidates))
 	for c := range candidates {

@@ -796,7 +796,10 @@ Graph projection does not modify stored context or memory. It separates:
 Completed merge rows use the destination identity. A continuation on its
 current path connects through the completed operation even if its provider
 timestamp predates the server receipt. Explicit subsequent movements away from
-that lineage withdraw the active placement. Retained captures without a proven
+that lineage withdraw the active placement while the destination no longer
+contains the displaced tip. Returning to that tip or a descendant restores the
+checkpoint connection; reaching it on a different branch does not. This is
+context placement, not proof of a Git revert or reapplication. Retained captures without a proven
 continuation keep their stored parent edges; timestamps alone do not assign
 them to a historical PR.
 
@@ -1438,6 +1441,16 @@ The server returns ordered `branch_snapshots`, `branch_contexts`, and a virtual
 responses use the identical projector. Evidence-only notifications refresh this
 compact graph plan without downloading all records again. Memory API clients
 use the evidence revision when refreshing their assessed projections.
+
+Automatic code selection follows the causal pre-append selections, rather than
+the time a PR notification arrived. An already-contained squash may complete
+without moving the destination to its source. The source's exact pre-squash code
+association is then accounted for by the merge SHA only when the matching
+receipt/completion pair belongs to the selected destination identity and causal
+path. Unrelated context associations, missing or conflicting completion evidence,
+and incomparable Git revisions remain unresolved. Explicit past-code queries
+do not follow future completions. The same resolver serves full/live graphs,
+context queries and branch memory; none of these reads rewrites stored history.
 
 Named branch memory combines these roots with the checked, provenance-deduplicated
 memory projector. The original snapshot attachments, conversation parents, refs,
