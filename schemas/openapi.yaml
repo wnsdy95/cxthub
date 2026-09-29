@@ -2770,7 +2770,8 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: Memory or evidence changed; restart without cursor }
+        '409':
+          description: Error code memory_cursor_stale identifies a continuation cursor whose bound state no longer matches the query. Restarting without the cursor requires reauthorizing and revalidating the original selection and observed content; the code does not prove revision-only drift. Other conflicts remain terminal and must not be classified by message text.
         '422': { description: Invalid explicit selection, cursor or result bounds }
         '503': { description: Query unavailable }
 

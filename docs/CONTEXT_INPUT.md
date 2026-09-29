@@ -119,7 +119,10 @@ context content across those attempts, discards partial pages, and reauthorizes
 the reads. An observed selection change, denied access or invalid source stops
 immediately. Persistent contention still returns `position_changed`. Explicit
 personal work does not use this retry because its imported provenance must be
-checked again by a new invocation.
+checked again by a new invocation. A typed `memory_cursor_stale` response for a
+continuation page restarts within that same attempt budget. Generic conflicts
+and cursor errors on the initial page remain terminal. Older servers returning
+a generic conflict require a new invocation.
 
 Strict native history delivery requires verified host/model capacity, tokenizer,
 framing reservations and compaction threshold. **This build does not yet ship a
@@ -160,6 +163,15 @@ current refs or memory. `pull` additionally reconciles selected state. Applied
 projection receipts identify the repository, remote, worktree and code; status
 marks a receipt stale after a different selection. A receipt proves a past
 authorized operation, not current server permission.
+
+An immediate `pull` retries preparation/application up to three times when only
+server read revisions move. Its original checkout state, frozen-index generation
+and previous receipt stay fixed; every attempt rereads and reauthorizes all
+pages. Effective-memory state hashes include repository revisions, so the
+reader also pins the actual page contents and lineage. Changed contents, local
+selection/index movement, malformed pages, denied access and a lost local CAS
+stop the operation. A separately previewed plan still requires its exact read
+revision when applied; it is never silently replaced with a newer plan.
 
 Explicit remote/ref requests cannot replay unrelated PR promotion jobs. Tokens
 from one configured server are not sent to another; saved host credentials are

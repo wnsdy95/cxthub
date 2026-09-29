@@ -62,7 +62,7 @@ func (s *SelectedPullService) InitializeSelection(ctx context.Context, in Select
 	}
 	// Reauthorize the complete projection before trusting any binding. Local
 	// branch labels or cached history alone cannot establish server authority.
-	view, _, err := s.readProjection(ctx, repo.ID, domain.ContextSelection{Branch: ref.Name, Position: string(ref.Target), CodeCommit: code, Scope: "current"})
+	view, _, err := s.readProjection(ctx, repo.ID, domain.ContextSelection{Branch: ref.Name, Position: string(ref.Target), CodeCommit: code, Scope: "current"}, &pullReadAnchor{})
 	if err != nil {
 		return err
 	}

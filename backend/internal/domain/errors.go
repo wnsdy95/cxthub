@@ -1,6 +1,9 @@
 package domain
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var ErrFederationUnavailable = errors.New("enterprise identity connection unavailable")
 var ErrVerifiedDomainRequired = errors.New("verify or renew this Enterprise domain before using its identity connection")
@@ -32,6 +35,10 @@ var ErrForbidden = errors.New("forbidden")
 
 // ErrConflict indicates a duplicate creation/state conflict (409). Example: already used invite, occupied username.
 var ErrConflict = errors.New("conflict")
+
+// ErrEffectiveMemoryCursorStale means an effective-memory continuation cursor no longer
+// matches the current query state. It does not establish unchanged content.
+var ErrEffectiveMemoryCursorStale = fmt.Errorf("%w: effective memory changed; restart without cursor", ErrConflict)
 
 // ErrValidation indicates an input format violation (422). Example: invalid slug username, incorrect visibility.
 var ErrValidation = errors.New("validation")

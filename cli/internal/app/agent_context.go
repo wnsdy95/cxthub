@@ -53,10 +53,11 @@ func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inboun
 }
 
 type agentPreparationAnchor struct {
-	position domain.ContentHash
-	branch   string
-	code     string
-	state    domain.ContentHash
+	position    domain.ContentHash
+	branch      string
+	code        string
+	state       domain.ContentHash
+	memoryPages memoryReadAnchor
 }
 
 type agentRevisionContention struct{ error }
@@ -124,10 +125,10 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	if err = validAgentHistory(view, in); err != nil {
 		return p, err
 	}
-	selected := agentPreparationAnchor{view.Position, view.Selection.Branch, view.Selection.CodeCommit, view.StateHash}
+	selected := agentPreparationAnchor{position: view.Position, branch: view.Selection.Branch, code: view.Selection.CodeCommit, state: view.StateHash}
 	if *anchor == nil {
 		*anchor = &selected
-	} else if **anchor != selected {
+	} else if (*anchor).position != selected.position || (*anchor).branch != selected.branch || (*anchor).code != selected.code || (*anchor).state != selected.state {
 		return p, fmt.Errorf("%w: original code/context selection changed between preparation attempts", domain.ErrSelectionChanged)
 	}
 	p = domain.AgentContextPackage{Version: domain.AgentContextVersion, Policy: policy, Delivery: "prepared", Capability: "not_verified_for_native_replay", ArtifactOnly: in.ArtifactOnly}
@@ -211,6 +212,9 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	for pageNo := 0; !emptyMemory && pageNo < 4; pageNo++ {
 		page, err := s.memory.QueryEffectiveMemory(ctx, in.RepoID, req)
 		if err != nil {
+			if req.Cursor != "" && errors.Is(err, domain.ErrEffectiveMemoryCursorStale) {
+				return domain.AgentContextPackage{}, retryAgentRevision("memory pagination cursor became stale")
+			}
 			return domain.AgentContextPackage{}, err
 		}
 		if !validEffectivePromptPage(page, req) {
@@ -219,16 +223,8 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if in.MemoryPin != nil && page.LineageHash != in.MemoryPin.MemoryHash {
 			return domain.AgentContextPackage{}, domain.ErrHashMismatch
 		}
-		if page.Revision.Graph != view.Revision.Graph || page.Revision.Evidence != view.Revision.Evidence {
-			return domain.AgentContextPackage{}, retryAgentRevision("memory and context revisions changed during preparation")
-		}
-		if state != "" && (page.StateHash != state || page.LineageHash != lineage || page.Total != total) {
-			return domain.AgentContextPackage{}, domain.ErrSelectionChanged
-		}
-		state, lineage, total = page.StateHash, page.LineageHash, page.Total
-		p.Content.Selection.MemoryStateHash = state
 		received += len(page.Items)
-		if received > total || (page.NextCursor == "" && received != total) || (page.NextCursor != "" && received >= total) {
+		if received > page.Total || (page.NextCursor == "" && received != page.Total) || (page.NextCursor != "" && received >= page.Total) || (page.NextCursor != "" && seenCursors[page.NextCursor]) {
 			return domain.AgentContextPackage{}, domain.ErrHashMismatch
 		}
 		for _, item := range page.Items {
@@ -236,6 +232,23 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 				return domain.AgentContextPackage{}, domain.ErrHashMismatch
 			}
 			seenItems[item.ID] = true
+		}
+		if state != "" && (page.LineageHash != lineage || page.Total != total) {
+			return domain.AgentContextPackage{}, domain.ErrSelectionChanged
+		}
+		if err := (*anchor).memoryPages.check(pageNo, page); err != nil {
+			return domain.AgentContextPackage{}, err
+		}
+		if page.Revision.Graph != view.Revision.Graph || page.Revision.Evidence != view.Revision.Evidence {
+			return domain.AgentContextPackage{}, retryAgentRevision("memory and context revisions changed during preparation")
+		}
+		if state != "" && page.StateHash != state {
+			return domain.AgentContextPackage{}, domain.ErrSelectionChanged
+		}
+		state, lineage, total = page.StateHash, page.LineageHash, page.Total
+		p.Content.Selection.MemoryStateHash = state
+
+		for _, item := range page.Items {
 			candidate := p
 			candidate.Content.ProjectMemory = append(append([]domain.EffectiveMemoryItem{}, p.Content.ProjectMemory...), item)
 			candidateUsage, e := s.measure(ctx, in, candidate)
@@ -303,6 +316,9 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		}
 		if !validEffectivePromptPage(check, req) || check.LineageHash != lineage {
 			return domain.AgentContextPackage{}, fmt.Errorf("%w: memory revalidation (content_changed=%t, lineage_changed=%t, graph_revision=%d->%d, evidence_revision=%d->%d)", domain.ErrSelectionChanged, check.StateHash != state, check.LineageHash != lineage, view.Revision.Graph, check.Revision.Graph, view.Revision.Evidence, check.Revision.Evidence)
+		}
+		if err := (*anchor).memoryPages.check(0, check); err != nil {
+			return domain.AgentContextPackage{}, err
 		}
 		if check.Revision.Graph != view.Revision.Graph || check.Revision.Evidence != view.Revision.Evidence {
 			return domain.AgentContextPackage{}, retryAgentRevision("memory revision changed during revalidation")
