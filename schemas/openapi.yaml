@@ -179,6 +179,32 @@ components:
         credentials:
           type: array
           items: {$ref: '#/components/schemas/CredentialAssuranceView'}
+    CredentialAssessment:
+      type: object
+      description: Current credential-specific identity evidence, not repository authority or MFA enforcement.
+      required: [state]
+      properties:
+        state: {type: string, enum: [unverified, verified, expired, revoked, verification_changed]}
+        protocol: {type: string, enum: [oidc, saml]}
+        authenticated_at: {type: string, format: date-time}
+        verified_until: {type: string, format: date-time}
+    OwnerRecoveryView:
+      type: object
+      required: [available, revision, state, ready]
+      properties:
+        available: {type: boolean}
+        revision: {type: string}
+        state: {type: string, enum: [unprepared, ready, consumed, revoked]}
+        ready: {type: boolean}
+        pending_until: {type: string, format: date-time}
+        repair_until: {type: string, format: date-time, description: Browser-bound recovery evidence only; never an SSO or repository grant}
+    PreparedOwnerRecovery:
+      type: object
+      required: [revision, code, pending_until]
+      properties:
+        revision: {type: string}
+        code: {type: string, description: One-time display of a cryptographically random recovery code; never returned by GET}
+        pending_until: {type: string, format: date-time}
     OIDCView:
       type: object
       required: [available, configured, callback_uri, linked]
@@ -1868,6 +1894,125 @@ components:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+  /enterprises/{enterpriseID}/credential-assessment:
+    get:
+      summary: Assess the exact current browser or CLI credential's Enterprise identity evidence
+      description: Uses a coherent identity transaction. Remote MCP access is assessed by the same application service, not accepted as a REST bearer. No access policy or MFA claim is inferred.
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Current evidence; no-store
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CredentialAssessment'}
+        '401': {description: Active exact credential required}
+        '403': {description: Current membership required}
+        '503': {description: Shared identity storage unavailable}
+  /enterprises/{enterpriseID}/owner-recovery:
+    get:
+      summary: Read the current owner's recovery readiness and this browser's repair evidence
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Non-secret current state; no-store
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OwnerRecoveryView'}
+        '401': {description: Active browser required}
+        '403': {description: Current Enterprise owner required}
+  /enterprises/{enterpriseID}/owner-recovery/prepare:
+    post:
+      summary: Prepare a recovery code without replacing the confirmed code
+      description: Requires current ownership and fresh OIDC/SAML verification of this exact browser. Stores only a domain-separated hash. Preparation and audit commit atomically.
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision]
+              properties:
+                revision: {type: string, maxLength: 128}
+      responses:
+        '200':
+          description: Code shown once; no-store and no-referrer
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PreparedOwnerRecovery'}
+        '400': {description: Invalid input}
+        '401': {description: Recent identity verification required}
+        '403': {description: Current Enterprise owner required}
+        '409': {description: Stale revision}
+        '429': {description: Rate limited}
+  /enterprises/{enterpriseID}/owner-recovery/confirm:
+    post:
+      summary: Confirm saved code in the preparing browser and atomically replace the old code
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision, code]
+              properties:
+                revision: {type: string, maxLength: 128}
+                code: {type: string, maxLength: 128, writeOnly: true}
+      responses:
+        '200': {description: Confirmed with audit; previous code and repair evidence invalidated}
+        '401': {description: Wrong code/browser or expired preparation/verification}
+        '403': {description: Current Enterprise owner required}
+        '409': {description: Stale revision}
+        '429': {description: Rate limited}
+  /enterprises/{enterpriseID}/owner-recovery/revoke:
+    post:
+      summary: Revoke own recovery preparation, code and repair evidence
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision]
+              properties:
+                revision: {type: string, maxLength: 128}
+      responses:
+        '200': {description: Revoked with audit}
+        '401': {description: Recent browser identity verification required}
+        '403': {description: Current Enterprise owner required}
+        '409': {description: Stale revision}
+        '429': {description: Rate limited}
+  /enterprises/{enterpriseID}/owner-recovery/redeem:
+    post:
+      summary: Consume a saved code into short-lived browser-bound identity-repair evidence
+      description: Requires a currently authenticated Enterprise owner. Works without IdP availability. Does not grant repository access, SSO/MFA assurance, membership or machine-token approvals, and does not enable or disable mandatory policy. A lost response cannot replay the code; GET recovers current state.
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: {type: string, maxLength: 128, writeOnly: true}
+      responses:
+        '200':
+          description: One-use redemption and audit committed; no-store
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OwnerRecoveryView'}
+        '401': {description: Active browser and valid unused code required}
+        '403': {description: Current Enterprise owner required}
+        '429': {description: Rate limited}
   /enterprises/{enterpriseID}/credential-assurances:
     get:
       summary: List the current browser user's individual CLI and MCP identity approvals

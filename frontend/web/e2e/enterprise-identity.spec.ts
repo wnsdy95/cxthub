@@ -167,3 +167,65 @@ test('SAML settings keep metadata edits revisioned and show supported scope', as
  await section.screenshot({ path: testInfo.outputPath('enterprise-saml.png') });
  expect(submitted?.metadata).toContain('synthetic UI fixture'); expect(errors).toEqual([]);
 });
+
+test('owner recovery confirms saved codes, rejects stale state and never restores a displayed secret', async ({ page }, testInfo) => {
+ test.skip(!process.env.CXT_E2E_FULLSTACK, 'requires PostgreSQL identity API');
+ const errors = capturePageErrors(page); const headers = { Origin: 'http://127.0.0.1:4174', 'X-Cxt-CSRF': '1' };
+ const client = page.context().request; const suffix = `${Date.now()}-${testInfo.retry}`;
+ expect((await client.post('/api/v1/auth/session', { headers: { ...headers, Authorization: `Bearer dev:recovery-${suffix}@example.test:Recovery` } })).ok()).toBeTruthy();
+ await client.patch('/api/v1/me', { headers, data: { locale: 'en' } });
+ const e = await (await client.post('/api/v1/enterprises', { headers, data: { name: 'Recovery Group', slug: `recovery-${suffix}` } })).json();
+ const root = `/api/v1/enterprises/${e.id}`; const endpoint = `${root}/owner-recovery`;
+ const initial = await client.get(endpoint); expect(initial.ok()).toBeTruthy();
+ let view = await initial.json(); expect(view.ready).toBe(false);
+ expect((await client.post(`${endpoint}/prepare`, { headers, data: { revision: view.revision } })).status()).toBe(401);
+ await page.goto(`/enterprises/${e.slug}?tab=identity`);
+ const section = page.getByRole('region', { name: 'Owner recovery preparation' });
+ await expect(section.getByRole('button', { name: 'Prepare recovery code', exact: true })).toBeDisabled();
+ // Explicit UI transport fixture: the real signed login + recovery lifecycle
+ // and PostgreSQL serialization/rollback are independently tested in Go.
+ const secret = 'cxt-recovery-' + 'z'.repeat(43); let fresh = true; let stale = true;
+ await page.route(`**${root}/credential-assessment`, route => route.fulfill({ json: fresh ? { state: 'verified', protocol: 'oidc', authenticated_at: new Date().toISOString(), verified_until: new Date(Date.now() + 3_600_000).toISOString() } : { state: 'verification_changed' } }));
+ await page.route(`**${endpoint}`, route => route.fulfill({ json: view }));
+ await page.route(`**${endpoint}/prepare`, async route => {
+  expect(route.request().postDataJSON()).toEqual({ revision: view.revision });
+  view = { ...view, revision: 'or_prepared', pending_until: new Date(Date.now() + 600_000).toISOString() };
+  await route.fulfill({ headers: { 'Cache-Control': 'no-store' }, json: { revision: view.revision, code: secret, pending_until: view.pending_until } });
+ });
+ await page.route(`**${endpoint}/confirm`, async route => {
+  expect(route.request().postDataJSON()).toEqual({ revision: 'or_prepared', code: secret });
+  if (stale) { await route.fulfill({ status: 409, json: { error: { code: 'conflict', message: 'Recovery changed. Refresh and try again.' } } }); return; }
+  view = { available: true, revision: 'or_ready', state: 'ready', ready: true };
+  await route.fulfill({ json: { status: 'saved' } });
+ });
+ await page.route(`**${endpoint}/redeem`, async route => {
+  expect(route.request().postDataJSON()).toEqual({ code: secret });
+  view = { available: true, revision: 'or_consumed', state: 'consumed', ready: false, repair_until: new Date(Date.now() + 600_000).toISOString() };
+  await route.fulfill({ json: view });
+ });
+ await page.reload();
+ await section.getByRole('button', { name: 'Prepare recovery code', exact: true }).click();
+ await expect(section.locator('.recovery-code')).toHaveText(secret);
+ await section.getByLabel('Re-enter the saved new code').fill(secret);
+ await section.getByRole('button', { name: 'Confirm saved code' }).click();
+ await expect(section.getByRole('alert')).toContainText('Recovery changed');
+ await expect(section.getByRole('status')).toContainText('No confirmed recovery code');
+ stale = false;
+ await section.getByRole('button', { name: 'Confirm saved code' }).click();
+ await expect(section.getByRole('status')).toContainText('A saved recovery code is ready');
+ await expect(section.locator('.recovery-code')).toHaveCount(0);
+ fresh = false; await page.reload();
+ await expect(section.getByRole('button', { name: 'Prepare replacement code' })).toBeDisabled();
+ await expect(section.locator('.recovery-code')).toHaveCount(0);
+ await section.getByText('Use a saved recovery code', { exact: true }).click();
+ await section.getByLabel('Saved recovery code', { exact: true }).fill(secret);
+ await section.getByRole('button', { name: 'Use code and verify recovery' }).click();
+ await expect(section.getByRole('status')).toContainText('Recovery code used');
+ await expect(section.getByLabel('Saved recovery code', { exact: true })).toHaveValue('');
+ await expect(section).toContainText('Recovery verification for this browser expires:');
+ expect(await page.evaluate(value => JSON.stringify([localStorage, sessionStorage]).includes(value), secret)).toBe(false);
+ await page.setViewportSize({ width: 390, height: 844 }); await section.scrollIntoViewIfNeeded();
+ expect(await section.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+ await section.screenshot({ path: testInfo.outputPath('owner-recovery.png') });
+ expect(errors).toEqual([]);
+});

@@ -3,6 +3,17 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+ ownerRecovery: {
+  title: 'Owner recovery preparation',
+  note: 'Prepare a one-use recovery code bound to your owner account. This release supports preparation and verification; it does not enable or disable mandatory SSO.',
+  unprepared: 'No confirmed recovery code.', ready: 'A saved recovery code is ready.', consumed: 'Recovery code used. Verify your identity to prepare another.', revoked: 'Recovery code revoked.',
+  repairUntil: 'Recovery verification for this browser expires:', verifyFirst: 'Preparing, replacing or revoking a code requires OIDC or SAML verification in this browser within the last 10 minutes.',
+  refresh: 'Refresh recovery status', prepare: 'Prepare recovery code', replace: 'Prepare replacement code',
+  saveNote: 'This code is shown once. Save it securely, then enter it below to confirm. Your existing code stays valid until confirmation.',
+  confirmCode: 'Re-enter the saved new code', confirm: 'Confirm saved code', revoke: 'Revoke recovery code',
+  use: 'Use a saved recovery code', useNote: 'Using this code consumes it. Recovery verification lasts up to 10 minutes for the current owner and this browser only. It grants no repository access or SSO approval.',
+  savedCode: 'Saved recovery code', redeem: 'Use code and verify recovery',
+ },
  credentialAssurance: {
   "title": "CLI and MCP identity approvals",
   "note": "Approve only the connection you recognize. Approval records verified identity for this Enterprise; it does not grant repository access or enable mandatory SSO. Revoking approval leaves the connection and its data intact.",

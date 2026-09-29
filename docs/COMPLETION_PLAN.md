@@ -224,3 +224,12 @@ tests as cloud certification. Preserve user data and existing Git/provider hooks
   state and non-bearer selectors. Mandatory policy enforcement and recoverable-owner
   activation remain the next security boundary; this feature alone does not
   restrict repository reads/writes or declare SSO/MFA enforced.
+
+- Identity prerequisite #328 adds a shared credential assessment and owner recovery
+  preparation/confirmation/redemption. Browser, CLI and MCP evidence keep their
+  separate identities and lifetimes. Recovery is one-use, browser-bound, audited
+  and invalidated on ownership loss, with no repository or SSO grant. This is not
+  mandatory SSO/MFA enforcement or working policy repair: the next slice must
+  apply assessment to protected reads/writes and wire narrowly scoped identity
+  repair commands with safe last-owner activation. SCIM, retention, external
+  security-audit delivery and live customer-provider acceptance remain open.

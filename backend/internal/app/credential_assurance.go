@@ -259,21 +259,13 @@ func (s *IdentityService) GetCredentialAssurances(ctx context.Context, actor, ep
 			if !ok {
 				continue
 			}
-			v.Protocol, v.AuthenticatedAt, v.VerifiedUntil = a.Proof.Protocol, &a.Proof.AuthenticatedAt, &a.Proof.ExpiresAt
-			if a.RevokedAt != nil {
-				v.State = "revoked"
-				continue
-			}
-			if !now.Before(a.Proof.ExpiresAt) {
-				v.State = "expired"
-				continue
-			}
-			valid, err := s.federationProofCurrent(ctx, st, a.Proof, now)
+			assessment, err := s.assessmentProof(ctx, st, a.Proof, a.RevokedAt != nil, now)
 			if err != nil {
 				return err
 			}
-			v.State = "verification_changed"
-			if valid {
+			v.Protocol, v.AuthenticatedAt, v.VerifiedUntil = assessment.Protocol, assessment.AuthenticatedAt, assessment.VerifiedUntil
+			v.State = assessment.State
+			if assessment.State == "verified" {
 				v.State = "approved"
 			}
 		}
