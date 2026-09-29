@@ -106,7 +106,12 @@ func run(args []string) error {
 	cfg := loadConfig()
 
 	// composition root: creates and wires all adapters and services.
-	ctr := buildContainer(cfg)
+	var ctr container
+	if delivcli.ReadOnlyInvocation(args) && args[1] != "mcp" {
+		ctr = buildReadContainer(cfg)
+	} else {
+		ctr = buildContainer(cfg)
+	}
 
 	// subcommand branching
 	if len(args) < 2 {
@@ -212,9 +217,9 @@ type container struct {
 	clictr *delivcli.Container
 }
 
-// buildContainer creates all adapters/services and injects dependencies.
-// DI is performed only within this function (domain model Rule 5).
-func buildContainer(cfg config) container {
+// buildRepositoryAdapters constructs passive repository readers and a lazy client.
+// No registration, capture discovery, replay or provider initialization occurs here.
+func buildRepositoryAdapters(cfg config) (*storage.FileStore, *backendclient.BackendClient, outbound.GitContext) {
 	// --- driven adapters (outbound implementations) ---
 	// Local store: repo root .cxt/ content-addressed file store (client-only).
 	store := storage.NewWorktreeFileStore(cfg.RepoRoot, cfg.GitDir, cfg.GitBranch, cfg.GitCommit)
@@ -245,6 +250,28 @@ func buildContainer(cfg config) container {
 	remote := backendclient.NewBackendClient(endpoint, token, cfg.Identity)
 	// Pull delta: Injects local chunk store, avoiding download of existing chunks.
 	remote.SetChunkLocal(store)
+	return store, remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter())
+}
+
+// buildReadContainer deliberately omits command-side services. Read-only
+// dispatch cannot reach capture, checkout, sync mutation or branch replay.
+func buildReadContainer(cfg config) container {
+	store, remote, gitCtx := buildRepositoryAdapters(cfg)
+	c := &delivcli.Container{
+		ResolveRepo: gitCtx.CurrentRepo,
+		List:        app.NewListSessionsService(store),
+		Queries:     app.NewLocalRefQueryService(gitCtx, store),
+		Settings:    remote,
+	}
+	out := container{clictr: c}
+	out.cliHandler.Run = delivcli.Run
+	return out
+}
+
+// buildContainer creates all adapters/services and injects dependencies.
+// The read-only composition above uses the same passive repository adapters.
+func buildContainer(cfg config) container {
+	store, remote, gitCtx := buildRepositoryAdapters(cfg)
 	// Masking policy loader injection (capture ← remotecfg circular prevention — DI here only).
 	capture.LoadScrubOptions = func(repoRoot string) capture.ScrubOptions {
 		return capture.ScrubOptions{
@@ -255,7 +282,6 @@ func buildContainer(cfg config) container {
 	}
 	// Repository identity: an origin URL reanchors the local store to its URL-derived RepoID,
 	// so clients configured with the same origin address the same repository.
-	gitCtx := remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter())
 	claudeCodec := codec.NewClaudeCodec()
 	codexCodec := codec.NewCodexCodec()
 	codecs := map[domain.ProviderKind]outbound.ProviderCodec{
@@ -307,12 +333,14 @@ func buildContainer(cfg config) container {
 
 	// --- driving adapters (delivery; client-specific: mcp/hook/cli) ---
 	// The explicit --local MCP helper is a read-only offline projection. The
-	// product MCP runs remotely in cxtd against shared cloud storage.
+	// product MCP runs in the independent cxt-mcp server against shared cloud storage.
 	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
 	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
 	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices)
 	clictr := &delivcli.Container{
 		WakeHistoricalSync: delivcli.SpawnHistoricalSync,
+		ResolveRepo:        gitCtx.CurrentRepo,
+		Queries:            app.NewLocalRefQueryService(gitCtx, store),
 		ResolveConnection: func(ctx context.Context, raw string) (domain.RepositoryConnection, error) {
 			base, err := remotecfg.APIBase(raw)
 			if err != nil {

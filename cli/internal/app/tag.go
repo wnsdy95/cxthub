@@ -64,18 +64,7 @@ func (s *TagService) Tags(ctx context.Context, cwd string) ([]domain.Ref, error)
 	if err != nil {
 		return nil, err
 	}
-	var tags []domain.Ref
-	for _, r := range refs {
-		if r.Kind == domain.RefTag {
-			if _, lifecycle, err := domain.ParseBranchLifecycleRef(r); err != nil {
-				return nil, err
-			} else if lifecycle {
-				continue
-			}
-			tags = append(tags, r)
-		}
-	}
-	return tags, nil
+	return visibleTags(refs)
 }
 
 // Ensure TagService implements inbound.TagRef.

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -37,20 +38,23 @@ type Container struct {
 	WakeHistoricalSync func(string)
 	CaptureRecovery    inbound.CaptureRecovery
 	ResolveConnection  func(context.Context, string) (domain.RepositoryConnection, error)
-	Init               inbound.InitRepo
-	Save               inbound.SaveSession
-	Fork               inbound.ForkSession
-	Branches           inbound.BranchLifecycle
-	Checkout           inbound.CheckoutSession
-	Load               inbound.LoadSession
-	List               inbound.ListSessions
-	Memorize           inbound.Memorize
-	Sync               inbound.SyncRepo
-	Seed               inbound.SeedBranch
-	Tag                inbound.TagRef
-	Stash              inbound.StashSession
-	Handoff            inbound.BranchHandoff
-	History            inbound.ContextHistory
+	// ResolveRepo identifies a configured replica without registering or mutating it.
+	ResolveRepo func(context.Context, string) (domain.Repo, error)
+	Init        inbound.InitRepo
+	Save        inbound.SaveSession
+	Fork        inbound.ForkSession
+	Branches    inbound.BranchLifecycle
+	Checkout    inbound.CheckoutSession
+	Load        inbound.LoadSession
+	List        inbound.ListSessions
+	Memorize    inbound.Memorize
+	Sync        inbound.SyncRepo
+	Seed        inbound.SeedBranch
+	Tag         inbound.TagRef
+	Queries     inbound.LocalRefQueries
+	Stash       inbound.StashSession
+	Handoff     inbound.BranchHandoff
+	History     inbound.ContextHistory
 	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
 	// can promote the source branch context into the checked-out base timeline.
 	PRMerges outbound.PullRequestMergeResolver
@@ -75,12 +79,20 @@ func Run(c *Container, args []string) error {
 		return err
 	}
 	cmd := args[1]
+	parsed := parsedCommand{name: cmd}
+	if cmd != "git-hook" {
+		var err error
+		parsed, _, err = parseCommand(cmd, args[2:])
+		if err != nil {
+			return err
+		}
+	}
 
 	ctx := context.Background()
 	rest := args[2:]
 	cwd, _ := os.Getwd()
 	if cmd == "sync" {
-		return RunSyncStatus(ctx, cwd, flagPresent(rest, "--json"), os.Stdout)
+		return RunSyncStatus(ctx, cwd, parsed.has("--json"), os.Stdout)
 	}
 	if cmd == "capture" {
 		root := cxtRepoRoot(ctx, cwd)
@@ -90,22 +102,22 @@ func Run(c *Container, args []string) error {
 		}
 		return RunCaptureRecovery(ctx, c, cwd, string(repo.ID), rest, os.Stdout)
 	}
-	if cmd == "doctor" || (cmd == "branch" && firstPositional(rest) == "operations") {
+	if cmd == "doctor" || (cmd == "branch" && parsed.first() == "operations") {
 		return RunDiagnostics(ctx, cwd, args[1:], os.Stdout)
 	}
-	if cmd == "branch" && firstPositional(rest) == "recover" {
-		if err := confirmOrphanRecovery(ctx, c, cwd, lastPositional(rest)); err != nil {
+	if cmd == "branch" && parsed.first() == "recover" {
+		if err := confirmOrphanRecovery(ctx, c, cwd, parsed.last()); err != nil {
 			return err
 		}
 		return replayBranchCommand(ctx, c, cwd)
 	}
-	if cmd == "branch" && firstPositional(rest) == "replay" {
+	if cmd == "branch" && parsed.first() == "replay" {
 		return replayBranchCommand(ctx, c, cwd)
 	}
 	if cmd == "push" || cmd == "pull" {
 		fmt.Fprintf(os.Stderr, "%s: checking queued branch and PR operations\n", cmd)
 	}
-	if cmd != "git-hook" && cmd != "init" && cmd != "setup" && c.History != nil {
+	if (parsed.effect == commandContextWrite || parsed.effect == commandSync) && c.History != nil {
 		if err := replayBranchOperations(ctx, c, cwd); err != nil {
 			hookWarn("branch operation remains queued: %v", err)
 		}
@@ -113,9 +125,9 @@ func Run(c *Container, args []string) error {
 
 	switch cmd {
 	case "init", "repo": // 'cxt repo create <url>' also routes to init
-		remote := flagVal(rest, "--remote")
+		remote := parsed.flags["--remote"]
 		if cmd == "repo" {
-			remote = lastPositional(rest) // repo create <github-url>
+			remote = parsed.last() // repo create <github-url>
 		}
 		out, err := c.Init.Init(ctx, inbound.InitInput{Cwd: cwd, RemoteURL: remote})
 		if err != nil {
@@ -130,7 +142,7 @@ func Run(c *Container, args []string) error {
 			fmt.Printf(".cxtsecrets created — %d values extracted from .env (automatically masked during context storage)\n", n)
 		}
 		// git hook auto-install — "using git means cxt comes with it" (--no-hooks to opt out).
-		if !flagPresent(rest, "--no-hooks") {
+		if !parsed.has("--no-hooks") {
 			if installed, herr := githooks.Install(cwd); herr == nil {
 				fmt.Printf("installed git hooks: %s (git commit/checkout/push automatically triggers cxt)\n", strings.Join(installed, ", "))
 			} else {
@@ -161,9 +173,42 @@ func Run(c *Container, args []string) error {
 		return runRemote(ctx, c, cwd, rest)
 
 	case "branch":
-		action := firstPositional(rest)
+		if parsed.first() == "" || parsed.first() == "list" {
+			var refs []domain.Ref
+			var err error
+			if c.Queries != nil {
+				refs, err = c.Queries.Refs(ctx, cwd)
+			} else {
+				var out inbound.ListOutput
+				out, err = c.List.List(ctx, inbound.ListInput{})
+				refs = out.Refs
+			}
+			if err != nil {
+				return err
+			}
+			refs = append([]domain.Ref(nil), refs...)
+			sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+			head := ""
+			for _, ref := range refs {
+				if ref.Kind == domain.RefHEAD {
+					head = ref.Symbolic
+				}
+			}
+			for _, ref := range refs {
+				if ref.Kind != domain.RefBranch {
+					continue
+				}
+				mark := " "
+				if ref.Name == head {
+					mark = "*"
+				}
+				fmt.Printf("%s %s\t%s\n", mark, ref.Name, shortHash(ref.Target))
+			}
+			return nil
+		}
+		action := parsed.first()
 		branch := ""
-		pos := positionals(rest)
+		pos := parsed.positionals
 		if len(pos) > 1 {
 			branch = pos[1]
 		}
@@ -191,7 +236,7 @@ func Run(c *Container, args []string) error {
 				return fmt.Errorf("usage: cxt branch restore <name> [--provider claude|codex] [--mode full|reconstructed|memory]")
 			}
 			out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
-				From: branch, TargetProvider: flagVal(rest, "--provider"), Mode: modeOr(cwd, rest), Cwd: cwd,
+				From: branch, TargetProvider: parsed.flags["--provider"], Mode: loadModeOr(cwd, parsed.flags["--mode"]), Cwd: cwd,
 			})
 			if err != nil {
 				return err
@@ -221,7 +266,7 @@ func Run(c *Container, args []string) error {
 	case "add":
 		// git add response: stages the session provider to be included in the next commit. No arguments/"." = default (all active session providers — commit staging default). Prevents the reversal of capturing a narrower scope than staging.
 		var provs []string
-		for _, a := range rest {
+		for _, a := range parsed.positionals {
 			if strings.HasPrefix(a, "-") || a == "." {
 				continue
 			}
@@ -241,7 +286,7 @@ func Run(c *Container, args []string) error {
 
 	case "commit":
 		// git commit response: snapshots the active session of the staged (or default) provider.
-		msg := flagVal(rest, "-m")
+		msg := parsed.flags["-m"]
 		n, lastErr := snapshotForCommit(ctx, c, cwd, msg)
 		if lastErr != nil {
 			return lastErr
@@ -254,9 +299,9 @@ func Run(c *Container, args []string) error {
 	case "switch":
 		// git switch equivalent: switch <branch> = checkout, switch -c <new> = checkout -b.
 		out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
-			From:      firstPositional(rest),
-			NewBranch: flagVal(rest, "-c"),
-			Mode:      modeOr(cwd, rest),
+			From:      parsed.first(),
+			NewBranch: parsed.flags["-c"],
+			Mode:      loadModeOr(cwd, parsed.flags["--mode"]),
 			Cwd:       cwd,
 		})
 		if err != nil {
@@ -270,9 +315,9 @@ func Run(c *Container, args []string) error {
 
 	case "config":
 		// cxt config <key> [value] — checkout.mode | load.mode | secrets.redact | secrets.minlen | secrets.scrub.
-		key := firstPositional(rest)
-		val := lastPositional(rest)
-		hasVal := val != key && val != ""
+		key := parsed.first()
+		val := parsed.last()
+		hasVal := len(parsed.positionals) == 2
 		switch key {
 		case "checkout.mode":
 			if hasVal {
@@ -382,11 +427,11 @@ func Run(c *Container, args []string) error {
 	case "login":
 		// Default is device flow (browser approval — token does not pass through screen/clipboard, device_login.go).
 		// `cxt login <token>` is manual fallback (web account settings ⚙ issued token), CI is CXT_TOKEN.
-		tok := firstPositional(rest)
+		tok := parsed.first()
 		if tok == "" {
-			tok = flagVal(rest, "-t")
+			tok = parsed.flags["-t"]
 		}
-		base, host, err := loginTarget(cwd, flagVal(rest, "--server"))
+		base, host, err := loginTarget(cwd, parsed.flags["--server"])
 		if err != nil {
 			return err
 		}
@@ -416,13 +461,13 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
-		conn, cerr := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd})
+		repo, cerr := resolveReadRepo(ctx, c, cwd)
 		if cerr != nil {
 			return cerr
 		}
 		rep, ferr := c.Settings.(interface {
 			Fsck(ctx context.Context, repoID string) (backendclient.FsckReport, error)
-		}).Fsck(ctx, string(conn.Repo.ID))
+		}).Fsck(ctx, string(repo.ID))
 		if ferr != nil {
 			return ferr
 		}
@@ -434,13 +479,13 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
-		conn, cerr := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd})
+		repo, cerr := resolveReadRepo(ctx, c, cwd)
 		if cerr != nil {
 			return cerr
 		}
 		entries, ferr := c.Settings.(interface {
 			Reflog(ctx context.Context, repoID string) ([]backendclient.RefLogEntry, error)
-		}).Reflog(ctx, string(conn.Repo.ID))
+		}).Reflog(ctx, string(repo.ID))
 		if ferr != nil {
 			return ferr
 		}
@@ -460,7 +505,7 @@ func Run(c *Container, args []string) error {
 	case "secrets":
 		// Share .cxtsecrets with end-to-end encryption: push encrypts the local file for the server;
 		// pull decrypts server ciphertext into local .cxtsecrets. The passphrase never reaches the server.
-		sub := firstPositional(rest)
+		sub := parsed.first()
 		if sub != "push" && sub != "pull" {
 			return fmt.Errorf("usage: cxt secrets push|pull [-p <team passphrase>] [--remember] [--rotate] [--force (pull only)]")
 		}
@@ -479,7 +524,7 @@ func Run(c *Container, args []string) error {
 		repoID := string(conn.Repo.ID)
 		// Passphrase precedence: -p > CXT_SECRETS_PASSPHRASE > ~/.cxt/credentials.json.
 		// On success, --remember stores it for this repository (credential store, secrets_cred.go).
-		pass := flagVal(rest, "-p")
+		pass := parsed.flags["-p"]
 		if pass == "" {
 			pass = os.Getenv("CXT_SECRETS_PASSPHRASE")
 		}
@@ -493,7 +538,7 @@ func Run(c *Container, args []string) error {
 			return fmt.Errorf("passphrase required: -p <passphrase> (after --remember stores it in ~/.cxt/credentials.json, -p may be omitted; the passphrase is never sent to the server)")
 		}
 		remember := func() {
-			if fromStore || !hasFlag(rest, "--remember") {
+			if fromStore || !parsed.has("--remember") {
 				return
 			}
 			if err := storePassphrase(repoID, pass); err == nil {
@@ -504,7 +549,7 @@ func Run(c *Container, args []string) error {
 		if !ok {
 			return fmt.Errorf("secrets client unavailable")
 		}
-		if err := syncSecrets(ctx, remote, cwd, repoID, sub, pass, hasFlag(rest, "--rotate"), hasFlag(rest, "--force")); err != nil {
+		if err := syncSecrets(ctx, remote, cwd, repoID, sub, pass, parsed.has("--rotate"), parsed.has("--force")); err != nil {
 			return err
 		}
 		remember()
@@ -512,9 +557,12 @@ func Run(c *Container, args []string) error {
 
 	case "settings":
 		// Receive team default settings bundles and overwrite local .claude/.agents/.codex (upload via web About ⚙).
-		switch firstPositional(rest) {
+		switch parsed.first() {
 		case "list":
-			cur1, cur2, cur3 := currentSettingsHashes(ctx, c, cwd)
+			cur1, cur2, cur3, err := inspectSettingsHashes(cwd)
+			if err != nil {
+				return err
+			}
 			fmt.Printf("current: claude=%s agents=%s codex=%s\n", shortHash(cur1), shortHash(cur2), shortHash(cur3))
 			backups := loadBackups(cwd)
 			if len(backups) == 0 {
@@ -528,7 +576,7 @@ func Run(c *Container, args []string) error {
 			return nil
 		case "restore":
 			idx := 0
-			if pos := positionals(rest); len(pos) > 1 {
+			if pos := parsed.positionals; len(pos) > 1 {
 				fmt.Sscanf(pos[1], "%d", &idx)
 			}
 			return restoreSettingsBackup(ctx, c, cwd, idx)
@@ -561,7 +609,7 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "hooks":
-		switch firstPositional(rest) {
+		switch parsed.first() {
 		case "install":
 			state := gitctx.InspectContextRoot(ctx, cwd)
 			if state.GitRepository && state.Exists {
@@ -594,11 +642,11 @@ func Run(c *Container, args []string) error {
 		if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
 			return err
 		}
-		target, err := commandCapture(ctx, cwd, flagVal(rest, "--provider"))
+		target, err := commandCapture(ctx, cwd, parsed.flags["--provider"])
 		if err != nil {
 			return err
 		}
-		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Message: flagVal(rest, "-m"), Author: c.Identity})
+		out, err := c.Save.Save(ctx, inbound.SaveInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Message: parsed.flags["-m"], Author: c.Identity})
 		if err != nil {
 			return err
 		}
@@ -610,7 +658,7 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "list", "log":
-		out, err := c.List.List(ctx, inbound.ListInput{RepoID: "", Branch: flagVal(rest, "--branch")})
+		out, err := c.List.List(ctx, inbound.ListInput{RepoID: "", Branch: parsed.flags["--branch"]})
 		if err != nil {
 			return err
 		}
@@ -625,10 +673,10 @@ func Run(c *Container, args []string) error {
 
 	case "checkout":
 		out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
-			From:           firstPositional(rest),
-			NewBranch:      flagVal(rest, "-b"),
-			TargetProvider: flagVal(rest, "--provider"),
-			Mode:           modeOr(cwd, rest),
+			From:           parsed.first(),
+			NewBranch:      parsed.flags["-b"],
+			TargetProvider: parsed.flags["--provider"],
+			Mode:           loadModeOr(cwd, parsed.flags["--mode"]),
 			Cwd:            cwd,
 		})
 		if err != nil {
@@ -643,10 +691,10 @@ func Run(c *Container, args []string) error {
 	case "fork":
 		// fork = checkout -b (branch + restore). NewBranch is --as.
 		out, err := c.Checkout.Checkout(ctx, inbound.CheckoutInput{
-			From:           firstPositional(rest),
-			NewBranch:      flagVal(rest, "--as"),
-			TargetProvider: flagVal(rest, "--provider"),
-			Mode:           modeOr(cwd, rest),
+			From:           parsed.first(),
+			NewBranch:      parsed.flags["--as"],
+			TargetProvider: parsed.flags["--provider"],
+			Mode:           loadModeOr(cwd, parsed.flags["--mode"]),
 			Cwd:            cwd,
 		})
 		if err != nil {
@@ -658,9 +706,9 @@ func Run(c *Container, args []string) error {
 
 	case "load":
 		out, err := c.Load.Load(ctx, inbound.LoadInput{
-			Ref:            firstPositional(rest),
-			TargetProvider: flagVal(rest, "--provider"),
-			Mode:           modeOr(cwd, rest),
+			Ref:            parsed.first(),
+			TargetProvider: parsed.flags["--provider"],
+			Mode:           loadModeOr(cwd, parsed.flags["--mode"]),
 			Cwd:            cwd,
 		})
 		if err != nil {
@@ -680,10 +728,10 @@ func Run(c *Container, args []string) error {
 		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
 			return fmt.Errorf("rewritten context associations remain pending: %w", err)
 		}
-		force := flagPresent(rest, "--force") || flagPresent(rest, "-f")
-		appendDiverged := flagPresent(rest, "--append")
+		force := parsed.has("--force") || parsed.has("-f")
+		appendDiverged := parsed.has("--append")
 		defer wakeHistoricalSync(c, cwd)
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged, ForegroundOnly: !flagPresent(rest, "--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
+		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Append: appendDiverged, ForegroundOnly: !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
 			if strings.Contains(err.Error(), "sync conflict") {
 				if strings.Contains(err.Error(), "memory attachment") {
@@ -708,7 +756,7 @@ func Run(c *Container, args []string) error {
 			return err
 		}
 		replaySavedPRDiscovery(ctx, c, cwd)
-		force := flagPresent(rest, "--force") || flagPresent(rest, "-f")
+		force := parsed.has("--force") || parsed.has("-f")
 		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Force: force, Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
 			return err
@@ -721,13 +769,13 @@ func Run(c *Container, args []string) error {
 
 	case "stash":
 		// git stash equivalent: save active session and return to branch head (commit chain) context.
-		switch firstPositional(rest) {
+		switch parsed.first() {
 		case "", "push":
-			target, err := commandCapture(ctx, cwd, flagVal(rest, "--provider"))
+			target, err := commandCapture(ctx, cwd, parsed.flags["--provider"])
 			if err != nil {
 				return err
 			}
-			out, err := c.Stash.Stash(ctx, inbound.StashInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Message: flagVal(rest, "-m"), Author: c.Identity})
+			out, err := c.Stash.Stash(ctx, inbound.StashInput{Cwd: cwd, Provider: target.Provider, SessionPath: target.SessionPath, Message: parsed.flags["-m"], Author: c.Identity})
 			if err != nil {
 				if err == domain.ErrNoActiveSession {
 					return fmt.Errorf("no active session to stash (Git equivalent: \"No local changes to save\")")
@@ -756,7 +804,13 @@ func Run(c *Container, args []string) error {
 			}
 			return nil
 		case "list":
-			entries, err := c.Stash.StashList(ctx, cwd)
+			var entries []domain.StashEntry
+			var err error
+			if c.Queries != nil {
+				entries, err = c.Queries.StashList(ctx, cwd)
+			} else {
+				entries, err = c.Stash.StashList(ctx, cwd)
+			}
 			if err != nil {
 				return err
 			}
@@ -775,11 +829,11 @@ func Run(c *Container, args []string) error {
 	case "memorize", "memory":
 		// Current branch head context distilled (compressed memory) → attached to snapshot.
 		// Push sends the attached memory to the server with the raw data.
-		claims, err := readMemoryClaims(flagVal(rest, "--claims"))
+		claims, err := readMemoryClaims(parsed.flags["--claims"])
 		if err != nil {
 			return err
 		}
-		out, err := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: flagVal(rest, "--provider"), Ref: firstPositional(rest), Claims: claims})
+		out, err := c.Memorize.Memorize(ctx, inbound.MemorizeInput{Cwd: cwd, Provider: parsed.flags["--provider"], Ref: parsed.first(), Claims: claims})
 		if err != nil {
 			if err == domain.ErrNotFound {
 				return fmt.Errorf("no snapshot to distill — create a snapshot first using git commit (or cxt commit)")
@@ -791,9 +845,15 @@ func Run(c *Container, args []string) error {
 
 	case "tag":
 		// git tag handling: cxt tag → list, cxt tag <name> [ref] → create (immutable).
-		name := firstPositional(rest)
+		name := parsed.first()
 		if name == "" {
-			tags, err := c.Tag.Tags(ctx, cwd)
+			var tags []domain.Ref
+			var err error
+			if c.Queries != nil {
+				tags, err = c.Queries.Tags(ctx, cwd)
+			} else {
+				tags, err = c.Tag.Tags(ctx, cwd)
+			}
 			if err != nil {
 				return err
 			}
@@ -807,7 +867,7 @@ func Run(c *Container, args []string) error {
 			return nil
 		}
 		var ref string
-		if pos := positionals(rest); len(pos) > 1 {
+		if pos := parsed.positionals; len(pos) > 1 {
 			ref = pos[1]
 		}
 		out, err := c.Tag.Tag(ctx, inbound.TagInput{Cwd: cwd, Name: name, Ref: ref})
@@ -879,6 +939,14 @@ func requireRemote(cwd string) error {
 	return fmt.Errorf("no origin to push/pull — first connect your repository URL:\n  cxt remote add origin https://<host>/<owner>/<repository>")
 }
 
+// Server audits identify the replica but never register it as a side effect.
+func resolveReadRepo(ctx context.Context, c *Container, cwd string) (domain.Repo, error) {
+	if c.ResolveRepo == nil {
+		return domain.Repo{}, fmt.Errorf("read-only repository resolver unavailable")
+	}
+	return c.ResolveRepo(ctx, cwd)
+}
+
 // resolvedRepositoryURL validates a display/legacy address against the server's
 // immutable content identity before callers save or compare a connection.
 func resolvedRepositoryURL(ctx context.Context, c *Container, rawURL string) (string, error) {
@@ -911,16 +979,14 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 	if err != nil {
 		return err
 	}
-	sub := ""
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
-		sub = rest[0]
-	}
+	pos := positionals(rest)
+	sub := firstPositional(rest)
 	switch sub {
 	case "add":
-		if len(rest) < 3 {
+		if len(pos) != 3 {
 			return fmt.Errorf("usage: cxt remote add <name> <url>  (e.g., cxt remote add origin https://cxthub.com/<owner>/<repository>)")
 		}
-		name, rawURL := rest[1], rest[2]
+		name, rawURL := pos[1], pos[2]
 		canonicalURL, err := remotecfg.CanonicalURL(rawURL)
 		if err != nil {
 			return err
@@ -959,10 +1025,10 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 		}
 		return nil
 	case "remove", "rm":
-		if len(rest) < 2 {
+		if len(pos) != 2 {
 			return fmt.Errorf("usage: cxt remote remove <name>")
 		}
-		name := rest[1]
+		name := pos[1]
 		if _, ok := remotes[name]; !ok {
 			return fmt.Errorf("remote %q not found", name)
 		}
@@ -993,9 +1059,16 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 
 // flagPresent checks if the name flag exists in args (a valueless boolean flag).
 func flagPresent(args []string, name string) bool {
-	for _, a := range args {
-		if a == name {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			break
+		}
+		if args[i] == name {
 			return true
+		}
+		_, _, inline := splitFlagValue(args[i])
+		if flagConsumesValue(args[i]) && !inline {
+			i++
 		}
 	}
 	return false
@@ -1020,6 +1093,9 @@ func printRestore(branch, fidelity, resumeCmd, writtenPath string) {
 func positionals(args []string) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			return append(out, args[i+1:]...)
+		}
 		if strings.HasPrefix(args[i], "-") {
 			_, _, inline := splitFlagValue(args[i])
 			if flagConsumesValue(args[i]) && !inline {
@@ -1040,13 +1116,7 @@ func firstPositional(args []string) string {
 	return ""
 }
 
-var publicCommandNames = []string{
-	"setup", "init", "repo", "claude", "codex", "remote", "repack",
-	"branch", "add", "commit", "switch", "config", "login", "logout", "fsck",
-	"sync", "doctor", "capture", "reflog", "secrets", "settings", "hooks", "save", "list", "log",
-	"checkout", "fork", "load", "push", "pull", "stash", "memorize",
-	"memory", "tag", "mcp", "hook", "version", "help",
-}
+var publicCommandNames = publicCommands()
 
 const usageText = `cxt — Git-style version control for coding-agent sessions
 usage: cxt <command> [flags]
@@ -1081,6 +1151,7 @@ usage: cxt <command> [flags]
   remote add origin <url>   connect the server repository URL (the context equivalent of Git origin)
   remote [-v]               list configured remotes
   remote remove <name>      remove a configured remote
+  branch [list]             list local context branches
   branch archive <name>     hide a deleted Git branch pointer while preserving all context history
   branch restore <name>     restore an archived context branch and record a new active generation
   add [claude|codex]        stage providers for the next commit (defaults to both)
@@ -1129,12 +1200,11 @@ func printUsage() {
 	fmt.Println(usageText)
 }
 
-// flagVal finds the value after name in args. Returns empty string if not found.
-// modeOr interprets the priority of load fidelity:
+// loadModeOr interprets the priority of load fidelity:
 // --mode flag (per invocation) > local load.mode (checkout-specific) > server personal setting (account global) > full.
-func modeOr(cwd string, rest []string) string {
-	if v := flagVal(rest, "--mode"); v != "" {
-		return v
+func loadModeOr(cwd, explicit string) string {
+	if explicit != "" {
+		return explicit
 	}
 	if v := remotecfg.LoadMode(cwd); v != "" {
 		return v
@@ -1142,8 +1212,12 @@ func modeOr(cwd string, rest []string) string {
 	return serverLoadMode(cwd)
 }
 
+// flagVal finds a value in internal argv, excluding option values and literals.
 func flagVal(args []string, name string) string {
 	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			break
+		}
 		flagName, inlineValue, inline := splitFlagValue(args[i])
 		if flagName == name && inline {
 			return inlineValue
@@ -1153,6 +1227,9 @@ func flagVal(args []string, name string) string {
 				return ""
 			}
 			return args[i+1]
+		}
+		if flagConsumesValue(args[i]) && !inline {
+			i++
 		}
 	}
 	return ""

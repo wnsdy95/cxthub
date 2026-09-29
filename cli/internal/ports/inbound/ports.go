@@ -124,6 +124,13 @@ type TagRef interface {
 	Tags(ctx context.Context, cwd string) ([]domain.Ref, error)
 }
 
+// LocalRefQueries exposes inspection without stash/tag mutation capabilities.
+type LocalRefQueries interface {
+	Refs(ctx context.Context, cwd string) ([]domain.Ref, error)
+	Tags(ctx context.Context, cwd string) ([]domain.Ref, error)
+	StashList(ctx context.Context, cwd string) ([]domain.StashEntry, error)
+}
+
 // StashInput is the input DTO for StashSession.Stash.
 type StashInput struct {
 	Cwd         string

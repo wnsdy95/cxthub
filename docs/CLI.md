@@ -38,7 +38,11 @@ For installation and first-run setup, see
   and retried without blocking Git or terminating an agent.
 - Every public command supports `-h` and `--help`. Help and usage errors are
   resolved before cxt creates adapters, contacts a remote, or changes local
-  context state. Unknown flags and missing flag values are rejected. Value
+  context state. Unknown flags, missing values, invalid provider/mode values,
+  duplicate options, extra positionals and unsupported option combinations are
+  rejected. `-f` and `--force` count as the same option. `push` and `pull` currently
+  use the configured origin; remote/ref positionals are rejected rather than
+  silently ignored. Value
   flags also accept `--flag=value` (or `-m=value`) when the value itself starts
   with a hyphen.
 - `cxt claude` and `cxt codex` pass provider-owned arguments through. Use a
@@ -49,6 +53,13 @@ For installation and first-run setup, see
   `--bare`, and `--safe-mode` to cxt hooks; unrelated settings values are never
   copied into the environment. External or mixed-purpose `--settings` remain
   provider-owned and make native-memory projection fail closed.
+- Inspection commands (`log`, `list`, `branch list`, `remote`, config reads,
+  `tag` without a name, `stash list`, and `settings list`) do not replay pending
+  branch operations. Use `cxt branch replay` or synchronization to retry them.
+  `fsck` and `reflog` identify the configured replica without registering it on
+  the server. Missing remote state is reported by the read endpoint; inspection
+  does not create it. `settings list` computes current hashes without saving
+  configuration objects.
 
 ## Recommended onboarding
 
@@ -436,6 +447,18 @@ cxt fork <ref> --as <branch>
 ```
 
 Creates a context branch from a specific ref and restores it.
+
+### `cxt branch` / `cxt branch list`
+
+```text
+cxt branch
+cxt branch list
+```
+
+Lists active local context branch refs and their targets, with `*` marking the
+selected named context HEAD. This is a local observation, not a server freshness
+check. It does not create branches, replay queued operations, load conversations,
+or restore archived records.
 
 ### `cxt branch archive` / `cxt branch restore`
 

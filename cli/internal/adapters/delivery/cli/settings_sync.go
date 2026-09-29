@@ -60,6 +60,26 @@ func currentSettingsHashes(ctx context.Context, c *Container, cwd string) (claud
 	return put("claude"), put("agents"), put("codex")
 }
 
+// inspectSettingsHashes computes identities without adding objects to .cxt.
+// Backups still use currentSettingsHashes to durably preserve their contents.
+func inspectSettingsHashes(cwd string) (claude, agents, codex domain.ContentHash, err error) {
+	hashes := make([]domain.ContentHash, 3)
+	for i, kind := range []string{"claude", "agents", "codex"} {
+		bundle, ok := capture.ReadSettingsDir(cwd, kind)
+		if !ok {
+			continue
+		}
+		if err := domain.ValidateSettingsBundle(kind, "", bundle); err != nil {
+			return "", "", "", err
+		}
+		hashes[i], err = domain.SettingsObjectHash(bundle)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	return hashes[0], hashes[1], hashes[2], nil
+}
+
 // syncSettingsToSnapshot syncs the local state to the target snapshot's settings folder state. If different: push current to backup stack → replace with target bundle. Preserve kinds not recorded in the snapshot.
 func syncSettingsToSnapshot(ctx context.Context, c *Container, cwd string, snapID domain.ContentHash, note string) {
 	all, err := c.List.List(ctx, inbound.ListInput{})
