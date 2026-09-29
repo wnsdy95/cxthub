@@ -126,3 +126,96 @@ func BenchmarkPGReadBlockAppend(b *testing.B) {
 	b.ReportMetric(float64(locations)/float64(b.N), "new-event-locations/op")
 	b.ReportMetric(float64(references)/float64(b.N), "block-references/op")
 }
+
+// Compare the old lock placement with prepared publication using the same
+// current algorithms and immutable 40 MiB fixture. The boundary metric includes
+// transaction acquisition/commit, not just advisory-lock hold time. It is a
+// local microbenchmark, not a concurrent-user latency or cloud percentile.
+func BenchmarkPGDocJobPreparationBoundary(b *testing.B) {
+	for _, prepareInside := range []bool{true, false} {
+		name := "prepared_before_transaction"
+		if prepareInside {
+			name = "planning_inside_transaction"
+		}
+		b.Run(name, func(b *testing.B) {
+			dsn := os.Getenv("CXT_TEST_DSN")
+			if dsn == "" {
+				b.Skip("CXT_TEST_DSN unset")
+			}
+			ctx := context.Background()
+			s, err := NewPostgresStore(ctx, dsn)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer s.Close()
+			if _, err := s.ApplyMigrations(ctx, "../../../../schemas/db/migrations"); err != nil {
+				b.Fatal(err)
+			}
+			repo := domain.HashContent([]byte(b.Name() + time.Now().String()))
+			if _, err := s.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
+				b.Fatal(err)
+			}
+			cir := chunkBigDoc(1000)
+			verify := func(i int) domain.VerifiedSessionDoc {
+				cir.Envelope.SessionOriginID = fmt.Sprintf("%s-%d", repo, i)
+				raw, err := domain.CanonicalBytes(cir)
+				if err != nil {
+					b.Fatal(err)
+				}
+				doc, err := domain.VerifySessionDoc(domain.SessionDoc{Hash: domain.HashContent(raw), CIR: cir})
+				if err != nil {
+					b.Fatal(err)
+				}
+				return doc
+			}
+			base := verify(-1)
+			if _, err := s.PutVerifiedDoc(ctx, repo, base); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(base.Bytes())))
+			var boundary time.Duration
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				doc := verify(i)
+				chunks, _ := domain.PlanDocChunks(doc.Bytes())
+				job, err := domain.NewDocFinalizationJob(repo, doc.Hash(), chunks.Manifest, time.Now())
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := s.EnqueueDocJob(ctx, job); err != nil {
+					b.Fatal(err)
+				}
+				job, err = s.ClaimDocJob(ctx, repo, time.Now(), time.Minute)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				if prepareInside {
+					start := time.Now()
+					err = s.WithinRepository(ctx, repo, func(tx context.Context) error {
+						p, err := s.PrepareDocJob(tx, doc)
+						if err != nil {
+							return err
+						}
+						return p.Complete(tx, job, time.Now())
+					})
+					boundary += time.Since(start)
+				} else {
+					p, prepareErr := s.PrepareDocJob(ctx, doc)
+					if prepareErr != nil {
+						b.Fatal(prepareErr)
+					}
+					start := time.Now()
+					err = p.Complete(ctx, job, time.Now())
+					boundary += time.Since(start)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(boundary.Nanoseconds())/float64(b.N), "repository-boundary-ns/op")
+		})
+	}
+}

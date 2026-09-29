@@ -175,6 +175,28 @@ func (s *PostgresStore) FinishDocJob(ctx context.Context, j domain.DocFinalizati
 	return nil
 }
 func (s *PostgresStore) CompleteDocJob(ctx context.Context, j domain.DocFinalizationJob, doc domain.VerifiedSessionDoc, _ time.Time) error {
+	publication, err := s.PrepareDocJob(ctx, doc)
+	if err != nil {
+		return err
+	}
+	return publication.Complete(ctx, j, time.Now().UTC())
+}
+
+type pgDocPublication struct {
+	store *PostgresStore
+	doc   preparedDocPG
+}
+
+func (s *PostgresStore) PrepareDocJob(ctx context.Context, doc domain.VerifiedSessionDoc) (outbound.PreparedDocPublication, error) {
+	prepared, err := prepareVerifiedDocPG(ctx, doc)
+	if err != nil {
+		return nil, err
+	}
+	return pgDocPublication{s, prepared}, nil
+}
+
+func (p pgDocPublication) Complete(ctx context.Context, j domain.DocFinalizationJob, _ time.Time) error {
+	s, doc := p.store, p.doc.doc
 	return s.WithinRepository(ctx, j.RepoID, func(ctx context.Context) error {
 		var raw []byte
 		if err := s.db(ctx).QueryRow(ctx, `SELECT payload FROM doc_finalization_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, j.RepoID, j.ID).Scan(&raw); err != nil {
@@ -191,7 +213,7 @@ func (s *PostgresStore) CompleteDocJob(ctx context.Context, j domain.DocFinaliza
 		if !doc.Valid() || doc.Hash() != old.DocHash {
 			return domain.ErrIntegrity
 		}
-		if _, err := s.PutVerifiedDoc(ctx, j.RepoID, doc); err != nil {
+		if _, err := s.putPreparedDoc(ctx, j.RepoID, p.doc); err != nil {
 			return err
 		}
 		old.State = "completed"
