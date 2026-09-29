@@ -276,6 +276,9 @@ type Invite struct {
 type Session struct {
 	Token  string `json:"token"`
 	UserID string `json:"user_id"`
+	// CredentialID is a random, non-bearer selector, independent of token/hint.
+	// PostgreSQL assigns it once; only explicit inventory DTOs expose it.
+	CredentialID string `json:"-"`
 	// GrantID is the stable MCP authorization. Empty means a legacy credential
 	// or a non-MCP session; it never implies federated authentication evidence.
 	GrantID string `json:"grant_id,omitempty"`

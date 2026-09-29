@@ -26,4 +26,8 @@ type FederationSession struct {
 	EnterpriseID, Protocol, SessionHash, ConnectionRevision, UserID, Issuer, Subject, ACR string
 	AMR                                                                                   []string
 	AuthenticatedAt, ExpiresAt                                                            time.Time
+	// Protocol expiry governs initial acceptance, not authenticated-session life.
+	ProofExpiresAt                 time.Time
+	IdPSessionExpiresAt            *time.Time
+	PolicyRevision, DomainRevision string
 }

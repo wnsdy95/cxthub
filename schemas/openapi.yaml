@@ -134,6 +134,51 @@ components:
         client_id: {type: string}
         auth_method: {type: string, enum: [client_secret_basic, client_secret_post]}
         revision: {type: string}
+    AssurancePolicy:
+      type: object
+      required: [enterprise_id, revision, max_age_hours]
+      properties:
+        enterprise_id: {type: string}
+        revision: {type: string}
+        max_age_hours: {type: integer, minimum: 1, maximum: 24, default: 8}
+    AssurancePolicyInput:
+      type: object
+      required: [revision, max_age_hours]
+      properties:
+        revision: {type: string, description: Observed policy revision; changes invalidate earlier evidence}
+        max_age_hours: {type: integer, minimum: 1, maximum: 24}
+    CredentialApprovalInput:
+      type: object
+      required: [protocol, connection_revision, policy_revision]
+      properties:
+        protocol: {type: string, enum: [oidc, saml]}
+        connection_revision: {type: string}
+        policy_revision: {type: string}
+    CredentialAssuranceView:
+      type: object
+      required: [id, kind, label, created_at, expires_at, state]
+      properties:
+        id: {type: string, description: Random non-bearer CLI selector or MCP grant ID; never a token or its hash}
+        kind: {type: string, enum: [cli, mcp]}
+        label: {type: string}
+        hint: {type: string}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        state: {type: string, enum: [unapproved, approved, expired, revoked, verification_changed]}
+        protocol: {type: string, enum: [oidc, saml]}
+        authenticated_at: {type: string, format: date-time}
+        verified_until: {type: string, format: date-time}
+    CredentialAssurancesView:
+      type: object
+      required: [available, credentials]
+      properties:
+        available: {type: boolean}
+        policy: {$ref: '#/components/schemas/AssurancePolicy'}
+        browser_proof: {$ref: '#/components/schemas/CredentialApprovalInput'}
+        approval_available_until: {type: string, format: date-time}
+        credentials:
+          type: array
+          items: {$ref: '#/components/schemas/CredentialAssuranceView'}
     OIDCView:
       type: object
       required: [available, configured, callback_uri, linked]
@@ -1823,6 +1868,71 @@ components:
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+  /enterprises/{enterpriseID}/credential-assurances:
+    get:
+      summary: List the current browser user's individual CLI and MCP identity approvals
+      description: PostgreSQL only. Requires an active browser credential and current Enterprise or organization membership. State is computed from current identity configuration, domain, membership and credential lifecycle. No mandatory SSO policy is activated.
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Non-secret inventory with current verification state; Cache-Control no-store
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CredentialAssurancesView'}
+        '401': {description: Browser session required}
+        '403': {description: Membership required}
+  /enterprises/{enterpriseID}/assurance-policy:
+    post:
+      summary: Set maximum authentication lifetime (Enterprise owner only)
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AssurancePolicyInput'}
+      responses:
+        '200': {description: Saved with audit; changed revision invalidates prior Enterprise proofs}
+        '400': {description: Invalid duration or JSON}
+        '401': {description: Browser session required}
+        '403': {description: Owner required}
+        '409': {description: Stale policy revision}
+  /enterprises/{enterpriseID}/credential-assurances/{credentialID}:
+    post:
+      summary: Explicitly approve one own CLI credential or MCP grant
+      description: Requires verification of this exact browser within ten minutes. Stores original authentication time and protocol evidence with audit in one identity transaction. Approval grants no repository permissions or implied MFA. MCP refresh cannot extend it.
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+        - {in: path, name: credentialID, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CredentialApprovalInput'}
+      responses:
+        '200': {description: Explicit identity approval recorded}
+        '400': {description: Invalid input}
+        '401': {description: Active browser and fresh identity verification required}
+        '403': {description: Membership required}
+        '404': {description: No matching active own credential}
+        '409': {description: Stale verification or policy revision}
+  /enterprises/{enterpriseID}/credential-assurances/{credentialID}/revoke:
+    post:
+      summary: Revoke one own identity approval without deleting the credential
+      parameters:
+        - {in: path, name: enterpriseID, required: true, schema: {type: string}}
+        - {in: path, name: credentialID, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        '200': {description: Approval revoked with audit or already revoked}
+        '401': {description: Browser session required}
+        '403': {description: Membership required}
+        '404': {description: No matching own approval}
   /github/connections:
     get:
       summary: "List manageable personal and organization GitHub connections"

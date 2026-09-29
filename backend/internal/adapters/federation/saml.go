@@ -482,7 +482,7 @@ func (*SAML) Verify(ctx context.Context, s outbound.SAMLSettings, id string, raw
 	if err = ctx.Err(); err != nil {
 		return zero, err
 	}
-	return outbound.SAMLProof{AssertionID: a.ID, FederationProof: outbound.FederationProof{Issuer: a.Issuer.Value, Subject: n.Value, AuthenticatedAt: auth.AuthnInstant, ExpiresAt: expires, ACR: acr}}, nil
+	return outbound.SAMLProof{AssertionID: a.ID, FederationProof: outbound.FederationProof{Issuer: a.Issuer.Value, Subject: n.Value, AuthenticatedAt: auth.AuthnInstant, ExpiresAt: expires, SessionExpiresAt: auth.SessionNotOnOrAfter, ACR: acr}}, nil
 }
 func verifySAMLAssertionSignature(sp *saml.ServiceProvider, el *etree.Element) error {
 	// Preserve inherited namespace context exactly as the protocol library does.

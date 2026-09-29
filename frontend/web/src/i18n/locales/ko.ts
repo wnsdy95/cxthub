@@ -6,6 +6,29 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+ credentialAssurance: {
+  "title": "CLI·MCP 연결별 본인 인증 승인",
+  "note": "본인이 확인한 연결만 승인하세요. 이 Enterprise의 본인 인증 근거를 저장하며, 레포지토리 권한을 부여하거나 SSO를 강제하지 않습니다. 승인을 회수해도 연결과 데이터는 유지됩니다.",
+  "ready": "이 브라우저의 최근 본인 인증을 확인했습니다. 아래에서 연결을 개별 승인할 수 있습니다.",
+  "verifyFirst": "위에서 OpenID Connect 또는 SAML로 이 브라우저를 인증한 뒤 10분 안에 연결을 승인하세요.",
+  "refresh": "연결 새로고침",
+  "empty": "활성 CLI 토큰·MCP 연결이 없습니다. 이전 방식의 MCP 연결은 새 동의 또는 정상 토큰 갱신 후 표시됩니다.",
+  "unnamed": "이름 없는 연결",
+  "unapproved": "미승인",
+  "approved": "본인 인증 승인됨",
+  "expired": "승인 만료",
+  "revoked": "승인 회수됨",
+  "verification_changed": "인증 조건 변경 — 재인증·재승인 필요",
+  "until": "승인 기한",
+  "created": "생성",
+  "expires": "인증 수단 만료",
+  "approve": "이 연결 승인",
+  "revoke": "승인 회수",
+  "duration": "최대 승인 유지 시간",
+  "policyNote": "인증 제공자에서 본인 인증한 시각부터 1~24시간이며 기본은 8시간입니다. 브라우저·제공자 세션·인증 수단의 만료가 더 빠르면 그 기한을 따릅니다. 토큰 갱신으로 연장되지 않습니다. 변경하면 이 Enterprise의 기존 브라우저 인증과 연결 승인이 모두 무효화됩니다.",
+  "hours": "시간",
+  "save": "시간 저장·기존 승인 무효화"
+},
  enterpriseSAML: {
   signing: '요청 서명 인증서', current: '현재 인증서', upcoming: '다음 인증서', previous: '이전 인증서',
   valid: '유효', expiring: '90일 이내 만료', expired: '만료됨', not_yet_valid: '아직 유효하지 않음',

@@ -3,6 +3,29 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+ credentialAssurance: {
+  "title": "CLI and MCP identity approvals",
+  "note": "Approve only the connection you recognize. Approval records verified identity for this Enterprise; it does not grant repository access or enable mandatory SSO. Revoking approval leaves the connection and its data intact.",
+  "ready": "This browser was recently verified. You can approve individual connections below.",
+  "verifyFirst": "Verify this browser with OpenID Connect or SAML above, then approve a connection within 10 minutes.",
+  "refresh": "Refresh connections",
+  "empty": "No active CLI tokens or MCP authorizations. Older MCP connections need a fresh consent or successful token refresh before they appear.",
+  "unnamed": "Unnamed connection",
+  "unapproved": "Not approved",
+  "approved": "Identity approved",
+  "expired": "Approval expired",
+  "revoked": "Approval revoked",
+  "verification_changed": "Verification changed — verify and approve again",
+  "until": "Approval deadline",
+  "created": "Created",
+  "expires": "Credential expires",
+  "approve": "Approve this connection",
+  "revoke": "Revoke approval",
+  "duration": "Maximum approval duration",
+  "policyNote": "1–24 hours from the original identity-provider authentication (default 8). A shorter browser, provider-session or credential lifetime still applies. Token refresh does not extend approval. Changing this value invalidates all previous browser verifications and connection approvals in this Enterprise.",
+  "hours": "Hours",
+  "save": "Save duration and invalidate previous approvals"
+},
  enterpriseSAML: {
   signing: 'Request signing certificate', current: 'Current certificate', upcoming: 'Upcoming certificate', previous: 'Previous certificate',
   valid: 'Valid', expiring: 'Expires within 90 days', expired: 'Expired', not_yet_valid: 'Not yet valid',

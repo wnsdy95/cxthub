@@ -108,8 +108,18 @@ func (s *IdentityService) GetOIDCView(ctx context.Context, actor, id, token stri
 			if err != nil && !errors.Is(err, domain.ErrNotFound) {
 				return out, err
 			}
-			if err == nil && proof.UserID == actor && proof.ConnectionRevision == c.Revision && time.Now().Before(proof.ExpiresAt) && s.verifiedConnectionDomain(ctx, c) == nil {
-				out.VerifiedUntil = &proof.ExpiresAt
+			if err == nil && proof.Protocol == "oidc" && proof.UserID == actor {
+				as, err := s.assuranceStore()
+				if err != nil {
+					return out, err
+				}
+				valid, err := s.federationProofCurrent(ctx, as, proof, time.Now())
+				if err != nil {
+					return out, err
+				}
+				if valid {
+					out.VerifiedUntil = &proof.ExpiresAt
+				}
 			}
 		}
 	}
@@ -324,11 +334,11 @@ func (s *IdentityService) CompleteOIDC(ctx context.Context, token, state, code s
 		if err = st.PutFederationIdentity(ctx, identity); err != nil {
 			return "", err
 		}
-		expires := proof.ExpiresAt
-		if sess.ExpiresAt.Before(expires) {
-			expires = sess.ExpiresAt
+		evidence, err := s.makeFederationSession(ctx, a.EnterpriseID, "oidc", current.Revision, current.Domain, sess, proof)
+		if err != nil {
+			return "", err
 		}
-		if err = st.PutFederationSession(ctx, domain.FederationSession{EnterpriseID: a.EnterpriseID, Protocol: "oidc", SessionHash: a.SessionHash, ConnectionRevision: current.Revision, UserID: a.UserID, Issuer: proof.Issuer, Subject: proof.Subject, AuthenticatedAt: proof.AuthenticatedAt, ExpiresAt: expires, AMR: proof.AMR, ACR: proof.ACR}); err != nil {
+		if err = st.PutFederationSession(ctx, evidence); err != nil {
 			return "", err
 		}
 		if err = s.enterpriseAudit(ctx, a.EnterpriseID, a.UserID, "enterprise.oidc.authenticated", a.EnterpriseID); err != nil {

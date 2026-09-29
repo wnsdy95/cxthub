@@ -199,6 +199,81 @@ func TestPGSAMLBrowserReceiptAndCompletion(t *testing.T) {
 		t.Fatal("key not encrypted", err)
 	}
 }
+
+func TestPGSAMLAssuranceUsesSessionDeadlineAndApprovesOneCredential(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "tenant_lifetime", true: "idp_session_bound"}[bounded], func(t *testing.T) {
+			f := newSAMLFlow(t)
+			ctx := context.Background()
+			auth, err := f.ids.BeginSAML(ctx, f.user.ID, f.ep.ID, f.session.Token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			u, _ := url.Parse(auth.URL)
+			state := u.Query().Get("RelayState")
+			attempt, err := f.st.GetSAMLAttempt(ctx, domain.HashToken(state))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertion := f.f.assertion()
+			assertion.ID = domain.NewID("assert_")
+			assertion.Subject.SubjectConfirmations[0].SubjectConfirmationData.InResponseTo = attempt.RequestID
+			deadline := time.Now().UTC().Add(45 * time.Minute)
+			if bounded {
+				assertion.AuthnStatements[0].SessionNotOnOrAfter = &deadline
+			}
+			raw := f.f.responseID(t, assertion, dsig.RSASHA256SignatureMethod, attempt.RequestID)
+			finish, err := f.ids.ReceiveSAML(ctx, f.ep.ID, state, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = f.ids.CompleteSAML(ctx, f.session.Token, finish); err != nil {
+				t.Fatal(err)
+			}
+			proof, err := f.st.GetFederationSession(ctx, f.ep.ID, domain.HashToken(f.session.Token))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proof.ExpiresAt.After(proof.ProofExpiresAt.Add(30 * time.Minute)) {
+				t.Fatal("short assertion truncated assurance", proof.ExpiresAt, proof.ProofExpiresAt)
+			}
+			if bounded && proof.ExpiresAt.Sub(deadline).Abs() > time.Second {
+				t.Fatal("IdP session constraint ignored", proof.ExpiresAt, deadline)
+			}
+			if !bounded && proof.ExpiresAt.Sub(proof.AuthenticatedAt.Add(8*time.Hour)).Abs() > time.Second {
+				t.Fatal("default duration", proof.ExpiresAt)
+			}
+			cli, err := f.ids.CreateCLIToken(ctx, f.user.ID, "terminal")
+			if err != nil {
+				t.Fatal(err)
+			}
+			v, err := f.ids.GetCredentialAssurances(ctx, f.user.ID, f.ep.ID, f.session.Token)
+			if err != nil || len(v.Credentials) != 1 || v.BrowserProof == nil {
+				t.Fatal(v, err)
+			}
+			path := "/api/v1/enterprises/" + f.ep.ID + "/credential-assurances/" + v.Credentials[0].ID
+			body, _ := json.Marshal(v.BrowserProof)
+			if w := f.request("POST", path, f.session.Token, string(body), "application/json"); w.Code != 403 {
+				t.Fatal("cookie CSRF bypass", w.Code)
+			}
+			req := httptest.NewRequest("POST", path, bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+f.session.Token)
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			f.handler.ServeHTTP(w, req)
+			if w.Code != 200 {
+				t.Fatal("approval HTTP", w.Code, w.Body.String())
+			}
+			v, err = f.ids.GetCredentialAssurances(ctx, f.user.ID, f.ep.ID, f.session.Token)
+			if err != nil || v.Credentials[0].State != "approved" || v.Credentials[0].Protocol != "saml" {
+				t.Fatal(v, err)
+			}
+			if _, err = f.ids.ResolveUser(ctx, cli.Token); err != nil {
+				t.Fatal("credential invalid", err)
+			}
+		})
+	}
+}
 func TestPGSAMLConcurrentCallbacksAndAssertionReplay(t *testing.T) {
 	f := newSAMLFlow(t)
 	ctx := context.Background()

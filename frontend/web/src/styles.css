@@ -1308,3 +1308,10 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .identity-editor input, .identity-editor select, .identity-editor textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 .identity-editor textarea { resize: vertical; background: transparent; border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 10px 12px; font: inherit; }
 .identity-editor textarea:focus { border-color: var(--ink); outline: none; }
+
+.credential-assurances { list-style: none; padding: 0; }
+.credential-assurances li { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; padding: 1rem 0; border-bottom: 1px solid var(--border); }
+.credential-assurances li > div { min-width: 0; overflow-wrap: anywhere; }
+.credential-assurances code { overflow-wrap: anywhere; }
+.credential-assurances p { margin: .4rem 0; }
+.credential-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
