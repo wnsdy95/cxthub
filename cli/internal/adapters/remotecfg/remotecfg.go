@@ -42,7 +42,8 @@ type fileConfig struct {
 	Remotes Remotes `json:"remotes,omitempty"`
 	// CheckoutMode is the context action for git checkout hooks (auto|prepare). Defaults to auto if not set.
 	CheckoutMode string `json:"checkout_mode,omitempty"`
-	// Staged is a list of providers to include in the next commit (corresponds to git's staging).
+	// Staged is the legacy provider selector. Frozen-index commands and hooks ignore it;
+	// source content cannot be inferred from this old configuration.
 	Staged []string `json:"staged,omitempty"`
 	// SecretsRedact is a custom masking replacement phrase (defaults to capture phrase if not set).
 	SecretsRedact string `json:"secrets_redact,omitempty"`
@@ -51,7 +52,8 @@ type fileConfig struct {
 	// SecretsScrub is the pattern scrub tier (off|standard|strict, default is standard).
 	SecretsScrub string `json:"secrets_scrub,omitempty"`
 	// LoadMode is the default fidelity for load/checkout/fork (full|reconstructed|memory).
-	// If none is specified, the full series is the default (--mode flag always takes precedence). Repositories that want to inject only compressed memory can be fixed as memory.
+	// An absent mode uses the structured memory input policy. An explicit legacy
+	// mode selects replay fidelity; the command-line --mode takes precedence.
 	LoadMode string `json:"load_mode,omitempty"`
 	// BoundaryEnforce is the isolation session process termination policy on context switch (kill|none).
 	// Default is kill — intentional break, checkpoint precedes so no loss.
@@ -463,6 +465,16 @@ func (g *GitContextWithRemote) LocalBranches(ctx context.Context, cwd string) ([
 		return nil, domain.ErrNotGitRepo
 	}
 	return inventory.LocalBranches(ctx, cwd)
+}
+
+// CurrentCommit observes the selected worktree even when repository identity
+// is reanchored to a CXT remote. Code selection never comes from the remote URL.
+func (g *GitContextWithRemote) CurrentCommit(ctx context.Context, cwd string) (string, error) {
+	reader, ok := g.inner.(outbound.CodePosition)
+	if !ok {
+		return "", domain.ErrSelectionChanged
+	}
+	return reader.CurrentCommit(ctx, cwd)
 }
 
 // Ensure interface implementation.

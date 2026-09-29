@@ -80,6 +80,20 @@ func TestDistillRejectsAgentSummaryContainingNestedSeed(t *testing.T) {
 	}
 }
 
+func TestDistillRejectsSummaryContainingStructuredInputPackage(t *testing.T) {
+	cir := domain.CIRDocument{Envelope: domain.Envelope{SourceProvider: domain.ProviderCodex}, Events: []domain.Event{
+		{Kind: domain.EventMessage, Role: "user", CompactSummary: true, Blocks: []domain.ContentBlock{{Type: "text", Text: "Prior work:\n[cxt context package v1]\n{\"stale\":\"nested-project-memory\"}"}}},
+		{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "Keep the exact new publication receipt."}}},
+	}}
+	d, err := NewRuleDistiller().Distill(context.Background(), cir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(d.Summary, "nested-project-memory") || strings.Contains(d.Summary, "[cxt context package v1]") || !strings.Contains(d.Summary, "Keep the exact new publication receipt.") {
+		t.Fatalf("structured input was promoted to new memory, or fresh instruction lost: %s", d.Summary)
+	}
+}
+
 func TestDistillAcceptsCleanLatestGenerationAfterSyntheticOlderGeneration(t *testing.T) {
 	old := `This session is being continued from a previous conversation.
 

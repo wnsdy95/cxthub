@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -37,16 +38,22 @@ func NewForkSessionService(store outbound.SessionStore) *ForkSessionService {
 
 // Fork creates a new branch from the specified snapshot (ref duplication only, no snapshot copy).
 func (s *ForkSessionService) Fork(ctx context.Context, in inbound.ForkInput) (inbound.ForkOutput, error) {
-	if in.NewBranch == "" {
-		return inbound.ForkOutput{}, domain.ErrNotFound
+	if err := domain.ValidateBranchName(in.NewBranch); err != nil {
+		return inbound.ForkOutput{}, err
 	}
 	// Invariant F2 (git checkout -b meaning): Fails if the target branch already exists. PutRef is an upsert, so here it would silently move the existing branch head.
 	if _, err := s.store.GetRef(ctx, in.RepoID, domain.RefBranch, in.NewBranch); err == nil {
 		return inbound.ForkOutput{}, fmt.Errorf("%w: %q", domain.ErrBranchExists, in.NewBranch)
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return inbound.ForkOutput{}, err
 	}
 	// Parent snapshot existence verification (invariant REF1/F1).
-	if _, err := s.store.GetSnapshot(ctx, in.FromSnapshot); err != nil {
+	snapshot, err := s.store.GetSnapshot(ctx, in.FromSnapshot)
+	if err != nil {
 		return inbound.ForkOutput{}, err
+	}
+	if in.RepoID != "" && snapshot.RepoID != in.RepoID {
+		return inbound.ForkOutput{}, domain.ErrHashMismatch
 	}
 	if _, err := s.store.CreateBranchRef(ctx, domain.Ref{
 		Kind:   domain.RefBranch,

@@ -298,7 +298,9 @@ func TestOrdinarySyncReplaysSavedPRDiscovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			resolver := &fakePRMergeResolver{err: errors.New("GitHub unavailable")}
-			c := &Container{Sync: fixedBriefingSync{}, PRMerges: resolver}
+			c := &Container{Sync: fixedBriefingSync{}, PRMerges: resolver, ApplySelectedPull: func(context.Context, string) (outbound.SelectedPullReceipt, error) {
+				return outbound.SelectedPullReceipt{}, nil
+			}}
 			if err := Run(c, []string{"cxt", command}); err != nil {
 				t.Fatal(err)
 			}

@@ -21,6 +21,7 @@ import (
 //
 // The seed is committed as the first snapshot of the new branch (branch birth — cut meaning), and serialized to a session file (ledger record — capture excluded for resumption).
 type BranchSeedService struct {
+	agentContext  inbound.PrepareAgentContext
 	prompts       *MemoryPromptService
 	gitCtx        outbound.GitContext
 	store         outbound.SessionStore
@@ -47,6 +48,11 @@ func NewBranchSeedService(
 
 func (s *BranchSeedService) WithMemoryPrompts(prompts *MemoryPromptService) *BranchSeedService {
 	s.prompts = prompts
+	return s
+}
+
+func (s *BranchSeedService) WithAgentContext(preparer inbound.PrepareAgentContext) *BranchSeedService {
+	s.agentContext = preparer
 	return s
 }
 
@@ -86,6 +92,9 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 		targetCwd = repo.LocalPath
 	}
 	targetCwd = materializationCwd(targetCwd)
+	if s.agentContext != nil {
+		return s.seedAgentContext(ctx, in, repo, fromSnap, fromDoc, provider, targetCwd)
+	}
 
 	// Layer 1: main head memory (explicit project understanding), including
 	// when the departure branch itself is main. The post-checkout hook
@@ -415,6 +424,7 @@ func isSyntheticReplayMessage(ev domain.Event) bool {
 			continue
 		}
 		return strings.HasPrefix(text, "[cxt seed] Branch-switch context:") ||
+			domain.IsAgentContextPackageText(text) ||
 			strings.HasPrefix(text, seedSummaryPrefix) ||
 			strings.HasPrefix(text, "<environment_context>")
 	}

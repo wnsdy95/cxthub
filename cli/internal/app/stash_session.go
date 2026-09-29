@@ -20,7 +20,8 @@ import (
 //     — same as git reverting the working tree to HEAD
 //
 // StashPop sequence (corresponding to git stash pop):
-//  1. Remove latest stack item → 2. Restore that snapshot as active session
+//  1. Prepare the latest original session without removing its entry.
+//  2. Remove the entry only if the observed stack is still unchanged.
 type StashService struct {
 	capture  outbound.SessionCapture
 	gitCtx   outbound.GitContext
@@ -144,18 +145,31 @@ func (s *StashService) StashPop(ctx context.Context, cwd string) (inbound.StashP
 	if err != nil {
 		return inbound.StashPopOutput{}, err
 	}
-	entry, err := s.store.StashPop(ctx, string(repo.ID))
+	ack, ok := s.store.(outbound.StashRestoreStore)
+	if !ok {
+		return inbound.StashPopOutput{}, fmt.Errorf("stash restore requires compare-and-drop storage")
+	}
+	stack, err := s.store.StashList(ctx, string(repo.ID))
 	if err != nil {
 		return inbound.StashPopOutput{}, err // ErrNotFound = stack empty
 	}
-	lo, err := s.load.Load(ctx, inbound.LoadInput{Ref: string(entry.Snapshot), Cwd: cwd})
+	if len(stack) == 0 {
+		return inbound.StashPopOutput{}, domain.ErrNotFound
+	}
+	entry := stack[0]
+	// Session stash is an explicit original-session restore, including local
+	// unpublished work. It must not become a cloud-only new-session selection.
+	lo, err := s.load.Load(ctx, inbound.LoadInput{RepoID: repo.ID, Ref: string(entry.Snapshot), Cwd: cwd, TargetProvider: entry.Provider, Mode: domain.FidelityFull, RequireConversation: true})
 	if err != nil {
-		// On recovery failure, restore the stack (undo pop) — git maintains stash on conflict.
-		_ = s.store.StashPush(ctx, string(repo.ID), entry)
 		return inbound.StashPopOutput{}, err
 	}
-	stack, _ := s.store.StashList(ctx, string(repo.ID))
-	return inbound.StashPopOutput{Entry: entry, Fidelity: lo.Fidelity, ResumeCmd: lo.ResumeCmd, Depth: len(stack)}, nil
+	if lo.ResumeCmd == "" || (lo.Fidelity != domain.FidelityFull && lo.Fidelity != domain.FidelityReconstructed) {
+		return inbound.StashPopOutput{}, fmt.Errorf("session restore did not produce a resumable conversation; stash was retained")
+	}
+	if err := ack.CompareAndDropStash(ctx, repo.ID, stack); err != nil {
+		return inbound.StashPopOutput{}, fmt.Errorf("session prepared but stash changed; no stash was removed: %w", err)
+	}
+	return inbound.StashPopOutput{Entry: entry, Fidelity: lo.Fidelity, ResumeCmd: lo.ResumeCmd, Depth: len(stack) - 1}, nil
 }
 
 // StashList returns the stack in latest order.

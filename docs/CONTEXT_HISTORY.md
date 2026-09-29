@@ -1,5 +1,9 @@
 # Context branches, working positions, and retained history
 
+The current CLI index, server segment projection and bounded agent input
+contracts are described in [Context selection and agent input](CONTEXT_INPUT.md).
+Stored archive bytes, current code inclusion and provider input are distinct.
+
 ## Shared query semantics
 
 `GET /repos/{repoID}/context-query` and remote MCP history/list/search scopes

@@ -13,6 +13,8 @@ import (
 )
 
 type toolArgs struct {
+	EventStart   *int     `json:"event_start"`
+	EventEnd     *int     `json:"event_end"`
 	CodeCommit   string   `json:"code_commit"`
 	SourceCommit string   `json:"source_commit"`
 	SourceParent string   `json:"source_parent"`
@@ -55,6 +57,12 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 	}
 	switch name {
 	case "context_list":
+		if args.Mode == "segments" {
+			return s.contextSegmentPage(ctx, repo, args)
+		}
+		if args.Mode != "" {
+			return "", fmt.Errorf("context_list mode must be segments or omitted")
+		}
 		return s.contextPage(ctx, repo, args)
 	case "context_fetch":
 		return s.eventPage(ctx, repo, args)

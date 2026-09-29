@@ -9,22 +9,26 @@ import (
 // ContextSelection is an explicit read position, not a mutable branch command.
 // It is shared by REST and MCP; neither adapter defines its own history scope.
 type ContextSelection struct {
-	CodeCommit string `json:"code_commit,omitempty"`
-	Branch     string `json:"branch,omitempty"`
-	Position   string `json:"position,omitempty"`
-	Scope      string `json:"scope,omitempty"`
+	SegmentLimit     int         `json:"segment_limit,omitempty"`
+	SegmentOffset    int         `json:"segment_offset,omitempty"`
+	SegmentStateHash ContentHash `json:"segment_state_hash,omitempty"`
+	CodeCommit       string      `json:"code_commit,omitempty"`
+	Branch           string      `json:"branch,omitempty"`
+	Position         string      `json:"position,omitempty"`
+	Scope            string      `json:"scope,omitempty"`
 }
 
 type ContextQueryView struct {
-	Branch    string             `json:"branch,omitempty"`
-	StateHash ContentHash        `json:"state_hash,omitempty"`
-	Inclusion *BranchContext     `json:"inclusion,omitempty"`
-	Semantics ContextSemantics   `json:"semantics"`
-	Version   int                `json:"version"`
-	Revision  RepositoryRevision `json:"revision"`
-	Position  ContentHash        `json:"position,omitempty"`
-	Snapshots []Snapshot         `json:"snapshots"`
-	History   []HistoryEvent     `json:"history"`
+	Segments  *ContextSegmentPage `json:"segments,omitempty"`
+	Branch    string              `json:"branch,omitempty"`
+	StateHash ContentHash         `json:"state_hash,omitempty"`
+	Inclusion *BranchContext      `json:"inclusion,omitempty"`
+	Semantics ContextSemantics    `json:"semantics"`
+	Version   int                 `json:"version"`
+	Revision  RepositoryRevision  `json:"revision"`
+	Position  ContentHash         `json:"position,omitempty"`
+	Snapshots []Snapshot          `json:"snapshots"`
+	History   []HistoryEvent      `json:"history"`
 }
 
 // SelectContext only consumes one coherent repository generation. Missing

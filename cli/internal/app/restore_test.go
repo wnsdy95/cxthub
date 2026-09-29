@@ -934,7 +934,7 @@ func TestCheckoutExistingBranchUpdatesHEAD(t *testing.T) {
 	}
 }
 
-func TestCheckoutTagKeepsCurrentHEAD(t *testing.T) {
+func TestCheckoutTagSelectsDetachedHEAD(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
@@ -961,7 +961,7 @@ func TestCheckoutTagKeepsCurrentHEAD(t *testing.T) {
 		t.Fatalf("tag restore must be detached, got branch %q", out.Branch)
 	}
 	symbolic, err := store.GetRef(ctx, "", domain.RefHEAD, "HEAD")
-	if err != nil || symbolic.Symbolic != "main" {
-		t.Fatalf("tag restore must not move HEAD: %v %+v", err, symbolic)
+	if err != nil || symbolic.Symbolic != "" || symbolic.Target != head {
+		t.Fatalf("tag checkout must select detached HEAD: %v %+v", err, symbolic)
 	}
 }

@@ -90,15 +90,12 @@ func clearAuthHint(cwd string) {
 	_ = providerfs.RemoveRepoFile(cwd, filepath.Join(".cxt", "auth-hint-shown"))
 }
 
-// commitProviders chooses the providers to snapshot for this commit. If cxt add staged providers,
-// it uses that set; otherwise it tries every provider that may have an active session (Claude and Codex).
+// commitProviders chooses the providers for automatic Git capture independently
+// of the manual frozen index. A hook never consumes a user's staged selection.
 // Defaulting to Claude alone would let Codex commits pass without context, make post-commit capture stale
 // Claude residue, and omit Codex from transition checkpoints. Trying an inactive provider is harmless because
 // Save quietly skips ErrNoActiveSession.
 func commitProviders(cwd string) []string {
-	if staged := remotecfg.StagedProviders(cxtRepoRoot(context.Background(), cwd)); len(staged) > 0 {
-		return staged
-	}
 	return []string{domain.ProviderClaude, domain.ProviderCodex}
 }
 
@@ -194,9 +191,6 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 		lastErr = pass.pending(lastErr)
 	}
 	if saved > 0 {
-		if lastErr == nil {
-			_ = remotecfg.SetStagedProviders(cxtRepoRoot(ctx, cwd), nil)
-		}
 		// Absorb the remote pending of the session that was committed + reflect remaining pending (detached — no commit delay).
 		spawnPendingSync(cwd, resolved)
 	}
@@ -552,7 +546,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 	if c.History != nil {
 		if p, err := c.History.CurrentPosition(ctx); err == nil && p.Orphan {
 			if c.Handoff != nil && p.MemoryHash != "" {
-				text, err := c.Handoff.RenderBranchHandoff(ctx, inbound.BranchHandoffInput{FromBranch: prevBranch, ToBranch: branch, MemoryHash: p.MemoryHash})
+				text, err := c.Handoff.RenderBranchHandoff(ctx, inbound.BranchHandoffInput{Cwd: cwd, FromBranch: prevBranch, ToBranch: branch, MemoryHash: p.MemoryHash})
 				if err != nil {
 					return err
 				}
@@ -631,9 +625,9 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 				b.SeedID = restoredSessionID(out.WrittenPath, out.ResumeCmd)
 				fmt.Printf("cxt: seed created → branch %q (snapshot %s)\n", branch, shortHash(out.SnapshotID))
 				if _, ok := remotecfg.Origin(cwd); ok {
-					if _, perr := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd}); perr != nil && strings.Contains(perr.Error(), domain.ErrSyncConflict.Error()) {
-						// Remote branch with same name (web fork etc.) already exists — seed principle (transient creation is always seed) enforces local retention, push reordering is warned.
-						hookWarn("remote context branch %q exists with same name (web fork?) — push reordering will occur", branch)
+					if _, perr := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd}); perr != nil {
+						prepareErr = fmt.Errorf("new context is not confirmed on the server: %w", perr)
+						hookWarn("context seed publication failed; current session will be preserved: %v", perr)
 					}
 				}
 			} else {
@@ -659,6 +653,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 			return nil
 		}
 		text, err := c.Handoff.RenderBranchHandoff(ctx, inbound.BranchHandoffInput{
+			Cwd:        cwd,
 			FromBranch: prevBranch,
 			ToBranch:   branch,
 			Target:     handoffTarget,
@@ -700,6 +695,17 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 	// wrapper child automatically.
 	if !transitionPreflightSafe(prepareErr, prepareExpected, b, wrapperManaged) {
 		hookWarn("context recovery was not restartable; current session was preserved — continue explicitly with cxt checkout %s", branch)
+		return nil
+	}
+	// New wrappers prepare the actual restart under the original launch policy
+	// while their child is still alive. A seed file alone cannot prove that a
+	// subsequent cloud re-selection will succeed. Leave files and process intact.
+	if wrapperManaged && os.Getenv("CXT_WRAPPER_TRANSITION_PROTOCOL") == "prepare-first-v1" {
+		if err := boundary.Record(cwd, b); err != nil {
+			hookWarn("context transition could not be queued; current session was preserved: %v", err)
+			return nil
+		}
+		fmt.Println("cxt: context transition queued; the active session stays open until restart preparation succeeds")
 		return nil
 	}
 

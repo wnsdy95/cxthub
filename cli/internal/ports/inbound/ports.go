@@ -261,14 +261,26 @@ type ForkOutput struct {
 
 // LoadInput is the DTO for LoadSession.Load.
 type LoadInput struct {
+	// WorkStatePath opts into a validated personal handoff; never a latest session.
+	WorkStatePath string
+	PersonalScope domain.PersonalWorkScope
 	// RepoID is the ID of the target repo.
 	RepoID string
 	// Ref is the name of the ref to load (branch name/tag name/snapshot ID/HEAD).
 	Ref string
+	// Branch preserves the explicit source branch when Ref was already resolved
+	// to a snapshot by checkout. Empty with a direct hash/tag means detached.
+	Branch string
+	// MemoryPin freezes the historical attachment for structured preparation.
+	// A non-nil empty pin preserves an intentionally empty historical selection.
+	MemoryPin *domain.AgentMemoryPin
 	// TargetProvider is the restoration target provider.
 	TargetProvider domain.ProviderKind
 	// Mode is the requested fidelity tier (full|reconstructed|memory).
 	Mode domain.FidelityTier
+	// RequireConversation rejects legacy memory-file fallback when an operation
+	// (such as stash pop) must prepare a resumable conversation to acknowledge it.
+	RequireConversation bool
 	// Cwd is the working directory for writing session files.
 	Cwd string
 	// PreferPendingTail true means that when a latest pending (uncommitted hook capture) exists to connect the Ref interpretation result (branch head), it loads that instead — "on" seed continues from the previous session (e.g., the most recent codex task) before the commit.
@@ -359,6 +371,7 @@ type BranchHandoff interface {
 }
 
 type BranchHandoffInput struct {
+	Cwd        string
 	MemoryHash domain.ContentHash // Explicit memory-only provenance for an orphan root.
 	FromBranch string
 	ToBranch   string
@@ -380,12 +393,16 @@ type SyncInput struct {
 	RepoID string
 	// Cwd is the working directory for repoID interpretation (used if RepoID is empty).
 	Cwd string
-	// Force means git --force: push forces non-fast-forward moves, pull overwrites diverged branches. Default false = git default policy.
+	// Force permits non-fast-forward push. Pull rejects force and requires an
+	// exact remote-repair plan; it never blindly overwrites diverged pointers.
 	Force bool
 	// Append is push-specific: appends a new context with no common ancestor (unrelated history) to the remote head (server grafts head to root — unlike Force, no loss).
 	Append bool
 	// FetchOnly is for pull only: fetches objects (snapshot/doc/memory) only and does not move local refs (git fetch meaning). Hooks' auto-pull is used — context does not force convergence (local history = truth of my session, ref movement is user's choice with cxt pull).
 	FetchOnly bool
+	// Ref selects one branch pointer. Objects and immutable repository evidence
+	// can still be shared; no other branch pointer is adopted or pushed.
+	Ref string
 }
 
 type SyncProgress struct {
@@ -409,7 +426,7 @@ type SyncOutput struct {
 	// pull, including fetch-only mode. They do not imply local ref adoption.
 	// Repair must use this observation, never fetch a newer independent manifest.
 	FetchedRefs []domain.Ref
-	// Conflicts is the list of ref names skipped during pull due to non-fast-forward. If not empty, the caller is advised to abort merge like git (can be adopted remotely with --force).
+	// Conflicts is the list of ref names skipped during pull due to non-fast-forward. If not empty, the caller is advised to abort merge like git (requires a reviewed repair plan for explicit adoption).
 	Conflicts []string
 	// RemoteAhead is the list of branches in the remote that have new context after the local — used by caller to hint "pull/load if needed" (not enforced).
 	RemoteAhead []string

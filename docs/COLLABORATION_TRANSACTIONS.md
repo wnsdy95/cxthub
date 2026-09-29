@@ -2,6 +2,15 @@
 
 The authoritative repository is in cloud PostgreSQL. CLI `.cxt` directories are
 working replicas with durable delivery records; they are not the shared database.
+
+The worktree-scoped manual index freezes source ranges before a local commit.
+Its journal records source observations before publishing pointers, and recovery
+preserves concurrent later index entries. A local finalized receipt does not
+claim server acceptance. Fetch observations and applied-pull receipts also have
+separate revisions; explicit repair preserves displaced values and checks the
+expected selection. See [Context selection and agent input](CONTEXT_INPUT.md)
+for upgrade restrictions and the provider delivery boundary.
+
 These guarantees apply to the PostgreSQL adapter and upgraded clients. The
 filesystem backend is a single-machine development adapter and does not provide
 multi-file or multi-server ACID transactions.

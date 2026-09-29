@@ -240,15 +240,15 @@ func TestPullDoesNotReplaceUntrackedLocalMemoryWithDifferentRemotePointer(t *tes
 	if got.MemoryHash != localHash {
 		t.Fatalf("pull rolled local memory back: got %s want %s", got.MemoryHash, localHash)
 	}
-	if _, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repo, Force: true}); err != nil {
-		t.Fatalf("forced pull did not resolve memory fork: %v", err)
+	if _, err := svc.Pull(ctx, inbound.SyncInput{RepoID: repo, Force: true}); !errors.Is(err, ErrPullRepairRequired) {
+		t.Fatalf("force bypassed explicit repair: %v", err)
 	}
 	got, err = st.GetSnapshot(ctx, doc.Hash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MemoryHash != remoteHash {
-		t.Fatalf("forced pull pointer=%s want remote %s", got.MemoryHash, remoteHash)
+	if got.MemoryHash != localHash {
+		t.Fatalf("blocked force changed pointer=%s want local %s", got.MemoryHash, localHash)
 	}
 	if _, err := st.GetMemory(ctx, localHash); err != nil {
 		t.Fatalf("forced pull deleted losing immutable local memory: %v", err)

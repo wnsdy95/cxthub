@@ -40,9 +40,8 @@ For installation and first-run setup, see
   resolved before cxt creates adapters, contacts a remote, or changes local
   context state. Unknown flags, missing values, invalid provider/mode values,
   duplicate options, extra positionals and unsupported option combinations are
-  rejected. `-f` and `--force` count as the same option. `push` and `pull` currently
-  use the configured origin; remote/ref positionals are rejected rather than
-  silently ignored. Value
+  rejected. `-f` and `--force` count as the same option. `push`, `pull` and `fetch` accept a configured remote name and optional
+  branch. Repository identity is verified; unsupported refspec mappings fail. Value
   flags also accept `--flag=value` (or `-m=value`) when the value itself starts
   with a hyphen.
 - `cxt claude` and `cxt codex` pass provider-owned arguments through. Use a
@@ -151,6 +150,9 @@ cxt repair --from-server
 # Missing/damaged remote configuration:
 cxt repair --from-server --remote https://cxthub.com/owner/repository
 ```
+
+`--remote=https://cxthub.com/owner/repository` is equivalent to the spaced
+form. Repeated `--remote` options are rejected before repair starts.
 
 Repair requires the repository identity recorded under the Git common directory.
 It downloads and verifies an isolated server replica first, then restores missing
@@ -329,27 +331,108 @@ and committed captures remain on the shared timeline.
 ### `cxt add`
 
 ```text
-cxt add [claude|codex]...
-cxt add .
+cxt add [claude|codex|.]... [--expect <index-revision>] [--json]
 ```
 
-Stages the providers to capture on the next `cxt commit` or Git post-commit
-hook. With no provider, or with `.`, both providers are staged. The staging
-selection is cleared after a successful commit capture.
+Freezes matching native sessions in this Git worktree into a versioned index.
+With no provider, or with `.`, both providers are considered. Adds are cumulative:
+adding Codex does not remove staged Claude sources. Each entry records its exact
+source identity, generation, immutable document and event range. Later native
+conversation edits cannot silently change what a manual commit publishes.
+`--expect` performs a compare-and-swap against the displayed index revision.
 
 ### `cxt commit`
 
 ```text
-cxt commit [-m <message>]
+cxt commit [-m <message>] [--expect <index-revision>] [--json]
+cxt commit --resume <operation-id> [--json]
 ```
 
-Captures active sessions from the staged providers, or from both providers
-when nothing is staged. Each successful capture is distilled into reusable
-memory. The command also schedules synchronization that resolves matching
-remote pending-session pointers.
+Publishes only the frozen index. An empty index is an error; run `cxt add` first.
+Commit does not reread live provider files. Its durable operation journal lets a
+retry finish the same publication without consuming concurrently added entries.
+A local finalization receipt is not evidence of server acceptance; publish with
+`cxt push` and inspect upload status separately.
 
-Ordinary `git commit` invokes the same capture path and adds the Git commit
-message and short SHA link automatically.
+Ordinary `git commit` captures eligible sessions from both providers independently.
+The automatic hook does not consume or clear the manual frozen index. The old
+provider-selector `staged` configuration is ignored: it contains no frozen content
+and cannot safely be migrated into an index.
+
+### `cxt restore`
+
+```text
+cxt restore --staged <source-key>...|. [--expect <index-revision>] [--json]
+```
+
+Removes selected entries (or all entries with `.`) from this worktree's index.
+Raw archives and native sessions are preserved. `cxt stash push --staged` saves
+this index; `cxt stash list --staged` lists it without mutation; restore it with
+`cxt stash pop --staged --id <stash-id>`. Incompatible entries fail without
+silently replacing newly staged sources.
+
+### `cxt status`
+
+```text
+cxt status [--json]
+```
+
+Reads the actual Git SHA, selected context and pinned memory, index revision,
+staged event ranges, stored pending captures and local commit receipts. It does
+not scan provider files, contact the server or replay journals. Pending captures
+are repository-scoped; their presence does not prove a session is currently live.
+Unavailable watcher/server evidence is reported as unknown, not clean.
+
+### `cxt diff`
+
+```text
+cxt diff [--staged] [--json]
+```
+
+The default compares stored pending captures with the index or selected HEAD.
+`--staged` compares the frozen index with finalized coverage reachable from the
+selected history. Events are compared by verified source identity and canonical
+content, never by timestamps or source-file length alone. Replaced, older and
+unavailable sources remain distinguishable.
+
+### `cxt fetch`
+
+```text
+cxt fetch [remote [branch]]
+cxt pull [remote [branch]]
+cxt push [remote [branch]] [--force|--append] [--wait-history]
+```
+
+A named remote is verified against the local immutable repository ID before any
+sync mutation. Unknown names, other repositories and unsupported refspecs fail.
+An explicit branch scopes pointer updates; immutable dependency objects and
+repository evidence can still be transferred. Credentials from the configured
+origin are never forwarded to a different server; log in to that server separately.
+
+`fetch` updates a separate remote observation and immutable cache. It leaves the
+working context, applied memory, index and branch refs unchanged. `pull` also
+reconciles permitted pointers and pins a complete authorized context/memory
+projection to the selected Git code. It does not execute an agent or edit an
+ongoing conversation. Local-ahead refs are preserved.
+
+`pull --force` and `pull -f` fail argument preflight before composition, queued
+branch/PR replay, or sync work (exit 2; mutation state `unchanged`). To resolve a
+conflict, preview one pointer and apply exactly that plan:
+
+```text
+cxt repair --preview --ref feature --reason 'adopt reviewed remote tip' --output repair.json
+cxt repair --apply repair.json --expect sha256:<plan-id>
+```
+
+For a memory conflict replace `--ref feature` with `--snapshot sha256:<snapshot>`.
+The first apply rechecks remote authorization/revision, Git position and local
+pointer/index state; intervening changes invalidate the plan. Losing refs/digests
+are retained. Apply output identifies the durable receipt, its `state=applied`
+and original `applied_at` time. Repeating the same approved plan returns that
+existing receipt without reapplying or rechecking current authorization,
+remote revision, or local position. The receipt records the completed operation;
+it does not assert that its pointer is still current.
+Plan files contain private context metadata and should not be committed.
 
 ### `cxt save`
 
@@ -374,12 +457,32 @@ an explicit standalone checkpoint.
 ### `cxt list` and `cxt log`
 
 ```text
-cxt list [--branch <branch>]
-cxt log [--branch <branch>]
+cxt log [<ref>|--branch <branch>|--all|--retained] [--server] [--json]
+cxt list [<ref>|--branch <branch>|--all|--retained] [--server] [--json]
 ```
 
-Lists local snapshots, optionally restricted to a branch. `log` is an alias for
-`list`.
+`log` and `list` share one read contract. The default walks this worktree's
+selected context HEAD, including natural parents and graft parents. A capture's
+original branch label does not decide membership. Children appear before their
+parents even when capture timestamps are out of order; independent captures use
+newest timestamp, then content ID as a stable tie-break.
+
+- `<ref>` or `--branch` selects a context ref. Ambiguous branch/tag names fail.
+- `--all` walks all known local ref targets. `--retained` inspects every locally
+  retained snapshot, including records outside the selected history.
+- `--server` queries the cloud's shared context projection for the selected
+  source and actual Git commit. It preserves the server's inclusion order,
+  evidence revision, and state hash. It does not combine with `--all` or
+  `--retained`, and an unavailable/denied server never silently becomes a local
+  answer.
+- `--json` returns versioned selection, source, state hash, coverage gaps and
+  server evidence. A local result says `server_checked: false`; an incomplete
+  ancestor chain is explicit. A local state hash includes mutable memory and
+  graft metadata, not just snapshot IDs.
+
+These reads do not register repositories, replay pending operations, capture
+providers, or move refs/working positions. Changing from the old label-filtered
+list to ancestry can change which rows appear; it does not delete stored data.
 
 ## Restore and branch commands
 
@@ -488,27 +591,49 @@ cxt load [<ref>]
   [--mode <full|reconstructed|memory>]
 ```
 
-Restores a snapshot without creating a branch. Omitting `<ref>` loads the
-current context head. `--provider` enables supported cross-provider
-materialization. If an oversized conversation must be trimmed, cxt first
-distills the exact omitted span and fails without creating a provider session
-file if that projection is unavailable; it never resumes from an unexplained
-recent tail. A new full or reconstructed provider session also receives the
-bounded portable-memory projection when the conversation itself fits. The
-current snapshot's conversation delta and exact ancestor user/assistant items
-already present in the replay are excluded because those turns follow
-verbatim; conversation from sibling/team lineages that is absent from the raw
-replay remains portable. An exact provider compaction summary already present
-in the replay is not repeated. cxt trims at a user-turn boundary only when the
-combined verbatim conversation and portable projection exceed the provider's
-seed budget.
+Prepares input from the selected snapshot without creating a branch or moving
+HEAD. With no explicit replay mode, it supplies structured project memory,
+code-selection metadata, coverage gaps and MCP source references. Raw transcript
+is not automatically inserted. Exact personal work state is included only when
+an explicit principal/session/worktree scope is available; missing scope is
+reported, never replaced with a teammate's tasks.
 
-The mode priority is:
+The mode priority is the command's `--mode`, local `config load.mode`, the
+account's explicit server preference, then the structured memory default.
 
-1. the command's `--mode`;
-2. local `config load.mode`;
-3. the authenticated account preference from the server; and
-4. `full`.
+Explicit `full` and `reconstructed` retain the archived conversation restoration
+path. Oversized replay distills the omitted span before materializing a session,
+uses user-turn boundaries, and preserves the original archive. Replay fidelity
+is separate from the new history input token budget.
+
+An inspectable input artifact does not launch a provider or change its files:
+
+```text
+cxt load --provider codex --context-budget 200k --output context.json
+cxt load --provider claude --context-budget full --output context.json
+```
+
+Existing files are not overwritten. Artifacts contain private memory and dialogue;
+keep them out of Git. `full` means a ceiling of 800,000 tokens, not a promise that
+a model can accept that much. This build's artifact counter uses a conservative
+UTF-8 byte bound and explicitly reports that provider acceptance is unverified.
+
+The interactive wrapper also recognizes:
+
+```text
+cxt --pull --context-budget 200k codex --yolo
+cxt --pull --context-budget full codex --yolo
+cxt --pull codex --yolo
+```
+
+The final two commands have the same requested ceiling. **Strict native history
+launch is currently unavailable in the shipped runtime adapter:** no installed
+host/model/tokenizer combination has been verified. These commands report
+`provider_capability_unknown` before materializing or launching; they do not
+silently shrink the request or launch without context. The artifact path is
+available for inspection. No global model-window or auto-compaction setting is
+changed. Native resume, provider help and noninteractive commands preserve their
+provider-owned behavior and receive no injected package.
 
 `memory` keeps the full immutable digest in cxt storage but injects at most a
 64 KiB projection into the target provider's instruction file. cxt appends or
@@ -566,10 +691,10 @@ generation-truncated.
 ### `cxt push`
 
 ```text
-cxt push [--append | --force]
+cxt push [remote [branch]] [--append | --force]
 ```
 
-Synchronizes local objects and refs to `origin`.
+Synchronizes local objects and selected refs to the specified remote (`origin` by default).
 
 - The default rejects a non-fast-forward update.
 - `--append` preserves both histories by placing the local segment after the
@@ -582,24 +707,29 @@ Prefer `--append` or pull-and-retry over `--force`.
 ### `cxt pull`
 
 ```text
-cxt pull [--force]
+cxt pull [remote [branch]]
 ```
 
-Downloads objects and refs from `origin`.
+On a connected clone's first pull, an empty worktree selection can be initialized
+only when the authorized server history binds the fetched current branch tip to
+the exact current Git commit. Branch identity, code, memory preparation and the
+local selection are checked again before publication. An unrelated latest tip,
+an orphan selection, or an existing historical cursor is never substituted.
+
+Observes the named remote, reconciles permitted local pointers, then records the
+selected-code context/memory application. The default remote is `origin`.
 
 - The default keeps local state and reports diverged branches or causal memory
   forks instead of choosing a winner by arrival time.
-- `--force` adopts remote ref state and resolves a memory fork by selecting the
-  remote memory pointer. The losing immutable local memory object and raw
-  session remain stored; run `cxt memorize` again to project that session onto
-  the selected remote lineage.
+- `--force` is rejected before mutation. Use `cxt repair --preview` and
+  `cxt repair --apply` for a reviewed exact-pointer conflict resolution.
 - If validated server metadata intentionally remains behind a local snapshot,
   cxt keeps a guarded local cursor so later pulls do not download that same
   projection forever. The cursor is only a disposable negotiation hint: a
   local or remote metadata change invalidates it, and it never participates in
   refs, reachability, or push state.
 
-Review local work before using `--force`.
+Review the old and new pointers in the repair plan before applying it.
 
 ## Tags and stashes
 
@@ -626,6 +756,15 @@ Stores active context separately and restores the branch-head context. `pop`
 restores and removes the newest context stash. Managed Git hooks mirror
 ordinary `git stash` and `git stash pop` operations.
 
+Session `stash pop` explicitly restores the original conversation, including
+unpublished local work, using the existing provider replay path. It does not
+use the default cloud memory-only input package. Replay may use the provider's
+saved compaction state and bounded seed rules; the original archive stays
+unchanged. Failure or a memory-only downgrade keeps the stash. The stack entry
+is removed only after a resumable file is prepared and only if the whole stack
+still matches the observed version. A concurrent push keeps both entries and
+reports a conflict; preparation does not prove the provider resumed the file.
+
 `stash push` uses the same provider selection rule as `cxt save`: explicit
 `--provider`, then a verified live wrapper, then the newest capture-eligible
 session.
@@ -643,6 +782,13 @@ cxt settings restore [index]
 - `pull` applies available team `.claude/`, `.agents/`, and `.codex/` settings.
 - `list` shows current setting-object hashes and local replacement backups.
 - `restore` restores a backup; the default index is `0`.
+
+`pull` skips only typed absence (`ErrNotFound`, including the server's 204
+"not configured" response). Authorization, network, verification, and local
+write errors stop the command with a nonzero exit and preserve their typed
+cause. Bundles applied before a later failure remain applied; the error reports
+that partial progress. Other HTTP failures, including an unclassified 404,
+are not treated as an empty settings bundle.
 
 ### `cxt secrets`
 
@@ -732,8 +878,8 @@ Reading a key prints its effective local value. Supported keys are:
 | Key | Values | Default | Effect |
 |---|---|---|---|
 | `checkout.mode` | `auto`, `prepare` | `auto` | Restore automatically or only prepare the resume action after Git checkout |
-| `load.mode` | `full`, `reconstructed`, `memory`, `default` | `full` | Default restore fidelity; `default` clears the local override |
-| `boundary.enforce` | `kill`, `none`, `default` | `kill` | Enforce process isolation across context switches when a live owning `cxt claude`/`cxt codex` wrapper can restart the prepared seed; unmanaged sessions are not killed and receive an explicit resume command |
+| `load.mode` | `full`, `reconstructed`, `memory`, `default` | structured memory | Explicit replay fidelity; `default` clears the local override |
+| `boundary.enforce` | `kill`, `none`, `default` | `kill` | Managed fresh wrappers prepare and validate the next input before stopping their current child; failed preparation preserves it. Legacy native-resume wrappers use the prepared-seed restart path. Unmanaged app sessions stay open and receive a bounded handoff. |
 | `capture.debounce` | non-negative seconds, `default` | 60 seconds | Minimum interval for repeated Stop-event captures |
 | `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier |
 | `secrets.redact` | replacement text, `default` | built-in redaction token | Exact-secret replacement text |
@@ -893,3 +1039,42 @@ and their completion bits are never rewritten by resolve/acknowledge.
 an auditable gap and stops repeating an impossible automatic retry. `retry` never
 rescans the current provider; successful local publication still needs `cxt push`
 for delivery. These are local replica diagnostics, not server completion receipts.
+
+## Machine failures and upgrade notes
+
+Commands advertising `--json` emit version-1 failure envelopes on stderr. Success
+stays on stdout. Automation should use `error.code` and `exit_code`, not translated
+messages. Exit codes are 2 for argument errors, 3 for selection/conflict/index
+conditions, 4 for authorization, 5 for integrity/unsupported storage versions,
+6 for input preparation limits, 130 for cancellation, and 1 for other failures.
+`mutation_state: inspect_receipts` means a resumable operation may have completed
+partly; it is not a rollback claim. Preflight failures report `unchanged`.
+
+Precise causes are emitted only when the operation identifies them through a
+typed error; message text is never used to guess a machine code:
+
+| `error.code` | Exit | Meaning |
+| --- | --- | --- |
+| `index_changed` | 3 | An explicit staging `--expect` revision differs from the observed index. Re-read/review the index before trying again. |
+| `code_position_mismatch` | 3 | Staging, selected pull, or prepared input delivery observed a different Git commit from its selected commit. Prepare against the current code before retrying. |
+| `invalid_ref` | 2 | A typed reference validation/resolution failure reached command execution, such as an ambiguous branch/tag. |
+| `delivery_failed` | 1 | Prepared input encoding/materialization, launch validation/start, or a required delivery receipt failed. `phase` is `delivery`; provider acceptance and rollback remain unproven. |
+| `position_changed` | 3 | A broader context/branch/server selection changed without an identified commit mismatch. |
+| `conflict` | 3 | A typed conflict without a more specific cause, including sync ref rejection. |
+
+An index CAS failure without an exact typed cause can still be `conflict`; a
+general selection failure stays `position_changed`. Plain errors remain
+`needs_attention`, even if their text contains one of these code names.
+Cancellation, timeouts, integrity failures, and preparation limits retain their
+existing codes through delivery wrappers. A provider's later nonzero task exit
+is not proof that input delivery failed. `invalid_ref` reported during command
+execution retains `mutation_state: inspect_receipts`; only argument preflight
+can promise `unchanged`. Commands without a `--json` contract use the same exit
+classification and human-readable stderr, including provider-owned flags.
+
+Index, commit, pull and delivery receipts are additive versioned records. Unknown
+index versions fail closed. Raw documents, natural parents, branch IDs and older
+memories are preserved. Older binaries do not understand frozen staging; do not
+use them to commit a repository with an active new index. Before downgrade,
+finish or explicitly unstage the index and keep its archives/receipts. A new CLI
+cannot make an independently invoked old binary honor a new local contract.

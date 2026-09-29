@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func (s *FSStore) readIndexPath(repo, hash domain.ContentHash) string {
@@ -82,6 +83,9 @@ func (s *FSStore) DocReadIndex(ctx context.Context, repo, hash domain.ContentHas
 	}
 	if err = ctx.Err(); err != nil {
 		return idx, err
+	}
+	if outbound.DocReadOnly(ctx) {
+		return idx, domain.ErrAgentHistoryUnavailable
 	}
 	doc, err := s.GetDoc(ctx, repo, hash)
 	if err != nil {

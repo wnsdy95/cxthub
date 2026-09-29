@@ -8,6 +8,9 @@ import (
 )
 
 func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in domain.ContextSelection) (domain.ContextQueryView, error) {
+	if err := domain.ValidateContextSegmentSelection(in); err != nil {
+		return domain.ContextQueryView{}, err
+	}
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return domain.ContextQueryView{}, err
 	}
@@ -19,6 +22,17 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 		if err != nil {
 			return domain.ContextQueryView{}, err
 		}
+
+		revision, err := s.RepositoryRevision(ctx, repo)
+		if err != nil {
+			return domain.ContextQueryView{}, err
+		}
+		key := segmentCacheKey(repo, r, revision, in)
+		if in.SegmentLimit > 0 && (revision.Graph != 0 || revision.Evidence != 0) {
+			if basis, ok := s.segmentCache.get(key); ok {
+				return s.contextSegmentPage(ctx, repo, in, basis)
+			}
+		}
 		view, err := s.loadRepositoryView(ctx, repo)
 		if err != nil {
 			return domain.ContextQueryView{}, err
@@ -28,8 +42,11 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 			branch = "main"
 		}
 		out, err := domain.SelectContext(view, in, branch)
-		if err != nil || in.Scope != "current" {
+		if err != nil {
 			return out, err
+		}
+		if in.Scope != "current" {
+			return s.finishContextQuery(ctx, repo, in, out, view.History, key)
 		}
 		name := in.Branch
 		if name == "" {
@@ -86,6 +103,6 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 			out.StateHash = domain.HashContent(basis)
 			break
 		}
-		return out, nil
+		return s.finishContextQuery(ctx, repo, in, out, view.History, key)
 	})
 }

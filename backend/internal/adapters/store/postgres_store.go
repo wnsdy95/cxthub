@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // PostgresStore stores metadata and content in PostgreSQL (repos/blobs/snapshots/refs/memories).
@@ -1404,6 +1405,9 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	}
 	if man, ok := domain.ParseDocChunkManifest(current); ok {
 		return man, nil
+	}
+	if outbound.DocReadOnly(ctx) {
+		return domain.DocChunkManifest{}, domain.ErrAgentHistoryUnavailable
 	}
 	if tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx); ok && tx.readOnly {
 		// The caller falls back to the legacy body in the same consistent read.

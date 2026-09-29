@@ -20,14 +20,48 @@ const appBranchHandoffMaxBytes = 16 << 10
 const appBranchHandoffPrefix = "── cxthub branch context handoff ──"
 
 type BranchHandoffService struct {
-	store outbound.SessionStore
+	store    outbound.SessionStore
+	packages inbound.PrepareAgentContext
+	code     outbound.CodePosition
 }
 
 func NewBranchHandoffService(store outbound.SessionStore) *BranchHandoffService {
 	return &BranchHandoffService{store: store}
 }
 
+// WithAgentContext unifies desktop branch notices with CLI preparation. An
+// orphan's explicitly pinned memory remains separate until it has a selectable
+// context snapshot; it must never acquire conversation ancestry by fallback.
+func (s *BranchHandoffService) WithAgentContext(packages inbound.PrepareAgentContext, code outbound.CodePosition) *BranchHandoffService {
+	s.packages, s.code = packages, code
+	return s
+}
+
 func (s *BranchHandoffService) RenderBranchHandoff(ctx context.Context, in inbound.BranchHandoffInput) (string, error) {
+	if s.packages != nil && in.Target != "" {
+		snapshot, err := s.store.GetSnapshot(ctx, in.Target)
+		if err != nil {
+			return "", err
+		}
+		p, err := s.packages.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{RepoID: snapshot.RepoID, Cwd: in.Cwd, Branch: in.ToBranch, SnapshotID: in.Target, Provider: snapshot.Provider, Policy: domain.MemoryInputPolicy(), ArtifactOnly: true})
+		if err != nil {
+			return "", err
+		}
+		if err = p.ValidateIdentity(); err != nil {
+			return "", err
+		}
+		if err = checkAgentCode(ctx, s.code, in.Cwd, p.Content.Selection.CodeCommit); err != nil {
+			return "", err
+		}
+		prompt, err := p.Prompt()
+		if err != nil {
+			return "", err
+		}
+		if len(prompt) > appBranchHandoffMaxBytes {
+			return "", domain.ErrContextBudgetExceeded
+		}
+		return prompt, nil
+	}
 	var digest domain.MemoryDigest
 	var ok bool
 	if in.Target == "" && in.MemoryHash != "" {

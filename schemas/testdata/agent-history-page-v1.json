@@ -1,0 +1,667 @@
+[
+  {
+    "name": "claude-codec",
+    "doc": {
+      "hash": "sha256:9868156f28c6178510ded7dcd0bb33f26d74caa087a6f4dffcea62254b773e5a",
+      "cir": {
+        "envelope": {
+          "cir_version": "1",
+          "source_provider": "claude",
+          "source_model": "",
+          "captured_at": "2026-09-01T00:00:00Z",
+          "cwd": "",
+          "git_branch": "",
+          "session_origin_id": "history-claude",
+          "fidelity": "full"
+        },
+        "events": [
+          {
+            "blocks": [
+              {
+                "type": "text",
+                "text": "check \u003c\u003e\u0026 \uD55C\uAD6D\uC5B4"
+              }
+            ],
+            "kind": "message",
+            "role": "user",
+            "seq": 0,
+            "ts": "2026-09-01T00:00:00Z"
+          },
+          {
+            "cross_replayable": false,
+            "kind": "reasoning",
+            "locked": {
+              "provider": "claude",
+              "scheme": "signature",
+              "blob": "SIG"
+            },
+            "redacted_summary": "summary",
+            "seq": 1,
+            "ts": "2026-09-01T00:00:01Z"
+          },
+          {
+            "blocks": [
+              {
+                "type": "text",
+                "text": "inspect"
+              }
+            ],
+            "kind": "message",
+            "role": "assistant",
+            "seq": 2,
+            "ts": "2026-09-01T00:00:01Z"
+          },
+          {
+            "call_id": "c",
+            "input": {
+              "command": "printf '\u003c\u003e\u0026'"
+            },
+            "kind": "tool_call",
+            "provider_tool_name": "Bash",
+            "seq": 3,
+            "tool_name": "shell",
+            "ts": "2026-09-01T00:00:01Z"
+          },
+          {
+            "call_id": "c",
+            "kind": "tool_result",
+            "output": [
+              {
+                "text": "result",
+                "type": "text"
+              }
+            ],
+            "seq": 4,
+            "ts": "2026-09-01T00:00:02Z"
+          }
+        ]
+      }
+    },
+    "page": {
+      "version": 1,
+      "hash": "sha256:9868156f28c6178510ded7dcd0bb33f26d74caa087a6f4dffcea62254b773e5a",
+      "provider": "claude",
+      "session_id": "history-claude",
+      "total": 5,
+      "before": 5,
+      "next_before": -1,
+      "covered": false,
+      "turns": [
+        {
+          "start": 0,
+          "end": 5,
+          "hash": "sha256:26d95e7c4c534810ada2b4e4ff9a4e00be8241982b7487d7d1dc653aa822928e",
+          "events": [
+            {
+              "blocks": [
+                {
+                  "type": "text",
+                  "text": "check \u003c\u003e\u0026 \uD55C\uAD6D\uC5B4"
+                }
+              ],
+              "kind": "message",
+              "role": "user",
+              "seq": 0,
+              "ts": "2026-09-01T00:00:00Z"
+            },
+            {
+              "cross_replayable": false,
+              "kind": "reasoning",
+              "locked": {
+                "provider": "claude",
+                "scheme": "signature",
+                "blob": "SIG"
+              },
+              "redacted_summary": "summary",
+              "seq": 1,
+              "ts": "2026-09-01T00:00:01Z"
+            },
+            {
+              "blocks": [
+                {
+                  "type": "text",
+                  "text": "inspect"
+                }
+              ],
+              "kind": "message",
+              "role": "assistant",
+              "seq": 2,
+              "ts": "2026-09-01T00:00:01Z"
+            },
+            {
+              "call_id": "c",
+              "input": {
+                "command": "printf '\u003c\u003e\u0026'"
+              },
+              "kind": "tool_call",
+              "provider_tool_name": "Bash",
+              "seq": 3,
+              "tool_name": "shell",
+              "ts": "2026-09-01T00:00:01Z"
+            },
+            {
+              "call_id": "c",
+              "kind": "tool_result",
+              "output": [
+                {
+                  "text": "result",
+                  "type": "text"
+                }
+              ],
+              "seq": 4,
+              "ts": "2026-09-01T00:00:02Z"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "codex-codec",
+    "doc": {
+      "hash": "sha256:b7d0d20c37a5990571d27c1491dfba6a5a767bcbb2d23ef3bf6504050d672dfd",
+      "cir": {
+        "envelope": {
+          "cir_version": "2",
+          "source_provider": "codex",
+          "source_model": "synthetic",
+          "captured_at": "2026-09-01T00:00:00Z",
+          "cwd": "/synthetic",
+          "git_branch": "",
+          "session_origin_id": "history-codex",
+          "fidelity": "full",
+          "source_models": [
+            "synthetic"
+          ],
+          "compaction_count": 1
+        },
+        "events": [
+          {
+            "blocks": [
+              {
+                "type": "text",
+                "text": "inspect \u003c\u003e\u0026 \uD55C\uAD6D\uC5B4"
+              }
+            ],
+            "kind": "message",
+            "role": "user",
+            "seq": 0,
+            "ts": "2026-09-01T00:00:01Z"
+          },
+          {
+            "cross_replayable": false,
+            "kind": "reasoning",
+            "locked": {
+              "provider": "codex",
+              "scheme": "encrypted_content",
+              "blob": "ENC"
+            },
+            "redacted_summary": "summary",
+            "seq": 1,
+            "ts": "2026-09-01T00:00:02Z"
+          },
+          {
+            "call_id": "f",
+            "input": {
+              "command": "ls"
+            },
+            "kind": "tool_call",
+            "provider_tool_name": "shell",
+            "seq": 2,
+            "tool_name": "shell",
+            "ts": "2026-09-01T00:00:03Z"
+          },
+          {
+            "call_id": "f",
+            "kind": "tool_result",
+            "output": "ok",
+            "seq": 3,
+            "ts": "2026-09-01T00:00:04Z"
+          },
+          {
+            "call_id": "p",
+            "input": {
+              "_raw": "patch"
+            },
+            "kind": "tool_call",
+            "provider_tool_name": "apply_patch",
+            "seq": 4,
+            "status": "completed",
+            "tool_name": "apply_patch",
+            "ts": "2026-09-01T00:00:05Z"
+          },
+          {
+            "call_id": "p",
+            "kind": "tool_result",
+            "output": "done",
+            "seq": 5,
+            "ts": "2026-09-01T00:00:06Z"
+          },
+          {
+            "kind": "compaction",
+            "replacement": [],
+            "replacement_complete": true,
+            "seq": 6,
+            "ts": "2026-09-01T00:00:07Z"
+          }
+        ]
+      }
+    },
+    "page": {
+      "version": 1,
+      "hash": "sha256:b7d0d20c37a5990571d27c1491dfba6a5a767bcbb2d23ef3bf6504050d672dfd",
+      "provider": "codex",
+      "session_id": "history-codex",
+      "total": 7,
+      "before": 7,
+      "next_before": -1,
+      "covered": false,
+      "turns": [
+        {
+          "start": 0,
+          "end": 7,
+          "hash": "sha256:935f3706f1e200bb3c88612501da71351486caeaf10d0140f854ddc318288174",
+          "events": [
+            {
+              "blocks": [
+                {
+                  "type": "text",
+                  "text": "inspect \u003c\u003e\u0026 \uD55C\uAD6D\uC5B4"
+                }
+              ],
+              "kind": "message",
+              "role": "user",
+              "seq": 0,
+              "ts": "2026-09-01T00:00:01Z"
+            },
+            {
+              "cross_replayable": false,
+              "kind": "reasoning",
+              "locked": {
+                "provider": "codex",
+                "scheme": "encrypted_content",
+                "blob": "ENC"
+              },
+              "redacted_summary": "summary",
+              "seq": 1,
+              "ts": "2026-09-01T00:00:02Z"
+            },
+            {
+              "call_id": "f",
+              "input": {
+                "command": "ls"
+              },
+              "kind": "tool_call",
+              "provider_tool_name": "shell",
+              "seq": 2,
+              "tool_name": "shell",
+              "ts": "2026-09-01T00:00:03Z"
+            },
+            {
+              "call_id": "f",
+              "kind": "tool_result",
+              "output": "ok",
+              "seq": 3,
+              "ts": "2026-09-01T00:00:04Z"
+            },
+            {
+              "call_id": "p",
+              "input": {
+                "_raw": "patch"
+              },
+              "kind": "tool_call",
+              "provider_tool_name": "apply_patch",
+              "seq": 4,
+              "status": "completed",
+              "tool_name": "apply_patch",
+              "ts": "2026-09-01T00:00:05Z"
+            },
+            {
+              "call_id": "p",
+              "kind": "tool_result",
+              "output": "done",
+              "seq": 5,
+              "ts": "2026-09-01T00:00:06Z"
+            },
+            {
+              "kind": "compaction",
+              "replacement": [],
+              "replacement_complete": true,
+              "seq": 6,
+              "ts": "2026-09-01T00:00:07Z"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "v2-union-presence",
+    "doc": {
+      "hash": "sha256:f25d2e2e59bfb1029e0b5e8046117769850849ebbf675db7d61af5c2e21ac0f5",
+      "cir": {
+        "envelope": {
+          "cir_version": "2",
+          "source_provider": "codex",
+          "source_model": "",
+          "captured_at": "",
+          "cwd": "",
+          "git_branch": "",
+          "session_origin_id": "all-unions",
+          "fidelity": ""
+        },
+        "events": [
+          {
+            "kind": "turn",
+            "provider_metadata": {
+              "turn_id": "t",
+              "create_time": 9007199254740993
+            },
+            "role": "user",
+            "seq": 0
+          },
+          {
+            "blocks": [
+              {
+                "type": "text",
+                "text": "\u003c\u003e\u0026\u2028\u2029 \uD55C\uAD6D\uC5B4"
+              }
+            ],
+            "kind": "message",
+            "role": "user",
+            "seq": 1
+          },
+          {
+            "agent_message": false,
+            "blocks": [],
+            "kind": "message",
+            "role": "assistant",
+            "seq": 2
+          },
+          {
+            "agent_author": "",
+            "agent_message": true,
+            "agent_recipient": "",
+            "blocks": [],
+            "kind": "message",
+            "locked": {
+              "provider": "codex",
+              "scheme": "opaque",
+              "blob": "state"
+            },
+            "role": "assistant",
+            "seq": 3
+          },
+          {
+            "call_id": "empty",
+            "input": {},
+            "kind": "tool_call",
+            "seq": 4,
+            "tool_name": "read"
+          },
+          {
+            "call_id": "empty",
+            "kind": "tool_result",
+            "output": "",
+            "seq": 5
+          },
+          {
+            "call_id": "object",
+            "input": {
+              "items": [
+                true,
+                null,
+                "\u003c\u003e\u0026"
+              ],
+              "n": 1.25
+            },
+            "kind": "tool_call",
+            "provider_tool_name": "native",
+            "seq": 6,
+            "status": "completed",
+            "tool_name": "read"
+          },
+          {
+            "call_id": "object",
+            "is_error": true,
+            "kind": "tool_result",
+            "output": {
+              "n": 1e+30,
+              "text": "\u003c\u003e\u0026"
+            },
+            "seq": 7
+          },
+          {
+            "call_id": "array",
+            "input": {},
+            "kind": "tool_call",
+            "seq": 8,
+            "tool_name": "read"
+          },
+          {
+            "call_id": "array",
+            "kind": "tool_result",
+            "output": [
+              {
+                "text": "array",
+                "type": "text"
+              }
+            ],
+            "seq": 9
+          },
+          {
+            "cross_replayable": false,
+            "kind": "reasoning",
+            "locked": {
+              "provider": "codex",
+              "scheme": "encrypted_content",
+              "blob": "ENC"
+            },
+            "redacted_summary": "summary",
+            "seq": 10
+          },
+          {
+            "kind": "compaction",
+            "replacement": [],
+            "replacement_complete": false,
+            "seq": 11
+          },
+          {
+            "kind": "compaction",
+            "replacement": [
+              {
+                "agent_message": false,
+                "blocks": [],
+                "kind": "message",
+                "role": "assistant",
+                "seq": 0
+              }
+            ],
+            "replacement_complete": true,
+            "seq": 12
+          },
+          {
+            "kind": "compaction",
+            "locked": {
+              "provider": "codex",
+              "scheme": "native",
+              "blob": "state"
+            },
+            "seq": 13
+          },
+          {
+            "blocks": [],
+            "compact_summary": true,
+            "kind": "message",
+            "role": "assistant",
+            "seq": 14
+          }
+        ]
+      }
+    },
+    "page": {
+      "version": 1,
+      "hash": "sha256:f25d2e2e59bfb1029e0b5e8046117769850849ebbf675db7d61af5c2e21ac0f5",
+      "provider": "codex",
+      "session_id": "all-unions",
+      "total": 15,
+      "before": 15,
+      "next_before": -1,
+      "covered": false,
+      "turns": [
+        {
+          "start": 0,
+          "end": 15,
+          "hash": "sha256:47e97f3071621ac88be5c597f6b45327e94b9d5d01150c3616fa5df5a8df3c18",
+          "events": [
+            {
+              "kind": "turn",
+              "provider_metadata": {
+                "turn_id": "t",
+                "create_time": 9007199254740993
+              },
+              "role": "user",
+              "seq": 0
+            },
+            {
+              "blocks": [
+                {
+                  "type": "text",
+                  "text": "\u003c\u003e\u0026\u2028\u2029 \uD55C\uAD6D\uC5B4"
+                }
+              ],
+              "kind": "message",
+              "role": "user",
+              "seq": 1
+            },
+            {
+              "agent_message": false,
+              "blocks": [],
+              "kind": "message",
+              "role": "assistant",
+              "seq": 2
+            },
+            {
+              "agent_author": "",
+              "agent_message": true,
+              "agent_recipient": "",
+              "blocks": [],
+              "kind": "message",
+              "locked": {
+                "provider": "codex",
+                "scheme": "opaque",
+                "blob": "state"
+              },
+              "role": "assistant",
+              "seq": 3
+            },
+            {
+              "call_id": "empty",
+              "input": {},
+              "kind": "tool_call",
+              "seq": 4,
+              "tool_name": "read"
+            },
+            {
+              "call_id": "empty",
+              "kind": "tool_result",
+              "output": "",
+              "seq": 5
+            },
+            {
+              "call_id": "object",
+              "input": {
+                "items": [
+                  true,
+                  null,
+                  "\u003c\u003e\u0026"
+                ],
+                "n": 1.25
+              },
+              "kind": "tool_call",
+              "provider_tool_name": "native",
+              "seq": 6,
+              "status": "completed",
+              "tool_name": "read"
+            },
+            {
+              "call_id": "object",
+              "is_error": true,
+              "kind": "tool_result",
+              "output": {
+                "n": 1e+30,
+                "text": "\u003c\u003e\u0026"
+              },
+              "seq": 7
+            },
+            {
+              "call_id": "array",
+              "input": {},
+              "kind": "tool_call",
+              "seq": 8,
+              "tool_name": "read"
+            },
+            {
+              "call_id": "array",
+              "kind": "tool_result",
+              "output": [
+                {
+                  "text": "array",
+                  "type": "text"
+                }
+              ],
+              "seq": 9
+            },
+            {
+              "cross_replayable": false,
+              "kind": "reasoning",
+              "locked": {
+                "provider": "codex",
+                "scheme": "encrypted_content",
+                "blob": "ENC"
+              },
+              "redacted_summary": "summary",
+              "seq": 10
+            },
+            {
+              "kind": "compaction",
+              "replacement": [],
+              "replacement_complete": false,
+              "seq": 11
+            },
+            {
+              "kind": "compaction",
+              "replacement": [
+                {
+                  "agent_message": false,
+                  "blocks": [],
+                  "kind": "message",
+                  "role": "assistant",
+                  "seq": 0
+                }
+              ],
+              "replacement_complete": true,
+              "seq": 12
+            },
+            {
+              "kind": "compaction",
+              "locked": {
+                "provider": "codex",
+                "scheme": "native",
+                "blob": "state"
+              },
+              "seq": 13
+            },
+            {
+              "blocks": [],
+              "compact_summary": true,
+              "kind": "message",
+              "role": "assistant",
+              "seq": 14
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

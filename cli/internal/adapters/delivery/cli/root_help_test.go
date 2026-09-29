@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -33,7 +35,7 @@ func TestGlobalHelpAliasesReturnSuccessWithoutContainer(t *testing.T) {
 
 func TestEveryPublicSubcommandHelpReturnsBeforeContainer(t *testing.T) {
 	for _, command := range publicCommandNames {
-		if command == "help" {
+		if command == "help" || commandArgSpecs[command].passthrough {
 			continue
 		}
 		for _, help := range []string{"-h", "--help"} {
@@ -120,22 +122,63 @@ func TestValueFlagsSupportInlineValues(t *testing.T) {
 	}
 }
 
-func TestProviderWrapperPassThroughRequiresDoubleDashForProviderHelp(t *testing.T) {
+func TestProviderHelpIsPassedThroughWithoutContextPreparation(t *testing.T) {
 	for _, command := range []string{"claude", "codex"} {
-		handled, err := PreflightArgs([]string{"cxt", command, "--provider-owned-flag"})
-		if err != nil || handled {
-			t.Fatalf("%s pass-through = handled %v, err %v", command, handled, err)
+		for _, flag := range []string{"-h", "--help", "--version"} {
+			t.Run(command+"/"+flag, func(t *testing.T) {
+				root, _ := providerLaunchFixture(t, command, "")
+				args := []string{"cxt", command, flag}
+				if handled, err := PreflightArgs(args); err != nil || handled {
+					t.Fatalf("provider help intercepted by CXT: handled=%v err=%v", handled, err)
+				}
+				if _, err := os.Stat(filepath.Join(root, "launch.log")); !os.IsNotExist(err) {
+					t.Fatal("preflight started provider")
+				}
+				c := &Container{ProviderLaunch: ProviderLaunchHooks{
+					Prepare: func(context.Context, ProviderLaunchRequest) (PreparedProviderLaunch, error) {
+						t.Fatal("provider diagnostics prepared context")
+						return PreparedProviderLaunch{}, nil
+					},
+					Record: func(context.Context, ProviderLaunchReceipt) error {
+						t.Fatal("provider diagnostics recorded package delivery")
+						return nil
+					},
+				}}
+				if err := Run(c, args); err != nil {
+					t.Fatal(err)
+				}
+				got, err := os.ReadFile(filepath.Join(root, "launch.log"))
+				if err != nil || string(got) != flag+"\n" {
+					t.Fatalf("provider argv=%q err=%v", got, err)
+				}
+			})
 		}
-		handled, err = PreflightArgs([]string{"cxt", command, "--", "--help"})
-		if err != nil || handled {
-			t.Fatalf("%s -- --help pass-through = handled %v, err %v", command, handled, err)
+	}
+}
+
+func TestProviderUnknownOptionsFailBeforeCompositionAndLiteralArgsStayLiteral(t *testing.T) {
+	for _, command := range []string{"claude", "codex"} {
+		for _, prefix := range [][]string{{"cxt"}, {"cxt", "--pull"}} {
+			args := append(append([]string(nil), prefix...), command, "--provider-owned-flag")
+			if handled, err := PreflightArgs(args); handled || err == nil || !strings.Contains(err.Error(), "cannot safely classify") {
+				t.Fatalf("unclassified provider launch %v: handled=%v err=%v", args, handled, err)
+			}
+			if err := Run(nil, args); err == nil || !strings.Contains(err.Error(), "cannot safely classify") {
+				t.Fatalf("unclassified launch reached composition: %v", err)
+			}
 		}
-		if got := providerPassthroughArgs([]string{"--", "exec", "--help"}); len(got) != 2 || got[0] != "exec" || got[1] != "--help" {
-			t.Fatalf("%s delimiter stripping = %v", command, got)
+		argv := []string{"--", "--help", "--provider-owned-flag"}
+		intent, recognized, err := ParseLaunchIntent(append([]string{command}, argv...))
+		if err != nil || !recognized || !reflect.DeepEqual(intent.ProviderArgs, argv) {
+			t.Fatalf("literal provider argv changed: %+v recognized=%v err=%v", intent, recognized, err)
 		}
-		handled, err = PreflightArgs([]string{"cxt", command, "--help"})
-		if err != nil || !handled {
-			t.Fatalf("%s cxt help = handled %v, err %v", command, handled, err)
+		details, err := (ProviderLaunchRequest{Intent: intent}).ArgumentDetails()
+		if err != nil || details.Mode != string(providerFresh) || !reflect.DeepEqual(details.Prompts, argv[1:]) {
+			t.Fatalf("literal prompt became diagnostic/options: %+v err=%v", details, err)
+		}
+		// CXT's wrapper help remains available without starting the provider.
+		if err := Run(nil, []string{"cxt", "help", command}); err != nil {
+			t.Fatalf("wrapper help: %v", err)
 		}
 	}
 }

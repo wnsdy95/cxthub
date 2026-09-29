@@ -405,6 +405,9 @@ func (s *FileStore) withRefMutationLock(ctx context.Context, fn func() error) er
 		if err := s.recoverWorkingCommit(); err != nil {
 			return err
 		}
+		if err := s.recoverCheckoutTransition(); err != nil {
+			return err
+		}
 		return fn()
 	})
 }
@@ -1313,28 +1316,31 @@ func (s *FileStore) writeStash(entries []domain.StashEntry) error {
 }
 
 // StashPush pushes an item to the front of the stack (stash@{0}).
-func (s *FileStore) StashPush(_ context.Context, _ string, e domain.StashEntry) error {
-	entries, err := s.readStash()
-	if err != nil {
-		return err
-	}
-	return s.writeStash(append([]domain.StashEntry{e}, entries...))
+func (s *FileStore) StashPush(ctx context.Context, _ string, e domain.StashEntry) error {
+	return s.withMutationLock(ctx, "stash", "stack", func() error {
+		entries, err := s.readStash()
+		if err != nil {
+			return err
+		}
+		return s.writeStash(append([]domain.StashEntry{e}, entries...))
+	})
 }
 
 // StashPop removes and returns the latest item. Returns ErrNotFound if empty.
-func (s *FileStore) StashPop(_ context.Context, _ string) (domain.StashEntry, error) {
-	entries, err := s.readStash()
-	if err != nil {
-		return domain.StashEntry{}, err
-	}
-	if len(entries) == 0 {
-		return domain.StashEntry{}, domain.ErrNotFound
-	}
-	top := entries[0]
-	if err := s.writeStash(entries[1:]); err != nil {
-		return domain.StashEntry{}, err
-	}
-	return top, nil
+func (s *FileStore) StashPop(ctx context.Context, _ string) (domain.StashEntry, error) {
+	var top domain.StashEntry
+	err := s.withMutationLock(ctx, "stash", "stack", func() error {
+		entries, err := s.readStash()
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			return domain.ErrNotFound
+		}
+		top = entries[0]
+		return s.writeStash(entries[1:])
+	})
+	return top, err
 }
 
 // StashList returns the entire stack in newest order.
@@ -1543,6 +1549,11 @@ func (s *FileStore) DeleteSnapshot(ctx context.Context, id domain.ContentHash) e
 	if err := domain.ValidateContentHash(id); err != nil {
 		return err
 	}
+	if pinned, err := s.HasStagingPin(ctx, id); err != nil {
+		return err
+	} else if pinned {
+		return fmt.Errorf("snapshot is retained by a frozen index, operation, or stash: %w", domain.ErrSyncConflict)
+	}
 	return s.withSnapshotMutationLock(ctx, id, func() error {
 		return removeCxtFile(s.objectPath("snapshots", id))
 	})
@@ -1551,9 +1562,14 @@ func (s *FileStore) DeleteSnapshot(ctx context.Context, id domain.ContentHash) e
 // DeleteDoc removes the doc body object (hook capture leaf GC exclusive — idempotent).
 // For chunked docs, only the manifest is deleted — chunks are shared prefixes for subsequent capture docs,
 // so deleting here is incorrect, and orphaned chunks are cleaned up by RepackDocs' mark&sweep.
-func (s *FileStore) DeleteDoc(_ context.Context, hash domain.ContentHash) error {
+func (s *FileStore) DeleteDoc(ctx context.Context, hash domain.ContentHash) error {
 	if err := domain.ValidateContentHash(hash); err != nil {
 		return err
+	}
+	if pinned, err := s.HasStagingPin(ctx, hash); err != nil {
+		return err
+	} else if pinned {
+		return fmt.Errorf("document is retained by a frozen index, operation, or stash: %w", domain.ErrSyncConflict)
 	}
 	return removeCxtFile(s.objectPath("docs", hash))
 }

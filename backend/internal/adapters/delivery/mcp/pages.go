@@ -46,6 +46,16 @@ func cursorFor(repo, tool string, a toolArgs) (pageCursor, error) {
 	if a.CodeCommit != "" {
 		selection = append(selection, "code:"+a.CodeCommit)
 	}
+	if a.EventStart != nil || a.EventEnd != nil {
+		start, end := -1, -1
+		if a.EventStart != nil {
+			start = *a.EventStart
+		}
+		if a.EventEnd != nil {
+			end = *a.EventEnd
+		}
+		selection = append(selection, fmt.Sprintf("events:%d:%d", start, end))
+	}
 	binding, _ := json.Marshal(selection)
 	filter := fmt.Sprintf("%x", sha256.Sum256(binding))
 	expected := pageCursor{Version: 1, Repository: repo, Tool: tool, Filter: filter}
@@ -257,6 +267,9 @@ func fragmentEnd(raw []byte, offset, budget int) int {
 }
 
 func (s *Server) eventPage(ctx context.Context, repo domain.Repo, a toolArgs) (string, error) {
+	if (a.EventStart == nil) != (a.EventEnd == nil) || (a.EventStart != nil && (*a.EventStart < 0 || *a.EventEnd < *a.EventStart)) {
+		return "", fmt.Errorf("event_start and event_end must define a nonnegative half-open range")
+	}
 	cur, err := cursorFor(string(repo.ID), "context_fetch", a)
 	if err != nil {
 		return "", err
@@ -267,6 +280,14 @@ func (s *Server) eventPage(ctx context.Context, repo domain.Repo, a toolArgs) (s
 			return "", err
 		}
 		cur.Snapshot = snap.ID
+	}
+	if a.EventStart != nil {
+		if a.Cursor == "" {
+			cur.Index = *a.EventStart
+		}
+		if cur.Index < *a.EventStart || cur.Index > *a.EventEnd {
+			return "", fmt.Errorf("cursor is outside selected event range")
+		}
 	}
 	snap, err := s.context.GetSnapshot(ctx, repo.ID, cur.Snapshot)
 	if err != nil {
@@ -279,13 +300,32 @@ func (s *Server) eventPage(ctx context.Context, repo domain.Repo, a toolArgs) (s
 			return "", fmt.Errorf("event cursor format changed; restart context_fetch without cursor")
 		}
 		cur.FragmentFormat = "canonical-v1"
-		page, err := reader.ReadDocFragments(ctx, repo.ID, snap.DocHash, cur.Index, cur.Offset, pageLimit(a.Events, 12, 50), pageBytes)
+		limit := pageLimit(a.Events, 12, 50)
+		if a.EventEnd != nil {
+			limit = max(1, min(limit, *a.EventEnd-cur.Index))
+		}
+		page, err := reader.ReadDocFragments(ctx, repo.ID, snap.DocHash, cur.Index, cur.Offset, limit, pageBytes)
 		if err != nil {
 			return "", err
 		}
+		if a.EventEnd != nil {
+			if *a.EventEnd > page.Total {
+				return "", fmt.Errorf("selected event range exceeds document")
+			}
+			kept := page.Fragments[:0]
+			for _, f := range page.Fragments {
+				if f.Index < *a.EventEnd {
+					kept = append(kept, f)
+				}
+			}
+			page.Fragments = kept
+			if page.NextIndex >= *a.EventEnd {
+				page.NextIndex, page.NextOffset = *a.EventEnd, 0
+			}
+		}
 		cur.Index, cur.Offset = page.NextIndex, page.NextOffset
 		next := ""
-		if cur.Index < page.Total {
+		if cur.Index < page.Total && (a.EventEnd == nil || cur.Index < *a.EventEnd) {
 			next = encodeCursor(cur)
 		}
 		return pageJSON(map[string]any{"notice": archiveNotice, "snapshot_id": snap.ID, "doc_hash": snap.DocHash, "total_events": page.Total, "fragments": page.Fragments, "next_cursor": next})
@@ -297,10 +337,13 @@ func (s *Server) eventPage(ctx context.Context, repo domain.Repo, a toolArgs) (s
 	if cur.Index > page.Total || (cur.Index == page.Total && cur.Offset != 0) {
 		return "", fmt.Errorf("event cursor is outside this document")
 	}
+	if a.EventEnd != nil && *a.EventEnd > page.Total {
+		return "", fmt.Errorf("selected event range exceeds document")
+	}
 	fragments := []eventFragment{}
 	remaining := pageBytes
 	limit := pageLimit(a.Events, 12, 50)
-	for cur.Index < page.Offset+len(page.Events) && len(fragments) < limit && remaining >= 4 {
+	for cur.Index < page.Offset+len(page.Events) && (a.EventEnd == nil || cur.Index < *a.EventEnd) && len(fragments) < limit && remaining >= 4 {
 		raw, err := json.Marshal(page.Events[cur.Index-page.Offset])
 		if err != nil {
 			return "", err
@@ -318,7 +361,7 @@ func (s *Server) eventPage(ctx context.Context, repo domain.Repo, a toolArgs) (s
 		}
 	}
 	next := ""
-	if cur.Index < page.Total {
+	if cur.Index < page.Total && (a.EventEnd == nil || cur.Index < *a.EventEnd) {
 		next = encodeCursor(cur)
 	}
 	return pageJSON(map[string]any{"notice": archiveNotice, "snapshot_id": snap.ID, "doc_hash": snap.DocHash, "total_events": page.Total, "fragments": fragments, "next_cursor": next})
