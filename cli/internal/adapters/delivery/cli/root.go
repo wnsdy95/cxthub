@@ -772,6 +772,9 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "push":
+		var finishDiagnostics func()
+		ctx, finishDiagnostics = beginPushDiagnostics(ctx)
+		defer finishDiagnostics()
 		selected, remoteName, selectedRef, err := syncDestination(ctx, c, cwd, parsed)
 		if err != nil {
 			return err
@@ -788,7 +791,8 @@ func Run(c *Container, args []string) error {
 		force := parsed.has("--force") || parsed.has("-f")
 		appendDiverged := parsed.has("--append")
 		defer wakeHistoricalSync(c, cwd)
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
+		pushCtx := outbound.WithSyncDiagnosticAttempt(ctx, 1)
+		out, err := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
 			if errors.Is(err, domain.ErrSyncConflict) {
 				if strings.Contains(err.Error(), "memory attachment") {

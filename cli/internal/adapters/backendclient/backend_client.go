@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"time"
@@ -150,10 +151,14 @@ func (c *BackendClient) do(ctx context.Context, method, path string, body, out a
 
 // doLimited decodes bounded endpoint responses only below an explicit upper limit. max=0 is
 // the existing general JSON path.
-func (c *BackendClient) doLimited(ctx context.Context, method, path string, body, out any, max int64) error {
+func (c *BackendClient) doLimited(ctx context.Context, method, path string, body, out any, max int64) (resultErr error) {
+	ctx = outbound.NextSyncDiagnosticRequest(ctx)
+	diagnosticCtx := ctx // Best-effort ACK cleanup must not look like caller cancellation.
 	var rdr io.Reader
 	if body != nil {
+		endMarshal := outbound.BeginMeasuredSyncDiagnostic(diagnosticCtx, outbound.SyncStageRequestMarshal)
 		b, err := json.Marshal(body)
+		endMarshal(outbound.SyncDiagnosticCounts{Bytes: len(b)}, err)
 		if err != nil {
 			return err
 		}
@@ -164,23 +169,48 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 		ctx, cancelACK = context.WithCancel(ctx)
 		defer cancelACK()
 	}
+	endSetup := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageRequestSetup, outbound.SyncDiagnosticCounts{})
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL()+path, rdr)
+	endSetup(err)
 	if err != nil {
 		return err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if t := c.token(); t != "" {
-		req.Header.Set("Authorization", "Bearer "+t)
+	endToken := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageTokenLookup, outbound.SyncDiagnosticCounts{})
+	token := c.token()
+	endToken(diagnosticCtx.Err())
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if c.identity.Email != "" {
 		req.Header.Set("X-Cxt-Identity", c.identity.Email)
 	}
+	// Compose with any caller trace. Only constant milestone labels enter the
+	// optional collector; connection addresses, headers and contents never do.
+	if outbound.SyncDiagnosticsFromContext(diagnosticCtx) != nil {
+		trace := &httptrace.ClientTrace{
+			GotConn: func(httptrace.GotConnInfo) {
+				outbound.RecordSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPGotConn, outbound.SyncDiagnosticCounts{}, nil)
+			},
+			WroteRequest: func(info httptrace.WroteRequestInfo) {
+				outbound.RecordSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPWroteRequest, outbound.SyncDiagnosticCounts{}, info.Err)
+			},
+			GotFirstResponseByte: func() {
+				outbound.RecordSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPFirstByte, outbound.SyncDiagnosticCounts{}, nil)
+			},
+		}
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	}
+	endDo := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPDo, outbound.SyncDiagnosticCounts{ClientTimeoutMillis: c.httpc.Timeout.Milliseconds()})
 	resp, err := c.httpc.Do(req)
+	endDo(err)
 	if err != nil {
 		return err
 	}
+	endBody := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageHTTPBody, outbound.SyncDiagnosticCounts{HTTPStatus: resp.StatusCode})
+	defer func() { endBody(resultErr) }()
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -754,6 +784,7 @@ func (c *BackendClient) remoteRefs(ctx context.Context, repoID string) ([]domain
 // Missing docs are opened afterward, and Push's second negotiation handles
 // their chunk manifests and resumes partially staged chunk uploads.
 func (c *BackendClient) NegotiatePushObjects(ctx context.Context, repoID string, snapshotHaves, docHaves []domain.ContentHash) (outbound.PushObjectWants, error) {
+	ctx = outbound.WithSyncDiagnosticRole(ctx, outbound.SyncRoleInventory)
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return outbound.PushObjectWants{}, err
 	}
@@ -763,6 +794,7 @@ func (c *BackendClient) NegotiatePushObjects(ctx context.Context, repoID string,
 		}
 	}
 	var neg negotiateResp
+	outbound.RecordSyncDiagnostic(ctx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Snapshots: len(snapshotHaves), Documents: len(docHaves)}, nil)
 	if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{
 		SnapshotHaves: snapshotHaves,
 		DocHaves:      docHaves,
@@ -817,20 +849,30 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 	plans := make(map[domain.ContentHash]chunkcas.Plan, len(docs))
 	var chunkHaves []domain.ContentHash
 	seenChunk := map[domain.ContentHash]bool{}
-	for _, d := range docs {
+	for index, d := range docs {
+		docCtx := ctx
+		if len(docs) > 1 {
+			docCtx = outbound.WithSyncDiagnosticDocument(ctx, index+1)
+		}
+		endCanonical := outbound.BeginMeasuredSyncDiagnostic(docCtx, outbound.SyncStageCanonical)
 		cb, cerr := domain.CanonicalBytes(d.CIR)
 		if cerr != nil {
+			endCanonical(outbound.SyncDiagnosticCounts{}, cerr)
 			return cerr
 		}
 		if domain.HashContent(cb) != d.Hash {
+			endCanonical(outbound.SyncDiagnosticCounts{Bytes: len(cb)}, domain.ErrHashMismatch)
 			return domain.ErrHashMismatch
 		}
+		endCanonical(outbound.SyncDiagnosticCounts{Bytes: len(cb)}, nil)
 		docHaves = append(docHaves, d.Hash)
 		// Storage and transport use the same v2 chunk identities. Sending v1 to a
 		// v2 server would leave a second, unreferenced chunk representation in its
 		// CAS. A pre-v2 server gets the complete document below; correctness is
 		// preserved during rolling upgrades at the cost of temporary delta upload.
+		endPlan := outbound.BeginMeasuredSyncDiagnostic(docCtx, outbound.SyncStageChunkPlan)
 		plan, ok := chunkcas.PlanDoc(cb)
+		endPlan(outbound.SyncDiagnosticCounts{Chunks: len(plan.Order)}, nil)
 		if ok {
 			plans[d.Hash] = plan
 			for _, ch := range plan.Order {
@@ -852,7 +894,9 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 
 	var neg negotiateResp
 	if len(snapHaves) > 0 || len(docHaves) > 0 {
-		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{snapHaves, docHaves, chunkHaves}, &neg); err != nil {
+		negotiationCtx := outbound.WithSyncDiagnosticRole(ctx, outbound.SyncRoleDocumentChunks)
+		outbound.RecordSyncDiagnostic(negotiationCtx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Snapshots: len(snapHaves), Documents: len(docHaves), Chunks: len(chunkHaves)}, nil)
+		if err := c.do(negotiationCtx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{snapHaves, docHaves, chunkHaves}, &neg); err != nil {
 			return err
 		}
 	}

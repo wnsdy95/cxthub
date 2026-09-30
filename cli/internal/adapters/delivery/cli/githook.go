@@ -1039,6 +1039,11 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	if len(rest) > 0 && rest[0] == "pre-push" {
+		var finish func()
+		ctx, finish = beginPushDiagnostics(ctx)
+		defer finish()
+	}
 	if len(rest) == 0 {
 		return nil
 	}
@@ -1082,9 +1087,11 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		// Detached capture has no branch birth to resolve. The full journal is
 		// handled separately; it must not consume this commit's capture budget.
 		var replayErr error
+		endReplay := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageHookReplay, outbound.SyncDiagnosticCounts{})
 		if ref != "" {
 			replayErr = replayBranchOperationsForRef(ctx, c, cwd, ref)
 		}
+		endReplay(replayErr)
 		if err := replayErr; err != nil {
 			hookWarn("branch operation remains queued: %v", err)
 			if event == "post-checkout" {
@@ -1249,7 +1256,10 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 
 	case "pre-push":
 		defer wakeHistoricalSync(c, cwd)
-		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
+		endReplay := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageHookReplay, outbound.SyncDiagnosticCounts{})
+		replayErr := replayRewriteHistory(ctx, c, cwd)
+		endReplay(replayErr)
+		if err := replayErr; err != nil {
 			hookWarn("rewritten context associations remain pending: %v", err)
 			return nil
 		}
@@ -1258,13 +1268,15 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 			hookWarn("Context not pushed — connect with cxt remote add origin <url>")
 			return nil
 		}
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true})
+		pushCtx := outbound.WithSyncDiagnosticAttempt(ctx, 1)
+		out, err := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true})
 		if err != nil && strings.Contains(err.Error(), domain.ErrSyncConflict.Error()) {
 			// A non-fast-forward rejection triggers an automatic append retry. Context does not force replicas
 			// to converge (the local lineage is authoritative for this session; pulling is the user's choice), so
 			// every divergent push must succeed without loss. The server leaves natural Parents unchanged and adds
 			// the remote head as a graft overlay at the new segment boundary, preserving and only expanding reachability.
-			out2, aerr := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Append: true, ForegroundOnly: true})
+			pushCtx = outbound.WithSyncDiagnosticAttempt(ctx, 2)
+			out2, aerr := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, Append: true, ForegroundOnly: true})
 			if aerr == nil {
 				out, err = out2, nil
 				fmt.Println("cxt: repositioned and appended after the remote head — no history lost")
