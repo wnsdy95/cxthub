@@ -91,6 +91,11 @@ CXT_LOAD_DSN='<empty load-test DSN>' CXT_LOAD_MULTIPROCESS=1 \
   go test -C backend -tags postgres ./internal/adapters/delivery/http \
   -run '^TestPostgresMultiInstanceLoad$' -count=1 -v
 
+# Document finalization plus same-repository page reads and ref writes.
+CXT_LOAD_DSN='<empty contention-test DSN>' \
+  go test -C backend -tags postgres ./internal/adapters/delivery/http \
+  -run '^TestPostgresDocPublicationContention$' -count=1 -v -timeout=10m
+
 # PostgreSQL transaction and publication regressions.
 CXT_TEST_DSN='<empty regression-test DSN>' \
   go test -C backend -tags postgres -race -p 1 ./...
@@ -110,6 +115,54 @@ Backend and CLI full test/vet suites, PostgreSQL race tests, four focused fuzz
 runs, frontend unit/i18n/routing/type/build checks, and the browser MCP OAuth
 flow passed locally. A browser SDK login with real Firebase or GitHub accounts
 was not exercised; local auth fixtures are deliberately isolated.
+
+### Local remeasurement, 2026-09-30
+
+At `269a974`, three fresh-database runs each of the existing pipeline and
+multi-process workloads passed. The 32 MiB pipeline preserved the document
+hash, durable job identity across restarts, and object-before-ref publication.
+Acceptance took 2.90–3.12 ms; worker duration was 1.65–1.87 s; the slowest
+status read in each run was 7.24–8.06 ms. These are loopback observations on a
+shared development machine, not service limits.
+
+The multi-process workload issued 960 successful requests across the three
+runs (480 REST and 480 MCP). Per-run REST p95 ranged from 25.50 to 54.04 ms;
+MCP p95 ranged from 24.98 to 29.81 ms. Responses stayed below 258 KB and 14 KB,
+respectively. Do not average these percentiles into a pooled p95. This fixture
+uses repetitive ASCII text and a single tenant, so it does not measure full
+document download throughput, realistic payload entropy, or cloud capacity.
+
+The opt-in contention workload complements those read-heavy checks with
+mixed Korean/code events and same-repository ref mutations while finalization
+is in flight. Its telemetry reports observed overlap, successful sample
+counts and integrity separately from latency. Request/worker overlap alone
+does not prove a request waited for a database lock. Exact lock-hold time,
+cloud network latency, long-running multi-tenant traffic and actual model
+200K/800K acceptance remain separate release gates.
+
+Three fresh-database runs of the reviewed contention fixture passed hash,
+full-document HTTP readback, page, snapshot, idempotent receipt and exact ref
+name/count checks. Each used 34,208,892 canonical bytes, 45,618,630 chunk-upload
+JSON bytes, 66 chunks and 1,024 unique events. Each workload had measured
+client-request overlap with the publication call; no worker gate manufactured
+that overlap. The largest ref-write latency per run was 2.37–2.58 s, although
+its per-run p95 was only 2.29–3.11 ms. Read maximums stayed below 23 ms. The
+percentile alone hides the write tail and is not sufficient acceptance evidence.
+These three measurements used 1 ms pacing. The final fixture uses 10 ms pacing
+to keep traffic active under race instrumentation; its three further runs passed
+with ref maximums of 1.97–4.53 s. The first overlapped a local HTTP test suite,
+so this range is not an isolated before/after comparison. A separate focused
+race run also passed. Request ceilings and HTTP response bounds remain enforced.
+
+A separate diagnostic run sampled `pg_stat_activity` in its disposable
+database: ref writes waited on an advisory lock while the blocking publication
+transaction inserted new `doc_search_events_v2` rows, including temporary-file
+I/O samples. Some blocked samples preceded that INSERT while the holder was
+idle in transaction during client-side index construction. This identifies a
+remaining publication cost; it is not a precision measurement of lock duration
+or a claim that moving all work outside the transaction is safe. Any follow-up
+must retain current-byte validation, authorization, lease/GC protection and
+atomic ownership/index/receipt publication.
 
 ## Collection during an in-flight push
 

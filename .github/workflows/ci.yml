@@ -198,6 +198,7 @@ jobs:
           CXT_E2E_DSN: postgres://cxt:cxt@localhost:5432/cxthub_sync?sslmode=disable
         run: |
           CXT_LOAD_DSN="$CXT_E2E_DSN" go test -C backend -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresDocumentPipeline$' -count=1 -v
+          CXT_LOAD_DSN="$CXT_E2E_DSN" go test -C backend -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresDocPublicationContention$' -count=1 -v -timeout=10m
           make e2e-sync
 
   docker:
