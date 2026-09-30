@@ -420,7 +420,9 @@ type SyncOutput struct {
 	Pushed int
 	// Pulled is the number of snapshots pulled.
 	Pulled int
-	// NewRefs is the list of refs updated/added after synchronization (includes branches created by forks).
+	// NewRefs contains refs adopted locally by pull (including fork branches).
+	// On push it is the requested reconciliation set; the transport may omit
+	// unchanged remote refs, so its length is not a wire-update count.
 	NewRefs []domain.Ref
 	// FetchedRefs are the remote refs whose dependencies were verified by this
 	// pull, including fetch-only mode. They do not imply local ref adoption.

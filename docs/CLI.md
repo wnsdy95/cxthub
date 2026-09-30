@@ -408,6 +408,10 @@ sync mutation. Unknown names, other repositories and unsupported refspecs fail.
 An explicit branch scopes pointer updates; immutable dependency objects and
 repository evidence can still be transferred. Credentials from the configured
 origin are never forwarded to a different server; log in to that server separately.
+`push origin [branch]` uses the same current-work-first/background-history policy
+as `push`; only `--wait-history` waits for the origin backlog. Other named remotes
+complete retained uploads in the foreground because the background queue is
+currently bound to origin. They never wake a worker for a different destination.
 
 `fetch` updates a separate remote observation and immutable cache. It leaves the
 working context, applied memory, index and branch refs unchanged. `pull` also
@@ -695,6 +699,9 @@ cxt push [remote [branch]] [--append | --force]
 ```
 
 Synchronizes local objects and selected refs to the specified remote (`origin` by default).
+The reported `checked N ref(s)` counts the requested reconciliation set,
+including retained-history refs. Unchanged remote refs may be omitted from the
+request; this count is not the number of ref updates sent over the network.
 
 - The default rejects a non-fast-forward update.
 - `--append` preserves both histories by placing the local segment after the

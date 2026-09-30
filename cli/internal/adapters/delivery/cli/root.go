@@ -788,7 +788,7 @@ func Run(c *Container, args []string) error {
 		force := parsed.has("--force") || parsed.has("-f")
 		appendDiverged := parsed.has("--append")
 		defer wakeHistoricalSync(c, cwd)
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Append: appendDiverged, ForegroundOnly: len(parsed.positionals) == 0 && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
+		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
 			if errors.Is(err, domain.ErrSyncConflict) {
 				if strings.Contains(err.Error(), "memory attachment") {
@@ -798,7 +798,7 @@ func Run(c *Container, args []string) error {
 			}
 			return err
 		}
-		fmt.Printf("pushed %d snapshot(s), %d ref(s) → %s\n", out.Pushed, len(out.NewRefs), remoteName)
+		fmt.Printf("pushed %d snapshot(s), checked %d ref(s) → %s\n", out.Pushed, len(out.NewRefs), remoteName)
 		if out.BackfillPending > 0 {
 			fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt sync status' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
 		}
