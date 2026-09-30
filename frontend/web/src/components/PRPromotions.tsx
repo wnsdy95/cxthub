@@ -10,6 +10,8 @@ export function PRPromotions({ repoId, canRetry }: { repoId: string; canRetry: b
  const retry = useMutation({ mutationFn: (id: string) => api.retryPRPromotion(repoId, id), onSuccess: () => qc.invalidateQueries({ queryKey: key }) });
  const labels = { waiting: t('promotion.waiting'), retrying: t('promotion.retrying'), running: t('promotion.running'), completed: t('promotion.completed'), attention: t('promotion.attention') };
  const reasons: Record<string,string> = { policy_changed: t('promotion.policy'), source_context_pending: t('promotion.source'), source_finalization_required: t('promotion.finalization'), integrity_check_failed: t('promotion.integrity'), identity_or_history_conflict: t('promotion.conflict'), repository_or_base_missing: t('promotion.missing'), temporary_failure: t('promotion.temporary'), retry_limit_reached: t('promotion.exhausted'), invalid_request: t('promotion.invalid') };
+ const failures = { deadline_exceeded: t('promotion.deadline'), canceled: t('promotion.canceled'), unspecified: t('promotion.unspecified') };
+ const kinds = { queued: t('promotion.queued'), claimed: t('promotion.claimed'), finished: t('promotion.finished'), retry_requested: t('promotion.retryRequested'), source_available: t('promotion.sourceAvailable') };
  if (jobs.isError) return <p role="alert" className="err">{t('promotion.loadError')} <button onClick={() => void jobs.refetch()}>{t('context.retryRead')}</button></p>;
  if (!jobs.data?.length) return null;
  const pending = jobs.data.filter(j => j.state !== 'completed').length;
@@ -20,6 +22,21 @@ export function PRPromotions({ repoId, canRetry }: { repoId: string; canRetry: b
    <strong>PR #{j.pr.number} · {labels[j.state]}</strong>
    <span>{j.pr.head_branch} → {j.pr.base_branch}</span>
    {j.reason && <p>{reasons[j.reason] ?? t('promotion.temporary')}</p>}
+   {j.failure_class && <p>{failures[j.failure_class] ?? t('promotion.unspecified')}</p>}
+   <details className="pr-diagnostics">
+    <summary>{t('promotion.history')}</summary>
+    {j.diagnostics ? <>
+     <p>{t('promotion.recordedSince', { at: new Date(j.diagnostics.since).toLocaleString(), count: j.diagnostics.total_claims })}</p>
+     <p>{t('promotion.historyLimit')}</p>
+     {j.diagnostics.dropped > 0 && <p>{t('promotion.dropped', { count: j.diagnostics.dropped })}</p>}
+     <ol>{j.diagnostics.events.map((e, i) => <li key={`${e.version}:${e.kind}:${i}`}>
+      <time dateTime={e.at}>{new Date(e.at).toLocaleString()}</time> · {kinds[e.kind]} · {labels[e.state]}
+      {e.attempt > 0 && <span>{t('promotion.attempt', { count: e.attempt })}</span>}
+      {e.reason && <p>{reasons[e.reason] ?? (e.reason === 'lease_expired' ? t('promotion.leaseExpired') : t('promotion.unspecified'))}</p>}
+      {e.failure_class && <p>{failures[e.failure_class] ?? t('promotion.unspecified')}</p>}
+     </li>)}</ol>
+    </> : <p>{t('promotion.historyUnavailable')}</p>}
+   </details>
    {canRetry && j.state !== 'completed' && j.state !== 'running' && <button disabled={retry.isPending} onClick={() => retry.mutate(j.id)}>{t('promotion.retry')}</button>}
   </li>)}</ul>
  </details>;

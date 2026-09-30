@@ -42,6 +42,7 @@ func (s *FSStore) EnqueuePRJob(ctx context.Context, j domain.PRPromotionJob) (do
 	if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, domain.ErrNotFound) {
 		return j, err
 	}
+	j = domain.AppendPRJobDiagnostic(domain.PRPromotionJob{}, j, "queued", j.CreatedAt)
 	return j, s.writePRJob(j)
 }
 func (s *FSStore) listPRJobsRaw() (jobs []domain.PRPromotionJob, err error) {
@@ -128,11 +129,14 @@ func (s *FSStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash, id st
 		if (repo != "" && j.RepoID != repo) || (id != "" && j.ID != id) || (j.State == "running" && j.LeaseUntil.After(now)) {
 			continue
 		}
+		old := j
 		j.State = "running"
+		j.FailureClass = ""
 		j.Attempts++
 		j.Version++
 		j.UpdatedAt = now
 		j.LeaseUntil = now.Add(lease)
+		j = domain.AppendPRJobDiagnostic(old, j, "claimed", now)
 		return j, s.writePRJob(j)
 	}
 	return domain.PRPromotionJob{}, domain.ErrNotFound
@@ -145,10 +149,11 @@ func (s *FSStore) FinishPRJob(ctx context.Context, j domain.PRPromotionJob) erro
 	if err := readJSON(s.prJobPath(j.RepoID, j.ID), &old); err != nil {
 		return err
 	}
-	if old.Version != j.Version || old.State != "running" || old.PR != j.PR || old.GitOrigin != j.GitOrigin {
-		return domain.ErrConflict
+	next, err := finishPRJob(old, j)
+	if err != nil {
+		return err
 	}
-	return s.writePRJob(j)
+	return s.writePRJob(next)
 }
 func (s *FSStore) RetryPRJob(ctx context.Context, repo domain.ContentHash, id string, now time.Time) error {
 	l := s.oauthLock()
@@ -158,18 +163,22 @@ func (s *FSStore) RetryPRJob(ctx context.Context, repo domain.ContentHash, id st
 	if err := readJSON(s.prJobPath(repo, id), &j); err != nil {
 		return err
 	}
-	if j.State == "completed" {
+	if retryPRJobUnchanged(j, now) {
 		return nil
 	}
 	if j.State == "running" && j.LeaseUntil.After(now) {
 		return domain.ErrConflict
 	}
+	old := j
 	j.State = "waiting"
 	j.NextAttempt = now
 	j.UpdatedAt = now
 	j.Version++
 	j.Attempts = 0
 	j.Reason = ""
+	j.FailureClass = ""
+	j.LeaseUntil = time.Time{}
+	j = domain.AppendPRJobDiagnostic(old, j, "retry_requested", now)
 	return s.writePRJob(j)
 }
 
@@ -209,9 +218,11 @@ func (s *FSStore) WakePRSourceJobs(ctx context.Context, repo domain.ContentHash,
 		if !hasPRSourcePublication(j, events) {
 			continue
 		}
-		j.State, j.Reason, j.Attempts = "waiting", "", 0
+		old := j
+		j.State, j.Reason, j.Attempts, j.FailureClass = "waiting", "", 0, ""
 		j.NextAttempt, j.UpdatedAt, j.LeaseUntil = now, now, time.Time{}
 		j.Version++
+		j = domain.AppendPRJobDiagnostic(old, j, "source_available", now)
 		if err := s.writePRJob(j); err != nil {
 			return err
 		}

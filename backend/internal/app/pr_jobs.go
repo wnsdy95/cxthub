@@ -114,6 +114,9 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 	var runErr error
 	runErr = repositoryWriteError(work, s, j.RepoID, func(work context.Context) error {
 		runErr = nil // a retry after a database abort starts from fresh state
+		if err := work.Err(); err != nil {
+			return err
+		}
 		if fence, ok := s.meta.(outbound.PRJobFence); ok {
 			if err := fence.FencePRJob(work, j); err != nil {
 				return err
@@ -142,6 +145,7 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 		}
 		completed := j
 		completed.State, completed.Reason = "completed", ""
+		completed.FailureClass = ""
 		completed.UpdatedAt, completed.LeaseUntil = time.Now().UTC(), time.Time{}
 		st, _ := s.prJobs()
 		return st.FinishPRJob(work, completed)
@@ -153,6 +157,7 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 	j.UpdatedAt = now
 	j.LeaseUntil = time.Time{}
 	j.Reason = ""
+	j.FailureClass = prJobFailureClass(runErr)
 	switch {
 	case errors.Is(runErr, domain.ErrPRSourcePending):
 		j.State = "waiting"
@@ -194,6 +199,19 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 		return out, errors.Join(runErr, err)
 	}
 	return out, runErr
+}
+
+// Only bounded classifications cross the read boundary; raw errors may contain
+// upstream URLs, credentials, or provider content.
+func prJobFailureClass(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "unspecified"
+	}
 }
 
 // ProcessPRPromotions is bounded per tick, safe to run on multiple instances.

@@ -124,6 +124,40 @@ async function openGraph(page: Page, responder: ReturnType<typeof publicReposito
   return { pageErrors, unexpected };
 }
 
+test('completed PR deliveries retain failed attempts and distinguish unrecorded legacy causes', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('cxt.locale', 'ko'));
+  const base = publicRepositoryApi([auditSnapshot(pushedHead, 'main', [], 'Current main context', 1)], [{ kind: 'branch', name: 'main', target: pushedHead }]);
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (request.pathname.endsWith('/prs/promotions')) return { body: [
+      { id: 'delivery-with-history', repo_id: repoId, pr: { number: 351, head_branch: 'feature', base_branch: 'main' }, state: 'completed', attempts: 1, updated_at: '2026-10-01T01:00:00Z', next_attempt: '2026-10-01T01:00:00Z', diagnostics: {
+        since: '2026-10-01T00:00:00Z', total_claims: 2, dropped: 3, events: [
+          { kind: 'finished', at: '2026-10-01T00:00:05Z', version: 1, attempt: 1, state: 'retrying', reason: 'temporary_failure', failure_class: 'deadline_exceeded' },
+          { kind: 'retry_requested', at: '2026-10-01T00:00:06Z', version: 2, attempt: 0, state: 'waiting' },
+          { kind: 'finished', at: '2026-10-01T00:00:10Z', version: 3, attempt: 1, state: 'completed' },
+        ],
+      } },
+      { id: 'legacy-delivery', repo_id: repoId, pr: { number: 349, head_branch: 'older-feature', base_branch: 'main' }, state: 'completed', attempts: 8, updated_at: '2026-09-30T00:00:00Z', next_attempt: '2026-09-30T00:00:00Z' },
+    ] };
+    return base(request);
+  });
+  const panel = page.locator('.pr-promotions');
+  await panel.locator(':scope > summary').click();
+  const recorded = panel.locator(':scope > ul > li').filter({ hasText: 'PR #351' });
+  await expect(recorded.locator('.pr-diagnostics')).not.toHaveAttribute('open', '');
+  await recorded.locator('.pr-diagnostics > summary').click();
+  await expect(recorded).toContainText(ko.promotion.deadline);
+  await expect(recorded).toContainText(ko.promotion.retryRequested);
+  await expect(recorded).toContainText(ko.promotion.dropped.replace('{count}', '3'));
+  await expect(recorded).toContainText(ko.promotion.completed);
+  await expect(recorded.getByRole('button', { name: ko.promotion.retry })).toHaveCount(0);
+  const legacy = panel.locator(':scope > ul > li').filter({ hasText: 'PR #349' });
+  await legacy.locator('.pr-diagnostics > summary').click();
+  await expect(legacy).toContainText(ko.promotion.historyUnavailable);
+  await expect(legacy.locator('.pr-diagnostics ol')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('large graph windows preserve paths, external selection, keyboard access and live scroll anchors', async ({ page }, testInfo) => {
   const hash = (i: number) => `sha256:${i.toString(16).padStart(64, '0')}`;
   let snapshots = Array.from({ length: 1000 }, (_, i) => auditSnapshot(hash(i + 1), 'main', i < 999 ? [hash(i + 2)] : [], `Large graph row ${i}`, 1000 - i));

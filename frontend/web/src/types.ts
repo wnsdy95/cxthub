@@ -414,6 +414,22 @@ export interface PRPromotionJob {
  state: 'waiting' | 'retrying' | 'running' | 'completed' | 'attention';
  attempts: number;
  reason?: string;
+ failure_class?: 'deadline_exceeded' | 'canceled' | 'unspecified';
+ diagnostics?: {
+  since: string;
+  total_claims: number;
+  dropped: number;
+  events: {
+   kind: 'queued' | 'claimed' | 'finished' | 'retry_requested' | 'source_available';
+   at: string;
+   version: number;
+   attempt: number;
+   state: PRPromotionJob['state'];
+   reason?: string;
+   failure_class?: PRPromotionJob['failure_class'];
+   elapsed_ms?: number;
+  }[];
+ };
  updated_at: string;
  next_attempt: string;
 }

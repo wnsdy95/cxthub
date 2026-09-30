@@ -996,10 +996,37 @@ components:
         attempts: { type: integer }
         version: { type: integer }
         reason: { type: string }
+        failure_class: { type: string, enum: [deadline_exceeded, canceled, unspecified] }
+        diagnostics: { $ref: '#/components/schemas/PRJobDiagnostics' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         next_attempt: { type: string, format: date-time }
         lease_until: { type: string, format: date-time }
+
+    PRJobDiagnostics:
+      type: object
+      additionalProperties: false
+      description: Bounded diagnostic history recorded with job transitions. Counts start at since; earlier unrecorded attempts and causes remain unknown. Not immutable PR completion history.
+      required: [since, total_claims, dropped, events]
+      properties:
+        since: { type: string, format: date-time }
+        total_claims: { type: integer, minimum: 0 }
+        dropped: { type: integer, minimum: 0 }
+        events: { type: array, maxItems: 32, items: { $ref: '#/components/schemas/PRJobDiagnostic' } }
+
+    PRJobDiagnostic:
+      type: object
+      additionalProperties: false
+      required: [kind, at, version, attempt, state]
+      properties:
+        kind: { type: string, enum: [queued, claimed, finished, retry_requested, source_available] }
+        at: { type: string, format: date-time }
+        version: { type: integer }
+        attempt: { type: integer, minimum: 0 }
+        state: { type: string, enum: [waiting, retrying, running, completed, attention] }
+        reason: { type: string, description: Code only; no upstream error text or private content. }
+        failure_class: { type: string, enum: [deadline_exceeded, canceled, unspecified] }
+        elapsed_ms: { type: integer, minimum: 0, description: Wall clock duration of this attempt; not a performance guarantee. }
 
     PullRequestMerge:
       type: object
