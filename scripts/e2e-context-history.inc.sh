@@ -148,7 +148,14 @@ repair_command cxt doctor --json >"$TMP/doctor-before.json" 2>&1
 echo "  repair fixture: restore verified server objects"
 if ! repair_command cxt repair --from-server --remote "$PROTOCOL_REMOTE" >"$TMP/repair.out" 2>&1; then cat "$TMP/repair.out"; FAIL=1; return; fi
 expect "repair keeps unpushed local main" "$(ref_target .cxt/refs/heads/main)" "$REPAIR_LOCAL"
-expect "repair verified all referenced replica objects" "$(cxt doctor --json | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["issues"] or []))')" 0
+cxt doctor --json >"$TMP/doctor-after.json"
+REPAIR_ISSUES=$(python3 -c 'import json,sys;print(len(json.load(sys.stdin)["issues"] or []))' <"$TMP/doctor-after.json")
+expect "repair verified all referenced replica objects" "$REPAIR_ISSUES" 0
+if [ "$REPAIR_ISSUES" != 0 ]; then
+  # Synthetic fixture only: retain the exact category instead of hiding it
+  # behind a count. This must not turn a failed integrity check into success.
+  python3 -c 'import json,sys;print("repair diagnostic issues:", json.dumps(json.load(sys.stdin)["issues"]))' <"$TMP/doctor-after.json"
+fi
 expect "damaged bytes were quarantined exactly" "$(python3 - "$PROTOCOL_MAIN" <<'PYQUARANTINE'
 import pathlib,sys
 root=pathlib.Path('.git/cxt/repairs')
