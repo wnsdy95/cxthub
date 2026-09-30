@@ -1264,6 +1264,8 @@ func mapError(err error) (code string, status int) {
 		return "not_found", http.StatusNotFound
 	case errors.Is(err, domain.ErrIntegrity):
 		return "integrity_violation", http.StatusUnprocessableEntity
+	case errors.Is(err, domain.ErrMemoryProjectionLimit):
+		return "memory_projection_limit", http.StatusUnprocessableEntity
 	case errors.Is(err, domain.ErrNonFastForward):
 		return "non_fast_forward", http.StatusConflict
 	case errors.Is(err, domain.ErrRefConflict):
