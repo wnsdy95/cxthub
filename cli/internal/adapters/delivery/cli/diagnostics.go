@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,6 +38,9 @@ func inspectBranchOperations(ctx context.Context, cwd string) ([]branchOperation
 	}
 	out := make([]branchOperationStatus, 0, len(ops))
 	for _, op := range ops {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		state := op.Phase
 		if state == "prepared" {
 			witness, err := hasBranchCommitWitness(op)
@@ -54,14 +58,38 @@ func inspectBranchOperations(ctx context.Context, cwd string) ([]branchOperation
 	return out, nil
 }
 
+type diagnosticsReport struct {
+	Completed                  bool                           `json:"completed"`
+	ReplicaInspectionCompleted bool                           `json:"replica_inspection_completed"`
+	DocumentsChecked           int                            `json:"documents_checked"`
+	HistoricalUploadsObserved  bool                           `json:"historical_uploads_observed"`
+	Unchecked                  []string                       `json:"unchecked"`
+	Backfills                  []domain.SnapshotBackfill      `json:"historical_uploads"`
+	Captures                   []domain.CaptureRecoveryStatus `json:"captures"`
+	GitRepository              bool                           `json:"git_repository"`
+	Registered                 bool                           `json:"registered"`
+	ReplicaPresent             bool                           `json:"replica_present"`
+	Initialized                bool                           `json:"initialized"`
+	Snapshots                  int                            `json:"snapshots"`
+	HistoryEvents              int                            `json:"history_events"`
+	Operations                 []branchOperationStatus        `json:"operations"`
+	Issues                     []string                       `json:"issues"`
+}
+
 // RunDiagnostics is dispatched before the ordinary composition root and its
 // automatic replay. It remains available with a missing or corrupt .cxt and
 // never authenticates, writes, contacts the server, or controls a provider.
 func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer, captureChecks ...func(context.Context, string) ([]domain.CaptureRecoveryStatus, error)) error {
-	operations, opErr := inspectBranchOperations(ctx, cwd)
 	if args[0] == "branch" {
-		if opErr != nil {
-			return opErr
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		operations, err := inspectBranchOperations(ctx, cwd)
+		if canceled := ctx.Err(); canceled != nil {
+			return canceled
+		}
+		if err != nil {
+			return err
 		}
 		if flagPresent(args, "--json") {
 			return json.NewEncoder(w).Encode(operations)
@@ -78,96 +106,170 @@ func RunDiagnostics(ctx context.Context, cwd string, args []string, w io.Writer,
 		}
 		return nil
 	}
-	state := gitctx.InspectContextRoot(ctx, cwd)
-	issues := []string{}
-	if opErr != nil {
-		issues = append(issues, "Git journal: "+opErr.Error())
-	}
-	registered := false
-	if j, err := branchjournal.Open(ctx, cwd); err == nil {
-		registered, err = j.Status()
-		if err != nil {
-			issues = append(issues, "Git registration: "+err.Error())
-		}
-	}
-	if registered && !state.Initialized {
-		issues = append(issues, "registered Git repository has no initialized .cxt replica; preserve damaged files and recover a verified copy before replay")
-	}
-	inspection := storage.ReplicaInspection{Issues: []string{}}
-	backfills := []domain.SnapshotBackfill{}
-	if state.Exists {
-		store := storage.NewFileStore(state.Root)
-		inspection = store.InspectReplica(ctx)
-		issues = append(issues, inspection.Issues...)
-		if repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd); err != nil {
-			issues = append(issues, "Historical uploads: cannot establish repository identity: "+err.Error())
-		} else if jobs, err := store.ListBackfills(ctx, string(repo.ID)); err != nil {
-			issues = append(issues, "Historical uploads: "+err.Error())
-		} else {
-			backfills = jobs
-			for _, job := range jobs {
-				if job.Reason != "" {
-					issues = append(issues, fmt.Sprintf("historical upload %s: %s; retained for retry", job.Snapshot, job.Reason))
-				}
-			}
-		}
-	}
-	for _, op := range operations {
-		if op.LocalState != "applied" && op.LocalState != "aborted" {
-			issues = append(issues, fmt.Sprintf("branch operation %s: %s", op.ID, op.LocalState))
-		}
-	}
-	captures := []domain.CaptureRecoveryStatus{}
-	for _, check := range captureChecks {
-		states, err := check(ctx, cwd)
-		if err != nil {
-			issues = append(issues, "Capture recovery: "+err.Error())
-			continue
-		}
-		for _, st := range states {
-			if st.State == "completed" {
-				continue
-			}
-			captures = append(captures, st)
-			if st.Resolution == nil {
-				issues = append(issues, fmt.Sprintf("capture %s: %s; inspect with cxt capture show %s", st.ID, st.State, st.ID))
-			}
-		}
-	}
-	report := struct {
-		Backfills      []domain.SnapshotBackfill      `json:"historical_uploads"`
-		Captures       []domain.CaptureRecoveryStatus `json:"captures"`
-		GitRepository  bool                           `json:"git_repository"`
-		Registered     bool                           `json:"registered"`
-		ReplicaPresent bool                           `json:"replica_present"`
-		Initialized    bool                           `json:"initialized"`
-		Snapshots      int                            `json:"snapshots"`
-		HistoryEvents  int                            `json:"history_events"`
-		Operations     []branchOperationStatus        `json:"operations"`
-		Issues         []string                       `json:"issues"`
-	}{backfills, captures, state.GitRepository, registered, state.Exists, state.Initialized, inspection.Snapshots, inspection.HistoryEvents, operations, issues}
+	report := collectDiagnostics(ctx, cwd, captureChecks)
 	if flagPresent(args, "--json") {
 		if err := json.NewEncoder(w).Encode(report); err != nil {
 			return err
 		}
 	} else {
-		fmt.Fprintf(w, "Local replica: present=%t initialized=%t · %d snapshots · %d history events\n", state.Exists, state.Initialized, inspection.Snapshots, inspection.HistoryEvents)
-		fmt.Fprintf(w, "Retained historical uploads: %d queued. Retry with cxt push; wait for all records with cxt push --wait-history.\n", len(backfills))
-		for _, job := range backfills {
+		fmt.Fprintf(w, "Local replica: present=%t initialized=%t · %d snapshots · %d documents checked · %d history events\n", report.ReplicaPresent, report.Initialized, report.Snapshots, report.DocumentsChecked, report.HistoryEvents)
+		if !report.Completed {
+			fmt.Fprintf(w, "Inspection incomplete; unchecked phases: %s. No files changed.\n", strings.Join(report.Unchecked, ", "))
+		}
+		if slices.Contains(report.Unchecked, "historical uploads") || !report.HistoricalUploadsObserved {
+			fmt.Fprintln(w, "Retained historical uploads: not checked.")
+		} else {
+			fmt.Fprintf(w, "Retained historical uploads: %d queued. Retry with cxt push; wait for all records with cxt push --wait-history.\n", len(report.Backfills))
+		}
+		for _, job := range report.Backfills {
 			fmt.Fprintf(w, "  %s  attempts=%d reason=%s next=%s\n", job.Snapshot, job.Attempts, job.Reason, job.NextAttempt.Format(time.RFC3339))
 		}
-		for _, issue := range issues {
+		for _, issue := range report.Issues {
 			fmt.Fprintf(w, "- %s\n", issue)
 		}
-		if len(issues) == 0 {
+		if report.Completed && len(report.Issues) == 0 {
 			fmt.Fprintln(w, "No failures found in local snapshot references, documents, memory attachments, or branch journal.")
 		}
 		fmt.Fprintln(w, "Capture history (including acknowledged gaps): cxt capture list. Server integrity: cxt fsck. Queued operations: cxt branch operations. Verified replay: cxt branch replay.")
 	}
-	if len(issues) > 0 {
-		return fmt.Errorf("local inspection found %d issue(s); no files changed", len(issues))
+	// Cancellation is not corruption. Preserve the typed cause and emit the
+	// partial report first; the command boundary maps SIGINT to exit 130.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(report.Issues) > 0 {
+		return fmt.Errorf("local inspection found %d issue(s); no files changed", len(report.Issues))
 	}
 	return nil
+}
+
+func collectDiagnostics(ctx context.Context, cwd string, captureChecks []func(context.Context, string) ([]domain.CaptureRecoveryStatus, error)) diagnosticsReport {
+	r := diagnosticsReport{
+		Unchecked: []string{"Git journal", "Git registration", "replica inspection", "historical uploads", "capture recovery"},
+		Backfills: []domain.SnapshotBackfill{}, Captures: []domain.CaptureRecoveryStatus{},
+		Operations: []branchOperationStatus{}, Issues: []string{},
+	}
+	stop := func() bool {
+		if err := ctx.Err(); err != nil {
+			r.Issues = append(r.Issues, "local inspection incomplete: "+err.Error())
+			return true
+		}
+		return false
+	}
+	phaseDone := func() { r.Unchecked = r.Unchecked[1:] }
+	if stop() {
+		return r
+	}
+	operations, opErr := inspectBranchOperations(ctx, cwd)
+	if stop() {
+		return r
+	}
+	r.Operations = operations
+	if opErr != nil {
+		r.Issues = append(r.Issues, "Git journal: "+opErr.Error())
+	}
+	for _, op := range operations {
+		if stop() {
+			return r
+		}
+		if op.LocalState != "applied" && op.LocalState != "aborted" {
+			r.Issues = append(r.Issues, fmt.Sprintf("branch operation %s: %s", op.ID, op.LocalState))
+		}
+	}
+	phaseDone()
+	state := gitctx.InspectContextRoot(ctx, cwd)
+	if stop() {
+		return r
+	}
+	r.GitRepository, r.ReplicaPresent, r.Initialized = state.GitRepository, state.Exists, state.Initialized
+	if j, err := branchjournal.Open(ctx, cwd); err == nil {
+		r.Registered, err = j.Status()
+		if stop() {
+			return r
+		}
+		if err != nil {
+			r.Issues = append(r.Issues, "Git registration: "+err.Error())
+		}
+	}
+	if stop() {
+		return r
+	}
+	if r.Registered && !state.Initialized {
+		r.Issues = append(r.Issues, "registered Git repository has no initialized .cxt replica; preserve damaged files and recover a verified copy before replay")
+	}
+	phaseDone()
+	if state.Exists {
+		store := storage.NewFileStore(state.Root)
+		inspection := store.InspectReplica(ctx)
+		r.Snapshots, r.HistoryEvents, r.DocumentsChecked = inspection.Snapshots, inspection.HistoryEvents, inspection.DocumentsChecked
+		r.ReplicaInspectionCompleted = inspection.Completed
+		r.Issues = append(r.Issues, inspection.Issues...)
+		if stop() {
+			return r
+		}
+	}
+	phaseDone()
+	if state.Exists {
+		store := storage.NewFileStore(state.Root)
+		repo, err := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+		if stop() {
+			return r
+		}
+		if err != nil {
+			r.Issues = append(r.Issues, "Historical uploads: cannot establish repository identity: "+err.Error())
+		} else {
+			jobs, err := store.ListBackfills(ctx, string(repo.ID))
+			if stop() {
+				return r
+			}
+			if err != nil {
+				r.Issues = append(r.Issues, "Historical uploads: "+err.Error())
+			} else {
+				r.HistoricalUploadsObserved = true
+				r.Backfills = jobs
+				for _, job := range jobs {
+					if stop() {
+						return r
+					}
+					if job.Reason != "" {
+						r.Issues = append(r.Issues, fmt.Sprintf("historical upload %s: %s; retained for retry", job.Snapshot, job.Reason))
+					}
+				}
+			}
+		}
+	}
+	phaseDone()
+	for _, check := range captureChecks {
+		if stop() {
+			return r
+		}
+		states, err := check(ctx, cwd)
+		if stop() {
+			return r
+		}
+		if err != nil {
+			r.Issues = append(r.Issues, "Capture recovery: "+err.Error())
+			continue
+		}
+		for _, st := range states {
+			if stop() {
+				return r
+			}
+			if st.State == "completed" {
+				continue
+			}
+			r.Captures = append(r.Captures, st)
+			if st.Resolution == nil {
+				r.Issues = append(r.Issues, fmt.Sprintf("capture %s: %s; inspect with cxt capture show %s", st.ID, st.State, st.ID))
+			}
+		}
+	}
+	if stop() {
+		return r
+	}
+	phaseDone()
+	r.Completed = true
+	return r
 }
 
 func replayBranchCommand(ctx context.Context, c *Container, cwd string) error {

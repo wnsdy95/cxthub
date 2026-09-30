@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -130,5 +131,121 @@ func TestDiagnosticArgumentsRejectAccidentalMutations(t *testing.T) {
 		if _, err := PreflightArgs(args); err == nil {
 			t.Fatalf("unexpected arguments accepted: %v", args)
 		}
+	}
+}
+
+func TestDoctorPreCancelledReportsUncheckedWithoutReadingOrWriting(t *testing.T) {
+	cwd := t.TempDir()
+	before := treeBytes(t, cwd)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	called := false
+	err := RunDiagnostics(ctx, cwd, []string{"doctor", "--json"}, &out, func(context.Context, string) ([]domain.CaptureRecoveryStatus, error) {
+		called = true
+		return nil, nil
+	})
+	if !errors.Is(err, context.Canceled) || called {
+		t.Fatalf("cancellation changed: err=%v called=%t", err, called)
+	}
+	var report diagnosticsReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Completed || report.ReplicaInspectionCompleted || report.DocumentsChecked != 0 || len(report.Unchecked) != 5 {
+		t.Fatalf("unchecked scope reported complete: %+v", report)
+	}
+	if !reflect.DeepEqual(before, treeBytes(t, cwd)) {
+		t.Fatal("canceled doctor mutated files")
+	}
+	var failure bytes.Buffer
+	if exit := WriteCommandFailure(&failure, []string{"cxt", "doctor", "--json"}, err); exit != 130 {
+		t.Fatalf("exit=%d", exit)
+	}
+}
+
+func TestDoctorCaptureCancellationPreservesCompletedReplicaScope(t *testing.T) {
+	cwd, _, _, _, _ := historyFixture(t)
+	before := treeBytes(t, cwd)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out bytes.Buffer
+	laterCalled := false
+	err := RunDiagnostics(ctx, cwd, []string{"doctor", "--json"}, &out,
+		func(context.Context, string) ([]domain.CaptureRecoveryStatus, error) {
+			cancel()
+			return nil, context.Canceled
+		},
+		func(context.Context, string) ([]domain.CaptureRecoveryStatus, error) {
+			laterCalled = true
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, context.Canceled) || laterCalled {
+		t.Fatalf("err=%v later=%t", err, laterCalled)
+	}
+	var report diagnosticsReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Completed || !report.ReplicaInspectionCompleted || report.DocumentsChecked != report.Snapshots || report.DocumentsChecked == 0 || !reflect.DeepEqual(report.Unchecked, []string{"capture recovery"}) {
+		t.Fatalf("partial scope changed: %+v", report)
+	}
+	if strings.Contains(out.String(), "Capture recovery: context canceled") {
+		t.Fatal("cancellation reported as capture damage")
+	}
+	if !reflect.DeepEqual(before, treeBytes(t, cwd)) {
+		t.Fatal("partial doctor mutated files")
+	}
+}
+
+func TestDoctorHumanCancellationDoesNotClaimHealthy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	err := RunDiagnostics(ctx, t.TempDir(), []string{"doctor"}, &out)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(out.String(), "Inspection incomplete") || strings.Contains(out.String(), "No failures found") {
+		t.Fatalf("output=%s err=%v", out.String(), err)
+	}
+}
+
+func TestDoctorUnreadableHistoricalQueueIsUnknownNotEmpty(t *testing.T) {
+	cwd, _, _, repo, id := historyFixture(t)
+	dir := filepath.Join(cwd, ".cxt", "historical-backfill", strings.TrimPrefix(repo, "sha256:"))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, strings.TrimPrefix(string(id), "sha256:")+".json"), []byte("damaged queue record"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := treeBytes(t, cwd)
+	var out bytes.Buffer
+	if err := RunDiagnostics(context.Background(), cwd, []string{"doctor", "--json"}, &out); err == nil {
+		t.Fatal("unreadable queue accepted")
+	}
+	var report diagnosticsReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.Completed || report.HistoricalUploadsObserved {
+		t.Fatalf("queue observability changed: %+v", report)
+	}
+	out.Reset()
+	_ = RunDiagnostics(context.Background(), cwd, []string{"doctor"}, &out)
+	if !strings.Contains(out.String(), "Retained historical uploads: not checked.") || strings.Contains(out.String(), "0 queued") {
+		t.Fatalf("unknown queue reported empty: %s", out.String())
+	}
+	if !reflect.DeepEqual(before, treeBytes(t, cwd)) {
+		t.Fatal("doctor modified damaged queue")
+	}
+}
+
+func TestBranchOperationsPreCancelledRetainsTypedFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	err := RunDiagnostics(ctx, t.TempDir(), []string{"branch", "operations", "--json"}, &out)
+	if !errors.Is(err, context.Canceled) || ClassifyCommandFailure(err).ExitCode != 130 {
+		t.Fatalf("branch cancellation=%v", err)
 	}
 }

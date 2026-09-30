@@ -321,32 +321,7 @@ func (s *FileStore) GetDoc(ctx context.Context, hash domain.ContentHash) (domain
 	if err != nil {
 		return domain.SessionDoc{}, err
 	}
-	if chunked {
-		var cir domain.CIRDocument
-		if err := json.Unmarshal(data, &cir); err != nil {
-			return domain.SessionDoc{}, domain.ErrInvalidCIR
-		}
-		if err := ctx.Err(); err != nil {
-			return domain.SessionDoc{}, err
-		}
-		// No additional recalculation is needed since the reassembled bytes have already been compared to the hash.
-		return domain.SessionDoc{Hash: hash, CIR: cir}, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return domain.SessionDoc{}, err
-	}
-	var cir domain.CIRDocument
-	if err := json.Unmarshal(data, &cir); err != nil {
-		return domain.SessionDoc{}, domain.ErrInvalidCIR
-	}
-	if err := ctx.Err(); err != nil {
-		return domain.SessionDoc{}, err
-	}
-	doc := domain.SessionDoc{Hash: hash, CIR: cir}
-	if err := domain.ValidateSessionDocHash(doc); err != nil {
-		return domain.SessionDoc{}, err
-	}
-	return doc, nil
+	return decodeStoredSessionDoc(ctx, hash, data, chunked)
 }
 
 // HasDoc determines the existence of a doc (body not loaded — for pull delta negotiation).

@@ -132,6 +132,20 @@ hashes, and pending save/branch transactions. Inspection is read-only and works
 without initializing a missing `.cxt`. Issues produce a nonzero exit status.
 It does not contact the server or assert that local data has been uploaded.
 
+V2 chunked documents are verified from current bytes one chunk and one event
+at a time, including the complete reconstructed hash and the ordinary reader's
+JSON validation. Legacy document formats retain their existing full verification.
+This reduces retained document memory; it does not skip content checks or
+guarantee a constant memory bound for a single oversized event.
+
+`Ctrl-C` cancels the inspection at cooperative read/event boundaries. Doctor
+prints the partial report and exits 130. JSON includes `completed`,
+`replica_inspection_completed`, `documents_checked`, and `unchecked` phases.
+The snapshot count is metadata discovered, not the number of documents verified.
+`completed: true` means all phases finished, even when `issues` contains damage;
+an interrupted inspection cannot certify the unchecked portion. This is a
+read-only observation of current files, not an atomic disk snapshot.
+
 `branch operations` reads the Git-directory journal even if `.cxt` is damaged
 or missing. `branch replay` retries committed operations and prepared operations
 with an exact Git reflog witness. Unproven operations remain pending and are

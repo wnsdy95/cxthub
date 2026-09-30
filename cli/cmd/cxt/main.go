@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -75,7 +76,9 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		return delivcli.RunDiagnostics(context.Background(), cwd, args[1:], os.Stdout, inspectCaptureRecovery)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		return delivcli.RunDiagnostics(ctx, cwd, args[1:], os.Stdout, inspectCaptureRecovery)
 	}
 	if args[1] == "capture" {
 		cwd, err := os.Getwd()
@@ -447,6 +450,6 @@ func inspectCaptureRecovery(ctx context.Context, cwd string) ([]domain.CaptureRe
 	if err != nil {
 		return nil, err
 	}
-	service := app.NewCaptureRecoveryService(capturejournal.New(state.Root, cwd), storage.NewFileStore(state.Root))
+	service := app.NewCaptureRecoveryService(capturejournal.New(state.Root, cwd), storage.NewCaptureEvidenceReader(state.Root))
 	return service.Inspect(ctx, string(repo.ID))
 }

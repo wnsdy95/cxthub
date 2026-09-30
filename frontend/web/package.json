@@ -31,5 +31,10 @@
     "esbuild": "^0.28.2",
     "typescript": "^5.6.3",
     "vite": "^8.3.0"
+  },
+  "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "1.13.6"
+    }
   }
 }
