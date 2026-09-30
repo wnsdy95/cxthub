@@ -1,16 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
+	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -197,5 +202,63 @@ func TestDesktopWorktreeSaveUsesSharedContextStore(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(linked, ".cxt")); !os.IsNotExist(err) {
 		t.Fatalf("split worktree store created: %v", err)
+	}
+}
+
+func TestProductionDoctorCaptureInspectionDoesNotRecoverTransactions(t *testing.T) {
+	root := bindRepairFixture(t, "https://example.test/team/repository")
+	if err := os.MkdirAll(filepath.Join(root, ".cxt"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A mutating history reader attempts to parse these journals and takes a
+	// filesystem lock. The production doctor callback must do neither.
+	for _, name := range []string{"working-commit.json", "checkout-transition.json"} {
+		if err := os.WriteFile(filepath.Join(root, ".cxt", name), []byte("retained damaged transaction"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tree := func() map[string]string {
+		out := map[string]string{}
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			var raw []byte
+			if !d.IsDir() {
+				raw, err = os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+			}
+			out[path] = fmt.Sprintf("%v/%d/%x", info.Mode(), info.ModTime().UnixNano(), sha256.Sum256(raw))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	before := tree()
+	if _, err := inspectCaptureRecovery(context.Background(), root); err != nil {
+		t.Fatalf("passive production callback attempted recovery: %v", err)
+	}
+	var report bytes.Buffer
+	if err := delivcli.RunDiagnostics(context.Background(), root, []string{"doctor", "--json"}, &report, inspectCaptureRecovery); err == nil {
+		t.Fatal("pending transactions not reported")
+	}
+	for _, name := range []string{"working-commit.json", "checkout-transition.json"} {
+		if !strings.Contains(report.String(), "pending local transaction: "+name) {
+			t.Fatal("pending transaction omitted: " + name)
+		}
+	}
+	if !reflect.DeepEqual(before, tree()) {
+		t.Fatal("production doctor callback changed files, modes or directories")
 	}
 }
