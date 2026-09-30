@@ -197,6 +197,11 @@ func (s *PostgresStore) PrepareDocJob(ctx context.Context, doc domain.VerifiedSe
 
 func (p pgDocPublication) Complete(ctx context.Context, j domain.DocFinalizationJob, _ time.Time) error {
 	s, doc := p.store, p.doc.doc
+	// Prepare expensive GIN/search derivatives before the repository writer lock.
+	// This grants no document access; the final transaction rechecks everything.
+	if err := p.stageReadBlocks(ctx, j); err != nil {
+		return err
+	}
 	return s.WithinRepository(ctx, j.RepoID, func(ctx context.Context) error {
 		var raw []byte
 		if err := s.db(ctx).QueryRow(ctx, `SELECT payload FROM doc_finalization_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, j.RepoID, j.ID).Scan(&raw); err != nil {

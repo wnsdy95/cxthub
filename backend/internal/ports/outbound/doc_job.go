@@ -24,6 +24,8 @@ type DocJobStore interface {
 // adapter's derived write plan. Preparation performs no writes or ownership
 // grants and runs while the worker can still renew its lease. Complete must
 // recheck the current job fence and atomically publish its body and receipt.
+// Complete may first stage invisible rebuildable derivatives under a durable
+// fenced job pin; it must not grant document access or complete the receipt then.
 // Plans are request-local capabilities, never accepted from a wire format.
 type PreparedDocPublication interface {
 	Complete(context.Context, domain.DocFinalizationJob, time.Time) error

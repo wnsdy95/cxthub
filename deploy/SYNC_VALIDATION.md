@@ -164,6 +164,34 @@ or a claim that moving all work outside the transaction is safe. Any follow-up
 must retain current-byte validation, authorization, lease/GC protection and
 atomic ownership/index/receipt publication.
 
+## Search preparation before the repository publication lock
+
+PostgreSQL document workers now stage immutable read/search blocks in a separate
+transaction before acquiring the repository writer lock. The transaction fences
+the current job generation and lease, writes complete blocks and search rows in
+the existing global hash order, and pins them to that durable job. It creates no
+document blob, repository ownership, document index/location or completion
+receipt. REST/MCP access still requires published locations and ownership.
+
+The final repository transaction retains current archive/chunk byte validation
+and the existing policy/quota boundary, attaches the document, and commits its
+ownership, index and receipt atomically. Successful pin retirement retains the
+exact document index by FK and skips unnecessary block lock upgrades. Other
+retirements use serialized last-owner cleanup. Reclaim, retry, rejection and job
+or repository deletion retire pins; a process loss leaves them protected until
+reclaim. Lease renewal ends before staging: staging past the remaining lease
+rolls back and retries rather than extending timeouts.
+
+Three fresh before/after runs of the same 34 MB, 10 ms-paced workload measured
+ref-write maximums of 2.11–2.50 s before and 22.1–29.4 ms after. Every run passed
+full HTTP hash/page/snapshot/receipt and exact ref name/count checks. This is a
+local synthetic comparison, not a cloud SLA or a promise for all payloads.
+The whole test process consumed about 3.9–4.2 s of user CPU; peak RSS was
+0.93–0.99 GB before and 1.04–1.12 GB after. These include HTTP fixture construction,
+full readback and more successful ref requests after the lock is released; they
+are not isolated worker memory or CPU measurements. No memory improvement is
+claimed. SQL diagnostics and raw measurements are retained with the task plan.
+
 ## Collection during an in-flight push
 
 The subsequent live-data run exposed another failure after about 24 minutes:
