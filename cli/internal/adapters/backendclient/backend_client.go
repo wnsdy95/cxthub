@@ -109,6 +109,8 @@ const (
 	maxChunkWireObjects  = 32
 	maxChunkWireJSONBody = 4 << 20
 	maxRefBatchUpdates   = 4096
+	maxACKDrainBytes     = 32 << 10
+	ackDrainTimeout      = 100 * time.Millisecond
 )
 
 type putRefReq struct {
@@ -157,6 +159,11 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 		}
 		rdr = bytes.NewReader(b)
 	}
+	var cancelACK context.CancelFunc
+	if out == nil {
+		ctx, cancelACK = context.WithCancel(ctx)
+		defer cancelACK()
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL()+path, rdr)
 	if err != nil {
 		return err
@@ -202,6 +209,15 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 		}
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
+	// Successful headers already acknowledge the write. Draining its unused ACK
+	// is only best-effort connection cleanup, never a commit check or retry signal.
+	// The 100ms cleanup bound starts only after successful headers. It never
+	// extends the caller deadline or the client's existing 30s request timeout.
+	// Cancelling the request interrupts a stalled net/http body read without a
+	// separate reader goroutine; the byte limit includes every drain read.
+	timer := time.AfterFunc(ackDrainTimeout, cancelACK)
+	defer timer.Stop()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxACKDrainBytes))
 	return nil
 }
 

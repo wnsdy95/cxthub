@@ -654,7 +654,10 @@ func (s *FileStore) CompareAndSwapSnapshotMemory(ctx context.Context, id, expect
 }
 
 // GetSnapshot retrieves Snapshot metadata by ID. Returns domain.ErrNotFound if not found.
-func (s *FileStore) GetSnapshot(_ context.Context, id domain.ContentHash) (domain.Snapshot, error) {
+func (s *FileStore) GetSnapshot(ctx context.Context, id domain.ContentHash) (domain.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.Snapshot{}, err
+	}
 	if err := domain.ValidateContentHash(id); err != nil {
 		return domain.Snapshot{}, err
 	}
@@ -679,17 +682,43 @@ func (s *FileStore) GetSnapshot(_ context.Context, id domain.ContentHash) (domai
 }
 
 // ListSnapshots returns the snapshot list of repo/branch. If branch=="" it returns the entire repo.
-func (s *FileStore) ListSnapshots(_ context.Context, _ string, branch string) ([]domain.Snapshot, error) {
+func (s *FileStore) ListSnapshots(ctx context.Context, _ string, branch string) ([]domain.Snapshot, error) {
+	out, err := s.scanSnapshots(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	// git log meaning: latest commit first.
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListSnapshotCatalog freshly reads all validated snapshot metadata in this
+// replica, with no ordering or atomic-read guarantee. Like ListSnapshots, it
+// leaves repository scope validation to the caller.
+func (s *FileStore) ListSnapshotCatalog(ctx context.Context, _ string) ([]domain.Snapshot, error) {
+	return s.scanSnapshots(ctx, "")
+}
+
+func (s *FileStore) scanSnapshots(ctx context.Context, branch string) ([]domain.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(s.storeDir(), "objects", "snapshots")
 	entries, err := readCxtDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, ctx.Err()
 		}
 		return nil, err
 	}
 	var out []domain.Snapshot
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if e.IsDir() {
 			continue
 		}
@@ -697,7 +726,7 @@ func (s *FileStore) ListSnapshots(_ context.Context, _ string, branch string) ([
 		if !ok {
 			continue
 		}
-		snap, err := s.GetSnapshot(context.Background(), id)
+		snap, err := s.GetSnapshot(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -705,8 +734,9 @@ func (s *FileStore) ListSnapshots(_ context.Context, _ string, branch string) ([
 			out = append(out, snap)
 		}
 	}
-	// git log meaning: latest commit first.
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

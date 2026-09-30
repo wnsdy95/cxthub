@@ -695,6 +695,9 @@ cxt push [remote [branch]] [--append | --force]
 ```
 
 Synchronizes local objects and selected refs to the specified remote (`origin` by default).
+The reported `checked N ref(s)` counts the requested reconciliation set,
+including retained-history refs. Unchanged remote refs may be omitted from the
+request; this count is not the number of ref updates sent over the network.
 
 - The default rejects a non-fast-forward update.
 - `--append` preserves both histories by placing the local segment after the

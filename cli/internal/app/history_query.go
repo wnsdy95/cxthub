@@ -265,7 +265,16 @@ func historyRef(refs []domain.Ref, name string) (domain.ContentHash, string, err
 // continuously changing archive returns a retryable conflict, never a mixed list.
 func (s *HistoryQueryService) stableCatalog(ctx context.Context, repo string) ([]domain.Snapshot, []domain.Ref, error) {
 	read := func() ([]domain.Snapshot, []domain.Ref, domain.ContentHash, error) {
-		snaps, e := s.local.ListSnapshots(ctx, repo, "")
+		if err := ctx.Err(); err != nil {
+			return nil, nil, "", err
+		}
+		var snaps []domain.Snapshot
+		var e error
+		if catalog, ok := s.local.(outbound.SnapshotCatalogReader); ok {
+			snaps, e = catalog.ListSnapshotCatalog(ctx, repo)
+		} else {
+			snaps, e = s.local.ListSnapshots(ctx, repo, "")
+		}
 		if e != nil {
 			return nil, nil, "", e
 		}

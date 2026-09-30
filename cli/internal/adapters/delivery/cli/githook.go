@@ -1279,7 +1279,7 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 			return nil
 		}
 		clearAuthHint(cwd)
-		fmt.Printf("cxt: pushed %d snapshot(s), %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
+		fmt.Printf("cxt: pushed %d snapshot(s), checked %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
 		if out.BackfillPending > 0 {
 			fmt.Printf("cxt: %d retained historical snapshot(s) remain queued; current publication completed\n", out.BackfillPending)
 		}

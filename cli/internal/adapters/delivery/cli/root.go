@@ -798,7 +798,7 @@ func Run(c *Container, args []string) error {
 			}
 			return err
 		}
-		fmt.Printf("pushed %d snapshot(s), %d ref(s) → %s\n", out.Pushed, len(out.NewRefs), remoteName)
+		fmt.Printf("pushed %d snapshot(s), checked %d ref(s) → %s\n", out.Pushed, len(out.NewRefs), remoteName)
 		if out.BackfillPending > 0 {
 			fmt.Printf("retained history: %d snapshot(s) queued for background upload; inspect with 'cxt sync status' or wait with 'cxt push --wait-history'\n", out.BackfillPending)
 		}

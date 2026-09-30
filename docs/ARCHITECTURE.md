@@ -84,6 +84,26 @@ Corrupt queue bytes are retained and rejected. An output queue is not a distribu
 transaction: failed remote delivery is retried idempotently rather than described
 as exactly-once transport.
 
+## Local CLI reads and transport cleanup
+
+Local CLI history reads compare fresh complete snapshot/ref observations before
+projecting ancestry. `SnapshotCatalogReader` is an optional read port that omits
+the presentation sort; the application still canonicalizes and validates every
+record, including unreachable metadata. Adapters without it retain the ordinary
+`ListSnapshots` path. `FileStore` shares validation between the two paths and
+honors cancellation while scanning, without returning a partial catalog. Neither
+path caches mutable metadata, takes a mutation lock or repairs local state.
+Status retains its complete working-state fence, and diff revalidates after
+reading documents. Unchanged log/status/diff therefore still enumerate metadata
+2/4/6 times; eliminating a redundant sort is not a disk-scan reduction.
+
+The REST client drains unused successful acknowledgments to support HTTP/1
+connection reuse, bounded by 32 KiB and a 100 ms cleanup timer started after
+successful headers. The ordinary request deadline remains unchanged. A failed
+cleanup closes the response but does not turn an acknowledged write into a
+failure or retry. Responses with a consumed application payload retain their
+existing decoding/error contract.
+
 ## Continuous checks
 
 - Backend `internal/architecture` parses non-test Go imports in both modules:
