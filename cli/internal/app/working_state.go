@@ -34,12 +34,15 @@ func NewWorkingStateService(git outbound.GitContext, code outbound.CodePosition,
 }
 
 type workingObservation struct {
-	State    domain.WorkingState
-	Index    domain.StagingIndex
-	Position domain.WorkingPosition
-	History  domain.HistoryQueryResult
-	Commits  []domain.StagingCommit
-	Pending  []domain.Pending
+	// Only the enclosing observation fence consumes this full-catalog hash.
+	// Keep the public working revision's existing serialization unchanged.
+	CatalogRevision domain.ContentHash `json:"-"`
+	State           domain.WorkingState
+	Index           domain.StagingIndex
+	Position        domain.WorkingPosition
+	History         domain.HistoryQueryResult
+	Commits         []domain.StagingCommit
+	Pending         []domain.Pending
 }
 
 func (s *WorkingStateService) Status(ctx context.Context, cwd string) (domain.WorkingState, error) {
@@ -60,12 +63,16 @@ func (s *WorkingStateService) stableWorkingObservation(ctx context.Context, cwd 
 		if err != nil {
 			return next, err
 		}
-		if prior.State.Revision == next.State.Revision {
+		if sameWorkingObservation(prior, next) {
 			return next, nil
 		}
 		prior = next
 	}
 	return workingObservation{}, domain.ErrSelectionChanged
+}
+
+func sameWorkingObservation(a, b workingObservation) bool {
+	return a.State.Revision == b.State.Revision && a.CatalogRevision == b.CatalogRevision
 }
 
 func (s *WorkingStateService) readWorkingObservation(ctx context.Context, cwd string) (workingObservation, error) {
@@ -103,7 +110,14 @@ func (s *WorkingStateService) readWorkingObservation(ctx context.Context, cwd st
 		return out, domain.ErrHashMismatch
 	}
 	// HEAD is resolved by the shared query contract, never a creation-label filter.
-	out.History, err = s.history.QueryHistory(ctx, inbound.HistoryQueryInput{Cwd: cwd})
+	if observer, ok := s.history.(inbound.LocalHistoryObserver); ok {
+		out.History, out.CatalogRevision, err = observer.ObserveLocalHistory(ctx, cwd)
+		if err == nil {
+			err = domain.ValidateContentHash(out.CatalogRevision)
+		}
+	} else {
+		out.History, err = s.history.QueryHistory(ctx, inbound.HistoryQueryInput{Cwd: cwd})
+	}
 	if err != nil {
 		return out, err
 	}
