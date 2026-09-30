@@ -58,6 +58,10 @@ load the full history or look up a branch identity. Unsupported protocol version
 remain errors for every ref kind. This narrows only the protocol validation
 read set; authorization, journal recovery, object checks, compare-and-swap and
 publication still run in their existing command and storage boundaries.
+FS ref writes reject unreadable existing pointers instead of treating them as
+absent. After journal recovery, protocol-1 symbolic HEAD writes recheck their
+branch target under the repository lock; recovery cannot leave HEAD attached to
+a branch it just removed. Legacy unborn HEAD bootstrap remains supported.
 
 Document finalization separates pure preparation from publication. The worker
 renews its durable lease while the PostgreSQL adapter derives chunk boundaries

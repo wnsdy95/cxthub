@@ -2027,6 +2027,21 @@ func (s *FSStore) CompareAndSwapRef(ctx context.Context, repoID domain.ContentHa
 		}
 	}
 	if next.Kind == domain.RefHead {
+		// Recovery above may have removed or renamed the symbolic target after
+		// application validation. Check the recovered state under this lock.
+		// Legacy stores still permit an unborn symbolic HEAD during bootstrap.
+		if protocol == 1 && next.Symbolic != "" {
+			branch := strings.TrimPrefix(next.Symbolic, "refs/heads/")
+			if _, err := s.GetRef(ctx, repoID, domain.RefBranch, branch); err != nil {
+				if errors.Is(err, domain.ErrNotFound) {
+					return fmt.Errorf("%w: symbolic HEAD branch %q does not exist after recovery", domain.ErrIntegrity, branch)
+				}
+				return err
+			}
+		}
+		if _, err := s.getRefRaw(ctx, repoID, domain.RefHead, domain.HeadRefName); err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
 		content := string(next.Target)
 		if next.Symbolic != "" {
 			content = "ref: refs/heads/" + strings.TrimPrefix(next.Symbolic, "refs/heads/")
@@ -2037,6 +2052,8 @@ func (s *FSStore) CompareAndSwapRef(ctx context.Context, repoID domain.ContentHa
 	curTarget := domain.ContentHash("")
 	if err == nil {
 		curTarget = cur.Target
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return err
 	}
 	if curTarget != expected {
 		return domain.ErrRefConflict
