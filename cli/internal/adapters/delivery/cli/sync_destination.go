@@ -35,9 +35,12 @@ func syncDestination(ctx context.Context, c *Container, cwd string, p parsedComm
 	}
 	selected := *c
 	selected.Sync, selected.ApplySelectedPull = destination.Sync, destination.ApplySelectedPull
-	// The background uploader is scoped to configured origin. Named destinations
-	// complete in the foreground, so no task can accidentally upload to origin.
-	selected.WakeHistoricalSync = nil
+	// The background uploader is scoped to configured origin. Spelling origin
+	// explicitly keeps that same worker. Other destinations must complete in the
+	// foreground, so no task can accidentally upload to the wrong server.
+	if name != "origin" {
+		selected.WakeHistoricalSync = nil
+	}
 	ref := ""
 	if len(p.positionals) == 2 {
 		ref = p.positionals[1]

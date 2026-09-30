@@ -788,7 +788,7 @@ func Run(c *Container, args []string) error {
 		force := parsed.has("--force") || parsed.has("-f")
 		appendDiverged := parsed.has("--append")
 		defer wakeHistoricalSync(c, cwd)
-		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Append: appendDiverged, ForegroundOnly: len(parsed.positionals) == 0 && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
+		out, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
 			if errors.Is(err, domain.ErrSyncConflict) {
 				if strings.Contains(err.Error(), "memory attachment") {
