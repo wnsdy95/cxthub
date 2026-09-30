@@ -65,12 +65,15 @@ func (s *FileStore) inspectReplica(ctx context.Context, beforeRead func(string))
 	if issue("snapshot metadata", err) {
 		return r
 	}
+	// Only this invocation owns the bounded proof markers; no payload or proof
+	// survives another inspection or changes ordinary document reads.
+	var reuse inspectionEventReuse
 	for _, snap := range snaps {
 		label := "document " + string(snap.DocHash)
 		if read(label) {
 			return r
 		}
-		if issue(label, s.VerifyDoc(ctx, snap.DocHash)) {
+		if issue(label, s.verifyDoc(ctx, snap.DocHash, &reuse)) {
 			return r
 		}
 		r.DocumentsChecked++

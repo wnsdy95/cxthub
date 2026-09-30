@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
-func verificationV2Fixture(t *testing.T, envelope, events string) (*FileStore, domain.ContentHash, chunkcas.Manifest) {
+func verificationV2Fixture(t testing.TB, envelope, events string) (*FileStore, domain.ContentHash, chunkcas.Manifest) {
 	t.Helper()
 	st := NewFileStore(t.TempDir())
 	body := []byte(events)
@@ -39,13 +40,25 @@ func verificationV2Fixture(t *testing.T, envelope, events string) (*FileStore, d
 func assertSameDocValidation(t *testing.T, st *FileStore, hash domain.ContentHash) {
 	t.Helper()
 	_, expected := st.GetDoc(context.Background(), hash)
-	actual := st.VerifyDoc(context.Background(), hash)
-	if (expected == nil) != (actual == nil) {
-		t.Fatalf("validation changed: GetDoc=%v VerifyDoc=%v", expected, actual)
+	var reuse inspectionEventReuse
+	if raw, err := readCxtFile(st.objectPath("docs", hash)); err == nil {
+		if body, err := docDecompress(raw); err == nil {
+			if manifest, ok := chunkcas.ParseManifest(body); ok {
+				reuse.observe(manifest.Chunks)
+			}
+		}
 	}
-	for _, kind := range []error{domain.ErrHashMismatch, domain.ErrInvalidCIR, domain.ErrNotFound} {
-		if errors.Is(expected, kind) != errors.Is(actual, kind) {
-			t.Fatalf("error precedence changed: GetDoc=%v VerifyDoc=%v", expected, actual)
+	for _, raw := range []string{`{}`, `null`, `{"seq":1}`} {
+		reuse.proofs.remember(sha256.Sum256([]byte(raw)))
+	}
+	for _, actual := range []error{st.VerifyDoc(context.Background(), hash), st.verifyDoc(context.Background(), hash, &reuse)} {
+		if (expected == nil) != (actual == nil) {
+			t.Fatalf("validation changed: GetDoc=%v VerifyDoc=%v", expected, actual)
+		}
+		for _, kind := range []error{domain.ErrHashMismatch, domain.ErrInvalidCIR, domain.ErrNotFound} {
+			if errors.Is(expected, kind) != errors.Is(actual, kind) {
+				t.Fatalf("error precedence changed: GetDoc=%v VerifyDoc=%v", expected, actual)
+			}
 		}
 	}
 }
@@ -54,6 +67,8 @@ func TestVerifyDocV2MatchesGetDocTypedAndJSONValidation(t *testing.T) {
 	for _, tc := range []struct{ name, envelope, events string }{
 		{"unicode", `{"cir_version":"1"}`, `{"kind":"message","role":"user","seq":0,"blocks":[{"type":"text","text":"\uD55C\uAE00 🐈 \\ \""}]}`},
 		{"multiple", `{}`, `{},null,{"seq":1}`},
+		{"replacement", `{}`, `{"kind":"compaction","replacement":[{"seq":0},null],"replacement_complete":true}`},
+		{"bad replacement", `{}`, `{"kind":"compaction","replacement":[{"seq":"invalid"}],"replacement_complete":true}`},
 		{"bad integer", `{}`, `{"seq":"invalid"}`},
 		{"bad envelope", `{"cir_version":42}`, `{}`},
 		{"malformed JSON", `{}`, `{"seq":]}`},
