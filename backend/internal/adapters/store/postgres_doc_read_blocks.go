@@ -28,6 +28,22 @@ func putPreparedReadIndexPG(ctx context.Context, tx pgx.Tx, plan preparedReadInd
 		return nil
 	}
 	blocks := plan.blocks
+	if err := putPreparedReadBlocksPG(ctx, tx, blocks); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO doc_read_indexes_v3(hash,version,envelope,event_count) VALUES($1,1,$2,$3)`, plan.hash, plan.envelope, plan.eventCount); err != nil {
+		return err
+	}
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"doc_read_block_locations_v3"}, []string{"doc_hash", "first_event", "byte_offset", "block_hash"}, pgx.CopyFromSlice(len(blocks), func(i int) ([]any, error) {
+		b := blocks[i]
+		return []any{string(plan.hash), b.FirstEvent, int64(b.Offset), string(b.Hash)}, nil
+	}))
+	return err
+}
+
+// Shared derivatives can be prepared without granting document ownership. Both
+// staging and final publication use the same ordered retention/insertion path.
+func putPreparedReadBlocksPG(ctx context.Context, tx pgx.Tx, blocks []domain.DocReadBlock) error {
 	// Retain existing shared blocks until this document's references commit.
 	// Hash ordering also orders competing insertion of previously unseen blocks.
 	hashes := make([]domain.ContentHash, len(blocks))
@@ -88,14 +104,7 @@ func putPreparedReadIndexPG(ctx context.Context, tx pgx.Tx, plan preparedReadInd
 	if err = putReadBlockEventsPG(ctx, tx, fresh); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO doc_read_indexes_v3(hash,version,envelope,event_count) VALUES($1,1,$2,$3)`, plan.hash, plan.envelope, plan.eventCount); err != nil {
-		return err
-	}
-	_, err = tx.CopyFrom(ctx, pgx.Identifier{"doc_read_block_locations_v3"}, []string{"doc_hash", "first_event", "byte_offset", "block_hash"}, pgx.CopyFromSlice(len(blocks), func(i int) ([]any, error) {
-		b := blocks[i]
-		return []any{string(plan.hash), b.FirstEvent, int64(b.Offset), string(b.Hash)}, nil
-	}))
-	return err
+	return nil
 }
 
 // Acquire all missing blocks before search rows, then acquire/insert search
