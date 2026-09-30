@@ -300,14 +300,23 @@ func (s *SyncRepoService) pushSettingsObjects(ctx context.Context, repoID domain
 }
 
 // Push uploads local snapshots/docs/refs to the central server (sync protocol).
-func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+func (s *SyncRepoService) Push(ctx context.Context, in inbound.SyncInput) (out inbound.SyncOutput, resultErr error) {
+	endPush := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStagePush, outbound.SyncDiagnosticCounts{})
+	defer func() { endPush(resultErr) }()
 	if in.Ref != "" && domain.ValidateBranchName(in.Ref) != nil {
 		return inbound.SyncOutput{}, domain.ErrInvalidRef
 	}
-	return withRetainedObjects(ctx, s.store, func() (inbound.SyncOutput, error) { return s.push(ctx, in) })
+	endRetention := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageRetention, outbound.SyncDiagnosticCounts{})
+	defer func() { endRetention(resultErr) }()
+	return withRetainedObjects(ctx, s.store, func() (inbound.SyncOutput, error) {
+		endRetention(nil)
+		return s.push(ctx, in)
+	})
 }
 
-func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (result inbound.SyncOutput, resultErr error) {
+	endPrepare := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{})
+	defer func() { endPrepare(resultErr) }()
 	syncProgress(in, "push", "prepare", 0, 0)
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
@@ -346,6 +355,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (inbou
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	endPrepare(nil)
 	syncProgress(in, "push", "negotiate", 0, 0)
 	pushSnaps, pushDocs, err := s.selectPushObjects(ctx, repoID, snaps)
 	if err != nil {
@@ -1059,7 +1069,8 @@ func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := s.pushDocument(ctx, repoID, hash); err != nil {
+			docCtx := outbound.WithSyncDiagnosticDocument(ctx, index+1)
+			if err := s.pushDocument(docCtx, repoID, hash); err != nil {
 				return err
 			}
 			syncProgress(progress, "push", "upload-and-verify-documents", index+1, len(hashes))
@@ -1114,7 +1125,9 @@ func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string
 }
 
 func (s *SyncRepoService) pushDocument(ctx context.Context, repoID string, hash domain.ContentHash) error {
+	endRead := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageDocumentRead, outbound.SyncDiagnosticCounts{Documents: 1})
 	doc, err := s.store.GetDoc(ctx, hash)
+	endRead(err)
 	if err != nil {
 		return fmt.Errorf("read push document %s: %w", hash, err)
 	}

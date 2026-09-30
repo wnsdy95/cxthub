@@ -711,6 +711,32 @@ request; this count is not the number of ref updates sent over the network.
 
 Prefer `--append` or pull-and-retry over `--force`.
 
+For a slow or failing push, enable optional diagnostics for that invocation:
+
+```sh
+CXT_SYNC_DIAGNOSTICS=1 cxt push
+CXT_SYNC_DIAGNOSTICS=1 git push
+```
+
+When a recorded stage fails, stderr receives one `cxt sync diagnostics:` JSON
+report, including when an append retry subsequently succeeds. Operations with
+no recorded failures remain silent. The report distinguishes inventory from
+document/chunk negotiation and records preparation, token lookup, request,
+response-header and response-body timing, caller budget remaining, numeric
+counts and process-local operation/request ordinals. An append retry shares
+the same caller budget and collector. The report retains at most 64 events;
+stage aggregates and the number of dropped events survive eviction.
+
+Reports contain no request/response contents, credentials, addresses, identities,
+file paths or raw errors. A request-write milestone does not prove that the
+server processed or committed the request. `timeout_active` means a timeout
+was observed while the caller context was still active; it does not identify
+the server's internal cause. Diagnostics do not change cancellation, retries,
+acknowledged progress, the hook's existing 60-second context deadline, or the
+HTTP client's 30-second timeout. Synchronous token lookup and Git subprocesses
+can still run beyond a context deadline; recording that deadline does not
+turn it into a hard wall-clock limit.
+
 ### `cxt pull`
 
 ```text
@@ -954,6 +980,7 @@ catalog and return success.
 |---|---|
 | `CXT_REMOTE` | API base fallback when no repository remote is configured |
 | `CXT_TOKEN` | Non-interactive authentication token |
+| `CXT_SYNC_DIAGNOSTICS=1` | Optional bounded failure diagnostics for explicit push and Git pre-push |
 | `CXT_NAME`, `CXT_EMAIL`, `CXT_TEAM` | Snapshot author identity overrides |
 | `CXT_NO_BROWSER=1` | Prevent automatic browser launch during login |
 | `CXT_SECRETS_PASSPHRASE` | Passphrase fallback for encrypted secret-mask sharing |
