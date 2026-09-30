@@ -33,7 +33,10 @@ func (s *FSStore) contextProtocol(repo domain.ContentHash) (int, error) {
 
 func (s *FSStore) validateContextWrite(ctx context.Context, repo domain.ContentHash, next domain.Ref) error {
 	protocol, err := s.contextProtocol(repo)
-	if err != nil || protocol == 0 {
+	if err != nil {
+		return err
+	}
+	if needsState, err := domain.ContextRefWriteNeedsState(protocol, next); err != nil || !needsState {
 		return err
 	}
 	events, err := s.listHistoryEventsRaw(repo)
