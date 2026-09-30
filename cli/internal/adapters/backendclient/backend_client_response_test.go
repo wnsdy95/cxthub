@@ -202,6 +202,53 @@ func TestIgnoredACKDrainStartsAfterHeaders(t *testing.T) {
 	}
 }
 
+func TestIgnoredACKClosesUnexpectedUpgradeWithoutDraining(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	closed := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		defer close(closed)
+		_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: unexpected\r\n\r\n")
+		if err := rw.Flush(); err != nil {
+			t.Error(err)
+			return
+		}
+		// Keep the upgraded body silent. Request cancellation cannot interrupt
+		// its reads; only closing the body/connection releases this exchange.
+		peerClosed := make(chan struct{})
+		go func() { _, _ = io.Copy(io.Discard, conn); close(peerClosed) }()
+		select {
+		case <-peerClosed:
+		case <-release:
+			_ = conn.Close()
+			<-peerClosed
+		}
+	}))
+	t.Cleanup(ts.Close)
+	c, _ := newACKResponseClient(t, ts.URL)
+	done := make(chan error, 1)
+	go func() { done <- c.do(context.Background(), http.MethodPost, "/ack", nil, nil) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("attempted to drain an upgraded body that ignores cancellation")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("unexpected upgraded connection was not closed")
+	}
+}
+
 func TestIgnoredACKLeavesOtherResponseHandlingUnchanged(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

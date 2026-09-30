@@ -209,6 +209,12 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 		}
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
+	// An unexpected 101 hands the upgraded connection to the response body;
+	// net/http no longer interrupts its reads on request cancellation. There is
+	// no reusable HTTP connection to recover, so close it without reading.
+	if resp.StatusCode < 200 {
+		return nil
+	}
 	// Successful headers already acknowledge the write. Draining its unused ACK
 	// is only best-effort connection cleanup, never a commit check or retry signal.
 	// The 100ms cleanup bound starts only after successful headers. It never
