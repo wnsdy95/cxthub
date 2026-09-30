@@ -138,6 +138,14 @@ JSON validation. Legacy document formats retain their existing full verification
 This reduces retained document memory; it does not skip content checks or
 guarantee a constant memory bound for a single oversized event.
 
+Within one inspection, successful current event JSON validation may be reused
+by its exact byte hash when most chunks have already been observed. Bounded
+hash markers retain no dialogue payload and are discarded when inspection ends.
+Every document still reads its current files and verifies its complete hash,
+envelope, JSON syntax and depth. Unique chunks use the direct decoder; repeated
+chunks with too many event misses fall back to it. These cost heuristics do not
+certify validity or guarantee that every workload becomes faster.
+
 `Ctrl-C` cancels the inspection at cooperative read/event boundaries. Doctor
 prints the partial report and exits 130. JSON includes `completed`,
 `replica_inspection_completed`, `documents_checked`, and `unchecked` phases.

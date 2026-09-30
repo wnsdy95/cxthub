@@ -42,6 +42,12 @@ func decodeStoredSessionDoc(ctx context.Context, hash domain.ContentHash, data [
 // or payload is cached across calls. Legacy representations use the same decoder
 // and canonical hash verification as GetDoc.
 func (s *FileStore) VerifyDoc(ctx context.Context, hash domain.ContentHash) error {
+	return s.verifyDoc(ctx, hash, nil)
+}
+
+// reuse belongs to one sequential inspection. It never substitutes for reading
+// current bytes, their complete hash, the envelope, or global JSON validation.
+func (s *FileStore) verifyDoc(ctx context.Context, hash domain.ContentHash, reuse *inspectionEventReuse) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -72,6 +78,7 @@ func (s *FileStore) VerifyDoc(ctx context.Context, hash domain.ContentHash) erro
 		_, err = decodeStoredSessionDoc(ctx, hash, body, true)
 		return err
 	}
+	proofs := reuse.forDocument(manifest.Chunks)
 	chunks := &verificationChunkReader{ctx: ctx, store: s, doc: hash, hashes: manifest.Chunks}
 	reader := io.MultiReader(
 		strings.NewReader(`{"envelope":`), bytes.NewReader(manifest.Envelope),
@@ -82,7 +89,7 @@ func (s *FileStore) VerifyDoc(ctx context.Context, hash domain.ContentHash) erro
 	depth := &cirDepthReader{input: reader}
 	digest := sha256.New()
 	checked := io.TeeReader(depth, digest)
-	decodeErr := verifyCIRStream(ctx, checked)
+	decodeErr := verifyCIRStreamWithProofs(ctx, checked, proofs)
 	// GetDoc checks byte identity before typed decoding. Finish hashing even if
 	// typed decoding fails, preserving corruption/missing-chunk precedence.
 	_, drainErr := io.Copy(io.Discard, checked)
@@ -100,6 +107,9 @@ func (s *FileStore) VerifyDoc(ctx context.Context, hash domain.ContentHash) erro
 	}
 	if depth.exceeded {
 		return domain.ErrInvalidCIR
+	}
+	if decodeErr == nil {
+		reuse.observe(manifest.Chunks)
 	}
 	return decodeErr
 }
@@ -193,6 +203,10 @@ func (r *verificationChunkReader) Read(p []byte) (int, error) {
 }
 
 func verifyCIRStream(ctx context.Context, input io.Reader) error {
+	return verifyCIRStreamWithProofs(ctx, input, nil)
+}
+
+func verifyCIRStreamWithProofs(ctx context.Context, input io.Reader, proofs *eventProofDecoder) error {
 	decoder := json.NewDecoder(input)
 	start, err := decoder.Token()
 	if err != nil || start != json.Delim('{') {
@@ -231,8 +245,7 @@ func verifyCIRStream(ctx context.Context, input io.Reader) error {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				var event domain.Event
-				if decoder.Decode(&event) != nil {
+				if proofs.decode(decoder) != nil {
 					return domain.ErrInvalidCIR
 				}
 			}
