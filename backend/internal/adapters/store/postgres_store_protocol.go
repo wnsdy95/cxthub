@@ -36,8 +36,8 @@ func validateContextWritePG(ctx context.Context, tx pgx.Tx, repo domain.ContentH
 	if err := tx.QueryRow(ctx, `SELECT context_protocol FROM repos WHERE id=$1`, string(repo)).Scan(&protocol); err != nil {
 		return mapNoRows(err)
 	}
-	if protocol == 0 {
-		return nil
+	if needsState, err := domain.ContextRefWriteNeedsState(protocol, next); err != nil || !needsState {
+		return err
 	}
 	events, err := protocolHistoryPG(ctx, tx, repo)
 	if err != nil {

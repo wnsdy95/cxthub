@@ -31,8 +31,8 @@ func (s *Service) checkContextWrite(ctx context.Context, repoID domain.ContentHa
 	if err != nil {
 		return err
 	}
-	if repo.ContextProtocol == 0 {
-		return nil
+	if needsState, err := domain.ContextRefWriteNeedsState(repo.ContextProtocol, next); err != nil || !needsState {
+		return err
 	}
 	events, err := s.ListHistory(ctx, repoID)
 	if err != nil {

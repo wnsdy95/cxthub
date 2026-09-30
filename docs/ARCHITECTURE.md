@@ -50,6 +50,19 @@ transaction boundary. Interface conformance is necessary but does not prove
 ACID: real PostgreSQL tests cover rollback, racing commands, authorization changes,
 revisions, leases and duplicate delivery against shared state.
 
+Context ref validation checks the repository protocol before deciding whether
+branch history is required. In protocol 1, branch writes still require durable
+identity evidence and validate it inside the graph transaction. Head, session
+and tag refs do not use that branch projection, so their protocol check does not
+load the full history or look up a branch identity. Unsupported protocol versions
+remain errors for every ref kind. This narrows only the protocol validation
+read set; authorization, journal recovery, object checks, compare-and-swap and
+publication still run in their existing command and storage boundaries.
+FS ref writes reject unreadable existing pointers instead of treating them as
+absent. After journal recovery, protocol-1 symbolic HEAD writes recheck their
+branch target under the repository lock; recovery cannot leave HEAD attached to
+a branch it just removed. Legacy unborn HEAD bootstrap remains supported.
+
 Document finalization separates pure preparation from publication. The worker
 renews its durable lease while the PostgreSQL adapter derives chunk boundaries
 and read-index blocks from an immutable verified document. Preparation acquires

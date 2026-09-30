@@ -2,20 +2,30 @@ package domain
 
 import "fmt"
 
+// ContextRefWriteNeedsState checks the protocol and branch identity before callers
+// load history and the current ref. A false result only skips context identity
+// validation; callers must still enforce ref validity, authorization and CAS.
+func ContextRefWriteNeedsState(protocol int, next Ref) (bool, error) {
+	if protocol == 0 {
+		return false, nil
+	}
+	if protocol != 1 {
+		return false, fmt.Errorf("%w: unsupported context protocol", ErrConflict)
+	}
+	if next.Kind != RefBranch {
+		return false, nil
+	}
+	if next.BranchID == "" {
+		return false, fmt.Errorf("%w: branch identity required; upgrade the CXTHub client for this repository", ErrConflict)
+	}
+	return true, nil
+}
+
 // ValidateContextRefWrite runs inside the repository graph transaction. Matching
 // content hashes cannot authorize a different logical branch after name reuse.
 func ValidateContextRefWrite(protocol int, events []HistoryEvent, current *Ref, next Ref) error {
-	if protocol == 0 {
-		return nil
-	}
-	if protocol != 1 {
-		return fmt.Errorf("%w: unsupported context protocol", ErrConflict)
-	}
-	if next.Kind != RefBranch {
-		return nil
-	}
-	if next.BranchID == "" {
-		return fmt.Errorf("%w: branch identity required; upgrade the CXTHub client for this repository", ErrConflict)
+	if needsState, err := ContextRefWriteNeedsState(protocol, next); err != nil || !needsState {
+		return err
 	}
 	p, err := ProjectContextBranches(events)
 	if err != nil {
