@@ -714,6 +714,28 @@ not marked completed or deleted. Arrival of the matching publication wakes it
 automatically; periodic reconciliation also covers a restart or a publication
 racing the transition into attention. Other conflicts still require review.
 
+PR delivery jobs retain up to 32 recent diagnostic events in the same fenced
+state transition: queue, claim, finish, manual retry and source availability.
+Completion and attempt-counter resets preserve this trail. `diagnostics.since`
+marks when recording began, `total_claims` counts only claims observed since
+then, and `dropped` reports older diagnostic events removed by the bound. A
+legacy job without diagnostics has no recorded historical cause; the server
+does not reconstruct one from timestamps or its attempt count. Expired leases
+are recorded as reclaim observations, not proof of a particular crash cause.
+
+Reasons and failure classes are bounded codes, never raw errors, credentials or
+conversation content. Deadline expiry and cancellation are classified when
+the error chain establishes them; other details remain unspecified. This
+history is operational evidence, separate from immutable PR completion and
+current code-position inclusion. It does not change retry scheduling or mark
+an accepted request as completed. The existing promotions API and collapsed
+processing-history UI expose the same records to repository readers.
+
+Upgrade every backend PR-job writer before relying on diagnostic retention.
+Older binaries can still read jobs but do not know these optional fields and
+may omit them on a subsequent write. No historical trail is backfilled, and
+this operational history is not an append-only audit log.
+
 The server verifies the CLI's exact source association; it cannot inspect a
 user's private native transcript or establish that a dishonest client supplied
 all of it. Missing copies and ambiguous Git transaction completion remain visible

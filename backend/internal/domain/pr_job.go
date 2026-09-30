@@ -12,19 +12,21 @@ var ErrPRSourcePending = errors.New("PR source context has not arrived")
 // PRPromotionJob is delivery state; source/completion history remains immutable.
 // Version fences workers whose lease expired while they were executing.
 type PRPromotionJob struct {
-	ID           string           `json:"id"`
-	RepoID       ContentHash      `json:"repo_id"`
-	PR           PullRequestMerge `json:"pr"`
-	BaseBranchID string           `json:"base_branch_id"`
-	GitOrigin    string           `json:"git_origin"`
-	State        string           `json:"state"`
-	Attempts     int              `json:"attempts"`
-	Version      int64            `json:"version"`
-	Reason       string           `json:"reason,omitempty"`
-	CreatedAt    time.Time        `json:"created_at"`
-	UpdatedAt    time.Time        `json:"updated_at"`
-	NextAttempt  time.Time        `json:"next_attempt"`
-	LeaseUntil   time.Time        `json:"lease_until"`
+	ID           string            `json:"id"`
+	RepoID       ContentHash       `json:"repo_id"`
+	PR           PullRequestMerge  `json:"pr"`
+	BaseBranchID string            `json:"base_branch_id"`
+	GitOrigin    string            `json:"git_origin"`
+	State        string            `json:"state"`
+	Attempts     int               `json:"attempts"`
+	Version      int64             `json:"version"`
+	Reason       string            `json:"reason,omitempty"`
+	FailureClass string            `json:"failure_class,omitempty"`
+	Diagnostics  *PRJobDiagnostics `json:"diagnostics,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+	NextAttempt  time.Time         `json:"next_attempt"`
+	LeaseUntil   time.Time         `json:"lease_until"`
 }
 
 func PRPromotionID(repo ContentHash, number int) string {
@@ -38,13 +40,11 @@ func (j PRPromotionJob) Validate() error {
 	if err := j.PR.Validate(); err != nil {
 		return err
 	}
-	if j.ID != PRPromotionID(j.RepoID, j.PR.Number) || j.CreatedAt.IsZero() {
+	if j.ID != PRPromotionID(j.RepoID, j.PR.Number) || j.CreatedAt.IsZero() || j.Version < 0 || j.Attempts < 0 {
 		return ErrValidation
 	}
-	switch j.State {
-	case "waiting", "retrying", "running", "completed", "attention":
-	default:
+	if !validPRJobState(j.State) || !validPRJobReason(j.Reason, false) || !validPRJobFailureClass(j.FailureClass) {
 		return ErrValidation
 	}
-	return nil
+	return j.Diagnostics.Validate()
 }

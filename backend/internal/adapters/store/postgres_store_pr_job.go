@@ -11,6 +11,7 @@ import (
 )
 
 func (s *PostgresStore) EnqueuePRJob(ctx context.Context, j domain.PRPromotionJob) (domain.PRPromotionJob, error) {
+	j = domain.AppendPRJobDiagnostic(domain.PRPromotionJob{}, j, "queued", j.CreatedAt)
 	if err := j.Validate(); err != nil {
 		return j, err
 	}
@@ -18,7 +19,7 @@ func (s *PostgresStore) EnqueuePRJob(ctx context.Context, j domain.PRPromotionJo
 	if err != nil {
 		return j, err
 	}
-	_, err = s.db(ctx).Exec(ctx, `INSERT INTO pr_promotion_jobs(repo_id,id,payload,state,created_at,next_attempt,lease_until) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, j.RepoID, j.ID, b, j.State, j.CreatedAt, j.NextAttempt, j.LeaseUntil)
+	_, err = s.db(ctx).Exec(ctx, `INSERT INTO pr_promotion_jobs(repo_id,id,payload,state,created_at,next_attempt,lease_until,version) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, j.RepoID, j.ID, b, j.State, j.CreatedAt, j.NextAttempt, j.LeaseUntil, j.Version)
 	if err != nil {
 		return j, err
 	}
@@ -96,11 +97,17 @@ func (s *PostgresStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash,
 	if err = json.Unmarshal(b, &j); err != nil {
 		return j, err
 	}
+	old := j
 	j.State = "running"
+	j.FailureClass = ""
 	j.Attempts++
 	j.Version++
 	j.UpdatedAt = now
 	j.LeaseUntil = now.Add(lease)
+	j = domain.AppendPRJobDiagnostic(old, j, "claimed", now)
+	if err = j.Validate(); err != nil {
+		return j, err
+	}
 	b, err = json.Marshal(j)
 	if err != nil {
 		return j, err
@@ -112,18 +119,40 @@ func (s *PostgresStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash,
 	return j, tx.Commit(ctx)
 }
 func (s *PostgresStore) FinishPRJob(ctx context.Context, j domain.PRPromotionJob) error {
-	b, err := json.Marshal(j)
+	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
 		return err
 	}
-	tag, err := s.db(ctx).Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6 WHERE repo_id=$1 AND id=$2 AND version=$7 AND state='running'`, j.RepoID, j.ID, b, j.State, j.NextAttempt, j.LeaseUntil, j.Version)
+	defer tx.Rollback(ctx)
+	var b []byte
+	var version int64
+	var state string
+	if err = tx.QueryRow(ctx, `SELECT payload,version,state FROM pr_promotion_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, j.RepoID, j.ID).Scan(&b, &version, &state); err != nil {
+		return mapNoRows(err)
+	}
+	var current domain.PRPromotionJob
+	if err = json.Unmarshal(b, &current); err != nil {
+		return err
+	}
+	if version != j.Version || state != "running" {
+		return domain.ErrConflict
+	}
+	next, err := finishPRJob(current, j)
+	if err != nil {
+		return err
+	}
+	b, err = json.Marshal(next)
+	if err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6 WHERE repo_id=$1 AND id=$2 AND version=$7 AND state='running'`, next.RepoID, next.ID, b, next.State, next.NextAttempt, next.LeaseUntil, next.Version)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() != 1 {
 		return domain.ErrConflict
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 func (s *PostgresStore) RetryPRJob(ctx context.Context, repo domain.ContentHash, id string, now time.Time) error {
 	tx, err := s.db(ctx).Begin(ctx)
@@ -139,23 +168,30 @@ func (s *PostgresStore) RetryPRJob(ctx context.Context, repo domain.ContentHash,
 	if err = json.Unmarshal(b, &j); err != nil {
 		return err
 	}
-	if j.State == "completed" {
+	if retryPRJobUnchanged(j, now) {
 		return nil
 	}
 	if j.State == "running" && j.LeaseUntil.After(now) {
 		return domain.ErrConflict
 	}
+	old := j
 	j.State = "waiting"
 	j.NextAttempt = now
 	j.UpdatedAt = now
 	j.Version++
 	j.Attempts = 0
 	j.Reason = ""
+	j.FailureClass = ""
+	j.LeaseUntil = time.Time{}
+	j = domain.AppendPRJobDiagnostic(old, j, "retry_requested", now)
+	if err = j.Validate(); err != nil {
+		return err
+	}
 	b, err = json.Marshal(j)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,version=$6 WHERE repo_id=$1 AND id=$2`, repo, id, b, j.State, j.NextAttempt, j.Version)
+	_, err = tx.Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,version=$6,lease_until=$7 WHERE repo_id=$1 AND id=$2`, repo, id, b, j.State, j.NextAttempt, j.Version, j.LeaseUntil)
 	if err != nil {
 		return err
 	}
@@ -216,9 +252,14 @@ func (s *PostgresStore) WakePRSourceJobs(ctx context.Context, repo domain.Conten
 			continue
 		}
 		version := j.Version
-		j.State, j.Reason, j.Attempts = "waiting", "", 0
+		old := j
+		j.State, j.Reason, j.Attempts, j.FailureClass = "waiting", "", 0, ""
 		j.NextAttempt, j.UpdatedAt, j.LeaseUntil = now, now, time.Time{}
 		j.Version++
+		j = domain.AppendPRJobDiagnostic(old, j, "source_available", now)
+		if err := j.Validate(); err != nil {
+			return err
+		}
 		raw, err := json.Marshal(j)
 		if err != nil {
 			return err
