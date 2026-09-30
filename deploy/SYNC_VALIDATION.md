@@ -148,6 +148,11 @@ client-request overlap with the publication call; no worker gate manufactured
 that overlap. The largest ref-write latency per run was 2.37–2.58 s, although
 its per-run p95 was only 2.29–3.11 ms. Read maximums stayed below 23 ms. The
 percentile alone hides the write tail and is not sufficient acceptance evidence.
+These three measurements used 1 ms pacing. The final fixture uses 10 ms pacing
+to keep traffic active under race instrumentation; its three further runs passed
+with ref maximums of 1.97–4.53 s. The first overlapped a local HTTP test suite,
+so this range is not an isolated before/after comparison. A separate focused
+race run also passed. Request ceilings and HTTP response bounds remain enforced.
 
 A separate diagnostic run sampled `pg_stat_activity` in its disposable
 database: ref writes waited on an advisory lock while the blocking publication
