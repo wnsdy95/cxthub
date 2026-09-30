@@ -216,6 +216,32 @@ unrelated validation failures. The same recovery path serves ordinary push,
 pending synchronization and unsync preparation. This is bounded recovery, not
 an indefinite server-side object retention promise.
 
+## Complete working observations without nested catalog rereads
+
+Local status and diff compare complete working observations, including the
+fingerprint of every snapshot and ref in the replica. History supplies one fresh
+HEAD observation to that enclosing fence. The independent history query still
+requires two matching catalog scans; status uses two, and diff uses three,
+including the fresh observation after reading immutable document bodies. Older
+history implementations without this optional capability keep their original
+four/six scans. Public results and revisions are unchanged for unchanged data.
+
+Unreachable metadata, unrelated refs, memory attachments and grafts participate
+in the fence. A changed observation retries; continuous changes return a
+selection conflict. Errors and cancellation do not fall back to cached data.
+These remain optimistic read comparisons, not an atomic filesystem snapshot or
+a guarantee against arbitrary ABA changes. No mutation lock, repair, persistent
+cache or metadata epoch is introduced. The full catalog is still freshly read
+on each observation. Server queries and upload negotiation are separate paths.
+
+An offline paired run with 50/500/2,500 snapshots verified all public DTOs and
+revisions in twelve cases and counted 960 timed observations. At 2,500 snapshots,
+warm status median was 260 → 132 ms and diff 378 → 203 ms. The independent log
+path did not improve its scan count, and its measured warm p95 worsened
+156 → 179 ms. These are shared-host macOS app-query measurements with uncontrolled
+OS cache; they exclude Git subprocesses, delivery formatting, HTTP and providers.
+They do not establish cold-disk or cloud latency or resolve negotiate deadlines.
+
 ## Launch gate after deployment
 
 Local proxies and containers cannot establish Vercel gateway behavior, Render

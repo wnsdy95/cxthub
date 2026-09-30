@@ -26,6 +26,16 @@ func NewHistoryQueryService(git outbound.GitContext, code outbound.CodePosition,
 	return &HistoryQueryService{git: git, code: code, local: local, remote: remote}
 }
 func (s *HistoryQueryService) QueryHistory(ctx context.Context, in inbound.HistoryQueryInput) (domain.HistoryQueryResult, error) {
+	return s.queryHistory(ctx, in, nil)
+}
+
+func (s *HistoryQueryService) ObserveLocalHistory(ctx context.Context, cwd string) (domain.HistoryQueryResult, domain.ContentHash, error) {
+	var catalogRevision domain.ContentHash
+	out, err := s.queryHistory(ctx, inbound.HistoryQueryInput{Cwd: cwd}, &catalogRevision)
+	return out, catalogRevision, err
+}
+
+func (s *HistoryQueryService) queryHistory(ctx context.Context, in inbound.HistoryQueryInput, catalogRevision *domain.ContentHash) (domain.HistoryQueryResult, error) {
 	out := domain.HistoryQueryResult{Version: domain.QueryContractVersion, Snapshots: []domain.Snapshot{}, Missing: []domain.ContentHash{}, Selection: domain.HistorySelection{Ref: "HEAD", Scope: "current", Source: "local_ancestry"}}
 	if (in.All && in.Retained) || ((in.All || in.Retained) && (in.Ref != "" || in.Branch != "" || in.Position != "")) || (in.Ref != "" && in.Branch != "") || in.Server && (in.All || in.Retained) {
 		return out, fmt.Errorf("invalid_arguments: incompatible history scopes")
@@ -162,7 +172,13 @@ func (s *HistoryQueryService) QueryHistory(ctx context.Context, in inbound.Histo
 		}
 		return out, nil
 	}
-	snaps, refs, err := s.stableCatalog(ctx, string(repo.ID))
+	var snaps []domain.Snapshot
+	var refs []domain.Ref
+	if catalogRevision == nil {
+		snaps, refs, err = s.stableCatalog(ctx, string(repo.ID))
+	} else {
+		snaps, refs, *catalogRevision, err = s.readCatalog(ctx, string(repo.ID))
+	}
 	if err != nil {
 		return out, err
 	}
@@ -261,56 +277,64 @@ func historyRef(refs []domain.Ref, name string) (domain.ContentHash, string, err
 	return selected.Target, branch, nil
 }
 
+// One fresh, canonical observation; no cache, mutation or stability guarantee.
+func (s *HistoryQueryService) readCatalog(ctx context.Context, repo string) ([]domain.Snapshot, []domain.Ref, domain.ContentHash, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
+	var snaps []domain.Snapshot
+	var e error
+	if catalog, ok := s.local.(outbound.SnapshotCatalogReader); ok {
+		snaps, e = catalog.ListSnapshotCatalog(ctx, repo)
+	} else {
+		snaps, e = s.local.ListSnapshots(ctx, repo, "")
+	}
+	if e != nil {
+		return nil, nil, "", e
+	}
+	if len(snaps) > 100000 {
+		return nil, nil, "", fmt.Errorf("local history exceeds 100000 snapshots; use --server for a selected branch")
+	}
+	refs, e := s.local.ListRefs(ctx, repo)
+	if e != nil {
+		return nil, nil, "", e
+	}
+	snaps = append([]domain.Snapshot(nil), snaps...)
+	refs = append([]domain.Ref(nil), refs...)
+	sort.Slice(snaps, func(i, j int) bool { return snaps[i].ID < snaps[j].ID })
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Kind == refs[j].Kind {
+			return refs[i].Name < refs[j].Name
+		}
+		return refs[i].Kind < refs[j].Kind
+	})
+	for _, v := range snaps {
+		if v.RepoID != repo {
+			return nil, nil, "", domain.ErrHashMismatch
+		}
+	}
+	for _, v := range refs {
+		if v.RepoID != repo {
+			return nil, nil, "", domain.ErrHashMismatch
+		}
+	}
+	raw, e := json.Marshal(struct {
+		Snapshots []domain.Snapshot
+		Refs      []domain.Ref
+	}{snaps, refs})
+	if e != nil {
+		return nil, nil, "", e
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
+	return snaps, refs, domain.HashContent(raw), nil
+}
+
 // Compare complete observations, including memory attachments and grafts. A
 // continuously changing archive returns a retryable conflict, never a mixed list.
 func (s *HistoryQueryService) stableCatalog(ctx context.Context, repo string) ([]domain.Snapshot, []domain.Ref, error) {
-	read := func() ([]domain.Snapshot, []domain.Ref, domain.ContentHash, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, "", err
-		}
-		var snaps []domain.Snapshot
-		var e error
-		if catalog, ok := s.local.(outbound.SnapshotCatalogReader); ok {
-			snaps, e = catalog.ListSnapshotCatalog(ctx, repo)
-		} else {
-			snaps, e = s.local.ListSnapshots(ctx, repo, "")
-		}
-		if e != nil {
-			return nil, nil, "", e
-		}
-		if len(snaps) > 100000 {
-			return nil, nil, "", fmt.Errorf("local history exceeds 100000 snapshots; use --server for a selected branch")
-		}
-		refs, e := s.local.ListRefs(ctx, repo)
-		if e != nil {
-			return nil, nil, "", e
-		}
-		snaps = append([]domain.Snapshot(nil), snaps...)
-		refs = append([]domain.Ref(nil), refs...)
-		sort.Slice(snaps, func(i, j int) bool { return snaps[i].ID < snaps[j].ID })
-		sort.Slice(refs, func(i, j int) bool {
-			if refs[i].Kind == refs[j].Kind {
-				return refs[i].Name < refs[j].Name
-			}
-			return refs[i].Kind < refs[j].Kind
-		})
-		for _, v := range snaps {
-			if v.RepoID != repo {
-				return nil, nil, "", domain.ErrHashMismatch
-			}
-		}
-		for _, v := range refs {
-			if v.RepoID != repo {
-				return nil, nil, "", domain.ErrHashMismatch
-			}
-		}
-		raw, e := json.Marshal(struct {
-			Snapshots []domain.Snapshot
-			Refs      []domain.Ref
-		}{snaps, refs})
-		return snaps, refs, domain.HashContent(raw), e
-	}
-	_, _, previous, err := read()
+	_, _, previous, err := s.readCatalog(ctx, repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -318,7 +342,7 @@ func (s *HistoryQueryService) stableCatalog(ctx context.Context, repo string) ([
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		snaps, refs, current, e := read()
+		snaps, refs, current, e := s.readCatalog(ctx, repo)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -329,5 +353,7 @@ func (s *HistoryQueryService) stableCatalog(ctx context.Context, repo string) ([
 	}
 	return nil, nil, domain.ErrSelectionChanged
 }
+
+var _ inbound.LocalHistoryObserver = (*HistoryQueryService)(nil)
 
 var _ inbound.HistoryQuery = (*HistoryQueryService)(nil)

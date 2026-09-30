@@ -18,3 +18,12 @@ type HistoryQueryInput struct {
 type HistoryQuery interface {
 	QueryHistory(context.Context, HistoryQueryInput) (domain.HistoryQueryResult, error)
 }
+
+// LocalHistoryObserver supplies one fresh HEAD observation and the fingerprint
+// of the entire snapshot/ref catalog, including unreachable metadata. It does
+// not guarantee a stable observation. Callers must compare complete working
+// observations before returning a result, and again after reading diff bodies.
+// QueryHistory remains the independently fenced public query.
+type LocalHistoryObserver interface {
+	ObserveLocalHistory(context.Context, string) (domain.HistoryQueryResult, domain.ContentHash, error)
+}

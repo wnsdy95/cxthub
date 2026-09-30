@@ -27,7 +27,7 @@ func (s *WorkingStateService) Diff(ctx context.Context, in inbound.ContextDiffIn
 		if err != nil {
 			return domain.ContextDiff{}, err
 		}
-		if after.State.Revision != observation.State.Revision {
+		if !sameWorkingObservation(after, observation) {
 			continue
 		}
 		return result, diffErr
