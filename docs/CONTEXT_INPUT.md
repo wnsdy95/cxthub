@@ -24,6 +24,20 @@ source or unavailable coverage; equal text and branch labels are not proofs.
 
 ## Default memory input
 
+Server memory projection distinguishes archived read volume from retained
+contributions. Cumulative archives may repeat the same earlier fragments;
+reading more than 64 MiB across those objects does not by itself reject a
+projection. The request retains at most 8 MiB of serialized-weight body cache
+and composes an ordered union using verified provenance and exact fragment
+identity. Evicted contribution bodies are hash-validated when loaded again.
+
+Individual objects, retained unique contributions and final wire output remain
+bounded at 64 MiB, with separate snapshot, traversal and entry bounds. These are
+logical payload limits, not a guarantee of 64 MiB process heap usage. Resource
+exhaustion returns HTTP 422 `memory_projection_limit`; the server neither
+truncates the result nor changes the archived memory. This server bound is
+separate from the agent's token budget below.
+
 An unqualified managed fresh launch and unqualified `load` prepare a versioned
 package containing:
 

@@ -26,7 +26,9 @@ func (s *Service) getMemoryProjection(ctx context.Context, repoID, id domain.Con
 }
 
 const maxProjectionSnapshots = 4096
+const maxProjectionEdges = 1 << 18
 const maxProjectionMemoryBytes = 64 << 20
+const maxProjectionCacheBytes = 8 << 20
 
 // ProjectMemory derives current project knowledge without attaching a new
 // memory object. Two metadata reads validate a consistent transitive state;
@@ -41,9 +43,12 @@ func ProjectMemory(ctx context.Context, source MemoryProjectionSource, repoID, i
 		if err != nil {
 			return domain.MemoryProjection{}, err
 		}
-		digest, found, complete := memoryProjectionFromDetailed(ctx, reader, id)
+		digest, found, complete, walkErr := memoryProjectionFromDetailed(ctx, reader, id)
 		if reader.err != nil {
 			return domain.MemoryProjection{}, reader.err
+		}
+		if walkErr != nil {
+			return domain.MemoryProjection{}, walkErr
 		}
 		if !complete {
 			return domain.MemoryProjection{}, fmt.Errorf("%w: incomplete memory projection", domain.ErrIntegrity)
@@ -65,12 +70,18 @@ func ProjectMemory(ctx context.Context, source MemoryProjectionSource, repoID, i
 }
 
 type projectionReader struct {
-	source    MemoryProjectionSource
-	repoID    domain.ContentHash
-	snapshots map[domain.ContentHash]domain.Snapshot
-	memories  map[domain.ContentHash]domain.MemoryDigest
-	bytes     int
-	err       error
+	source      MemoryProjectionSource
+	repoID      domain.ContentHash
+	snapshots   map[domain.ContentHash]domain.Snapshot
+	memories    map[domain.ContentHash]domain.MemoryDigest
+	weights     map[domain.ContentHash]int
+	order       []domain.ContentHash
+	validated   map[domain.ContentHash]bool
+	cacheBytes  int
+	cacheLimit  int // zero uses the production capacity; tests may choose less.
+	objectLimit int // zero uses the production bound; tests may choose less.
+	bytes       int
+	err         error
 }
 
 func (r *projectionReader) readState(ctx context.Context, root domain.ContentHash) (domain.ContentHash, error) {
@@ -89,6 +100,7 @@ func (r *projectionReader) readState(ctx context.Context, root domain.ContentHas
 	// a selected branch unreadable, and missing edges/cycles cannot be hidden by
 	// a covering digest. Bound recursion before invoking the lineage walker.
 	state := map[domain.ContentHash]uint8{}
+	edges := 0
 	var visit func(domain.ContentHash) error
 	visit = func(id domain.ContentHash) error {
 		if err := ctx.Err(); err != nil {
@@ -101,7 +113,7 @@ func (r *projectionReader) readState(ctx context.Context, root domain.ContentHas
 			return fmt.Errorf("%w: cycle in memory lineage", domain.ErrIntegrity)
 		}
 		if len(state) >= maxProjectionSnapshots {
-			return fmt.Errorf("memory projection exceeds %d snapshots; select a narrower ref", maxProjectionSnapshots)
+			return fmt.Errorf("%w: exceeds %d snapshots; select a narrower ref", domain.ErrMemoryProjectionLimit, maxProjectionSnapshots)
 		}
 		s, ok := r.snapshots[id]
 		if !ok {
@@ -116,6 +128,17 @@ func (r *projectionReader) readState(ctx context.Context, root domain.ContentHas
 		if err := domain.ValidateOptionalContentHash(s.MemoryHash); err != nil {
 			return err
 		}
+		// Charge raw edges before ReachabilityParents or fingerprinting can
+		// allocate a deduplicated list or serialize repeated parent records.
+		// A covering digest must not bypass this topology bound.
+		if len(s.Parents) > maxProjectionEdges-edges {
+			return fmt.Errorf("%w: exceeds %d parent edges; select a narrower ref", domain.ErrMemoryProjectionLimit, maxProjectionEdges)
+		}
+		edges += len(s.Parents)
+		if len(s.GraftParents) > maxProjectionEdges-edges {
+			return fmt.Errorf("%w: exceeds %d parent edges; select a narrower ref", domain.ErrMemoryProjectionLimit, maxProjectionEdges)
+		}
+		edges += len(s.GraftParents)
 		state[id] = 1
 		for _, p := range s.ReachabilityParents() {
 			if err := visit(p); err != nil {
@@ -169,9 +192,15 @@ func (r *projectionReader) GetMemory(ctx context.Context, hash domain.ContentHas
 		if marshalErr != nil {
 			err = marshalErr
 		} else {
-			r.bytes += len(raw)
-			if r.bytes > maxProjectionMemoryBytes {
-				err = fmt.Errorf("memory projection exceeds %d bytes; select a narrower ref", maxProjectionMemoryBytes)
+			r.bytes += len(raw) // observed read volume, not retained-memory capacity.
+			limit := maxProjectionMemoryBytes
+			if r.objectLimit > 0 && r.objectLimit < limit {
+				limit = r.objectLimit
+			}
+			if len(raw) > limit {
+				err = fmt.Errorf("%w: object exceeds %d bytes; select a narrower ref", domain.ErrMemoryProjectionLimit, limit)
+			} else {
+				r.cacheMemory(hash, d, len(raw))
 			}
 		}
 	}
@@ -179,6 +208,53 @@ func (r *projectionReader) GetMemory(ctx context.Context, hash domain.ContentHas
 		r.err = fmt.Errorf("memory projection object %s: %w", hash, err)
 		return domain.MemoryDigest{}, r.err
 	}
-	r.memories[hash] = d
+	if r.validated == nil {
+		r.validated = map[domain.ContentHash]bool{}
+	}
+	r.validated[hash] = true
 	return d, nil
+}
+
+// Cache immutable bodies only within a fixed retained weight. Evicted bodies
+// are re-read and hash-validated if their contribution is needed later.
+func (r *projectionReader) cacheMemory(hash domain.ContentHash, d domain.MemoryDigest, weight int) {
+	limit := r.cacheLimit
+	if limit == 0 {
+		limit = maxProjectionCacheBytes
+	}
+	if weight > limit {
+		return
+	}
+	if r.memories == nil {
+		r.memories = map[domain.ContentHash]domain.MemoryDigest{}
+	}
+	if r.weights == nil {
+		r.weights = map[domain.ContentHash]int{}
+	}
+	for r.cacheBytes+weight > limit && len(r.order) > 0 {
+		old := r.order[0]
+		r.order = r.order[1:]
+		r.cacheBytes -= r.weights[old]
+		delete(r.weights, old)
+		delete(r.memories, old)
+	}
+	r.memories[hash] = d
+	r.weights[hash] = weight
+	r.order = append(r.order, hash)
+	r.cacheBytes += weight
+}
+
+// Reproducibility uses the same request-local validation evidence as the old
+// whole-body cache. It does not need to retain or reconstruct that body again.
+// A subsequent contribution reload still validates the current bytes.
+func (r *projectionReader) memoryValidated(ctx context.Context, hash domain.ContentHash) bool {
+	if err := ctx.Err(); err != nil {
+		r.err = err
+		return false
+	}
+	if r.validated[hash] {
+		return true
+	}
+	_, err := r.GetMemory(ctx, hash)
+	return err == nil
 }

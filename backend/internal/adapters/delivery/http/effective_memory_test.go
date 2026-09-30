@@ -129,15 +129,17 @@ func TestEffectiveMemoryHTTPStaleCursorContract(t *testing.T) {
 	for _, tc := range []struct {
 		name, code string
 		err        error
+		status     int
 	}{
-		{"wrapped_stale", "memory_cursor_stale", fmt.Errorf("read failed: %w", domain.ErrEffectiveMemoryCursorStale)},
-		{"generic_conflict", "conflict", fmt.Errorf("%w: effective memory changed; restart without cursor", domain.ErrConflict)},
+		{"wrapped_stale", "memory_cursor_stale", fmt.Errorf("read failed: %w", domain.ErrEffectiveMemoryCursorStale), http.StatusConflict},
+		{"generic_conflict", "conflict", fmt.Errorf("%w: effective memory changed; restart without cursor", domain.ErrConflict), http.StatusConflict},
+		{"resource_limit", "memory_projection_limit", fmt.Errorf("read failed: %w", domain.ErrMemoryProjectionLimit), http.StatusUnprocessableEntity},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api.SetEffectiveMemory(effectiveMemoryQueryFunc(func(context.Context, domain.ContentHash, domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
 				return domain.EffectiveMemoryPage{}, tc.err
 			}))
-			checkError(t, "dev:test@t.io:Test", "page-two", http.StatusConflict, tc.code)
+			checkError(t, "dev:test@t.io:Test", "page-two", tc.status, tc.code)
 		})
 	}
 }

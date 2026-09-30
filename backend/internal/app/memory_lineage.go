@@ -21,114 +21,153 @@ type memoryProjectionWalker struct {
 	supplementSeen map[domain.ContentHash]bool
 	fingerprinter  *memoryProjectionFingerprinter
 	projection     domain.MemoryDigest
-	queued         []domain.MemoryDigest
+	accumulator    *domain.MemoryAccumulator
 	found          bool
 	complete       bool
+	err            error
 }
 
 func memoryProjectionFrom(ctx context.Context, store memoryProjectionStore, starts ...domain.ContentHash) (domain.MemoryDigest, bool) {
-	digest, found, _ := memoryProjectionFromDetailed(ctx, store, starts...)
+	digest, found, _, err := memoryProjectionFromDetailed(ctx, store, starts...)
+	if err != nil {
+		return domain.MemoryDigest{}, false
+	}
 	return digest, found
 }
 
-func memoryProjectionFromDetailed(ctx context.Context, store memoryProjectionStore, starts ...domain.ContentHash) (domain.MemoryDigest, bool, bool) {
+func memoryProjectionFromDetailed(ctx context.Context, store memoryProjectionStore, starts ...domain.ContentHash) (domain.MemoryDigest, bool, bool, error) {
 	walker := memoryProjectionWalker{
 		ctx: ctx, store: store,
 		seen: map[domain.ContentHash]bool{}, supplementSeen: map[domain.ContentHash]bool{},
 		fingerprinter: newMemoryProjectionFingerprinter(ctx, store), complete: true,
+		accumulator: domain.NewMemoryAccumulator(maxProjectionMemoryBytes),
 	}
 	for _, start := range starts {
 		walker.walk(start)
 	}
 	walker.flush()
-	return walker.projection, walker.found, walker.complete
+	return walker.projection, walker.found, walker.complete, walker.err
 }
 
+type memoryWalkFrame struct {
+	kind uint8
+	id   domain.ContentHash
+	snap domain.Snapshot // topology only; never retains an ancestor digest.
+}
+
+const (
+	memoryWalkNode uint8 = iota
+	memoryWalkSupplement
+	memoryWalkContribution
+	memoryWalkOpaque
+)
+const maxProjectionWalkFrames = 1 << 18
+
+// Explicit post-order actions preserve the old traversal order while releasing
+// each inspected archive before descending. A contribution reload is verified
+// by the store; no recursive frame keeps every cumulative ancestor alive.
 func (w *memoryProjectionWalker) walk(id domain.ContentHash) {
-	if id == "" || w.seen[id] {
-		return
-	}
-	w.seen[id] = true // Cycle guard: graft is mutable even though cycles are rejected at write time.
-	snap, err := w.store.GetSnapshot(w.ctx, id)
-	if err != nil {
-		w.complete = false
-		return // Partial local lineage: keep every available frontier.
-	}
-
-	digest, hasDigest := domain.MemoryDigest{}, false
-	if snap.MemoryHash != "" {
-		if loaded, loadErr := w.store.GetMemory(w.ctx, snap.MemoryHash); loadErr == nil {
-			digest, hasDigest = loaded, true
-		} else {
+	stack := []memoryWalkFrame{{kind: memoryWalkNode, id: id}}
+	push := func(ids []domain.ContentHash, kind uint8) {
+		if w.err != nil {
+			return
+		}
+		if len(ids) > maxProjectionWalkFrames-len(stack) {
+			w.err = domain.ErrMemoryProjectionLimit
 			w.complete = false
+			return
+		}
+		for i := len(ids) - 1; i >= 0; i-- {
+			stack = append(stack, memoryWalkFrame{kind: kind, id: ids[i]})
 		}
 	}
-	if hasDigest && w.memoryDigestCoversLineage(digest, snap) {
-		w.merge(digest)
-		return
-	}
-
-	if hasDigest && len(digest.Fragments) == 0 {
-		// A legacy cumulative digest already contains its natural lineage, but it
-		// may have been produced by the old first-BFS-winner algorithm and silently
-		// skipped a graft below that lineage. Scan natural ancestors only for such
-		// hidden graft supplements, project this snapshot's current grafts, then
-		// keep the nearest opaque digest once. This repairs old descendants without
-		// concatenating every historical cumulative summary again.
-		for _, parent := range snap.Parents {
-			w.scanLegacySupplements(parent)
+	for len(stack) > 0 && w.err == nil {
+		if err := w.ctx.Err(); err != nil {
+			w.err = err
+			w.complete = false
+			return
 		}
-		for _, parent := range snap.GraftParents {
-			w.walk(parent)
+		if len(stack) > maxProjectionWalkFrames {
+			w.err = domain.ErrMemoryProjectionLimit
+			w.complete = false
+			return
 		}
-		w.mergeLegacyOpaque(digest)
-		return
-	}
-
-	// No digest, or a modern fragment digest created against a stale/unknown
-	// graft register: reconstruct all current parent frontiers first. Fragment
-	// provenance then lets us append only this snapshot's own contribution, so
-	// superseded grafts are not retained.
-	for _, parent := range snap.ReachabilityParents() {
-		w.walk(parent)
-	}
-	if hasDigest {
-		if own, ok := w.retainedMemoryContribution(digest, snap); ok {
-			w.merge(own)
+		frame := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if frame.kind == memoryWalkContribution || frame.kind == memoryWalkOpaque {
+			digest, err := w.store.GetMemory(w.ctx, frame.snap.MemoryHash)
+			if err != nil {
+				w.complete = false
+				w.err = err
+				return
+			}
+			if frame.kind == memoryWalkOpaque {
+				w.mergeLegacyOpaque(digest)
+			} else if own, ok := w.retainedMemoryContribution(digest, frame.snap); ok {
+				w.merge(own)
+			}
+			continue
 		}
-	}
-}
-
-// scanLegacySupplements follows the natural chain assumed to be embedded in a
-// nearest opaque legacy digest and adds only graft branches that the old
-// single-winner projection could have skipped. This scan cannot stop at a
-// descendant digest's coverage: the outer opaque digest may predate a later
-// memory/graft update on that ancestor.
-func (w *memoryProjectionWalker) scanLegacySupplements(id domain.ContentHash) {
-	if id == "" || w.seen[id] || w.supplementSeen[id] {
-		return
-	}
-	w.supplementSeen[id] = true
-	snap, err := w.store.GetSnapshot(w.ctx, id)
-	if err != nil {
-		w.complete = false
-		return
-	}
-	for _, parent := range snap.Parents {
-		w.scanLegacySupplements(parent)
-	}
-	for _, parent := range snap.GraftParents {
-		w.walk(parent)
+		if frame.id == "" || w.seen[frame.id] {
+			continue
+		}
+		if frame.kind == memoryWalkSupplement {
+			if w.supplementSeen[frame.id] {
+				continue
+			}
+			w.supplementSeen[frame.id] = true
+		} else {
+			w.seen[frame.id] = true
+		}
+		snap, err := w.store.GetSnapshot(w.ctx, frame.id)
+		if err != nil {
+			w.complete = false
+			continue
+		}
+		if frame.kind == memoryWalkSupplement {
+			push(snap.GraftParents, memoryWalkNode)
+			push(snap.Parents, memoryWalkSupplement)
+			continue
+		}
+		var digest domain.MemoryDigest
+		hasDigest := false
+		if snap.MemoryHash != "" {
+			digest, err = w.store.GetMemory(w.ctx, snap.MemoryHash)
+			if err == nil {
+				hasDigest = true
+			} else {
+				w.complete = false
+			}
+		}
+		if hasDigest && w.memoryDigestCoversLineage(digest, snap) {
+			w.merge(digest)
+			continue
+		}
+		if hasDigest && len(digest.Fragments) == 0 {
+			digest = domain.MemoryDigest{}
+			stack = append(stack, memoryWalkFrame{kind: memoryWalkOpaque, snap: snap})
+			push(snap.GraftParents, memoryWalkNode)
+			push(snap.Parents, memoryWalkSupplement)
+			continue
+		}
+		digest = domain.MemoryDigest{}
+		if hasDigest {
+			stack = append(stack, memoryWalkFrame{kind: memoryWalkContribution, snap: snap})
+		}
+		push(snap.ReachabilityParents(), memoryWalkNode)
 	}
 }
 
 func (w *memoryProjectionWalker) merge(digest domain.MemoryDigest) {
-	if !w.found {
-		w.projection = digest
-		w.found = true
+	if w.err != nil {
 		return
 	}
-	w.queued = append(w.queued, digest)
+	if err := w.accumulator.Add(digest); err != nil {
+		w.err = err
+		w.complete = false
+		return
+	}
+	w.found = true
 }
 
 // mergeLegacyOpaque avoids recreating the historical cumulative-summary
@@ -137,19 +176,30 @@ func (w *memoryProjectionWalker) merge(digest domain.MemoryDigest) {
 // summary. Structured facts/tasks are still unioned explicitly, so narrative
 // containment cannot discard them. No fuzzy or semantic match is inferred.
 func (w *memoryProjectionWalker) flush() {
-	if len(w.queued) == 0 {
+	if w.err != nil || !w.found {
 		return
 	}
-	w.projection = domain.MergeDigestSequence(append([]domain.MemoryDigest{w.projection}, w.queued...)...)
-	w.queued = nil
+	var err error
+	w.projection, err = w.accumulator.Digest()
+	if err != nil {
+		w.err = err
+		w.complete = false
+	}
 }
 
 func (w *memoryProjectionWalker) mergeLegacyOpaque(digest domain.MemoryDigest) {
 	w.flush()
+	if w.err != nil {
+		return
+	}
 	if w.found && legacyDigestContainsProjectionNarrative(digest, w.projection) {
 		digest.KeyFacts = mergeExactStrings(w.projection.KeyFacts, digest.KeyFacts)
 		digest.OpenTasks = mergeExactStrings(w.projection.OpenTasks, digest.OpenTasks)
 		w.projection = digest
+		if err := w.accumulator.Reset(digest); err != nil {
+			w.err = err
+			w.complete = false
+		}
 		return
 	}
 	w.merge(digest)
@@ -381,6 +431,11 @@ func memorySourceReproducible(
 	sourceSnapshot, err := store.GetSnapshot(ctx, source)
 	if err != nil || sourceSnapshot.MemoryHash == "" {
 		return false
+	}
+	if verified, ok := store.(interface {
+		memoryValidated(context.Context, domain.ContentHash) bool
+	}); ok {
+		return verified.memoryValidated(ctx, sourceSnapshot.MemoryHash)
 	}
 	_, err = store.GetMemory(ctx, sourceSnapshot.MemoryHash)
 	return err == nil

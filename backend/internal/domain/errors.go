@@ -43,6 +43,10 @@ var ErrEffectiveMemoryCursorStale = fmt.Errorf("%w: effective memory changed; re
 // ErrValidation indicates an input format violation (422). Example: invalid slug username, incorrect visibility.
 var ErrValidation = errors.New("validation")
 
+// ErrMemoryProjectionLimit rejects derived memory that exceeds its bounded
+// retained payload, entry count, or rendered wire size (422).
+var ErrMemoryProjectionLimit = errors.New("memory projection limit exceeded")
+
 // ErrUnsupportedCIRVersion requires a peer upgrade before a document can be
 // transferred without changing its content hash.
 var ErrUnsupportedCIRVersion = errors.New("unsupported CIR version")

@@ -2772,7 +2772,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: Error code memory_cursor_stale identifies a continuation cursor whose bound state no longer matches the query. Restarting without the cursor requires reauthorizing and revalidating the original selection and observed content; the code does not prove revision-only drift. Other conflicts remain terminal and must not be classified by message text.
-        '422': { description: Invalid explicit selection, cursor or result bounds }
+        '422': { description: Invalid explicit selection, cursor or result bounds. memory_projection_limit identifies a bounded memory object, retained contribution, traversal or output limit; original memory is retained and no truncated result is returned. }
         '503': { description: Query unavailable }
 
   /repos/{repoID}/code-applicability:

@@ -152,7 +152,7 @@ func TestProjectMemoryBoundsAndCancellation(t *testing.T) {
 	if _, err := ProjectMemory(systemTestContext(), s, repo, prev); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("unbounded graph: %v", err)
 	}
-	reader := &projectionReader{source: s, repoID: repo, bytes: maxProjectionMemoryBytes, memories: map[domain.ContentHash]domain.MemoryDigest{}}
+	reader := &projectionReader{source: s, repoID: repo, objectLimit: 1, memories: map[domain.ContentHash]domain.MemoryDigest{}}
 	if _, err := reader.GetMemory(systemTestContext(), s.snapshots[0].MemoryHash); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("unbounded memory: %v", err)
 	}
