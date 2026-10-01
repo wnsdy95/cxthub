@@ -652,11 +652,18 @@ cxt --pull --context-budget full codex --yolo
 cxt --pull codex --yolo
 ```
 
-The final two commands have the same requested ceiling. **Strict native history
+The final two commands request the same 800,000-token package ceiling. Requests
+in 100k steps are supported. A verified runtime's total initial input is limited
+to 80% of its window; host input/framing is deducted before selecting recent
+complete turns. Required output reserves or an earlier compaction trigger can
+lower that limit further. Requested, effective and selected budgets are recorded
+separately, without shortening stored source records. **Strict native history
 launch is currently unavailable in the shipped runtime adapter:** no installed
 host/model/tokenizer combination has been verified. These commands report
-`provider_capability_unknown` before materializing or launching; they do not
-silently shrink the request or launch without context. The artifact path is
+`provider_capability_unknown` before materializing or launching; an unknown
+window is not replaced by a 1M guess or a hidden memory-only launch. Verified
+small-window adjustment is supported by the preparation policy, while the
+shipped runtime still lacks the required capability evidence. The artifact path is
 available for inspection. No global model-window or auto-compaction setting is
 changed. Native resume, provider help and noninteractive commands preserve their
 provider-owned behavior and receive no injected package.
