@@ -177,6 +177,10 @@ currently return `provider_capability_unknown` before starting the provider.
 Adaptive accounting does not enable an unverified runtime or invent provider
 acceptance.
 
+The preparatory [native Codex transport](NATIVE_HOST_TRANSPORT.md) has a separate
+owned-process and injection-acknowledgement contract. It remains unwired from
+the launch path until the runtime capability and interactive handoff gates pass.
+
 Inspectable artifacts are available without claiming native acceptance:
 
 ```sh
