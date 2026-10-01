@@ -44,6 +44,18 @@ func (s *LoadSessionService) materializeAgentPackage(ctx context.Context, in inb
 	if err := p.ValidateIdentity(); err != nil {
 		return inbound.LoadOutput{}, err
 	}
+	if in.Policy.Mode == "history" || p.Policy.Mode == "history" {
+		if p.Policy != in.Policy || p.Budget == nil || p.Capability != "verified_for_preparation" {
+			return inbound.LoadOutput{}, fmt.Errorf("%w: history delivery requires the original request and verified budget", domain.ErrProviderCapabilityUnknown)
+		}
+		model := in.Model
+		if model == "" {
+			model = p.Budget.Model
+		}
+		if err := p.Budget.Validate(in.Provider, model, in.Policy.BudgetTokens, p.Usage); err != nil {
+			return inbound.LoadOutput{}, err
+		}
+	}
 	cir, err := agentPackageCIR(p, in.Provider, in.Cwd)
 	if err != nil {
 		return inbound.LoadOutput{}, err

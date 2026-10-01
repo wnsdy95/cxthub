@@ -170,15 +170,18 @@ type AgentTokenUsage struct {
 // AgentHostCapability must come from a verified adapter, not a larger arbitrary
 // model_context_window setting. Prepared is not provider-accepted.
 type AgentHostCapability struct {
-	Provider          ProviderKind `json:"provider"`
-	Model             string       `json:"model"`
-	HostVersion       string       `json:"host_version"`
-	Evidence          string       `json:"evidence"`
-	Verified          bool         `json:"verified"`
-	ContextWindow     int          `json:"context_window"`
-	ReservedTokens    int          `json:"reserved_tokens"`
-	FramingTokens     int          `json:"framing_tokens"`
-	AutoCompactTokens int          `json:"auto_compact_tokens,omitempty"`
+	Provider        ProviderKind `json:"provider"`
+	Model           string       `json:"model"`
+	HostVersion     string       `json:"host_version"`
+	Evidence        string       `json:"evidence"`
+	Verified        bool         `json:"verified"`
+	ContextWindow   int          `json:"context_window"`
+	HostInputTokens int          `json:"host_input_tokens"`
+	HostInputKnown  bool         `json:"host_input_known"`
+	// Required output/reasoning/work space, separate from fixed host input.
+	ReservedTokens    int `json:"reserved_tokens"`
+	FramingTokens     int `json:"framing_tokens"`
+	AutoCompactTokens int `json:"auto_compact_tokens,omitempty"`
 	// Known is required even when automatic compaction is explicitly disabled.
 	// A missing/null host setting is not evidence of an unlimited threshold.
 	AutoCompactKnown bool   `json:"auto_compact_known"`
@@ -186,20 +189,11 @@ type AgentHostCapability struct {
 }
 
 func (c AgentHostCapability) Check(provider ProviderKind, model string, usage AgentTokenUsage) error {
-	if !c.Verified || !c.AutoCompactKnown || c.Provider != provider || c.Model != model || c.Model == "" || c.HostVersion == "" || c.Evidence == "" || c.ContextWindow <= 0 || c.ReservedTokens < 0 || c.FramingTokens < 0 || c.AutoCompactTokens < 0 || !usage.Exact || usage.Tokenizer == "" || usage.Tokenizer != c.Tokenizer {
-		return fmt.Errorf("%w: verified host/model/tokenizer and reserved input are required for history", ErrProviderCapabilityUnknown)
+	b, err := c.ResolveBudget(provider, model, MaxAgentContextTokens, usage)
+	if err != nil {
+		return err
 	}
-	if usage.Tokens < 0 || c.ReservedTokens > c.ContextWindow || c.FramingTokens > c.ContextWindow-c.ReservedTokens {
-		return fmt.Errorf("%w: invalid host reservations", ErrContextBudgetExceeded)
-	}
-	available := c.ContextWindow - c.ReservedTokens - c.FramingTokens
-	if c.AutoCompactTokens > 0 && c.AutoCompactTokens-c.ReservedTokens-c.FramingTokens < available {
-		available = c.AutoCompactTokens - c.ReservedTokens - c.FramingTokens
-	}
-	if usage.Tokens > available {
-		return fmt.Errorf("%w: selected %d tokens; host allows %d after reservations and compaction threshold; choose a smaller budget or a verified host", ErrContextBudgetExceeded, usage.Tokens, available)
-	}
-	return nil
+	return b.Validate(provider, model, MaxAgentContextTokens, usage)
 }
 
 type AgentContextPackage struct {
@@ -211,6 +205,8 @@ type AgentContextPackage struct {
 	Capability   string              `json:"capability"`
 	Delivery     string              `json:"delivery"`
 	ArtifactOnly bool                `json:"artifact_only,omitempty"`
+	// Optional so previously prepared package hashes remain unchanged.
+	Budget *AgentContextBudget `json:"budget,omitempty"`
 }
 
 // Artifact returns an inspectable package/receipt. Its metadata is not part of
@@ -254,7 +250,16 @@ func (p AgentContextPackage) ValidateIdentity() error {
 	if expected != p.ID {
 		return ErrHashMismatch
 	}
-	return p.Policy.Validate()
+	if err := p.Policy.Validate(); err != nil {
+		return err
+	}
+	if p.Budget != nil {
+		if p.Policy.Mode != "history" || p.ArtifactOnly || p.Capability != "verified_for_preparation" {
+			return ErrAgentContextUnavailable
+		}
+		return p.Budget.Validate(p.Budget.Provider, p.Budget.Model, p.Policy.BudgetTokens, p.Usage)
+	}
+	return nil
 }
 
 // IsAgentContextPackageText lets capture/distillation exclude synthetic input

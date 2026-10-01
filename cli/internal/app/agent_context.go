@@ -30,9 +30,9 @@ func NewAgentContextService(history inbound.HistoryQuery, memory outbound.Effect
 var _ inbound.PrepareAgentContext = (*AgentContextService)(nil)
 
 func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inbound.PrepareAgentContextInput) (domain.AgentContextPackage, error) {
-	// Only a repository revision race is retryable. Each attempt reauthorizes
-	// every source, while the first code/context selection remains fixed. Never
-	// treat a moved worktree, revoked permission or malformed source as contention.
+	// Repository revision or verified runtime-limit changes can reselect input.
+	// Each attempt reauthorizes sources and keeps the first code/context pinned.
+	// A moved worktree, revoked permission or malformed source is not contention.
 	var anchor *agentPreparationAnchor
 	if in.MemoryPin != nil {
 		pin := *in.MemoryPin
@@ -43,9 +43,10 @@ func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inboun
 	for attempt := 0; attempt < 3; attempt++ {
 		p, err = s.prepareAgentContext(ctx, in, &anchor)
 		var contention *agentRevisionContention
+		var runtimeChange *agentCapabilityContention
 		// Explicit personal work is imported and authorized outside this service.
 		// Do not retry its cached reader without a fresh provenance check.
-		if !errors.As(err, &contention) || in.PersonalScope.Complete() || in.WorkStatePath != "" {
+		if (!errors.As(err, &contention) && !errors.As(err, &runtimeChange)) || in.PersonalScope.Complete() || in.WorkStatePath != "" {
 			return p, err
 		}
 	}
@@ -63,6 +64,10 @@ type agentPreparationAnchor struct {
 type agentRevisionContention struct{ error }
 
 func (e *agentRevisionContention) Unwrap() error { return e.error }
+
+type agentCapabilityContention struct{ error }
+
+func (e *agentCapabilityContention) Unwrap() error { return e.error }
 
 func retryAgentRevision(message string) error {
 	return &agentRevisionContention{fmt.Errorf("%w: %s", domain.ErrSelectionChanged, message)}
@@ -100,6 +105,8 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		return p, domain.ErrUnsupportedProvider
 	}
 	var capability domain.AgentHostCapability
+	var budget *domain.AgentContextBudget
+	requestedModel := in.Model
 	if policy.Mode == "history" && !in.ArtifactOnly {
 		if s.tokens == nil || s.capabilities == nil {
 			return p, domain.ErrProviderCapabilityUnknown
@@ -109,13 +116,20 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if err != nil {
 			return p, err
 		}
+		if in.Model == "" {
+			// The runtime resolves its own default/profile/config model. Bind
+			// that identity locally before counting or selecting any material.
+			in.Model = capability.Model
+		}
 		probe, err := s.tokens.CountAgentTokens(ctx, in.Provider, in.Model, "")
 		if err != nil {
 			return p, err
 		}
-		if err = capability.Check(in.Provider, in.Model, probe); err != nil {
+		resolved, err := capability.ResolveBudget(in.Provider, in.Model, policy.BudgetTokens, probe)
+		if err != nil {
 			return p, err
 		}
+		budget = &resolved
 	}
 	query := inbound.HistoryQueryInput{Cwd: in.Cwd, Server: true, Position: in.SnapshotID, Branch: in.Branch}
 	view, err := s.history.QueryHistory(ctx, query)
@@ -131,7 +145,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	} else if (*anchor).position != selected.position || (*anchor).branch != selected.branch || (*anchor).code != selected.code || (*anchor).state != selected.state {
 		return p, fmt.Errorf("%w: original code/context selection changed between preparation attempts", domain.ErrSelectionChanged)
 	}
-	p = domain.AgentContextPackage{Version: domain.AgentContextVersion, Policy: policy, Delivery: "prepared", Capability: "not_verified_for_native_replay", ArtifactOnly: in.ArtifactOnly}
+	p = domain.AgentContextPackage{Version: domain.AgentContextVersion, Policy: policy, Delivery: "prepared", Capability: "not_verified_for_native_replay", ArtifactOnly: in.ArtifactOnly, Budget: budget}
 	if in.ArtifactOnly {
 		p.Capability = "unverified_artifact_only"
 	}
@@ -192,7 +206,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	if err != nil {
 		return domain.AgentContextPackage{}, err
 	}
-	memoryLimit := p.Policy.BudgetTokens
+	memoryLimit := p.EffectiveBudget()
 	if p.Policy.Mode == "history" && baseUsage.Tokens+domain.DefaultMemoryContextTokens < memoryLimit {
 		memoryLimit = baseUsage.Tokens + domain.DefaultMemoryContextTokens
 	}
@@ -291,6 +305,9 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if err = capability.Check(in.Provider, in.Model, usage); err != nil {
 			return domain.AgentContextPackage{}, err
 		}
+		if err = p.Budget.Validate(in.Provider, in.Model, policy.BudgetTokens, usage); err != nil {
+			return domain.AgentContextPackage{}, err
+		}
 		p.Capability = "verified_for_preparation"
 	}
 	// Reauthorize both reads after body selection. A generation move, revoked
@@ -325,6 +342,27 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		}
 		if check.StateHash != state {
 			return domain.AgentContextPackage{}, domain.ErrSelectionChanged
+		}
+	}
+	if p.Budget != nil {
+		current, err := s.capabilities.AgentCapability(ctx, in.Provider, requestedModel)
+		if err != nil {
+			return domain.AgentContextPackage{}, err
+		}
+		model := requestedModel
+		if model == "" {
+			model = current.Model
+		}
+		probe, err := s.tokens.CountAgentTokens(ctx, in.Provider, model, "")
+		if err != nil {
+			return domain.AgentContextPackage{}, err
+		}
+		latest, err := current.ResolveBudget(in.Provider, model, policy.BudgetTokens, probe)
+		if err != nil {
+			return domain.AgentContextPackage{}, err
+		}
+		if latest != *p.Budget {
+			return domain.AgentContextPackage{}, &agentCapabilityContention{fmt.Errorf("%w: verified runtime limits changed during selection; reprepare recent input", domain.ErrProviderCapabilityUnknown)}
 		}
 	}
 	p.ID, err = p.Digest()
@@ -375,8 +413,11 @@ func (s *AgentContextService) measure(ctx context.Context, in inbound.PrepareAge
 	if usage.Tokens <= 0 || usage.Tokenizer == "" || p.Policy.Mode == "history" && !in.ArtifactOnly && !usage.Exact {
 		return usage, domain.ErrProviderCapabilityUnknown
 	}
-	if usage.Tokens > p.Policy.BudgetTokens {
-		return usage, fmt.Errorf("%w: required package %d, budget %d; exact user conditions are never truncated", domain.ErrContextBudgetExceeded, usage.Tokens, p.Policy.BudgetTokens)
+	if p.Budget != nil && usage.Tokenizer != p.Budget.Tokenizer {
+		return usage, fmt.Errorf("%w: token counter changed during selection", domain.ErrProviderCapabilityUnknown)
+	}
+	if usage.Tokens > p.EffectiveBudget() {
+		return usage, fmt.Errorf("%w: required package %d, effective budget %d (requested %d); exact user conditions are never truncated", domain.ErrContextBudgetExceeded, usage.Tokens, p.EffectiveBudget(), p.Policy.BudgetTokens)
 	}
 	return usage, nil
 }

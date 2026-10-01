@@ -145,7 +145,12 @@ func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
 			if p.Usage.Exact {
 				measurement = "exact"
 			}
-			return delivcli.PreparedProviderLaunch{Args: args, SessionID: id, PackageHash: p.ID, CodeCommit: p.Content.Selection.CodeCommit, SourceRevision: string(p.Content.Selection.ContextStateHash), SelectedTokens: p.Usage.Tokens, TokenMeasurement: measurement, Capability: p.Capability,
+			var budget *domain.AgentContextBudget
+			if p.Budget != nil {
+				copy := *p.Budget
+				budget = &copy
+			}
+			return delivcli.PreparedProviderLaunch{Args: args, SessionID: id, PackageHash: p.ID, CodeCommit: p.Content.Selection.CodeCommit, SourceRevision: string(p.Content.Selection.ContextStateHash), SelectedTokens: p.Usage.Tokens, TokenMeasurement: measurement, Capability: p.Capability, Budget: budget,
 				Validate: func(ctx context.Context) error {
 					return preparer.validateAgentDelivery(ctx, req.Cwd, p.Content.Selection)
 				},

@@ -10,7 +10,7 @@ func TestAgentContextHistoryBudgets(t *testing.T) {
 	for _, test := range []struct {
 		input string
 		want  int
-	}{{"", 800000}, {"full", 800000}, {"800k", 800000}, {"200k", 200000}, {"1", 1}, {"800000", 800000}} {
+	}{{"", 800000}, {"full", 800000}, {"100k", 100000}, {"200k", 200000}, {"300k", 300000}, {"400k", 400000}, {"500k", 500000}, {"600k", 600000}, {"700k", 700000}, {"800k", 800000}, {"1", 1}, {"800000", 800000}} {
 		got, err := ParseHistoryBudget(test.input)
 		if err != nil || got != test.want {
 			t.Fatalf("%q: %d %v", test.input, got, err)
@@ -25,7 +25,7 @@ func TestAgentContextHistoryBudgets(t *testing.T) {
 
 func TestAgentContextCapabilityDoesNotFabricateHostAcceptance(t *testing.T) {
 	usage := AgentTokenUsage{Tokens: 100, Exact: true, Tokenizer: "fixture"}
-	capability := AgentHostCapability{Provider: ProviderCodex, Model: "fixture", HostVersion: "fixture-v1", Evidence: "synthetic test only", Verified: true, AutoCompactKnown: true, ContextWindow: 1000, ReservedTokens: 100, FramingTokens: 10, AutoCompactTokens: 800, Tokenizer: "fixture"}
+	capability := AgentHostCapability{Provider: ProviderCodex, Model: "fixture", HostVersion: "fixture-v1", Evidence: "synthetic test only", Verified: true, HostInputKnown: true, AutoCompactKnown: true, ContextWindow: 1000, ReservedTokens: 100, HostInputTokens: 100, FramingTokens: 10, AutoCompactTokens: 800, Tokenizer: "fixture"}
 	if err := capability.Check(ProviderCodex, "fixture", usage); err != nil {
 		t.Fatal(err)
 	}

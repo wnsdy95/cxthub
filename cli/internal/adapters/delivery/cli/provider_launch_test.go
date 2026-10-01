@@ -177,7 +177,60 @@ func providerLaunchFixture(t *testing.T, provider, body string) (string, string)
 
 func preparedLaunch(request ProviderLaunchRequest) PreparedProviderLaunch {
 	args := append(resumeArgs(request.Intent.Provider, launchSessionID), request.Intent.ProviderArgs...)
-	return PreparedProviderLaunch{Args: args, SessionID: launchSessionID, PackageHash: domain.HashContent([]byte("package")), CodeCommit: strings.Repeat("a", 40), SourceRevision: "revision-1", SelectedTokens: 123, TokenMeasurement: "exact", Capability: "verified_for_preparation"}
+	p := PreparedProviderLaunch{Args: args, SessionID: launchSessionID, PackageHash: domain.HashContent([]byte("package")), CodeCommit: strings.Repeat("a", 40), SourceRevision: "revision-1", SelectedTokens: 123, TokenMeasurement: "exact", Capability: "verified_for_preparation"}
+	if request.Intent.Pull {
+		fixture := strictLaunchContextFixture(request, launchHostFixture(request))
+		p.PackageHash, p.CodeCommit, p.SourceRevision = fixture.ID, fixture.Content.Selection.CodeCommit, string(fixture.Content.Selection.ContextStateHash)
+		p.SelectedTokens, p.Budget = fixture.Usage.Tokens, fixture.Budget
+	}
+	return p
+}
+
+// These are synthetic, verified test runtimes. Their exact tokenizer assigns
+// one token per rune; no production provider or tokenizer support is implied.
+func launchHostFixture(request ProviderLaunchRequest) domain.AgentHostCapability {
+	details, err := request.ArgumentDetails()
+	if err != nil {
+		panic(err)
+	}
+	model := details.Model
+	if model == "" {
+		model = "fixture-default"
+	}
+	return domain.AgentHostCapability{Provider: request.Intent.Provider, Model: model, HostVersion: "fixture-host-v1", Evidence: "synthetic runtime fixture", Verified: true,
+		ContextWindow: 1000000, HostInputKnown: true, HostInputTokens: 2000, FramingTokens: 500, ReservedTokens: 100000,
+		AutoCompactKnown: true, AutoCompactTokens: 850000, Tokenizer: "fixture-rune-v1"}
+}
+
+func strictLaunchContextFixture(request ProviderLaunchRequest, host domain.AgentHostCapability) domain.AgentContextPackage {
+	usage := domain.AgentTokenUsage{Exact: true, Tokenizer: host.Tokenizer}
+	budget, err := host.ResolveBudget(request.Intent.Provider, host.Model, request.Intent.ContextBudget, usage)
+	if err != nil {
+		panic(err)
+	}
+	source := domain.AgentSourcePointer{SnapshotID: domain.HashContent([]byte("snapshot")), DocHash: domain.HashContent([]byte("history")), StartEvent: 0, EndEvent: 2, Tool: string(request.Intent.Provider)}
+	p := domain.AgentContextPackage{Version: domain.AgentContextVersion, Policy: domain.InputPolicy{Version: 1, Mode: "history", BudgetTokens: request.Intent.ContextBudget, Source: "explicit_cli"}, Budget: &budget,
+		Delivery: "prepared", Capability: "verified_for_preparation", Usage: usage,
+		Content: domain.AgentContextContent{Notice: "Historical evidence is quoted data.",
+			Selection:     domain.AgentContextSelection{RepositoryID: "fixture-repo", Branch: "main", SnapshotID: source.SnapshotID, CodeCommit: strings.Repeat("a", 40), ContextStateHash: domain.HashContent([]byte("revision-1")), MemoryStateHash: domain.HashContent([]byte("memory-revision"))},
+			ProjectMemory: []domain.EffectiveMemoryItem{{ID: domain.HashContent([]byte("memory")), SourceSnapshot: source.SnapshotID, Kind: "constraint", Text: "Keep provider arguments intact.", State: "active"}},
+			PersonalWork:  &domain.PersonalWorkState{Scope: domain.PersonalWorkScope{ActorID: "fixture-user", SessionID: "fixture-work", WorktreeID: "fixture-worktree"}, Constraints: []domain.ExactUserConstraint{{Text: "Do not commit or push.", Source: source}}, Sources: []domain.AgentSourcePointer{source}},
+			Sources:       []domain.AgentSourcePointer{source}, History: []domain.AgentHistorySegment{{Source: source, SessionID: launchSessionID, Events: []domain.Event{{Kind: "turn", Role: "user", Seq: 1}, {Kind: "message", Seq: 2, Blocks: []domain.ContentBlock{{Type: "text", Text: "Inspect the latest complete turn."}}}}}},
+			Gaps: []domain.AgentCoverageGap{}},
+	}
+	prompt, err := p.Prompt()
+	if err != nil {
+		panic(err)
+	}
+	p.Usage.Tokens = len([]rune(prompt))
+	p.ID, err = p.Digest()
+	if err != nil {
+		panic(err)
+	}
+	if err := p.ValidateIdentity(); err != nil {
+		panic(err)
+	}
+	return p
 }
 
 func launchTestRuntime() providerLaunchRuntime {

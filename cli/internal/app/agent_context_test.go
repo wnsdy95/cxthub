@@ -77,7 +77,7 @@ func (agentTokenFixture) CountAgentTokens(ctx context.Context, p domain.Provider
 type agentCapabilityFixture struct{ window int }
 
 func (f agentCapabilityFixture) AgentCapability(ctx context.Context, p domain.ProviderKind, model string) (domain.AgentHostCapability, error) {
-	return domain.AgentHostCapability{Provider: p, Model: model, HostVersion: "test", Verified: true, AutoCompactKnown: true, Evidence: "synthetic fixture; not real host support", ContextWindow: f.window, ReservedTokens: 100, FramingTokens: 10, Tokenizer: "fixture-byte-counter"}, ctx.Err()
+	return domain.AgentHostCapability{Provider: p, Model: model, HostVersion: "test", Verified: true, HostInputKnown: true, AutoCompactKnown: true, Evidence: "synthetic fixture; not real host support", ContextWindow: f.window, ReservedTokens: 100, FramingTokens: 10, Tokenizer: "fixture-byte-counter"}, ctx.Err()
 }
 func agentHash(s string) domain.ContentHash { return domain.HashContent([]byte(s)) }
 func agentDocument(t testing.TB, session string, events ...domain.Event) domain.SessionDoc {

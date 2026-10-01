@@ -59,6 +59,7 @@ type PreparedProviderLaunch struct {
 	// Bootstrap proves an authorized empty repository, including a genuine
 	// unborn Git branch when CodeCommit is empty. Validate must recheck it.
 	Bootstrap        *domain.AgentBootstrapProof
+	Budget           *domain.AgentContextBudget
 	Args             []string
 	SessionID        string
 	PackageHash      domain.ContentHash
@@ -78,6 +79,7 @@ type PreparedProviderLaunch struct {
 
 type ProviderLaunchReceipt struct {
 	Bootstrap        *domain.AgentBootstrapProof `json:"bootstrap,omitempty"`
+	Budget           *domain.AgentContextBudget  `json:"budget,omitempty"`
 	Version          int                         `json:"version"`
 	Provider         domain.ProviderKind         `json:"provider"`
 	PackageHash      domain.ContentHash          `json:"package_hash,omitempty"`
@@ -208,12 +210,19 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 			if !prewarmed {
 				warmAgentIndexContext(ctx, bin, intent.Provider, selectionCwd, prepared.SessionID)
 			}
-			if err = validateReadyLaunch(ctx, selectionCwd, start, prepared); err != nil {
+			if err = validateReadyLaunch(ctx, request, start, prepared); err != nil {
 				cleanup()
 				return launchFailure(ctx, hooks, receipt, true, err)
 			}
-			fmt.Fprintf(runtime.stderr, "cxt: mode=%s budget=%d selected_tokens=%d code=%s revision=%s capability=%s delivery=prepared (provider acceptance unknown)\n",
-				receipt.Mode, receipt.RequestedBudget, receipt.SelectedTokens, receipt.CodeCommit, receipt.SourceRevision, receipt.Capability)
+			limits := ""
+			if b := receipt.Budget; b != nil {
+				limits = fmt.Sprintf(" model=%q effective_budget=%d initial_input_limit=%d host_input_tokens=%d framing_tokens=%d reserved_tokens=%d context_window=%d", b.Model, b.EffectiveTokens, b.InitialInputLimit, b.HostInputTokens, b.FramingTokens, b.ReservedTokens, b.ContextWindow)
+				if b.AdjustmentReason != "" {
+					limits += " adjustment=" + b.AdjustmentReason
+				}
+			}
+			fmt.Fprintf(runtime.stderr, "cxt: mode=%s budget=%d selected_tokens=%d%s code=%s revision=%s capability=%s delivery=prepared (provider acceptance unknown)\n",
+				receipt.Mode, receipt.RequestedBudget, receipt.SelectedTokens, limits, receipt.CodeCommit, receipt.SourceRevision, receipt.Capability)
 		}
 		if err := ctx.Err(); err != nil {
 			cleanup()
@@ -235,8 +244,13 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 		done := make(chan error, 1)
 		go func() { done <- child.Wait() }()
 		if managed {
+			if err := validatePreparedProviderLaunch(request, prepared); err != nil {
+				stopProviderChild(child, done)
+				cleanup()
+				return launchFailure(ctx, hooks, receipt, true, err)
+			}
 			receipt.State = "launched"
-			if err := hooks.Record(ctx, receipt); err != nil {
+			if err := hooks.Record(ctx, cloneProviderLaunchReceipt(receipt)); err != nil {
 				stopProviderChild(child, done)
 				cleanup()
 				return launchFailure(ctx, hooks, receipt, true, fmt.Errorf("%w: provider started but its delivery receipt could not be persisted: %w", domain.ErrDeliveryFailed, err))
@@ -274,7 +288,7 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 						p, r, prepareErr := prepareProviderLaunch(ctx, restart, hooks)
 						if prepareErr == nil {
 							warmAgentIndexContext(ctx, bin, intent.Provider, selectionCwd, p.SessionID)
-							prepareErr = validateReadyLaunch(ctx, selectionCwd, observed, p)
+							prepareErr = validateReadyLaunch(ctx, restart, observed, p)
 							if prepareErr != nil && p.Cleanup != nil {
 								_ = p.Cleanup()
 							}
@@ -329,8 +343,8 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 	}
 }
 
-func validateReadyLaunch(ctx context.Context, cwd string, observed time.Time, prepared PreparedProviderLaunch) error {
-	if newBoundarySince(cwd, observed) {
+func validateReadyLaunch(ctx context.Context, request ProviderLaunchRequest, observed time.Time, prepared PreparedProviderLaunch) error {
+	if newBoundarySince(request.Cwd, observed) {
 		return fmt.Errorf("%w: context changed during launch preparation", domain.ErrSelectionChanged)
 	}
 	if prepared.Validate != nil {
@@ -338,7 +352,10 @@ func validateReadyLaunch(ctx context.Context, cwd string, observed time.Time, pr
 			return err
 		}
 	}
-	if newBoundarySince(cwd, observed) {
+	if err := validatePreparedProviderLaunch(request, prepared); err != nil {
+		return err
+	}
+	if newBoundarySince(request.Cwd, observed) {
 		return fmt.Errorf("%w: context changed during launch validation", domain.ErrSelectionChanged)
 	}
 	return ctx.Err()
@@ -370,6 +387,8 @@ func prepareProviderLaunch(ctx context.Context, request ProviderLaunchRequest, h
 	request.Intent.ProviderArgs = append([]string(nil), originalArgs...)
 	prepared, err := hooks.Prepare(ctx, request)
 	request.Intent.ProviderArgs = originalArgs
+	prepared.Budget = cloneAgentContextBudget(prepared.Budget)
+	receipt.Budget = cloneAgentContextBudget(prepared.Budget)
 	receipt.PackageHash, receipt.CodeCommit, receipt.SourceRevision = prepared.PackageHash, prepared.CodeCommit, prepared.SourceRevision
 	if prepared.Bootstrap != nil {
 		proof := *prepared.Bootstrap
@@ -390,7 +409,7 @@ func prepareProviderLaunch(ctx context.Context, request ProviderLaunchRequest, h
 		return prepared, receipt, launchFailure(ctx, hooks, receipt, true, fmt.Errorf("CXT context preparation failed; %s was not started: %w", request.Intent.Provider, err))
 	}
 	receipt.State = "prepared"
-	if err := hooks.Record(ctx, receipt); err != nil {
+	if err := hooks.Record(ctx, cloneProviderLaunchReceipt(receipt)); err != nil {
 		if prepared.Cleanup != nil {
 			_ = prepared.Cleanup()
 		}
@@ -435,11 +454,45 @@ func validatePreparedProviderLaunch(request ProviderLaunchRequest, prepared Prep
 		if prepared.TokenMeasurement != "exact" {
 			return fmt.Errorf("%w: history requires exact token accounting", domain.ErrProviderCapabilityUnknown)
 		}
-		if prepared.SelectedTokens > request.Intent.ContextBudget {
-			return fmt.Errorf("%w: history requires an exact token count within the requested budget (%d selected, %d requested)", domain.ErrContextBudgetExceeded, prepared.SelectedTokens, request.Intent.ContextBudget)
+		if prepared.Budget == nil {
+			return fmt.Errorf("%w: history requires verified preparation budget accounting", domain.ErrProviderCapabilityUnknown)
 		}
+		inv, err := inspectLaunchIntent(request.Intent)
+		if err != nil {
+			return err
+		}
+		model := inv.Model
+		if model == "" {
+			// The parser's retained settings exclude literal prompts. An empty
+			// explicit model must not be treated as a resolved host default.
+			for _, arg := range inv.RestartArgs {
+				if arg == "--model" || strings.HasPrefix(arg, "--model=") || request.Intent.Provider == domain.ProviderCodex && (arg == "-m" || strings.HasPrefix(arg, "-m=")) {
+					return fmt.Errorf("%w: explicit history model must match the resolved preparation model", domain.ErrProviderCapabilityUnknown)
+				}
+			}
+			model = prepared.Budget.Model
+		}
+		usage := domain.AgentTokenUsage{Tokens: prepared.SelectedTokens, Exact: true, Tokenizer: prepared.Budget.Tokenizer}
+		if err := prepared.Budget.Validate(request.Intent.Provider, model, request.Intent.ContextBudget, usage); err != nil {
+			return err
+		}
+	} else if prepared.Budget != nil {
+		return fmt.Errorf("%w: preparation budget accounting is only valid for history delivery", domain.ErrDeliveryFailed)
 	}
 	return nil
+}
+
+func cloneAgentContextBudget(budget *domain.AgentContextBudget) *domain.AgentContextBudget {
+	if budget == nil {
+		return nil
+	}
+	copy := *budget
+	return &copy
+}
+
+func cloneProviderLaunchReceipt(receipt ProviderLaunchReceipt) ProviderLaunchReceipt {
+	receipt.Budget = cloneAgentContextBudget(receipt.Budget)
+	return receipt
 }
 
 func launchFailure(ctx context.Context, hooks ProviderLaunchHooks, receipt ProviderLaunchReceipt, managed bool, cause error) error {
@@ -449,7 +502,7 @@ func launchFailure(ctx context.Context, hooks ProviderLaunchHooks, receipt Provi
 	receipt.State, receipt.Failure = "failed", cause.Error()
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
-	if err := hooks.Record(recordCtx, receipt); err != nil {
+	if err := hooks.Record(recordCtx, cloneProviderLaunchReceipt(receipt)); err != nil {
 		return errors.Join(cause, fmt.Errorf("%w: persist failed delivery receipt: %w", domain.ErrDeliveryFailed, err))
 	}
 	return cause

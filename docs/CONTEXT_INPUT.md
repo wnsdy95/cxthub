@@ -108,11 +108,33 @@ cxt --pull --context-budget full codex --yolo
 cxt --pull codex --yolo
 ```
 
-The last two requests have the same 800,000-token ceiling. This ceiling does not
-claim that the selected model or host accepts 800,000 tokens. History is quoted
-evidence in a new package, not decoded opaque reasoning or native state replay.
+The last two requests both ask for 800,000 tokens: `full` is the original
+requested budget, not a promise of 800,000 tokens of input. Budgets can be chosen
+in 100k steps (`100k`, `200k`, through `800k`); `k` means 1,000 tokens. Smaller
+positive token counts are also accepted. History is quoted evidence in a new
+package, not decoded opaque reasoning or native state replay.
 Native resume, help and noninteractive provider commands preserve their own
 argument and session semantics; incompatible context prefixes fail.
+
+For a verified runtime, preparation resolves the actual model and its context
+window `W` before selecting history. Total initial input must be at most
+`floor(0.8 * W)`, including host system instructions, tools, prompt and other
+fixed host input, package framing, project memory, exact personal constraints,
+provenance and selected history. Required output/reasoning/work capacity is
+reserved separately: initial input is also limited by `W - reserved_tokens`.
+It is not deducted again from the twenty percent already left outside the
+80-percent input limit. A known automatic-compaction trigger further caps total
+initial input strictly below that trigger.
+
+The effective package budget is the smaller of the original request and the
+remaining initial-input capacity after host input and framing. The package keeps
+the original request in `policy.budget_tokens`; its optional `budget` records the
+resolved provider/model, host version, tokenizer, requested/effective limits,
+window, host input, framing, output reserve, compaction threshold and adjustment
+reason. Launch summaries show the effective limit and any adjustment. An
+explicit provider `--model` must match this accounting; without that option,
+accounting uses the runtime's resolved model. A model/window override alone is
+not verified host or tokenizer evidence.
 
 The cloud reader requests complete newest-first turns from
 `GET /repos/{repoID}/docs/{hash}/turns`. Each page is separately authorized and
@@ -121,28 +143,39 @@ and at most 4 MiB of event JSON. The response's turn hashes validate its wire
 bodies; they are not an independent proof of the full document hash. An exact
 same-provider/session prefix proof can skip an older cumulative source.
 
-The package builder stops reading when the next complete turn exceeds its
-budget, keeps tool calls and results together, and renders selected turns in
-chronological order. A turn exceeding the transfer byte bound is reported as
-such, separately from token capacity. No source archive is shortened. Context
-and memory authorization/revisions are checked again before materialization.
+The package builder selects the latest complete turns that fit the effective
+budget, stops reading when the next complete turn exceeds it, keeps tool calls
+and results together, and renders selected turns in chronological order.
+Mandatory memory, exact personal constraints and provenance must fit first;
+constraints are never shortened. If mandatory content or the newest complete
+turn cannot fit, the explicit history request fails without a quiet memory-only
+fallback. A turn exceeding the transfer byte bound is reported separately from
+token capacity. No source archive is shortened. Context and memory
+authorization/revisions are checked again before materialization.
 
-If only the server revision changes while preparing input, the reader makes at
-most three complete attempts. It fixes the original snapshot, branch, code and
+If the server revision or verified runtime limits change while preparing input,
+the reader makes at most three complete attempts in total. Changed runtime
+limits discard the old selection and reselect recent turns with the new budget.
+It fixes the original snapshot, branch, code and
 context content across those attempts, discards partial pages, and reauthorizes
 the reads. An observed selection change, denied access or invalid source stops
-immediately. Persistent contention still returns `position_changed`. Explicit
+immediately. Exhausted server-revision contention returns `position_changed`;
+exhausted runtime-limit/model contention returns `provider_capability_unknown`. Explicit
 personal work does not use this retry because its imported provenance must be
 checked again by a new invocation. A typed `memory_cursor_stale` response for a
 continuation page restarts within that same attempt budget. Generic conflicts
 and cursor errors on the initial page remain terminal. Older servers returning
 a generic conflict require a new invocation.
 
-Strict native history delivery requires verified host/model capacity, tokenizer,
-framing reservations and compaction threshold. **This build does not yet ship a
-verified native combination**, so the three launch examples above currently
-return `provider_capability_unknown` before starting the provider. It never
-substitutes a smaller hidden budget or launches an empty session.
+Strict native history delivery requires verified host/model capacity, known host
+input, an exact tokenizer, framing/output reservations and a known compaction
+threshold. Before preparation and launch receipts are recorded, delivery checks
+that budget accounting reproduces the original request, provider, model and
+exact selected-token count within the effective limit. **This build does not yet
+ship a verified native combination**, so the three launch examples above
+currently return `provider_capability_unknown` before starting the provider.
+Adaptive accounting does not enable an unverified runtime or invent provider
+acceptance.
 
 Inspectable artifacts are available without claiming native acceptance:
 
@@ -151,10 +184,12 @@ cxt load --provider codex --context-budget 200k --output context.json
 cxt load --provider codex --context-budget full --output context-full.json
 ```
 
-Artifacts use the explicitly inexact byte counter, preserve selection and
-source provenance, and cannot be relabelled as launchable by changing one field.
-Prepared and launched delivery receipts are separate; acceptance stays unknown
-without provider evidence. Current-context mutation is never part of `load`.
+This separate artifact path uses the explicitly inexact byte counter and the
+requested budget, preserves selection and source provenance, and cannot be
+relabelled as launchable by changing one field. Prepared and launched delivery
+receipts preserve a copy of verified budget accounting when present; memory and
+empty-bootstrap receipts omit it. Acceptance stays unknown without provider
+evidence. Current-context mutation is never part of `load`.
 
 ## Local state and compatibility
 
