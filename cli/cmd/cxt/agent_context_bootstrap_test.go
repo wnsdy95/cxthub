@@ -50,7 +50,7 @@ func newEmptyBootstrapFixture(t *testing.T, unborn bool) *emptyBootstrapFixture 
 		f.reads++
 		mode := f.mode
 		f.mu.Unlock()
-		if r.Method != "GET" || !strings.HasSuffix(r.URL.Path, "/context-query") || r.URL.RawQuery != "scope=all" || r.Header.Get("Authorization") != "Bearer fixture-token" {
+		if r.Method != "GET" || !strings.HasSuffix(r.URL.Path, "/context-query") || (r.URL.RawQuery != "scope=all" && mode != "nonempty" && mode != "history") || r.Header.Get("Authorization") != "Bearer fixture-token" {
 			t.Errorf("unexpected bootstrap request: %s %s", r.Method, r.URL)
 		}
 		switch mode {
@@ -350,5 +350,19 @@ func TestEmptyBootstrapNeverHandlesExplicitOrPinnedSelection(t *testing.T) {
 				t.Fatalf("non-bootstrap selection handled: %+v handled=%v err=%v reads=%d", p, handled, err, f.readCount())
 			}
 		})
+	}
+}
+
+func TestEmptyBootstrapDefersNonemptyServerToLatestMainEvenWhenDetached(t *testing.T) {
+	for _, detached := range []bool{false, true} {
+		f := newEmptyBootstrapFixture(t, false)
+		if detached {
+			selectionGit(t, f.root, "switch", "--detach", "HEAD")
+		}
+		f.setMode("nonempty")
+		_, handled, err := f.runtime.prepareEmptyBootstrap(context.Background(), f.cfg, f.request(domain.ProviderCodex))
+		if handled || err != nil || f.readCount() != 1 {
+			t.Fatalf("nonempty server blocked latest-main preparation: handled=%v err=%v reads=%d", handled, err, f.readCount())
+		}
 	}
 }

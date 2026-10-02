@@ -950,13 +950,9 @@ func hasProcessAncestor(start, want int, parent func(int) (int, bool)) bool {
 	return false
 }
 
-// hookLoadMode is the load fidelity of the hook path (no flag): local load.mode > server personal setting.
-func hookLoadMode(cwd string) string {
-	if v := remotecfg.LoadMode(cwd); v != "" {
-		return v
-	}
-	return serverLoadMode(cwd)
-}
+// Git transitions prepare managed latest-main input. A saved replay preference
+// must not silently substitute the selected branch's archived conversation.
+func hookLoadMode(_ string) string { return "" }
 
 // claudeSessionFiles returns all Claude session files (*.jsonl) in the cwd (for isolation).
 func claudeSessionFiles(cwd string) []string {

@@ -37,6 +37,14 @@ func (s *HistoryQueryService) ObserveLocalHistory(ctx context.Context, cwd strin
 
 func (s *HistoryQueryService) queryHistory(ctx context.Context, in inbound.HistoryQueryInput, catalogRevision *domain.ContentHash) (domain.HistoryQueryResult, error) {
 	out := domain.HistoryQueryResult{Version: domain.QueryContractVersion, Snapshots: []domain.Snapshot{}, Missing: []domain.ContentHash{}, Selection: domain.HistorySelection{Ref: "HEAD", Scope: "current", Source: "local_ancestry"}}
+	if in.ServerTip {
+		if !in.Server || in.Branch == "" || in.Branch == "HEAD" || in.Ref != "" || in.Position != "" || in.All || in.Retained {
+			return out, fmt.Errorf("invalid_arguments: server tip requires server and an explicit non-HEAD branch without ref, position, all or retained")
+		}
+		if err := domain.ValidateBranchName(in.Branch); err != nil {
+			return out, err
+		}
+	}
 	if (in.All && in.Retained) || ((in.All || in.Retained) && (in.Ref != "" || in.Branch != "" || in.Position != "")) || (in.Ref != "" && in.Branch != "") || in.Server && (in.All || in.Retained) {
 		return out, fmt.Errorf("invalid_arguments: incompatible history scopes")
 	}
@@ -46,6 +54,12 @@ func (s *HistoryQueryService) queryHistory(ctx context.Context, in inbound.Histo
 	repo, err := s.git.CurrentRepo(ctx, in.Cwd)
 	if err != nil {
 		return out, err
+	}
+	if in.ServerTip {
+		out.Selection.Ref = in.Branch
+		// The authorized server resolves the branch's current tip and code commit.
+		// Local aliases, refs, cursor and Git position are not selection inputs.
+		return s.queryServerHistory(ctx, string(repo.ID), domain.ContextSelection{Branch: in.Branch, Position: in.Branch, Scope: "current"}, out)
 	}
 	name := in.Ref
 	if in.Branch != "" {
@@ -138,39 +152,7 @@ func (s *HistoryQueryService) queryHistory(ctx context.Context, in inbound.Histo
 		if position == "" {
 			return out, domain.ErrNotFound
 		}
-		view, e := s.remote.QueryContext(ctx, string(repo.ID), domain.ContextSelection{Branch: branch, Position: position, CodeCommit: code, Scope: "current"})
-		if e != nil {
-			return out, e
-		}
-		if e = domain.ValidateContextQuery(string(repo.ID), domain.ContextSelection{Position: string(target), CodeCommit: code}, view); e != nil {
-			return out, e
-		}
-		if view.Branch != branch {
-			return out, domain.ErrSelectionChanged
-		}
-		out.Selection.Source = "server"
-		out.Selection.CodeCommit = code
-		if view.Inclusion != nil {
-			out.Selection.CodeCommit = view.Inclusion.CodeCommit
-		}
-		out.Selection.Branch = view.Branch
-		out.StateHash = view.StateHash
-		out.Revision = &view.Revision
-		out.Position = view.Position
-		out.Snapshots = view.Snapshots
-		out.Inclusion = view.Inclusion
-		out.ServerChecked = true
-		out.Complete = true
-		if view.Inclusion == nil {
-			out.Complete = false
-		} else {
-			for _, m := range view.Inclusion.Merges {
-				if m.State == "review" {
-					out.Complete = false
-				}
-			}
-		}
-		return out, nil
+		return s.queryServerHistory(ctx, string(repo.ID), domain.ContextSelection{Branch: branch, Position: position, CodeCommit: code, Scope: "current"}, out)
 	}
 	var snaps []domain.Snapshot
 	var refs []domain.Ref
@@ -232,6 +214,46 @@ func (s *HistoryQueryService) queryHistory(ctx context.Context, in inbound.Histo
 	out.StateHash = domain.HashContent(raw)
 	return out, nil
 }
+
+func (s *HistoryQueryService) queryServerHistory(ctx context.Context, repo string, selection domain.ContextSelection, out domain.HistoryQueryResult) (domain.HistoryQueryResult, error) {
+	if s.remote == nil {
+		return out, fmt.Errorf("server context query unavailable")
+	}
+	view, err := s.remote.QueryContext(ctx, repo, selection)
+	if err != nil {
+		return out, err
+	}
+	if err := domain.ValidateContextQuery(repo, selection, view); err != nil {
+		return out, err
+	}
+	if view.Branch != selection.Branch {
+		return out, domain.ErrSelectionChanged
+	}
+	out.Selection.Source = "server"
+	out.Selection.CodeCommit = selection.CodeCommit
+	if view.Inclusion != nil {
+		out.Selection.CodeCommit = view.Inclusion.CodeCommit
+	}
+	out.Selection.Branch = view.Branch
+	out.StateHash = view.StateHash
+	out.Revision = &view.Revision
+	out.Position = view.Position
+	out.Snapshots = view.Snapshots
+	out.Inclusion = view.Inclusion
+	out.ServerChecked = true
+	out.Complete = true
+	if view.Inclusion == nil {
+		out.Complete = false
+	} else {
+		for _, m := range view.Inclusion.Merges {
+			if m.State == "review" {
+				out.Complete = false
+			}
+		}
+	}
+	return out, nil
+}
+
 func historyRef(refs []domain.Ref, name string) (domain.ContentHash, string, error) {
 	if strings.HasPrefix(name, "sha256:") {
 		id := domain.ContentHash(name)

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
@@ -42,11 +41,11 @@ func TestAgentContextHistoryBudgetCheckedBeforeMaterialization(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := domain.AgentContextPackage{Version: 1, Policy: in.Policy, Delivery: "prepared", Capability: "verified_for_preparation", Budget: &b, Usage: u, Content: domain.AgentContextContent{Notice: "synthetic preparation; not provider acceptance", Selection: domain.AgentContextSelection{CodeCommit: strings.Repeat("a", 40)}}}
+			p := domain.AgentContextPackage{Version: 1, Policy: in.Policy, Delivery: "prepared", Capability: "verified_for_preparation", Budget: &b, Usage: u, Content: domain.AgentContextContent{Notice: "synthetic preparation; not provider acceptance", Selection: latestMainSelection("repo", "feature")}}
 			tc.mutate(&p, &in)
 			p.ID, _ = p.Digest()
 			mat := &agentMaterializerFixture{}
-			s := NewLoadSessionService(nil, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderCodex: codec.NewCodexCodec()}, map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderCodex: mat}, nil, nil, nil).WithAgentCodePosition(agentCodeFixture{})
+			s := NewLoadSessionService(nil, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderCodex: codec.NewCodexCodec()}, map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderCodex: mat}, nil, nil, nil).WithAgentContext(&agentPackageFixture{}).WithAgentCodePosition(agentCodeFixture{})
 			_, err = s.materializeAgentPackage(context.Background(), in, p)
 			if tc.want == nil {
 				if err != nil || mat.calls != 1 {

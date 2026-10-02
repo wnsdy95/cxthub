@@ -1,10 +1,13 @@
 package capture
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,59 +87,119 @@ func WriteSessionHandoff(cwd string, sessionIDs []string, text string) error {
 	return nil
 }
 
-// ConsumeSessionHandoff atomically consumes the exact app-session queue, then
-// falls back to a worktree queue only when discovery was unavailable during
-// the Git hook. Corrupt and stale files fail closed without prompt injection.
+// DeliverSessionHandoff treats the queued body only as a pending request. The
+// caller must prepare fresh input and write it inside deliver. Failed delivery
+// leaves the request retryable; acknowledgement never removes a replacement.
+func DeliverSessionHandoff(ctx context.Context, cwd, sessionID string, deliver func() error) (bool, error) {
+	return deliverSessionHandoff(ctx, cwd, sessionID, func(string) error { return deliver() })
+}
+
+// ConsumeSessionHandoff retains the immediate-consumption helper for archive
+// callers. Provider hooks use DeliverSessionHandoff and never emit this body.
 func ConsumeSessionHandoff(cwd, sessionID string) (string, bool) {
-	repoRoot, enabled := gitctx.ContextRoot(context.Background(), cwd)
-	if !enabled {
-		return "", false
+	var text string
+	delivered, err := deliverSessionHandoff(context.Background(), cwd, sessionID, func(body string) error {
+		text = body
+		return nil
+	})
+	return text, delivered && err == nil
+}
+
+func deliverSessionHandoff(ctx context.Context, cwd, sessionID string, deliver func(string) error) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
-	scopes := handoffScopes(context.Background(), cwd, []string{sessionID})
-	if roots, err := gitctx.ResolveRepositoryRoots(context.Background(), cwd); err == nil {
+	repoRoot, enabled := gitctx.ContextRoot(ctx, cwd)
+	if !enabled {
+		return false, ctx.Err()
+	}
+	scopes := handoffScopes(ctx, cwd, []string{sessionID})
+	if roots, err := gitctx.ResolveRepositoryRoots(ctx, cwd); err == nil {
 		fallback := "worktree\x00" + roots.WorktreeRoot
 		if len(scopes) == 0 || scopes[len(scopes)-1] != fallback {
 			scopes = append(scopes, fallback)
 		}
 	}
 	for _, scope := range scopes {
-		if text, ok := consumeHandoffAt(repoRoot, handoffRelativePath(scope)); ok {
-			return text, true
+		if delivered, err := deliverHandoffAt(ctx, repoRoot, handoffRelativePath(scope), deliver); delivered || err != nil {
+			return delivered, err
 		}
 	}
-	return "", false
+	return false, ctx.Err()
 }
 
-func consumeHandoffAt(repoRoot, relative string) (string, bool) {
-	var text string
-	var consumed bool
-	if err := withBriefingFileLock(repoRoot, relative, func() error {
-		source, err := providerfs.PrepareRepoFile(repoRoot, relative, 0o755)
-		if err != nil {
+func deliverHandoffAt(ctx context.Context, repoRoot, relative string, deliver func(string) error) (bool, error) {
+	// Avoid creating queue directories on hooks with no pending request.
+	if _, _, err := readHandoffFile(repoRoot, relative); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	var delivered bool
+	// Serialize consumers separately from writers. Preparation can involve slow
+	// authorized reads; a Git hook must still be able to queue its replacement.
+	err := withBriefingFileLock(repoRoot, relative+".delivery", func() error {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		claimRel := filepath.Join(filepath.Dir(relative), fmt.Sprintf("%s.claim.%d", filepath.Base(relative), os.Getpid()))
-		claim, err := providerfs.PrepareRepoFile(repoRoot, claimRel, 0o755)
-		if err != nil {
+		var data []byte
+		var original os.FileInfo
+		err := withBriefingFileLock(repoRoot, relative, func() error {
+			var err error
+			data, original, err = readHandoffFile(repoRoot, relative)
 			return err
+		})
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
 		}
-		if err := os.Rename(source, claim); err != nil {
-			return err
-		}
-		defer func() { _ = os.Remove(claim) }()
-		data, err := providerfs.ReadRegularFile(claim)
 		if err != nil {
 			return err
 		}
 		var payload handoffFile
 		if json.Unmarshal(data, &payload) != nil || payload.Version != handoffFormatVersion ||
-			time.Since(payload.At) > handoffTTL || len(payload.Text) > handoffMaxBytes {
+			time.Since(payload.At) > handoffTTL || len(payload.Text) > handoffMaxBytes || strings.TrimSpace(payload.Text) == "" {
 			return nil
 		}
-		text, consumed = payload.Text, strings.TrimSpace(payload.Text) != ""
-		return nil
-	}); err != nil {
-		return "", false
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := deliver(payload.Text); err != nil {
+			return err
+		}
+		delivered = true
+		return withBriefingFileLock(repoRoot, relative, func() error {
+			current, info, err := readHandoffFile(repoRoot, relative)
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if !os.SameFile(original, info) || !bytes.Equal(data, current) {
+				return nil // A newer request belongs to the next hook.
+			}
+			path, err := providerfs.PrepareRepoFile(repoRoot, relative, 0o755)
+			if err != nil {
+				return err
+			}
+			return os.Remove(path)
+		})
+	})
+	return delivered, err
+}
+
+func readHandoffFile(repoRoot, relative string) ([]byte, os.FileInfo, error) {
+	f, err := providerfs.OpenRepoFile(repoRoot, relative)
+	if err != nil {
+		return nil, nil, err
 	}
-	return text, consumed
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	// JSON escaping can expand each byte of the bounded text sixfold.
+	data, err := io.ReadAll(io.LimitReader(f, 6*handoffMaxBytes+4096))
+	return data, info, err
 }

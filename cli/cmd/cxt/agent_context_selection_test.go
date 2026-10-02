@@ -132,7 +132,7 @@ func TestRuntimeAgentContextPreservesHistoricalPins(t *testing.T) {
 				want = &domain.AgentMemoryPin{}
 			}
 			f.writePosition(t)
-			p, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{Cwd: f.cwd, Provider: domain.ProviderCodex})
+			p, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{ArtifactOnly: true, Cwd: f.cwd, Provider: domain.ProviderCodex})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -166,7 +166,7 @@ func TestRuntimeAgentContextPreservesHistoricalPins(t *testing.T) {
 func TestRuntimeAgentContextExplicitHashDoesNotInheritBranch(t *testing.T) {
 	f := newAgentSelectionFixture(t)
 	f.writePosition(t)
-	p, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{Cwd: f.cwd, SnapshotID: f.position.Snapshot, Provider: domain.ProviderCodex})
+	p, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{ArtifactOnly: true, Cwd: f.cwd, SnapshotID: f.position.Snapshot, Provider: domain.ProviderCodex})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestRuntimeAgentContextRejectsPinChangeDuringPreparation(t *testing.T) {
 		f.position.MemoryHash = domain.HashContent([]byte("changed pin"))
 		f.writePosition(t)
 	}
-	if _, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{Cwd: f.cwd, Provider: domain.ProviderCodex}); !errors.Is(err, domain.ErrSelectionChanged) {
+	if _, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{ArtifactOnly: true, Cwd: f.cwd, Provider: domain.ProviderCodex}); !errors.Is(err, domain.ErrSelectionChanged) {
 		t.Fatal("concurrent pin change accepted", err)
 	}
 }
@@ -197,7 +197,7 @@ func TestRuntimeAgentDeliveryValidatesCodeBranchAndPinsAfterWarm(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			f := newAgentSelectionFixture(t)
 			f.writePosition(t)
-			p, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{Cwd: f.cwd, Provider: domain.ProviderCodex})
+			p, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{ArtifactOnly: true, Cwd: f.cwd, Provider: domain.ProviderCodex})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -230,7 +230,7 @@ func TestRuntimeAgentContextOrphanNeverSelectsUnrelatedBranchTip(t *testing.T) {
 	f := newAgentSelectionFixture(t)
 	f.position.Snapshot, f.position.Orphan = "", true
 	f.writePosition(t)
-	if _, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{Cwd: f.cwd, Provider: domain.ProviderCodex}); !errors.Is(err, domain.ErrAgentContextUnavailable) || len(f.historyRequests) != 0 {
+	if _, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{ArtifactOnly: true, Cwd: f.cwd, Provider: domain.ProviderCodex}); !errors.Is(err, domain.ErrAgentContextUnavailable) || len(f.historyRequests) != 0 {
 		t.Fatal("orphan silently selected a branch tip", err, f.historyRequests)
 	}
 }
@@ -270,7 +270,7 @@ func TestRuntimeAgentContextPreservesPinAfterNamedCheckout(t *testing.T) {
 			if err != nil || !selected.MemoryPinned || !selected.Rewound {
 				t.Fatalf("expected a named historical selection: %+v %v", selected, err)
 			}
-			p, err := f.runtime.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{Cwd: f.cwd, Provider: domain.ProviderCodex})
+			p, err := f.runtime.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{ArtifactOnly: true, Cwd: f.cwd, Provider: domain.ProviderCodex})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -289,7 +289,7 @@ func TestRuntimeAgentCurrentSelectionUsesIntegratedServerMemory(t *testing.T) {
 	f := newAgentSelectionFixture(t)
 	f.position.Rewound = false
 	f.writePosition(t)
-	p, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{Cwd: f.cwd, Provider: domain.ProviderCodex})
+	p, err := f.runtime.PrepareAgentContext(context.Background(), inbound.PrepareAgentContextInput{ArtifactOnly: true, Cwd: f.cwd, Provider: domain.ProviderCodex})
 	if err != nil {
 		t.Fatal(err)
 	}

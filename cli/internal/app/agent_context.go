@@ -30,6 +30,14 @@ func NewAgentContextService(history inbound.HistoryQuery, memory outbound.Effect
 var _ inbound.PrepareAgentContext = (*AgentContextService)(nil)
 
 func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inbound.PrepareAgentContextInput) (domain.AgentContextPackage, error) {
+	if in.LatestMain {
+		in.Branch, in.SnapshotID, in.MemoryPin = "main", "", nil
+		if in.WorkingPosition == nil || !domain.ValidGitOID(in.WorkingPosition.CodeCommit) || domain.ValidateContentHash(in.WorktreeStateHash) != nil {
+			return domain.AgentContextPackage{}, domain.ErrAgentContextUnavailable
+		}
+		working := *in.WorkingPosition
+		in.WorkingPosition = &working
+	}
 	// Repository revision or verified runtime-limit changes can reselect input.
 	// Each attempt reauthorizes sources and keeps the first code/context pinned.
 	// A moved worktree, revoked permission or malformed source is not contention.
@@ -131,9 +139,12 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		}
 		budget = &resolved
 	}
-	query := inbound.HistoryQueryInput{Cwd: in.Cwd, Server: true, Position: in.SnapshotID, Branch: in.Branch}
+	query := inbound.HistoryQueryInput{Cwd: in.Cwd, Server: true, ServerTip: in.LatestMain, Position: in.SnapshotID, Branch: in.Branch}
 	view, err := s.history.QueryHistory(ctx, query)
 	if err != nil {
+		if in.LatestMain {
+			return p, fmt.Errorf("latest server main input is unavailable; verify that main exists and that you can read it: %w", err)
+		}
 		return p, err
 	}
 	if err = validAgentHistory(view, in); err != nil {
@@ -145,7 +156,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	} else if (*anchor).position != selected.position || (*anchor).branch != selected.branch || (*anchor).code != selected.code || (*anchor).state != selected.state {
 		return p, fmt.Errorf("%w: original code/context selection changed between preparation attempts", domain.ErrSelectionChanged)
 	}
-	p = domain.AgentContextPackage{Version: domain.AgentContextVersion, Policy: policy, Delivery: "prepared", Capability: "not_verified_for_native_replay", ArtifactOnly: in.ArtifactOnly, Budget: budget}
+	p = domain.AgentContextPackage{Version: domain.AgentContextVersion, Provider: in.Provider, Policy: policy, Delivery: "prepared", Capability: "not_verified_for_native_replay", ArtifactOnly: in.ArtifactOnly, Budget: budget}
 	if in.ArtifactOnly {
 		p.Capability = "unverified_artifact_only"
 	}
@@ -156,6 +167,11 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	}
 	p.Content.Selection.MemoryPin = in.MemoryPin
 	p.Content.Selection.WorktreeStateHash = in.WorktreeStateHash
+	if in.LatestMain {
+		p.Content.Selection.SourcePolicy = domain.AgentSourceLatestMain
+		p.Content.Selection.WorkingPosition = in.WorkingPosition
+		p.Content.Notice += " Project knowledge comes from the latest observed server main. The separate working_position describes the code being edited; main's implementation claims may not yet apply to that checkout."
+	}
 	emptyMemory := in.MemoryPin != nil && in.MemoryPin.MemoryHash == ""
 	if emptyMemory {
 		p.Content.Gaps = append(p.Content.Gaps, domain.AgentCoverageGap{Reason: "historical_memory_empty"})

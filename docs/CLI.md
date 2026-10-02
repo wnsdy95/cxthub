@@ -25,9 +25,11 @@ For installation and first-run setup, see
   existing connections and local captures continue to work offline.
 - `<ref>` accepts `HEAD`, a branch name, a tag name, or a full
   `sha256:<64-hex-character>` snapshot ID. An omitted ref resolves to the
-  current context head where supported.
+  current context head where supported for archive reads and context operations.
+  Managed fresh input uses the latest authorized server `main` independently of
+  that local selection.
 - Providers are `claude` and `codex`.
-- Restore modes are:
+- Explicit legacy archive restore modes are separate from prepared fresh input:
   - `full`: materialize the native session when possible;
   - `reconstructed`: rebuild a provider-compatible session from normalized
     context; and
@@ -267,10 +269,12 @@ not revoke the token on the server.
 cxt claude [claude-arguments...]
 ```
 
-Runs Claude Code with branch-context seeding and passes remaining arguments to
-the installed `claude` executable. The wrapper owns process restart/resume on a
-branch switch. It is optional for Claude Desktop's Code tab, where lifecycle
-hooks preserve the live app session and apply one bounded memory handoff.
+Runs Claude Code with fresh input from latest authorized server `main` and
+passes remaining arguments to the installed `claude` executable. The wrapper
+owns process restart/resume on a branch switch. It is optional for Claude
+Desktop's Code tab, where lifecycle hooks preserve the live app session and
+apply one bounded memory handoff from latest authorized server `main`.
+Existing native resume does not reinject context.
 
 ### `cxt codex`
 
@@ -278,10 +282,30 @@ hooks preserve the live app session and apply one bounded memory handoff.
 cxt codex [codex-arguments...]
 ```
 
-Runs Codex with branch-context seeding and passes remaining arguments to the
-installed `codex` executable. The wrapper owns process restart/resume on a
-branch switch. It is optional for Codex app/IDE sessions, where lifecycle hooks
-preserve the live app session and apply one bounded memory handoff.
+Runs Codex with fresh input from latest authorized server `main` and passes
+remaining arguments to the installed `codex` executable. The wrapper owns
+process restart/resume on a branch switch. It is optional for Codex app/IDE
+sessions, where lifecycle hooks preserve the live app session and apply one
+bounded memory handoff from latest authorized server `main`.
+Existing native resume does not reinject context.
+
+All managed fresh injections use this source rule: default memory, explicit
+budgeted history, `load` delivery, branch seeds and desktop handoffs. The server
+resolves `main` directly; the local branch/worktree, local `main`, local Git
+commit and rewound memory cursor cannot select its tip. Source selection
+`branch`, `snapshot_id` and `code_commit` identify main. The additive, optional
+`source_policy: latest_server_main` and `working_position` fields record that
+policy and the separate actual Git branch/code being edited.
+
+Missing or denied server main, invalid source data and memory errors stop the
+injection without local fallback. Source and memory are reauthorized and
+revalidated before delivery, along with the actual working position. Concurrent
+changes abort delivery or require fresh preparation; these checks are bounded
+observations, not a distributed transaction across the server, Git and provider.
+Verified-empty new-repository bootstrap remains a distinct first-launch path
+requiring an authorized empty server repository; it never invents `main` or
+treats missing main in a nonempty repository as empty. See
+[context input and bootstrap](CONTEXT_INPUT.md).
 
 ### `cxt mcp --local`
 
@@ -316,7 +340,11 @@ are reported without blocking the provider.
 Supported coding-app events are `SessionStart`, `UserPromptSubmit`, `Stop`, and
 `SessionEnd`. A desktop branch switch never renames the vendor-owned active
 session file. Instead, the next start/prompt hook consumes a session-scoped,
-maximum-16-KiB project-memory handoff exactly once. Full transcripts remain in
+maximum-16-KiB project-memory handoff from latest authorized server `main`
+after source/memory revalidation. Successful delivery acknowledges the queued
+request; a process crash between output and acknowledgement can cause a retry.
+Its input is independent of the
+selected local branch or historical cursor. Full transcripts remain in
 the immutable CXTHub DAG. The web viewer exposes archived conversation; current
 MCP tools provide bounded history results with the limits documented in
 [MCP connections](MCP.md#current-history-retrieval-limits). A per-handoff limit
@@ -528,8 +556,14 @@ cxt checkout [<ref>] [-b <new-branch>]
 
 Restores a ref. With `-b`, creates and restores a new context branch from that
 ref. Git checkout hooks normally invoke the corresponding behavior
-automatically. A new branch seed carries the main head's compact memory plus
-the departure branch head's session conversation. Conversations that fit are
+automatically. A branch's natural parents and archival memory follow its actual
+creation source, including an explicit historical ref. Managed fresh seed input
+and desktop handoffs use latest authorized server `main`; that input does not
+rewrite branch ancestry, archival memory or the worktree's selected cursor.
+An orphan's inherited archival memory remains distinct from prepared main input.
+
+Explicit legacy replay restores the selected source archive instead of preparing
+a fresh input package. In that restoration path, conversations that fit are
 preserved in full; larger sessions keep a bounded recent tail starting at a
 user-turn boundary and distill the exact omitted slice into a bounded bridge.
 That bridge is merged with the inherited compact/project memory, so work after
@@ -575,7 +609,9 @@ cxt fork <ref> --as <branch>
   [--mode <full|reconstructed|memory>]
 ```
 
-Creates a context branch from a specific ref and restores it.
+Creates a context branch from a specific ref and restores it. The ref determines
+natural ancestry and archival memory. Any managed fresh input uses latest
+authorized server `main`; explicit legacy replay remains archive restoration.
 
 ### `cxt branch` / `cxt branch list`
 
@@ -605,8 +641,10 @@ reachable and syncable. Git's branch-deletion hook performs this automatically;
 the command is also available for repairing historical stale pointers.
 
 `restore` resolves the latest archived target, records a newer active lifecycle
-event, recreates the context pointer, and restores the provider session. A
-stale client cannot recreate an archived pointer by an ordinary push; it must
+event, recreates the context pointer, and restores the provider session. Managed
+fresh delivery uses latest authorized server `main` while preserving that
+archived lineage; explicit legacy replay restores the archive. A stale client
+cannot recreate an archived pointer by an ordinary push; it must
 observe or explicitly create the newer active generation.
 
 ### `cxt load`
@@ -617,26 +655,41 @@ cxt load [<ref>]
   [--mode <full|reconstructed|memory>]
 ```
 
-Prepares input from the selected snapshot without creating a branch or moving
-HEAD. With no explicit replay mode, it supplies structured project memory,
-code-selection metadata, coverage gaps and MCP source references. Raw transcript
-is not automatically inserted. Exact personal work state is included only when
-an explicit principal/session/worktree scope is available; missing scope is
-reported, never replaced with a teammate's tasks.
+Prepares managed fresh input from latest authorized server `main` without
+creating a branch or moving HEAD. For delivery, an explicit ref or rewound
+memory cursor does not replace main as the prepared source. With no explicit
+replay mode, the package supplies main's structured project memory, main source
+metadata, separate actual working position, coverage gaps and MCP source
+references. Raw transcript is not automatically inserted. Exact personal work
+state is included only when an explicit principal/session/worktree scope is
+available; missing scope is reported, never replaced with a teammate's tasks.
 
-The mode priority is the command's `--mode`, local `config load.mode`, the
-account's explicit server preference, then the structured memory default.
+When `--provider` is omitted, managed `load` can infer the provider from the
+authorized server main snapshot metadata. The package's optional `provider`
+field carries that choice; no local archive is required for this inference.
 
-Explicit `full` and `reconstructed` retain the archived conversation restoration
-path. Oversized replay distills the omitted span before materializing a session,
-uses user-turn boundaries, and preserves the original archive. Replay fidelity
-is separate from the new history input token budget.
+Only an explicit `--mode` on the current command selects legacy archive replay.
+Without it, commands use structured managed input from latest authorized server
+`main`. Stored `load.mode` and account server preferences remain for
+compatibility but cannot override managed injection. Git hooks always use
+structured managed input, regardless of those stored preferences.
 
-An inspectable input artifact does not launch a provider or change its files:
+Explicit legacy replay modes retain archive restoration for the selected ref;
+they are not prepared fresh injection. `full` and `reconstructed` restore the
+archived conversation. Oversized replay distills the omitted span before
+materializing a session, uses user-turn boundaries, and preserves the original
+archive. Replay fidelity is separate from the new history input token budget.
+
+Without an explicit ref, `cxt load --output` previews the latest authorized
+server `main` input, including the `200k` and `full` examples below. An explicit
+`<ref>` instead selects historical archive inspection and its exact memory
+revision. Both paths produce inspection artifacts only; neither launches a
+provider nor changes its files:
 
 ```text
 cxt load --provider codex --model gpt-5.4 --context-budget 200k --output context.json
 cxt load --provider claude --context-budget full --output context.json
+cxt load <historical-ref> --provider codex --model gpt-5.4 --context-budget 200k --output historical-context.json
 ```
 
 Existing files are not overwritten. Artifacts contain private memory and dialogue;
@@ -644,7 +697,9 @@ keep them out of Git. `full` means a ceiling of 800,000 tokens, not a promise th
 a model can accept that much. A documented `--model` mapping uses an offline
 text tokenizer; omitted/unknown models and Claude use explicitly inexact UTF-8
 byte allowances. `usage.scope: text` excludes native-host inputs outside the
-rendered package. Provider acceptance remains unverified. See
+rendered package. Output artifacts cannot be relabeled for delivery; a
+managed fresh injection must prepare and revalidate latest server main and its
+memory. Provider acceptance remains unverified. See
 [local accounting and resource limits](CONTEXT_INPUT.md#local-text-accounting).
 
 The interactive wrapper also recognizes:
@@ -655,9 +710,11 @@ cxt --pull --context-budget full codex --yolo
 cxt --pull codex --yolo
 ```
 
-The final two commands request the same 800,000-token package ceiling. Requests
-in 100k steps are supported. A verified runtime's total initial input is limited
-to 80% of its window; host input/framing is deducted before selecting recent
+These managed history requests use latest authorized server `main`, independent
+of the local branch or historical cursor. The final two commands request the
+same 800,000-token package ceiling. Requests in 100k steps are supported.
+A verified runtime's total initial input is limited to 80% of its window;
+host input/framing is deducted before selecting recent
 complete turns. Required output reserves or an earlier compaction trigger can
 lower that limit further. Requested, effective and selected budgets are recorded
 separately, without shortening stored source records. **Strict native history
@@ -670,9 +727,12 @@ shipped runtime still lacks the required capability evidence. The artifact path 
 available for inspection. No global model-window or auto-compaction setting is
 changed. Native resume, provider help and noninteractive commands preserve their
 provider-owned behavior and receive no injected package.
+Native 200k/full-budget delivery, real-host acceptance and interactive TUI
+handoff remain incomplete validation gates.
 
-`memory` keeps the full immutable digest in cxt storage but injects at most a
-64 KiB projection into the target provider's instruction file. cxt appends or
+The explicit legacy `--mode memory` archive-restoration path keeps the full
+immutable digest in cxt storage but projects at most 64 KiB into the target
+provider's instruction file. cxt appends or
 refreshes one marked region in `CLAUDE.md` or `AGENTS.md`; text and permissions
 outside that region are preserved. Malformed or duplicate cxt markers fail
 closed instead of guessing a destructive replacement range.
@@ -943,7 +1003,7 @@ Reading a key prints its effective local value. Supported keys are:
 | Key | Values | Default | Effect |
 |---|---|---|---|
 | `checkout.mode` | `auto`, `prepare` | `auto` | Restore automatically or only prepare the resume action after Git checkout |
-| `load.mode` | `full`, `reconstructed`, `memory`, `default` | structured memory | Explicit replay fidelity; `default` clears the local override |
+| `load.mode` | `full`, `reconstructed`, `memory`, `default` | structured memory | Retained for compatibility; does not override managed latest-server-main input. Archive replay requires explicit `--mode` per command; `default` clears the stored preference. |
 | `boundary.enforce` | `kill`, `none`, `default` | `kill` | Managed fresh wrappers prepare and validate the next input before stopping their current child; failed preparation preserves it. Legacy native-resume wrappers use the prepared-seed restart path. Unmanaged app sessions stay open and receive a bounded handoff. |
 | `capture.debounce` | non-negative seconds, `default` | 60 seconds | Minimum interval for repeated Stop-event captures |
 | `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier |
@@ -954,7 +1014,7 @@ Examples:
 
 ```bash
 cxt config checkout.mode prepare
-cxt config load.mode reconstructed
+cxt config load.mode default
 cxt config secrets.scrub strict
 cxt config capture.debounce 120
 ```

@@ -182,16 +182,19 @@ func (r runtimeAgentPreparer) prepareEmptyBootstrap(ctx context.Context, cfg con
 	if err != nil || !eligible {
 		return result, eligible || err != nil, err
 	}
+	server, err := r.remote.VerifyEmptyRepository(ctx, repo.ID)
+	if errors.Is(err, domain.ErrRepositoryHasContext) {
+		return result, false, nil // Continue with the authorized latest-main path.
+	}
+	if err != nil {
+		return result, true, err
+	}
 	git, err := bootstrapGit(ctx, req.Cwd)
 	if err != nil {
 		return result, true, err
 	}
 	if filepath.Clean(git.GitDir) != filepath.Clean(cfg.GitDir) {
 		return result, true, domain.ErrSelectionChanged
-	}
-	server, err := r.remote.VerifyEmptyRepository(ctx, repo.ID)
-	if err != nil {
-		return result, true, err
 	}
 	proof := domain.AgentBootstrapProof{Server: server, Branch: git.Branch, CodeCommit: git.Commit, Unborn: git.Unborn, WorktreeStateHash: local}
 	if err := proof.Validate(); err != nil {

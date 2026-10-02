@@ -325,7 +325,7 @@ try:
     text=json.load(sys.stdin)['hookSpecificOutput']['additionalContext']
     prefix='[cxt context package v1]'
     package,end=json.JSONDecoder().raw_decode(text.split(prefix,1)[1].lstrip())
-    print('yes' if prefix in text and len(text.encode()) <= 16*1024 and package['selection']['branch']=='app-feature-x' and package['selection']['repository_id']=='$RID' and not package.get('historical_evidence') else 'no')
+    print('yes' if prefix in text and len(text.encode()) <= 16*1024 and package['selection']['branch']=='main' and package['selection']['source_policy']=='latest_server_main' and package['selection']['working_position']['branch']=='app-feature-x' and package['selection']['repository_id']=='$RID' and not package.get('historical_evidence') else 'no')
 except Exception: print('no')")" yes
 expect "app handoff is consumed once" "$(find .cxt/handoffs -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" 0
 git checkout -q main >/dev/null 2>&1

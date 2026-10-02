@@ -367,7 +367,7 @@ func TestHandlerBriefingEmission(t *testing.T) {
 	}
 }
 
-func TestHandlerEmitsOnlyMatchingAppSessionHandoff(t *testing.T) {
+func TestHandlerWithoutPreparerKeepsAppSessionHandoffs(t *testing.T) {
 	cwd := t.TempDir()
 	initHookContext(t, cwd)
 	const (
@@ -385,14 +385,17 @@ func TestHandlerEmitsOnlyMatchingAppSessionHandoff(t *testing.T) {
 	h := NewHandler(capture.NewCaptureCoordinator(&recSave{}, domain.TeamIdentity{}))
 	h.stdin = strings.NewReader(`{"session_id":"` + second + `","cwd":"` + cwd + `","prompt":"continue"}`)
 	h.stdout = &out
-	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); err != nil {
-		t.Fatal(err)
+	if err := h.Run(domain.ProviderCodex, "UserPromptSubmit"); !errors.Is(err, domain.ErrAgentContextUnavailable) {
+		t.Fatal("unconfigured handoff did not fail closed", err)
 	}
-	if !strings.Contains(out.String(), "SECOND APP BRANCH MEMORY") || strings.Contains(out.String(), "FIRST APP BRANCH MEMORY") {
-		t.Fatalf("wrong app handoff emitted: %s", out.String())
+	if out.Len() != 0 {
+		t.Fatalf("unconfigured handler emitted queued text: %s", out.String())
 	}
 	if got, ok := capture.ConsumeSessionHandoff(cwd, first); !ok || got != "FIRST APP BRANCH MEMORY" {
 		t.Fatalf("other app session queue was consumed: %q, %v", got, ok)
+	}
+	if got, ok := capture.ConsumeSessionHandoff(cwd, second); !ok || got != "SECOND APP BRANCH MEMORY" {
+		t.Fatalf("failed handoff was consumed: %q, %v", got, ok)
 	}
 }
 

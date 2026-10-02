@@ -1,5 +1,10 @@
 package domain
 
+import "errors"
+
+// ErrRepositoryHasContext distinguishes an authorized nonempty catalog from a failed read.
+var ErrRepositoryHasContext = errors.New("server repository already contains context")
+
 // EmptyRepositoryProof is an authorized, unfiltered server catalog observation.
 // It is not a snapshot, a durable emptiness claim, or provider acceptance.
 type EmptyRepositoryProof struct {

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
@@ -13,7 +12,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
-func TestLoadAgentContextPreservesSourceBranchAndDetachedHash(t *testing.T) {
+func TestLoadAgentContextAlwaysRequestsMainIndependentlyOfArchiveRef(t *testing.T) {
 	ctx := context.Background()
 	store := storage.NewFileStore(t.TempDir())
 	repo := string(agentHash("load selection repo"))
@@ -48,7 +47,7 @@ func TestLoadAgentContextPreservesSourceBranchAndDetachedHash(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if prepared.seen.Branch != tc.wantBranch || prepared.seen.SnapshotID != tc.want || !reflect.DeepEqual(prepared.seen.MemoryPin, pin) || mat.calls != 1 {
+			if !prepared.seen.LatestMain || prepared.seen.Branch != "" || prepared.seen.SnapshotID != "" || prepared.seen.MemoryPin != nil || mat.calls != 1 {
 				t.Fatalf("wrong preparation identity: %+v", prepared.seen)
 			}
 		})
@@ -77,5 +76,20 @@ func TestHistoryPinnedHashRejectsServerBranchSubstitution(t *testing.T) {
 	s.remote = &historyRemote{view: domain.ContextQueryView{Version: 1, Branch: "main", Position: position, StateHash: agentHash("state"), Snapshots: []domain.Snapshot{local.snaps[1]}}}
 	if _, err := s.QueryHistory(context.Background(), inbound.HistoryQueryInput{Server: true, Position: position}); !errors.Is(err, domain.ErrSelectionChanged) {
 		t.Fatal("server substituted HEAD scope for detached hash", err)
+	}
+}
+
+func TestManagedLoadDoesNotRequireLocalArchive(t *testing.T) {
+	for _, provider := range []domain.ProviderKind{domain.ProviderCodex, ""} {
+		prepared := &agentPackageFixture{}
+		mat := &agentMaterializerFixture{}
+		// Nil store makes any dependency on old HEAD/ref/snapshot immediately visible.
+		load := NewLoadSessionService(nil, map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderCodex: codec.NewCodexCodec()}, map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderCodex: mat}, nil, nil, nil).WithAgentContext(prepared).WithAgentCodePosition(agentCodeFixture{})
+		if _, err := load.Load(context.Background(), inbound.LoadInput{Cwd: "/fixture", TargetProvider: provider}); err != nil {
+			t.Fatal(err)
+		}
+		if !prepared.seen.LatestMain || prepared.seen.SnapshotID != "" || mat.calls != 1 {
+			t.Fatal("managed load consulted a local selection", prepared.seen)
+		}
 	}
 }

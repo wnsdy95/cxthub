@@ -39,7 +39,7 @@ func (c *BackendClient) VerifyEmptyRepository(ctx context.Context, repo string) 
 		return proof, domain.ErrHashMismatch
 	}
 	if len(wire.Snapshots) != 0 || len(wire.History) != 0 {
-		return proof, fmt.Errorf("%w: server repository contains context; select or fetch it explicitly", domain.ErrAgentContextUnavailable)
+		return proof, fmt.Errorf("%w: %w", domain.ErrAgentContextUnavailable, domain.ErrRepositoryHasContext)
 	}
 	return domain.EmptyRepositoryProof{RepositoryID: repo, StateHash: wire.StateHash, Revision: domain.RepositoryRevision{Graph: *wire.Revision.Graph, Pending: *wire.Revision.Pending, Evidence: wire.Revision.Evidence}}, nil
 }

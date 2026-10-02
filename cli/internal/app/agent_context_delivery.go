@@ -29,9 +29,13 @@ func (s *LoadSessionService) PrepareAgentDelivery(ctx context.Context, in inboun
 	if s.agentContext == nil {
 		return domain.AgentContextPackage{}, inbound.LoadOutput{}, domain.ErrAgentContextUnavailable
 	}
+	in.LatestMain = true
 	p, err := s.agentContext.PrepareAgentContext(ctx, in)
 	if err != nil {
 		return p, inbound.LoadOutput{}, err
+	}
+	if in.Provider == "" {
+		in.Provider = p.Provider
 	}
 	out, err := s.materializeAgentPackage(ctx, in, p)
 	return p, out, err
@@ -43,6 +47,9 @@ func (s *LoadSessionService) materializeAgentPackage(ctx context.Context, in inb
 	}
 	if err := p.ValidateIdentity(); err != nil {
 		return inbound.LoadOutput{}, err
+	}
+	if p.Provider != "" && p.Provider != in.Provider {
+		return inbound.LoadOutput{}, domain.ErrUnsupportedProvider
 	}
 	if in.Policy.Mode == "history" || p.Policy.Mode == "history" {
 		if p.Policy != in.Policy || p.Budget == nil || p.Capability != "verified_for_preparation" {
@@ -72,7 +79,10 @@ func (s *LoadSessionService) materializeAgentPackage(ctx context.Context, in inb
 	if err = ctx.Err(); err != nil {
 		return inbound.LoadOutput{}, err
 	}
-	if err := checkAgentCode(ctx, s.agentCode, in.Cwd, p.Content.Selection.CodeCommit); err != nil {
+	if err := validateInjectedPackage(ctx, s.agentContext, in.Cwd, p); err != nil {
+		return inbound.LoadOutput{}, err
+	}
+	if err := checkAgentCode(ctx, s.agentCode, in.Cwd, p.Content.Selection.DeliveryCodeCommit()); err != nil {
 		return inbound.LoadOutput{}, err
 	}
 	path, resume, err := mat.Materialize(ctx, raw, in.Cwd)
@@ -99,7 +109,7 @@ func agentPackageCIR(p domain.AgentContextPackage, provider domain.ProviderKind,
 	if p.Policy.Mode == "history" {
 		fidelity = domain.FidelityReconstructed
 	}
-	return domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: provider, CapturedAt: now, Cwd: materializationCwd(cwd), GitBranch: p.Content.Selection.Branch, SessionOriginID: domain.NewSessionID(), Fidelity: fidelity}, Events: []domain.Event{{Kind: domain.EventMessage, Role: "user", Seq: 0, Ts: now, Blocks: []domain.ContentBlock{{Type: "text", Text: prompt}}}}}, nil
+	return domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: provider, CapturedAt: now, Cwd: materializationCwd(cwd), GitBranch: p.Content.Selection.DeliveryBranch(), SessionOriginID: domain.NewSessionID(), Fidelity: fidelity}, Events: []domain.Event{{Kind: domain.EventMessage, Role: "user", Seq: 0, Ts: now, Blocks: []domain.ContentBlock{{Type: "text", Text: prompt}}}}}, nil
 }
 
 func (s *BranchSeedService) seedAgentContext(ctx context.Context, in inbound.SeedInput, repo domain.Repo, source domain.Snapshot, sourceDoc domain.SessionDoc, provider domain.ProviderKind, cwd string) (inbound.SeedOutput, error) {
@@ -112,15 +122,15 @@ func (s *BranchSeedService) seedAgentContext(ctx context.Context, in inbound.See
 			return inbound.SeedOutput{}, err
 		}
 	}
-	p, err := s.agentContext.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{RepoID: repo.ID, Cwd: cwd, Branch: in.FromBranch, SnapshotID: source.ID, Provider: provider, Policy: domain.MemoryInputPolicy()})
+	p, err := s.agentContext.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{RepoID: repo.ID, Cwd: cwd, Branch: in.FromBranch, SnapshotID: source.ID, LatestMain: true, Provider: provider, Policy: domain.MemoryInputPolicy()})
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
-	if err = p.ValidateIdentity(); err != nil {
+	if err = validateInjectedPackage(ctx, s.agentContext, cwd, p); err != nil {
 		return inbound.SeedOutput{}, err
 	}
 	selection := p.Content.Selection
-	if selection.RepositoryID != repo.ID || selection.SnapshotID != source.ID || selection.Branch != in.FromBranch {
+	if selection.RepositoryID != repo.ID {
 		return inbound.SeedOutput{}, domain.ErrSelectionChanged
 	}
 	cir, err := agentPackageCIR(p, provider, cwd)
@@ -129,9 +139,21 @@ func (s *BranchSeedService) seedAgentContext(ctx context.Context, in inbound.See
 	}
 	cir.Envelope.GitBranch = in.NewBranch
 	out := inbound.SeedOutput{SessionID: cir.Envelope.SessionOriginID}
-	// Preserve full inherited memory independently of the small provider prompt.
+	// Preserve branch-lineage memory independently of the latest-main input.
+	// Injecting main knowledge must not rewrite the branch birth or its archive.
 	// Raw history and opaque provider state remain reachable through source.ID.
-	digest, found, err := readAgentSeedMemory(ctx, s.store, source, selection.MemoryPin)
+	var archivePin *domain.AgentMemoryPin
+	if position := state.Position; position != nil && position.Rewound && position.Snapshot == source.ID && position.Branch == in.FromBranch {
+		archivePin = &domain.AgentMemoryPin{}
+		if position.MemoryHash != "" {
+			owner := position.MemorySource
+			if owner == "" {
+				owner = source.ID
+			}
+			archivePin.SnapshotID, archivePin.MemoryHash = owner, position.MemoryHash
+		}
+	}
+	digest, found, err := readAgentSeedMemory(ctx, s.store, source, archivePin)
 	if err != nil {
 		return out, err
 	}
@@ -162,8 +184,11 @@ func (s *BranchSeedService) seedAgentContext(ctx context.Context, in inbound.See
 		if err = ctx.Err(); err != nil {
 			return out, err
 		}
+		if err = validateInjectedPackage(ctx, s.agentContext, cwd, p); err != nil {
+			return out, err
+		}
 		code, _ := s.gitCtx.(outbound.CodePosition)
-		if err = checkAgentCode(ctx, code, cwd, p.Content.Selection.CodeCommit); err != nil {
+		if err = checkAgentCode(ctx, code, cwd, p.Content.Selection.DeliveryCodeCommit()); err != nil {
 			return out, err
 		}
 		out.WrittenPath, out.ResumeCmd, err = mat.Materialize(ctx, raw, cwd)
@@ -176,6 +201,11 @@ func (s *BranchSeedService) seedAgentContext(ctx context.Context, in inbound.See
 		fields := strings.Fields(out.ResumeCmd)
 		if len(fields) > 0 && domain.ValidSessionID(fields[len(fields)-1]) {
 			out.SessionID = fields[len(fields)-1]
+		}
+	}
+	if in.SkipMaterialize {
+		if err = validateInjectedPackage(ctx, s.agentContext, cwd, p); err != nil {
+			return out, err
 		}
 	}
 	docHash, err := s.store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
@@ -199,7 +229,7 @@ func (s *BranchSeedService) seedAgentContext(ctx context.Context, in inbound.See
 		if err != nil {
 			return out, err
 		}
-		if current != p.Content.Selection.CodeCommit {
+		if current != p.Content.Selection.DeliveryCodeCommit() {
 			return out, domain.ErrCodePositionMismatch
 		}
 	}
