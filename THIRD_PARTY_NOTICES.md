@@ -15,6 +15,8 @@ following libraries:
 | The Go standard library | BSD-3-Clause |
 | `github.com/klauspost/compress` | BSD-3-Clause |
 | `github.com/coder/websocket` | ISC |
+| `github.com/tiktoken-go/tokenizer`, with OpenAI tiktoken encoding data | MIT |
+| `github.com/dlclark/regexp2/v2` | MIT |
 | `github.com/jackc/pgx/v5` and `github.com/jackc/puddle/v2` | MIT |
 | `github.com/jackc/pgpassfile` and `github.com/jackc/pgservicefile` | MIT |
 | `golang.org/x/mod`, `x/sync`, `x/text`, and `x/tools` | BSD-3-Clause |
@@ -37,6 +39,32 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+### Tokenizer and regular-expression components
+
+The following components use the MIT license reproduced below:
+
+- tiktoken-go/tokenizer: Copyright (c) 2023 tiktoken-go
+- OpenAI tiktoken: Copyright (c) 2022 OpenAI, Shantanu Jain
+- dlclark/regexp2: Copyright (c) Doug Clark
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ## Web application
 

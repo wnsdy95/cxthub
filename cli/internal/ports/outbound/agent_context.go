@@ -26,6 +26,9 @@ type PersonalWorkReader interface {
 	ReadPersonalWork(context.Context, string, domain.PersonalWorkScope) (domain.PersonalWorkState, error)
 }
 
+// AgentTokenCounter measures the supplied text under a model encoding. Exact
+// does not cover host inputs/framing absent from this text or establish runtime
+// capacity; that evidence belongs to AgentCapabilityReader.
 type AgentTokenCounter interface {
 	CountAgentTokens(context.Context, domain.ProviderKind, string, string) (domain.AgentTokenUsage, error)
 }

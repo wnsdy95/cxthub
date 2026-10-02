@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/agenttokens"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
 	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
@@ -42,6 +43,8 @@ func (unverifiedAgentHost) AgentCapability(context.Context, domain.ProviderKind,
 	return domain.AgentHostCapability{}, fmt.Errorf("%w: this build has no verified host/tokenizer combination for strict history; use cxt load --context-budget <budget> --output <file> to prepare an inspectable artifact", domain.ErrProviderCapabilityUnknown)
 }
 
+var runtimeAgentTokens = agenttokens.New()
+
 type runtimeAgentPreparer struct {
 	git     outbound.GitContext
 	store   *storage.FileStore
@@ -67,7 +70,7 @@ func (r runtimeAgentPreparer) PrepareAgentContext(ctx context.Context, in inboun
 		return domain.AgentContextPackage{}, err
 	}
 	in.PersonalScope = scope
-	service := app.NewAgentContextService(r.history, r.remote, cloudAgentDocuments{r.remote, repo.ID}, work, app.ConservativeAgentTokenCounter{}, unverifiedAgentHost{})
+	service := app.NewAgentContextService(r.history, r.remote, cloudAgentDocuments{r.remote, repo.ID}, work, runtimeAgentTokens, unverifiedAgentHost{})
 	p, err := service.PrepareAgentContext(ctx, in)
 	if err != nil {
 		return domain.AgentContextPackage{}, err

@@ -5,11 +5,11 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
-// ConservativeAgentTokenCounter is the shipped memory/artifact counter. It
+// ConservativeAgentTokenCounter is the fallback memory/artifact counter. It
 // counts each UTF-8 byte as one allowance unit. It is deliberately labelled
 // inexact, including for ASCII, and can never satisfy strict native history
 // launch. Provider-specific framing remains a separate host reservation.
-// Replacing this with a tokenizer requires a verified model/tokenizer mapping.
+// The runtime prefers the agenttokens adapter for documented model mappings.
 type ConservativeAgentTokenCounter struct{}
 
 func (ConservativeAgentTokenCounter) CountAgentTokens(ctx context.Context, _ domain.ProviderKind, _ string, text string) (domain.AgentTokenUsage, error) {

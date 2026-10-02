@@ -635,14 +635,17 @@ is separate from the new history input token budget.
 An inspectable input artifact does not launch a provider or change its files:
 
 ```text
-cxt load --provider codex --context-budget 200k --output context.json
+cxt load --provider codex --model gpt-5.4 --context-budget 200k --output context.json
 cxt load --provider claude --context-budget full --output context.json
 ```
 
 Existing files are not overwritten. Artifacts contain private memory and dialogue;
 keep them out of Git. `full` means a ceiling of 800,000 tokens, not a promise that
-a model can accept that much. This build's artifact counter uses a conservative
-UTF-8 byte bound and explicitly reports that provider acceptance is unverified.
+a model can accept that much. A documented `--model` mapping uses an offline
+text tokenizer; omitted/unknown models and Claude use explicitly inexact UTF-8
+byte allowances. `usage.scope: text` excludes native-host inputs outside the
+rendered package. Provider acceptance remains unverified. See
+[local accounting and resource limits](CONTEXT_INPUT.md#local-text-accounting).
 
 The interactive wrapper also recognizes:
 
