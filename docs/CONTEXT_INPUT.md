@@ -46,7 +46,8 @@ package containing:
   supplied. Another contributor's task list is never selected automatically.
 - The repository, code position, source pointers, revision and coverage gaps.
 
-The default allowance is 8,000 conservative UTF-8 byte units. This is an
+The default allowance is 8,000 units: local text tokens when a documented model
+mapping is available, otherwise explicitly inexact UTF-8 byte units. This is an
 engineering bound, not a measured optimal model window or quality result.
 Required personal conditions are not silently truncated to meet that bound.
 Use `--work-state <file>` to select a scoped personal handoff explicitly; see
@@ -184,16 +185,61 @@ the launch path until the runtime capability and interactive handoff gates pass.
 Inspectable artifacts are available without claiming native acceptance:
 
 ```sh
-cxt load --provider codex --context-budget 200k --output context.json
-cxt load --provider codex --context-budget full --output context-full.json
+cxt load --provider codex --model gpt-5.4 --context-budget 200k --output context.json
+cxt load --provider codex --model gpt-5.4 --context-budget full --output context-full.json
 ```
 
-This separate artifact path uses the explicitly inexact byte counter and the
-requested budget, preserves selection and source provenance, and cannot be
+This separate artifact path counts the final rendered package using the
+selected model's documented text encoding when available, preserves selection
+and source provenance, and cannot be
 relabelled as launchable by changing one field. Prepared and launched delivery
 receipts preserve a copy of verified budget accounting when present; memory and
 empty-bootstrap receipts omit it. Acceptance stays unknown without provider
 evidence. Current-context mutation is never part of `load`.
+
+### Local text accounting
+
+The CLI embeds the vocabulary; counting needs no API key, Python, network call,
+or runtime download. Its versioned counter uses ordinary-text `o200k_base` for
+documented GPT-5, GPT-4o/4.1/4.5 and o1/o3/o4-mini mappings, and `cl100k_base` for
+GPT-4/3.5 mappings. Mapping follows
+[OpenAI tiktoken model.py](https://github.com/openai/tiktoken/blob/4e71bbe0c078468e00fefbf94b39849389f346e5/tiktoken/model.py);
+it does not validate that a model exists or that a custom endpoint uses it.
+Unknown/future models, deployment aliases, an omitted model and Claude keep the
+inexact byte allowance (`reason: model_tokenizer_unavailable`). Claude's legacy
+public tokenizer is not treated as an exact counter for current Claude models.
+The Go regex engine uses Unicode 15; code points unknown to those tables and
+existing assignments with category/simple-fold changes in the reference's
+Unicode 16 use `reason: unicode_classification_unavailable`. Non-ASCII input
+also falls back if the Go table version changes without revalidation. The
+counter ID includes the Unicode-table version. This avoids labelling a newer
+letter as punctuation and reporting a differing result as exact.
+
+Every candidate and the final `Prompt()` are counted with memory, historical
+JSON, escaping, notices, constraints and source pointers included. Counts of
+independent chunks are never added as a substitute for counting joined text:
+BPE merges can cross text boundaries. Special-token spellings in user text are
+counted literally. The bounded 128-entry in-process cache holds only hashes and
+counts; the counter version and encoding identify the result. Nothing about
+this cache changes archive hashes or authorization checks.
+
+The receipt's `usage.scope: text` means `exact: true` applies to these rendered
+bytes under that encoding, not the provider's entire request. The native first
+task, tools, system instructions and message framing outside the package remain
+separate runtime inputs. See [OpenAI counting semantics](https://developers.openai.com/api/docs/guides/token-counting).
+Local measurement does not require native-host evidence, and does not grant it.
+Strict history launch remains gated on that separate evidence.
+
+The current Go BPE implementation has quadratic work within an unbroken piece.
+Inputs above 16 MiB, runs above 4 KiB, or an aggregate sum of squared run lengths
+above 134,217,728 work units use the whole-text byte allowance
+with `reason: tokenizer_work_limit`. They are never split into independently
+counted fragments or silently truncated. Invalid UTF-8 is rejected. This bounds
+individual counting work; it is not a real-time completion guarantee. An
+inexact result cannot pass strict native-history delivery. Text-token equality
+is tested against an independent synthetic Python tiktoken reference corpus.
+Two overlapping run guards separate whitespace and letter/number classes;
+punctuation with newline/slash suffixes is included in the work bound.
 
 ## Local state and compatibility
 

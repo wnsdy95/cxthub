@@ -165,6 +165,10 @@ type AgentTokenUsage struct {
 	Tokens    int    `json:"tokens"`
 	Exact     bool   `json:"exact"`
 	Tokenizer string `json:"tokenizer"`
+	// Scope distinguishes local text accounting from an entire native request.
+	// Optional fields preserve existing serialized packages and their hashes.
+	Scope  string `json:"scope,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // AgentHostCapability must come from a verified adapter, not a larger arbitrary
