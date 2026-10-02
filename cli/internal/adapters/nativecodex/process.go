@@ -20,10 +20,11 @@ import (
 // The wrapper must still preserve original launch arguments before using this
 // adapter in production. No runtime capacity evidence is manufactured here.
 type Options struct {
-	Executable string
-	Cwd        string
-	Env        []string
-	ConfigArgs []string
+	Executable   string
+	Cwd          string
+	Env          []string
+	ConfigArgs   []string
+	StrictConfig bool
 }
 
 type ownedProcess struct {
@@ -60,6 +61,9 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 	socketPath := filepath.Join(dir, "rpc.sock")
 	args := []string{"app-server", "--listen", "unix://" + socketPath}
 	args = append(args, opts.ConfigArgs...)
+	if opts.StrictConfig {
+		args = append(args, "--strict-config")
+	}
 	cmd := exec.CommandContext(ctx, opts.Executable, args...)
 	cmd.Dir = cwd
 	if opts.Env != nil {

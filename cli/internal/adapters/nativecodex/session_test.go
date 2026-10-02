@@ -106,7 +106,27 @@ func nativeHelper() {
 				if mode == "existing-turn" {
 					turns = append(turns, map[string]any{"id": "unexpected"})
 				}
-				result = map[string]any{"model": "fixture-resolved", "modelProvider": "fixture-provider", "thread": map[string]any{"id": "fresh-fixture-thread", "cwd": gotCwd, "turns": turns}}
+				model, approval, sandbox := "fixture-resolved", "on-request", "readOnly"
+				_ = json.Unmarshal(req.Params["model"], &model)
+				_ = json.Unmarshal(req.Params["approvalPolicy"], &approval)
+				var requestedSandbox string
+				_ = json.Unmarshal(req.Params["sandbox"], &requestedSandbox)
+				if requestedSandbox != "" {
+					sandbox = map[string]string{"read-only": "readOnly", "workspace-write": "workspaceWrite", "danger-full-access": "dangerFullAccess"}[requestedSandbox]
+				}
+				if mode == "wrong-model" {
+					model = "different-model"
+				}
+				if mode == "wrong-approval" {
+					approval = "never"
+				}
+				if mode == "wrong-sandbox" {
+					sandbox = "dangerFullAccess"
+				}
+				if string(req.Params["allowProviderModelFallback"]) != "false" {
+					os.Exit(5)
+				}
+				result = map[string]any{"model": model, "modelProvider": "fixture-provider", "cwd": gotCwd, "approvalPolicy": approval, "approvalsReviewer": "user", "sandbox": map[string]string{"type": sandbox}, "thread": map[string]any{"id": "fresh-fixture-thread", "cwd": gotCwd, "turns": turns}}
 				if mode == "duplicate-turns" {
 					result = json.RawMessage(fmt.Sprintf(`{"model":"fixture-resolved","modelProvider":"fixture-provider","thread":{"id":"fresh-fixture-thread","cwd":%q,"turns":[{"id":"old"}],"turns":[]}}`, cwd))
 				}

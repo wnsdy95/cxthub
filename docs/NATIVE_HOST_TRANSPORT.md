@@ -32,6 +32,13 @@ A fresh thread must return exact, unambiguous identity fields and an explicit
 empty history array. Missing/null history and duplicate or case-aliased identity
 fields are rejected before injection.
 
+`thread/start` also disables provider model fallback. An explicitly requested
+model, approval policy, or sandbox mode must match the native response. A mismatch
+invalidates the session before any history is sent. The settings hash includes
+the response's permission details and other effective settings, without its
+thread object. It is an observation of returned settings, not a hash of loaded
+instruction contents, hidden tools, or a capacity attestation.
+
 Only user/assistant text can be injected. System/developer instructions, opaque
 reasoning and tool-call/result pairs are outside this text transport contract.
 A lost injection acknowledgement is ambiguous: the server may already have
@@ -74,8 +81,30 @@ test-only; it does not enable native launch in the installed product.
 
 ## Remaining integration requirements
 
-The wrapper must preserve the original argv, profile, model, permissions,
-working directory and initial task across the helper and interactive TUI.
+The composition layer now has a launch-binding seam for Codex 0.157.1. It uses
+the supervisor's existing argument parser, retains the selected cwd and first
+task, forwards ordered config/feature overrides, and maps explicit model,
+sandbox, approval, bypass, strict-config and web-search choices. Native config
+resolution remains native; CXTHub does not parse user TOML. The initial task is
+held privately for later host accounting and handoff, never sent by preparation.
+Private config and prompts are omitted from JSON and routine binding formatting.
+
+The installed binary verifies repeated config precedence, explicit model
+precedence, and explicit bypass behavior in isolated fixtures with no model
+turn. The optional test is `TestNativeCodexBoundLaunch` in `cli/cmd/cxt` and uses
+the same `CXT_TEST_NATIVE_CODEX` opt-in as the transport test.
+
+Unsupported launch options fail before creating the helper. In particular,
+Codex 0.157.1 `--profile` selects a separate configuration layer through a
+runtime loader override, but `app-server` rejects that option. Passing
+`-c profile=...` is not equivalent. Profiles, images, extra writable roots,
+provider pickers, hook-trust overrides and automatic-review modes need dedicated
+mapping and validation before they can use this path. Existing public provider
+passthrough behavior is unchanged.
+
+This seam remains deliberately unwired to public history launch. The wrapper
+still must preserve configuration through the interactive TUI, verify the
+matching resume acknowledgement, and account for the retained initial task.
 Verified model/window, host input/framing, tokenizer and compaction evidence
 must feed the existing adaptive budget before real history delivery. A prepared
 package, injection ACK, interactive connection and actual model acceptance need
@@ -83,4 +112,5 @@ separate receipts. Claude requires its own protocol adapter and evidence.
 
 Sources: [Codex app-server](https://learn.chatgpt.com/docs/app-server),
 [history injection](https://learn.chatgpt.com/docs/app-server#inject-items-into-a-thread),
+[versioned native profile and launch semantics](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/cli/src/main.rs),
 [WebSocket transport library](https://pkg.go.dev/github.com/coder/websocket).

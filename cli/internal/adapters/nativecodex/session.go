@@ -3,12 +3,14 @@
 package nativecodex
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,9 @@ type Thread struct {
 	Model         string `json:"model"`
 	ModelProvider string `json:"model_provider"`
 	Cwd           string `json:"cwd"`
+	// SettingsHash covers the native response's effective settings, not the
+	// contents of instruction files, hidden tools, capacity, or token counts.
+	SettingsHash string `json:"settings_hash"`
 }
 
 type ThreadOptions struct {
@@ -118,7 +123,7 @@ func (s *Session) StartThread(ctx context.Context, opts ThreadOptions) (Thread, 
 	if opts.ApprovalPolicy != "" && opts.ApprovalPolicy != "untrusted" && opts.ApprovalPolicy != "on-request" && opts.ApprovalPolicy != "never" {
 		return Thread{}, ErrState
 	}
-	params := map[string]any{"cwd": s.cwd, "ephemeral": opts.Ephemeral}
+	params := map[string]any{"cwd": s.cwd, "ephemeral": opts.Ephemeral, "allowProviderModelFallback": false}
 	if opts.Model != "" {
 		params["model"] = opts.Model
 	}
@@ -138,6 +143,9 @@ func (s *Session) StartThread(ctx context.Context, opts ThreadOptions) (Thread, 
 		return Thread{}, err
 	}
 	thread, valid := freshThread(raw, s.cwd, opts.ModelProvider)
+	if valid {
+		thread.SettingsHash, valid = threadSettings(raw, thread, opts)
+	}
 	if !valid {
 		s.uncertain = true
 		_ = s.rpc.close()
@@ -146,6 +154,124 @@ func (s *Session) StartThread(ctx context.Context, opts ThreadOptions) (Thread, 
 	s.thread = thread
 	s.started = true
 	return s.thread, nil
+}
+
+// threadSettings binds explicit CLI choices to the acknowledged runtime. Native
+// managed policy may reject or constrain a request; a mismatch must not silently
+// become a different preparation runtime. Model aliases are not guessed here.
+func threadSettings(raw []byte, thread Thread, opts ThreadOptions) (string, bool) {
+	fields, ok := identityObject(raw, "cwd", "approvalPolicy", "approvalsReviewer", "sandbox")
+	if !ok || (opts.Model != "" && thread.Model != opts.Model) {
+		return "", false
+	}
+	var cwd, approval, reviewer string
+	if json.Unmarshal(fields["cwd"], &cwd) != nil || cwd != thread.Cwd ||
+		json.Unmarshal(fields["approvalsReviewer"], &reviewer) != nil || (reviewer != "user" && reviewer != "auto_review" && reviewer != "guardian_subagent") {
+		return "", false
+	}
+	// Native config can select a granular approval object. Preserve that shape
+	// in the hash but never treat it as an explicit scalar CLI approval choice.
+	if json.Unmarshal(fields["approvalPolicy"], &approval) != nil {
+		granular, ok := identityObject(fields["approvalPolicy"], "granular")
+		if !ok || len(granular) != 1 || !validGranularApproval(granular["granular"]) {
+			return "", false
+		}
+	} else if approval != "never" && approval != "untrusted" && approval != "on-request" {
+		return "", false
+	}
+	if opts.ApprovalPolicy != "" && approval != opts.ApprovalPolicy {
+		return "", false
+	}
+	sandbox, ok := identityObject(fields["sandbox"], "type")
+	var kind string
+	if !ok || json.Unmarshal(sandbox["type"], &kind) != nil {
+		return "", false
+	}
+	if !validSandboxFields(kind, sandbox) {
+		return "", false
+	}
+	expected := map[string]string{"read-only": "readOnly", "workspace-write": "workspaceWrite", "danger-full-access": "dangerFullAccess"}
+	if kind != "readOnly" && kind != "workspaceWrite" && kind != "dangerFullAccess" && kind != "externalSandbox" {
+		return "", false
+	}
+	if opts.Sandbox != "" && expected[opts.Sandbox] != kind {
+		return "", false
+	}
+	// Include future native settings too, without thread IDs/timestamps which
+	// would make two otherwise identical observations incomparable.
+	delete(fields, "thread")
+	canonical, err := json.Marshal(fields)
+	if err != nil {
+		return "", false
+	}
+	// Normalize nested object ordering too; a response serializer changing its
+	// map order is not a runtime configuration change. Keep numeric precision.
+	var normalized any
+	decoder := json.NewDecoder(bytes.NewReader(canonical))
+	decoder.UseNumber()
+	if decoder.Decode(&normalized) != nil {
+		return "", false
+	}
+	canonical, err = json.Marshal(normalized)
+	if err != nil {
+		return "", false
+	}
+	hash := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(hash[:]), true
+}
+
+func validGranularApproval(raw json.RawMessage) bool {
+	fields, ok := identityObject(raw, "mcp_elicitations", "rules", "sandbox_approval")
+	if !ok {
+		return false
+	}
+	for key, value := range fields {
+		switch key {
+		case "mcp_elicitations", "rules", "sandbox_approval", "request_permissions", "skill_approval":
+			if string(value) != "true" && string(value) != "false" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validSandboxFields(kind string, fields map[string]json.RawMessage) bool {
+	for key, value := range fields {
+		if key == "type" {
+			continue
+		}
+		switch key {
+		case "networkAccess":
+			if kind == "externalSandbox" {
+				var network string
+				if json.Unmarshal(value, &network) != nil || (network != "enabled" && network != "restricted") {
+					return false
+				}
+			} else if (kind != "readOnly" && kind != "workspaceWrite") || (string(value) != "true" && string(value) != "false") {
+				return false
+			}
+		case "excludeSlashTmp", "excludeTmpdirEnvVar":
+			if kind != "workspaceWrite" || (string(value) != "true" && string(value) != "false") {
+				return false
+			}
+		case "writableRoots":
+			var roots []string
+			if kind != "workspaceWrite" || json.Unmarshal(value, &roots) != nil || roots == nil {
+				return false
+			}
+			for _, root := range roots {
+				if root == "" || strings.ContainsRune(root, 0) || !filepath.IsAbs(root) {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // identityObject rejects duplicate fields and case aliases before any struct
