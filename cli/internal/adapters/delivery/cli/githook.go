@@ -542,6 +542,21 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		fmt.Println("cxt: detached HEAD — time travel mode (current session maintained). Recovery: cxt checkout <ref>")
 		return nil
 	}
+	if !wrapperManaged {
+		// A completed checkpoint owns this prefix even if preparing the new
+		// main memory or queuing its handoff fails. Otherwise entering and
+		// leaving a branch attaches the unchanged conversation again. Only
+		// acknowledged bytes are excluded; growth remains captureable.
+		for _, live := range lives {
+			_ = capture.TrackAppSession(cwd, domain.ProviderKind(live.provider), live.session, live.path)
+			if live.capturedBytes <= 0 {
+				continue
+			}
+			if err := providerfs.RecordCaptureBaseline(stateRoot, live.path, live.capturedBytes); err != nil {
+				hookWarn("app session growth baseline was not recorded; the next switch will retry its checkpoint: %v", err)
+			}
+		}
+	}
 
 	if c.History != nil {
 		if p, err := c.History.CurrentPosition(ctx); err == nil && p.Orphan {
@@ -587,7 +602,8 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		}
 		if len(existing.Snapshots) > 0 || hasRef {
 			prepareExpected = true
-			// Existing branch: load context of that task (current context is not carried).
+			// Select this task's archived position. Any managed fresh input is
+			// independently prepared from the latest authorized server main.
 			from := branch
 			if c.History != nil {
 				if p, err := c.History.CurrentPosition(ctx); err == nil && p.GitBranch() == branch && p.Snapshot != "" {
@@ -615,7 +631,8 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 			}
 		} else if prevBranch != "" && prevBranch != branch {
 			prepareExpected = true
-			// New branch: seed genesis — main memory ⊕ ancestry summary + previous commit raw tail.
+			// Preserve the branch's source ancestry while preparing fresh input
+			// from latest server main, independently of that archived source.
 			if out, err := c.Seed.Seed(ctx, inbound.SeedInput{
 				Cwd: cwd, FromBranch: prevBranch, NewBranch: branch, Provider: targetProvider, Author: c.Identity,
 				SkipMaterialize: !wrapperManaged,
@@ -671,20 +688,6 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 		if err := capture.WriteSessionHandoff(cwd, sessionIDs, text); err != nil {
 			hookWarn("app context handoff could not be queued; current session was preserved: %v", err)
 			return nil
-		}
-		// The app keeps writing the same native file after the switch. Exclude
-		// the exact prefix already checkpointed above; any byte appended after
-		// that read immediately clears the gate. Without this baseline, merely
-		// entering and leaving a branch would attach the unchanged old
-		// conversation to the target branch and pollute its lineage.
-		for _, live := range lives {
-			_ = capture.TrackAppSession(cwd, domain.ProviderKind(live.provider), live.session, live.path)
-			if live.capturedBytes <= 0 {
-				continue // checkpoint failed; retry rather than hiding uncaptured bytes
-			}
-			if err := providerfs.RecordCaptureBaseline(stateRoot, live.path, live.capturedBytes); err != nil {
-				hookWarn("app session growth baseline was not recorded; the next switch will retry its checkpoint: %v", err)
-			}
 		}
 		fmt.Printf("cxt: app session retained; bounded context for %q will be applied once on the next prompt\n", branch)
 		return nil

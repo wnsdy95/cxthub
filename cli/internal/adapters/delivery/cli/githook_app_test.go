@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,9 +16,12 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
 
-type appSwitchSave struct{}
+type appSwitchSave struct{ err error }
 
-func (appSwitchSave) Save(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+func (s appSwitchSave) Save(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+	if s.err != nil {
+		return inbound.SaveOutput{}, s.err
+	}
 	info, err := os.Stat(in.SessionPath)
 	if err != nil {
 		return inbound.SaveOutput{}, err
@@ -47,20 +51,24 @@ func (s appSwitchList) List(context.Context, inbound.ListInput) (inbound.ListOut
 type appSwitchCheckout struct {
 	seen     *inbound.CheckoutInput
 	prepared string
+	err      error
 }
 
 func (s appSwitchCheckout) Checkout(_ context.Context, in inbound.CheckoutInput) (inbound.CheckoutOutput, error) {
 	*s.seen = in
+	if s.err != nil {
+		return inbound.CheckoutOutput{}, s.err
+	}
 	if s.prepared != "" {
 		return inbound.CheckoutOutput{Branch: "feature/app", Head: domain.HashContent([]byte("app branch target")), WrittenPath: s.prepared, ResumeCmd: "codex resume " + providerfs.SessionIDFromPath(s.prepared), Fidelity: domain.FidelityMemory}, nil
 	}
 	return inbound.CheckoutOutput{Branch: "feature/app", Head: domain.HashContent([]byte("app branch target"))}, nil
 }
 
-type appSwitchHandoff struct{}
+type appSwitchHandoff struct{ err error }
 
-func (appSwitchHandoff) RenderBranchHandoff(context.Context, inbound.BranchHandoffInput) (string, error) {
-	return "BOUNDED APP HANDOFF", nil
+func (s appSwitchHandoff) RenderBranchHandoff(context.Context, inbound.BranchHandoffInput) (string, error) {
+	return "BOUNDED APP HANDOFF", s.err
 }
 
 func appSwitchGit(t *testing.T, cwd string, args ...string) {
@@ -73,7 +81,7 @@ func appSwitchGit(t *testing.T, cwd string, args ...string) {
 }
 
 func TestUnmanagedAppBranchSwitchPreservesProviderSession(t *testing.T) {
-	for _, mode := range []string{"app", "prepare-first-wrapper"} {
+	for _, mode := range []string{"app", "app-handoff-failure", "app-checkout-failure", "app-save-failure", "prepare-first-wrapper"} {
 		t.Run(mode, func(t *testing.T) {
 			repo := t.TempDir()
 			home := t.TempDir()
@@ -136,10 +144,19 @@ func TestUnmanagedAppBranchSwitchPreservesProviderSession(t *testing.T) {
 				Checkout: appSwitchCheckout{seen: &checkoutInput, prepared: prepared},
 				Handoff:  appSwitchHandoff{},
 			}
+			failure := errors.New("synthetic transition failure")
+			switch mode {
+			case "app-handoff-failure":
+				container.Handoff = appSwitchHandoff{err: failure}
+			case "app-checkout-failure":
+				container.Checkout = appSwitchCheckout{seen: &checkoutInput, err: failure}
+			case "app-save-failure":
+				container.Save = appSwitchSave{err: failure}
+			}
 			if err := contextSwitch(context.Background(), container, repo); err != nil {
 				t.Fatal(err)
 			}
-			if checkoutInput.SkipMaterialize != (mode == "app") {
+			if checkoutInput.SkipMaterialize != (mode != "prepare-first-wrapper") {
 				t.Fatal("checkout preparation did not match session ownership")
 			}
 			if _, err := os.Stat(sessionPath); err != nil {
@@ -158,8 +175,19 @@ func TestUnmanagedAppBranchSwitchPreservesProviderSession(t *testing.T) {
 				}
 				return
 			}
-			if got, ok := capture.ConsumeSessionHandoff(repo, sessionID); !ok || got != "BOUNDED APP HANDOFF" {
+			got, ok := capture.ConsumeSessionHandoff(repo, sessionID)
+			if mode == "app-handoff-failure" || mode == "app-checkout-failure" {
+				if ok {
+					t.Fatalf("failed handoff was queued: %q", got)
+				}
+			} else if !ok || got != "BOUNDED APP HANDOFF" {
 				t.Fatalf("app handoff = %q, %v", got, ok)
+			}
+			if mode == "app-save-failure" {
+				if providerfs.CaptureExcluded(repo, sessionPath, int64(len(raw))) {
+					t.Fatal("failed checkpoint excluded uncaptured conversation")
+				}
+				return
 			}
 			if !providerfs.CaptureExcluded(repo, sessionPath, int64(len(raw))) {
 				t.Fatal("unchanged app session was not held at the branch-switch baseline")
