@@ -422,13 +422,13 @@ expect "restart does not silently revert the invocation to default settings" "$(
 if [ -f "$CXT_E2E_AGENT_PID" ]; then kill "$(cat "$CXT_E2E_AGENT_PID")" 2>/dev/null; fi
 wait "$WPID" 2>/dev/null
 
-echo "── H. Web personal settings(load_mode): PATCH /me → CLI consumption"
+echo "── H. Saved load mode cannot override managed latest-main input"
 expect "load_mode saved(memory)" "$(ccurl -sb "$J" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":"memory"}' | jget "['load_mode']")" memory
 expect "GET /me reflects" "$(curl -sb "$J" "$B/me" | jget "['load_mode']")" memory
 expect "Invalid value 422" "$(ccurl -sb "$J" -o /dev/null -w '%{http_code}' -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":"bogus"}')" 422
-# CLI consumption: an explicit cxt load materializes using the account-wide
-# setting. Plain desktop-app Git switches intentionally do not replace the
-# vendor-owned native session and are covered in section G.
+# Saved preferences remain readable for compatibility. Managed load ignores
+# them, injects latest main, and leaves instruction files untouched. Explicit
+# --mode memory separately exercises historical archive restoration.
 cd "$TMP/repo1"
 cat > CLAUDE.md <<'EOF'
 # User-owned instructions
@@ -436,8 +436,30 @@ Preserve this text and its file mode.
 EOF
 chmod 600 CLAUDE.md
 cxt load main --provider claude >"$TMP/pref.out" 2>&1
-expect "CLI load uses server personal settings(memory)" "$(grep -c 'fidelity: memory' "$TMP/pref.out")" 1
-cxt load main --provider claude >/dev/null 2>&1
+expect "managed load prepares bounded memory" "$(grep -c 'fidelity: memory' "$TMP/pref.out")" 1
+expect "saved mode cannot replace managed main input" "$(python3 - "$TMP/pref.out" "$(main_head)" "$(git branch --show-current)" <<'PYPREF'
+import json,pathlib,sys
+output=pathlib.Path(sys.argv[1]).read_text()
+path=next(line.split('written: ',1)[1] for line in output.splitlines() if 'written: ' in line)
+found=False
+for line in pathlib.Path(path).read_text().splitlines():
+    row=json.loads(line)
+    message=row.get('message',{})
+    if message.get('role')!='user': continue
+    content=message.get('content',[])
+    texts=[content] if isinstance(content,str) else [part.get('text','') for part in content if isinstance(part,dict)]
+    for text in texts:
+        if not text.startswith('[cxt context package v1]\n'): continue
+        selection=json.loads(text.split('\n',1)[1])['selection']
+        found=(selection['source_policy']=='latest_server_main' and selection['branch']=='main'
+            and selection['snapshot_id']==sys.argv[2] and selection['working_position']['branch']==sys.argv[3])
+print('yes' if found else 'no')
+PYPREF
+)" yes
+expect "managed load leaves instruction bytes unchanged" "$(python3 -c "from pathlib import Path; print('yes' if Path('CLAUDE.md').read_text() == '# User-owned instructions\nPreserve this text and its file mode.\n' else 'no')")" yes
+cxt load main --provider claude --mode memory >"$TMP/legacy-memory.out" 2>&1
+expect "explicit archive memory restoration stays available" "$(grep -c 'fidelity: memory' "$TMP/legacy-memory.out")" 1
+cxt load main --provider claude --mode memory >/dev/null 2>&1
 expect "memory load preserves user instructions" "$(python3 -c "from pathlib import Path; print('yes' if Path('CLAUDE.md').read_text().startswith('# User-owned instructions\nPreserve this text and its file mode.\n') else 'no')")" yes
 expect "CLI memory uses server-assessed claims" "$(grep -c 'Assessment: server_assessed' CLAUDE.md)" 1
 expect "CLI keeps retained rationale from shared query" "$(grep -c '\[retained; rationale;' CLAUDE.md)" 1
