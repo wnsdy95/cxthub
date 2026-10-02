@@ -18,6 +18,10 @@ func (f seedPinPreparer) PrepareAgentContext(ctx context.Context, in inbound.Pre
 	return f(ctx, in)
 }
 
+func (seedPinPreparer) ValidateAgentContextDelivery(context.Context, string, domain.AgentContextSelection) error {
+	return nil
+}
+
 type seedPinDistiller struct{ calls int }
 
 func (d *seedPinDistiller) Distill(context.Context, domain.CIRDocument, *domain.NativeMemory) (domain.MemoryDigest, error) {
@@ -25,8 +29,8 @@ func (d *seedPinDistiller) Distill(context.Context, domain.CIRDocument, *domain.
 	return domain.MemoryDigest{Summary: "FUTURE redistilled source conversation"}, nil
 }
 
-func TestAgentContextSeedPersistsPreparedHistoricalPin(t *testing.T) {
-	for _, kind := range []string{"selected owner", "ancestor owner", "empty", "prepared pin without live cursor"} {
+func TestAgentContextSeedPersistsArchivePinIndependentlyOfInjectedMain(t *testing.T) {
+	for _, kind := range []string{"selected owner", "ancestor owner", "empty"} {
 		t.Run(kind, func(t *testing.T) {
 			ctx := context.Background()
 			f := newStagingFixture(t)
@@ -47,17 +51,16 @@ func TestAgentContextSeedPersistsPreparedHistoricalPin(t *testing.T) {
 			if kind == "empty" {
 				pin, old = domain.AgentMemoryPin{}, domain.MemoryDigest{}
 			}
-			if kind != "prepared pin without live cursor" {
+			{
 				if err := f.store.PutWorkingPosition(ctx, domain.WorkingPosition{RepoID: f.git.repo.ID, Branch: "main", GitCommit: f.git.sha, Snapshot: source, MemoryHash: pin.MemoryHash, MemorySource: pin.SnapshotID, MemoryPinned: true, Rewound: true}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			prepare := seedPinPreparer(func(ctx context.Context, in inbound.PrepareAgentContextInput) (domain.AgentContextPackage, error) {
-				if in.SnapshotID != source || in.Branch != "main" {
+				if in.SnapshotID != source || in.Branch != "main" || !in.LatestMain {
 					t.Fatal("wrong seed source", in)
 				}
 				p, err := (&agentPackageFixture{}).PrepareAgentContext(ctx, in)
-				p.Content.Selection.MemoryPin = &pin
 				p.ID, _ = p.Digest()
 				return p, err
 			})

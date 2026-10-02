@@ -15,6 +15,33 @@ earlier code position. CLI history reads retain the server revision and state
 hash; local-only history identifies itself as an observation rather than an
 authorization or server acknowledgement.
 
+Every managed fresh context injection uses the latest authorized **server
+`main`**: default memory input, explicit budgeted history, `load` delivery,
+branch seeds and desktop handoffs. The local branch, worktree, local `main` ref
+and rewound memory cursor do not select that input. The server resolves `main`
+directly; local aliases, refs and the local Git commit cannot pin its tip.
+
+The package's source selection `branch`, `snapshot_id` and `code_commit`
+identify server `main` and its observed tip/code. The additive, optional
+`source_policy: latest_server_main` and `working_position` fields distinguish
+that source from the actual branch and code being edited. `working_position`
+records the actual Git branch and commit separately; a feature worktree is not
+relabeled as `main`. Its state still participates in delivery validation.
+
+Local `main` is never authoritative. Missing or denied server `main`, invalid
+source data and failed memory reads stop managed injection without falling back
+to local context. A missing `main` in a nonempty server repository is not an
+empty-repository bootstrap. Historical archive reads, including
+`load <ref> --output`, retain their explicit source and memory revision; they
+do not deliver a managed fresh package.
+
+Before delivery, cxt reauthorizes and revalidates the source and memory against
+the prepared selection, and checks the separate working position. Concurrent
+source, memory or worktree changes invalidate the package: delivery aborts or
+the input must be prepared again within the applicable retry policy. These are
+bounded observations, not a distributed transaction or a lock across the server,
+Git and provider process.
+
 The optional `segment_limit`, `segment_offset` and `segment_state_hash` query
 parameters return logical conversation ranges in the same snapshot order.
 Continuation requires the original selection hash. Each page contains only its
@@ -38,13 +65,21 @@ exhaustion returns HTTP 422 `memory_projection_limit`; the server neither
 truncates the result nor changes the archived memory. This server bound is
 separate from the agent's token budget below.
 
-An unqualified managed fresh launch and unqualified `load` prepare a versioned
-package containing:
+An unqualified managed fresh launch and prepared `load` delivery use the latest
+authorized server `main` to prepare a versioned package containing:
 
-- Server-selected project memory and its application state.
+- Server `main` project memory and its application state.
 - Explicitly selected personal work state and exact user constraints, when
   supplied. Another contributor's task list is never selected automatically.
-- The repository, code position, source pointers, revision and coverage gaps.
+- The repository, main source/code pointers, separate working position,
+  revision and coverage gaps.
+
+Stored `load.mode` and account server preferences remain for compatibility but
+cannot override managed input. Archive replay requires explicit `--mode` on
+each command; Git hooks always use structured managed input. When managed
+`load` omits `--provider`, it can infer the provider from authorized server main
+snapshot metadata and record it in the package's optional `provider` field,
+without requiring a local archive.
 
 The default allowance is 8,000 units: local text tokens when a documented model
 mapping is available, otherwise explicitly inexact UTF-8 byte units. This is an
@@ -52,26 +87,30 @@ engineering bound, not a measured optimal model window or quality result.
 Required personal conditions are not silently truncated to meet that bound.
 Use `--work-state <file>` to select a scoped personal handoff explicitly; see
 [personal work format and validation](PERSONAL_WORK.md).
-An ordinary current selection queries the server's integrated memory for its
-selected branch, snapshot and Git commit. A historical selection keeps its exact
-memory revision (including an explicitly empty revision), even after it receives
-a branch name. The local recovery cursor's `memory_pinned` marker alone does not
-disable current branch integration. Preparing input never changes that cursor
-or an applied-pull receipt; those receipts record explicit synchronization, not
-the provider's current input cache.
+Managed input queries the server's integrated memory for the latest authorized
+`main` snapshot and its server-selected code commit. A historical or rewound
+local cursor, including `memory_pinned`, does not pin managed input to historical
+memory. Historical archive inspection retains its exact memory revision,
+including an explicitly empty revision. Preparing input never changes that
+cursor or an applied-pull receipt; those receipts record explicit
+synchronization, not the provider's current input cache.
 Synthetic input packages are excluded from subsequent seed reconstruction and
 memory distillation, including summaries that quote a nested package.
 
-Desktop branch notices use the same prepared package for a selected snapshot.
-They leave the provider-owned conversation open and keep the existing 16 KiB
-handoff limit. An orphan root has no selected conversation: its explicitly
-pinned inherited project memory remains a separate memory-only handoff.
+Desktop branch notices and managed branch seeds use the same latest authorized
+server `main` input rule. Notices leave the provider-owned conversation open and
+keep the existing 16 KiB handoff limit. Branch creation still derives natural
+parents and archival memory from its actual creation source. An orphan root retains its
+separate inherited archival memory and has no natural conversation parent.
+Input from main does not rewrite that ancestry or archival memory, and an
+orphan cursor cannot substitute inherited memory for the authorized main input.
 Preparing a notice or starting a process does not prove that an app accepted it.
 
 A first managed default CLI launch can start a repository with no context yet.
 This is a distinct **verified-empty bootstrap**, not a fallback after a failed
-context read. It requires a pristine local context replica and an authorized,
-unfiltered `scope=all` server query with empty snapshot **and history** arrays,
+main/context read or a way to invent `main`. It requires a pristine local
+context replica and an authorized, unfiltered `scope=all` server query with
+empty snapshot **and history** arrays,
 including unreachable captures. Missing fields, missing repositories (404),
 denied access (403), transport failures, and nonempty server data stop the launch.
 Explicit load/ref requests, history input, personal work-state input, native
@@ -98,10 +137,12 @@ child. The wrapper prepares and validates the next input while that child is
 alive, then reuses the prepared input for the restart. A failed preparation keeps
 the current child and does not retry repeatedly for the same boundary. A later
 transition may retry. The wrapper retires only its own old session after stopping
-it; other terminals stay open. Legacy native-resume wrappers keep their explicit
+it; other terminals stay open. Existing native resume does not reinject context.
+Explicit legacy replay restores the selected archive; it is separate from
+prepared fresh injection. Legacy native-resume wrappers retain that explicit
 replay path. Upgrade long-running wrappers as well as the CLI binary.
 
-## Explicit historical input
+## Explicit budgeted history input
 
 ```sh
 cxt --pull --context-budget 200k codex --yolo
@@ -112,8 +153,10 @@ cxt --pull codex --yolo
 The last two requests both ask for 800,000 tokens: `full` is the original
 requested budget, not a promise of 800,000 tokens of input. Budgets can be chosen
 in 100k steps (`100k`, `200k`, through `800k`); `k` means 1,000 tokens. Smaller
-positive token counts are also accepted. History is quoted evidence in a new
-package, not decoded opaque reasoning or native state replay.
+positive token counts are also accepted. Managed history input selects evidence
+from the latest authorized server `main`, regardless of the working branch or
+rewound cursor. History is quoted evidence in a new package, not decoded opaque
+reasoning or native state replay.
 Native resume, help and noninteractive provider commands preserve their own
 argument and session semantics; incompatible context prefixes fail.
 
@@ -157,10 +200,12 @@ authorization/revisions are checked again before materialization.
 If the server revision or verified runtime limits change while preparing input,
 the reader makes at most three complete attempts in total. Changed runtime
 limits discard the old selection and reselect recent turns with the new budget.
-It fixes the original snapshot, branch, code and
+Each preparation fixes its observed server main snapshot, branch, code and
 context content across those attempts, discards partial pages, and reauthorizes
-the reads. An observed selection change, denied access or invalid source stops
-immediately. Exhausted server-revision contention returns `position_changed`;
+the reads. Main tip/content or working-position movement requires a new
+preparation; denied access or invalid source stops immediately. Historical
+artifact requests instead retain their explicitly selected archive source.
+Exhausted server-revision contention returns `position_changed`;
 exhausted runtime-limit/model contention returns `provider_capability_unknown`. Explicit
 personal work does not use this retry because its imported provenance must be
 checked again by a new invocation. A typed `memory_cursor_stale` response for a
@@ -181,19 +226,26 @@ acceptance.
 The preparatory [native Codex transport](NATIVE_HOST_TRANSPORT.md) has a separate
 owned-process and injection-acknowledgement contract. It remains unwired from
 the launch path until the runtime capability and interactive handoff gates pass.
+Native 200k/full-budget delivery, real-host acceptance and interactive TUI
+handoff remain incomplete validation gates.
 
-Inspectable artifacts are available without claiming native acceptance:
+Without an explicit ref, `cxt load --output` previews the latest authorized
+server `main` input, including the `200k` and `full` examples below. An explicit
+`<ref>` instead selects historical archive inspection and its exact memory
+revision. Both paths remain inspection artifacts without native acceptance:
 
 ```sh
 cxt load --provider codex --model gpt-5.4 --context-budget 200k --output context.json
 cxt load --provider codex --model gpt-5.4 --context-budget full --output context-full.json
+cxt load <historical-ref> --provider codex --model gpt-5.4 --context-budget 200k --output historical-context.json
 ```
 
-This separate artifact path counts the final rendered package using the
-selected model's documented text encoding when available, preserves selection
-and source provenance, and cannot be
-relabelled as launchable by changing one field. Prepared and launched delivery
-receipts preserve a copy of verified budget accounting when present; memory and
+The artifact path counts the final rendered package
+using the selected model's documented text encoding when available, preserves
+selection and source provenance, and cannot be relabelled as launchable by
+changing one field. A delivered managed package must be prepared from latest
+authorized server `main`. Prepared and launched delivery receipts preserve a
+copy of verified budget accounting when present; memory and
 empty-bootstrap receipts omit it. Acceptance stays unknown without provider
 evidence. Current-context mutation is never part of `load`.
 

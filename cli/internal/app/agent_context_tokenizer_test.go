@@ -304,6 +304,8 @@ func TestAgentContextTokenizerExactTextDoesNotAuthorizeUnknownHost(t *testing.T)
 			}
 			mat := &agentMaterializerFixture{}
 			load := NewLoadSessionService(nil, map[domain.ProviderKind]outbound.ProviderCodec{in.Provider: codec.NewCodexCodec()}, map[domain.ProviderKind]outbound.SessionMaterializer{in.Provider: mat}, nil, nil, nil).WithAgentContext(s).WithAgentCodePosition(agentCodeFixture{})
+			in.WorkingPosition = &domain.AgentWorkingPosition{Branch: "feature", CodeCommit: strings.Repeat("a", 40)}
+			in.WorktreeStateHash = agentHash("worktree")
 			_, out, err := load.PrepareAgentDelivery(context.Background(), in)
 			if !errors.Is(err, domain.ErrProviderCapabilityUnknown) {
 				t.Fatalf("exact text authorized an unknown host: %v", err)

@@ -99,32 +99,23 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	if personal && (in.Mode != "" || in.PreferPendingTail || s.agentContext == nil) {
 		return inbound.LoadOutput{}, fmt.Errorf("%w: explicit personal handoff requires agent context preparation without legacy replay or pending-tail selection", domain.ErrAgentContextUnavailable)
 	}
+	if in.Mode == "" && s.agentContext != nil {
+		return s.LoadAgentContext(ctx, inbound.PrepareAgentContextInput{
+			RepoID: in.RepoID, Cwd: in.Cwd, LatestMain: true,
+			Provider: in.TargetProvider, Policy: domain.MemoryInputPolicy(),
+			WorkStatePath: in.WorkStatePath, PersonalScope: in.PersonalScope,
+		})
+	}
 	snapID, err := resolveRef(ctx, s.store, in.RepoID, in.Ref)
 	if err != nil {
 		return inbound.LoadOutput{}, err
 	}
-	sourceID := snapID
 	if in.PreferPendingTail {
 		snapID = s.pendingTailOf(ctx, in.RepoID, in.Ref, snapID, in.PreferredSessionID)
 	}
 	snap, err := s.store.GetSnapshot(ctx, snapID)
 	if err != nil {
 		return inbound.LoadOutput{}, err
-	}
-	if in.Mode == "" && s.agentContext != nil {
-		branch, err := loadAgentSourceBranch(ctx, s.store, snap.RepoID, in.Ref, in.Branch, sourceID)
-		if err != nil {
-			return inbound.LoadOutput{}, err
-		}
-		target := in.TargetProvider
-		if target == "" {
-			target = snap.Provider
-		}
-		return s.LoadAgentContext(ctx, inbound.PrepareAgentContextInput{
-			RepoID: snap.RepoID, Cwd: in.Cwd, Branch: branch, SnapshotID: snap.ID, MemoryPin: in.MemoryPin,
-			Provider: target, Policy: domain.MemoryInputPolicy(),
-			WorkStatePath: in.WorkStatePath, PersonalScope: in.PersonalScope,
-		})
 	}
 	if _, _, err := selectedMemory(ctx, s.store, snapID); err != nil {
 		return inbound.LoadOutput{}, err

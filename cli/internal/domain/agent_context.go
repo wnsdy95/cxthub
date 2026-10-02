@@ -126,16 +126,51 @@ func (p *AgentMemoryPin) Validate() error {
 }
 
 type AgentContextSelection struct {
-	RepositoryID      string          `json:"repository_id"`
-	Branch            string          `json:"branch,omitempty"`
-	SnapshotID        ContentHash     `json:"snapshot_id"`
-	CodeCommit        string          `json:"code_commit"`
-	ContextStateHash  ContentHash     `json:"context_state_hash"`
-	MemoryStateHash   ContentHash     `json:"memory_state_hash"`
-	MemoryPin         *AgentMemoryPin `json:"memory_pin,omitempty"`
-	WorktreeStateHash ContentHash     `json:"worktree_state_hash,omitempty"`
-	EvidenceRevision  uint64          `json:"evidence_revision,string"`
-	GraphRevision     uint64          `json:"graph_revision,string"`
+	RepositoryID      string                `json:"repository_id"`
+	Branch            string                `json:"branch,omitempty"`
+	SnapshotID        ContentHash           `json:"snapshot_id"`
+	CodeCommit        string                `json:"code_commit"`
+	ContextStateHash  ContentHash           `json:"context_state_hash"`
+	MemoryStateHash   ContentHash           `json:"memory_state_hash"`
+	MemoryPin         *AgentMemoryPin       `json:"memory_pin,omitempty"`
+	WorktreeStateHash ContentHash           `json:"worktree_state_hash,omitempty"`
+	EvidenceRevision  uint64                `json:"evidence_revision,string"`
+	GraphRevision     uint64                `json:"graph_revision,string"`
+	SourcePolicy      string                `json:"source_policy,omitempty"`
+	WorkingPosition   *AgentWorkingPosition `json:"working_position,omitempty"`
+}
+
+const AgentSourceLatestMain = "latest_server_main"
+
+// AgentWorkingPosition fences the code being edited without using it to select
+// project knowledge. Source CodeCommit above describes server main instead.
+type AgentWorkingPosition struct {
+	Branch     string `json:"branch,omitempty"`
+	CodeCommit string `json:"code_commit"`
+}
+
+func (s AgentContextSelection) DeliveryCodeCommit() string {
+	if s.WorkingPosition != nil {
+		return s.WorkingPosition.CodeCommit
+	}
+	return s.CodeCommit
+}
+
+func (s AgentContextSelection) DeliveryBranch() string {
+	if s.WorkingPosition != nil {
+		return s.WorkingPosition.Branch
+	}
+	return s.Branch
+}
+
+func (s AgentContextSelection) ValidateSource() error {
+	if s.SourcePolicy == "" && s.WorkingPosition == nil {
+		return nil
+	}
+	if s.SourcePolicy != AgentSourceLatestMain || s.Branch != "main" || s.MemoryPin != nil || s.WorkingPosition == nil || !ValidGitOID(s.WorkingPosition.CodeCommit) || ValidateContentHash(s.WorktreeStateHash) != nil {
+		return ErrAgentContextUnavailable
+	}
+	return nil
 }
 
 type AgentHistorySegment struct {
@@ -201,6 +236,7 @@ func (c AgentHostCapability) Check(provider ProviderKind, model string, usage Ag
 }
 
 type AgentContextPackage struct {
+	Provider     ProviderKind        `json:"provider,omitempty"`
 	Version      int                 `json:"version"`
 	ID           ContentHash         `json:"id"`
 	Policy       InputPolicy         `json:"policy"`
@@ -255,6 +291,9 @@ func (p AgentContextPackage) ValidateIdentity() error {
 		return ErrHashMismatch
 	}
 	if err := p.Policy.Validate(); err != nil {
+		return err
+	}
+	if err := p.Content.Selection.ValidateSource(); err != nil {
 		return err
 	}
 	if p.Budget != nil {

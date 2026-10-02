@@ -10,6 +10,11 @@ type PrepareAgentContextInput struct {
 	Cwd        string
 	Branch     string
 	SnapshotID domain.ContentHash
+	// LatestMain selects the current authorized server main for injection, not
+	// the local working cursor. Explicit archive inspection may leave it false.
+	LatestMain bool
+	// WorkingPosition is independent of the injected project's source position.
+	WorkingPosition *domain.AgentWorkingPosition
 	// MemoryPin is an exact historical attachment; non-nil empty means no memory.
 	MemoryPin *domain.AgentMemoryPin
 	// WorktreeStateHash fences the runtime's selected cursor before delivery.
@@ -30,4 +35,10 @@ type PrepareAgentContextInput struct {
 
 type PrepareAgentContext interface {
 	PrepareAgentContext(context.Context, PrepareAgentContextInput) (domain.AgentContextPackage, error)
+}
+
+// AgentContextDeliveryValidator rechecks source authorization and working state
+// immediately before a prepared package is materialized or delivered.
+type AgentContextDeliveryValidator interface {
+	ValidateAgentContextDelivery(context.Context, string, domain.AgentContextSelection) error
 }

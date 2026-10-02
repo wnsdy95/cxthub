@@ -24,9 +24,23 @@ type agentPackageFixture struct {
 func (f *agentPackageFixture) PrepareAgentContext(ctx context.Context, in inbound.PrepareAgentContextInput) (domain.AgentContextPackage, error) {
 	f.calls++
 	f.seen = in
-	p := domain.AgentContextPackage{Version: 1, Policy: domain.MemoryInputPolicy(), Delivery: "prepared", Content: domain.AgentContextContent{Notice: "bounded B memory fixture", Selection: domain.AgentContextSelection{RepositoryID: in.RepoID, Branch: in.Branch, SnapshotID: in.SnapshotID, CodeCommit: strings.Repeat("a", 40)}}}
+	provider := in.Provider
+	if provider == "" {
+		provider = domain.ProviderCodex
+	}
+	p := domain.AgentContextPackage{Version: 1, Provider: provider, Policy: domain.MemoryInputPolicy(), Delivery: "prepared", Content: domain.AgentContextContent{Notice: "bounded B memory fixture", Selection: domain.AgentContextSelection{RepositoryID: in.RepoID, Branch: in.Branch, SnapshotID: in.SnapshotID, CodeCommit: strings.Repeat("a", 40)}}}
+	if in.LatestMain {
+		p.Content.Selection = latestMainSelection(in.RepoID, in.Branch)
+	}
 	p.ID, _ = p.Digest()
 	return p, f.err
+}
+
+func latestMainSelection(repo, branch string) domain.AgentContextSelection {
+	return domain.AgentContextSelection{RepositoryID: repo, Branch: "main", SnapshotID: agentHash("latest main"), CodeCommit: strings.Repeat("b", 40), SourcePolicy: domain.AgentSourceLatestMain, WorktreeStateHash: agentHash("working position"), WorkingPosition: &domain.AgentWorkingPosition{Branch: branch, CodeCommit: strings.Repeat("a", 40)}}
+}
+func (*agentPackageFixture) ValidateAgentContextDelivery(context.Context, string, domain.AgentContextSelection) error {
+	return nil
 }
 
 type agentMaterializerFixture struct {

@@ -399,6 +399,7 @@ func buildContainer(cfg config) container {
 		Identity:        cfg.Identity,
 	}
 	preparer := runtimeAgentPreparer{gitCtx, store, remote, history}
+	hookHdl.WithAgentContext(preparer)
 	loadSvc.WithAgentContext(preparer).WithAgentCodePosition(gitctx.NewGitContextAdapter())
 	seedSvc.WithAgentContext(preparer)
 	handoffSvc.WithAgentContext(preparer, gitctx.NewGitContextAdapter())

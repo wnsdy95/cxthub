@@ -38,19 +38,30 @@ func (s *BranchHandoffService) WithAgentContext(packages inbound.PrepareAgentCon
 }
 
 func (s *BranchHandoffService) RenderBranchHandoff(ctx context.Context, in inbound.BranchHandoffInput) (string, error) {
-	if s.packages != nil && in.Target != "" {
-		snapshot, err := s.store.GetSnapshot(ctx, in.Target)
+	if s.packages != nil {
+		target := in.Target
+		if target == "" && in.MemoryHash != "" {
+			memory, err := s.store.GetMemory(ctx, in.MemoryHash)
+			if err != nil {
+				return "", err
+			}
+			target = memory.SnapshotID
+		}
+		if target == "" {
+			return "", domain.ErrAgentContextUnavailable
+		}
+		snapshot, err := s.store.GetSnapshot(ctx, target)
 		if err != nil {
 			return "", err
 		}
-		p, err := s.packages.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{RepoID: snapshot.RepoID, Cwd: in.Cwd, Branch: in.ToBranch, SnapshotID: in.Target, Provider: snapshot.Provider, Policy: domain.MemoryInputPolicy(), ArtifactOnly: true})
+		p, err := s.packages.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{RepoID: snapshot.RepoID, Cwd: in.Cwd, Branch: in.ToBranch, SnapshotID: in.Target, LatestMain: true, Provider: snapshot.Provider, Policy: domain.MemoryInputPolicy(), ArtifactOnly: true})
 		if err != nil {
 			return "", err
 		}
-		if err = p.ValidateIdentity(); err != nil {
+		if err = validateInjectedPackage(ctx, s.packages, in.Cwd, p); err != nil {
 			return "", err
 		}
-		if err = checkAgentCode(ctx, s.code, in.Cwd, p.Content.Selection.CodeCommit); err != nil {
+		if err = checkAgentCode(ctx, s.code, in.Cwd, p.Content.Selection.DeliveryCodeCommit()); err != nil {
 			return "", err
 		}
 		prompt, err := p.Prompt()

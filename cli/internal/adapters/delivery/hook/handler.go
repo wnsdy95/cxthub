@@ -19,6 +19,7 @@ package hook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -37,11 +38,12 @@ import (
 // Handler is the hook event handler. Keep it thin (capture path) —
 // parse stdin and classify events, delegate core logic to CaptureCoordinator.
 type Handler struct {
-	coord   *capture.CaptureCoordinator
-	notices inbound.SessionNotices
-	observe func(string, domain.ProviderKind, string)
-	stdin   io.Reader // for testing. nil means os.Stdin (no read from terminal)
-	stdout  io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
+	coord    *capture.CaptureCoordinator
+	notices  inbound.SessionNotices
+	preparer inbound.PrepareAgentContext
+	observe  func(string, domain.ProviderKind, string)
+	stdin    io.Reader // for testing. nil means os.Stdin (no read from terminal)
+	stdout   io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
 }
 
 // NewHandler creates a Handler and injects CaptureCoordinator.
@@ -188,31 +190,89 @@ func (h *Handler) WithSessionNotices(notices inbound.SessionNotices) *Handler {
 	return h
 }
 
+// WithAgentContext enables fresh, authorized server-main input for queued app
+// handoffs. The queue is only a delivery request, never a trusted input body.
+func (h *Handler) WithAgentContext(preparer inbound.PrepareAgentContext) *Handler {
+	h.preparer = preparer
+	return h
+}
+
+const appHandoffMaxBytes = 16 << 10
+
 // emitBriefing uses the documented SessionStart/UserPromptSubmit JSON channel:
 // https://learn.chatgpt.com/docs/hooks and https://code.claude.com/docs/en/hooks.
 // The selection cursor is acknowledged only after the complete JSON write.
 func (h *Handler) emitBriefing(ctx context.Context, provider domain.ProviderKind, event, cwd, sessionID string) error {
 	var entries []string
-	if text, ok := capture.ConsumeSessionHandoff(cwd, sessionID); ok {
-		entries = append(entries, text)
-	}
 	if text, ok := capture.ConsumeBriefing(cwd); ok {
 		entries = append(entries, text)
 	}
-	emitted := false
-	var noticeErr error
-	if h.notices != nil {
-		noticeErr = h.notices.DeliverSessionNotice(ctx, inbound.SessionNoticeInput{Cwd: cwd, Provider: provider, SessionID: sessionID}, func(notice domain.SessionNotice) error {
-			emitted = true
-			return h.writeContext(event, append(entries, notice.Text()))
-		})
+	emissionAttempted := false
+	emit := func(handoff string, validate func() error) error {
+		emissionAttempted = true
+		emitted := false
+		var handoffErr, writeErr, noticeErr error
+		write := func(noticeEntries []string) error {
+			if writeErr = ctx.Err(); writeErr != nil {
+				return writeErr
+			}
+			if validate != nil {
+				// Check after notice preparation, immediately before the JSON write.
+				handoffErr = validate()
+				if handoffErr == nil {
+					noticeEntries = append([]string{handoff}, noticeEntries...)
+				}
+			}
+			if writeErr = ctx.Err(); writeErr != nil {
+				return writeErr
+			}
+			// Independent identifier/selection notices still deliver and acknowledge
+			// normally when authorization for the project-memory handoff fails.
+			writeErr = h.writeContext(event, noticeEntries)
+			return writeErr
+		}
+		if h.notices != nil {
+			noticeErr = h.notices.DeliverSessionNotice(ctx, inbound.SessionNoticeInput{Cwd: cwd, Provider: provider, SessionID: sessionID}, func(notice domain.SessionNotice) error {
+				emitted = true
+				return write(append(append([]string(nil), entries...), notice.Text()))
+			})
+		}
+		if !emitted {
+			writeErr = write(entries)
+		}
+		return errors.Join(handoffErr, writeErr, noticeErr)
 	}
-	if !emitted && ctx.Err() == nil {
-		if err := h.writeContext(event, entries); err != nil {
+	_, handoffErr := capture.DeliverSessionHandoff(ctx, cwd, sessionID, func() error {
+		validator, ok := h.preparer.(inbound.AgentContextDeliveryValidator)
+		if h.preparer == nil || !ok {
+			return domain.ErrAgentContextUnavailable
+		}
+		policy := domain.MemoryInputPolicy()
+		p, err := h.preparer.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{Cwd: cwd, Provider: provider, LatestMain: true, ArtifactOnly: true, Policy: policy})
+		if err != nil {
 			return err
 		}
+		if err := p.ValidateIdentity(); err != nil {
+			return err
+		}
+		if p.Content.Selection.SourcePolicy != domain.AgentSourceLatestMain || p.Policy != policy {
+			return domain.ErrAgentContextUnavailable
+		}
+		prompt, err := p.Prompt()
+		if err != nil {
+			return err
+		}
+		if len(prompt) > appHandoffMaxBytes {
+			return domain.ErrContextBudgetExceeded
+		}
+		return emit(prompt, func() error {
+			return validator.ValidateAgentContextDelivery(ctx, cwd, p.Content.Selection)
+		})
+	})
+	if !emissionAttempted {
+		return errors.Join(handoffErr, emit("", nil))
 	}
-	return noticeErr
+	return handoffErr
 }
 
 func (h *Handler) writeContext(event string, entries []string) error {

@@ -65,6 +65,21 @@ func (r runtimeAgentPreparer) PrepareAgentContext(ctx context.Context, in inboun
 	if err != nil {
 		return domain.AgentContextPackage{}, err
 	}
+	if in.Provider == "" && in.LatestMain {
+		view, err := r.history.QueryHistory(ctx, inbound.HistoryQueryInput{Cwd: in.Cwd, Server: true, ServerTip: true, Branch: "main"})
+		if err != nil {
+			return domain.AgentContextPackage{}, err
+		}
+		for _, snapshot := range view.Snapshots {
+			if snapshot.ID == view.Position {
+				in.Provider = snapshot.Provider
+				break
+			}
+		}
+		if in.Provider != domain.ProviderCodex && in.Provider != domain.ProviderClaude {
+			return domain.AgentContextPackage{}, fmt.Errorf("%w: main has no supported default provider; select --provider claude or codex", domain.ErrUnsupportedProvider)
+		}
+	}
 	work, scope, err := importPersonalWork(ctx, r.remote, repo.ID, in.Cwd, in.WorkStatePath, in.PersonalScope)
 	if err != nil {
 		return domain.AgentContextPackage{}, err
@@ -77,6 +92,16 @@ func (r runtimeAgentPreparer) PrepareAgentContext(ctx context.Context, in inboun
 	}
 	if err := r.validateAgentWorktree(ctx, in.Cwd, in.RepoID, in.WorktreeStateHash); err != nil {
 		return domain.AgentContextPackage{}, err
+	}
+	if in.WorkingPosition != nil {
+		code := r.git.(outbound.CodePosition) // selectAgentContext already verified this port.
+		actual, err := code.CurrentCommit(ctx, in.Cwd)
+		if err != nil {
+			return domain.AgentContextPackage{}, err
+		}
+		if actual != in.WorkingPosition.CodeCommit {
+			return domain.AgentContextPackage{}, domain.ErrCodePositionMismatch
+		}
 	}
 	return p, nil
 }
@@ -153,7 +178,7 @@ func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
 				copy := *p.Budget
 				budget = &copy
 			}
-			return delivcli.PreparedProviderLaunch{Args: args, SessionID: id, PackageHash: p.ID, CodeCommit: p.Content.Selection.CodeCommit, SourceRevision: string(p.Content.Selection.ContextStateHash), SelectedTokens: p.Usage.Tokens, TokenMeasurement: measurement, Capability: p.Capability, Budget: budget,
+			return delivcli.PreparedProviderLaunch{Args: args, SessionID: id, PackageHash: p.ID, CodeCommit: p.Content.Selection.DeliveryCodeCommit(), SourceRevision: string(p.Content.Selection.ContextStateHash), SelectedTokens: p.Usage.Tokens, TokenMeasurement: measurement, Capability: p.Capability, Budget: budget,
 				Validate: func(ctx context.Context) error {
 					return preparer.validateAgentDelivery(ctx, req.Cwd, p.Content.Selection)
 				},

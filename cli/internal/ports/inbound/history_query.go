@@ -14,6 +14,9 @@ type HistoryQueryInput struct {
 	All      bool
 	Retained bool
 	Server   bool
+	// ServerTip resolves an explicit non-HEAD Branch on the server without local
+	// selection data. It requires Server and excludes Ref, Position, All and Retained.
+	ServerTip bool
 }
 type HistoryQuery interface {
 	QueryHistory(context.Context, HistoryQueryInput) (domain.HistoryQueryResult, error)

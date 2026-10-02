@@ -327,7 +327,7 @@ func Run(c *Container, args []string) error {
 			fmt.Printf("checkout.mode = %s\n", remotecfg.CheckoutMode(cwd))
 			return nil
 		case "load.mode":
-			// load/checkout/fork default fidelity (full|reconstructed|memory). "default" to disable.
+			// Retained legacy preference. Managed input always uses server main.
 			if hasVal {
 				if val == "default" {
 					val = ""
@@ -338,9 +338,9 @@ func Run(c *Container, args []string) error {
 			}
 			cur := remotecfg.LoadMode(cwd)
 			if cur == "" {
-				cur = "full (default)"
+				cur = "structured memory from server main (default)"
 			}
-			fmt.Printf("load.mode = %s\n", cur)
+			fmt.Printf("load.mode = %s; archive replay requires an explicit --mode\n", cur)
 			return nil
 		case "boundary.enforce":
 			// session isolation process termination policy on switch (kill|none). "default" to disable (kill).
@@ -1301,16 +1301,10 @@ func printUsage() {
 	fmt.Println(usageText)
 }
 
-// loadModeOr interprets the priority of load fidelity:
-// --mode flag (per invocation) > local load.mode (checkout-specific) > server personal setting (account global) > structured memory input.
-func loadModeOr(cwd, explicit string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if v := remotecfg.LoadMode(cwd); v != "" {
-		return v
-	}
-	return serverLoadMode(cwd)
+// loadModeOr permits legacy archive replay only when requested on this command.
+// Stored load.mode preferences cannot override latest-main managed input.
+func loadModeOr(_ string, explicit string) string {
+	return explicit
 }
 
 // flagVal finds a value in internal argv, excluding option values and literals.

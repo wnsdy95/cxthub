@@ -24,7 +24,12 @@ func runAgentArtifact(ctx context.Context, c *Container, cwd string, p parsedCom
 	if err != nil {
 		return err
 	}
-	view, err := c.HistoryQuery.QueryHistory(ctx, inbound.HistoryQueryInput{Cwd: cwd, Ref: p.first(), Server: true})
+	query := inbound.HistoryQueryInput{Cwd: cwd, Ref: p.first(), Server: true}
+	latestMain := p.first() == ""
+	if latestMain {
+		query.Branch, query.ServerTip = "main", true
+	}
+	view, err := c.HistoryQuery.QueryHistory(ctx, query)
 	if err != nil {
 		return err
 	}
@@ -48,7 +53,7 @@ func runAgentArtifact(ctx context.Context, c *Container, cwd string, p parsedCom
 		}
 		policy = domain.InputPolicy{Version: 1, Mode: "history", BudgetTokens: budget, Source: "explicit_artifact"}
 	}
-	value, err := c.PrepareAgent.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{RepoID: repo.ID, Cwd: cwd, Branch: view.Selection.Branch, SnapshotID: view.Position, Provider: provider, Model: p.flags["--model"], Policy: policy, WorkStatePath: p.flags["--work-state"], ArtifactOnly: true})
+	value, err := c.PrepareAgent.PrepareAgentContext(ctx, inbound.PrepareAgentContextInput{RepoID: repo.ID, Cwd: cwd, Branch: view.Selection.Branch, SnapshotID: view.Position, LatestMain: latestMain, Provider: provider, Model: p.flags["--model"], Policy: policy, WorkStatePath: p.flags["--work-state"], ArtifactOnly: true})
 	if err != nil {
 		return err
 	}
