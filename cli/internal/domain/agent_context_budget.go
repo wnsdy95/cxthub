@@ -7,19 +7,20 @@ import "fmt"
 // are inside EffectiveTokens. ReservedTokens is required output/work space,
 // not another deduction from the already reserved twenty percent.
 type AgentContextBudget struct {
-	Provider          ProviderKind `json:"provider"`
-	Model             string       `json:"model"`
-	HostVersion       string       `json:"host_version"`
-	Tokenizer         string       `json:"tokenizer"`
-	RequestedTokens   int          `json:"requested_tokens"`
-	EffectiveTokens   int          `json:"effective_tokens"`
-	ContextWindow     int          `json:"context_window"`
-	InitialInputLimit int          `json:"initial_input_limit"`
-	HostInputTokens   int          `json:"host_input_tokens"`
-	FramingTokens     int          `json:"framing_tokens"`
-	ReservedTokens    int          `json:"reserved_tokens"`
-	AutoCompactTokens int          `json:"auto_compact_tokens"`
-	AdjustmentReason  string       `json:"adjustment_reason,omitempty"`
+	Provider            ProviderKind `json:"provider"`
+	Model               string       `json:"model"`
+	HostVersion         string       `json:"host_version"`
+	Tokenizer           string       `json:"tokenizer"`
+	RequestedTokens     int          `json:"requested_tokens"`
+	EffectiveTokens     int          `json:"effective_tokens"`
+	ContextWindow       int          `json:"context_window"`
+	InitialInputLimit   int          `json:"initial_input_limit"`
+	HostInputTokens     int          `json:"host_input_tokens"`
+	FramingTokens       int          `json:"framing_tokens"`
+	InitialPromptTokens int          `json:"initial_prompt_tokens,omitempty"`
+	ReservedTokens      int          `json:"reserved_tokens"`
+	AutoCompactTokens   int          `json:"auto_compact_tokens"`
+	AdjustmentReason    string       `json:"adjustment_reason,omitempty"`
 }
 
 // ResolveBudget must run before body selection. A model name or user-supplied
@@ -28,7 +29,7 @@ func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, 
 	if (provider != ProviderCodex && provider != ProviderClaude) || !c.Verified || !c.HostInputKnown || !c.AutoCompactKnown || c.Provider != provider || c.Model != model || c.Model == "" || c.HostVersion == "" || c.Evidence == "" || c.ContextWindow <= 0 || c.HostInputTokens < 0 || c.ReservedTokens < 0 || c.FramingTokens < 0 || c.AutoCompactTokens < 0 || !counter.Exact || counter.Tokenizer == "" || counter.Tokenizer != c.Tokenizer {
 		return AgentContextBudget{}, fmt.Errorf("%w: verified runtime model/window, host input, compaction threshold and exact tokenizer are required for history", ErrProviderCapabilityUnknown)
 	}
-	if requested <= 0 || requested > MaxAgentContextTokens || counter.Tokens < 0 || c.ReservedTokens > c.ContextWindow {
+	if requested <= 0 || requested > MaxAgentContextTokens || counter.Tokens < 0 || c.InitialPromptTokens < 0 || c.ReservedTokens > c.ContextWindow {
 		return AgentContextBudget{}, fmt.Errorf("%w: invalid request or required reservations", ErrContextBudgetExceeded)
 	}
 	// floor(4*window/5), without overflowing on a large untrusted int.
@@ -45,6 +46,12 @@ func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, 
 		return AgentContextBudget{}, fmt.Errorf("%w: mandatory host input leaves no package capacity", ErrContextBudgetExceeded)
 	}
 	available := limit - c.HostInputTokens - c.FramingTokens
+	// Check before subtracting so even hostile counts cannot overflow or leave
+	// a non-positive package allowance. The app owns this separate reservation.
+	if c.InitialPromptTokens >= available {
+		return AgentContextBudget{}, fmt.Errorf("%w: initial prompt leaves no package capacity", ErrContextBudgetExceeded)
+	}
+	available -= c.InitialPromptTokens
 	effective := min(requested, available)
 	if effective == requested {
 		reason = ""
@@ -52,7 +59,8 @@ func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, 
 	return AgentContextBudget{Provider: provider, Model: model, HostVersion: c.HostVersion, Tokenizer: c.Tokenizer,
 		RequestedTokens: requested, EffectiveTokens: effective, ContextWindow: c.ContextWindow, InitialInputLimit: limit,
 		HostInputTokens: c.HostInputTokens, FramingTokens: c.FramingTokens, ReservedTokens: c.ReservedTokens,
-		AutoCompactTokens: c.AutoCompactTokens, AdjustmentReason: reason}, nil
+		InitialPromptTokens: c.InitialPromptTokens,
+		AutoCompactTokens:   c.AutoCompactTokens, AdjustmentReason: reason}, nil
 }
 
 // Validate binds a receipt to the request and selected accounting. Recomputing
@@ -64,7 +72,8 @@ func (b AgentContextBudget) Validate(provider ProviderKind, model string, reques
 	c := AgentHostCapability{Provider: b.Provider, Model: b.Model, HostVersion: b.HostVersion, Tokenizer: b.Tokenizer,
 		Verified: true, Evidence: "recorded preparation accounting", HostInputKnown: true, AutoCompactKnown: true,
 		ContextWindow: b.ContextWindow, HostInputTokens: b.HostInputTokens, FramingTokens: b.FramingTokens,
-		ReservedTokens: b.ReservedTokens, AutoCompactTokens: b.AutoCompactTokens}
+		InitialPromptTokens: b.InitialPromptTokens,
+		ReservedTokens:      b.ReservedTokens, AutoCompactTokens: b.AutoCompactTokens}
 	expected, err := c.ResolveBudget(provider, model, requested, usage)
 	if err != nil {
 		return err

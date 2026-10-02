@@ -58,15 +58,16 @@ type ProviderLaunchTransition struct {
 type PreparedProviderLaunch struct {
 	// Bootstrap proves an authorized empty repository, including a genuine
 	// unborn Git branch when CodeCommit is empty. Validate must recheck it.
-	Bootstrap        *domain.AgentBootstrapProof
-	Budget           *domain.AgentContextBudget
-	Args             []string
-	SessionID        string
-	PackageHash      domain.ContentHash
-	CodeCommit       string
-	SourceRevision   string
-	SelectedTokens   int
-	TokenMeasurement string
+	Bootstrap         *domain.AgentBootstrapProof
+	Budget            *domain.AgentContextBudget
+	PromptReservation domain.AgentPromptReservation `json:"-"`
+	Args              []string
+	SessionID         string
+	PackageHash       domain.ContentHash
+	CodeCommit        string
+	SourceRevision    string
+	SelectedTokens    int
+	TokenMeasurement  string
 	// Capability is "verified_for_preparation" only after validating the selected model,
 	// authentication path, host version, overhead, and compaction threshold.
 	Capability string
@@ -216,7 +217,7 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 			}
 			limits := ""
 			if b := receipt.Budget; b != nil {
-				limits = fmt.Sprintf(" model=%q effective_budget=%d initial_input_limit=%d host_input_tokens=%d framing_tokens=%d reserved_tokens=%d context_window=%d", b.Model, b.EffectiveTokens, b.InitialInputLimit, b.HostInputTokens, b.FramingTokens, b.ReservedTokens, b.ContextWindow)
+				limits = fmt.Sprintf(" model=%q effective_budget=%d initial_input_limit=%d host_input_tokens=%d framing_tokens=%d initial_prompt_tokens=%d reserved_tokens=%d context_window=%d", b.Model, b.EffectiveTokens, b.InitialInputLimit, b.HostInputTokens, b.FramingTokens, b.InitialPromptTokens, b.ReservedTokens, b.ContextWindow)
 				if b.AdjustmentReason != "" {
 					limits += " adjustment=" + b.AdjustmentReason
 				}
@@ -474,6 +475,14 @@ func validatePreparedProviderLaunch(request ProviderLaunchRequest, prepared Prep
 		}
 		usage := domain.AgentTokenUsage{Tokens: prepared.SelectedTokens, Exact: true, Tokenizer: prepared.Budget.Tokenizer}
 		if err := prepared.Budget.Validate(request.Intent.Provider, model, request.Intent.ContextBudget, usage); err != nil {
+			return err
+		}
+		prompt, err := request.InitialPrompt()
+		if err != nil {
+			return err
+		}
+		budget := prepared.Budget
+		if err := prepared.PromptReservation.Validate(prompt, budget.Provider, budget.Model, budget.Tokenizer, budget.InitialPromptTokens); err != nil {
 			return err
 		}
 	} else if prepared.Budget != nil {

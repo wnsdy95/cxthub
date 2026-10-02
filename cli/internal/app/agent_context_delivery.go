@@ -62,6 +62,9 @@ func (s *LoadSessionService) materializeAgentPackage(ctx context.Context, in inb
 		if err := p.Budget.Validate(in.Provider, model, in.Policy.BudgetTokens, p.Usage); err != nil {
 			return inbound.LoadOutput{}, err
 		}
+		if err := p.ValidateInitialPrompt(in.InitialPrompt); err != nil {
+			return inbound.LoadOutput{}, err
+		}
 	}
 	cir, err := agentPackageCIR(p, in.Provider, in.Cwd)
 	if err != nil {

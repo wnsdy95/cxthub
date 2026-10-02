@@ -182,6 +182,7 @@ func preparedLaunch(request ProviderLaunchRequest) PreparedProviderLaunch {
 		fixture := strictLaunchContextFixture(request, launchHostFixture(request))
 		p.PackageHash, p.CodeCommit, p.SourceRevision = fixture.ID, fixture.Content.Selection.CodeCommit, string(fixture.Content.Selection.ContextStateHash)
 		p.SelectedTokens, p.Budget = fixture.Usage.Tokens, fixture.Budget
+		p.PromptReservation = fixture.InitialPromptReservation()
 	}
 	return p
 }
@@ -203,6 +204,16 @@ func launchHostFixture(request ProviderLaunchRequest) domain.AgentHostCapability
 }
 
 func strictLaunchContextFixture(request ProviderLaunchRequest, host domain.AgentHostCapability) domain.AgentContextPackage {
+	initialPrompt, err := request.InitialPrompt()
+	if err != nil {
+		panic(err)
+	}
+	promptUsage := domain.AgentTokenUsage{Tokens: len([]rune(initialPrompt.Text())), Exact: true, Tokenizer: host.Tokenizer}
+	reservation, err := domain.NewAgentPromptReservation(initialPrompt, request.Intent.Provider, host.Model, promptUsage)
+	if err != nil {
+		panic(err)
+	}
+	host.InitialPromptTokens = promptUsage.Tokens
 	usage := domain.AgentTokenUsage{Exact: true, Tokenizer: host.Tokenizer}
 	budget, err := host.ResolveBudget(request.Intent.Provider, host.Model, request.Intent.ContextBudget, usage)
 	if err != nil {
@@ -223,6 +234,10 @@ func strictLaunchContextFixture(request ProviderLaunchRequest, host domain.Agent
 		panic(err)
 	}
 	p.Usage.Tokens = len([]rune(prompt))
+	p.BindInitialPrompt(reservation)
+	if err := p.ValidateInitialPrompt(initialPrompt); err != nil {
+		panic(err)
+	}
 	p.ID, err = p.Digest()
 	if err != nil {
 		panic(err)
@@ -442,6 +457,7 @@ if [ "$2" = "`+launchSessionID+`" ]; then
 fi`)
 	var requests []ProviderLaunchRequest
 	var receipts []ProviderLaunchReceipt
+	var preparations []PreparedProviderLaunch
 	hooks := ProviderLaunchHooks{Prepare: func(_ context.Context, req ProviderLaunchRequest) (PreparedProviderLaunch, error) {
 		requests = append(requests, req)
 		p := preparedLaunch(req)
@@ -451,6 +467,7 @@ fi`)
 			p.CodeCommit = strings.Repeat("b", 40)
 			p.SourceRevision = "revision-2"
 		}
+		preparations = append(preparations, p)
 		return p, nil
 	}, Record: func(_ context.Context, r ProviderLaunchReceipt) error {
 		receipts = append(receipts, r)
@@ -473,6 +490,17 @@ fi`)
 	}
 	if len(receipts) != 4 || receipts[2].CodeCommit != strings.Repeat("b", 40) || receipts[2].SourceRevision != "revision-2" {
 		t.Fatalf("stale restart receipt %+v", receipts)
+	}
+	if len(preparations) != 2 || preparations[0].Budget.InitialPromptTokens != len([]rune("first task")) || preparations[1].Budget.InitialPromptTokens != 0 {
+		t.Fatal("restart retained the first task's token reservation")
+	}
+	if prompt, err := requests[1].InitialPrompt(); err != nil || prompt.Present() {
+		t.Fatal("restart retained the first task")
+	}
+	stale := preparations[1]
+	stale.PromptReservation = preparations[0].PromptReservation
+	if err := validatePreparedProviderLaunch(requests[1], stale); err == nil {
+		t.Fatal("restart accepted the initial launch's prompt reservation")
 	}
 	log, _ := os.ReadFile(filepath.Join(root, "launch.log"))
 	if strings.Count(string(log), "first task") != 1 || !strings.Contains(string(log), restartedSessionID) {

@@ -23,6 +23,9 @@ type PrepareAgentContextInput struct {
 	Model             string
 	Policy            domain.InputPolicy
 	PersonalScope     domain.PersonalWorkScope
+	// InitialPrompt is private argv input. It is budgeted separately and never
+	// becomes shared project memory, history, or serialized receipt content.
+	InitialPrompt domain.AgentInitialPrompt `json:"-"`
 	// WorkStatePath explicitly selects a structured handoff artifact. The runtime
 	// authenticates its principal and validates all provenance before consumption.
 	WorkStatePath string

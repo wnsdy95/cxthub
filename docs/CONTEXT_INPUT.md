@@ -171,14 +171,31 @@ It is not deducted again from the twenty percent already left outside the
 initial input strictly below that trigger.
 
 The effective package budget is the smaller of the original request and the
-remaining initial-input capacity after host input and framing. The package keeps
+remaining initial-input capacity after host input, framing and the initial user
+task supplied in provider arguments. The task is counted as one complete text
+under the resolved model's tokenizer, before selecting history; it is not trimmed
+or split. Host input must exclude that separately reserved user message, and
+verified framing must account for its native message boundary. The package keeps
 the original request in `policy.budget_tokens`; its optional `budget` records the
 resolved provider/model, host version, tokenizer, requested/effective limits,
-window, host input, framing, output reserve, compaction threshold and adjustment
+window, host input, framing, optional `initial_prompt_tokens`, output reserve,
+compaction threshold and adjustment
 reason. Launch summaries show the effective limit and any adjustment. An
 explicit provider `--model` must match this accounting; without that option,
 accounting uses the runtime's resolved model. A model/window override alone is
 not verified host or tokenizer evidence.
+
+The initial task remains private invocation input. It is never copied into the
+shared-memory package, its sources or serialized receipts. An in-memory
+reservation binds its exact bytes and presence to the provider, resolved model,
+tokenizer and count; equal counts do not authorize a substituted question.
+Materialization and child launch reject a missing or mismatched reservation.
+An explicitly empty task differs from no task, and multiple ambiguous positional
+tasks are rejected rather than joined. Wrapper restart removes the original task
+and prepares a new reservation. Model changes during preparation also recount it.
+This covers the supplied argv text; later interactive input and multimodal
+attachments require their own native accounting. Default memory, archive
+artifacts, bootstrap and existing native resume retain their existing behavior.
 
 The cloud reader requests complete newest-first turns from
 `GET /repos/{repoID}/docs/{hash}/turns`. Each page is separately authorized and
@@ -216,8 +233,9 @@ a generic conflict require a new invocation.
 Strict native history delivery requires verified host/model capacity, known host
 input, an exact tokenizer, framing/output reservations and a known compaction
 threshold. Before preparation and launch receipts are recorded, delivery checks
-that budget accounting reproduces the original request, provider, model and
-exact selected-token count within the effective limit. **This build does not yet
+that budget accounting reproduces the original request, provider, model, private
+initial task and exact selected-token count within the effective limit. A saved
+receipt alone cannot restore the private task reservation. **This build does not yet
 ship a verified native combination**, so the three launch examples above
 currently return `provider_capability_unknown` before starting the provider.
 Adaptive accounting does not enable an unverified runtime or invent provider
@@ -276,9 +294,11 @@ counts; the counter version and encoding identify the result. Nothing about
 this cache changes archive hashes or authorization checks.
 
 The receipt's `usage.scope: text` means `exact: true` applies to these rendered
-bytes under that encoding, not the provider's entire request. The native first
-task, tools, system instructions and message framing outside the package remain
-separate runtime inputs. See [OpenAI counting semantics](https://developers.openai.com/api/docs/guides/token-counting).
+bytes under that encoding, not the provider's entire request. The supplied
+initial task is counted and reserved separately for verified strict-history
+preparation. Tools, system instructions, native message framing and later
+interactive input still need runtime evidence.
+See [OpenAI counting semantics](https://developers.openai.com/api/docs/guides/token-counting).
 Local measurement does not require native-host evidence, and does not grant it.
 Strict history launch remains gated on that separate evidence.
 

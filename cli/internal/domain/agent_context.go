@@ -217,6 +217,9 @@ type AgentHostCapability struct {
 	ContextWindow   int          `json:"context_window"`
 	HostInputTokens int          `json:"host_input_tokens"`
 	HostInputKnown  bool         `json:"host_input_known"`
+	// InitialPromptTokens is reserved by the app using exact prompt accounting.
+	// HostInputTokens and FramingTokens must exclude it to avoid double counting.
+	InitialPromptTokens int `json:"initial_prompt_tokens,omitempty"`
 	// Required output/reasoning/work space, separate from fixed host input.
 	ReservedTokens    int `json:"reserved_tokens"`
 	FramingTokens     int `json:"framing_tokens"`
@@ -247,6 +250,8 @@ type AgentContextPackage struct {
 	ArtifactOnly bool                `json:"artifact_only,omitempty"`
 	// Optional so previously prepared package hashes remain unchanged.
 	Budget *AgentContextBudget `json:"budget,omitempty"`
+	// In-memory authorization only; receipts never contain the initial prompt.
+	initialPromptReservation AgentPromptReservation
 }
 
 // Artifact returns an inspectable package/receipt. Its metadata is not part of
