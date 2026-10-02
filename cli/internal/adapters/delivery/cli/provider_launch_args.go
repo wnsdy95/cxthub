@@ -27,6 +27,14 @@ type providerInvocation struct {
 	Profile         string
 	ConfigOverrides []string
 	Prompts         []string
+	Options         []ProviderLaunchOption
+}
+
+// ProviderLaunchOption is a recognized option, normalized by the single
+// invocation parser. Values remain private launch input, never receipt data.
+type ProviderLaunchOption struct {
+	Name   string
+	Values []string
 }
 
 // ProviderLaunchDetails exposes parsed arguments to composition without a
@@ -40,6 +48,7 @@ type ProviderLaunchDetails struct {
 	Prompts         []string
 	Directory       string
 	SessionID       string
+	Options         []ProviderLaunchOption
 }
 
 func (r ProviderLaunchRequest) ArgumentDetails() (ProviderLaunchDetails, error) {
@@ -47,9 +56,13 @@ func (r ProviderLaunchRequest) ArgumentDetails() (ProviderLaunchDetails, error) 
 	if err != nil {
 		return ProviderLaunchDetails{}, err
 	}
+	options := make([]ProviderLaunchOption, len(inv.Options))
+	for i, option := range inv.Options {
+		options[i] = ProviderLaunchOption{Name: option.Name, Values: append([]string(nil), option.Values...)}
+	}
 	return ProviderLaunchDetails{Mode: string(inv.Mode), Model: inv.Model, Profile: inv.Profile,
 		ConfigOverrides: append([]string(nil), inv.ConfigOverrides...), Prompts: append([]string(nil), inv.Prompts...),
-		Directory: inv.Directory, SessionID: inv.SessionID}, nil
+		Directory: inv.Directory, SessionID: inv.SessionID, Options: options}, nil
 }
 
 type providerOption struct {
@@ -176,6 +189,13 @@ func inspectProviderInvocation(provider domain.ProviderKind, args []string) (pro
 				return inv, fmt.Errorf("%s option %s requires a value", provider, name)
 			}
 			setMode(option.mode)
+			parsed := ProviderLaunchOption{Name: name}
+			if inline {
+				parsed.Values = []string{value}
+			} else if i > start {
+				parsed.Values = append([]string(nil), args[start+1:i+1]...)
+			}
+			inv.Options = append(inv.Options, parsed)
 			if option.dir {
 				inv.Directory = value
 			}
