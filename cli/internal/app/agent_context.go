@@ -114,6 +114,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	}
 	var capability domain.AgentHostCapability
 	var budget *domain.AgentContextBudget
+	var promptReservation domain.AgentPromptReservation
 	requestedModel := in.Model
 	if policy.Mode == "history" && !in.ArtifactOnly {
 		if s.tokens == nil || s.capabilities == nil {
@@ -129,10 +130,17 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 			// that identity locally before counting or selecting any material.
 			in.Model = capability.Model
 		}
-		probe, err := s.tokens.CountAgentTokens(ctx, in.Provider, in.Model, "")
+		probe, err := s.tokens.CountAgentTokens(ctx, in.Provider, in.Model, in.InitialPrompt.Text())
 		if err != nil {
 			return p, err
 		}
+		promptReservation, err = domain.NewAgentPromptReservation(in.InitialPrompt, in.Provider, in.Model, probe)
+		if err != nil {
+			return p, err
+		}
+		// The adapter's host input excludes the separately measured initial
+		// user message; never trust a caller-provided reservation amount.
+		capability.InitialPromptTokens = probe.Tokens
 		resolved, err := capability.ResolveBudget(in.Provider, in.Model, policy.BudgetTokens, probe)
 		if err != nil {
 			return p, err
@@ -157,6 +165,9 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		return p, fmt.Errorf("%w: original code/context selection changed between preparation attempts", domain.ErrSelectionChanged)
 	}
 	p = domain.AgentContextPackage{Version: domain.AgentContextVersion, Provider: in.Provider, Policy: policy, Delivery: "prepared", Capability: "not_verified_for_native_replay", ArtifactOnly: in.ArtifactOnly, Budget: budget}
+	if budget != nil {
+		p.BindInitialPrompt(promptReservation)
+	}
 	if in.ArtifactOnly {
 		p.Capability = "unverified_artifact_only"
 	}
@@ -369,10 +380,14 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if model == "" {
 			model = current.Model
 		}
-		probe, err := s.tokens.CountAgentTokens(ctx, in.Provider, model, "")
+		probe, err := s.tokens.CountAgentTokens(ctx, in.Provider, model, in.InitialPrompt.Text())
 		if err != nil {
 			return domain.AgentContextPackage{}, err
 		}
+		if _, err = domain.NewAgentPromptReservation(in.InitialPrompt, in.Provider, model, probe); err != nil {
+			return domain.AgentContextPackage{}, err
+		}
+		current.InitialPromptTokens = probe.Tokens
 		latest, err := current.ResolveBudget(in.Provider, model, policy.BudgetTokens, probe)
 		if err != nil {
 			return domain.AgentContextPackage{}, err

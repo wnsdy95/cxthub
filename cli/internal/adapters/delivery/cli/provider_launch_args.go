@@ -65,6 +65,23 @@ func (r ProviderLaunchRequest) ArgumentDetails() (ProviderLaunchDetails, error) 
 		Directory: inv.Directory, SessionID: inv.SessionID, Options: options}, nil
 }
 
+// InitialPrompt preserves the single literal prompt, including an explicitly
+// empty argument. Multiple positional prompts cannot be counted unambiguously.
+func (r ProviderLaunchRequest) InitialPrompt() (domain.AgentInitialPrompt, error) {
+	details, err := r.ArgumentDetails()
+	if err != nil {
+		return domain.AgentInitialPrompt{}, err
+	}
+	switch len(details.Prompts) {
+	case 0:
+		return domain.AgentInitialPrompt{}, nil
+	case 1:
+		return domain.NewAgentInitialPrompt(details.Prompts[0]), nil
+	default:
+		return domain.AgentInitialPrompt{}, fmt.Errorf("%w: provider launch requires at most one initial prompt argument", domain.ErrProviderCapabilityUnknown)
+	}
+}
+
 type providerOption struct {
 	values  int // 0 flag, 1 required, -1 optional, 2 one or more
 	mode    providerLaunchMode

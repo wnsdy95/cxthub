@@ -41,10 +41,10 @@ func TestProviderLaunchBudgetAccountsRenderedFixtureAndPreservesReceipts(t *test
 					t.Fatalf("fixture does not account for complete rendered input: %+v", fixture)
 				}
 				budget := fixture.Budget
-				if budget.RequestedTokens != 800000 || budget.InitialInputLimit != tc.limit || budget.EffectiveTokens != tc.limit-3400 || budget.AdjustmentReason != tc.reason {
+				if budget.RequestedTokens != 800000 || budget.InitialInputLimit != tc.limit || budget.InitialPromptTokens != len([]rune("user task")) || budget.EffectiveTokens != tc.limit-3400-budget.InitialPromptTokens || budget.AdjustmentReason != tc.reason {
 					t.Fatalf("incorrect adjusted accounting: %+v", budget)
 				}
-				total := fixture.Usage.Tokens + budget.HostInputTokens + budget.FramingTokens
+				total := fixture.Usage.Tokens + budget.HostInputTokens + budget.FramingTokens + budget.InitialPromptTokens
 				if total > budget.ContextWindow*4/5 || total+budget.ReservedTokens > budget.ContextWindow || total >= budget.AutoCompactTokens {
 					t.Fatalf("initial input violates runtime limits: total=%d budget=%+v", total, budget)
 				}
@@ -52,6 +52,7 @@ func TestProviderLaunchBudgetAccountsRenderedFixtureAndPreservesReceipts(t *test
 				hooks := ProviderLaunchHooks{Prepare: func(_ context.Context, req ProviderLaunchRequest) (PreparedProviderLaunch, error) {
 					p := preparedLaunch(req)
 					p.PackageHash, p.SelectedTokens, p.Budget = fixture.ID, fixture.Usage.Tokens, fixture.Budget
+					p.PromptReservation = fixture.InitialPromptReservation()
 					return p, nil
 				}, Record: func(_ context.Context, r ProviderLaunchReceipt) error { receipts = append(receipts, r); return nil }}
 				var summary bytes.Buffer
@@ -76,7 +77,7 @@ func TestProviderLaunchBudgetAccountsRenderedFixtureAndPreservesReceipts(t *test
 						t.Fatalf("budget lost in receipt JSON: %s / %v", raw, err)
 					}
 				}
-				for _, text := range []string{"budget=800000", `model="fixture-model"`, fmt.Sprintf("effective_budget=%d", budget.EffectiveTokens), fmt.Sprintf("initial_input_limit=%d", tc.limit), "host_input_tokens=3000", "framing_tokens=400", fmt.Sprintf("reserved_tokens=%d", tc.reserve), "context_window=128000", "adjustment=" + tc.reason, "provider acceptance unknown"} {
+				for _, text := range []string{"budget=800000", `model="fixture-model"`, fmt.Sprintf("effective_budget=%d", budget.EffectiveTokens), fmt.Sprintf("initial_input_limit=%d", tc.limit), "host_input_tokens=3000", "framing_tokens=400", "initial_prompt_tokens=9", fmt.Sprintf("reserved_tokens=%d", tc.reserve), "context_window=128000", "adjustment=" + tc.reason, "provider acceptance unknown"} {
 					if !strings.Contains(summary.String(), text) {
 						t.Fatalf("summary omits %q: %s", text, summary.String())
 					}

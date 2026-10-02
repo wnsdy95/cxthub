@@ -142,15 +142,20 @@ func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
 			if err != nil {
 				return result, err
 			}
+			var initialPrompt domain.AgentInitialPrompt
 			policy := domain.MemoryInputPolicy()
 			if req.Intent.Pull {
+				initialPrompt, err = req.InitialPrompt()
+				if err != nil {
+					return result, err
+				}
 				policy = domain.InputPolicy{Version: 1, Mode: "history", BudgetTokens: req.Intent.ContextBudget, Source: "explicit_cli"}
 			}
 			preparer, loader := runtimeAgentLoader(cfg)
 			if bootstrap, handled, err := preparer.prepareEmptyBootstrap(ctx, cfg, req); handled {
 				return bootstrap, err
 			}
-			p, out, err := loader.PrepareAgentDelivery(ctx, inbound.PrepareAgentContextInput{Cwd: req.Cwd, Provider: req.Intent.Provider, Model: details.Model, Policy: policy, WorkStatePath: req.Intent.WorkStatePath})
+			p, out, err := loader.PrepareAgentDelivery(ctx, inbound.PrepareAgentContextInput{Cwd: req.Cwd, Provider: req.Intent.Provider, Model: details.Model, Policy: policy, WorkStatePath: req.Intent.WorkStatePath, InitialPrompt: initialPrompt})
 			if err != nil {
 				return result, err
 			}
@@ -178,7 +183,7 @@ func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
 				copy := *p.Budget
 				budget = &copy
 			}
-			return delivcli.PreparedProviderLaunch{Args: args, SessionID: id, PackageHash: p.ID, CodeCommit: p.Content.Selection.DeliveryCodeCommit(), SourceRevision: string(p.Content.Selection.ContextStateHash), SelectedTokens: p.Usage.Tokens, TokenMeasurement: measurement, Capability: p.Capability, Budget: budget,
+			return delivcli.PreparedProviderLaunch{Args: args, SessionID: id, PackageHash: p.ID, CodeCommit: p.Content.Selection.DeliveryCodeCommit(), SourceRevision: string(p.Content.Selection.ContextStateHash), SelectedTokens: p.Usage.Tokens, TokenMeasurement: measurement, Capability: p.Capability, Budget: budget, PromptReservation: p.InitialPromptReservation(),
 				Validate: func(ctx context.Context) error {
 					return preparer.validateAgentDelivery(ctx, req.Cwd, p.Content.Selection)
 				},
