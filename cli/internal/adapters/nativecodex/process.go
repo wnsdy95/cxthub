@@ -85,35 +85,9 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 	if err = waitSocket(startup, socketPath, p.done); err != nil {
 		return nil, err
 	}
-	transport := &http.Transport{
-		Proxy:                  nil,
-		MaxResponseHeaderBytes: 8192,
-		DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
-			var dialer net.Dialer
-			conn, dialErr := dialer.DialContext(dialCtx, "unix", socketPath)
-			if dialErr != nil {
-				return nil, dialErr
-			}
-			// Codex publishes a symlink to its own private socket. Verify the
-			// kernel peer identity, not the name or permissions of that target.
-			if !p.ownsPeer(conn) {
-				_ = conn.Close()
-				return nil, fmt.Errorf("%w: listener is not the owned app-server", ErrProtocol)
-			}
-			return conn, nil
-		},
-	}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	conn, response, err := websocket.Dial(startup, "ws://localhost/rpc", &websocket.DialOptions{HTTPClient: client, CompressionMode: websocket.CompressionDisabled})
+	conn, err := dialOwnedSocket(startup, socketPath, p)
 	if err != nil {
-		if response != nil && response.Body != nil {
-			_ = response.Body.Close()
-		}
-		if startup.Err() != nil {
-			return nil, startup.Err()
-		}
-		return nil, fmt.Errorf("%w: local WebSocket handshake failed", ErrProtocol)
+		return nil, err
 	}
 	rpc := newRPC(conn)
 	defer func() {
@@ -133,7 +107,7 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 	if err = rpc.notify(startup, "initialized", struct{}{}); err != nil {
 		return nil, err
 	}
-	s := &Session{rpc: rpc, process: p, cwd: cwd, host: host, closed: make(chan struct{}), gate: make(chan struct{}, 1)}
+	s := &Session{rpc: rpc, process: p, cwd: cwd, host: host, socketPath: socketPath, closed: make(chan struct{}), gate: make(chan struct{}, 1)}
 	ok = true
 	go func() {
 		select {
@@ -202,4 +176,39 @@ func (p ownedProcess) stop() error {
 		return fmt.Errorf("%w: private transport cleanup incomplete", ErrProtocol)
 	}
 	return p.state.observationErr // published before done is closed
+}
+
+// dialOwnedSocket authenticates the kernel peer on every client connection.
+func dialOwnedSocket(ctx context.Context, socketPath string, p ownedProcess) (*websocket.Conn, error) {
+	transport := &http.Transport{
+		Proxy:                  nil,
+		MaxResponseHeaderBytes: 8192,
+		DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			conn, dialErr := dialer.DialContext(dialCtx, "unix", socketPath)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			// Codex publishes a symlink to its own private socket. Verify the
+			// kernel peer identity, not the name or permissions of that target.
+			if !p.ownsPeer(conn) {
+				_ = conn.Close()
+				return nil, fmt.Errorf("%w: listener is not the owned app-server", ErrProtocol)
+			}
+			return conn, nil
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	conn, response, err := websocket.Dial(ctx, "ws://localhost/rpc", &websocket.DialOptions{HTTPClient: client, CompressionMode: websocket.CompressionDisabled})
+	if err != nil {
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("%w: local WebSocket handshake failed", ErrProtocol)
+	}
+	return conn, nil
 }

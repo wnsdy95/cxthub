@@ -363,6 +363,16 @@ for i in $(seq 1 40); do
   [ -f .cxt/boundary.json ] && [ "$(grep -c '^AGENT ' "$CLAUDELOG" 2>/dev/null)" -ge 2 ] && break
   sleep 0.25
 done
+if [ ! -f .cxt/boundary.json ] || [ "$(grep -c '^AGENT ' "$CLAUDELOG" 2>/dev/null)" -lt 2 ]; then
+  # These files contain only this isolated fixture's generated sessions/argv.
+  # Preserve bounded diagnostics even when normal cleanup removes the fixture;
+  # a retry succeeding does not explain the original preflight/restart failure.
+  echo "  wrapper transition incomplete; bounded synthetic fixture diagnostics:"
+  for diagnostic in "$TMP/sw.out" "$TMP/wrapper.out" "$CLAUDELOG"; do
+    echo "  $(basename "$diagnostic"):"
+    if [ -f "$diagnostic" ]; then tail -c 8192 "$diagnostic"; else echo "  unavailable"; fi
+  done
+fi
 expect "Checkpoint execution" "$(grep -c 'cxt: checkpoint' "$TMP/sw.out")" 1
 expect "wrapper switch records a durable branch birth" "$(birth_field feature-x kind)" birth
 expect "boundary signal output" "$(grep -c 'previous session is isolated' "$TMP/sw.out")" 1
@@ -414,8 +424,14 @@ expect "isolated session holder killed" "$(kill -0 "$TPID" 2>/dev/null && echo a
 
 # The first fake child already caused the transition. The wrapper must observe
 # that boundary and restart a second child with the newly materialized seed.
-expect "wrapper automatically restarts as seed (--resume)" "$(grep -c -- "--resume $SEEDID" "$CLAUDELOG")" 1
-expect "restart target = new seed ID" "$(tail -1 "$CLAUDELOG" | grep -c -- "--resume $SEEDID")" 1
+RESTART_MATCHES=0
+LAST_RESTART_MATCHES=0
+if [ -n "$SEEDID" ]; then
+  RESTART_MATCHES=$(grep -c -- "--resume $SEEDID" "$CLAUDELOG")
+  LAST_RESTART_MATCHES=$(tail -1 "$CLAUDELOG" | grep -c -- "--resume $SEEDID")
+fi
+expect "wrapper automatically restarts as seed (--resume)" "$RESTART_MATCHES" 1
+expect "restart target = new seed ID" "$LAST_RESTART_MATCHES" 1
 expect "wrapper carries proven Claude memory profile" "$(grep -c '^MEMORY_PROFILE v1 64 ' "$CLAUDELOG")" 2
 expect "both children retain the invocation's custom Claude memory directory" "$(grep -c "^MEMORY_PROFILE v1 64 $CLAUDE_MEMORY_OVERRIDE$" "$CLAUDELOG")" 2
 expect "restart does not silently revert the invocation to default settings" "$(grep -c '^MEMORY_PROFILE v1 64 default$' "$CLAUDELOG")" 0

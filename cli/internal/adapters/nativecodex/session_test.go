@@ -56,6 +56,7 @@ func nativeHelper() {
 	}
 	cwd, _ := os.Getwd()
 	var methods []string
+	var traceMu sync.Mutex
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -76,8 +77,10 @@ func nativeHelper() {
 			if json.Unmarshal(raw, &req) != nil {
 				return
 			}
+			traceMu.Lock()
 			methods = append(methods, req.Method)
 			_ = os.WriteFile(os.Getenv("CXT_NATIVE_HELPER_TRACE"), []byte(strings.Join(methods, "\n")), 0600)
+			traceMu.Unlock()
 			if len(req.ID) == 0 {
 				continue
 			}
@@ -97,7 +100,7 @@ func nativeHelper() {
 				if mode == "control-init" {
 					result = map[string]any{"userAgent": "bad\x1bPRIVATE_SENTINEL"}
 				}
-			case "thread/start":
+			case "thread/start", "thread/resume":
 				gotCwd := cwd
 				if mode == "wrong-cwd" {
 					gotCwd = "/wrong"
@@ -123,13 +126,17 @@ func nativeHelper() {
 				if mode == "wrong-sandbox" {
 					sandbox = "dangerFullAccess"
 				}
-				if string(req.Params["allowProviderModelFallback"]) != "false" {
+				if req.Method == "thread/start" && string(req.Params["allowProviderModelFallback"]) != "false" {
 					os.Exit(5)
 				}
 				result = map[string]any{"model": model, "modelProvider": "fixture-provider", "cwd": gotCwd, "approvalPolicy": approval, "approvalsReviewer": "user", "sandbox": map[string]string{"type": sandbox}, "thread": map[string]any{"id": "fresh-fixture-thread", "cwd": gotCwd, "turns": turns}}
 				if mode == "duplicate-turns" {
 					result = json.RawMessage(fmt.Sprintf(`{"model":"fixture-resolved","modelProvider":"fixture-provider","thread":{"id":"fresh-fixture-thread","cwd":%q,"turns":[{"id":"old"}],"turns":[]}}`, cwd))
 				}
+			case "config/read":
+				result = map[string]any{"config": map[string]any{"web_search": "disabled"}}
+			case "thread/loaded/list":
+				result = map[string]any{"data": []string{"fresh-fixture-thread"}}
 			case "thread/inject_items":
 				hash := sha256.Sum256(req.Params["items"])
 				_ = os.WriteFile(os.Getenv("CXT_NATIVE_HELPER_TRACE")+".hash", []byte("sha256:"+hex.EncodeToString(hash[:])), 0600)

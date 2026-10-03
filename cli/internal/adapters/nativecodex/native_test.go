@@ -21,55 +21,11 @@ import (
 // loopback synthetic provider which cannot generate a response. This verifies
 // real protocol/persistence, never a model, capacity or interactive TUI attach.
 func TestNativeCodexOfflineTransport(t *testing.T) {
-	executable := os.Getenv("CXT_TEST_NATIVE_CODEX")
-	if executable == "" {
-		t.Skip("set CXT_TEST_NATIVE_CODEX to an absolute installed binary for isolated offline protocol validation")
-	}
-	if !filepath.IsAbs(executable) {
-		t.Fatal("native binary must be an absolute path")
-	}
-	root := t.TempDir()
-	for _, dir := range []string{"home", "state", "work"} {
-		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var requests atomic.Int64
-	var authorization atomic.Bool
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "" {
-			authorization.Store(true)
-		}
-		if r.Method == http.MethodPost {
-			requests.Add(1)
-			http.Error(w, "model calls are forbidden in this fixture", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
-	}))
-	defer provider.Close()
-	settings := []struct {
-		key   string
-		value any
-	}{
-		{"model_provider", "cxt-offline-fixture"}, {"model", "cxt-synthetic-model"},
-		{"model_providers.cxt-offline-fixture.name", "CXTHub offline fixture"},
-		{"model_providers.cxt-offline-fixture.base_url", provider.URL + "/v1"},
-		{"model_providers.cxt-offline-fixture.wire_api", "responses"},
-		{"model_providers.cxt-offline-fixture.requires_openai_auth", false},
-		{"analytics.enabled", false},
-		{"cli_auth_credentials_store", "file"},
-	}
-	var args []string
-	for _, setting := range settings {
-		b, _ := json.Marshal(setting.value)
-		args = append(args, "-c", setting.key+"="+string(b))
-	}
-	env := []string{"HOME=" + filepath.Join(root, "home"), "CODEX_HOME=" + filepath.Join(root, "state"), "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=en_US.UTF-8", "TERM=dumb"}
+	opts, requests, authorization := offlineNativeFixture(t)
+	root := filepath.Dir(opts.Cwd)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	s, err := Start(ctx, Options{Executable: executable, Cwd: filepath.Join(root, "work"), Env: env, ConfigArgs: args})
+	s, err := Start(ctx, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,4 +97,55 @@ func TestNativeCodexOfflineTransport(t *testing.T) {
 	if receipt.UTF8Bytes < 1<<20 {
 		t.Fatal(fmt.Sprint("fixture too small: ", receipt.UTF8Bytes))
 	}
+}
+
+func offlineNativeFixture(t *testing.T) (Options, *atomic.Int64, *atomic.Bool) {
+	t.Helper()
+	executable := os.Getenv("CXT_TEST_NATIVE_CODEX")
+	if executable == "" {
+		t.Skip("set CXT_TEST_NATIVE_CODEX to an absolute installed binary for isolated offline protocol validation")
+	}
+	if !filepath.IsAbs(executable) {
+		t.Fatal("native binary must be an absolute path")
+	}
+	root := t.TempDir()
+	for _, dir := range []string{"home", "state", "work"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var requests atomic.Int64
+	var authorization atomic.Bool
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			authorization.Store(true)
+		}
+		if r.Method == http.MethodPost {
+			requests.Add(1)
+			http.Error(w, "model calls are forbidden in this fixture", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	t.Cleanup(provider.Close)
+	settings := []struct {
+		key   string
+		value any
+	}{
+		{"model_provider", "cxt-offline-fixture"}, {"model", "cxt-synthetic-model"},
+		{"model_providers.cxt-offline-fixture.name", "CXTHub offline fixture"},
+		{"model_providers.cxt-offline-fixture.base_url", provider.URL + "/v1"},
+		{"model_providers.cxt-offline-fixture.wire_api", "responses"},
+		{"model_providers.cxt-offline-fixture.requires_openai_auth", false},
+		{"analytics.enabled", false},
+		{"cli_auth_credentials_store", "file"},
+	}
+	var args []string
+	for _, setting := range settings {
+		b, _ := json.Marshal(setting.value)
+		args = append(args, "-c", setting.key+"="+string(b))
+	}
+	env := []string{"HOME=" + filepath.Join(root, "home"), "CODEX_HOME=" + filepath.Join(root, "state"), "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=en_US.UTF-8", "TERM=dumb"}
+	return Options{Executable: executable, Cwd: filepath.Join(root, "work"), Env: env, ConfigArgs: args}, &requests, &authorization
 }

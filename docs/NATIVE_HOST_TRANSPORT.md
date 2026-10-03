@@ -3,7 +3,8 @@
 The `nativecodex` adapter is a preparatory local protocol boundary. It is not
 wired into `cxt --pull codex`; strict native history launch still reports
 `provider_capability_unknown`. Transport success does not establish capacity,
-exact token accounting, interactive attachment, or model acceptance.
+exact token accounting or model acceptance. Interactive readiness has its own
+correlated acknowledgement below; it does not enable generation.
 
 ## Owned Codex app-server
 
@@ -18,7 +19,8 @@ The supported sequence is:
 
 ```text
 start owned process → connect owned peer → initialize → initialized
-  → create fresh thread → inject history once → acknowledge → close
+  → create fresh thread → inject history once → acknowledge
+  → optional private TUI handoff → matching resume acknowledgement → close
 ```
 
 Requests have correlated IDs, bounded waits, a 16 MiB encoded-message limit,
@@ -56,6 +58,40 @@ endpoint directory is removed. Native session storage and the native server's
 own resource cleanup remain the provider's responsibility. The owned child has
 one CXTHub reaper; external child reaping or SIGCHLD auto-reaping is unsupported.
 
+## Interactive readiness
+
+After successful injection, `OpenHandoff` opens a one-client Unix WebSocket in
+the same private directory (0700 directory, 0600 socket). Its upstream connection
+rechecks the owned app-server's kernel peer identity. The endpoint is private to
+the local user; it does not authenticate the TUI binary against other processes
+running as that same user. The composition layer must launch the owned TUI.
+
+The bridge permits initialization, selected inspection methods and exactly one
+`thread/resume` of the fresh injected thread. A matching response must retain
+the model, provider, canonical cwd and settings from `thread/start`. Only known
+resume pagination fields are excluded from that comparison; collaboration-mode
+settings are checked separately. A receipt is produced after that response has
+been forwarded to the client. A loaded thread, an unrelated response, a live
+process or a notification is never sufficient evidence. The receipt binds the
+injection payload hash and settings hash, with provider acceptance `unverified`.
+It does not attest rendered pixels or instruction-file contents.
+
+Initialization has a 15-second deadline, at most 64 outstanding requests and a
+512-frame / 32 MiB aggregate budget. Every frame remains bounded to 16 MiB.
+Duplicate IDs, ambiguous envelopes, wrong-thread requests, unknown operations,
+server requests and changed settings terminate the handoff. Disconnect cannot
+be retried on this handoff. Closing it cancels its connections and removes its
+socket; the separate owned control session remains available until it is closed.
+
+This is still a **readiness-only** bridge. Turns, tool/approval requests, config
+writes and other mutations remain blocked even after the resume ACK. The native
+project must already be trusted; CXTHub neither accepts its trust dialog nor
+writes that decision. `config/read` must return an explicit `web_search` mode
+(`disabled`, `cached`, `indexed` or `live`). An absent mode is not guessed from
+a default, since native features and managed requirements can change it. Resume
+may only repeat that search setting, not introduce other configuration or
+instruction overrides.
+
 ## Verification
 
 Ordinary tests exercise malformed/oversized frames, interleaved and excessive
@@ -70,14 +106,18 @@ loopback synthetic provider which rejects all generation requests:
 ```sh
 CXT_TEST_NATIVE_CODEX=/absolute/path/to/codex \
   go -C cli test ./internal/adapters/nativecodex \
-  -run TestNativeCodexOfflineTransport -count=1 -v
+  -run 'TestNativeCodex(OfflineTransport|TUIHandoff)' -count=1 -v
 ```
 
 It injects over 1 MiB of synthetic text, checks the exact provider-generated
 persisted content and records that no generation request reached the fixture.
 It does not read an existing account's credentials or transcript, use a real
 model, or claim that the injected data fits a model window. The variable is
-test-only; it does not enable native launch in the installed product.
+test-only; it does not enable native launch in the installed product. The TUI
+test additionally needs Python 3's standard-library PTY support. It creates its
+own trusted synthetic project, injects over 1 MiB, starts the real CLI, observes
+the matching resume response and checks that the connection survives subsequent
+initialization without a model request. It does not capture terminal transcripts.
 
 ## Remaining integration requirements
 
@@ -102,9 +142,18 @@ provider pickers, hook-trust overrides and automatic-review modes need dedicated
 mapping and validation before they can use this path. Existing public provider
 passthrough behavior is unchanged.
 
+The private TUI mapper preserves accepted root config/feature overrides and
+terminal choices, uses the acknowledged canonical cwd, and withholds the first
+question. `--no-daemon` is consumed because this is an invocation-owned private
+server, not the ordinary daemon. Explicit sandbox, approval and bypass flags
+are applied at `thread/start`, then inherited and checked at resume: native
+remote resume rejects those flags on its command line. Replaying them literally
+would prevent attachment. `--search` becomes the same final native override on
+both processes. Unsupported modes remain unsupported.
+
 This seam remains deliberately unwired to public history launch. The wrapper
-still must preserve configuration through the interactive TUI, verify the
-matching resume acknowledgement, and account for the retained initial task.
+still must verify configuration/source freshness at generation release and
+account for the retained initial task, including native newline normalization.
 Verified model/window, host input/framing, tokenizer and compaction evidence
 must feed the existing adaptive budget before real history delivery. A prepared
 package, injection ACK, interactive connection and actual model acceptance need
