@@ -56,20 +56,25 @@ type InjectionReceipt struct {
 }
 
 // Session owns its process and fresh thread. There is deliberately no resume,
-// attach-to-existing, turn/start or arbitrary RPC entry point.
+// attach-to-existing, turn/start or arbitrary RPC entry point. A handoff can
+// observe one interactive client resuming this owned thread, without generation.
 type Session struct {
-	rpc       *rpcClient
-	process   ownedProcess
-	cwd       string
-	host      string
-	gate      chan struct{} // cancellable lifecycle serialization, never Close
-	thread    Thread
-	started   bool
-	injected  bool
-	uncertain bool
-	closed    chan struct{}
-	closeOnce sync.Once
-	closeErr  error
+	socketPath  string
+	settingsRaw json.RawMessage
+	injection   InjectionReceipt
+	handed      bool
+	rpc         *rpcClient
+	process     ownedProcess
+	cwd         string
+	host        string
+	gate        chan struct{} // cancellable lifecycle serialization, never Close
+	thread      Thread
+	started     bool
+	injected    bool
+	uncertain   bool
+	closed      chan struct{}
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 func (s *Session) active() error {
@@ -151,6 +156,7 @@ func (s *Session) StartThread(ctx context.Context, opts ThreadOptions) (Thread, 
 		_ = s.rpc.close()
 		return Thread{}, fmt.Errorf("%w: invalid fresh thread identity", ErrProtocol)
 	}
+	s.settingsRaw = append(json.RawMessage(nil), raw...)
 	s.thread = thread
 	s.started = true
 	return s.thread, nil
@@ -376,6 +382,7 @@ func (s *Session) InjectHistory(ctx context.Context, messages []HistoryMessage) 
 		return receipt, fmt.Errorf("%w: invalid injection acknowledgement", ErrProtocol)
 	}
 	s.injected, receipt.Acknowledged = true, true
+	s.injection = receipt
 	return receipt, nil
 }
 

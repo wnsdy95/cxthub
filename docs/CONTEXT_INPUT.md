@@ -242,10 +242,11 @@ Adaptive accounting does not enable an unverified runtime or invent provider
 acceptance.
 
 The preparatory [native Codex transport](NATIVE_HOST_TRANSPORT.md) has a separate
-owned-process and injection-acknowledgement contract. It remains unwired from
-the launch path until the runtime capability and interactive handoff gates pass.
-Native 200k/full-budget delivery, real-host acceptance and interactive TUI
-handoff remain incomplete validation gates.
+owned-process, injection and matching TUI-resume acknowledgement contract. The
+isolated Codex TUI readiness path is verified without model calls. It remains
+unwired from the public launch path until runtime capability, source/config
+revalidation and generation release pass. Native 200k/full-budget delivery and
+real-host acceptance remain incomplete validation gates.
 
 Without an explicit ref, `cxt load --output` previews the latest authorized
 server `main` input, including the `200k` and `full` examples below. An explicit
