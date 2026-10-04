@@ -60,8 +60,21 @@ func TestAgentContextPagedCannotUseSnapshotLabelsForCoverage(t *testing.T) {
 		history.view.Snapshots[i].Provider = domain.ProviderCodex
 		history.view.Snapshots[i].SessionID = "alice"
 	}
-	if _, err := s.PrepareAgentContext(context.Background(), in); !errors.Is(err, domain.ErrHashMismatch) {
-		t.Fatalf("uncovered incomplete foreign session accepted: %v", err)
+	p, err := s.PrepareAgentContext(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Content.History) != 1 || p.Content.History[0].SessionID != "alice" {
+		t.Fatal("uncovered incomplete foreign session became selected history")
+	}
+	found := false
+	for _, gap := range p.Content.Gaps {
+		if gap.Reason == "history_incomplete_tool_pair" && gap.Source != nil && gap.Source.DocHash == foreign.Hash {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("foreign session was falsely covered instead of separately omitted")
 	}
 	if len(pages.requests) != 3 || pages.requests[2].CoveredBy != "" {
 		t.Fatalf("snapshot hint selected native-session proof: %+v", pages.requests)

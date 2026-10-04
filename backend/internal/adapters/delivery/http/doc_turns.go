@@ -32,11 +32,12 @@ func (s *Server) getDocTurns(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if len(query["covered_by"]) > 1 {
+	if len(query["covered_by"]) > 1 || len(query["incomplete_tail"]) > 1 {
 		s.respond(w, nil, domain.ErrValidation)
 		return
 	}
 	req.CoveredBy = domain.ContentHash(query.Get("covered_by"))
+	req.IncompleteTail = query.Get("incomplete_tail")
 	out, err := reader.ReadAgentHistoryPage(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")), req)
 	switch {
 	case errors.Is(err, domain.ErrContextBudgetExceeded):

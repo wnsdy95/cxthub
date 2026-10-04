@@ -66,11 +66,11 @@ func markAgentMeasurementGap(p *domain.AgentContextPackage, scope string, err er
 }
 
 func (s *AgentContextService) finishAgentHistorySelection(ctx context.Context, in inbound.PrepareAgentContextInput, p *domain.AgentContextPackage, rejected error) error {
-	var measurement *AgentTokenMeasurementError
-	if !errors.As(rejected, &measurement) {
-		return nil
-	}
 	markAgentMeasurementGap(p, "history", rejected)
+	return s.fitAgentHistoryProjection(ctx, in, p)
+}
+
+func (s *AgentContextService) fitAgentHistoryProjection(ctx context.Context, in inbound.PrepareAgentContextInput, p *domain.AgentContextPackage) error {
 	_, err := s.measure(ctx, in, *p)
 	if err == nil || !agentCandidateLimit(err) {
 		return err
@@ -80,8 +80,11 @@ func (s *AgentContextService) finishAgentHistorySelection(ctx context.Context, i
 	// diagnostic already consumed that notice. Drop only oldest complete turns,
 	// including turns from prior pages, until the final rendered package fits.
 	history := p.Content.History
+	if len(history) == 0 {
+		return err
+	}
 	accepted := 0
-	rejected = err
+	rejected := err
 	for low, high := 1, len(history)-1; low <= high; {
 		middle := low + (high-low)/2
 		candidate := *p

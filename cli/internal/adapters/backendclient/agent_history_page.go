@@ -27,6 +27,9 @@ func (c *BackendClient) ReadAgentHistoryPage(ctx context.Context, repo string, h
 	if req.CoveredBy != "" {
 		q.Set("covered_by", string(req.CoveredBy))
 	}
+	if req.IncompleteTail != "" {
+		q.Set("incomplete_tail", req.IncompleteTail)
+	}
 	var raw json.RawMessage
 	// A separate transport ceiling accommodates JSON escaping and response
 	// framing. The validator enforces the smaller requested event-body bound.
@@ -96,24 +99,42 @@ func verifyHistoryEventWire(raw []byte, page domain.AgentHistoryPage) error {
 }
 
 func historyPageWireShape(raw []byte) error {
-	check := func(raw []byte, keys []string) (map[string]json.RawMessage, error) {
+	check := func(raw []byte, keys []string, optional ...string) (map[string]json.RawMessage, error) {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &fields); err != nil {
 			return nil, err
 		}
-		if len(fields) != len(keys) {
-			return nil, domain.ErrHashMismatch
-		}
 		for _, key := range keys {
-			if value, ok := fields[key]; !ok || string(value) == "null" {
+			if value, ok := fields[key]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 				return nil, domain.ErrHashMismatch
 			}
 		}
+		count := len(keys)
+		for _, key := range optional {
+			if value, ok := fields[key]; ok {
+				if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+					return nil, domain.ErrHashMismatch
+				}
+				count++
+			}
+		}
+		if len(fields) != count {
+			return nil, domain.ErrHashMismatch
+		}
 		return fields, nil
 	}
-	fields, err := check(raw, []string{"version", "hash", "provider", "session_id", "total", "before", "next_before", "covered", "turns"})
+	fields, err := check(raw, []string{"version", "hash", "provider", "session_id", "total", "before", "next_before", "covered", "turns"}, "omitted_tail")
 	if err != nil {
 		return err
+	}
+	if tail, ok := fields["omitted_tail"]; ok {
+		var version int
+		if err := json.Unmarshal(fields["version"], &version); err != nil || version != domain.AgentHistoryProjectionVersion {
+			return domain.ErrHashMismatch
+		}
+		if _, err := check(tail, []string{"start", "end", "reason"}); err != nil {
+			return err
+		}
 	}
 	var turns []json.RawMessage
 	if err := json.Unmarshal(fields["turns"], &turns); err != nil {
