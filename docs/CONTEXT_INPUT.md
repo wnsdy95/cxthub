@@ -161,7 +161,7 @@ Native resume, help and noninteractive provider commands preserve their own
 argument and session semantics; incompatible context prefixes fail.
 
 For a verified runtime, preparation resolves the actual model and its context
-window `W` before selecting history. Total initial input must be at most
+window `W` before selecting history. Budgeted initial input is limited to
 `floor(0.8 * W)`, including host system instructions, tools, prompt and other
 fixed host input, package framing, project memory, exact personal constraints,
 provenance and selected history. Required output/reasoning/work capacity is
@@ -171,11 +171,12 @@ It is not deducted again from the twenty percent already left outside the
 initial input strictly below that trigger.
 
 The effective package budget is the smaller of the original request and the
-remaining initial-input capacity after host input, framing and the initial user
+remaining initial-input capacity after host input, framing, an internal-input
+allowance and the initial user
 task supplied in provider arguments. The task is counted as one complete text
 under the resolved model's tokenizer, before selecting history; it is not trimmed
 or split. Host input must exclude that separately reserved user message, and
-verified framing must account for its native message boundary. The package keeps
+the internal-input allowance also covers unknown native framing. The package keeps
 the original request in `policy.budget_tokens`; its optional `budget` records the
 resolved provider/model, host version, tokenizer, requested/effective limits,
 window, host input, framing, optional `initial_prompt_tokens`, output reserve,
@@ -187,13 +188,15 @@ not verified host or tokenizer evidence.
 
 The initial task remains private invocation input. It is never copied into the
 shared-memory package, its sources or serialized receipts. An in-memory
-reservation binds its exact bytes and presence to the provider, resolved model,
+reservation binds its provider-normalized bytes and presence to the provider, resolved model,
 tokenizer and count; equal counts do not authorize a substituted question.
 Materialization and child launch reject a missing or mismatched reservation.
 An explicitly empty task differs from no task, and multiple ambiguous positional
 tasks are rejected rather than joined. Wrapper restart removes the original task
 and prepares a new reservation. Model changes during preparation also recount it.
-This covers the supplied argv text; later interactive input and multimodal
+Codex CRLF and CR are normalized to LF before counting, matching native initial
+TUI/resume submission. Raw argv remains unchanged; Claude text is not normalized
+by this Codex-specific rule. This covers the supplied argv text; later interactive input and multimodal
 attachments require their own native accounting. Default memory, archive
 artifacts, bootstrap and existing native resume retain their existing behavior.
 
@@ -230,9 +233,46 @@ continuation page restarts within that same attempt budget. Generic conflicts
 and cursor errors on the initial page remain terminal. Older servers returning
 a generic conflict require a new invocation.
 
-Strict native history delivery requires verified host/model capacity, known host
-input, an exact tokenizer, framing/output reservations and a known compaction
-threshold. Before preparation and launch receipts are recorded, delivery checks
+The approved `measured_reserve_v1` policy requires verified runtime/model window
+and an exact supported local text tokenizer, but does not require advance
+knowledge of all hidden system/tool input or the compaction threshold. Unknown
+host input and unknown compaction are labeled separately from measured zero.
+Known lower compaction thresholds still apply. The runtime scope must bind
+provider/account routing, effective configuration, instructions and tools;
+a model name or arbitrary window override is insufficient.
+
+The initial extra allowance is `max(16000, floor(W / 20))` tokens, reserved
+**inside** the 80-percent input limit. This is a conservative engineering policy,
+not a guarantee of the hidden payload size. For a 1M window, a 2k first question,
+no separately known overhead and no observations, full requests can retain up to
+748k package tokens; complete-turn boundaries may retain less.
+
+Calibrations are local metadata in `.cxt/agent-input-calibrations/`, never source
+conversation mutations. Scope includes provider, model, host version, tokenizer,
+window and the adapter's runtime-scope fingerprint. They contain only that hash,
+maximum observed overhead and minimum observed input ceiling. Concurrent writers
+merge under a lock; duplicates and delivery order cannot weaken the reserve.
+Malformed records fail instead of silently becoming zero observations.
+
+A correlated initial request can report total input (including cached input)
+minus exactly measured submitted text. Keep the larger observed overhead plus
+the fresh allowance; known host/framing components are not subtracted twice.
+Do not infer zero from absent usage, reuse later tool-turn totals, or use
+post-compaction usage as the pre-compaction input. Successful requests never
+reduce the allowance automatically. Initial compaction or definite input rejection
+lowers the next budget from the submitted estimated size. Feedback changes force
+reselection during preparation, and changed runtime scopes cannot reuse it.
+
+Observation recording never starts a model call. At most one retry is eligible
+only for a correlated input rejection known to precede execution; a timeout,
+disconnection, completed turn or compaction cannot authorize automatic replay.
+Any eligible attempt still requires fresh preparation, source authorization and
+runtime checks. Native event correlation and generation release are separate
+integration work; this policy layer does not claim they are already wired.
+
+Additive budget fields distinguish the accounting policy, unknown flags,
+overhead allowance and observations. Legacy strict receipts keep their old wire
+shape and hashes. Before preparation and launch receipts are recorded, delivery checks
 that budget accounting reproduces the original request, provider, model, private
 initial task and exact selected-token count within the effective limit. A saved
 receipt alone cannot restore the private task reservation. **This build does not yet

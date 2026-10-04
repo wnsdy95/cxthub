@@ -224,10 +224,16 @@ type AgentHostCapability struct {
 	ReservedTokens    int `json:"reserved_tokens"`
 	FramingTokens     int `json:"framing_tokens"`
 	AutoCompactTokens int `json:"auto_compact_tokens,omitempty"`
-	// Known is required even when automatic compaction is explicitly disabled.
-	// A missing/null host setting is not evidence of an unlimited threshold.
+	// Legacy strict accounting requires Known even when compaction is disabled.
+	// Measured reserve accounting can retain an explicitly unknown threshold.
 	AutoCompactKnown bool   `json:"auto_compact_known"`
 	Tokenizer        string `json:"tokenizer"`
+	// Measured input accounting still requires verified runtime/window evidence.
+	// RuntimeScope is an adapter-owned fingerprint of provider/account routing,
+	// configuration and instruction/tool scope, never a user window override.
+	InputAccountingPolicy string                `json:"input_accounting_policy,omitempty"`
+	RuntimeScope          ContentHash           `json:"runtime_scope,omitempty"`
+	Calibration           AgentInputCalibration `json:"-"`
 }
 
 func (c AgentHostCapability) Check(provider ProviderKind, model string, usage AgentTokenUsage) error {

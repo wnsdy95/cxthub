@@ -280,3 +280,58 @@ func TestProviderLaunchBudgetOmittedForDefaultMemoryAndBootstrap(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderLaunchMeasuredReserveStaysExplicitThroughReceipts(t *testing.T) {
+	for _, provider := range []string{"codex", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			root, _ := providerLaunchFixture(t, provider, "")
+			intent := LaunchIntent{Provider: provider, Pull: true, ContextBudget: 800000, ProviderArgs: []string{"--model", "fixture-model", "private task\r\nline"}}
+			request := ProviderLaunchRequest{Cwd: root, Intent: intent}
+			host := launchHostFixture(request)
+			host.HostInputKnown = false
+			host.HostInputTokens = 0
+			host.AutoCompactKnown = false
+			host.AutoCompactTokens = 0
+			host.InputAccountingPolicy = domain.MeasuredInputReserveV1
+			host.RuntimeScope = domain.HashContent([]byte("synthetic provider configuration"))
+			scope, err := host.CalibrationScope()
+			if err != nil {
+				t.Fatal(err)
+			}
+			host.Calibration = domain.AgentInputCalibration{Scope: scope}
+			fixture := strictLaunchContextFixture(request, host)
+			var receipts []ProviderLaunchReceipt
+			hooks := ProviderLaunchHooks{Prepare: func(_ context.Context, req ProviderLaunchRequest) (PreparedProviderLaunch, error) {
+				p := preparedLaunch(req)
+				p.PackageHash = fixture.ID
+				p.SelectedTokens = fixture.Usage.Tokens
+				p.Budget = fixture.Budget
+				p.PromptReservation = fixture.InitialPromptReservation()
+				return p, nil
+			}, Record: func(_ context.Context, r ProviderLaunchReceipt) error { receipts = append(receipts, r); return nil }}
+			runtime := launchTestRuntime()
+			var summary bytes.Buffer
+			runtime.stderr = &summary
+			if err = runProviderLaunch(context.Background(), root, intent, hooks, runtime); err != nil {
+				t.Fatal(err)
+			}
+			if len(receipts) != 2 {
+				t.Fatal("missing lifecycle")
+			}
+			for _, r := range receipts {
+				if r.Acceptance != "unknown" || r.Budget.InputAccountingPolicy != domain.MeasuredInputReserveV1 || !r.Budget.HostInputUnverified || !r.Budget.AutoCompactUnverified {
+					t.Fatal("estimated overhead labeled verified")
+				}
+				wire, _ := json.Marshal(r)
+				if bytes.Contains(wire, []byte("private task")) {
+					t.Fatal("leaked question")
+				}
+			}
+			for _, s := range []string{"accounting=measured_reserve_v1", "overhead_allowance_tokens=50000", "host_input_unverified=true", "auto_compact_unverified=true", "provider acceptance unknown"} {
+				if !strings.Contains(summary.String(), s) {
+					t.Fatalf("summary missing %q", s)
+				}
+			}
+		})
+	}
+}

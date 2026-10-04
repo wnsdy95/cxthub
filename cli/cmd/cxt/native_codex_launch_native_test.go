@@ -91,7 +91,7 @@ func TestNativeCodexBoundLaunch(t *testing.T) {
 			if thread.Model != tc.model || thread.ModelProvider != "cxt-bound-fixture" || thread.Cwd != cwd || !strings.HasPrefix(thread.SettingsHash, "sha256:") {
 				t.Fatal("native runtime does not match launch")
 			}
-			if launch.prompt != "PRIVATE_SYNTHETIC_TASK_NOT_SUBMITTED" {
+			if !launch.prompt.Present() || launch.prompt.Text() != "PRIVATE_SYNTHETIC_TASK_NOT_SUBMITTED" {
 				t.Fatal("lost initial task")
 			}
 			if err = session.Close(); err != nil {
