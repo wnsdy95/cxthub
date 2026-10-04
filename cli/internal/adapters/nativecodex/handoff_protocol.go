@@ -9,8 +9,9 @@ import (
 	"sync"
 )
 
-// This is an inspection protocol, not the eventual generation transport. In
-// particular config writes, tools, approvals, forks and turns are not relayed.
+// Inspection is the default. The optional generation state permits only turns
+// and correlated approvals on the owned thread; config writes and forks remain
+// unavailable in either mode.
 type handoffProtocol struct {
 	mu                                                  sync.Mutex
 	thread                                              Thread
@@ -19,6 +20,8 @@ type handoffProtocol struct {
 	pending                                             map[string]string
 	initSent, initAck, initialized, resumeSent, resumed bool
 	frames, bytes                                       int
+	deniedAuxiliary                                     int
+	generation                                          *generationProtocol
 }
 
 func newHandoffProtocol(thread Thread, raw json.RawMessage, search string) *handoffProtocol {
@@ -27,6 +30,12 @@ func newHandoffProtocol(thread Thread, raw json.RawMessage, search string) *hand
 }
 
 func handoffError(reason string) error { return fmt.Errorf("%w: handoff %s", ErrProtocol, reason) }
+
+// Deny native title-generation requests locally. They must not create a second
+// model request, consume the initial input budget, or disconnect the owned turn.
+type deniedAuxiliaryRequest struct{ id json.RawMessage }
+
+func (*deniedAuxiliaryRequest) Error() string { return "auxiliary generation unavailable" }
 
 func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 	p.mu.Lock()
@@ -77,7 +86,13 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 		}
 		if !client {
 			if hasID {
+				if p.generation != nil {
+					return false, p.generation.serverRequest(method, key, f["params"])
+				}
 				return false, handoffError("server request before generation enabled")
+			}
+			if p.generation != nil {
+				return false, p.generation.notification(method, f["params"])
 			}
 			return false, nil // notifications never establish readiness
 		}
@@ -102,12 +117,29 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 			if p.initSent {
 				return false, handoffError("repeated initialization")
 			}
+			if p.generation != nil && !generationNotificationsEnabled(params) {
+				return false, handoffError("generation requires unsuppressed notifications")
+			}
 			p.initSent = true
 		} else {
 			if !p.initialized {
 				return false, handoffError("not initialized")
 			}
 			switch method {
+			case "thread/start":
+				if p.resumed && p.generation != nil && p.deniedAuxiliary < 16 &&
+					string(params["ephemeral"]) == "true" && stringEquals(params["threadSource"], "thread_title") {
+					p.deniedAuxiliary++
+					return false, &deniedAuxiliaryRequest{id: append(json.RawMessage(nil), id...)}
+				}
+				return false, handoffError("additional thread not permitted")
+			case "turn/start", "turn/interrupt":
+				if !p.resumed || p.generation == nil {
+					return false, handoffError("generation not enabled")
+				}
+				if err := p.generation.clientRequest(p, method, key, params); err != nil {
+					return false, err
+				}
 			case "thread/resume":
 				if p.resumeSent || !p.resumeParams(params) {
 					return false, handoffError("resume changes prepared intent")
@@ -125,14 +157,23 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 		p.pending[key] = method
 		return false, nil
 	}
-	if client || !hasID || hasResult == hasError || f["params"] != nil {
+	if !hasID || hasResult == hasError || f["params"] != nil {
 		return false, handoffError("unexpected response")
+	}
+	if client {
+		if p.generation == nil {
+			return false, handoffError("unexpected client response")
+		}
+		return false, p.generation.clientResponse(key, f)
 	}
 	method, exists := p.pending[key]
 	if !exists {
 		return false, handoffError("uncorrelated response")
 	}
 	delete(p.pending, key)
+	if method == "turn/start" {
+		return false, p.generation.startResponse(key, f["result"], hasError)
+	}
 	if hasError {
 		if method == "initialize" || method == "thread/resume" {
 			return false, handoffError("native initialization or resume rejected")
