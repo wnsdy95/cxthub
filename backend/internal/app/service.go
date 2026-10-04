@@ -23,13 +23,14 @@ import (
 
 // Service implements all server inbound use-cases and HTTP read-through.
 type Service struct {
-	branchCache  branchProjectionCache
-	segmentCache contextSegmentCache
-	docVerifier  domain.CanonicalDocVerifier
-	meta         outbound.MetadataStore
-	blobs        outbound.BlobStore
-	auth         outbound.AuthProvider
-	engine       outbound.GitEngine
+	branchCache   branchProjectionCache
+	segmentCache  contextSegmentCache
+	deliveryCache effectiveMemoryDeliveryCache
+	docVerifier   domain.CanonicalDocVerifier
+	meta          outbound.MetadataStore
+	blobs         outbound.BlobStore
+	auth          outbound.AuthProvider
+	engine        outbound.GitEngine
 	// repositories resolves bindings and current write authority. A missing adapter
 	// denies user writes; explicit trusted system jobs may operate without one.
 	repositories outbound.RepositoryStore

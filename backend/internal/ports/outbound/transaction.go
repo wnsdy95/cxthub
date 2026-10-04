@@ -15,6 +15,15 @@ type RepositoryTransactions interface {
 	WithinReadSnapshot(context.Context, func(context.Context) error) error
 }
 
+// RepositoryTransactionState positively identifies a store-owned, read-only
+// snapshot. False also covers an absent, foreign or write transaction. Callers
+// must not infer read-only mode merely from entering WithinReadSnapshot: it may
+// join a pre-existing write transaction. Unknown adapters must bypass caches
+// which assume the visible repository generation is already committed.
+type RepositoryTransactionState interface {
+	InReadOnlyTransaction(context.Context) bool
+}
+
 // PRJobFence holds the current job row until the repository transaction ends.
 // A stale/expired worker must fail before changing any context state.
 type PRJobFence interface {

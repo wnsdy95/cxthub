@@ -46,7 +46,7 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 			return out, err
 		}
 		if in.Scope != "current" {
-			return s.finishContextQuery(ctx, repo, in, out, view.History, key)
+			return s.finishContextQuery(ctx, repo, in, out, view, key)
 		}
 		name := in.Branch
 		if name == "" {
@@ -103,6 +103,6 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 			out.StateHash = domain.HashContent(basis)
 			break
 		}
-		return s.finishContextQuery(ctx, repo, in, out, view.History, key)
+		return s.finishContextQuery(ctx, repo, in, out, view, key)
 	})
 }

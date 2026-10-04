@@ -317,6 +317,54 @@ expect "app switch does not create wrapper boundary" "$([ ! -e .cxt/boundary.jso
 expect "app switch does not supersede provider files" "$(find "$PROJ" -maxdepth 1 -type f -name '*.superseded' | wc -l | tr -d ' ')" 0
 expect "app switch does not materialize orphan native seed" "$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')" "$APP_JSONL_BEFORE"
 expect "app session file remains at original path" "$([ -f "$APP_SESSION" ] && echo yes)" yes
+# Earlier Git hooks can still be publishing retained memory attachments. This
+# assertion tests one immediate handoff after that known work has completed;
+# deterministic application tests separately exercise drift and retained retry.
+# Join the real workers, then check their queue under the same publication locks.
+# An empty queue alone does not prove an already-running worker has finished.
+python3 - "$TMP/bin/cxt" "$TMP/repo1" "$TMP/repo2" <<'PYDRAIN'
+import contextlib, fcntl, json, pathlib, signal, subprocess, sys, time
+
+def deadline(*_):
+    raise TimeoutError('historical publication did not finish before app handoff')
+
+signal.signal(signal.SIGALRM, deadline)
+# checkout has returned, but its branch publisher can still be running and can
+# enqueue historical work on exit. Observe only this fixture's unique binary;
+# the older best-effort sync.lock is not an exclusion/completion guarantee.
+publisher_commands = {str(path) + ' git-hook branch-state-sync' for path in
+                      (pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[1]).resolve())}
+expires = time.monotonic() + 45
+while True:
+    processes = subprocess.check_output(['ps', '-ww', '-axo', 'pid=,command='],
+                                        text=True, timeout=5)
+    running = any(len(fields := line.strip().split(None, 1)) == 2 and
+                  fields[1] in publisher_commands for line in processes.splitlines())
+    if not running:
+        break
+    if time.monotonic() >= expires:
+        raise TimeoutError('fixture branch publication is still running')
+    time.sleep(0.02)
+for root in map(pathlib.Path, sys.argv[2:]):
+    subprocess.run(['cxt', 'git-hook', 'historical-sync'], cwd=root,
+                   check=True, timeout=45)
+    signal.alarm(45)
+    try:
+        with contextlib.ExitStack() as locks:
+            directory = root / '.cxt/locks/historical-backfill'
+            directory.mkdir(parents=True, exist_ok=True)
+            for name in ('daemon', 'worker'):
+                lock = locks.enter_context((directory / (name + '.flock')).open('a+'))
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            result = subprocess.run(['cxt', 'sync', 'status', '--json'], cwd=root,
+                                    check=True, capture_output=True, text=True, timeout=10)
+            report = json.loads(result.stdout)
+            if report['historical_uploads'] or report['issues']:
+                raise RuntimeError('fixture retained publication is still pending')
+    finally:
+        signal.alarm(0)
+PYDRAIN
+expect "prior historical publication finished before immediate handoff" "$?" 0
 APP_HANDOFF=$(echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"continue\"}" | cxt hook --provider claude --event UserPromptSubmit)
 printf '%s\n' "$APP_HANDOFF" > "$TMP/app-handoff.json"
 expect "app handoff is one bounded project-memory injection" "$(echo "$APP_HANDOFF" | python3 -c "
@@ -325,7 +373,10 @@ try:
     text=json.load(sys.stdin)['hookSpecificOutput']['additionalContext']
     prefix='[cxt context package v1]'
     package,end=json.JSONDecoder().raw_decode(text.split(prefix,1)[1].lstrip())
-    print('yes' if prefix in text and len(text.encode()) <= 16*1024 and package['selection']['branch']=='main' and package['selection']['source_policy']=='latest_server_main' and package['selection']['working_position']['branch']=='app-feature-x' and package['selection']['repository_id']=='$RID' and not package.get('historical_evidence') else 'no')
+    selected=package['selection']
+    proofs=[selected.get('context_delivery_hash',''), selected.get('memory_delivery_hash','')]
+    proofs_valid=all(len(p)==71 and p.startswith('sha256:') and all(c in '0123456789abcdef' for c in p[7:]) for p in proofs)
+    print('yes' if prefix in text and len(text.encode()) <= 16*1024 and selected['branch']=='main' and selected['source_policy']=='latest_server_main' and selected['working_position']['branch']=='app-feature-x' and selected['repository_id']=='$RID' and proofs_valid and not package.get('historical_evidence') else 'no')
 except Exception: print('no')")" yes
 expect "app handoff is consumed once" "$(find .cxt/handoffs -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" 0
 git checkout -q main >/dev/null 2>&1

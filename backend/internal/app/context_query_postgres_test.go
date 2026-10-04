@@ -73,6 +73,11 @@ func TestPGContextQueryPinsPositionAndRevisionAcrossConcurrentWriter(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	baselineService := NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	baseline, err := baselineService.QueryContext(ctx, repo, domain.ContextSelection{Position: "HEAD", Scope: "current"})
+	if err != nil || domain.ValidateContentHash(baseline.DeliveryStateHash) != nil {
+		t.Fatal("missing initial delivery proof", err)
+	}
 	paused := &pausedQueryStore{PostgresStore: st, started: make(chan struct{}), release: make(chan struct{})}
 	svc := NewService(paused, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	type result struct {
@@ -105,12 +110,18 @@ func TestPGContextQueryPinsPositionAndRevisionAcrossConcurrentWriter(t *testing.
 		if got.err != nil || got.view.Position != ids[0] || got.view.Revision != before || len(got.view.Snapshots) != 1 {
 			t.Fatalf("torn generation: %+v %v", got.view, got.err)
 		}
+		if got.view.DeliveryStateHash != baseline.DeliveryStateHash {
+			t.Fatal("delivery proof escaped pinned generation")
+		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
 	after, err := svc.QueryContext(ctx, repo, domain.ContextSelection{Position: "HEAD", Scope: "current"})
 	if err != nil || after.Position != ids[1] || after.Revision.Graph <= before.Graph {
 		t.Fatalf("next generation missing: %+v %v", after, err)
+	}
+	if after.DeliveryStateHash == baseline.DeliveryStateHash {
+		t.Fatal("delivery proof ignored selected main move")
 	}
 }
 

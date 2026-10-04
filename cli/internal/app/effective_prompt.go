@@ -197,6 +197,9 @@ func (s *MemoryPromptService) prepare(ctx context.Context, repo, cwd string, roo
 // Shape and enum checks protect the query contract. Applicability itself is
 // determined exclusively by the backend; do not duplicate its Git rules here.
 func validEffectivePromptPage(p domain.EffectiveMemoryPage, r domain.EffectiveMemoryRequest) bool {
+	if domain.ValidateOptionalContentHash(p.DeliveryStateHash) != nil {
+		return false
+	}
 	if p.Content != r.Content || (p.Content != "claims" && p.Content != "prompt") || p.Selection != r.Selection || domain.ValidateContentHash(p.StateHash) != nil || domain.ValidateContentHash(p.LineageHash) != nil || p.Total < 0 || p.Total > 16384 || len(p.Items) > r.Limit || len(p.NextCursor) > 1024 || (p.NextCursor != "" && len(p.Items) == 0) {
 		return false
 	}

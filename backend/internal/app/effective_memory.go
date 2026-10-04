@@ -137,6 +137,10 @@ func (s *Service) queryEffectiveMemory(ctx context.Context, repo domain.ContentH
 	if offset > len(items) {
 		return out, domain.ErrValidation
 	}
+	out.DeliveryStateHash, err = s.effectiveMemoryProof(ctx, repo, out, history, items)
+	if err != nil {
+		return out, err
+	}
 	resolver, err := newMemoryIntegration(s, evidence, repo, history)
 	if err != nil {
 		return out, err

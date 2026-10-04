@@ -90,6 +90,7 @@ func TestPGMemoryProjectionBranchIntegrationReplicaSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{Branch: "main", SnapshotID: ref.Target, CodeCommit: effectiveOID(3)}, Limit: 1}
+	var oldDelivery domain.ContentHash
 	err = peer.WithinReadSnapshot(ctx, func(bound context.Context) error {
 		before, e := reader.QueryBranchMemory(bound, repo, "main", ref.Target, "")
 		if e != nil {
@@ -97,6 +98,14 @@ func TestPGMemoryProjectionBranchIntegrationReplicaSnapshot(t *testing.T) {
 		}
 		if strings.Contains(before.Digest.Summary, "PR SOURCE MEMORY") {
 			t.Fatal("unverified source included")
+		}
+		initialPage, e := reader.QueryEffectiveMemory(bound, repo, req)
+		if e != nil {
+			return e
+		}
+		oldDelivery = initialPage.DeliveryStateHash
+		if domain.ValidateContentHash(oldDelivery) != nil {
+			t.Fatal("missing initial memory proof")
 		}
 		if _, e = scans.ObservePush(ctx, origin, "refs/heads/main", "", effectiveOID(3), false, "push"); e != nil {
 			return e
@@ -119,6 +128,13 @@ func TestPGMemoryProjectionBranchIntegrationReplicaSnapshot(t *testing.T) {
 		}
 		if held.StateHash != before.StateHash || held.Inclusion.Merges[0].State != "review" {
 			t.Fatal("mixed evidence generations")
+		}
+		heldPage, e := reader.QueryEffectiveMemory(bound, repo, req)
+		if e != nil {
+			return e
+		}
+		if heldPage.DeliveryStateHash != oldDelivery || heldPage.Revision != initialPage.Revision {
+			t.Fatal("memory proof escaped pinned evidence generation")
 		}
 		return nil
 	})
@@ -144,12 +160,65 @@ func TestPGMemoryProjectionBranchIntegrationReplicaSnapshot(t *testing.T) {
 	if err != nil || page.NextCursor == "" {
 		t.Fatal(page, err)
 	}
+	if page.DeliveryStateHash == oldDelivery || domain.ValidateContentHash(page.DeliveryStateHash) != nil {
+		t.Fatal("new inclusion/evidence not bound")
+	}
+	// A repository-wide clock advance without new selected evidence changes
+	// the legacy cursor fence, not the complete selected delivery projection.
+	if err := st.AdvanceEvidenceRevision(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	drifted, err := reader.QueryEffectiveMemory(ctx, repo, req)
+	if err != nil || drifted.DeliveryStateHash != page.DeliveryStateHash || drifted.StateHash == page.StateHash {
+		t.Fatal("global clock changed delivery semantics", err)
+	}
+	page = drifted
+	// The service can be read from a write callback before its final revision
+	// advance. A rolled-back memory must never publish a reusable proof.
+	committed, err := writer.QueryEffectiveMemory(ctx, repo, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := len(writer.deliveryCache.entries)
+	rollback := errors.New("synthetic rollback")
+	err = repositoryWriteError(ctx, writer, repo, func(bound context.Context) error {
+		snap, e := st.GetSnapshot(bound, repo, ids[1])
+		if e != nil {
+			return e
+		}
+		_, e = writer.PutMemoryDigestCAS(bound, repo, domain.MergeDigests(domain.MemoryDigest{}, domain.MemoryDigest{SnapshotID: ids[1], PreviousMemoryHash: snap.MemoryHash, Summary: "UNCOMMITTED SOURCE"}))
+		if e != nil {
+			return e
+		}
+		uncommitted, e := writer.QueryEffectiveMemory(bound, repo, req)
+		if e != nil {
+			return e
+		}
+		if uncommitted.DeliveryStateHash == committed.DeliveryStateHash {
+			t.Fatal("write read ignored uncommitted memory")
+		}
+		if len(writer.deliveryCache.entries) != entries {
+			t.Fatal("write read poisoned delivery cache")
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatal("expected rollback", err)
+	}
+	restored, err := writer.QueryEffectiveMemory(ctx, repo, req)
+	if err != nil || restored.DeliveryStateHash != committed.DeliveryStateHash || restored.Revision != committed.Revision {
+		t.Fatal("rollback left uncommitted delivery state", err)
+	}
 	previous, err := st.GetSnapshot(ctx, repo, ids[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = writer.PutMemoryDigestCAS(ctx, repo, domain.MergeDigests(domain.MemoryDigest{}, domain.MemoryDigest{SnapshotID: ids[1], PreviousMemoryHash: previous.MemoryHash, Summary: "UPDATED SOURCE"})); err != nil {
 		t.Fatal(err)
+	}
+	updated, err := reader.QueryEffectiveMemory(ctx, repo, req)
+	if err != nil || updated.DeliveryStateHash == page.DeliveryStateHash {
+		t.Fatal("selected immutable memory change not bound", err)
 	}
 	req.Cursor = page.NextCursor
 	if _, err = reader.QueryEffectiveMemory(ctx, repo, req); !errors.Is(err, domain.ErrConflict) {

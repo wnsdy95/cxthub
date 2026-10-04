@@ -100,6 +100,9 @@ func TestContextSegmentPagesBindOnlyFinalizedVerifiedRanges(t *testing.T) {
 	if spy.catalogReads != catalogReads {
 		t.Fatalf("continuation reread full catalog: %d -> %d", catalogReads, spy.catalogReads)
 	}
+	if domain.ValidateContentHash(first.DeliveryStateHash) != nil || first.DeliveryStateHash != plain.DeliveryStateHash || last.DeliveryStateHash != first.DeliveryStateHash {
+		t.Fatal("delivery proof must cover the entire selection on every page")
+	}
 	if len(last.Snapshots) != 1 || len(last.History) != 0 || last.Inclusion != nil {
 		t.Fatal("continuation returned whole repository metadata")
 	}

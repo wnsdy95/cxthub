@@ -505,6 +505,9 @@ components:
         segments: { $ref: '#/components/schemas/ContextSegmentPage' }
         branch: { type: string }
         state_hash: { $ref: '#/components/schemas/ContentHash' }
+        delivery_state_hash:
+          allOf: [{ $ref: '#/components/schemas/ContentHash' }]
+          description: Optional versioned fingerprint of the complete selected semantic projection before pagination. Excludes repository-wide revisions, unrelated history and display-only branch memberships; retains selected content, ancestry, inclusion and provenance. Does not replace state_hash or revision fences.
         inclusion: { $ref: '#/components/schemas/BranchContext' }
         version: { type: integer, const: 1 }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
@@ -849,6 +852,9 @@ components:
         selection: { $ref: '#/components/schemas/EffectiveMemorySelection' }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         state_hash: { $ref: '#/components/schemas/ContentHash' }
+        delivery_state_hash:
+          allOf: [{ $ref: '#/components/schemas/ContentHash' }]
+          description: Optional versioned fingerprint of the complete assessed effective-memory projection, including all items outside this page. Excludes repository-wide revisions and unrelated history. Absent if the complete assessment exceeds its bounded proof budget; never represents a partial assessment. Existing cursor and revision fences are unchanged.
         lineage_hash: { $ref: '#/components/schemas/ContentHash' }
         items: { type: array, items: { $ref: '#/components/schemas/EffectiveMemoryItem' } }
         total: { type: integer }

@@ -100,13 +100,16 @@ type EffectiveMemoryRequest struct {
 }
 
 type EffectiveMemoryPage struct {
-	Inclusion   *BranchContext           `json:"inclusion,omitempty"`
-	Content     string                   `json:"content,omitempty"`
-	Selection   EffectiveMemorySelection `json:"selection"`
-	Revision    RepositoryRevision       `json:"revision"`
-	StateHash   ContentHash              `json:"state_hash"`
-	LineageHash ContentHash              `json:"lineage_hash"`
-	Items       []EffectiveMemoryItem    `json:"items"`
-	Total       int                      `json:"total"`
-	NextCursor  string                   `json:"next_cursor"`
+	// DeliveryStateHash is present only after the complete effective projection
+	// has been assessed, including items outside this page. It is not a cursor.
+	DeliveryStateHash ContentHash              `json:"delivery_state_hash,omitempty"`
+	Inclusion         *BranchContext           `json:"inclusion,omitempty"`
+	Content           string                   `json:"content,omitempty"`
+	Selection         EffectiveMemorySelection `json:"selection"`
+	Revision          RepositoryRevision       `json:"revision"`
+	StateHash         ContentHash              `json:"state_hash"`
+	LineageHash       ContentHash              `json:"lineage_hash"`
+	Items             []EffectiveMemoryItem    `json:"items"`
+	Total             int                      `json:"total"`
+	NextCursor        string                   `json:"next_cursor"`
 }

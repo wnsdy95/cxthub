@@ -35,5 +35,8 @@ func (c *BackendClient) QueryEffectiveMemory(ctx context.Context, repo string, i
 	if errors.As(err, &responseErr) && responseErr.Status == http.StatusConflict && responseErr.Code == "memory_cursor_stale" {
 		return out, fmt.Errorf("%w: %w", domain.ErrEffectiveMemoryCursorStale, err)
 	}
+	if err == nil && domain.ValidateOptionalContentHash(out.DeliveryStateHash) != nil {
+		return out, domain.ErrHashMismatch
+	}
 	return out, err
 }

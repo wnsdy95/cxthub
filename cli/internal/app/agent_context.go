@@ -66,6 +66,7 @@ type agentPreparationAnchor struct {
 	branch      string
 	code        string
 	state       domain.ContentHash
+	delivery    domain.ContentHash
 	memoryPages memoryReadAnchor
 }
 
@@ -158,10 +159,10 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	if err = validAgentHistory(view, in); err != nil {
 		return p, err
 	}
-	selected := agentPreparationAnchor{position: view.Position, branch: view.Selection.Branch, code: view.Selection.CodeCommit, state: view.StateHash}
+	selected := agentPreparationAnchor{position: view.Position, branch: view.Selection.Branch, code: view.Selection.CodeCommit, state: view.StateHash, delivery: view.DeliveryStateHash}
 	if *anchor == nil {
 		*anchor = &selected
-	} else if (*anchor).position != selected.position || (*anchor).branch != selected.branch || (*anchor).code != selected.code || (*anchor).state != selected.state {
+	} else if (*anchor).position != selected.position || (*anchor).branch != selected.branch || (*anchor).code != selected.code || !sameAgentContextState((*anchor).state, (*anchor).delivery, selected.state, selected.delivery) {
 		return p, fmt.Errorf("%w: original code/context selection changed between preparation attempts", domain.ErrSelectionChanged)
 	}
 	p = domain.AgentContextPackage{Version: domain.AgentContextVersion, Provider: in.Provider, Policy: policy, Delivery: "prepared", Capability: "not_verified_for_native_replay", ArtifactOnly: in.ArtifactOnly, Budget: budget}
@@ -245,7 +246,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	}
 	content := "prompt"
 	req := domain.EffectiveMemoryRequest{Selection: selection, Content: content, Limit: 50}
-	var state, lineage domain.ContentHash
+	var state, lineage, delivery domain.ContentHash
 	total, received := -1, 0
 	seenItems := map[domain.ContentHash]bool{}
 	seenCursors := map[string]bool{}
@@ -274,7 +275,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 			}
 			seenItems[item.ID] = true
 		}
-		if state != "" && (page.LineageHash != lineage || page.Total != total) {
+		if state != "" && (page.LineageHash != lineage || page.Total != total || page.DeliveryStateHash != delivery) {
 			return domain.AgentContextPackage{}, domain.ErrSelectionChanged
 		}
 		if err := (*anchor).memoryPages.check(pageNo, page); err != nil {
@@ -286,8 +287,12 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if state != "" && page.StateHash != state {
 			return domain.AgentContextPackage{}, domain.ErrSelectionChanged
 		}
-		state, lineage, total = page.StateHash, page.LineageHash, page.Total
+		state, lineage, delivery, total = page.StateHash, page.LineageHash, page.DeliveryStateHash, page.Total
 		p.Content.Selection.MemoryStateHash = state
+		if view.DeliveryStateHash != "" && delivery != "" {
+			p.Content.Selection.ContextDeliveryHash = view.DeliveryStateHash
+			p.Content.Selection.MemoryDeliveryHash = delivery
+		}
 
 		for _, item := range page.Items {
 			candidate := p
@@ -347,11 +352,14 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	if err = validAgentHistory(after, in); err != nil {
 		return domain.AgentContextPackage{}, err
 	}
-	if after.StateHash != view.StateHash || after.Position != view.Position || after.Selection.Branch != view.Selection.Branch || after.Selection.CodeCommit != view.Selection.CodeCommit {
-		return domain.AgentContextPackage{}, fmt.Errorf("%w: context revalidation (content_changed=%t, position_changed=%t, branch_changed=%t, code_changed=%t, graph_revision=%d->%d, evidence_revision=%d->%d)", domain.ErrSelectionChanged, after.StateHash != view.StateHash, after.Position != view.Position, after.Selection.Branch != view.Selection.Branch, after.Selection.CodeCommit != view.Selection.CodeCommit, view.Revision.Graph, after.Revision.Graph, view.Revision.Evidence, after.Revision.Evidence)
+	if !sameAgentContextState(view.StateHash, view.DeliveryStateHash, after.StateHash, after.DeliveryStateHash) || after.Position != view.Position || after.Selection.Branch != view.Selection.Branch || after.Selection.CodeCommit != view.Selection.CodeCommit {
+		return domain.AgentContextPackage{}, fmt.Errorf("%w: context revalidation (content_changed=%t, delivery_changed=%t, position_changed=%t, branch_changed=%t, code_changed=%t, graph_revision=%d->%d, evidence_revision=%d->%d)", domain.ErrSelectionChanged, after.StateHash != view.StateHash, after.DeliveryStateHash != view.DeliveryStateHash, after.Position != view.Position, after.Selection.Branch != view.Selection.Branch, after.Selection.CodeCommit != view.Selection.CodeCommit, view.Revision.Graph, after.Revision.Graph, view.Revision.Evidence, after.Revision.Evidence)
 	}
 	if after.Revision.Graph != view.Revision.Graph || after.Revision.Evidence != view.Revision.Evidence {
 		return domain.AgentContextPackage{}, retryAgentRevision(fmt.Sprintf("context revalidation (graph_revision=%d->%d, evidence_revision=%d->%d)", view.Revision.Graph, after.Revision.Graph, view.Revision.Evidence, after.Revision.Evidence))
+	}
+	if after.StateHash != view.StateHash {
+		return domain.AgentContextPackage{}, fmt.Errorf("%w: context state changed within the same revision", domain.ErrSelectionChanged)
 	}
 	if !emptyMemory {
 		req.Cursor = ""
@@ -359,7 +367,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if err != nil {
 			return domain.AgentContextPackage{}, err
 		}
-		if !validEffectivePromptPage(check, req) || check.LineageHash != lineage {
+		if !validEffectivePromptPage(check, req) || check.LineageHash != lineage || check.DeliveryStateHash != delivery {
 			return domain.AgentContextPackage{}, fmt.Errorf("%w: memory revalidation (content_changed=%t, lineage_changed=%t, graph_revision=%d->%d, evidence_revision=%d->%d)", domain.ErrSelectionChanged, check.StateHash != state, check.LineageHash != lineage, view.Revision.Graph, check.Revision.Graph, view.Revision.Evidence, check.Revision.Evidence)
 		}
 		if err := (*anchor).memoryPages.check(0, check); err != nil {
@@ -405,6 +413,9 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 }
 
 func validAgentHistory(v domain.HistoryQueryResult, in inbound.PrepareAgentContextInput) error {
+	if domain.ValidateOptionalContentHash(v.DeliveryStateHash) != nil {
+		return domain.ErrHashMismatch
+	}
 	if !v.ServerChecked || v.Version != domain.QueryContractVersion || v.Revision == nil || domain.ValidateContentHash(v.StateHash) != nil || domain.ValidateContentHash(v.Position) != nil || !domain.ValidGitOID(v.Selection.CodeCommit) {
 		return fmt.Errorf("%w: a pinned server context projection is required", domain.ErrAgentContextUnavailable)
 	}

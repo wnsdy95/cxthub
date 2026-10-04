@@ -22,17 +22,18 @@ type HistorySelection struct {
 }
 
 type HistoryQueryResult struct {
-	Segments      *ContextSegmentPage `json:"segments,omitempty"`
-	Version       int                 `json:"version"`
-	Selection     HistorySelection    `json:"selection"`
-	StateHash     ContentHash         `json:"state_hash"`
-	Revision      *RepositoryRevision `json:"revision,omitempty"`
-	Position      ContentHash         `json:"position,omitempty"`
-	Snapshots     []Snapshot          `json:"snapshots"`
-	Complete      bool                `json:"complete"`
-	Missing       []ContentHash       `json:"missing"`
-	ServerChecked bool                `json:"server_checked"`
-	Inclusion     *BranchContext      `json:"inclusion,omitempty"`
+	Segments          *ContextSegmentPage `json:"segments,omitempty"`
+	Version           int                 `json:"version"`
+	Selection         HistorySelection    `json:"selection"`
+	StateHash         ContentHash         `json:"state_hash"`
+	DeliveryStateHash ContentHash         `json:"delivery_state_hash,omitempty"`
+	Revision          *RepositoryRevision `json:"revision,omitempty"`
+	Position          ContentHash         `json:"position,omitempty"`
+	Snapshots         []Snapshot          `json:"snapshots"`
+	Complete          bool                `json:"complete"`
+	Missing           []ContentHash       `json:"missing"`
+	ServerChecked     bool                `json:"server_checked"`
+	Inclusion         *BranchContext      `json:"inclusion,omitempty"`
 }
 
 // These wire values mirror the server's ContextQuery contract; no local policy
@@ -72,15 +73,16 @@ type RepositoryRevision struct {
 	Pending  uint64 `json:"pending,string"`
 }
 type ContextQueryView struct {
-	Segments  *ContextSegmentPage `json:"segments,omitempty"`
-	Revision  RepositoryRevision  `json:"revision"`
-	Version   int                 `json:"version"`
-	Branch    string              `json:"branch,omitempty"`
-	StateHash ContentHash         `json:"state_hash,omitempty"`
-	Position  ContentHash         `json:"position,omitempty"`
-	Snapshots []Snapshot          `json:"snapshots"`
-	History   []HistoryEvent      `json:"history,omitempty"`
-	Inclusion *BranchContext      `json:"inclusion,omitempty"`
+	Segments          *ContextSegmentPage `json:"segments,omitempty"`
+	Revision          RepositoryRevision  `json:"revision"`
+	Version           int                 `json:"version"`
+	Branch            string              `json:"branch,omitempty"`
+	StateHash         ContentHash         `json:"state_hash,omitempty"`
+	DeliveryStateHash ContentHash         `json:"delivery_state_hash,omitempty"`
+	Position          ContentHash         `json:"position,omitempty"`
+	Snapshots         []Snapshot          `json:"snapshots"`
+	History           []HistoryEvent      `json:"history,omitempty"`
+	Inclusion         *BranchContext      `json:"inclusion,omitempty"`
 }
 
 const ContextSegmentVersion = 1
@@ -252,7 +254,7 @@ func ValidateContextQuery(repo string, in ContextSelection, out ContextQueryView
 	if out.Version != QueryContractVersion {
 		return fmt.Errorf("unsupported context query version %d", out.Version)
 	}
-	if ValidateContentHash(out.StateHash) != nil {
+	if ValidateContentHash(out.StateHash) != nil || ValidateOptionalContentHash(out.DeliveryStateHash) != nil {
 		return ErrHashMismatch
 	}
 	if strings.HasPrefix(in.Position, "sha256:") && string(out.Position) != in.Position {
