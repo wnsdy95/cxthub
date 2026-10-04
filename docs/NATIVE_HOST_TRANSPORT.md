@@ -60,6 +60,53 @@ endpoint directory is removed. Native session storage and the native server's
 own resource cleanup remain the provider's responsibility. The owned child has
 one CXTHub reaper; external child reaping or SIGCHLD auto-reaping is unsupported.
 
+## Runtime window policy
+
+`ResolveModelWindow` follows Codex 0.157.1's versioned configuration rules. It
+separates the catalog base window, the resolved window after configuration and
+maximum clamping, and the usable window after native's effective percentage.
+For example, 272,000 at 95% yields 258,400 usable tokens. CXTHub applies its 80%
+input policy and measured hidden-input reserve inside that usable amount.
+An existing configuration increase is allowed only when the same bound catalog
+explicitly supplies a maximum; native clamps the value to that maximum. Without
+a maximum, configuration cannot enlarge packing beyond the base usable window.
+A catalog maximum by itself never selects a larger window. Native telemetry is compared with the native resolved usable
+window separately; matching telemetry never increases the prepared budget.
+
+`StartWindowBound` supports an **already-configured static model catalog** on the
+OpenAI-compatible native provider. A discovery app-server reads the effective
+configuration without creating a thread. After capturing config and catalog
+fingerprints, CXTHub closes discovery and starts a new execution app-server with
+unchanged options and environment. It checks those fingerprints before and after
+fresh-thread creation, then again through an invocation-owned binding before
+injection. The exact catalog slug must match the acknowledged model. Duplicates,
+aliases, fallback entries, invalid numbers and observed config changes fail.
+CXTHub does not create, replace, or recommend manufacturing a catalog to enable
+this path. Errors and receipts exclude private paths and configuration contents.
+
+Reading only before and after **thread** creation is insufficient: the native
+model manager loads its static catalog at **process startup**. An actual 0.157.1
+probe reproduced a file changing from A to B while config reads and file hashes
+both showed B but the native manager still used A. The discovery/execution split
+covers this case. Repeated hashes are drift detection, not atomic filesystem
+isolation; an ABA edit entirely between observations is not ruled out.
+
+The capability is a checked **local packing policy**, not signed remote
+entitlement or evidence of model acceptance. Feedback keys include the fresh
+thread identity, so credentials need not be read and calibration is not reused
+across invocations. This does not attest account identity or detect account changes. Hidden input remains explicitly unknown and uses
+the approved measured reserve. Body-relative compaction thresholds are not
+misrepresented as whole-input limits.
+
+**Refreshable native catalogs remain unsupported for preparation.** `model/list`
+omits window metadata; `modelProvider/capabilities/read` returns feature booleans.
+A debug/cache snapshot cannot prove the descriptor retained by the execution
+thread. General support needs a native read/admission contract exposing that
+owned thread's resolved model descriptor and revision. The public CLI supervisor
+has not yet been switched from materialized-session launch to the native delayed
+first-turn lifecycle; this static binding alone does not activate `--pull` or
+claim actual 800k acceptance.
+
 ## Interactive readiness
 
 After successful injection, `OpenHandoff` opens a one-client Unix WebSocket in

@@ -87,7 +87,7 @@ func newNativeGenerationBridgeFixture(t *testing.T, launchArgs ...string) *nativ
 	}
 	f.capability.Calibration.Scope = scope
 	f.bridge = nativeCodexGenerationBridge{
-		bound: bound, expectedHost: f.host, host: func() string { return f.host }, store: f.store,
+		bound: bound, expectedHost: f.host, expectedNativeWindow: f.capability.ContextWindow, host: func() string { return f.host }, store: f.store,
 		expected: nativecodex.Thread{
 			ID: nativeHandoffTestID, Model: f.capability.Model, ModelProvider: "fixture-provider",
 			Cwd: bound.process.Cwd, SettingsHash: string(domain.HashContent([]byte("synthetic native settings"))),
@@ -261,10 +261,10 @@ func TestNativeCodexGenerationCompositionRejectsUnboundRuntime(t *testing.T) {
 		})
 	}
 	f := newNativeGenerationBridgeFixture(t)
-	if callback, err := newNativeCodexGenerationPrepare(f.bridge.bound, nil, f.bridge.expected, f.host, f.bridge.prepare, f.bridge.validate, f.store); err == nil || callback != nil {
+	if callback, err := newNativeCodexGenerationPrepare(f.bridge.bound, nil, f.bridge.expected, f.host, f.bridge.expectedNativeWindow, f.bridge.prepare, f.bridge.validate, f.store); err == nil || callback != nil {
 		t.Fatal("missing session authorized a callback")
 	}
-	if callback, err := newNativeCodexGenerationPrepare(f.bridge.bound, &nativecodex.Session{}, f.bridge.expected, f.host, f.bridge.prepare, f.bridge.validate, f.store); err == nil || callback != nil {
+	if callback, err := newNativeCodexGenerationPrepare(f.bridge.bound, &nativecodex.Session{}, f.bridge.expected, f.host, f.bridge.expectedNativeWindow, f.bridge.prepare, f.bridge.validate, f.store); err == nil || callback != nil {
 		t.Fatal("unacknowledged session authorized a callback")
 	}
 }
@@ -618,4 +618,40 @@ func TestNativeCodexGenerationCompositionReportsCancellationDuringPersistence(t 
 func nativeGenerationIsPersistenceFailure(err error) bool {
 	var classified interface{ CalibrationPersistenceFailure() bool }
 	return errors.As(err, &classified) && classified.CalibrationPersistenceFailure()
+}
+
+// The configured runtime can have a larger usable window than our conservative
+// catalog-base packing policy. Matching telemetry must not reject valid usage.
+func TestNativeCodexGenerationSeparateNativeAndPackingWindows(t *testing.T) {
+	f := newNativeGenerationBridgeFixture(t)
+	f.bridge.expectedNativeWindow = 380000
+	prepared := f.prepared(t, "PRIVATE_INITIAL")
+	before := *f.returned.Budget
+	o := f.observation("completed")
+	o.ExecutionKnown, o.ExecutionStarted = true, true
+	o.UsageKnown, o.UsageBeforeCompaction = true, true
+	o.TotalInputTokens = f.returned.Usage.Tokens + before.InitialPromptTokens + 9000
+	o.ModelContextWindow = 380000
+	if err := prepared.Observe(context.Background(), o); err != nil || f.store.writes != 1 {
+		t.Fatal("native usable window was confused with packing limit", err)
+	}
+	if *f.returned.Budget != before || before.ContextWindow != 200000 {
+		t.Fatal("native telemetry enlarged the packing budget")
+	}
+	o.ModelContextWindow = before.ContextWindow
+	if err := prepared.Observe(context.Background(), o); !errors.Is(err, domain.ErrProviderCapabilityUnknown) || f.store.writes != 1 {
+		t.Fatal("packing window incorrectly accepted as runtime telemetry", err)
+	}
+}
+
+func TestNativeCodexGenerationRejectsMissingOrSmallerNativeWindow(t *testing.T) {
+	for _, window := range []int{-1, 0, 100000} {
+		t.Run(fmt.Sprint(window), func(t *testing.T) {
+			f := newNativeGenerationBridgeFixture(t)
+			f.bridge.expectedNativeWindow = window
+			if _, err := f.bridge.prepareGeneration(context.Background(), f.bridge.expected, "PRIVATE_INITIAL"); err == nil {
+				t.Fatal("unbound or oversized packing budget was accepted")
+			}
+		})
+	}
 }

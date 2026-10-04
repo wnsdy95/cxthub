@@ -37,6 +37,16 @@ func nativeHelper() {
 		}
 	}
 	mode := os.Getenv("CXT_NATIVE_HELPER_MODE")
+	if strings.HasPrefix(mode, "window-") {
+		marker := os.Getenv("CXT_NATIVE_HELPER_TRACE") + ".starts"
+		previous, _ := os.ReadFile(marker)
+		_ = os.WriteFile(marker, append(previous, 'x'), 0600)
+		if mode == "window-startup-drift" && len(previous) == 1 {
+			path := os.Getenv("CXT_NATIVE_WINDOW_CATALOG")
+			raw, _ := os.ReadFile(path)
+			_ = os.WriteFile(path, append(raw, '\n'), 0600)
+		}
+	}
 	if mode == "early-exit" {
 		os.Exit(2)
 	}
@@ -90,6 +100,9 @@ func nativeHelper() {
 			switch req.Method {
 			case "initialize":
 				result = map[string]any{"userAgent": "codex-fixture/0.157.1"}
+				if strings.HasPrefix(mode, "window-") {
+					result = map[string]any{"userAgent": "cxthub_native_transport/0.157.1 synthetic"}
+				}
 				if mode == "invalid-init" {
 					result = map[string]any{"userAgent": "bad\nPRIVATE_SENTINEL"}
 				}
@@ -132,11 +145,24 @@ func nativeHelper() {
 					os.Exit(5)
 				}
 				result = map[string]any{"model": model, "modelProvider": "fixture-provider", "cwd": gotCwd, "approvalPolicy": approval, "approvalsReviewer": "user", "sandbox": map[string]string{"type": sandbox}, "thread": map[string]any{"id": "fresh-fixture-thread", "cwd": gotCwd, "turns": turns}}
+				if strings.HasPrefix(mode, "window-") {
+					result.(map[string]any)["modelProvider"] = "openai"
+					if mode == "window-config-drift" {
+						path := os.Getenv("CXT_NATIVE_WINDOW_CONFIG")
+						raw, _ := os.ReadFile(path)
+						raw = []byte(strings.ReplaceAll(string(raw), "272000", "100000"))
+						_ = os.WriteFile(path, raw, 0600)
+					}
+				}
 				if mode == "duplicate-turns" {
 					result = json.RawMessage(fmt.Sprintf(`{"model":"fixture-resolved","modelProvider":"fixture-provider","thread":{"id":"fresh-fixture-thread","cwd":%q,"turns":[{"id":"old"}],"turns":[]}}`, cwd))
 				}
 			case "config/read":
 				result = map[string]any{"config": map[string]any{"web_search": "disabled"}}
+				if strings.HasPrefix(mode, "window-") {
+					raw, _ := os.ReadFile(os.Getenv("CXT_NATIVE_WINDOW_CONFIG"))
+					result = map[string]any{"config": json.RawMessage(raw)}
+				}
 			case "thread/loaded/list":
 				result = map[string]any{"data": []string{"fresh-fixture-thread"}}
 			case "thread/section/move":

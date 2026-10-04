@@ -46,10 +46,11 @@ func (unverifiedAgentHost) AgentCapability(context.Context, domain.ProviderKind,
 var runtimeAgentTokens = agenttokens.New()
 
 type runtimeAgentPreparer struct {
-	git     outbound.GitContext
-	store   *storage.FileStore
-	remote  *backendclient.BackendClient
-	history inbound.HistoryQuery
+	git          outbound.GitContext
+	store        *storage.FileStore
+	remote       *backendclient.BackendClient
+	history      inbound.HistoryQuery
+	capabilities outbound.AgentCapabilityReader
 }
 
 func (r runtimeAgentPreparer) PrepareAgentContext(ctx context.Context, in inbound.PrepareAgentContextInput) (domain.AgentContextPackage, error) {
@@ -85,7 +86,11 @@ func (r runtimeAgentPreparer) PrepareAgentContext(ctx context.Context, in inboun
 		return domain.AgentContextPackage{}, err
 	}
 	in.PersonalScope = scope
-	service := app.NewAgentContextService(r.history, r.remote, cloudAgentDocuments{r.remote, repo.ID}, work, runtimeAgentTokens, app.MeasuredAgentCapabilities{Runtime: unverifiedAgentHost{}, Observations: r.store})
+	capabilities := r.capabilities
+	if capabilities == nil {
+		capabilities = unverifiedAgentHost{}
+	}
+	service := app.NewAgentContextService(r.history, r.remote, cloudAgentDocuments{r.remote, repo.ID}, work, runtimeAgentTokens, app.MeasuredAgentCapabilities{Runtime: capabilities, Observations: r.store})
 	p, err := service.PrepareAgentContext(ctx, in)
 	if err != nil {
 		return domain.AgentContextPackage{}, err
@@ -120,7 +125,7 @@ func runtimeConfigAt(ctx context.Context, base config, cwd string) (config, erro
 func runtimeAgentLoader(cfg config) (runtimeAgentPreparer, *app.LoadSessionService) {
 	store, remote, git := buildRepositoryAdapters(cfg)
 	history := app.NewHistoryQueryService(git, gitctx.NewGitContextAdapter(), store, remote)
-	p := runtimeAgentPreparer{git, store, remote, history}
+	p := runtimeAgentPreparer{git: git, store: store, remote: remote, history: history}
 	codecs := map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderCodex: codec.NewCodexCodec(), domain.ProviderClaude: codec.NewClaudeCodec()}
 	materializers := map[domain.ProviderKind]outbound.SessionMaterializer{domain.ProviderCodex: sessionadapter.NewCodexMaterializer(), domain.ProviderClaude: sessionadapter.NewClaudeMaterializer()}
 	loader := app.NewLoadSessionService(store, codecs, materializers, nil, nil, nil).WithAgentContext(p).WithAgentCodePosition(gitctx.NewGitContextAdapter())
