@@ -110,6 +110,8 @@ type Session struct {
 	closed                        chan struct{}
 	closeOnce                     sync.Once
 	closeErr                      error
+	launch                        idleLaunch
+	verifiedArchive               *archiveVerification
 }
 
 func (s *Session) SessionID() string   { return s.id }
@@ -142,6 +144,10 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	launch, err := freezeIdleLaunch(opts, env, cwd)
+	if err != nil {
+		return nil, err
+	}
 	startup, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
 	version, err := readVersion(startup, opts.Executable, cwd, env)
@@ -153,7 +159,10 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 		return nil, ErrState
 	}
 	args = append(args, "--session-id", id)
-	s := &Session{id: id, version: version, cwd: cwd, archiveRoot: root, gate: make(chan struct{}, 1), failed: make(chan struct{}), closed: make(chan struct{})}
+	s := &Session{id: id, version: version, cwd: cwd, archiveRoot: root, launch: launch, gate: make(chan struct{}, 1), failed: make(chan struct{}), closed: make(chan struct{})}
+	if err := launch.validate(); err != nil {
+		return nil, err
+	}
 	p, err := startProcess(opts.Executable, args, cwd, env, s.frame, s.fail)
 	if err != nil {
 		return nil, err

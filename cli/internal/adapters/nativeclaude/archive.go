@@ -2,6 +2,7 @@ package nativeclaude
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"os"
@@ -16,41 +17,61 @@ import (
 // Opening is scoped against traversal and nonblocking against special files.
 // No archive or configuration file is created, rewritten or removed here.
 func (s *Session) VerifyArchive(ctx context.Context, path string) (ReferenceReceipt, error) {
-	if err := ctx.Err(); err != nil {
+	verified, err := s.verifyArchive(ctx, path)
+	if err != nil {
 		return ReferenceReceipt{}, err
+	}
+	s.mu.Lock()
+	s.verifiedArchive = &verified
+	s.mu.Unlock()
+	return verified.receipt, nil
+}
+
+type archiveVerification struct {
+	path    string
+	receipt ReferenceReceipt
+	info    os.FileInfo
+	digest  [sha256.Size]byte
+}
+
+func (s *Session) verifyArchive(ctx context.Context, path string) (archiveVerification, error) {
+	if err := ctx.Err(); err != nil {
+		return archiveVerification{}, err
 	}
 	select {
 	case <-s.closed:
 	default:
-		return ReferenceReceipt{}, ErrState
+		return archiveVerification{}, ErrState
 	}
 	s.mu.Lock()
 	receipt := s.receipt
 	err := s.closeErr
 	s.mu.Unlock()
 	if err != nil || !receipt.NoTurnAcknowledged {
-		return ReferenceReceipt{}, ErrState
+		return archiveVerification{}, ErrState
 	}
 	rel := filepath.Join(providerfs.EncodeCwd(s.cwd), s.id+".jsonl")
 	if !filepath.IsAbs(path) || filepath.Clean(path) != filepath.Join(s.archiveRoot, rel) {
-		return ReferenceReceipt{}, ErrState
+		return archiveVerification{}, ErrState
 	}
 	root, err := os.OpenRoot(s.archiveRoot)
 	if err != nil {
-		return ReferenceReceipt{}, ErrState
+		return archiveVerification{}, ErrState
 	}
 	defer root.Close()
 	f, err := openArchive(root, rel)
 	if err != nil {
-		return ReferenceReceipt{}, ErrState
+		return archiveVerification{}, ErrState
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<20 {
-		return ReferenceReceipt{}, ErrLimit
+		return archiveVerification{}, ErrLimit
 	}
 	matches := 0
-	err = readFrames(io.LimitReader(f, (64<<20)+1), func(raw []byte) error {
+	digest := sha256.New()
+	limited := &io.LimitedReader{R: idleContextReader{ctx: ctx, r: f}, N: (64 << 20) + 1}
+	err = readFrames(io.TeeReader(limited, digest), func(raw []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -103,19 +124,27 @@ func (s *Session) VerifyArchive(ctx context.Context, path string) (ReferenceRece
 		}
 		return nil
 	})
+	if ctx.Err() != nil {
+		return archiveVerification{}, ctx.Err()
+	}
+	if limited.N == 0 {
+		return archiveVerification{}, ErrLimit
+	}
 	if err != nil {
-		return ReferenceReceipt{}, err
+		return archiveVerification{}, err
 	}
 	after, err := f.Stat()
-	if err != nil || info.Size() != after.Size() || !info.ModTime().Equal(after.ModTime()) {
-		return ReferenceReceipt{}, ErrState
+	if err != nil || !sameIdleFile(info, after) {
+		return archiveVerification{}, ErrState
 	}
 	if err := ctx.Err(); err != nil {
-		return ReferenceReceipt{}, err
+		return archiveVerification{}, err
 	}
 	if matches != 1 {
-		return ReferenceReceipt{}, ErrProtocol
+		return archiveVerification{}, ErrProtocol
 	}
 	receipt.Persisted = true
-	return receipt, nil
+	verified := archiveVerification{path: path, receipt: receipt, info: after}
+	copy(verified.digest[:], digest.Sum(nil))
+	return verified, nil
 }
