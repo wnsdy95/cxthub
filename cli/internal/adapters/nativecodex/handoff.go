@@ -71,6 +71,10 @@ type PreparedGeneration struct {
 	History  []HistoryMessage                                   `json:"-"`
 	Validate func(context.Context) error                        `json:"-"`
 	Observe  func(context.Context, GenerationObservation) error `json:"-"`
+	// BeforeRelease optionally persists the acknowledged injection before the
+	// first turn is forwarded. It runs once, must honor its bounded context,
+	// and is followed by another Validate. Errors stop release without retry.
+	BeforeRelease func(context.Context, InjectionReceipt) error `json:"-"`
 }
 
 func (PreparedGeneration) String() string     { return "prepared native generation (private input)" }
@@ -318,4 +322,25 @@ func (h *Handoff) Close() error {
 	h.cancel()
 	<-h.done
 	return nil
+}
+
+// WaitLifecycle waits for the one-client transport or its owned native session
+// to close, including after a successful first turn. Unlike WaitGeneration it
+// never returns for a historical outcome. Canceling this waiter does not close
+// the runtime; the owner remains responsible for Close and Session.Close.
+func (h *Handoff) WaitLifecycle(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-h.done:
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.err != nil {
+		return h.err
+	}
+	return ErrClosed
 }

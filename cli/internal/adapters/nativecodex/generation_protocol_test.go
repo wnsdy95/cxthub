@@ -2,6 +2,7 @@ package nativecodex
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,37 @@ func TestGenerationRequiresResumeAndUnchangedSettings(t *testing.T) {
 	f.p.generation = newGenerationProtocol(f.p.thread)
 	f.initialize(t)
 	handoffUnitObserve(t, f.p, handoffUnitRequest(t, "go", "turn/start", map[string]any{"threadId": f.p.thread.ID, "input": []any{map[string]any{"type": "text", "text": "q"}}}), true, false, true)
+}
+
+func TestGenerationServiceTierPreservesPreparedChoice(t *testing.T) {
+	for _, tc := range serviceTierProtocolCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			start := strings.Replace(handoffUnitStart, `"serviceTier":null`, `"serviceTier":`+tc.prepared, 1)
+			f := handoffUnitFromStart(t, start)
+			f.p.generation = newGenerationProtocol(f.p.thread)
+			f.ready(t)
+			params := map[string]any{
+				"threadId": f.p.thread.ID,
+				"input":    []any{map[string]any{"type": "text", "text": "question"}},
+				// Unlike serviceTier, serviceTierForTurn:null inherits in 0.157.1.
+				"serviceTierForTurn": nil,
+			}
+			if tc.request != "" {
+				params["serviceTier"] = json.RawMessage(tc.request)
+			}
+			handoffUnitObserve(t, f.p, handoffUnitRequest(t, "go", "turn/start", params), true, false, !tc.accept)
+			g := f.p.generation
+			if !tc.accept {
+				if g.active || g.firstKey != "" || g.startKey != "" || len(f.p.pending) != 0 {
+					t.Fatal("rejected tier consumed the initial turn gate")
+				}
+				return
+			}
+			if !g.active || g.firstPrompt != "question" || !sameJSON(f.p.settings["serviceTier"], json.RawMessage(tc.prepared)) {
+				t.Fatal("accepted turn lost its prompt or acknowledged tier")
+			}
+		})
+	}
 }
 
 func TestGenerationCorrelatesApprovalsAndInterruption(t *testing.T) {

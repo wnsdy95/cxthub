@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
-	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
 	"github.com/wnsdy95/cxthub/cli/internal/app"
@@ -67,7 +66,7 @@ func (b nativeCodexGenerationBridge) GoString() string { return b.String() }
 func (b nativeCodexGenerationBridge) checkRuntime(thread nativecodex.Thread) error {
 	if b.expectedNativeWindow <= 0 || b.host == nil || b.prepare == nil || b.validate == nil || b.store == nil ||
 		domain.ValidateContentHash(b.bound.intent) != nil || b.bound.process.Executable == "" || !filepath.IsAbs(b.bound.process.Cwd) ||
-		!strings.HasPrefix(b.expectedHost, "cxthub_native_transport/0.157.1 ") || b.host() != b.expectedHost ||
+		!nativecodex.SupportedHostIdentity(b.expectedHost) || b.host() != b.expectedHost ||
 		thread != b.expected || !domain.ValidSessionID(thread.ID) || thread.Model == "" || thread.ModelProvider == "" ||
 		!filepath.IsAbs(thread.Cwd) || filepath.Clean(thread.Cwd) != thread.Cwd ||
 		domain.ValidateContentHash(domain.ContentHash(thread.SettingsHash)) != nil {

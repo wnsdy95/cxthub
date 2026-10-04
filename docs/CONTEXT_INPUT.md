@@ -275,18 +275,21 @@ overhead allowance and observations. Legacy strict receipts keep their old wire
 shape and hashes. Before preparation and launch receipts are recorded, delivery checks
 that budget accounting reproduces the original request, provider, model, private
 initial task and exact selected-token count within the effective limit. A saved
-receipt alone cannot restore the private task reservation. **This build does not yet
-ship a verified native combination**, so the three launch examples above
-currently return `provider_capability_unknown` before starting the provider.
-Adaptive accounting does not enable an unverified runtime or invent provider
-acceptance.
+receipt alone cannot restore the private task reservation. Fresh Codex history
+launches now use the delayed native route when the native version, existing
+static catalog, launch options and exact tokenizer are supported. Refreshable
+catalogs and unsupported combinations return `provider_capability_unknown`;
+CXTHub never manufactures a catalog or changes native settings to enable them.
+Adaptive accounting does not establish actual provider acceptance.
 
 The preparatory [native Codex transport](NATIVE_HOST_TRANSPORT.md) has a separate
 owned-process, injection and matching TUI-resume acknowledgement contract. The
-isolated Codex TUI readiness path is verified without model calls. It remains
-unwired from the public launch path until runtime capability, source/config
-revalidation and generation release pass. Native 200k/full-budget delivery and
-real-host acceptance remain incomplete validation gates.
+isolated Codex TUI readiness path is verified without model calls. Runtime-only
+receipts, the private prepared package, acknowledged injection and first-turn
+completion are distinct. The actual first question triggers latest-main
+selection and counting, followed by source/configuration/budget revalidation.
+General dynamic-model support and actual large-model acceptance remain open;
+`full=800k` remains a requested upper bound, not a proven accepted input size.
 
 Without an explicit ref, `cxt load --output` previews the latest authorized
 server `main` input, including the `200k` and `full` examples below. An explicit

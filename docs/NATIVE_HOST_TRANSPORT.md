@@ -1,12 +1,12 @@
 # Native host transport development
 
-The `nativecodex` adapter is a preparatory local protocol boundary. It is not
-wired into `cxt --pull codex`; public native history launch still reports
-`provider_capability_unknown`. Transport success does not establish capacity,
-exact token accounting or model acceptance. Interactive readiness has its own
-correlated acknowledgement below. A separate first-turn gate now connects an
-application-prepared package to native generation; it is not a capacity proof
-and remains unwired to the public launch route.
+The `nativecodex` adapter connects fresh `cxt --pull codex` launches to the
+delayed first-turn path described below. Only the supported native version,
+an already-configured static catalog, supported launch options and an exact
+text tokenizer qualify. Ordinary refreshable catalogs still report
+`provider_capability_unknown`. CXTHub does not change a catalog, model,
+authentication or window setting to enable this path. Transport success and
+runtime readiness never establish actual model acceptance.
 
 ## Owned Codex app-server
 
@@ -80,7 +80,12 @@ fingerprints, CXTHub closes discovery and starts a new execution app-server with
 unchanged options and environment. It checks those fingerprints before and after
 fresh-thread creation, then again through an invocation-owned binding before
 injection. The exact catalog slug must match the acknowledged model. Duplicates,
-aliases, fallback entries, invalid numbers and observed config changes fail.
+aliases, fallback entries, invalid numbers and observed runtime config changes fail.
+The fingerprint normalizes the pinned native version's serialized TUI defaults
+and excludes only its screen-reader marker and animation preference, which the
+TUI updates automatically. Types are checked; other settings and unknown keys
+remain bound, including `auto_recap`, keybindings and resume-directory policy.
+CXTHub does not edit the native configuration to pass this check.
 CXTHub does not create, replace, or recommend manufacturing a catalog to enable
 this path. Errors and receipts exclude private paths and configuration contents.
 
@@ -102,10 +107,49 @@ misrepresented as whole-input limits.
 omits window metadata; `modelProvider/capabilities/read` returns feature booleans.
 A debug/cache snapshot cannot prove the descriptor retained by the execution
 thread. General support needs a native read/admission contract exposing that
-owned thread's resolved model descriptor and revision. The public CLI supervisor
-has not yet been switched from materialized-session launch to the native delayed
-first-turn lifecycle; this static binding alone does not activate `--pull` or
-claim actual 800k acceptance.
+owned thread's resolved model descriptor and revision. Public launch uses the
+existing static binding and rejects unsupported configurations before starting
+the TUI. It does not fall back to unverified materialized history.
+
+## Public CLI lifecycle
+
+`cxt --pull [--context-budget 200k|full] codex [native options] [question]`
+preserves the original executable, selected directory, native model/configuration
+and supported permission/terminal options. Its app-server and TUI use the same
+captured environment. The default memory-only path and explicit native resume
+keep their existing behavior; Claude history still needs a native adapter.
+
+Preparation creates an owned native thread and private endpoint, not a context
+package. `runtime_prepared` and `runtime_launched` receipts contain no selected
+token count, package hash or input-acceptance claim. Local code/worktree identity
+is checked before launch and again when the actual question arrives. Server
+main is selected at that later point, so an idle terminal does not freeze an
+old shared source. A supplied argv question is normalized and passed literally;
+an interactive question is counted when submitted.
+
+The first-turn gate saves the exact private package (0600), records
+`package_prepared`, injects once, revalidates source/permissions/model/window and
+calibration, then durably records `injected_ready` before release. Validation
+runs again after that write. Any failure prevents forwarding the model request;
+the native archive may already contain the injected text, which is preserved.
+`injected_ready` is not evidence of submission or acceptance. Correlated native
+completion writes `first_turn_observed`; only successful, eligible completion is
+marked `first_turn_completed`, without asserting history fidelity.
+
+On a branch boundary the supervisor prepares and validates the replacement
+runtime before stopping its own current child. Failed preparation preserves
+that child. A restart retains budget/options and removes the previous initial
+question; latest main is prepared for the new actual question. Owned endpoints
+and app-server processes close on failed receipts, cancellation and child exit.
+Source records and provider conversation files are never deleted by cleanup.
+A local private capture binding ties the supervisor PID to the actual native
+thread. Tool processes supply their native thread ID; managed capture verifies
+that binding instead of borrowing an old terminal affinity. Prepared replacement
+and current threads have separate entries, retired only by their own cleanup.
+The transport remains monitored after the first turn. Unexpected disconnects
+stop the owned lifecycle; unsuccessful cleanup blocks replacement launch.
+Post-generation feedback/receipt write failures are reported separately and do
+not terminate a productive conversation or replay the model request.
 
 ## Interactive readiness
 
@@ -155,7 +199,8 @@ The flow is:
 ```text
 fresh durable thread → metadata persistence → TUI resume
   → exact first question → application preparation and validation
-  → inject prepared history once → revalidate → forward original turn/start
+  → inject prepared history once → revalidate → persist injection-ready receipt
+  → revalidate → forward original turn/start
   → correlated output/usage/completion → scoped input-reserve feedback
 ```
 
@@ -166,7 +211,11 @@ measured-reserve policy and `latest_server_main` source selection. Preparation
 and validation remain application responsibilities; passing a callback or
 receiving a native ACK does not supply verified model-window evidence.
 
-Known turn parameters may only repeat the acknowledged runtime settings. Mixed
+Known turn parameters may only repeat the acknowledged runtime settings.
+For `serviceTier`, omission inherits while explicit null selects `default`;
+null cannot change an acknowledged priority/flex or unspecified tier. A TUI
+which resolves an unspecified tier to explicit default is rejected until that
+resolution can be bound before thread creation. CXTHub does not force a tier. Mixed
 text/image inputs, additional instructions, alternate models, changed permissions
 or unrelated threads fail closed. Approval and user-input requests must belong
 to the active thread/turn/item; only the client's correlated answer is relayed.
@@ -245,18 +294,20 @@ remote resume rejects those flags on its command line. Replaying them literally
 would prevent attachment. `--search` becomes the same final native override on
 both processes. Unsupported modes remain unsupported.
 
-This seam remains deliberately unwired to public history launch. The wrapper
-still must verify configuration/source freshness at generation release and
-account for the retained initial task, including native newline normalization.
-Verified model/window and tokenizer evidence must feed the adaptive budget
-before public native history delivery. Hidden host/framing input may use the approved
-measured-reserve policy in [context input](CONTEXT_INPUT.md), with explicit
-unknown labels and scoped feedback; a complete pre-send hidden-input count is
-no longer a prerequisite. The first-turn relay and private application bridge are implemented, but
-verified model-window provenance and public runtime wiring remain outstanding. Codex initial prompt CRLF/CR normalization is now
-applied before token reservation. A prepared
-package, injection ACK, interactive connection and actual model acceptance need
-separate receipts. Claude requires its own protocol adapter and evidence.
+The public Codex history route uses this binding and the delayed supervisor.
+The first question remains blocked until the runtime-launched receipt is
+persisted. Configuration/source freshness, actual question reservation and the
+measured reserve are checked again before generation release. Dynamic model
+metadata and additional launch modes remain unsupported; normal catalog lookup
+must not be mistaken for a bound runtime descriptor. Actual large-model input
+acceptance and immediate compaction still require provider validation. A package,
+injection ACK, TUI attachment and model completion are distinct evidence.
+Claude requires its own protocol adapter and evidence.
+
+The native initialize user-agent's originator can be overridden by the desktop
+environment (for example `Codex Desktop/0.157.1`). Compatibility checks compare
+the version component; scope binding retains the entire identity and unchanged
+environment. A different originator does not imply a different build version.
 
 Sources: [Codex app-server](https://learn.chatgpt.com/docs/app-server),
 [history injection](https://learn.chatgpt.com/docs/app-server#inject-items-into-a-thread),
@@ -269,3 +320,11 @@ response. It verifies that the exact large history and question reach one
 same-thread request after both validations, and that its correlated usage is
 observed. It proves transport ordering and bytes only: no real model is called,
 no actual capacity or 800k acceptance is claimed, and no account token is read.
+
+The optional `TestNativeDeferredPublicCompositionReadiness` in `cli/cmd/cxt`
+exercises the public composition with an existing TEST-ONLY static catalog:
+idle readiness performs no cloud selection; invalid cloud data blocks the first
+request; valid synthetic latest-main history/memory reach one loopback canned
+request only after a durable injection receipt. The test uses an isolated dummy
+local API key, never user credentials. It also verifies correlated outcome and
+post-completion disconnect monitoring. This is not real-model capacity evidence.

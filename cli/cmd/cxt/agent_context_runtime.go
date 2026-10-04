@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/agenttokens"
@@ -35,12 +36,13 @@ func (r cloudAgentDocuments) ReadAgentHistoryPage(ctx context.Context, hash doma
 	return r.remote.ReadAgentHistoryPage(ctx, r.repo, hash, req)
 }
 
-// No model window override can supply missing tokenizer/host evidence. Explicit
-// history remains inspectable with load --output while native delivery fails.
+// Materialized delivery has no native window authority. The Codex deferred
+// composition supplies a scoped reader; unsupported routes remain inspectable
+// with load --output without claiming provider acceptance.
 type unverifiedAgentHost struct{}
 
 func (unverifiedAgentHost) AgentCapability(context.Context, domain.ProviderKind, string) (domain.AgentHostCapability, error) {
-	return domain.AgentHostCapability{}, fmt.Errorf("%w: this build has no verified native model/window and tokenizer binding for history; use cxt load --context-budget <budget> --output <file> to prepare an inspectable artifact", domain.ErrProviderCapabilityUnknown)
+	return domain.AgentHostCapability{}, fmt.Errorf("%w: this delivery route has no verified native model/window and tokenizer binding for history; use cxt load --context-budget <budget> --output <file> to prepare an inspectable artifact", domain.ErrProviderCapabilityUnknown)
 }
 
 var runtimeAgentTokens = agenttokens.New()
@@ -133,16 +135,30 @@ func runtimeAgentLoader(cfg config) (runtimeAgentPreparer, *app.LoadSessionServi
 }
 func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
 	// Each preparation rebinds --cd and branch transitions to their own worktree.
-	// The supervisor invokes callbacks serially; receipts use that exact root.
+	// Lifecycle records use that exact root; native input records retain their
+	// own immutable root while a replacement runtime is prepared.
 	receiptRoot := base.RepoRoot
+	var receiptMu sync.Mutex
 	return delivcli.ProviderLaunchHooks{
+		PrepareDeferred: func(ctx context.Context, req delivcli.ProviderLaunchRequest) (delivcli.DeferredProviderLaunch, error) {
+			cfg, err := runtimeConfigAt(ctx, base, req.Cwd)
+			if err != nil {
+				return delivcli.DeferredProviderLaunch{}, err
+			}
+			receiptMu.Lock()
+			receiptRoot = cfg.RepoRoot
+			receiptMu.Unlock()
+			return prepareNativeCodexDeferred(ctx, cfg, req)
+		},
 		Prepare: func(ctx context.Context, req delivcli.ProviderLaunchRequest) (delivcli.PreparedProviderLaunch, error) {
 			var result delivcli.PreparedProviderLaunch
 			cfg, err := runtimeConfigAt(ctx, base, req.Cwd)
 			if err != nil {
 				return result, err
 			}
+			receiptMu.Lock()
 			receiptRoot = cfg.RepoRoot
+			receiptMu.Unlock()
 			details, err := req.ArgumentDetails()
 			if err != nil {
 				return result, err
@@ -195,18 +211,25 @@ func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
 			}, nil
 		},
 		Record: func(ctx context.Context, receipt delivcli.ProviderLaunchReceipt) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			raw, err := json.Marshal(struct {
-				At      time.Time                      `json:"at"`
-				Receipt delivcli.ProviderLaunchReceipt `json:"receipt"`
-			}{time.Now().UTC(), receipt})
-			if err != nil {
-				return err
-			}
-			id := strings.TrimPrefix(string(domain.HashContent(raw)), "sha256:")
-			return providerfs.WriteRepoFileDurable(receiptRoot, filepath.Join(".cxt", "delivery-receipts", id+".json"), raw, 0600)
+			receiptMu.Lock()
+			root := receiptRoot
+			receiptMu.Unlock()
+			return recordProviderLaunchReceipt(ctx, root, receipt)
 		},
 	}
+}
+
+func recordProviderLaunchReceipt(ctx context.Context, root string, receipt delivcli.ProviderLaunchReceipt) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(struct {
+		At      time.Time                      `json:"at"`
+		Receipt delivcli.ProviderLaunchReceipt `json:"receipt"`
+	}{time.Now().UTC(), receipt})
+	if err != nil {
+		return err
+	}
+	id := strings.TrimPrefix(string(domain.HashContent(raw)), "sha256:")
+	return providerfs.WriteRepoFileDurable(root, filepath.Join(".cxt", "delivery-receipts", id+".json"), raw, 0600)
 }
