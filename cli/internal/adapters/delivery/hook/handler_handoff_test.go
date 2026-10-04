@@ -129,7 +129,7 @@ func TestHandlerHandoffFailuresKeepRequestForFreshRetry(t *testing.T) {
 	denied := errors.New("server access denied")
 	writeFailure := errors.New("output failed")
 	for _, provider := range []domain.ProviderKind{domain.ProviderCodex, domain.ProviderClaude} {
-		for _, failure := range []string{"denied", "stale", "bad identity", "historical source", "oversized", "no preparer", "no validator", "short write", "write error", "canceled validation"} {
+		for _, failure := range []string{"denied", "stale", "bad identity", "partial delivery proof", "malformed delivery proof", "historical source", "oversized", "no preparer", "no validator", "short write", "write error", "canceled validation"} {
 			t.Run(string(provider)+"/"+failure, func(t *testing.T) {
 				cwd := t.TempDir()
 				initHookContext(t, cwd)
@@ -150,6 +150,17 @@ func TestHandlerHandoffFailuresKeepRequestForFreshRetry(t *testing.T) {
 					prepared.validationErr, want = domain.ErrSelectionChanged, domain.ErrSelectionChanged
 				case "bad identity":
 					prepared.mutate = func(p *domain.AgentContextPackage) { p.Content.Notice = "TAMPERED" }
+					want = domain.ErrHashMismatch
+				case "partial delivery proof", "malformed delivery proof":
+					prepared.mutate = func(p *domain.AgentContextPackage) {
+						p.Content.Selection.ContextDeliveryHash = domain.HashContent([]byte("selected context"))
+						if failure == "malformed delivery proof" {
+							p.Content.Selection.MemoryDeliveryHash = "malformed"
+						}
+						// The package's own hash is valid: source-proof validation
+						// must reject this instead of taking the legacy path.
+						p.ID, _ = p.Digest()
+					}
 					want = domain.ErrHashMismatch
 				case "historical source":
 					prepared.mutate = func(p *domain.AgentContextPackage) {

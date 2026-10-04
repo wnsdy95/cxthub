@@ -46,9 +46,10 @@ type EffectiveMemoryPage struct {
 		Graph    uint64 `json:"graph,string"`
 		Pending  uint64 `json:"pending,string"`
 	} `json:"revision"`
-	StateHash   ContentHash           `json:"state_hash"`
-	LineageHash ContentHash           `json:"lineage_hash"`
-	Items       []EffectiveMemoryItem `json:"items"`
-	Total       int                   `json:"total"`
-	NextCursor  string                `json:"next_cursor"`
+	StateHash         ContentHash           `json:"state_hash"`
+	DeliveryStateHash ContentHash           `json:"delivery_state_hash,omitempty"`
+	LineageHash       ContentHash           `json:"lineage_hash"`
+	Items             []EffectiveMemoryItem `json:"items"`
+	Total             int                   `json:"total"`
+	NextCursor        string                `json:"next_cursor"`
 }

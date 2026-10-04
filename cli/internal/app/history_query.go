@@ -236,6 +236,7 @@ func (s *HistoryQueryService) queryServerHistory(ctx context.Context, repo strin
 	}
 	out.Selection.Branch = view.Branch
 	out.StateHash = view.StateHash
+	out.DeliveryStateHash = view.DeliveryStateHash
 	out.Revision = &view.Revision
 	out.Position = view.Position
 	out.Snapshots = view.Snapshots

@@ -457,6 +457,10 @@ func replayBranchOperations(ctx context.Context, c *Container, cwd string) error
 // Foreground capture only needs its own branch birth. Unrelated unresolved
 // tracking branches remain durable and are retried by the detached replay.
 func replayBranchOperationsForRef(ctx context.Context, c *Container, cwd, gitRef string) error {
+	return replayBranchOperationsForRefWithPublication(ctx, c, cwd, gitRef, spawnBranchStateSync)
+}
+
+func replayBranchOperationsForRefWithPublication(ctx context.Context, c *Container, cwd, gitRef string, publish func(string)) error {
 	if c.History == nil {
 		return nil
 	}
@@ -482,6 +486,15 @@ func replayBranchOperationsForRef(ctx context.Context, c *Container, cwd, gitRef
 	}
 	blocked := map[string]bool{}
 	applied := false
+	// Successfully applied votes remain publishable even if a later vote fails
+	// or the foreground operation is cancelled. Unapplied votes stay queued.
+	defer func() {
+		if applied && c.Sync != nil {
+			if _, ok := remotecfg.Origin(cwd); ok {
+				publish(cwd)
+			}
+		}
+	}()
 	var failures []error
 	for _, op := range ops {
 		if gitRef != "" && op.GitRef != gitRef {
@@ -573,11 +586,6 @@ func replayBranchOperationsForRef(ctx context.Context, c *Container, cwd, gitRef
 		if err != nil {
 			blocked[op.GitRef] = true
 			failures = append(failures, err)
-		}
-	}
-	if applied && c.Sync != nil {
-		if _, ok := remotecfg.Origin(cwd); ok {
-			spawnBranchStateSync(cwd)
 		}
 	}
 	return errors.Join(failures...)

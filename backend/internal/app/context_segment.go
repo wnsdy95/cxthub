@@ -12,7 +12,7 @@ import (
 
 // finishContextQuery adds bounded, opt-in range metadata to the already selected
 // server view. Inclusion and ordering stay owned by QueryContext/branchContext.
-func (s *Service) finishContextQuery(ctx context.Context, repo domain.ContentHash, in domain.ContextSelection, out domain.ContextQueryView, history []domain.HistoryEvent, key contextSegmentCacheKey) (domain.ContextQueryView, error) {
+func (s *Service) finishContextQuery(ctx context.Context, repo domain.ContentHash, in domain.ContextSelection, out domain.ContextQueryView, full domain.RepositoryView, key contextSegmentCacheKey) (domain.ContextQueryView, error) {
 	if out.StateHash == "" {
 		basis, err := json.Marshal(struct {
 			Version   int
@@ -26,13 +26,25 @@ func (s *Service) finishContextQuery(ctx context.Context, repo domain.ContentHas
 		}
 		out.StateHash = domain.HashContent(basis)
 	}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	bindings := contextPublicationBindings(repo, full.History)
+	semantic := out
+	// Inherited branch integrations may depend on facts outside the display
+	// branch's filtered journal. The domain fingerprint selects relevant facts.
+	semantic.History, semantic.Semantics = full.History, full.Semantics
+	var err error
+	out.DeliveryStateHash, err = domain.ContextDeliveryStateHash(repo, key.origin, in, semantic, bindings)
+	if err != nil {
+		return out, err
+	}
 	if in.SegmentLimit == 0 {
 		return out, nil
 	}
 	if in.SegmentOffset > len(out.Snapshots) {
 		return out, fmt.Errorf("%w: segment offset exceeds selection", domain.ErrValidation)
 	}
-	bindings := contextPublicationBindings(repo, history)
 	type sourceBindings struct {
 		SnapshotID domain.ContentHash
 		Bindings   []domain.CommitContextBinding

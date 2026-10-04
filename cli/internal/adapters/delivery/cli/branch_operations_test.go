@@ -17,6 +17,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/app"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -25,6 +26,11 @@ import (
 )
 
 func historyFixture(t *testing.T) (string, *Container, *storage.FileStore, string, domain.ContentHash) {
+	t.Helper()
+	return historyFixtureWithRemote(t, "")
+}
+
+func historyFixtureWithRemote(t *testing.T, remote string) (string, *Container, *storage.FileStore, string, domain.ContentHash) {
 	t.Helper()
 	cwd := t.TempDir()
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -35,8 +41,13 @@ func historyFixture(t *testing.T) (string, *Container, *storage.FileStore, strin
 	runLifecycleGit(t, cwd, "config", "user.name", "test")
 	runLifecycleGit(t, cwd, "config", "user.email", "test@example.test")
 	runLifecycleGit(t, cwd, "commit", "--allow-empty", "-qm", "base")
+	if remote != "" {
+		if err := remotecfg.Save(cwd, remotecfg.Remotes{"origin": remote}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx := context.Background()
-	repo, err := gitctx.NewGitContextAdapter().CurrentRepo(ctx, cwd)
+	repo, err := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
 	if err != nil {
 		t.Fatal(err)
 	}

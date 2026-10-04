@@ -126,18 +126,22 @@ func (p *AgentMemoryPin) Validate() error {
 }
 
 type AgentContextSelection struct {
-	RepositoryID      string                `json:"repository_id"`
-	Branch            string                `json:"branch,omitempty"`
-	SnapshotID        ContentHash           `json:"snapshot_id"`
-	CodeCommit        string                `json:"code_commit"`
-	ContextStateHash  ContentHash           `json:"context_state_hash"`
-	MemoryStateHash   ContentHash           `json:"memory_state_hash"`
-	MemoryPin         *AgentMemoryPin       `json:"memory_pin,omitempty"`
-	WorktreeStateHash ContentHash           `json:"worktree_state_hash,omitempty"`
-	EvidenceRevision  uint64                `json:"evidence_revision,string"`
-	GraphRevision     uint64                `json:"graph_revision,string"`
-	SourcePolicy      string                `json:"source_policy,omitempty"`
-	WorkingPosition   *AgentWorkingPosition `json:"working_position,omitempty"`
+	RepositoryID     string      `json:"repository_id"`
+	Branch           string      `json:"branch,omitempty"`
+	SnapshotID       ContentHash `json:"snapshot_id"`
+	CodeCommit       string      `json:"code_commit"`
+	ContextStateHash ContentHash `json:"context_state_hash"`
+	MemoryStateHash  ContentHash `json:"memory_state_hash"`
+	// Both proofs bind the complete server projection, independently of the
+	// repository-wide pagination/revision generation. Never use a partial pair.
+	ContextDeliveryHash ContentHash           `json:"context_delivery_hash,omitempty"`
+	MemoryDeliveryHash  ContentHash           `json:"memory_delivery_hash,omitempty"`
+	MemoryPin           *AgentMemoryPin       `json:"memory_pin,omitempty"`
+	WorktreeStateHash   ContentHash           `json:"worktree_state_hash,omitempty"`
+	EvidenceRevision    uint64                `json:"evidence_revision,string"`
+	GraphRevision       uint64                `json:"graph_revision,string"`
+	SourcePolicy        string                `json:"source_policy,omitempty"`
+	WorkingPosition     *AgentWorkingPosition `json:"working_position,omitempty"`
 }
 
 const AgentSourceLatestMain = "latest_server_main"
@@ -164,6 +168,9 @@ func (s AgentContextSelection) DeliveryBranch() string {
 }
 
 func (s AgentContextSelection) ValidateSource() error {
+	if (s.ContextDeliveryHash == "") != (s.MemoryDeliveryHash == "") || ValidateOptionalContentHash(s.ContextDeliveryHash) != nil || ValidateOptionalContentHash(s.MemoryDeliveryHash) != nil {
+		return ErrHashMismatch
+	}
 	if s.SourcePolicy == "" && s.WorkingPosition == nil {
 		return nil
 	}

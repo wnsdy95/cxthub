@@ -19,16 +19,19 @@ type ContextSelection struct {
 }
 
 type ContextQueryView struct {
-	Segments  *ContextSegmentPage `json:"segments,omitempty"`
-	Branch    string              `json:"branch,omitempty"`
-	StateHash ContentHash         `json:"state_hash,omitempty"`
-	Inclusion *BranchContext      `json:"inclusion,omitempty"`
-	Semantics ContextSemantics    `json:"semantics"`
-	Version   int                 `json:"version"`
-	Revision  RepositoryRevision  `json:"revision"`
-	Position  ContentHash         `json:"position,omitempty"`
-	Snapshots []Snapshot          `json:"snapshots"`
-	History   []HistoryEvent      `json:"history"`
+	// DeliveryStateHash pins the complete selected semantic projection before
+	// pagination, independently of repository-wide revisions and cursor fences.
+	DeliveryStateHash ContentHash         `json:"delivery_state_hash,omitempty"`
+	Segments          *ContextSegmentPage `json:"segments,omitempty"`
+	Branch            string              `json:"branch,omitempty"`
+	StateHash         ContentHash         `json:"state_hash,omitempty"`
+	Inclusion         *BranchContext      `json:"inclusion,omitempty"`
+	Semantics         ContextSemantics    `json:"semantics"`
+	Version           int                 `json:"version"`
+	Revision          RepositoryRevision  `json:"revision"`
+	Position          ContentHash         `json:"position,omitempty"`
+	Snapshots         []Snapshot          `json:"snapshots"`
+	History           []HistoryEvent      `json:"history"`
 }
 
 // SelectContext only consumes one coherent repository generation. Missing

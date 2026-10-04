@@ -69,7 +69,13 @@ func (foreignTransactionDB) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, err
 }
 
 var _ outbound.RepositoryTransactions = (*PostgresStore)(nil)
+var _ outbound.RepositoryTransactionState = (*PostgresStore)(nil)
 var _ outbound.PRJobFence = (*PostgresStore)(nil)
+
+func (s *PostgresStore) InReadOnlyTransaction(ctx context.Context) bool {
+	tx, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx)
+	return ok && tx.owner == s && tx.readOnly
+}
 
 func rollbackPG(tx pgx.Tx) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

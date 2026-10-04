@@ -39,6 +39,7 @@ func TestContextQueryUsesFullGenerationAndExplicitPosition(t *testing.T) {
 		t.Fatalf("missing stable query hash: %q", got.StateHash)
 	}
 	want.StateHash = got.StateHash
+	want.DeliveryStateHash = got.DeliveryStateHash
 	if !reflect.DeepEqual(got, want) || len(got.Snapshots) != 1 || got.Snapshots[0].ID != b {
 		t.Fatalf("query differs from view: %+v", got)
 	}
