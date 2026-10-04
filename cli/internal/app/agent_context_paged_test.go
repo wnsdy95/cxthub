@@ -37,6 +37,9 @@ func (f *agentPageFixture) ReadAgentHistoryPage(ctx context.Context, hash domain
 		before = len(doc.CIR.Events)
 	}
 	p := domain.AgentHistoryPage{Version: 1, Hash: hash, Provider: doc.CIR.Envelope.SourceProvider, SessionID: doc.CIR.Envelope.SessionOriginID, Total: len(doc.CIR.Events), Before: before, NextBefore: -1, Turns: []domain.AgentHistoryTurn{}}
+	if req.IncompleteTail == "omit" {
+		p.Version = domain.AgentHistoryProjectionVersion
+	}
 	if prior, ok := f.docs[req.CoveredBy]; ok && prior.CIR.Envelope.SourceProvider == p.Provider && prior.CIR.Envelope.SessionOriginID == p.SessionID && p.SessionID != "" && len(prior.CIR.Events) >= len(doc.CIR.Events) {
 		left, _ := json.Marshal(doc.CIR.Events)
 		right, _ := json.Marshal(prior.CIR.Events[:len(doc.CIR.Events)])
@@ -46,7 +49,18 @@ func (f *agentPageFixture) ReadAgentHistoryPage(ctx context.Context, hash domain
 		}
 	}
 	end, bytes := before, 0
-	for i := before - 1; i >= 0; i-- {
+	if req.IncompleteTail == "omit" && before == len(doc.CIR.Events) && before > 0 {
+		_, tail, err := projectAgentHistoryTurns(doc.CIR, true)
+		if err != nil {
+			return p, err
+		}
+		if tail != nil {
+			p.OmittedTail = tail
+			end = tail.Start
+		}
+	}
+
+	for i := end - 1; i >= 0; i-- {
 		if doc.CIR.Events[i].Role != "user" || doc.CIR.Events[i].Kind != domain.EventMessage {
 			continue
 		}

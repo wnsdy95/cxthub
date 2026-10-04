@@ -395,7 +395,11 @@ func nativeDeferredCloudFixture(t *testing.T, repo string) *httptest.Server {
 			page.Revision.Graph, page.Revision.Evidence = 1, 1
 			_ = json.NewEncoder(w).Encode(page)
 		case strings.HasSuffix(r.URL.Path, "/turns"):
-			_ = json.NewEncoder(w).Encode(domain.AgentHistoryPage{Version: 1, Hash: id, Provider: domain.ProviderCodex, SessionID: "fixture-native-main", Total: 1, Before: 1, NextBefore: -1, Turns: []domain.AgentHistoryTurn{{Start: 0, End: 1, Hash: domain.HashContent(eventBytes), Events: events}}})
+			version := domain.AgentHistoryPageVersion
+			if r.URL.Query().Get("incomplete_tail") == "omit" {
+				version = domain.AgentHistoryProjectionVersion
+			}
+			_ = json.NewEncoder(w).Encode(domain.AgentHistoryPage{Version: version, Hash: id, Provider: domain.ProviderCodex, SessionID: "fixture-native-main", Total: 1, Before: 1, NextBefore: -1, Turns: []domain.AgentHistoryTurn{{Start: 0, End: 1, Hash: domain.HashContent(eventBytes), Events: events}}})
 		default:
 			t.Errorf("unexpected fixture path: %s", r.URL.Path)
 			http.NotFound(w, r)

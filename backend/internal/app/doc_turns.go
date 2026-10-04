@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -19,7 +20,7 @@ func (s *Service) ReadAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 	if err := validateHashes(repo, hash); err != nil {
 		return domain.AgentHistoryPage{}, err
 	}
-	if req.Before < -1 || req.Limit < 1 || req.Limit > domain.MaxAgentHistoryPageTurns || req.MaxBytes < 1 || req.MaxBytes > domain.MaxAgentHistoryPageBytes || domain.ValidateOptionalContentHash(req.CoveredBy) != nil {
+	if req.Before < -1 || req.Limit < 1 || req.Limit > domain.MaxAgentHistoryPageTurns || req.MaxBytes < 1 || req.MaxBytes > domain.MaxAgentHistoryPageBytes || domain.ValidateOptionalContentHash(req.CoveredBy) != nil || req.IncompleteTail != "" && req.IncompleteTail != "omit" {
 		return domain.AgentHistoryPage{}, fmt.Errorf("%w: invalid history page range or byte budget", domain.ErrValidation)
 	}
 	return repositoryRead(outbound.WithDocReadOnly(ctx), s, func(ctx context.Context) (domain.AgentHistoryPage, error) {
@@ -29,6 +30,10 @@ func (s *Service) ReadAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 
 func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.ContentHash, req domain.AgentHistoryPageRequest) (domain.AgentHistoryPage, error) {
 	out := domain.AgentHistoryPage{Version: domain.AgentHistoryPageVersion, Hash: hash, NextBefore: -1, Turns: []domain.AgentHistoryTurn{}}
+	projection := req.IncompleteTail == "omit"
+	if projection {
+		out.Version = domain.AgentHistoryProjectionVersion
+	}
 	store, ok := s.blobs.(outbound.DocReadStore)
 	if !ok {
 		return out, domain.ErrAgentHistoryUnavailable
@@ -50,6 +55,11 @@ func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 			}
 			if ev.Index != i || ev.Offset != offset || ev.Length <= 0 || domain.ValidateContentHash(ev.Hash) != nil || ev.Length >= int(^uint(0)>>1)-offset {
 				return idx, domain.ErrIntegrity
+			}
+			// V2 must reject malformed ordering across turn boundaries too:
+			// neither an omitted tail nor a metadata/prefix proof may hide it.
+			if projection && (ev.Seq < 0 || i > 0 && ev.Seq <= idx.Events[i-1].Seq) {
+				return idx, fmt.Errorf("%w: invalid historical event sequence", domain.ErrIntegrity)
 			}
 			offset += ev.Length + 1
 		}
@@ -95,16 +105,45 @@ func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 	if err != nil {
 		return out, err
 	}
-	// CIR can place a small user-turn marker immediately before its prompt.
-	// Inspect only that bounded metadata, never the body of an earlier prompt.
-	withMarker := func(start int) (int, error) {
-		if start > 0 && idx.Events[start-1].Role == "user" && idx.Events[start-1].Length <= 1024 {
-			item := idx.Events[start-1]
-			raw, err := read(item.Offset, item.Length)
-			if err != nil {
-				return start, err
+	// V2 may classify a tail whose body will not be returned. Bound that work
+	// separately from MaxBytes, sharing one allowance across every inspected
+	// event (including marker look-behind) and all selected turns. Chunks may
+	// overfetch at their fixed storage boundaries; this counts indexed bodies.
+	readRemaining := domain.MaxAgentHistoryPageBytes
+	classified := map[int]domain.CIREvent{}
+	readEvent := func(item domain.DocEventIndex) (domain.CIREvent, error) {
+		if projection {
+			if ev, ok := classified[item.Index]; ok {
+				return ev, nil
 			}
-			ev, err := domain.DecodeIndexedEvent(raw, item)
+			if item.Length > readRemaining {
+				return domain.CIREvent{}, historyClassificationBudgetError()
+			}
+			readRemaining -= item.Length
+		}
+		raw, err := read(item.Offset, item.Length)
+		if err != nil {
+			return domain.CIREvent{}, err
+		}
+		ev, err := domain.DecodeIndexedEvent(raw, item)
+		if err != nil {
+			return ev, err
+		}
+		if string(ev.Role) != item.Role || ev.Seq != item.Seq {
+			return ev, domain.ErrIntegrity
+		}
+		if projection {
+			classified[item.Index] = ev
+		}
+		return ev, nil
+	}
+	// CIR can place a user-turn marker immediately before its prompt. V1 keeps
+	// its small-marker look-behind; v2 must classify any adjacent user event
+	// within the shared allowance so an oversized marker is never left behind.
+	withMarker := func(start int) (int, error) {
+		if start > 0 && idx.Events[start-1].Role == "user" && (projection || idx.Events[start-1].Length <= 1024) {
+			item := idx.Events[start-1]
+			ev, err := readEvent(item)
 			if err != nil {
 				return start, err
 			}
@@ -134,8 +173,12 @@ func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 		}
 		start, err = withMarker(start)
 		if err != nil {
+			if projection && errors.Is(err, domain.ErrContextBudgetExceeded) && (len(out.Turns) > 0 || out.OmittedTail != nil) {
+				break
+			}
 			return out, err
 		}
+		canOmit := projection && out.Before == out.Total && end == out.Total
 		// Canonical bytes are a lower bound on the JSON wire body. Preflight
 		// prevents any chunk fetch for a huge candidate that cannot fit.
 		size := 1
@@ -146,39 +189,60 @@ func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 			}
 			size += item.Length + 1
 		}
-		if size > remaining {
-			if len(out.Turns) == 0 {
+		if size > remaining && !canOmit {
+			if len(out.Turns) == 0 && out.OmittedTail == nil {
 				return out, historyTurnBudgetError()
 			}
 			break
+		}
+		if projection {
+			needed := 0
+			for _, item := range idx.Events[start:end] {
+				if _, ok := classified[item.Index]; ok {
+					continue
+				}
+				if item.Length > readRemaining-needed {
+					needed = readRemaining + 1
+					break
+				}
+				needed += item.Length
+			}
+			if needed > readRemaining {
+				if len(out.Turns) == 0 && out.OmittedTail == nil {
+					return out, historyClassificationBudgetError()
+				}
+				break
+			}
 		}
 		turn := domain.AgentHistoryTurn{Start: start, End: end, Events: make([]domain.CIREvent, 0, end-start)}
 		for _, item := range idx.Events[start:end] {
 			if err := ctx.Err(); err != nil {
 				return out, err
 			}
-			raw, err := read(item.Offset, item.Length)
+			ev, err := readEvent(item)
 			if err != nil {
 				return out, err
-			}
-			ev, err := domain.DecodeIndexedEvent(raw, item)
-			if err != nil {
-				return out, err
-			}
-			if string(ev.Role) != item.Role || ev.Seq != item.Seq {
-				return out, domain.ErrIntegrity
 			}
 			turn.Events = append(turn.Events, ev)
 		}
-		if err := completeHistoryTurn(turn.Events); err != nil {
+		incomplete, err := classifyHistoryTurn(turn.Events, projection)
+		if err != nil {
 			return out, err
+		}
+		if incomplete {
+			if !canOmit {
+				return out, incompleteHistoryTurnError()
+			}
+			out.OmittedTail = &domain.AgentHistoryTail{Start: start, End: end, Reason: "incomplete_tool_pair"}
+			end = start
+			continue
 		}
 		raw, err := json.Marshal(turn.Events)
 		if err != nil {
 			return out, err
 		}
 		if len(raw) > remaining {
-			if len(out.Turns) == 0 {
+			if len(out.Turns) == 0 && out.OmittedTail == nil {
 				return out, historyTurnBudgetError()
 			}
 			break
@@ -198,6 +262,10 @@ func historyTurnBudgetError() error {
 	return fmt.Errorf("%w: newest complete turn exceeds the requested history byte range; no turn was skipped (this is not a token limit)", domain.ErrContextBudgetExceeded)
 }
 
+func historyClassificationBudgetError() error {
+	return fmt.Errorf("%w: history classification exceeds the 4 MiB indexed-body read allowance; unclassified turns are not omitted (this is not a token limit)", domain.ErrContextBudgetExceeded)
+}
+
 func historyIndexCovered(ctx context.Context, older, newer domain.DocReadIndex) bool {
 	provider, session := older.Envelope.SourceProvider, older.Envelope.SessionOriginID
 	if (provider != domain.ProviderClaude && provider != domain.ProviderCodex) || session == "" || newer.Envelope.SourceProvider != provider || newer.Envelope.SessionOriginID != session || len(older.Events) > len(newer.Events) || len(older.Events) > domain.MaxContextSegmentPrefixEvents {
@@ -214,30 +282,52 @@ func historyIndexCovered(ctx context.Context, older, newer domain.DocReadIndex) 
 	return true
 }
 
-func completeHistoryTurn(events []domain.CIREvent) error {
+func incompleteHistoryTurnError() error {
+	return fmt.Errorf("%w: incomplete historical tool pair", domain.ErrIntegrity)
+}
+
+// A pending call is a tail candidate only after all events pass validation.
+// An earlier outstanding call must never hide a later duplicate or orphan.
+func classifyHistoryTurn(events []domain.CIREvent, projection bool) (bool, error) {
 	calls := map[string]bool{}
 	for i, ev := range events {
+		if projection {
+			if ev.Seq < 0 || i > 0 && ev.Seq <= events[i-1].Seq {
+				return false, fmt.Errorf("%w: invalid historical event sequence", domain.ErrIntegrity)
+			}
+			switch ev.Kind {
+			case domain.EventTurn, domain.EventMessage, domain.EventToolCall, domain.EventToolResult, domain.EventReasoning, domain.EventCompaction:
+			default:
+				return false, fmt.Errorf("%w: unknown historical event kind", domain.ErrIntegrity)
+			}
+			// Omitted events never reach the final turn marshal or the client's
+			// wire validator. Check the CIR union here as well, without exposing
+			// private event data in an error. Strict v1 keeps its old checks.
+			if _, err := json.Marshal(ev); err != nil {
+				return false, fmt.Errorf("%w: invalid historical event", domain.ErrIntegrity)
+			}
+		}
 		if ev.Role == "user" && (ev.Kind != domain.EventMessage && ev.Kind != domain.EventTurn || i > 0 && !(i == 1 && events[0].Kind == domain.EventTurn && ev.Kind == domain.EventMessage)) {
-			return fmt.Errorf("%w: invalid user turn boundary", domain.ErrIntegrity)
+			return false, fmt.Errorf("%w: invalid user turn boundary", domain.ErrIntegrity)
 		}
 		switch ev.Kind {
 		case domain.EventToolCall:
 			if _, found := calls[ev.CallID]; found || ev.CallID == "" {
-				return fmt.Errorf("%w: duplicate or missing tool call identity", domain.ErrIntegrity)
+				return false, fmt.Errorf("%w: duplicate or missing tool call identity", domain.ErrIntegrity)
 			}
 			calls[ev.CallID] = false
 		case domain.EventToolResult:
 			done, found := calls[ev.CallID]
 			if !found || done {
-				return fmt.Errorf("%w: unmatched tool result", domain.ErrIntegrity)
+				return false, fmt.Errorf("%w: unmatched tool result", domain.ErrIntegrity)
 			}
 			calls[ev.CallID] = true
 		}
 	}
 	for _, done := range calls {
 		if !done {
-			return fmt.Errorf("%w: incomplete historical tool pair", domain.ErrIntegrity)
+			return true, nil
 		}
 	}
-	return nil
+	return false, nil
 }

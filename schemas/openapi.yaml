@@ -1229,20 +1229,30 @@ components:
         hash: { $ref: "#/components/schemas/ContentHash", description: "SHA-256 of json.Marshal(events) in the CIR wire representation; not a canonical document hash proof." }
         events: { type: array, minItems: 1, items: { type: object } }
 
+    AgentHistoryTail:
+      type: object
+      additionalProperties: false
+      required: [start, end, reason]
+      properties:
+        start: { type: integer, minimum: 0, description: "Inclusive original event ordinal of the omitted final user turn, including its optional turn marker." }
+        end: { type: integer, minimum: 1, description: "Exclusive original event ordinal; equals the document total and is greater than start." }
+        reason: { type: string, enum: [incomplete_tool_pair] }
+
     AgentHistoryPage:
       type: object
       additionalProperties: false
       required: [version, hash, provider, session_id, total, before, next_before, covered, turns]
       properties:
-        version: { type: integer, enum: [1] }
+        version: { type: integer, enum: [1, 2], description: "1 for strict requests; 2 whenever incomplete_tail=omit, including metadata and covered responses." }
         hash: { $ref: "#/components/schemas/ContentHash", description: "Source document identity; a partial page does not independently prove this canonical hash." }
         provider: { type: string, enum: [claude, codex] }
         session_id: { type: string }
         total: { type: integer, minimum: 0, description: "Total document events, not turns." }
         before: { type: integer, minimum: 0, description: "Resolved exclusive event cursor; requested -1 resolves to total." }
-        next_before: { type: integer, minimum: -1, description: "Oldest returned turn start, or -1 when no older user turns remain." }
+        next_before: { type: integer, minimum: -1, description: "Oldest returned turn start, or omitted_tail.start on a gap-only page with older turns remaining; -1 when no older user turns remain." }
         covered: { type: boolean, description: "Entire source is an exact event-hash prefix of covered_by in the same native provider and nonempty session; at most 250000 source events." }
-        turns: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/AgentHistoryTurn" }, description: "Newest turns first; events within each turn stay in chronological order. Empty when covered." }
+        turns: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/AgentHistoryTurn" }, description: "Newest turns first; events within each turn stay in chronological order. The newest returned turn ends at omitted_tail.start when present, otherwise before. Empty for covered, metadata, exhausted, or v2 gap-only pages." }
+        omitted_tail: { $ref: "#/components/schemas/AgentHistoryTail", description: "Present only in v2 uncovered pages where before=total, after validating the entire final user turn and finding outstanding calls only. Never present for before=0. Source events and hashes remain unchanged." }
 
     DocFinalizationStatus:
       type: object
@@ -3227,7 +3237,20 @@ paths:
         Read-only projection from the verified read index and hash-verified v2 chunks.
         Uses the same per-request viewer authorization and repository ownership as events.
         Missing read indexes or legacy unindexed bodies are unavailable; reads never repair or repack them.
-        Whole user turns and tool pairs are preserved. The newest candidate is never skipped.
+        Strict requests return version 1 and never skip the newest candidate.
+        Opting in with incomplete_tail=omit returns version 2. Only an entire final user
+        turn with outstanding tool calls may be excluded, and only when before resolves
+        to total. Its complete body, including any turn marker, must first pass all other
+        integrity checks. Duplicate/missing call IDs, unmatched or duplicate results, and
+        incomplete interior turns remain errors. No source document is rewritten.
+        The omitted tail is reported separately; before and total retain original ordinals.
+        V2 shares a separate 4194304-byte classification allowance across indexed event
+        bodies inspected, including the omitted tail, selected turns and marker look-behind.
+        This is not a physical storage I/O cap: verified fixed-size chunks may overfetch.
+        An unclassified oversized first candidate produces a bounded error, never omission.
+        A gap-only page may advance next_before to the omitted tail start if older turns
+        cannot be read within the remaining allowance or returned within max_bytes.
+        before=0 remains metadata-only and never reads or classifies a tail.
         covered_by proves only complete prefix containment in the same native provider/session;
         a shared text fragment or an incomplete prefix never authorizes deduplication.
       tags: [docs]
@@ -3236,16 +3259,17 @@ paths:
         - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 16 } }
         - { in: query, name: max_bytes, schema: { type: integer, minimum: 1, maximum: 4194304, default: 4194304 }, description: "Maximum sum of json.Marshal(turn.events) bytes. This range cap is independent of token budgets." }
         - { in: query, name: covered_by, schema: { $ref: "#/components/schemas/ContentHash" }, description: "Optional newer document owned by this repository." }
+        - { in: query, name: incomplete_tail, schema: { type: string, enum: ["", omit], default: "" }, description: "Explicit opt-in to version 2 complete-history projection. Empty retains strict version 1. Repeated or other values are invalid." }
       responses:
         "200":
-          description: "Bounded newest-first complete turns, or covered=true with no turns. Per-turn wire hashes detect event body corruption without proving the full source document hash."
+          description: "Bounded newest-first complete turns, metadata, a v2 omission gap, or covered=true with no turns and no omitted_tail. Per-turn wire hashes detect event body corruption without proving the full source document hash."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AgentHistoryPage" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "422": { description: "Invalid cursor, corrupt event/chunk, or context_budget_exceeded when the newest complete turn exceeds max_bytes. No turn is skipped." }
+        "422": { description: "Invalid cursor/option, corrupt event/chunk, malformed tool pairing, or context_budget_exceeded when a first candidate exceeds its return-byte or classification-read allowance. Only a fully validated v2 incomplete final turn may be omitted." }
         "503": { description: "Verified read index or v2 range storage unavailable. Maintenance must prepare it without mutating this read." }
 
   /repos/{repoID}/docs/{hash}:

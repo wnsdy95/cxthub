@@ -6,6 +6,10 @@ import (
 )
 
 const AgentHistoryPageVersion = 1
+
+// AgentHistoryProjectionVersion is negotiated only by IncompleteTail="omit".
+// The strict history-page contract remains version 1.
+const AgentHistoryProjectionVersion = 2
 const MaxAgentHistoryPageBytes = 4 << 20
 const MaxAgentHistoryPageTurns = 100
 
@@ -14,18 +18,30 @@ type AgentHistoryPageRequest struct {
 	Limit     int         `json:"limit"`
 	MaxBytes  int         `json:"max_bytes"`
 	CoveredBy ContentHash `json:"covered_by,omitempty"`
+	// IncompleteTail may be empty (strict) or "omit" (version 2 projection).
+	IncompleteTail string `json:"incomplete_tail,omitempty"`
 }
 
 type AgentHistoryPage struct {
-	Version    int                `json:"version"`
-	Hash       ContentHash        `json:"hash"`
-	Provider   ProviderKind       `json:"provider"`
-	SessionID  string             `json:"session_id"`
-	Total      int                `json:"total"`
-	Before     int                `json:"before"`
-	NextBefore int                `json:"next_before"`
-	Covered    bool               `json:"covered"`
-	Turns      []AgentHistoryTurn `json:"turns"`
+	Version     int                `json:"version"`
+	Hash        ContentHash        `json:"hash"`
+	Provider    ProviderKind       `json:"provider"`
+	SessionID   string             `json:"session_id"`
+	Total       int                `json:"total"`
+	Before      int                `json:"before"`
+	NextBefore  int                `json:"next_before"`
+	Covered     bool               `json:"covered"`
+	Turns       []AgentHistoryTurn `json:"turns"`
+	OmittedTail *AgentHistoryTail  `json:"omitted_tail,omitempty"`
+}
+
+// AgentHistoryTail identifies a whole final user turn omitted from this source
+// document. Its range is [Start, End), with End equal to the original Total.
+// It records incomplete tool pairing at capture, not current session liveness.
+type AgentHistoryTail struct {
+	Start  int    `json:"start"`
+	End    int    `json:"end"`
+	Reason string `json:"reason"`
 }
 
 type AgentHistoryTurn struct {
@@ -38,7 +54,7 @@ type AgentHistoryTurn struct {
 }
 
 func ValidateAgentHistoryPageRequest(req AgentHistoryPageRequest) error {
-	if req.Before < -1 || req.Limit < 1 || req.Limit > MaxAgentHistoryPageTurns || req.MaxBytes < 1 || req.MaxBytes > MaxAgentHistoryPageBytes || req.CoveredBy != "" && ValidateContentHash(req.CoveredBy) != nil {
+	if req.Before < -1 || req.Limit < 1 || req.Limit > MaxAgentHistoryPageTurns || req.MaxBytes < 1 || req.MaxBytes > MaxAgentHistoryPageBytes || req.CoveredBy != "" && ValidateContentHash(req.CoveredBy) != nil || req.IncompleteTail != "" && req.IncompleteTail != "omit" {
 		return fmt.Errorf("%w: invalid history page request", ErrAgentContextUnavailable)
 	}
 	return nil
@@ -52,7 +68,11 @@ func ValidateAgentHistoryPage(hash ContentHash, req AgentHistoryPageRequest, pag
 		return err
 	}
 	bad := func(message string) error { return fmt.Errorf("%w: history page %s", ErrHashMismatch, message) }
-	if ValidateContentHash(hash) != nil || page.Version != AgentHistoryPageVersion || page.Hash != hash || page.Total < 0 || page.Before < 0 || page.Before > page.Total || page.Turns == nil || len(page.Turns) > req.Limit || (page.Provider != ProviderClaude && page.Provider != ProviderCodex) {
+	version := AgentHistoryPageVersion
+	if req.IncompleteTail == "omit" {
+		version = AgentHistoryProjectionVersion
+	}
+	if ValidateContentHash(hash) != nil || page.Version != version || page.Hash != hash || page.Total < 0 || page.Before < 0 || page.Before > page.Total || page.Turns == nil || len(page.Turns) > req.Limit || (page.Provider != ProviderClaude && page.Provider != ProviderCodex) {
 		return bad("identity or shape")
 	}
 	before := req.Before
@@ -62,6 +82,13 @@ func ValidateAgentHistoryPage(hash ContentHash, req AgentHistoryPageRequest, pag
 	if page.Before != before {
 		return bad("before cursor")
 	}
+	end := page.Before
+	if tail := page.OmittedTail; tail != nil {
+		if version != AgentHistoryProjectionVersion || page.Covered || page.Before != page.Total || tail.Start < 0 || tail.Start >= tail.End || tail.End != page.Total || tail.Reason != "incomplete_tool_pair" {
+			return bad("omitted tail")
+		}
+		end = tail.Start
+	}
 	if page.Covered {
 		if req.CoveredBy == "" || page.SessionID == "" || len(page.Turns) != 0 || page.NextBefore != -1 || page.Total > 250000 {
 			return bad("coverage shape")
@@ -69,12 +96,12 @@ func ValidateAgentHistoryPage(hash ContentHash, req AgentHistoryPageRequest, pag
 		return nil
 	}
 	if len(page.Turns) == 0 {
-		if page.NextBefore != -1 {
+		if page.NextBefore != -1 && (page.OmittedTail == nil || end <= 0 || page.NextBefore != end) {
 			return bad("nonadvancing empty cursor")
 		}
 		return nil
 	}
-	remaining, end := req.MaxBytes, page.Before
+	remaining := req.MaxBytes
 	for n, turn := range page.Turns {
 		if turn.Start < 0 || turn.End != end || turn.End <= turn.Start || turn.End > page.Total || turn.End-turn.Start != len(turn.Events) || ValidateContentHash(turn.Hash) != nil || turn.Events[0].Role != "user" {
 			return bad("turn range")

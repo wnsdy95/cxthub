@@ -207,6 +207,30 @@ and at most 4 MiB of event JSON. The response's turn hashes validate its wire
 bodies; they are not an independent proof of the full document hash. An exact
 same-provider/session prefix proof can skip an older cumulative source.
 
+Managed history requests opt into projection version 2 with
+`incomplete_tail=omit`. A synchronous commit capture can end before its enclosing
+tool call returns. If only the final user turn has outstanding calls, the reader
+omits that **entire turn**, including a preceding user-turn marker, and returns
+`omitted_tail` with its original event range and `incomplete_tool_pair` reason.
+The source document, hash and event ordinals remain unchanged. A legacy request
+without this option stays strict version 1. Interior incomplete pairs, malformed
+events, duplicate calls and unmatched results still fail; omission never invents
+a result or infers whether the original session is currently running.
+
+Classification has a cumulative 4 MiB indexed-event body allowance per request,
+separate from returned event bytes. Chunk storage may overfetch its containing
+chunk. An oversized unclassified tail fails within that bound. An omission-only
+page may continue at the start of the omitted range. Metadata and whole-prefix
+proof requests do not read event bodies. The package records
+`history_incomplete_tool_pair` with the snapshot, document and omitted range;
+this diagnostic is part of the measured token budget. Exclusion proofs remain
+separate from selected-turn deduplication, so an intervening divergent capture
+cannot make an older balanced prefix of that unfinished turn reappear. These
+proofs are bounded (64 tail anchors, 512 probes, 250,000 events per prefix; the
+full-document fallback retains at most 1,000,000 anchor event hashes). When a
+required proof exceeds those limits, preparation stops and directs the caller
+to source-specific MCP retrieval instead of assuming independence.
+
 The package builder selects the latest complete turns that fit the effective
 budget, stops reading when the next complete turn exceeds it, keeps tool calls
 and results together, and renders selected turns in chronological order.

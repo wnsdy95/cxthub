@@ -470,6 +470,7 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 	// useful only within one provider/session; identical prose in another session
 	// remains an independent contribution.
 	prefixes := map[string][]domain.ContentHash{}
+	var exclusions agentTailExclusions
 	seenEvents := map[string]domain.ContentHash{}
 	newest := []domain.AgentHistorySegment{}
 	for _, snapshot := range snapshots {
@@ -503,6 +504,11 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 			hashes[i] = domain.HashContent(raw)
 		}
 		if doc.CIR.Envelope.SessionOriginID != "" {
+			if covered, err := exclusions.contains(ctx, sessionKey, hashes); err != nil {
+				return err
+			} else if covered {
+				continue
+			}
 			prior := prefixes[sessionKey]
 			prefix := len(prior) >= len(hashes) && len(hashes) > 0
 			if prefix {
@@ -517,9 +523,17 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 				continue
 			}
 		}
-		turns, err := agentHistoryTurns(doc.CIR)
+		turns, tail, err := projectAgentHistoryTurns(doc.CIR, true)
 		if err != nil {
 			return err
+		}
+		if tail != nil {
+			markAgentIncompleteTail(p, snapshot, tail)
+			if doc.CIR.Envelope.SessionOriginID != "" {
+				if err := exclusions.remember(sessionKey, agentTailAnchor{hash: snapshot.DocHash, total: len(hashes), events: hashes}); err != nil {
+					return err
+				}
+			}
 		}
 		candidates := []domain.AgentHistorySegment{}
 		for i := len(turns) - 1; i >= 0; i-- {
@@ -591,7 +605,8 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 			}
 			return s.finishAgentHistorySelection(ctx, in, p, rejected)
 		}
-		// Only fully selected documents establish prefix coverage for older ones.
+		// Fully processed documents establish raw prefix coverage, including
+		// explicitly omitted tails. Excluded events are never marked selected.
 		if doc.CIR.Envelope.SessionOriginID != "" {
 			prefixes[sessionKey] = hashes
 		}
@@ -604,7 +619,7 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 			}
 		}
 	}
-	return nil
+	return s.fitAgentHistoryProjection(ctx, in, p)
 }
 
 type agentTurn struct {
@@ -615,7 +630,13 @@ type agentTurn struct {
 // Historical evidence keeps complete user turns and tool pairs. Opaque native
 // state is left at its original source; this is not native replay.
 func agentHistoryTurns(cir domain.CIRDocument) ([]agentTurn, error) {
+	turns, _, err := projectAgentHistoryTurns(cir, false)
+	return turns, err
+}
+
+func projectAgentHistoryTurns(cir domain.CIRDocument, omitTail bool) ([]agentTurn, *domain.AgentHistoryTail, error) {
 	var turns []agentTurn
+	lastUser := -1
 	var current *agentTurn
 	calls := map[string]bool{}
 	finish := func() error {
@@ -627,9 +648,24 @@ func agentHistoryTurns(cir domain.CIRDocument) ([]agentTurn, error) {
 		return nil
 	}
 	for i, ev := range cir.Events {
+		if omitTail {
+			// An open pair is a valid in-flight capture only when the rest of
+			// its evidence is well formed. Never hide malformed events in a gap.
+			if ev.Seq < 0 || (i > 0 && ev.Seq <= cir.Events[i-1].Seq) {
+				return nil, nil, fmt.Errorf("%w: invalid historical event sequence", domain.ErrInvalidCIR)
+			}
+			switch ev.Kind {
+			case domain.EventMessage, domain.EventTurn, domain.EventToolCall, domain.EventToolResult, domain.EventReasoning, domain.EventCompaction:
+			default:
+				return nil, nil, fmt.Errorf("%w: unknown historical event kind", domain.ErrInvalidCIR)
+			}
+		}
+		if ev.Role == "user" {
+			lastUser = i
+		}
 		if ev.Kind == domain.EventMessage && ev.Role == "user" && (ev.CompactSummary || isSyntheticReplayMessage(ev)) {
 			if err := finish(); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			// Responses following an injected seed are not a continuation of
 			// the previous real user's turn. Wait for another genuine prompt.
@@ -642,7 +678,7 @@ func agentHistoryTurns(cir domain.CIRDocument) ([]agentTurn, error) {
 		}
 		if ev.Kind == domain.EventMessage && ev.Role == "user" {
 			if err := finish(); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			turns = append(turns, agentTurn{Start: i, End: i + 1})
 			current = &turns[len(turns)-1]
@@ -653,14 +689,14 @@ func agentHistoryTurns(cir domain.CIRDocument) ([]agentTurn, error) {
 		}
 		if ev.Kind == domain.EventToolCall {
 			if _, exists := calls[ev.CallID]; ev.CallID == "" || exists {
-				return nil, domain.ErrInvalidCIR
+				return nil, nil, domain.ErrInvalidCIR
 			}
 			calls[ev.CallID] = false
 		}
 		if ev.Kind == domain.EventToolResult {
 			done, ok := calls[ev.CallID]
 			if !ok || done {
-				return nil, fmt.Errorf("%w: unmatched historical tool result", domain.ErrInvalidCIR)
+				return nil, nil, fmt.Errorf("%w: unmatched historical tool result", domain.ErrInvalidCIR)
 			}
 			calls[ev.CallID] = true
 		}
@@ -676,7 +712,14 @@ func agentHistoryTurns(cir domain.CIRDocument) ([]agentTurn, error) {
 		current.End = i + 1
 	}
 	if err := finish(); err != nil {
-		return nil, err
+		if omitTail && current != nil && current.Start == lastUser {
+			start := current.Start
+			if start > 0 && cir.Events[start-1].Kind == domain.EventTurn && cir.Events[start-1].Role == "user" {
+				start--
+			}
+			return turns[:len(turns)-1], &domain.AgentHistoryTail{Start: start, End: len(cir.Events), Reason: "incomplete_tool_pair"}, nil
+		}
+		return nil, nil, err
 	}
-	return turns, nil
+	return turns, nil, nil
 }
