@@ -362,6 +362,42 @@ compares the entire expected native text; it does not strip arbitrary prefixes
 or accept a substring match. Future input budgeting must count this native
 projection as well as the package text.
 
+### Private idle-session resumption
+
+The next transport step is deliberately private to the native adapter. An owned
+session can issue an opaque, one-use resume plan only after the helper has
+retired successfully and its exact saved archive has been verified. The plan
+retains the original supported executable, working directory, environment,
+model and option vector. Its terminal launch contains the owned absolute
+`<session-uuid>.jsonl` path and no initial question or helper stream-JSON flags.
+The launch rechecks the saved archive and execution identity; failed validation
+or cleanup preserves the archive and cannot start a replacement process.
+
+Preserving the option vector does not prove that mutable settings, instruction
+or MCP configuration files are identical when the new process reads them.
+Likewise, validation immediately before native launch is not an atomic lock on
+what another process subsequently opens. These are separate executing-TUI
+binding requirements; private process startup must not be promoted to public
+input authorization, composer readiness or model acceptance.
+
+The idle handoff probe uses only synthetic references and a network-denied PTY.
+It must distinguish an actual composer with the loaded reference from login,
+trust and first-run setup screens. The fixture never submits a question or
+changes credentials/trust to make an unready screen pass. An unavailable
+composer remains an explicit incomplete native verification. Terminal output is
+bounded and kept out of logs. Native storage and process cleanup remain
+independently testable when interactive readiness is unavailable.
+
+The isolated Claude 2.1.285 probe on 2026-10-05 preserved the exact 1 KiB
+reference and retired both processes, but observed only welcome/theme screen
+markers. It did not observe the composer or loaded reference before its bounded
+deadline. This opt-in readiness assertion failed; the dependent 1.5 MiB probe
+was not run. No question was submitted, and no model-start or compaction marker
+was observed. OS network denial prevents successful external requests; it does
+not prove that native attempted none. Public Claude history delivery remains
+disabled. A real initialized TUI fixture, first-question insertion/release,
+executing-TUI policy binding and exact Claude accounting are still required.
+
 The native context summary is a **local estimate**. Its model window and
 compaction settings are observations of local host policy, not proof of API
 capacity or an exact tokenizer. A successful append does not activate public
