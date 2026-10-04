@@ -107,8 +107,12 @@ func (p *handoffProtocol) generationParams(params map[string]json.RawMessage) (s
 	for k, v := range params {
 		switch k {
 		case "threadId", "input":
-		case "model", "cwd", "approvalPolicy", "approvalsReviewer", "serviceTier":
+		case "model", "cwd", "approvalPolicy", "approvalsReviewer":
 			if string(v) != "null" && !sameJSON(v, p.settings[k]) {
+				return "", false
+			}
+		case "serviceTier":
+			if !preservesServiceTier(v, p.settings[k]) {
 				return "", false
 			}
 		case "sandboxPolicy":

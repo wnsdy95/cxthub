@@ -12,8 +12,8 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
-// nativeCodexLaunch owns parsed intent, not a capacity attestation. It is not
-// wired to public launch until exact capacity and interactive handoff exist.
+// nativeCodexLaunch owns parsed intent, not a capacity attestation. The public
+// delayed path separately requires its owned window binding and first-turn gate.
 // Config and the initial task may contain secrets: keep them out of receipts,
 // JSON, and routine formatting. The prompt must enter later host accounting;
 // creating this fresh runtime never submits it or starts a model turn.
@@ -203,7 +203,7 @@ func (n nativeCodexLaunch) start(ctx context.Context, env []string) (*nativecode
 	if err != nil {
 		return nil, nativecodex.Thread{}, err
 	}
-	if !strings.HasPrefix(session.HostIdentity(), "cxthub_native_transport/0.157.1 ") {
+	if !nativecodex.SupportedHostIdentity(session.HostIdentity()) {
 		_ = session.Close()
 		return nil, nativecodex.Thread{}, fmt.Errorf("native Codex launch mapping has not been verified for this host version")
 	}

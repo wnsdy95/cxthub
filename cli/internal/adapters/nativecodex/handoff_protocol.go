@@ -221,17 +221,33 @@ func stringEquals(raw json.RawMessage, want string) bool {
 	return json.Unmarshal(raw, &s) == nil && s == want
 }
 
+// Codex 0.157.1 uses Option<Option<String>> for serviceTier: omission inherits,
+// but explicit null selects "default" (core/src/config/mod.rs and
+// core/src/session/step_settings.rs at rust-v0.157.1). Check only present fields;
+// an unspecified acknowledged tier is not proof of an explicit default choice.
+func preservesServiceTier(value, prepared json.RawMessage) bool {
+	if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return stringEquals(prepared, "default")
+	}
+	var tier string
+	return json.Unmarshal(value, &tier) == nil && tier != "" && stringEquals(prepared, tier)
+}
+
 func (p *handoffProtocol) resumeParams(params map[string]json.RawMessage) bool {
 	if !stringEquals(params["threadId"], p.thread.ID) {
 		return false
 	}
 	for key, value := range params {
-		// Null optional fields are the native client's way of inheriting the
-		// prepared thread. Unknown fields cannot silently change that contract.
+		// Most null optional fields inherit; serviceTier explicitly clears.
+		// Unknown fields cannot silently change the prepared thread contract.
 		switch key {
 		case "threadId":
-		case "model", "modelProvider", "cwd", "approvalPolicy", "approvalsReviewer", "serviceTier":
+		case "model", "modelProvider", "cwd", "approvalPolicy", "approvalsReviewer":
 			if string(value) != "null" && !sameJSON(value, p.settings[key]) {
+				return false
+			}
+		case "serviceTier":
+			if !preservesServiceTier(value, p.settings[key]) {
 				return false
 			}
 		case "sandbox":

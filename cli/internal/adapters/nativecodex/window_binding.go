@@ -57,7 +57,7 @@ func StartWindowBound(ctx context.Context, opts Options, threadOpts ThreadOption
 	if err != nil {
 		return nil, Thread{}, empty, err
 	}
-	if !strings.HasPrefix(discovery.HostIdentity(), "cxthub_native_transport/0.157.1 ") {
+	if !SupportedHostIdentity(discovery.HostIdentity()) {
 		_ = discovery.Close()
 		return nil, Thread{}, empty, windowBindingError("unsupported native version")
 	}
@@ -90,7 +90,7 @@ func StartWindowBound(ctx context.Context, opts Options, threadOpts ThreadOption
 			_ = s.Close()
 		}
 	}()
-	if !strings.HasPrefix(s.HostIdentity(), "cxthub_native_transport/0.157.1 ") {
+	if !SupportedHostIdentity(s.HostIdentity()) {
 		return nil, Thread{}, empty, windowBindingError("unsupported native version")
 	}
 	ctx, cancel := context.WithTimeout(ctx, startupTimeout)
@@ -212,19 +212,13 @@ func (s *Session) windowConfig(ctx context.Context, path string) (map[string]jso
 	if !ok || !valid || (path != "" && !stringEquals(config["model_catalog_json"], path)) {
 		return nil, "", windowBindingError("effective catalog mismatch")
 	}
-	// Unknown configuration is retained in the fingerprint, never logged. JSON
-	// object key order does not change semantic equality or expose secret values.
-	var canonical any
-	decoder := json.NewDecoder(bytes.NewReader(root["config"]))
-	decoder.UseNumber()
-	if decoder.Decode(&canonical) != nil {
-		return nil, "", windowBindingError("invalid effective configuration")
-	}
-	encoded, err := json.Marshal(canonical)
+	// Fingerprint a detached, version-normalized copy. The resolver receives the
+	// original effective configuration, including all TUI and unknown fields.
+	hash, err := windowConfigFingerprint(root["config"])
 	if err != nil {
-		return nil, "", windowBindingError("invalid effective configuration")
+		return nil, "", err
 	}
-	return config, windowHash(encoded), nil
+	return config, hash, nil
 }
 
 func resolveBoundModelWindow(thread Thread, catalog []byte, config map[string]json.RawMessage) (ModelWindow, error) {

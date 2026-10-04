@@ -306,10 +306,73 @@ func TestHandoffProtocolNotificationTimestamp(t *testing.T) {
 	})
 }
 
+// Versioned native evidence: rust-v0.157.1 protocol/v2/{thread,turn}.rs
+// deserialize_double_option distinguishes omission from null. Core config and
+// session/step_settings.rs map the latter to the explicit "default" sentinel.
+// An empty request string below means the field is omitted, not a JSON string.
+func serviceTierProtocolCases() []struct {
+	name, prepared, request string
+	accept                  bool
+} {
+	return []struct {
+		name, prepared, request string
+		accept                  bool
+	}{
+		{"priority omitted", `"priority"`, "", true},
+		{"flex omitted", `"flex"`, "", true},
+		{"default omitted", `"default"`, "", true},
+		{"unspecified omitted", `null`, "", true},
+		{"priority unchanged", `"priority"`, `"priority"`, true},
+		{"flex unchanged", `"flex"`, `"flex"`, true},
+		{"default unchanged", `"default"`, `"default"`, true},
+		{"priority cleared", `"priority"`, `null`, false},
+		{"flex cleared", `"flex"`, `null`, false},
+		{"default cleared", `"default"`, `null`, true},
+		{"unspecified cleared", `null`, `null`, false},
+		{"unspecified to default", `null`, `"default"`, false},
+		{"priority to default", `"priority"`, `"default"`, false},
+		{"flex to default", `"flex"`, `"default"`, false},
+		{"default to priority", `"default"`, `"priority"`, false},
+		{"priority to flex", `"priority"`, `"flex"`, false},
+		{"legacy alias is not exact", `"priority"`, `"fast"`, false},
+		{"string null is not a clear", `"default"`, `"null"`, false},
+		{"empty string", `"default"`, `""`, false},
+		{"boolean", `"default"`, `false`, false},
+		{"number", `"default"`, `0`, false},
+		{"object", `"default"`, `{}`, false},
+		{"array", `"default"`, `[]`, false},
+	}
+}
+
+func TestHandoffProtocolServiceTierPreservesPreparedChoice(t *testing.T) {
+	for _, tc := range serviceTierProtocolCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			start := strings.Replace(handoffUnitStart, `"serviceTier":null`, `"serviceTier":`+tc.prepared, 1)
+			f := handoffUnitFromStart(t, start)
+			f.initialize(t)
+			params := map[string]any{"threadId": f.p.thread.ID, "excludeTurns": true}
+			if tc.request != "" {
+				params["serviceTier"] = json.RawMessage(tc.request)
+			}
+			handoffUnitObserve(t, f.p, handoffUnitRequest(t, "resume", "thread/resume", params), true, false, !tc.accept)
+			if !tc.accept {
+				if f.p.resumeSent || len(f.p.pending) != 0 {
+					t.Fatal("rejected tier consumed resume authority")
+				}
+				return
+			}
+			handoffUnitObserve(t, f.p, handoffUnitResponse(t, "resume", f.result), false, true, false)
+			if !sameJSON(f.p.settings["serviceTier"], json.RawMessage(tc.prepared)) {
+				t.Fatal("request changed the acknowledged tier")
+			}
+		})
+	}
+}
+
 func TestHandoffProtocolResumeParametersPreserveIntent(t *testing.T) {
 	for _, params := range []string{
 		`{"threadId":"prepared-thread"}`,
-		`{"threadId":"prepared-thread","model":null,"modelProvider":null,"cwd":null,"approvalPolicy":null,"approvalsReviewer":null,"serviceTier":null,"sandbox":null,"config":null,"history":null,"path":null,"baseInstructions":null,"developerInstructions":null,"personality":null,"permissions":null,"runtimeWorkspaceRoots":null,"initialTurnsPage":null,"excludeTurns":true}`,
+		`{"threadId":"prepared-thread","model":null,"modelProvider":null,"cwd":null,"approvalPolicy":null,"approvalsReviewer":null,"sandbox":null,"config":null,"history":null,"path":null,"baseInstructions":null,"developerInstructions":null,"personality":null,"permissions":null,"runtimeWorkspaceRoots":null,"initialTurnsPage":null,"excludeTurns":true}`,
 		`{"threadId":"prepared-thread","model":"fixture-model","modelProvider":"fixture-provider","cwd":"/work","approvalPolicy":"untrusted","approvalsReviewer":"user","sandbox":"read-only","config":{"web_search":"cached"},"excludeTurns":true}`,
 		`{"threadId":"prepared-thread","config":{}}`,
 	} {

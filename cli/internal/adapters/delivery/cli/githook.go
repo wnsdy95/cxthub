@@ -860,7 +860,19 @@ func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTa
 	}
 
 	sessionID := strings.TrimSpace(os.Getenv("CXT_WRAPPED_SESSION_ID"))
-	if !providerfs.ValidSessionID(sessionID) {
+	if protocol := os.Getenv("CXT_WRAPPED_CAPTURE_PROTOCOL"); protocol != "" && provider == domain.ProviderCodex {
+		if protocol != capture.NativeWrapperCaptureProtocol {
+			return commandCaptureTarget{}, fmt.Errorf("unsupported native wrapper capture protocol")
+		}
+		pid, err := strconv.Atoi(os.Getenv("CXT_WRAPPER_PID"))
+		if err != nil {
+			return commandCaptureTarget{}, fmt.Errorf("invalid native capture supervisor")
+		}
+		sessionID, err = capture.NativeWrapperSession(cwd, pid, strings.TrimSpace(os.Getenv("CODEX_THREAD_ID")))
+		if err != nil {
+			return commandCaptureTarget{}, fmt.Errorf("cannot identify this wrapper's owned native Codex thread")
+		}
+	} else if !providerfs.ValidSessionID(sessionID) {
 		sessionID = capture.SessionAffinity(cwd, provider)
 	}
 	if !providerfs.ValidSessionID(sessionID) {

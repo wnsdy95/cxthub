@@ -15,6 +15,8 @@ import (
 // must be reported without terminating a productive native conversation.
 var ErrCalibrationPersistence = errors.New("native Codex input feedback was not confirmed saved")
 
+const generationPersistenceTimeout = 5 * time.Second
+
 // Keep observing the client's close while the first request waits for cloud
 // preparation. The bounded queue carries bytes only; all protocol decisions
 // still run serially in the relay. Overflow cancels rather than hiding a close
@@ -124,6 +126,23 @@ func (h *Handoff) prepareGeneration(p *handoffProtocol, s *Session) error {
 	// Discard a stale prepared context without ever submitting a model request.
 	if err = prepared.Validate(ctx); err != nil || ctx.Err() != nil {
 		return fmt.Errorf("%w: initial context changed before generation", ErrState)
+	}
+	if prepared.BeforeRelease != nil {
+		// Persist only after native acknowledged the exact injection. A failed
+		// or canceled write may have committed, so never retry it or release the
+		// model request. Keep storage errors and private data out of this relay.
+		persistCtx, persistCancel := context.WithTimeout(ctx, generationPersistenceTimeout)
+		err = prepared.BeforeRelease(persistCtx, injection)
+		persistErr := persistCtx.Err()
+		persistCancel()
+		if err != nil || persistErr != nil {
+			return fmt.Errorf("%w: initial context persistence failed", ErrState)
+		}
+		prepared.BeforeRelease = nil
+		// Persistence can outlast the source/config snapshot checked above.
+		if err = prepared.Validate(ctx); err != nil || ctx.Err() != nil {
+			return fmt.Errorf("%w: initial context changed before generation", ErrState)
+		}
 	}
 	prepared.History = nil
 	h.mu.Lock()
