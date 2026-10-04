@@ -65,8 +65,9 @@ func (r ProviderLaunchRequest) ArgumentDetails() (ProviderLaunchDetails, error) 
 		Directory: inv.Directory, SessionID: inv.SessionID, Options: options}, nil
 }
 
-// InitialPrompt preserves the single literal prompt, including an explicitly
-// empty argument. Multiple positional prompts cannot be counted unambiguously.
+// InitialPrompt returns the text the provider will submit, including an
+// explicitly empty argument. Raw argument details and launch argv stay intact.
+// Multiple positional prompts cannot be counted unambiguously.
 func (r ProviderLaunchRequest) InitialPrompt() (domain.AgentInitialPrompt, error) {
 	details, err := r.ArgumentDetails()
 	if err != nil {
@@ -76,7 +77,14 @@ func (r ProviderLaunchRequest) InitialPrompt() (domain.AgentInitialPrompt, error
 	case 0:
 		return domain.AgentInitialPrompt{}, nil
 	case 1:
-		return domain.NewAgentInitialPrompt(details.Prompts[0]), nil
+		text := details.Prompts[0]
+		if r.Intent.Provider == domain.ProviderCodex {
+			// Codex 0.157.1 cli/src/main.rs normalizes initial TUI and resume
+			// prompts in this order. Do this before counting or reserving text,
+			// while leaving the original argv for native submission unchanged.
+			text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+		}
+		return domain.NewAgentInitialPrompt(text), nil
 	default:
 		return domain.AgentInitialPrompt{}, fmt.Errorf("%w: provider launch requires at most one initial prompt argument", domain.ErrProviderCapabilityUnknown)
 	}

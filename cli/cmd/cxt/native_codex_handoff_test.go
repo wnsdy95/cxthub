@@ -33,7 +33,7 @@ func TestNativeHandoffPreservesBoundRootOptionsWithoutPrompt(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("handoff mapping: args=%q err=%v", got, err)
 	}
-	if bound.prompt != question {
+	if !bound.prompt.Present() || bound.prompt.Text() != question {
 		t.Fatal("mapping changed the withheld prompt")
 	}
 	// Both the original request and each returned argv must be independent.

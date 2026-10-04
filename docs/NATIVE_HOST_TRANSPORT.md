@@ -1,7 +1,7 @@
 # Native host transport development
 
 The `nativecodex` adapter is a preparatory local protocol boundary. It is not
-wired into `cxt --pull codex`; strict native history launch still reports
+wired into `cxt --pull codex`; public native history launch still reports
 `provider_capability_unknown`. Transport success does not establish capacity,
 exact token accounting or model acceptance. Interactive readiness has its own
 correlated acknowledgement below; it does not enable generation.
@@ -154,8 +154,13 @@ both processes. Unsupported modes remain unsupported.
 This seam remains deliberately unwired to public history launch. The wrapper
 still must verify configuration/source freshness at generation release and
 account for the retained initial task, including native newline normalization.
-Verified model/window, host input/framing, tokenizer and compaction evidence
-must feed the existing adaptive budget before real history delivery. A prepared
+Verified model/window and tokenizer evidence must feed the adaptive budget
+before real history delivery. Hidden host/framing input may now use the approved
+measured-reserve policy in [context input](CONTEXT_INPUT.md), with explicit
+unknown labels and scoped feedback; a complete pre-send hidden-input count is
+no longer a prerequisite. That change does not establish window provenance or
+wire the generation relay. Codex initial prompt CRLF/CR normalization is now
+applied before token reservation. A prepared
 package, injection ACK, interactive connection and actual model acceptance need
 separate receipts. Claude requires its own protocol adapter and evidence.
 

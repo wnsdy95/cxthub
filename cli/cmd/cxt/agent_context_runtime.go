@@ -40,7 +40,7 @@ func (r cloudAgentDocuments) ReadAgentHistoryPage(ctx context.Context, hash doma
 type unverifiedAgentHost struct{}
 
 func (unverifiedAgentHost) AgentCapability(context.Context, domain.ProviderKind, string) (domain.AgentHostCapability, error) {
-	return domain.AgentHostCapability{}, fmt.Errorf("%w: this build has no verified host/tokenizer combination for strict history; use cxt load --context-budget <budget> --output <file> to prepare an inspectable artifact", domain.ErrProviderCapabilityUnknown)
+	return domain.AgentHostCapability{}, fmt.Errorf("%w: this build has no verified native model/window and tokenizer binding for history; use cxt load --context-budget <budget> --output <file> to prepare an inspectable artifact", domain.ErrProviderCapabilityUnknown)
 }
 
 var runtimeAgentTokens = agenttokens.New()
@@ -85,7 +85,7 @@ func (r runtimeAgentPreparer) PrepareAgentContext(ctx context.Context, in inboun
 		return domain.AgentContextPackage{}, err
 	}
 	in.PersonalScope = scope
-	service := app.NewAgentContextService(r.history, r.remote, cloudAgentDocuments{r.remote, repo.ID}, work, runtimeAgentTokens, unverifiedAgentHost{})
+	service := app.NewAgentContextService(r.history, r.remote, cloudAgentDocuments{r.remote, repo.ID}, work, runtimeAgentTokens, app.MeasuredAgentCapabilities{Runtime: unverifiedAgentHost{}, Observations: r.store})
 	p, err := service.PrepareAgentContext(ctx, in)
 	if err != nil {
 		return domain.AgentContextPackage{}, err

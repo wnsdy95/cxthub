@@ -20,7 +20,7 @@ import (
 type nativeCodexLaunch struct {
 	process     nativecodex.Options
 	thread      nativecodex.ThreadOptions
-	prompt      string
+	prompt      domain.AgentInitialPrompt
 	intent      domain.ContentHash
 	tuiRootArgs []string
 }
@@ -45,8 +45,11 @@ func bindNativeCodexLaunch(req delivcli.ProviderLaunchRequest) (nativeCodexLaunc
 	}
 	bound.process = nativecodex.Options{Executable: req.Executable, Cwd: req.Cwd}
 	bound.thread.Model = details.Model
-	if len(details.Prompts) == 1 {
-		bound.prompt = details.Prompts[0]
+	// Share the pre-count provider normalization and presence semantics with
+	// preparation, so a later native submission uses the reserved text.
+	bound.prompt, err = req.InitialPrompt()
+	if err != nil {
+		return nativeCodexLaunch{}, fmt.Errorf("native Codex initial prompt could not be bound")
 	}
 	search, bypass := false, false
 	seen := map[string]bool{}

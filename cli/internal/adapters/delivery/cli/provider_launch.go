@@ -218,6 +218,9 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 			limits := ""
 			if b := receipt.Budget; b != nil {
 				limits = fmt.Sprintf(" model=%q effective_budget=%d initial_input_limit=%d host_input_tokens=%d framing_tokens=%d initial_prompt_tokens=%d reserved_tokens=%d context_window=%d", b.Model, b.EffectiveTokens, b.InitialInputLimit, b.HostInputTokens, b.FramingTokens, b.InitialPromptTokens, b.ReservedTokens, b.ContextWindow)
+				if b.InputAccountingPolicy != "" {
+					limits += fmt.Sprintf(" accounting=%s overhead_allowance_tokens=%d host_input_unverified=%t auto_compact_unverified=%t", b.InputAccountingPolicy, b.OverheadAllowanceTokens, b.HostInputUnverified, b.AutoCompactUnverified)
+				}
 				if b.AdjustmentReason != "" {
 					limits += " adjustment=" + b.AdjustmentReason
 				}

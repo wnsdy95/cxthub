@@ -36,3 +36,14 @@ type AgentTokenCounter interface {
 type AgentCapabilityReader interface {
 	AgentCapability(context.Context, domain.ProviderKind, string) (domain.AgentHostCapability, error)
 }
+
+type AgentInputCalibrationReader interface {
+	// Missing observations return a zero calibration bound to the requested scope.
+	ReadAgentInputCalibration(context.Context, domain.ContentHash) (domain.AgentInputCalibration, error)
+}
+
+type AgentInputCalibrationStore interface {
+	AgentInputCalibrationReader
+	// Atomically merge max overhead / min positive ceiling; never last-writer-wins.
+	MergeAgentInputCalibration(context.Context, domain.AgentInputCalibration) (domain.AgentInputCalibration, error)
+}

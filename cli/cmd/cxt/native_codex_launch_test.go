@@ -23,7 +23,7 @@ func TestNativeLaunchBindsOneParsedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound.thread.Model != "explicit" || bound.thread.Sandbox != "read-only" || bound.thread.ApprovalPolicy != "untrusted" || !bound.process.StrictConfig || bound.process.Cwd != request.Cwd || bound.prompt != "--yolo literal prompt" {
+	if bound.thread.Model != "explicit" || bound.thread.Sandbox != "read-only" || bound.thread.ApprovalPolicy != "untrusted" || !bound.process.StrictConfig || bound.process.Cwd != request.Cwd || !bound.prompt.Present() || bound.prompt.Text() != "--yolo literal prompt" {
 		t.Fatal("launch intent changed")
 	}
 	want := []string{"-c", `model="config-model"`, "--config", "model=second-config", "--disable", "shell_tool", "--enable", "shell_tool"}
@@ -38,6 +38,54 @@ func TestNativeLaunchBindsOneParsedIntent(t *testing.T) {
 	changed, err := bindNativeCodexLaunch(request)
 	if err != nil || changed.intent == before {
 		t.Fatal("different input not distinguished")
+	}
+}
+
+func TestNativeLaunchBindsNormalizedInitialPromptAndPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		args       []string
+		present    bool
+	}{
+		{"absent", "", nil, false},
+		{"empty", "", []string{"--", ""}, true},
+		{"mixed newlines", "PRIVATE_PROMPT\nsecond\nthird\n\n", []string{"--", "PRIVATE_PROMPT\r\nsecond\rthird\r\r\n"}, true},
+		{"whitespace", " \t\n \n ", []string{"--", " \t\r\n \r "}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := nativeLaunchRequest(tc.args...)
+			before := append([]string(nil), req.Intent.ProviderArgs...)
+			bound, err := bindNativeCodexLaunch(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt, err := req.InitialPrompt()
+			if err != nil || bound.prompt.Present() != tc.present || bound.prompt.Text() != tc.text || bound.prompt != prompt {
+				t.Fatal("native submission prompt differs from the pre-count prompt or loses presence")
+			}
+			if !reflect.DeepEqual(req.Intent.ProviderArgs, before) {
+				t.Fatal("binding changed original argv")
+			}
+			encoded, err := json.Marshal(bound)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, output := range []string{string(encoded), fmt.Sprint(bound), fmt.Sprintf("%+v", bound), fmt.Sprintf("%#v", bound)} {
+				if strings.Contains(output, "PRIVATE_PROMPT") {
+					t.Fatal("normalized private prompt escaped bound launch")
+				}
+			}
+		})
+	}
+	// Canonically equivalent text has the same reservation input, but raw launch
+	// intent must still distinguish the user's original arguments.
+	raw, err := bindNativeCodexLaunch(nativeLaunchRequest("first\r\nsecond"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := bindNativeCodexLaunch(nativeLaunchRequest("first\nsecond"))
+	if err != nil || raw.prompt != normalized.prompt || raw.intent == normalized.intent {
+		t.Fatal("binding lost raw intent identity or normalized prompt equivalence")
 	}
 }
 

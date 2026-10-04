@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,117 @@ func TestProviderLaunchInitialPromptUsesArgumentDetails(t *testing.T) {
 			}
 			if tc.present && (len(details.Prompts) != 1 || details.Prompts[0] != prompt.Text()) || !tc.present && len(details.Prompts) != 0 {
 				t.Fatal("initial prompt disagrees with argument details")
+			}
+		})
+	}
+}
+
+func TestProviderLaunchInitialPromptNormalizesOnlyCodexNewlines(t *testing.T) {
+	for _, provider := range []string{"codex", "claude"} {
+		for _, tc := range []struct{ name, raw, normalized string }{
+			{"empty", "", ""},
+			{"LF", "first\nsecond\n", "first\nsecond\n"},
+			{"CRLF", "first\r\nsecond\r\n", "first\nsecond\n"},
+			{"CR", "first\rsecond\r", "first\nsecond\n"},
+			{"mixed", "\r\nfirst\rsecond\nthird\r\r\n\n\r", "\nfirst\nsecond\nthird\n\n\n\n"},
+			{"whitespace", " \t\r\n \r\t ", " \t\n \n\t "},
+			{"unicode and literal syntax", "--resume \"\ud55c\uae00\" e\u0301\r\n<|endoftext|>\r\u2028", "--resume \"\ud55c\uae00\" e\u0301\n<|endoftext|>\n\u2028"},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				args := []string{"--model=fixture-model", "--", tc.raw}
+				req := ProviderLaunchRequest{Intent: LaunchIntent{Provider: provider, Pull: true, ContextBudget: 200000, ProviderArgs: append([]string(nil), args...)}}
+				want := tc.raw
+				if provider == "codex" {
+					want = tc.normalized
+				}
+				prompt, err := req.InitialPrompt()
+				if err != nil || !prompt.Present() || prompt.Text() != want {
+					t.Fatalf("prompt presence=%v text=%q error=%v", prompt.Present(), prompt.Text(), err)
+				}
+				details, err := req.ArgumentDetails()
+				if err != nil || !reflect.DeepEqual(details.Prompts, []string{tc.raw}) || !reflect.DeepEqual(req.Intent.ProviderArgs, args) {
+					t.Fatal("normalization changed raw argument details or original argv")
+				}
+				resume, err := req.ResumeArguments(launchSessionID)
+				if err != nil || !reflect.DeepEqual(resume, append(resumeArgs(provider, launchSessionID), args...)) {
+					t.Fatal("normalization changed native submission argv")
+				}
+			})
+		}
+	}
+}
+
+func TestProviderLaunchInitialPromptReservesNormalizedCodexTextWithoutLeaking(t *testing.T) {
+	const rawPrompt = "PRIVATE_INITIAL_PROMPT\r\nsecond\rthird\r\r\n"
+	const submittedPrompt = "PRIVATE_INITIAL_PROMPT\nsecond\nthird\n\n"
+	for _, reserveRaw := range []bool{false, true} {
+		name := "normalized reservation"
+		if reserveRaw {
+			name = "raw reservation rejected"
+		}
+		t.Run(name, func(t *testing.T) {
+			root, _ := providerLaunchFixture(t, "codex", "")
+			intent := LaunchIntent{Provider: "codex", Pull: true, ContextBudget: 200000, ProviderArgs: []string{"--", rawPrompt}}
+			var states []string
+			hooks := ProviderLaunchHooks{Prepare: func(_ context.Context, req ProviderLaunchRequest) (PreparedProviderLaunch, error) {
+				p := preparedLaunch(req)
+				b := p.Budget
+				// The fixture tokenizer counts runes, so CRLF changes the count.
+				if b.InitialPromptTokens != len([]rune(submittedPrompt)) {
+					t.Fatal("token counting ran before native prompt normalization")
+				}
+				if err := p.PromptReservation.Validate(domain.NewAgentInitialPrompt(submittedPrompt), b.Provider, b.Model, b.Tokenizer, b.InitialPromptTokens); err != nil {
+					t.Fatalf("reservation does not bind the eventual native text: %v", err)
+				}
+				if reserveRaw {
+					// Keep the count identical to isolate text binding from count
+					// validation: raw text must not authorize normalized input.
+					var err error
+					p.PromptReservation, err = domain.NewAgentPromptReservation(domain.NewAgentInitialPrompt(rawPrompt), b.Provider, b.Model, domain.AgentTokenUsage{Tokens: b.InitialPromptTokens, Exact: true, Tokenizer: b.Tokenizer})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				return p, nil
+			}, Record: func(_ context.Context, r ProviderLaunchReceipt) error {
+				states = append(states, r.State)
+				encoded, err := json.Marshal(r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, secret := range []string{"PRIVATE_INITIAL_PROMPT", string(domain.HashContent([]byte(rawPrompt))), string(domain.HashContent([]byte(submittedPrompt)))} {
+					if strings.Contains(string(encoded), secret) {
+						t.Fatal("receipt exposed raw or normalized prompt text or hash")
+					}
+				}
+				if r.Budget == nil || r.Budget.InitialPromptTokens != len([]rune(submittedPrompt)) {
+					t.Fatal("receipt lost normalized prompt accounting")
+				}
+				return nil
+			}}
+			var summary bytes.Buffer
+			runtime := launchTestRuntime()
+			runtime.stderr = &summary
+			err := runProviderLaunch(context.Background(), root, intent, hooks, runtime)
+			if strings.Contains(summary.String(), "PRIVATE_INITIAL_PROMPT") {
+				t.Fatal("launch summary exposed the initial prompt")
+			}
+			if reserveRaw {
+				if !errors.Is(err, domain.ErrContextBudgetExceeded) || !reflect.DeepEqual(states, []string{"failed"}) {
+					t.Fatalf("raw reservation: error=%v states=%v", err, states)
+				}
+				if _, err := os.Stat(filepath.Join(root, "launch.log")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("child started with an unnormalized reservation: %v", err)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(states, []string{"prepared", "launched"}) {
+				t.Fatalf("normalized reservation: error=%v states=%v", err, states)
+			}
+			log, err := os.ReadFile(filepath.Join(root, "launch.log"))
+			want := strings.Join(append(resumeArgs("codex", launchSessionID), "--", rawPrompt), "\n") + "\n"
+			if err != nil || string(log) != want || intent.ProviderArgs[1] != rawPrompt {
+				t.Fatal("native child or caller did not retain raw original argv")
 			}
 		})
 	}
