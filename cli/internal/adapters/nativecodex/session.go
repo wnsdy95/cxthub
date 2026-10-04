@@ -117,6 +117,11 @@ func (s *Session) StartThread(ctx context.Context, opts ThreadOptions) (Thread, 
 		return Thread{}, err
 	}
 	defer func() { <-s.gate }()
+	return s.startThread(ctx, opts)
+}
+
+// Caller holds the lifecycle gate, including any window/config binding reads.
+func (s *Session) startThread(ctx context.Context, opts ThreadOptions) (Thread, error) {
 	if err := s.active(); err != nil {
 		return Thread{}, err
 	}

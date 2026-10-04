@@ -398,7 +398,7 @@ func buildContainer(cfg config) container {
 		Repack:          store.RepackObjects,
 		Identity:        cfg.Identity,
 	}
-	preparer := runtimeAgentPreparer{gitCtx, store, remote, history}
+	preparer := runtimeAgentPreparer{git: gitCtx, store: store, remote: remote, history: history}
 	hookHdl.WithAgentContext(preparer)
 	loadSvc.WithAgentContext(preparer).WithAgentCodePosition(gitctx.NewGitContextAdapter())
 	seedSvc.WithAgentContext(preparer)

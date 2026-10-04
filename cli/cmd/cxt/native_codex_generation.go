@@ -24,15 +24,18 @@ type nativeCodexPackageValidate func(context.Context, domain.AgentContextPackage
 // actual question. validate must recheck that authority, configuration/account
 // scope, working position, and latest server main. Neither a package digest nor
 // the native host/version/settings strings supply that authority themselves.
+// expectedNativeWindow must come from the same runtime evidence, in native
+// usable-window units. It may exceed the deliberately smaller packing budget;
+// it never raises that budget or establishes provider acceptance.
 func newNativeCodexGenerationPrepare(
-	bound nativeCodexLaunch, session *nativecodex.Session, expected nativecodex.Thread, expectedHost string,
+	bound nativeCodexLaunch, session *nativecodex.Session, expected nativecodex.Thread, expectedHost string, expectedNativeWindow int,
 	prepare nativeCodexPackagePrepare, validate nativeCodexPackageValidate, store outbound.AgentInputCalibrationStore,
 ) (func(context.Context, nativecodex.Thread, string) (nativecodex.PreparedGeneration, error), error) {
 	if session == nil {
 		return nil, nativeCodexGenerationFailure("runtime binding", nativecodex.ErrState)
 	}
 	b := nativeCodexGenerationBridge{
-		bound: bound, expected: expected, expectedHost: expectedHost, host: session.HostIdentity,
+		bound: bound, expected: expected, expectedHost: expectedHost, expectedNativeWindow: expectedNativeWindow, host: session.HostIdentity,
 		prepare: prepare, validate: validate, store: store,
 	}
 	if err := b.checkRuntime(expected); err != nil {
@@ -47,10 +50,13 @@ type nativeCodexGenerationBridge struct {
 	bound        nativeCodexLaunch
 	expected     nativecodex.Thread
 	expectedHost string
-	host         func() string
-	prepare      nativeCodexPackagePrepare
-	validate     nativeCodexPackageValidate
-	store        outbound.AgentInputCalibrationStore
+	// Native telemetry reports the usable window after its effective percentage.
+	// Keep it separate from a more conservative CXTHub packing window.
+	expectedNativeWindow int
+	host                 func() string
+	prepare              nativeCodexPackagePrepare
+	validate             nativeCodexPackageValidate
+	store                outbound.AgentInputCalibrationStore
 }
 
 func (nativeCodexGenerationBridge) String() string {
@@ -59,7 +65,7 @@ func (nativeCodexGenerationBridge) String() string {
 func (b nativeCodexGenerationBridge) GoString() string { return b.String() }
 
 func (b nativeCodexGenerationBridge) checkRuntime(thread nativecodex.Thread) error {
-	if b.host == nil || b.prepare == nil || b.validate == nil || b.store == nil ||
+	if b.expectedNativeWindow <= 0 || b.host == nil || b.prepare == nil || b.validate == nil || b.store == nil ||
 		domain.ValidateContentHash(b.bound.intent) != nil || b.bound.process.Executable == "" || !filepath.IsAbs(b.bound.process.Cwd) ||
 		!strings.HasPrefix(b.expectedHost, "cxthub_native_transport/0.157.1 ") || b.host() != b.expectedHost ||
 		thread != b.expected || !domain.ValidSessionID(thread.ID) || thread.Model == "" || thread.ModelProvider == "" ||
@@ -81,6 +87,7 @@ func (b nativeCodexGenerationBridge) checkPackage(p domain.AgentContextPackage, 
 	if p.ArtifactOnly || p.Policy.Mode != "history" || p.Capability != "verified_for_preparation" || p.Budget == nil ||
 		p.Provider != domain.ProviderCodex || p.Budget.Provider != domain.ProviderCodex ||
 		p.Budget.Model != b.expected.Model || p.Budget.HostVersion != b.expectedHost ||
+		p.Budget.ContextWindow > b.expectedNativeWindow ||
 		p.Budget.InputAccountingPolicy != domain.MeasuredInputReserveV1 ||
 		p.Content.Selection.SourcePolicy != domain.AgentSourceLatestMain {
 		return domain.ErrProviderCapabilityUnknown
@@ -174,7 +181,7 @@ func (b nativeCodexGenerationBridge) prepareGeneration(ctx context.Context, thre
 		if observed.Ineligible || observed.ModelRerouted {
 			return nil // no feedback may cross the prepared runtime/model scope
 		}
-		if observed.ModelContextWindow < 0 || (observed.ModelContextWindow != 0 && observed.ModelContextWindow != p.Budget.ContextWindow) {
+		if observed.ModelContextWindow < 0 || (observed.ModelContextWindow != 0 && observed.ModelContextWindow != b.expectedNativeWindow) {
 			return nativeCodexGenerationFailure("observation window disagreement", domain.ErrProviderCapabilityUnknown)
 		}
 		// Feedback belongs to the immutable package actually submitted. Source
