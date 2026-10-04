@@ -117,7 +117,8 @@ the TUI. It does not fall back to unverified materialized history.
 preserves the original executable, selected directory, native model/configuration
 and supported permission/terminal options. Its app-server and TUI use the same
 captured environment. The default memory-only path and explicit native resume
-keep their existing behavior; Claude history still needs a native adapter.
+keep their existing behavior. Claude's separate no-turn reference adapter is
+not yet wired into public history launches.
 
 Preparation creates an owned native thread and private endpoint, not a context
 package. `runtime_prepared` and `runtime_launched` receipts contain no selected
@@ -302,7 +303,8 @@ metadata and additional launch modes remain unsupported; normal catalog lookup
 must not be mistaken for a bound runtime descriptor. Actual large-model input
 acceptance and immediate compaction still require provider validation. A package,
 injection ACK, TUI attachment and model completion are distinct evidence.
-Claude requires its own protocol adapter and evidence.
+Claude still needs public launch, interactive resume, budgeting and actual
+model-acceptance integration beyond its no-turn reference adapter.
 
 The native initialize user-agent's originator can be overridden by the desktop
 environment (for example `Codex Desktop/0.157.1`). Compatibility checks compare
@@ -328,3 +330,65 @@ request; valid synthetic latest-main history/memory reach one loopback canned
 request only after a durable injection receipt. The test uses an isolated dummy
 local API key, never user credentials. It also verifies correlated outcome and
 post-completion disconnect monitoring. This is not real-model capacity evidence.
+
+## Claude no-turn references
+
+The `nativeclaude` adapter starts its own fresh Claude stream-JSON process. It
+initializes the control protocol, reads `get_context_usage` with
+`detail="summary"`, and can append one literal user-content reference with
+`shouldQuery=false`. It never submits the user's first question, grants a
+permission request, imports assistant/tool roles, or exposes arbitrary control
+requests. Original roles and provenance belong inside the quoted reference.
+
+`client_composed=true` prevents slash/path expansion of that reference. Claude
+2.1.285 acknowledges this non-querying message through its ordered command
+lifecycle and a successful zero-turn result. Both the fresh session UUID and
+message UUID must match; token usage, API duration and turn count must be zero.
+The native version does not guarantee a user-message replay for this operation.
+If a replay arrives, its identity and exact text are checked separately. An
+ambiguous append cannot be retried in the same session. The command receipt
+explicitly leaves persistence and provider acceptance unverified. A separate
+read-only `VerifyArchive` can establish exact file
+readback after successful Close; this is not a power-loss/fsync durability
+guarantee. Close drains and validates output through EOF; unexpected model,
+permission or compaction activity, malformed frames and cancellation invalidate
+the session. Native archives are preserved even after failure.
+
+For `isSynthetic=true`, Claude 2.1.285 prefixes the stored reference with
+`[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]` followed by a newline. This
+48-byte provenance marker is retained. The receipt distinguishes the original
+payload hash/size from the exact native content hash/size. Archive verification
+compares the entire expected native text; it does not strip arbitrary prefixes
+or accept a substring match. Future input budgeting must count this native
+projection as well as the package text.
+
+The native context summary is a **local estimate**. Its model window and
+compaction settings are observations of local host policy, not proof of API
+capacity or an exact tokenizer. A successful append does not activate public
+`cxt --pull claude` or establish 800k support. The next integration must preserve
+the user's native options, attach the same saved session, account for the actual
+first question and verify the model's result separately.
+
+The optional macOS real-binary test uses a fresh private HOME/config/project,
+fixed credential-free environment and an OS sandbox that denies all network
+access. Before launching Claude it verifies that synthetic outside-file reads,
+writes and a loopback connection receive `EPERM`. The profile allows one
+resolved, root-owned ICU timezone data file required by native startup; it does
+not open user preferences or keychain access. The earlier isolated-startup
+timeout was this missing OS data dependency, not a remaining initialization
+defect.
+
+```sh
+CXT_TEST_NATIVE_CLAUDE=/absolute/path/to/claude \
+  go -C cli test ./internal/adapters/nativeclaude \
+  -run TestNativeClaudeOfflineReference -count=1 -v
+```
+
+The fixture appends synthetic 1 KiB and 1.5 MiB references in separate sessions,
+checks the local estimate before/after, then compares the exact native archive
+after orderly shutdown. Neither the payload nor provider account details enter
+test logs. All network access is denied; no actual model acceptance is claimed.
+
+Protocol references: [Claude CLI flags](https://code.claude.com/docs/en/cli-reference)
+and the versioned `@anthropic-ai/claude-agent-sdk` types. The adapter's supported
+versions are explicit; a newer installed version needs compatibility verification.
