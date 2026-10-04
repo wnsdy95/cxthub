@@ -134,13 +134,15 @@ func (s *AgentContextService) selectPagedHistory(ctx context.Context, in inbound
 				return candidate
 			}
 			accepted := 0
+			var rejected error
 			for low, high := 1, len(candidates); low <= high; {
 				middle := low + (high-low)/2
 				_, err := s.measure(ctx, in, build(middle))
 				if err == nil {
 					accepted = middle
 					low = middle + 1
-				} else if errors.Is(err, domain.ErrContextBudgetExceeded) {
+				} else if agentCandidateLimit(err) {
+					rejected = err
 					high = middle - 1
 				} else {
 					return err
@@ -152,9 +154,9 @@ func (s *AgentContextService) selectPagedHistory(ctx context.Context, in inbound
 			}
 			if accepted < len(candidates) {
 				if len(newest) == 0 {
-					return fmt.Errorf("%w: newest complete turn exceeds remaining input", domain.ErrContextBudgetExceeded)
+					return fmt.Errorf("newest complete turn cannot be selected: %w", rejected)
 				}
-				return nil
+				return s.finishAgentHistorySelection(ctx, in, p, rejected)
 			}
 			for key, digest := range pageEvents {
 				seenEvents[key] = digest

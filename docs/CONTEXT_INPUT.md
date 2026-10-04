@@ -347,15 +347,27 @@ Local measurement does not require native-host evidence, and does not grant it.
 Strict history launch remains gated on that separate evidence.
 
 The current Go BPE implementation has quadratic work within an unbroken piece.
-Inputs above 16 MiB, runs above 4 KiB, or an aggregate sum of squared run lengths
+Inputs above 16 MiB, regex pieces above 4 KiB, or an aggregate sum of squared piece byte lengths
 above 134,217,728 work units use the whole-text byte allowance
 with `reason: tokenizer_work_limit`. They are never split into independently
 counted fragments or silently truncated. Invalid UTF-8 is rejected. This bounds
 individual counting work; it is not a real-time completion guarantee. An
 inexact result cannot pass strict native-history delivery. Text-token equality
 is tested against an independent synthetic Python tiktoken reference corpus.
-Two overlapping run guards separate whitespace and letter/number classes;
-punctuation with newline/slash suffixes is included in the work bound.
+Preflight uses each encoding's pinned ordinary-text regex boundaries, including
+punctuation with newline/slash suffixes. Minified JSON, numeric strings and URLs
+are not treated as single pieces merely because they contain no spaces. The
+regex preflight has a finite per-match timeout and checks cancellation between
+matches; the unchanged synchronous full-text count finishes within the work
+bound before returning cancellation, not necessarily at the instant of cancel.
+
+An inexact allowance above the requested budget means fit could not be
+certified; it does not prove actual tokens exceeded that budget. Errors preserve
+the measurement reason and distinguish it from exact token overflow. If a
+newer complete history turn fits but an older candidate cannot be measured,
+the artifact's coverage gaps report that measurement limitation. Native history
+still requires exact accounting. The source archive and complete user turns
+are never modified to force an input to fit.
 
 ## Local state and compatibility
 

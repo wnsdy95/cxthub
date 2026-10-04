@@ -69,6 +69,39 @@ func TestCounterDoesNotGuessProviderOrModel(t *testing.T) {
 	}
 }
 
+func TestCounterStructuredTextMatchesIndependentReference(t *testing.T) {
+	data, err := os.ReadFile("testdata/work.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Encoding, Name, Prefix, Unit, Suffix string
+			Repeat, Tokens, Bytes                int
+		}
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.Cases) != 14 {
+		t.Fatal("work reference corpus missing")
+	}
+	c := New()
+	for _, item := range fixture.Cases {
+		t.Run(item.Encoding+"/"+item.Name, func(t *testing.T) {
+			text := item.Prefix + strings.Repeat(item.Unit, item.Repeat) + item.Suffix
+			model := "gpt-5"
+			if item.Encoding == "cl100k_base" {
+				model = "gpt-4"
+			}
+			u, err := c.CountAgentTokens(context.Background(), domain.ProviderCodex, model, text)
+			if len(text) != item.Bytes || err != nil || !u.Exact || u.Tokens != item.Tokens {
+				t.Fatalf("structured reference mismatch: got=%+v want=%d err=%v", u, item.Tokens, err)
+			}
+		})
+	}
+}
+
 func TestCounterVersionedModelMapping(t *testing.T) {
 	for _, model := range []string{"gpt-5", "gpt-5-mini", "gpt-5.1-codex-mini", "gpt-5.4", "gpt-5.4-2026-03-05", "gpt-4o", "gpt-4.1-mini", "gpt-4.5-preview", "o1", "o3-mini", "o4-mini"} {
 		if got := encodingFor(domain.ProviderCodex, model); got != tokenizer.O200kBase {
@@ -147,7 +180,7 @@ func TestCounterConcurrentAndCancelledCalls(t *testing.T) {
 
 func TestCounterBoundsPathologicalInputWithoutTruncation(t *testing.T) {
 	c := New()
-	for _, text := range []string{strings.Repeat("a", maxRunBytes+1), strings.Repeat(" ", maxRunBytes+1), strings.Repeat("\n", maxRunBytes+1), strings.Repeat("a ", maxTextBytes/2+1), strings.Repeat(strings.Repeat("a", maxRunBytes)+" ", 9), strings.Repeat("/\n", 8192), strings.Repeat("\u0301!", 8192)} {
+	for _, text := range []string{strings.Repeat("a", maxRunBytes+1), strings.Repeat(" ", maxRunBytes+1), strings.Repeat("\n", maxRunBytes+1), strings.Repeat("a ", maxTextBytes/2+1), strings.Repeat(strings.Repeat("a", maxRunBytes)+" ", 9), strings.Repeat("/\n", 8192), strings.Repeat("\u0301", maxRunBytes)} {
 		u, err := c.CountAgentTokens(context.Background(), domain.ProviderCodex, "gpt-5", text)
 		if err != nil || u.Exact || u.Tokens != len(text) || u.Tokenizer != domain.UTF8ByteBoundCounter || u.Reason != "tokenizer_work_limit" {
 			t.Fatalf("unbounded/sliced input: %+v %v", u, err)

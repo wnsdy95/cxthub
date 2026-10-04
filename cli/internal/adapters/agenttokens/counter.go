@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/dlclark/regexp2/v2"
 	"github.com/tiktoken-go/tokenizer"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -20,7 +21,7 @@ const (
 	cacheEntries = 128
 	maxTextBytes = 16 << 20
 	// The underlying BPE merge is quadratic in an unbroken regex piece. Refuse
-	// pathological runs before entering it; do not split and miscount BPE seams.
+	// pathological pieces before entering it; do not split and miscount BPE seams.
 	maxRunBytes = 4096
 	// Bound aggregate worst-case merging work as well as each individual run.
 	// Otherwise thousands of individually permitted long pieces could stall a
@@ -43,12 +44,13 @@ type cacheEntry struct {
 type Counter struct {
 	gate   chan struct{}
 	codecs map[tokenizer.Encoding]tokenizer.Codec
+	splits map[tokenizer.Encoding]*regexp2.Regexp
 	cache  map[cacheKey]*list.Element
 	lru    *list.List
 }
 
 func New() *Counter {
-	return &Counter{gate: make(chan struct{}, 1), codecs: make(map[tokenizer.Encoding]tokenizer.Codec), cache: make(map[cacheKey]*list.Element), lru: list.New()}
+	return &Counter{gate: make(chan struct{}, 1), codecs: make(map[tokenizer.Encoding]tokenizer.Codec), splits: make(map[tokenizer.Encoding]*regexp2.Regexp), cache: make(map[cacheKey]*list.Element), lru: list.New()}
 }
 
 var _ outbound.AgentTokenCounter = (*Counter)(nil)
@@ -70,9 +72,6 @@ func (c *Counter) CountAgentTokens(ctx context.Context, provider domain.Provider
 	if len(text) > maxTextBytes {
 		return byteAllowance(text, "tokenizer_work_limit"), nil
 	}
-	if reason := inputFallbackReason(text); reason != "" {
-		return byteAllowance(text, reason), nil
-	}
 	select {
 	case c.gate <- struct{}{}:
 		defer func() { <-c.gate }()
@@ -87,6 +86,15 @@ func (c *Counter) CountAgentTokens(ctx context.Context, provider domain.Provider
 		c.lru.MoveToFront(entry)
 		return entry.Value.(cacheEntry).usage, nil
 	}
+	reason, err := c.inputFallbackReason(ctx, encoding, text)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return domain.AgentTokenUsage{}, ctxErr
+	}
+	if err != nil {
+		return domain.AgentTokenUsage{}, err
+	} else if reason != "" {
+		return byteAllowance(text, reason), nil
+	}
 	codec := c.codecs[encoding]
 	if codec == nil {
 		var err error
@@ -96,15 +104,18 @@ func (c *Counter) CountAgentTokens(ctx context.Context, provider domain.Provider
 		}
 		c.codecs[encoding] = codec
 	}
+	if err := ctx.Err(); err != nil {
+		return domain.AgentTokenUsage{}, err
+	}
 	// Count treats special-token spellings as ordinary text. User-controlled
 	// strings such as <|endoftext|> must never be assigned hidden control IDs.
 	n, err := codec.Count(text)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return domain.AgentTokenUsage{}, ctxErr
+	}
 	if err != nil {
 		// Do not propagate library errors that might include private input.
 		return domain.AgentTokenUsage{}, fmt.Errorf("%w: local tokenizer failed", domain.ErrProviderCapabilityUnknown)
-	}
-	if err := ctx.Err(); err != nil {
-		return domain.AgentTokenUsage{}, err
 	}
 	usage := domain.AgentTokenUsage{Tokens: n, Exact: true, Tokenizer: "tiktoken-go/" + string(encoding) + "@0.8.1/ordinary-v1/ucd-" + unicode.Version, Scope: "text"}
 	c.cache[key] = c.lru.PushFront(cacheEntry{key: key, usage: usage})
@@ -145,38 +156,6 @@ func encodingFor(provider domain.ProviderKind, model string) tokenizer.Encoding 
 		}
 	}
 	return ""
-}
-
-func inputFallbackReason(text string) string {
-	// Two overlapping guards cover all tokenizer pieces: non-whitespace runs
-	// cover words/marks, and non-letter/non-number runs also cover punctuation
-	// with its newline/slash suffix. A whitespace-only split misses /\n repeats.
-	var whitespace, word runBound
-	for i, r := range text {
-		if r >= utf8.RuneSelf && !compatibleUnicodeRune(r) {
-			return "unicode_classification_unavailable"
-		}
-		if whitespace.add(i, r, unicode.IsSpace(r)) || word.add(i, r, unicode.IsLetter(r) || unicode.IsNumber(r)) {
-			return "tokenizer_work_limit"
-		}
-	}
-	return ""
-}
-
-type runBound struct {
-	start          int
-	group          bool
-	work, previous int64
-}
-
-func (b *runBound) add(i int, r rune, group bool) bool {
-	if i == 0 || group != b.group {
-		b.start, b.group, b.previous = i, group, 0
-	}
-	run := int64(i + utf8.RuneLen(r) - b.start)
-	b.work += run*run - b.previous*b.previous
-	b.previous = run
-	return run > maxRunBytes || b.work > maxMergeWork
 }
 
 func compatibleUnicodeRune(r rune) bool {
