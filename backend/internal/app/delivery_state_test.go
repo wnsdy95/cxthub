@@ -13,6 +13,134 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
+func TestContextDeliverySelectedDisplayPromotion(t *testing.T) {
+	for _, change := range []string{"message API", "branch label only"} {
+		t.Run(change, func(t *testing.T) {
+			svc, st := newFsckSvc(t)
+			ctx := systemTestContext()
+			repo := hh(t.Name())
+			if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main"}); err != nil {
+				t.Fatal(err)
+			}
+			doc := domain.SessionDoc{CIR: domain.CIRDocument{
+				Envelope: domain.CIREnvelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex, SessionOriginID: "synthetic-display-promotion"},
+				Events:   []domain.CIREvent{{Seq: 0, Kind: domain.EventMessage, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: "selected synthetic content"}}}},
+			}}
+			raw, err := domain.CanonicalBytes(doc.CIR)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc.Hash = domain.HashContent(raw)
+			if _, err := st.PutDoc(ctx, repo, doc); err != nil {
+				t.Fatal(err)
+			}
+			snap := domain.Snapshot{ID: doc.Hash, RepoID: repo, DocHash: doc.Hash, Branch: "main", Message: domain.HookMessagePrefix + "checkpoint", Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull, SessionID: doc.CIR.Envelope.SessionOriginID}
+			if change == "branch label only" {
+				snap.Branch = domain.StashBranchLabel
+			}
+			if err := st.PutSnapshot(ctx, snap); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.PutMemoryDigestCAS(ctx, repo, domain.MemoryDigest{SnapshotID: snap.ID, Summary: "selected synthetic memory"}); err != nil {
+				t.Fatal(err)
+			}
+			ref := domain.Ref{Kind: domain.RefBranch, Name: "main", BranchID: "main-identity", RepoID: repo, Target: snap.ID}
+			if err := st.CompareAndSwapRef(ctx, repo, ref, ""); err != nil {
+				t.Fatal(err)
+			}
+			segmentPublish(t, svc, repo, snap.ID, 1)
+			selection := domain.ContextSelection{Scope: "current", Branch: "main", Position: "main", CodeCommit: effectiveOID(1)}
+			query := func() domain.ContextQueryView {
+				v, err := svc.QueryContext(ctx, repo, selection)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return v
+			}
+			memory := func() domain.EffectiveMemoryPage {
+				v, err := svc.QueryEffectiveMemory(ctx, repo, domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{Branch: "main", SnapshotID: snap.ID, CodeCommit: effectiveOID(1)}, Content: "prompt", Limit: 50})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return v
+			}
+			before, beforeMemory := query(), memory()
+			storedBefore, err := st.GetSnapshot(ctx, repo, snap.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			historyBefore, err := svc.ListHistory(ctx, repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			docBefore, err := st.GetDoc(ctx, repo, snap.DocHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if domain.ValidateContentHash(before.DeliveryStateHash) != nil || domain.ValidateContentHash(beforeMemory.DeliveryStateHash) != nil {
+				t.Fatal("missing initial delivery proof")
+			}
+			if change == "message API" {
+				// Exercise the application command used by the HTTP promotion API.
+				if err := svc.PromoteSnapshotMessage(ctx, repo, snap.ID, "synthetic commit caption"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				// Exercise the supported stash-to-commit storage promotion, keeping
+				// Message identical so only the scalar branch label is promoted.
+				promoted := storedBefore
+				promoted.Branch = "main"
+				if err := st.PutSnapshot(ctx, promoted); err != nil {
+					t.Fatal(err)
+				}
+				if err := st.AdvanceRepositoryRevision(ctx, repo, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			after, afterMemory := query(), memory()
+			storedAfter, err := st.GetSnapshot(ctx, repo, snap.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			historyAfter, err := svc.ListHistory(ctx, repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			docAfter, err := st.GetDoc(ctx, repo, snap.DocHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change == "message API" {
+				if storedAfter.Message == storedBefore.Message || storedAfter.Branch != storedBefore.Branch {
+					t.Fatal("fixture did not isolate message promotion")
+				}
+				storedAfter.Message = storedBefore.Message
+			} else {
+				if storedAfter.Branch == storedBefore.Branch || storedAfter.Message != storedBefore.Message {
+					t.Fatal("fixture did not isolate branch promotion")
+				}
+				storedAfter.Branch = storedBefore.Branch
+			}
+			if !reflect.DeepEqual(storedBefore, storedAfter) || !reflect.DeepEqual(docBefore, docAfter) || !reflect.DeepEqual(historyBefore, historyAfter) {
+				t.Fatal("display promotion changed immutable source metadata/content or receipts")
+			}
+			if !reflect.DeepEqual(before.Inclusion, after.Inclusion) || !reflect.DeepEqual(before.Semantics, after.Semantics) || !reflect.DeepEqual(beforeMemory.Items, afterMemory.Items) {
+				t.Fatal("display promotion changed selected semantic content")
+			}
+			if before.StateHash == after.StateHash || beforeMemory.StateHash == afterMemory.StateHash || after.Revision.Graph <= before.Revision.Graph {
+				t.Fatal("legacy state/revision fences did not change")
+			}
+			if before.DeliveryStateHash != after.DeliveryStateHash || beforeMemory.DeliveryStateHash != afterMemory.DeliveryStateHash {
+				t.Fatal("display-only promotion invalidated delivery proof")
+			}
+			segmentPublish(t, svc, repo, snap.ID, 2)
+			if query().DeliveryStateHash == after.DeliveryStateHash {
+				t.Fatal("selected publication provenance change was hidden")
+			}
+		})
+	}
+}
+
 func TestContextDeliveryIgnoresUnselectedTraffic(t *testing.T) {
 	svc, st := newFsckSvc(t)
 	ctx := systemTestContext()

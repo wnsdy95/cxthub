@@ -446,6 +446,10 @@ func acquireSyncLock(cwd string) (release func()) {
 // "start new work" (seed birth reason — cut), detached is "time travel" (no capture).
 // Opt-out: CXT_KEEP_SESSION=1 (suppress switch — keep old session), CXT_CARRY=1 (carry session).
 func contextSwitch(ctx context.Context, c *Container, cwd string) error {
+	return contextSwitchWithPublication(ctx, c, cwd, spawnBranchStateSync)
+}
+
+func contextSwitchWithPublication(ctx context.Context, c *Container, cwd string, publish func(string)) error {
 	if os.Getenv("CXT_KEEP_SESSION") == "1" {
 		hookWarn("keep-session — context switch omitted (current session maintained)")
 		return nil
@@ -623,7 +627,7 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 					fmt.Printf("cxt: %q app context selected (live session retained)\n", branch)
 				}
 				if out.ActivatedBranch {
-					spawnBranchStateSync(cwd)
+					publish(cwd)
 				}
 				syncSettingsToSnapshot(ctx, c, cwd, out.Head, "git checkout "+branch)
 			} else {
@@ -698,6 +702,9 @@ func contextSwitch(ctx context.Context, c *Container, cwd string) error {
 	// wrapper child automatically.
 	if !transitionPreflightSafe(prepareErr, prepareExpected, b, wrapperManaged) {
 		hookWarn("context recovery was not restartable; current session was preserved — continue explicitly with cxt checkout %s", branch)
+		if prepareErr != nil {
+			hookWarn("context recovery preparation failed: %v", prepareErr)
+		}
 		return nil
 	}
 	// New wrappers prepare the actual restart under the original launch policy
@@ -1042,6 +1049,10 @@ func shouldSupersedeSession(path, preparedSeedPath string) bool {
 // Total limit: 60 seconds: Hooks block git commands, so they must finish in finite time for network operations.
 // (Individual HTTPs have a 30-second client timeout as a first defense — this is the total safety net).
 func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) error {
+	return runGitHookWithPublication(ctx, c, cwd, rest, spawnBranchStateSync)
+}
+
+func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, rest []string, publish func(string)) error {
 	if len(rest) > 0 && rest[0] == "historical-sync" {
 		return runHistoricalSync(ctx, c, cwd)
 	}
@@ -1093,6 +1104,19 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		return nil
 	}
 	repoRoot := state.Root
+	if event == "post-checkout" {
+		// This hook's replay and activation must not publish between the source
+		// reads used to prepare/commit its replacement. Start one helper after
+		// every return path, including failed preparation; durable votes/refs
+		// still need publication. Never wait for branch-replay: it waits for Git.
+		start, pending := publish, false
+		publish = func(string) { pending = true }
+		defer func() {
+			if pending {
+				start(cwd)
+			}
+		}()
+	}
 	if event == "post-checkout" || event == "pre-push" || event == "post-commit" {
 		ref := gitOut(cwd, "symbolic-ref", "--quiet", "HEAD")
 		// Detached capture has no branch birth to resolve. The full journal is
@@ -1100,7 +1124,7 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 		var replayErr error
 		endReplay := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageHookReplay, outbound.SyncDiagnosticCounts{})
 		if ref != "" {
-			replayErr = replayBranchOperationsForRef(ctx, c, cwd, ref)
+			replayErr = replayBranchOperationsForRefWithPublication(ctx, c, cwd, ref, publish)
 		}
 		endReplay(replayErr)
 		if err := replayErr; err != nil {
@@ -1255,7 +1279,7 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 				return err
 			}
 		}
-		return contextSwitch(ctx, c, cwd)
+		return contextSwitchWithPublication(ctx, c, cwd, publish)
 
 	case "boundary-enforce":
 		// Transition execution (detached helper): Waits briefly until the hook/tool call is complete,

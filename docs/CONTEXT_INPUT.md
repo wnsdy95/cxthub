@@ -46,8 +46,11 @@ New servers return an optional `delivery_state_hash` for both the complete
 context selection and the complete effective-memory projection, before paging.
 Input packages carry these as the paired `context_delivery_hash` and
 `memory_delivery_hash`. They bind selected content, inclusion and provenance,
-including items outside the first page or input budget. Additional display-only
-branch memberships and unrelated repository history do not change these proofs.
+including items outside the first page or input budget. Mutable display messages,
+branch labels/memberships and unrelated
+repository history, do not change these proofs. Immutable source documents,
+provider/session identity and accepted publication/integration receipts remain
+bound, as do selected inclusion and ordering.
 The existing state hashes, cursors and repository revision checks remain intact.
 
 Final delivery reads context, memory and context again with fresh authorization.
@@ -59,6 +62,12 @@ still rejects delivery. Older servers and packages without the paired proofs
 retain the strict original revision check. Partial, malformed or disappearing
 proofs cannot select a weaker fallback. Desktop handoff failures retain their
 queue entry for a later preparation.
+
+A Git checkout defers background branch publication requested by its own replay
+or activation until foreground context preparation finishes. Applied branch
+records still publish when preparation fails; the existing session stays open.
+Other writers can still change the source during validation and cause a safe
+rejection. This ordering does not lock the server or other worktrees.
 
 The optional `segment_limit`, `segment_offset` and `segment_state_hash` query
 parameters return logical conversation ranges in the same snapshot order.

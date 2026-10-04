@@ -14,7 +14,7 @@ func deliveryHash(s string) ContentHash { return HashContent([]byte(s)) }
 func TestContextDeliveryStateScopeAndProvenance(t *testing.T) {
 	repo, a, b := deliveryHash("repo"), deliveryHash("a"), deliveryHash("b")
 	base := ContextQueryView{Version: 1, Branch: "main", Position: b,
-		Snapshots: []Snapshot{{ID: b, RepoID: repo, Parents: []ContentHash{a}, DocHash: b, MemoryHash: deliveryHash("memory"), Branch: "main", Branches: []string{"main"}}, {ID: a, RepoID: repo, DocHash: a}},
+		Snapshots: []Snapshot{{ID: b, RepoID: repo, Parents: []ContentHash{a}, DocHash: b, MemoryHash: deliveryHash("memory"), Branch: "main", Branches: []string{"main"}, Message: "display caption"}, {ID: a, RepoID: repo, DocHash: a}},
 		Inclusion: &BranchContext{BranchID: "main-id", SnapshotID: b, CodeCommit: strings.Repeat("1", 40), Reason: "selected_code", Roots: []ContentHash{a, b}, SnapshotIDs: []ContentHash{b, a}, Merges: []BranchContextMerge{{EventID: "merge", Source: a, State: "included", Reason: "verified_git_order"}}},
 		Semantics: ContextSemantics{Version: 1, Merges: []ContextMergeEvidence{{EventID: "merge", BirthID: "birth", Completed: true, PlacementIntact: true, SourceAvailable: true, Lineage: "natural"}}},
 		History:   []HistoryEvent{{ID: "merge", Kind: "pr-merge", Source: a, Target: b, PRCompleted: true}, {ID: "birth", Kind: "birth", BranchID: "source-id", Source: a}},
@@ -44,6 +44,8 @@ func TestContextDeliveryStateScopeAndProvenance(t *testing.T) {
 			v.DeliveryStateHash = deliveryHash("old")
 		}, true},
 		{"display membership", func(v *ContextQueryView) { v.Snapshots[0].Branches = []string{"other", "main"} }, true},
+		{"display branch label", func(v *ContextQueryView) { v.Snapshots[0].Branch = "other" }, true},
+		{"display message", func(v *ContextQueryView) { v.Snapshots[0].Message = "promoted caption" }, true},
 		{"unrelated journal and semantics", func(v *ContextQueryView) {
 			v.History = append(v.History, HistoryEvent{ID: "unrelated", Kind: "pr-merge", PRCompleted: true, Source: deliveryHash("elsewhere")})
 			v.Semantics.Merges = append(v.Semantics.Merges, ContextMergeEvidence{EventID: "unrelated"})
@@ -53,7 +55,11 @@ func TestContextDeliveryStateScopeAndProvenance(t *testing.T) {
 		{"ancestry", func(v *ContextQueryView) { v.Snapshots[0].Parents = nil }, false},
 		{"overlay", func(v *ContextQueryView) { v.Snapshots[0].GraftParents = []ContentHash{a}; v.Snapshots[0].GraftSeq++ }, false},
 		{"settings", func(v *ContextQueryView) { v.Snapshots[0].CodexSettings = deliveryHash("settings") }, false},
-		{"original provenance", func(v *ContextQueryView) { v.Snapshots[0].Branch = "other" }, false},
+		{"source provider", func(v *ContextQueryView) { v.Snapshots[0].Provider = ProviderClaude }, false},
+		{"source session", func(v *ContextQueryView) { v.Snapshots[0].SessionID = "other-session" }, false},
+		{"source author", func(v *ContextQueryView) { v.Snapshots[0].Author.Name = "other-author" }, false},
+		{"selected branch", func(v *ContextQueryView) { v.Branch = "other" }, false},
+		{"selected identity", func(v *ContextQueryView) { v.Inclusion.BranchID = "other-id" }, false},
 		{"ordered snapshots", func(v *ContextQueryView) { v.Snapshots[0], v.Snapshots[1] = v.Snapshots[1], v.Snapshots[0] }, false},
 		{"revert truth", func(v *ContextQueryView) { v.Inclusion.Merges[0].State = "not_selected" }, false},
 		{"merge placement", func(v *ContextQueryView) { v.Semantics.Merges[0].PlacementIntact = false }, false},
@@ -88,13 +94,38 @@ func TestContextDeliveryStateScopeAndProvenance(t *testing.T) {
 	if got == want {
 		t.Fatal("selected publication not bound")
 	}
-	if !reflect.DeepEqual(base.Snapshots[0].Branches, []string{"main"}) {
+	if !reflect.DeepEqual(base.Snapshots[0].Branches, []string{"main"}) || base.Snapshots[0].Branch != "main" || base.Snapshots[0].Message != "display caption" {
 		t.Fatal("hash mutated response")
 	}
 	got, _ = ContextDeliveryStateHash(deliveryHash("different repo"), "origin", in, base, bindings)
 	other, _ := ContextDeliveryStateHash(repo, "other origin", in, base, bindings)
 	if got == want || got == other {
 		t.Fatal("scope missing")
+	}
+}
+
+func TestContextDeliveryDisplayLabelStillBindsSelectionChanges(t *testing.T) {
+	repo, id := deliveryHash("repo"), deliveryHash("source")
+	full := RepositoryView{Snapshots: []Snapshot{{ID: id, RepoID: repo, DocHash: id, Branch: StashBranchLabel}}}
+	in := ContextSelection{Scope: "all", Branch: "feature"}
+	before, err := SelectContext(full, in, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash, err := ContextDeliveryStateHash(repo, "", in, before, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The legacy branch-selection fallback consumes the scalar label. Its
+	// resulting source membership must still change the semantic projection.
+	full.Snapshots[0].Branch = "feature"
+	after, err := SelectContext(full, in, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newHash, err := ContextDeliveryStateHash(repo, "", in, after, nil)
+	if err != nil || len(before.Snapshots) != 0 || len(after.Snapshots) != 1 || oldHash == newHash {
+		t.Fatal("display normalization hid changed selection", err)
 	}
 }
 

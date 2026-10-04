@@ -11,8 +11,9 @@ import (
 // ContextDeliveryStateHash consumes the complete selected view, full merge
 // semantics/history from the same read generation, and finalized publication
 // bindings. Pagination, repository revisions and cursor hashes are deliberately
-// absent. Only Snapshot.Branches is discarded from selected snapshot metadata:
-// ancestry, overlays, immutable content and original provenance remain bound.
+// absent. Snapshot.Branch, Branches and Message are mutable display labels and
+// are discarded only after selection. Ordered snapshots, ancestry, overlays,
+// immutable content, inclusion and publication/merge/birth receipts remain bound.
 func ContextDeliveryStateHash(repo ContentHash, origin string, in ContextSelection, view ContextQueryView, bindings map[ContentHash][]CommitContextBinding) (ContentHash, error) {
 	type source struct {
 		Snapshot     Snapshot
@@ -22,7 +23,9 @@ func ContextDeliveryStateHash(repo ContentHash, origin string, in ContextSelecti
 	selected := make(map[ContentHash]bool, len(view.Snapshots))
 	for _, snap := range view.Snapshots {
 		selected[snap.ID] = true
-		snap.Branches = nil // copy; never change the response or a cached snapshot
+		// Normalize this copy, never the response or a cached snapshot. Stash
+		// promotion and hook-message promotion do not change source content.
+		snap.Branch, snap.Message, snap.Branches = "", "", nil
 		pubs := append([]CommitContextBinding{}, bindings[snap.ID]...)
 		sort.Slice(pubs, func(i, j int) bool { return pubs[i].EventID < pubs[j].EventID })
 		sources = append(sources, source{snap, pubs})

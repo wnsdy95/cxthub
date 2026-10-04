@@ -507,7 +507,7 @@ components:
         state_hash: { $ref: '#/components/schemas/ContentHash' }
         delivery_state_hash:
           allOf: [{ $ref: '#/components/schemas/ContentHash' }]
-          description: Optional versioned fingerprint of the complete selected semantic projection before pagination. Excludes repository-wide revisions, unrelated history and display-only branch memberships; retains selected content, ancestry, inclusion and provenance. Does not replace state_hash or revision fences.
+          description: Optional versioned fingerprint of the complete selected semantic projection before pagination. Excludes repository-wide revisions, unrelated history and mutable snapshot display fields (branch, branches, message) after selection. Retains the resolved selection, ordered snapshots, immutable content, provider/session identity, ancestry, memory, inclusion and relevant publication/merge/birth receipts. A display change that changes the selected projection still changes this proof. Does not replace state_hash or revision fences.
         inclusion: { $ref: '#/components/schemas/BranchContext' }
         version: { type: integer, const: 1 }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
