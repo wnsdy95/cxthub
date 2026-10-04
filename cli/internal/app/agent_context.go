@@ -228,7 +228,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 	}
 	// Reserve the coverage notice up front, so adding a truncation marker cannot
 	// itself push mandatory constraints outside the requested token budget.
-	p.Content.Gaps = append(p.Content.Gaps, domain.AgentCoverageGap{Reason: "bounded_projection_remaining_sources_via_mcp"})
+	p.Content.Gaps = append(p.Content.Gaps, domain.AgentCoverageGap{Reason: agentBoundedProjectionGap})
 	baseUsage, err := s.measure(ctx, in, p)
 	if err != nil {
 		return domain.AgentContextPackage{}, err
@@ -294,7 +294,8 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 			candidate.Content.ProjectMemory = append(append([]domain.EffectiveMemoryItem{}, p.Content.ProjectMemory...), item)
 			candidateUsage, e := s.measure(ctx, in, candidate)
 			if e != nil {
-				if errors.Is(e, domain.ErrContextBudgetExceeded) {
+				if agentCandidateLimit(e) {
+					markAgentMeasurementGap(&p, "memory", e)
 					memoryFull = true
 					break
 				}
@@ -441,8 +442,12 @@ func (s *AgentContextService) measure(ctx context.Context, in inbound.PrepareAge
 			return usage, err
 		}
 	}
-	if usage.Tokens <= 0 || usage.Tokenizer == "" || p.Policy.Mode == "history" && !in.ArtifactOnly && !usage.Exact {
+	if usage.Tokens <= 0 || usage.Tokenizer == "" {
 		return usage, domain.ErrProviderCapabilityUnknown
+	}
+	exactRequired := p.Policy.Mode == "history" && !in.ArtifactOnly
+	if !usage.Exact && (exactRequired || usage.Tokens > p.EffectiveBudget()) {
+		return usage, agentTokenMeasurementFailure(usage, p.EffectiveBudget(), exactRequired)
 	}
 	if p.Budget != nil && usage.Tokenizer != p.Budget.Tokenizer {
 		return usage, fmt.Errorf("%w: token counter changed during selection", domain.ErrProviderCapabilityUnknown)
@@ -559,6 +564,7 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 			return candidate
 		}
 		accepted := 0
+		var rejected error
 		for low, high := 1, len(candidates); low <= high; {
 			middle := low + (high-low)/2
 			candidate := build(middle)
@@ -566,7 +572,10 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 			if err == nil {
 				accepted = middle
 				low = middle + 1
-			} else if errors.Is(err, domain.ErrContextBudgetExceeded) {
+			} else if agentCandidateLimit(err) {
+				// Each rejection lowers high, so retain the reason for the
+				// smallest rejected candidate, not an earlier larger probe.
+				rejected = err
 				high = middle - 1
 			} else {
 				return err
@@ -578,9 +587,9 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 		}
 		if accepted < len(candidates) {
 			if len(newest) == 0 {
-				return fmt.Errorf("%w: newest complete turn exceeds remaining input; use MCP excerpts or a larger budget", domain.ErrContextBudgetExceeded)
+				return fmt.Errorf("newest complete turn cannot be selected: %w", rejected)
 			}
-			return nil
+			return s.finishAgentHistorySelection(ctx, in, p, rejected)
 		}
 		// Only fully selected documents establish prefix coverage for older ones.
 		if doc.CIR.Envelope.SessionOriginID != "" {

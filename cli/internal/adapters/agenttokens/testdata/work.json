@@ -1,0 +1,145 @@
+{
+  "reference": "openai/tiktoken 0.12.0 encode_ordinary; synthetic repeated fixtures",
+  "cases": [
+    {
+      "encoding": "o200k_base",
+      "name": "minified_json",
+      "prefix": "{\"items\":[",
+      "unit": "{\"path\":\"src/a1.go\",\"sha\":\"a1b2c3d4\",\"ok\":true},",
+      "repeat": 5000,
+      "suffix": "{}]}",
+      "tokens": 110006,
+      "bytes": 240014
+    },
+    {
+      "encoding": "o200k_base",
+      "name": "digits",
+      "prefix": "",
+      "unit": "1234567890",
+      "repeat": 1000,
+      "suffix": "",
+      "tokens": 3334,
+      "bytes": 10000
+    },
+    {
+      "encoding": "o200k_base",
+      "name": "marks_punctuation",
+      "prefix": "",
+      "unit": "\u0301!",
+      "repeat": 8192,
+      "suffix": "",
+      "tokens": 16384,
+      "bytes": 24576
+    },
+    {
+      "encoding": "o200k_base",
+      "name": "url_query",
+      "prefix": "",
+      "unit": "https://example.test/a1/b2?x=12&y=z#fragment;",
+      "repeat": 1500,
+      "suffix": "",
+      "tokens": 27000,
+      "bytes": 67500
+    },
+    {
+      "encoding": "o200k_base",
+      "name": "adjacent_tools",
+      "prefix": "",
+      "unit": "{\"tool\":\"exec\",\"input\":{\"cmd\":\"go test ./...\"},\"output\":\"ok\\n\"}",
+      "repeat": 1200,
+      "suffix": "",
+      "tokens": 24000,
+      "bytes": 75600
+    },
+    {
+      "encoding": "o200k_base",
+      "name": "case_contractions",
+      "prefix": "",
+      "unit": "aB2can't<|endoftext|>\u4f60\u597d!",
+      "repeat": 1000,
+      "suffix": "",
+      "tokens": 13000,
+      "bytes": 28000
+    },
+    {
+      "encoding": "o200k_base",
+      "name": "whitespace_lookahead",
+      "prefix": "",
+      "unit": " \t\r\n foo\tbar   \n/\n",
+      "repeat": 1000,
+      "suffix": "",
+      "tokens": 6000,
+      "bytes": 18000
+    },
+    {
+      "encoding": "cl100k_base",
+      "name": "minified_json",
+      "prefix": "{\"items\":[",
+      "unit": "{\"path\":\"src/a1.go\",\"sha\":\"a1b2c3d4\",\"ok\":true},",
+      "repeat": 5000,
+      "suffix": "{}]}",
+      "tokens": 110005,
+      "bytes": 240014
+    },
+    {
+      "encoding": "cl100k_base",
+      "name": "digits",
+      "prefix": "",
+      "unit": "1234567890",
+      "repeat": 1000,
+      "suffix": "",
+      "tokens": 3334,
+      "bytes": 10000
+    },
+    {
+      "encoding": "cl100k_base",
+      "name": "marks_punctuation",
+      "prefix": "",
+      "unit": "\u0301!a",
+      "repeat": 8192,
+      "suffix": "",
+      "tokens": 24576,
+      "bytes": 32768
+    },
+    {
+      "encoding": "cl100k_base",
+      "name": "url_query",
+      "prefix": "",
+      "unit": "https://example.test/a1/b2?x=12&y=z#fragment;",
+      "repeat": 1500,
+      "suffix": "",
+      "tokens": 27000,
+      "bytes": 67500
+    },
+    {
+      "encoding": "cl100k_base",
+      "name": "adjacent_tools",
+      "prefix": "",
+      "unit": "{\"tool\":\"exec\",\"input\":{\"cmd\":\"go test ./...\"},\"output\":\"ok\\n\"}",
+      "repeat": 1200,
+      "suffix": "",
+      "tokens": 22800,
+      "bytes": 75600
+    },
+    {
+      "encoding": "cl100k_base",
+      "name": "case_contractions",
+      "prefix": "",
+      "unit": "aB2can't<|endoftext|>\u4f60\u597d!",
+      "repeat": 1000,
+      "suffix": "",
+      "tokens": 15000,
+      "bytes": 28000
+    },
+    {
+      "encoding": "cl100k_base",
+      "name": "whitespace_lookahead",
+      "prefix": "",
+      "unit": " \t\r\n foo\tbar   \n/\n",
+      "repeat": 1000,
+      "suffix": "",
+      "tokens": 6000,
+      "bytes": 18000
+    }
+  ]
+}

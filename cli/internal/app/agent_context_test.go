@@ -144,7 +144,8 @@ func TestAgentContextRequiredConditionsNeverSilentlyTruncate(t *testing.T) {
 	s, in, _, _, _ := agentServiceFixture(t)
 	in.PersonalScope = domain.PersonalWorkScope{ActorID: "alice", SessionID: "s", WorktreeID: "w"}
 	s.work = agentWorkFixture{state: domain.PersonalWorkState{Scope: in.PersonalScope, Goal: strings.Repeat("essential ", 1000), Sources: []domain.AgentSourcePointer{{SnapshotID: in.SnapshotID}}}}
-	if _, err := s.PrepareAgentContext(context.Background(), in); !errors.Is(err, domain.ErrContextBudgetExceeded) {
+	var measurement *AgentTokenMeasurementError
+	if _, err := s.PrepareAgentContext(context.Background(), in); !errors.As(err, &measurement) || errors.Is(err, domain.ErrContextBudgetExceeded) {
 		t.Fatal(err)
 	}
 }
