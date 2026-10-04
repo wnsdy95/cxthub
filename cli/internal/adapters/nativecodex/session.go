@@ -56,8 +56,8 @@ type InjectionReceipt struct {
 }
 
 // Session owns its process and fresh thread. There is deliberately no resume,
-// attach-to-existing, turn/start or arbitrary RPC entry point. A handoff can
-// observe one interactive client resuming this owned thread, without generation.
+// attach-to-existing, turn/start or arbitrary RPC entry point. Generation is
+// available only through a separately prepared handoff on this owned thread.
 type Session struct {
 	socketPath  string
 	settingsRaw json.RawMessage
@@ -71,6 +71,7 @@ type Session struct {
 	thread      Thread
 	started     bool
 	injected    bool
+	ephemeral   bool
 	uncertain   bool
 	closed      chan struct{}
 	closeOnce   sync.Once
@@ -159,6 +160,7 @@ func (s *Session) StartThread(ctx context.Context, opts ThreadOptions) (Thread, 
 	s.settingsRaw = append(json.RawMessage(nil), raw...)
 	s.thread = thread
 	s.started = true
+	s.ephemeral = opts.Ephemeral
 	return s.thread, nil
 }
 

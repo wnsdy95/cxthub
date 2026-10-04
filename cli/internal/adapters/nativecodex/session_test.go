@@ -64,6 +64,7 @@ func nativeHelper() {
 		}
 		defer conn.CloseNow()
 		conn.SetReadLimit(maxMessageBytes)
+		turnNumber := 0
 		for {
 			_, raw, err := conn.Read(context.Background())
 			if err != nil {
@@ -85,6 +86,7 @@ func nativeHelper() {
 				continue
 			}
 			var result any = map[string]any{}
+			var after []any
 			switch req.Method {
 			case "initialize":
 				result = map[string]any{"userAgent": "codex-fixture/0.157.1"}
@@ -137,6 +139,16 @@ func nativeHelper() {
 				result = map[string]any{"config": map[string]any{"web_search": "disabled"}}
 			case "thread/loaded/list":
 				result = map[string]any{"data": []string{"fresh-fixture-thread"}}
+			case "thread/section/move":
+				if mode == "materialize-invalid" {
+					result = map[string]any{"unexpected": true}
+				}
+			case "thread/read":
+				turns := []any{}
+				if mode == "materialize-not-fresh" {
+					turns = append(turns, map[string]any{"id": "old"})
+				}
+				result = map[string]any{"thread": map[string]any{"id": "fresh-fixture-thread", "cwd": cwd, "turns": turns}}
 			case "thread/inject_items":
 				hash := sha256.Sum256(req.Params["items"])
 				_ = os.WriteFile(os.Getenv("CXT_NATIVE_HELPER_TRACE")+".hash", []byte("sha256:"+hex.EncodeToString(hash[:])), 0600)
@@ -150,12 +162,33 @@ func nativeHelper() {
 				if mode == "bad-ack" {
 					result = map[string]any{"unexpected": true}
 				}
+			case "turn/start":
+				if mode != "generation" {
+					os.Exit(4)
+				}
+				turnNumber++
+				id := fmt.Sprintf("turn-%d", turnNumber)
+				turn := map[string]any{"id": id, "status": "inProgress", "items": []any{}, "error": nil}
+				result = map[string]any{"turn": turn}
+				notice := func(method string, params any) any { return map[string]any{"method": method, "params": params} }
+				after = append(after, notice("turn/started", map[string]any{"threadId": "fresh-fixture-thread", "turn": turn}))
+				item := map[string]any{"type": "agentMessage", "id": "answer", "text": "fixture answer"}
+				after = append(after, notice("item/completed", map[string]any{"threadId": "fresh-fixture-thread", "turnId": id, "item": item}))
+				usage := map[string]any{"inputTokens": 120, "cachedInputTokens": 30, "outputTokens": 2, "reasoningOutputTokens": 0, "totalTokens": 122}
+				after = append(after, notice("thread/tokenUsage/updated", map[string]any{"threadId": "fresh-fixture-thread", "turnId": id, "tokenUsage": map[string]any{"last": usage, "total": usage, "modelContextWindow": 1000}}))
+				after = append(after, notice("turn/completed", map[string]any{"threadId": "fresh-fixture-thread", "turn": map[string]any{"id": id, "status": "completed", "items": []any{item}, "error": nil}}))
 			default:
 				os.Exit(4)
 			}
 			response, _ := json.Marshal(map[string]any{"id": req.ID, "result": result})
 			if conn.Write(context.Background(), websocket.MessageText, response) != nil {
 				return
+			}
+			for _, notification := range after {
+				raw, _ := json.Marshal(notification)
+				if conn.Write(context.Background(), websocket.MessageText, raw) != nil {
+					return
+				}
 			}
 		}
 	})}

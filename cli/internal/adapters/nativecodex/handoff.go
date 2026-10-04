@@ -3,6 +3,7 @@ package nativecodex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,24 +27,27 @@ type HandoffReceipt struct {
 	ProviderAcceptance string `json:"provider_acceptance"`
 }
 
-// Handoff is a one-client readiness transport, not a general RPC proxy. It
-// permits initialization, inspection, and exactly one resume of the injected
-// thread. Model turns and all other mutations remain unavailable, even after
-// readiness. A future generation gate must independently revalidate capacity,
-// the initial question, and the latest authorized main source.
+// Handoff is a one-client transport, not a general RPC proxy. OpenHandoff only
+// permits inspection and one resume. OpenGenerationHandoff additionally gates
+// the exact first question on application preparation and source revalidation.
 type Handoff struct {
-	url     string
-	ctx     context.Context
-	cancel  context.CancelFunc
-	server  *http.Server
-	ready   chan struct{}
-	done    chan struct{}
-	claimed atomic.Bool
-	mu      sync.Mutex
-	peers   map[*websocket.Conn]struct{}
-	receipt HandoffReceipt
-	err     error
-	startup *time.Timer
+	url              string
+	ctx              context.Context
+	cancel           context.CancelFunc
+	server           *http.Server
+	ready            chan struct{}
+	done             chan struct{}
+	claimed          atomic.Bool
+	prepare          func(context.Context, Thread, string) (PreparedGeneration, error)
+	prepared         *PreparedGeneration
+	generationReady  chan struct{}
+	generationResult GenerationObservation
+	generationErr    error
+	mu               sync.Mutex
+	peers            map[*websocket.Conn]struct{}
+	receipt          HandoffReceipt
+	err              error
+	startup          *time.Timer
 }
 
 func (*Handoff) String() string     { return "native Codex handoff (private transport)" }
@@ -56,6 +60,33 @@ func (h *Handoff) URL() string { return h.url }
 // web_search setting. Do not guess the effective default or forward arbitrary
 // TUI configuration writes into an already prepared runtime.
 func (s *Session) OpenHandoff(ctx context.Context) (*Handoff, error) {
+	return s.openHandoff(ctx, nil)
+}
+
+// PreparedGeneration is invocation-private. The application owns exact text
+// accounting, active model/window evidence, latest-main authorization and final
+// source/config checks. Neither a callback nor an injection ACK proves model
+// acceptance. History and callback errors must never enter routine receipts.
+type PreparedGeneration struct {
+	History  []HistoryMessage                                   `json:"-"`
+	Validate func(context.Context) error                        `json:"-"`
+	Observe  func(context.Context, GenerationObservation) error `json:"-"`
+}
+
+func (PreparedGeneration) String() string     { return "prepared native generation (private input)" }
+func (p PreparedGeneration) GoString() string { return p.String() }
+
+// OpenGenerationHandoff defers preparation until the real initial question is
+// known. A single injected history is released to one fresh owned thread. The
+// inspection-only OpenHandoff keeps its original no-generation contract.
+func (s *Session) OpenGenerationHandoff(ctx context.Context, prepare func(context.Context, Thread, string) (PreparedGeneration, error)) (*Handoff, error) {
+	if prepare == nil {
+		return nil, ErrState
+	}
+	return s.openHandoff(ctx, prepare)
+}
+
+func (s *Session) openHandoff(ctx context.Context, prepare func(context.Context, Thread, string) (PreparedGeneration, error)) (*Handoff, error) {
 	if err := s.enter(ctx); err != nil {
 		return nil, err
 	}
@@ -63,7 +94,7 @@ func (s *Session) OpenHandoff(ctx context.Context) (*Handoff, error) {
 	if err := s.active(); err != nil {
 		return nil, err
 	}
-	if !s.injected || s.handed || s.socketPath == "" {
+	if !s.started || s.handed || s.socketPath == "" || (prepare == nil && !s.injected) || (prepare != nil && (s.injected || s.ephemeral)) {
 		return nil, ErrState
 	}
 	readCtx, cancel := context.WithTimeout(ctx, startupTimeout)
@@ -79,6 +110,11 @@ func (s *Session) OpenHandoff(ctx context.Context) (*Handoff, error) {
 		(search != "cached" && search != "live" && search != "disabled" && search != "indexed") {
 		return nil, fmt.Errorf("%w: handoff requires an explicit native web search setting", ErrState)
 	}
+	if prepare != nil {
+		if err := s.materializeFreshThread(ctx); err != nil {
+			return nil, err
+		}
+	}
 	path := filepath.Join(s.process.dir, "tui.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
@@ -90,6 +126,8 @@ func (s *Session) OpenHandoff(ctx context.Context) (*Handoff, error) {
 	}
 	hctx, hcancel := context.WithCancel(ctx)
 	h := &Handoff{url: "unix://" + path, ctx: hctx, cancel: hcancel, ready: make(chan struct{}), done: make(chan struct{}), peers: make(map[*websocket.Conn]struct{})}
+	h.prepare = prepare
+	h.generationReady = make(chan struct{})
 	h.startup = time.AfterFunc(startupTimeout, h.expireStartup)
 	h.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 8192}
 	h.server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,9 +158,13 @@ func (s *Session) OpenHandoff(ctx context.Context) (*Handoff, error) {
 		h.mu.Unlock()
 		defer func() { _ = remote.CloseNow(); h.mu.Lock(); delete(h.peers, remote); h.mu.Unlock() }()
 		state := newHandoffProtocol(s.thread, s.settingsRaw, search)
+		if prepare != nil {
+			state.generation = newGenerationProtocol(s.thread)
+		}
 		results := make(chan error, 2)
-		go func() { results <- h.relay(client, remote, state, true, s.injection) }()
-		go func() { results <- h.relay(remote, client, state, false, s.injection) }()
+		injection := s.injection
+		go func() { results <- h.relay(client, remote, state, true, injection, s) }()
+		go func() { results <- h.relay(remote, client, state, false, injection, s) }()
 		h.finish(<-results)
 		_ = client.CloseNow()
 		_ = remote.CloseNow()
@@ -151,9 +193,15 @@ func (s *Session) OpenHandoff(ctx context.Context) (*Handoff, error) {
 	return h, nil
 }
 
-func (h *Handoff) relay(from, to *websocket.Conn, state *handoffProtocol, client bool, injection InjectionReceipt) error {
+func (h *Handoff) relay(from, to *websocket.Conn, state *handoffProtocol, client bool, injection InjectionReceipt, session *Session) error {
+	read := func() (websocket.MessageType, []byte, error) { return from.Read(h.ctx) }
+	if client && h.prepare != nil {
+		var stop func()
+		read, stop = h.readGenerationClient(from)
+		defer stop()
+	}
 	for {
-		kind, data, err := from.Read(h.ctx)
+		kind, data, err := read()
 		if err != nil {
 			return ErrClosed
 		}
@@ -162,14 +210,34 @@ func (h *Handoff) relay(from, to *websocket.Conn, state *handoffProtocol, client
 		}
 		resumed, err := state.observe(data, client)
 		if err != nil {
+			var denied *deniedAuxiliaryRequest
+			if client && errors.As(err, &denied) {
+				response, _ := json.Marshal(map[string]any{"id": denied.id, "error": map[string]any{
+					"code": -32601, "message": "Auxiliary title generation is unavailable on this managed connection.",
+				}})
+				if err := from.Write(h.ctx, websocket.MessageText, response); err != nil {
+					return ErrClosed
+				}
+				continue
+			}
 			return err
+		}
+		if client {
+			if err = h.prepareGeneration(state, session); err != nil {
+				return err
+			}
 		}
 		if err = to.Write(h.ctx, kind, data); err != nil {
 			return ErrClosed
 		}
 		if resumed {
-			h.completeResume(HandoffReceipt{ThreadID: injection.ThreadID, PayloadHash: injection.PayloadHash,
+			h.completeResume(HandoffReceipt{ThreadID: state.thread.ID, PayloadHash: injection.PayloadHash,
 				SettingsHash: state.thread.SettingsHash, ResumeAcknowledged: true, ProviderAcceptance: "unverified"})
+		}
+		if !client {
+			if err = h.recordGeneration(state); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -193,6 +261,11 @@ func (h *Handoff) completeResume(receipt HandoffReceipt) {
 	defer h.mu.Unlock()
 	if h.err != nil || h.ctx.Err() != nil || h.receipt.ResumeAcknowledged {
 		return
+	}
+	// The client can submit its first question immediately after receiving the
+	// resume response. Preparation may already have stored its injection hash.
+	if receipt.PayloadHash == "" {
+		receipt.PayloadHash = h.receipt.PayloadHash
 	}
 	h.receipt = receipt
 	h.startup.Stop()

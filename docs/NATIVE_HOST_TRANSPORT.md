@@ -4,7 +4,9 @@ The `nativecodex` adapter is a preparatory local protocol boundary. It is not
 wired into `cxt --pull codex`; public native history launch still reports
 `provider_capability_unknown`. Transport success does not establish capacity,
 exact token accounting or model acceptance. Interactive readiness has its own
-correlated acknowledgement below; it does not enable generation.
+correlated acknowledgement below. A separate first-turn gate now connects an
+application-prepared package to native generation; it is not a capacity proof
+and remains unwired to the public launch route.
 
 ## Owned Codex app-server
 
@@ -92,6 +94,50 @@ a default, since native features and managed requirements can change it. Resume
 may only repeat that search setting, not introduce other configuration or
 instruction overrides.
 
+## Prepared first-turn generation
+
+`OpenGenerationHandoff` is separate from inspection-only `OpenHandoff`. It opens
+one fresh durable thread, materializes its metadata with native
+`thread/section/move` to its existing null section, then verifies its ID, cwd and
+empty turns through `thread/read`. This permits TUI resume without inserting a
+placeholder conversation or consuming the one-shot history injection. Failed or
+ambiguous persistence cannot be retried on the same session.
+
+The flow is:
+
+```text
+fresh durable thread → metadata persistence → TUI resume
+  → exact first question → application preparation and validation
+  → inject prepared history once → revalidate → forward original turn/start
+  → correlated output/usage/completion → scoped input-reserve feedback
+```
+
+The private composition bridge binds the real question (including a question
+first entered interactively) to the package's in-memory token reservation. It
+requires a verified preparation budget, exact model/host binding, the approved
+measured-reserve policy and `latest_server_main` source selection. Preparation
+and validation remain application responsibilities; passing a callback or
+receiving a native ACK does not supply verified model-window evidence.
+
+Known turn parameters may only repeat the acknowledged runtime settings. Mixed
+text/image inputs, additional instructions, alternate models, changed permissions
+or unrelated threads fail closed. Approval and user-input requests must belong
+to the active thread/turn/item; only the client's correlated answer is relayed.
+Interrupts target that turn. No automatic approval or model retry is performed.
+Native ephemeral title-generation requests receive a local unsupported error;
+they neither create another thread nor disconnect the original conversation.
+
+Only the first correlated usage sample after model output, before any tool or
+compaction boundary, is eligible for feedback. Native usage has no model-request
+ID; tool-bearing turns can therefore remain unknown. Errors, missing telemetry,
+reroutes and ambiguous completions cannot manufacture an accepted sample or
+prove that execution never started. `modelContextWindow` telemetry is not a
+capacity attestation. Neither conversation text nor error bodies enter feedback.
+Feedback uses the immutable submitted package; a newer server main or legitimate
+tool changes after release do not invalidate that measurement. A calibration
+store failure is returned separately by `WaitGeneration` and does not terminate
+the conversation or trigger another model request.
+
 ## Verification
 
 Ordinary tests exercise malformed/oversized frames, interleaved and excessive
@@ -144,7 +190,8 @@ passthrough behavior is unchanged.
 
 The private TUI mapper preserves accepted root config/feature overrides and
 terminal choices, uses the acknowledged canonical cwd, and withholds the first
-question. `--no-daemon` is consumed because this is an invocation-owned private
+question in inspection mode. The generation composition receives the actual
+question from the first correlated `turn/start`. `--no-daemon` is consumed because this is an invocation-owned private
 server, not the ordinary daemon. Explicit sandbox, approval and bypass flags
 are applied at `thread/start`, then inherited and checked at resume: native
 remote resume rejects those flags on its command line. Replaying them literally
@@ -155,11 +202,11 @@ This seam remains deliberately unwired to public history launch. The wrapper
 still must verify configuration/source freshness at generation release and
 account for the retained initial task, including native newline normalization.
 Verified model/window and tokenizer evidence must feed the adaptive budget
-before real history delivery. Hidden host/framing input may now use the approved
+before public native history delivery. Hidden host/framing input may use the approved
 measured-reserve policy in [context input](CONTEXT_INPUT.md), with explicit
 unknown labels and scoped feedback; a complete pre-send hidden-input count is
-no longer a prerequisite. That change does not establish window provenance or
-wire the generation relay. Codex initial prompt CRLF/CR normalization is now
+no longer a prerequisite. The first-turn relay and private application bridge are implemented, but
+verified model-window provenance and public runtime wiring remain outstanding. Codex initial prompt CRLF/CR normalization is now
 applied before token reservation. A prepared
 package, injection ACK, interactive connection and actual model acceptance need
 separate receipts. Claude requires its own protocol adapter and evidence.
@@ -168,3 +215,10 @@ Sources: [Codex app-server](https://learn.chatgpt.com/docs/app-server),
 [history injection](https://learn.chatgpt.com/docs/app-server#inject-items-into-a-thread),
 [versioned native profile and launch semantics](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/cli/src/main.rs),
 [WebSocket transport library](https://pkg.go.dev/github.com/coder/websocket).
+
+The additional real-binary fixture `TestNativeCodexGenerationOffline` uses the
+same isolated home and a credential-free loopback provider returning a canned
+response. It verifies that the exact large history and question reach one
+same-thread request after both validations, and that its correlated usage is
+observed. It proves transport ordering and bytes only: no real model is called,
+no actual capacity or 800k acceptance is claimed, and no account token is read.
