@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -106,7 +107,7 @@ func TestAppendMergedPRContextsPromotesInResolverOrder(t *testing.T) {
 			"feature/new":     {Target: newTarget},
 		},
 		appendErrs: map[domain.ContentHash]error{
-			alreadyTarget: errors.New("non_fast_forward: already reachable"),
+			alreadyTarget: &backendclient.HTTPError{Status: 409, Code: "non_fast_forward"},
 		},
 	}
 

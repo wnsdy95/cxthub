@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
@@ -1710,7 +1711,7 @@ func processMergedPRContexts(
 			continue
 		}
 		if aerr := syncer.AppendBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch, ref.Target); aerr != nil {
-			if strings.Contains(aerr.Error(), "non_fast_forward") {
+			if appendAlreadyIncluded(aerr) {
 				reflected = true
 				continue // hosted webhook or another client already promoted it
 			}
@@ -1755,10 +1756,6 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 		}
 		links = append(links, linked{sha: resolveRewritten(rewrites, m[1]), snap: snap})
 	}
-	byID := map[domain.ContentHash]domain.Snapshot{}
-	for _, s := range list.Snapshots {
-		byID[s.ID] = s
-	}
 	// Collect candidates in insertion commit order (oldest first) — ensure final tip is the latest merge.
 	seen := map[domain.ContentHash]bool{}
 	var cands []domain.Snapshot
@@ -1777,6 +1774,25 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	if len(cands) == 0 {
 		return false
 	}
+	observer, ok := c.Sync.(inbound.RemoteBranchObserver)
+	if !ok {
+		hookWarn("merge context promotion deferred: remote observation unavailable")
+		return false
+	}
+	observed, err := observer.ResolveRemoteBranchObservation(ctx, inbound.SyncInput{Cwd: cwd}, branch)
+	if err != nil {
+		hookWarn("merge context observation failed (%s): %v", branch, err)
+		return false
+	}
+	if observed.Ref.Target == "" {
+		return false
+	}
+	// Local labels select candidates; only observed edges prove remote coverage.
+	// This also governs candidate pruning: AppendBranch does not publish local grafts.
+	byID := make(map[domain.ContentHash]domain.Snapshot, len(observed.Snapshots))
+	for _, snap := range observed.Snapshots {
+		byID[snap.ID] = snap
+	}
 	// Remove candidates already reachable from the server branch + ancestors of other candidates (minimize requests).
 	reach := map[domain.ContentHash]bool{}
 	walk := func(from domain.ContentHash) {
@@ -1793,9 +1809,7 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 			}
 		}
 	}
-	if ref, rerr := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch); rerr == nil && ref.Target != "" {
-		walk(ref.Target)
-	}
+	walk(observed.Ref.Target)
 	remoteReach := make(map[domain.ContentHash]bool, len(reach))
 	for id := range reach {
 		remoteReach[id] = true
@@ -1815,7 +1829,7 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	appended := 0
 	for _, sn := range kept { // from oldest — tip = latest merge
 		if aerr := c.Sync.AppendBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch, sn.ID); aerr != nil {
-			if strings.Contains(aerr.Error(), "non_fast_forward") {
+			if appendAlreadyIncluded(aerr) {
 				reflected = true
 				continue // skip if another team member has already promoted (idempotent no-op)
 			}
@@ -1829,6 +1843,13 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 		fmt.Printf("cxt: promoted %d merge contexts to %q timeline (appended)\n", appended, branch)
 	}
 	return reflected
+}
+
+// A branch path or server message can contain the code's text. Only the
+// structured rejection proves that this target is already behind the head.
+func appendAlreadyIncluded(err error) bool {
+	var remote *backendclient.HTTPError
+	return errors.As(err, &remote) && remote.Status == 409 && remote.Code == "non_fast_forward"
 }
 
 // --- History Rewrite Mapping (.cxt/rewrites.json) ---

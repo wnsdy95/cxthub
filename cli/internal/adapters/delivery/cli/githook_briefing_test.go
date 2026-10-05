@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -250,7 +251,7 @@ func (s *promotionBriefingState) AppendBranch(
 		return fmt.Errorf("unexpected append %s -> %s", branch, target)
 	}
 	if s.remote == target {
-		return fmt.Errorf("non_fast_forward: target already reflected")
+		return &backendclient.HTTPError{Status: 409, Code: "non_fast_forward"}
 	}
 	s.appends++
 	s.remote = target
@@ -368,19 +369,32 @@ func TestHandleIncomingContextsRetriesBriefingAfterPostPromotionFailure(t *testi
 	}
 }
 
+type observedBriefingSync struct {
+	fixedBriefingSync
+	snapshots []domain.Snapshot
+}
+
+func (s observedBriefingSync) ResolveRemoteBranchObservation(context.Context, inbound.SyncInput, string) (inbound.RemoteBranchObservation, error) {
+	return inbound.RemoteBranchObservation{Ref: s.remote, Snapshots: s.snapshots}, nil
+}
+
 func TestAppendMergedContextsDoesNotTreatCoveredFailedCandidateAsReflected(t *testing.T) {
 	base := briefingHash("generic-promotion-base")
 	older := briefingHash("generic-promotion-older")
 	newer := briefingHash("generic-promotion-newer")
+	snapshots := []domain.Snapshot{
+		{ID: newer, Parents: []domain.ContentHash{older}, Message: "newer [git bbbb]"},
+		{ID: older, Parents: []domain.ContentHash{base}, Message: "older [git aaaa]"},
+		{ID: base, Message: "base"},
+	}
 	c := &Container{
-		List: fixedBriefingList{out: inbound.ListOutput{Snapshots: []domain.Snapshot{
-			{ID: newer, Parents: []domain.ContentHash{older}, Message: "newer [git bbbb]"},
-			{ID: older, Parents: []domain.ContentHash{base}, Message: "older [git aaaa]"},
-			{ID: base, Message: "base"},
-		}}},
-		Sync: fixedBriefingSync{
-			remote:    domain.Ref{Kind: domain.RefBranch, Name: "main", Target: base},
-			appendErr: fmt.Errorf("remote unavailable"),
+		List: fixedBriefingList{out: inbound.ListOutput{Snapshots: snapshots}},
+		Sync: observedBriefingSync{
+			fixedBriefingSync: fixedBriefingSync{
+				remote:    domain.Ref{Kind: domain.RefBranch, Name: "main", Target: base},
+				appendErr: fmt.Errorf("remote unavailable"),
+			},
+			snapshots: snapshots,
 		},
 	}
 
