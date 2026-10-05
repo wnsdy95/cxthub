@@ -12,3 +12,5 @@ require (
 )
 
 require github.com/dlclark/regexp2/v2 v2.5.1
+
+require golang.org/x/sys v0.46.0
