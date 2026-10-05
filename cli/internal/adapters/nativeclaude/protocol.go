@@ -153,6 +153,11 @@ func (s *Session) frame(raw []byte) error {
 	if s.err != nil {
 		return s.err
 	}
+	if s.firstQuestion != nil {
+		if handled, err := s.firstQuestionFrame(m, kind); handled {
+			return err
+		}
+	}
 	switch kind {
 	case "control_response":
 		if s.pending == nil || s.pending.kind == "append" || s.pending.delivered {
@@ -319,6 +324,12 @@ func (s *Session) frame(raw []byte) error {
 		}
 		if err := zeroTurnResult(m); err != nil {
 			return err
+		}
+		if s.version == "2.1.287" {
+			index, err := count(m, "result_index", 0)
+			if err != nil || index != 0 {
+				return ErrProtocol
+			}
 		}
 		s.appendResult = true
 		return nil

@@ -46,8 +46,9 @@ func (s *Session) verifyArchive(ctx context.Context, path string) (archiveVerifi
 	s.mu.Lock()
 	receipt := s.receipt
 	err := s.closeErr
+	queried := s.firstQuestion != nil
 	s.mu.Unlock()
-	if err != nil || !receipt.NoTurnAcknowledged {
+	if err != nil || queried || !receipt.NoTurnAcknowledged {
 		return archiveVerification{}, ErrState
 	}
 	rel := filepath.Join(providerfs.EncodeCwd(s.cwd), s.id+".jsonl")

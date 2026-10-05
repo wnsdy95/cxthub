@@ -212,6 +212,13 @@ func (p *process) close() error {
 }
 
 func readVersion(ctx context.Context, exe, cwd string, env []string) (string, error) {
+	return readVersionFor(ctx, exe, cwd, env, "2.1.285")
+}
+
+func readVersionFor(ctx context.Context, exe, cwd string, env []string, expected string) (string, error) {
+	if expected != "2.1.285" && expected != "2.1.287" {
+		return "", ErrState
+	}
 	var mu sync.Mutex
 	var version string
 	var protocolErr error
@@ -221,12 +228,10 @@ func readVersion(ctx context.Context, exe, cwd string, env []string) (string, er
 		if version != "" || !bytes.Equal(bytes.TrimSpace(raw), raw) {
 			return ErrProtocol
 		}
-		switch string(raw) {
-		case "2.1.285 (Claude Code)":
-			version = "2.1.285"
-		default:
+		if string(raw) != expected+" (Claude Code)" {
 			return ErrProtocol
 		}
+		version = expected
 		return nil
 	}, func(err error) { mu.Lock(); protocolErr = err; mu.Unlock() })
 	if err != nil {
