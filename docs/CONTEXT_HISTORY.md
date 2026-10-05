@@ -1252,6 +1252,15 @@ key ordering or number spelling inside the canonical envelope. Queue capacity is
 claims serialize a repository across replicas. Temporary failures retry with
 bounded backoff; invalid documents remain rejected and never publish refs.
 
+Canonical event proofs are a bounded, process-local optimization keyed by exact
+event bytes and CIR version. Newly checked proofs are admitted only after the
+whole document passes validation. This avoids evicting still-needed prefix proofs
+while scanning a transcript larger than the cache. Both retained proofs and each
+verification's pending admissions are limited to 65,536 entries; no transcript
+bodies are cached. Concurrent verification may evict another call's proofs and
+increase work, but never changes acceptance. Hash, framing and sequence checks
+still run for every document, and cold events are fully validated.
+
 FS is a single-process development adapter: an interrupted cross-file write is
 replayed idempotently, not advertised as database ACID. Repack retains chunks
 referenced by pending jobs. A completed body removed by ordinary collection is
