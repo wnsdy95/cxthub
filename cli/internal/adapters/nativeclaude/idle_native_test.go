@@ -271,14 +271,15 @@ func (c *idleTerminalCapture) append(raw []byte) bool {
 	return true
 }
 
-// Track only full display erasure (CSI 2 J) and terminal reset (ESC c).
+// Conservatively invalidate readiness on display erasure (CSI J / 0 J / 1 J /
+// 2 J) and terminal reset (ESC c), even when only part of the display is erased.
 // Parser state survives read boundaries; offsets and parameters use constant
 // space. This delimits screen segments, not arbitrary cursor edits or a full
 // terminal emulator. Escape strings cannot manufacture a display reset.
 type idleScreenSegment struct {
 	start, generation int
 	state             byte
-	parameter         byte // Saturates at 3; only the value 2 is relevant.
+	parameter         byte // Saturates at 3; values 0 through 2 erase the display.
 	validParameter    bool
 }
 
@@ -321,7 +322,7 @@ func (s *idleScreenSegment) append(raw []byte, offset int) {
 			case b >= '0' && b <= '9':
 				s.parameter = min(3, s.parameter*10+b-'0')
 			case b >= 0x40 && b <= 0x7e:
-				if b == 'J' && s.validParameter && s.parameter == 2 {
+				if b == 'J' && s.validParameter && s.parameter <= 2 {
 					reset(offset + i + 1)
 				}
 				s.state = idleScreenText
@@ -471,13 +472,18 @@ func (r *idleComposerTimer) observe(evidence idleScreenEvidence, now time.Time) 
 func TestIdleTerminalClearDiscardsReadinessButRetainsDanger(t *testing.T) {
 	const marker, session = "SYNTHETIC_REFERENCE", "owned-session"
 	const readyScreen = "❯ \n? for shortcuts\n" + marker + "\n" + session
-	for _, clear := range []string{"\x1b[2J\x1b[H", "\x1b[02J", "\x1bc"} {
+	for _, clear := range []string{"\x1b[J", "\x1b[0J", "\x1b[00J", "\x1b[H\x1b[J", "\x1b[H\x1b[0J", "\x1b[1J", "\x1b[2J\x1b[H", "\x1b[02J", "\x1bc"} {
 		for split := 0; split <= len(clear); split++ {
 			capture := &idleTerminalCapture{}
 			capture.append([]byte("Thinking... Compacting context\n" + readyScreen))
 			before, err := capture.inspect(marker, session)
 			if err != nil || !idleComposerReady(before) {
 				t.Fatal("initial screen did not contain readiness markers")
+			}
+			var timer idleComposerTimer
+			start := time.Unix(1, 0)
+			if timer.observe(before, start) || !timer.observe(before, start.Add(time.Second)) {
+				t.Fatal("initial screen did not establish its own readiness interval")
 			}
 			capture.append([]byte(clear[:split]))
 			capture.append([]byte(clear[split:] + "Loading"))
@@ -487,6 +493,18 @@ func TestIdleTerminalClearDiscardsReadinessButRetainsDanger(t *testing.T) {
 			}
 			if !after.modelStart || !after.compaction {
 				t.Fatal("screen clear discarded historical danger evidence")
+			}
+			if timer.observe(after, start.Add(2*time.Second)) {
+				t.Fatal("erased screen retained readiness interval", split)
+			}
+			capture.append([]byte(readyScreen))
+			fresh, err := capture.inspect(marker, session)
+			if err != nil || !idleComposerReady(fresh) {
+				t.Fatal("fresh screen did not restore readiness markers")
+			}
+			replaced := start.Add(3 * time.Second)
+			if timer.observe(fresh, replaced) || timer.observe(fresh, replaced.Add(999*time.Millisecond)) || !timer.observe(fresh, replaced.Add(time.Second)) {
+				t.Fatal("fresh screen inherited readiness interval", split)
 			}
 		}
 	}
