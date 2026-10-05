@@ -546,15 +546,7 @@ func cleanupProviderLaunch(p PreparedProviderLaunch) error {
 
 func prepareProviderLaunch(ctx context.Context, request ProviderLaunchRequest, hooks ProviderLaunchHooks) (PreparedProviderLaunch, ProviderLaunchReceipt, error) {
 	if hooks.PrepareDeferred != nil && nativeDeferredProvider(request.Intent.Provider) && request.Intent.Pull {
-		prepared, receipt, err := prepareDeferredProviderLaunch(ctx, request, hooks)
-		if err != nil {
-			// Deferred cleanup is once-only and retains its result. Recover any
-			// failed retirement from preparation before the supervisor can retry.
-			if cleanupErr := cleanupProviderLaunch(prepared); cleanupErr != nil {
-				err = redactDeferredProviderError(errors.Join(err, cleanupErr))
-			}
-		}
-		return prepared, receipt, err
+		return prepareDeferredProviderLaunch(ctx, request, hooks)
 	}
 	receipt := ProviderLaunchReceipt{Version: 1, Provider: request.Intent.Provider, Mode: "memory", RequestedBudget: domain.DefaultMemoryContextTokens, State: "preparing", Acceptance: "unknown"}
 	if request.Intent.Pull {

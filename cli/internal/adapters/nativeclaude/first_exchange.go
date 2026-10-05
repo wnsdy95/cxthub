@@ -191,13 +191,15 @@ func (e *FirstExchange) run(ctx context.Context, question string, admit func(con
 		"message":     map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": question}}}}
 	if handlers == nil {
 		frame["client_composed"] = true
-	} else {
-		q.ordinary = newOrdinaryState(ctx, *handlers)
-		defer q.ordinary.cancel()
 	}
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		return result, ErrState
+	}
+	if handlers != nil {
+		// Close owns cancellation after auditing committed permission writes.
+		// Native can finish before the last writer returns from its syscall.
+		q.ordinary = newOrdinaryState(ctx, *handlers)
 	}
 	s.mu.Lock()
 	s.firstQuestion = q

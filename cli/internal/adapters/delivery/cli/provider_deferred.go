@@ -115,9 +115,7 @@ func prepareDeferredProviderLaunch(ctx context.Context, request ProviderLaunchRe
 	receipt := ProviderLaunchReceipt{Version: 1, Provider: request.Intent.Provider, Mode: "history", State: "runtime_preparing", Acceptance: "unknown"}
 	var prepared PreparedProviderLaunch
 	fail := func(err error) (PreparedProviderLaunch, ProviderLaunchReceipt, error) {
-		if prepared.Cleanup != nil {
-			_ = prepared.Cleanup()
-		}
+		err = errors.Join(err, cleanupProviderLaunch(prepared))
 		return prepared, receipt, launchFailure(ctx, hooks, receipt, true, redactDeferredProviderError(err))
 	}
 	inv, err := inspectLaunchIntent(request.Intent)

@@ -413,12 +413,22 @@ func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closing = true
-		if s.firstQuestion != nil && s.firstQuestion.ordinary != nil {
-			s.firstQuestion.ordinary.cancel()
-		}
 		if s.pending != nil && s.err == nil {
 			s.err = ErrClosed
 			close(s.failed)
+		}
+		completed := s.firstQuestion != nil && s.firstQuestion.ordinary != nil && s.firstQuestion.completed && s.err == nil
+		s.mu.Unlock()
+		if completed {
+			// The native result can overtake a committed permission writer's
+			// post-write audit. Do not cancel that successful write ourselves.
+			// Closing is already set, so no new writer can commit a response.
+			s.writeMu.Lock()
+			s.writeMu.Unlock()
+		}
+		s.mu.Lock()
+		if s.firstQuestion != nil && s.firstQuestion.ordinary != nil {
+			s.firstQuestion.ordinary.cancel()
 		}
 		abort := s.err != nil && s.firstQuestion != nil && s.firstQuestion.ordinary != nil
 		s.mu.Unlock()
@@ -432,8 +442,10 @@ func (s *Session) Close() error {
 		// finalizing closeErr; a late permission-write failure must not arrive
 		// after successful Run/readback has already been reported. UI callbacks
 		// themselves never hold this lock.
-		s.writeMu.Lock()
-		s.writeMu.Unlock()
+		if !completed {
+			s.writeMu.Lock()
+			s.writeMu.Unlock()
+		}
 		s.mu.Lock()
 		s.closeErr = errors.Join(s.err, err)
 		s.mu.Unlock()
