@@ -14,15 +14,9 @@ import (
 )
 
 func TestArchiveRequiresExactNativeProjection(t *testing.T) {
-	s := unitSession(t, "normal")
-	const text = "synthetic archived context"
-	if _, err := s.AppendReference(context.Background(), text); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	path := unitArchive(s)
+	e, rows, _ := completedExchangeArchive(t, "normal")
+	const text = "PRIVATE_SYNTHETIC_REFERENCE"
+	path := unitArchive(e.s)
 	valid, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -37,16 +31,14 @@ func TestArchiveRequiresExactNativeProjection(t *testing.T) {
 		"compacted":     func(row map[string]any) { row["isCompactSummary"] = true },
 	} {
 		t.Run(name, func(t *testing.T) {
-			var row map[string]any
-			if err := json.Unmarshal(valid, &row); err != nil {
+			raw, _ := json.Marshal(rows)
+			var changed []map[string]any
+			if err := json.Unmarshal(raw, &changed); err != nil {
 				t.Fatal(err)
 			}
-			transform(row)
-			raw, _ := json.Marshal(row)
-			if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.VerifyArchive(context.Background(), path); err == nil {
+			transform(changed[0])
+			writeExchangeRows(t, e, changed)
+			if _, err := e.VerifyArchive(context.Background(), path); err == nil {
 				t.Fatal("modified archive attested as exact")
 			}
 		})
@@ -54,20 +46,20 @@ func TestArchiveRequiresExactNativeProjection(t *testing.T) {
 	if err := os.WriteFile(path, append(append([]byte{}, valid...), valid...), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.VerifyArchive(context.Background(), path); err == nil {
+	if _, err := e.VerifyArchive(context.Background(), path); err == nil {
 		t.Fatal("duplicate persisted message accepted")
 	}
 	if err := os.WriteFile(path, valid, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.VerifyArchive(context.Background(), path); err != nil {
+	if _, err := e.VerifyArchive(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(t.TempDir(), "outside.jsonl")
 	if err := os.WriteFile(outside, valid, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.VerifyArchive(context.Background(), outside); err == nil {
+	if _, err := e.VerifyArchive(context.Background(), outside); err == nil {
 		t.Fatal("foreign archive accepted")
 	}
 	if err := os.Remove(path); err != nil {
@@ -76,7 +68,7 @@ func TestArchiveRequiresExactNativeProjection(t *testing.T) {
 	if err := os.Symlink(outside, path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.VerifyArchive(context.Background(), path); err == nil {
+	if _, err := e.VerifyArchive(context.Background(), path); err == nil {
 		t.Fatal("escaping symlink accepted")
 	}
 	if err := os.Remove(path); err != nil {
@@ -86,7 +78,7 @@ func TestArchiveRequiresExactNativeProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Now()
-	if _, err := s.VerifyArchive(context.Background(), path); err == nil {
+	if _, err := e.VerifyArchive(context.Background(), path); err == nil {
 		t.Fatal("FIFO accepted")
 	}
 	if time.Since(started) > time.Second {
@@ -129,5 +121,25 @@ func TestProtocolRejectsAmbiguousOrActiveInput(t *testing.T) {
 	}
 	if err := readFrames(strings.NewReader(`{"type":"system"}`), func([]byte) error { return nil }); err == nil {
 		t.Fatal("truncated frame accepted at EOF")
+	}
+}
+
+func TestReferenceAcknowledgmentRejectsNestedUsage(t *testing.T) {
+	for _, field := range []string{"cache_creation", "output_tokens_details", "server_tool_use"} {
+		t.Run(field, func(t *testing.T) {
+			for _, raw := range []string{`{"count":0}`, `{"count":1}`, `{"count":null}`, `{"count":"0"}`, `null`, `[]`} {
+				row := zeroResultFixture("owned", "reference")
+				row["usage"].(map[string]any)[field] = json.RawMessage(raw)
+				encoded, _ := json.Marshal(row)
+				m, err := object(encoded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = zeroTurnResult(m)
+				if (err == nil) != (raw == `{"count":0}`) {
+					t.Fatalf("nested usage was not a typed zero: %s: %v", raw, err)
+				}
+			}
+		})
 	}
 }

@@ -13,14 +13,14 @@ import (
 func TestFirstExchangeAdmissionEvidenceIsAnOwnedCopy(t *testing.T) {
 	f := newFirstExchangeFixture(t, "normal")
 	s := f.start(t, true)
-	r, err := s.Run(firstExchangeRunContext(t), "question", func(_ context.Context, e FirstQuestionEvidence) error {
+	r, err := s.RunOrdinary(firstExchangeRunContext(t), "question", func(_ context.Context, e FirstQuestionEvidence) error {
 		if e.Summary.AutoCompactThreshold == nil {
 			t.Fatal("fixture threshold missing")
 		}
 		*e.Summary.AutoCompactThreshold = 1
 		e.Reference.PayloadHash = "changed"
 		return nil
-	})
+	}, InteractionHandlers{})
 	if err != nil || !r.Completed || len(f.queries(t)) != 1 {
 		t.Fatal("callback could mutate the transport's comparison evidence", err)
 	}
@@ -37,11 +37,11 @@ func TestFirstExchangeCancellationRetiresProcessWhileAdmissionReturns(t *testing
 	defer unblock()
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.Run(ctx, "question", func(context.Context, FirstQuestionEvidence) error {
+		_, err := s.RunOrdinary(ctx, "question", func(context.Context, FirstQuestionEvidence) error {
 			close(entered)
 			<-release
 			return nil
-		})
+		}, InteractionHandlers{})
 		done <- err
 	}()
 	select {

@@ -47,17 +47,17 @@ func TestSessionSuppliedIDOwnsFreshArchive(t *testing.T) {
 	}
 }
 
-func TestSessionSuppliedIDPreservesNoQueryVersion(t *testing.T) {
+func TestSessionSuppliedIDPreservesPinnedPreQuerySession(t *testing.T) {
 	o := unitOptions(t, "normal")
 	o.SessionID = suppliedTestSessionID
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	s, err := Start(ctx, o)
+	s, err := StartFirstExchange(ctx, o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if s.SessionID() != o.SessionID || s.HostVersion() != "2.1.285" {
+	if s.SessionID() != o.SessionID || s.HostVersion() != "2.1.287" {
 		t.Fatal("no-query contract changed")
 	}
 	if _, err := s.ContextSummary(ctx); err != nil {

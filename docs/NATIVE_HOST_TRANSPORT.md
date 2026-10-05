@@ -425,102 +425,50 @@ the TUI receives and handles its own foreground-group interrupt while the
 wrapper keeps supervising. SIGTERM retires the owned lifecycle in either phase.
 
 See [input accounting and supported interaction limits](CONTEXT_INPUT.md).
-Actual 200k–800k model acceptance and compaction behavior need provider testing;
-local window estimates and canned responses do not establish them.
+The recorded real-provider full-budget test accepted 423,237 input tokens.
+Exact 800k-token acceptance and repeated quality/compaction evaluation remain
+separate; local window estimates and canned responses do not establish them.
 
-## Earlier Claude no-turn reference contract
+## Shared Claude reference phase
 
-The `nativeclaude` adapter starts its own fresh Claude stream-JSON process. It
-initializes the control protocol, reads `get_context_usage` with
-`detail="summary"`, and can append one literal user-content reference with
-`shouldQuery=false`. It never submits the user's first question, grants a
-permission request, imports assistant/tool roles, or exposes arbitrary control
-requests. Original roles and provenance belong inside the quoted reference.
+The production Claude adapter supports the pinned 2.1.287 ordinary first-exchange
+route. The retired 2.1.285 standalone reference runner, literal-only question
+runner and isolated idle-process owner are no longer product entry points.
+Their useful identity, admission, cancellation, archive-drift and launch-option
+regressions run against the ordinary exchange and supervised handoff.
 
-`client_composed=true` prevents slash/path expansion of that reference. Claude
-2.1.285 acknowledges this non-querying message through its ordered command
-lifecycle and a successful zero-turn result. Both the fresh session UUID and
-message UUID must match; token usage, API duration and turn count must be zero.
-The native version does not guarantee a user-message replay for this operation.
-If a replay arrives, its identity and exact text are checked separately. An
-ambiguous append cannot be retried in the same session. The command receipt
-explicitly leaves persistence and provider acceptance unverified. A separate
-read-only `VerifyArchive` can establish exact file
-readback after successful Close; this is not a power-loss/fsync durability
-guarantee. Close drains and validates output through EOF; unexpected model,
-permission or compaction activity, malformed frames and cancellation invalidate
-the session. Native archives are preserved even after failure.
+Before the actual question, the same owned process still appends exactly one
+quoted reference with `shouldQuery=false`, `isSynthetic=true` and
+`client_composed=true`. This phase is required: it prevents reference text from
+becoming a new user request or triggering slash/path expansion. Original roles
+and provenance remain inside the quoted reference.
 
-For `isSynthetic=true`, Claude 2.1.285 prefixes the stored reference with
-`[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]` followed by a newline. This
-48-byte provenance marker is retained. The receipt distinguishes the original
-payload hash/size from the exact native content hash/size. Archive verification
-compares the entire expected native text; it does not strip arbitrary prefixes
-or accept a substring match. Future input budgeting must count this native
-projection as well as the package text.
+The ordered command lifecycle and zero-turn result must match both session and
+message UUIDs; usage, API duration and turn count must be zero. A replay, when
+present, must match the exact native text. The native provenance prefix
+`[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]` and newline remain part of
+budgeting and exact archive verification. Ambiguous appends cannot be retried.
+The append receipt leaves persistence and provider acceptance unverified.
 
-### Private idle-session resumption
+After the ordinary question completes, `FirstExchange.VerifyArchive` checks the
+reference, native-preprocessed question, assistant/tool records, permitted
+metadata and selected parent chain. A one-use `IdleResumePlan` freezes the
+original supported executable, cwd, environment, model and option vector.
+`StartSupervised` rechecks exact owned archive/file identity and hands the native
+TUI to the existing CLI supervisor, which exclusively owns Wait and termination.
+No question is replayed; no archive is rewritten. The reference-only proof and
+second isolated process owner are not retained as fallback paths.
 
-The next transport step is deliberately private to the native adapter. An owned
-session can issue an opaque, one-use resume plan only after the helper has
-retired successfully and its exact saved archive has been verified. The plan
-retains the original supported executable, working directory, environment,
-model and option vector. Its terminal launch contains the owned absolute
-`<session-uuid>.jsonl` path and no initial question or helper stream-JSON flags.
-The launch rechecks the saved archive and execution identity; failed validation
-or cleanup preserves the archive and cannot start a replacement process.
+These checks do not lock mutable configuration/instruction files against later
+edits, make native pathname opening atomic, or attest power-loss durability.
+A local native summary remains an estimate. A matching archive, successful
+process start and actual provider acceptance are separate evidence.
 
-Preserving the option vector does not prove that mutable settings, instruction
-or MCP configuration files are identical when the new process reads them.
-Likewise, validation immediately before native launch is not an atomic lock on
-what another process subsequently opens. These are separate executing-TUI
-binding requirements; private process startup must not be promoted to public
-input authorization, composer readiness or model acceptance.
-
-The idle handoff probe uses only synthetic references and a network-denied PTY.
-It must distinguish an actual composer with the loaded reference from login,
-trust and first-run setup screens. The fixture never submits a question or
-changes credentials/trust to make an unready screen pass. An unavailable
-composer remains an explicit incomplete native verification. Terminal output is
-bounded and kept out of logs. Native storage and process cleanup remain
-independently testable when interactive readiness is unavailable.
-
-The isolated Claude 2.1.285 probe on 2026-10-05 preserved the exact 1 KiB
-reference and retired both processes, but observed only welcome/theme screen
-markers. It did not observe the composer or loaded reference before its bounded
-deadline. This opt-in readiness assertion failed; the dependent 1.5 MiB probe
-was not run. No question was submitted, and no model-start or compaction marker
-was observed. OS network denial prevents successful external requests; it does
-not prove that native attempted none. This describes the earlier no-turn-only
-probe, not the first-exchange route above.
-
-The native context summary is a **local estimate**. Its model window and
-compaction settings are observations of local host policy, not proof of API
-capacity or an exact tokenizer. A successful append does not activate public
-`cxt --pull claude` or establish 800k support. The first-exchange route separately
-preserves the native options and saved session, accounts for the actual first
-question, and verifies the result.
-
-The optional macOS real-binary test uses a fresh private HOME/config/project,
-fixed credential-free environment and an OS sandbox that denies all network
-access. Before launching Claude it verifies that synthetic outside-file reads,
-writes and a loopback connection receive `EPERM`. The profile allows one
-resolved, root-owned ICU timezone data file required by native startup; it does
-not open user preferences or keychain access. The earlier isolated-startup
-timeout was this missing OS data dependency, not a remaining initialization
-defect.
-
-```sh
-CXT_TEST_NATIVE_CLAUDE=/absolute/path/to/claude \
-  go -C cli test ./internal/adapters/nativeclaude \
-  -run TestNativeClaudeOfflineReference -count=1 -v
-```
-
-The fixture appends synthetic 1 KiB and 1.5 MiB references in separate sessions,
-checks the local estimate before/after, then compares the exact native archive
-after orderly shutdown. Neither the payload nor provider account details enter
-test logs. All network access is denied; no actual model acceptance is claimed.
+Historical 2.1.285 offline probes are preserved in the development evidence and
+Git history. Their welcome/theme-only result was not composer readiness and is
+not a supported readiness test for the current path. Ordinary 2.1.287 regression
+tests and supervised handoff tests replace those retired opt-in commands.
 
 Protocol references: [Claude CLI flags](https://code.claude.com/docs/en/cli-reference)
-and the versioned `@anthropic-ai/claude-agent-sdk` types. The adapter's supported
-versions are explicit; a newer installed version needs compatibility verification.
+and the versioned `@anthropic-ai/claude-agent-sdk` types. A newer installed native
+version needs compatibility verification before this adapter accepts it.

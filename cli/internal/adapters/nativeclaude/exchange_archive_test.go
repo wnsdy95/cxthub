@@ -19,9 +19,18 @@ func completedExchangeArchive(t *testing.T, mode string) (*FirstExchange, []map[
 	log := filepath.Join(f.opts.Cwd, "resumed.jsonl")
 	f.opts.Env = append(f.opts.Env, "CXT_CLAUDE_IDLE_LOG="+log, "CXT_CLAUDE_IDLE_MODE=exit")
 	e := f.start(t, true)
-	if _, err := e.Run(firstExchangeRunContext(t), "synthetic question", firstExchangeAllow); err != nil {
+	if _, err := e.RunOrdinary(firstExchangeRunContext(t), "synthetic question", firstExchangeAllow, InteractionHandlers{}); err != nil {
 		t.Fatal(err)
 	}
+	rows := completedExchangeRows(t, e, mode)
+
+	return e, rows, log
+}
+
+// A deterministic archive of the ordinary text-only wire fixture. No native
+// executable is involved; all rows must still match the production reducer.
+func completedExchangeRows(t *testing.T, e *FirstExchange, mode string) []map[string]any {
+	t.Helper()
 	q := e.s.firstQuestion
 	row := func(kind, id, parent string, value any) map[string]any {
 		var p any
@@ -46,11 +55,17 @@ func completedExchangeArchive(t *testing.T, mode string) (*FirstExchange, []map[
 		raw, _ := json.Marshal(row("assistant", id, parent, m["message"]))
 		var archived map[string]any
 		_ = json.Unmarshal(raw, &archived)
+		archived["apiBlockIndex"] = len(rows) - 2
 		rows = append(rows, archived)
 		parent = id
 	})
 	writeExchangeRows(t, e, rows)
-	return e, rows, log
+	// Check the positive fixture without publishing a proof or authorizing a
+	// resume plan. Mutations must fail for their change, not a broken baseline.
+	if _, err := e.s.verifyExchangeArchive(context.Background(), unitArchive(e.s)); err != nil {
+		t.Fatal("ordinary archive fixture is not valid", err)
+	}
+	return rows
 }
 
 func writeExchangeRows(t *testing.T, e *FirstExchange, rows []map[string]any) {
@@ -84,25 +99,18 @@ func TestExchangeArchiveExactReadbackAndResume(t *testing.T) {
 			if err != nil || !receipt.Persisted || !receipt.Reference.Persisted || receipt.AnswerHash != hashText(firstExchangeAnswer) || receipt.AssistantRecords != len(e.s.firstQuestion.archiveMessages) {
 				t.Fatal("readback", receipt, err)
 			}
-			if _, err := e.s.VerifyArchive(context.Background(), path); !errors.Is(err, ErrState) {
-				t.Fatal("query reused no-query proof", err)
-			}
-			if _, err := e.s.PrepareIdleResume(context.Background(), path); !errors.Is(err, ErrState) {
-				t.Fatal("query reused no-query resume", err)
-			}
 			plan, err := e.PrepareIdleResume(context.Background(), path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			in, out, diag := idleFiles(t)
-			process, err := plan.Start(context.Background(), in, out, diag)
+			process, err := plan.StartSupervised(context.Background(), in, out, diag)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = process.Close() })
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			if err := process.Wait(ctx); err != nil {
+			if err := waitSupervised(t, process); err != nil {
 				t.Fatal(err)
 			}
 			got := awaitIdleInvocation(t, log)
@@ -110,8 +118,8 @@ func TestExchangeArchiveExactReadbackAndResume(t *testing.T) {
 			if !reflect.DeepEqual(got.Args, want) || got.Cwd != e.s.cwd {
 				t.Fatal("changed invocation", got.Args)
 			}
-			assertIdleReaped(t, process)
-			if _, err := plan.Start(ctx, in, out, diag); !errors.Is(err, ErrState) {
+			assertSupervisedReaped(t, process)
+			if _, err := plan.StartSupervised(ctx, in, out, diag); !errors.Is(err, ErrState) {
 				t.Fatal("duplicate resume", err)
 			}
 			after, _ := os.ReadFile(path)
@@ -185,13 +193,13 @@ func TestExchangeResumeRechecksArchiveAtLaunch(t *testing.T) {
 	rows[2]["message"].(map[string]any)["content"] = []any{map[string]any{"type": "text", "text": "later corruption"}}
 	writeExchangeRows(t, e, rows)
 	in, out, diag := idleFiles(t)
-	if _, err := plan.Start(context.Background(), in, out, diag); err == nil {
+	if _, err := plan.StartSupervised(context.Background(), in, out, diag); err == nil {
 		t.Fatal("changed file launched")
 	}
 	if _, err := os.Stat(log); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("process was started", err)
 	}
-	if _, err := plan.Start(context.Background(), in, out, diag); !errors.Is(err, ErrState) {
+	if _, err := plan.StartSupervised(context.Background(), in, out, diag); !errors.Is(err, ErrState) {
 		t.Fatal("failed launch retried", err)
 	}
 }

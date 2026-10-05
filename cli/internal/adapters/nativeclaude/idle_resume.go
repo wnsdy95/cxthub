@@ -2,19 +2,13 @@ package nativeclaude
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
-
-// ErrIdleExit is deliberately independent of native diagnostics, which may
-// contain account details, paths or transcript content.
-var ErrIdleExit = errors.New("native Claude idle resume exited unsuccessfully")
 
 type idlePathEntry struct {
 	path string
@@ -159,8 +153,8 @@ func (r idleContextReader) Read(p []byte) (int, error) {
 }
 
 // IdleResumePlan is an opaque, one-shot continuation of a retired session with
-// a verified no-turn or completed-exchange archive. Start owns an isolated PTY
-// process; StartSupervised transfers the TUI to the public delivery supervisor.
+// a verified completed-exchange archive. StartSupervised transfers the TUI to
+// the public delivery supervisor, which owns terminal signaling and reaping.
 // Neither its launch state nor its archive identity can be changed by callers,
 // and process creation is not evidence of native readiness.
 type IdleResumePlan struct {
@@ -178,15 +172,11 @@ type idleResumeState struct {
 	archivePath []idlePathEntry
 }
 
-// PrepareIdleResume requires successful Close and a prior successful
+// prepareIdleResume requires successful Close and a prior successful
 // VerifyArchive for ownedPath. It freshly verifies the same raw archive,
 // including metadata rows. One Session can issue at most one plan, even when
 // preparation or the later launch fails. Archives are never rewritten here.
-func (s *Session) PrepareIdleResume(ctx context.Context, ownedPath string) (*IdleResumePlan, error) {
-	return s.prepareIdleResume(ctx, ownedPath, false)
-}
-
-func (s *Session) prepareIdleResume(ctx context.Context, ownedPath string, exchange bool) (*IdleResumePlan, error) {
+func (s *Session) prepareIdleResume(ctx context.Context, ownedPath string) (*IdleResumePlan, error) {
 	ctx, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -197,12 +187,8 @@ func (s *Session) prepareIdleResume(ctx context.Context, ownedPath string, excha
 	default:
 		return nil, ErrState
 	}
-	wantVersion := "2.1.285"
-	if exchange {
-		wantVersion = "2.1.287"
-	}
 	s.mu.Lock()
-	if s.closeErr != nil || s.verifiedArchive == nil || s.verifiedArchive.path != ownedPath || (s.verifiedArchive.exchange != nil) != exchange || s.version != wantVersion || s.launch.version != s.version {
+	if s.closeErr != nil || s.verifiedArchive == nil || s.verifiedArchive.path != ownedPath || s.verifiedArchive.exchange == nil || s.version != supportedVersion || s.launch.version != s.version {
 		s.mu.Unlock()
 		return nil, ErrState
 	}
@@ -229,7 +215,7 @@ func (s *Session) prepareIdleResume(ctx context.Context, ownedPath string, excha
 	if err != nil {
 		return nil, err
 	}
-	verified, err := s.verifyResumeArchive(ctx, ownedPath)
+	verified, err := s.verifyExchangeArchive(ctx, ownedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -242,43 +228,8 @@ func (s *Session) prepareIdleResume(ctx context.Context, ownedPath string, excha
 	return &IdleResumePlan{idleResumeState: &idleResumeState{source: s, launch: launch, archive: verified, archivePath: path}}, nil
 }
 
-// Start launches only the original allowed settings and --resume with the exact
-// owned absolute <UUID>.jsonl pathname, avoiding native session search. It has no
-// prompt or helper protocol flags. Success means process creation only, never
-// composer readiness or provider acceptance. The supplied files remain owned
-// by the caller. Setpgid cleanup is suitable for an isolated PTY; this API does
-// not implement foreground job control for the user's controlling terminal.
-// The first attempt consumes the plan, including cancellation or launch error.
-func (p *IdleResumePlan) Start(ctx context.Context, stdin, stdout, stderr *os.File) (*IdleProcess, error) {
-	cmd, err := p.resumeCommand(ctx, stdin, stdout, stderr)
-	if err != nil {
-		return nil, err
-	}
-	observer, err := newProcessExitObserver()
-	if err != nil {
-		return nil, ErrState
-	}
-	configureProcess(cmd)
-	if err := p.startResumeCommand(ctx, cmd); err != nil {
-		observer.close()
-		return nil, err
-	}
-	process := &IdleProcess{idleProcessState: &idleProcessState{cmd: cmd, exited: make(chan struct{}), done: make(chan struct{}), stop: make(chan struct{})}}
-	go func() {
-		process.observationErr = observer.wait(cmd.Process.Pid)
-		observer.close()
-		close(process.exited)
-	}()
-	go process.run(ctx)
-	if err := ctx.Err(); err != nil {
-		return nil, errors.Join(err, process.Close())
-	}
-	return process, nil
-}
-
-// Shared by the isolated-PTY fixture and the supervised terminal handoff.
-// Claiming the plan consumes every attempt; the final archive read remains
-// immediately before process creation in startResumeCommand.
+// Claiming the supervised handoff plan consumes every attempt. The final archive
+// read remains immediately before process creation in startResumeCommand.
 func (p *IdleResumePlan) resumeCommand(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) (*exec.Cmd, error) {
 	if p == nil || p.idleResumeState == nil {
 		return nil, ErrState
@@ -328,7 +279,7 @@ func (p *IdleResumePlan) startResumeCommand(ctx context.Context, cmd *exec.Cmd) 
 	if err := validateIdlePath(p.archivePath); err != nil {
 		return err
 	}
-	archive, err := p.source.verifyResumeArchive(verification, p.archive.path)
+	archive, err := p.source.verifyExchangeArchive(verification, p.archive.path)
 	if err != nil {
 		return err
 	}
@@ -348,85 +299,4 @@ func (p *IdleResumePlan) startResumeCommand(ctx context.Context, cmd *exec.Cmd) 
 		return ErrState
 	}
 	return nil
-}
-
-// IdleProcess owns signaling and reaping of one resumed process and its group.
-// It does not parse the TUI, send input, close caller files, or start replacements.
-type IdleProcess struct {
-	*idleProcessState
-}
-
-type idleProcessState struct {
-	cmd            *exec.Cmd
-	exited, done   chan struct{}
-	stop           chan struct{}
-	stopOnce       sync.Once
-	observationErr error
-	err            error // published by closing done
-}
-
-func (p *IdleProcess) Done() <-chan struct{} { return p.done }
-
-// Wait waits for final group cleanup and reaping. Cancelling this wait also
-// retires the owned process; it never detaches an unobserved live child.
-func (p *IdleProcess) Wait(ctx context.Context) error {
-	select {
-	case <-p.done:
-		return p.err
-	case <-ctx.Done():
-		return errors.Join(ctx.Err(), p.Close())
-	}
-}
-
-// Close requests termination once and joins bounded cleanup (at most 2.5s of
-// cleanup waits). Intentional termination is not an unsuccessful native exit;
-// inability to confirm the final group termination request, observation or
-// reaping returns ErrCleanup.
-func (p *IdleProcess) Close() error {
-	p.stopOnce.Do(func() { close(p.stop) })
-	<-p.done
-	return p.err
-}
-
-func (p *IdleProcess) run(ctx context.Context) {
-	stopped := false
-	select {
-	case <-ctx.Done():
-		p.err = ctx.Err()
-		stopped = true
-	case <-p.stop:
-		stopped = true
-	case <-p.exited:
-	}
-	select {
-	case <-p.exited:
-	default:
-		_ = signalProcessGroup(p.cmd, false)
-		if !waitFor(p.exited, 500*time.Millisecond) {
-			_ = signalProcessGroup(p.cmd, true)
-		}
-	}
-	observed := waitFor(p.exited, time.Second)
-	// No Wait has run: the unreaped child still reserves its PID/group identity.
-	// Kill any remaining descendants before releasing that reservation.
-	if err := cleanupProcessGroup(p.cmd); err != nil {
-		p.err = errors.Join(p.err, ErrCleanup)
-	}
-	reaped := make(chan struct{})
-	var waitErr error
-	go func() { waitErr = p.cmd.Wait(); close(reaped) }()
-	if !waitFor(reaped, time.Second) {
-		p.err = errors.Join(p.err, ErrCleanup)
-	} else if waitErr != nil {
-		var exit *exec.ExitError
-		if !errors.As(waitErr, &exit) {
-			p.err = errors.Join(p.err, ErrCleanup)
-		} else if !stopped {
-			p.err = errors.Join(p.err, ErrIdleExit)
-		}
-	}
-	if !observed || p.observationErr != nil {
-		p.err = errors.Join(p.err, ErrCleanup)
-	}
-	close(p.done)
 }

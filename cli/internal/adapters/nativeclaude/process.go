@@ -299,7 +299,7 @@ func (p *process) shutdown(abort bool) error {
 }
 
 func readVersionFor(ctx context.Context, exe, cwd string, env []string, expected string) (string, error) {
-	if expected != "2.1.285" && expected != "2.1.287" {
+	if expected != supportedVersion {
 		return "", ErrState
 	}
 	var mu sync.Mutex

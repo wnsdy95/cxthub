@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -34,9 +36,9 @@ func claudeUnitHelper() {
 				_ = os.Symlink(os.Getenv("CXT_CLAUDE_UNIT_REPLACEMENT"), link)
 			}
 			if mode == "wrong-version" {
-				fmt.Println("2.1.287 (Claude Code)")
+				fmt.Println("2.1.288 (Claude Code)")
 			} else {
-				fmt.Println("2.1.285 (Claude Code)")
+				fmt.Println("2.1.287 (Claude Code)")
 			}
 			return
 		}
@@ -142,7 +144,7 @@ func claudeUnitHelper() {
 }
 
 func zeroResultFixture(sid, id string) map[string]any {
-	return map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": sid, "user_message_uuid": id, "user_message_uuids": []string{id}, "num_turns": 0, "duration_api_ms": 0, "total_cost_usd": 0, "queued_turn_count": 0, "permission_denials": []any{}, "modelUsage": map[string]any{}, "usage": map[string]any{"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}
+	return map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": sid, "user_message_uuid": id, "user_message_uuids": []string{id}, "result_index": 0, "num_turns": 0, "duration_api_ms": 0, "total_cost_usd": 0, "queued_turn_count": 0, "permission_denials": []any{}, "modelUsage": map[string]any{}, "usage": map[string]any{"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}
 }
 
 func unitOptions(t *testing.T, mode string) Options {
@@ -161,18 +163,18 @@ func unitSession(t *testing.T, mode string) *Session {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	t.Cleanup(cancel)
-	s, err := Start(ctx, unitOptions(t, mode))
+	e, err := StartFirstExchange(ctx, unitOptions(t, mode))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	t.Cleanup(func() { _ = e.Close() })
+	return e.s
 }
 func unitArchive(s *Session) string {
 	return filepath.Join(s.archiveRoot, providerfs.EncodeCwd(s.cwd), s.id+".jsonl")
 }
 
-func TestSessionNoTurnAcknowledgmentAndExactArchive(t *testing.T) {
+func TestSessionNoTurnAcknowledgmentAndReferenceProjection(t *testing.T) {
 	for _, mode := range []string{"normal", "replay"} {
 		t.Run(mode, func(t *testing.T) {
 			s := unitSession(t, mode)
@@ -194,7 +196,7 @@ func TestSessionNoTurnAcknowledgmentAndExactArchive(t *testing.T) {
 			if !r.NoTurnAcknowledged || r.ReplayAcknowledged != (mode == "replay") || r.Persisted || r.PayloadHash != hashText(text) || r.UTF8Bytes != len(text) || r.NativeContentHash != hashText("[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n"+text) || r.NativeUTF8Bytes != len(text)+48 || r.ProviderAcceptance != "unverified" {
 				t.Fatalf("false receipt: %+v", r)
 			}
-			if _, err := s.VerifyArchive(ctx, unitArchive(s)); !errors.Is(err, ErrState) {
+			if _, err := (&FirstExchange{s: s}).VerifyArchive(ctx, unitArchive(s)); !errors.Is(err, ErrState) {
 				t.Fatal("archive checked before EOF")
 			}
 			if _, err := s.AppendReference(ctx, text); !errors.Is(err, ErrState) {
@@ -213,9 +215,20 @@ func TestSessionNoTurnAcknowledgmentAndExactArchive(t *testing.T) {
 			if _, err := s.ContextSummary(ctx); !errors.Is(err, ErrClosed) {
 				t.Fatal("closed session reused", err)
 			}
-			r, err = s.VerifyArchive(ctx, unitArchive(s))
-			if err != nil || !r.Persisted {
-				t.Fatal("exact archive not confirmed", err)
+			if _, err := (&FirstExchange{s: s}).VerifyArchive(ctx, unitArchive(s)); !errors.Is(err, ErrState) {
+				t.Fatal("reference-only session claimed a completed exchange", err)
+			}
+			archive, err := os.ReadFile(unitArchive(s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			row, err := object(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projection, err := referenceText(row["message"])
+			if err != nil || projection != nativeReferencePrefix+text || hashText(projection) != r.NativeContentHash {
+				t.Fatal("synthetic archive lost exact reference projection", err)
 			}
 			raw, _ := json.Marshal(r)
 			if strings.Contains(string(raw), "PRIVATE") {
@@ -242,7 +255,7 @@ func TestSessionRejectsActivityAndLateShutdownFrames(t *testing.T) {
 			if err == nil || strings.Contains(fmt.Sprintf("%v %+v %#v", err, err, err), "PRIVATE") {
 				t.Fatal("activity ignored or private error leaked", err)
 			}
-			if _, err := s.VerifyArchive(context.Background(), unitArchive(s)); err == nil {
+			if _, err := (&FirstExchange{s: s}).VerifyArchive(context.Background(), unitArchive(s)); err == nil {
 				t.Fatal("failed EOF audit attested persistence")
 			}
 		})
@@ -263,7 +276,7 @@ func TestSessionCancellationAbandonsUncertainAppend(t *testing.T) {
 			if _, err := s.AppendReference(context.Background(), "retry"); err == nil {
 				t.Fatal("uncertain append retried")
 			}
-			if _, err := s.VerifyArchive(context.Background(), unitArchive(s)); err == nil {
+			if _, err := (&FirstExchange{s: s}).VerifyArchive(context.Background(), unitArchive(s)); err == nil {
 				t.Fatal("uncertain append claimed persistence")
 			}
 		})
@@ -285,7 +298,7 @@ func TestSessionPinsExecutableSymlinkBeforeVersion(t *testing.T) {
 	opts.Env = append(opts.Env, "CXT_CLAUDE_UNIT_LINK="+link, "CXT_CLAUDE_UNIT_REPLACEMENT="+replacement)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	s, err := Start(ctx, opts)
+	s, err := StartFirstExchange(ctx, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,8 +314,111 @@ func TestSessionPinsExecutableSymlinkBeforeVersion(t *testing.T) {
 func TestSessionRejectsUnsupportedVersion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if s, err := Start(ctx, unitOptions(t, "wrong-version")); err == nil {
+	if s, err := StartFirstExchange(ctx, unitOptions(t, "wrong-version")); err == nil {
 		_ = s.Close()
 		t.Fatal("unsupported version accepted")
+	}
+}
+
+// Successful synthetic size cases replace the useful transport assertions of
+// the retired 2.1.285 native fixture. They make no native/provider capacity claim.
+func TestSessionLargeReferenceRemainsNoQuery(t *testing.T) {
+	for _, size := range []int{1024, 1572864} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			s := unitSession(t, "replay")
+			unit := "Synthetic archived reference. \ud55c\uae00 \ud655\uc778.\n"
+			text := strings.Repeat(unit, size/len(unit)) + strings.Repeat("x", size%len(unit))
+			receipt, err := s.AppendReference(context.Background(), text)
+			if err != nil || !receipt.NoTurnAcknowledged || !receipt.ReplayAcknowledged || receipt.Persisted || receipt.UTF8Bytes != size || receipt.PayloadHash != hashText(text) || receipt.NativeContentHash != hashText(nativeReferencePrefix+text) || receipt.ProviderAcceptance != "unverified" {
+				t.Fatal("large reference lost bounded no-query evidence", err)
+			}
+			summary, err := s.ContextSummary(context.Background())
+			if err != nil || summary.TotalTokens != 40+int64(size) || summary.Measurement != "local_estimate" {
+				t.Fatal("same-session estimate lost reference", err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(unitArchive(s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			row, err := object(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := referenceText(row["message"])
+			if err != nil || got != nativeReferencePrefix+text || len(got) != receipt.NativeUTF8Bytes {
+				t.Fatal("large reference projection changed", err)
+			}
+			if s.firstQuestion != nil {
+				t.Fatal("reference initiated a model question")
+			}
+		})
+	}
+}
+
+func TestSessionLifetimeCancellationAndConcurrentCloseReap(t *testing.T) {
+	for _, mode := range []string{"lifetime", "concurrent-close"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			e, err := StartFirstExchange(ctx, unitOptions(t, "normal"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = e.Close() })
+			if _, err := e.AppendReference(context.Background(), "synthetic reference"); err != nil {
+				t.Fatal(err)
+			}
+			started := time.Now()
+			if mode == "lifetime" {
+				cancel()
+				select {
+				case <-e.s.closed:
+				case <-time.After(3 * time.Second):
+					t.Fatal("lifetime cancellation did not retire session")
+				}
+			}
+			copy := *e // The exported exchange copies the owned Session pointer.
+			var wg sync.WaitGroup
+			outcomes := make(chan error, 4)
+			for i := 0; i < 4; i++ {
+				target := e
+				if i%2 == 0 {
+					target = &copy
+				}
+				wg.Go(func() { outcomes <- target.Close() })
+			}
+			joined := make(chan struct{})
+			go func() { wg.Wait(); close(joined) }()
+			select {
+			case <-joined:
+			case <-time.After(4 * time.Second):
+				t.Fatal("concurrent close did not join process retirement")
+			}
+			close(outcomes)
+			for err := range outcomes {
+				if mode == "lifetime" && !errors.Is(err, context.Canceled) {
+					t.Fatal("cancellation cause was lost", err)
+				}
+				if mode == "concurrent-close" && err != nil {
+					t.Fatal(err)
+				}
+				if errors.Is(err, ErrCleanup) {
+					t.Fatal("retirement was not confirmed", err)
+				}
+			}
+			if time.Since(started) > 4*time.Second || e.s.process.cmd.ProcessState == nil {
+				t.Fatal("owned process was not reaped")
+			}
+			var status syscall.WaitStatus
+			if _, err := syscall.Wait4(e.s.process.cmd.Process.Pid, &status, syscall.WNOHANG, nil); !errors.Is(err, syscall.ECHILD) {
+				t.Fatal("owned leader remains waitable", err)
+			}
+			if _, err := e.ContextSummary(context.Background()); err == nil {
+				t.Fatal("retired transport reused")
+			}
+		})
 	}
 }

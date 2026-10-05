@@ -12,7 +12,7 @@ import (
 func firstResultFixture() (map[string]json.RawMessage, *firstQuestionState) {
 	raw := []byte(`{"terminal_reason":"completed","stop_reason":"end_turn","result_index":1,"user_message_uuid":"query","user_message_uuids":["query"],"subtype":"success","is_error":false,"num_turns":1,"duration_api_ms":1,"total_cost_usd":0.01,"queued_turn_count":0,"permission_denials":[],"modelUsage":{"model":{}},"usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"result":"reply"}`)
 	m, _ := object(raw)
-	return m, &firstQuestionState{id: "query", summary: ContextSummary{Model: "model"}}
+	return m, &firstQuestionState{id: "query", summary: ContextSummary{Model: "model"}, ordinary: &ordinaryState{}}
 }
 
 func TestFirstQuestionResultRejectsForeignOrNonResponseEvidence(t *testing.T) {
@@ -36,7 +36,7 @@ func TestFirstQuestionResultRejectsForeignOrNonResponseEvidence(t *testing.T) {
 		{"is_error", `null`},
 		{"subtype", `"error_during_execution"`},
 		{"num_turns", `0`},
-		{"num_turns", `2`},
+		{"num_turns", `129`},
 		{"num_turns", `1.5`},
 		{"duration_api_ms", `-1`},
 		{"total_cost_usd", `null`},
@@ -66,7 +66,11 @@ func TestFirstQuestionResultRejectsForeignOrNonResponseEvidence(t *testing.T) {
 
 func TestFirstAssistantProjectsVisibleTextOnly(t *testing.T) {
 	raw := []byte(`{"role":"assistant","model":"model","content":[{"type":"thinking","thinking":"PRIVATE_REASONING"},{"type":"text","text":"visible"},{"type":"redacted_thinking","data":"PRIVATE_OPAQUE"}]}`)
-	text, err := firstAssistantText(raw, "model")
+	message, err := object(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _, _, err := ordinaryAssistant(message, "model")
 	if err != nil || text != "visible" {
 		t.Fatal("wrong visible text projection", err)
 	}
@@ -78,24 +82,46 @@ func TestFirstAssistantProjectsVisibleTextOnly(t *testing.T) {
 		`{"role":"assistant","model":"model","content":[]}`,
 		`{"role":"assistant","model":"model","content":[{"type":"thinking","thinking":null}]}`,
 	} {
-		if text, err := firstAssistantText([]byte(body), "model"); err == nil || text != "" || strings.Contains(fmt.Sprintf("%+v", err), "PRIVATE") {
+		message, parseErr := object([]byte(body))
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if text, _, _, err := ordinaryAssistant(message, "model"); err == nil || text != "" || strings.Contains(fmt.Sprintf("%+v", err), "PRIVATE") {
 			t.Fatal("invalid or private response projected")
 		}
 	}
 	block, _ := json.Marshal(map[string]any{"role": "assistant", "model": "model", "content": []any{map[string]any{"type": "text", "text": strings.Repeat("x", maxFirstAnswerBytes+1)}}})
-	if _, err := firstAssistantText(block, "model"); err == nil {
+	message, err = object(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := ordinaryAssistant(message, "model"); err == nil {
 		t.Fatal("unbounded response")
 	}
 }
 
 func TestFirstQueryCannotReuseNoTurnArchiveClaim(t *testing.T) {
-	s := &Session{closed: make(chan struct{}), firstQuestion: &firstQuestionState{}, receipt: ReferenceReceipt{NoTurnAcknowledged: true}}
-	close(s.closed)
-	if _, err := s.VerifyArchive(context.Background(), "/unused"); !errors.Is(err, ErrState) {
-		t.Fatal("queried session entered reference-only archive proof", err)
+	e, _, _ := completedExchangeArchive(t, "normal")
+	path := unitArchive(e.s)
+	if _, err := e.VerifyArchive(context.Background(), path); err != nil {
+		t.Fatal("completed baseline did not verify", err)
+	}
+	// Change only the completion proof: version, ordinary state, ACK and the
+	// exact owned archive remain valid, so no other guard can satisfy this test.
+	e.s.firstQuestion.completed = false
+	if _, err := e.VerifyArchive(context.Background(), path); !errors.Is(err, ErrState) {
+		t.Fatal("incomplete question reused a no-turn acknowledgment as completed proof", err)
 	}
 	r := FirstExchangeResult{Answer: "PRIVATE_BODY"}
 	if strings.Contains(fmt.Sprintf("%v %+v %#v", r, r, r), "PRIVATE_BODY") {
 		t.Fatal("response formatting leaked its body")
+	}
+}
+
+func TestFirstQuestionResultRequiresOrdinaryState(t *testing.T) {
+	m, q := firstResultFixture()
+	q.ordinary = nil
+	if answer, err := firstQuestionResult(m, q); !errors.Is(err, ErrProtocol) || answer != "" {
+		t.Fatal("missing ordinary state re-enabled literal completion", err)
 	}
 }

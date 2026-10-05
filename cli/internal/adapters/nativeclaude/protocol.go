@@ -327,11 +327,9 @@ func (s *Session) frame(raw []byte) error {
 		if err := zeroTurnResult(m); err != nil {
 			return err
 		}
-		if s.version == "2.1.287" {
-			index, err := count(m, "result_index", 0)
-			if err != nil || index != 0 {
-				return ErrProtocol
-			}
+		index, err := count(m, "result_index", 0)
+		if err != nil || index != 0 {
+			return ErrProtocol
 		}
 		s.appendResult = true
 		return nil
@@ -420,7 +418,7 @@ func zeroTurnResult(m map[string]json.RawMessage) error {
 	return nil
 }
 
-// In 2.1.285 output_tokens_details is an object, not a token count. Require
+// In the pinned protocol output_tokens_details is an object, not a token count. Require
 // every supplied detail (including cache durations and server tools) to be a
 // typed zero count; do not ignore nonzero usage nested under these objects.
 func zeroCountDetails(raw []byte) error {

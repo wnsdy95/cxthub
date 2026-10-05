@@ -35,7 +35,7 @@ const (
 	MaxReferenceBytes = 4 << 20
 	maxFrameBytes     = 32 << 20
 	operationTimeout  = 15 * time.Second
-	// Claude 2.1.285 applies this literal projection to isSynthetic messages.
+	// The pinned native protocol applies this literal projection to isSynthetic messages.
 	// Preserve its provenance instead of labelling machine text as user input.
 	nativeReferencePrefix = "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n"
 )
@@ -128,13 +128,10 @@ func (s *Session) SessionID() string   { return s.id }
 func (s *Session) HostVersion() string { return s.version }
 func (s *Session) Models() []ModelInfo { return append([]ModelInfo(nil), s.models...) }
 
-// Start initializes a fresh native session with no prompt. The context owns the
-// lifetime, not just startup: cancellation retires the process and invalidates
-// future operations. Protocol support is pinned to 2.1.285.
-func Start(ctx context.Context, opts Options) (*Session, error) {
-	return startVersion(ctx, opts, "2.1.285")
-}
+const supportedVersion = "2.1.287"
 
+// Initialize a fresh owned process without sending a question. Cancellation
+// owns its full lifetime, including reference preparation and completion.
 func startVersion(ctx context.Context, opts Options, expectedVersion string) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -439,7 +436,7 @@ func (s *Session) Close() error {
 			s.firstQuestion.ordinary.cancel()
 		}
 		// Graceful EOF is only for successful work, including no-query sessions.
-		// Failed initialization/appends and literal questions must not inherit
+		// Failed initialization or appends must not inherit
 		// normal native teardown grace or continue processing on EOF either.
 		abort := s.err != nil
 		s.mu.Unlock()
@@ -521,12 +518,8 @@ func launchOptionsForVersion(o Options, version string) ([]string, []string, str
 	if !filepath.IsAbs(root) {
 		return nil, nil, "", "", ErrState
 	}
-	permissionPrompts := "none"
-	if version == "2.1.287" {
-		permissionPrompts = "host"
-	}
 	args := append([]string{}, o.ConfigArgs...)
-	args = append(args, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--await-initialize", "--permission-prompt-tool", "stdio", "--permission-prompts", permissionPrompts, "--prompt-suggestions", "false", "--replay-user-messages")
+	args = append(args, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--await-initialize", "--permission-prompt-tool", "stdio", "--permission-prompts", "host", "--prompt-suggestions", "false", "--replay-user-messages")
 	if o.Model != "" {
 		args = append(args, "--model", o.Model)
 	}
@@ -534,7 +527,7 @@ func launchOptionsForVersion(o Options, version string) ([]string, []string, str
 }
 
 func validArgs(args []string, version string) bool {
-	if len(args) > 128 || version != "2.1.285" && version != "2.1.287" {
+	if len(args) > 128 || version != supportedVersion {
 		return false
 	}
 	values := map[string]bool{"--settings": true, "--setting-sources": true, "--mcp-config": true, "--tools": true, "--allowedTools": true, "--disallowedTools": true, "--add-dir": true, "--plugin-dir": true, "--agent": true, "--system-prompt": true, "--append-system-prompt": true, "--system-prompt-file": true, "--append-system-prompt-file": true, "--effort": true, "--permission-mode": true}
@@ -558,11 +551,7 @@ func validArgs(args []string, version string) bool {
 		}
 		if name == "--permission-mode" {
 			switch value {
-			case "default", "dontAsk", "plan":
-			case "acceptEdits", "bypassPermissions", "auto", "manual":
-				if version != "2.1.287" {
-					return false
-				}
+			case "default", "dontAsk", "plan", "acceptEdits", "bypassPermissions", "auto", "manual":
 			default:
 				return false
 			}
@@ -574,11 +563,14 @@ func validArgs(args []string, version string) bool {
 // Shared by initial launch validation and resume parsing. These options carry
 // no value; they are never inserted on the caller's behalf.
 func standaloneConfigFlag(name, version string) bool {
+	if version != supportedVersion {
+		return false
+	}
 	switch name {
 	case "--bare", "--safe-mode", "--strict-mcp-config", "--no-chrome", "--disable-slash-commands":
 		return true
 	case "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions":
-		return version == "2.1.287"
+		return true
 	default:
 		return false
 	}
