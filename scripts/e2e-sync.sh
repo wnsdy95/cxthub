@@ -32,6 +32,10 @@ SRV_PID=""
 # Preserve the isolated fixture on demand so fail-open Git hook diagnostics are
 # still inspectable after the script exits.
 cleanup() {
+  local test_status=$?
+  if { [ "$test_status" -ne 0 ] || [ "$FAIL" -ne 0 ]; } && [ -n "${CXT_E2E_DIAGNOSTICS_DIR:-}" ]; then
+    python3 "$ROOT/scripts/e2e-collect-diagnostics.py" "$TMP" "$CXT_E2E_DIAGNOSTICS_DIR" || echo "Could not collect E2E failure diagnostics" >&2
+  fi
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null && wait "$SRV_PID" 2>/dev/null
   if [ "${CXT_E2E_KEEP_TMP:-0}" = 1 ]; then
     echo "SYNC E2E fixture preserved: $TMP"
@@ -317,54 +321,25 @@ expect "app switch does not create wrapper boundary" "$([ ! -e .cxt/boundary.jso
 expect "app switch does not supersede provider files" "$(find "$PROJ" -maxdepth 1 -type f -name '*.superseded' | wc -l | tr -d ' ')" 0
 expect "app switch does not materialize orphan native seed" "$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl' | wc -l | tr -d ' ')" "$APP_JSONL_BEFORE"
 expect "app session file remains at original path" "$([ -f "$APP_SESSION" ] && echo yes)" yes
+# End the synthetic observation through its supported lifecycle hook. Its
+# watcher can otherwise retry publication even when the transcript is idle.
+# The next prompt re-registers the same file after this completion boundary.
+if ! printf '{"cwd":"%s","session_id":"%s","transcript_path":"%s"}\n' "$TMP/repo2" "$APP_SESSION_ID" "$APP_SESSION" | cxt hook --provider claude --event SessionEnd >"$TMP/app-end.out" 2>&1; then
+  cat "$TMP/app-end.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
 # Earlier Git hooks can still be publishing retained memory attachments. This
 # assertion tests one immediate handoff after that known work has completed;
 # deterministic application tests separately exercise drift and retained retry.
 # Join the real workers, then check their queue under the same publication locks.
 # An empty queue alone does not prove an already-running worker has finished.
-python3 - "$TMP/bin/cxt" "$TMP/repo1" "$TMP/repo2" <<'PYDRAIN'
-import contextlib, fcntl, json, pathlib, signal, subprocess, sys, time
-
-def deadline(*_):
-    raise TimeoutError('historical publication did not finish before app handoff')
-
-signal.signal(signal.SIGALRM, deadline)
-# checkout has returned, but its branch publisher can still be running and can
-# enqueue historical work on exit. Observe only this fixture's unique binary;
-# the older best-effort sync.lock is not an exclusion/completion guarantee.
-publisher_commands = {str(path) + ' git-hook branch-state-sync' for path in
-                      (pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[1]).resolve())}
-expires = time.monotonic() + 45
-while True:
-    processes = subprocess.check_output(['ps', '-ww', '-axo', 'pid=,command='],
-                                        text=True, timeout=5)
-    running = any(len(fields := line.strip().split(None, 1)) == 2 and
-                  fields[1] in publisher_commands for line in processes.splitlines())
-    if not running:
-        break
-    if time.monotonic() >= expires:
-        raise TimeoutError('fixture branch publication is still running')
-    time.sleep(0.02)
-for root in map(pathlib.Path, sys.argv[2:]):
-    subprocess.run(['cxt', 'git-hook', 'historical-sync'], cwd=root,
-                   check=True, timeout=45)
-    signal.alarm(45)
-    try:
-        with contextlib.ExitStack() as locks:
-            directory = root / '.cxt/locks/historical-backfill'
-            directory.mkdir(parents=True, exist_ok=True)
-            for name in ('daemon', 'worker'):
-                lock = locks.enter_context((directory / (name + '.flock')).open('a+'))
-                fcntl.flock(lock, fcntl.LOCK_EX)
-            result = subprocess.run(['cxt', 'sync', 'status', '--json'], cwd=root,
-                                    check=True, capture_output=True, text=True, timeout=10)
-            report = json.loads(result.stdout)
-            if report['historical_uploads'] or report['issues']:
-                raise RuntimeError('fixture retained publication is still pending')
-    finally:
-        signal.alarm(0)
-PYDRAIN
-expect "prior historical publication finished before immediate handoff" "$?" 0
+if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$TMP/repo1" "$TMP/repo2" >"$TMP/app-drain.out" 2>&1; then
+  cat "$TMP/app-drain.out"
+  echo "  ✗ prior publication did not finish; handoff assertions not evaluated"
+  FAIL=1
+  CXT_E2E_KEEP_TMP=1
+  exit 1
+fi
+expect "prior historical publication finished before immediate handoff" yes yes
 APP_HANDOFF=$(echo "{\"cwd\":\"$TMP/repo2\",\"session_id\":\"$APP_SESSION_ID\",\"transcript_path\":\"$APP_SESSION\",\"prompt\":\"continue\"}" | cxt hook --provider claude --event UserPromptSubmit)
 printf '%s\n' "$APP_HANDOFF" > "$TMP/app-handoff.json"
 expect "app handoff is one bounded project-memory injection" "$(echo "$APP_HANDOFF" | python3 -c "
@@ -583,6 +558,9 @@ expect "new branch uses its live source context" "$([ "$(ref_target .cxt/refs/he
 cxt git-hook branch-replay
 expect "replaying birth never overwrites the selected source" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
 git checkout -q main >/dev/null 2>&1
+if ! printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s"}\n' "$TMP/repo1" "$D/sess-WFY.jsonl" | cxt hook --provider claude --event SessionEnd >"$TMP/fork-end.out" 2>&1; then
+  cat "$TMP/fork-end.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
 
 echo "── I. Branch lifecycle: rename transfers context; deletion archives without deleting history"
 RENAME_OUT=$(git branch -m web-fork-x web-fork-renamed 2>&1)
