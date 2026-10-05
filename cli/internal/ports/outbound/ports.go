@@ -290,6 +290,21 @@ type BranchStreamingRemotePull interface {
 	PullBranchTo(context.Context, string, string, map[domain.ContentHash]domain.ContentHash, []domain.ContentHash, PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error)
 }
 
+// PullCapabilities is runtime protocol support from an authorized repository
+// response. A zero BranchPlanVersion means the legacy complete transfer path.
+type PullCapabilities struct {
+	ContextProtocol   int
+	BranchPlanVersion int
+}
+
+type RemotePullCapabilities interface {
+	PullCapabilities(context.Context, string) (PullCapabilities, error)
+}
+
+type ScopedBranchRemotePull interface {
+	PullSelectedBranchTo(context.Context, string, domain.BranchPullRequest, map[domain.ContentHash]domain.ContentHash, []domain.ContentHash, PullDocumentReceiver) (domain.BranchPullPlan, []domain.Snapshot, error)
+}
+
 // PushObjectWants is the server-proven missing subset of a local push
 // inventory. Snapshot metadata and document bodies are independent objects: a
 // damaged server may have one without the other, so both sets remain explicit.

@@ -14,6 +14,31 @@ HOLDER = SOURCE.split("# BEGIN wrapper holder readiness.\n", 1)[1].split("# END 
 
 
 class WrapperGateTest(unittest.TestCase):
+    def test_server_readiness_gates_authentication(self):
+        readiness = SOURCE.split('SRV_PID=$!\n', 1)[1].split('\nJ="$TMP/a.jar"', 1)[0]
+        for scenario in ("ready", "delayed", "unavailable", "exited"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / "srv.log").write_text("synthetic server diagnostic\n")
+                script = '''set -u
+SRV_PID=77; B=http://fixture.invalid; attempts=0
+kill() { [ "$SCENARIO" != exited ]; }
+curl() {
+  attempts=$((attempts + 1))
+  [ "$SCENARIO" = ready ] || { [ "$SCENARIO" = delayed ] && [ "$attempts" = 3 ]; }
+}
+sleep() { :; }
+''' + readiness + '\nprintf "AUTH:%s\\n" "$attempts"\n'
+                result = subprocess.run(["bash", "-c", script], env=dict(os.environ, TMP=tmp, SCENARIO=scenario),
+                                        capture_output=True, text=True, timeout=2)
+                success = scenario in ("ready", "delayed")
+                self.assertEqual(result.returncode, 0 if success else 1, result.stdout + result.stderr)
+                self.assertEqual("AUTH:" in result.stdout, success)
+                if success:
+                    self.assertIn("AUTH:" + ("1" if scenario == "ready" else "3"), result.stdout)
+                else:
+                    self.assertIn("server did not become ready", result.stderr)
+                    self.assertIn("synthetic server diagnostic", result.stderr)
+
     def test_bad_helper_results_never_execute_dependent_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

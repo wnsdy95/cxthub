@@ -1779,7 +1779,16 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 		hookWarn("merge context promotion deferred: remote observation unavailable")
 		return false
 	}
-	observed, err := observer.ResolveRemoteBranchObservation(ctx, inbound.SyncInput{Cwd: cwd}, branch)
+	// Bound optional candidate evidence to the newest roots. Older candidates
+	// without observed ancestry are still appended conservatively below.
+	roots := make([]domain.ContentHash, 0, len(cands))
+	for _, candidate := range cands {
+		roots = append(roots, candidate.ID)
+	}
+	if len(roots) > domain.MaxBranchPullRoots {
+		roots = roots[len(roots)-domain.MaxBranchPullRoots:]
+	}
+	observed, err := observer.ResolveRemoteBranchObservation(ctx, inbound.SyncInput{Cwd: cwd, ObservationRoots: roots}, branch)
 	if err != nil {
 		hookWarn("merge context observation failed (%s): %v", branch, err)
 		return false

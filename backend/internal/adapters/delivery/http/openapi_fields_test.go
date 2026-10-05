@@ -107,7 +107,10 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"GitHubOwnerView", reflect.TypeOf(app.GitHubOwnerView{})},
 		{"GitHubEnterpriseConnection", reflect.TypeOf(app.GitHubEnterpriseConnection{})},
 		{"GitHubStart", reflect.TypeOf(app.GitHubStart{})},
-		{"Repo", reflect.TypeOf(domain.Repo{})},
+		{"Repo", reflect.TypeOf(repoPullView{})},
+		{"BranchPullRequest", reflect.TypeOf(domain.BranchPullRequest{})},
+		{"BranchPullPlan", reflect.TypeOf(domain.BranchPullPlan{})},
+		{"BranchPullSettings", reflect.TypeOf(domain.BranchPullSettings{})},
 		{"User", reflect.TypeOf(domain.User{})},
 	}
 	for _, c := range cases {

@@ -1306,12 +1306,75 @@ components:
           type: string
           format: byte
 
+    BranchPullRequest:
+      type: object
+      additionalProperties: false
+      required: [version, branch]
+      properties:
+        version: { type: integer, const: 1, description: "Unknown versions return 400; do not infer support from context_protocol." }
+        branch: { type: string, minLength: 1 }
+        observation_roots:
+          type: array
+          maxItems: 256
+          description: "Optional same-repo candidate snapshot roots. Duplicates are normalized. Foreign/missing candidates are absent; required dependencies cannot be absent."
+          items: { $ref: '#/components/schemas/ContentHash' }
+
+    BranchPullSettings:
+      type: object
+      additionalProperties: false
+      required: [kind, hash]
+      properties:
+        kind: { type: string, enum: [claude, agents, codex] }
+        hash: { $ref: '#/components/schemas/ContentHash' }
+
+    BranchPullPlan:
+      type: object
+      additionalProperties: false
+      required: [version, repo_id, branch, context_protocol, selected_ref, refs, history, snapshot_index, snapshot_states, absent_roots, settings_objects]
+      description: "Complete snapshot/history dependency plan and frozen memory roots from one repository read snapshot; no lease, publication, or local adoption. Every retained ref target, history Source/Target/SharedTarget/MemorySource and present optional root has complete natural/graft ancestry. Preserve all selected-identity code observations, name-release dependencies and exact completed-PR source witnesses. Snapshot state tokens freeze attachment hashes; history pins retain their exact hashes. No memory bodies or transcript bytes are read by planning. Clients reconstruct every exact snapshot and validate root digest owners and complete same-owner ancestry, including cached/staged objects on warm plans, before observation CAS. The CLI chain bound is 1024; this route neither enumerates nor prevalidates memory bodies. Later object/state failures invalidate the fetch. Arrays are always non-null."
+      properties:
+        version: { type: integer, const: 1 }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        branch: { type: string }
+        context_protocol: { type: integer, enum: [0, 1] }
+        selected_ref: { $ref: '#/components/schemas/Ref' }
+        refs:
+          type: array
+          description: "Exactly the selected branch ref and retained same-name lifecycle tags; every target is required. No unrelated refs or symbolic HEAD."
+          items: { $ref: '#/components/schemas/Ref' }
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/HistoryEvent' }
+        snapshot_index:
+          type: array
+          uniqueItems: true
+          description: "Sorted complete required metadata inventory. Snapshot ID equals canonical document hash. Materialize every node before validating dependencies; cached local grafts cannot fill missing evidence."
+          items: { $ref: '#/components/schemas/ContentHash' }
+        snapshot_states:
+          type: object
+          description: "Exactly one mutable metadata state token per snapshot_index entry; no other keys."
+          additionalProperties: { $ref: '#/components/schemas/ContentHash' }
+        absent_roots:
+          type: array
+          uniqueItems: true
+          description: "Sorted requested optional roots absent in this repo. Disjoint from snapshot_index. No unsolicited roots."
+          items: { $ref: '#/components/schemas/ContentHash' }
+        settings_objects:
+          type: array
+          description: "Sorted unique settings hashes/kinds of included snapshots; existing object endpoints still enforce ownership and bytes must pass kind/hash verification. No secrets."
+          items: { $ref: '#/components/schemas/BranchPullSettings' }
+
     Repo:
       type: object
       description: "Repo metadata. local_path is always an empty string on the server (local-only field)."
       required: [id, remote_url, default_branch]
       additionalProperties: false
       properties:
+        branch_pull_version:
+          type: integer
+          enum: [0, 1]
+          readOnly: true
+          description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Absent/zero means legacy full transfer. One requires repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol. After a one response, errors are failures, never fallback permission."
         context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Only an explicit upgrade can enable version 1." }
         id:
           $ref: "#/components/schemas/ContentHash"
@@ -4142,6 +4205,49 @@ paths:
   # =========================================================================
   # Pull Negotiation
   # =========================================================================
+  /repos/{repoID}/pull/branch-plan:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: pullBranchPlan
+      summary: Plan selected-branch snapshot/history dependencies
+      description: "Requires puller, including zero-want/cached clients. Read GET /repos/{repoID}.branch_pull_version first: only absent/zero permits legacy full-transfer fallback. Unknown request versions return 400. FS/nontransactional stores return 501 branch_pull_unsupported. PostgreSQL reads refs, history and snapshot metadata through one read-only transaction context. Planning performs no GetMemory calls; clients validate immutable memory roots and full same-owner ancestry before observation CAS, including unchanged warm plans. This is not a retention lease; subsequent object requests reauthorize and verify all planned dependencies. No Git/provider execution. Request body is limited to 64 KiB."
+      tags: [pull]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BranchPullRequest' }
+      responses:
+        '200':
+          description: Complete snapshot/history dependency plan with frozen memory roots; use existing object/chunk/memory/settings routes for bytes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BranchPullPlan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Branch identity disagreement or archived branch; no fallback
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '413':
+          description: Request body exceeds 64 KiB
+        '415':
+          description: JSON content type required
+        '422':
+          description: Incomplete/corrupt dependency evidence; no successful partial plan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '501':
+          description: "branch_pull_unsupported; store lacks repository read transactions. Capability is absent/zero."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /repos/{repoID}/pull/objects:
     parameters:
       - $ref: "#/components/parameters/repoID"

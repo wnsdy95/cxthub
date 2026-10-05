@@ -133,7 +133,17 @@ CXT_ENV_FILE=/dev/null CXT_AUTH=dev CXT_POSTGRES_DSN="${CXT_E2E_DSN:-}" \
   RESEND_API_KEY= CXT_GITHUB_TOKEN= \
   "$TMP/bin/cxtd" serve --addr 127.0.0.1:$PORT --data "$TMP/data" >"$TMP/srv.log" 2>&1 &
 SRV_PID=$!
-for i in $(seq 1 30); do curl -sf -o /dev/null "$B/repos" && break; sleep 0.3; done
+SERVER_READY=0
+for i in $(seq 1 30); do
+  kill -0 "$SRV_PID" 2>/dev/null || break
+  if curl -sf -o /dev/null "$B/repos"; then SERVER_READY=1; break; fi
+  sleep 0.3
+done
+if [ "$SERVER_READY" != 1 ]; then
+  echo "fixture server did not become ready; authentication was not attempted" >&2
+  tail -20 "$TMP/srv.log" >&2
+  exit 1
+fi
 
 J="$TMP/a.jar"
 ccurl -s -c "$J" -X POST "$B/auth/session" -H "Authorization: Bearer dev:o@t.io:O" >/dev/null
@@ -737,11 +747,12 @@ for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
 PYREUSE
 )
 CXT_MEMORY_REUSE_TEST_URL="$B" CXT_MEMORY_REUSE_TEST_TOKEN="$REUSE_TOKEN" \
+  CXT_BRANCH_PULL_TEST_REQUIRED="$([ -n "${CXT_E2E_DSN:-}" ] && echo 1 || echo 0)" \
   CXT_MEMORY_REUSE_TEST_REPO="$RID" "$TMP/bin/memory-reuse-test" \
-  -test.run '^TestMemoryReuseLiveProtocol$' -test.v >"$TMP/memory-reuse.out" 2>&1
+  -test.run '^(TestMemoryReuseLiveProtocol|TestBranchPullLiveProtocol)$' -test.v >"$TMP/memory-reuse.out" 2>&1
 REUSE_EXIT=$?
 if [ "$REUSE_EXIT" != 0 ]; then cat "$TMP/memory-reuse.out"; fi
-expect "exact typed memory reused and verified by server" "$REUSE_EXIT" 0
+expect "memory reuse and selected-branch wire protocol verified by server" "$REUSE_EXIT" 0
 unset REUSE_TOKEN
 
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: All passed ✓"; else echo "SYNC E2E: Failures exist ✗"; fi

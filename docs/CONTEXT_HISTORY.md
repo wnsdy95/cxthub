@@ -131,7 +131,8 @@ Tracking preparation uses the ref, immutable history and observed graph returned
 by the same verified fetch, including its warm-delta baseline. It never rereads
 a newer observation file, substitutes local snapshot labels, or adopts remote
 history as a side effect of a query. Ref/history identity disagreement stays
-pending because these server reads are not one transactional revision.
+pending. The legacy full-transfer path reads these separately; the PostgreSQL
+branch-plan path below reads its catalog in one transaction.
 
 The Git commit frozen at branch creation selects its first-parent ancestry.
 Recorded context ancestry and memory parent hashes resolve competing observations;
@@ -173,6 +174,45 @@ corrupt evidence blocks application and preserves the journal. No provider
 transcript is edited, and no historical PR joins are inferred from branch names.
 An existing ref whose forward relationship is provable only through mutable grafts
 remains pending until an explicit reconciliation establishes a safe move.
+
+## Selected-branch observation transfer
+
+A successful authorized repository response advertises `branch_pull_version: 1`
+only when the server store supports a consistent repository read transaction.
+The CLI uses `POST /repos/{repoID}/pull/branch-plan` for a selected-branch,
+fetch-only observation. The capability is separate from `context_protocol` and
+is not stored as local repository configuration. Older servers and the FS
+adapter keep the existing full-transfer path. Once version 1 is advertised,
+a denied request, missing route, invalid plan or object error fails the fetch;
+it never silently changes to a broader query.
+
+The server chooses the logical branch identity, its observations, name/lifecycle
+dependencies and exact completed-PR source witnesses. Snapshot dependencies
+include all returned ref targets, historical source/target/shared/memory-source
+roots, and natural plus graft parents. Snapshot labels cannot prune that graph.
+Optional candidate roots support merge coverage checks; missing optional roots
+are explicit, while missing required dependencies fail. At most 256 optional
+roots are requested. Older merge candidates without observed coverage still
+receive conservative append requests in Git order.
+
+The response freezes metadata state tokens and memory hashes. Existing object
+and chunk transfer verifies the exact returned inventory; it cannot fill a gap
+with unpublished local metadata. Cached objects avoid redundant transfer but
+must still pass dependency, settings and full memory-ancestry validation.
+A completed PR receipt also requires its exact ordinary source pin by branch
+identity, code SHA and context target. Competing pins remain available to the
+selection policy; transfer does not choose one by timestamp.
+
+A successful fetch records a branch-scoped observation using the existing CAS
+mechanism, separately from the full-repository repair baseline. Cached nodes
+outside this request's inventory cannot prove merge coverage. Fetch does not
+adopt local refs, history, settings or memory selection. Normal pull and repair
+retain their existing semantics.
+
+This narrows network transfer, not repository authorization or server catalog
+work: the server still reads repository metadata/history before selecting the
+dependency closure. It does not read every memory body while planning. Later
+object requests reauthorize and can fail; the plan is not a retention lease.
 
 ## Graph and history browser
 

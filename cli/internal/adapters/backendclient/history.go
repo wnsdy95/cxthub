@@ -3,6 +3,7 @@ package backendclient
 import (
 	"context"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 	"net/http"
 )
 
@@ -45,22 +46,39 @@ func (c *BackendClient) PromotePullRequest(ctx context.Context, repoID string, p
 	return out.Ref, err
 }
 
+// repositoryView includes runtime capabilities without persisting them as
+// local repository configuration.
+type repositoryView struct {
+	domain.Repo
+	BranchPullVersion int `json:"branch_pull_version,omitempty"`
+}
+
+func (c *BackendClient) readRepository(ctx context.Context, repoID string) (repositoryView, error) {
+	var view repositoryView
+	if err := domain.ValidateContentHash(repoID); err != nil {
+		return view, err
+	}
+	if err := c.do(ctx, http.MethodGet, c.reposPath(repoID), nil, &view); err != nil {
+		return view, err
+	}
+	if view.ID != repoID {
+		return view, domain.ErrHashMismatch
+	}
+	if err := domain.ValidateBranchName(view.DefaultBranch); err != nil {
+		return view, err
+	}
+	return view, nil
+}
+
 // Repository reads cloud identity/configuration without consulting local state.
 func (c *BackendClient) Repository(ctx context.Context, repoID string) (domain.Repo, error) {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return domain.Repo{}, err
-	}
-	var repo domain.Repo
-	if err := c.do(ctx, http.MethodGet, c.reposPath(repoID), nil, &repo); err != nil {
-		return repo, err
-	}
-	if repo.ID != repoID {
-		return repo, domain.ErrHashMismatch
-	}
-	if err := domain.ValidateBranchName(repo.DefaultBranch); err != nil {
-		return repo, err
-	}
-	return repo, nil
+	view, err := c.readRepository(ctx, repoID)
+	return view.Repo, err
+}
+
+func (c *BackendClient) PullCapabilities(ctx context.Context, repoID string) (outbound.PullCapabilities, error) {
+	view, err := c.readRepository(ctx, repoID)
+	return outbound.PullCapabilities{ContextProtocol: view.ContextProtocol, BranchPlanVersion: view.BranchPullVersion}, err
 }
 
 // ContextProtocol reads small repository metadata, not the full object catalog.
