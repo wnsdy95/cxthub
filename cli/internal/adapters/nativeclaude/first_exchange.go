@@ -14,8 +14,9 @@ var (
 )
 
 // FirstExchange is an explicit, private text-response transport for 2.1.287.
-// It does not enable the public CLI, grant tools, measure exact tokens, or issue
-// a TUI resume plan. Existing Start retains its strictly no-query contract.
+// It does not enable the public CLI, grant tools or measure exact tokens.
+// Verified readback can issue a same-session resume plan. Existing Start
+// retains its strictly no-query contract.
 // Configuration and native permission settings are never changed here. Any
 // permission request, tool response or compaction retires this limited session.
 // Existing native rules may have executed a preapproved tool before its frame

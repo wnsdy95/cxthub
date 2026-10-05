@@ -181,6 +181,10 @@ type idleResumeState struct {
 // including metadata rows. One Session can issue at most one plan, even when
 // preparation or the later launch fails. Archives are never rewritten here.
 func (s *Session) PrepareIdleResume(ctx context.Context, ownedPath string) (*IdleResumePlan, error) {
+	return s.prepareIdleResume(ctx, ownedPath, false)
+}
+
+func (s *Session) prepareIdleResume(ctx context.Context, ownedPath string, exchange bool) (*IdleResumePlan, error) {
 	ctx, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -191,8 +195,12 @@ func (s *Session) PrepareIdleResume(ctx context.Context, ownedPath string) (*Idl
 	default:
 		return nil, ErrState
 	}
+	wantVersion := "2.1.285"
+	if exchange {
+		wantVersion = "2.1.287"
+	}
 	s.mu.Lock()
-	if s.closeErr != nil || s.verifiedArchive == nil || s.verifiedArchive.path != ownedPath || s.version != "2.1.285" {
+	if s.closeErr != nil || s.verifiedArchive == nil || s.verifiedArchive.path != ownedPath || (s.verifiedArchive.exchange != nil) != exchange || s.version != wantVersion {
 		s.mu.Unlock()
 		return nil, ErrState
 	}
@@ -219,7 +227,7 @@ func (s *Session) PrepareIdleResume(ctx context.Context, ownedPath string) (*Idl
 	if err != nil {
 		return nil, err
 	}
-	verified, err := s.verifyArchive(ctx, ownedPath)
+	verified, err := s.verifyResumeArchive(ctx, ownedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +298,7 @@ func (p *IdleResumePlan) Start(ctx context.Context, stdin, stdout, stderr *os.Fi
 	if err := validateIdlePath(p.archivePath); err != nil {
 		return nil, err
 	}
-	archive, err := p.source.verifyArchive(verification, p.archive.path)
+	archive, err := p.source.verifyResumeArchive(verification, p.archive.path)
 	if err != nil {
 		return nil, err
 	}
