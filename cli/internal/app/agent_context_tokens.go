@@ -13,8 +13,8 @@ const agentBoundedProjectionGap = "bounded_projection_remaining_sources_via_mcp"
 
 // AgentTokenMeasurementError means a candidate could not be certified, not that
 // an exact token count exceeded its budget. Reason is a bounded diagnostic code;
-// the error never contains the candidate's text. Native history requires exact
-// accounting even when a conservative allowance fits.
+// the error never contains the candidate's text. Strict native policies require
+// exact accounting even when a conservative allowance fits.
 type AgentTokenMeasurementError struct {
 	Reason        string
 	Allowance     int
@@ -110,7 +110,8 @@ func (s *AgentContextService) fitAgentHistoryProjection(ctx context.Context, in 
 // ConservativeAgentTokenCounter is the fallback memory/artifact counter. It
 // counts each UTF-8 byte as one allowance unit. It is deliberately labelled
 // inexact, including for ASCII, and can never satisfy strict native history
-// launch. Provider-specific framing remains a separate host reservation.
+// launch or the versioned native-estimate counter provenance. Provider-specific
+// framing remains a separate host reservation.
 // The runtime prefers the agenttokens adapter for documented model mappings.
 type ConservativeAgentTokenCounter struct{}
 

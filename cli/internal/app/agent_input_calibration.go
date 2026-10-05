@@ -27,6 +27,18 @@ func (r MeasuredAgentCapabilities) AgentCapability(ctx context.Context, provider
 	if err != nil {
 		return domain.AgentHostCapability{}, err
 	}
+	switch c.InputAccountingPolicy {
+	case domain.NativeEstimateReserveV1:
+		if c.Calibration != (domain.AgentInputCalibration{}) {
+			return domain.AgentHostCapability{}, domain.ErrProviderCapabilityUnknown
+		}
+		// This policy has an ephemeral native baseline, not reusable measured
+		// overhead. Preserve it and never consult the calibration store.
+		return c, ctx.Err()
+	case "", domain.MeasuredInputReserveV1:
+	default:
+		return domain.AgentHostCapability{}, domain.ErrProviderCapabilityUnknown
+	}
 	c.InputAccountingPolicy = domain.MeasuredInputReserveV1
 	scope, err := c.CalibrationScope()
 	if err != nil {
@@ -53,7 +65,7 @@ func RecordAgentInputObservation(ctx context.Context, store outbound.AgentInputC
 	if err := ctx.Err(); err != nil {
 		return domain.AgentInputCalibration{}, false, err
 	}
-	if store == nil || p.Budget == nil {
+	if store == nil || p.Budget == nil || p.Budget.InputAccountingPolicy != domain.MeasuredInputReserveV1 {
 		return domain.AgentInputCalibration{}, false, domain.ErrProviderCapabilityUnknown
 	}
 	if err := p.ValidateIdentity(); err != nil {

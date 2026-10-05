@@ -34,20 +34,64 @@ func (p *AgentInitialPrompt) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// AgentPromptReservation binds a prompt to exact accounting for a resolved
+// AgentPromptReservation binds a prompt to declared accounting for a resolved
 // provider/model. A closure keeps prompt bytes out of reflective formatting of
 // private fields in enclosing structs, where String and GoString are bypassed.
 // The zero value only authorizes a legacy absent prompt with zero tokens.
 type AgentPromptReservation struct {
-	validate func(AgentInitialPrompt, ProviderKind, string, string, int) error
+	validate       func(AgentInitialPrompt, ProviderKind, string, string, int) error
+	validateBudget func(AgentInitialPrompt, AgentContextBudget) error
 }
 
 func NewAgentPromptReservation(prompt AgentInitialPrompt, provider ProviderKind, model string, usage AgentTokenUsage) (AgentPromptReservation, error) {
-	if (provider != ProviderCodex && provider != ProviderClaude) || strings.TrimSpace(model) == "" || !usage.Exact || strings.TrimSpace(usage.Tokenizer) == "" {
-		return AgentPromptReservation{}, fmt.Errorf("%w: initial prompt requires a resolved provider/model and exact tokenizer", ErrProviderCapabilityUnknown)
+	return newAgentPromptReservation(prompt, provider, model, "", usage)
+}
+
+// NewAgentPromptReservationForCapability binds the actual question to the
+// capability-owned policy and runtime scope. It does not confer runtime authority.
+// Native allowances count actual UTF-8 bytes, never runes or an estimated codec.
+func NewAgentPromptReservationForCapability(prompt AgentInitialPrompt, c AgentHostCapability, usage AgentTokenUsage) (AgentPromptReservation, error) {
+	if usage.Tokenizer != c.Tokenizer {
+		return AgentPromptReservation{}, ErrProviderCapabilityUnknown
+	}
+	r, err := newAgentPromptReservation(prompt, c.Provider, c.Model, c.InputAccountingPolicy, usage)
+	if err != nil {
+		return AgentPromptReservation{}, err
+	}
+	validate := r.validate
+	policy, scope := c.InputAccountingPolicy, c.RuntimeScope
+	r.validateBudget = func(actual AgentInitialPrompt, b AgentContextBudget) error {
+		if b.InputAccountingPolicy != policy || b.RuntimeScope != scope {
+			return fmt.Errorf("%w: initial prompt policy or runtime changed", ErrProviderCapabilityUnknown)
+		}
+		return validate(actual, b.Provider, b.Model, b.Tokenizer, b.InitialPromptTokens)
+	}
+	if policy == NativeEstimateReserveV1 {
+		if ValidateContentHash(scope) != nil {
+			return AgentPromptReservation{}, ErrProviderCapabilityUnknown
+		}
+		// The legacy API has no policy/scope parameters and cannot authorize an
+		// allowance reservation, even when its text and numeric count match.
+		r.validate = func(AgentInitialPrompt, ProviderKind, string, string, int) error {
+			return ErrProviderCapabilityUnknown
+		}
+	}
+	return r, nil
+}
+
+func newAgentPromptReservation(prompt AgentInitialPrompt, provider ProviderKind, model, policy string, usage AgentTokenUsage) (AgentPromptReservation, error) {
+	kind, err := ValidateAgentTokenAccounting(policy, provider, usage.Tokenizer, usage)
+	if err != nil {
+		return AgentPromptReservation{}, err
+	}
+	if strings.TrimSpace(model) == "" || strings.TrimSpace(usage.Tokenizer) == "" {
+		return AgentPromptReservation{}, fmt.Errorf("%w: initial prompt requires a resolved model and accounting", ErrProviderCapabilityUnknown)
 	}
 	if usage.Tokens < 0 || (prompt.Text() == "" && usage.Tokens != 0) || (prompt.Text() != "" && usage.Tokens == 0) {
 		return AgentPromptReservation{}, fmt.Errorf("%w: invalid initial prompt token accounting", ErrContextBudgetExceeded)
+	}
+	if kind == AgentTextUTF8Allowance && usage.Tokens != len(prompt.Text()) {
+		return AgentPromptReservation{}, fmt.Errorf("%w: initial prompt allowance differs from its UTF-8 byte length", ErrContextBudgetExceeded)
 	}
 	return AgentPromptReservation{validate: func(actual AgentInitialPrompt, actualProvider ProviderKind, actualModel, tokenizer string, tokens int) error {
 		if actual != prompt {
@@ -61,6 +105,19 @@ func NewAgentPromptReservation(prompt AgentInitialPrompt, provider ProviderKind,
 		}
 		return nil
 	}}, nil
+}
+
+// ValidateForBudget retains the opaque byte/presence binding and also verifies
+// policy/scope for reservations created from a runtime capability.
+func (r AgentPromptReservation) ValidateForBudget(prompt AgentInitialPrompt, b AgentContextBudget) error {
+	if r.validateBudget != nil {
+		return r.validateBudget(prompt, b)
+	}
+	// A decoded/legacy reservation cannot authorize the new allowance policy.
+	if b.InputAccountingPolicy == NativeEstimateReserveV1 {
+		return ErrProviderCapabilityUnknown
+	}
+	return r.Validate(prompt, b.Provider, b.Model, b.Tokenizer, b.InitialPromptTokens)
 }
 
 func (r AgentPromptReservation) Validate(prompt AgentInitialPrompt, provider ProviderKind, model, tokenizer string, tokens int) error {
@@ -103,8 +160,7 @@ func (p AgentContextPackage) ValidateInitialPrompt(prompt AgentInitialPrompt) er
 		}
 		return fmt.Errorf("%w: initial prompt reservation requires a preparation budget", ErrProviderCapabilityUnknown)
 	}
-	b := p.Budget
-	return p.initialPromptReservation.Validate(prompt, b.Provider, b.Model, b.Tokenizer, b.InitialPromptTokens)
+	return p.initialPromptReservation.ValidateForBudget(prompt, *p.Budget)
 }
 
 // UnmarshalJSON preserves receipt compatibility but never restores launch

@@ -7,38 +7,53 @@ import "fmt"
 // are inside EffectiveTokens. ReservedTokens is required output/work space,
 // not another deduction from the already reserved twenty percent.
 type AgentContextBudget struct {
-	Provider                   ProviderKind `json:"provider"`
-	Model                      string       `json:"model"`
-	HostVersion                string       `json:"host_version"`
-	Tokenizer                  string       `json:"tokenizer"`
-	RequestedTokens            int          `json:"requested_tokens"`
-	EffectiveTokens            int          `json:"effective_tokens"`
-	ContextWindow              int          `json:"context_window"`
-	InitialInputLimit          int          `json:"initial_input_limit"`
-	HostInputTokens            int          `json:"host_input_tokens"`
-	FramingTokens              int          `json:"framing_tokens"`
-	InitialPromptTokens        int          `json:"initial_prompt_tokens,omitempty"`
-	ReservedTokens             int          `json:"reserved_tokens"`
-	AutoCompactTokens          int          `json:"auto_compact_tokens"`
-	AdjustmentReason           string       `json:"adjustment_reason,omitempty"`
-	InputAccountingPolicy      string       `json:"input_accounting_policy,omitempty"`
-	RuntimeScope               ContentHash  `json:"runtime_scope,omitempty"`
-	HostInputUnverified        bool         `json:"host_input_unverified,omitempty"`
-	AutoCompactUnverified      bool         `json:"auto_compact_unverified,omitempty"`
-	OverheadAllowanceTokens    int          `json:"overhead_allowance_tokens,omitempty"`
-	ObservedOverheadTokens     int          `json:"observed_overhead_tokens,omitempty"`
-	ObservedInputCeilingTokens int          `json:"observed_input_ceiling_tokens,omitempty"`
+	Provider                    ProviderKind `json:"provider"`
+	Model                       string       `json:"model"`
+	HostVersion                 string       `json:"host_version"`
+	Tokenizer                   string       `json:"tokenizer"`
+	RequestedTokens             int          `json:"requested_tokens"`
+	EffectiveTokens             int          `json:"effective_tokens"`
+	ContextWindow               int          `json:"context_window"`
+	InitialInputLimit           int          `json:"initial_input_limit"`
+	HostInputTokens             int          `json:"host_input_tokens"`
+	FramingTokens               int          `json:"framing_tokens"`
+	InitialPromptTokens         int          `json:"initial_prompt_tokens,omitempty"`
+	ReservedTokens              int          `json:"reserved_tokens"`
+	AutoCompactTokens           int          `json:"auto_compact_tokens"`
+	AdjustmentReason            string       `json:"adjustment_reason,omitempty"`
+	InputAccountingPolicy       string       `json:"input_accounting_policy,omitempty"`
+	RuntimeScope                ContentHash  `json:"runtime_scope,omitempty"`
+	HostInputUnverified         bool         `json:"host_input_unverified,omitempty"`
+	AutoCompactUnverified       bool         `json:"auto_compact_unverified,omitempty"`
+	OverheadAllowanceTokens     int          `json:"overhead_allowance_tokens,omitempty"`
+	ObservedOverheadTokens      int          `json:"observed_overhead_tokens,omitempty"`
+	ObservedInputCeilingTokens  int          `json:"observed_input_ceiling_tokens,omitempty"`
+	BaselineInputEstimateTokens int          `json:"baseline_input_estimate_tokens,omitempty"`
+	BaselineInputMeasurement    string       `json:"baseline_input_measurement,omitempty"`
+	FramingAllowanceTokens      int          `json:"framing_allowance_tokens,omitempty"`
 }
 
 // ResolveBudget must run before body selection. A model name or user-supplied
-// window setting cannot replace adapter evidence or exact token accounting.
+// window setting cannot replace adapter evidence or declared text accounting.
 func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, requested int, counter AgentTokenUsage) (AgentContextBudget, error) {
-	if (provider != ProviderCodex && provider != ProviderClaude) || !c.Verified || c.Provider != provider || c.Model != model || c.Model == "" || c.HostVersion == "" || c.Evidence == "" || c.ContextWindow <= 0 || c.HostInputTokens < 0 || c.ReservedTokens < 0 || c.FramingTokens < 0 || c.AutoCompactTokens < 0 || !counter.Exact || counter.Tokenizer == "" || counter.Tokenizer != c.Tokenizer {
-		return AgentContextBudget{}, fmt.Errorf("%w: verified runtime model/window and exact text tokenizer are required for history", ErrProviderCapabilityUnknown)
+	if (provider != ProviderCodex && provider != ProviderClaude) || !c.Verified || c.Provider != provider || c.Model != model || c.Model == "" || c.HostVersion == "" || c.Evidence == "" || c.ContextWindow <= 0 || c.HostInputTokens < 0 || c.ReservedTokens < 0 || c.FramingTokens < 0 || c.AutoCompactTokens < 0 {
+		return AgentContextBudget{}, fmt.Errorf("%w: verified runtime model/window is required for history", ErrProviderCapabilityUnknown)
+	}
+	if _, err := ValidateAgentTokenAccounting(c.InputAccountingPolicy, provider, c.Tokenizer, counter); err != nil {
+		return AgentContextBudget{}, err
 	}
 	measured := c.InputAccountingPolicy == MeasuredInputReserveV1
+	estimated := c.InputAccountingPolicy == NativeEstimateReserveV1
+	if !estimated && (c.BaselineInputEstimateTokens != 0 || c.BaselineInputMeasurement != "" || c.FramingAllowanceTokens != 0) {
+		return AgentContextBudget{}, fmt.Errorf("%w: estimate fields require their own input policy", ErrProviderCapabilityUnknown)
+	}
 	allowance := 0
-	if measured {
+	if estimated {
+		if ValidateContentHash(c.RuntimeScope) != nil || c.HostInputKnown || c.HostInputTokens != 0 || c.FramingTokens != 0 || c.BaselineInputEstimateTokens < 0 || c.BaselineInputMeasurement != NativeLocalEstimate || c.FramingAllowanceTokens < 0 || c.Calibration != (AgentInputCalibration{}) || (!c.AutoCompactKnown && c.AutoCompactTokens != 0) {
+			return AgentContextBudget{}, fmt.Errorf("%w: invalid native estimate capability", ErrProviderCapabilityUnknown)
+		}
+		allowance = InputReserveMargin(c.ContextWindow)
+	} else if measured {
 		scope, err := c.CalibrationScope()
 		if err != nil {
 			return AgentContextBudget{}, err
@@ -85,6 +100,12 @@ func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, 
 		return AgentContextBudget{}, fmt.Errorf("%w: mandatory host input leaves no package capacity", ErrContextBudgetExceeded)
 	}
 	available := limit - c.HostInputTokens - c.FramingTokens
+	if estimated {
+		if c.BaselineInputEstimateTokens >= available || c.FramingAllowanceTokens >= available-c.BaselineInputEstimateTokens {
+			return AgentContextBudget{}, fmt.Errorf("%w: native baseline allowance leaves no package capacity", ErrContextBudgetExceeded)
+		}
+		available -= c.BaselineInputEstimateTokens + c.FramingAllowanceTokens
+	}
 	// Check before subtracting so even hostile counts cannot overflow or leave
 	// a non-positive package allowance. The app owns this separate reservation.
 	if c.InitialPromptTokens >= available {
@@ -105,9 +126,11 @@ func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, 
 		InitialPromptTokens: c.InitialPromptTokens,
 		AutoCompactTokens:   c.AutoCompactTokens, AdjustmentReason: reason,
 		InputAccountingPolicy: c.InputAccountingPolicy, RuntimeScope: c.RuntimeScope,
-		HostInputUnverified: measured && !c.HostInputKnown, AutoCompactUnverified: measured && !c.AutoCompactKnown,
+		HostInputUnverified: (measured || estimated) && !c.HostInputKnown, AutoCompactUnverified: (measured || estimated) && !c.AutoCompactKnown,
 		OverheadAllowanceTokens: allowance, ObservedOverheadTokens: c.Calibration.OverheadTokens,
-		ObservedInputCeilingTokens: c.Calibration.InputCeilingTokens}, nil
+		ObservedInputCeilingTokens:  c.Calibration.InputCeilingTokens,
+		BaselineInputEstimateTokens: c.BaselineInputEstimateTokens, BaselineInputMeasurement: c.BaselineInputMeasurement,
+		FramingAllowanceTokens: c.FramingAllowanceTokens}, nil
 }
 
 // Validate binds a receipt to the request and selected accounting. Recomputing
@@ -125,7 +148,7 @@ func (b AgentContextBudget) Validate(provider ProviderKind, model string, reques
 		return fmt.Errorf("%w: preparation budget does not match the request or runtime limits", ErrContextBudgetExceeded)
 	}
 	if usage.Tokens > b.EffectiveTokens {
-		return fmt.Errorf("%w: selected %d tokens; effective package limit %d", ErrContextBudgetExceeded, usage.Tokens, b.EffectiveTokens)
+		return fmt.Errorf("%w: selected accounting %d; effective package limit %d", ErrContextBudgetExceeded, usage.Tokens, b.EffectiveTokens)
 	}
 	return nil
 }
@@ -136,7 +159,9 @@ func (b AgentContextBudget) capability() AgentHostCapability {
 		Verified: true, Evidence: "recorded preparation accounting", HostInputKnown: !b.HostInputUnverified, AutoCompactKnown: !b.AutoCompactUnverified,
 		ContextWindow: b.ContextWindow, HostInputTokens: b.HostInputTokens, FramingTokens: b.FramingTokens,
 		InitialPromptTokens: b.InitialPromptTokens, ReservedTokens: b.ReservedTokens, AutoCompactTokens: b.AutoCompactTokens,
-		InputAccountingPolicy: b.InputAccountingPolicy, RuntimeScope: b.RuntimeScope}
+		InputAccountingPolicy: b.InputAccountingPolicy, RuntimeScope: b.RuntimeScope,
+		BaselineInputEstimateTokens: b.BaselineInputEstimateTokens, BaselineInputMeasurement: b.BaselineInputMeasurement,
+		FramingAllowanceTokens: b.FramingAllowanceTokens}
 	if b.InputAccountingPolicy == MeasuredInputReserveV1 {
 		scope, _ := c.CalibrationScope()
 		c.Calibration = AgentInputCalibration{Scope: scope, OverheadTokens: b.ObservedOverheadTokens, InputCeilingTokens: b.ObservedInputCeilingTokens}

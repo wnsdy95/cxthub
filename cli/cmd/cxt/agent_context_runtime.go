@@ -188,11 +188,7 @@ func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
 			if err != nil {
 				return result, err
 			}
-			raw, err := p.Artifact()
-			if err != nil {
-				return result, err
-			}
-			if err = providerfs.WriteRepoFileDurable(cfg.RepoRoot, filepath.Join(".cxt", "input-packages", strings.TrimPrefix(string(p.ID), "sha256:")+".json"), raw, 0600); err != nil {
+			if err = persistAgentInputPackage(ctx, cfg.RepoRoot, p); err != nil {
 				return result, err
 			}
 			measurement := "conservative_bound"
