@@ -140,6 +140,13 @@ stays empty. A pinned completed-PR source uses the same fetched evidence rather
 than rereading local history. The selected context can be older than the observed
 shared tip; both values are retained independently.
 
+Fetch retains the full immutable memory ancestry of each historical pin, even
+when that chain is outside the snapshot's current attachment or its tip is
+already cached locally. Every digest must belong to the declared owner; an
+explicit memory source cannot be overridden by a matching conversation source.
+Missing or corrupt ancestors fail verification before a successful observation
+is recorded. Fetch still leaves the local memory selection unchanged.
+
 Before application, the Git-side branch operation stores the selected identity,
 code association, memory pin, historical-selection status and required history
 proof. Application adopts only the selected identity's observations and explicit

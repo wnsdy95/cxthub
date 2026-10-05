@@ -1753,31 +1753,48 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 		memoryAdoptions[snap.ID] = existing.MemoryHash
 	}
 
-	// Pin history memory by immutable hash, even when it is older than the
-	// currently advertised snapshot attachment.
+	// Historical code positions may pin a memory chain outside the snapshot's
+	// current attachment. Retain its complete immutable ancestry for offline
+	// causal selection, including when the pinned tip was already cached.
+	completeHistoryMemories := map[domain.ContentHash]bool{}
 	for _, event := range history {
 		if event.MemoryHash == "" {
 			continue
 		}
-		if _, ok := stagedMemories[event.MemoryHash]; ok {
-			continue
-		}
-		memory, err := s.store.GetMemory(ctx, event.MemoryHash)
-		if errors.Is(err, domain.ErrNotFound) {
-			memory, err = s.remote.PullMemoryObject(ctx, repoID, event.MemoryHash)
-			if err == nil {
-				stagedMemories[event.MemoryHash] = memory
+		memory, staged := stagedMemories[event.MemoryHash]
+		if !staged {
+			var err error
+			memory, err = s.store.GetMemory(ctx, event.MemoryHash)
+			if errors.Is(err, domain.ErrNotFound) {
+				memory, err = s.remote.PullMemoryObject(ctx, repoID, event.MemoryHash)
+				if err == nil {
+					stagedMemories[event.MemoryHash] = memory
+				}
 			}
-		}
-		if err != nil {
-			return inbound.SyncOutput{}, err
+			if err != nil {
+				return inbound.SyncOutput{}, err
+			}
 		}
 		if err := validateMemoryAttachmentObject(memory, event.MemoryHash, memory.SnapshotID); err != nil {
 			return inbound.SyncOutput{}, err
 		}
-		if memory.SnapshotID != event.Source && memory.SnapshotID != event.Target && memory.SnapshotID != event.MemorySource {
+		if (event.MemorySource != "" && memory.SnapshotID != event.MemorySource) ||
+			(memory.SnapshotID != event.Source && memory.SnapshotID != event.Target && memory.SnapshotID != event.MemorySource) {
 			return inbound.SyncOutput{}, domain.ErrHashMismatch
 		}
+		if completeHistoryMemories[event.MemoryHash] {
+			continue
+		}
+		loader := &memoryPullLoader{service: s, ctx: ctx, repoID: repoID,
+			snapshotID: memory.SnapshotID, staged: stagedMemories, loaded: knownMemories}
+		complete, err := memoryAttachmentAncestor(loader, "", event.MemoryHash)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if !complete {
+			return inbound.SyncOutput{}, domain.ErrHashMismatch
+		}
+		completeHistoryMemories[event.MemoryHash] = true
 	}
 	syncProgress(in, "pull", "store-verified-objects", 0, 0)
 	// Publish metadata only after complete preflight. The streaming transport

@@ -25,7 +25,7 @@ type memoryPushPlan struct {
 }
 
 func validateMemoryAttachmentObject(digest domain.MemoryDigest, hash, snapshotID domain.ContentHash) error {
-	if digest.SnapshotID != snapshotID {
+	if domain.ValidateContentHash(snapshotID) != nil || digest.SnapshotID != snapshotID {
 		return domain.ErrHashMismatch
 	}
 	if err := domain.ValidateOptionalContentHash(digest.PreviousMemoryHash); err != nil {
@@ -215,9 +215,15 @@ type memoryPullLoader struct {
 
 func (l *memoryPullLoader) load(hash domain.ContentHash) (domain.MemoryDigest, error) {
 	if digest, ok := l.loaded[hash]; ok {
+		if digest.SnapshotID != l.snapshotID {
+			return domain.MemoryDigest{}, domain.ErrHashMismatch
+		}
 		return digest, nil
 	}
 	if digest, ok := l.staged[hash]; ok {
+		if digest.SnapshotID != l.snapshotID {
+			return domain.MemoryDigest{}, domain.ErrHashMismatch
+		}
 		if l.loaded != nil {
 			l.loaded[hash] = digest
 		}
