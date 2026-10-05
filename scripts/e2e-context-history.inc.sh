@@ -128,6 +128,13 @@ fi
 if ! git branch repair-evidence >"$TMP/repair-witness.out" 2>&1 || ! cxt branch replay >>"$TMP/repair-witness.out" 2>&1; then
   cat "$TMP/repair-witness.out"; FAIL=1; return
 fi
+# No publisher may observe the local-only work created below. An empty queue
+# alone is insufficient while an upstream branch replay can still enqueue it.
+if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$TMP/protocol-client" "$TMP/repair-client" >"$TMP/repair-drain.out" 2>&1; then
+  cat "$TMP/repair-drain.out"
+  echo "  ✗ publication is not quiescent; repair corruption not attempted"
+  FAIL=1; CXT_E2E_KEEP_TMP=1; return
+fi
 # Linux CI emits Go goroutines if this small fixture ever stalls again. This
 # deadline is test diagnostics only; production repair/capture timeouts stay unchanged.
 repair_command() {
@@ -140,16 +147,35 @@ repair_command() {
 echo "  repair fixture: capture local-only work"
 session "$TMP/repair-client" LOCAL_ONLY
 if ! repair_command cxt save --provider claude -m local-only >"$TMP/repair-save.out" 2>&1; then cat "$TMP/repair-save.out"; FAIL=1; return; fi
-REPAIR_LOCAL=$(ref_target .cxt/refs/heads/main)
+if ! REPAIR_LOCAL=$(ref_target .cxt/refs/heads/main); then
+  echo "repair proof failed: cannot read local snapshot" >"$TMP/repair-proof.out"
+  cat "$TMP/repair-proof.out"; FAIL=1; return
+fi
+if ! curl --fail --silent --show-error -b "$J" "$B/repos/$PROTOCOL_RID/manifest" >"$TMP/repair-server-manifest.json"; then
+  FAIL=1; return
+fi
+if ! python3 "$ROOT/scripts/e2e-repair-proof.py" local-only "$TMP/repair-server-manifest.json" "$PROTOCOL_RID" "$PROTOCOL_MAIN" "$REPAIR_LOCAL" >"$TMP/repair-proof.out" 2>&1; then
+  cat "$TMP/repair-proof.out"; FAIL=1; return
+fi
 printf 'corrupted document fixture\n' > ".cxt/objects/docs/${PROTOCOL_MAIN#sha256:}"
 printf 'broken config fixture\n' > .cxt/config
 echo "  repair fixture: inspect damaged replica"
-repair_command cxt doctor --json >"$TMP/doctor-before.json" 2>&1
+# A damaged replica is expected to fail doctor; retain its JSON and stderr
+# separately so a process failure cannot be mistaken for an empty issue list.
+repair_command cxt doctor --json >"$TMP/doctor-before.json" 2>"$TMP/doctor-before.err"
+printf '%s\n' "$?" >"$TMP/doctor-before.status"
 echo "  repair fixture: restore verified server objects"
 if ! repair_command cxt repair --from-server --remote "$PROTOCOL_REMOTE" >"$TMP/repair.out" 2>&1; then cat "$TMP/repair.out"; FAIL=1; return; fi
 expect "repair keeps unpushed local main" "$(ref_target .cxt/refs/heads/main)" "$REPAIR_LOCAL"
-cxt doctor --json >"$TMP/doctor-after.json"
-REPAIR_ISSUES=$(python3 -c 'import json,sys;print(len(json.load(sys.stdin)["issues"] or []))' <"$TMP/doctor-after.json")
+repair_command cxt doctor --json >"$TMP/doctor-after.json" 2>"$TMP/doctor-after.err"
+DOCTOR_AFTER_STATUS=$?
+printf '%s\n' "$DOCTOR_AFTER_STATUS" >"$TMP/doctor-after.status"
+if [ "$DOCTOR_AFTER_STATUS" -ne 0 ]; then
+  cat "$TMP/doctor-after.err" "$TMP/doctor-after.json"; FAIL=1; return
+fi
+if ! REPAIR_ISSUES=$(python3 "$ROOT/scripts/e2e-repair-proof.py" doctor "$TMP/doctor-after.json"); then
+  FAIL=1; return
+fi
 expect "repair verified all referenced replica objects" "$REPAIR_ISSUES" 0
 if [ "$REPAIR_ISSUES" != 0 ]; then
   # Synthetic fixture only: retain the exact category instead of hiding it

@@ -26,6 +26,11 @@ jobs:
         run: bash scripts/test-dogfood-daemon.sh
       - name: Verify independent local service lifecycle
         run: python3 scripts/test-local-services.py
+      - name: Verify E2E publication fence and failure evidence
+        run: |
+          python3 scripts/test-e2e-drain-publication.py
+          python3 scripts/test-e2e-collect-diagnostics.py
+          python3 scripts/test-e2e-repair-proof.py
       - name: Validate the complete public history
         if: github.event.repository.private == false
         run: bash scripts/public-preflight.sh full
@@ -191,15 +196,33 @@ jobs:
         with:
           go-version: "1.26.6"
           cache-dependency-path: backend/go.sum
+      - name: Allocate private synchronization diagnostics
+        id: sync-diagnostics
+        run: |
+          diagnostics_root=$(mktemp -d "$RUNNER_TEMP/cxt-sync-diagnostics.XXXXXX") || exit 1
+          printf 'root=%s\n' "$diagnostics_root" >> "$GITHUB_OUTPUT"
       - name: Synchronized E2E deep dive (append/graft · memory promotion · session boundary · fetch-only)
+        env:
+          CXT_E2E_DIAGNOSTICS_DIR: ${{ steps.sync-diagnostics.outputs.root }}/fs
         run: make e2e-sync
       - name: Production PostgreSQL CLI push/pull and hook contracts
         env:
           CXT_E2E_DSN: postgres://cxt:cxt@localhost:5432/cxthub_sync?sslmode=disable
+          CXT_E2E_DIAGNOSTICS_DIR: ${{ steps.sync-diagnostics.outputs.root }}/postgres
         run: |
           CXT_LOAD_DSN="$CXT_E2E_DSN" go test -C backend -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresDocumentPipeline$' -count=1 -v
           CXT_LOAD_DSN="$CXT_E2E_DSN" go test -C backend -tags postgres ./internal/adapters/delivery/http -run '^TestPostgresDocPublicationContention$' -count=1 -v -timeout=10m
           make e2e-sync
+      - name: Preserve allowlisted synchronization failure evidence
+        if: failure() && steps.sync-diagnostics.outputs.root != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: synchronization-diagnostics
+          path: |
+            ${{ steps.sync-diagnostics.outputs.root }}/fs/
+            ${{ steps.sync-diagnostics.outputs.root }}/postgres/
+          if-no-files-found: ignore
+          retention-days: 14
 
   docker:
     runs-on: ubuntu-latest
