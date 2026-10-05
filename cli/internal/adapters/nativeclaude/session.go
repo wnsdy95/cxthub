@@ -1,5 +1,6 @@
 // Package nativeclaude owns a versioned, local Claude stream-JSON process.
-// It exposes no querying user message, arbitrary control, or permission grant.
+// Start exposes no querying user message, arbitrary control, or permission grant.
+// The separate private FirstExchange contract owns one admitted text response.
 // Local context estimates are not provider capacity or acceptance evidence.
 package nativeclaude
 
@@ -112,6 +113,8 @@ type Session struct {
 	closeErr                      error
 	launch                        idleLaunch
 	verifiedArchive               *archiveVerification
+	firstQuestion                 *firstQuestionState
+	firstAttempted                bool
 }
 
 func (s *Session) SessionID() string   { return s.id }
@@ -122,6 +125,10 @@ func (s *Session) Models() []ModelInfo { return append([]ModelInfo(nil), s.model
 // lifetime, not just startup: cancellation retires the process and invalidates
 // future operations. Protocol support is pinned to 2.1.285.
 func Start(ctx context.Context, opts Options) (*Session, error) {
+	return startVersion(ctx, opts, "2.1.285")
+}
+
+func startVersion(ctx context.Context, opts Options, expectedVersion string) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -140,7 +147,11 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 		return nil, ErrState
 	}
 	opts.Executable = executable
-	args, env, cwd, root, err := launchOptions(opts)
+	permissionPrompts := "none"
+	if expectedVersion == "2.1.287" {
+		permissionPrompts = "host"
+	}
+	args, env, cwd, root, err := launchOptionsWithPermissions(opts, permissionPrompts)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +161,7 @@ func Start(ctx context.Context, opts Options) (*Session, error) {
 	}
 	startup, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
-	version, err := readVersion(startup, opts.Executable, cwd, env)
+	version, err := readVersionFor(startup, opts.Executable, cwd, env, expectedVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -378,6 +389,10 @@ func hashText(s string) string {
 }
 
 func launchOptions(o Options) ([]string, []string, string, string, error) {
+	return launchOptionsWithPermissions(o, "none")
+}
+
+func launchOptionsWithPermissions(o Options, permissionPrompts string) ([]string, []string, string, string, error) {
 	if o.Executable == "" || !filepath.IsAbs(o.Cwd) || strings.ContainsRune(o.Model, 0) || len(o.Model) > 256 {
 		return nil, nil, "", "", ErrState
 	}
@@ -419,7 +434,7 @@ func launchOptions(o Options) ([]string, []string, string, string, error) {
 		return nil, nil, "", "", ErrState
 	}
 	args := append([]string{}, o.ConfigArgs...)
-	args = append(args, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--await-initialize", "--permission-prompt-tool", "stdio", "--permission-prompts", "none", "--prompt-suggestions", "false", "--replay-user-messages")
+	args = append(args, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--await-initialize", "--permission-prompt-tool", "stdio", "--permission-prompts", permissionPrompts, "--prompt-suggestions", "false", "--replay-user-messages")
 	if o.Model != "" {
 		args = append(args, "--model", o.Model)
 	}
