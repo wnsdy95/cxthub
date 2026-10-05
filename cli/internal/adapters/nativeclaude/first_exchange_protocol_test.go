@@ -101,9 +101,15 @@ func TestFirstAssistantProjectsVisibleTextOnly(t *testing.T) {
 }
 
 func TestFirstQueryCannotReuseNoTurnArchiveClaim(t *testing.T) {
-	s := &Session{closed: make(chan struct{}), firstQuestion: &firstQuestionState{}, receipt: ReferenceReceipt{NoTurnAcknowledged: true}}
-	close(s.closed)
-	if _, err := (&FirstExchange{s: s}).VerifyArchive(context.Background(), "/unused"); !errors.Is(err, ErrState) {
+	e, _, _ := completedExchangeArchive(t, "normal")
+	path := unitArchive(e.s)
+	if _, err := e.VerifyArchive(context.Background(), path); err != nil {
+		t.Fatal("completed baseline did not verify", err)
+	}
+	// Change only the completion proof: version, ordinary state, ACK and the
+	// exact owned archive remain valid, so no other guard can satisfy this test.
+	e.s.firstQuestion.completed = false
+	if _, err := e.VerifyArchive(context.Background(), path); !errors.Is(err, ErrState) {
 		t.Fatal("incomplete question reused a no-turn acknowledgment as completed proof", err)
 	}
 	r := FirstExchangeResult{Answer: "PRIVATE_BODY"}
