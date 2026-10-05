@@ -1305,7 +1305,7 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 		}
 		pushCtx := outbound.WithSyncDiagnosticAttempt(ctx, 1)
 		out, err := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true})
-		if err != nil && strings.Contains(err.Error(), domain.ErrSyncConflict.Error()) {
+		if errors.Is(err, domain.ErrSyncConflict) {
 			// A non-fast-forward rejection triggers an automatic append retry. Context does not force replicas
 			// to converge (the local lineage is authoritative for this session; pulling is the user's choice), so
 			// every divergent push must succeed without loss. The server leaves natural Parents unchanged and adds
