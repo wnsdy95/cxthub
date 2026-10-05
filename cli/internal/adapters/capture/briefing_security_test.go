@@ -6,11 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
+
+const briefingLockTimeoutMessage = "briefing file lock timeout"
 
 func TestConsumeBriefingRefusesSymlinkedCxtDirectory(t *testing.T) {
 	repo := t.TempDir()
@@ -72,7 +75,7 @@ func TestBriefingQueuesMultiplePullsUntilNextPrompt(t *testing.T) {
 	}
 }
 
-func TestBriefingConcurrentWritersPreserveEveryEntry(t *testing.T) {
+func TestBriefingConcurrentWritersPreserveSuccessfulEntries(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
 		t.Fatal(err)
@@ -81,30 +84,105 @@ func TestBriefingConcurrentWritersPreserveEveryEntry(t *testing.T) {
 
 	const writers = 16
 	start := make(chan struct{})
-	errs := make(chan error, writers)
+	errs := make([]error, writers)
+	var workers sync.WaitGroup
 	for i := 0; i < writers; i++ {
 		text := fmt.Sprintf("pull context %02d", i)
-		go func() {
+		workers.Go(func() {
 			<-start
-			errs <- writeBriefingText(repo, text)
-		}()
+			errs[i] = writeBriefingText(repo, text)
+		})
 	}
 	close(start)
-	for i := 0; i < writers; i++ {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
+	workers.Wait() // Join every writer even when an earlier write failed.
+	successes := 0
+	for i, err := range errs {
+		if err == nil {
+			successes++
+		} else if err.Error() != briefingLockTimeoutMessage {
+			t.Fatalf("writer %d: unexpected error: %v", i, err)
 		}
 	}
 
+	// The one-second acquisition bound need not admit every contender on a
+	// slow machine. Successful writes must commit once; timed-out writes must
+	// not appear. Explicit retry is verified separately under a held lock.
 	text, ok := ConsumeBriefing(repo)
-	if !ok {
-		t.Fatal("concurrent briefing queue was empty")
+	if successes == 0 || !ok || len(strings.Split(text, "\n\n")) != successes {
+		t.Fatalf("successes=%d queue=%q ok=%v", successes, text, ok)
 	}
-	for i := 0; i < writers; i++ {
+	counts := make(map[string]int)
+	for _, entry := range strings.Split(text, "\n\n") {
+		counts[entry]++
+	}
+	for i, err := range errs {
 		want := fmt.Sprintf("pull context %02d", i)
-		if got := strings.Count(text, want); got != 1 {
-			t.Fatalf("%q count=%d in %q", want, got, text)
+		count := 0
+		if err == nil {
+			count = 1
 		}
+		if got := counts[want]; got != count {
+			t.Fatalf("%q count=%d want=%d (write error=%v) in %q", want, got, count, err, text)
+		}
+	}
+}
+
+func TestBriefingWriteTimeoutPreservesQueueForExplicitRetry(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TERM_SESSION_ID", "briefing-timeout-retry")
+	if err := writeBriefingText(repo, "committed entry"); err != nil {
+		t.Fatal(err)
+	}
+	relative := briefingRelativePath()
+	path := filepath.Join(repo, relative)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	locked, release := make(chan struct{}), make(chan struct{})
+	ownerDone := make(chan error, 1)
+	var owner sync.WaitGroup
+	owner.Go(func() {
+		ownerDone <- withBriefingFileLock(repo, relative, func() error {
+			close(locked) // The real lock is owned before the contender starts.
+			<-release
+			return nil
+		})
+	})
+	select {
+	case <-locked:
+	case err := <-ownerDone:
+		owner.Wait()
+		t.Fatalf("lock owner did not enter callback: %v", err)
+	}
+	// Hold ownership until the normal production write returns. No sleep or
+	// elapsed-time assertion is needed to force its bounded acquisition failure.
+	writeErr := writeBriefingText(repo, "retry entry")
+	after, readErr := os.ReadFile(path)
+	close(release)
+	owner.Wait()
+	ownerErr := <-ownerDone
+	if ownerErr != nil {
+		t.Fatal(ownerErr)
+	}
+	if writeErr == nil || writeErr.Error() != briefingLockTimeoutMessage {
+		t.Fatalf("contended write=%v; want lock timeout", writeErr)
+	}
+	if readErr != nil || string(after) != string(before) {
+		t.Fatalf("failed write changed committed queue: before=%q after=%q error=%v", before, after, readErr)
+	}
+	if err := writeBriefingText(repo, "retry entry"); err != nil {
+		t.Fatalf("explicit retry after owner release: %v", err)
+	}
+	if text, ok := ConsumeBriefing(repo); !ok || text != "committed entry\n\nretry entry" {
+		t.Fatalf("queue after explicit retry=%q ok=%v", text, ok)
+	}
+	if text, ok := ConsumeBriefing(repo); ok || text != "" {
+		t.Fatalf("retried queue consumed twice: %q ok=%v", text, ok)
 	}
 }
 
@@ -120,30 +198,34 @@ func TestBriefingConsumeAndWriteNeverReplayConsumedEntry(t *testing.T) {
 		}
 
 		start := make(chan struct{})
-		written := make(chan error, 1)
-		consumed := make(chan string, 1)
-		go func() {
+		var workers sync.WaitGroup
+		var writeErr error
+		var all string
+		workers.Go(func() {
 			<-start
-			written <- writeBriefingText(repo, "new pull context")
-		}()
-		go func() {
+			writeErr = writeBriefingText(repo, "new pull context")
+		})
+		workers.Go(func() {
 			<-start
-			text, _ := ConsumeBriefing(repo)
-			consumed <- text
-		}()
+			all, _ = ConsumeBriefing(repo)
+		})
 		close(start)
-		if err := <-written; err != nil {
-			t.Fatal(err)
+		workers.Wait()
+		wantNew := 1
+		if writeErr != nil {
+			if writeErr.Error() != briefingLockTimeoutMessage {
+				t.Fatalf("unexpected write error: %v", writeErr)
+			}
+			wantNew = 0
 		}
-		all := <-consumed
 		if rest, ok := ConsumeBriefing(repo); ok {
 			all += "\n\n" + rest
 		}
 		if got := strings.Count(all, "old pull context"); got != 1 {
 			t.Fatalf("iteration %d replayed/lost old entry: count=%d all=%q", iteration, got, all)
 		}
-		if got := strings.Count(all, "new pull context"); got != 1 {
-			t.Fatalf("iteration %d replayed/lost new entry: count=%d all=%q", iteration, got, all)
+		if got := strings.Count(all, "new pull context"); got != wantNew {
+			t.Fatalf("iteration %d new entry: count=%d want=%d (write error=%v) all=%q", iteration, got, wantNew, writeErr, all)
 		}
 	}
 }
@@ -255,30 +337,45 @@ func TestPullBriefingCursorConcurrentCASRejectsStaleWriter(t *testing.T) {
 		domain.HashContent([]byte("cursor child two")),
 	}
 	start := make(chan struct{})
-	errs := make(chan error, len(contenders))
-	for _, contender := range contenders {
-		go func(next domain.ContentHash) {
+	errs := make([]error, len(contenders))
+	var workers sync.WaitGroup
+	for i, contender := range contenders {
+		workers.Go(func() {
 			<-start
-			errs <- CompareAndSwapPullBriefingCursor(repo, "main", root, next)
-		}(contender)
+			errs[i] = CompareAndSwapPullBriefingCursor(repo, "main", root, contender)
+		})
 	}
 	close(start)
-	var successes, conflicts int
-	for range contenders {
-		switch err := <-errs; {
+	workers.Wait()
+	var successes, conflicts, timeouts int
+	var winner domain.ContentHash
+	for i, err := range errs {
+		switch {
 		case err == nil:
 			successes++
+			winner = contenders[i]
 		case errors.Is(err, domain.ErrSyncConflict):
 			conflicts++
+		case err.Error() == briefingLockTimeoutMessage:
+			timeouts++
 		default:
 			t.Fatalf("unexpected cursor CAS error: %v", err)
 		}
 	}
-	if successes != 1 || conflicts != 1 {
-		t.Fatalf("cursor CAS results: successes=%d conflicts=%d", successes, conflicts)
+	if successes != 1 || conflicts+timeouts != 1 {
+		t.Fatalf("cursor CAS results: successes=%d conflicts=%d timeouts=%d", successes, conflicts, timeouts)
+	}
+	for i, err := range errs {
+		if err != nil {
+			// Once the winner is joined, even a previously timed-out contender
+			// must reject the stale expected cursor on an explicit later attempt.
+			if err := CompareAndSwapPullBriefingCursor(repo, "main", root, contenders[i]); !errors.Is(err, domain.ErrSyncConflict) {
+				t.Fatalf("stale cursor retry: %v", err)
+			}
+		}
 	}
 	got, ok := ReadPullBriefingCursor(repo, "main")
-	if !ok || (got != contenders[0] && got != contenders[1]) {
+	if !ok || got != winner {
 		t.Fatalf("cursor winner=%s ok=%v", got, ok)
 	}
 }
