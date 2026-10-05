@@ -383,6 +383,9 @@ func (s *FileStore) withRefMutationLock(ctx context.Context, fn func() error) er
 		if err := s.recoverCheckoutTransition(); err != nil {
 			return err
 		}
+		if err := s.recoverTrackingAttachment(); err != nil {
+			return err
+		}
 		return fn()
 	})
 }

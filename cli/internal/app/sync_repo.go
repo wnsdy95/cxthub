@@ -702,25 +702,65 @@ func (s *SyncRepoService) flushGrafts(ctx context.Context, repoRoot, repoID stri
 // ResolveRemoteBranch returns the branch from the fetch that verified its
 // dependencies. Fetch retains server evidence without moving the local selection.
 func (s *SyncRepoService) ResolveRemoteBranch(ctx context.Context, in inbound.SyncInput, branch string) (domain.Ref, error) {
-	ref, _, err := s.fetchRemoteBranch(ctx, in, branch)
-	return ref, err
+	observation, err := s.ResolveRemoteBranchObservation(ctx, in, branch)
+	return observation.Ref, err
 }
 
-func (s *SyncRepoService) fetchRemoteBranch(ctx context.Context, in inbound.SyncInput, branch string) (domain.Ref, []domain.HistoryEvent, error) {
+func (s *SyncRepoService) ResolveRemoteBranchObservation(ctx context.Context, in inbound.SyncInput, branch string) (inbound.RemoteBranchObservation, error) {
 	if domain.ValidateBranchName(branch) != nil {
-		return domain.Ref{}, nil, domain.ErrInvalidRef
+		return inbound.RemoteBranchObservation{}, domain.ErrInvalidRef
 	}
 	out, err := s.Pull(ctx, inbound.SyncInput{RepoID: in.RepoID, Cwd: in.Cwd, Ref: branch, FetchOnly: true, Progress: in.Progress})
 	if err != nil {
-		return domain.Ref{}, nil, err
+		return inbound.RemoteBranchObservation{}, err
 	}
+	if len(out.Conflicts) != 0 {
+		return inbound.RemoteBranchObservation{}, fmt.Errorf("%w: fetched branch dependencies conflict with local metadata", domain.ErrSyncConflict)
+	}
+	var ref domain.Ref
 	for _, r := range out.FetchedRefs {
-		if r.Kind != domain.RefBranch || r.Name != branch || r.Target == "" {
-			continue
+		if r.Kind == domain.RefBranch && r.Name == branch && r.Target != "" {
+			ref = r
+			break
 		}
-		return r, out.FetchedHistory, nil
 	}
-	return domain.Ref{}, nil, domain.ErrNotFound
+	if ref.Target == "" {
+		return inbound.RemoteBranchObservation{}, domain.ErrNotFound
+	}
+	latest, found, err := domain.LatestBranchLifecycle(out.FetchedRefs, branch)
+	if err != nil {
+		return inbound.RemoteBranchObservation{}, err
+	}
+	if ref.BranchID == "" && found && latest.State == domain.BranchArchived && latest.Target == ref.Target {
+		return inbound.RemoteBranchObservation{}, domain.ErrBranchArchived
+	}
+	// Own nested values so caller normalization cannot mutate retained evidence.
+	history := make([]domain.HistoryEvent, len(out.FetchedHistory))
+	for i, e := range out.FetchedHistory {
+		if e.Creation != nil {
+			copy := *e.Creation
+			copy.Command = append([]string(nil), copy.Command...)
+			e.Creation = &copy
+		}
+		if e.PR != nil {
+			copy := *e.PR
+			e.PR = &copy
+		}
+		history[i] = e
+	}
+	snaps := make([]domain.Snapshot, len(out.FetchedSnapshots))
+	for i, snap := range out.FetchedSnapshots {
+		snap.Parents = append([]domain.ContentHash(nil), snap.Parents...)
+		snap.GraftParents = append([]domain.ContentHash(nil), snap.GraftParents...)
+		snap.Models = append([]string(nil), snap.Models...)
+		snaps[i] = snap
+	}
+	return inbound.RemoteBranchObservation{Ref: ref, History: history, Snapshots: snaps}, nil
+}
+
+func (s *SyncRepoService) fetchRemoteBranch(ctx context.Context, in inbound.SyncInput, branch string) (domain.Ref, []domain.HistoryEvent, error) {
+	observation, err := s.ResolveRemoteBranchObservation(ctx, in, branch)
+	return observation.Ref, observation.History, err
 }
 
 const maxAppendReconcileSnapshots = 256
@@ -1528,6 +1568,13 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 		cursorRepo = string(domain.HashContent([]byte(repoID + "\x00" + identity)))
 	}
 	advertisedSnapshotStates, cursorStore, cursorEntries := preparePullSnapshotStates(ctx, s.store, cursorRepo, snapshotStates)
+	// Local possession alone cannot supply the server's graph projection. Keep
+	// document deduplication, but negotiate metadata until this endpoint has an
+	// exact observed baseline for every omitted snapshot.
+	advertisedSnapshotStates, err = observedSnapshotStates(observation, advertisedSnapshotStates)
+	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
 	contextProtocol, err := s.remoteContextProtocol(ctx, repoID)
 	if err != nil {
 		return inbound.SyncOutput{}, err
@@ -1765,7 +1812,8 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	// Fence the observed revision before publishing any mutable local metadata.
 	// A concurrent fetch/pull can leave reusable immutable objects above, but
 	// cannot make this request apply a stale observation unnoticed.
-	if err := s.recordObservation(ctx, observation, snaps, refs, history); err != nil {
+	observedSnapshots, err := s.recordObservation(ctx, observation, snaps, refs, history)
+	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
 	// Parent meta mismatch (replica divergence): parents can differ among replicas (legacy empirical verification: 7/7 stash-dedup bug snapshots). Local objects are immutable (PutSnapshot does not overwrite parents), so reject remote version adoption and proceed with batch — total rejection makes known divergence permanent pull failure (availability). Pollution server defense intent maintained: mismatched meta never reflected locally.
@@ -1833,7 +1881,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 		} else {
 			syncProgress(in, "pull", "conflicts", 0, 0)
 		}
-		return inbound.SyncOutput{Pulled: len(snaps), FetchedRefs: append([]domain.Ref{}, selectedRefs...), FetchedHistory: history, RemoteAhead: ahead}, nil
+		return inbound.SyncOutput{Pulled: len(snaps), FetchedRefs: append([]domain.Ref{}, selectedRefs...), FetchedHistory: history, FetchedSnapshots: observedSnapshots, Conflicts: conflicts, RemoteAhead: ahead}, nil
 	}
 	refs, err = selectSyncRefs(refs, in.Ref)
 	if err != nil {

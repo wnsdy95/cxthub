@@ -133,6 +133,14 @@ func TestSyncPullAdvertisesSnapshotStatesAndVerifiedDocs(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &inventoryPullRemote{refs: []domain.Ref{ref}}
+	observed, err := st.ReadRemoteObservation(ctx, repo, "configured")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed.Snapshots, observed.Refs = []domain.Snapshot{snap}, []domain.Ref{ref}
+	if err := st.CompareAndSwapRemoteObservation(ctx, observed.Revision, observed); err != nil {
+		t.Fatal(err)
+	}
 	out, err := newTestSyncService(st, remote, nil).Pull(ctx, inbound.SyncInput{RepoID: repo, FetchOnly: true})
 	if err != nil {
 		t.Fatal(err)

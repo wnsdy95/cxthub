@@ -299,7 +299,7 @@ func (s *FileStore) inspectReplica(ctx context.Context, beforeRead func(string))
 			}
 		}
 	}
-	for _, name := range []string{"working-commit.json", "checkout-transition.json"} {
+	for _, name := range []string{"working-commit.json", "checkout-transition.json", "tracking-attachment.json"} {
 		if read(name) {
 			return r
 		}
@@ -309,6 +309,12 @@ func (s *FileStore) inspectReplica(ctx context.Context, beforeRead func(string))
 		}
 		if err == nil {
 			r.Issues = append(r.Issues, "pending local transaction: "+name+" (normal mutation retries recovery)")
+			if name == "tracking-attachment.json" {
+				_, validationErr := s.readTrackingAttachment()
+				if issue(name, validationErr) {
+					return r
+				}
+			}
 		} else if !os.IsNotExist(err) {
 			if issue(name, err) {
 				return r

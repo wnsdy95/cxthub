@@ -201,6 +201,9 @@ func (s *FileStore) RepairFromReplica(ctx context.Context, source *FileStore, re
 		if err := s.recoverWorkingCommit(); err != nil {
 			return fmt.Errorf("local transaction still needs evidence: %w", err)
 		}
+		if err := s.recoverTrackingAttachment(); err != nil {
+			return fmt.Errorf("tracking attachment still needs evidence: %w", err)
+		}
 		for _, e := range events {
 			path := filepath.Join(s.storeDir(), "history", e.ID+".json")
 			raw, err := readCxtFile(path)

@@ -50,16 +50,32 @@ func mergeObservedSnapshots(previous, incoming []domain.Snapshot) []domain.Snaps
 	return out
 }
 
-func (s *SyncRepoService) recordObservation(ctx context.Context, previous outbound.RemoteObservation, snaps []domain.Snapshot, refs []domain.Ref, history []domain.HistoryEvent) error {
+func (s *SyncRepoService) recordObservation(ctx context.Context, previous outbound.RemoteObservation, snaps []domain.Snapshot, refs []domain.Ref, history []domain.HistoryEvent) ([]domain.Snapshot, error) {
 	store, ok := s.store.(outbound.RemoteObservationStore)
 	if !ok {
-		return fmt.Errorf("remote observation storage unavailable; fetch cannot safely retain unapplied metadata")
+		return nil, fmt.Errorf("remote observation storage unavailable; fetch cannot safely retain unapplied metadata")
 	}
 	next := previous
 	next.Snapshots = mergeObservedSnapshots(previous.Snapshots, snaps)
 	next.Refs, next.History = refs, history
 	if err := store.CompareAndSwapRemoteObservation(ctx, previous.Revision, next); err != nil {
-		return fmt.Errorf("record remote observation: %w", err)
+		return nil, fmt.Errorf("record remote observation: %w", err)
 	}
-	return nil
+	return next.Snapshots, nil
+}
+
+// observedSnapshotStates permits a metadata omission only when this replica can
+// reconstruct that exact server projection without consulting local grafts.
+func observedSnapshotStates(observation outbound.RemoteObservation, advertised map[domain.ContentHash]domain.ContentHash) (map[domain.ContentHash]domain.ContentHash, error) {
+	known := make(map[domain.ContentHash]domain.ContentHash, len(observation.Snapshots))
+	for _, snapshot := range observation.Snapshots {
+		state, err := domain.SnapshotStateHash(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if advertised[snapshot.ID] == state {
+			known[snapshot.ID] = state
+		}
+	}
+	return known, nil
 }

@@ -125,6 +125,48 @@ and deduplicate accepted operations on the server. Interpret remote bindings
 using repository identity, branch identity, and upstream mapping: `--track`
 implies `-c` in Git, so those flags cannot define opposite identity policies.
 
+## Verified remote tracking attachments
+
+Tracking preparation uses the ref, immutable history and observed graph returned
+by the same verified fetch, including its warm-delta baseline. It never rereads
+a newer observation file, substitutes local snapshot labels, or adopts remote
+history as a side effect of a query. Ref/history identity disagreement stays
+pending because these server reads are not one transactional revision.
+
+The Git commit frozen at branch creation selects its first-parent ancestry.
+Recorded context ancestry and memory parent hashes resolve competing observations;
+wall-clock recency and mutable snapshot memory do not. Explicitly empty memory
+stays empty. A pinned completed-PR source uses the same fetched evidence rather
+than rereading local history. The selected context can be older than the observed
+shared tip; both values are retained independently.
+
+Before application, the Git-side branch operation stores the selected identity,
+code association, memory pin, historical-selection status and required history
+proof. Application adopts only the selected identity's observations and explicit
+lifecycle dependencies. Completed-PR source witnesses remain verification
+evidence; they cannot resurrect or rename the source branch. Unrelated fetched
+history stays unapplied. Local-only grafts cannot reclassify the frozen selection.
+Unpublished local conflicts, archived local state, divergent refs and incompatible
+bindings remain pending rather than being overwritten.
+
+The local adapter compares the expected ref and optional worktree position under
+its existing repository mutation lock. A dedicated `tracking-attachment.json`
+redo records acceptance before publishing history, ref, binding and position.
+Subsequent writers finish accepted redo first. An immutable operation receipt
+prevents a retry after store success from rewinding newer work when the Git-side
+acknowledgement was interrupted. Pending redo pins its objects against collection;
+`cxt doctor` reports it without repairing during inspection. Only the originating
+worktree still at the recorded Git branch/commit can request position selection.
+A compatible selection already made for that identity and code is preserved;
+retries do not turn the latest user choice into permission to overwrite it.
+
+This is a local writer-serialization and crash-recovery contract, not a joint
+Git/database transaction or a multi-file snapshot-isolation guarantee. Missing or
+corrupt evidence blocks application and preserves the journal. No provider
+transcript is edited, and no historical PR joins are inferred from branch names.
+An existing ref whose forward relationship is provable only through mutable grafts
+remains pending until an explicit reconciliation establishes a safe move.
+
 ## Graph and history browser
 
 The server transaction and consistent graph-read guarantees are specified in

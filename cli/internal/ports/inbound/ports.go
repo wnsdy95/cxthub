@@ -434,6 +434,9 @@ type SyncOutput struct {
 	// does not imply local history adoption. Resolve names against this result,
 	// not a separate observation that a concurrent fetch may have replaced.
 	FetchedHistory []domain.HistoryEvent
+	// FetchedSnapshots is the retained catalog from this fetch, including its
+	// verified warm-delta baseline. It is not the mutable local graph.
+	FetchedSnapshots []domain.Snapshot
 	// Conflicts is the list of ref names skipped during pull due to non-fast-forward. If not empty, the caller is advised to abort merge like git (requires a reviewed repair plan for explicit adoption).
 	Conflicts []string
 	// RemoteAhead is the list of branches in the remote that have new context after the local — used by caller to hint "pull/load if needed" (not enforced).
