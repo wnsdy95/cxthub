@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -44,77 +47,131 @@ type diagnosticRetrySync struct {
 	inbound.SyncRepo
 	contexts []context.Context
 	inputs   []inbound.SyncInput
+	results  []error
 }
 
 func (s *diagnosticRetrySync) Push(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+	index := len(s.inputs)
 	s.contexts = append(s.contexts, ctx)
 	s.inputs = append(s.inputs, in)
-	end := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStagePush, outbound.SyncDiagnosticCounts{})
-	if len(s.inputs) == 1 {
-		end(domain.ErrSyncConflict)
-		return inbound.SyncOutput{}, domain.ErrSyncConflict
+	var err error
+	if index < len(s.results) {
+		err = s.results[index]
 	}
-	end(nil)
+	end := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStagePush, outbound.SyncDiagnosticCounts{})
+	end(err)
+	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
 	return inbound.SyncOutput{Pushed: 1}, nil
 }
+
+type diagnosticOpaqueConflict struct{}
+
+func (diagnosticOpaqueConflict) Error() string { return "publication rejected" }
+func (diagnosticOpaqueConflict) Unwrap() error { return domain.ErrSyncConflict }
 
 func TestPrePushDiagnosticsAppendRetrySharesBudget(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("CXT_REMOTE", "https://example.invalid")
 	t.Setenv("CXT_SYNC_DIAGNOSTICS", "1")
-	repo := t.TempDir()
-	activationTestGit(t, repo, "init", "-b", "main")
-	if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0700); err != nil {
-		t.Fatal(err)
+	prior := func(err error) error {
+		return fmt.Errorf("previous rejection: %v; terminal: %w", domain.ErrSyncConflict, err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0600); err != nil {
-		t.Fatal(err)
+	auth := func(status int) error {
+		return prior(&backendclient.HTTPError{Status: status, Code: "forbidden", Message: "synthetic denial"})
 	}
-	output, err := os.CreateTemp(t.TempDir(), "hook-stderr")
-	if err != nil {
-		t.Fatal(err)
-	}
-	originalStderr := os.Stderr
-	os.Stderr = output
-	defer func() { os.Stderr = originalStderr; _ = output.Close() }()
-	caller, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	wakes := 0
-	syncer := &diagnosticRetrySync{}
-	c := &Container{Sync: syncer, WakeHistoricalSync: func(string) { wakes++ }}
-	if err := runGitHook(caller, c, repo, []string{"pre-push"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(syncer.inputs) != 2 || syncer.inputs[0].Append || !syncer.inputs[1].Append || wakes != 1 {
-		t.Fatal("diagnostics changed automatic append or historical wakeup")
-	}
-	wantDeadline, _ := caller.Deadline()
-	collector := outbound.SyncDiagnosticsFromContext(syncer.contexts[0])
-	if collector == nil {
-		t.Fatal("environment opt-in did not attach diagnostics in the real hook")
-	}
-	for _, attempt := range syncer.contexts {
-		deadline, ok := attempt.Deadline()
-		if !ok || deadline != wantDeadline || outbound.SyncDiagnosticsFromContext(attempt) != collector {
-			t.Fatal("retry started a new budget or collector")
-		}
-	}
-	var pushes []outbound.SyncDiagnosticEvent
-	for _, event := range collector.Snapshot().Events {
-		if event.Stage == outbound.SyncStagePush {
-			pushes = append(pushes, event)
-		}
-	}
-	if len(pushes) != 2 || pushes[0].Attempt != 1 || pushes[1].Attempt != 2 || pushes[0].OperationID != pushes[1].OperationID || *pushes[1].StartRemainingMillis > *pushes[0].StartRemainingMillis {
-		t.Fatal("attempts lost their shared, decreasing caller budget")
-	}
-	raw, err := os.ReadFile(output.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(string(raw), "cxt sync diagnostics: ") != 1 {
-		t.Fatal("recovered conflict must retain one observed failure report")
+	for _, tc := range []struct {
+		name    string
+		results []error
+		calls   int
+	}{
+		{"success", nil, 1},
+		{"conflict", []error{domain.ErrSyncConflict}, 2},
+		{"wrapped_conflict", []error{fmt.Errorf("push: %w", domain.ErrSyncConflict)}, 2},
+		{"opaque_conflict", []error{diagnosticOpaqueConflict{}}, 2},
+		{"append_conflict", []error{domain.ErrSyncConflict, domain.ErrSyncConflict}, 2},
+		{"append_terminal", []error{domain.ErrSyncConflict, auth(403)}, 2},
+		{"terminal_401", []error{auth(401)}, 1},
+		{"terminal_403", []error{auth(403)}, 1},
+		{"terminal_network", []error{prior(&net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")})}, 1},
+		{"terminal_deadline", []error{prior(context.DeadlineExceeded)}, 1},
+		{"branch_text", []error{fmt.Errorf("branch record %q: %w", domain.ErrSyncConflict.Error(), domain.ErrNotFound)}, 1},
+		{"plain_text", []error{errors.New(domain.ErrSyncConflict.Error())}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			activationTestGit(t, repo, "init", "-b", "main")
+			if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			output, err := os.CreateTemp(t.TempDir(), "hook-stderr")
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalStderr := os.Stderr
+			os.Stderr = output
+			defer func() { os.Stderr = originalStderr; _ = output.Close() }()
+			caller, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			wakes := 0
+			syncer := &diagnosticRetrySync{results: tc.results}
+			c := &Container{Sync: syncer, WakeHistoricalSync: func(string) { wakes++ }}
+			if err := runGitHook(caller, c, repo, []string{"pre-push"}); err != nil {
+				t.Fatalf("hook lost fail-open: %v", err)
+			}
+			if len(syncer.inputs) != tc.calls || wakes != 1 {
+				t.Fatalf("push calls=%d want=%d; historical wakeups=%d want=1", len(syncer.inputs), tc.calls, wakes)
+			}
+			for i, in := range syncer.inputs {
+				if in.Append != (i == 1) || !in.ForegroundOnly || in.Force || in.Cwd != repo {
+					t.Fatalf("attempt %d changed publication input: %+v", i+1, in)
+				}
+			}
+			wantDeadline, _ := caller.Deadline()
+			collector := outbound.SyncDiagnosticsFromContext(syncer.contexts[0])
+			if collector == nil {
+				t.Fatal("environment opt-in did not attach diagnostics in the real hook")
+			}
+			for _, attempt := range syncer.contexts {
+				deadline, ok := attempt.Deadline()
+				if !ok || deadline != wantDeadline || attempt.Done() != syncer.contexts[0].Done() || outbound.SyncDiagnosticsFromContext(attempt) != collector {
+					t.Fatal("retry started a new budget, cancellation scope or collector")
+				}
+			}
+			var pushes []outbound.SyncDiagnosticEvent
+			for _, event := range collector.Snapshot().Events {
+				if event.Stage == outbound.SyncStagePush {
+					pushes = append(pushes, event)
+				}
+			}
+			if len(pushes) != tc.calls {
+				t.Fatal("push diagnostics lost an attempt")
+			}
+			for i, push := range pushes {
+				if push.Attempt != i+1 || push.OperationID != pushes[0].OperationID || push.StartRemainingMillis == nil {
+					t.Fatal("attempt identity or caller budget was lost")
+				}
+				if i > 0 && *push.StartRemainingMillis > *pushes[i-1].StartRemainingMillis {
+					t.Fatal("append retry replenished caller budget")
+				}
+			}
+			raw, err := os.ReadFile(output.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			reports := 0
+			if len(tc.results) > 0 && tc.results[0] != nil {
+				reports = 1
+			}
+			if strings.Count(string(raw), "cxt sync diagnostics: ") != reports {
+				t.Fatal("diagnostic failure report count changed")
+			}
+		})
 	}
 }
 
