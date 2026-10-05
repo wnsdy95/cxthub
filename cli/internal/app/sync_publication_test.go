@@ -33,7 +33,7 @@ func (r *publicationRemote) PushHistoryEvent(_ context.Context, e domain.History
 	if e.Kind == "publish" {
 		proven := false
 		for _, old := range r.accepted {
-			if old.Kind == "position" && old.RepoID == e.RepoID && old.BranchID == e.BranchID &&
+			if old.Kind != "publish" && old.Kind != "pr-merge" && old.RepoID == e.RepoID && old.BranchID == e.BranchID &&
 				old.Branch == e.Branch && old.LocalBranch == e.LocalBranch && old.WorktreeID == e.WorktreeID &&
 				old.Target == e.Target && old.GitAfter == e.GitAfter {
 				proven = true
@@ -58,13 +58,14 @@ func (r *publicationRemote) PushHistoryEvent(_ context.Context, e domain.History
 		}
 		names := []string{e.Branch}
 		for _, proof := range r.accepted {
-			if proof.Kind != "position" || proof.Target != e.Target || proof.BranchID != e.BranchID ||
+			if proof.Kind == "publish" || proof.Kind == "pr-merge" || proof.RepoID != e.RepoID || proof.Branch != e.Branch || proof.Target != e.Target || proof.BranchID != e.BranchID ||
 				proof.GitAfter != e.GitAfter || proof.WorktreeID != e.WorktreeID || proof.LocalBranch != e.LocalBranch {
 				continue
 			}
 			for _, attach := range r.accepted {
 				if e.LocalBranch != "" && e.WorktreeID != "" && attach.Kind == "attach" &&
-					attach.RepoID == e.RepoID && attach.BranchID == e.BranchID && attach.WorktreeID == e.WorktreeID &&
+					attach.RepoID == e.RepoID && attach.BranchID == e.BranchID && attach.WorktreeID != "" &&
+					(attach.WorktreeID == e.WorktreeID || attach.LocalBranch == e.LocalBranch) &&
 					attach.LocalBranch != "" && !attach.CreatedAt.After(proof.CreatedAt) {
 					names = append(names, e.LocalBranch)
 				}

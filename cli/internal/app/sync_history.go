@@ -258,7 +258,8 @@ func publicationSourceNames(p domain.HistoryEvent, events []domain.HistoryEvent)
 		}
 		for _, attached := range events {
 			if attached.Kind == "attach" && attached.RepoID == p.RepoID && attached.LocalBranch != "" &&
-				attached.WorktreeID == p.WorktreeID && attached.BranchID == p.BranchID && !attached.CreatedAt.After(proof.CreatedAt) {
+				attached.WorktreeID != "" && (attached.WorktreeID == p.WorktreeID || attached.LocalBranch == p.LocalBranch) && attached.BranchID == p.BranchID &&
+				!attached.CreatedAt.After(proof.CreatedAt) {
 				return append(names, p.LocalBranch)
 			}
 		}
