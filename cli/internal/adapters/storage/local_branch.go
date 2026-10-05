@@ -101,17 +101,24 @@ func (s *FileStore) BindLocalBranch(ctx context.Context, e domain.HistoryEvent) 
 		return err
 	}
 	return s.withRefMutationLock(ctx, func() error {
-
 		e.LocalBranch = local
-		if err := domain.ValidateHistoryEvent(e); err != nil {
-			return err
-		}
-		raw, err := json.Marshal(localBranchRecord{Event: e})
-		if err != nil {
-			return err
-		}
-		return writeAtomic(s.localBranchPath(local), raw)
+		return s.writeLocalBinding(localBranchRecord{Event: e})
 	})
+}
+
+// Caller holds the ref mutation lock, including during journal recovery.
+func (s *FileStore) writeLocalBinding(record localBranchRecord) error {
+	if err := domain.ValidateHistoryEvent(record.Event); err != nil {
+		return err
+	}
+	if err := domain.ValidateBranchName(record.Event.LocalBranch); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(s.localBranchPath(record.Event.LocalBranch), raw)
 }
 
 func (s *FileStore) UnbindLocalBranch(ctx context.Context, repo, local string) error {

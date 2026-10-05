@@ -456,6 +456,12 @@ func (s *SaveSessionService) collectHookLeaf(ctx context.Context, repoID string,
 			return false
 		}
 	}
+	if pins, ok := s.store.(outbound.TrackingAttachmentPins); ok {
+		pinned, err := pins.HasTrackingAttachmentPin(ctx, snap.DocHash)
+		if err != nil || pinned {
+			return false
+		}
+	}
 	// Manual staging and its durable commit receipts may still reference this
 	// exact frozen capture after the live pending pointer has advanced.
 	if pins, ok := s.store.(outbound.StagingPins); ok {

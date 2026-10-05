@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"syscall"
@@ -22,16 +23,17 @@ import (
 )
 
 type Operation struct {
-	Binding   *BindingIntent      `json:"binding,omitempty"`
-	Event     domain.HistoryEvent `json:"event"`
-	Phase     string              `json:"phase"`
-	GitRef    string              `json:"git_ref"`
-	Worktree  string              `json:"worktree"`
-	LastError string              `json:"last_error,omitempty"`
-	Resolved  bool                `json:"resolved,omitempty"`
-	GitPID    string              `json:"git_pid,omitempty"`
-	LogBytes  int                 `json:"log_bytes,omitempty"`
-	LogHash   domain.ContentHash  `json:"log_hash,omitempty"`
+	Tracking  *domain.TrackingAttachment `json:"tracking,omitempty"`
+	Binding   *BindingIntent             `json:"binding,omitempty"`
+	Event     domain.HistoryEvent        `json:"event"`
+	Phase     string                     `json:"phase"`
+	GitRef    string                     `json:"git_ref"`
+	Worktree  string                     `json:"worktree"`
+	LastError string                     `json:"last_error,omitempty"`
+	Resolved  bool                       `json:"resolved,omitempty"`
+	GitPID    string                     `json:"git_pid,omitempty"`
+	LogBytes  int                        `json:"log_bytes,omitempty"`
+	LogHash   domain.ContentHash         `json:"log_hash,omitempty"`
 }
 
 // BindingIntent is the local creation-time decision, not the branch's mutable
@@ -199,6 +201,9 @@ func (j *Journal) List() ([]Operation, error) {
 		if err = op.Binding.validate(); err != nil {
 			return nil, err
 		}
+		if err = validateTracking(op); err != nil {
+			return nil, err
+		}
 		if entry.Name() != op.Event.ID+".json" {
 			return nil, fmt.Errorf("branch journal identity mismatch")
 		}
@@ -226,6 +231,9 @@ func (j *Journal) Save(op Operation) error {
 		return err
 	}
 	if err := op.Binding.validate(); err != nil {
+		return err
+	}
+	if err := validateTracking(op); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(op)
@@ -262,4 +270,14 @@ func (j *Journal) StartRepair(repoID string) (string, error) {
 		return "", err
 	}
 	return filepath.Dir(filepath.Join(j.gitDir, path)), nil
+}
+
+func validateTracking(op Operation) error {
+	if op.Tracking == nil {
+		return nil
+	}
+	if !op.Resolved || !reflect.DeepEqual(op.Tracking.Event, op.Event) {
+		return domain.ErrHashMismatch
+	}
+	return domain.ValidateTrackingAttachment(*op.Tracking)
 }

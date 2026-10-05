@@ -20,7 +20,7 @@ import (
 // alone cannot show a second manifest read inside transport negotiation, or an
 // absent branch causing unrelated document downloads.
 func TestResolveRemoteBranchHTTPNegotiatesOnce(t *testing.T) {
-	for _, name := range []string{"cold", "warm", "missing", "denied"} {
+	for _, name := range []string{"cold", "local-only", "warm", "missing", "denied"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			repo := string(domain.HashContent([]byte("branch HTTP contract")))
@@ -32,7 +32,7 @@ func TestResolveRemoteBranchHTTPNegotiatesOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			st := storage.NewFileStore(t.TempDir())
-			if name == "warm" || name == "denied" {
+			if name == "warm" || name == "local-only" || name == "denied" {
 				if _, err := st.PutDoc(ctx, doc); err != nil {
 					t.Fatal(err)
 				}
@@ -88,11 +88,22 @@ func TestResolveRemoteBranchHTTPNegotiatesOnce(t *testing.T) {
 			}))
 			defer server.Close()
 			remote := backendclient.NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+			if name == "warm" {
+				observation, err := st.ReadRemoteObservation(ctx, repo, remote.SyncRemoteIdentity())
+				if err != nil {
+					t.Fatal(err)
+				}
+				observation.Snapshots, observation.Refs = []domain.Snapshot{snap}, []domain.Ref{ref}
+				if err := st.CompareAndSwapRemoteObservation(ctx, observation.Revision, observation); err != nil {
+					t.Fatal(err)
+				}
+			}
 			branch := "feature"
 			if name == "missing" {
 				branch = "gone"
 			}
-			got, err := newTestSyncService(st, remote, nil).ResolveRemoteBranch(ctx, inbound.SyncInput{RepoID: repo}, branch)
+			observation, err := newTestSyncService(st, remote, nil).ResolveRemoteBranchObservation(ctx, inbound.SyncInput{RepoID: repo}, branch)
+			got := observation.Ref
 			if name == "missing" || name == "denied" {
 				if err == nil || got.Target != "" || (name == "missing" && !errors.Is(err, domain.ErrNotFound)) {
 					t.Fatalf("unavailable branch: %+v %v", got, err)
@@ -110,7 +121,13 @@ func TestResolveRemoteBranchHTTPNegotiatesOnce(t *testing.T) {
 				if err != nil || got != ref {
 					t.Fatalf("resolved %+v %v, want %+v", got, err, ref)
 				}
+				if len(observation.Snapshots) != 1 || observation.Snapshots[0].ID != snap.ID {
+					t.Fatalf("verified graph missing locally known snapshot: %+v", observation.Snapshots)
+				}
 				wantObjects := int32(2)
+				if name == "local-only" {
+					wantObjects = 1
+				}
 				if name == "warm" {
 					wantObjects = 0
 				}

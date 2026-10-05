@@ -55,7 +55,9 @@ git update-ref refs/remotes/origin/history-pair "$CODE_A"
 if ! CXT_KEEP_SESSION=1 git switch -qc my-history --track origin/history-pair >"$TMP/alias-create.out" 2>&1; then
   cat "$TMP/alias-create.out"; FAIL=1; return
 fi
-cxt git-hook branch-replay >"$TMP/alias-replay.out" 2>&1
+if ! cxt branch replay >"$TMP/alias-replay.out" 2>&1; then
+  cat "$TMP/alias-replay.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; return
+fi
 expect "tracking alias selects code A rather than the newer remote tip" "$(position_snapshot "$TMP/history-client")" "$SNAP_A"
 expect "tracking alias retains shared tip C" "$(ref_target .cxt/refs/heads/history-pair)" "$SNAP_C"
 expect "tracking alias creates no duplicate context ref" "$([ ! -f .cxt/refs/heads/my-history ] && echo yes)" yes

@@ -224,6 +224,7 @@ func TestBranchBirthNewPreparedVoteDoesNotReusePID(t *testing.T) {
 type birthTrackingSync struct {
 	inbound.SyncRepo
 	target   domain.Ref
+	history  []domain.HistoryEvent
 	cwds     []string
 	branches []string
 }
@@ -232,6 +233,11 @@ func (s *birthTrackingSync) ResolveRemoteBranch(_ context.Context, in inbound.Sy
 	s.cwds = append(s.cwds, in.Cwd)
 	s.branches = append(s.branches, branch)
 	return s.target, nil
+}
+
+func (s *birthTrackingSync) ResolveRemoteBranchObservation(ctx context.Context, in inbound.SyncInput, branch string) (inbound.RemoteBranchObservation, error) {
+	ref, err := s.ResolveRemoteBranch(ctx, in, branch)
+	return inbound.RemoteBranchObservation{Ref: ref, History: s.history}, err
 }
 
 func TestBranchBirthReplayUsesFrozenOriginWorktreeConfig(t *testing.T) {
@@ -250,7 +256,7 @@ func TestBranchBirthReplayUsesFrozenOriginWorktreeConfig(t *testing.T) {
 				runLifecycleGit(t, cwd, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
 				for i, branch := range []string{"owner-task", "replay-task"} {
 					runLifecycleGit(t, cwd, "update-ref", "refs/remotes/origin/"+branch, oid)
-					if err := store.PutHistoryEvent(ctx, domain.HistoryEvent{ID: strings.Repeat(strconv.Itoa(i+1), 32), BranchID: branch, RepoID: repo, Branch: branch, Kind: "birth", GitAfter: oid, Source: source, Target: source, CreatedAt: time.Now().UTC()}); err != nil {
+					if err := store.PutHistoryEvent(ctx, domain.HistoryEvent{ID: strings.Repeat(strconv.Itoa(i+1), 32), BranchID: branch, RepoID: repo, Branch: branch, Kind: "birth", GitAfter: oid, Source: source, Target: source, MemoryPinned: true, CreatedAt: time.Now().UTC()}); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -287,7 +293,8 @@ func TestBranchBirthReplayUsesFrozenOriginWorktreeConfig(t *testing.T) {
 				} else if state == "removed" {
 					runLifecycleGit(t, cwd, "worktree", "remove", linked)
 				}
-				remote := &birthTrackingSync{target: domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "owner-task", Target: source}}
+				remote := &birthTrackingSync{target: domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "owner-task", BranchID: "owner-task", Target: source}}
+				remote.history, _ = store.ListHistoryEvents(ctx, repo)
 				c.Sync = remote
 				err := replayBranchOperations(ctx, c, cwd)
 				after, readErr := j.List()
@@ -327,14 +334,15 @@ func TestBranchBirthReplayPreservesWorktreeProvenance(t *testing.T) {
 				}
 				oid := gitOut(linked, "rev-parse", "HEAD")
 				wantBranch, wantKind := "relocated", "birth"
-				remote := &birthTrackingSync{target: domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "team-task", Target: source}}
+				remote := &birthTrackingSync{target: domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "team-task", BranchID: "remote-identity", Target: source}}
 				if tracking {
 					wantBranch, wantKind = "team-task", "attach"
 					runLifecycleGit(t, cwd, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
 					runLifecycleGit(t, cwd, "update-ref", "refs/remotes/origin/team-task", oid)
-					if err := store.PutHistoryEvent(ctx, domain.HistoryEvent{ID: strings.Repeat("a", 32), BranchID: "remote-identity", RepoID: repo, Branch: wantBranch, Kind: "birth", GitAfter: oid, Source: source, Target: source, CreatedAt: time.Now().UTC()}); err != nil {
+					if err := store.PutHistoryEvent(ctx, domain.HistoryEvent{ID: strings.Repeat("a", 32), BranchID: "remote-identity", RepoID: repo, Branch: wantBranch, Kind: "birth", GitAfter: oid, Source: source, Target: source, MemoryPinned: true, CreatedAt: time.Now().UTC()}); err != nil {
 						t.Fatal(err)
 					}
+					remote.history, _ = store.ListHistoryEvents(ctx, repo)
 					c.Sync = remote
 				}
 				line := strings.Repeat("0", 40) + " " + oid + " refs/heads/relocated"
@@ -875,6 +883,7 @@ type waitingTrackingSync struct {
 	entered chan struct{}
 	release chan struct{}
 	target  domain.Ref
+	history []domain.HistoryEvent
 }
 
 func (s waitingTrackingSync) ResolveRemoteBranch(ctx context.Context, _ inbound.SyncInput, _ string) (domain.Ref, error) {
@@ -887,6 +896,11 @@ func (s waitingTrackingSync) ResolveRemoteBranch(ctx context.Context, _ inbound.
 	}
 }
 
+func (s waitingTrackingSync) ResolveRemoteBranchObservation(ctx context.Context, in inbound.SyncInput, branch string) (inbound.RemoteBranchObservation, error) {
+	ref, err := s.ResolveRemoteBranch(ctx, in, branch)
+	return inbound.RemoteBranchObservation{Ref: ref, History: s.history}, err
+}
+
 func TestTrackingReplayDoesNotHoldTheGitCreationVoteDuringNetwork(t *testing.T) {
 	cwd, c, store, repoID, source := historyFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -895,7 +909,7 @@ func TestTrackingReplayDoesNotHoldTheGitCreationVoteDuringNetwork(t *testing.T) 
 	oid := gitOut(cwd, "rev-parse", "HEAD")
 	runLifecycleGit(t, cwd, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
 	runLifecycleGit(t, cwd, "update-ref", "refs/remotes/origin/team-task", oid)
-	known := domain.HistoryEvent{ID: strings.Repeat("a", 32), BranchID: "teammate-logical-branch", RepoID: repoID, Branch: "team-task", Kind: "birth", GitAfter: oid, Source: source, Target: source, CreatedAt: time.Now().UTC()}
+	known := domain.HistoryEvent{ID: strings.Repeat("a", 32), BranchID: "teammate-logical-branch", RepoID: repoID, Branch: "team-task", Kind: "birth", GitAfter: oid, Source: source, Target: source, MemoryPinned: true, CreatedAt: time.Now().UTC()}
 	if err := store.PutHistoryEvent(ctx, known); err != nil {
 		t.Fatal(err)
 	}
@@ -912,7 +926,7 @@ func TestTrackingReplayDoesNotHoldTheGitCreationVoteDuringNetwork(t *testing.T) 
 	}
 	commitBirthJournal(t, cwd, operations[0].Event.ID)
 	entered, release := make(chan struct{}), make(chan struct{})
-	c.Sync = waitingTrackingSync{entered: entered, release: release, target: domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: "team-task", Target: source}}
+	c.Sync = waitingTrackingSync{entered: entered, release: release, target: domain.Ref{RepoID: repoID, Kind: domain.RefBranch, Name: "team-task", BranchID: known.BranchID, Target: source}, history: []domain.HistoryEvent{known}}
 	result := make(chan error, 1)
 	go func() { result <- replayBranchOperations(ctx, c, cwd) }()
 	select {

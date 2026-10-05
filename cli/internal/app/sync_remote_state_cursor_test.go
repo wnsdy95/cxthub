@@ -94,6 +94,25 @@ func TestPullRemoteStateCursorSkipsRepeatedLocalAheadMetadata(t *testing.T) {
 }
 
 func TestPullRemoteStateCursorRefetchesRemoteAndLocalMutations(t *testing.T) {
+	t.Run("matching local and remote mutation still needs observation", func(t *testing.T) {
+		f := newRemoteStateCursorFixture(t)
+		f.pull(t)
+		f.remote.snapshot.GraftSeq = 2
+		if err := f.store.ReconcileGraftState(f.ctx, f.remote.snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.pull(t).Pulled; got != 1 {
+			t.Fatalf("unobserved matching state pull=%d snapshots, want 1", got)
+		}
+		observed, err := f.store.ReadRemoteObservation(f.ctx, f.repoID, "configured")
+		if err != nil || len(observed.Snapshots) != 1 || observed.Snapshots[0].GraftSeq != 2 {
+			t.Fatalf("matching state not observed: %+v err=%v", observed, err)
+		}
+		if got := f.pull(t).Pulled; got != 0 {
+			t.Fatalf("warm matching state pull=%d snapshots, want 0", got)
+		}
+	})
+
 	t.Run("remote mutation", func(t *testing.T) {
 		f := newRemoteStateCursorFixture(t)
 		f.pull(t)
@@ -139,15 +158,11 @@ func TestPullRemoteStateCursorRefetchesRemoteAndLocalMutations(t *testing.T) {
 		if err := f.store.ReconcileGraftState(f.ctx, local); err != nil {
 			t.Fatal(err)
 		}
-		wantLocalState, err := domain.SnapshotStateHash(local)
-		if err != nil {
-			t.Fatal(err)
-		}
 		if got := f.pull(t).Pulled; got != 1 {
 			t.Fatalf("changed local pull=%d snapshots, want 1", got)
 		}
-		if advertised := f.remote.seen[len(f.remote.seen)-1][f.id]; advertised != wantLocalState {
-			t.Fatalf("local mutation advertised cached remote state %s, want local %s", advertised, wantLocalState)
+		if advertised := f.remote.seen[len(f.remote.seen)-1][f.id]; advertised != "" {
+			t.Fatalf("local mutation advertised an unobserved projection: %s", advertised)
 		}
 		if got := f.pull(t).Pulled; got != 0 {
 			t.Fatalf("recached local-ahead pull=%d snapshots, want 0", got)

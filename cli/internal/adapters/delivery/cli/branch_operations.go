@@ -524,9 +524,10 @@ func replayBranchOperationsForRefWithPublication(ctx context.Context, c *Contain
 		// must not hold up an unrelated Git branch creation. Competing replayers
 		// propose a resolution; the first durable resolution wins below.
 		event := op.Event
+		tracking := op.Tracking
 		var resolutionErr error
 		if !op.Resolved {
-			event, resolutionErr = resolveBranchOperation(ctx, c, cwd, op)
+			event, tracking, resolutionErr = resolveBranchOperation(ctx, c, cwd, op)
 		}
 		err = j.Transaction(ctx, func() error {
 			current, err := j.List()
@@ -560,6 +561,7 @@ func replayBranchOperationsForRefWithPublication(ctx context.Context, c *Contain
 						return resolutionErr
 					}
 					saved.Event = event
+					saved.Tracking = tracking
 					saved.Resolved = true
 					saved.Phase = "committed"
 					if err := j.Save(saved); err != nil {
@@ -591,71 +593,50 @@ func replayBranchOperationsForRefWithPublication(ctx context.Context, c *Contain
 	return errors.Join(failures...)
 }
 
-func resolveBranchOperation(ctx context.Context, c *Container, cwd string, op branchjournal.Operation) (domain.HistoryEvent, error) {
+func resolveBranchOperation(ctx context.Context, c *Container, cwd string, op branchjournal.Operation) (domain.HistoryEvent, *domain.TrackingAttachment, error) {
 	e := op.Event
 	binding := op.Binding
 	if binding == nil {
-		// Old records may prove a direct creation command. Never use a current
-		// upstream to fill gaps in historical evidence.
 		binding = legacyBranchBinding(e)
 	}
 	if binding.Kind == "unavailable" {
-		return e, fmt.Errorf("creation-time branch binding is unavailable for %s; operation remains queued; current upstream cannot prove the original command", e.Branch)
+		return e, nil, fmt.Errorf("creation-time branch binding is unavailable for %s; operation remains queued; current upstream cannot prove the original command", e.Branch)
 	}
 	if binding.Kind == "attach" && e.Kind != "orphan" {
-		remoteBranch := binding.RemoteBranch
-		if c.Sync == nil {
-			return e, fmt.Errorf("tracking context attachment awaits sync service")
+		observer, ok := c.Sync.(inbound.RemoteBranchObserver)
+		if !ok {
+			return e, nil, fmt.Errorf("tracking context attachment requires verified remote history; operation remains queued")
 		}
-		ref, err := c.Sync.ResolveRemoteBranch(ctx, inbound.SyncInput{Cwd: cwd}, remoteBranch)
+		service, ok := c.History.(inbound.TrackingAttachmentService)
+		if !ok {
+			return e, nil, fmt.Errorf("durable tracking attachment unavailable; operation remains queued")
+		}
+		observed, err := observer.ResolveRemoteBranchObservation(ctx, inbound.SyncInput{Cwd: cwd}, binding.RemoteBranch)
 		if err != nil {
-			return e, fmt.Errorf("tracking context attachment awaits server: %w", err)
+			return e, nil, fmt.Errorf("tracking context attachment awaits server: %w", err)
 		}
-		e.Kind = "attach"
-		e.Source = ref.Target
-		e.Target = ref.Target
-		e.SharedTarget = ref.Target
-		e.MemoryHash, e.MemoryPinned = "", false
-		e.MemorySource = ""
-		e.BindingParent = ""
-		history, err := c.History.ListHistory(ctx, e.RepoID)
+		if observed.Ref.RepoID != e.RepoID || observed.Ref.Name != binding.RemoteBranch {
+			return e, nil, domain.ErrHashMismatch
+		}
+		raw, err := branchGitOutput(ctx, cwd, "rev-list", "--first-parent", e.GitAfter)
 		if err != nil {
-			return e, err
+			return e, nil, err
 		}
-		bindings, err := domain.ProjectContextBranches(history)
+		a, err := service.PrepareTrackingAttachment(ctx, e, observed, strings.Fields(raw))
 		if err != nil {
-			return e, err
+			return e, nil, err
 		}
-		e.BranchID = bindings.Identity(e.RepoID, remoteBranch)
-		if e.Creation != nil && e.Creation.Evidence == "process-argv" && e.Creation.OriginBranch == remoteBranch {
-			// The server binding may arrive after the prepared local vote. Resolve
-			// this retained identity together with the tracking attachment.
-			creation := *e.Creation
-			creation.OriginBranchID = e.BranchID
-			e.Creation = &creation
-		}
-		e.LocalBranch, e.Branch = e.Branch, remoteBranch
-		all, err := c.List.List(ctx, inbound.ListInput{RepoID: e.RepoID})
-		if err != nil {
-			return e, err
-		}
-		selected := contextSelectionAtCode(cwd, e.GitAfter, remoteBranch, all.Snapshots, history)
-		selected, err = resolveCompletedPRMemory(ctx, c, remoteBranch, e.BranchID, selected, history)
-		if err != nil {
-			return e, err
-		}
-		if selected.Snapshot != "" {
-			e.Source, e.Target = selected.Snapshot, selected.Snapshot
-			e.MemoryHash, e.MemorySource, e.MemoryPinned = selected.MemoryHash, selected.MemorySource, selected.MemoryPinned
-		} else {
-			return e, fmt.Errorf("tracking context has no verified association with Git %s; operation remains queued", e.GitAfter)
-		}
+		return a.Event, &a, nil
 	}
-	return c.History.ValidateHistorySource(ctx, e)
+	verified, err := c.History.ValidateHistorySource(ctx, e)
+	return verified, nil, err
 }
 
 func applyBranchOperation(ctx context.Context, c *Container, cwd string, op branchjournal.Operation, branchExists bool) error {
 	e := op.Event
+	if e.Kind == "attach" {
+		return applyTrackingOperation(ctx, c, cwd, op, branchExists)
+	}
 	if err := c.History.RecordHistory(ctx, e); err != nil {
 		return err
 	}
@@ -741,4 +722,51 @@ func branchGitOutput(ctx context.Context, cwd string, args ...string) (string, e
 		return "", fmt.Errorf("cannot verify Git branch state: %s", strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// The Git-side journal keeps the first verified proof across retries. The
+// dedicated application command owns local history/ref/binding publication.
+func applyTrackingOperation(ctx context.Context, c *Container, cwd string, op branchjournal.Operation, branchExists bool) error {
+	if !branchExists {
+		return fmt.Errorf("tracking Git branch no longer exists; operation remains queued")
+	}
+	if op.Tracking == nil {
+		return fmt.Errorf("resolved tracking operation lacks durable remote proof; operation remains queued")
+	}
+	service, ok := c.History.(inbound.TrackingAttachmentService)
+	if !ok {
+		return fmt.Errorf("durable tracking attachment unavailable")
+	}
+	all, err := c.List.List(ctx, inbound.ListInput{RepoID: op.Event.RepoID})
+	if err != nil {
+		return err
+	}
+	in := inbound.TrackingAttachmentInput{Attachment: *op.Tracking}
+	for _, ref := range all.Refs {
+		if ref.Kind == domain.RefBranch && ref.Name == op.Event.Branch {
+			copy := ref
+			in.ExpectedRef = &copy
+			break
+		}
+	}
+	wt := sha256.Sum256([]byte(gitOut(cwd, "rev-parse", "--absolute-git-dir")))
+	local := strings.TrimPrefix(op.GitRef, "refs/heads/")
+	if fmt.Sprintf("%x", wt[:16]) == op.Event.WorktreeID && gitOut(cwd, "symbolic-ref", "--short", "HEAD") == local && gitOut(cwd, "rev-parse", "--verify", "HEAD") == op.Event.GitAfter {
+		current, err := c.History.CurrentPosition(ctx)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		// Resolution can outlive an explicit selection on this same code/identity.
+		// Preserve that cursor; the store must still validate its compatibility
+		// and complete the attachment's history/ref/binding under the ref lock.
+		preserveSelection := err == nil && current.RepoID == op.Event.RepoID && current.WorktreeID == op.Event.WorktreeID && current.Branch == op.Event.Branch && current.BranchID == op.Event.BranchID && current.GitBranch() == local && current.GitCommit == op.Event.GitAfter
+		in.SelectPosition = !preserveSelection
+		if in.SelectPosition && err == nil {
+			in.ExpectedPosition = &current
+		}
+		if gitOut(cwd, "symbolic-ref", "--short", "HEAD") != local || gitOut(cwd, "rev-parse", "--verify", "HEAD") != op.Event.GitAfter {
+			return domain.ErrCodePositionMismatch
+		}
+	}
+	return service.ApplyTrackingAttachment(ctx, in)
 }
