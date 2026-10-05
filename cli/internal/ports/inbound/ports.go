@@ -382,6 +382,9 @@ type BranchHandoffInput struct {
 
 // SyncInput is an input DTO for SyncRepo.Push / SyncRepo.Pull.
 type SyncInput struct {
+	// ObservationRoots requests server graph evidence for known merge candidates
+	// outside the selected branch. It never moves or publishes those snapshots.
+	ObservationRoots []domain.ContentHash
 	// Progress observes acknowledged phase progress, never changes publication
 	// ordering. It is optional and called synchronously; totals are phase-local.
 	Progress func(SyncProgress)

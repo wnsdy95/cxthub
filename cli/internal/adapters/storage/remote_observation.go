@@ -12,19 +12,33 @@ import (
 )
 
 func (s *FileStore) remoteObservationPath(repo, remote string) (string, error) {
+	return s.scopedRemoteObservationPath(repo, remote, "")
+}
+
+func (s *FileStore) scopedRemoteObservationPath(repo, remote, branch string) (string, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repo)); err != nil {
 		return "", err
 	}
 	if remote == "" {
 		return "", domain.ErrInvalidRef
 	}
-	key := domain.HashContent([]byte(repo + "\x00" + remote))
+	identity := repo + "\x00" + remote
+	if branch != "" {
+		if err := domain.ValidateBranchName(branch); err != nil {
+			return "", err
+		}
+		identity += "\x00branch\x00" + branch
+	}
+	key := domain.HashContent([]byte(identity))
 	return filepath.Join(s.storeDir(), "remote-observations", hexOf(key)+".json"), nil
 }
 
 func validateRemoteObservation(value outbound.RemoteObservation) error {
 	if value.Version != 1 || domain.ValidateContentHash(domain.ContentHash(value.RepoID)) != nil || value.Remote == "" {
 		return domain.ErrHashMismatch
+	}
+	if value.Branch != "" && domain.ValidateBranchName(value.Branch) != nil {
+		return domain.ErrInvalidRef
 	}
 	seen := map[domain.ContentHash]bool{}
 	for _, snap := range value.Snapshots {
@@ -62,22 +76,33 @@ func observationRevision(value outbound.RemoteObservation) (domain.ContentHash, 
 }
 
 func (s *FileStore) ReadRemoteObservation(ctx context.Context, repo, remote string) (outbound.RemoteObservation, error) {
+	return s.readRemoteObservation(ctx, repo, remote, "")
+}
+
+func (s *FileStore) ReadScopedRemoteObservation(ctx context.Context, repo, remote, branch string) (outbound.RemoteObservation, error) {
+	if domain.ValidateBranchName(branch) != nil {
+		return outbound.RemoteObservation{}, domain.ErrInvalidRef
+	}
+	return s.readRemoteObservation(ctx, repo, remote, branch)
+}
+
+func (s *FileStore) readRemoteObservation(ctx context.Context, repo, remote, branch string) (outbound.RemoteObservation, error) {
 	if err := ctx.Err(); err != nil {
 		return outbound.RemoteObservation{}, err
 	}
-	path, err := s.remoteObservationPath(repo, remote)
+	path, err := s.scopedRemoteObservationPath(repo, remote, branch)
 	if err != nil {
 		return outbound.RemoteObservation{}, err
 	}
 	raw, err := readCxtFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return outbound.RemoteObservation{Version: 1, RepoID: repo, Remote: remote}, nil
+		return outbound.RemoteObservation{Version: 1, RepoID: repo, Remote: remote, Branch: branch}, nil
 	}
 	if err != nil {
 		return outbound.RemoteObservation{}, err
 	}
 	var value outbound.RemoteObservation
-	if json.Unmarshal(raw, &value) != nil || value.RepoID != repo || value.Remote != remote {
+	if json.Unmarshal(raw, &value) != nil || value.RepoID != repo || value.Remote != remote || value.Branch != branch {
 		return value, domain.ErrHashMismatch
 	}
 	if err := validateRemoteObservation(value); err != nil {
@@ -97,12 +122,12 @@ func (s *FileStore) CompareAndSwapRemoteObservation(ctx context.Context, expecte
 	if err := validateRemoteObservation(value); err != nil {
 		return err
 	}
-	path, err := s.remoteObservationPath(value.RepoID, value.Remote)
+	path, err := s.scopedRemoteObservationPath(value.RepoID, value.Remote, value.Branch)
 	if err != nil {
 		return err
 	}
 	return s.withMutationLock(ctx, "remote-observations", filepath.Base(path), func() error {
-		current, err := s.ReadRemoteObservation(ctx, value.RepoID, value.Remote)
+		current, err := s.readRemoteObservation(ctx, value.RepoID, value.Remote, value.Branch)
 		if err != nil {
 			return err
 		}
@@ -122,3 +147,5 @@ func (s *FileStore) CompareAndSwapRemoteObservation(ctx context.Context, expecte
 }
 
 var _ outbound.RemoteObservationStore = (*FileStore)(nil)
+
+var _ outbound.ScopedRemoteObservationStore = (*FileStore)(nil)

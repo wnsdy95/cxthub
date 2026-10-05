@@ -28,6 +28,7 @@ import (
 
 // Backend is a set of server actions required by REST handlers (app.Service implements).
 type Backend interface {
+	inbound.BranchPullPlanner
 	inbound.ContextQuery
 	inbound.GraphStateQuery
 	GetRepositoryView(context.Context, domain.ContentHash) (domain.RepositoryView, error)
@@ -261,6 +262,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/push/doc-jobs/{jobID}", s.guard(domain.RoleMember, s.getDocFinalization))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/objects", s.guard(domain.RoleMember, s.pushObjects))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/chunks", s.guard(domain.RolePuller, s.pullChunks))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/branch-plan", s.guard(domain.RolePuller, s.pullBranchPlan))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/objects", s.guard(domain.RolePuller, s.pullObjects))
 
 	// Actions exposed by the server. Provider-session restoration remains a local
@@ -382,7 +384,7 @@ func (s *Server) createRepo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getRepo(w http.ResponseWriter, r *http.Request) {
 	out, err := s.b.GetRepo(r.Context(), s.repoID(r))
-	s.respond(w, out, err)
+	s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion()}, err)
 }
 
 // fsck returns reference reachability audit results (read-only — makes no changes).
@@ -1260,6 +1262,8 @@ func mapError(err error) (code string, status int) {
 		return "storage_limit", http.StatusConflict
 	case errors.Is(err, domain.ErrUsageUnavailable):
 		return "usage_unavailable", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrBranchPullUnsupported):
+		return "branch_pull_unsupported", http.StatusNotImplemented
 	case errors.Is(err, domain.ErrNotFound):
 		return "not_found", http.StatusNotFound
 	case errors.Is(err, domain.ErrIntegrity):

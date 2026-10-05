@@ -9,6 +9,9 @@ import (
 // snapshots, branch identities and worktree memory. Revision is a local CAS
 // token, not a claim about a server database transaction revision.
 type RemoteObservation struct {
+	// Branch is empty for a complete repository observation. A selected branch
+	// has a separate CAS revision and can never replace a repair baseline.
+	Branch    string                `json:"branch,omitempty"`
 	Version   int                   `json:"version"`
 	RepoID    string                `json:"repo_id"`
 	Remote    string                `json:"remote"`
@@ -21,6 +24,13 @@ type RemoteObservation struct {
 type RemoteObservationStore interface {
 	ReadRemoteObservation(context.Context, string, string) (RemoteObservation, error)
 	CompareAndSwapRemoteObservation(context.Context, domain.ContentHash, RemoteObservation) error
+}
+
+// ScopedRemoteObservationStore keeps selected-branch evidence separate from
+// the complete repository observation used by normal pull and repair.
+type ScopedRemoteObservationStore interface {
+	RemoteObservationStore
+	ReadScopedRemoteObservation(context.Context, string, string, string) (RemoteObservation, error)
 }
 
 // SyncRemoteIdentity scopes disposable observations when two endpoints expose

@@ -710,7 +710,7 @@ func (s *SyncRepoService) ResolveRemoteBranchObservation(ctx context.Context, in
 	if domain.ValidateBranchName(branch) != nil {
 		return inbound.RemoteBranchObservation{}, domain.ErrInvalidRef
 	}
-	out, err := s.Pull(ctx, inbound.SyncInput{RepoID: in.RepoID, Cwd: in.Cwd, Ref: branch, FetchOnly: true, Progress: in.Progress})
+	out, err := s.Pull(ctx, inbound.SyncInput{RepoID: in.RepoID, Cwd: in.Cwd, Ref: branch, FetchOnly: true, Progress: in.Progress, ObservationRoots: in.ObservationRoots})
 	if err != nil {
 		return inbound.RemoteBranchObservation{}, err
 	}
@@ -1544,7 +1544,26 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 			return inbound.SyncOutput{}, err
 		}
 	}
-	observation, err := s.readObservation(ctx, repoID)
+	capabilities, err := s.pullCapabilities(ctx, repoID)
+	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
+	contextProtocol := capabilities.ContextProtocol
+	if contextProtocol < 0 || contextProtocol > 1 || capabilities.BranchPlanVersion < 0 || capabilities.BranchPlanVersion > domain.BranchPullVersion {
+		return inbound.SyncOutput{}, domain.ErrSyncConflict
+	}
+	scopedRemote, remoteSupportsScope := s.remote.(outbound.ScopedBranchRemotePull)
+	scopedStore, storeSupportsScope := s.store.(outbound.ScopedRemoteObservationStore)
+	useScope := in.FetchOnly && in.Ref != "" && capabilities.BranchPlanVersion == domain.BranchPullVersion
+	if useScope && (!remoteSupportsScope || !storeSupportsScope) {
+		return inbound.SyncOutput{}, fmt.Errorf("selected branch observation is unavailable in this client adapter")
+	}
+	var observation outbound.RemoteObservation
+	if useScope {
+		observation, err = scopedStore.ReadScopedRemoteObservation(ctx, repoID, s.observationRemote(), in.Ref)
+	} else {
+		observation, err = s.readObservation(ctx, repoID)
+	}
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
@@ -1575,19 +1594,17 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
-	contextProtocol, err := s.remoteContextProtocol(ctx, repoID)
-	if err != nil {
-		return inbound.SyncOutput{}, err
-	}
-	if contextProtocol < 0 || contextProtocol > 1 {
-		return inbound.SyncOutput{}, domain.ErrSyncConflict
-	}
 	var snaps []domain.Snapshot
 	var docs []domain.SessionDoc
 	var refs []domain.Ref
 	syncProgress(in, "pull", "download-and-verify-documents", 0, 0)
 	verified := make(map[domain.ContentHash]bool)
-	if selected, ok := s.remote.(outbound.BranchStreamingRemotePull); ok && in.Ref != "" {
+	var scopedPlan domain.BranchPullPlan
+	request := domain.BranchPullRequest{Version: domain.BranchPullVersion, Branch: in.Ref, ObservationRoots: in.ObservationRoots}
+	if useScope {
+		scopedPlan, snaps, err = scopedRemote.PullSelectedBranchTo(ctx, repoID, request, advertisedSnapshotStates, docHaves, &pullDocumentReceiver{store: s.store, verified: verified})
+		refs = scopedPlan.Refs
+	} else if selected, ok := s.remote.(outbound.BranchStreamingRemotePull); ok && in.Ref != "" {
 		snaps, refs, err = selected.PullBranchTo(ctx, repoID, in.Ref, advertisedSnapshotStates, docHaves, &pullDocumentReceiver{store: s.store, verified: verified})
 	} else if streaming, ok := s.remote.(outbound.StreamingRemotePull); ok {
 		snaps, refs, err = streaming.PullTo(ctx, repoID, advertisedSnapshotStates, docHaves, &pullDocumentReceiver{store: s.store, verified: verified})
@@ -1596,6 +1613,19 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	}
 	if err != nil {
 		return inbound.SyncOutput{}, err
+	}
+	pulledSnapshots := len(snaps)
+	if useScope {
+		if err := domain.ValidateBranchPullPlan(repoID, request, scopedPlan); err != nil {
+			return inbound.SyncOutput{}, err
+		}
+		if scopedPlan.ContextProtocol != contextProtocol {
+			return inbound.SyncOutput{}, domain.ErrSyncConflict
+		}
+		snaps, err = reconstructBranchPull(ctx, scopedPlan, observation.Snapshots, snaps)
+		if err != nil {
+			return inbound.SyncOutput{}, err
+		}
 	}
 	// A preceding fetch may have negotiated these exact remote tokens without
 	if _, err := selectSyncRefs(refs, in.Ref); err != nil {
@@ -1616,7 +1646,10 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	if err := validatePullBatchWithVerified(ctx, s.store, repoID, snaps, docs, refs, verified); err != nil {
 		return inbound.SyncOutput{}, err
 	}
-	history, err := s.readRemoteHistory(ctx, repoID)
+	history := scopedPlan.History
+	if !useScope {
+		history, err = s.readRemoteHistory(ctx, repoID)
+	}
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
@@ -1684,7 +1717,13 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 				}
 				knownMemories[snap.MemoryHash] = local
 			case errors.Is(gerr, domain.ErrNotFound):
-				digest, perr := s.remote.PullMemory(ctx, repoID, snap.ID)
+				var digest domain.MemoryDigest
+				var perr error
+				if useScope {
+					digest, perr = s.remote.PullMemoryObject(ctx, repoID, snap.MemoryHash)
+				} else {
+					digest, perr = s.remote.PullMemory(ctx, repoID, snap.ID)
+				}
 				if perr != nil {
 					return inbound.SyncOutput{}, perr
 				}
@@ -1833,6 +1872,9 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	if useScope {
+		observedSnapshots = snaps
+	}
 	// Parent meta mismatch (replica divergence): parents can differ among replicas (legacy empirical verification: 7/7 stash-dedup bug snapshots). Local objects are immutable (PutSnapshot does not overwrite parents), so reject remote version adoption and proceed with batch — total rejection makes known divergence permanent pull failure (availability). Pollution server defense intent maintained: mismatched meta never reflected locally.
 	var conflicts []string
 	for _, snap := range snaps {
@@ -1898,7 +1940,11 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 		} else {
 			syncProgress(in, "pull", "conflicts", 0, 0)
 		}
-		return inbound.SyncOutput{Pulled: len(snaps), FetchedRefs: append([]domain.Ref{}, selectedRefs...), FetchedHistory: history, FetchedSnapshots: observedSnapshots, Conflicts: conflicts, RemoteAhead: ahead}, nil
+		count := len(snaps)
+		if useScope {
+			count = pulledSnapshots
+		}
+		return inbound.SyncOutput{Pulled: count, FetchedRefs: append([]domain.Ref{}, selectedRefs...), FetchedHistory: history, FetchedSnapshots: observedSnapshots, Conflicts: conflicts, RemoteAhead: ahead}, nil
 	}
 	refs, err = selectSyncRefs(refs, in.Ref)
 	if err != nil {
