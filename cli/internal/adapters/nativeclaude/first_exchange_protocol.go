@@ -24,13 +24,19 @@ type firstQuestionState struct {
 	assistantText   string
 	lastText        string
 	answer          string
+	ordinary        *ordinaryState
 }
 
 // Caller holds Session.mu. Only an explicitly owned first question may receive
-// querying frames. No frame callback executes arbitrary caller code or grants a
-// native permission; that needs its own versioned interaction contract.
+// querying frames. Ordinary permission callbacks are dispatched separately;
+// this reader never executes caller code or waits for an interaction.
 func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) (bool, error) {
 	q := s.firstQuestion
+	if q.ordinary != nil {
+		if handled, err := s.ordinaryFrame(m, kind); handled {
+			return true, err
+		}
+	}
 	switch kind {
 	case "control_request":
 		return true, ErrPermissionRequired
@@ -42,6 +48,9 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 			return true, ErrProtocol
 		}
 	case "system":
+		if q.ordinary != nil && bytes.Equal(m["subtype"], []byte(`"compact_boundary"`)) {
+			return true, ErrUnsupported
+		}
 		if subtype, err := stringField(m, "subtype"); err == nil && subtype == "status" {
 			id, err := stringField(m, "session_id")
 			if err != nil || id != s.id {
@@ -76,6 +85,9 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 			return true, ErrProtocol
 		}
 		state, err := stringField(m, "state")
+		if q.ordinary != nil && (state == "cancelled" || state == "discarded" || state == "refused") {
+			return true, ErrUnsupported
+		}
 		want := []string{"queued", "started", "completed"}
 		if err != nil || q.phase >= len(want) || state != want[q.phase] || state == "completed" && !q.resultReceived {
 			return true, ErrProtocol
@@ -163,7 +175,13 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 		if q.phase != 2 || q.resultReceived || !q.replayed || len(q.assistantIDs) == 0 {
 			return true, ErrProtocol
 		}
+		if q.ordinary != nil && !q.ordinary.settled() {
+			return true, ErrProtocol
+		}
 		answer, err := firstQuestionResult(m, q)
+		if err != nil && q.ordinary != nil {
+			return true, err
+		}
 		if err != nil || answer != q.lastText {
 			return true, ErrProtocol
 		}
@@ -199,35 +217,48 @@ func firstAssistantText(raw []byte, model string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		key := ""
-		switch kind {
-		case "text":
-			key = "text"
-		case "thinking":
-			key = "thinking"
-		case "redacted_thinking":
-			key = "data"
-		default:
-			// Tool use requires a separate permission and result conversation.
-			return "", ErrProtocol
+		value, err := assistantTextBlock(b, kind)
+		if err != nil {
+			return "", err
 		}
-		var value string
-		if bytes.Equal(bytes.TrimSpace(b[key]), []byte("null")) || json.Unmarshal(b[key], &value) != nil || !utf8.ValidString(value) || len(value) > maxFirstAnswerBytes {
-			return "", ErrProtocol
+		if len(value) > maxFirstAnswerBytes-text.Len() {
+			return "", ErrLimit
 		}
-		if kind == "text" {
-			if len(value) > maxFirstAnswerBytes-text.Len() {
-				return "", ErrLimit
-			}
-			text.WriteString(value)
-		}
+		text.WriteString(value)
 	}
 	return text.String(), nil
+}
+
+// Both protocols validate hidden blocks but project only visible text. Tool
+// blocks remain the responsibility of the ordinary interaction protocol.
+func assistantTextBlock(b map[string]json.RawMessage, kind string) (string, error) {
+	key := ""
+	switch kind {
+	case "text":
+		key = "text"
+	case "thinking":
+		key = "thinking"
+	case "redacted_thinking":
+		key = "data"
+	default:
+		return "", ErrProtocol
+	}
+	var value string
+	if bytes.Equal(bytes.TrimSpace(b[key]), []byte("null")) || json.Unmarshal(b[key], &value) != nil || !utf8.ValidString(value) || len(value) > maxFirstAnswerBytes {
+		return "", ErrProtocol
+	}
+	if kind != "text" {
+		return "", nil
+	}
+	return value, nil
 }
 
 func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (string, error) {
 	terminal, err := stringField(m, "terminal_reason")
 	if err != nil || terminal != "completed" {
+		if err == nil && q.ordinary != nil {
+			return "", ErrUnsupported
+		}
 		return "", ErrProtocol
 	}
 	stop, err := stringField(m, "stop_reason")
@@ -257,7 +288,7 @@ func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (s
 		return "", ErrProtocol
 	}
 	turns, err := count(m, "num_turns", 1)
-	if err != nil || turns != 1 {
+	if err != nil || q.ordinary == nil && turns != 1 || q.ordinary != nil && turns > maxOrdinaryRecords {
 		return "", ErrProtocol
 	}
 	if _, err = count(m, "duration_api_ms", 0); err != nil {
@@ -277,8 +308,13 @@ func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (s
 	}
 	if raw, ok := m["permission_denials"]; ok {
 		var denials []json.RawMessage
-		if json.Unmarshal(raw, &denials) != nil || denials == nil || len(denials) != 0 {
+		if json.Unmarshal(raw, &denials) != nil || denials == nil || q.ordinary == nil && len(denials) != 0 {
 			return "", ErrProtocol
+		}
+		if q.ordinary != nil {
+			if err := q.ordinary.validateDenials(denials); err != nil {
+				return "", err
+			}
 		}
 	}
 	usage, err := object(m["usage"])
@@ -298,8 +334,23 @@ func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (s
 	if err != nil || len(models) != 1 {
 		return "", ErrProtocol
 	}
-	if _, err := object(models[q.summary.Model]); err != nil {
+	modelUsage, err := object(models[q.summary.Model])
+	if err != nil {
 		return "", err
+	}
+	if q.ordinary != nil {
+		for _, key := range []string{"inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests", "contextWindow", "maxOutputTokens"} {
+			if _, ok := modelUsage[key]; ok {
+				if _, err := count(modelUsage, key, 0); err != nil {
+					return "", err
+				}
+			}
+		}
+		if raw, ok := modelUsage["costUSD"]; ok {
+			if _, err := exchangeNumber(raw, exchangeNativeTotalCostMax); err != nil {
+				return "", err
+			}
+		}
 	}
 	var answer string
 	if json.Unmarshal(m["result"], &answer) != nil || answer == "" || !utf8.ValidString(answer) || len(answer) > maxFirstAnswerBytes {

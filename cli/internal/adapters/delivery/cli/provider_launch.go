@@ -26,18 +26,19 @@ import (
 // a process start is never evidence that the provider accepted the package.
 type ProviderLaunchHooks struct {
 	Prepare func(context.Context, ProviderLaunchRequest) (PreparedProviderLaunch, error)
-	// PrepareDeferred owns a native runtime for fresh Codex history launches.
+	// PrepareDeferred owns a native runtime for fresh native history launches.
 	// When configured, failure never falls back to materialized delivery.
 	PrepareDeferred func(context.Context, ProviderLaunchRequest) (DeferredProviderLaunch, error)
 	Record          func(context.Context, ProviderLaunchReceipt) error
 }
 
 type ProviderLaunchRequest struct {
-	Cwd         string
-	Executable  string
-	Intent      LaunchIntent
-	Transition  *ProviderLaunchTransition
-	environment []string // frozen before deferred preparation; access through Environment
+	Cwd            string
+	Executable     string
+	Intent         LaunchIntent
+	Transition     *ProviderLaunchTransition
+	environment    []string // frozen before deferred preparation; access through Environment
+	ownedSessionID string   // assigned only by the supervisor before native Claude starts
 }
 
 // ResumeArguments constructs the only supported prepared CLI transport: a new,
@@ -111,17 +112,19 @@ type ProviderLaunchReceipt struct {
 func RunProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hooks ProviderLaunchHooks) error {
 	return runProviderLaunch(ctx, cwd, intent, hooks, providerLaunchRuntime{
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
-		interactive:  providerLaunchTerminal(os.Stdin) && providerLaunchTerminal(os.Stdout),
-		pollInterval: time.Second,
+		interactive:   providerLaunchTerminal(os.Stdin) && providerLaunchTerminal(os.Stdout),
+		pollInterval:  time.Second,
+		handleSignals: true,
 	})
 }
 
 type providerLaunchRuntime struct {
-	stdin        io.Reader
-	stdout       io.Writer
-	stderr       io.Writer
-	interactive  bool
-	pollInterval time.Duration
+	stdin         io.Reader
+	stdout        io.Writer
+	stderr        io.Writer
+	interactive   bool
+	pollInterval  time.Duration
+	handleSignals bool
 }
 
 type providerLaunchWriter struct {
@@ -136,6 +139,11 @@ func (w *providerLaunchWriter) Write(p []byte) (int, error) {
 }
 
 func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hooks ProviderLaunchHooks, runtime providerLaunchRuntime) (resultErr error) {
+	var signals *providerLaunchSignals
+	if runtime.handleSignals {
+		ctx, signals = ownProviderLaunchSignals(ctx)
+		defer signals.close()
+	}
 	// The supervisor can report a failed restart while the child still writes.
 	// Keep native terminal descriptors intact; serialize custom embedding writers.
 	if _, native := runtime.stderr.(*os.File); !native {
@@ -176,7 +184,7 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 	}
 	managed := inv.Mode == providerFresh
 	supervised := managed || inv.Mode == providerNative
-	deferred := managed && intent.Provider == domain.ProviderCodex && intent.Pull && hooks.PrepareDeferred != nil
+	deferred := managed && nativeDeferredProvider(intent.Provider) && intent.Pull && hooks.PrepareDeferred != nil
 	if managed && ((!deferred && hooks.Prepare == nil) || hooks.Record == nil) {
 		return fmt.Errorf("CXT context preparation is unavailable; %s was not started. Run %s directly to explicitly start without CXT context", intent.Provider, intent.Provider)
 	}
@@ -250,54 +258,84 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
-		child := exec.Command(bin, args...)
-		// Keep provider --cd relative to the original invocation, while using
-		// its resolved destination for CXT selection and boundary monitoring.
-		child.Dir = cwd
-		child.Stdin, child.Stdout, child.Stderr = runtime.stdin, runtime.stdout, runtime.stderr
-		if prepared.Deferred != nil {
-			child.Env = append([]string{}, prepared.Deferred.Env...)
-		} else {
-			child.Env = providerLaunchEnvironment(ctx, selectionCwd, intent.Provider, args, supervised)
-			if managed {
-				child.Env = append(child.Env, "CXT_WRAPPER_TRANSITION_PROTOCOL=prepare-first-v1")
+		ownedStart := prepared.Deferred != nil && prepared.Deferred.owned.start != nil
+		var process providerLaunchProcess
+		recordLaunched := func() error {
+			if !managed {
+				return nil
 			}
-		}
-		if err := deferredProviderFailureReady(prepared.Deferred); err != nil {
-			return fail(err)
-		}
-		if err := child.Start(); err != nil {
-			return fail(fmt.Errorf("%w: start %s: %w", domain.ErrDeliveryFailed, intent.Provider, err))
-		}
-		done := make(chan error, 1)
-		go func() { done <- child.Wait() }()
-		if managed {
 			if err := validatePreparedProviderLaunch(request, prepared); err != nil {
-				stopProviderChild(child, done)
-				return fail(err)
+				return err
 			}
 			receipt.State = "launched"
 			if prepared.Deferred != nil {
 				receipt.State = "runtime_launched"
 			}
 			if err := hooks.Record(ctx, cloneProviderLaunchReceipt(receipt)); err != nil {
-				stopProviderChild(child, done)
-				return fail(fmt.Errorf("%w: provider started but its delivery receipt could not be persisted: %w", domain.ErrDeliveryFailed, err))
+				if !ownedStart {
+					return fmt.Errorf("%w: provider started but its delivery receipt could not be persisted: %w", domain.ErrDeliveryFailed, err)
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				// Owned Start already passed its durable release gate and
+				// returned a started TUI. This receipt only observes that start.
+				fmt.Fprintln(runtime.stderr, "cxt: native runtime launch receipt was not confirmed saved; the conversation remains active")
 			}
+			if prepared.Deferred != nil && !ownedStart {
+				// The ordinary TUI can submit its argv question early, but its
+				// preparation gate opens only after runtime_launched is durable.
+				return activateDeferredProviderLaunch(ctx, prepared.Deferred)
+			}
+			return nil
+		}
+		if err := deferredProviderFailureReady(prepared.Deferred); err != nil {
+			return fail(err)
+		}
+		if ownedStart {
+			// Start can itself release the first turn. Persist and activate
+			// before calling it; runtime_launched still means a TUI was started.
+			receipt.State = "runtime_starting"
+			if err := hooks.Record(ctx, cloneProviderLaunchReceipt(receipt)); err != nil {
+				return fail(redactDeferredProviderError(err))
+			}
+			if err := activateDeferredProviderLaunch(ctx, prepared.Deferred); err != nil {
+				return fail(err)
+			}
+			startOwned := prepared.Deferred.owned.start
+			process.start(ctx, func(ctx context.Context) (*exec.Cmd, error) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				cmd, err := startOwned(ctx, runtime.stdin, runtime.stdout, runtime.stderr, signals.terminalStarted)
+				if cmd != nil && cmd.Process != nil {
+					signals.terminalStarted()
+				}
+				return cmd, err
+			})
+		} else {
+			child := exec.Command(bin, args...)
+			// Keep provider --cd relative to the original invocation, while using
+			// its resolved destination for CXT selection and boundary monitoring.
+			child.Dir = cwd
+			child.Stdin, child.Stdout, child.Stderr = runtime.stdin, runtime.stdout, runtime.stderr
 			if prepared.Deferred != nil {
-				// A fast TUI may already have submitted its argv question. Its
-				// native preparation gate stays closed until this receipt exists.
-				activationErr := ctx.Err()
-				if activationErr == nil {
-					activationErr = deferredProviderFailureReady(prepared.Deferred)
+				child.Env = append([]string{}, prepared.Deferred.Env...)
+			} else {
+				child.Env = providerLaunchEnvironment(ctx, selectionCwd, intent.Provider, args, supervised)
+				if managed {
+					child.Env = append(child.Env, "CXT_WRAPPER_TRANSITION_PROTOCOL=prepare-first-v1")
 				}
-				if activationErr == nil {
-					activationErr = prepared.Deferred.owned.activate(ctx)
-				}
-				if activationErr != nil {
-					stopProviderChild(child, done)
-					return fail(activationErr)
-				}
+			}
+			if err := child.Start(); err != nil {
+				return fail(fmt.Errorf("%w: start %s: %w", domain.ErrDeliveryFailed, intent.Provider, err))
+			}
+			signals.terminalStarted()
+			process.adopt(child)
+			if err := recordLaunched(); err != nil {
+				stopErr := process.stop()
+				signals.ownedInput()
+				return fail(errors.Join(err, stopErr))
 			}
 		}
 		var exitErr error
@@ -305,20 +343,37 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 		if prepared.Deferred != nil {
 			runtimeFailure = prepared.Deferred.Failure
 		}
-		transition := false
+		transition, retireSession := false, false
 		ticker := time.NewTicker(runtime.pollInterval)
 	watch:
 		for {
 			select {
+			case result := <-process.starting:
+				if err := process.started(result); err != nil {
+					exitErr = redactDeferredProviderError(err)
+					break watch
+				}
+				if err := ctx.Err(); err != nil {
+					exitErr = err
+					break watch
+				}
+				if err := deferredProviderFailureReady(prepared.Deferred); err != nil {
+					exitErr = err
+					break watch
+				}
+				if err := recordLaunched(); err != nil {
+					exitErr = err
+					break watch
+				}
 			case failure, open := <-runtimeFailure:
 				if !open || failure == nil {
 					runtimeFailure = nil
 					continue
 				}
-				stopProviderChild(child, done)
 				exitErr = redactDeferredProviderError(failure)
 				break watch
-			case exitErr = <-done:
+			case exitErr = <-process.done:
+				process.done = nil
 				if failure := deferredProviderFailureReady(prepared.Deferred); failure != nil {
 					exitErr = failure
 					break watch
@@ -326,7 +381,6 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 				transition = supervised && newBoundarySince(selectionCwd, start)
 				break watch
 			case <-ctx.Done():
-				stopProviderChild(child, done)
 				exitErr = ctx.Err()
 				break watch
 			case <-ticker.C:
@@ -360,7 +414,6 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 						}
 						if prepareErr != nil {
 							if errors.Is(prepareErr, errProviderCleanup) {
-								stopProviderChild(child, done)
 								exitErr = prepareErr
 								break watch
 							}
@@ -374,28 +427,40 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 						next = &readyLaunch{prepared: p, receipt: r, observed: observed}
 					}
 					if failure := deferredProviderFailureReady(prepared.Deferred); failure != nil {
-						stopProviderChild(child, done)
 						exitErr = failure
 						break watch
 					}
-					exitErr = stopProviderChild(child, done)
-					if managed && prepared.Deferred == nil {
-						retireOwnedProviderSession(ctx, selectionCwd, intent.Provider, prepared.SessionID)
-					}
 					transition = true
+					retireSession = managed && prepared.Deferred == nil
 					break watch
 				}
 			}
 		}
 		ticker.Stop()
+		// Join startup and reap any late child before retiring the runtime or
+		// starting a prewarmed replacement. One loop owns both lifecycle phases.
+		exitErr = errors.Join(exitErr, process.stop())
+		// Replacement preparation kept the old TUI's interrupt behavior. Only
+		// after joining it may CXT own input again, including replacement Start.
+		signals.ownedInput()
+		if process.startErr != nil {
+			transition = false
+		}
+		if retireSession {
+			retireOwnedProviderSession(ctx, selectionCwd, intent.Provider, prepared.SessionID)
+		}
 		cleanupErr := cleanup()
+		if failure := deferredProviderFailureReady(prepared.Deferred); failure != nil {
+			exitErr = errors.Join(exitErr, failure)
+			transition = false
+		}
 		if cleanupErr != nil {
 			// Retirement must be confirmed before a prewarmed replacement can
 			// launch. The outer defer disposes that unused replacement too.
 			return launchFailure(ctx, hooks, receipt, managed, errors.Join(exitErr, ctx.Err(), cleanupErr))
 		}
 		if ctx.Err() != nil {
-			return launchFailure(ctx, hooks, receipt, managed, ctx.Err())
+			return launchFailure(ctx, hooks, receipt, managed, errors.Join(exitErr, ctx.Err()))
 		}
 		if !transition {
 			if exitErr != nil {
@@ -480,7 +545,7 @@ func cleanupProviderLaunch(p PreparedProviderLaunch) error {
 }
 
 func prepareProviderLaunch(ctx context.Context, request ProviderLaunchRequest, hooks ProviderLaunchHooks) (PreparedProviderLaunch, ProviderLaunchReceipt, error) {
-	if hooks.PrepareDeferred != nil && request.Intent.Provider == domain.ProviderCodex && request.Intent.Pull {
+	if hooks.PrepareDeferred != nil && nativeDeferredProvider(request.Intent.Provider) && request.Intent.Pull {
 		prepared, receipt, err := prepareDeferredProviderLaunch(ctx, request, hooks)
 		if err != nil {
 			// Deferred cleanup is once-only and retains its result. Recover any

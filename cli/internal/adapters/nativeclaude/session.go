@@ -1,6 +1,6 @@
 // Package nativeclaude owns a versioned, local Claude stream-JSON process.
-// Start exposes no querying user message, arbitrary control, or permission grant.
-// The separate private FirstExchange contract owns one admitted text response.
+// Start retains a no-query reference contract. FirstExchange owns an admitted
+// first turn with bounded, explicitly handled native tool interactions.
 // Local context estimates are not provider capacity or acceptance evidence.
 package nativeclaude
 
@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 )
 
 var (
@@ -48,6 +50,10 @@ type Options struct {
 	Env        []string
 	Model      string
 	ConfigArgs []string
+	// SessionID optionally binds a supervisor-generated fresh, canonical UUID
+	// before process creation. It never requests resume. Existing owned archive
+	// paths (including symlinks) are rejected without opening their contents.
+	SessionID string
 }
 
 type ModelInfo struct {
@@ -100,6 +106,7 @@ type Session struct {
 	process                       *process
 	gate                          chan struct{}
 	mu                            sync.Mutex
+	writeMu                       sync.Mutex
 	pending                       *pendingCall
 	err                           error
 	closing                       bool
@@ -132,6 +139,10 @@ func startVersion(ctx context.Context, opts Options, expectedVersion string) (*S
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	id := opts.SessionID
+	if id != "" && !canonicalSessionID(id) {
+		return nil, ErrState
+	}
 	// Freeze symlink resolution before --version. A launcher symlink changing
 	// afterward cannot select a different executable for the protocol process.
 	executable, err := exec.LookPath(opts.Executable)
@@ -147,16 +158,22 @@ func startVersion(ctx context.Context, opts Options, expectedVersion string) (*S
 		return nil, ErrState
 	}
 	opts.Executable = executable
-	permissionPrompts := "none"
-	if expectedVersion == "2.1.287" {
-		permissionPrompts = "host"
-	}
-	args, env, cwd, root, err := launchOptionsWithPermissions(opts, permissionPrompts)
+	args, env, cwd, root, err := launchOptionsForVersion(opts, expectedVersion)
 	if err != nil {
 		return nil, err
 	}
-	launch, err := freezeIdleLaunch(opts, env, cwd)
+	launch, err := freezeIdleLaunch(opts, env, cwd, expectedVersion)
 	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		id, err = newUUID()
+		if err != nil {
+			return nil, ErrState
+		}
+	}
+	archivePath := filepath.Join(root, providerfs.EncodeCwd(cwd), id+".jsonl")
+	if err := unusedSessionArchive(archivePath); err != nil {
 		return nil, err
 	}
 	startup, cancel := context.WithTimeout(ctx, operationTimeout)
@@ -165,13 +182,12 @@ func startVersion(ctx context.Context, opts Options, expectedVersion string) (*S
 	if err != nil {
 		return nil, err
 	}
-	id, err := newUUID()
-	if err != nil {
-		return nil, ErrState
-	}
 	args = append(args, "--session-id", id)
 	s := &Session{id: id, version: version, cwd: cwd, archiveRoot: root, launch: launch, gate: make(chan struct{}, 1), failed: make(chan struct{}), closed: make(chan struct{})}
 	if err := launch.validate(); err != nil {
+		return nil, err
+	}
+	if err := unusedSessionArchive(archivePath); err != nil {
 		return nil, err
 	}
 	p, err := startProcess(opts.Executable, args, cwd, env, s.frame, s.fail)
@@ -211,6 +227,32 @@ func startVersion(ctx context.Context, opts Options, expectedVersion string) (*S
 		return nil, errors.Join(err, s.Close())
 	}
 	return s, nil
+}
+
+func canonicalSessionID(id string) bool {
+	if len(id) != 36 || id == "00000000-0000-0000-0000-000000000000" {
+		return false
+	}
+	for i, ch := range id {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if ch != '-' {
+				return false
+			}
+		} else if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func unusedSessionArchive(path string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	// An inaccessible path also cannot certify a fresh session. Lstat rejects
+	// a dangling leaf symlink instead of following it or replacing it.
+	return ErrState
 }
 
 func (s *Session) enter(ctx context.Context) error {
@@ -319,7 +361,7 @@ func (s *Session) exchange(ctx context.Context, p *pendingCall, raw []byte) (jso
 	s.pending = p
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); s.pending = nil; s.mu.Unlock() }()
-	if err := s.process.write(ctx, append(raw, '\n')); err != nil {
+	if err := s.writeFrame(ctx, raw); err != nil {
 		s.fail(err)
 		return nil, errors.Join(err, s.Close())
 	}
@@ -353,19 +395,45 @@ func (s *Session) fail(err error) {
 }
 func (s *Session) failure() error { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
 
+func (s *Session) writeFrame(ctx context.Context, raw []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	ordinary := s.firstQuestion != nil && s.firstQuestion.ordinary != nil
+	s.mu.Unlock()
+	return s.process.write(ctx, append(raw, '\n'), ordinary)
+}
+
 // Close drains and validates stdout through EOF, waits for the owned process,
-// and never removes its native archive. Forced shutdown is reported as failure,
-// not as persisted input. Close is safe concurrently and returns its first result.
+// and never removes its native archive. A failed ordinary exchange is killed
+// before EOF can be interpreted as a permission decision. Its original error
+// remains a failure even when physical retirement succeeds; it cannot authorize
+// archive proof or resume. Close is concurrent-safe and returns its first result.
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closing = true
+		if s.firstQuestion != nil && s.firstQuestion.ordinary != nil {
+			s.firstQuestion.ordinary.cancel()
+		}
 		if s.pending != nil && s.err == nil {
 			s.err = ErrClosed
 			close(s.failed)
 		}
+		abort := s.err != nil && s.firstQuestion != nil && s.firstQuestion.ordinary != nil
 		s.mu.Unlock()
-		err := s.process.close()
+		err := s.process.shutdown(abort)
+		if abort {
+			// Completion eligibility and retirement are separate. The original
+			// cancellation/protocol error still prevents a successful close.
+			err = s.process.retirementErr
+		}
+		// Pipe shutdown interrupts committed writes. Join their audit before
+		// finalizing closeErr; a late permission-write failure must not arrive
+		// after successful Run/readback has already been reported. UI callbacks
+		// themselves never hold this lock.
+		s.writeMu.Lock()
+		s.writeMu.Unlock()
 		s.mu.Lock()
 		s.closeErr = errors.Join(s.err, err)
 		s.mu.Unlock()
@@ -388,11 +456,7 @@ func hashText(s string) string {
 	return "sha256:" + hex.EncodeToString(h[:])
 }
 
-func launchOptions(o Options) ([]string, []string, string, string, error) {
-	return launchOptionsWithPermissions(o, "none")
-}
-
-func launchOptionsWithPermissions(o Options, permissionPrompts string) ([]string, []string, string, string, error) {
+func launchOptionsForVersion(o Options, version string) ([]string, []string, string, string, error) {
 	if o.Executable == "" || !filepath.IsAbs(o.Cwd) || strings.ContainsRune(o.Model, 0) || len(o.Model) > 256 {
 		return nil, nil, "", "", ErrState
 	}
@@ -404,7 +468,7 @@ func launchOptionsWithPermissions(o Options, permissionPrompts string) ([]string
 	if err != nil || !info.IsDir() {
 		return nil, nil, "", "", ErrState
 	}
-	if !validArgs(o.ConfigArgs) {
+	if !validArgs(o.ConfigArgs, version) {
 		return nil, nil, "", "", ErrState
 	}
 	env := o.Env
@@ -433,6 +497,10 @@ func launchOptionsWithPermissions(o Options, permissionPrompts string) ([]string
 	if !filepath.IsAbs(root) {
 		return nil, nil, "", "", ErrState
 	}
+	permissionPrompts := "none"
+	if version == "2.1.287" {
+		permissionPrompts = "host"
+	}
 	args := append([]string{}, o.ConfigArgs...)
 	args = append(args, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--await-initialize", "--permission-prompt-tool", "stdio", "--permission-prompts", permissionPrompts, "--prompt-suggestions", "false", "--replay-user-messages")
 	if o.Model != "" {
@@ -441,15 +509,14 @@ func launchOptionsWithPermissions(o Options, permissionPrompts string) ([]string
 	return args, env, cwd, filepath.Join(filepath.Clean(root), "projects"), nil
 }
 
-func validArgs(args []string) bool {
-	if len(args) > 128 {
+func validArgs(args []string, version string) bool {
+	if len(args) > 128 || version != "2.1.285" && version != "2.1.287" {
 		return false
 	}
-	flags := map[string]bool{"--bare": true, "--safe-mode": true, "--strict-mcp-config": true, "--no-chrome": true, "--disable-slash-commands": true}
 	values := map[string]bool{"--settings": true, "--setting-sources": true, "--mcp-config": true, "--tools": true, "--allowedTools": true, "--disallowedTools": true, "--add-dir": true, "--plugin-dir": true, "--agent": true, "--system-prompt": true, "--append-system-prompt": true, "--system-prompt-file": true, "--append-system-prompt-file": true, "--effort": true, "--permission-mode": true}
 	for i := 0; i < len(args); i++ {
 		name, value, equal := strings.Cut(args[i], "=")
-		if flags[name] && !equal {
+		if standaloneConfigFlag(name, version) && !equal {
 			continue
 		}
 		if !values[name] {
@@ -465,9 +532,30 @@ func validArgs(args []string) bool {
 		if len(value) > 64<<10 || strings.ContainsRune(value, 0) {
 			return false
 		}
-		if name == "--permission-mode" && value != "default" && value != "dontAsk" && value != "plan" {
-			return false
+		if name == "--permission-mode" {
+			switch value {
+			case "default", "dontAsk", "plan":
+			case "acceptEdits", "bypassPermissions", "auto", "manual":
+				if version != "2.1.287" {
+					return false
+				}
+			default:
+				return false
+			}
 		}
 	}
 	return true
+}
+
+// Shared by initial launch validation and resume parsing. These options carry
+// no value; they are never inserted on the caller's behalf.
+func standaloneConfigFlag(name, version string) bool {
+	switch name {
+	case "--bare", "--safe-mode", "--strict-mcp-config", "--no-chrome", "--disable-slash-commands":
+		return true
+	case "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions":
+		return version == "2.1.287"
+	default:
+		return false
+	}
 }

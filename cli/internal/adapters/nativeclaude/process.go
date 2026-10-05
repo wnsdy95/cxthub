@@ -26,6 +26,7 @@ type process struct {
 	onError                  func(error)
 	closeOnce                sync.Once
 	closeErr                 error
+	retirementErr            error
 }
 
 // OS exit observation leaves the child unreaped. Close is the sole signaler
@@ -132,7 +133,7 @@ func readFrames(r io.Reader, frame func([]byte) error) error {
 	return nil
 }
 
-func (p *process) write(ctx context.Context, raw []byte) error {
+func (p *process) write(ctx context.Context, raw []byte, abortOnCancel bool) error {
 	if len(raw) > maxFrameBytes {
 		return ErrLimit
 	}
@@ -141,7 +142,13 @@ func (p *process) write(ctx context.Context, raw []byte) error {
 	}
 	// Closing a pollable os.Pipe interrupts a blocked write; cancellation is
 	// irreversible, because a partial frame may already have reached native.
-	stop := context.AfterFunc(ctx, func() { _ = p.stdin.Close() })
+	stop := context.AfterFunc(ctx, func() {
+		if abortOnCancel {
+			_ = p.shutdown(true)
+		} else {
+			_ = p.stdin.Close()
+		}
+	})
 	defer stop()
 	n, err := p.stdin.Write(raw)
 	if ctx.Err() != nil {
@@ -164,10 +171,34 @@ func waitFor(ch <-chan struct{}, duration time.Duration) bool {
 	}
 }
 
-func (p *process) close() error {
+func (p *process) close() error { return p.shutdown(false) }
+
+func (p *process) shutdown(abort bool) error {
 	p.closeOnce.Do(func() {
-		_ = p.stdin.Close()
 		forced := false
+		closeInput := !abort
+		retirementFailed := func() { p.closeErr, p.retirementErr = ErrCleanup, ErrCleanup }
+		if abort {
+			// EOF during a permission dialog can mean "deny and continue" to
+			// native. An abandoned exchange must stop the owned group before
+			// closing its input, rather than inadvertently releasing another turn.
+			forced = true
+			if err := cleanupProcessGroup(p.cmd); err != nil {
+				retirementFailed()
+			}
+			if !waitFor(p.exited, time.Second) || p.observationErr != nil {
+				retirementFailed()
+			} else {
+				closeInput = true
+			}
+		}
+		if closeInput {
+			_ = p.stdin.Close()
+		} else {
+			// A denied signal or failed observer is not proof of exit. Interrupt
+			// our writer without sending an EOF that could continue native work.
+			_ = p.stdin.SetWriteDeadline(time.Now())
+		}
 		if !waitFor(p.exited, time.Second) {
 			forced = true
 			_ = signalProcessGroup(p.cmd, false)
@@ -179,40 +210,50 @@ func (p *process) close() error {
 		// The unreaped child still reserves the group identity. Dispose any
 		// descendants holding inherited descriptors before allowing Wait.
 		if err := cleanupProcessGroup(p.cmd); err != nil {
-			p.closeErr = ErrCleanup
+			retirementFailed()
 		}
 		reaped := make(chan struct{})
 		var waitErr error
-		go func() { waitErr = p.cmd.Wait(); close(reaped) }()
+		go func() {
+			waitErr = p.cmd.Wait()
+			if p.cmd.ProcessState != nil {
+				// Even after our bounded wait expires, actual leader exit must
+				// eventually release the retained input descriptor.
+				_ = p.stdin.Close()
+			}
+			close(reaped)
+		}()
 		if !waitFor(reaped, time.Second) {
-			p.closeErr = ErrCleanup
-		} else if waitErr != nil {
+			retirementFailed()
+		} else {
+			if waitErr != nil {
+				p.closeErr = ErrCleanup
+				var exited *exec.ExitError
+				if !errors.As(waitErr, &exited) {
+					retirementFailed()
+				}
+			}
+		}
+		if forced {
 			p.closeErr = ErrCleanup
 		}
-		if !observed || forced {
-			p.closeErr = ErrCleanup
-		}
-		if observed && p.observationErr != nil {
-			p.closeErr = ErrCleanup
+		if !observed || p.observationErr != nil {
+			retirementFailed()
 		}
 		if !waitFor(p.outDone, time.Second) {
 			_ = p.stdout.Close()
-			p.closeErr = ErrCleanup
+			retirementFailed()
 		}
 		if !waitFor(p.errDone, time.Second) {
 			_ = p.stderr.Close()
-			p.closeErr = ErrCleanup
+			retirementFailed()
 		}
 		// Pipe closure must also join the readers before a persistence claim.
 		if !waitFor(p.outDone, time.Second) || !waitFor(p.errDone, time.Second) {
-			p.closeErr = ErrCleanup
+			retirementFailed()
 		}
 	})
 	return p.closeErr
-}
-
-func readVersion(ctx context.Context, exe, cwd string, env []string) (string, error) {
-	return readVersionFor(ctx, exe, cwd, env, "2.1.285")
 }
 
 func readVersionFor(ctx context.Context, exe, cwd string, env []string, expected string) (string, error) {

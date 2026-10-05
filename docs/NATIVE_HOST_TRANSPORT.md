@@ -117,8 +117,8 @@ the TUI. It does not fall back to unverified materialized history.
 preserves the original executable, selected directory, native model/configuration
 and supported permission/terminal options. Its app-server and TUI use the same
 captured environment. The default memory-only path and explicit native resume
-keep their existing behavior. Claude's separate no-turn reference adapter is
-not yet wired into public history launches.
+keep their existing behavior. The Claude first-exchange route is described
+below; it shares the supervisor but has a different native protocol.
 
 Preparation creates an owned native thread and private endpoint, not a context
 package. `runtime_prepared` and `runtime_launched` receipts contain no selected
@@ -303,8 +303,8 @@ metadata and additional launch modes remain unsupported; normal catalog lookup
 must not be mistaken for a bound runtime descriptor. Actual large-model input
 acceptance and immediate compaction still require provider validation. A package,
 injection ACK, TUI attachment and model completion are distinct evidence.
-Claude still needs public launch, interactive resume, budgeting and actual
-model-acceptance integration beyond its no-turn reference adapter.
+Claude uses its own local estimate policy and owned first exchange. Neither
+provider's synthetic tests establish actual large-input model acceptance.
 
 The native initialize user-agent's originator can be overridden by the desktop
 environment (for example `Codex Desktop/0.157.1`). Compatibility checks compare
@@ -331,7 +331,76 @@ request only after a durable injection receipt. The test uses an isolated dummy
 local API key, never user credentials. It also verifies correlated outcome and
 post-completion disconnect monitoring. This is not real-model capacity evidence.
 
-## Claude no-turn references
+## Claude first exchange and handoff
+
+Fresh `cxt --pull [--context-budget 200k|full] claude [options] [question]`
+uses the pinned 2.1.287 stream-JSON protocol. Preparation starts an idle helper
+with the original launch settings and a fresh session ID already bound to
+capture. It does not collect input or send a model request during replacement
+preparation. The supervisor persists `runtime_starting` and activates the
+session before invoking its owned starter. That starter collects the first
+question, prepares latest-server-main input, appends the reference, checks the
+budget, and releases the ordinary question once.
+
+Native rules and hooks remain in charge of tool permissions. CXT displays
+native requests and returns only the user's one-time allow/deny decision, or
+answers to supported choice questions. Requests are correlated with the
+observed tool invocation; cancellation withdraws the dialog and discards a late
+reply. Replies use a serialized writer while callbacks run outside the protocol
+reader and state lock. Unknown interaction forms stop the exchange without
+implicit approval or automatic replay.
+
+The native replay of a permission response must match the exact committed
+response, including its request identity; it is not another permission grant.
+On cancellation, the helper process group is stopped before stdin is closed.
+EOF during a pending native permission dialog can otherwise mean "deny and
+continue" and release another model request. A failed exit observation or
+denied signal interrupts the writer without sending EOF and remains a cleanup
+failure. The sole waiter eventually releases the input descriptor after actual
+process exit.
+
+Completion requires correlated root/tool records and a successful native
+result. Readback then verifies the exact reference, observed question, stable
+assistant fields and tool results in the owned archive. The SDK emits assistant
+blocks before final stop/usage accounting; readback validates the final stop
+against that API round's observed tools and requires nondecreasing output usage.
+Model, message identity, content, stop sequence and input accounting remain bound.
+Unknown behavior fields and non-null context-management changes are rejected.
+Native scalar block indices may contain gaps or ties; their stable merge order
+must preserve the observed SDK sibling order. Missing indices, reversed content
+and per-block index arrays are unsupported. This verifies replay order, not
+unavailable original API indices.
+The submitted question hash
+and the native-expanded question hash remain distinct. The verified one-shot
+resume plan starts the normal TUI with the original options and exact archive;
+the supervisor owns its wait and termination. `runtime_launched` records that
+TUI start, not the earlier model release. Input estimates, reference ACK,
+response completion, archive persistence and TUI start are separate receipts.
+Failed post-completion or owned-TUI-start receipt writes produce a fixed warning
+without replaying the completed request or stopping the conversation. Pre-query
+receipt writes, archive/launch validation and process cleanup remain mandatory.
+
+Readback separately classifies bounded native environment/model announcements,
+prompt snapshots and repeated token reminders at API-round boundaries. They
+retain their native ancestry and full-file identity. Reference-only queue flags
+cannot appear on the real question or tool results. Native prompt instructions
+and tool schemas are native-added overhead, not an exact pre-query measurement
+or a permission grant; a token reminder is not a model-window descriptor.
+
+The same supervisor watches cancellation, fatal failure and branch boundaries
+while the starter runs. Replacement preparation precedes retirement; retirement
+joins a canceled starter and any child it returned before releasing another
+starter. Cleanup failure remains an error. The original first question is
+removed from subsequent branch launches.
+During CXT-owned input, Ctrl-C cancels the exchange. After native TUI start,
+the TUI receives and handles its own foreground-group interrupt while the
+wrapper keeps supervising. SIGTERM retires the owned lifecycle in either phase.
+
+See [input accounting and supported interaction limits](CONTEXT_INPUT.md).
+Actual 200k–800k model acceptance and compaction behavior need provider testing;
+local window estimates and canned responses do not establish them.
+
+## Earlier Claude no-turn reference contract
 
 The `nativeclaude` adapter starts its own fresh Claude stream-JSON process. It
 initializes the control protocol, reads `get_context_usage` with
@@ -394,16 +463,15 @@ markers. It did not observe the composer or loaded reference before its bounded
 deadline. This opt-in readiness assertion failed; the dependent 1.5 MiB probe
 was not run. No question was submitted, and no model-start or compaction marker
 was observed. OS network denial prevents successful external requests; it does
-not prove that native attempted none. Public Claude history delivery remains
-disabled. A real initialized TUI fixture, first-question insertion/release,
-executing-TUI policy binding and exact Claude accounting are still required.
+not prove that native attempted none. This describes the earlier no-turn-only
+probe, not the first-exchange route above.
 
 The native context summary is a **local estimate**. Its model window and
 compaction settings are observations of local host policy, not proof of API
 capacity or an exact tokenizer. A successful append does not activate public
-`cxt --pull claude` or establish 800k support. The next integration must preserve
-the user's native options, attach the same saved session, account for the actual
-first question and verify the model's result separately.
+`cxt --pull claude` or establish 800k support. The first-exchange route separately
+preserves the native options and saved session, accounts for the actual first
+question, and verifies the result.
 
 The optional macOS real-binary test uses a fresh private HOME/config/project,
 fixed credential-free environment and an OS sandbox that denies all network

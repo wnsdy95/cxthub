@@ -23,6 +23,7 @@ type idlePathEntry struct {
 
 type idleLaunch struct {
 	executable, cwd, model string
+	version                string
 	env, configArgs        []string
 	executablePath         []idlePathEntry
 	cwdPath                []idlePathEntry
@@ -34,8 +35,8 @@ type idleResumeAuthority struct {
 	prepared bool
 }
 
-func freezeIdleLaunch(opts Options, env []string, cwd string) (idleLaunch, error) {
-	launch := idleLaunch{executable: opts.Executable, cwd: cwd, model: opts.Model,
+func freezeIdleLaunch(opts Options, env []string, cwd, version string) (idleLaunch, error) {
+	launch := idleLaunch{executable: opts.Executable, cwd: cwd, model: opts.Model, version: version,
 		env: append([]string{}, env...), configArgs: append([]string{}, opts.ConfigArgs...), authority: &idleResumeAuthority{}}
 	var err error
 	launch.executablePath, err = inspectIdlePath(launch.executable, false)
@@ -93,7 +94,7 @@ func validateIdlePath(entries []idlePathEntry) error {
 }
 
 func (l idleLaunch) validate() error {
-	if !validArgs(l.configArgs) || l.executable == "" || l.cwd == "" {
+	if !validArgs(l.configArgs, l.version) || l.executable == "" || l.cwd == "" {
 		return ErrState
 	}
 	if err := validateIdlePath(l.executablePath); err != nil {
@@ -103,15 +104,14 @@ func (l idleLaunch) validate() error {
 }
 
 func (l idleLaunch) resumeArgs(archivePath string) ([]string, error) {
-	if !validArgs(l.configArgs) || strings.HasPrefix(l.model, "-") || strings.ContainsRune(l.model, 0) || len(l.model) > 256 || !validIdleArchivePath(archivePath) {
+	if !validArgs(l.configArgs, l.version) || strings.HasPrefix(l.model, "-") || strings.ContainsRune(l.model, 0) || len(l.model) > 256 || !validIdleArchivePath(archivePath) {
 		return nil, ErrState
 	}
 	// A separated option-looking value can be interpreted by native as another
 	// flag. Do not silently rewrite it to the equals form during handoff.
-	flags := map[string]bool{"--bare": true, "--safe-mode": true, "--strict-mcp-config": true, "--no-chrome": true, "--disable-slash-commands": true}
 	for i := 0; i < len(l.configArgs); i++ {
 		name, _, equal := strings.Cut(l.configArgs[i], "=")
-		if equal || flags[name] {
+		if equal || standaloneConfigFlag(name, l.version) {
 			continue
 		}
 		i++ // validArgs already established a paired value.
@@ -158,9 +158,11 @@ func (r idleContextReader) Read(p []byte) (int, error) {
 	return r.r.Read(p)
 }
 
-// IdleResumePlan is an opaque, one-shot continuation of a retired no-turn
-// session. It is not a public delivery route or evidence of native readiness.
-// Neither its launch state nor its archive identity can be changed by callers.
+// IdleResumePlan is an opaque, one-shot continuation of a retired session with
+// a verified no-turn or completed-exchange archive. Start owns an isolated PTY
+// process; StartSupervised transfers the TUI to the public delivery supervisor.
+// Neither its launch state nor its archive identity can be changed by callers,
+// and process creation is not evidence of native readiness.
 type IdleResumePlan struct {
 	*idleResumeState
 }
@@ -200,7 +202,7 @@ func (s *Session) prepareIdleResume(ctx context.Context, ownedPath string, excha
 		wantVersion = "2.1.287"
 	}
 	s.mu.Lock()
-	if s.closeErr != nil || s.verifiedArchive == nil || s.verifiedArchive.path != ownedPath || (s.verifiedArchive.exchange != nil) != exchange || s.version != wantVersion {
+	if s.closeErr != nil || s.verifiedArchive == nil || s.verifiedArchive.path != ownedPath || (s.verifiedArchive.exchange != nil) != exchange || s.version != wantVersion || s.launch.version != s.version {
 		s.mu.Unlock()
 		return nil, ErrState
 	}
@@ -248,6 +250,36 @@ func (s *Session) prepareIdleResume(ctx context.Context, ownedPath string, excha
 // not implement foreground job control for the user's controlling terminal.
 // The first attempt consumes the plan, including cancellation or launch error.
 func (p *IdleResumePlan) Start(ctx context.Context, stdin, stdout, stderr *os.File) (*IdleProcess, error) {
+	cmd, err := p.resumeCommand(ctx, stdin, stdout, stderr)
+	if err != nil {
+		return nil, err
+	}
+	observer, err := newProcessExitObserver()
+	if err != nil {
+		return nil, ErrState
+	}
+	configureProcess(cmd)
+	if err := p.startResumeCommand(ctx, cmd); err != nil {
+		observer.close()
+		return nil, err
+	}
+	process := &IdleProcess{idleProcessState: &idleProcessState{cmd: cmd, exited: make(chan struct{}), done: make(chan struct{}), stop: make(chan struct{})}}
+	go func() {
+		process.observationErr = observer.wait(cmd.Process.Pid)
+		observer.close()
+		close(process.exited)
+	}()
+	go process.run(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, process.Close())
+	}
+	return process, nil
+}
+
+// Shared by the isolated-PTY fixture and the supervised terminal handoff.
+// Claiming the plan consumes every attempt; the final archive read remains
+// immediately before process creation in startResumeCommand.
+func (p *IdleResumePlan) resumeCommand(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) (*exec.Cmd, error) {
 	if p == nil || p.idleResumeState == nil {
 		return nil, ErrState
 	}
@@ -264,9 +296,14 @@ func (p *IdleResumePlan) Start(ctx context.Context, stdin, stdout, stderr *os.Fi
 	if p.source == nil || stdin == nil || stdout == nil || stderr == nil {
 		return nil, ErrState
 	}
-	for _, file := range []*os.File{stdin, stdout, stderr} {
-		if _, err := file.Stat(); err != nil {
-			return nil, ErrState
+	for _, stream := range []any{stdin, stdout, stderr} {
+		if file, ok := stream.(*os.File); ok {
+			if file == nil {
+				return nil, ErrState
+			}
+			if _, err := file.Stat(); err != nil {
+				return nil, ErrState
+			}
 		}
 	}
 	if err := p.launch.validate(); err != nil {
@@ -276,59 +313,41 @@ func (p *IdleResumePlan) Start(ctx context.Context, stdin, stdout, stderr *os.Fi
 	if err != nil {
 		return nil, err
 	}
-	observer, err := newProcessExitObserver()
-	if err != nil {
-		return nil, ErrState
-	}
-	started := false
-	defer func() {
-		if !started {
-			observer.close()
-		}
-	}()
 	cmd := exec.Command(p.launch.executable, args...)
 	cmd.Dir, cmd.Env = p.launch.cwd, append([]string{}, p.launch.env...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
-	configureProcess(cmd)
+	return cmd, nil
+}
+
+func (p *IdleResumePlan) startResumeCommand(ctx context.Context, cmd *exec.Cmd) error {
 	// Keep the final bounded raw read immediately adjacent to process launch.
 	// The native resume protocol accepts a pathname, not an already-open file;
 	// this is a drift check, not an atomic filesystem-to-native transaction.
 	verification, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
 	if err := validateIdlePath(p.archivePath); err != nil {
-		return nil, err
+		return err
 	}
 	archive, err := p.source.verifyResumeArchive(verification, p.archive.path)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if archive.digest != p.archive.digest || !sameIdleFile(p.archive.info, archive.info) {
-		return nil, ErrState
+		return ErrState
 	}
 	if err := validateIdlePath(p.archivePath); err != nil {
-		return nil, err
+		return err
 	}
 	if err := p.launch.validate(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := verification.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, ErrState
+		return ErrState
 	}
-	started = true
-	process := &IdleProcess{idleProcessState: &idleProcessState{cmd: cmd, exited: make(chan struct{}), done: make(chan struct{}), stop: make(chan struct{})}}
-	go func() {
-		process.observationErr = observer.wait(cmd.Process.Pid)
-		observer.close()
-		close(process.exited)
-	}()
-	go process.run(ctx)
-	if err := ctx.Err(); err != nil {
-		return nil, errors.Join(err, process.Close())
-	}
-	return process, nil
+	return nil
 }
 
 // IdleProcess owns signaling and reaping of one resumed process and its group.

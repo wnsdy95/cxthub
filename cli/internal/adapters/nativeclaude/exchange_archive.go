@@ -11,13 +11,15 @@ import (
 // provider's capacity. Hidden assistant content is compared by hash, never
 // included in this receipt.
 type ExchangeArchiveReceipt struct {
-	Reference         ReferenceReceipt          `json:"reference"`
-	QuestionID        string                    `json:"question_id"`
-	QuestionHash      string                    `json:"question_hash"`
-	AnswerHash        string                    `json:"answer_hash"`
-	AssistantRecords  int                       `json:"assistant_records"`
-	NativeAttachments []NativeArchiveAttachment `json:"native_attachments,omitempty"`
-	Persisted         bool                      `json:"persisted"`
+	Reference          ReferenceReceipt          `json:"reference"`
+	QuestionID         string                    `json:"question_id"`
+	QuestionHash       string                    `json:"question_hash"`
+	NativeQuestionHash string                    `json:"native_question_hash,omitempty"`
+	ToolResultRecords  int                       `json:"tool_result_records,omitempty"`
+	AnswerHash         string                    `json:"answer_hash"`
+	AssistantRecords   int                       `json:"assistant_records"`
+	NativeAttachments  []NativeArchiveAttachment `json:"native_attachments,omitempty"`
+	Persisted          bool                      `json:"persisted"`
 }
 
 // NativeArchiveAttachment identifies native-added model context separately
@@ -82,6 +84,9 @@ func (s *Session) verifyExchangeArchive(ctx context.Context, path string) (archi
 	s.mu.Unlock()
 	if !valid {
 		return archiveVerification{}, ErrState
+	}
+	if q.ordinary != nil {
+		return s.verifyOrdinaryArchive(ctx, path, q, reference)
 	}
 	// Protocol EOF and Close have completed: q is now immutable. Validate the
 	// single path native resume will select, including intervening attachments.

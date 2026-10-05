@@ -148,6 +148,9 @@ func providerLaunchHooks(base config) delivcli.ProviderLaunchHooks {
 			receiptMu.Lock()
 			receiptRoot = cfg.RepoRoot
 			receiptMu.Unlock()
+			if req.Intent.Provider == domain.ProviderClaude {
+				return prepareNativeClaudeDeferred(ctx, cfg, req)
+			}
 			return prepareNativeCodexDeferred(ctx, cfg, req)
 		},
 		Prepare: func(ctx context.Context, req delivcli.ProviderLaunchRequest) (delivcli.PreparedProviderLaunch, error) {
