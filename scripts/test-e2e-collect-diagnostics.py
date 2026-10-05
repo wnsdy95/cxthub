@@ -17,7 +17,7 @@ class DiagnosticsTest(unittest.TestCase):
             source, output = root / "fixture", root / "output"
             source.mkdir()
             (source / "doctor-after.json").write_text('{"issues":["exact first failure"]}')
-            for name in ("cookies", "auth.json", "session.jsonl", "srv.log", ".env"):
+            for name in ("cookies", "auth.json", "session.jsonl", "srv.log", ".env", "agent.log", "boundary.json", "seed.jsonl"):
                 (source / name).write_text("must not be collected")
             (source / "repair.out").symlink_to(source / ".env")
             entries = diagnostics.collect(source, output)
