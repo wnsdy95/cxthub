@@ -92,7 +92,7 @@ func TestPullValidatesHistoricalMemoryClosure(t *testing.T) {
 			currentHash := hashOf(current)
 			snapshot := localSnapshot
 			snapshot.MemoryHash = currentHash
-			event := domain.HistoryEvent{ID: "11111111111111111111111111111111", RepoID: repo, BranchID: "main-identity", Branch: "main", Kind: "position", Source: doc.Hash, Target: doc.Hash, MemoryHash: pinHash, MemoryPinned: true, CreatedAt: time.Unix(100, 0)}
+			event := domain.HistoryEvent{ID: "11111111111111111111111111111111", RepoID: repo, BranchID: "main-identity", Branch: "main", Kind: "position", Source: doc.Hash, Target: doc.Hash, MemoryHash: pinHash, MemoryPinned: true, CreatedAt: time.Unix(100, 0).UTC()}
 			base := &pinnedHistoryPullRemote{causalPullRemote: &causalPullRemote{snapshot: snapshot, doc: doc, latest: current, objects: map[domain.ContentHash]domain.MemoryDigest{pinHash: pin, ancestorHash: ancestor}}, history: []domain.HistoryEvent{event}}
 			remote := &reviewHistoryMemoryRemote{pinnedHistoryPullRemote: base}
 			var wantErr error
