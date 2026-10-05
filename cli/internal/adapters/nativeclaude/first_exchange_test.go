@@ -28,6 +28,12 @@ func init() {
 const firstExchangeAnswer = "Synthetic text response."
 
 func firstExchangeUnitHelper() int {
+	for _, arg := range os.Args[1:] {
+		if arg == "--resume" {
+			idleUnitHelper()
+			return 0
+		}
+	}
 	mode := os.Getenv("CXT_FIRST_EXCHANGE_UNIT_MODE")
 	for _, arg := range os.Args[1:] {
 		if arg == "--version" {

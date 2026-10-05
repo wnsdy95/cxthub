@@ -11,18 +11,19 @@ import (
 const maxFirstAnswerBytes = 1 << 20
 
 type firstQuestionState struct {
-	id, hash       string
-	bytes          int
-	summary        ContextSummary
-	phase          int
-	replayed       bool
-	resultReceived bool
-	completed      bool
-	assistantIDs   map[string]bool
-	messageID      string
-	assistantText  string
-	lastText       string
-	answer         string
+	id, hash        string
+	bytes           int
+	summary         ContextSummary
+	phase           int
+	replayed        bool
+	resultReceived  bool
+	completed       bool
+	assistantIDs    map[string]bool
+	archiveMessages []archiveAssistant
+	messageID       string
+	assistantText   string
+	lastText        string
+	answer          string
 }
 
 // Caller holds Session.mu. Only an explicitly owned first question may receive
@@ -151,6 +152,11 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 		if q.assistantIDs == nil {
 			q.assistantIDs = map[string]bool{}
 		}
+		contentHash, err := archiveContentHash(message["content"])
+		if err != nil {
+			return true, err
+		}
+		q.archiveMessages = append(q.archiveMessages, archiveAssistant{id: id, contentHash: contentHash})
 		q.assistantIDs[id] = true
 		q.assistantText += text
 	case "result":
