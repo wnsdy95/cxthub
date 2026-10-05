@@ -353,19 +353,38 @@ implicit approval or automatic replay.
 The native replay of a permission response must match the exact committed
 response, including its request identity; it is not another permission grant.
 On cancellation, the helper process group is stopped before stdin is closed.
+This applies to all protocol writes, including initialization and reference
+append, not only interactive permission replies.
 EOF during a pending native permission dialog can otherwise mean "deny and
 continue" and release another model request. A failed exit observation or
 denied signal interrupts the writer without sending EOF and remains a cleanup
 failure. The sole waiter eventually releases the input descriptor after actual
 process exit.
 
+Successful protocol EOF allows up to five seconds for native session cleanup
+before forced termination. Canceled and failed operations do not use that
+grace; a cancellation during normal cleanup wakes the existing shutdown owner
+and escalates without a second signaler or reaper. A forced termination remains a failed close even if the child handles
+the signal and exits zero; process retirement alone cannot authorize resume.
+
+The pinned host's numeric thinking progress and subscription usage notifications
+are drained without becoming response text, token accounting, permission or
+completion evidence. Progress must identify the active question; account
+notifications must identify the owned session after its question starts. A
+successful correlated result and lifecycle completion are still required.
+
 Completion requires correlated root/tool records and a successful native
 result. Readback then verifies the exact reference, observed question, stable
 assistant fields and tool results in the owned archive. The SDK emits assistant
 blocks before final stop/usage accounting; readback validates the final stop
 against that API round's observed tools and requires nondecreasing output usage.
+An optional single `message` usage iteration must agree with the final aggregate;
+multiple or different iterations remain unsupported.
 Model, message identity, content, stop sequence and input accounting remain bound.
 Unknown behavior fields and non-null context-management changes are rejected.
+Null container/diagnostic fields and an empty input-transformation list are
+inert provider metadata; their omitted archive equivalents have the same
+projection. Active transformations and non-null values remain unsupported.
 Native scalar block indices may contain gaps or ties; their stable merge order
 must preserve the observed SDK sibling order. Missing indices, reversed content
 and per-block index arrays are unsupported. This verifies replay order, not
@@ -381,11 +400,20 @@ without replaying the completed request or stopping the conversation. Pre-query
 receipt writes, archive/launch validation and process cleanup remain mandatory.
 
 Readback separately classifies bounded native environment/model announcements,
-prompt snapshots and repeated token reminders at API-round boundaries. They
+prompt snapshots and repeated token reminders at API-round boundaries. It
+preserves their native rendering roles, including user-role session context.
+One final prompt snapshot may enrich resolved tools, a previously absent prefix
+and supported rendering flags after the last assistant. It must preserve the
+earlier prompt, existing prefix/tool definitions and fold/echo policy, and become
+the recorded selected leaf. Arbitrary trailing attachments, duplicate final
+snapshots and a stale selected leaf are rejected. These records
 retain their native ancestry and full-file identity. Reference-only queue flags
 cannot appear on the real question or tool results. Native prompt instructions
 and tool schemas are native-added overhead, not an exact pre-query measurement
 or a permission grant; a token reminder is not a model-window descriptor.
+The initial credential-organization marker and assistant timing/model hints
+remain in the hash-bound original archive. They do not establish credentials,
+permissions, capacity or another model request.
 
 The same supervisor watches cancellation, fatal failure and branch boundaries
 while the starter runs. Replacement preparation precedes retirement; retirement

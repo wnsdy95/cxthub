@@ -283,7 +283,7 @@ func (s *Session) answerOrdinaryControl(q *firstQuestionState, c *ordinaryContro
 		return
 	}
 	ctx, cancel := context.WithTimeout(o.ctx, operationTimeout)
-	err = s.process.write(ctx, append(raw, '\n'), true)
+	err = s.process.write(ctx, append(raw, '\n'))
 	cancel()
 	if err != nil {
 		s.fail(err)

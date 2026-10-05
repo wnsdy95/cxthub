@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -164,7 +165,18 @@ func probeAbortWrite(root, scenario string) (result abortWriteResult) {
 			}
 		}
 	}()
-	go func() { written <- p.write(ctx, bytes.Repeat([]byte{'x'}, 4<<20), true) }()
+	go func() {
+		raw := bytes.Repeat([]byte{'x'}, 4<<20)
+		if strings.HasPrefix(scenario, "kill-before-eof-") {
+			session := &Session{process: p}
+			if scenario == "kill-before-eof-literal" {
+				session.firstQuestion = &firstQuestionState{}
+			}
+			written <- session.writeFrame(ctx, raw)
+		} else {
+			written <- p.write(ctx, raw)
+		}
+	}()
 	if !awaitAbortWriteMarker(root, "first-byte", 2*time.Second) {
 		result.Stage = "write-not-observed"
 		return
@@ -183,7 +195,7 @@ func probeAbortWrite(root, scenario string) (result abortWriteResult) {
 		result.Stage = "live-child-precondition"
 		return
 	}
-	if scenario != "kill-before-eof" {
+	if !strings.HasPrefix(scenario, "kill-before-eof") {
 		result.SignalDenied = errors.Is(signalProcessGroup(p.cmd, true), syscall.EPERM)
 		if !result.SignalDenied {
 			result.Stage = "signal-not-denied"
@@ -210,7 +222,7 @@ func probeAbortWrite(root, scenario string) (result abortWriteResult) {
 		result.Stage = "drain-marker"
 		return
 	}
-	if scenario == "kill-before-eof" {
+	if strings.HasPrefix(scenario, "kill-before-eof") {
 		// Under the former callback (stdin.Close only), let the finite helper
 		// observe EOF before cleanup can mask it by subsequently killing it.
 		if !waitFor(p.exited, 2*time.Second) {
@@ -291,12 +303,12 @@ func TestDarwinAbortWriteWithholdsEOF(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
 		t.Fatal("sandbox-exec is required for the kernel-enforced regression")
 	}
-	for _, scenario := range []string{"kill-before-eof", "denied-signal", "denied-observer-error"} {
+	for _, scenario := range []string{"kill-before-eof", "kill-before-eof-no-query", "kill-before-eof-literal", "denied-signal", "denied-observer-error"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
 			profile := "(version 1)(allow default)(deny network*)"
-			if scenario != "kill-before-eof" {
+			if !strings.HasPrefix(scenario, "kill-before-eof") {
 				profile += "(deny signal (target others))"
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
@@ -318,9 +330,9 @@ func TestDarwinAbortWriteWithholdsEOF(t *testing.T) {
 				t.Fatalf("sole waiter left stdin open after actual child reaping: %+v", got)
 			}
 			if got.SawEOF {
-				t.Fatalf("ordinary cancellation delivered EOF to a live child: %+v", got)
+				t.Fatalf("cancellation delivered EOF to a live child: %+v", got)
 			}
-			if scenario == "kill-before-eof" {
+			if strings.HasPrefix(scenario, "kill-before-eof") {
 				if got.CleanupFailure || got.FiniteExit {
 					t.Fatalf("confirmed killed/reaped child misclassified: %+v", got)
 				}

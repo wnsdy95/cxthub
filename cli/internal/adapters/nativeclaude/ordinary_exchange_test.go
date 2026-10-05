@@ -76,6 +76,9 @@ func ordinaryUnitHelper() int {
 				stored[key] = value
 			}
 			delete(stored, "context_management")
+			delete(stored, "container")
+			delete(stored, "diagnostics")
+			delete(stored, "input_transformations")
 			stored["stop_details"] = nil
 			stored["stop_reason"] = "end_turn"
 			if id == "assistant-1" {
@@ -149,6 +152,7 @@ func ordinaryUnitHelper() int {
 		if mode == "finalized-metadata" {
 			message["type"], message["stop_reason"], message["stop_sequence"], message["context_management"] = "message", nil, nil, nil
 			message["usage"] = map[string]any{"input_tokens": 64, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 1}
+			message["container"], message["diagnostics"], message["input_transformations"] = nil, nil, []any{}
 		}
 		archive("assistant", id, parent, message)
 		write(map[string]any{"type": "assistant", "session_id": sid, "parent_tool_use_id": nil, "uuid": id, "user_message_uuid": qid, "message": message})
@@ -241,6 +245,9 @@ func ordinaryUnitHelper() int {
 			qid = id
 			lifecycle(id, "queued")
 			lifecycle(id, "started")
+			if mode == "thinking-progress" {
+				write(map[string]any{"type": "system", "subtype": "thinking_tokens", "session_id": sid, "uuid": "progress-1", "user_message_uuid": id, "estimated_tokens": 50, "estimated_tokens_delta": 50})
+			}
 			if mode == "hooks" {
 				hooks()
 			}
@@ -355,7 +362,7 @@ func ordinaryResponses(t *testing.T, f firstExchangeFixture) ([]map[string]json.
 }
 
 func TestOrdinaryExchangeToolsAndArchive(t *testing.T) {
-	for _, mode := range []string{"normal", "preapproved", "finalized-metadata", "hooks", "parallel", "sibling-tool-parent", "duplicate-request", "deny", "rewritten", "ask"} {
+	for _, mode := range []string{"normal", "thinking-progress", "preapproved", "finalized-metadata", "hooks", "parallel", "sibling-tool-parent", "duplicate-request", "deny", "rewritten", "ask"} {
 		t.Run(mode, func(t *testing.T) {
 			f := ordinaryFixture(t, mode)
 			e := f.start(t, true)

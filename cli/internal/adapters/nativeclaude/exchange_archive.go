@@ -93,7 +93,7 @@ func (s *Session) verifyExchangeArchive(ctx context.Context, path string) (archi
 	parent, phase, assistants := "", 0, 0
 	seen := map[string]bool{}
 	attachments := map[string]bool{}
-	metadata := newExchangeMetadataValidator(s, q, reference)
+	metadata := newExchangeMetadataValidator(s, q, reference, nil)
 	var nativeAttachments []NativeArchiveAttachment
 	verified, err := s.readArchive(ctx, path, func(m map[string]json.RawMessage) error {
 		kind, err := stringField(m, "type")

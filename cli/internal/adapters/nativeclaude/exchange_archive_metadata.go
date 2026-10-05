@@ -30,7 +30,7 @@ const (
 //
 // Claude 2.1.287 source: queue recorder zOr (185985900), last-prompt reader
 // (190097959), ATIS reader (190099966), and cost schema c3 (185883360).
-func newExchangeMetadataValidator(s *Session, q *firstQuestionState, reference ReferenceReceipt) func(map[string]json.RawMessage, string) error {
+func newExchangeMetadataValidator(s *Session, q *firstQuestionState, reference ReferenceReceipt, validatedTip *string) func(map[string]json.RawMessage, string) error {
 	if s == nil || q == nil || s.id == "" || q.id == "" || reference.MessageID == "" ||
 		reference.SessionID != s.id || len(q.archiveMessages) == 0 {
 		return func(map[string]json.RawMessage, string) error { return ErrProtocol }
@@ -128,7 +128,13 @@ func newExchangeMetadataValidator(s *Session, q *firstQuestionState, reference R
 			}
 			if _, ok := m["leafUuid"]; ok {
 				selected, err := stringField(m, "leafUuid")
-				if err != nil || selected != leaf {
+				want := leaf
+				// The ordinary chain reader validates progressive checkpoints
+				// against its current tip, then audits the final selection at EOF.
+				if validatedTip != nil {
+					want = *validatedTip
+				}
+				if err != nil || selected != want {
 					return ErrProtocol
 				}
 			}

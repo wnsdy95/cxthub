@@ -38,6 +38,8 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 		}
 	}
 	switch kind {
+	case "rate_limit_event":
+		return true, s.validateRateLimitNotification(m)
 	case "control_request":
 		return true, ErrPermissionRequired
 	case "control_response":
@@ -48,6 +50,9 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 			return true, ErrProtocol
 		}
 	case "system":
+		if bytes.Equal(m["subtype"], []byte(`"thinking_tokens"`)) {
+			return true, s.validateThinkingProgress(m)
+		}
 		if q.ordinary != nil && bytes.Equal(m["subtype"], []byte(`"compact_boundary"`)) {
 			return true, ErrUnsupported
 		}
@@ -188,6 +193,37 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 		q.answer, q.resultReceived = q.assistantText, true
 	}
 	return true, nil
+}
+
+// Pinned 2.1.287 emits numerical progress before an assistant record, including
+// during redacted thinking. It is neither response content, billable usage nor
+// completion evidence. Drain only progress correlated to the active question;
+// no-query sessions must continue rejecting it. Totals reset per thinking block.
+func (s *Session) validateThinkingProgress(m map[string]json.RawMessage) error {
+	q := s.firstQuestion
+	if s.version != "2.1.287" || q == nil || q.phase != 2 || q.completed || q.resultReceived ||
+		s.pending == nil || s.pending.kind != "first_question" || s.pending.id != q.id || s.pending.delivered ||
+		!exchangeKeys(m, "type", "subtype", "session_id", "uuid", "user_message_uuid", "estimated_tokens", "estimated_tokens_delta") {
+		return ErrProtocol
+	}
+	if id, err := stringField(m, "session_id"); err != nil || id != s.id {
+		return ErrProtocol
+	}
+	if id, err := stringField(m, "user_message_uuid"); err != nil || id != q.id {
+		return ErrProtocol
+	}
+	if _, err := stringField(m, "uuid"); err != nil {
+		return ErrProtocol
+	}
+	total, err := count(m, "estimated_tokens", 0)
+	if err != nil || total > int64(exchangeNativeNumberMax) {
+		return ErrProtocol
+	}
+	delta, err := count(m, "estimated_tokens_delta", 0)
+	if err != nil || delta > total {
+		return ErrProtocol
+	}
+	return nil
 }
 
 func firstAssistantText(raw []byte, model string) (string, error) {

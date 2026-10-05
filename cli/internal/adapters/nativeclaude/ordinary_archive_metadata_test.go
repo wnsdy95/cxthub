@@ -5,7 +5,10 @@ package nativeclaude
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -59,6 +62,7 @@ func ordinaryRecordedMetadata(t *testing.T, e *FirstExchange) []map[string]any {
 		if row["type"] == "assistant" {
 			row["parentUuid"] = parent
 			row["apiBlockIndex"], row["effort"], row["perTurnEffort"] = 0, "medium", "medium"
+			row["thinkingDurationMs"], row["advisorModel"] = 775, "fixture-model"
 		}
 		rows = append(rows, row)
 		parent = row["uuid"]
@@ -108,6 +112,9 @@ func TestOrdinaryArchiveNativeMetadata(t *testing.T) {
 		"attachment-parent":             func(r []map[string]any) { r[10]["parentUuid"] = r[1]["uuid"] },
 		"initial-announcement-repeated": func(r []map[string]any) { r[10]["attachment"] = r[3]["attachment"] },
 		"assistant-block-index":         func(r []map[string]any) { r[8]["apiBlockIndex"] = 0.5 },
+		"assistant-thinking-time":       func(r []map[string]any) { r[8]["thinkingDurationMs"] = -1 },
+		"assistant-advisor-model":       func(r []map[string]any) { r[8]["advisorModel"] = "" },
+		"question-advisor-model":        func(r []map[string]any) { r[1]["advisorModel"] = "fixture-model" },
 		"assistant-hides-attachment":    func(r []map[string]any) { r[8]["attachment"] = r[3]["attachment"] },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -128,6 +135,88 @@ func TestOrdinaryArchiveNativeMetadata(t *testing.T) {
 	}
 	if _, err := e.PrepareIdleResume(context.Background(), unitArchive(e.s)); err != nil {
 		t.Fatal("verified native resume", err)
+	}
+}
+
+func TestOrdinaryArchiveKeepsNativeOrganizationMarker(t *testing.T) {
+	f := ordinaryFixture(t, "preapproved")
+	e := f.start(t, true)
+	if _, err := e.RunOrdinary(firstExchangeRunContext(t), "ordinary question", firstExchangeAllow, InteractionHandlers{}); err != nil {
+		t.Fatal(err)
+	}
+	rows := ordinaryRecordedMetadata(t, e)
+	marker := map[string]any{"type": "attachment", "uuid": "organization-marker", "parentUuid": rows[1]["uuid"], "sessionId": e.s.id, "cwd": e.s.cwd, "isSidechain": false,
+		"attachment": map[string]any{"type": "credential_org", "organizationUuid": "11111111-1111-4111-8111-111111111111"}}
+	rows[2]["parentUuid"] = marker["uuid"]
+	rows = append(append(append([]map[string]any{}, rows[:2]...), marker), rows[2:]...)
+	writeExchangeRows(t, e, rows)
+	proof, err := e.VerifyArchive(context.Background(), unitArchive(e.s))
+	if err != nil || !proof.Persisted || len(proof.NativeAttachments) != 9 {
+		t.Fatal("organization marker was not retained", err)
+	}
+	baseline, _ := json.Marshal(rows)
+	for _, bad := range []any{nil, "", "foreign-path", 42} {
+		var changed []map[string]any
+		_ = json.Unmarshal(baseline, &changed)
+		changed[2]["attachment"].(map[string]any)["organizationUuid"] = bad
+		writeExchangeRows(t, e, changed)
+		if _, err := e.VerifyArchive(context.Background(), unitArchive(e.s)); err == nil {
+			t.Fatal("malformed organization marker accepted")
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, []map[string]any) []map[string]any
+	}{
+		{"duplicate-initial-markers", func(_ *testing.T, r []map[string]any) []map[string]any {
+			// Keep UUIDs unique and the parent chain intact so only duplicate
+			// organization metadata, not malformed lineage, causes rejection.
+			duplicate := maps.Clone(r[2])
+			duplicate["uuid"], duplicate["parentUuid"] = "organization-marker-duplicate", r[2]["uuid"]
+			r[3]["parentUuid"] = duplicate["uuid"]
+			return slices.Insert(r, 3, duplicate)
+		}},
+		{"later-attachment-batch", func(t *testing.T, r []map[string]any) []map[string]any {
+			// Move the sole marker to the otherwise valid post-tool attachment
+			// batch, repairing both its old and new parent links.
+			marker := r[2]
+			r[3]["parentUuid"] = marker["parentUuid"]
+			r = slices.Delete(r, 2, 3)
+			i := slices.IndexFunc(r, func(row map[string]any) bool { return row["uuid"] == "prompt-2" })
+			if i < 0 {
+				t.Fatal("fixture has no later attachment batch")
+			}
+			marker["parentUuid"] = r[i]["parentUuid"]
+			r[i]["parentUuid"] = marker["uuid"]
+			return slices.Insert(r, i, marker)
+		}},
+		{"extra-payload-key", func(_ *testing.T, r []map[string]any) []map[string]any {
+			r[2]["attachment"].(map[string]any)["permissions"] = []any{"synthetic-grant"}
+			return r
+		}},
+		{"rendered-content", func(_ *testing.T, r []map[string]any) []map[string]any {
+			// This rendering is valid for other native attachments, but an
+			// organization marker must never contribute rendered instructions.
+			r[2]["renderedRole"] = "system"
+			r[2]["rendered"] = []any{map[string]any{"content": "Synthetic organization instructions"}}
+			return r
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var changed []map[string]any
+			if err := json.Unmarshal(baseline, &changed); err != nil {
+				t.Fatal(err)
+			}
+			changed = tc.mutate(t, changed)
+			writeExchangeRows(t, e, changed)
+			if _, err := e.VerifyArchive(context.Background(), unitArchive(e.s)); !errors.Is(err, ErrUnsupported) {
+				t.Fatal("unsupported organization marker was not rejected", err)
+			}
+		})
+	}
+	writeExchangeRows(t, e, rows)
+	if _, err := e.VerifyArchive(context.Background(), unitArchive(e.s)); err != nil {
+		t.Fatal("original marker changed", err)
 	}
 }
 

@@ -47,7 +47,7 @@ func exchangeModelCost() map[string]any {
 
 func TestExchangeMetadataOwnedNativeRows(t *testing.T) {
 	s, q, r := exchangeMetadataFixture()
-	validate := newExchangeMetadataValidator(s, q, r)
+	validate := newExchangeMetadataValidator(s, q, r, nil)
 	for _, item := range []struct {
 		kind   string
 		fields map[string]any
@@ -120,7 +120,7 @@ func TestExchangeMetadataRejectsUnownedOrActiveSemantics(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, q, r := exchangeMetadataFixture()
-			err := newExchangeMetadataValidator(s, q, r)(exchangeMetadataRow(t, tc.kind, tc.fields), tc.kind)
+			err := newExchangeMetadataValidator(s, q, r, nil)(exchangeMetadataRow(t, tc.kind, tc.fields), tc.kind)
 			if !errors.Is(err, ErrProtocol) || strings.Contains(err.Error(), "PRIVATE_MARKER") {
 				t.Fatal("expected redacted protocol error", err)
 			}
@@ -130,7 +130,7 @@ func TestExchangeMetadataRejectsUnownedOrActiveSemantics(t *testing.T) {
 
 func TestExchangeMetadataReadBoundsAndFrozenIdentity(t *testing.T) {
 	s, q, r := exchangeMetadataFixture()
-	validate := newExchangeMetadataValidator(s, q, r)
+	validate := newExchangeMetadataValidator(s, q, r, nil)
 	// Freeze primitive identities, not mutable slices or Session pointers.
 	s.id, s.cwd, q.id, q.hash = "changed", "/changed", "changed", "changed"
 	q.archiveMessages[len(q.archiveMessages)-1].id = "changed"
@@ -144,7 +144,7 @@ func TestExchangeMetadataReadBoundsAndFrozenIdentity(t *testing.T) {
 		t.Fatal("unbounded metadata rows", err)
 	}
 	s, q, r = exchangeMetadataFixture()
-	validate = newExchangeMetadataValidator(s, q, r)
+	validate = newExchangeMetadataValidator(s, q, r, nil)
 	atis := exchangeMetadataRow(t, "atis-latch", map[string]any{"atis": ""})
 	if err := validate(atis, "atis-latch"); err != nil {
 		t.Fatal("empty native latch", err)
@@ -153,14 +153,14 @@ func TestExchangeMetadataReadBoundsAndFrozenIdentity(t *testing.T) {
 	if err := validate(atis, "atis-latch"); !errors.Is(err, ErrProtocol) {
 		t.Fatal("conflicting latch", err)
 	}
-	if err := newExchangeMetadataValidator(s, q, r)(atis, "atis-latch"); err != nil {
+	if err := newExchangeMetadataValidator(s, q, r, nil)(atis, "atis-latch"); err != nil {
 		t.Fatal("state leaked across reads", err)
 	}
 	// Repeated owned queue content can exhaust the aggregate bound even when
 	// every individual content hash and row count remains admissible.
 	text := strings.Repeat("a", 1<<20)
 	r.PayloadHash, r.UTF8Bytes = hashText(text), len(text)
-	validate = newExchangeMetadataValidator(s, q, r)
+	validate = newExchangeMetadataValidator(s, q, r, nil)
 	large := exchangeMetadataRow(t, "queue-operation", map[string]any{"operation": "enqueue", "timestamp": "2026-10-05T00:00:00.000Z", "content": text})
 	for i := 0; i < 31; i++ {
 		if err := validate(large, "queue-operation"); err != nil {
@@ -177,19 +177,19 @@ func TestExchangeMetadataCostNativeSchema(t *testing.T) {
 	fields := exchangeCostFields()
 	fields["hasUnknownModelCost"] = true
 	fields["modelUsage"].(map[string]any)["native-model"].(map[string]any)["thinkingTokens"] = 1.5
-	if err := newExchangeMetadataValidator(s, q, r)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); err != nil {
+	if err := newExchangeMetadataValidator(s, q, r, nil)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); err != nil {
 		t.Fatal("native finite fractional numbers/optional fields", err)
 	}
 	fields = exchangeCostFields()
 	fields["modelUsage"] = map[string]any{}
-	if err := newExchangeMetadataValidator(s, q, r)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); err != nil {
+	if err := newExchangeMetadataValidator(s, q, r, nil)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); err != nil {
 		t.Fatal("empty native model map", err)
 	}
 	for _, key := range []string{"totalCostUSD", "totalAPIDuration", "totalAPIDurationWithoutRetries", "totalToolDuration", "totalLinesAdded", "totalLinesRemoved", "totalDuration", "startTime", "modelUsage"} {
 		t.Run("missing-"+key, func(t *testing.T) {
 			fields := exchangeCostFields()
 			delete(fields, key)
-			if err := newExchangeMetadataValidator(s, q, r)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
+			if err := newExchangeMetadataValidator(s, q, r, nil)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
 				t.Fatal("missing required native field accepted", err)
 			}
 		})
@@ -198,7 +198,7 @@ func TestExchangeMetadataCostNativeSchema(t *testing.T) {
 		t.Run("model-missing-"+key, func(t *testing.T) {
 			fields := exchangeCostFields()
 			delete(fields["modelUsage"].(map[string]any)["native-model"].(map[string]any), key)
-			if err := newExchangeMetadataValidator(s, q, r)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
+			if err := newExchangeMetadataValidator(s, q, r, nil)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
 				t.Fatal("missing required native model field accepted", err)
 			}
 		})
@@ -230,7 +230,7 @@ func TestExchangeMetadataCostRejectsMalformedAndConflicting(t *testing.T) {
 			s, q, r := exchangeMetadataFixture()
 			m := exchangeMetadataRow(t, "cost-state", exchangeCostFields())
 			mutate(m)
-			if err := newExchangeMetadataValidator(s, q, r)(m, "cost-state"); !errors.Is(err, ErrProtocol) {
+			if err := newExchangeMetadataValidator(s, q, r, nil)(m, "cost-state"); !errors.Is(err, ErrProtocol) {
 				t.Fatal("malformed cost accepted", err)
 			}
 		})
@@ -239,12 +239,12 @@ func TestExchangeMetadataCostRejectsMalformedAndConflicting(t *testing.T) {
 		s, q, r := exchangeMetadataFixture()
 		fields := exchangeCostFields()
 		fields["modelUsage"] = map[string]any{key: exchangeModelCost()}
-		if err := newExchangeMetadataValidator(s, q, r)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
+		if err := newExchangeMetadataValidator(s, q, r, nil)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
 			t.Fatal("invalid model key accepted", err)
 		}
 	}
 	s, q, r := exchangeMetadataFixture()
-	validate := newExchangeMetadataValidator(s, q, r)
+	validate := newExchangeMetadataValidator(s, q, r, nil)
 	fields := exchangeCostFields()
 	if err := validate(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); err != nil {
 		t.Fatal(err)
@@ -258,7 +258,7 @@ func TestExchangeMetadataCostRejectsMalformedAndConflicting(t *testing.T) {
 		one, two := exchangeModelCost(), exchangeModelCost()
 		one[tokenKey], two[tokenKey] = 6e14, 6e14
 		fields["modelUsage"] = map[string]any{"one": one, "two": two}
-		if err := newExchangeMetadataValidator(s, q, r)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
+		if err := newExchangeMetadataValidator(s, q, r, nil)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
 			t.Fatal("native aggregate token bound", tokenKey, err)
 		}
 	}
@@ -268,7 +268,7 @@ func TestExchangeMetadataCostRejectsMalformedAndConflicting(t *testing.T) {
 		models[fmt.Sprintf("model-%d", i)] = exchangeModelCost()
 	}
 	fields["modelUsage"] = models
-	if err := newExchangeMetadataValidator(s, q, r)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
+	if err := newExchangeMetadataValidator(s, q, r, nil)(exchangeMetadataRow(t, "cost-state", fields), "cost-state"); !errors.Is(err, ErrProtocol) {
 		t.Fatal("model-count bound", err)
 	}
 }

@@ -36,9 +36,16 @@ func TestHostNotificationsDoNotAdvanceProtocol(t *testing.T) {
 				if s.firstQuestion != nil {
 					question = *s.firstQuestion
 				}
-				raw, _ := json.Marshal(hostNotification(kind))
-				if err := s.frame(raw); err != nil {
-					t.Fatal(err)
+				m := hostNotification(kind)
+				for _, sdk := range []bool{false, true} {
+					if sdk && kind == "informational" {
+						delete(m, "isMeta")
+						m["level"] = "notice"
+					}
+					raw, _ := json.Marshal(m)
+					if err := s.frame(raw); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if s.pending != pending || pending.delivered || len(pending.result) != 0 || s.appendPhase != beforePhase || s.appendResult != beforeResult || s.receipt != beforeReceipt || s.closing != beforeClosing {
 					t.Fatal("notification changed command or acknowledgment state")
@@ -70,7 +77,8 @@ func TestHostNotificationsRejectMalformedOrForeignData(t *testing.T) {
 			cases["missing content"] = func(m map[string]any) { delete(m, "content") }
 			cases["null content"] = func(m map[string]any) { m["content"] = nil }
 			cases["oversized content"] = func(m map[string]any) { m["content"] = strings.Repeat("x", 16385) }
-			cases["missing meta"] = func(m map[string]any) { delete(m, "isMeta") }
+			cases["continuation control"] = func(m map[string]any) { m["prevent_continuation"] = true }
+			cases["tool interaction"] = func(m map[string]any) { m["tool_use_id"] = "tool" }
 			cases["null meta"] = func(m map[string]any) { m["isMeta"] = nil }
 			cases["unknown level"] = func(m map[string]any) { m["level"] = "grant" }
 		}

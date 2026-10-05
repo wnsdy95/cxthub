@@ -22,6 +22,7 @@ type process struct {
 	cmd                      *exec.Cmd
 	stdin, stdout, stderr    *os.File
 	exited, outDone, errDone chan struct{}
+	abortRequested           chan struct{}
 	observationErr           error
 	onError                  func(error)
 	closeOnce                sync.Once
@@ -77,7 +78,7 @@ func startProcess(executable string, args []string, cwd string, env []string, fr
 	_ = inR.Close()
 	_ = outW.Close()
 	_ = errW.Close()
-	p := &process{cmd: cmd, stdin: inW, stdout: outR, stderr: errR, exited: make(chan struct{}), outDone: make(chan struct{}), errDone: make(chan struct{}), onError: onError}
+	p := &process{cmd: cmd, stdin: inW, stdout: outR, stderr: errR, exited: make(chan struct{}), outDone: make(chan struct{}), errDone: make(chan struct{}), abortRequested: make(chan struct{}, 1), onError: onError}
 	go func() { p.observationErr = observer.wait(cmd.Process.Pid); observer.close(); close(p.exited) }()
 	go func() {
 		defer close(p.outDone)
@@ -133,21 +134,17 @@ func readFrames(r io.Reader, frame func([]byte) error) error {
 	return nil
 }
 
-func (p *process) write(ctx context.Context, raw []byte, abortOnCancel bool) error {
+func (p *process) write(ctx context.Context, raw []byte) error {
 	if len(raw) > maxFrameBytes {
 		return ErrLimit
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Closing a pollable os.Pipe interrupts a blocked write; cancellation is
-	// irreversible, because a partial frame may already have reached native.
+	// Abort stops the owned group before closing its input to interrupt a write.
+	// Cancellation is irreversible: a partial frame may have reached native.
 	stop := context.AfterFunc(ctx, func() {
-		if abortOnCancel {
-			_ = p.shutdown(true)
-		} else {
-			_ = p.stdin.Close()
-		}
+		_ = p.shutdown(true)
 	})
 	defer stop()
 	n, err := p.stdin.Write(raw)
@@ -173,8 +170,28 @@ func waitFor(ch <-chan struct{}, duration time.Duration) bool {
 
 func (p *process) close() error { return p.shutdown(false) }
 
+// Request escalation without signaling or reaping. Only the shutdown owner
+// consumes it, before Wait; requests after retirement cannot signal a reused PID.
+// A nil channel permits inert process fixtures without starting a new owner.
+func (p *process) requestAbort() {
+	select {
+	case p.abortRequested <- struct{}{}:
+	default:
+	}
+}
+
 func (p *process) shutdown(abort bool) error {
+	if abort {
+		p.requestAbort()
+	}
 	p.closeOnce.Do(func() {
+		// An abort requester can lose the Once race to a normal closer. Honor
+		// the queued request before that closer sends EOF.
+		select {
+		case <-p.abortRequested:
+			abort = true
+		default:
+		}
 		forced := false
 		closeInput := !abort
 		retirementFailed := func() { p.closeErr, p.retirementErr = ErrCleanup, ErrCleanup }
@@ -199,7 +216,32 @@ func (p *process) shutdown(abort bool) error {
 			// our writer without sending an EOF that could continue native work.
 			_ = p.stdin.SetWriteDeadline(time.Now())
 		}
-		if !waitFor(p.exited, time.Second) {
+		// Normal EOF runs native session teardown and registered cleanup. The
+		// pinned host has two-second cleanup/refresh bounds; a one-second wait
+		// can kill a successful session before its write queues finish. Keep a
+		// bounded grace only for this path. Abort still signals before EOF and
+		// retains its short retirement checks; forced exits remain failures.
+		exited := false
+		if abort {
+			exited = waitFor(p.exited, time.Second)
+		} else {
+			grace := time.NewTimer(5 * time.Second)
+			select {
+			case <-p.exited:
+				exited = true
+			case <-p.abortRequested:
+				// EOF has already been sent. Escalate here, in the same owner,
+				// rather than blocking another abort behind closeOnce.
+				forced = true
+				if err := cleanupProcessGroup(p.cmd); err != nil {
+					retirementFailed()
+				}
+				exited = waitFor(p.exited, time.Second)
+			case <-grace.C:
+			}
+			grace.Stop()
+		}
+		if !exited {
 			forced = true
 			_ = signalProcessGroup(p.cmd, false)
 			if !waitFor(p.exited, 500*time.Millisecond) {
