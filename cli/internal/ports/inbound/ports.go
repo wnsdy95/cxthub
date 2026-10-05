@@ -90,7 +90,9 @@ type SyncRepo interface {
 	// resolutions carry the exact capture absorbed by a commit, so a detached
 	// helper cannot delete a newer capture from the same still-running session.
 	SyncPendings(ctx context.Context, in SyncInput, resolutions []PendingResolution) (int, error)
-	// ResolveRemoteBranch queries the remote (server) branch ref and prepares it for fetch-only if the target snapshot object is not present locally (for web fork connection). Returns ErrNotFound if not found.
+	// ResolveRemoteBranch returns a fresh server branch from a verified fetch,
+	// retaining dependencies without applying local refs or working selection.
+	// Returns ErrNotFound if the branch is absent.
 	ResolveRemoteBranch(ctx context.Context, in SyncInput, branch string) (domain.Ref, error)
 	// AppendBranch appends the server branch ref to the target (lossless graft) — path for merging PR context into a branch. On success, it reconciles the authoritative graft path and mirrors the local ref only if doing so preserves local history. Already reflected (behind) targets are rejected by the server as non_fast_forward — caller treats them as idempotent no-ops.
 	AppendBranch(ctx context.Context, in SyncInput, branch string, target domain.ContentHash) error
@@ -428,6 +430,10 @@ type SyncOutput struct {
 	// pull, including fetch-only mode. They do not imply local ref adoption.
 	// Repair must use this observation, never fetch a newer independent manifest.
 	FetchedRefs []domain.Ref
+	// FetchedHistory is the remote evidence read and retained by this pull. It
+	// does not imply local history adoption. Resolve names against this result,
+	// not a separate observation that a concurrent fetch may have replaced.
+	FetchedHistory []domain.HistoryEvent
 	// Conflicts is the list of ref names skipped during pull due to non-fast-forward. If not empty, the caller is advised to abort merge like git (requires a reviewed repair plan for explicit adoption).
 	Conflicts []string
 	// RemoteAhead is the list of branches in the remote that have new context after the local — used by caller to hint "pull/load if needed" (not enforced).

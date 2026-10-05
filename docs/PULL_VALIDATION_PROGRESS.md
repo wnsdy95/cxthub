@@ -60,6 +60,20 @@ semantics must increment `docVerificationVersion`.
 
 ## Integrity and cancellation
 
+Remote branch resolution uses the refs returned by its single fetch, rather
+than reading a separate manifest first and returning that older pointer. The
+same fetch retains remote history without applying local refs, history, memory
+pointers or worktree positions. PR name-only lookup checks both that fetched
+history and local history: a released/reused name, inconsistent identity or
+conflicting dependency requires an exact historical PR binding.
+
+This removes one redundant manifest request per successful branch lookup and
+the second full-pull retry against an obsolete target. It does not yet limit
+object transfer to a single branch. `Ref` selects pointers; repository evidence
+and object negotiation remain repository-wide. Scoped transfer needs a separate
+dependency contract for natural/graft ancestry, retained history and pinned
+memory; a local object hit must not bypass fresh server authorization.
+
 The trust boundary includes deliberate modification of `.cxt`: editing objects
 and their receipts together cannot manufacture a valid HMAC. This is not a
 defense against compromise of the OS account, CLI binary, or private key itself.

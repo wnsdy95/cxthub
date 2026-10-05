@@ -24,22 +24,26 @@ func (s *SyncRepoService) remoteContextProtocol(ctx context.Context, repo string
 // A name-only PR lookup cannot distinguish an old merged branch from a newer
 // task using its name. Preserve both until an exact PR source binding exists.
 func (s *SyncRepoService) ResolveRemotePRBranch(ctx context.Context, in inbound.SyncInput, branch string) (domain.Ref, error) {
-	ref, err := s.ResolveRemoteBranch(ctx, in, branch)
+	ref, events, err := s.fetchRemoteBranch(ctx, in, branch)
 	if err != nil {
 		return ref, err
 	}
 	if history, ok := s.store.(outbound.HistoryStore); ok {
-		events, err := history.ListHistoryEvents(ctx, ref.RepoID)
+		local, err := history.ListHistoryEvents(ctx, ref.RepoID)
 		if err != nil {
 			return ref, err
 		}
-		bindings, err := domain.ProjectContextBranches(events)
-		if err != nil {
-			return ref, err
-		}
-		if bindings.Released[branch] != "" {
-			return ref, fmt.Errorf("%w: PR source branch %q was renamed, archived, or reused; an exact historical source binding is required", domain.ErrSyncConflict, branch)
-		}
+		events = append(append([]domain.HistoryEvent{}, events...), local...)
+	}
+	bindings, err := domain.ProjectContextBranches(events)
+	if err != nil {
+		return ref, fmt.Errorf("%w: resolve PR source branch history: %v", domain.ErrSyncConflict, err)
+	}
+	if bindings.Released[branch] != "" {
+		return ref, fmt.Errorf("%w: PR source branch %q was renamed, archived, or reused; an exact historical source binding is required", domain.ErrSyncConflict, branch)
+	}
+	if active, ok := bindings.Active[branch]; ok && ref.BranchID != "" && active.ID != ref.BranchID {
+		return ref, fmt.Errorf("%w: PR source branch %q changed identity during fetch", domain.ErrSyncConflict, branch)
 	}
 	return ref, nil
 }

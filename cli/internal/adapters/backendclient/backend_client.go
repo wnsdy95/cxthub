@@ -1192,18 +1192,29 @@ func (c *BackendClient) Pull(
 	snapshotStates map[domain.ContentHash]domain.ContentHash,
 	docHaves []domain.ContentHash,
 ) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
-	return c.pull(ctx, repoID, snapshotStates, docHaves, nil)
+	return c.pull(ctx, repoID, snapshotStates, docHaves, nil, "")
 }
 
 func (c *BackendClient) PullTo(ctx context.Context, repoID string, states map[domain.ContentHash]domain.ContentHash, haves []domain.ContentHash, receiver outbound.PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error) {
+	return c.pullTo(ctx, repoID, "", states, haves, receiver)
+}
+
+func (c *BackendClient) PullBranchTo(ctx context.Context, repoID, branch string, states map[domain.ContentHash]domain.ContentHash, haves []domain.ContentHash, receiver outbound.PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error) {
+	if domain.ValidateBranchName(branch) != nil {
+		return nil, nil, domain.ErrInvalidRef
+	}
+	return c.pullTo(ctx, repoID, branch, states, haves, receiver)
+}
+
+func (c *BackendClient) pullTo(ctx context.Context, repoID, branch string, states map[domain.ContentHash]domain.ContentHash, haves []domain.ContentHash, receiver outbound.PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error) {
 	if receiver == nil {
 		return nil, nil, fmt.Errorf("pull document receiver is required")
 	}
-	snaps, _, refs, err := c.pull(ctx, repoID, states, haves, receiver)
+	snaps, _, refs, err := c.pull(ctx, repoID, states, haves, receiver, branch)
 	return snaps, refs, err
 }
 
-func (c *BackendClient) pull(ctx context.Context, repoID string, snapshotStates map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash, receiver outbound.PullDocumentReceiver) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
+func (c *BackendClient) pull(ctx context.Context, repoID string, snapshotStates map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash, receiver outbound.PullDocumentReceiver, branch string) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return nil, nil, nil, err
 	}
@@ -1247,6 +1258,7 @@ func (c *BackendClient) pull(ctx context.Context, repoID string, snapshotStates 
 			snapshotWants = append(snapshotWants, id)
 		}
 	}
+	foundBranch := branch == ""
 	for _, ref := range man.Refs {
 		if err := domain.ValidateRef(ref); err != nil {
 			return nil, nil, nil, err
@@ -1254,6 +1266,12 @@ func (c *BackendClient) pull(ctx context.Context, repoID string, snapshotStates 
 		if ref.RepoID != repoID {
 			return nil, nil, nil, domain.ErrHashMismatch
 		}
+		if ref.Kind == domain.RefBranch && ref.Name == branch && ref.Target != "" {
+			foundBranch = true
+		}
+	}
+	if !foundBranch {
+		return nil, nil, nil, domain.ErrNotFound
 	}
 	if len(man.SnapshotIndex) == 0 {
 		return nil, nil, man.Refs, nil
