@@ -14,6 +14,11 @@ type canonicalEventKey struct {
 	version string
 }
 
+type canonicalEventProof struct {
+	key canonicalEventKey
+	seq int
+}
+
 // CanonicalDocVerifier reuses only proofs of exact event bytes under the same
 // CIR version. It retains bounded hashes/sequence metadata, never transcripts.
 // Its zero value is ready for concurrent use; it must not be copied after use.
@@ -25,7 +30,7 @@ type CanonicalDocVerifier struct {
 	next   int
 }
 
-func (v *CanonicalDocVerifier) event(ctx context.Context, version string, raw []byte) (int, error) {
+func (v *CanonicalDocVerifier) event(ctx context.Context, version string, raw []byte, pending *[]canonicalEventProof) (int, error) {
 	key := canonicalEventKey{HashContent(raw), version}
 	v.mu.Lock()
 	seq, found := v.events[key]
@@ -52,12 +57,30 @@ func (v *CanonicalDocVerifier) event(ctx context.Context, version string, raw []
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
+	// Do not evict proofs that a later event in this same document may need.
+	// Admission is bounded independently of document size and follows complete
+	// document validation. Rejection or cancellation observed during validation
+	// therefore discards the pending admissions without churning the cache.
+	if len(*pending) < maxCanonicalEventProofs {
+		*pending = append(*pending, canonicalEventProof{key, event.Seq})
+	}
+	return event.Seq, nil
+}
+
+func (v *CanonicalDocVerifier) remember(pending []canonicalEventProof) {
+	if len(pending) == 0 {
+		return
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.events == nil {
 		v.events = make(map[canonicalEventKey]int)
 	}
-	if _, exists := v.events[key]; !exists {
+	for _, proof := range pending {
+		key := proof.key
+		if _, exists := v.events[key]; exists {
+			continue
+		}
 		if len(v.order) < maxCanonicalEventProofs {
 			v.order = append(v.order, key)
 		} else {
@@ -65,9 +88,8 @@ func (v *CanonicalDocVerifier) event(ctx context.Context, version string, raw []
 			v.order[v.next] = key
 			v.next = (v.next + 1) % maxCanonicalEventProofs
 		}
-		v.events[key] = event.Seq
+		v.events[key] = proof.seq
 	}
-	return event.Seq, nil
 }
 
 // Verify accepts canonical wire bytes only. Legacy noncanonical storage reads
@@ -101,11 +123,12 @@ func (v *CanonicalDocVerifier) Verify(ctx context.Context, hash ContentHash, raw
 	// second JSON decoder or a transcript-sized RawMessage array. Only a cold
 	// event needs typed decoding and canonicalization.
 	previous, havePrevious := 0, false
+	var pending []canonicalEventProof
 	err = visitCanonicalEvents(ctx, stream, func(body []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		seq, err := v.event(ctx, envelope.CIRVersion, body)
+		seq, err := v.event(ctx, envelope.CIRVersion, body, &pending)
 		if err != nil {
 			return err
 		}
@@ -121,6 +144,7 @@ func (v *CanonicalDocVerifier) Verify(ctx context.Context, hash ContentHash, raw
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
+	v.remember(pending)
 	// An owned immutable copy preserves the same value contract as VerifySessionDoc.
 	return VerifiedSessionDoc{hash: hash, canonical: string(raw)}, nil
 }

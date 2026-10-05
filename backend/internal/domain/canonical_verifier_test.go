@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -107,11 +106,16 @@ func TestCanonicalDocVerifierConcurrentAndBounded(t *testing.T) {
 	wg.Wait()
 	// More independently valid events than capacity cannot grow retained state
 	// indefinitely. An evicted earlier document remains fully verifiable.
+	cir := CIRDocument{Envelope: CIREnvelope{CIRVersion: "1"}}
 	for i := 0; i < maxCanonicalEventProofs+3; i++ {
-		event := []byte(fmt.Sprintf(`{"blocks":[],"kind":"message","role":"user","seq":%d}`, i))
-		if _, err := v.event(context.Background(), "1", event); err != nil {
-			t.Fatal(err)
-		}
+		cir.Events = append(cir.Events, CIREvent{Kind: EventMessage, Role: RoleUser, Seq: i})
+	}
+	large, err := CanonicalBytes(cir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Verify(context.Background(), HashContent(large), large); err != nil {
+		t.Fatal(err)
 	}
 	if len(v.events) != maxCanonicalEventProofs || len(v.order) != maxCanonicalEventProofs {
 		t.Fatal("unbounded event proofs")
