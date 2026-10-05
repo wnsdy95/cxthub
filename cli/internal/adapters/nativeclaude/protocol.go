@@ -249,6 +249,8 @@ func (s *Session) frame(raw []byte) error {
 			return err
 		}
 		switch subtype {
+		case "ui_invalidate", "informational":
+			return s.validateHostNotification(m, subtype)
 		case "init":
 			if raw, ok := m["cwd"]; ok {
 				var cwd string

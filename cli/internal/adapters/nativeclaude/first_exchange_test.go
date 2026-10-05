@@ -86,6 +86,11 @@ func firstExchangeUnitHelper() int {
 			id, _ := stringField(m, "request_id")
 			switch method {
 			case "initialize":
+				if mode == "host-notifications" {
+					m := hostNotification("ui_invalidate")
+					m["session_id"] = sid
+					write(m)
+				}
 				control(id, map[string]any{"models": []any{map[string]any{"value": "sonnet", "resolvedModel": "fixture-model"}}})
 			case "get_context_usage":
 				if string(r["detail"]) != `"summary"` {
@@ -152,12 +157,21 @@ func firstExchangeUnitHelper() int {
 		if mode == "silent-query" {
 			continue // EOF still terminates promptly when the caller cancels.
 		}
+		if mode == "host-notifications" {
+			m := hostNotification("informational")
+			m["session_id"] = sid
+			write(m)
+		}
 		firstExchangeQueryFrames(mode, sid, id, m["message"], write)
 	}
 	if scanner.Err() != nil {
 		return 99
 	}
 	switch mode {
+	case "host-notifications":
+		m := hostNotification("ui_invalidate")
+		m["session_id"] = sid
+		write(m)
 	case "late-assistant":
 		write(map[string]any{"type": "assistant", "session_id": sid, "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "PRIVATE_LATE_RESPONSE"}}}})
 	case "late-compaction":
@@ -753,5 +767,14 @@ func TestFirstExchangeVersionIsolation(t *testing.T) {
 	if s, err := Start(ctx, newer.opts); err == nil {
 		_ = s.Close()
 		t.Fatal("default no-query Start broadened to 2.1.287")
+	}
+}
+
+func TestFirstExchangeHostNotificationsAcrossLifetime(t *testing.T) {
+	f := newFirstExchangeFixture(t, "host-notifications")
+	s := f.start(t, true)
+	r, err := s.Run(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow)
+	if err != nil || !r.Completed || r.Answer != firstExchangeAnswer || len(f.queries(t)) != 1 {
+		t.Fatal("notification lifetime failed:", err)
 	}
 }
