@@ -284,6 +284,12 @@ type StreamingRemotePull interface {
 	PullTo(context.Context, string, map[domain.ContentHash]domain.ContentHash, []domain.ContentHash, PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error)
 }
 
+// BranchStreamingRemotePull checks branch presence in the same manifest used
+// for negotiation, before downloading objects. It does not narrow dependencies.
+type BranchStreamingRemotePull interface {
+	PullBranchTo(context.Context, string, string, map[domain.ContentHash]domain.ContentHash, []domain.ContentHash, PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error)
+}
+
 // PushObjectWants is the server-proven missing subset of a local push
 // inventory. Snapshot metadata and document bodies are independent objects: a
 // damaged server may have one without the other, so both sets remain explicit.

@@ -699,36 +699,28 @@ func (s *SyncRepoService) flushGrafts(ctx context.Context, repoRoot, repoID stri
 	return nil
 }
 
-// ResolveRemoteBranch fetches the remote branch ref for web fork connections.
-// If the target snapshot object is not local, it prepares a fetch-only pull to allow
-// the caller to immediately create a local fork ref. If not found on the remote, returns domain.ErrNotFound.
+// ResolveRemoteBranch returns the branch from the fetch that verified its
+// dependencies. Fetch retains server evidence without moving the local selection.
 func (s *SyncRepoService) ResolveRemoteBranch(ctx context.Context, in inbound.SyncInput, branch string) (domain.Ref, error) {
-	repoID, err := s.repoID(ctx, in)
-	if err != nil {
-		return domain.Ref{}, err
+	ref, _, err := s.fetchRemoteBranch(ctx, in, branch)
+	return ref, err
+}
+
+func (s *SyncRepoService) fetchRemoteBranch(ctx context.Context, in inbound.SyncInput, branch string) (domain.Ref, []domain.HistoryEvent, error) {
+	if domain.ValidateBranchName(branch) != nil {
+		return domain.Ref{}, nil, domain.ErrInvalidRef
 	}
-	man, err := s.remote.RemoteManifest(ctx, repoID)
+	out, err := s.Pull(ctx, inbound.SyncInput{RepoID: in.RepoID, Cwd: in.Cwd, Ref: branch, FetchOnly: true, Progress: in.Progress})
 	if err != nil {
-		return domain.Ref{}, err
+		return domain.Ref{}, nil, err
 	}
-	for _, r := range man.Refs {
+	for _, r := range out.FetchedRefs {
 		if r.Kind != domain.RefBranch || r.Name != branch || r.Target == "" {
 			continue
 		}
-		if _, perr := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); perr != nil {
-			return domain.Ref{}, perr
-		}
-		if _, gerr := s.store.GetSnapshot(ctx, r.Target); gerr != nil {
-			if _, perr := s.Pull(ctx, inbound.SyncInput{RepoID: repoID, Cwd: in.Cwd, FetchOnly: true}); perr != nil {
-				return domain.Ref{}, perr
-			}
-			if _, gerr := s.store.GetSnapshot(ctx, r.Target); gerr != nil {
-				return domain.Ref{}, gerr
-			}
-		}
-		return r, nil
+		return r, out.FetchedHistory, nil
 	}
-	return domain.Ref{}, domain.ErrNotFound
+	return domain.Ref{}, nil, domain.ErrNotFound
 }
 
 const maxAppendReconcileSnapshots = 256
@@ -1548,7 +1540,9 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	var refs []domain.Ref
 	syncProgress(in, "pull", "download-and-verify-documents", 0, 0)
 	verified := make(map[domain.ContentHash]bool)
-	if streaming, ok := s.remote.(outbound.StreamingRemotePull); ok {
+	if selected, ok := s.remote.(outbound.BranchStreamingRemotePull); ok && in.Ref != "" {
+		snaps, refs, err = selected.PullBranchTo(ctx, repoID, in.Ref, advertisedSnapshotStates, docHaves, &pullDocumentReceiver{store: s.store, verified: verified})
+	} else if streaming, ok := s.remote.(outbound.StreamingRemotePull); ok {
 		snaps, refs, err = streaming.PullTo(ctx, repoID, advertisedSnapshotStates, docHaves, &pullDocumentReceiver{store: s.store, verified: verified})
 	} else {
 		snaps, docs, refs, err = s.remote.Pull(ctx, repoID, advertisedSnapshotStates, docHaves)
@@ -1839,7 +1833,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 		} else {
 			syncProgress(in, "pull", "conflicts", 0, 0)
 		}
-		return inbound.SyncOutput{Pulled: len(snaps), FetchedRefs: append([]domain.Ref{}, selectedRefs...), RemoteAhead: ahead}, nil
+		return inbound.SyncOutput{Pulled: len(snaps), FetchedRefs: append([]domain.Ref{}, selectedRefs...), FetchedHistory: history, RemoteAhead: ahead}, nil
 	}
 	refs, err = selectSyncRefs(refs, in.Ref)
 	if err != nil {
@@ -2003,7 +1997,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	} else {
 		syncProgress(in, "pull", "conflicts", 0, 0)
 	}
-	return inbound.SyncOutput{Pulled: len(snaps), NewRefs: newRefs, FetchedRefs: append([]domain.Ref{}, refs...), Conflicts: conflicts}, nil
+	return inbound.SyncOutput{Pulled: len(snaps), NewRefs: newRefs, FetchedRefs: append([]domain.Ref{}, refs...), FetchedHistory: history, Conflicts: conflicts}, nil
 }
 
 // Ensure SyncRepoService implements inbound.SyncRepo.
