@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 )
 
 // These fields were observed in the 2.1.287 SDK recorder. They describe
@@ -35,13 +37,21 @@ func ordinaryArchiveProvenance(m map[string]json.RawMessage, kind string, phase 
 			return ErrUnsupported
 		}
 	}
-	for _, key := range []string{"apiBlockIndex", "effort", "perTurnEffort"} {
+	for _, key := range []string{"apiBlockIndex", "effort", "perTurnEffort", "advisorModel", "thinkingDurationMs"} {
 		if raw, ok := m[key]; ok {
 			if kind != "assistant" {
 				return ErrUnsupported
 			}
-			if key != "apiBlockIndex" {
-				if value, err := exchangeString(raw, 64); err != nil || value == "" {
+			if key == "thinkingDurationMs" {
+				if _, err := exchangeNumber(raw, exchangeNativeNumberMax); err != nil {
+					return err
+				}
+			} else if key != "apiBlockIndex" {
+				limit := 64
+				if key == "advisorModel" {
+					limit = 256
+				}
+				if value, err := exchangeString(raw, limit); err != nil || value == "" {
 					return ErrProtocol
 				}
 			}
@@ -105,7 +115,11 @@ func validateOrdinaryAttachment(row map[string]json.RawMessage, sessionID, cwd, 
 		return "", err
 	}
 	if rendered, ok := row["rendered"]; ok {
-		if len(rendered) > exchangeAttachmentBytes || !ordinaryLiteral(row["renderedRole"], "system") {
+		role := "system"
+		if kind == "session_context" {
+			role = "user"
+		}
+		if len(rendered) > exchangeAttachmentBytes || !ordinaryLiteral(row["renderedRole"], role) {
 			return "", ErrProtocol
 		}
 		var blocks []map[string]json.RawMessage
@@ -124,6 +138,17 @@ func validateOrdinaryAttachment(row map[string]json.RawMessage, sessionID, cwd, 
 		return "", ErrProtocol
 	}
 	switch kind {
+	case "credential_org":
+		// Native records the login organization before the first response. This
+		// is an identity marker, not a credential or an authorization grant. It
+		// remains in the hash-bound archive; resume never rewrites it.
+		if !exchangeKeys(m, "type", "organizationUuid") || row["rendered"] != nil {
+			return "", ErrUnsupported
+		}
+		id, err := stringField(m, "organizationUuid")
+		if err != nil || !providerfs.ValidSessionID(id) {
+			return "", ErrProtocol
+		}
 	case "session_context", "date":
 		return validateExchangeAttachment(raw, sessionID)
 	case "environment":
@@ -206,7 +231,7 @@ func validateOrdinaryPromptSnapshot(m map[string]json.RawMessage) error {
 	for _, key := range []string{"reminderFold", "inlineTools", "keptReminders", "echoWireToolInputs", "systemTurns", "toolChangeHeader"} {
 		if raw, ok := m[key]; ok {
 			value, err := exchangeBool(raw)
-			if err != nil || value != (key == "systemTurns" || key == "toolChangeHeader") {
+			if err != nil || (key != "echoWireToolInputs" && key != "keptReminders" && value != (key == "systemTurns" || key == "toolChangeHeader")) {
 				return ErrUnsupported
 			}
 		}
@@ -242,6 +267,51 @@ func validateOrdinaryPromptSnapshot(m map[string]json.RawMessage) error {
 			if _, err := object(schema["input_schema"]); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// The pinned recorder can enrich the last prompt snapshot after a successful
+// assistant round. Only resolved tools/prefix/wire shape may change there;
+// original prompt, fold/echo policy and context rendering remain identical.
+func ordinaryTerminalPrompt(previous, next map[string]json.RawMessage) error {
+	if previous == nil {
+		return ErrUnsupported
+	}
+	for _, key := range []string{"systemPrompt", "reminderFold", "echoWireToolInputs", "contextRendering", "cliPrefix"} {
+		old, had := previous[key]
+		current, has := next[key]
+		if key == "cliPrefix" && !had {
+			continue
+		}
+		if had != has {
+			return ErrUnsupported
+		}
+		if !had {
+			continue
+		}
+		a, err := archiveContentHash(old)
+		b, err2 := archiveContentHash(current)
+		if err != nil || err2 != nil || a != b {
+			return ErrUnsupported
+		}
+	}
+	var oldTools, newTools []json.RawMessage
+	if raw, ok := previous["tools"]; ok && json.Unmarshal(raw, &oldTools) != nil {
+		return ErrProtocol
+	}
+	if raw, ok := next["tools"]; ok && json.Unmarshal(raw, &newTools) != nil {
+		return ErrProtocol
+	}
+	if len(oldTools) > len(newTools) {
+		return ErrUnsupported
+	}
+	for i, tool := range oldTools {
+		a, err := archiveContentHash(tool)
+		b, err2 := archiveContentHash(newTools[i])
+		if err != nil || err2 != nil || a != b {
+			return ErrUnsupported
 		}
 	}
 	return nil

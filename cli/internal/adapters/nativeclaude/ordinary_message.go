@@ -11,18 +11,28 @@ import (
 // separately validate final metadata instead of requiring an impossible whole
 // message hash match. The full archive is still bound by its own file hash.
 func ordinaryAssistantProjection(message map[string]json.RawMessage, finalStop string) (string, int64, error) {
-	if !exchangeKeys(message, "id", "type", "role", "model", "content", "stop_sequence", "stop_reason", "context_management", "stop_details", "usage") {
+	if !exchangeKeys(message, "id", "type", "role", "model", "content", "stop_sequence", "stop_reason", "context_management", "stop_details", "usage", "container", "diagnostics", "input_transformations") {
 		return "", 0, ErrUnsupported
 	}
 	stable := make(map[string]json.RawMessage, len(message))
 	for key, raw := range message {
 		stable[key] = raw
 	}
-	for _, key := range []string{"context_management", "stop_details"} {
+	for _, key := range []string{"context_management", "stop_details", "container", "diagnostics"} {
 		if raw, ok := message[key]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return "", 0, ErrUnsupported
 		}
 		delete(stable, key)
+	}
+	// The live provider supplies empty transformation metadata even when no
+	// transformation occurred. Archives may omit it. Nonempty transformations
+	// change input semantics and still require a separate supported contract.
+	if raw, ok := message["input_transformations"]; ok {
+		var changes []json.RawMessage
+		if json.Unmarshal(raw, &changes) != nil || changes == nil || len(changes) != 0 {
+			return "", 0, ErrUnsupported
+		}
+		delete(stable, "input_transformations")
 	}
 	if raw, ok := message["stop_reason"]; ok {
 		if !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
@@ -97,8 +107,28 @@ func ordinaryUsageDetails(usage map[string]json.RawMessage) error {
 	}
 	if raw, ok := usage["iterations"]; ok {
 		var rows []json.RawMessage
-		if json.Unmarshal(raw, &rows) != nil || rows == nil || len(rows) != 0 {
+		if json.Unmarshal(raw, &rows) != nil || rows == nil || len(rows) > 1 {
 			return ErrUnsupported
+		}
+		if len(rows) == 1 {
+			iteration, err := object(rows[0])
+			if err != nil || !exchangeKeys(iteration, "type", "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation") || !ordinaryLiteral(iteration["type"], "message") {
+				return ErrUnsupported
+			}
+			for _, key := range []string{"input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
+				a, err := count(iteration, key, 0)
+				b, err2 := count(usage, key, 0)
+				if err != nil || err2 != nil || a != b {
+					return ErrProtocol
+				}
+			}
+			if raw, ok := iteration["cache_creation"]; ok {
+				a, err := archiveContentHash(raw)
+				b, err2 := archiveContentHash(usage["cache_creation"])
+				if err != nil || err2 != nil || a != b {
+					return ErrProtocol
+				}
+			}
 		}
 	}
 	if raw, ok := usage["fallback_credit"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {

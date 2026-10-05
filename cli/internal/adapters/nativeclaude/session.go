@@ -194,7 +194,13 @@ func startVersion(ctx context.Context, opts Options, expectedVersion string) (*S
 	if err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
 	s.process = p
+	if s.err != nil {
+		// A reader can report failure before startProcess publishes its handle.
+		p.requestAbort()
+	}
+	s.mu.Unlock()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -392,21 +398,23 @@ func (s *Session) fail(err error) {
 		s.err = err
 		close(s.failed)
 	}
+	if s.err != nil && s.process != nil {
+		// Wake an existing graceful shutdown without waiting for closeOnce or
+		// taking ownership of process signaling/reaping from that closer.
+		s.process.requestAbort()
+	}
 }
 func (s *Session) failure() error { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
 
 func (s *Session) writeFrame(ctx context.Context, raw []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	s.mu.Lock()
-	ordinary := s.firstQuestion != nil && s.firstQuestion.ordinary != nil
-	s.mu.Unlock()
-	return s.process.write(ctx, append(raw, '\n'), ordinary)
+	return s.process.write(ctx, append(raw, '\n'))
 }
 
 // Close drains and validates stdout through EOF, waits for the owned process,
-// and never removes its native archive. A failed ordinary exchange is killed
-// before EOF can be interpreted as a permission decision. Its original error
+// and never removes its native archive. A failed or canceled operation is killed
+// before EOF can continue native work. Its original error
 // remains a failure even when physical retirement succeeds; it cannot authorize
 // archive proof or resume. Close is concurrent-safe and returns its first result.
 func (s *Session) Close() error {
@@ -430,14 +438,12 @@ func (s *Session) Close() error {
 		if s.firstQuestion != nil && s.firstQuestion.ordinary != nil {
 			s.firstQuestion.ordinary.cancel()
 		}
-		abort := s.err != nil && s.firstQuestion != nil && s.firstQuestion.ordinary != nil
+		// Graceful EOF is only for successful work, including no-query sessions.
+		// Failed initialization/appends and literal questions must not inherit
+		// normal native teardown grace or continue processing on EOF either.
+		abort := s.err != nil
 		s.mu.Unlock()
 		err := s.process.shutdown(abort)
-		if abort {
-			// Completion eligibility and retirement are separate. The original
-			// cancellation/protocol error still prevents a successful close.
-			err = s.process.retirementErr
-		}
 		// Pipe shutdown interrupts committed writes. Join their audit before
 		// finalizing closeErr; a late permission-write failure must not arrive
 		// after successful Run/readback has already been reported. UI callbacks
@@ -447,6 +453,12 @@ func (s *Session) Close() error {
 			s.writeMu.Unlock()
 		}
 		s.mu.Lock()
+		if s.err != nil {
+			// Include failures arriving during graceful shutdown or writer drain.
+			// The original cause prevents success; only unconfirmed retirement
+			// adds a cleanup failure to it.
+			err = s.process.retirementErr
+		}
 		s.closeErr = errors.Join(s.err, err)
 		s.mu.Unlock()
 		close(s.closed)

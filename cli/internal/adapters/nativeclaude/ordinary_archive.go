@@ -12,25 +12,35 @@ import (
 // remain explicit unsupported forms, independently of successful model output.
 func (s *Session) verifyOrdinaryArchive(ctx context.Context, path string, q *firstQuestionState, reference ReferenceReceipt) (archiveVerification, error) {
 	o := q.ordinary
-	metadata := newExchangeMetadataValidator(s, q, reference)
 	parent, phase, index, assistants, results := "", 0, 0, 0, 0
+	metadata := newExchangeMetadataValidator(s, q, reference, &parent)
 	seen := map[string]bool{}
 	attachments := map[string]int{}
 	blockOrder := map[string]float64{}
 	var nativeAttachments []NativeArchiveAttachment
+	var promptSnapshot map[string]json.RawMessage
+	selectedLeaf := ""
 	verified, err := s.readArchive(ctx, path, func(m map[string]json.RawMessage) error {
 		kind, err := stringField(m, "type")
 		if err != nil {
 			return err
 		}
 		switch kind {
-		case "queue-operation", "atis-latch", "last-prompt", "cost-state":
+		case "last-prompt":
+			if err := metadata(m, kind); err != nil {
+				return err
+			}
+			if _, ok := m["leafUuid"]; ok {
+				selectedLeaf, _ = stringField(m, "leafUuid")
+			}
+			return nil
+		case "queue-operation", "atis-latch", "cost-state":
 			return metadata(m, kind)
 		case "user", "assistant", "attachment":
 		default:
 			return ErrUnsupported
 		}
-		if !exchangeKeys(m, "type", "uuid", "parentUuid", "sessionId", "cwd", "isSidechain", "message", "attachment", "isMeta", "isApiErrorMessage", "isVisibleInTranscriptOnly", "isCompactSummary", "sourceToolAssistantUUID", "toolUseResult", "timestamp", "version", "gitBranch", "slug", "userType", "promptId", "permissionMode", "requestId", "entrypoint", "origin", "queueSkipAttachments", "queueTranscriptOnly", "promptSource", "turnOrigin", "turnPosition", "apiBlockIndex", "effort", "perTurnEffort", "rendered", "renderedRole") {
+		if !exchangeKeys(m, "type", "uuid", "parentUuid", "sessionId", "cwd", "isSidechain", "message", "attachment", "isMeta", "isApiErrorMessage", "isVisibleInTranscriptOnly", "isCompactSummary", "sourceToolAssistantUUID", "toolUseResult", "timestamp", "version", "gitBranch", "slug", "userType", "promptId", "permissionMode", "requestId", "entrypoint", "origin", "queueSkipAttachments", "queueTranscriptOnly", "promptSource", "turnOrigin", "turnPosition", "apiBlockIndex", "effort", "perTurnEffort", "thinkingDurationMs", "advisorModel", "rendered", "renderedRole") {
 			return ErrUnsupported
 		}
 		if err := ordinaryArchiveProvenance(m, kind, phase); err != nil {
@@ -102,10 +112,10 @@ func (s *Session) verifyOrdinaryArchive(ctx context.Context, path string, q *fir
 			}
 			phase++
 		} else if kind == "attachment" {
-			// Native announcements occur before an API round, including after
-			// a tool result. They cannot split assistant blocks or follow the
-			// final answer, and never substitute for an observed wire record.
-			if actualParent != parent || index >= len(o.records) || o.records[index].kind != "assistant" || (index > 0 && o.records[index-1].kind != "user") {
+			// Announcements precede API rounds; a single terminal prompt
+			// snapshot may finalize the last round's recorded rendering state.
+			terminal := index == len(o.records) && assistants > 0 && o.records[index-1].kind == "assistant"
+			if actualParent != parent || (!terminal && (index >= len(o.records) || o.records[index].kind != "assistant" || (index > 0 && o.records[index-1].kind != "user"))) {
 				return ErrUnsupported
 			}
 			kind, err := validateOrdinaryAttachment(m, s.id, s.cwd, q.summary.Model)
@@ -114,6 +124,17 @@ func (s *Session) verifyOrdinaryArchive(ctx context.Context, path string, q *fir
 				return ErrUnsupported
 			}
 			if index != 0 && kind != "prompt_snapshot" && kind != "total_tokens_reminder" {
+				return ErrUnsupported
+			}
+			if kind == "prompt_snapshot" {
+				next, _ := object(m["attachment"]) // validated above
+				if terminal {
+					if m["rendered"] != nil || ordinaryTerminalPrompt(promptSnapshot, next) != nil {
+						return ErrUnsupported
+					}
+				}
+				promptSnapshot = next
+			} else if terminal {
 				return ErrUnsupported
 			}
 			attachments[kind] = index
@@ -157,6 +178,9 @@ func (s *Session) verifyOrdinaryArchive(ctx context.Context, path string, q *fir
 				}
 				var output int64
 				h, output, err = ordinaryAssistantProjection(message, stop)
+				if err != nil {
+					return err
+				}
 				if output < r.outputTokens {
 					return ErrProtocol
 				}
@@ -229,6 +253,12 @@ func (s *Session) verifyOrdinaryArchive(ctx context.Context, path string, q *fir
 		return archiveVerification{}, err
 	}
 	if phase != 2 || index != len(o.records) || assistants == 0 || !o.settled() {
+		return archiveVerification{}, ErrProtocol
+	}
+	// Native can checkpoint its selection after the reference, then update it
+	// after the response. Every checkpoint must name the already validated tip;
+	// the last explicit selection must still reach the complete final chain.
+	if selectedLeaf != "" && selectedLeaf != parent {
 		return archiveVerification{}, ErrProtocol
 	}
 	reference.Persisted = true
