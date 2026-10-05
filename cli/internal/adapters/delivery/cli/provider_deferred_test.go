@@ -456,6 +456,46 @@ while :; do sleep 0.01; done`)
 	}
 }
 
+func TestDeferredPreparationJoinsCleanupFailureBeforeReturning(t *testing.T) {
+	root, bin := providerLaunchFixture(t, "codex", "")
+	primaryErr := errors.New("PRIVATE preparation failure")
+	cleanupErr := errors.New("PRIVATE cleanup failure")
+	recordErr := errors.New("PRIVATE receipt failure")
+	cleaned, recorded := 0, 0
+	var failed ProviderLaunchReceipt
+	hooks := ProviderLaunchHooks{
+		PrepareDeferred: func(ctx context.Context, req ProviderLaunchRequest) (DeferredProviderLaunch, error) {
+			d := deferredLaunchFixture(ctx, req, func() error { cleaned++; return cleanupErr })
+			return d, primaryErr
+		},
+		Record: func(_ context.Context, receipt ProviderLaunchReceipt) error {
+			recorded++
+			failed = receipt
+			if cleaned != 1 {
+				t.Error("failed receipt preceded cleanup")
+			}
+			return recordErr
+		},
+	}
+	req := ProviderLaunchRequest{Cwd: root, Executable: bin, Intent: deferredLaunchIntent()}
+	prepared, _, err := prepareDeferredProviderLaunch(context.Background(), req, hooks)
+	for _, cause := range []error{primaryErr, cleanupErr, recordErr, errProviderCleanup, domain.ErrDeliveryFailed} {
+		if !errors.Is(err, cause) {
+			t.Errorf("lost failure %v: %v", cause, err)
+		}
+	}
+	if strings.Contains(fmt.Sprintf("%v %+v %#v %s", err, err, err, failed.Failure), "PRIVATE") {
+		t.Fatal("preparation or cleanup failure leaked private data")
+	}
+	if failed.State != "runtime_failed" || recorded != 1 || cleaned != 1 {
+		t.Fatalf("receipt=%s recorded=%d cleaned=%d", failed.State, recorded, cleaned)
+	}
+	// A later owner can observe the same cleanup failure without running it again.
+	if cached := cleanupProviderLaunch(prepared); !errors.Is(cached, cleanupErr) || !errors.Is(cached, errProviderCleanup) || cleaned != 1 {
+		t.Fatalf("cleanup result lost or repeated: err=%v cleaned=%d", cached, cleaned)
+	}
+}
+
 func TestDeferredProviderCleanupFailurePropagatesOnEveryExit(t *testing.T) {
 	for _, stage := range []string{"success", "prepare", "last validation", "receipt", "cancel"} {
 		t.Run(stage, func(t *testing.T) {

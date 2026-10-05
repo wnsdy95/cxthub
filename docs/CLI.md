@@ -717,18 +717,23 @@ A verified runtime's total initial input is limited to 80% of its window;
 host input/framing is deducted before selecting recent
 complete turns. Required output reserves or an earlier compaction trigger can
 lower that limit further. Requested, effective and selected budgets are recorded
-separately, without shortening stored source records. **Strict native history
-launch is currently unavailable in the shipped runtime adapter:** no installed
-host/model/tokenizer combination has been verified. These commands report
-`provider_capability_unknown` before materializing or launching; an unknown
-window is not replaced by a 1M guess or a hidden memory-only launch. Verified
-small-window adjustment is supported by the preparation policy, while the
-shipped runtime still lacks the required capability evidence. The artifact path is
-available for inspection. No global model-window or auto-compaction setting is
-changed. Native resume, provider help and noninteractive commands preserve their
-provider-owned behavior and receive no injected package.
-Native 200k/full-budget delivery, real-host acceptance and interactive TUI
-handoff remain incomplete validation gates.
+separately, without shortening stored source records.
+
+Fresh Codex history launches support verified native versions, existing static
+model catalogs and exact supported text tokenizers. Refreshable catalogs and
+unsupported combinations report `provider_capability_unknown`; an unknown
+window is not replaced by a 1M guess or a hidden memory-only launch.
+Claude Code 2.1.287 uses its resolved window with an explicit conservative
+estimate/reserve policy. CXT collects the first question, handles supported
+one-time tool decisions, verifies the saved response and opens the same native
+session without replaying the question. This is not exact Claude token counting.
+See [supported native input and accounting](CONTEXT_INPUT.md#explicit-budgeted-history-input).
+
+Actual 200k/full provider acceptance, initial compaction and general dynamic
+Codex support remain unverified. `full=800k` is a requested ceiling. No global
+model-window or auto-compaction setting is changed. Native resume, provider help
+and noninteractive commands preserve provider-owned behavior and receive no
+injected package. `cxt load --output` remains available for artifact inspection.
 
 The explicit legacy `--mode memory` archive-restoration path keeps the full
 immutable digest in cxt storage but projects at most 64 KiB into the target

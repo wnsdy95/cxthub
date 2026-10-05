@@ -292,7 +292,7 @@ Known lower compaction thresholds still apply. The runtime scope must bind
 provider/account routing, effective configuration, instructions and tools;
 a model name or arbitrary window override is insufficient.
 
-A separate private Claude integration uses `native_estimate_reserve_v1`.
+The Claude history integration uses `native_estimate_reserve_v1`.
 Its `usage.exact` remains false: the numeric text allowance is the full rendered
 UTF-8 byte length, not an exact Claude token count. The native process supplies
 its resolved model, local window and a separately labeled pre-reference input
@@ -306,13 +306,38 @@ is a ceiling, not evidence that 800k model tokens were packed or accepted.
 This policy never reads or writes exact-text overhead calibrations. Its runtime
 scope belongs only to the owned invocation. Preparation, reference admission,
 first response, archive verification and TUI readiness remain distinct evidence.
-The private bridge uses the existing latest-server-main preparation and source
-reauthorization, without changing the worktree's code position. It is **not a
-public Claude history route**: ordinary prompt expansion, tools/permission UI
-and the public supervisor connection still require their own implementation.
+The bridge uses the existing latest-server-main preparation and source
+reauthorization, without changing the worktree's code position.
 Observed source freshness is not an atomic transaction across Git, the cloud
 and the model; unseen later native expansion is covered by a reserve policy,
 not by an exact final-input guarantee.
+
+On the supported Claude Code 2.1.287 path, `cxt --pull claude` and
+`cxt --pull --context-budget 200k claude` prepare an idle native process first.
+CXT takes the first question from the invocation, or accepts multiline input
+until a line containing `/submit`; `/cancel` abandons the first exchange.
+The actual question participates in selection and admission. CXT records and
+activates the owned session before releasing it, renders one-time tool
+permission decisions and supported choice questions, then verifies the saved
+conversation before opening that same session in the normal Claude terminal.
+It neither replays the initial question during handoff nor answers permission
+requests automatically. Existing native permission rules remain authoritative.
+
+The first exchange supports ordinary root-session text and tool rounds, with
+single- and multiple-choice `AskUserQuestion` answers. Extended question cards,
+subagent output, image tool results and leading slash commands require separate
+handling and are rejected explicitly. Unsupported native versions/options are
+also rejected instead of being dropped or replaced. Native expansion after the
+question admission point is covered by the stated reserve, not exact counting.
+A completed response is distinct from actual large-input provider acceptance.
+
+While the owned first exchange is waiting for input or a tool decision, the
+supervisor still handles cancellation, runtime failure and branch transitions.
+It prepares and validates a replacement before retiring the current exchange;
+failed preparation keeps the current session. Retirement cancels and joins the
+starter, including any TUI it returned during the race, before cleanup and a new
+start. A later branch launch collects a new question rather than replaying the
+previous one.
 
 The initial extra allowance is `max(16000, floor(W / 20))` tokens, reserved
 **inside** the 80-percent input limit. This is a conservative engineering policy,
@@ -439,7 +464,8 @@ certified; it does not prove actual tokens exceeded that budget. Errors preserve
 the measurement reason and distinguish it from exact token overflow. If a
 newer complete history turn fits but an older candidate cannot be measured,
 the artifact's coverage gaps report that measurement limitation. Native history
-still requires exact accounting. The source archive and complete user turns
+under a strict policy still requires exact accounting; the separate Claude
+estimate policy keeps its inexact allowance explicit. The source archive and complete user turns
 are never modified to force an input to fit.
 
 ## Local state and compatibility

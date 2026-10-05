@@ -23,6 +23,7 @@ type claudeContextRunner struct {
 	reference                nativeclaude.ReferenceReceipt
 	appends, queries, closes int
 	mutate                   func(*nativeclaude.FirstQuestionEvidence)
+	closeErr                 error
 }
 
 func (f *claudeContextRunner) AppendReference(_ context.Context, text string) (nativeclaude.ReferenceReceipt, error) {
@@ -44,7 +45,7 @@ func (f *claudeContextRunner) Run(ctx context.Context, text string, admit func(c
 	f.queries++
 	return nativeclaude.FirstExchangeResult{SessionID: f.summary.SessionID, MessageID: claudeContextTestMessage, QuestionHash: e.QuestionHash, Answer: "fixture response", Completed: true}, nil
 }
-func (f *claudeContextRunner) Close() error { f.closes++; return nil }
+func (f *claudeContextRunner) Close() error { f.closes++; return f.closeErr }
 
 func claudeContextFixture(t *testing.T) (nativeClaudeContextReader, domain.AgentContextPackage, domain.AgentInitialPrompt, *claudeContextRunner) {
 	t.Helper()
@@ -134,6 +135,40 @@ func TestNativeClaudeContextCommonAccountingAndOneShot(t *testing.T) {
 	copy := prepared
 	if _, err = copy.run(ctx); err == nil || runner.queries != 1 || runner.closes != 1 {
 		t.Fatal("copied handle retried or retired the winner")
+	}
+}
+
+func TestNativeClaudeContextCompletedReceiptFailureDoesNotReplay(t *testing.T) {
+	for _, closeErr := range []error{nil, nativeclaude.ErrCleanup} {
+		r, p, q, runner := claudeContextFixture(t)
+		runner.closeErr = closeErr
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		cause := errors.New("PRIVATE_RECEIPT_FAILURE")
+		var states []string
+		prepared, err := r.prepareRun(ctx, runner, p, q, func(context.Context) error { return nil }, func(_ context.Context, rec delivcli.ProviderLaunchReceipt) error {
+			states = append(states, rec.State)
+			if rec.State == "first_turn_observed" {
+				return cause
+			}
+			return nil
+		}, func(context.Context, domain.AgentContextPackage) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := prepared.run(ctx)
+		if !result.Completed || result.Answer != "fixture response" || !errors.Is(result.ReceiptError, cause) || strings.Contains(result.ReceiptError.Error(), "PRIVATE") {
+			t.Fatal("completed response or private warning lost", err)
+		}
+		if closeErr == nil && err != nil || closeErr != nil && !errors.Is(err, closeErr) {
+			t.Fatal("receipt warning masked cleanup failure", err)
+		}
+		if len(states) != 3 || states[1] != "injected_ready" || states[2] != "first_turn_observed" {
+			t.Fatal("release order changed", states)
+		}
+		if _, err := prepared.run(ctx); err == nil || runner.queries != 1 || runner.appends != 1 || runner.closes != 1 {
+			t.Fatal("receipt failure authorized a replay")
+		}
 	}
 }
 

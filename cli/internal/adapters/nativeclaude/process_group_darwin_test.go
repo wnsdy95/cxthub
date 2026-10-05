@@ -168,6 +168,9 @@ func probeGroupTest(root, api, scenario string) (result groupTestResult) {
 			return
 		}
 		cmd, exited, finish = p.cmd, p.exited, p.close
+		if api == "abort" {
+			finish = func() error { _ = p.shutdown(true); return p.retirementErr }
+		}
 		observationError = func() error { return p.observationErr }
 	}
 	// Both actual lifecycle implementations own the mandatory leader Wait.
@@ -214,7 +217,7 @@ func TestDarwinProcessGroupCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, api := range []string{"idle", "helper"} {
+	for _, api := range []string{"idle", "helper", "abort"} {
 		for _, scenario := range []string{"denied-live-descendant", "zombie-only"} {
 			t.Run(api+"/"+scenario, func(t *testing.T) {
 				t.Parallel()

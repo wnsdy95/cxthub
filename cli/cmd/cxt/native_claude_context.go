@@ -13,9 +13,9 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
 
-// This composition reuses the common main selection and the owned exchange.
-// It remains private until natural prompt expansion and tool interactions are
-// supported. In particular, an estimate receipt never enables public delivery.
+// The public native Claude launch reuses common main selection and admission
+// through the owned ordinary exchange. Local estimates and preparation receipts
+// do not establish provider acceptance.
 type nativeClaudeContextReader struct {
 	baseline nativeclaude.ContextSummary
 	host     string
@@ -144,7 +144,14 @@ func (r nativeClaudeContextReader) admit(p domain.AgentContextPackage, question 
 }
 
 type nativeClaudePreparedInput struct {
-	run func(context.Context) (nativeclaude.FirstExchangeResult, error)
+	run func(context.Context) (nativeClaudeInputResult, error)
+}
+
+// A failed post-generation receipt is separate from a failed exchange. The
+// response already exists and must never be replayed to recover bookkeeping.
+type nativeClaudeInputResult struct {
+	nativeclaude.FirstExchangeResult
+	ReceiptError error
 }
 
 func (nativeClaudePreparedInput) String() string {
@@ -155,7 +162,7 @@ func (p nativeClaudePreparedInput) GoString() string { return p.String() }
 // Caller owns the already-started native process. Preparation never sends a
 // querying message. The returned one-shot run uses the existing exchange and
 // leaves archive verification/resume to its established lifecycle.
-func prepareNativeClaudeInput(ctx context.Context, cfg config, req delivcli.ProviderLaunchRequest, e *nativeclaude.FirstExchange, question domain.AgentInitialPrompt) (prepared nativeClaudePreparedInput, resultErr error) {
+func prepareNativeClaudeInput(ctx context.Context, cfg config, req delivcli.ProviderLaunchRequest, e *nativeclaude.FirstExchange, runner nativeClaudeExchangeRunner, question domain.AgentInitialPrompt) (prepared nativeClaudePreparedInput, resultErr error) {
 	defer func() { resultErr = redactNativeClaudeContext(resultErr) }()
 	if req.Intent.Provider != domain.ProviderClaude || !req.Intent.Pull || !question.Present() || question.Text() == "" {
 		return nativeClaudePreparedInput{}, domain.ErrDeliveryFailed
@@ -177,7 +184,7 @@ func prepareNativeClaudeInput(ctx context.Context, cfg config, req delivcli.Prov
 	validate := func(ctx context.Context) error {
 		return preparer.validateAgentDelivery(ctx, req.Cwd, p.Content.Selection)
 	}
-	return r.prepareRun(ctx, e, p, question, validate, func(ctx context.Context, receipt delivcli.ProviderLaunchReceipt) error {
+	return r.prepareRun(ctx, runner, p, question, validate, func(ctx context.Context, receipt delivcli.ProviderLaunchReceipt) error {
 		return recordProviderLaunchReceipt(ctx, cfg.RepoRoot, receipt)
 	}, func(ctx context.Context, p domain.AgentContextPackage) error {
 		return persistAgentInputPackage(ctx, cfg.RepoRoot, p)
@@ -224,31 +231,31 @@ func (r nativeClaudeContextReader) prepareRun(ctx context.Context, exchange nati
 		return nativeClaudePreparedInput{}, err
 	}
 	var attempted atomic.Bool
-	return nativeClaudePreparedInput{run: func(ctx context.Context) (result nativeclaude.FirstExchangeResult, resultErr error) {
+	return nativeClaudePreparedInput{run: func(ctx context.Context) (result nativeClaudeInputResult, resultErr error) {
 		if !attempted.CompareAndSwap(false, true) {
-			return nativeclaude.FirstExchangeResult{}, domain.ErrDeliveryFailed
+			return nativeClaudeInputResult{}, domain.ErrDeliveryFailed
 		}
 		defer func() {
 			resultErr = errors.Join(resultErr, exchange.Close())
 			resultErr = redactNativeClaudeContext(resultErr)
 		}()
 		if err := ctx.Err(); err != nil {
-			return nativeclaude.FirstExchangeResult{}, err
+			return nativeClaudeInputResult{}, err
 		}
 		if _, bounded := ctx.Deadline(); !bounded {
-			return nativeclaude.FirstExchangeResult{}, domain.ErrDeliveryFailed
+			return nativeClaudeInputResult{}, domain.ErrDeliveryFailed
 		}
 		if _, err := r.AgentCapability(ctx, p.Provider, p.Budget.Model); err != nil {
-			return nativeclaude.FirstExchangeResult{}, err
+			return nativeClaudeInputResult{}, err
 		}
 		if err := validate(ctx); err != nil {
-			return nativeclaude.FirstExchangeResult{}, err
+			return nativeClaudeInputResult{}, err
 		}
 		reference, err := exchange.AppendReference(ctx, text)
 		if err != nil {
-			return nativeclaude.FirstExchangeResult{}, err
+			return nativeClaudeInputResult{}, err
 		}
-		result, err = exchange.Run(ctx, question.Text(), func(ctx context.Context, evidence nativeclaude.FirstQuestionEvidence) error {
+		result.FirstExchangeResult, err = exchange.Run(ctx, question.Text(), func(ctx context.Context, evidence nativeclaude.FirstQuestionEvidence) error {
 			if err := r.admit(p, question, text, reference, evidence); err != nil {
 				return err
 			}
@@ -276,7 +283,8 @@ func (r nativeClaudeContextReader) prepareRun(ctx context.Context, exchange nati
 		observed := receipt.Clone()
 		observed.State, observed.Outcome = "first_turn_observed", "completed"
 		observed.Acceptance = "first_turn_completed"
-		return result, record(ctx, observed)
+		result.ReceiptError = redactNativeClaudeContext(record(ctx, observed))
+		return result, nil
 	}}, nil
 }
 
