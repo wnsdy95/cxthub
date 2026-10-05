@@ -19,7 +19,7 @@ following libraries:
 | `github.com/dlclark/regexp2/v2` | MIT |
 | `github.com/jackc/pgx/v5` and `github.com/jackc/puddle/v2` | MIT |
 | `github.com/jackc/pgpassfile` and `github.com/jackc/pgservicefile` | MIT |
-| `golang.org/x/mod`, `x/sync`, `x/text`, and `x/tools` | BSD-3-Clause |
+| `golang.org/x/mod`, `x/sync`, `x/sys`, `x/text`, and `x/tools` | BSD-3-Clause |
 
 Test-only dependencies listed in the Go module files are not linked into the
 release binaries.

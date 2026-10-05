@@ -353,7 +353,8 @@ func (p *IdleProcess) Wait(ctx context.Context) error {
 
 // Close requests termination once and joins bounded cleanup (at most 2.5s of
 // cleanup waits). Intentional termination is not an unsuccessful native exit;
-// inability to confirm observation or reaping returns ErrCleanup.
+// inability to confirm the final group termination request, observation or
+// reaping returns ErrCleanup.
 func (p *IdleProcess) Close() error {
 	p.stopOnce.Do(func() { close(p.stop) })
 	<-p.done
@@ -381,7 +382,9 @@ func (p *IdleProcess) run(ctx context.Context) {
 	observed := waitFor(p.exited, time.Second)
 	// No Wait has run: the unreaped child still reserves its PID/group identity.
 	// Kill any remaining descendants before releasing that reservation.
-	_ = signalProcessGroup(p.cmd, true)
+	if err := cleanupProcessGroup(p.cmd); err != nil {
+		p.err = errors.Join(p.err, ErrCleanup)
+	}
 	reaped := make(chan struct{})
 	var waitErr error
 	go func() { waitErr = p.cmd.Wait(); close(reaped) }()

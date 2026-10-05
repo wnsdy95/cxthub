@@ -178,7 +178,9 @@ func (p *process) close() error {
 		observed := waitFor(p.exited, time.Second)
 		// The unreaped child still reserves the group identity. Dispose any
 		// descendants holding inherited descriptors before allowing Wait.
-		_ = signalProcessGroup(p.cmd, true)
+		if err := cleanupProcessGroup(p.cmd); err != nil {
+			p.closeErr = ErrCleanup
+		}
 		reaped := make(chan struct{})
 		var waitErr error
 		go func() { waitErr = p.cmd.Wait(); close(reaped) }()
