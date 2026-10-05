@@ -31,6 +31,8 @@ jobs:
           python3 scripts/test-e2e-drain-publication.py
           python3 scripts/test-e2e-collect-diagnostics.py
           python3 scripts/test-e2e-repair-proof.py
+          python3 scripts/test-e2e-wrapper-proof.py
+          python3 scripts/test-e2e-wrapper-gate.py
       - name: Validate the complete public history
         if: github.event.repository.private == false
         run: bash scripts/public-preflight.sh full

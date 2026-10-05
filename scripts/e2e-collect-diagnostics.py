@@ -12,6 +12,8 @@ FILES = (
     "repair-save.out", "repair-proof.out", "repair.out", "repair-retry.out", "repair-wrong.out",
     "doctor-before.json", "doctor-before.err", "doctor-before.status",
     "doctor-after.json", "doctor-after.err", "doctor-after.status",
+    "wrapper-proof.tsv", "wrapper-proof.err", "wrapper-observation.out",
+    "sw.out", "wrapper.out", "holder.out",
 )
 MAX_BYTES = 1024 * 1024
 

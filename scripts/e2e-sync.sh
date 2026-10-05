@@ -28,11 +28,48 @@ B="http://127.0.0.1:$PORT/api/v1"
 ORIGIN="http://127.0.0.1:$PORT"
 FAIL=0
 SRV_PID=""
+WPID=""
+TPID=""
+
+# BEGIN fixture job cleanup (also exercised without launching cxt).
+fixture_job_active() {
+  local wanted="$1" candidate
+  for candidate in $(jobs -pr; jobs -ps); do
+    [ "$candidate" = "$wanted" ] && return 0
+  done
+  return 1
+}
+# Only a running job started by this shell may be signalled. Never trust PID files.
+finish_fixture_job() {
+  local owned_pid="$1" running end=$((SECONDS + 30))
+  [ -n "$owned_pid" ] || return 0
+  case " ${CLEANUP_UNFINISHED:-} " in *" $owned_pid "*) return 1;; esac
+  for running in $(jobs -pr); do
+    if [ "$running" = "$owned_pid" ]; then kill -TERM "$owned_pid" 2>/dev/null || true; fi
+  done
+  while fixture_job_active "$owned_pid"; do
+    if [ "$SECONDS" -ge "$end" ]; then
+      echo "fixture cleanup incomplete: owned pid=$owned_pid did not exit" >>"$TMP/wrapper-observation.out"
+      CLEANUP_UNFINISHED="${CLEANUP_UNFINISHED:-} $owned_pid"
+      FAIL=1; CXT_E2E_KEEP_TMP=1; return 1
+    fi
+    sleep 0.05
+  done
+  wait "$owned_pid" 2>/dev/null || true
+}
+# END fixture job cleanup.
 # Reap the server immediately after killing it to avoid shell "Terminated" noise.
 # Preserve the isolated fixture on demand so fail-open Git hook diagnostics are
 # still inspectable after the script exits.
 cleanup() {
   local test_status=$?
+  local cleanup_pid
+  for cleanup_pid in "$TPID" "$WPID"; do
+    if ! finish_fixture_job "$cleanup_pid"; then
+      [ "$test_status" -ne 0 ] || test_status=1
+    fi
+  done
+  if [ "$FAIL" -ne 0 ] && [ "$test_status" -eq 0 ]; then test_status=1; fi
   if { [ "$test_status" -ne 0 ] || [ "$FAIL" -ne 0 ]; } && [ -n "${CXT_E2E_DIAGNOSTICS_DIR:-}" ]; then
     python3 "$ROOT/scripts/e2e-collect-diagnostics.py" "$TMP" "$CXT_E2E_DIAGNOSTICS_DIR" || echo "Could not collect E2E failure diagnostics" >&2
   fi
@@ -42,6 +79,7 @@ cleanup() {
   else
     rm -rf "$TMP"
   fi
+  exit "$test_status"
 }
 trap cleanup EXIT
 
@@ -365,12 +403,13 @@ export CLAUDELOG="$TMP/agent.log"
 export CXT_E2E_REPO="$TMP/repo2"
 export CXT_E2E_SWITCH_OUT="$TMP/sw.out"
 export CXT_E2E_SWITCH_MARK="$TMP/agent-switched"
-export CXT_E2E_AGENT_PID="$TMP/agent.pid"
 cat > "$TMP/bin/claude" <<'SH'
 #!/bin/bash
 echo "MEMORY_PROFILE ${CXT_CLAUDE_MEMORY_PROFILE:-missing} ${#CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT} ${CXT_CLAUDE_FLAG_AUTO_MEMORY_DIRECTORY:-default}" >> "$CLAUDELOG"
-echo "AGENT $*" >> "$CLAUDELOG"
-echo $$ > "$CXT_E2E_AGENT_PID"
+python3 - "$@" <<'PYARGV' >> "$CLAUDELOG"
+import json, sys
+print('AGENT ' + json.dumps(sys.argv[1:]))
+PYARGV
 if [ ! -e "$CXT_E2E_SWITCH_MARK" ]; then
   : > "$CXT_E2E_SWITCH_MARK"
   cd "$CXT_E2E_REPO" || exit 1
@@ -383,32 +422,23 @@ wait $SP
 SH
 chmod +x "$TMP/bin/claude"
 CLAUDE_MEMORY_OVERRIDE="$TMP/initial-claude-memory"
+WRAPPER_STARTED=$SECONDS
 cxt claude --resume "$APP_SESSION_ID" --settings "{\"autoMemoryDirectory\":\"$CLAUDE_MEMORY_OVERRIDE\"}" >"$TMP/wrapper.out" 2>&1 &
 WPID=$!
 for i in $(seq 1 40); do
   [ -f .cxt/boundary.json ] && [ "$(grep -c '^AGENT ' "$CLAUDELOG" 2>/dev/null)" -ge 2 ] && break
   sleep 0.25
 done
-if [ ! -f .cxt/boundary.json ] || [ "$(grep -c '^AGENT ' "$CLAUDELOG" 2>/dev/null)" -lt 2 ]; then
-  # These files contain only this isolated fixture's generated sessions/argv.
-  # Preserve bounded diagnostics even when normal cleanup removes the fixture;
-  # a retry succeeding does not explain the original preflight/restart failure.
-  echo "  wrapper transition incomplete; bounded synthetic fixture diagnostics:"
-  for diagnostic in "$TMP/sw.out" "$TMP/wrapper.out" "$CLAUDELOG"; do
-    echo "  $(basename "$diagnostic"):"
-    if [ -f "$diagnostic" ]; then tail -c 8192 "$diagnostic"; else echo "  unavailable"; fi
-  done
-fi
+printf 'elapsed_seconds=%s\nwrapper_pid_alive=%s\nboundary_present=%s\n' "$((SECONDS - WRAPPER_STARTED))" "$(kill -0 "$WPID" 2>/dev/null && echo yes || echo no)" "$([ -f .cxt/boundary.json ] && echo yes || echo no)" >"$TMP/wrapper-observation.out"
 expect "Checkpoint execution" "$(grep -c 'cxt: checkpoint' "$TMP/sw.out")" 1
 expect "wrapper switch records a durable branch birth" "$(birth_field feature-x kind)" birth
+# BEGIN wrapper prerequisite gate (negative cases exercise this exact block).
+if python3 "$ROOT/scripts/e2e-wrapper-proof.py" "$TMP" "$APP_SESSION_ID" >"$TMP/wrapper-proof.tsv" 2>"$TMP/wrapper-proof.err" &&
+  IFS=$'\t' read -r SEED SEEDID RESUMEID PROOF_EXTRA <"$TMP/wrapper-proof.tsv" &&
+  [ -n "$SEED" ] && [ -n "$SEEDID" ] && [ -n "$RESUMEID" ] && [ -z "$PROOF_EXTRA" ] &&
+  [ "$(cat "$TMP/wrapper-proof.tsv")" = "$(printf '%s\t%s\t%s' "$SEED" "$SEEDID" "$RESUMEID")" ]; then
+echo 'wrapper_proof=ready' >>"$TMP/wrapper-observation.out"
 expect "boundary signal output" "$(grep -c 'previous session is isolated' "$TMP/sw.out")" 1
-expect "All previous sessions isolated (renamed)" "$([ "$(find "$PROJ" -maxdepth 1 -type f -name '*.jsonl.superseded' | wc -l | tr -d ' ')" -ge 1 ] && echo yes)" yes
-expect "Boundary record" "$([ -f .cxt/boundary.json ] && echo yes)" yes
-SEED=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_path',''))")
-SEEDID=$(python3 -c "import json;print(json.load(open('.cxt/boundary.json')).get('seed_id',''))")
-RESUMEID=$(python3 -c "import json;cmd=json.load(open('.cxt/boundary.json')).get('resume_cmd','').split();print(cmd[-1] if cmd else '')")
-expect "seed materialization" "$([ -n "$SEED" ] && [ -f "$SEED" ] && echo yes)" yes
-expect "boundary seed ID matches materialized resume target" "$RESUMEID" "$SEEDID"
 expect "seed inherits main compact memory" "$(grep -q 'task A' "$SEED" && grep -q 'task B' "$SEED" && grep -q 'task C' "$SEED" && echo yes)" yes
 expect "seed inherits main session conversation" "$(grep -q 'task E' "$SEED" && echo yes)" yes
 expect "seed excludes the unregistered sibling conversation" "$(grep -q 'task UNOWNED' "$SEED" && echo yes || echo no)" no
@@ -440,29 +470,62 @@ echo y > y.txt; git add y.txt; git commit -qm cap >"$TMP/cap.out" 2>&1
 expect "resumed seed captures" "$(grep -c 'cxt: snapshot' "$TMP/cap.out")" 1
 
 # Enforcement: boundary-enforce terminates processes that still hold isolated session files.
-SUP=$(ls "$PROJ"/*.jsonl.superseded | head -1)
-tail -f "$SUP" >/dev/null 2>&1 &
+# BEGIN wrapper holder readiness.
+SUP="$APP_SESSION.superseded"
+python3 - "$SUP" "$TMP/holder-ready" <<'PYHOLDER' >"$TMP/holder.out" 2>&1 &
+import os, sys, time
+with open(sys.argv[1], 'rb') as held:
+    with open(sys.argv[2], 'x') as ready:
+        ready.write(str(os.getpid()))
+    time.sleep(30)
+PYHOLDER
 TPID=$!
-disown "$TPID" # boundary-enforce owns termination; remove this process from the shell job table.
-cxt git-hook boundary-enforce >/dev/null 2>&1
-sleep 0.3
-expect "isolated session holder killed" "$(kill -0 "$TPID" 2>/dev/null && echo alive || echo dead)" dead
+holder_ready() {
+  [ -f "$TMP/holder-ready" ] && [ "$(cat "$TMP/holder-ready")" = "$TPID" ] && fixture_job_active "$TPID"
+}
+for i in $(seq 1 40); do
+  holder_ready && break
+  fixture_job_active "$TPID" || break
+  sleep 0.025
+done
+if holder_ready; then
+  cxt git-hook boundary-enforce >/dev/null 2>&1
+  sleep 0.3
+  HOLDER_EXIT=running
+  if ! fixture_job_active "$TPID"; then
+    wait "$TPID" 2>/dev/null
+    HOLDER_EXIT=$?
+  fi
+  expect "isolated session holder terminated by SIGTERM" "$HOLDER_EXIT" 143
+else
+  echo "  ✗ superseded-file holder did not become ready; enforcement not evaluated"
+  FAIL=1
+fi
+if ! finish_fixture_job "$TPID"; then exit 1; fi
+TPID=""
+# END wrapper holder readiness.
 
 # The first fake child already caused the transition. The wrapper must observe
 # that boundary and restart a second child with the newly materialized seed.
-RESTART_MATCHES=0
-LAST_RESTART_MATCHES=0
-if [ -n "$SEEDID" ]; then
-  RESTART_MATCHES=$(grep -c -- "--resume $SEEDID" "$CLAUDELOG")
-  LAST_RESTART_MATCHES=$(tail -1 "$CLAUDELOG" | grep -c -- "--resume $SEEDID")
-fi
-expect "wrapper automatically restarts as seed (--resume)" "$RESTART_MATCHES" 1
-expect "restart target = new seed ID" "$LAST_RESTART_MATCHES" 1
+expect "wrapper restarts with the exact seed selector" "$RESUMEID" "$SEEDID"
 expect "wrapper carries proven Claude memory profile" "$(grep -c '^MEMORY_PROFILE v1 64 ' "$CLAUDELOG")" 2
-expect "both children retain the invocation's custom Claude memory directory" "$(grep -c "^MEMORY_PROFILE v1 64 $CLAUDE_MEMORY_OVERRIDE$" "$CLAUDELOG")" 2
+expect "both children retain the invocation's custom Claude memory directory" "$(grep -Fxc "MEMORY_PROFILE v1 64 $CLAUDE_MEMORY_OVERRIDE" "$CLAUDELOG")" 2
 expect "restart does not silently revert the invocation to default settings" "$(grep -c '^MEMORY_PROFILE v1 64 default$' "$CLAUDELOG")" 0
-if [ -f "$CXT_E2E_AGENT_PID" ]; then kill "$(cat "$CXT_E2E_AGENT_PID")" 2>/dev/null; fi
-wait "$WPID" 2>/dev/null
+else
+  FAIL=1
+  echo 'wrapper_proof=failed' >>"$TMP/wrapper-observation.out"
+  echo "  ✗ wrapper prerequisites missing or invalid; dependent assertions not evaluated"
+fi
+# END wrapper prerequisite gate.
+if [ "$FAIL" -ne 0 ]; then
+  CXT_E2E_KEEP_TMP=1
+  for diagnostic in "$TMP/wrapper-proof.err" "$TMP/sw.out" "$TMP/wrapper.out" "$CLAUDELOG"; do
+    echo "  $(basename "$diagnostic"):"
+    if [ -f "$diagnostic" ]; then tail -c 8192 "$diagnostic"; else echo "  unavailable"; fi
+  done
+fi
+if ! finish_fixture_job "$WPID"; then exit 1; fi
+WPID=""
 
 echo "── H. Saved load mode cannot override managed latest-main input"
 expect "load_mode saved(memory)" "$(ccurl -sb "$J" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_mode":"memory"}' | jget "['load_mode']")" memory
