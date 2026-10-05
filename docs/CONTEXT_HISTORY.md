@@ -169,6 +169,15 @@ remains pending until an explicit reconciliation establishes a safe move.
 
 ## Graph and history browser
 
+Generic Git merge promotion selects candidate contexts in incoming Git commit
+order. Its duplicate-coverage checks use the branch tip and graph from the same
+verified server observation, including when one candidate covers another.
+Unpublished local grafts cannot prove that the server already includes a context;
+missing observed metadata never borrows local edges. Failed observation defers
+promotion. Only the structured HTTP 409 `non_fast_forward` rejection means an
+append is already included; error messages and branch names cannot establish
+success. This classification is shared by PR and generic merge hooks.
+
 The server transaction and consistent graph-read guarantees are specified in
 [Collaboration transactions](COLLABORATION_TRANSACTIONS.md).
 
