@@ -111,21 +111,24 @@ esac
 exit "$user_status"
 `, Marker, shellQuote(cxtBin))
 	}
-	// post-rewrite receives old→new commit mapping from stdin — refilled on capture and chaining sides of cxt.
-	if hookName == "post-rewrite" {
+	// Both hooks supply records on stdin. Replay them to each consumer;
+	// the sentinel preserves empty input and trailing newlines in the shell.
+	if hookName == "post-rewrite" || hookName == "pre-push" {
 		return fmt.Sprintf(`#!/bin/sh
 %s (managed by cxt — 'cxt hooks uninstall' to remove)
-input=$(cat)
+input=$(cat; printf '.')
+input=${input%%.}
 user_status=0
 if [ -x "$0.pre-cxt" ]; then
-  printf '%%s\n' "$input" | "$0.pre-cxt" "$@" || user_status=$?
+  printf '%%s' "$input" | "$0.pre-cxt" "$@" || user_status=$?
 fi
+if [ "%s" = "pre-push" ] && [ "$user_status" -ne 0 ]; then exit "$user_status"; fi
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
 command -v "$CXT" >/dev/null 2>&1 || exit "$user_status"
-printf '%%s\n' "$input" | "$CXT" git-hook post-rewrite "$@" || true
+printf '%%s' "$input" | "$CXT" git-hook %s "$@" || true
 exit "$user_status"
-`, Marker, shellQuote(cxtBin))
+`, Marker, hookName, shellQuote(cxtBin), hookName)
 	}
 	return fmt.Sprintf(`#!/bin/sh
 %s (managed by cxt — 'cxt hooks uninstall' to remove)
@@ -134,13 +137,12 @@ user_status=0
 if [ -x "$0.pre-cxt" ]; then
   "$0.pre-cxt" "$@" || user_status=$?
 fi
-if [ "%s" = "pre-push" ] && [ "$user_status" -ne 0 ]; then exit "$user_status"; fi
 CXT=%s
 [ -x "$CXT" ] || CXT=cxt
 command -v "$CXT" >/dev/null 2>&1 || exit "$user_status"
 "$CXT" git-hook %s "$@" || true
 exit "$user_status"
-`, Marker, hookName, shellQuote(cxtBin), hookName)
+`, Marker, shellQuote(cxtBin), hookName)
 }
 
 // Install installs 4 git hooks and returns a list of installed hook names.
