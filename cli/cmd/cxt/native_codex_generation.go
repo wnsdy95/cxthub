@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"path/filepath"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
@@ -120,7 +119,7 @@ func (b nativeCodexGenerationBridge) prepareGeneration(ctx context.Context, thre
 	}
 	// Own all slices and pointers, while deliberately retaining the private
 	// in-memory reservation that JSON receipts cannot restore by themselves.
-	p, err = cloneNativeCodexGenerationPackage(p)
+	p, err = cloneAgentContextPackage(p)
 	if err != nil {
 		return empty, nativeCodexGenerationFailure("package snapshot", err)
 	}
@@ -148,7 +147,7 @@ func (b nativeCodexGenerationBridge) prepareGeneration(ctx context.Context, thre
 		if err := checkSnapshot(ctx); err != nil {
 			return err
 		}
-		candidate, err := cloneNativeCodexGenerationPackage(p)
+		candidate, err := cloneAgentContextPackage(p)
 		if err != nil {
 			return nativeCodexGenerationFailure("package snapshot", err)
 		}
@@ -234,19 +233,6 @@ type nativeCodexCalibrationPersistenceError struct {
 }
 
 func (nativeCodexCalibrationPersistenceError) CalibrationPersistenceFailure() bool { return true }
-
-func cloneNativeCodexGenerationPackage(p domain.AgentContextPackage) (domain.AgentContextPackage, error) {
-	raw, err := json.Marshal(p)
-	if err != nil {
-		return domain.AgentContextPackage{}, err
-	}
-	var copy domain.AgentContextPackage
-	if err := json.Unmarshal(raw, &copy); err != nil {
-		return domain.AgentContextPackage{}, err
-	}
-	copy.BindInitialPrompt(p.InitialPromptReservation())
-	return copy, nil
-}
 
 // Reconstruct only the domain's scope digest inputs after external validation.
 // This is the same integrity operation as AgentContextBudget.capability; the

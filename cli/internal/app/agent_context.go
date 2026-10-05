@@ -135,7 +135,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if err != nil {
 			return p, err
 		}
-		promptReservation, err = domain.NewAgentPromptReservation(in.InitialPrompt, in.Provider, in.Model, probe)
+		promptReservation, err = domain.NewAgentPromptReservationForCapability(in.InitialPrompt, capability, probe)
 		if err != nil {
 			return p, err
 		}
@@ -393,7 +393,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if err != nil {
 			return domain.AgentContextPackage{}, err
 		}
-		if _, err = domain.NewAgentPromptReservation(in.InitialPrompt, in.Provider, model, probe); err != nil {
+		if _, err = domain.NewAgentPromptReservationForCapability(in.InitialPrompt, current, probe); err != nil {
 			return domain.AgentContextPackage{}, err
 		}
 		current.InitialPromptTokens = probe.Tokens
@@ -456,15 +456,36 @@ func (s *AgentContextService) measure(ctx context.Context, in inbound.PrepareAge
 	if usage.Tokens <= 0 || usage.Tokenizer == "" {
 		return usage, domain.ErrProviderCapabilityUnknown
 	}
-	exactRequired := p.Policy.Mode == "history" && !in.ArtifactOnly
-	if !usage.Exact && (exactRequired || usage.Tokens > p.EffectiveBudget()) {
-		return usage, agentTokenMeasurementFailure(usage, p.EffectiveBudget(), exactRequired)
-	}
-	if p.Budget != nil && usage.Tokenizer != p.Budget.Tokenizer {
-		return usage, fmt.Errorf("%w: token counter changed during selection", domain.ErrProviderCapabilityUnknown)
+	var accounting domain.AgentTextAccounting
+	if p.Policy.Mode == "history" && !in.ArtifactOnly {
+		policy, tokenizer := "", usage.Tokenizer
+		if p.Budget != nil {
+			policy, tokenizer = p.Budget.InputAccountingPolicy, p.Budget.Tokenizer
+		}
+		kind, err := domain.ValidateAgentTokenAccounting(policy, in.Provider, tokenizer, usage)
+		if err != nil {
+			if kind == domain.AgentTextExact {
+				return usage, agentTokenMeasurementFailure(usage, p.EffectiveBudget(), true)
+			}
+			// Allowance provenance drift is not a candidate-fit problem and must
+			// not be disguised by selecting a smaller candidate.
+			return usage, err
+		}
+		accounting = kind
+		if kind == domain.AgentTextUTF8Allowance && usage.Tokens != len(prompt) {
+			return usage, fmt.Errorf("%w: package allowance differs from its rendered UTF-8 byte length", domain.ErrHashMismatch)
+		}
+	} else if !usage.Exact && usage.Tokens > p.EffectiveBudget() {
+		return usage, agentTokenMeasurementFailure(usage, p.EffectiveBudget(), false)
 	}
 	if usage.Tokens > p.EffectiveBudget() {
+		if accounting == domain.AgentTextUTF8Allowance {
+			return usage, fmt.Errorf("%w: required package allowance %d, effective budget %d (requested %d); exact user conditions are never truncated", domain.ErrContextBudgetExceeded, usage.Tokens, p.EffectiveBudget(), p.Policy.BudgetTokens)
+		}
 		return usage, fmt.Errorf("%w: required package %d, effective budget %d (requested %d); exact user conditions are never truncated", domain.ErrContextBudgetExceeded, usage.Tokens, p.EffectiveBudget(), p.Policy.BudgetTokens)
+	}
+	if p.Budget != nil {
+		return usage, p.Budget.Validate(in.Provider, in.Model, p.Policy.BudgetTokens, usage)
 	}
 	return usage, nil
 }

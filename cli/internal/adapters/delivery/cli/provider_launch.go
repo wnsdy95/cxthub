@@ -85,24 +85,25 @@ type PreparedProviderLaunch struct {
 }
 
 type ProviderLaunchReceipt struct {
-	SessionID        string                      `json:"session_id,omitempty"`
-	TurnID           string                      `json:"turn_id,omitempty"`
-	Outcome          string                      `json:"outcome,omitempty"`
-	Bootstrap        *domain.AgentBootstrapProof `json:"bootstrap,omitempty"`
-	Budget           *domain.AgentContextBudget  `json:"budget,omitempty"`
-	Version          int                         `json:"version"`
-	Provider         domain.ProviderKind         `json:"provider"`
-	PackageHash      domain.ContentHash          `json:"package_hash,omitempty"`
-	Mode             string                      `json:"mode"`
-	RequestedBudget  int                         `json:"requested_budget,omitempty"`
-	SelectedTokens   int                         `json:"selected_tokens,omitempty"`
-	TokenMeasurement string                      `json:"token_measurement,omitempty"`
-	CodeCommit       string                      `json:"code_commit,omitempty"`
-	SourceRevision   string                      `json:"source_revision,omitempty"`
-	Capability       string                      `json:"capability,omitempty"`
-	State            string                      `json:"state"`
-	Acceptance       string                      `json:"acceptance"`
-	Failure          string                      `json:"failure,omitempty"`
+	SessionID           string                           `json:"session_id,omitempty"`
+	TurnID              string                           `json:"turn_id,omitempty"`
+	Outcome             string                           `json:"outcome,omitempty"`
+	Bootstrap           *domain.AgentBootstrapProof      `json:"bootstrap,omitempty"`
+	Budget              *domain.AgentContextBudget       `json:"budget,omitempty"`
+	NativeInputEstimate *domain.AgentNativeInputEstimate `json:"native_input_estimate,omitempty"`
+	Version             int                              `json:"version"`
+	Provider            domain.ProviderKind              `json:"provider"`
+	PackageHash         domain.ContentHash               `json:"package_hash,omitempty"`
+	Mode                string                           `json:"mode"`
+	RequestedBudget     int                              `json:"requested_budget,omitempty"`
+	SelectedTokens      int                              `json:"selected_tokens,omitempty"`
+	TokenMeasurement    string                           `json:"token_measurement,omitempty"`
+	CodeCommit          string                           `json:"code_commit,omitempty"`
+	SourceRevision      string                           `json:"source_revision,omitempty"`
+	Capability          string                           `json:"capability,omitempty"`
+	State               string                           `json:"state"`
+	Acceptance          string                           `json:"acceptance"`
+	Failure             string                           `json:"failure,omitempty"`
 }
 
 // RunProviderLaunch launches CLI providers only. Desktop apps require their
@@ -615,7 +616,16 @@ func cloneAgentContextBudget(budget *domain.AgentContextBudget) *domain.AgentCon
 }
 
 func cloneProviderLaunchReceipt(receipt ProviderLaunchReceipt) ProviderLaunchReceipt {
+	return receipt.Clone()
+}
+
+// Clone isolates mutable observation/accounting fields from record callbacks.
+func (receipt ProviderLaunchReceipt) Clone() ProviderLaunchReceipt {
 	receipt.Budget = cloneAgentContextBudget(receipt.Budget)
+	if receipt.NativeInputEstimate != nil {
+		copy := *receipt.NativeInputEstimate
+		receipt.NativeInputEstimate = &copy
+	}
 	return receipt
 }
 

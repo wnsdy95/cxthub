@@ -292,6 +292,28 @@ Known lower compaction thresholds still apply. The runtime scope must bind
 provider/account routing, effective configuration, instructions and tools;
 a model name or arbitrary window override is insufficient.
 
+A separate private Claude integration uses `native_estimate_reserve_v1`.
+Its `usage.exact` remains false: the numeric text allowance is the full rendered
+UTF-8 byte length, not an exact Claude token count. The native process supplies
+its resolved model, local window and a separately labeled pre-reference input
+estimate. Preparation deducts that baseline, the actual question byte allowance,
+reference framing allowance and the same extra reserve inside the 80% limit.
+After append, admission checks the whole native input estimate plus the question
+allowance and reserve. It does not add the baseline or reference a second time.
+This may retain substantially less text than an exact tokenizer would; `full`
+is a ceiling, not evidence that 800k model tokens were packed or accepted.
+
+This policy never reads or writes exact-text overhead calibrations. Its runtime
+scope belongs only to the owned invocation. Preparation, reference admission,
+first response, archive verification and TUI readiness remain distinct evidence.
+The private bridge uses the existing latest-server-main preparation and source
+reauthorization, without changing the worktree's code position. It is **not a
+public Claude history route**: ordinary prompt expansion, tools/permission UI
+and the public supervisor connection still require their own implementation.
+Observed source freshness is not an atomic transaction across Git, the cloud
+and the model; unseen later native expansion is covered by a reserve policy,
+not by an exact final-input guarantee.
+
 The initial extra allowance is `max(16000, floor(W / 20))` tokens, reserved
 **inside** the 80-percent input limit. This is a conservative engineering policy,
 not a guarantee of the hidden payload size. For a 1M window, a 2k first question,

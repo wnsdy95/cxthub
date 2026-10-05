@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
 	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/app"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -113,7 +110,7 @@ func prepareNativeCodexDeferred(ctx context.Context, cfg config, req delivcli.Pr
 		if err != nil {
 			return p, err
 		}
-		selected, err = cloneNativeCodexGenerationPackage(p)
+		selected, err = cloneAgentContextPackage(p)
 		return p, err
 	}
 	validate := func(ctx context.Context, p domain.AgentContextPackage) error {
@@ -277,7 +274,7 @@ func persistNativeGeneration(ctx context.Context, root string, thread nativecode
 	if record == nil || prepared.Validate == nil || prepared.Observe == nil || len(prepared.History) != 1 || selected.Budget == nil {
 		return nativecodex.PreparedGeneration{}, domain.ErrDeliveryFailed
 	}
-	p, err := cloneNativeCodexGenerationPackage(selected)
+	p, err := cloneAgentContextPackage(selected)
 	if err != nil {
 		return nativecodex.PreparedGeneration{}, err
 	}
@@ -285,11 +282,7 @@ func persistNativeGeneration(ctx context.Context, root string, thread nativecode
 	if err != nil || prepared.History[0].Role != "user" || prepared.History[0].Text != text {
 		return nativecodex.PreparedGeneration{}, domain.ErrHashMismatch
 	}
-	raw, err := p.Artifact()
-	if err != nil {
-		return nativecodex.PreparedGeneration{}, err
-	}
-	if err = providerfs.WriteRepoFileDurable(root, filepath.Join(".cxt", "input-packages", strings.TrimPrefix(string(p.ID), "sha256:")+".json"), raw, 0600); err != nil {
+	if err = persistAgentInputPackage(ctx, root, p); err != nil {
 		return nativecodex.PreparedGeneration{}, nativeCodexGenerationFailure("package persistence", err)
 	}
 	receipt := delivcli.ProviderLaunchReceipt{Version: 1, Provider: p.Provider, Mode: p.Policy.Mode, RequestedBudget: p.Policy.BudgetTokens,

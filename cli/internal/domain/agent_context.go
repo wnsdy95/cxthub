@@ -224,7 +224,7 @@ type AgentHostCapability struct {
 	ContextWindow   int          `json:"context_window"`
 	HostInputTokens int          `json:"host_input_tokens"`
 	HostInputKnown  bool         `json:"host_input_known"`
-	// InitialPromptTokens is reserved by the app using exact prompt accounting.
+	// InitialPromptTokens is reserved by the app under the declared text policy.
 	// HostInputTokens and FramingTokens must exclude it to avoid double counting.
 	InitialPromptTokens int `json:"initial_prompt_tokens,omitempty"`
 	// Required output/reasoning/work space, separate from fixed host input.
@@ -241,6 +241,12 @@ type AgentHostCapability struct {
 	InputAccountingPolicy string                `json:"input_accounting_policy,omitempty"`
 	RuntimeScope          ContentHash           `json:"runtime_scope,omitempty"`
 	Calibration           AgentInputCalibration `json:"-"`
+	// Native estimate policy only. The baseline precedes reference append and
+	// is not known exact host input. A measurement tag distinguishes zero from
+	// absent evidence. FramingAllowanceTokens covers the reference projection.
+	BaselineInputEstimateTokens int    `json:"baseline_input_estimate_tokens,omitempty"`
+	BaselineInputMeasurement    string `json:"baseline_input_measurement,omitempty"`
+	FramingAllowanceTokens      int    `json:"framing_allowance_tokens,omitempty"`
 }
 
 func (c AgentHostCapability) Check(provider ProviderKind, model string, usage AgentTokenUsage) error {
@@ -318,7 +324,22 @@ func (p AgentContextPackage) ValidateIdentity() error {
 		if p.Policy.Mode != "history" || p.ArtifactOnly || p.Capability != "verified_for_preparation" {
 			return ErrAgentContextUnavailable
 		}
-		return p.Budget.Validate(p.Budget.Provider, p.Budget.Model, p.Policy.BudgetTokens, p.Usage)
+		if err := p.Budget.Validate(p.Budget.Provider, p.Budget.Model, p.Policy.BudgetTokens, p.Usage); err != nil {
+			return err
+		}
+		kind, err := ValidateAgentTokenAccounting(p.Budget.InputAccountingPolicy, p.Budget.Provider, p.Budget.Tokenizer, p.Usage)
+		if err != nil {
+			return err
+		}
+		if kind == AgentTextUTF8Allowance {
+			prompt, err := p.Prompt()
+			if err != nil {
+				return err
+			}
+			if p.Usage.Tokens != len(prompt) {
+				return fmt.Errorf("%w: package allowance differs from its rendered UTF-8 byte length", ErrHashMismatch)
+			}
+		}
 	}
 	return nil
 }
