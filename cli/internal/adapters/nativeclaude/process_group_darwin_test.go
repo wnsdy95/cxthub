@@ -138,42 +138,19 @@ func probeGroupTest(root, api, scenario string) (result groupTestResult) {
 	var exited <-chan struct{}
 	var finish func() error
 	var observationError func() error
-	if api == "idle" {
-		observer, err := newProcessExitObserver()
-		if err != nil {
-			result.Stage = "observer"
-			return
-		}
-		cmd = exec.Command(exe)
-		cmd.Env, cmd.Dir = env, root
-		configureProcess(cmd)
-		if err := cmd.Start(); err != nil {
-			observer.close()
-			result.Stage = "idle-start"
-			return
-		}
-		p := &IdleProcess{idleProcessState: &idleProcessState{cmd: cmd, exited: make(chan struct{}), done: make(chan struct{}), stop: make(chan struct{})}}
-		go func() { p.observationErr = observer.wait(cmd.Process.Pid); observer.close(); close(p.exited) }()
-		exited = p.exited
-		observationError = func() error { return p.observationErr }
-		finish = func() error {
-			// Exercise the real lifecycle after natural exit observation.
-			go p.run(context.Background())
-			return p.Wait(context.Background())
-		}
-	} else {
-		p, err := startProcess(exe, nil, root, env, func([]byte) error { return nil }, func(error) {})
-		if err != nil {
-			result.Stage = "helper-start"
-			return
-		}
-		cmd, exited, finish = p.cmd, p.exited, p.close
-		if api == "abort" {
-			finish = func() error { _ = p.shutdown(true); return p.retirementErr }
-		}
-		observationError = func() error { return p.observationErr }
+
+	p, err := startProcess(exe, nil, root, env, func([]byte) error { return nil }, func(error) {})
+	if err != nil {
+		result.Stage = "helper-start"
+		return
 	}
-	// Both actual lifecycle implementations own the mandatory leader Wait.
+	cmd, exited, finish = p.cmd, p.exited, p.close
+	if api == "abort" {
+		finish = func() error { _ = p.shutdown(true); return p.retirementErr }
+	}
+	observationError = func() error { return p.observationErr }
+
+	// Both graceful and abort paths own the mandatory leader Wait.
 	defer func() {
 		cleanup := finish()
 		result.CleanupError = errors.Is(cleanup, ErrCleanup)
@@ -217,7 +194,7 @@ func TestDarwinProcessGroupCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, api := range []string{"idle", "helper", "abort"} {
+	for _, api := range []string{"helper", "abort"} {
 		for _, scenario := range []string{"denied-live-descendant", "zombie-only"} {
 			t.Run(api+"/"+scenario, func(t *testing.T) {
 				t.Parallel()

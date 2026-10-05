@@ -54,7 +54,7 @@ func (o *ordinaryState) settled() bool {
 }
 
 // Called only with Session.mu held. Common lifecycle/result and informational
-// handling stays in firstQuestionFrame, preserving the literal reducer.
+// handling stays in the common firstQuestionFrame reducer.
 func (s *Session) ordinaryFrame(m map[string]json.RawMessage, kind string) (bool, error) {
 	q, o := s.firstQuestion, s.firstQuestion.ordinary
 	switch kind {

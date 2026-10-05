@@ -25,7 +25,7 @@ func TestHostNotificationsDoNotAdvanceProtocol(t *testing.T) {
 				pending := &pendingCall{id: "command", kind: phase, result: make(chan json.RawMessage, 1)}
 				s := &Session{id: "owned", version: "2.1.287", pending: pending, appendPhase: 2, appended: true}
 				if phase == "first_question" || phase == "closing" {
-					s.firstQuestion = &firstQuestionState{id: "command", phase: 2}
+					s.firstQuestion = &firstQuestionState{id: "command", phase: 2, ordinary: &ordinaryState{}}
 				}
 				if phase == "closing" {
 					s.closing = true

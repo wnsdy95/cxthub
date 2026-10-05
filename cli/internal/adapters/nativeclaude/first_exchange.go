@@ -18,16 +18,13 @@ var (
 // FirstExchange is an owned first-question transport for 2.1.287. The CLI
 // composition supplies source/budget admission and user interaction handlers.
 // The transport does not itself grant tools or measure exact tokens.
-// Verified readback can issue a same-session resume plan. Existing Start
-// retains its strictly no-query contract.
-// Configuration and native permission settings are never changed here. Run
-// accepts only literal text responses; RunOrdinary adds bounded tool rounds and
-// per-invocation human interactions. Neither supports compaction or subagents.
+// Verified readback can issue a same-session resume plan. Configuration and
+// native permission settings are never changed here. Bounded tool rounds and
+// per-invocation interactions are supported; compaction and subagents are not.
 // Existing native rules may have executed a preapproved tool before its frame
 // arrives; rejecting that frame is not a tool sandbox or a zero-side-effect proof.
-// Run's client_composed preserves literal text but skips native turn-start
-// attachments. RunOrdinary leaves native preprocessing enabled. Neither API
-// claims normal TUI prompt/context equivalence.
+// Native question preprocessing stays enabled. This API does not claim normal
+// TUI prompt/context equivalence.
 type FirstExchange struct {
 	s *Session
 }
@@ -59,7 +56,7 @@ func (FirstExchange) String() string           { return "native Claude first exc
 func (e FirstExchange) GoString() string       { return e.String() }
 
 func StartFirstExchange(ctx context.Context, opts Options) (*FirstExchange, error) {
-	s, err := startVersion(ctx, opts, "2.1.287")
+	s, err := startVersion(ctx, opts, supportedVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -76,24 +73,15 @@ func (e *FirstExchange) AppendReference(ctx context.Context, text string) (Refer
 }
 func (e *FirstExchange) Close() error { return e.s.Close() }
 
-// Run consumes one attempt, including rejected admission. There is no retry on
-// an uncertain write or result. The caller supplies a finite deadline and an
-// admission callback honoring cancellation; callbacks must not reenter this
-// transport. Only the winning concurrent call owns closing the session.
-func (e *FirstExchange) Run(ctx context.Context, question string, admit func(context.Context, FirstQuestionEvidence) error) (result FirstExchangeResult, err error) {
-	return e.run(ctx, question, admit, nil)
-}
-
 // RunOrdinary preserves native question preprocessing and native tool policy.
 // It owns one root question, possibly several model/tool rounds. Handlers must
 // honor cancellation and must not reenter this transport. No callback can
 // install permission rules. Slash commands and specialized dialogs/subagents
 // remain unsupported; this is not a TUI-equivalence or exact-token claim.
-func (e *FirstExchange) RunOrdinary(ctx context.Context, question string, admit func(context.Context, FirstQuestionEvidence) error, handlers InteractionHandlers) (FirstExchangeResult, error) {
-	return e.run(ctx, question, admit, &handlers)
-}
-
-func (e *FirstExchange) run(ctx context.Context, question string, admit func(context.Context, FirstQuestionEvidence) error, handlers *InteractionHandlers) (result FirstExchangeResult, err error) {
+// One attempt is consumed even by rejected admission or an uncertain result.
+// The caller supplies a finite deadline. Only the winning concurrent call owns
+// closing the session; no question is automatically retried.
+func (e *FirstExchange) RunOrdinary(ctx context.Context, question string, admit func(context.Context, FirstQuestionEvidence) error, handlers InteractionHandlers) (result FirstExchangeResult, err error) {
 	if e == nil || e.s == nil {
 		return result, ErrState
 	}
@@ -131,7 +119,7 @@ func (e *FirstExchange) run(ctx context.Context, question string, admit func(con
 	if len(question) > MaxReferenceBytes {
 		return result, ErrLimit
 	}
-	if handlers != nil && strings.HasPrefix(strings.TrimSpace(question), "/") {
+	if strings.HasPrefix(strings.TrimSpace(question), "/") {
 		return result, ErrUnsupported
 	}
 	if admit == nil {
@@ -189,18 +177,13 @@ func (e *FirstExchange) run(ctx context.Context, question string, admit func(con
 	frame := map[string]any{"type": "user", "uuid": id, "session_id": s.id, "parent_tool_use_id": nil,
 		"shouldQuery": true,
 		"message":     map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": question}}}}
-	if handlers == nil {
-		frame["client_composed"] = true
-	}
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		return result, ErrState
 	}
-	if handlers != nil {
-		// Close owns cancellation after auditing committed permission writes.
-		// Native can finish before the last writer returns from its syscall.
-		q.ordinary = newOrdinaryState(ctx, *handlers)
-	}
+	// Close owns cancellation after auditing committed permission writes.
+	// Native can finish before the last writer returns from its syscall.
+	q.ordinary = newOrdinaryState(ctx, handlers)
 	s.mu.Lock()
 	s.firstQuestion = q
 	s.mu.Unlock()

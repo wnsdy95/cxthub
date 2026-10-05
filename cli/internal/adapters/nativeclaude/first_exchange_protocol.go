@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -32,10 +31,11 @@ type firstQuestionState struct {
 // this reader never executes caller code or waits for an interaction.
 func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) (bool, error) {
 	q := s.firstQuestion
-	if q.ordinary != nil {
-		if handled, err := s.ordinaryFrame(m, kind); handled {
-			return true, err
-		}
+	if q == nil || q.ordinary == nil {
+		return true, ErrProtocol
+	}
+	if handled, err := s.ordinaryFrame(m, kind); handled {
+		return true, err
 	}
 	switch kind {
 	case "rate_limit_event":
@@ -53,7 +53,7 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 		if bytes.Equal(m["subtype"], []byte(`"thinking_tokens"`)) {
 			return true, s.validateThinkingProgress(m)
 		}
-		if q.ordinary != nil && bytes.Equal(m["subtype"], []byte(`"compact_boundary"`)) {
+		if bytes.Equal(m["subtype"], []byte(`"compact_boundary"`)) {
 			return true, ErrUnsupported
 		}
 		if subtype, err := stringField(m, "subtype"); err == nil && subtype == "status" {
@@ -90,7 +90,7 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 			return true, ErrProtocol
 		}
 		state, err := stringField(m, "state")
-		if q.ordinary != nil && (state == "cancelled" || state == "discarded" || state == "refused") {
+		if state == "cancelled" || state == "discarded" || state == "refused" {
 			return true, ErrUnsupported
 		}
 		want := []string{"queued", "started", "completed"}
@@ -103,91 +103,18 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 			s.pending.delivered = true
 			s.pending.result <- nil
 		}
-	case "user":
-		id, err := stringField(m, "uuid")
-		if err != nil || id != q.id || q.replayed || q.resultReceived || !bytes.Equal(bytes.TrimSpace(m["parent_tool_use_id"]), []byte("null")) {
-			return true, ErrProtocol
-		}
-		for key, want := range map[string]bool{"isSynthetic": false, "shouldQuery": true, "client_composed": true} {
-			if _, ok := m[key]; ok {
-				value, err := boolean(m, key)
-				if err != nil || value != want {
-					return true, ErrProtocol
-				}
-			}
-		}
-		text, err := referenceText(m["message"])
-		if err != nil || len(text) != q.bytes || hashText(text) != q.hash {
-			return true, ErrProtocol
-		}
-		q.replayed = true
-	case "assistant":
-		if _, hasError := m["error"]; hasError {
-			return true, ErrProtocol
-		}
-		if q.phase != 2 || q.resultReceived || !bytes.Equal(bytes.TrimSpace(m["parent_tool_use_id"]), []byte("null")) {
-			return true, ErrProtocol
-		}
-		id, err := stringField(m, "uuid")
-		if err != nil || len(q.assistantIDs) >= 64 || q.assistantIDs[id] {
-			return true, ErrProtocol
-		}
-		if _, ok := m["user_message_uuid"]; ok || len(q.assistantIDs) == 0 {
-			userID, err := stringField(m, "user_message_uuid")
-			if err != nil || userID != q.id {
-				return true, ErrProtocol
-			}
-		}
-		if raw, ok := m["user_message_uuids"]; ok {
-			var ids []string
-			if json.Unmarshal(raw, &ids) != nil || len(ids) != 1 || ids[0] != q.id {
-				return true, ErrProtocol
-			}
-		}
-		message, err := object(m["message"])
-		if err != nil {
-			return true, err
-		}
-		messageID, err := stringField(message, "id")
-		if err != nil || q.messageID != "" && q.messageID != messageID {
-			return true, ErrProtocol
-		}
-		q.messageID = messageID
-		text, err := firstAssistantText(m["message"], q.summary.Model)
-		if err != nil || len(text) > maxFirstAnswerBytes-len(q.assistantText) {
-			return true, ErrProtocol
-		}
-		// Native's result projects the last block of the latest assistant
-		// record, not all visible text. Keep the full visible response separate.
-		var blocks []json.RawMessage
-		_ = json.Unmarshal(message["content"], &blocks) // validated above
-		last, _ := object(blocks[len(blocks)-1])
-		q.lastText = ""
-		if kind, _ := stringField(last, "type"); kind == "text" {
-			_ = json.Unmarshal(last["text"], &q.lastText)
-		}
-		if q.assistantIDs == nil {
-			q.assistantIDs = map[string]bool{}
-		}
-		contentHash, err := archiveContentHash(message["content"])
-		if err != nil {
-			return true, err
-		}
-		q.archiveMessages = append(q.archiveMessages, archiveAssistant{id: id, contentHash: contentHash})
-		q.assistantIDs[id] = true
-		q.assistantText += text
 	case "result":
 		if q.phase != 2 || q.resultReceived || !q.replayed || len(q.assistantIDs) == 0 {
 			return true, ErrProtocol
 		}
-		if q.ordinary != nil && !q.ordinary.settled() {
+		if !q.ordinary.settled() {
 			return true, ErrProtocol
 		}
 		answer, err := firstQuestionResult(m, q)
-		if err != nil && q.ordinary != nil {
+		if err != nil {
 			return true, err
 		}
-		if err != nil || answer != q.lastText {
+		if answer != q.lastText {
 			return true, ErrProtocol
 		}
 		q.answer, q.resultReceived = q.assistantText, true
@@ -201,7 +128,7 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 // no-query sessions must continue rejecting it. Totals reset per thinking block.
 func (s *Session) validateThinkingProgress(m map[string]json.RawMessage) error {
 	q := s.firstQuestion
-	if s.version != "2.1.287" || q == nil || q.phase != 2 || q.completed || q.resultReceived ||
+	if s.version != supportedVersion || q == nil || q.phase != 2 || q.completed || q.resultReceived ||
 		s.pending == nil || s.pending.kind != "first_question" || s.pending.id != q.id || s.pending.delivered ||
 		!exchangeKeys(m, "type", "subtype", "session_id", "uuid", "user_message_uuid", "estimated_tokens", "estimated_tokens_delta") {
 		return ErrProtocol
@@ -226,47 +153,8 @@ func (s *Session) validateThinkingProgress(m map[string]json.RawMessage) error {
 	return nil
 }
 
-func firstAssistantText(raw []byte, model string) (string, error) {
-	m, err := object(raw)
-	if err != nil {
-		return "", err
-	}
-	role, err := stringField(m, "role")
-	if err != nil || role != "assistant" {
-		return "", ErrProtocol
-	}
-	actual, err := stringField(m, "model")
-	if err != nil || actual != model {
-		return "", ErrProtocol
-	}
-	var blocks []json.RawMessage
-	if json.Unmarshal(m["content"], &blocks) != nil || len(blocks) == 0 || len(blocks) > 64 {
-		return "", ErrProtocol
-	}
-	var text strings.Builder
-	for _, raw := range blocks {
-		b, err := object(raw)
-		if err != nil {
-			return "", err
-		}
-		kind, err := stringField(b, "type")
-		if err != nil {
-			return "", err
-		}
-		value, err := assistantTextBlock(b, kind)
-		if err != nil {
-			return "", err
-		}
-		if len(value) > maxFirstAnswerBytes-text.Len() {
-			return "", ErrLimit
-		}
-		text.WriteString(value)
-	}
-	return text.String(), nil
-}
-
-// Both protocols validate hidden blocks but project only visible text. Tool
-// blocks remain the responsibility of the ordinary interaction protocol.
+// Validate hidden blocks but project only visible text. Tool blocks are
+// validated separately by the ordinary interaction protocol.
 func assistantTextBlock(b map[string]json.RawMessage, kind string) (string, error) {
 	key := ""
 	switch kind {
@@ -290,9 +178,12 @@ func assistantTextBlock(b map[string]json.RawMessage, kind string) (string, erro
 }
 
 func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (string, error) {
+	if q == nil || q.ordinary == nil {
+		return "", ErrProtocol
+	}
 	terminal, err := stringField(m, "terminal_reason")
 	if err != nil || terminal != "completed" {
-		if err == nil && q.ordinary != nil {
+		if err == nil {
 			return "", ErrUnsupported
 		}
 		return "", ErrProtocol
@@ -324,7 +215,7 @@ func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (s
 		return "", ErrProtocol
 	}
 	turns, err := count(m, "num_turns", 1)
-	if err != nil || q.ordinary == nil && turns != 1 || q.ordinary != nil && turns > maxOrdinaryRecords {
+	if err != nil || turns > maxOrdinaryRecords {
 		return "", ErrProtocol
 	}
 	if _, err = count(m, "duration_api_ms", 0); err != nil {
@@ -344,13 +235,11 @@ func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (s
 	}
 	if raw, ok := m["permission_denials"]; ok {
 		var denials []json.RawMessage
-		if json.Unmarshal(raw, &denials) != nil || denials == nil || q.ordinary == nil && len(denials) != 0 {
+		if json.Unmarshal(raw, &denials) != nil || denials == nil {
 			return "", ErrProtocol
 		}
-		if q.ordinary != nil {
-			if err := q.ordinary.validateDenials(denials); err != nil {
-				return "", err
-			}
+		if err := q.ordinary.validateDenials(denials); err != nil {
+			return "", err
 		}
 	}
 	usage, err := object(m["usage"])
@@ -374,18 +263,16 @@ func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (s
 	if err != nil {
 		return "", err
 	}
-	if q.ordinary != nil {
-		for _, key := range []string{"inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests", "contextWindow", "maxOutputTokens"} {
-			if _, ok := modelUsage[key]; ok {
-				if _, err := count(modelUsage, key, 0); err != nil {
-					return "", err
-				}
-			}
-		}
-		if raw, ok := modelUsage["costUSD"]; ok {
-			if _, err := exchangeNumber(raw, exchangeNativeTotalCostMax); err != nil {
+	for _, key := range []string{"inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests", "contextWindow", "maxOutputTokens"} {
+		if _, ok := modelUsage[key]; ok {
+			if _, err := count(modelUsage, key, 0); err != nil {
 				return "", err
 			}
+		}
+	}
+	if raw, ok := modelUsage["costUSD"]; ok {
+		if _, err := exchangeNumber(raw, exchangeNativeTotalCostMax); err != nil {
+			return "", err
 		}
 	}
 	var answer string

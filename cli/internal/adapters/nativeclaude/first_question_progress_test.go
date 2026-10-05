@@ -11,7 +11,7 @@ const thinkingProgressFixture = `{"type":"system","subtype":"thinking_tokens","e
 
 func thinkingProgressSession() *Session {
 	return &Session{id: "owned-session", version: "2.1.287",
-		firstQuestion: &firstQuestionState{id: "owned-question", phase: 2},
+		firstQuestion: &firstQuestionState{id: "owned-question", phase: 2, ordinary: &ordinaryState{}},
 		pending:       &pendingCall{id: "owned-question", kind: "first_question", result: make(chan json.RawMessage, 1)},
 	}
 }
@@ -70,11 +70,8 @@ func TestRateLimitNotificationRejectsForeignMalformedAndOversizedData(t *testing
 }
 
 func TestThinkingProgressDoesNotCompleteOrMutateQuestion(t *testing.T) {
-	for _, ordinary := range []bool{false, true} {
+	{
 		s := thinkingProgressSession()
-		if ordinary {
-			s.firstQuestion.ordinary = &ordinaryState{}
-		}
 		if err := s.frame([]byte(thinkingProgressFixture)); err != nil {
 			t.Fatal("valid first-question progress rejected", err)
 		}
@@ -117,15 +114,16 @@ func TestThinkingProgressRejectsForeignMalformedAndInactiveFrames(t *testing.T) 
 		})
 	}
 	for name, alter := range map[string]func(*Session){
-		"no_query":        func(s *Session) { s.firstQuestion = nil },
-		"legacy":          func(s *Session) { s.version = "2.1.285" },
-		"queued":          func(s *Session) { s.firstQuestion.phase = 1 },
-		"completed":       func(s *Session) { s.firstQuestion.completed = true },
-		"result_received": func(s *Session) { s.firstQuestion.resultReceived = true },
-		"no_pending":      func(s *Session) { s.pending = nil },
-		"foreign_pending": func(s *Session) { s.pending.id = "foreign" },
-		"append_pending":  func(s *Session) { s.pending.kind = "append" },
-		"delivered":       func(s *Session) { s.pending.delivered = true },
+		"no_query":         func(s *Session) { s.firstQuestion = nil },
+		"missing_ordinary": func(s *Session) { s.firstQuestion.ordinary = nil },
+		"legacy":           func(s *Session) { s.version = "2.1.285" },
+		"queued":           func(s *Session) { s.firstQuestion.phase = 1 },
+		"completed":        func(s *Session) { s.firstQuestion.completed = true },
+		"result_received":  func(s *Session) { s.firstQuestion.resultReceived = true },
+		"no_pending":       func(s *Session) { s.pending = nil },
+		"foreign_pending":  func(s *Session) { s.pending.id = "foreign" },
+		"append_pending":   func(s *Session) { s.pending.kind = "append" },
+		"delivered":        func(s *Session) { s.pending.delivered = true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := thinkingProgressSession()

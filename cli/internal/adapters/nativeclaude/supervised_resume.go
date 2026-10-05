@@ -29,9 +29,9 @@ func (e *FirstExchange) ResumeArguments() ([]string, error) {
 
 // StartSupervised hands a started native TUI to the existing CLI supervisor.
 // The caller exclusively owns Wait and termination. It shares the controlling
-// terminal's foreground group, just like the supervisor's ordinary child;
-// unlike Start it never installs the isolated-PTY process-group lifecycle.
-// The opaque plan's one-shot and final archive checks are shared with Start.
+// terminal's foreground group, just like the supervisor's ordinary child.
+// The opaque plan is consumed once, including failed or cancelled launches;
+// final archive and invocation checks run immediately before process creation.
 func (p *IdleResumePlan) StartSupervised(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) (*exec.Cmd, error) {
 	cmd, err := p.resumeCommand(ctx, stdin, stdout, stderr)
 	if err != nil {

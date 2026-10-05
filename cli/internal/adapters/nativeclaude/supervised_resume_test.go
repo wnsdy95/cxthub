@@ -22,7 +22,7 @@ func TestSupervisedResumePreservesTerminalGroupAndOneShot(t *testing.T) {
 	if cmd.SysProcAttr != nil {
 		t.Fatal("isolated process group was applied to controlling terminal")
 	}
-	if err := cmd.Wait(); err != nil {
+	if err := waitSupervised(t, cmd); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := copy.StartSupervised(context.Background(), strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, ErrState) {
@@ -33,7 +33,7 @@ func TestSupervisedResumePreservesTerminalGroupAndOneShot(t *testing.T) {
 func TestSupervisedResumeRejectsArchiveDriftBeforeProcessCreation(t *testing.T) {
 	opts, log := idleUnitOptions(t, "exit")
 	s, plan := idleUnitPlan(t, opts)
-	f, err := os.OpenFile(unitArchive(s), os.O_APPEND|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(unitArchive(s.s), os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}

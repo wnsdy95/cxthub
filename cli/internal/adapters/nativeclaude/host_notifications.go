@@ -9,7 +9,7 @@ import (
 // Validate and drain them without retaining private notice text, advancing a
 // pending operation, or treating a render notification as permission approval.
 func (s *Session) validateHostNotification(m map[string]json.RawMessage, subtype string) error {
-	if s.version != "2.1.287" {
+	if s.version != supportedVersion {
 		return ErrProtocol
 	}
 	if id, err := stringField(m, "session_id"); err != nil || id != s.id {
@@ -67,7 +67,7 @@ func (s *Session) validateHostNotification(m map[string]json.RawMessage, subtype
 // into receipts, prompts, budgets or native permission decisions.
 func (s *Session) validateRateLimitNotification(m map[string]json.RawMessage) error {
 	q := s.firstQuestion
-	if s.version != "2.1.287" || q == nil || q.phase < 2 ||
+	if s.version != supportedVersion || q == nil || q.phase < 2 ||
 		!exchangeKeys(m, "type", "rate_limit_info", "uuid", "session_id") {
 		return ErrProtocol
 	}

@@ -54,11 +54,7 @@ func firstExchangeUnitHelper() int {
 			permissionPrompts = os.Args[i+1]
 		}
 	}
-	wantPrompts := "host"
-	if mode == "old-version" {
-		wantPrompts = "none"
-	}
-	if sid == "" || permissionPrompts != wantPrompts {
+	if sid == "" || permissionPrompts != "host" {
 		return 90
 	}
 	recorder, err := os.OpenFile(os.Getenv("CXT_FIRST_EXCHANGE_UNIT_RECORD"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
@@ -233,7 +229,10 @@ func firstExchangeQueryFrames(mode, sid, id string, message json.RawMessage, wri
 		if mode == "unknown-control" {
 			subtype = "future_permission"
 		}
-		write(map[string]any{"type": "control_request", "request_id": "synthetic-permission", "request": map[string]any{"subtype": subtype, "tool_name": "PRIVATE_TOOL", "input": map[string]any{"private": "PRIVATE_ARGUMENT"}}})
+		if mode == "permission" {
+			write(map[string]any{"type": "assistant", "session_id": sid, "uuid": "permission-assistant", "user_message_uuid": id, "parent_tool_use_id": nil, "message": map[string]any{"id": "permission-message", "type": "message", "role": "assistant", "model": "fixture-model", "content": []any{map[string]any{"type": "tool_use", "id": "permission-tool", "name": "PRIVATE_TOOL", "input": map[string]any{}}}}})
+		}
+		write(map[string]any{"type": "control_request", "request_id": "synthetic-permission", "request": map[string]any{"subtype": subtype, "tool_use_id": "permission-tool", "tool_name": "PRIVATE_TOOL", "input": map[string]any{"private": "PRIVATE_ARGUMENT"}}})
 		return
 	}
 	if mode == "unknown-event" {
@@ -284,8 +283,11 @@ func firstExchangeQueryFrames(mode, sid, id string, message json.RawMessage, wri
 			assistant["user_message_uuid"] = "foreign-question"
 		case "sibling-query-null":
 			assistant["user_message_uuid"] = nil
-		case "sibling-message-id-foreign":
-			assistant["message"].(map[string]any)["id"] = "foreign-response"
+		case "sibling-message-id-reused":
+			assistant["message"].(map[string]any)["id"] = "second-response"
+			write(assistant)
+			assistant["uuid"] = "synthetic-assistant-third"
+			assistant["message"].(map[string]any)["id"] = "synthetic-response"
 		case "sibling-message-id-missing":
 			delete(assistant["message"].(map[string]any), "id")
 		}
@@ -343,8 +345,8 @@ func firstExchangeQueryFrames(mode, sid, id string, message json.RawMessage, wri
 		result["errors"] = []string{"PRIVATE_PROVIDER_ERROR"}
 	case "zero-turns":
 		result["num_turns"] = 0
-	case "multiple-turns":
-		result["num_turns"] = 2
+	case "excessive-turns":
+		result["num_turns"] = maxOrdinaryRecords + 1
 	case "empty-answer":
 		result["result"] = ""
 	case "missing-result-usage":
@@ -453,12 +455,12 @@ func firstExchangeRunContext(t *testing.T) context.Context {
 
 func firstExchangeAllow(context.Context, FirstQuestionEvidence) error { return nil }
 
-func TestFirstExchangeLiteralQuestionAndOneShot(t *testing.T) {
+func TestFirstExchangeOrdinaryQuestionAndOneShot(t *testing.T) {
 	f := newFirstExchangeFixture(t, "normal")
 	s := f.start(t, true)
-	const question = "/literal @file \u97d3\u6587\nPRIVATE_QUESTION"
+	const question = "ordinary @file \u97d3\u6587\nPRIVATE_QUESTION"
 	var admitted int
-	r, err := s.Run(firstExchangeRunContext(t), question, func(ctx context.Context, e FirstQuestionEvidence) error {
+	r, err := s.RunOrdinary(firstExchangeRunContext(t), question, func(ctx context.Context, e FirstQuestionEvidence) error {
 		admitted++
 		if _, ok := ctx.Deadline(); !ok || e.QuestionHash != hashText(question) || e.QuestionBytes != len(question) || e.Summary.SessionID != s.SessionID() || e.Summary.Model != "fixture-model" || e.Summary.TotalTokens != 57 || e.Summary.Measurement != "local_estimate" || !e.Reference.NoTurnAcknowledged || e.Reference.SessionID != s.SessionID() || e.Reference.Persisted || e.Reference.ProviderAcceptance != "unverified" {
 			t.Error("incorrect admission evidence")
@@ -467,11 +469,11 @@ func TestFirstExchangeLiteralQuestionAndOneShot(t *testing.T) {
 			t.Error("question sent before admission returned")
 		}
 		return nil
-	})
+	}, InteractionHandlers{})
 	if err != nil || !r.Completed || r.Answer != firstExchangeAnswer || r.SessionID != s.SessionID() || r.QuestionHash != hashText(question) || r.MessageID == "" || admitted != 1 || s.HostVersion() != "2.1.287" {
 		t.Fatal("first text exchange failed:", err)
 	}
-	if _, err := s.Run(firstExchangeRunContext(t), question, firstExchangeAllow); err == nil {
+	if _, err := s.RunOrdinary(firstExchangeRunContext(t), question, firstExchangeAllow, InteractionHandlers{}); err == nil {
 		t.Fatal("second query allowed")
 	}
 	if err := s.Close(); err != nil {
@@ -484,7 +486,7 @@ func TestFirstExchangeLiteralQuestionAndOneShot(t *testing.T) {
 	q := queries[0]
 	text, err := referenceText(q["message"])
 	_, hasSynthetic := q["isSynthetic"]
-	if err != nil || text != question || hasSynthetic || string(q["client_composed"]) != "true" || string(q["parent_tool_use_id"]) != "null" || string(q["session_id"]) != fmt.Sprintf("%q", s.SessionID()) || string(q["uuid"]) != fmt.Sprintf("%q", r.MessageID) {
+	if err != nil || text != question || hasSynthetic || q["client_composed"] != nil || string(q["parent_tool_use_id"]) != "null" || string(q["session_id"]) != fmt.Sprintf("%q", s.SessionID()) || string(q["uuid"]) != fmt.Sprintf("%q", r.MessageID) {
 		t.Fatal("query was transformed or had incorrect identity/flags")
 	}
 	var order []string
@@ -534,7 +536,7 @@ func TestFirstExchangeAdmissionNeverWritesOnFailure(t *testing.T) {
 				admit = func(ctx context.Context, _ FirstQuestionEvidence) error { <-ctx.Done(); return ctx.Err() }
 				wantContext = context.DeadlineExceeded
 			}
-			r, err := s.Run(ctx, "PRIVATE_QUESTION", admit)
+			r, err := s.RunOrdinary(ctx, "PRIVATE_QUESTION", admit, InteractionHandlers{})
 			if err == nil || r.Completed || r.Answer != "" || strings.Contains(fmt.Sprintf("%v %+v %#v", err, err, err), "PRIVATE") {
 				t.Fatal("failed admission released a response or leaked callback data")
 			}
@@ -542,7 +544,7 @@ func TestFirstExchangeAdmissionNeverWritesOnFailure(t *testing.T) {
 				t.Fatal("context cancellation was lost:", err)
 			}
 			if mode == "admit-error" {
-				if _, err := s.Run(firstExchangeRunContext(t), "retry", firstExchangeAllow); err == nil {
+				if _, err := s.RunOrdinary(firstExchangeRunContext(t), "retry", firstExchangeAllow, InteractionHandlers{}); err == nil {
 					t.Fatal("failed admission did not consume one-shot Run")
 				}
 			}
@@ -570,12 +572,12 @@ func TestFirstExchangeSummaryAndLaunchDrift(t *testing.T) {
 			if mode == "launch-before" {
 				replaceCwd()
 			}
-			r, err := s.Run(firstExchangeRunContext(t), "PRIVATE_QUESTION", func(context.Context, FirstQuestionEvidence) error {
+			r, err := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_QUESTION", func(context.Context, FirstQuestionEvidence) error {
 				if mode == "launch-after" {
 					replaceCwd()
 				}
 				return nil
-			})
+			}, InteractionHandlers{})
 			_ = s.Close()
 			if err == nil || r.Completed || len(f.queries(t)) != 0 {
 				t.Fatal("changed admission evidence released a query:", err)
@@ -606,7 +608,10 @@ func TestFirstExchangeConcurrentRunConsumesOneAttempt(t *testing.T) {
 			return ctx.Err()
 		}
 	}
-	run := func() { r, err := s.Run(ctx, "same literal question", admit); out <- outcome{r, err} }
+	run := func() {
+		r, err := s.RunOrdinary(ctx, "same ordinary question", admit, InteractionHandlers{})
+		out <- outcome{r, err}
+	}
 	go run()
 	select {
 	case <-entered:
@@ -617,7 +622,7 @@ func TestFirstExchangeConcurrentRunConsumesOneAttempt(t *testing.T) {
 	// close the transport while its owner's admission callback is in flight.
 	copied := *s
 	go func() {
-		r, err := copied.Run(ctx, "same literal question", admit)
+		r, err := copied.RunOrdinary(ctx, "same ordinary question", admit, InteractionHandlers{})
 		out <- outcome{r, err}
 	}()
 	select {
@@ -652,17 +657,23 @@ func TestFirstExchangeConcurrentRunConsumesOneAttempt(t *testing.T) {
 }
 
 func TestFirstExchangeRejectsMalformedOrForeignProtocol(t *testing.T) {
-	modes := []string{"foreign-lifecycle", "started-before-queued", "duplicate-queued", "missing-started", "completed-before-result", "foreign-echo", "changed-echo", "echo-parent", "missing-echo", "duplicate-echo", "permission", "unknown-control", "unknown-event", "malformed-json", "tool-use", "foreign-session", "foreign-result", "foreign-result-list", "error-result", "zero-turns", "multiple-turns", "empty-answer", "missing-result-usage", "negative-input", "null-input", "string-output", "zero-output", "foreign-model", "queued-turn", "denied-permission", "duplicate-result"}
+	modes := []string{"foreign-lifecycle", "started-before-queued", "duplicate-queued", "missing-started", "completed-before-result", "foreign-echo", "echo-parent", "missing-echo", "duplicate-echo", "permission", "unknown-control", "unknown-event", "malformed-json", "tool-use", "foreign-session", "foreign-result", "foreign-result-list", "error-result", "zero-turns", "excessive-turns", "empty-answer", "missing-result-usage", "negative-input", "null-input", "string-output", "zero-output", "foreign-model", "queued-turn", "denied-permission", "duplicate-result"}
 	modes = append(modes, "assistant-query-missing", "assistant-query-foreign", "assistant-query-null", "sibling-query-foreign", "sibling-query-null", "result-index-missing", "result-index-reused", "result-index-skipped", "result-index-null", "result-index-string", "stop-reason-missing", "stop-reason-wrong")
-	modes = append(modes, "assistant-message-id-missing", "assistant-message-id-empty", "sibling-message-id-foreign", "sibling-message-id-missing", "status-compacting", "terminal-reason-missing", "terminal-reason-null", "terminal-hook-stopped", "terminal-tool-deferred", "terminal-max-turns", "terminal-background-requested")
+	modes = append(modes, "assistant-message-id-missing", "assistant-message-id-empty", "sibling-message-id-reused", "sibling-message-id-missing", "status-compacting", "terminal-reason-missing", "terminal-reason-null", "terminal-hook-stopped", "terminal-tool-deferred", "terminal-max-turns", "terminal-background-requested")
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			f := newFirstExchangeFixture(t, mode)
 			s := f.start(t, true)
-			r, err := s.Run(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow)
+			r, err := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow, InteractionHandlers{})
 			want := ErrProtocol
 			if mode == "permission" || mode == "unknown-control" {
 				want = ErrPermissionRequired
+			}
+			if strings.HasPrefix(mode, "terminal-") && mode != "terminal-reason-missing" && mode != "terminal-reason-null" {
+				want = ErrUnsupported
+			}
+			if mode == "echo-parent" || mode == "foreign-echo" {
+				want = ErrUnsupported
 			}
 			if !errors.Is(err, want) || r.Completed || r.Answer != "" || strings.Contains(fmt.Sprintf("%v %+v %#v", err, err, err), "PRIVATE") {
 				t.Fatal("unsafe protocol accepted, wrong error, or private diagnostic:", err)
@@ -683,7 +694,7 @@ func TestFirstExchangeReferenceIndexRequired(t *testing.T) {
 			if _, err := s.AppendReference(firstExchangeRunContext(t), "PRIVATE_REFERENCE"); !errors.Is(err, ErrProtocol) {
 				t.Fatal("uncorrelated no-turn result index accepted:", err)
 			}
-			if r, err := s.Run(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow); err == nil || r.Completed {
+			if r, err := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow, InteractionHandlers{}); err == nil || r.Completed {
 				t.Fatal("question admitted after invalid reference result")
 			}
 			_ = s.Close()
@@ -699,7 +710,7 @@ func TestFirstExchangeAssistantSiblingCorrelation(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f := newFirstExchangeFixture(t, mode)
 			s := f.start(t, true)
-			r, err := s.Run(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow)
+			r, err := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow, InteractionHandlers{})
 			if err != nil || !r.Completed || r.Answer != firstExchangeAnswer || len(f.queries(t)) != 1 {
 				t.Fatal("correlated visible text projection failed:", err)
 			}
@@ -710,7 +721,7 @@ func TestFirstExchangeAssistantSiblingCorrelation(t *testing.T) {
 func TestFirstExchangeAllowsActiveRequestingStatus(t *testing.T) {
 	f := newFirstExchangeFixture(t, "status-requesting-and-null")
 	s := f.start(t, true)
-	r, err := s.Run(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow)
+	r, err := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow, InteractionHandlers{})
 	if err != nil || !r.Completed || r.Answer != firstExchangeAnswer || len(f.queries(t)) != 1 {
 		t.Fatal("ordinary active-query status rejected:", err)
 	}
@@ -721,11 +732,11 @@ func TestFirstExchangeCancellationAfterQuery(t *testing.T) {
 	s := f.start(t, true)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	r, err := s.Run(ctx, "PRIVATE_QUESTION", firstExchangeAllow)
+	r, err := s.RunOrdinary(ctx, "PRIVATE_QUESTION", firstExchangeAllow, InteractionHandlers{})
 	if !errors.Is(err, context.DeadlineExceeded) || r.Completed || r.Answer != "" {
 		t.Fatal("incomplete exchange did not preserve cancellation:", err)
 	}
-	if _, err := s.Run(firstExchangeRunContext(t), "retry", firstExchangeAllow); err == nil {
+	if _, err := s.RunOrdinary(firstExchangeRunContext(t), "retry", firstExchangeAllow, InteractionHandlers{}); err == nil {
 		t.Fatal("uncertain query retried")
 	}
 	_ = s.Close()
@@ -739,11 +750,15 @@ func TestFirstExchangeAuditsLateOutputAtClose(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f := newFirstExchangeFixture(t, mode)
 			s := f.start(t, true)
-			r, err := s.Run(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow)
-			if !errors.Is(err, ErrProtocol) || r.Completed || r.Answer != "" || strings.Contains(fmt.Sprintf("%v %+v %#v", err, err, err), "PRIVATE") {
+			r, err := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow, InteractionHandlers{})
+			want := ErrProtocol
+			if mode == "late-compaction" {
+				want = ErrUnsupported
+			}
+			if !errors.Is(err, want) || r.Completed || r.Answer != "" || strings.Contains(fmt.Sprintf("%v %+v %#v", err, err, err), "PRIVATE") {
 				t.Fatal("late protocol output was ignored or leaked:", err)
 			}
-			if !errors.Is(s.Close(), ErrProtocol) {
+			if !errors.Is(s.Close(), want) {
 				t.Fatal("repeated Close lost the EOF audit failure")
 			}
 			if len(f.queries(t)) != 1 {
@@ -760,27 +775,45 @@ func TestFirstExchangeVersionIsolation(t *testing.T) {
 		_ = s.Close()
 		t.Fatal("first exchange silently accepted no-query version")
 	}
-	// The same helper enforces --permission-prompts none for the unchanged
-	// 2.1.285 no-query path, and host for each first-exchange process above.
-	s, err := Start(ctx, old.opts)
-	if err != nil {
-		t.Fatal("legacy no-query launch options changed:", err)
+	if _, err := os.Stat(old.recorder); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unsupported host launched protocol transport", err)
 	}
-	if err := s.Close(); err != nil {
+	current := newFirstExchangeFixture(t, "normal").start(t, false)
+	if current.HostVersion() != "2.1.287" {
+		t.Fatal("pinned host changed")
+	}
+	if err := current.Close(); err != nil {
 		t.Fatal(err)
-	}
-	newer := newFirstExchangeFixture(t, "normal")
-	if s, err := Start(ctx, newer.opts); err == nil {
-		_ = s.Close()
-		t.Fatal("default no-query Start broadened to 2.1.287")
 	}
 }
 
 func TestFirstExchangeHostNotificationsAcrossLifetime(t *testing.T) {
 	f := newFirstExchangeFixture(t, "host-notifications")
 	s := f.start(t, true)
-	r, err := s.Run(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow)
+	r, err := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_QUESTION", firstExchangeAllow, InteractionHandlers{})
 	if err != nil || !r.Completed || r.Answer != firstExchangeAnswer || len(f.queries(t)) != 1 {
 		t.Fatal("notification lifetime failed:", err)
+	}
+}
+
+func TestFirstExchangePreservesSubmittedAndNativeQuestionHashes(t *testing.T) {
+	f := newFirstExchangeFixture(t, "changed-echo")
+	e := f.start(t, true)
+	const submitted = "submitted ordinary question"
+	result, err := e.RunOrdinary(firstExchangeRunContext(t), submitted, firstExchangeAllow, InteractionHandlers{})
+	if err != nil || !result.Completed || result.QuestionHash != hashText(submitted) {
+		t.Fatal("ordinary rewrite changed admitted question identity", err)
+	}
+	observed := e.s.firstQuestion.ordinary
+	if observed.questionHash != hashText("PRIVATE_CHANGED_QUESTION") || observed.questionHash == result.QuestionHash || observed.questionBytes != len("PRIVATE_CHANGED_QUESTION") {
+		t.Fatal("native preprocessing was mislabeled as admitted text")
+	}
+	queries := f.queries(t)
+	if len(queries) != 1 {
+		t.Fatal("rewritten question replayed")
+	}
+	text, err := referenceText(queries[0]["message"])
+	if err != nil || text != submitted || queries[0]["client_composed"] != nil {
+		t.Fatal("ordinary preprocessing was disabled or submission changed", err)
 	}
 }

@@ -262,7 +262,6 @@ func (s *Session) verifyOrdinaryArchive(ctx context.Context, path string, q *fir
 		return archiveVerification{}, ErrProtocol
 	}
 	reference.Persisted = true
-	verified.receipt = reference
 	verified.exchange = &ExchangeArchiveReceipt{Reference: reference, QuestionID: q.id, QuestionHash: q.hash, NativeQuestionHash: o.questionHash, AnswerHash: hashText(q.answer), AssistantRecords: assistants, ToolResultRecords: results, NativeAttachments: nativeAttachments, Persisted: true}
 	return verified, nil
 }
