@@ -142,7 +142,9 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 	var signals *providerLaunchSignals
 	if runtime.handleSignals {
 		ctx, signals = ownProviderLaunchSignals(ctx)
-		defer signals.close()
+		defer func() {
+			resultErr = errors.Join(resultErr, signals.close())
+		}()
 	}
 	// The supervisor can report a failed restart while the child still writes.
 	// Keep native terminal descriptors intact; serialize custom embedding writers.
@@ -334,7 +336,6 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 			process.adopt(child)
 			if err := recordLaunched(); err != nil {
 				stopErr := process.stop()
-				signals.ownedInput()
 				return fail(errors.Join(err, stopErr))
 			}
 		}
@@ -440,9 +441,6 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 		// Join startup and reap any late child before retiring the runtime or
 		// starting a prewarmed replacement. One loop owns both lifecycle phases.
 		exitErr = errors.Join(exitErr, process.stop())
-		// Replacement preparation kept the old TUI's interrupt behavior. Only
-		// after joining it may CXT own input again, including replacement Start.
-		signals.ownedInput()
 		if process.startErr != nil {
 			transition = false
 		}
@@ -473,6 +471,9 @@ func runProviderLaunch(ctx context.Context, cwd string, intent LaunchIntent, hoo
 		if !ok || !providerfs.ValidSessionID(b.SeedID) {
 			return launchFailure(ctx, hooks, receipt, managed, fmt.Errorf("context changed but no valid resume target is available; delivery stopped"))
 		}
+		// Return input to CXT only for a replacement, after joining the old TUI.
+		// Final shutdown must retain native ownership for queued terminal SIGINT.
+		signals.ownedInput()
 		fmt.Fprintf(runtime.stderr, "\ncxt: context transition (%s → %s); preparing restart\n", b.PrevBranch, b.Branch)
 		if managed {
 			// Keep input mode/budget, reselect the new code/revision, and check

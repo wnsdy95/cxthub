@@ -13,6 +13,7 @@ import (
 // SIGTERM always retires the whole owned lifecycle through the supervisor.
 type providerLaunchSignals struct {
 	native  atomic.Bool
+	ctx     context.Context
 	cancel  context.CancelFunc
 	signals chan os.Signal
 	stop    chan struct{}
@@ -21,22 +22,26 @@ type providerLaunchSignals struct {
 
 func ownProviderLaunchSignals(ctx context.Context) (context.Context, *providerLaunchSignals) {
 	ctx, cancel := context.WithCancel(ctx)
-	s := &providerLaunchSignals{cancel: cancel, signals: make(chan os.Signal, 8), stop: make(chan struct{}), done: make(chan struct{})}
+	s := &providerLaunchSignals{ctx: ctx, cancel: cancel, signals: make(chan os.Signal, 8), stop: make(chan struct{}), done: make(chan struct{})}
 	signal.Notify(s.signals, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		defer close(s.done)
 		for {
 			select {
 			case sig := <-s.signals:
-				if sig == syscall.SIGTERM || !s.native.Load() {
-					cancel()
-				}
+				s.receive(sig)
 			case <-s.stop:
 				return
 			}
 		}
 	}()
 	return ctx, s
+}
+
+func (s *providerLaunchSignals) receive(sig os.Signal) {
+	if sig == syscall.SIGTERM || !s.native.Load() {
+		s.cancel()
+	}
 }
 
 func (s *providerLaunchSignals) terminalStarted() {
@@ -53,9 +58,22 @@ func (s *providerLaunchSignals) ownedInput() {
 	}
 }
 
-func (s *providerLaunchSignals) close() {
+func (s *providerLaunchSignals) close() error {
+	defer s.cancel()
 	signal.Stop(s.signals)
+	// Stop waits for signal delivery to quiesce. Settle the finite buffer
+	// before stopping the receiver, then join any receive already in flight.
+drain:
+	for {
+		select {
+		case sig := <-s.signals:
+			s.receive(sig)
+		default:
+			break drain
+		}
+	}
 	close(s.stop)
 	<-s.done
-	s.cancel()
+	// Ordinary resource cleanup must not turn a successful exit into a cancel.
+	return s.ctx.Err()
 }

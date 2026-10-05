@@ -35,6 +35,7 @@ func TestProviderLaunchSignals(t *testing.T) {
 		{"native", syscall.SIGINT}, {"native", syscall.SIGTERM},
 		{"replacement", syscall.SIGINT}, {"replacement-failed", syscall.SIGINT},
 		{"direct", syscall.SIGINT},
+		{"direct-interrupt-exit", syscall.SIGINT},
 	} {
 		t.Run(tt.mode+"/"+tt.sig.String(), func(t *testing.T) {
 			root, _ := providerLaunchFixture(t, "claude", "export CXT_TEST_SIGNAL_ROLE=tui\nexec '"+strings.ReplaceAll(os.Args[0], "'", "'\\''")+"' -test.run='^TestProviderLaunchSignalProcess$'")
@@ -123,6 +124,9 @@ func TestProviderLaunchSignals(t *testing.T) {
 					}
 					send(syscall.SIGTERM)
 				}
+			case "direct-interrupt-exit":
+				waitFile("native-ready")
+				send(syscall.SIGINT)
 			case "replacement", "replacement-failed":
 				waitFile("native-ready")
 				waitFile("launched")
@@ -186,6 +190,9 @@ func TestProviderLaunchSignalProcess(t *testing.T) {
 				if err := markProviderSignalFile(root, "native-interrupt"); err != nil {
 					t.Fatal(err)
 				}
+				if os.Getenv("CXT_TEST_SIGNAL_MODE") == "direct-interrupt-exit" {
+					return
+				}
 			case <-time.After(20 * time.Second):
 				t.Fatal("fake TUI was not retired")
 			}
@@ -202,8 +209,14 @@ func TestProviderLaunchSignalProcess(t *testing.T) {
 func runProviderSignalFixture(root, mode string) error {
 	// The public direct path also verifies public signal installation without
 	// requiring a real terminal, provider, user configuration, or native adapter.
-	if mode == "direct" {
+	if mode == "direct" || mode == "direct-interrupt-exit" {
 		err := RunProviderLaunch(context.Background(), root, LaunchIntent{Provider: domain.ProviderClaude, ProviderArgs: []string{"--help"}}, ProviderLaunchHooks{})
+		if mode == "direct-interrupt-exit" {
+			if err != nil {
+				return fmt.Errorf("public native SIGINT clean exit: %w", err)
+			}
+			return nil
+		}
 		if !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("public direct launch did not cancel: %w", err)
 		}
