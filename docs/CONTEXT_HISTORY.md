@@ -203,6 +203,17 @@ A completed PR receipt also requires its exact ordinary source pin by branch
 identity, code SHA and context target. Competing pins remain available to the
 selection policy; transfer does not choose one by timestamp.
 
+For this scoped path, local negotiation reads metadata only for snapshots in
+the exact endpoint/branch observation, rather than scanning the entire local
+snapshot catalog. An empty observation requests the full selected metadata;
+already stored documents still avoid download through the verified receiver.
+Every document in the returned plan remains subject to current-byte validation,
+including when its metadata was omitted. Remote-state hints for unexamined
+branches are retained but never advertised without checking current local state.
+An existing document descriptor with a missing referenced chunk is a verification
+failure, not an absent document: normal transfer must not silently repair it and
+publish a successful observation. Only an absent descriptor permits download.
+
 A successful fetch records a branch-scoped observation using the existing CAS
 mechanism, separately from the full-repository repair baseline. Cached nodes
 outside this request's inventory cannot prove merge coverage. Fetch does not

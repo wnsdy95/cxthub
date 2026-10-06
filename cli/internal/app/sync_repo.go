@@ -1468,7 +1468,7 @@ func (s *SyncRepoService) isAncestor(ctx context.Context, anc, desc domain.Conte
 }
 
 // preparePullSnapshotStates overlays validated remote projection tokens on the
-// local manifest for snapshots whose local metadata intentionally remains
+// local inventory for snapshots whose local metadata intentionally remains
 // ahead. The cursor is only a negotiation hint: the current local state is the
 // guard, and any local mutation makes the cached remote token ineligible.
 func preparePullSnapshotStates(
@@ -1476,6 +1476,7 @@ func preparePullSnapshotStates(
 	store outbound.SessionStore,
 	repoID string,
 	local map[domain.ContentHash]domain.ContentHash,
+	partialInventory bool,
 ) (
 	map[domain.ContentHash]domain.ContentHash,
 	outbound.RemoteSnapshotStateCursorStore,
@@ -1505,7 +1506,16 @@ func preparePullSnapshotStates(
 	}
 	for id, entry := range loaded {
 		current, exists := local[id]
-		if !exists || current != entry.LocalState {
+		if !exists {
+			// A scoped fetch did not examine other branches' metadata. Retain
+			// their hints, but never advertise a token without checking its
+			// current local state in this fetch.
+			if partialInventory {
+				active[id] = entry
+			}
+			continue
+		}
+		if current != entry.LocalState {
 			continue
 		}
 		active[id] = entry
@@ -1609,13 +1619,37 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 		return inbound.SyncOutput{}, err
 	}
 
-	// Delta pull advertises the verified local metadata and document inventory.
-	// Snapshot IDs equal DocHash, so document existence needs only a cheap stat;
-	// opening every cumulative session body or re-reading snapshots a second time
-	// would make the post-merge hook O(total history).
+	// Only the exact observation can justify omitting metadata. A scoped fetch
+	// therefore needs no inventory of unrelated local history. Document presence
+	// is a transfer hint, not proof: the receiver/batch still verifies every
+	// document required by the returned plan against its current stored bytes.
 	var snapshotStates map[domain.ContentHash]domain.ContentHash
 	var docHaves []domain.ContentHash
-	if man, merr := s.store.Manifest(ctx, repoID); merr == nil {
+	if useScope {
+		snapshotStates = make(map[domain.ContentHash]domain.ContentHash, len(observation.Snapshots))
+		for _, observed := range observation.Snapshots {
+			if err := ctx.Err(); err != nil {
+				return inbound.SyncOutput{}, err
+			}
+			local, lerr := s.store.GetSnapshot(ctx, observed.ID)
+			if lerr != nil {
+				// An unavailable hint requests full metadata; it cannot bypass
+				// validation of the server's selected dependency closure.
+				if err := ctx.Err(); err != nil {
+					return inbound.SyncOutput{}, err
+				}
+				continue
+			}
+			state, serr := domain.SnapshotStateHash(local)
+			if serr != nil {
+				continue
+			}
+			snapshotStates[observed.ID] = state
+			if ok, herr := s.store.HasDoc(ctx, observed.ID); herr == nil && ok {
+				docHaves = append(docHaves, observed.ID)
+			}
+		}
+	} else if man, merr := s.store.Manifest(ctx, repoID); merr == nil {
 		snapshotStates = man.SnapshotStates
 		for _, id := range man.SnapshotIndex {
 			if ok, herr := s.store.HasDoc(ctx, id); herr == nil && ok {
@@ -1627,7 +1661,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	if identity := s.observationRemote(); identity != "configured" {
 		cursorRepo = string(domain.HashContent([]byte(repoID + "\x00" + identity)))
 	}
-	advertisedSnapshotStates, cursorStore, cursorEntries := preparePullSnapshotStates(ctx, s.store, cursorRepo, snapshotStates)
+	advertisedSnapshotStates, cursorStore, cursorEntries := preparePullSnapshotStates(ctx, s.store, cursorRepo, snapshotStates, useScope)
 	// Local possession alone cannot supply the server's graph projection. Keep
 	// document deduplication, but negotiate metadata until this endpoint has an
 	// exact observed baseline for every omitted snapshot.
