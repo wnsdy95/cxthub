@@ -96,16 +96,6 @@ func loadFileAtRoot(repoRoot string) (fileConfig, error) {
 	return fc, nil
 }
 
-// saveFile writes the entire .cxt/config (.cxt directory is created if it does not exist).
-func saveFile(repoRoot string, fc fileConfig) error {
-	repoRoot = sharedConfigRoot(repoRoot)
-	b, err := json.MarshalIndent(fc, "", "  ")
-	if err != nil {
-		return err
-	}
-	return providerfs.WriteRepoFileAtomic(repoRoot, filepath.Join(".cxt", "config"), append(b, '\n'), 0o644)
-}
-
 // Load reads the remote list. Returns an empty map if file does not exist (no error).
 func Load(repoRoot string) (Remotes, error) {
 	fc, err := loadFile(repoRoot)
@@ -116,19 +106,6 @@ func Load(repoRoot string) (Remotes, error) {
 		fc.Remotes = Remotes{}
 	}
 	return canonicalRemotes(fc.Remotes)
-}
-
-// Save records the remote list. Other settings fields (checkout_mode, etc.) are preserved.
-func Save(repoRoot string, r Remotes) error {
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.Remotes, err = canonicalRemotes(r)
-	if err != nil {
-		return err
-	}
-	return saveFile(repoRoot, fc)
 }
 
 // CheckoutMode returns the context action mode of the git checkout hook (default is auto).
@@ -159,26 +136,16 @@ func SecretsMinLen(repoRoot string) int {
 }
 
 // SetSecretsRedact sets the masking replacement phrase (empty string = revert to default).
-func SetSecretsRedact(repoRoot, phrase string) error {
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.SecretsRedact = phrase
-	return saveFile(repoRoot, fc)
+func SetSecretsRedact(ctx context.Context, repoRoot, phrase string) error {
+	return setField(ctx, repoRoot, "secrets_redact", phrase)
 }
 
 // SetSecretsMinLen sets the masking minimum length (1~64, 0 = revert to default 4).
-func SetSecretsMinLen(repoRoot string, n int) error {
+func SetSecretsMinLen(ctx context.Context, repoRoot string, n int) error {
 	if n < 0 || n > 64 {
 		return fmt.Errorf("secrets.minlen must be 0(default)~64: %d", n)
 	}
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.SecretsMinLen = n
-	return saveFile(repoRoot, fc)
+	return setField(ctx, repoRoot, "secrets_minlen", n)
 }
 
 // SecretsScrub returns the pattern scrub tier (empty if none).
@@ -191,31 +158,21 @@ func SecretsScrub(repoRoot string) string {
 }
 
 // SetSecretsScrub sets the pattern scrub tier (off|standard|strict, "" = default standard).
-func SetSecretsScrub(repoRoot, tier string) error {
+func SetSecretsScrub(ctx context.Context, repoRoot, tier string) error {
 	switch tier {
 	case "", "off", "standard", "strict":
 	default:
 		return fmt.Errorf("secrets.scrub must be off|standard|strict: %q", tier)
 	}
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.SecretsScrub = tier
-	return saveFile(repoRoot, fc)
+	return setField(ctx, repoRoot, "secrets_scrub", tier)
 }
 
 // SetCheckoutMode sets the checkout mode (auto|prepare).
-func SetCheckoutMode(repoRoot, mode string) error {
+func SetCheckoutMode(ctx context.Context, repoRoot, mode string) error {
 	if mode != CheckoutAuto && mode != CheckoutPrepare {
 		return fmt.Errorf("checkout.mode must be %q or %q: %q", CheckoutAuto, CheckoutPrepare, mode)
 	}
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.CheckoutMode = mode
-	return saveFile(repoRoot, fc)
+	return setField(ctx, repoRoot, "checkout_mode", mode)
 }
 
 // LoadMode returns the default fidelity for load/checkout/fork ("" = full series default).
@@ -228,16 +185,11 @@ func LoadMode(repoRoot string) string {
 }
 
 // SetLoadMode sets the default fidelity (full|reconstructed|memory, "default" → unset).
-func SetLoadMode(repoRoot, mode string) error {
+func SetLoadMode(ctx context.Context, repoRoot, mode string) error {
 	if mode != "" && mode != "full" && mode != "reconstructed" && mode != "memory" {
 		return fmt.Errorf("load.mode must be full|reconstructed|memory: %q", mode)
 	}
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.LoadMode = mode
-	return saveFile(repoRoot, fc)
+	return setField(ctx, repoRoot, "load_mode", mode)
 }
 
 // CaptureDebounce returns the debounce window for hook Stop capture (default 60s, capture path).
@@ -250,16 +202,11 @@ func CaptureDebounce(repoRoot string) time.Duration {
 }
 
 // SetCaptureDebounce sets the debounce window (seconds) (0 → default 60 seconds off).
-func SetCaptureDebounce(repoRoot string, sec int) error {
+func SetCaptureDebounce(ctx context.Context, repoRoot string, sec int) error {
 	if sec < 0 {
 		return fmt.Errorf("capture.debounce must be 0 or more seconds: %d", sec)
 	}
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.CaptureDebounceSec = sec
-	return saveFile(repoRoot, fc)
+	return setField(ctx, repoRoot, "capture_debounce_sec", sec)
 }
 
 // BoundaryEnforce returns the transition execution policy (default kill).
@@ -272,16 +219,11 @@ func BoundaryEnforce(repoRoot string) string {
 }
 
 // SetBoundaryEnforce sets the transition execution policy (kill|none, "default" → off).
-func SetBoundaryEnforce(repoRoot, v string) error {
+func SetBoundaryEnforce(ctx context.Context, repoRoot, v string) error {
 	if v != "" && v != "kill" && v != "none" {
 		return fmt.Errorf("boundary.enforce must be kill|none: %q", v)
 	}
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.BoundaryEnforce = v
-	return saveFile(repoRoot, fc)
+	return setField(ctx, repoRoot, "boundary_enforce", v)
 }
 
 // StagedProviders returns the list of staged providers added via cxt add.
@@ -294,13 +236,8 @@ func StagedProviders(repoRoot string) []string {
 }
 
 // SetStagedProviders sets the staging list (empty slice = staging off).
-func SetStagedProviders(repoRoot string, providers []string) error {
-	fc, err := loadFile(repoRoot)
-	if err != nil {
-		return err
-	}
-	fc.Staged = providers
-	return saveFile(repoRoot, fc)
+func SetStagedProviders(ctx context.Context, repoRoot string, providers []string) error {
+	return setField(ctx, repoRoot, "staged", providers)
 }
 
 // Origin returns the origin remote URL. Returns ("", false) if not set.

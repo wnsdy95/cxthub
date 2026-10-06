@@ -591,6 +591,38 @@ A genuine observed birth uses ordinary history publication. Only a pre-existing 
 
 `GET /repos/{repoID}?initial_branch=<name>` returns `initial_anchor_available` as a coherent branch-specific eligibility projection. An absent receipt alone is not authority: existing ownership and history can prohibit observation. Independent branches do not consume one another's eligibility. `GET /repos/{repoID}/initialization` recovers immutable creation metadata with current manage authorization. Exact accepted retries return the historical receipt without restoring older refs, including after archive or subsequent advancement; modified retries conflict. Heavy immutable-body verification precedes the write transaction, which rechecks authorization and mutable/ownership evidence before applying. Unsupported filesystem storage fails without mutation.
 
+### Concurrent local configuration changes
+
+Managed `.cxt/config` mutations and context capture use the same permanent-file
+lock in the shared repository root, including linked worktrees. A setting write
+rereads the current object under the exclusive lock and changes only its named
+field; unknown fields and other settings survive. Capture holds the shared lock
+while its repository identity is in use. A write from an already-held capture
+context fails instead of attempting a lock upgrade.
+
+Remote registration freezes the destination URL, credential and Git repository
+evidence before making the connection request, outside the lock. Publication
+then compares the exact previously observed config and rechecks local Git
+evidence. It never temporarily installs the proposed remote or restores an old
+config after a connection error. Origin mismatch, invalid resolution and caller
+cancellation stop registration. Other connection failures retain the existing
+warning-and-local-registration behavior; local registration does not prove
+server access or completed setup.
+
+Every managed write receives a fresh `mutation_id`, including a write of the
+same value, so a concurrent managed change-away-and-back cannot reuse an earlier
+observation. Remote removal and repair use the same conditional publication.
+Repair verifies server identity first, backs up the exact accepted config bytes,
+and preserves valid preferences, unknown fields and other remotes. A valid
+foreign origin or syntactically valid JSON with invalid known fields is refused
+without replacing the config. Explicit repair can back up and replace malformed
+JSON; it may also correct an invalid origin URL in an otherwise valid config.
+Object recovery and config publication remain separate operations.
+
+Older clients, manual file edits and Git-origin changes do not participate in
+this lock. They require quiesced operations; this protocol does not claim atomic
+coordination or detect exact-byte change-away-and-back for those external writers.
+
 ### Branch graph event projection
 
 The graph includes separate event nodes for recorded branch births and proven

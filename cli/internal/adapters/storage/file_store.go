@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
@@ -121,53 +122,8 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func validateCxtDir(dir string) error {
-	current := filepath.Clean(dir)
-	var chain []string
-	foundRoot := false
-	for {
-		chain = append(chain, current)
-		if filepath.Base(current) == ".cxt" {
-			foundRoot = true
-			break
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-		current = parent
-	}
-	if !foundRoot {
-		return domain.ErrHashMismatch
-	}
-	for i := len(chain) - 1; i >= 0; i-- {
-		info, err := os.Lstat(chain[i])
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return domain.ErrHashMismatch
-		}
-	}
-	return nil
-}
-
-func validateCxtWritePath(path string) error {
-	if err := validateCxtDir(filepath.Dir(path)); err != nil {
-		return err
-	}
-	if info, err := os.Lstat(path); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return domain.ErrHashMismatch
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
+func validateCxtDir(dir string) error        { return providerfs.ValidateCxtDir(dir) }
+func validateCxtWritePath(path string) error { return providerfs.ValidateCxtWritePath(path) }
 
 func readCxtFile(path string) ([]byte, error) {
 	if err := validateCxtWritePath(path); err != nil {

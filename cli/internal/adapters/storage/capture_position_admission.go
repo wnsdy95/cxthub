@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
@@ -40,7 +41,7 @@ func (s *FileStore) EnsureCapturePosition(ctx context.Context, repo string) erro
 	if expected.RepoID == repo {
 		return nil
 	}
-	if root, _ := ctx.Value(captureTrackingKey{}).(string); root == s.storeDir() {
+	if providerfs.CaptureGateHeld(ctx, s.repoRoot) {
 		return fmt.Errorf("normalize capture position before shared capture admission: %w", domain.ErrSelectionChanged)
 	}
 	if !canonicalEmptyCapturePosition(expected) || expected.GitBranch() != s.gitBranch {

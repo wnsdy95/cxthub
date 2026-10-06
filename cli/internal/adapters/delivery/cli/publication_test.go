@@ -186,7 +186,7 @@ func TestCommitPublicationUsesOwnOutputsDuringConcurrentPass(t *testing.T) {
 	ctx := context.Background()
 	own := publicationSnapshot(t, st, repo, "own complete pass", initial)
 	other := publicationSnapshot(t, st, repo, "other partial pass", initial)
-	if err := remotecfg.SetStagedProviders(cwd, []string{domain.ProviderClaude}); err != nil {
+	if err := remotecfg.SetStagedProviders(context.Background(), cwd, []string{domain.ProviderClaude}); err != nil {
 		t.Fatal(err)
 	}
 	read, release := make(chan struct{}), make(chan struct{})
@@ -256,7 +256,7 @@ func TestCommitPublicationRejectsChangedGitIdentity(t *testing.T) {
 	for _, change := range []string{"sha", "branch"} {
 		t.Run(change, func(t *testing.T) {
 			cwd, c, _, repo, target := publicationFixture(t)
-			if err := remotecfg.SetStagedProviders(cwd, []string{domain.ProviderClaude}); err != nil {
+			if err := remotecfg.SetStagedProviders(context.Background(), cwd, []string{domain.ProviderClaude}); err != nil {
 				t.Fatal(err)
 			}
 			old := gitOut(cwd, "rev-parse", "HEAD")
@@ -289,7 +289,7 @@ func TestCommitSelectedTranscriptDisappearingRemainsPending(t *testing.T) {
 	id := "11111111-1111-4111-8111-111111111111"
 	t.Setenv("CODEX_THREAD_ID", id)
 	path := writeCodexRollout(t, os.Getenv("HOME"), cwd, id, time.Now())
-	if err := remotecfg.SetStagedProviders(cwd, []string{domain.ProviderCodex}); err != nil {
+	if err := remotecfg.SetStagedProviders(context.Background(), cwd, []string{domain.ProviderCodex}); err != nil {
 		t.Fatal(err)
 	}
 	c.Save = publicationSaveFunc(func(_ context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {

@@ -14,15 +14,22 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/app"
+	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 // Only the configured origin may inherit CXT_TOKEN. Other servers use their
 // own login credential, so adding a named remote cannot leak origin credentials.
 func tokenForSyncDestination(cfg config, target string) string {
+	origin, _ := remotecfg.Origin(cfg.RepoRoot)
+	return tokenForObservedDestination(cfg, target, origin)
+}
+
+func tokenForObservedDestination(cfg config, target, configuredOrigin string) string {
 	base := cfg.RemoteEndpoint
-	if origin, ok := remotecfg.Origin(cfg.RepoRoot); ok {
-		if resolved, err := remotecfg.APIBase(origin); err == nil {
+	if configuredOrigin != "" {
+		if resolved, err := remotecfg.APIBase(configuredOrigin); err == nil {
 			base = resolved
 		}
 	}
@@ -85,6 +92,53 @@ func namedSyncDestination(cfg config, store *storage.FileStore, git outbound.Git
 		client.SetChunkLocal(store)
 		out.Sync = app.NewSyncRepoService(store, client, git, storage.NewSyncOutbox())
 		out.ApplySelectedPull = selectedPullApplication(store, client, git)
+		return out, nil
+	}
+}
+
+// prepareRemoteConnection freezes endpoint, credential and Git evidence once.
+// Both resolution and registration use this client; neither reads live config.
+func prepareRemoteConnection(cfg config) func(context.Context, string, string, string) (delivcli.PreparedRemoteConnection, error) {
+	return func(ctx context.Context, cwd, raw, configuredOrigin string) (delivcli.PreparedRemoteConnection, error) {
+		var out delivcli.PreparedRemoteConnection
+		canonical, err := remotecfg.CanonicalURL(raw)
+		if err != nil {
+			return out, err
+		}
+		base, err := remotecfg.APIBase(canonical)
+		if err != nil {
+			return out, err
+		}
+		token := tokenForObservedDestination(cfg, base, configuredOrigin)
+		client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
+		git := gitctx.NewGitContextAdapter()
+		before, err := git.CurrentRepo(ctx, cwd)
+		if err != nil {
+			return out, err
+		}
+		connection, err := client.ResolveRepositoryConnection(ctx, canonical)
+		if err != nil {
+			return out, fmt.Errorf("repository identity could not be verified; remote was not saved: %w", err)
+		}
+		stable, err := delivcli.ValidatedRepositoryURL(canonical, connection)
+		if err != nil {
+			return out, err
+		}
+		repo := before
+		repo.ID, repo.RemoteURL = connection.RepoID, stable
+		service := app.NewSyncRepoService(nil, client, nil, nil)
+		out.URL = stable
+		out.Connect = func(ctx context.Context) (inbound.ConnectOutput, error) { return service.ConnectRepository(ctx, repo) }
+		out.ValidateLocal = func(ctx context.Context) error {
+			current, err := git.CurrentRepo(ctx, cwd)
+			if err != nil {
+				return err
+			}
+			if current != before {
+				return domain.ErrSelectionChanged
+			}
+			return nil
+		}
 		return out, nil
 	}
 }

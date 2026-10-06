@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
 	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/app"
@@ -47,7 +45,11 @@ func runRepair(args []string) error {
 	if err != nil {
 		return fmt.Errorf("cannot establish repository identity from the Git journal: %w; preserve .cxt and run cxt doctor", err)
 	}
-	remotes, configErr := remotecfg.Load(roots.SharedRoot)
+	observedConfig, err := remotecfg.Observe(ctx, roots.SharedRoot)
+	if err != nil {
+		return err
+	}
+	remotes, configErr := observedConfig.Remotes()
 	origin := options.RemoteURL
 	if origin == "" {
 		origin = remotes["origin"]
@@ -113,17 +115,7 @@ func runRepair(args []string) error {
 	// Restore only absent/unparseable config. Valid local preferences are kept.
 	// A malformed file is retained exactly, including unknown fields.
 	if configErr != nil || remotes["origin"] == "" {
-		raw, readErr := providerfs.ReadRepoFile(roots.SharedRoot, ".cxt/config")
-		if readErr != nil && !os.IsNotExist(readErr) {
-			return readErr
-		}
-		if readErr == nil {
-			if err := providerfs.WriteRepoFileAtomic(backup, "config.before", raw, 0600); err != nil {
-				return err
-			}
-		}
-		data, _ := json.Marshal(map[string]any{"remotes": map[string]string{"origin": origin}})
-		if err := providerfs.WriteRepoFileAtomic(roots.SharedRoot, ".cxt/config", data, 0600); err != nil {
+		if err := remotecfg.RepairOrigin(ctx, observedConfig, origin, backup); err != nil {
 			return err
 		}
 	}

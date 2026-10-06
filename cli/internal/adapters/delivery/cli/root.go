@@ -36,15 +36,16 @@ import (
 // Container is a bundle of inbound ports used by the CLI driver + author identifier.
 type Container struct {
 	// WakeHistoricalSync is process lifecycle wiring, absent in embedded/test drivers.
-	WakeHistoricalSync     func(string)
-	ProviderLaunch         ProviderLaunchHooks
-	PrepareAgent           inbound.PrepareAgentContext
-	ApplySelectedPull      func(context.Context, string) (outbound.SelectedPullReceipt, error)
-	PreviewRemoteRepair    func(context.Context, string, string, domain.ContentHash, string) (outbound.RemoteRepairPlan, error)
-	ApplyRemoteRepair      func(context.Context, string, domain.ContentHash, outbound.RemoteRepairPlan) (outbound.RemoteRepairReceipt, error)
-	CaptureRecovery        inbound.CaptureRecovery
-	ResolveConnection      func(context.Context, string) (domain.RepositoryConnection, error)
-	ResolveSyncDestination func(context.Context, string, string) (SyncDestination, error)
+	WakeHistoricalSync      func(string)
+	ProviderLaunch          ProviderLaunchHooks
+	PrepareAgent            inbound.PrepareAgentContext
+	ApplySelectedPull       func(context.Context, string) (outbound.SelectedPullReceipt, error)
+	PreviewRemoteRepair     func(context.Context, string, string, domain.ContentHash, string) (outbound.RemoteRepairPlan, error)
+	ApplyRemoteRepair       func(context.Context, string, domain.ContentHash, outbound.RemoteRepairPlan) (outbound.RemoteRepairReceipt, error)
+	CaptureRecovery         inbound.CaptureRecovery
+	ResolveConnection       func(context.Context, string) (domain.RepositoryConnection, error)
+	PrepareRemoteConnection func(context.Context, string, string, string) (PreparedRemoteConnection, error)
+	ResolveSyncDestination  func(context.Context, string, string) (SyncDestination, error)
 	// ResolveRepo identifies a configured replica without registering or mutating it.
 	ResolveRepo      func(context.Context, string) (domain.Repo, error)
 	Init             inbound.InitRepo
@@ -322,7 +323,7 @@ func Run(c *Container, args []string) error {
 		switch key {
 		case "checkout.mode":
 			if hasVal {
-				if err := remotecfg.SetCheckoutMode(cwd, val); err != nil {
+				if err := remotecfg.SetCheckoutMode(ctx, cwd, val); err != nil {
 					return err
 				}
 			}
@@ -334,7 +335,7 @@ func Run(c *Container, args []string) error {
 				if val == "default" {
 					val = ""
 				}
-				if err := remotecfg.SetLoadMode(cwd, val); err != nil {
+				if err := remotecfg.SetLoadMode(ctx, cwd, val); err != nil {
 					return err
 				}
 			}
@@ -350,7 +351,7 @@ func Run(c *Container, args []string) error {
 				if val == "default" {
 					val = ""
 				}
-				if err := remotecfg.SetBoundaryEnforce(cwd, val); err != nil {
+				if err := remotecfg.SetBoundaryEnforce(ctx, cwd, val); err != nil {
 					return err
 				}
 			}
@@ -366,7 +367,7 @@ func Run(c *Container, args []string) error {
 				if _, serr := fmt.Sscanf(val, "%d", &sec); serr != nil {
 					return fmt.Errorf("capture.debounce must be an integer in seconds: %q", val)
 				}
-				if err := remotecfg.SetCaptureDebounce(cwd, sec); err != nil {
+				if err := remotecfg.SetCaptureDebounce(ctx, cwd, sec); err != nil {
 					return err
 				}
 			}
@@ -378,7 +379,7 @@ func Run(c *Container, args []string) error {
 				if val == "default" {
 					val = ""
 				}
-				if err := remotecfg.SetSecretsScrub(cwd, val); err != nil {
+				if err := remotecfg.SetSecretsScrub(ctx, cwd, val); err != nil {
 					return err
 				}
 			}
@@ -394,7 +395,7 @@ func Run(c *Container, args []string) error {
 				if val == "default" {
 					val = ""
 				}
-				if err := remotecfg.SetSecretsRedact(cwd, val); err != nil {
+				if err := remotecfg.SetSecretsRedact(ctx, cwd, val); err != nil {
 					return err
 				}
 			}
@@ -410,7 +411,7 @@ func Run(c *Container, args []string) error {
 				if cerr != nil {
 					return fmt.Errorf("secrets.minlen must be a number: %q", val)
 				}
-				if err := remotecfg.SetSecretsMinLen(cwd, n); err != nil {
+				if err := remotecfg.SetSecretsMinLen(ctx, cwd, n); err != nil {
 					return err
 				}
 			}
@@ -1064,6 +1065,17 @@ func resolvedRepositoryURL(ctx context.Context, c *Container, rawURL string) (st
 	if err != nil {
 		return "", fmt.Errorf("repository identity could not be verified; remote was not saved (use cxt setup <url> or cxt login --server <server-url> first): %w", err)
 	}
+	return ValidatedRepositoryURL(canonical, resolved)
+}
+
+// ValidatedRepositoryURL preserves the server/identity checks for both setup
+// resolution and a frozen remote-add connection.
+func ValidatedRepositoryURL(canonical string, resolved domain.RepositoryConnection) (string, error) {
+	var err error
+	canonical, err = remotecfg.CanonicalURL(canonical)
+	if err != nil {
+		return "", err
+	}
 	stable, err := remotecfg.CanonicalURL(resolved.RemoteURL)
 	requested, _ := url.Parse(canonical)
 	resolvedURL, _ := url.Parse(stable)
@@ -1081,7 +1093,11 @@ func resolvedRepositoryURL(ctx context.Context, c *Container, rawURL string) (st
 //
 // A single URL defines both the server address (scheme://host/api/v1) and RepoID (sha256(normalize(url))).
 func runRemote(ctx context.Context, c *Container, cwd string, rest []string) error {
-	remotes, err := remotecfg.Load(cwd)
+	observed, err := remotecfg.Observe(ctx, cwd)
+	if err != nil {
+		return err
+	}
+	remotes, err := observed.Remotes()
 	if err != nil {
 		return err
 	}
@@ -1100,28 +1116,45 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 		if existing, dup := remotes[name]; dup {
 			return fmt.Errorf("remote %q is already registered as %s (change: remove then add)", name, existing)
 		}
-		canonicalURL, err = resolvedRepositoryURL(ctx, c, canonicalURL)
-		if err != nil {
-			return err
+		var prepared PreparedRemoteConnection
+		if c.PrepareRemoteConnection != nil {
+			prepared, err = c.PrepareRemoteConnection(ctx, cwd, canonicalURL, remotes["origin"])
+			if err != nil {
+				return err
+			}
+			canonicalURL = prepared.URL
+		} else {
+			if name == "origin" {
+				return fmt.Errorf("explicit remote connection unavailable; config unchanged")
+			}
+			canonicalURL, err = resolvedRepositoryURL(ctx, c, canonicalURL)
+			if err != nil {
+				return err
+			}
 		}
-		remotes[name] = canonicalURL
-		if err := remotecfg.Save(cwd, remotes); err != nil {
+		var out inbound.ConnectOutput
+		var connectErr error
+		if name == "origin" {
+			if prepared.Connect == nil || prepared.ValidateLocal == nil {
+				return fmt.Errorf("incomplete remote connection; config unchanged")
+			}
+			out, connectErr = prepared.Connect(ctx)
+			var he *backendclient.HTTPError
+			if errors.As(connectErr, &he) && he.Code == "git_origin_mismatch" {
+				return fmt.Errorf("connection rejected — %w", he)
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if err := remotecfg.Add(ctx, observed, name, canonicalURL, prepared.ValidateLocal); err != nil {
 			return err
 		}
 		fmt.Printf("remote %q → %s (repo %s)\n", name, canonicalURL, shortHash(remotecfg.RepoIDFor(canonicalURL)))
-		// if origin, register immediately on the server to confirm and display the connection status (visible on the web too).
 		if name == "origin" {
-			out, cerr := c.Sync.Connect(ctx, inbound.SyncInput{Cwd: cwd})
-			var he *backendclient.HTTPError
 			switch {
-			case cerr != nil && errors.As(cerr, &he) && he.Code == "git_origin_mismatch":
-				// definitive server rejection — rollback the saved remote and exit with failure.
-				// (unlike connection failure, "auto-registration on server start" does not apply: this folder is not a git connected to this repository repo.)
-				delete(remotes, name)
-				_ = remotecfg.Save(cwd, remotes)
-				return fmt.Errorf("connection rejected — %w", he)
-			case cerr != nil:
-				fmt.Printf("⚠ Unable to connect to server (%v)\n  settings saved — will auto-register on first push when server is up.\n", cerr)
+			case connectErr != nil:
+				fmt.Printf("⚠ Unable to connect to server (%v)\n  settings saved — will auto-register on first push when server is up.\n", connectErr)
 			case out.Repo.RepositoryID != "":
 				fmt.Printf("✓ Connected — server registration complete, bound to repository (%s). Visible on the web.\n", out.Repo.RepositoryID)
 			default:
@@ -1138,8 +1171,7 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 		if _, ok := remotes[name]; !ok {
 			return fmt.Errorf("remote %q not found", name)
 		}
-		delete(remotes, name)
-		if err := remotecfg.Save(cwd, remotes); err != nil {
+		if err := remotecfg.Remove(ctx, observed, name); err != nil {
 			return err
 		}
 		fmt.Printf("removed remote %q\n", name)

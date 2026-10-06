@@ -364,17 +364,18 @@ func buildContainer(cfg config) container {
 	history := app.NewHistoryQueryService(gitCtx, gitctx.NewGitContextAdapter(), store, remote)
 	working := app.NewWorkingStateService(gitCtx, gitctx.NewGitContextAdapter(), store, store, history).WithAppliedPullReader(store, remote.SyncRemoteIdentity())
 	clictr := &delivcli.Container{
-		ProviderLaunch:     providerLaunchHooks(cfg),
-		WakeHistoricalSync: delivcli.SpawnHistoricalSync,
-		ResolveRepo:        gitCtx.CurrentRepo,
-		Queries:            app.NewLocalRefQueryService(gitCtx, store),
-		HistoryQuery:       history,
-		WorkingState:       working,
-		ContextDiff:        working,
-		CodePosition:       gitctx.NewGitContextAdapter(),
-		Staging:            stagingSvc,
-		IndexStash:         stagingSvc,
-		ListIndexStashes:   stagingSvc.ListIndexStashes,
+		ProviderLaunch:          providerLaunchHooks(cfg),
+		WakeHistoricalSync:      delivcli.SpawnHistoricalSync,
+		ResolveRepo:             gitCtx.CurrentRepo,
+		PrepareRemoteConnection: prepareRemoteConnection(cfg),
+		Queries:                 app.NewLocalRefQueryService(gitCtx, store),
+		HistoryQuery:            history,
+		WorkingState:            working,
+		ContextDiff:             working,
+		CodePosition:            gitctx.NewGitContextAdapter(),
+		Staging:                 stagingSvc,
+		IndexStash:              stagingSvc,
+		ListIndexStashes:        stagingSvc.ListIndexStashes,
 		ResolveConnection: func(ctx context.Context, raw string) (domain.RepositoryConnection, error) {
 			base, err := remotecfg.APIBase(raw)
 			if err != nil {

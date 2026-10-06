@@ -253,7 +253,7 @@ func TestPostCheckoutEarlyReturnStillPublishesAppliedBirth(t *testing.T) {
 			case "carry":
 				t.Setenv("CXT_CARRY", "1")
 			case "prepare-mode":
-				if err := remotecfg.SetCheckoutMode(cwd, remotecfg.CheckoutPrepare); err != nil {
+				if err := remotecfg.SetCheckoutMode(context.Background(), cwd, remotecfg.CheckoutPrepare); err != nil {
 					t.Fatal(err)
 				}
 			}

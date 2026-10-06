@@ -32,7 +32,7 @@ func TestFirstCommitFreezesConnectedIdentityAfterPendingCapture(t *testing.T) {
 	if err := st.PutWorkingPosition(ctx, domain.WorkingPosition{RepoID: provisional.ID, Branch: "main", GitCommit: code}); err != nil {
 		t.Fatal(err)
 	}
-	if err := remotecfg.Save(cwd, remotecfg.Remotes{"origin": "https://example.invalid/team/context"}); err != nil {
+	if err := configFixtureSave(cwd, remotecfg.Remotes{"origin": "https://example.invalid/team/context"}); err != nil {
 		t.Fatal(err)
 	}
 	git := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter())

@@ -2132,6 +2132,19 @@ func (s *SyncRepoService) Connect(ctx context.Context, in inbound.SyncInput) (in
 	if err != nil {
 		return inbound.ConnectOutput{}, err
 	}
+	return s.connectRepository(ctx, repo)
+}
+
+// ConnectRepository uses a caller-frozen repository and destination transport.
+// It reuses the exact initialization policy without rereading ambient config.
+func (s *SyncRepoService) ConnectRepository(ctx context.Context, repo domain.Repo) (inbound.ConnectOutput, error) {
+	if domain.ValidateContentHash(repo.ID) != nil || repo.RemoteURL == "" {
+		return inbound.ConnectOutput{}, domain.ErrHashMismatch
+	}
+	return s.connectRepository(ctx, repo)
+}
+
+func (s *SyncRepoService) connectRepository(ctx context.Context, repo domain.Repo) (inbound.ConnectOutput, error) {
 	registered, err := s.prepareRepositoryConnection(ctx, repo)
 	if err != nil {
 		return inbound.ConnectOutput{}, err
