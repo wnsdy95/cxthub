@@ -93,7 +93,36 @@ func setupInitialFixture(t *testing.T) (*tracking290Fixture, *setupInitialRemote
 	runLifecycleGit(t, f.cwd, "update-ref", "refs/remotes/origin/local-task", f.oid)
 	runLifecycleGit(t, f.cwd, "config", "branch.local-task.merge", "refs/heads/local-task")
 	r := &setupInitialRemote{}
-	f.c.Sync = app.NewSyncRepoService(f.store, r, remotecfg.Wrap(f.cwd, gitctx.NewGitContextAdapter()), storage.NewSyncOutbox())
+	sync := app.NewSyncRepoService(f.store, r, remotecfg.Wrap(f.cwd, gitctx.NewGitContextAdapter()), storage.NewSyncOutbox())
+	f.c.Sync = sync
+	f.c.PrepareRemoteConnection = func(ctx context.Context, cwd, raw, origin string) (PreparedRemoteConnection, error) {
+		if cwd != f.cwd || raw != url || origin != "" {
+			t.Fatalf("unexpected connection input: cwd=%q url=%q origin=%q", cwd, raw, origin)
+		}
+		git := gitctx.NewGitContextAdapter()
+		before, err := git.CurrentRepo(ctx, cwd)
+		if err != nil {
+			return PreparedRemoteConnection{}, err
+		}
+		repo := before
+		repo.ID, repo.RemoteURL = f.repo, url
+		return PreparedRemoteConnection{
+			URL: url,
+			Connect: func(ctx context.Context) (inbound.ConnectOutput, error) {
+				return sync.ConnectRepository(ctx, repo)
+			},
+			ValidateLocal: func(ctx context.Context) error {
+				after, err := git.CurrentRepo(ctx, cwd)
+				if err != nil {
+					return err
+				}
+				if after != before {
+					return domain.ErrSelectionChanged
+				}
+				return nil
+			},
+		}, nil
+	}
 	return f, r, url
 }
 func assertSetupEmpty(t *testing.T, f *tracking290Fixture) domain.WorkingPosition {
@@ -257,6 +286,13 @@ func TestSetupInitialCaptureEligibilityAndAdmission(t *testing.T) {
 			err := runSetup(ctx, f.c, f.cwd, []string{url, "--no-login"})
 			if err == nil || r.plans != wantPlans {
 				t.Fatalf("unauthorized empty path: err=%v plans=%d want=%d", err, r.plans, wantPlans)
+			}
+			wantQueries := 1
+			if name == "alias" {
+				wantQueries = 0
+			}
+			if r.begins != 1 || r.queries != wantQueries {
+				t.Fatalf("rejected before intended eligibility check: begins=%d queries=%d want=%d err=%v", r.begins, r.queries, wantQueries, err)
 			}
 			if _, err := os.Stat(filepath.Join(f.cwd, ".claude", "settings.json")); !os.IsNotExist(err) {
 				t.Fatal("enabled agent hooks")
