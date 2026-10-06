@@ -133,14 +133,28 @@ func (s *FileStore) matchesDocReceipt(ctx context.Context, id domain.ContentHash
 		return false
 	}
 	buf := make([]byte, 64<<10)
+	observed := make(map[[2]string]domain.ContentHash)
 	for i, file := range receipt.Proof.Files {
+		if ctx.Err() != nil {
+			return false
+		}
 		if (i == 0 && (file.Kind != "docs" || file.ID != id)) || (i > 0 && file.Kind != "chunks") || domain.ValidateContentHash(file.ID) != nil {
 			return false
+		}
+		identity := [2]string{file.Kind, string(file.ID)}
+		if got, ok := observed[identity]; ok {
+			if got != file.Stored {
+				return false
+			}
+			continue
 		}
 		got, err := hashDocVerificationFile(ctx, s.objectPath(file.Kind, file.ID), buf)
 		if err != nil || got != file.Stored {
 			return false
 		}
+		// Reuse only this invocation's successful stored-byte hash, never merely
+		// another entry's expectation or a digest from an earlier verification.
+		observed[identity] = got
 	}
 	return ctx.Err() == nil
 }
