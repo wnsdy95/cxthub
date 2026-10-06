@@ -42,6 +42,22 @@ re-chunking and repeated JSON decoding while preserving this identity. They
 still have to hash the canonical byte stream and check current chunk integrity.
 This is **not** a claim of fully incremental computation or constant-time save.
 
+The CLI's compatible upload path starts from the stored v2 manifest instead of
+decoding the full conversation and planning its chunks again. It verifies the
+local representation, negotiates missing chunk IDs, loads bounded batches, and
+waits for document finalization before publishing snapshot metadata or refs.
+An authenticated local receipt can avoid repeated CIR decoding only after every
+current stored file has been hashed. The descriptor is captured from those same
+verified bytes; requested bodies are hash-checked again when read. A cold check
+still reconstructs and validates the complete canonical document.
+
+Raw/v1 storage, partitions exceeding chunk/body/manifest limits, and peers
+without bounded v2 support use the existing upload path. This fallback is decided before any
+upload writes; corruption, cancellation, malformed negotiation, and partial
+upload failures are errors, not compatibility signals. Server verification and
+repository ownership checks remain mandatory. Memory uses its independent
+version/attachment protocol and does not enter this conversation upload path.
+
 Eliminating that remaining full-stream verification requires a separately
 versioned manifest-root identity and a durable verified-chunk contract. Such a
 protocol must be explicitly negotiated; an old server must never interpret a

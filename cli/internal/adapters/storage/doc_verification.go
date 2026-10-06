@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -18,13 +19,17 @@ import (
 
 // Bump this when canonical/CIR validation semantics change. Receipts are local
 // optimization hints, never replicated evidence or a replacement for fsck.
-const docVerificationVersion = 1
+// Version 2 also records decoded chunk identity and size from the consumed bytes.
+// A v1 receipt cannot establish bounded manifest-first upload eligibility.
+const docVerificationVersion = 2
 const maxDocReceiptBytes = 4 << 20
 
 type docVerifiedFile struct {
-	Kind   string             `json:"kind"`
-	ID     domain.ContentHash `json:"id"`
-	Stored domain.ContentHash `json:"stored"`
+	Kind      string             `json:"kind"`
+	ID        domain.ContentHash `json:"id"`
+	Stored    domain.ContentHash `json:"stored"`
+	Body      domain.ContentHash `json:"body,omitempty"`
+	BodyBytes int                `json:"body_bytes,omitempty"`
 }
 
 type docVerificationProof struct {
@@ -54,53 +59,76 @@ func (s *FileStore) docReceiptPath(id domain.ContentHash) string {
 // file named by an authenticated proof is hashed from disk on EVERY invocation;
 // timestamps, sizes, existence, and untrusted .cxt flags never prove integrity.
 func (s *FileStore) VerifyStoredDoc(ctx context.Context, id domain.ContentHash) error {
+	_, err := s.verifyStoredDoc(ctx, id, false)
+	return err
+}
+
+// storedDocEvidence binds the descriptor to the actual bytes consumed by full
+// validation or a current authenticated receipt check. Never read the descriptor
+// separately before/after verification: even equal reads admit an ABA race.
+type storedDocEvidence struct {
+	proof docVerificationProof
+	raw   []byte
+}
+
+func (s *FileStore) verifyStoredDoc(ctx context.Context, id domain.ContentHash, capture bool) (storedDocEvidence, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return storedDocEvidence{}, err
 	}
 	if err := domain.ValidateContentHash(id); err != nil {
-		return err
+		return storedDocEvidence{}, err
 	}
 	key, _ := s.docVerificationKey() // caching is optional, correctness is not
-	if len(key) != 0 && s.matchesDocReceipt(ctx, id, key) {
-		return ctx.Err()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	proof := docVerificationProof{Version: docVerificationVersion, Doc: id}
-	var observe func(string, domain.ContentHash, []byte)
 	if len(key) != 0 {
-		observe = func(kind string, hash domain.ContentHash, raw []byte) {
-			proof.Files = append(proof.Files, docVerifiedFile{Kind: kind, ID: hash, Stored: domain.HashContent(raw)})
+		if evidence, ok := s.matchingDocReceipt(ctx, id, key, capture); ok {
+			return evidence, ctx.Err()
 		}
 	}
-	// The receipt describes these exact consumed bytes, not a second read after
-	// validation. Repacking or a concurrent file replacement invalidates reuse.
+	if err := ctx.Err(); err != nil {
+		return storedDocEvidence{}, err
+	}
+	evidence := storedDocEvidence{proof: docVerificationProof{Version: docVerificationVersion, Doc: id}}
+	var observe func(string, domain.ContentHash, []byte, []byte)
+	if len(key) != 0 || capture {
+		observe = func(kind string, hash domain.ContentHash, raw, body []byte) {
+			file := docVerifiedFile{Kind: kind, ID: hash, Stored: domain.HashContent(raw)}
+			if kind == "docs" && capture {
+				evidence.raw = bytes.Clone(raw)
+			}
+			if kind == "chunks" {
+				// Reuse the reader's decoded bytes; warm verification only hashes
+				// the stored representation and never decodes cumulative CIR.
+				file.Body = domain.HashContent(body)
+				file.BodyBytes = len(body)
+			}
+			evidence.proof.Files = append(evidence.proof.Files, file)
+		}
+	}
 	data, _, err := s.readStoredDoc(ctx, id, observe)
 	if err != nil {
-		return err
+		return storedDocEvidence{}, err
 	}
 	var cir domain.CIRDocument
 	if err := json.Unmarshal(data, &cir); err != nil {
-		return domain.ErrInvalidCIR
+		return storedDocEvidence{}, domain.ErrInvalidCIR
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return storedDocEvidence{}, err
 	}
 	if err := domain.ValidateSessionDocHash(domain.SessionDoc{Hash: id, CIR: cir}); err != nil {
-		return err
+		return storedDocEvidence{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return storedDocEvidence{}, err
 	}
 	if len(key) != 0 {
-		receipt := docVerificationReceipt{Proof: proof, MAC: signDocProof(proof, key)}
+		receipt := docVerificationReceipt{Proof: evidence.proof, MAC: signDocProof(evidence.proof, key)}
 		if raw, err := json.Marshal(receipt); err == nil && len(raw) <= maxDocReceiptBytes {
 			// A failed cache write cannot turn a valid document into a failed pull.
 			_ = writeAtomic(s.docReceiptPath(id), raw)
 		}
 	}
-	return ctx.Err()
+	return evidence, ctx.Err()
 }
 
 func signDocProof(proof docVerificationProof, key []byte) string {
@@ -111,52 +139,66 @@ func signDocProof(proof docVerificationProof, key []byte) string {
 }
 
 func (s *FileStore) matchesDocReceipt(ctx context.Context, id domain.ContentHash, key []byte) bool {
+	_, ok := s.matchingDocReceipt(ctx, id, key, false)
+	return ok
+}
+
+func (s *FileStore) matchingDocReceipt(ctx context.Context, id domain.ContentHash, key []byte, capture bool) (storedDocEvidence, bool) {
 	f, err := openDocVerificationFile(s.docReceiptPath(id))
 	if err != nil {
-		return false
+		return storedDocEvidence{}, false
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxDocReceiptBytes+1))
 	_ = f.Close()
 	if err != nil || len(raw) > maxDocReceiptBytes {
-		return false
+		return storedDocEvidence{}, false
 	}
 	var receipt docVerificationReceipt
 	if json.Unmarshal(raw, &receipt) != nil || receipt.Proof.Version != docVerificationVersion || receipt.Proof.Doc != id {
-		return false
+		return storedDocEvidence{}, false
 	}
 	mac, err := hex.DecodeString(receipt.MAC)
 	if err != nil {
-		return false
+		return storedDocEvidence{}, false
 	}
 	expect, _ := hex.DecodeString(signDocProof(receipt.Proof, key))
 	if !hmac.Equal(mac, expect) || len(receipt.Proof.Files) == 0 {
-		return false
+		return storedDocEvidence{}, false
 	}
+	evidence := storedDocEvidence{proof: receipt.Proof}
 	buf := make([]byte, 64<<10)
-	observed := make(map[[2]string]domain.ContentHash)
+	observed := make(map[[2]string]docVerifiedFile)
 	for i, file := range receipt.Proof.Files {
 		if ctx.Err() != nil {
-			return false
+			return storedDocEvidence{}, false
 		}
 		if (i == 0 && (file.Kind != "docs" || file.ID != id)) || (i > 0 && file.Kind != "chunks") || domain.ValidateContentHash(file.ID) != nil {
-			return false
+			return storedDocEvidence{}, false
 		}
 		identity := [2]string{file.Kind, string(file.ID)}
 		if got, ok := observed[identity]; ok {
-			if got != file.Stored {
-				return false
+			if got != file {
+				return storedDocEvidence{}, false
 			}
 			continue
 		}
-		got, err := hashDocVerificationFile(ctx, s.objectPath(file.Kind, file.ID), buf)
-		if err != nil || got != file.Stored {
-			return false
+		var captured bytes.Buffer
+		var out io.Writer
+		if i == 0 && capture {
+			out = &captured
 		}
-		// Reuse only this invocation's successful stored-byte hash, never merely
-		// another entry's expectation or a digest from an earlier verification.
-		observed[identity] = got
+		got, err := hashDocVerificationFileObserved(ctx, s.objectPath(file.Kind, file.ID), buf, out)
+		if err != nil || got != file.Stored {
+			return storedDocEvidence{}, false
+		}
+		if i == 0 && capture {
+			evidence.raw = captured.Bytes()
+		}
+		// Reuse only this invocation's successful stored-byte hash. Duplicate
+		// entries must agree on all authenticated body metadata as well.
+		observed[identity] = file
 	}
-	return ctx.Err() == nil
+	return evidence, ctx.Err() == nil
 }
 
 func openDocVerificationFile(path string) (*os.File, error) {
@@ -177,6 +219,10 @@ func openDocVerificationFile(path string) (*os.File, error) {
 }
 
 func hashDocVerificationFile(ctx context.Context, path string, buf []byte) (domain.ContentHash, error) {
+	return hashDocVerificationFileObserved(ctx, path, buf, nil)
+}
+
+func hashDocVerificationFileObserved(ctx context.Context, path string, buf []byte, out io.Writer) (domain.ContentHash, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -192,6 +238,11 @@ func hashDocVerificationFile(ctx context.Context, path string, buf []byte) (doma
 		}
 		n, err := f.Read(buf)
 		_, _ = hash.Write(buf[:n])
+		if out != nil {
+			if _, err := out.Write(buf[:n]); err != nil {
+				return "", err
+			}
+		}
 		if err == io.EOF {
 			return domain.ContentHash("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
 		}
