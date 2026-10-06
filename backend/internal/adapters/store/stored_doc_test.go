@@ -185,8 +185,12 @@ func BenchmarkStoredDocVerification(b *testing.B) {
 		}
 	})
 	b.Run("warm-proof", func(b *testing.B) {
+		if _, err := s.VerifyStoredDoc(ctx, repo, doc.Hash); err != nil {
+			b.Fatal(err)
+		}
 		b.SetBytes(int64(len(raw)))
 		b.ReportAllocs()
+		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			if _, err := s.VerifyStoredDoc(ctx, repo, doc.Hash); err != nil {
 				b.Fatal(err)
