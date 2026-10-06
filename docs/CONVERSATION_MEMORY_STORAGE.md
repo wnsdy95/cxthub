@@ -51,8 +51,8 @@ current stored file has been hashed. The descriptor is captured from those same
 verified bytes; requested bodies are hash-checked again when read. A cold check
 still reconstructs and validates the complete canonical document.
 
-Raw/v1 storage, oversized legacy chunk partitions, and peers without bounded
-v2 support use the existing upload path. This fallback is decided before any
+Raw/v1 storage, partitions exceeding chunk/body/manifest limits, and peers
+without bounded v2 support use the existing upload path. This fallback is decided before any
 upload writes; corruption, cancellation, malformed negotiation, and partial
 upload failures are errors, not compatibility signals. Server verification and
 repository ownership checks remain mandatory. Memory uses its independent

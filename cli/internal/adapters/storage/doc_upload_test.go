@@ -618,3 +618,133 @@ func TestVerifiedDocChunksRepeatedIDsAndConflictingReceiptMetadata(t *testing.T)
 		})
 	}
 }
+
+func TestVerifiedDocChunksManifestEntryLimit(t *testing.T) {
+	for _, count := range []int{chunkcas.MaxPortableManifestChunks, chunkcas.MaxPortableManifestChunks + 1} {
+		for _, corruptSuffix := range []bool{false, true} {
+			s := verificationStore(t)
+			repeats := count - 2
+			id, canonical, plan := uploadFixture(t, s, sampleCIR(strings.Repeat("x", repeats)))
+			stream := plan.Bodies[plan.Order[0]]
+			start := bytes.Index(stream, bytes.Repeat([]byte("x"), repeats))
+			if start < 0 {
+				t.Fatal("fixture text not found")
+			}
+			prefix, suffix := stream[:start], stream[start+repeats:]
+			prefixID, repeatedID, suffixID := domain.HashContent(prefix), domain.HashContent([]byte("x")), domain.HashContent(suffix)
+			if corruptSuffix {
+				suffixID = domain.HashContent([]byte("wrong suffix label"))
+			}
+			plan.Manifest.Chunks = []domain.ContentHash{prefixID}
+			for range repeats {
+				plan.Manifest.Chunks = append(plan.Manifest.Chunks, repeatedID)
+			}
+			plan.Manifest.Chunks = append(plan.Manifest.Chunks, suffixID)
+			plan.Bodies = map[domain.ContentHash][]byte{prefixID: prefix, repeatedID: []byte("x"), suffixID: suffix}
+			writeUploadPlan(t, s, id, plan)
+			for _, warm := range []bool{false, true} {
+				called := false
+				ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+					called = true
+					checkUploadDescriptor(t, doc, id, canonical, plan)
+					return nil
+				})
+				want := count == chunkcas.MaxPortableManifestChunks && !corruptSuffix
+				if ok != want || called != want || (err != nil) != corruptSuffix {
+					t.Fatalf("entries=%d corrupt=%v warm=%v: supported=%v called=%v error=%v", count, corruptSuffix, warm, ok, called, err)
+				}
+				if corruptSuffix && !errors.Is(err, domain.ErrHashMismatch) {
+					t.Fatal("entry fallback hid corrupt suffix", err)
+				}
+			}
+			if !corruptSuffix {
+				// The ordinary planner can transport the same canonical document
+				// with one chunk after source eligibility declines the tiny pieces.
+				doc, err := s.GetDoc(context.Background(), id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := domain.CanonicalBytes(doc.CIR)
+				if err != nil || !bytes.Equal(body, canonical) {
+					t.Fatal("fallback lost canonical identity", err)
+				}
+				fallback, ok := chunkcas.PlanDoc(body)
+				if !ok || len(fallback.Order) != 1 || !chunkcas.PortableManifest(fallback.Manifest) {
+					t.Fatal("fallback did not produce portable manifest")
+				}
+			}
+		}
+	}
+}
+
+func TestVerifiedDocChunksEncodedManifestLimit(t *testing.T) {
+	for _, extra := range []int{0, 1} {
+		for _, corruptSuffix := range []bool{false, true} {
+			s := verificationStore(t)
+			cir := sampleCIR("synthetic")
+			canonical, _ := domain.CanonicalBytes(cir)
+			base, _ := chunkcas.PlanDoc(canonical)
+			encoded, _ := json.Marshal(base.Manifest)
+			cir.Envelope.Cwd = strings.Repeat("x", chunkcas.MaxPortableManifestBytes-len(encoded)+extra)
+			id, _, plan := uploadFixture(t, s, cir)
+			encoded, _ = json.Marshal(plan.Manifest)
+			if len(encoded) != chunkcas.MaxPortableManifestBytes+extra {
+				t.Fatal("fixture missed encoded boundary", len(encoded))
+			}
+			if corruptSuffix {
+				wrong := domain.HashContent([]byte("wrong label"))
+				plan.Bodies[wrong] = plan.Bodies[plan.Order[0]]
+				plan.Manifest.Chunks[0] = wrong
+				writeUploadPlan(t, s, id, plan)
+			}
+			for _, warm := range []bool{false, true} {
+				called := false
+				ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(outbound.DocumentChunks) error {
+					called = true
+					return nil
+				})
+				want := extra == 0 && !corruptSuffix
+				if ok != want || called != want || (err != nil) != corruptSuffix {
+					t.Fatalf("encoded+%d corrupt=%v warm=%v: supported=%v called=%v error=%v", extra, corruptSuffix, warm, ok, called, err)
+				}
+			}
+		}
+	}
+}
+
+func TestVerifiedDocChunksAssembledLimitCountsOccurrencesAndFraming(t *testing.T) {
+	// Test the private eligibility boundary using proof metadata so exercising
+	// a 512 MiB bound does not allocate/decode a 512 MiB test document. Real
+	// proofs obtain these lengths only from the already verified decoded bytes.
+	repeated := domain.HashContent([]byte("repeated"))
+	tail := domain.HashContent([]byte("tail"))
+	manifest := chunkcas.Manifest{Format: chunkcas.FormatV2, Envelope: json.RawMessage(`{}`)}
+	for range 255 {
+		manifest.Chunks = append(manifest.Chunks, repeated)
+	}
+	manifest.Chunks = append(manifest.Chunks, tail)
+	raw, _ := json.Marshal(manifest)
+	frame := len(chunkcas.Assemble(manifest.Envelope, nil))
+	for _, extra := range []int{0, 1} {
+		evidence := storedDocEvidence{raw: raw, proof: docVerificationProof{Files: []docVerifiedFile{
+			{Kind: "chunks", ID: repeated, Body: repeated, BodyBytes: chunkcas.MaxPortableChunkBytes},
+			{Kind: "chunks", ID: tail, Body: tail, BodyBytes: chunkcas.MaxPortableChunkBytes - frame + extra},
+		}}}
+		_, _, ok, err := uploadDocManifest(context.Background(), evidence)
+		if err != nil || ok != (extra == 0) {
+			t.Fatalf("assembled limit+%d: supported=%v error=%v", extra, ok, err)
+		}
+		// No subtraction overflow, and an earlier size miss cannot suppress a
+		// later identity error. This is shape-level private evidence, not a MAC.
+		evidence.proof.Files[0].BodyBytes = int(^uint(0) >> 1)
+		_, _, ok, err = uploadDocManifest(context.Background(), evidence)
+		if err != nil || ok {
+			t.Fatal("size accounting overflowed", ok, err)
+		}
+		evidence.proof.Files[1].Body = repeated
+		_, _, ok, err = uploadDocManifest(context.Background(), evidence)
+		if ok || !errors.Is(err, domain.ErrHashMismatch) {
+			t.Fatal("assembled limit hid a corrupt suffix", ok, err)
+		}
+	}
+}

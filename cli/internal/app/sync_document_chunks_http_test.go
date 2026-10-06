@@ -145,6 +145,97 @@ func TestStoredChunkUploadPreservesCanonicalIdentity(t *testing.T) {
 	}
 }
 
+func TestStoredNonportableChunksUseLegacyPlannerBeforeUpload(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := storage.NewFileStore(root)
+	run := strings.Repeat("x", chunkcas.MaxPortableManifestChunks+1)
+	cir := domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: "1"}, Events: []domain.Event{{Seq: 0, Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: run}}}}}
+	raw, err := domain.CanonicalBytes(cir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := store.PutDoc(ctx, domain.SessionDoc{CIR: cir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, ok := chunkcas.PlanDoc(raw)
+	if !ok || len(plan.Order) != 1 {
+		t.Fatal("fixture requires one standard chunk")
+	}
+	body := plan.Bodies[plan.Order[0]]
+	start := bytes.Index(body, []byte(run))
+	if start < 0 {
+		t.Fatal("fixture text absent")
+	}
+	manifest := chunkcas.Manifest{Format: chunkcas.FormatV2, Envelope: plan.Manifest.Envelope}
+	add := func(body []byte) {
+		hash := domain.HashContent(body)
+		if err := store.PutChunk(ctx, hash, body); err != nil {
+			t.Fatal(err)
+		}
+		manifest.Chunks = append(manifest.Chunks, hash)
+	}
+	add(body[:start])
+	add([]byte("x"))
+	for range len(run) - 1 {
+		manifest.Chunks = append(manifest.Chunks, manifest.Chunks[1])
+	}
+	add(body[start+len(run):])
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".cxt", "objects", "docs", strings.TrimPrefix(string(id), "sha256:")), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var negotiated, finalized atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/push/negotiate"):
+			var in struct {
+				Chunks []domain.ContentHash `json:"chunk_haves"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				t.Error(err)
+			}
+			if len(in.Chunks) != 1 || in.Chunks[0] != plan.Order[0] {
+				t.Errorf("nonportable representation reached negotiation: %v", in.Chunks)
+			}
+			negotiated.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"doc_wants": []domain.ContentHash{id}, "chunk_wants": in.Chunks, "chunks_supported": true, "bounded_chunks_supported": true, "chunk_formats_supported": []string{chunkcas.FormatV2}, "async_docs_supported": true})
+		case strings.HasSuffix(r.URL.Path, "/push/chunks"):
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/push/doc-jobs"):
+			var in struct {
+				Hash domain.ContentHash `json:"hash"`
+				chunkcas.Manifest
+			}
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				t.Error(err)
+			}
+			assembled, err := chunkcas.AssembleChunks(in.Manifest, [][]byte{body}, in.Hash)
+			if err != nil || !bytes.Equal(assembled, raw) || in.Hash != id || len(in.Chunks) != 1 {
+				t.Errorf("fallback changed canonical document: %v", err)
+			}
+			finalized.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": domain.HashContent([]byte("job")), "doc_hash": id, "state": "completed"})
+		default:
+			t.Errorf("unexpected publication: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	remote := backendclient.NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
+	if err := newTestSyncService(store, remote, nil).pushDocument(ctx, string(domain.HashContent([]byte("repo"))), id); err != nil {
+		t.Fatal(err)
+	}
+	if negotiated.Load() != 1 || finalized.Load() != 1 {
+		t.Fatal("fallback did not finish exactly one publication")
+	}
+}
+
 // Compare client work for the same warm store, peer and one missing tail chunk.
 // HTTP acknowledgements are synthetic; this does not measure server indexing.
 func BenchmarkStoredDocumentUpload(b *testing.B) {

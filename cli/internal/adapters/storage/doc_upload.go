@@ -123,6 +123,15 @@ func uploadDocManifest(ctx context.Context, evidence storedDocEvidence) (chunkca
 	}
 	allowed := make(map[domain.ContentHash]struct{}, len(manifest.Chunks))
 	portable := true
+	// V2 is the envelope and every ordered body, including repeated IDs, plus
+	// exact canonical framing. Subtract before adding to avoid size overflow.
+	remaining := chunkcas.MaxPortableDocBytes - len(`{"envelope":,"events":[]}`)
+	if len(manifest.Envelope) > remaining {
+		portable = false
+		remaining = 0
+	} else {
+		remaining -= len(manifest.Envelope)
+	}
 	for _, hash := range manifest.Chunks {
 		if err := ctx.Err(); err != nil {
 			return chunkcas.Manifest{}, nil, false, err
@@ -134,7 +143,14 @@ func uploadDocManifest(ctx context.Context, evidence storedDocEvidence) (chunkca
 		if file.BodyBytes == 0 || file.BodyBytes > chunkcas.MaxPortableChunkBytes {
 			portable = false
 		}
+		if file.BodyBytes > remaining {
+			portable = false
+			remaining = 0
+		} else {
+			remaining -= file.BodyBytes
+		}
 		allowed[hash] = struct{}{}
 	}
-	return manifest, allowed, portable, ctx.Err()
+	// Do not let any admission limit hide a corrupt suffix or missing proof.
+	return manifest, allowed, portable && chunkcas.PortableManifest(manifest), ctx.Err()
 }

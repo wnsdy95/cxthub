@@ -207,6 +207,45 @@ func TestPushDocChunksCapabilities(t *testing.T) {
 	}
 }
 
+func TestPushDocChunksManifestLimitsFallBackBeforeRequests(t *testing.T) {
+	for _, kind := range []string{"ordered-count", "encoded-bytes"} {
+		t.Run(kind, func(t *testing.T) {
+			doc := docUploadFixture(t, domain.CIRVersionV1)
+			if kind == "ordered-count" {
+				id := doc.Chunks[0]
+				for len(doc.Chunks) <= chunkcas.MaxPortableManifestChunks {
+					doc.Chunks = append(doc.Chunks, id)
+				}
+			} else {
+				raw, err := domain.CanonicalBytes(domain.CIRDocument{Envelope: domain.Envelope{
+					CIRVersion: domain.CIRVersionV1, SessionOriginID: strings.Repeat("x", chunkcas.MaxPortableManifestBytes),
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var value struct {
+					Envelope json.RawMessage `json:"envelope"`
+				}
+				if err := json.Unmarshal(raw, &value); err != nil {
+					t.Fatal(err)
+				}
+				doc.Envelope = value.Envelope
+			}
+			doc.ReadChunk = func(context.Context, domain.ContentHash) ([]byte, error) {
+				t.Error("nonportable manifest read an upload body")
+				return nil, errors.New("unexpected body read")
+			}
+			repo := domain.HashContent([]byte(t.Name()))
+			client := docUploadClient(t, repo, func(http.ResponseWriter, *http.Request) {
+				t.Error("nonportable manifest contacted server")
+			})
+			if used, err := client.PushDocChunks(context.Background(), repo, doc); used || err != nil {
+				t.Fatalf("clean pre-write fallback: used=%v error=%v", used, err)
+			}
+		})
+	}
+}
+
 func TestPushDocChunksRejectsMaliciousNegotiationBeforeReadsOrFallback(t *testing.T) {
 	other := domain.HashContent([]byte("unoffered"))
 	for _, tc := range []struct {

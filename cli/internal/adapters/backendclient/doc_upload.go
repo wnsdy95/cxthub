@@ -57,6 +57,9 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 			chunkHaves = append(chunkHaves, hash)
 		}
 	}
+	if !chunkcas.PortableManifest(chunkcas.Manifest{Format: doc.Format, Envelope: doc.Envelope, Chunks: doc.Chunks}) {
+		return false, nil
+	}
 	docHaves := []domain.ContentHash{doc.Hash}
 	var neg negotiateResp
 	negotiationCtx := outbound.WithSyncDiagnosticRole(ctx, outbound.SyncRoleDocumentChunks)
