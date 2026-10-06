@@ -30,6 +30,18 @@ PYINITSTATE
   [ "$?" = 0 ] || exit 1
   session "$TMP/initial-repo-$INIT_KIND" FIRSTMAIN
   printf '{"cwd":"%s","session_id":"sess-FIRSTMAIN","transcript_path":"%s","prompt":"begin"}\n' "$PWD" "$D/sess-FIRSTMAIN.jsonl" | cxt hook --provider claude --event UserPromptSubmit >"$TMP/initial-hook.out" 2>&1 || exit 1
+  # The first real hook must normalize only the empty init cursor before
+  # asynchronous pending capture or commit finalization can freeze its identity.
+  python3 - "$INIT_RID" <<'PYINITCAPTURE'
+import hashlib,json,pathlib,subprocess,sys
+repo=sys.argv[1]
+admin=subprocess.check_output(['git','rev-parse','--absolute-git-dir'],text=True).strip()
+key=hashlib.sha256(admin.encode()).hexdigest()[:32]
+p=json.loads((pathlib.Path('.cxt/worktrees')/key/'position.json').read_text())
+assert p['repo_id']==repo and p['branch_id']=='legacy-'+hashlib.sha256((repo+'\x00main').encode()).hexdigest()[:32], 'first hook kept provisional repository identity'
+assert p['branch']=='main' and not p.get('snapshot') and not p.get('selection'), 'first hook invented context selection'
+PYINITCAPTURE
+  [ "$?" = 0 ] || { cat "$TMP/initial-hook.out"; exit 1; }
   if [ "$INIT_KIND" = birth ]; then
     CXT_KEEP_SESSION=1 git switch -qc "$INIT_BRANCH" >"$TMP/initial-switch.out" 2>&1 || { cat "$TMP/initial-switch.out"; exit 1; }
   fi

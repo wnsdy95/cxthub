@@ -41,6 +41,7 @@ type Handler struct {
 	coord    *capture.CaptureCoordinator
 	notices  inbound.SessionNotices
 	preparer inbound.PrepareAgentContext
+	admit    func(context.Context, string) error
 	observe  func(string, domain.ProviderKind, string)
 	stdin    io.Reader // for testing. nil means os.Stdin (no read from terminal)
 	stdout   io.Writer // for testing. nil means os.Stdout (additionalContext JSON emission channel)
@@ -136,6 +137,11 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 			return err
 		}
 	}
+	if h.admit != nil {
+		if err := h.admit(ctx, cwd); err != nil {
+			return err
+		}
+	}
 	if err := capture.TrackAppSession(cwd, provider, p.SessionID, path); err != nil {
 		return err
 	}
@@ -181,6 +187,13 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 		return err
 	}
 	return nil
+}
+
+// WithCaptureAdmission validates the connected worktree before tracking or
+// preparing a live session. Repository policy stays in the application service.
+func (h *Handler) WithCaptureAdmission(admit func(context.Context, string) error) *Handler {
+	h.admit = admit
+	return h
 }
 
 // WithSessionNotices enables code/selection notices through the application

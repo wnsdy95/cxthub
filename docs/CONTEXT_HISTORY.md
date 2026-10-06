@@ -566,6 +566,15 @@ other worktrees and queued operations are not overwritten. Repeated setup keeps
 an existing selection. Registration through `remote add` does not attach or
 inject context.
 
+The next capture may normalize a still-empty local init cursor from its
+provisional Git repository identity to the configured CXTHub identity. This is
+an atomic admission step shared by provider hooks, Save and commit capture,
+not an implicit pull or branch attachment. It changes only the repository ID
+and derived legacy branch ID. Existing selected context, memory, foreign
+repository evidence and frozen capture intentions prevent normalization.
+Already captured pending data owned by the connected repository is preserved;
+other worktree positions are never rewritten.
+
 If an authorized exact-branch query affirmatively reports initial-anchor
 eligibility for a proven-new protected repository, setup may instead establish
 the current worktree's canonical empty position. Local and upstream branch

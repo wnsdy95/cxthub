@@ -59,10 +59,49 @@ func beginCommitCapture(ctx context.Context, c *Container, cwd string, providers
 	if c.History == nil {
 		return nil, nil
 	}
+	var captureRepo string
+	if admission, ok := c.History.(inbound.ContextCaptureAdmission); ok {
+		repo, err := resolvePublicationRepo(ctx, c, cwd)
+		if err != nil {
+			return nil, err
+		}
+		if err := admission.EnsureCapturePosition(ctx, repo.ID); err != nil {
+			return nil, fmt.Errorf("prepare commit capture position: %w", err)
+		}
+		captureRepo = repo.ID
+	}
+	// Admission may need EX. Only its subsequent recheck and durable intent
+	// share the existing SH gate with capture writers.
+	if gate, ok := c.History.(inbound.ContextCaptureGate); ok {
+		var pass *commitCapturePass
+		err := gate.WithCaptureTrackingGate(ctx, func(locked context.Context) error {
+			var err error
+			pass, err = freezeCommitCapture(locked, c, cwd, providers, captureRepo)
+			return err
+		})
+		return pass, err
+	}
+	return freezeCommitCapture(ctx, c, cwd, providers, captureRepo)
+}
+
+func freezeCommitCapture(ctx context.Context, c *Container, cwd string, providers []string, captureRepo string) (*commitCapturePass, error) {
+	if captureRepo != "" {
+		repo, err := resolvePublicationRepo(ctx, c, cwd)
+		if err != nil {
+			return nil, err
+		}
+		if repo.ID != captureRepo {
+			return nil, domain.ErrSelectionChanged
+		}
+	}
 	position, err := c.History.CurrentPosition(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if captureRepo != "" && position.RepoID != captureRepo {
+		return nil, domain.ErrSelectionChanged
+	}
+
 	oid := gitOut(cwd, "rev-parse", "HEAD")
 	branch := gitOut(cwd, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if branch == "" {

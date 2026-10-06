@@ -28,6 +28,7 @@ cleanup() {
 trap cleanup EXIT
 
 expect() { # expect <description> <actual> <expected>
+  if [ "$#" -ne 3 ]; then echo "  ✗ ${1:-unnamed assertion}: expected 3 arguments, got $#"; FAIL=1; return; fi
   if [ "$2" = "$3" ]; then echo "  ✓ $1"; else echo "  ✗ $1  (got=$2 want=$3)"; FAIL=1; fi
 }
 jget() { python3 -c "import json,sys;print(json.load(sys.stdin)$1)"; }
@@ -214,7 +215,8 @@ expect "search endpoint 200" "$(code -b "$JA" "$RB/search?q=ssrf")" 200
 expect "search less than 2 characters 422" "$(code -b "$JA" "$RB/search?q=a")" 422
 expect "search unauthenticated 401" "$(code "$RB/search?q=ssrf")" 401
 ccurl -sb "$JA" -X PATCH "$RB/about" -H 'Content-Type: application/json' -d '{"description":"","website":"","topics":[],"protect_default":true}' >/dev/null
-expect "protected branch force 403" "$(ccode -b "$JA" -X PUT "$RB/refs/branch/main" -H 'Content-Type: application/json' -d "{\"target\":\"$H1\",\"force\":true}")" 403
+FORCE_REF_PAYLOAD="{\"target\":\"$H1\",\"force\":true}"
+expect "protected branch force 403" "$(ccode -b "$JA" -X PUT "$RB/refs/branch/main" -H 'Content-Type: application/json' -d "$FORCE_REF_PAYLOAD")" 403
 
 echo "── F. CLI: init output, device-flow login, and secret round trip"
 REPO="$TMP/repo"; mkdir -p "$REPO"; cd "$REPO"
@@ -227,6 +229,12 @@ expect ".gitignore auto-registration" "$(grep -c -e '.cxt/' -e '.cxtsecrets' .gi
 # Use a fresh repository for a decryptable CLI round trip; the role matrix above
 # intentionally stores a format-valid opaque fixture which is not decryptable.
 CLISLUG=$(ccurl -sb "$JA" -X POST "$B/repositories" -H 'Content-Type: application/json' -d '{"name":"SecretsCLI"}' | jget "['slug']")
+# This suite exercises existing FS repository compatibility. New atomic
+# repository initialization requires PostgreSQL and is covered by e2e-sync.
+CLIREMOTE="$ORIGIN/$OWN/$CLISLUG"
+CLIRID="$(repo_id "$CLIREMOTE")"
+CLIREPO_PAYLOAD="{\"id\":\"$CLIRID\",\"remote_url\":\"$CLIREMOTE\",\"default_branch\":\"main\"}"
+expect "existing FS secrets repository registration" "$(ccode -b "$JA" -X POST "$B/repos" -H 'Content-Type: application/json' -d "$CLIREPO_PAYLOAD")" 200
 CXT_NO_BROWSER=1 cxt login --server "$ORIGIN" >"$TMP/login.out" 2>&1 &
 LPID=$!
 sleep 1.5
@@ -234,7 +242,7 @@ DCODE=$(grep -o '[B-Z2-9]\{3\}-[B-Z2-9]\{3\}' "$TMP/login.out" | head -1)
 expect "device flow code output" "$([ -n "$DCODE" ] && echo yes)" yes
 ccurl -sb "$JA" -X POST "$B/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE\"}" >/dev/null
 wait "$LPID"
-cxt remote add origin "http://127.0.0.1:$PORT/$OWN/$CLISLUG" >/dev/null 2>&1
+cxt remote add origin "$CLIREMOTE" >/dev/null 2>&1
 expect "device login complete(auth.json)" "$(python3 -c "import json;print('127.0.0.1:$PORT' in json.load(open('$HOME/.cxt/auth.json')))")" True
 # Device name label: device flow passes CLI hostname as a label → shows in token list.
 expect "device token with hostname label" "$(curl -sb "$JA" "$B/me/cli-tokens" | python3 -c "import json,socket,sys;ts=json.load(sys.stdin) or [];print(any(t.get('label')==socket.gethostname() for t in ts))")" True
@@ -248,6 +256,7 @@ expect "correct pull recovery" "$(grep -c 'sk-e2e-secret-12345' .cxtsecrets)" 1
 rm .cxtsecrets
 cxt secrets pull >/dev/null 2>&1
 expect "--remember after -p omission" "$(grep -c 'sk-e2e-secret-12345' .cxtsecrets)" 1
+expect "secrets round trip does not upgrade an existing repository" "$(curl -fsSb "$JA" "$B/repos/$CLIRID" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["id"], r.get("context_protocol", 0))')" "$CLIRID 0"
 cd "$ROOT"
 
 echo "── G. Webhooks: default SSRF blocking versus explicitly allowed private targets"
@@ -341,7 +350,10 @@ expect "CORS: arbitrary origin is not reflected" "$(curl -s -H 'Origin: https://
 expect "CORS: localhost origin is reflected" "$(curl -s -H 'Origin: http://localhost:5173' -o /dev/null -w '%{header_json}' "$B/repos" | python3 -c "import json,sys;print(json.load(sys.stdin).get('access-control-allow-origin',['none'])[0])")" "http://localhost:5173"
 expect "Content-Type forced 415" "$(ccode -b "$JA" -X POST "$B/repositories" -H 'Content-Type: text/plain' -d '{"name":"Csrf"}')" 415
 expect "Reserved username 409" "$(ccode -b "$JA" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"username":"api"}')" 409
-expect "device: wrong poll_token 404" "$(S=$(curl -s -X POST "$B/auth/device/start" -H 'Content-Type: application/json' -d '{}'); C=$(echo "$S"|jget "['code']"); code -X POST "$B/auth/device/poll" -H 'Content-Type: application/json' -d "{\"code\":\"$C\",\"poll_token\":\"dpoll_x\"}")" 404
+DEVICE_POLL_START=$(curl -s -X POST "$B/auth/device/start" -H 'Content-Type: application/json' -d '{}')
+DEVICE_POLL_CODE=$(printf '%s\n' "$DEVICE_POLL_START" | jget "['code']")
+DEVICE_POLL_PAYLOAD="{\"code\":\"$DEVICE_POLL_CODE\",\"poll_token\":\"dpoll_x\"}"
+expect "device: wrong poll_token 404" "$(code -X POST "$B/auth/device/poll" -H 'Content-Type: application/json' -d "$DEVICE_POLL_PAYLOAD")" 404
 R429=$(for i in $(seq 1 25); do code -X POST "$B/auth/session" -H "Authorization: Bearer dev:rl@t.io:R"; echo; done | grep -c 429)
 expect "login rate limit returns at least one 429 in 25 attempts" "$([ "$R429" -ge 1 ] && echo yes)" yes
 

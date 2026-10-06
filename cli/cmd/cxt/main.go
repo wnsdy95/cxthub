@@ -351,8 +351,16 @@ func buildContainer(cfg config) container {
 	// The explicit --local MCP helper is a read-only offline projection. The
 	// product MCP runs in the independent cxt-mcp server against shared cloud storage.
 	mcpSrv := delivmcp.NewServer(gitCtx, store, remote)
+	contextHistory := app.NewContextHistoryService(store, store)
 	notices := app.NewSessionNoticeService(sessionnotice.NewSelectionReader(cfg.RepoRoot, cfg.GitDir, store), store)
 	hookHdl := delivhook.NewHandler(coord).WithLiveObservation().WithSessionNotices(notices)
+	hookHdl.WithCaptureAdmission(func(ctx context.Context, cwd string) error {
+		repo, err := gitCtx.CurrentRepo(ctx, cwd)
+		if err != nil {
+			return err
+		}
+		return contextHistory.EnsureCapturePosition(ctx, repo.ID)
+	})
 	history := app.NewHistoryQueryService(gitCtx, gitctx.NewGitContextAdapter(), store, remote)
 	working := app.NewWorkingStateService(gitCtx, gitctx.NewGitContextAdapter(), store, store, history).WithAppliedPullReader(store, remote.SyncRemoteIdentity())
 	clictr := &delivcli.Container{
@@ -390,7 +398,7 @@ func buildContainer(cfg config) container {
 		Tag:             tagSvc,
 		Stash:           stashSvc,
 		Handoff:         handoffSvc,
-		History:         app.NewContextHistoryService(store, store),
+		History:         contextHistory,
 		CaptureRecovery: app.NewCaptureRecoveryService(capturejournal.New(cfg.RepoRoot, cfg.RepoRoot), store),
 		PRMerges:        gitctx.NewGitHubPRMergeResolver(),
 		Settings:        remote,
