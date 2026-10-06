@@ -159,6 +159,12 @@ func TestIncomingMetadataSelectedTransferPreservesCandidatesAndLocalState(t *tes
 	c := &Container{Sync: syncer, List: app.NewListSessionsService(st)}
 	refsBefore, _ := st.ListRefs(ctx, repo)
 	fullBefore, _ := st.ReadRemoteObservation(ctx, repo, "configured")
+	// Compare persisted representations on both sides. JSON timestamps are UTC;
+	// time.Unix uses time.Local even when the host's local zone is UTC.
+	localBefore, err := st.GetSnapshot(ctx, local.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		out, err := fetchIncomingContexts(ctx, c, root, "main", []string{"aaaa1111", "bbbb2222"})
 		if err != nil || len(out.Conflicts) != 0 {
@@ -181,10 +187,22 @@ func TestIncomingMetadataSelectedTransferPreservesCandidatesAndLocalState(t *tes
 		}
 		refsAfter, _ := st.ListRefs(ctx, repo)
 		fullAfter, _ := st.ReadRemoteObservation(ctx, repo, "configured")
-		localAfter, _ := st.GetSnapshot(ctx, local.ID)
+		localAfter, err := st.GetSnapshot(ctx, local.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
 		history, err := st.ListHistoryEvents(ctx, repo)
-		if err != nil || len(history) != 0 || !reflect.DeepEqual(refsBefore, refsAfter) || !reflect.DeepEqual(fullBefore, fullAfter) || !reflect.DeepEqual(local, localAfter) {
-			t.Fatal("fetch adopted local refs/history/grafts or full repair observation")
+		if err != nil || len(history) != 0 {
+			t.Fatalf("fetch changed history: %v %v", history, err)
+		}
+		if !reflect.DeepEqual(refsBefore, refsAfter) {
+			t.Fatalf("fetch changed refs: before=%+v after=%+v", refsBefore, refsAfter)
+		}
+		if !reflect.DeepEqual(fullBefore, fullAfter) {
+			t.Fatal("fetch changed full repair observation")
+		}
+		if !reflect.DeepEqual(localBefore, localAfter) {
+			t.Fatalf("fetch changed unpublished snapshot: before=%+v after=%+v", localBefore, localAfter)
 		}
 	}
 	want := []domain.ContentHash{remote.ID, ancestor.ID}
