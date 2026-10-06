@@ -400,7 +400,7 @@ func TestAppendMergedContextsDoesNotTreatCoveredFailedCandidateAsReflected(t *te
 
 	if reflected := appendMergedContexts(
 		context.Background(), c, t.TempDir(), "main", []string{"aaaa1111", "bbbb2222"},
-	); reflected {
+		false); reflected {
 		t.Fatal("failed newest candidate was masked by its covered ancestor")
 	}
 }
@@ -426,7 +426,7 @@ func TestWritePullBriefingUsesPrePromotionBaselineAfterLocalRefMoves(t *testing.
 		Sync: fixedBriefingSync{remote: domain.Ref{Kind: domain.RefBranch, Name: "main", Target: promoted}},
 	}
 
-	writePullBriefingFromBaseline(context.Background(), c, cwd, "main", baseline)
+	writePullBriefingFromBaseline(context.Background(), c, cwd, "main", baseline, false)
 	briefing, ok := capture.ConsumeBriefing(cwd)
 	if !ok || !strings.Contains(briefing, string(promoted)) || strings.Contains(briefing, string(baseline)) {
 		t.Fatalf("post-promotion briefing = %q, want only promoted target", briefing)
@@ -435,7 +435,7 @@ func TestWritePullBriefingUsesPrePromotionBaselineAfterLocalRefMoves(t *testing.
 		t.Fatalf("briefing cursor = %s, %v; want promoted target", cursor, ok)
 	}
 
-	writePullBriefingFromBaseline(context.Background(), c, cwd, "main", baseline)
+	writePullBriefingFromBaseline(context.Background(), c, cwd, "main", baseline, false)
 	if repeated, ok := capture.ConsumeBriefing(cwd); ok {
 		t.Fatalf("promoted range was briefed twice: %q", repeated)
 	}
@@ -476,7 +476,7 @@ func TestPullBriefingReadsOnlyPointerAndPreservesIncompleteCursor(t *testing.T) 
 				t.Fatal(err)
 			}
 			c := &Container{Sync: sync, List: fixedBriefingList{out: inbound.ListOutput{Snapshots: snaps}}}
-			writePullBriefingFromBaseline(context.Background(), c, cwd, "main", base)
+			writePullBriefingFromBaseline(context.Background(), c, cwd, "main", base, false)
 			cursor, ok := capture.ReadPullBriefingCursor(cwd, "main")
 			text, queued := capture.ConsumeBriefing(cwd)
 			want := base

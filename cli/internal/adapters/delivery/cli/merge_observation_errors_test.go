@@ -58,7 +58,7 @@ func TestMergeUnknownGraphAndFailure(t *testing.T) {
 			}
 			base := &mergeObservationRefOnly{ref: ref, appendErr: appendErr}
 			syncer := &mergeObservationBoundarySync{mergeObservationRefOnly: base, observed: inbound.RemoteBranchObservation{Ref: ref, Snapshots: observed}}
-			got := appendMergedContexts(context.Background(), &Container{List: fixedBriefingList{out: inbound.ListOutput{Snapshots: local}}, Sync: syncer}, t.TempDir(), "main", shas)
+			got := appendMergedContexts(context.Background(), &Container{List: fixedBriefingList{out: inbound.ListOutput{Snapshots: local}}, Sync: syncer}, t.TempDir(), "main", shas, false)
 			if got != wantReflected || !reflect.DeepEqual(base.appends, want) || syncer.calls != 1 || base.refCalls != 0 {
 				t.Fatalf("reflected=%t want=%t; appends=%v want=%v; observation calls=%d ref-only calls=%d", got, wantReflected, base.appends, want, syncer.calls, base.refCalls)
 			}
@@ -138,7 +138,7 @@ func TestMergeRejectedAppendIsNotReflected(t *testing.T) {
 			})
 			remote := backendclient.NewBackendClient(func() string { return "https://merge-review.invalid/api/v1" }, func() string { return "" }, domain.TeamIdentity{})
 			syncer := &mergeCommandSync{SyncRepoService: app.NewSyncRepoService(store, remote, mergeObservationGit{domain.Repo{ID: repo, LocalPath: root}}, storage.NewSyncOutbox()), observed: inbound.RemoteBranchObservation{Ref: observed, Snapshots: []domain.Snapshot{{ID: r}, {ID: a}}}}
-			got := appendMergedContexts(ctx, &Container{List: fixedBriefingList{out: inbound.ListOutput{Snapshots: []domain.Snapshot{{ID: a, Message: "A [git aaaa]"}, {ID: r}}, Refs: []domain.Ref{local}}}, Sync: syncer}, root, tc.branch, []string{"aaaa1111"})
+			got := appendMergedContexts(ctx, &Container{List: fixedBriefingList{out: inbound.ListOutput{Snapshots: []domain.Snapshot{{ID: a, Message: "A [git aaaa]"}, {ID: r}}, Refs: []domain.Ref{local}}}, Sync: syncer}, root, tc.branch, []string{"aaaa1111"}, false)
 			after, err := store.GetRef(ctx, repo, domain.RefBranch, tc.branch)
 			if err != nil || after != local || requests != 1 {
 				t.Fatalf("local identity/ref changed or wrong request count: after=%+v err=%v requests=%d", after, err, requests)

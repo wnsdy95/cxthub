@@ -717,7 +717,7 @@ func (s *SyncRepoService) ResolveRemoteBranchObservation(ctx context.Context, in
 	if domain.ValidateBranchName(branch) != nil {
 		return inbound.RemoteBranchObservation{}, domain.ErrInvalidRef
 	}
-	out, err := s.Pull(ctx, inbound.SyncInput{RepoID: in.RepoID, Cwd: in.Cwd, Ref: branch, FetchOnly: true, Progress: in.Progress, ObservationRoots: in.ObservationRoots})
+	out, err := s.Pull(ctx, inbound.SyncInput{RepoID: in.RepoID, Cwd: in.Cwd, Ref: branch, FetchOnly: true, Progress: in.Progress, ObservationRoots: in.ObservationRoots, RequireBranchPlan: in.RequireBranchPlan})
 	if err != nil {
 		return inbound.RemoteBranchObservation{}, err
 	}
@@ -1565,6 +1565,9 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	scopedRemote, remoteSupportsScope := s.remote.(outbound.ScopedBranchRemotePull)
 	scopedStore, storeSupportsScope := s.store.(outbound.ScopedRemoteObservationStore)
 	useScope := in.FetchOnly && in.Ref != "" && capabilities.BranchPlanVersion == domain.BranchPullVersion
+	if in.RequireBranchPlan && !useScope {
+		return inbound.SyncOutput{}, fmt.Errorf("%w: selected branch transfer is no longer available", domain.ErrSyncConflict)
+	}
 	if useScope && (!remoteSupportsScope || !storeSupportsScope) {
 		return inbound.SyncOutput{}, fmt.Errorf("selected branch observation is unavailable in this client adapter")
 	}

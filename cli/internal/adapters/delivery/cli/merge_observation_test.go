@@ -152,7 +152,7 @@ func TestMergeObservedCoverage(t *testing.T) {
 					}
 				}
 			}
-			reflected := appendMergedContexts(ctx, &Container{List: listing, Sync: syncer}, root, "main", shas)
+			reflected := appendMergedContexts(ctx, &Container{List: listing, Sync: syncer}, root, "main", shas, false)
 			after, err := listing.List(ctx, inbound.ListInput{RepoID: repo})
 			if err != nil || !reflect.DeepEqual(before, after) {
 				t.Fatalf("fetch/observation adopted local metadata or moved refs: %v", err)

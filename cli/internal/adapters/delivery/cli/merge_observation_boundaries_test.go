@@ -81,7 +81,7 @@ func TestMergeObservationBoundaries(t *testing.T) {
 				observer.observed.Snapshots = []domain.Snapshot{{ID: a}, {ID: y, Parents: []domain.ContentHash{a}}}
 				wantReflected = true
 			}
-			got := appendMergedContexts(context.Background(), &Container{List: fixedBriefingList{out: inbound.ListOutput{Snapshots: local}}, Sync: syncer}, t.TempDir(), "main", []string{"aaaa1111"})
+			got := appendMergedContexts(context.Background(), &Container{List: fixedBriefingList{out: inbound.ListOutput{Snapshots: local}}, Sync: syncer}, t.TempDir(), "main", []string{"aaaa1111"}, false)
 			if got != wantReflected || !reflect.DeepEqual(base.appends, wantAppends) {
 				t.Fatalf("reflected=%t want=%t; append count=%d want=%d", got, wantReflected, len(base.appends), len(wantAppends))
 			}
