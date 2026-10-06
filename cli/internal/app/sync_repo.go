@@ -1164,6 +1164,34 @@ func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string
 }
 
 func (s *SyncRepoService) pushDocument(ctx context.Context, repoID string, hash domain.ContentHash) error {
+	// Preserve the stored representation when both adapters support it. The
+	// callback keeps its lazy chunk reader alive until the server acknowledges
+	// the document; snapshot/ref publication still happens in the caller.
+	if source, ok := s.store.(outbound.ChunkedDocumentStore); ok {
+		if remote, ok := s.remote.(outbound.ChunkedDocumentPusher); ok {
+			endRead := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageDocumentRead, outbound.SyncDiagnosticCounts{Documents: 1})
+			uploaded := false
+			_, err := source.WithVerifiedDocChunks(ctx, hash, func(doc outbound.DocumentChunks) error {
+				endRead(nil)
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if doc.Hash != hash {
+					return domain.ErrHashMismatch
+				}
+				var err error
+				uploaded, err = remote.PushDocChunks(ctx, repoID, doc)
+				return err
+			})
+			endRead(err)
+			if err != nil {
+				return fmt.Errorf("prepare or upload chunked document %s (no ref updates sent): %w", hash, err)
+			}
+			if uploaded {
+				return ctx.Err()
+			}
+		}
+	}
 	endRead := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageDocumentRead, outbound.SyncDiagnosticCounts{Documents: 1})
 	doc, err := s.store.GetDoc(ctx, hash)
 	endRead(err)
