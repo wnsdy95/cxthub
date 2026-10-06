@@ -73,7 +73,7 @@ func (s *Session) firstQuestionFrame(m map[string]json.RawMessage, kind string) 
 		}
 		if raw, ok := m["model"]; ok {
 			var model string
-			if json.Unmarshal(raw, &model) != nil || model != q.summary.Model {
+			if json.Unmarshal(raw, &model) != nil || !sameResponseModel(model, q.summary.Model) {
 				return true, ErrProtocol
 			}
 		}
@@ -259,9 +259,15 @@ func firstQuestionResult(m map[string]json.RawMessage, q *firstQuestionState) (s
 	if err != nil || len(models) != 1 {
 		return "", ErrProtocol
 	}
-	modelUsage, err := object(models[q.summary.Model])
-	if err != nil {
-		return "", err
+	var modelUsage map[string]json.RawMessage
+	for model, raw := range models {
+		if !sameResponseModel(model, q.summary.Model) {
+			return "", ErrProtocol
+		}
+		modelUsage, err = object(raw)
+		if err != nil {
+			return "", err
+		}
 	}
 	for _, key := range []string{"inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests", "contextWindow", "maxOutputTokens"} {
 		if _, ok := modelUsage[key]; ok {

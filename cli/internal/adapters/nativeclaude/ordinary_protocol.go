@@ -244,7 +244,7 @@ func ordinaryAssistant(m map[string]json.RawMessage, model string) (text, last s
 		err = ErrProtocol
 		return
 	}
-	if actual, e := stringField(m, "model"); e != nil || actual != model {
+	if actual, e := stringField(m, "model"); e != nil || !sameResponseModel(actual, model) {
 		err = ErrProtocol
 		return
 	}
