@@ -724,10 +724,27 @@ func stopProviderChild(child *exec.Cmd, done <-chan error) error {
 }
 
 func providerLaunchEnvironment(ctx context.Context, cwd string, provider domain.ProviderKind, args []string, supervised bool) []string {
+	var profile []string
+	profileKeys := map[string]bool{}
+	if supervised && provider == domain.ProviderClaude {
+		profile = claudeMemoryProfileEnv(cwd, args)
+		for i, entry := range profile {
+			key, _, _ := strings.Cut(entry, "=")
+			profileKeys[key] = true
+			if key == "CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT" && profile[0] == "CXT_CLAUDE_MEMORY_PROFILE=v1" {
+				profile[i] = key + "=" + memoryadapter.ClaudeMemoryConfigFingerprint(ctx, cwd)
+			}
+		}
+	}
 	var env []string
 	for _, item := range os.Environ() {
 		name, _, _ := strings.Cut(item, "=")
 		if name == "CXT_WRAPPED_CAPTURE_PROTOCOL" || name == "CXT_WRAPPED" || name == "CXT_WRAPPER_PID" || name == "CXT_WRAPPED_AGENT" || name == "CXT_WRAPPED_SESSION_ID" || name == "CXT_WRAPPER_TRANSITION_PROTOCOL" {
+			continue
+		}
+		// Replace the owned profile as a unit, including empty overrides for
+		// unknown settings. Native validation rejects duplicate environment keys.
+		if profileKeys[name] {
 			continue
 		}
 		env = append(env, item)
@@ -736,12 +753,5 @@ func providerLaunchEnvironment(ctx context.Context, cwd string, provider domain.
 		return env
 	}
 	env = append(env, "CXT_WRAPPED=1", fmt.Sprintf("CXT_WRAPPER_PID=%d", os.Getpid()), "CXT_WRAPPED_AGENT="+string(provider), "CXT_WRAPPED_SESSION_ID="+sessionIDFromAgentArgs(string(provider), args))
-	if provider == domain.ProviderClaude {
-		profile := claudeMemoryProfileEnv(cwd, args)
-		if len(profile) > 0 && profile[0] == "CXT_CLAUDE_MEMORY_PROFILE=v1" {
-			profile = append(profile, "CXT_CLAUDE_MEMORY_CONFIG_FINGERPRINT="+memoryadapter.ClaudeMemoryConfigFingerprint(ctx, cwd))
-		}
-		env = append(env, profile...)
-	}
-	return env
+	return append(env, profile...)
 }
