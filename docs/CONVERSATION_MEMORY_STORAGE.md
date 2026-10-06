@@ -51,6 +51,12 @@ current stored file has been hashed. The descriptor is captured from those same
 verified bytes; requested bodies are hash-checked again when read. A cold check
 still reconstructs and validates the complete canonical document.
 
+Receipt v2 adds decoded chunk hashes and sizes without changing canonical/CIR
+validation. Ordinary fetch continues to reuse authenticated v1 receipts after
+hashing current files; only upload upgrades them through full validation. This
+compatibility is specific to the v1-to-v2 metadata change, not future validation
+versions. Losing or rejecting a receipt always falls back to full verification.
+
 Raw/v1 storage, partitions exceeding chunk/body/manifest limits, and peers
 without bounded v2 support use the existing upload path. This fallback is decided before any
 upload writes; corruption, cancellation, malformed negotiation, and partial

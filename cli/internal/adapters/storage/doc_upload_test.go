@@ -83,14 +83,7 @@ func TestVerifiedDocChunksColdWarmAndDisabledCache(t *testing.T) {
 					t.Fatal(err)
 				}
 				if mode == "v1-receipt" {
-					r := receiptFor(t, s, id)
-					r.Proof.Version = 1
-					for i := range r.Proof.Files {
-						r.Proof.Files[i].Body = ""
-						r.Proof.Files[i].BodyBytes = 0
-					}
-					key, _ := s.docVerificationKey()
-					writeSignedReuseReceipt(t, s, r, key)
+					writeV1DocReceipt(t, s, id)
 				}
 				if err := os.Chtimes(s.docReceiptPath(id), old, old); err != nil {
 					t.Fatal(err)

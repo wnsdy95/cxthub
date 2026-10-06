@@ -19,8 +19,9 @@ import (
 
 // Bump this when canonical/CIR validation semantics change. Receipts are local
 // optimization hints, never replicated evidence or a replacement for fsck.
-// Version 2 also records decoded chunk identity and size from the consumed bytes.
-// A v1 receipt cannot establish bounded manifest-first upload eligibility.
+// Version 2 adds decoded chunk identity/size without changing canonical/CIR
+// semantics. V1 therefore remains valid for verification, but not upload capture.
+// Any later semantics bump must invalidate both versions (see the gate below).
 const docVerificationVersion = 2
 const maxDocReceiptBytes = 4 << 20
 
@@ -154,7 +155,13 @@ func (s *FileStore) matchingDocReceipt(ctx context.Context, id domain.ContentHas
 		return storedDocEvidence{}, false
 	}
 	var receipt docVerificationReceipt
-	if json.Unmarshal(raw, &receipt) != nil || receipt.Proof.Version != docVerificationVersion || receipt.Proof.Doc != id {
+	if json.Unmarshal(raw, &receipt) != nil || receipt.Proof.Doc != id {
+		return storedDocEvidence{}, false
+	}
+	// Compatibility is specific to the metadata-only v1 -> v2 upgrade.
+	// A future validation version must not silently keep accepting v1.
+	compatibleV1 := docVerificationVersion == 2 && receipt.Proof.Version == 1 && !capture
+	if receipt.Proof.Version != docVerificationVersion && !compatibleV1 {
 		return storedDocEvidence{}, false
 	}
 	mac, err := hex.DecodeString(receipt.MAC)
