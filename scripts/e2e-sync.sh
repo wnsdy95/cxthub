@@ -3,7 +3,7 @@
 # and fetch-only behavior with real cxtd/cxt binaries and Git hooks.
 #
 # Scenarios along the context-divergence policy path:
-#   A. repo1 pushes session A, memorize             (base chain + memory)
+#   A. legacy repo1 pushes session A, memorize      (base chain + memory)
 #   B. repo2 (new clone, no pull) pushes independent session B → hook append (root graft)
 #   C. repo2 pulls, adopts the graft, and memorizes             → B inherits memory from A
 #   D. repo2 commits new session C                              → session boundary metadata
@@ -11,6 +11,8 @@
 #   F. repo1 pushes after both sides moved                      → automatic rebase-graft
 #   J2. global app hooks in unconnected repositories            → no store creation + residue quarantine
 #   K. oversized single event                                  → v2 bounded push/pull + v1 fallback
+#   T. modern main birth → fresh clone + setup → same-identity ordinary push
+#   U. first-owner setup → same-code capture → initial legacy observation (PG)
 #
 # Run with isolated TMP, HOME, and a randomized port; no local state is retained.
 # CXT_E2E_PUBLICATION_ONLY=1 runs just the promotion/next-commit regression.
@@ -87,6 +89,25 @@ expect() { if [ "$2" = "$3" ]; then echo "  ✓ $1"; else echo "  ✗ $1  (got=$
 jget() { python3 -c "import json,sys;print(json.load(sys.stdin)$1)"; }
 ccurl() { command curl -H "Origin: $ORIGIN" -H 'X-Cxt-CSRF: 1' "$@"; }
 main_head() { curl -sb "$J" "$B/repos/$RID/refs" | python3 -c "import json,sys;print(next((r['target'] for r in json.load(sys.stdin) if r['kind']=='branch' and r['name']=='main'),''))"; }
+
+# Explicit compatibility setup for legacy-store/migration fixtures only.
+# PostgreSQL fresh-use cases never call this helper.
+fixture_register_legacy_repo() {
+  python3 - "$1" "$2" >"$TMP/legacy-registration.json" <<'PYLEGACYREPO'
+import hashlib,json,sys,urllib.parse
+remote,git_remote=sys.argv[1:]
+u=urllib.parse.urlsplit(remote)
+identity=(u.netloc+u.path).removesuffix('.git').rstrip('/').lower()
+print(json.dumps({'id':'sha256:'+hashlib.sha256(identity.encode()).hexdigest(),'remote_url':remote,'git_remote_url':git_remote,'default_branch':'main'}))
+PYLEGACYREPO
+  [ "$?" = 0 ] || return 1
+  ccurl -fsSb "$J" -X POST "$B/repos" -H 'Content-Type: application/json' \
+    --data-binary @"$TMP/legacy-registration.json" >"$TMP/legacy-registration-response.json" || return 1
+  python3 - "$TMP/legacy-registration-response.json" <<'PYLEGACYSTATE'
+import json,sys
+r=json.load(open(sys.argv[1])); assert r.get('context_protocol',0)==0
+PYLEGACYSTATE
+}
 
 ref_target() { python3 - "$1" <<'PYREF'
 import json,pathlib,sys
@@ -176,9 +197,12 @@ with open(path,'w') as f:
 PY
 }
 
-echo "── A. repo1: Session A push + memorize"
+echo "── A. legacy repo1: Session A push + memorize (B root-append compatibility)"
 mkdir -p "$TMP/repo1"; cd "$TMP/repo1"
 git init -q; git remote add origin "$TMP/bare.git"
+# A/B intentionally exercise same legacy identity with independent context roots.
+# T separately requires a modern main birth and automatic fresh-clone adoption.
+git commit -q --allow-empty -m legacy-code-baseline || exit 1
 cxt init >/dev/null 2>&1
 CXT_NO_BROWSER=1 cxt login --server "$ORIGIN" >"$TMP/login.out" 2>&1 &
 LPID=$!
@@ -190,6 +214,9 @@ done
 expect "device flow code output" "$([ -n "$DCODE" ] && echo yes)" yes
 ccurl -sb "$J" -X POST "$B/auth/device/approve" -H 'Content-Type: application/json' -d "{\"code\":\"$DCODE\"}" >/dev/null
 wait "$LPID"
+if [ -z "${CXT_E2E_DSN:-}" ]; then
+  fixture_register_legacy_repo "$REMOTE" "$TMP/bare.git" || exit 1
+fi
 cxt remote add origin "$REMOTE" >/dev/null 2>&1
 if [ "${CXT_E2E_PUBLICATION_ONLY:-0}" = 1 ]; then
   source "$ROOT/scripts/e2e-publication.inc.sh"
@@ -198,8 +225,24 @@ if [ "${CXT_E2E_PUBLICATION_ONLY:-0}" = 1 ]; then
 fi
 session "$TMP/repo1" A
 echo a > f.txt; git add f.txt; git commit -qm codeA >/dev/null 2>&1
+if ! python3 - <<'PYALEGACY'
+import hashlib,json,pathlib
+ref=json.loads(pathlib.Path('.cxt/refs/heads/main').read_text())
+assert ref['branch_id']=='legacy-'+hashlib.sha256((ref['repo_id']+'\x00main').encode()).hexdigest()[:32], 'A/B fixture requires real pre-existing main'
+events=[json.loads(p.read_text()) for p in pathlib.Path('.cxt/history').glob('*.json')]
+assert not any(e['branch']=='main' and e['kind'] in ('birth','orphan') for e in events), 'legacy fixture fabricated a main birth'
+PYALEGACY
+then exit 1; fi
+if [ -z "${CXT_E2E_DSN:-}" ]; then
+  # FS compatibility is explicit existing-repo migration, not new initialization.
+  cxt push origin >"$TMP/legacy-bootstrap.out" 2>&1 || { cat "$TMP/legacy-bootstrap.out"; exit 1; }
+  RID=$(ccurl -fsSb "$J" "$B/repos" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])') || exit 1
+  ccurl -fsSb "$J" -X POST "$B/repos/$RID/context-protocol" -H 'Content-Type: application/json' -d '{}' >"$TMP/legacy-protection.json" || exit 1
+fi
 git push -q -u origin main >"$TMP/p1.out" 2>&1
 RID=$(curl -sb "$J" "$B/repos" | python3 -c "import json,sys; rs=json.load(sys.stdin); print(rs[0]['id'] if rs else '')")
+ccurl -fsSb "$J" "$B/repos/$RID" >"$TMP/first-publication-state.json" || exit 1
+expect "first publication uses protected repository" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["context_protocol"])' "$TMP/first-publication-state.json")" 1
 HEAD_A=""
 [ -n "$RID" ] && HEAD_A=$(main_head)
 if [ -z "$HEAD_A" ]; then
@@ -587,6 +630,20 @@ ccurl -sb "$J" -X PATCH "$B/me" -H 'Content-Type: application/json' -d '{"load_m
 
 echo "── I. Explicit Git start points and branch births preserve code authority"
 cd "$TMP/repo1"
+# Save each foreign owner before creating an independent same-name local birth.
+capture_i_server_fork() {
+  curl -fsSb "$J" "$B/repos/$RID/refs" -o "$TMP/i-fork-refs.json" || return 1
+  python3 - "$TMP/i-fork-refs.json" "$RID" "$1" "$TMP/i-server-$1.json" <<'PYIFORK'
+import json,pathlib,re,sys
+rows=json.loads(pathlib.Path(sys.argv[1]).read_text())
+matches=[r for r in rows if r['kind']=='branch' and r['name']==sys.argv[3]]
+assert len(matches)==1, 'missing or duplicate server fork'
+r=matches[0]
+assert r['repo_id']==sys.argv[2] and re.fullmatch(r'[0-9a-f]{32}',r.get('branch_id','')), 'invalid server fork identity'
+assert re.fullmatch(r'sha256:[0-9a-f]{64}',r['target']), 'invalid server fork target'
+pathlib.Path(sys.argv[4]).write_text(json.dumps({k:r[k] for k in ('name','branch_id','target')})+'\n')
+PYIFORK
+}
 git checkout -q main >/dev/null 2>&1
 # Choose the newest snapshot whose [git sha] exists in repo1. The head may be a checkpoint
 # without a Git link, and commits originating in repo2 may not exist in repo1.
@@ -602,11 +659,15 @@ for s in sorted(json.load(sys.stdin), key=lambda x: x['created_at'], reverse=Tru
 expect "Fork point snapshot([git sha] link) confirmed" "$([ -n "$FORK_SHA" ] && echo yes)" yes
 ccurl -sb "$J" -X POST "$B/repos/$RID/fork" -H 'Content-Type: application/json' \
   -d "{\"from\":\"$FORK_FROM\",\"new_branch\":\"web-fork-x\",\"author\":{\"name\":\"E2E\",\"email\":\"e2e@test.local\",\"team\":\"\"}}" >/dev/null
+if ! capture_i_server_fork web-fork-x; then
+  FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
 # Create an unpushed commit so HEAD(Y) advances beyond fork point(X).
 echo z > z.txt; git add z.txt; git commit -qm ahead >/dev/null 2>&1
 git branch web-fork-x "$FORK_SHA"
 cxt git-hook branch-replay
 FORK_LOCAL=$(birth_field web-fork-x target)
+WFX_ID=$(birth_field web-fork-x branch_id)
 expect "helper preserves the explicit Git start point [git X]" "$(git rev-parse --short=7 web-fork-x)" "$(git rev-parse --short=7 "$FORK_SHA")"
 expect "context ref is connected to fork snapshot" "$(ref_target .cxt/refs/heads/web-fork-x 2>/dev/null)" "$FORK_LOCAL"
 # Switching should materialize the fork context; a fork-only ref represents an existing branch.
@@ -620,12 +681,16 @@ git checkout -q main >/dev/null 2>&1
 # its actual current source; the helper must never move Git to a guessed tip.
 ccurl -sb "$J" -X POST "$B/repos/$RID/fork" -H 'Content-Type: application/json' \
   -d "{\"from\":\"$FORK_FROM\",\"new_branch\":\"web-fork-y\",\"author\":{\"name\":\"E2E\",\"email\":\"e2e@test.local\",\"team\":\"\"}}" >/dev/null
+if ! capture_i_server_fork web-fork-y; then
+  FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
 session "$TMP/repo1" WFY
 # A real app reports the new conversation through its official prompt hook.
 printf '{"cwd":"%s","session_id":"sess-WFY","transcript_path":"%s","prompt":"continue"}\n' "$TMP/repo1" "$D/sess-WFY.jsonl" | cxt hook --provider claude --event UserPromptSubmit >/dev/null
 git checkout -qb web-fork-y >"$TMP/wfy.out" 2>&1
 expect "switch -c records its own observed birth" "$(birth_field web-fork-y kind)" birth
 WFY_BIRTH_TARGET=$(birth_field web-fork-y target)
+WFY_ID=$(birth_field web-fork-y branch_id)
 expect "branch birth captures the exact official hook session" "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("session_id",""))' ".cxt/objects/snapshots/${WFY_BIRTH_TARGET#sha256:}")" sess-WFY
 expect "new branch uses its live source context" "$([ "$(ref_target .cxt/refs/heads/web-fork-y)" != "$FORK_FROM" ] && echo yes)" yes
 cxt git-hook branch-replay
@@ -648,6 +713,42 @@ expect "deleted Git branch has no active context projection" "$([ ! -e .cxt/refs
 expect "archive keeps the target snapshot readable" "$(cxt fsck | grep -c 'Missing 0')" 1
 expect "archive records an immutable lifecycle event" "$(find .cxt/refs/tags/cxt/branch-state/v1 -type f -path '*/archived/*/web-fork-renamed' 2>/dev/null | wc -l | tr -d ' ')" 1
 
+# A separate identity must be accepted before its lifecycle can remove server refs.
+# Creation, rename and deletion still pass through the real installed Git hooks.
+if ! git branch lifecycle-owned >"$TMP/i-owned.out" 2>&1 ||
+   ! cxt branch replay >>"$TMP/i-owned.out" 2>&1 ||
+   ! cxt push origin lifecycle-owned >>"$TMP/i-owned.out" 2>&1 ||
+   ! curl -fsSb "$J" "$B/repos/$RID/refs" -o "$TMP/i-owned-refs.json"; then
+  cat "$TMP/i-owned.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
+OWNED_ID=$(birth_field lifecycle-owned branch_id)
+OWNED_TARGET=$(ref_target .cxt/refs/heads/lifecycle-owned)
+if ! python3 - "$TMP/i-owned-refs.json" "$RID" "$OWNED_ID" "$OWNED_TARGET" <<'PYIOWNED'
+import json,pathlib,re,sys
+rows=json.loads(pathlib.Path(sys.argv[1]).read_text())
+matches=[r for r in rows if r['kind']=='branch' and r['name']=='lifecycle-owned']
+assert len(matches)==1 and re.fullmatch(r'[0-9a-f]{32}',sys.argv[3]), 'owned birth missing'
+assert re.fullmatch(r'sha256:[0-9a-f]{64}',sys.argv[4]), 'invalid owned target'
+r=matches[0]
+assert (r['repo_id'],r.get('branch_id'),r['target'])==tuple(sys.argv[2:5]), 'owned birth not accepted exactly'
+PYIOWNED
+then
+  FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
+# Like the existing I controls, capture the inherited output pipe so the
+# asynchronous local finalizer completes before the next Git mutation/assertion.
+if ! OWNED_RENAME_OUT=$(git branch -m lifecycle-owned lifecycle-owned-renamed 2>&1); then
+  printf '%s\n' "$OWNED_RENAME_OUT" >>"$TMP/i-owned.out"
+  cat "$TMP/i-owned.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
+printf '%s\n' "$OWNED_RENAME_OUT" >>"$TMP/i-owned.out"
+if ! OWNED_DELETE_OUT=$(git branch -D lifecycle-owned-renamed 2>&1); then
+  printf '%s\n' "$OWNED_DELETE_OUT" >>"$TMP/i-owned.out"
+  cat "$TMP/i-owned.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
+printf '%s\n' "$OWNED_DELETE_OUT" >>"$TMP/i-owned.out"
+expect "owned archive removes both local name projections" "$([ ! -e .cxt/refs/heads/lifecycle-owned ] && [ ! -e .cxt/refs/heads/lifecycle-owned-renamed ] && echo yes)" yes
+
 # Detached HEAD used to return before reading deletion transactions. Delete a
 # second branch while detached to exercise the real hook and zeros→zeros Git
 # transaction form, not only the parser unit test.
@@ -657,20 +758,84 @@ expect "detached branch deletion still invokes context archive" "$(echo "$DETACH
 expect "detached deletion removes only the active projection" "$([ ! -e .cxt/refs/heads/web-fork-y ] && echo yes)" yes
 expect "detached archive preserves immutable history" "$(cxt fsck | grep -c 'Missing 0')" 1
 
-# The archive helper pushes asynchronously. The server must converge to no
-# branch projection while retaining the lifecycle tags as reachability roots.
+# Freeze exact local lifecycle evidence; never infer identity from a shared name.
+if ! python3 - "$TMP" "$RID" "$WFX_ID" "$WFY_ID" "$OWNED_ID" <<'PYILOCAL'
+import json,pathlib,re,sys
+tmp=pathlib.Path(sys.argv[1]); repo=sys.argv[2]
+rows=[json.loads(p.read_text()) for p in pathlib.Path('.cxt/history').glob('*.json')]
+def event(identity,kind,name):
+    found=[e for e in rows if e['branch_id']==identity and e['kind']==kind and e['branch']==name]
+    assert len(found)==1, 'missing or duplicate local lifecycle event'
+    e=found[0]
+    assert e['repo_id']==repo and re.fullmatch(r'[0-9a-f]{32}',e['id']), 'invalid local event identity'
+    return e
+forks=[]; conflicted=[]; owned=[]
+for identity,name,renamed in ((sys.argv[3],'web-fork-x','web-fork-renamed'),
+                              (sys.argv[4],'web-fork-y',''),
+                              (sys.argv[5],'lifecycle-owned','lifecycle-owned-renamed')):
+    birth=event(identity,'birth',name)
+    assert birth['id']==identity, 'birth must establish the exact modern identity'
+    chain=[birth]
+    if renamed:
+        rename=event(identity,'rename',renamed)
+        assert rename['previous_branch']==name and rename['binding_parent']==birth['id'], 'broken rename chain'
+        chain.append(rename)
+    archive=event(identity,'archive',renamed or name)
+    assert archive['binding_parent']==chain[-1]['id'], 'broken archive chain'
+    chain.append(archive)
+    assert all(e.get('source')==birth['target'] and e.get('target')==birth['target'] for e in chain[1:]), 'lifecycle target changed'
+    if name=='lifecycle-owned':
+        owned=chain
+    else:
+        foreign=json.loads((tmp/('i-server-'+name+'.json')).read_text())
+        assert foreign['branch_id']!=identity, 'fixture did not create independent identities'
+        forks.append(foreign)
+        conflicted.extend(e['id'] for e in chain)
+assert len({e['id'] for e in owned}|set(conflicted))==8, 'lifecycle IDs overlap'
+(tmp/'i-lifecycle-proof.json').write_text(json.dumps({'forks':forks,'conflicted':conflicted,'conflicted_branch_ids':sys.argv[3:5],'owned':owned})+'\n')
+PYILOCAL
+then
+  FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
+
+# The archive helpers publish asynchronously. Same budget, exact identities;
+# protocol 1 applies immutable history, not legacy lifecycle-tag counts.
 for i in $(seq 1 40); do
-  SERVER_ARCHIVE_STATE=$(curl -sb "$J" "$B/repos/$RID/refs" | python3 -c "
-import json,sys
-refs=json.load(sys.stdin)
-branches={r['name'] for r in refs if r['kind']=='branch'}
-archives=[r for r in refs if r['kind']=='tag' and '/archived/' in r['name'] and r['name'].startswith('cxt/branch-state/v1/')]
-print('ready' if 'web-fork-x' not in branches and 'web-fork-renamed' not in branches and 'web-fork-y' not in branches and len(archives) >= 3 else 'waiting')
-")
+  if ! curl -fsSb "$J" "$B/repos/$RID/refs" -o "$TMP/i-server-refs.json" ||
+     ! curl -fsSb "$J" "$B/repos/$RID/history" -o "$TMP/i-server-history.json"; then
+    SERVER_ARCHIVE_STATE=unreadable; break
+  fi
+  if ! SERVER_ARCHIVE_STATE=$(python3 - "$TMP" <<'PYIREMOTE'
+import json,pathlib,sys
+tmp=pathlib.Path(sys.argv[1])
+proof=json.loads((tmp/'i-lifecycle-proof.json').read_text())
+refs=json.loads((tmp/'i-server-refs.json').read_text())
+events=json.loads((tmp/'i-server-history.json').read_text())
+assert isinstance(refs,list) and isinstance(events,list), 'invalid server metadata'
+branches=[r for r in refs if r['kind']=='branch']
+history={e['id']:e for e in events}
+assert len(history)==len(events), 'duplicate server history IDs'
+for old in proof['forks']:
+    matches=[r for r in branches if r['name']==old['name']]
+    assert len(matches)==1 and all(matches[0].get(k)==v for k,v in old.items()), 'foreign server owner or target changed'
+assert not set(proof['conflicted']).intersection(history), 'conflicting local lifecycle was accepted'
+local_ids=set(proof['conflicted_branch_ids'])
+assert not any(r['name']=='web-fork-renamed' or r.get('branch_id') in local_ids for r in branches), 'conflicting local identity was projected'
+for expected in proof['owned']:
+    if expected['id'] in history:
+        assert history[expected['id']]==expected, 'accepted lifecycle payload changed'
+owned_id=proof['owned'][0]['branch_id']
+pending_ref=any(r['name'] in ('lifecycle-owned','lifecycle-owned-renamed') or r.get('branch_id')==owned_id for r in branches)
+print('ready' if all(e['id'] in history for e in proof['owned']) and not pending_ref else 'waiting')
+PYIREMOTE
+); then
+    SERVER_ARCHIVE_STATE=invalid-evidence; break
+  fi
   [ "$SERVER_ARCHIVE_STATE" = ready ] && break
   sleep 0.25
 done
-expect "server applies both recoverable archive projections" "$SERVER_ARCHIVE_STATE" ready
+expect "server preserves foreign owners and accepts only the owned lifecycle chain" "$SERVER_ARCHIVE_STATE" ready
+if [ "$SERVER_ARCHIVE_STATE" != ready ]; then CXT_E2E_KEEP_TMP=1; fi
 
 echo "── J. cxt setup: onboarding single command (idempotent, merge preservation)"
 mkdir -p "$HOME/.codex"
@@ -709,12 +874,44 @@ expect "directory-only residue receives local ignore protection" "$(git check-ig
 expect "directory-only residue does not grow capture state" "$(find .cxt -type f | wc -l | tr -d ' ')" 0
 
 echo "── K. Chunk CAS v2: oversized event push/pull + old-client fallback"
-git clone -q "$TMP/bare.git" "$TMP/repo4"
-cd "$TMP/repo4"; cxt init >/dev/null 2>&1; cxt remote add origin "$REMOTE" >/dev/null 2>&1
-large_session "$TMP/repo4" BIG
+# Reuse the fixture's existing main identity and exact local code selection.
+# A fresh clone can legitimately have a different code from the shared context tip.
+cd "$TMP/repo1"
+if ! CXT_KEEP_SESSION=1 git checkout -q main >"$TMP/big-select.out" 2>&1; then
+  cat "$TMP/big-select.out"; exit 1
+fi
+python3 - "$(git rev-parse HEAD)" "$(git rev-parse --absolute-git-dir)" >"$TMP/big-binding.out" 2>&1 <<'PYBIGBINDING'
+import hashlib,json,pathlib,sys
+root=pathlib.Path('.')
+code,admin=sys.argv[1:]
+wt=hashlib.sha256(admin.encode()).hexdigest()[:32]
+ref=json.loads((root/'.cxt/refs/heads/main').read_text())
+p=json.loads((root/'.cxt/worktrees'/wt/'position.json').read_text())
+assert ref.get('branch_id') and ref.get('kind')=='branch' and ref.get('name')=='main', 'missing canonical main identity'
+assert p.get('repo_id')==ref.get('repo_id') and p.get('branch')=='main' and p.get('branch_id')==ref['branch_id'], 'main selection identity mismatch'
+assert p.get('git_commit')==code and p.get('snapshot')==ref.get('target') and ref.get('target'), 'main code/context selection mismatch'
+events=[json.loads(f.read_text()) for f in (root/'.cxt/history').glob('*.json')]
+assert any(e.get('kind') in ('position','advance','birth','orphan','attach') and e.get('repo_id')==ref['repo_id']
+           and e.get('branch_id')==ref['branch_id'] and e.get('target')==ref['target'] and e.get('git_after')==code
+           for e in events), 'main has no exact stored code binding'
+print('verified main code/context binding')
+PYBIGBINDING
+if [ "$?" != 0 ]; then cat "$TMP/big-binding.out"; exit 1; fi
+large_session "$TMP/repo1" BIG
 echo big > big.txt; git add big.txt; git commit -qm big-event >/dev/null 2>&1
-git push -q origin main >"$TMP/big-push.out" 2>&1
+BIG_EXPECTED=$(python3 - <<'PYBIGEXPECTED'
+import json,re
+with open('.cxt/refs/heads/main') as f:
+    ref=json.load(f)
+target=ref.get('target','')
+assert ref.get('branch_id') and re.fullmatch(r'sha256:[0-9a-f]{64}',target), 'missing captured context identity/target'
+print(target)
+PYBIGEXPECTED
+) || exit 1
+git push -q origin main >"$TMP/big-push.out" 2>&1 || { cat "$TMP/big-push.out"; exit 1; }
 BIG_HEAD=$(main_head)
+expect "oversized captured context is the published main" "$BIG_HEAD" "$BIG_EXPECTED"
+[ "$BIG_HEAD" = "$BIG_EXPECTED" ] || { cat "$TMP/big-push.out"; exit 1; }
 BIG_MANIFEST=$(ccurl -sb "$J" -X POST "$B/repos/$RID/pull/objects" -H 'Content-Type: application/json' \
   -d "{\"doc_manifest_wants\":[\"$BIG_HEAD\"],\"chunk_formats_supported\":[\"cxt-doc-chunks-v1\",\"cxt-doc-chunks-v2\"]}" | python3 -c "
 import json,sys
@@ -728,7 +925,7 @@ OLD_FALLBACK=$(ccurl -sb "$J" -X POST "$B/repos/$RID/pull/objects" -H 'Content-T
 expect "client without v2 capability receives full-doc fallback" "$OLD_FALLBACK" 1:0
 git clone -q "$TMP/bare.git" "$TMP/repo5"
 cd "$TMP/repo5"; cxt init >/dev/null 2>&1; cxt remote add origin "$REMOTE" >/dev/null 2>&1
-cxt pull >/dev/null 2>&1
+if ! cxt pull >"$TMP/big-pull.out" 2>&1; then cat "$TMP/big-pull.out"; exit 1; fi
 expect "fresh client pulls and verifies v2 history" "$(cxt fsck | grep -c 'Missing 0')" 1
 
 echo
@@ -754,6 +951,10 @@ REUSE_EXIT=$?
 if [ "$REUSE_EXIT" != 0 ]; then cat "$TMP/memory-reuse.out"; fi
 expect "memory reuse and selected-branch wire protocol verified by server" "$REUSE_EXIT" 0
 unset REUSE_TOKEN
+
+source "$ROOT/scripts/e2e-initialization.inc.sh"
+source "$ROOT/scripts/e2e-setup.inc.sh"
+source "$ROOT/scripts/e2e-first-owner.inc.sh"
 
 if [ "$FAIL" = 0 ]; then echo "SYNC E2E: All passed ✓"; else echo "SYNC E2E: Failures exist ✗"; fi
 exit "$FAIL"

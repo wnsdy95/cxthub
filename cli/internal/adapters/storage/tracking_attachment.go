@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"syscall"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -82,6 +84,16 @@ func (s *FileStore) trackingAttachmentApplied(a domain.TrackingAttachment, hash 
 }
 
 func (s *FileStore) CommitTrackingAttachment(ctx context.Context, c outbound.TrackingAttachmentCommit) error {
+	if c.RequirePristine {
+		_, err := s.withOSLock(ctx, "first-tracking", "repo", syscall.LOCK_EX, true, func() error {
+			return s.commitTrackingAttachment(ctx, c)
+		})
+		return err
+	}
+	return s.commitTrackingAttachment(ctx, c)
+}
+
+func (s *FileStore) commitTrackingAttachment(ctx context.Context, c outbound.TrackingAttachmentCommit) error {
 	hash, err := trackingAttachmentHash(c.Attachment)
 	if err != nil {
 		return err
@@ -97,27 +109,43 @@ func (s *FileStore) CommitTrackingAttachment(ctx context.Context, c outbound.Tra
 	}
 	return s.WithObjectsRetained(ctx, func() error {
 		return s.withRefMutationLock(ctx, func() error {
-			// Expected state can legitimately be obsolete after success. Never replay
-			// a completed attachment over another writer's newer selection or ref.
-			if done, err := s.trackingAttachmentApplied(c.Attachment, hash); err != nil || done {
+			accept := func() error {
+				// Expected state can legitimately be obsolete after success. Never replay
+				// a completed attachment over another writer's newer selection or ref.
+				if done, err := s.trackingAttachmentApplied(c.Attachment, hash); err != nil || done {
+					return err
+				}
+				if c.RequirePristine {
+					pristine, err := s.trackingPristine(ctx, c.Attachment.Event.RepoID, c.ObservedSnapshots)
+					if err != nil {
+						return err
+					}
+					if !pristine {
+						return fmt.Errorf("local context appeared during setup; preserved without attachment: %w", domain.ErrSyncConflict)
+					}
+				}
+				j, err := s.prepareTrackingAttachment(ctx, c, hash)
+				if err != nil {
+					return err
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				raw, err := json.Marshal(j)
+				if err != nil {
+					return err
+				}
+				// No applied history, binding, lifecycle or position precedes acceptance.
+				if err := writeAtomic(s.trackingAttachmentPath(), raw); err != nil {
+					return err
+				}
+				return s.recoverTrackingAttachment()
+			}
+			if c.RequirePristine {
+				_, err := s.withOSLock(ctx, "first-tracking", "snapshots", syscall.LOCK_EX, true, accept)
 				return err
 			}
-			j, err := s.prepareTrackingAttachment(ctx, c, hash)
-			if err != nil {
-				return err
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			raw, err := json.Marshal(j)
-			if err != nil {
-				return err
-			}
-			// No applied history, binding, lifecycle or position precedes acceptance.
-			if err := writeAtomic(s.trackingAttachmentPath(), raw); err != nil {
-				return err
-			}
-			return s.recoverTrackingAttachment()
+			return accept()
 		})
 	})
 }
@@ -149,7 +177,7 @@ func validateTrackingCommit(c outbound.TrackingAttachmentCommit) error {
 	var source domain.ContentHash
 	var code string
 	if old := c.Position.Expected; old != nil {
-		if old.WorktreeID != p.WorktreeID || old.RepoID != p.RepoID {
+		if old.WorktreeID != p.WorktreeID || (old.RepoID != p.RepoID && (!c.RequirePristine || !emptyInitialTrackingPosition(*old))) {
 			return domain.ErrHashMismatch
 		}
 		for _, id := range []domain.ContentHash{old.Snapshot, old.SharedTarget, old.MemoryHash, old.MemorySource} {
@@ -160,7 +188,9 @@ func validateTrackingCommit(c outbound.TrackingAttachmentCommit) error {
 		if old.Selection != nil && domain.ValidateHistoryEvent(*old.Selection) != nil {
 			return domain.ErrHashMismatch
 		}
-		source, code = old.Snapshot, old.GitCommit
+		if old.RepoID == p.RepoID {
+			source, code = old.Snapshot, old.GitCommit
+		}
 	}
 	if selection.Source != source || selection.GitBefore != code {
 		return domain.ErrHashMismatch

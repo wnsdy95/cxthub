@@ -68,20 +68,34 @@ func (s *SyncRepoService) foregroundSnapshots(ctx context.Context, repo, root st
 }
 
 func (s *SyncRepoService) snapshotDependencyClosure(ctx context.Context, snapshots []domain.Snapshot, roots, memory []domain.ContentHash, remoteMemory map[domain.ContentHash]domain.ContentHash) ([]domain.Snapshot, []domain.Snapshot, error) {
+	return s.snapshotDependencyClosureChecked(ctx, snapshots, roots, memory, remoteMemory, false)
+}
+
+// Strict publication cannot silently omit absent dependency nodes or skip local
+// memory proof because a remote pointer happens to match. Bare/backfill callers
+// retain the existing optional external-dependency behavior.
+func (s *SyncRepoService) snapshotDependencyClosureChecked(ctx context.Context, snapshots []domain.Snapshot, roots, memory []domain.ContentHash, remoteMemory map[domain.ContentHash]domain.ContentHash, strict bool) ([]domain.Snapshot, []domain.Snapshot, error) {
 	byID := make(map[domain.ContentHash]domain.Snapshot, len(snapshots))
 	for _, snap := range snapshots {
 		byID[snap.ID] = snap
 	}
 	var pending []domain.ContentHash
+	var missing error
 	add := func(id domain.ContentHash) {
+		if id == "" {
+			return
+		}
 		if _, ok := byID[id]; ok {
 			pending = append(pending, id)
+		} else if strict {
+			missing = fmt.Errorf("%w: missing publication dependency %s", domain.ErrHashMismatch, id)
 		}
 	}
 	for _, id := range roots {
 		add(id)
 	}
 	seen, seenMemory := map[domain.ContentHash]bool{}, map[domain.ContentHash]bool{}
+	verifiedMemory := map[domain.ContentHash]domain.MemoryDigest{}
 	// An authoritative server attachment proves that this immutable memory and
 	// its publication prerequisites already exist remotely. Local metadata for
 	// otherwise-unselected source snapshots remains a backfill obligation.
@@ -91,6 +105,9 @@ func (s *SyncRepoService) snapshotDependencyClosure(ctx context.Context, snapsho
 		}
 	}
 	for len(pending) > 0 || len(memory) > 0 {
+		if missing != nil {
+			return nil, nil, missing
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -102,10 +119,24 @@ func (s *SyncRepoService) snapshotDependencyClosure(ctx context.Context, snapsho
 			}
 			seen[id] = true
 			snap := byID[id]
+			if strict {
+				if err := validateSnapshotObject(snap); err != nil {
+					return nil, nil, err
+				}
+			}
 			for _, parent := range snap.ReachabilityParents() {
 				add(parent)
 			}
 			if snap.MemoryHash != "" {
+				if strict {
+					chain, err := s.localMemoryPushPlan(ctx, snap.ID, snap.MemoryHash)
+					if err != nil {
+						return nil, nil, err
+					}
+					for _, object := range chain.chain {
+						verifiedMemory[object.hash] = object.digest
+					}
+				}
 				memory = append(memory, snap.MemoryHash)
 			}
 			continue
@@ -116,9 +147,22 @@ func (s *SyncRepoService) snapshotDependencyClosure(ctx context.Context, snapsho
 			continue
 		}
 		seenMemory[hash] = true
-		digest, err := s.store.GetMemory(ctx, hash)
-		if err != nil {
-			return nil, nil, fmt.Errorf("read foreground memory dependency %s: %w", hash, err)
+		digest, ok := verifiedMemory[hash]
+		if !ok {
+			var err error
+			digest, err = s.store.GetMemory(ctx, hash)
+			if err != nil {
+				return nil, nil, fmt.Errorf("read foreground memory dependency %s: %w", hash, err)
+			}
+			if strict {
+				chain, err := s.localMemoryPushPlan(ctx, digest.SnapshotID, hash)
+				if err != nil {
+					return nil, nil, err
+				}
+				for _, object := range chain.chain {
+					verifiedMemory[object.hash] = object.digest
+				}
+			}
 		}
 		if err := validateMemoryAttachmentObject(digest, hash, digest.SnapshotID); err != nil {
 			return nil, nil, err
@@ -137,6 +181,35 @@ func (s *SyncRepoService) snapshotDependencyClosure(ctx context.Context, snapsho
 		}
 		if digest.PreviousMemoryHash != "" {
 			memory = append(memory, digest.PreviousMemoryHash)
+		}
+	}
+	if missing != nil {
+		return nil, nil, missing
+	}
+	if strict {
+		// Verify complete conversation/graft DAG without opening document bodies.
+		state := map[domain.ContentHash]uint8{}
+		var visit func(domain.ContentHash) error
+		visit = func(id domain.ContentHash) error {
+			if state[id] == 1 {
+				return domain.ErrHashMismatch
+			}
+			if state[id] == 2 {
+				return nil
+			}
+			state[id] = 1
+			for _, parent := range byID[id].ReachabilityParents() {
+				if err := visit(parent); err != nil {
+					return err
+				}
+			}
+			state[id] = 2
+			return nil
+		}
+		for id := range seen {
+			if err := visit(id); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	var foreground, retained []domain.Snapshot

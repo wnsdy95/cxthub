@@ -50,6 +50,20 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		}
 		return s.wakePublishedPRJobs(ctx, event)
 	}
+	if event.MemorySelectionParent != "" {
+		// The predecessor is immutable accepted evidence from this repository's
+		// current write transaction, never a caller-supplied or mutable position.
+		var predecessor domain.HistoryEvent
+		for _, old := range accepted {
+			if old.ID == event.MemorySelectionParent {
+				predecessor = old
+				break
+			}
+		}
+		if !domain.IsInitialMemorySelection(predecessor, event) {
+			return fmt.Errorf("%w: memory selection requires an accepted exact empty predecessor", domain.ErrConflict)
+		}
+	}
 	if err := domain.ValidateCreationOrigin(accepted, event); err != nil {
 		return fmt.Errorf("%w: %v", domain.ErrConflict, err)
 	}
@@ -99,6 +113,12 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		}
 		if memory.SnapshotID != event.Source && memory.SnapshotID != event.Target && memory.SnapshotID != event.MemorySource {
 			return domain.ErrIntegrity
+		}
+		if event.MemorySelectionParent != "" {
+			hash, err := domain.MemoryDigestHash(memory)
+			if err != nil || hash != event.MemoryHash || memory.SnapshotID != event.Target || memory.PreviousMemoryHash != "" {
+				return domain.ErrIntegrity
+			}
 		}
 	}
 	protectedName := event.Branch

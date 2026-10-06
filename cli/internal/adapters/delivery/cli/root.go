@@ -144,7 +144,9 @@ func Run(c *Container, args []string) error {
 	if cmd == "push" || cmd == "pull" {
 		fmt.Fprintf(os.Stderr, "%s: checking queued branch and PR operations\n", cmd)
 	}
-	if (parsed.effect == commandContextWrite || parsed.effect == commandSync) && c.History != nil {
+	// An explicit push must finish only its selected local replay before any publisher.
+	selectedPush := cmd == "push" && len(parsed.positionals) == 2
+	if !selectedPush && (parsed.effect == commandContextWrite || parsed.effect == commandSync) && c.History != nil {
 		if err := replayBranchOperations(ctx, c, cwd); err != nil {
 			hookWarn("branch operation remains queued: %v", err)
 		}
@@ -783,16 +785,23 @@ func Run(c *Container, args []string) error {
 		if selectedRef == "" {
 			replaySavedPRDiscovery(ctx, c, cwd)
 		}
+		var publication *domain.PublicationScope
 		if selectedRef == "" {
 			if err := replayRewriteHistory(ctx, c, cwd); err != nil {
 				return fmt.Errorf("rewritten context associations remain pending: %w", err)
 			}
+		} else {
+			scope, err := prepareManualPublication(ctx, c, cwd, selectedRef)
+			if err != nil {
+				return fmt.Errorf("selected context publication remains pending: %w", err)
+			}
+			publication = &scope
 		}
 		force := parsed.has("--force") || parsed.has("-f")
 		appendDiverged := parsed.has("--append")
 		defer wakeHistoricalSync(c, cwd)
 		pushCtx := outbound.WithSyncDiagnosticAttempt(ctx, 1)
-		out, err := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
+		out, err := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, Publication: publication, Force: force, Append: appendDiverged, ForegroundOnly: remoteName == "origin" && !parsed.has("--wait-history"), Progress: syncProgressPrinter(os.Stderr)})
 		if err != nil {
 			if errors.Is(err, domain.ErrSyncConflict) {
 				if strings.Contains(err.Error(), "memory attachment") {

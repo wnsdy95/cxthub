@@ -28,8 +28,23 @@ type TrackingAttachmentService interface {
 	ApplyTrackingAttachment(context.Context, TrackingAttachmentInput) error
 }
 type TrackingAttachmentInput struct {
-	Attachment       domain.TrackingAttachment
-	ExpectedRef      *domain.Ref
-	SelectPosition   bool
-	ExpectedPosition *domain.WorkingPosition
+	RequirePristine   bool
+	ObservedSnapshots []domain.Snapshot
+	Attachment        domain.TrackingAttachment
+	ExpectedRef       *domain.Ref
+	SelectPosition    bool
+	ExpectedPosition  *domain.WorkingPosition
+}
+
+// FirstSetupTracking is used only by setup, never ordinary Connect/remote add.
+type FirstSetupTracking interface {
+	TrackingAttachmentService
+	TrackingPristine(context.Context, string) (bool, error)
+	InitializeCapturePosition(context.Context, *domain.WorkingPosition, domain.WorkingPosition) error
+}
+
+// SetupInitialCapture queries authorized branch-specific creation eligibility.
+// A false result leaves normal populated-branch observation unchanged.
+type SetupInitialCapture interface {
+	InitialCaptureEligibility(context.Context, SyncInput, string) (domain.Repo, bool, error)
 }

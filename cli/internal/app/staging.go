@@ -79,6 +79,17 @@ func (s *StagingService) selection(ctx context.Context, cwd string) (domain.Repo
 }
 
 func (s *StagingService) Stage(ctx context.Context, in inbound.StageInput) (result domain.StagingIndex, err error) {
+	if gate, ok := s.store.(outbound.CaptureTrackingGate); ok {
+		err = gate.WithCaptureTrackingGate(ctx, func(locked context.Context) error {
+			result, err = s.stage(locked, in)
+			return err
+		})
+		return result, err
+	}
+	return s.stage(ctx, in)
+}
+
+func (s *StagingService) stage(ctx context.Context, in inbound.StageInput) (result domain.StagingIndex, err error) {
 	if len(in.Sessions) == 0 {
 		return result, fmt.Errorf("add requires explicitly resolved source sessions")
 	}

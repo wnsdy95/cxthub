@@ -38,6 +38,15 @@ var ErrUnsupportedFidelity = errors.New("unsupported fidelity")
 // Occurs in SyncRepo.Pull.
 var ErrSyncConflict = errors.New("sync conflict")
 
+// ErrContextProtocolRequired needs repository onboarding or an explicit policy
+// migration. Retrying the same selected publication with append cannot fix it.
+var ErrContextProtocolRequired = errors.New("branch history protection is required for selected publication")
+
+// Initialization conflicts require explicit recovery; append/force cannot make
+// an existing repository new or enlarge an immutable creation receipt.
+var ErrRepositoryInitializationConflict = errors.New("repository initialization conflicts with existing server state")
+var ErrRepositoryInitializationUnsupported = errors.New("server does not support atomic repository initialization")
+
 // ErrNoActiveSession indicates the absence of an active session file in the cwd.
 // This error occurs in CaptureSource.LocateActiveSession.
 // Auto hooks gracefully exit as no-op when encountering this error.

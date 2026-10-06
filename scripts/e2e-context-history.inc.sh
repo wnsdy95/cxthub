@@ -88,6 +88,8 @@ git remote add origin "$TMP/bare.git"
 cxt init >/dev/null 2>&1
 PROTOCOL_SLUG=$(ccurl -sb "$J" -X POST "$B/repositories" -H 'Content-Type: application/json' -d '{"name":"ProtectedContext"}' | jget "['slug']")
 PROTOCOL_REMOTE="$ORIGIN/$OWN/$PROTOCOL_SLUG"
+# This section specifically verifies migration of an existing legacy repository.
+fixture_register_legacy_repo "$PROTOCOL_REMOTE" "$TMP/bare.git" || { FAIL=1; return; }
 if ! cxt remote add origin "$PROTOCOL_REMOTE" >"$TMP/protocol-connect.out" 2>&1; then cat "$TMP/protocol-connect.out"; FAIL=1; return; fi
 session "$TMP/protocol-client" PROTOCOL
 echo protected > protocol.txt

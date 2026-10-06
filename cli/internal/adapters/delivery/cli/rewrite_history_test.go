@@ -27,7 +27,7 @@ func TestRewrittenHistoryPreservesExactAssociations(t *testing.T) {
 	otherWorktree.ID, otherWorktree.WorktreeID = strings.Repeat("6", 32), strings.Repeat("7", 32)
 	events := []domain.HistoryEvent{original, otherBranch, otherWorktree}
 	now := time.Unix(2, 0).UTC()
-	got, err := rewrittenHistory(events, map[string]string{a: b, b: c}, original.BranchID, original.WorktreeID, now)
+	got, err := rewrittenHistory(events, nil, map[string]string{a: b, b: c}, original.BranchID, original.WorktreeID, now)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("rewrites: %v %v", got, err)
 	}
@@ -42,22 +42,22 @@ func TestRewrittenHistoryPreservesExactAssociations(t *testing.T) {
 	if !reflect.DeepEqual(events[0], original) {
 		t.Fatal("original mutated")
 	}
-	replay, err := rewrittenHistory(append(events, got...), map[string]string{a: b, b: c}, original.BranchID, original.WorktreeID, time.Now())
+	replay, err := rewrittenHistory(append(events, got...), nil, map[string]string{a: b, b: c}, original.BranchID, original.WorktreeID, time.Now())
 	if err != nil || len(replay) != 0 {
 		t.Fatalf("replay duplicated observations: %v %v", replay, err)
 	}
 	fresh := original
 	fresh.ID, fresh.GitAfter, fresh.Target = strings.Repeat("8", 32), b, "sha256:"+strings.Repeat("9", 64)
-	delayed, err := rewrittenHistory(append(events, fresh), map[string]string{a: b, b: c}, original.BranchID, original.WorktreeID, now)
+	delayed, err := rewrittenHistory(append(events, fresh), nil, map[string]string{a: b, b: c}, original.BranchID, original.WorktreeID, now)
 	if err != nil || len(delayed) != 1 || delayed[0].Target != fresh.Target || delayed[0].GitAfter != c {
 		t.Fatalf("delayed replay overshadowed a fresh capture: %v %v", delayed, err)
 	}
 	for _, bad := range []map[string]string{{a: b, b: a}, {a: "abcdef"}, {a: strings.Repeat("0", 40)}} {
-		if _, err := rewrittenHistory(events, bad, original.BranchID, original.WorktreeID, now); err == nil {
+		if _, err := rewrittenHistory(events, nil, bad, original.BranchID, original.WorktreeID, now); err == nil {
 			t.Fatalf("accepted bad rewrite: %v", bad)
 		}
 	}
-	got, err = rewrittenHistory(events, map[string]string{a[:7]: b}, original.BranchID, original.WorktreeID, now)
+	got, err = rewrittenHistory(events, nil, map[string]string{a[:7]: b}, original.BranchID, original.WorktreeID, now)
 	if err != nil || len(got) != 0 {
 		t.Fatal("short Git prefix used as exact evidence")
 	}
@@ -70,13 +70,13 @@ func TestRewriteReplayResumesPartiallyPublishedSquash(t *testing.T) {
 	last.ID, last.GitAfter, last.Target = strings.Repeat("4", 32), b, "sha256:"+strings.Repeat("5", 64)
 	events := []domain.HistoryEvent{first, last}
 	mapping := map[string]string{a: squashed, b: squashed}
-	all, err := rewrittenHistory(events, mapping, first.BranchID, first.WorktreeID, time.Unix(2, 0).UTC())
+	all, err := rewrittenHistory(events, nil, mapping, first.BranchID, first.WorktreeID, time.Unix(2, 0).UTC())
 	if err != nil || len(all) != 2 {
 		t.Fatalf("prepare: %v %v", all, err)
 	}
 	// The process died after storing the first alias. The final commit's
 	// conversation still has to arrive at the squashed Git revision on retry.
-	remaining, err := rewrittenHistory(append(events, all[0]), mapping, first.BranchID, first.WorktreeID, time.Unix(3, 0).UTC())
+	remaining, err := rewrittenHistory(append(events, all[0]), nil, mapping, first.BranchID, first.WorktreeID, time.Unix(3, 0).UTC())
 	if err != nil || len(remaining) != 1 || remaining[0].Target != last.Target {
 		t.Fatalf("partial squash lost final context: %+v %v", remaining, err)
 	}
@@ -89,7 +89,7 @@ func TestRewritePublicationDoesNotBecomeMemorylessPosition(t *testing.T) {
 	published.ID, published.Kind, published.MemoryHash = strings.Repeat("2", 32), "publish", ""
 	for _, at := range []string{a, b} {
 		published.GitAfter = at
-		got, err := rewrittenHistory([]domain.HistoryEvent{proof, published}, map[string]string{a: b}, proof.BranchID, proof.WorktreeID, time.Now())
+		got, err := rewrittenHistory([]domain.HistoryEvent{proof, published}, nil, map[string]string{a: b}, proof.BranchID, proof.WorktreeID, time.Now())
 		if err != nil || len(got) != 1 || got[0].MemoryHash != proof.MemoryHash || !got[0].MemoryPinned {
 			t.Fatalf("publication at %s altered ordinary rewrite: %+v %v", at, got, err)
 		}

@@ -268,7 +268,7 @@ func trackingHistoryClosure(ordered []HistoryEvent, wanted map[string]bool) ([]H
 		id := queue[len(queue)-1]
 		queue = queue[:len(queue)-1]
 		e := byID[id]
-		for _, dep := range []string{e.BindingParent, e.NameParent} {
+		for _, dep := range HistoryDependencies(e) {
 			if dep != "" && !wanted[dep] {
 				if _, ok := byID[dep]; !ok {
 					return nil, ErrHashMismatch

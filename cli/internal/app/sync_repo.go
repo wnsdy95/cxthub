@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -320,6 +321,12 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (resul
 	syncProgress(in, "push", "prepare", 0, 0)
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
+		return inbound.SyncOutput{}, err
+	}
+	if in.Publication != nil || in.Ref != "" {
+		return s.pushPublication(ctx, in, repoID)
+	}
+	if err := s.initializeBeforeBroadPublication(ctx, in, repoID); err != nil {
 		return inbound.SyncOutput{}, err
 	}
 	if err := s.flushPRDeliveriesForSelection(ctx, repoID, in.Ref); err != nil {
@@ -750,9 +757,9 @@ func (s *SyncRepoService) ResolveRemoteBranchObservation(ctx context.Context, in
 	}
 	snaps := make([]domain.Snapshot, len(out.FetchedSnapshots))
 	for i, snap := range out.FetchedSnapshots {
-		snap.Parents = append([]domain.ContentHash(nil), snap.Parents...)
-		snap.GraftParents = append([]domain.ContentHash(nil), snap.GraftParents...)
-		snap.Models = append([]string(nil), snap.Models...)
+		snap.Parents = slices.Clone(snap.Parents)
+		snap.GraftParents = slices.Clone(snap.GraftParents)
+		snap.Models = slices.Clone(snap.Models)
 		snaps[i] = snap
 	}
 	return inbound.RemoteBranchObservation{Ref: ref, History: history, Snapshots: snaps}, nil
@@ -1521,6 +1528,9 @@ func (s *SyncRepoService) updateRemoteSnapshotStateCursor(
 
 // Pull merges the snapshot/doc/ref from the central server into the local repository (fast-forward first).
 func (s *SyncRepoService) Pull(ctx context.Context, in inbound.SyncInput) (inbound.SyncOutput, error) {
+	if in.Publication != nil {
+		return inbound.SyncOutput{}, domain.ErrInvalidRef
+	}
 	if in.Ref != "" && domain.ValidateBranchName(in.Ref) != nil {
 		return inbound.SyncOutput{}, domain.ErrInvalidRef
 	}
@@ -2122,7 +2132,7 @@ func (s *SyncRepoService) Connect(ctx context.Context, in inbound.SyncInput) (in
 	if err != nil {
 		return inbound.ConnectOutput{}, err
 	}
-	registered, err := s.remote.RegisterRepo(ctx, repo)
+	registered, err := s.prepareRepositoryConnection(ctx, repo)
 	if err != nil {
 		return inbound.ConnectOutput{}, err
 	}

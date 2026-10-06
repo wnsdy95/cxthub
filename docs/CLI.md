@@ -72,10 +72,10 @@ cxt setup [remote-url] [--no-login]
 
 Runs the complete, idempotent onboarding sequence:
 
-1. initialize the local `.cxt` store;
-2. install managed Git hooks;
-3. register the repository remote when supplied;
-4. authenticate through the browser device flow unless `--no-login` is set;
+1. initialize a missing local `.cxt` store, preserving an existing HEAD and worktree selection;
+2. authenticate and verify the repository remote when supplied (`--no-login` uses existing credentials);
+3. on a pristine clone, attach its actual Git origin upstream and select context at the checked-out code;
+4. install managed Git hooks;
 5. merge Claude Code and Codex lifecycle hooks; and
 6. pull team settings when authenticated.
 
@@ -87,6 +87,27 @@ cxt setup https://cxthub.example/alice/platform
 
 Rerunning the command reports and repairs missing setup steps without replacing
 an existing remote that points somewhere else.
+
+Automatic tracking uses one verified server observation for branch identity,
+code-aligned context and recorded memory. It requires the checked-out commit to
+match the locally recorded Git upstream and the server to verify the Git origin.
+It does not launch an agent or inject a conversation. Existing captures,
+staging, selections and queued operations are preserved; setup skips automatic
+attachment when local work already exists. Concurrent local changes or missing
+proof stop attachment before new capture hooks are installed. Resolve the
+reported conflict or use an explicit `cxt pull`, then rerun setup.
+
+`cxt remote add` remains registration only. On a manual connection, use an
+explicit `cxt pull` to select the server context before starting local capture.
+
+For a proven-new PostgreSQL repository with no context on this branch, setup
+can prepare an empty position at the actual code when the server affirmatively
+reports first-capture eligibility. This requires matching local and upstream
+branch names. It creates no context ref, birth or attachment; the first push
+still passes normal server authorization and initial-observation checks.
+An absent branch or failed query alone does not authorize this path. Detached,
+unborn and no-upstream setup remains registration only. An explicitly requested
+different repository is rejected while the existing connection is preserved.
 
 The lifecycle hooks also cover Codex app/IDE sessions and Claude Desktop's
 **Code** tab. Apps are not launched through a cxt wrapper: hook payloads identify
@@ -455,13 +476,19 @@ cxt push [remote [branch]] [--force|--append] [--wait-history]
 
 A named remote is verified against the local immutable repository ID before any
 sync mutation. Unknown names, other repositories and unsupported refspecs fail.
-An explicit branch scopes pointer updates; immutable dependency objects and
-repository evidence can still be transferred. Credentials from the configured
+An explicit branch fixes the selected context identity for history, lifecycle
+changes and final pointer updates. Required immutable dependency objects and
+ordinary observations can still be transferred. Unaccepted state changes for a
+different identity remain pending rather than expanding this selection. Selected
+push requires context protocol 1; it never falls back to a repository-wide push.
+A push without a branch keeps the existing repository-wide behavior. Credentials from the configured
 origin are never forwarded to a different server; log in to that server separately.
-`push origin [branch]` uses the same current-work-first/background-history policy
-as `push`; only `--wait-history` waits for the origin backlog. Other named remotes
-complete retained uploads in the foreground because the background queue is
-currently bound to origin. They never wake a worker for a different destination.
+With a branch selector, push waits for the complete selected dependency closure;
+`--wait-history` does not authorize unrelated branches or widen that scope.
+Without a selector, `push origin` publishes current work first and
+`--wait-history` also waits for the retained origin backlog. Other named remotes
+complete their authorized uploads in the foreground because the background queue
+is currently bound to origin. They never wake a worker for a different destination.
 
 `fetch` updates a separate remote observation and immutable cache. It leaves the
 working context, applied memory, index and branch refs unchanged. `pull` also
@@ -978,6 +1005,22 @@ post-rewrite
 ```
 
 Existing user hooks are chained and restored on uninstall.
+
+The pre-push hook reads Git's complete update list before doing any work. It
+publishes only the selected branches to the configured CXT origin when Git is
+pushing to its named `origin`. Pushing another branch does not publish `HEAD`.
+Same-name branches, their canonical context name, and recorded tracking aliases
+are supported. Other Git remotes, direct URL pushes, tags, deletions and raw-OID
+refspecs do not authorize automatic context publication; use an explicit `cxt
+push` for that destination. An unknown alias or a concurrently changed Git ref
+leaves context publication pending while Git continues. Automatic append retries
+retain the exact identity selection and original timeout.
+
+Branch/capture completion wakes a bounded history-only delivery helper. It
+retries durable events across identities without reconciling all current tips
+or clearing pending sessions. A blocked identity does not prevent independent
+history from being delivered. Local immutable history and the server's exact
+acceptance are the retry record; no second publication queue is created.
 Installation requires an initialized store (`cxt init` or `cxt setup`) and
 repairs both `.gitignore` and `.git/info/exclude` before writing hook scripts.
 
@@ -1089,11 +1132,13 @@ shell history, issue reports, or CI logs.
 
 ### Repository branch-history compatibility
 
-Update and sync all CLI replicas before enabling **Branch history protection**
-in repository settings. Once enabled, older clients cannot mutate branch refs.
-New clients send the persisted branch identity and publish verified birth,
-rename and archive history before refs. A same-name/same-hash identity conflict
-requires reconciliation; force-push does not override branch identity.
+New repositories created by an updated CLI on PostgreSQL start with branch-history protection enabled. `cxt setup` / `cxt remote add origin` establishes a server-verified creation receipt. A recorded new Git branch can then publish normally. For a pre-existing Git branch without a recorded birth, each branch’s first selected push observes its saved context. If it contains recorded rewind continuations, the initial observation uses their exact starting tip before applying those events; this does not invent a historical branch-creation event. Creating the repository or accepting that initial observation requires maintainer permission. Later ordinary publication retains member permission.
+
+Existing repositories keep their current protocol. Before enabling protection on an existing legacy repository, update and synchronize every replica, then enable **Branch history protection** in settings. An existing empty repository is still existing. Selected push will not silently perform a broad bootstrap or enable protection.
+
+Creation and initial observation need PostgreSQL transactions. A filesystem development server or an older server returns an explicit unsupported error for this new flow. For an existing legacy development repository, deliberate bare publication followed by maintainer enablement remains the migration path; this is not an automatic fallback. Git success with a CXT delivery warning does not mean context publication succeeded; durable work remains available for retry.
+
+A same-name/same-hash identity conflict requires reconciliation; force-push does not override branch identity.
 
 `.cxt/refs/heads/*` may contain a JSON ref with `branch_id`, not just a hash.
 Use `cxt log`, `cxt branch list`, or `cxt doctor` instead of interpreting the

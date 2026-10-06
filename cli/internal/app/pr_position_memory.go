@@ -42,7 +42,7 @@ func (s *ContextHistoryService) ResolvePRSourcePositionFromHistory(ctx context.C
 	if err != nil {
 		return zero, err
 	}
-	var candidates []domain.WorkingPosition
+	var observations []domain.HistoryEvent
 	for _, e := range events {
 		if err := ctx.Err(); err != nil {
 			return zero, err
@@ -54,6 +54,14 @@ func (s *ContextHistoryService) ResolvePRSourcePositionFromHistory(ctx context.C
 		if _, err := s.ValidateHistorySource(ctx, e); err != nil {
 			return zero, fmt.Errorf("PR source observation %s: %w", e.ID, err)
 		}
+		observations = append(observations, e)
+	}
+	observations, err = s.initialMemorySelections(ctx, observations)
+	if err != nil {
+		return zero, err
+	}
+	var candidates []domain.WorkingPosition
+	for _, e := range observations {
 		candidates = append(candidates, domain.WorkingPosition{RepoID: receipt.RepoID, Branch: receipt.Branch, BranchID: receipt.BranchID,
 			GitCommit: receipt.PR.MergeSHA, Snapshot: receipt.Source, MemoryHash: e.MemoryHash, MemorySource: e.MemorySource, MemoryPinned: true})
 	}

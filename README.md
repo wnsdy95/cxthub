@@ -109,9 +109,13 @@ cxt setup https://<host>/<owner>/<repository>
 cxt remote -v
 ```
 
-`cxt setup` initializes the local store, installs Git hooks, registers the
-repository, starts browser login, merges provider hooks, and pulls team settings.
-It is safe to rerun. Use `cxt init` instead for local-only operation.
+`cxt setup` initializes the local store, authenticates and verifies the repository
+connection, then resolves a pristine clone's Git upstream and code-aligned
+context before installing Git and provider hooks. It also pulls team settings.
+Rerunning it preserves existing context and local work. Automatic attachment
+does not launch an agent or inject a conversation. See the
+[setup contract](docs/CLI.md#cxt-setup) for evidence requirements and recovery.
+Use `cxt init` instead for local-only operation.
 
 Useful manual commands:
 

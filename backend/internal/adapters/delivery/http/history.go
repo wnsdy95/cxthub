@@ -17,12 +17,26 @@ func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) recordHistory(w http.ResponseWriter, r *http.Request) {
+	s.recordHistoryEvent(w, r, false)
+}
+
+// A distinct route prevents an older server from accepting the event while
+// silently discarding an unknown memory-selection dependency field.
+func (s *Server) recordMemorySelection(w http.ResponseWriter, r *http.Request) {
+	s.recordHistoryEvent(w, r, true)
+}
+
+func (s *Server) recordHistoryEvent(w http.ResponseWriter, r *http.Request, requireMemorySelection bool) {
 	var e domain.HistoryEvent
 	if !s.decodeLimited(w, r, &e, 32<<10) {
 		return
 	}
 	if e.RepoID != string(s.repoID(r)) {
 		s.respond(w, nil, fmt.Errorf("%w: history repository does not match route", domain.ErrValidation))
+		return
+	}
+	if requireMemorySelection && e.MemorySelectionParent == "" {
+		s.respond(w, nil, fmt.Errorf("%w: memory selection requires its prior position", domain.ErrValidation))
 		return
 	}
 	err := s.b.RecordHistory(r.Context(), e)

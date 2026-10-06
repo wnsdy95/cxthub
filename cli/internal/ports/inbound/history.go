@@ -28,3 +28,11 @@ type ContextHistoryReconciler interface {
 type ContextCodeMoveReconciler interface {
 	SelectPositionAfterCodeMove(context.Context, domain.WorkingPosition, domain.WorkingPosition, domain.Ref) error
 }
+
+// ContextRewriteSourceSelector optionally verifies which original observations
+// remain alias sources. It validates and orders the full history, then resolves
+// initial-memory selections only in the requested branch/worktree. Raw history
+// and known/native alias detection must keep the complete event set.
+type ContextRewriteSourceSelector interface {
+	RewriteHistorySources(context.Context, []domain.HistoryEvent, string, string) ([]domain.HistoryEvent, error)
+}

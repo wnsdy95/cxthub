@@ -140,7 +140,7 @@ func ValidateHistoryBranch(events []HistoryEvent, e HistoryEvent) error {
 }
 
 // OrderHistoryEvents keeps ordinary observation order while satisfying the
-// explicit dependencies of identity changes, including clocks that moved back.
+// explicit identity and memory dependencies, including clocks that moved back.
 func OrderHistoryEvents(events []HistoryEvent) ([]HistoryEvent, error) {
 	byID := make(map[string]HistoryEvent, len(events))
 	for _, e := range events {
@@ -153,11 +153,7 @@ func OrderHistoryEvents(events []HistoryEvent) ([]HistoryEvent, error) {
 	children := make(map[string][]string, len(byID))
 	ready := &historyQueue{}
 	for id, e := range byID {
-		deps := []string{e.BindingParent}
-		if e.NameParent != e.BindingParent {
-			deps = append(deps, e.NameParent)
-		}
-		for _, parent := range deps {
+		for _, parent := range HistoryDependencies(e) {
 			if parent == "" {
 				continue
 			}

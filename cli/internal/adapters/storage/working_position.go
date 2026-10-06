@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -177,9 +178,26 @@ func (s *FileStore) RecordWorkingMemory(ctx context.Context, snapshot, memory do
 		if digest.SnapshotID != snapshot {
 			return domain.ErrHashMismatch
 		}
+		// Preserve the first empty -> memory selection as an explicit dependency.
+		// The ref lock fixes the exact previous selection; no clock or mutable
+		// snapshot pointer can prove this transition to a future observer.
+		var selection *domain.HistoryEvent
+		if p.MemoryPinned && p.MemoryHash == "" && p.MemorySource == "" && p.Selection != nil && digest.PreviousMemoryHash == "" {
+			var id [16]byte
+			if _, err := rand.Read(id[:]); err != nil {
+				return err
+			}
+			e := domain.HistoryEvent{ID: fmt.Sprintf("%x", id), RepoID: p.RepoID, BranchID: p.BranchID,
+				Branch: p.Branch, LocalBranch: p.LocalBranch, Kind: "position", MemorySelectionParent: p.Selection.ID,
+				Source: snapshot, Target: snapshot, MemoryHash: memory, MemoryPinned: true,
+				GitAfter: p.GitCommit, WorktreeID: s.worktreeID, CreatedAt: time.Now().UTC()}
+			if domain.IsInitialMemorySelection(*p.Selection, e) {
+				selection = &e
+			}
+		}
 		p.MemoryHash = memory
 		p.MemoryPinned = true
-		p.Selection = nil
+		p.Selection = selection
 		return s.writePosition(p)
 	})
 }

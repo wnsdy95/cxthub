@@ -8,6 +8,7 @@ import (
 // A runtime capability, never persisted as repository configuration. Old
 // clients ignore it; new clients treat an absent/zero version as unsupported.
 type repoPullView struct {
+	InitialAnchorAvailable bool `json:"initial_anchor_available,omitempty"`
 	domain.Repo
 	BranchPullVersion int `json:"branch_pull_version,omitempty"`
 }

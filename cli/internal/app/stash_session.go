@@ -45,22 +45,50 @@ func NewStashService(
 
 // Stash saves the active session to the stack and restores the branch head context.
 func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inbound.StashOutput, error) {
+	var out inbound.StashOutput
+	var restoreHead bool
+	capture := func(locked context.Context) error {
+		var err error
+		out, restoreHead, err = s.captureStash(locked, in)
+		return err
+	}
+	var err error
+	if gate, ok := s.store.(outbound.CaptureTrackingGate); ok {
+		err = gate.WithCaptureTrackingGate(ctx, capture)
+	} else {
+		err = capture(ctx)
+	}
+	if err != nil {
+		return out, err
+	}
+	// Capture and stack publication are durable. Release admission exclusion
+	// before restoration, which can query server history and materialize a session.
+	if restoreHead {
+		if lo, lerr := s.load.Load(ctx, inbound.LoadInput{Ref: out.Branch, Cwd: in.Cwd}); lerr == nil {
+			out.RestoredHead = true
+			out.ResumeCmd = lo.ResumeCmd
+		}
+	}
+	return out, nil
+}
+
+func (s *StashService) captureStash(ctx context.Context, in inbound.StashInput) (inbound.StashOutput, bool, error) {
 	provider := in.Provider
 	if provider == "" {
 		provider = domain.ProviderClaude
 	}
 	capt, ok := s.captures[provider]
 	if !ok {
-		return inbound.StashOutput{}, domain.ErrUnsupportedProvider
+		return inbound.StashOutput{}, false, domain.ErrUnsupportedProvider
 	}
 	cdc, ok := s.codecs[provider]
 	if !ok {
-		return inbound.StashOutput{}, domain.ErrUnsupportedProvider
+		return inbound.StashOutput{}, false, domain.ErrUnsupportedProvider
 	}
 
 	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
 	if err != nil {
-		return inbound.StashOutput{}, err
+		return inbound.StashOutput{}, false, err
 	}
 	branch, _ := s.gitCtx.CurrentBranch(ctx, in.Cwd)
 	if branch == "" {
@@ -72,16 +100,16 @@ func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inboun
 	if path == "" {
 		path, err = capt.LocateActiveSession(ctx, in.Cwd)
 		if err != nil {
-			return inbound.StashOutput{}, err // ErrNoActiveSession included
+			return inbound.StashOutput{}, false, err // ErrNoActiveSession included
 		}
 	} else {
 		if !s.capture.Eligible(repo.LocalPath, path) {
-			return inbound.StashOutput{}, domain.ErrNoActiveSession
+			return inbound.StashOutput{}, false, domain.ErrNoActiveSession
 		}
 	}
 	envelope, docHash, _, _, err := s.capture.Project(ctx, repo.LocalPath, path, capt, cdc, false)
 	if err != nil {
-		return inbound.StashOutput{}, err
+		return inbound.StashOutput{}, false, err
 	}
 
 	msg := in.Message
@@ -112,7 +140,7 @@ func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inboun
 		Models:    envelope.OrderedModels(),
 	}
 	if err := s.store.PutSnapshot(ctx, snap); err != nil {
-		return inbound.StashOutput{}, err
+		return inbound.StashOutput{}, false, err
 	}
 
 	// 2) stack push.
@@ -123,20 +151,14 @@ func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inboun
 		Provider:  provider,
 		CreatedAt: snap.CreatedAt,
 	}); err != nil {
-		return inbound.StashOutput{}, err
+		return inbound.StashOutput{}, false, err
 	}
 	stack, _ := s.store.StashList(ctx, string(repo.ID))
 
 	out := inbound.StashOutput{StashID: docHash, Branch: branch, Depth: len(stack)}
 
-	// 3) branch head context recovery — skip if head matches stash content or is empty.
-	if headTarget != "" && headTarget != docHash {
-		if lo, lerr := s.load.Load(ctx, inbound.LoadInput{Ref: branch, Cwd: in.Cwd}); lerr == nil {
-			out.RestoredHead = true
-			out.ResumeCmd = lo.ResumeCmd
-		}
-	}
-	return out, nil
+	// Preserve the restore decision made against the captured branch baseline.
+	return out, headTarget != "" && headTarget != docHash, nil
 }
 
 // StashPop restores the latest stash to the active session and removes it from the stack.

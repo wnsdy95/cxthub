@@ -382,6 +382,10 @@ type BranchHandoffInput struct {
 
 // SyncInput is an input DTO for SyncRepo.Push / SyncRepo.Pull.
 type SyncInput struct {
+	// Publication selects frozen context identities for strict Push. A non-nil
+	// empty scope is invalid; nil with no Ref keeps ordinary repository-wide Push.
+	// HistoryOnly delivers recorded operations without final refs or pointer cleanup.
+	Publication *domain.PublicationScope
 	// ObservationRoots requests server graph evidence for known merge candidates
 	// outside the selected branch. It never moves or publishes those snapshots.
 	ObservationRoots []domain.ContentHash
@@ -448,6 +452,8 @@ type SyncOutput struct {
 
 // InitInput is the DTO for InitRepo.Init (compatibility rules).
 type InitInput struct {
+	// PreserveExisting is setup-only; explicit init retains its existing semantics.
+	PreserveExisting bool
 	// Cwd is the target working directory for registration.
 	Cwd string
 	// RemoteURL is the explicit git remote URL. "" means auto-detect origin (fallback to cwd if not found).

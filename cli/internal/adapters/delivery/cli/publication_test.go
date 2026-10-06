@@ -102,7 +102,7 @@ func TestRewritePublicationWaitsForNativeFinalization(t *testing.T) {
 	native.ID, native.Kind, native.Source, native.Target, native.GitAfter = strings.Repeat("3", 32), "position", next, next, b
 	batch := rewriteBatch{RepoID: old.RepoID, BranchID: old.BranchID, WorktreeID: old.WorktreeID, Rewrites: map[string]string{a: b}}
 	events := []domain.HistoryEvent{old, native}
-	aliases, err := rewrittenHistory(events, batch.Rewrites, batch.BranchID, batch.WorktreeID, time.Now())
+	aliases, err := rewrittenHistory(events, nil, batch.Rewrites, batch.BranchID, batch.WorktreeID, time.Now())
 	if err != nil || len(aliases) != 0 {
 		t.Fatalf("native observation should suppress old alias: %+v %v", aliases, err)
 	}

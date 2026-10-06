@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
-	"sort"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -132,139 +130,22 @@ func (s *SyncRepoService) pushSelectedHistory(ctx context.Context, repoID string
 	return nil
 }
 
-// Preflight the complete ready set before sending any completion barrier. A
-// worker can bind permanently after the very first publication in this push.
-// Accepted events are excluded: later captures cannot undo a terminal binding.
+// The application supplies verified ancestry; grouping and alias policy are shared
+// with the pure scoped planner rather than implemented twice.
 func (s *SyncRepoService) orderHistoryPublications(ctx context.Context, repoID string, events, accepted []domain.HistoryEvent) ([]domain.HistoryEvent, error) {
-	byID := make(map[string]domain.HistoryEvent, len(accepted))
-	for _, e := range accepted {
-		byID[e.ID] = e
+	roots, err := domain.PublicationAncestryRoots(repoID, events, accepted)
+	if err != nil {
+		return nil, err
 	}
-	ordinary := make([]domain.HistoryEvent, 0, len(events))
-	groups := map[[3]string][]domain.HistoryEvent{}
-	var keys [][3]string
-	identities := map[[3]string]string{}
-	for _, e := range events {
-		if old, ok := byID[e.ID]; ok {
-			if !reflect.DeepEqual(old, e) {
-				return nil, domain.ErrHashMismatch
-			}
-			continue
+	ancestry := map[domain.ContentHash]map[domain.ContentHash]bool{}
+	for _, target := range roots {
+		found, err := s.publicationAncestors(ctx, repoID, target)
+		if err != nil {
+			return nil, fmt.Errorf("%w: cannot prove publication ancestry for %s: %w", domain.ErrSyncConflict, target, err)
 		}
-		if e.Kind != "publish" {
-			ordinary = append(ordinary, e)
-			continue
-		}
-		if e.RepoID != repoID {
-			return nil, domain.ErrHashMismatch
-		}
-		if err := domain.ValidateHistoryEvent(e); err != nil {
-			return nil, err
-		}
-		// A reused canonical name or tracking alias at this exact Git revision
-		// must not let the first identity win before the other is uploaded.
-		for _, name := range []string{e.Branch, e.LocalBranch} {
-			if name == "" {
-				continue
-			}
-			key := [3]string{e.RepoID, name, e.GitAfter}
-			if old := identities[key]; old != "" && old != e.BranchID {
-				return nil, fmt.Errorf("%w: publication name %q at Git %s belongs to multiple branch identities", domain.ErrSyncConflict, name, e.GitAfter)
-			}
-			identities[key] = e.BranchID
-		}
-		// Names and worktrees are observations of an identity, not separate
-		// groups. Preserve full Git object IDs, including SHA-256 repositories.
-		key := [3]string{e.RepoID, e.BranchID, e.GitAfter}
-		if _, ok := groups[key]; !ok {
-			keys = append(keys, key)
-		}
-		groups[key] = append(groups[key], e)
+		ancestry[target] = found
 	}
-	observations := append(append([]domain.HistoryEvent(nil), accepted...), events...)
-	for _, key := range keys {
-		group := groups[key]
-		ranks := map[domain.ContentHash]int{}
-		for _, e := range group {
-			ranks[e.Target] = 0
-		}
-		var maximal domain.ContentHash
-		for target := range ranks {
-			if len(ranks) == 1 {
-				maximal = target
-				break
-			}
-			ancestors, err := s.publicationAncestors(ctx, repoID, target)
-			if err != nil {
-				return nil, fmt.Errorf("%w: cannot prove publication ancestry for %s: %w", domain.ErrSyncConflict, target, err)
-			}
-			for other := range ranks {
-				if ancestors[other] {
-					ranks[target]++
-				}
-			}
-			if ranks[target] == len(ranks) {
-				maximal = target
-			}
-		}
-		if maximal == "" {
-			return nil, fmt.Errorf("%w: branch identity %s at Git %s has incomparable publications", domain.ErrSyncConflict, key[1], key[2])
-		}
-		// An ancestor may expose an alias which the maximal publication cannot
-		// satisfy. Refuse that ambiguity instead of allowing its worker to bind
-		// the ancestor. Several publications of the maximal target may cover it.
-		covered := map[string]bool{}
-		names := map[string][]string{}
-		for _, e := range group {
-			names[e.ID] = publicationSourceNames(e, observations)
-			if e.Target == maximal {
-				for _, name := range names[e.ID] {
-					covered[name] = true
-				}
-			}
-		}
-		for _, e := range group {
-			for _, name := range names[e.ID] {
-				if !covered[name] {
-					return nil, fmt.Errorf("%w: maximal publication for branch identity %s at Git %s does not cover source name %q", domain.ErrSyncConflict, key[1], key[2], name)
-				}
-			}
-		}
-		// Every descendant has strictly more candidate ancestors in a DAG.
-		// IDs only break ties between equivalent or already-covered sources.
-		sort.Slice(group, func(i, j int) bool {
-			if ranks[group[i].Target] != ranks[group[j].Target] {
-				return ranks[group[i].Target] > ranks[group[j].Target]
-			}
-			return group[i].ID < group[j].ID
-		})
-		ordinary = append(ordinary, group...)
-	}
-	return ordinary, nil
-}
-
-// Alias eligibility follows the existing server proof/attachment contract.
-// The publication clock is not evidence of when the source was observed.
-func publicationSourceNames(p domain.HistoryEvent, events []domain.HistoryEvent) []string {
-	names := []string{p.Branch}
-	if p.LocalBranch == "" || p.LocalBranch == p.Branch || p.WorktreeID == "" {
-		return names
-	}
-	for _, proof := range events {
-		if proof.Kind == "publish" || proof.Kind == "pr-merge" || proof.RepoID != p.RepoID ||
-			proof.BranchID != p.BranchID || proof.Branch != p.Branch || proof.LocalBranch != p.LocalBranch ||
-			proof.WorktreeID != p.WorktreeID || proof.GitAfter != p.GitAfter || proof.Target != p.Target {
-			continue
-		}
-		for _, attached := range events {
-			if attached.Kind == "attach" && attached.RepoID == p.RepoID && attached.LocalBranch != "" &&
-				attached.WorktreeID != "" && (attached.WorktreeID == p.WorktreeID || attached.LocalBranch == p.LocalBranch) && attached.BranchID == p.BranchID &&
-				!attached.CreatedAt.After(proof.CreatedAt) {
-				return append(names, p.LocalBranch)
-			}
-		}
-	}
-	return names
+	return domain.OrderHistoryPublications(repoID, events, accepted, ancestry)
 }
 
 func (s *SyncRepoService) publicationAncestors(ctx context.Context, repoID string, target domain.ContentHash) (map[domain.ContentHash]bool, error) {

@@ -120,6 +120,19 @@ type scopedPRSyncRemote struct {
 	pushed []domain.Ref
 }
 
+// Strict selected Push requires the existing protocol-1 identity/history contract.
+func (r *scopedPRSyncRemote) ContextProtocol(context.Context, string) (int, error) { return 1, nil }
+func (r *scopedPRSyncRemote) RegisterRepo(_ context.Context, repo domain.Repo) (domain.Repo, error) {
+	return repo, nil
+}
+func (r *scopedPRSyncRemote) RemoteManifest(_ context.Context, repo string) (domain.Manifest, error) {
+	return domain.Manifest{RepoID: repo, Refs: r.refs}, nil
+}
+func (r *scopedPRSyncRemote) PullHistoryEvents(context.Context, string) ([]domain.HistoryEvent, error) {
+	return nil, nil
+}
+func (r *scopedPRSyncRemote) PushHistoryEvent(context.Context, domain.HistoryEvent) error { return nil }
+
 func (r *scopedPRSyncRemote) Pull(context.Context, string, map[domain.ContentHash]domain.ContentHash, []domain.ContentHash) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
 	return nil, nil, append([]domain.Ref{}, r.refs...), nil
 }
@@ -177,6 +190,8 @@ func TestScopedSyncLeavesPRDeliveryQueuedUntilUnscopedSync(t *testing.T) {
 			var out inbound.SyncOutput
 			var err error
 			if operation == "push" {
+				in.Cwd = root
+				svc.gitCtx = pushOrderGit{repo: domain.Repo{ID: repo, LocalPath: root}}
 				out, err = svc.Push(ctx, in)
 			} else {
 				if operation == "missing-pull" {

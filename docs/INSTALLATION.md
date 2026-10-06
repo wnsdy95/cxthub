@@ -149,10 +149,10 @@ cxt setup https://<host>/<owner>/<repository>
 
 `cxt setup` is idempotent and performs:
 
-1. local `.cxt` store initialization;
-2. managed Git hook installation;
-3. browser-based login, unless a credential already exists;
-4. verified repository remote registration;
+1. initialize a missing `.cxt` store, preserving an existing context selection;
+2. browser-based login and verified repository remote registration;
+3. resolve the actual Git origin upstream and code-aligned context on a pristine clone;
+4. managed Git hook installation;
 5. Claude Code and Codex hook registration when available; and
 6. team settings pull when authenticated.
 
@@ -160,6 +160,14 @@ It preserves existing provider hooks while adding the CXTHub entries. Claude
 Code settings are written under the repository's `.claude/` directory. Codex
 hooks are merged into `~/.codex/hooks.json`; Codex may require a one-time `/hooks`
 approval.
+
+Automatic tracking does not launch a provider or inject conversation text. It
+requires matching checked-out/upstream code and a server-verified Git origin.
+Existing local context and queued operations are preserved. A conflicting or
+unverifiable first attachment stops before new hooks are installed; follow the
+reported recovery guidance, then rerun setup. `cxt remote add` only registers a
+connection; use explicit `cxt pull` to select context on that manual path. See
+the [setup reference](CLI.md#cxt-setup) for the complete contract.
 
 The Codex hook registration is global, but capture remains repository opt-in.
 Only `cxt init` or `cxt setup` writes the `.cxt/HEAD` activation marker. In any

@@ -76,6 +76,15 @@ func recordRewriteBatch(ctx context.Context, c *Container, cwd string, rewrites 
 // original snapshots, branch refs, and the worktree's selection stay untouched.
 // Push retries a batch after an interrupted history write.
 func replayRewriteHistory(ctx context.Context, c *Container, cwd string) error {
+	return replayRewriteHistoryForBranches(ctx, c, cwd, nil)
+}
+
+// A nil selection preserves all-replay; an empty selection performs no work.
+// Durable batch identity owns replay across worktrees, not the caller's branch.
+func replayRewriteHistoryForBranches(ctx context.Context, c *Container, cwd string, branchIDs map[string]bool) error {
+	if branchIDs != nil && len(branchIDs) == 0 {
+		return nil
+	}
 	if c.History == nil {
 		return nil
 	}
@@ -89,7 +98,7 @@ func replayRewriteHistory(ctx context.Context, c *Container, cwd string) error {
 	if p.WorktreeID == "" {
 		return nil
 	}
-	if err := replayPublications(ctx, c, cwd); err != nil {
+	if err := replayPublicationsForBranches(ctx, c, cwd, branchIDs); err != nil {
 		return err
 	}
 	root := cxtRepoRoot(ctx, cwd)
@@ -132,6 +141,9 @@ func replayRewriteHistory(ctx context.Context, c *Container, cwd string) error {
 			if batch.RepoID != p.RepoID || batch.WorktreeID != worktree.Name() || batch.BranchID == "" || entry.Name() != fmt.Sprintf("%x.json", sha256.Sum256(raw)) {
 				return domain.ErrHashMismatch
 			}
+			if branchIDs != nil && !branchIDs[batch.BranchID] {
+				continue
+			}
 			batches = append(batches, batch)
 		}
 	}
@@ -142,12 +154,19 @@ func replayRewriteHistory(ctx context.Context, c *Container, cwd string) error {
 	if err != nil {
 		return err
 	}
+	// Verify every selected source relation before persisting any new aliases.
+	// Generated aliases introduce no new selection dependencies, so these exact
+	// immutable exclusions remain valid across chained replay passes.
+	excluded, err := rewriteMemoryExclusions(ctx, c.History, events, batches)
+	if err != nil {
+		return err
+	}
 	// Batch filenames are hashes, not clocks. Bounded passes resolve a chain
 	// even when B→C sorts before A→B; replay identity prevents duplicate writes.
 	for pass := 0; pass < len(batches); pass++ {
 		changed := false
 		for _, batch := range batches {
-			observations, err := rewrittenHistory(events, batch.Rewrites, batch.BranchID, batch.WorktreeID, time.Now().UTC())
+			observations, err := rewrittenHistory(events, excluded, batch.Rewrites, batch.BranchID, batch.WorktreeID, time.Now().UTC())
 			if err != nil {
 				return err
 			}
@@ -337,7 +356,49 @@ func rewrittenPublications(events []domain.HistoryEvent, b rewriteBatch, snapsho
 	return out, nil
 }
 
-func rewrittenHistory(events []domain.HistoryEvent, rewrites map[string]string, branchID, worktreeID string, now time.Time) ([]domain.HistoryEvent, error) {
+// Derive exclusions once from the frozen original history. The generator still
+// sees every row for idempotency and native-destination suppression.
+func rewriteMemoryExclusions(ctx context.Context, history inbound.ContextHistory, events []domain.HistoryEvent, batches []rewriteBatch) (map[string]bool, error) {
+	excluded := map[string]bool{}
+	seen := map[[2]string]bool{}
+	for _, b := range batches {
+		key := [2]string{b.BranchID, b.WorktreeID}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		hasSelection := false
+		for _, e := range events {
+			if e.BranchID == b.BranchID && e.WorktreeID == b.WorktreeID && e.MemorySelectionParent != "" {
+				hasSelection = true
+				break
+			}
+		}
+		if !hasSelection {
+			continue
+		}
+		selector, ok := history.(inbound.ContextRewriteSourceSelector)
+		if !ok {
+			return nil, fmt.Errorf("rewrite initial-memory verification unavailable; observations remain pending")
+		}
+		sources, err := selector.RewriteHistorySources(ctx, events, b.BranchID, b.WorktreeID)
+		if err != nil {
+			return nil, err
+		}
+		kept := make(map[string]bool, len(sources))
+		for _, e := range sources {
+			kept[e.ID] = true
+		}
+		for _, e := range events {
+			if e.BranchID == b.BranchID && e.WorktreeID == b.WorktreeID && !kept[e.ID] {
+				excluded[e.ID] = true
+			}
+		}
+	}
+	return excluded, nil
+}
+
+func rewrittenHistory(events []domain.HistoryEvent, excluded map[string]bool, rewrites map[string]string, branchID, worktreeID string, now time.Time) ([]domain.HistoryEvent, error) {
 	known := make(map[string]bool, len(events))
 	observed := make(map[string]bool)
 	for _, e := range events {
@@ -348,6 +409,9 @@ func rewrittenHistory(events []domain.HistoryEvent, rewrites map[string]string, 
 	}
 	var out []domain.HistoryEvent
 	for _, e := range events {
+		if excluded[e.ID] {
+			continue
+		}
 		if e.Kind == "pr-merge" || e.Kind == "publish" || e.Target == "" || e.Branch == "" || e.BranchID != branchID || e.WorktreeID != worktreeID || !validNonZeroGitOID(e.GitAfter) {
 			continue
 		}

@@ -5,13 +5,20 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 	"net/http"
+	"net/url"
 )
 
 func (c *BackendClient) PushHistoryEvent(ctx context.Context, e domain.HistoryEvent) error {
 	if err := domain.ValidateHistoryEvent(e); err != nil {
 		return err
 	}
-	return c.do(ctx, http.MethodPost, c.reposPath(e.RepoID)+"/history", e, nil)
+	path := c.reposPath(e.RepoID) + "/history"
+	if e.MemorySelectionParent != "" {
+		// Fence rolling old nodes that silently discard unknown history fields.
+		// An unsupported route is an error; never retry through ordinary history.
+		path += "/memory-selection"
+	}
+	return c.do(ctx, http.MethodPost, path, e, nil)
 }
 func (c *BackendClient) PullHistoryEvents(ctx context.Context, repoID string) ([]domain.HistoryEvent, error) {
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
@@ -50,15 +57,23 @@ func (c *BackendClient) PromotePullRequest(ctx context.Context, repoID string, p
 // local repository configuration.
 type repositoryView struct {
 	domain.Repo
-	BranchPullVersion int `json:"branch_pull_version,omitempty"`
+	BranchPullVersion      int  `json:"branch_pull_version,omitempty"`
+	InitialAnchorAvailable bool `json:"initial_anchor_available,omitempty"`
 }
 
-func (c *BackendClient) readRepository(ctx context.Context, repoID string) (repositoryView, error) {
+func (c *BackendClient) readRepository(ctx context.Context, repoID, initialBranch string) (repositoryView, error) {
 	var view repositoryView
 	if err := domain.ValidateContentHash(repoID); err != nil {
 		return view, err
 	}
-	if err := c.do(ctx, http.MethodGet, c.reposPath(repoID), nil, &view); err != nil {
+	path := c.reposPath(repoID)
+	if initialBranch != "" {
+		if err := domain.ValidateBranchName(initialBranch); err != nil {
+			return view, err
+		}
+		path += "?initial_branch=" + url.QueryEscape(initialBranch)
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &view); err != nil {
 		return view, err
 	}
 	if view.ID != repoID {
@@ -72,12 +87,12 @@ func (c *BackendClient) readRepository(ctx context.Context, repoID string) (repo
 
 // Repository reads cloud identity/configuration without consulting local state.
 func (c *BackendClient) Repository(ctx context.Context, repoID string) (domain.Repo, error) {
-	view, err := c.readRepository(ctx, repoID)
+	view, err := c.readRepository(ctx, repoID, "")
 	return view.Repo, err
 }
 
 func (c *BackendClient) PullCapabilities(ctx context.Context, repoID string) (outbound.PullCapabilities, error) {
-	view, err := c.readRepository(ctx, repoID)
+	view, err := c.readRepository(ctx, repoID, "")
 	return outbound.PullCapabilities{ContextProtocol: view.ContextProtocol, BranchPlanVersion: view.BranchPullVersion}, err
 }
 
