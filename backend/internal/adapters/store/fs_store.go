@@ -2371,7 +2371,6 @@ func (s *FSStore) PutVerifiedDoc(ctx context.Context, repoID domain.ContentHash,
 	if !doc.Valid() {
 		return false, domain.ErrIntegrity
 	}
-	canonical := doc.Bytes()
 	s.docProofs.put(docProofKey{repo: repoID, expected: doc.Hash(), representation: doc.Hash()}, doc.Reference())
 	p := s.docPath(repoID, doc.Hash())
 	if exists(p) {
@@ -2380,15 +2379,14 @@ func (s *FSStore) PutVerifiedDoc(ctx context.Context, repoID domain.ContentHash,
 		}
 		return false, nil
 	}
-	data := canonical
 	// Chunk CAS basic (doc_chunks.go) — append-only session prefixes are deduped across pushes.
 	// Inapplicable chunking falls back to whole. Integrity hash remains whole canonical.
-	chunked, _, err := s.putDocChunked(repoID, doc.Hash(), data)
-	if err != nil {
-		return false, err
-	}
-	if !chunked {
-		if err := writeAtomic(p, docCompress(data)); err != nil {
+	if plan, chunked := doc.ChunkPlan(); chunked {
+		if _, err := s.putDocChunkPlan(repoID, doc.Hash(), plan); err != nil {
+			return false, err
+		}
+	} else {
+		if err := writeAtomic(p, docCompress(doc.Bytes())); err != nil {
 			return false, err
 		}
 	}

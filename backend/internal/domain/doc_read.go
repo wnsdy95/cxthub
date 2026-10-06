@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 )
@@ -74,27 +75,62 @@ func (doc VerifiedSessionDoc) ReadIndex() (DocReadIndex, error) {
 // The private bodies prevent a caller from changing the bytes behind the hash.
 type DocReadPlan struct {
 	index  DocReadIndex
-	bodies []json.RawMessage
+	stream canonicalSegments
+	bodies []canonicalSpan
 }
 
 func (doc VerifiedSessionDoc) PlanReadIndex() (DocReadPlan, error) {
+	return doc.PlanReadIndexContext(context.Background())
+}
+
+// PlanReadIndexContext cooperatively cancels projection planning. A v2 chunk
+// proof already owns exact event spans/hashes, so it needs no second byte scan.
+// Legacy values scan their immutable string without a cumulative JSON copy.
+func (doc VerifiedSessionDoc) PlanReadIndexContext(ctx context.Context) (DocReadPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return DocReadPlan{}, err
+	}
 	if !doc.Valid() {
 		return DocReadPlan{}, ErrIntegrity
 	}
-	env, raw, err := splitCanonicalDocBytes(doc.Bytes())
+	env, stream, err := doc.segmented()
 	if err != nil {
 		return DocReadPlan{}, err
 	}
-	out := DocReadIndex{Version: 1, Hash: doc.Hash(), Events: make([]DocEventIndex, 0, len(raw))}
-	if err := json.Unmarshal(env, &out.Envelope); err != nil {
+	out := DocReadIndex{Version: 1, Hash: doc.Hash(), Events: []DocEventIndex{}}
+	if err := json.Unmarshal([]byte(env), &out.Envelope); err != nil {
 		return DocReadPlan{}, err
 	}
-	offset := 0
-	for i, body := range raw {
-		out.Events = append(out.Events, DocEventIndex{Index: i, Offset: offset, Length: len(body), Hash: HashContent(body)})
-		offset += len(body) + 1 // canonical comma between events
+	var spans []canonicalSpan
+	if doc.chunks != nil {
+		out.Events = make([]DocEventIndex, 0, len(doc.chunks.events))
+		spans = make([]canonicalSpan, 0, len(doc.chunks.events))
+		for i, event := range doc.chunks.events {
+			if err := ctx.Err(); err != nil {
+				return DocReadPlan{}, err
+			}
+			out.Events = append(out.Events, DocEventIndex{Index: i, Offset: event.span.offset, Length: event.span.length, Hash: event.hash, Seq: event.seq})
+			spans = append(spans, event.span)
+		}
+		if err := ctx.Err(); err != nil {
+			return DocReadPlan{}, err
+		}
+		return DocReadPlan{index: out, stream: stream, bodies: spans}, nil
 	}
-	return DocReadPlan{index: out, bodies: raw}, nil
+	hasher := newCanonicalSpanHasher()
+	err = stream.visit(ctx, func(span canonicalSpan) error {
+		h, err := hasher.sum(ctx, stream, span)
+		if err != nil {
+			return err
+		}
+		out.Events = append(out.Events, DocEventIndex{Index: len(spans), Offset: span.offset, Length: span.length, Hash: h})
+		spans = append(spans, span)
+		return nil
+	})
+	if err != nil {
+		return DocReadPlan{}, err
+	}
+	return DocReadPlan{index: out, stream: stream, bodies: spans}, nil
 }
 
 func (p DocReadPlan) EventHashes() []ContentHash {
@@ -113,8 +149,11 @@ func (p DocReadPlan) Build(reusedSearch map[ContentHash]bool) (DocReadIndex, err
 		return DocReadIndex{}, ErrIntegrity
 	}
 	out := p.index
+	out.Envelope = p.Envelope()
 	out.Events = append([]DocEventIndex{}, p.index.Events...)
-	for i, body := range p.bodies {
+	var body []byte
+	for i, span := range p.bodies {
+		body = p.stream.appendRange(body[:0], span)
 		if reusedSearch[out.Events[i].Hash] {
 			var metadata struct {
 				Seq  int    `json:"seq"`

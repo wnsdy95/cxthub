@@ -1129,7 +1129,7 @@ func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.Conten
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	doc, canonical := prepared.doc, prepared.canonical
+	doc := prepared.doc
 	s.docProofs.put(docProofKey{repo: repoID, expected: doc.Hash(), representation: doc.Hash()}, doc.Reference())
 	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
@@ -1155,7 +1155,12 @@ func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.Conten
 		return false, fmt.Errorf("%w: stored blob undecodable for doc %s", domain.ErrIntegrity, doc.Hash())
 	}
 	storedMan, isMan := domain.ParseDocChunkManifest(stored)
-	if !created {
+	// Matching manifests describe the exact verified stream. The chunk loop
+	// below still compares each current stored body under its retention lock.
+	// Only legacy/differently partitioned representations need full assembly.
+	matchingManifest := !created && chunked && isMan && sameDocManifest(storedMan, plan.Manifest)
+	if !created && !matchingManifest {
+		canonical := doc.Bytes()
 		if cb, _, cerr := s.reassembleManifestTx(ctx, tx, stored, doc.Hash()); isMan {
 			if cerr != nil || !bytes.Equal(cb, canonical) {
 				return false, fmt.Errorf("%w: stored manifest disagrees with doc hash %s", domain.ErrIntegrity, doc.Hash())
@@ -1166,7 +1171,7 @@ func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.Conten
 	}
 	if chunked {
 		for _, ch := range plan.Order {
-			if err := retainOrPutDocChunkPG(ctx, tx, ch, plan.Bodies[ch]); err != nil {
+			if err := retainDocChunkPG(ctx, tx, ch, plan.Bodies[ch], !matchingManifest); err != nil {
 				return false, err
 			}
 			if _, err := tx.Exec(ctx,
@@ -1220,13 +1225,19 @@ func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.Conten
 // and retain those bytes instead of compressing/sending them to a losing INSERT.
 // Presence alone is never integrity proof; compare decompressed bytes even on
 // reuse. The key-share lock protects the ownership grant from concurrent GC.
-func retainOrPutDocChunkPG(ctx context.Context, tx pgx.Tx, hash domain.ContentHash, body []byte) error {
+func retainDocChunkPG(ctx context.Context, tx pgx.Tx, hash domain.ContentHash, body []byte, allowInsert bool) error {
 	var stored []byte
 	read := func() error {
 		return tx.QueryRow(ctx, `SELECT bytes FROM blobs WHERE hash=$1 FOR KEY SHARE`, string(hash)).Scan(&stored)
 	}
 	err := read()
 	if errors.Is(err, pgx.ErrNoRows) {
+		if !allowInsert {
+			// Replaying an existing manifest is validation, not repair. A new
+			// document may reconstruct chunks collected after verification;
+			// an already published broken archive must still fail closed.
+			return domain.ErrIntegrity
+		}
 		result, insertErr := tx.Exec(ctx, `INSERT INTO blobs (hash, bytes) VALUES ($1,$2) ON CONFLICT (hash) DO NOTHING`, string(hash), docCompress(body))
 		if insertErr != nil {
 			return insertErr

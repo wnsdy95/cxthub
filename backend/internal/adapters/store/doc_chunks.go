@@ -1,15 +1,16 @@
 // doc_chunks.go — Server-side session doc chunk CAS (symmetric contract with client storage/doc_chunks.go).
 //
-// doc is a comprehensive transcript object up to the capture point, so the entire thing is
-// rewritten every time the session grows (empirically verified 97%). The session is append-only,
-// so only the storage layer is chunked:
+// A document describes the conversation up to one capture point. Its ordered
+// manifest references immutable chunks; appending preserves closed chunks and
+// replaces only the partial tail. Memory versions are separate objects.
 //
 //	repos/<r>/objects/docs/<hash>   = zstd(mani{format, envelope, chunks[]})  ← or legacy zstd(comprehensive)
 //	repos/<r>/objects/chunks/<h_i>  = zstd(v2 canonical event-stream byte range; v1 remains readable)
 //
 // The integrity hash (DocHash=Snapshot.ID) remains the same as the comprehensive canonical standard — protocol·validation unchanged,
-// legacy comprehensives can be repacked losslessly with the same hash. Pre-write reassembly==original validation (mismatch triggers
-// comprehensive fallback), read-time reassembly hash comparison detects chunk corruption.
+// legacy comprehensive objects can be repacked losslessly with the same hash.
+// Chunk-backed domain proofs can be published without whole-body reassembly;
+// stored chunk byte comparison still detects corruption on reuse.
 // Chunks are isolated within the repo directory — maintaining ownership isolation (preventing content sharing across repos).
 package store
 
@@ -20,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -36,31 +38,44 @@ func (s *FSStore) putDocChunked(repoID, h domain.ContentHash, cb []byte) (bool, 
 	if !ok {
 		return false, 0, nil
 	}
+	added, err := s.putDocChunkPlan(repoID, h, plan)
+	return true, added, err
+}
+
+// sameDocManifest compares a representation, not a document ownership grant.
+// Callers must also retain and check the current bytes of its referenced chunks.
+func sameDocManifest(a, b domain.DocChunkManifest) bool {
+	return a.Format == b.Format && bytes.Equal(a.Envelope, b.Envelope) && slices.Equal(a.Chunks, b.Chunks)
+}
+
+// The plan comes from a verified immutable document; no cumulative body or
+// re-chunking is needed to publish its original v2 representation.
+func (s *FSStore) putDocChunkPlan(repoID, h domain.ContentHash, plan domain.DocChunkPlan) (int64, error) {
 	var added int64
 	for _, ch := range plan.Order {
 		p := s.chunkPath(repoID, ch)
 		if exists(p) {
 			raw, err := os.ReadFile(p)
 			if err != nil {
-				return false, added, err
+				return added, err
 			}
 			existing, err := docDecompress(raw)
 			if err != nil || !bytes.Equal(existing, plan.Bodies[ch]) {
-				return false, added, domain.ErrIntegrity
+				return added, domain.ErrIntegrity
 			}
 		} else {
 			compressed := docCompress(plan.Bodies[ch])
 			if err := writeAtomic(p, compressed); err != nil {
-				return false, added, err
+				return added, err
 			}
 			added += int64(len(compressed))
 		}
 	}
 	mb, err := json.Marshal(plan.Manifest)
 	if err != nil {
-		return false, added, err
+		return added, err
 	}
-	return true, added, writeAtomic(s.docPath(repoID, h), docCompress(mb))
+	return added, writeAtomic(s.docPath(repoID, h), docCompress(mb))
 }
 
 // getDocChunked reassembles manifest from chunks. If isManifest=false, it's a legacy comprehensive.

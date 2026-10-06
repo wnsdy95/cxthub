@@ -32,6 +32,10 @@ type CanonicalDocVerifier struct {
 
 func (v *CanonicalDocVerifier) event(ctx context.Context, version string, raw []byte, pending *[]canonicalEventProof) (int, error) {
 	key := canonicalEventKey{HashContent(raw), version}
+	return v.eventWithKey(ctx, key, raw, pending)
+}
+
+func (v *CanonicalDocVerifier) eventWithKey(ctx context.Context, key canonicalEventKey, raw []byte, pending *[]canonicalEventProof) (int, error) {
 	v.mu.Lock()
 	seq, found := v.events[key]
 	v.mu.Unlock()
@@ -42,7 +46,7 @@ func (v *CanonicalDocVerifier) event(ctx context.Context, version string, raw []
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return 0, ErrIntegrity
 	}
-	doc := CIRDocument{Envelope: CIREnvelope{CIRVersion: version}, Events: []CIREvent{event}}
+	doc := CIRDocument{Envelope: CIREnvelope{CIRVersion: key.version}, Events: []CIREvent{event}}
 	if err := ValidateCIRVersion(doc); err != nil {
 		return 0, err
 	}
@@ -152,42 +156,7 @@ func (v *CanonicalDocVerifier) Verify(ctx context.Context, hash ContentHash, raw
 // Input is the compact, syntactically validated interior of the events array.
 // Commas in nested replacement histories, tool JSON and quoted text are data.
 func visitCanonicalEvents(ctx context.Context, stream []byte, visit func([]byte) error) error {
-	start, depth := 0, 0
-	quoted, escaped := false, false
-	for i, ch := range stream {
-		if i%(64<<10) == 0 {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-		}
-		if quoted {
-			if escaped {
-				escaped = false
-			} else if ch == '\\' {
-				escaped = true
-			} else if ch == '"' {
-				quoted = false
-			}
-			continue
-		}
-		switch ch {
-		case '"':
-			quoted = true
-		case '{', '[':
-			depth++
-		case '}', ']':
-			depth--
-		case ',':
-			if depth == 0 {
-				if err := visit(stream[start:i]); err != nil {
-					return err
-				}
-				start = i + 1
-			}
-		}
-	}
-	if start < len(stream) {
-		return visit(stream[start:])
-	}
-	return ctx.Err()
+	return visitCanonicalParts(ctx, [][]byte{stream}, func(span canonicalSpan) error {
+		return visit(stream[span.offset : span.offset+span.length])
+	})
 }

@@ -34,12 +34,16 @@ func (p DocReadPlan) Blocks() []DocReadBlock {
 			index.Events[i].Offset -= events[0].Offset
 		}
 		blocks = append(blocks, DocReadBlock{Hash: HashContent([]byte(key.String())), FirstEvent: start, Offset: events[0].Offset, Count: end - start,
-			plan: DocReadPlan{index: index, bodies: p.bodies[start:end]}})
+			plan: DocReadPlan{index: index, stream: p.stream, bodies: p.bodies[start:end]}})
 	}
 	return blocks
 }
 
-func (p DocReadPlan) Envelope() CIREnvelope       { return p.index.Envelope }
+func (p DocReadPlan) Envelope() CIREnvelope {
+	out := p.index.Envelope
+	out.SourceModels = append([]string(nil), out.SourceModels...)
+	return out
+}
 func (p DocReadPlan) EventCount() int             { return len(p.index.Events) }
 func (b DocReadBlock) EventHashes() []ContentHash { return b.plan.EventHashes() }
 func (b DocReadBlock) Build(known map[ContentHash]bool) (DocReadIndex, error) {
