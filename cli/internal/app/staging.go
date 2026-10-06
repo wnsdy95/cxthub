@@ -308,7 +308,7 @@ func (s *StagingService) Commit(ctx context.Context, in inbound.StagingCommitInp
 		if _, err := rand.Read(random[:]); err != nil {
 			return err
 		}
-		result = domain.StagingCommit{Version: domain.StagingVersion, ID: hex.EncodeToString(random[:]), Index: index, ExpectedPosition: p, ExpectedRef: ref, CreatedAt: time.Now().UTC()}
+		result = domain.StagingCommit{Version: domain.StagingCommitVersion, ID: hex.EncodeToString(random[:]), Index: index, ExpectedPosition: p, ExpectedRef: ref, CreatedAt: time.Now().UTC()}
 		entries := append([]domain.StagedSession{}, index.Entries...)
 		sort.Slice(entries, func(i, j int) bool {
 			if entries[i].CapturedAt.Equal(entries[j].CapturedAt) {

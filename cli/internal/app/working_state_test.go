@@ -475,3 +475,20 @@ func TestWorkingStateAppliedPullStorageScopeAndNoMutation(t *testing.T) {
 		t.Fatal("status changed stored files, timestamps, or created repair/lock state")
 	}
 }
+
+func TestWorkingStateStagingCommitVersions(t *testing.T) {
+	for _, version := range []int{1, domain.StagingCommitVersion, domain.StagingCommitVersion + 1} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			s, f := newWorkingReadFixture(t)
+			f.commits = []domain.StagingCommit{{Version: version, ID: "versioned", Index: f.index, Position: f.position, LocalFinalized: true}}
+			_, err := s.Status(context.Background(), "")
+			if version > domain.StagingCommitVersion {
+				if !errors.Is(err, domain.ErrHashMismatch) {
+					t.Fatalf("unknown receipt accepted: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

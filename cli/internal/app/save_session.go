@@ -504,6 +504,12 @@ func (s *SaveSessionService) collectHookLeaf(ctx context.Context, repoID string,
 			return false
 		}
 	}
+	if pins, ok := s.store.(outbound.WorkingMemoryPins); ok {
+		pinned, err := pins.HasWorkingMemoryPin(ctx, snap.DocHash)
+		if err != nil || pinned {
+			return false
+		}
+	}
 	if pins, ok := s.store.(outbound.TrackingAttachmentPins); ok {
 		pinned, err := pins.HasTrackingAttachmentPin(ctx, snap.DocHash)
 		if err != nil || pinned {

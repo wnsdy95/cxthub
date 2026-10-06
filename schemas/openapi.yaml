@@ -1105,11 +1105,14 @@ components:
           type: string
           pattern: '^[0-9a-f]{32}$'
           description: |
-            Accepted empty position replaced by this first-memory position.
+            Accepted ordinary empty or explicitly inherited position replaced by
+            this first self-owned memory position.
             Both observations must refer to the same repository, branch identity,
             local branch, worktree, Git code and snapshot. The successor pins a
             verified root digest owned by that snapshot. This is memory-selection
             causality, not a branch identity transition; both records are retained.
+            Inherited memory must have a different verified owner and a fully
+            verified immutable ancestor chain.
         pr: { $ref: '#/components/schemas/PullRequestMerge' }
         recovery_evidence: { type: string, enum: [user-confirmed-unborn-head] }
         source_branch_id: { type: string, maxLength: 128 }
@@ -2859,9 +2862,10 @@ paths:
         Requires member access and application/json. Uses the same authorized
         history transaction and immutable replay rules as history recording.
         memory_selection_parent is required and must name an accepted exact
-        empty position. The server verifies the successor root digest and owner
-        before accepting the new dependency. Neither event moves a branch ref.
-        Older servers lack this route; clients must retain the operation and
+        empty or explicitly inherited ordinary position. The server verifies
+        the inherited owner and full memory chain, then the successor self-owned
+        root digest before accepting the dependency. Neither event moves a branch ref.
+        Older servers may lack this route or reject inherited predecessors; clients must retain the operation and
         report the failure instead of falling back to the ordinary history route.
       tags: [repos]
       requestBody:

@@ -485,7 +485,12 @@ func TestBranchBirthCheckpointRetainsEffectiveSavedHead(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := st.RecordWorkingMemory(ctx, saved[1], memory); err != nil {
+					position, err := st.GetWorkingPosition(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					position.MemoryHash, position.MemorySource, position.MemoryPinned, position.Selection = memory, "", true, nil
+					if err := st.PutWorkingPosition(ctx, position); err != nil {
 						t.Fatal(err)
 					}
 				}

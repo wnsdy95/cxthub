@@ -12,6 +12,11 @@ import (
 
 const StagingVersion = 1
 
+// Version 2 records one final memory selection for the selected target. Index
+// and stash formats remain version 1; interrupted version 1 commits retain
+// their original observations when replayed.
+const StagingCommitVersion = 2
+
 var ErrStagingVersion = errors.New("unsupported staging version")
 var ErrEmptyIndex = errors.New("no frozen sessions staged; run cxt add first")
 
@@ -160,11 +165,24 @@ type StagingCommit struct {
 	LocalFinalized   bool            `json:"local_finalized"`
 }
 
-// StagingObservations are exact add-time source/code facts derived from the
-// durable commit manifest. They are not publication acknowledgements. IDs stay
-// deterministic across crash recovery and are disjoint from publish IDs.
+// StagingObservations are source/code facts derived from the durable commit
+// manifest, not publication acknowledgements. Version 2 uses the final selection
+// as the selected target's witness: a contribution's empty memory attachment must
+// not also become a conflicting memory selection. Raw publications are retained.
+// IDs stay deterministic across crash recovery and disjoint from publish IDs.
 func StagingObservations(op StagingCommit) []HistoryEvent {
-	publications := append([]HistoryEvent{}, op.Publications...)
+	var final HistoryEvent
+	if op.Position.Selection != nil {
+		final = *op.Position.Selection
+		final.Kind = "position"
+	}
+	publications := make([]HistoryEvent, 0, len(op.Publications)+1)
+	for _, event := range op.Publications {
+		if op.Version == StagingCommitVersion && publicationProof(event, final) {
+			continue
+		}
+		publications = append(publications, event)
+	}
 	if op.Position.Selection != nil {
 		publications = append(publications, *op.Position.Selection)
 	}

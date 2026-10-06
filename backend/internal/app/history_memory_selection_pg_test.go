@@ -60,8 +60,29 @@ func (s *historyMemorySelectionTxPG) ApplyHistoryEvent(ctx context.Context, e do
 }
 
 func TestPGHistoryMemorySelectionTransactionRollbackAndAuthorization(t *testing.T) {
+	for _, inherited := range []bool{false, true} {
+		name := "empty"
+		if inherited {
+			name = "inherited"
+		}
+		t.Run(name, func(t *testing.T) { runPGMemorySelectionTransaction(t, inherited) })
+	}
+}
+
+func runPGMemorySelectionTransaction(t *testing.T, inherited bool) {
 	svc, st, repo := collaborationPG(t)
 	f := newHistoryMemorySelectionFixture(t, svc, st, repo)
+	if inherited {
+		root, err := st.PutMemory(f.ctx, repo, domain.MemoryDigest{SnapshotID: f.other, Summary: "ancestor"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		prior, err := st.PutMemory(f.ctx, repo, domain.MemoryDigest{SnapshotID: f.other, PreviousMemoryHash: root, Summary: "inherited"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.before.MemoryHash, f.before.MemorySource = prior, f.other
+	}
 	if err := svc.RecordHistory(f.ctx, f.before); err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +102,9 @@ func TestPGHistoryMemorySelectionTransactionRollbackAndAuthorization(t *testing.
 	writer := NewService(probe, probe, nil, nil, probe)
 	if err = writer.RecordHistory(f.ctx, f.after); !errors.Is(err, domain.ErrIntegrity) {
 		t.Fatalf("injected post-apply failure: %v", err)
+	}
+	if inherited && probe.memories < 3 {
+		t.Fatal("inherited chain did not share transaction")
 	}
 	if probe.histories == 0 || probe.memories == 0 || probe.applies != 1 {
 		t.Fatalf("predecessor/digest/write did not share transaction: histories=%d memories=%d applies=%d", probe.histories, probe.memories, probe.applies)

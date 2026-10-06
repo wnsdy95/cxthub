@@ -817,10 +817,13 @@ completed PR's scope.
 
 ### First memory selection at an existing code position
 
-A pinned empty position and a later nonempty memory pin are not ordered by
+A pinned empty or explicitly inherited position and a later self-owned memory
+pin are not ordered by
 timestamps or by the snapshot's mutable memory attachment. When the first root
 digest is recorded for that exact selected snapshot, the producer records
-`memory_selection_parent` pointing to the accepted empty position. The pair
+`memory_selection_parent` pointing to the accepted ordinary position. Inherited memory must have a verified
+owner different from the selected snapshot, including its complete immutable
+ancestor chain. The pair
 must match repository, branch identity/name, local branch, worktree, Git code
 and snapshot. The successor digest must be hash-verified, owned by that snapshot
 and have no prior digest. This memory relation is separate from `binding_parent`,
@@ -828,18 +831,36 @@ which retains its branch identity role.
 
 The server validates this dependency under the history write transaction. Both
 events remain immutable and travel with the dependency closure. CLI tracking
-and completed-PR source selection exclude only the explicitly superseded empty
+and completed-PR source selection exclude only the exact explicitly superseded empty or inherited
 candidate, then apply the existing causal memory checks. Unlinked historical
 empty/nonempty observations, divergent memories and another worktree's empty
 pin remain conflicts. This does not repair old records by timestamp.
 
 Clients send these events through `POST /history/memory-selection`, which uses
-the ordinary history application service. Older servers lack the route and
-cannot silently accept a payload after discarding the new field. Failure leaves
+the ordinary history application service. Older servers may lack the route or reject inherited predecessors; neither
+case authorizes a fallback that discards the dependency. Failure leaves
 the operation pending; clients never retry it through the older history route.
 Upgrade API writers before publishing these dependencies. Older readers may
 still report an unresolved historical selection instead of applying the new
 causal relation.
+
+Local memorization freezes the complete worktree selection before distillation.
+Attachment and any eligible pin are accepted together under a durable redo
+journal, with a full selection comparison including its immutable event ID.
+A later same-code reselect is a conflict, not permission to repin. Recovery
+completes an accepted operation before cooperating writers proceed; it never
+advances the shared branch ref or changes another worktree's selection. Plain
+snapshot attachment synchronization does not repin historical selections.
+Unlocked multi-file readers do not receive a filesystem snapshot transaction.
+
+New staging commits use commit format v2 (index and stash remain v1). They keep
+all raw contributor publications but use the exact final ordinary observation
+for contributors matching the final publication's complete source/code tuple.
+This prevents an empty contribution attachment and an inherited final pin from
+becoming two contradictory selections. V1 recovery retains its original events
+and IDs. No existing history is rewritten. Memorizing a staged target requires
+the exact retained ordinary witness, including memory fields; a publish record
+itself is never accepted as a memory predecessor.
 
 This historical selection contract differs from branch-memory queries that
 project current project knowledge. Those queries do not promise the exact

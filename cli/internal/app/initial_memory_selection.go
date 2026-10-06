@@ -6,10 +6,11 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
-// initialMemorySelections omits only an explicitly superseded empty position
-// from selection candidates. Both immutable events remain in the proof. All
-// other empty/nonempty pairs still reach recordedMemorySelection unchanged.
-// Events have already passed history validation and dependency ordering.
+// initialMemorySelections omits only the exact proven empty or inherited
+// predecessor from selection candidates. Both immutable events remain in the
+// proof; unlinked observations still reach recordedMemorySelection unchanged.
+// Callers order dependencies first; inherited evidence is validated here too
+// because tracking may not yet have validated every source.
 func (s *ContextHistoryService) initialMemorySelections(ctx context.Context, events []domain.HistoryEvent) ([]domain.HistoryEvent, error) {
 	byID := make(map[string]domain.HistoryEvent, len(events))
 	for _, e := range events {
@@ -23,8 +24,22 @@ func (s *ContextHistoryService) initialMemorySelections(ctx context.Context, eve
 		if e.MemorySelectionParent == "" {
 			continue
 		}
-		if !domain.IsInitialMemorySelection(byID[e.MemorySelectionParent], e) {
+		before := byID[e.MemorySelectionParent]
+		if !domain.IsInitialMemorySelection(before, e) {
 			return nil, domain.ErrHashMismatch
+		}
+		if before.MemoryHash != "" {
+			// Tracking/rewrite can reach this filter before source validation.
+			// Do not hide a corrupt inherited pin or any of its causal ancestors.
+			if _, err := s.ValidateHistorySource(ctx, before); err != nil {
+				return nil, err
+			}
+			if _, err := s.recordedMemorySelection(ctx, []domain.WorkingPosition{{
+				Snapshot: before.Target, MemoryHash: before.MemoryHash,
+				MemorySource: before.MemorySource, MemoryPinned: true,
+			}}); err != nil {
+				return nil, err
+			}
 		}
 		digest, err := s.store.GetMemory(ctx, e.MemoryHash)
 		if err != nil {

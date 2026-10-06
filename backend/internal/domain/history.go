@@ -26,7 +26,7 @@ type HistoryEvent struct {
 	PreviousBranch   string            `json:"previous_branch,omitempty"`
 	BindingParent    string            `json:"binding_parent,omitempty"`
 	NameParent       string            `json:"name_parent,omitempty"`
-	// MemorySelectionParent is the exact pinned-empty position replaced by the first memory.
+	// MemorySelectionParent is the exact empty or inherited position replaced by the first self-owned memory root.
 	MemorySelectionParent string      `json:"memory_selection_parent,omitempty"`
 	Source                ContentHash `json:"source,omitempty"`
 	Target                ContentHash `json:"target,omitempty"`

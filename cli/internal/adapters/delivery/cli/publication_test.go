@@ -17,6 +17,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/app"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 func TestCommitPublicationSurvivesFailedHistoryWrite(t *testing.T) {
@@ -410,7 +411,11 @@ func TestCommitPublicationPreservesMemorySelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := st.RecordWorkingMemory(ctx, target, memory); err != nil {
+			position, err := st.GetWorkingPosition(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.CommitWorkingMemory(ctx, outbound.WorkingMemoryCommit{RepoID: repo, Snapshot: target, Memory: memory, ExpectedPosition: &position}); err != nil {
 				t.Fatal(err)
 			}
 			if !reuse {

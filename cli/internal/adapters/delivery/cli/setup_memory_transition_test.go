@@ -8,6 +8,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 // Reproduce T's Save -> first Memorize transition with the actual author store,
@@ -46,10 +47,7 @@ func TestSetupTrackingAfterFirstRecordedMemory(t *testing.T) {
 	if _, err := author.PutMemory(ctx, f.remote.memories[f.m1]); err != nil {
 		t.Fatal(err)
 	}
-	if err := author.CompareAndSwapSnapshotMemory(ctx, f.a, "", f.m1); err != nil {
-		t.Fatal(err)
-	}
-	if err := author.RecordWorkingMemory(ctx, f.a, f.m1); err != nil {
+	if err := author.CommitWorkingMemory(ctx, outbound.WorkingMemoryCommit{RepoID: before.RepoID, Snapshot: f.a, Memory: f.m1, ExpectedPosition: &before}); err != nil {
 		t.Fatal(err)
 	}
 	f.remote.history, err = author.ListHistoryEvents(ctx, f.repo)

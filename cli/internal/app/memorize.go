@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -107,6 +108,36 @@ func (s *MemorizeService) memorize(ctx context.Context, in inbound.MemorizeInput
 		provider = domain.ProviderClaude
 	}
 
+	// Freeze selection before reading provider memory or running distillation.
+	// Even an explicit same-tuple reselect changes authority; never refresh it
+	// after slow work has started. Checkpoint-only targets retain their cursor.
+	committer, ok := s.store.(outbound.WorkingMemoryStore)
+	if !ok {
+		return inbound.MemorizeOutput{}, fmt.Errorf("conditional working memory commit unavailable")
+	}
+	var expected *domain.WorkingPosition
+	if positions, ok := s.store.(outbound.WorkingPositionReader); ok {
+		p, err := positions.GetWorkingPosition(ctx)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return inbound.MemorizeOutput{}, err
+		}
+		if err == nil {
+			raw, err := json.Marshal(p)
+			if err != nil {
+				return inbound.MemorizeOutput{}, err
+			}
+			var frozen domain.WorkingPosition
+			if err = json.Unmarshal(raw, &frozen); err != nil {
+				return inbound.MemorizeOutput{}, err
+			}
+			expected = &frozen
+		}
+	}
+	projection := frozenMemoryPosition{MemoryReader: s.store, position: expected}
+	commit := func(snapshot, previous, next domain.ContentHash) error {
+		return committer.CommitWorkingMemory(ctx, outbound.WorkingMemoryCommit{RepoID: repo.ID, Snapshot: snapshot, ExpectedMemory: previous, Memory: next, ExpectedPosition: expected})
+	}
+
 	// Absorb native memory (e.g., CLAUDE.md/MEMORY.md) first — fallback to CIR distillation if not present.
 	var nativePtr *domain.NativeMemory
 	if src, ok := s.memSources[provider]; ok {
@@ -137,7 +168,7 @@ func (s *MemorizeService) memorize(ctx context.Context, in inbound.MemorizeInput
 	// Project memory follows every natural/graft lineage and unions provenance
 	// fragments; choosing one globally closest digest loses sibling PR memory.
 	// Filter noisy prior KeyFacts so tool names and ingestion markers do not propagate forever across generations. Keep only sentence-form facts, using the same rules as the seed filter.
-	projectionState, prior, hasPrior, priorComplete, err := stablePriorMemoryProjection(ctx, s.store, snap.ID)
+	projectionState, prior, hasPrior, priorComplete, err := stablePriorMemoryProjection(ctx, projection, snap.ID)
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
 	}
@@ -165,10 +196,7 @@ func (s *MemorizeService) memorize(ctx context.Context, in inbound.MemorizeInput
 		if sameMemoryDigestPayload(current, digest) {
 			// Verify that another terminal did not move the pointer between the
 			// stable projection and this no-op decision.
-			if err := s.store.CompareAndSwapSnapshotMemory(ctx, snap.ID, snap.MemoryHash, snap.MemoryHash); err != nil {
-				return inbound.MemorizeOutput{}, err
-			}
-			if err := recordWorkingMemory(ctx, s.store, snap.ID, snap.MemoryHash); err != nil {
+			if err := commit(snap.ID, snap.MemoryHash, snap.MemoryHash); err != nil {
 				return inbound.MemorizeOutput{}, err
 			}
 			return inbound.MemorizeOutput{SnapshotID: snap.ID, MemoryHash: snap.MemoryHash, Attached: true}, nil
@@ -185,20 +213,24 @@ func (s *MemorizeService) memorize(ctx context.Context, in inbound.MemorizeInput
 	// A second terminal may have memorized the same snapshot while distillation
 	// was running. CAS keeps both immutable blobs and rejects the stale pointer
 	// move instead of making the last filesystem rename win.
-	if err := s.store.CompareAndSwapSnapshotMemory(ctx, snap.ID, digest.PreviousMemoryHash, memHash); err != nil {
-		return inbound.MemorizeOutput{}, err
-	}
-	if err := recordWorkingMemory(ctx, s.store, snap.ID, memHash); err != nil {
+	if err := commit(snap.ID, digest.PreviousMemoryHash, memHash); err != nil {
 		return inbound.MemorizeOutput{}, err
 	}
 	return inbound.MemorizeOutput{SnapshotID: snap.ID, MemoryHash: memHash, Attached: true}, nil
 }
 
-func recordWorkingMemory(ctx context.Context, store outbound.SessionStore, snapshot, memory domain.ContentHash) error {
-	if positions, ok := store.(outbound.WorkingMemoryStore); ok {
-		return positions.RecordWorkingMemory(ctx, snapshot, memory)
+// Projection may consult historical selections, but must use the same frozen
+// cursor eventually compared by the commit rather than a second live read.
+type frozenMemoryPosition struct {
+	MemoryReader
+	position *domain.WorkingPosition
+}
+
+func (f frozenMemoryPosition) GetWorkingPosition(context.Context) (domain.WorkingPosition, error) {
+	if f.position == nil {
+		return domain.WorkingPosition{}, domain.ErrNotFound
 	}
-	return nil
+	return *f.position, nil
 }
 
 func sameMemoryDigestPayload(left, right domain.MemoryDigest) bool {
