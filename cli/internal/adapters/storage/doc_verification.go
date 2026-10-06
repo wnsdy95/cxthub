@@ -109,14 +109,7 @@ func (s *FileStore) verifyStoredDoc(ctx context.Context, id domain.ContentHash, 
 	if err != nil {
 		return storedDocEvidence{}, err
 	}
-	var cir domain.CIRDocument
-	if err := json.Unmarshal(data, &cir); err != nil {
-		return storedDocEvidence{}, domain.ErrInvalidCIR
-	}
-	if err := ctx.Err(); err != nil {
-		return storedDocEvidence{}, err
-	}
-	if err := domain.ValidateSessionDocHash(domain.SessionDoc{Hash: id, CIR: cir}); err != nil {
+	if err := s.docVerifier.Verify(ctx, id, data); err != nil {
 		return storedDocEvidence{}, err
 	}
 	if err := ctx.Err(); err != nil {

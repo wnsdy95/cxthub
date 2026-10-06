@@ -31,6 +31,12 @@ func HashContent(data []byte) ContentHash {
 // encoding/json sorts map keys in ascending UTF-8 byte order and outputs compactly,
 // ensuring all nested object keys are deterministically sorted.
 func CanonicalBytes(doc CIRDocument) ([]byte, error) {
+	return canonicalBytes(doc, nil)
+}
+
+// observe receives the canonical bytes already computed for each sorted event.
+// Callers must not admit this provisional evidence before full hash validation.
+func canonicalBytes(doc CIRDocument, observe func([]byte, int)) ([]byte, error) {
 	if err := ValidateCIRVersion(doc); err != nil {
 		return nil, fmt.Errorf("canonical bytes: %w", err)
 	}
@@ -53,6 +59,9 @@ func CanonicalBytes(doc CIRDocument) ([]byte, error) {
 			out.WriteByte(',')
 		}
 		out.Write(raw)
+		if observe != nil {
+			observe(raw, event.Seq)
+		}
 	}
 	out.WriteString(`]}`)
 	return out.Bytes(), nil
@@ -90,10 +99,14 @@ func canonicalEvents(events []Event) []Event {
 
 // ValidateSessionDocHash recalculates the claimed hash from wire as a canonical CIR and validates it.
 func ValidateSessionDocHash(doc SessionDoc) error {
+	return validateSessionDocHash(doc, nil)
+}
+
+func validateSessionDocHash(doc SessionDoc, observe func([]byte, int)) error {
 	if err := ValidateContentHash(doc.Hash); err != nil {
 		return err
 	}
-	canonical, err := CanonicalBytes(doc.CIR)
+	canonical, err := canonicalBytes(doc.CIR, observe)
 	if err != nil {
 		return err
 	}
