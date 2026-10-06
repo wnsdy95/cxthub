@@ -392,6 +392,9 @@ func (s *FileStore) withRefMutationLock(ctx context.Context, fn func() error) er
 		if err := s.recoverTrackingAttachment(); err != nil {
 			return err
 		}
+		if err := s.recoverWorkingMemory(ctx); err != nil {
+			return err
+		}
 		return fn()
 	})
 }
@@ -467,9 +470,13 @@ func (s *FileStore) PutSnapshot(ctx context.Context, snap domain.Snapshot) error
 			return domain.ErrHashMismatch
 		}
 	}
-	return s.withSnapshotMutationLock(ctx, snap.ID, func() error {
-		return s.putSnapshotLocked(snap)
-	})
+	write := func() error {
+		return s.withSnapshotMutationLock(ctx, snap.ID, func() error { return s.putSnapshotLocked(snap) })
+	}
+	if snap.MemoryHash != "" {
+		return s.withRefMutationLock(ctx, write)
+	}
+	return write()
 }
 
 func (s *FileStore) putSnapshotLocked(snap domain.Snapshot) error {
@@ -617,23 +624,25 @@ func (s *FileStore) CompareAndSwapSnapshotMemory(ctx context.Context, id, expect
 			return domain.ErrHashMismatch
 		}
 	}
-	return s.withSnapshotMutationLock(ctx, id, func() error {
-		snap, err := s.GetSnapshot(ctx, id)
-		if err != nil {
-			return err
-		}
-		if snap.MemoryHash == next {
-			return nil
-		}
-		if snap.MemoryHash != expected {
-			return domain.ErrSyncConflict
-		}
-		snap.MemoryHash = next
-		data, err := json.Marshal(snap)
-		if err != nil {
-			return err
-		}
-		return writeAtomic(s.objectPath("snapshots", id), data)
+	return s.withRefMutationLock(ctx, func() error {
+		return s.withSnapshotMutationLock(ctx, id, func() error {
+			snap, err := s.GetSnapshot(ctx, id)
+			if err != nil {
+				return err
+			}
+			if snap.MemoryHash == next {
+				return nil
+			}
+			if snap.MemoryHash != expected {
+				return domain.ErrSyncConflict
+			}
+			snap.MemoryHash = next
+			data, err := json.Marshal(snap)
+			if err != nil {
+				return err
+			}
+			return writeAtomic(s.objectPath("snapshots", id), data)
+		})
 	})
 }
 

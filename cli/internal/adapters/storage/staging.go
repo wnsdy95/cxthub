@@ -206,7 +206,7 @@ func (s *FileStore) readStagingOperation(repo, id string) (domain.StagingCommit,
 	return op, nil
 }
 func (s *FileStore) validateStagingOperation(op domain.StagingCommit) error {
-	if op.Version != domain.StagingVersion {
+	if op.Version != 1 && op.Version != domain.StagingCommitVersion {
 		return domain.ErrStagingVersion
 	}
 	if _, err := s.stagingOperationPath(op.ID); err != nil {
@@ -262,6 +262,9 @@ func (s *FileStore) validateStagingOperation(op domain.StagingCommit) error {
 		}
 		covered[e.Target] = true
 		if e.Kind != "publish" || e.RepoID != p.RepoID || e.GitAfter != p.GitCommit || e.BranchID != p.BranchID || e.WorktreeID != s.worktreeID {
+			return domain.ErrHashMismatch
+		}
+		if op.Version == domain.StagingCommitVersion && (!p.MemoryPinned || e.Branch != p.Branch || e.LocalBranch != p.LocalBranch || e.Source != e.Target || !e.MemoryPinned) {
 			return domain.ErrHashMismatch
 		}
 	}

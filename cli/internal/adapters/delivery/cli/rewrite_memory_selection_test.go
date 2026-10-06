@@ -14,6 +14,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/app"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 // Real producer, durable replay and real selectors; no provider or remote server.
@@ -41,10 +42,7 @@ func TestRewriteInitialMemorySelectionReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CompareAndSwapSnapshotMemory(ctx, target, "", memory); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.RecordWorkingMemory(ctx, target, memory); err != nil {
+	if err := st.CommitWorkingMemory(ctx, outbound.WorkingMemoryCommit{RepoID: before.RepoID, Snapshot: target, Memory: memory, ExpectedPosition: &before}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := st.GetWorkingPosition(ctx)

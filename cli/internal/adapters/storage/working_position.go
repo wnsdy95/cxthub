@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -154,53 +153,6 @@ func (s *FileStore) writePosition(p domain.WorkingPosition) error {
 	return writeAtomic(s.positionPath(), raw)
 }
 
-// Called after a causal attachment CAS (including a retry/no-op). Updating a
-// memory object must not silently repin a historical or another worktree's view.
-func (s *FileStore) RecordWorkingMemory(ctx context.Context, snapshot, memory domain.ContentHash) error {
-	if s.worktreeID == "" {
-		return nil
-	}
-	return s.withRefMutationLock(ctx, func() error {
-		p, err := s.readPosition()
-		if err == domain.ErrNotFound {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if p.Rewound || p.Snapshot != snapshot || p.GitBranch() != s.gitBranch || p.GitCommit != s.gitCommit || (p.MemoryHash == memory && p.MemoryPinned && p.Selection != nil) {
-			return nil
-		}
-		digest, err := s.GetMemory(ctx, memory)
-		if err != nil {
-			return err
-		}
-		if digest.SnapshotID != snapshot {
-			return domain.ErrHashMismatch
-		}
-		// Preserve the first empty -> memory selection as an explicit dependency.
-		// The ref lock fixes the exact previous selection; no clock or mutable
-		// snapshot pointer can prove this transition to a future observer.
-		var selection *domain.HistoryEvent
-		if p.MemoryPinned && p.MemoryHash == "" && p.MemorySource == "" && p.Selection != nil && digest.PreviousMemoryHash == "" {
-			var id [16]byte
-			if _, err := rand.Read(id[:]); err != nil {
-				return err
-			}
-			e := domain.HistoryEvent{ID: fmt.Sprintf("%x", id), RepoID: p.RepoID, BranchID: p.BranchID,
-				Branch: p.Branch, LocalBranch: p.LocalBranch, Kind: "position", MemorySelectionParent: p.Selection.ID,
-				Source: snapshot, Target: snapshot, MemoryHash: memory, MemoryPinned: true,
-				GitAfter: p.GitCommit, WorktreeID: s.worktreeID, CreatedAt: time.Now().UTC()}
-			if domain.IsInitialMemorySelection(*p.Selection, e) {
-				selection = &e
-			}
-		}
-		p.MemoryHash = memory
-		p.MemoryPinned = true
-		p.Selection = selection
-		return s.writePosition(p)
-	})
-}
 func (s *FileStore) writeWorkingHead(ref domain.Ref) error {
 	branch := strings.TrimPrefix(ref.Symbolic, "refs/heads/")
 	target := ref.Target

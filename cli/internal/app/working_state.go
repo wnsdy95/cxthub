@@ -219,7 +219,7 @@ func (s *WorkingStateService) readWorkingObservation(ctx context.Context, cwd st
 	}
 	seenOps := map[string]bool{}
 	for _, op := range out.Commits {
-		if op.Version != domain.StagingVersion || op.Index.RepoID != repo.ID || op.Index.WorktreeID != p.WorktreeID || seenOps[op.ID] {
+		if (op.Version != 1 && op.Version != domain.StagingCommitVersion) || op.Index.RepoID != repo.ID || op.Index.WorktreeID != p.WorktreeID || seenOps[op.ID] {
 			return out, domain.ErrHashMismatch
 		}
 		seenOps[op.ID] = true

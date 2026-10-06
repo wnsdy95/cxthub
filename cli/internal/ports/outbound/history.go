@@ -50,10 +50,6 @@ type WorkingBranchRenameStore interface {
 	RenameWorkingBranch(context.Context, string, string, string) error
 }
 
-type WorkingMemoryStore interface {
-	RecordWorkingMemory(context.Context, domain.ContentHash, domain.ContentHash) error
-}
-
 // WorkingCommitStore publishes a selected continuation with a local ref CAS.
 // The implementation journals retention and position updates before moving it.
 type WorkingCommitStore interface {

@@ -204,6 +204,9 @@ func (s *FileStore) RepairFromReplica(ctx context.Context, source *FileStore, re
 		if err := s.recoverTrackingAttachment(); err != nil {
 			return fmt.Errorf("tracking attachment still needs evidence: %w", err)
 		}
+		if err := s.recoverWorkingMemory(ctx); err != nil {
+			return fmt.Errorf("working memory still needs evidence: %w", err)
+		}
 		for _, e := range events {
 			path := filepath.Join(s.storeDir(), "history", e.ID+".json")
 			raw, err := readCxtFile(path)

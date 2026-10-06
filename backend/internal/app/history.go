@@ -50,10 +50,10 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		}
 		return s.wakePublishedPRJobs(ctx, event)
 	}
+	var predecessor domain.HistoryEvent
 	if event.MemorySelectionParent != "" {
 		// The predecessor is immutable accepted evidence from this repository's
 		// current write transaction, never a caller-supplied or mutable position.
-		var predecessor domain.HistoryEvent
 		for _, old := range accepted {
 			if old.ID == event.MemorySelectionParent {
 				predecessor = old
@@ -61,7 +61,7 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 			}
 		}
 		if !domain.IsInitialMemorySelection(predecessor, event) {
-			return fmt.Errorf("%w: memory selection requires an accepted exact empty predecessor", domain.ErrConflict)
+			return fmt.Errorf("%w: memory selection requires an accepted exact empty or inherited predecessor", domain.ErrConflict)
 		}
 	}
 	if err := domain.ValidateCreationOrigin(accepted, event); err != nil {
@@ -89,7 +89,11 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 	if verified == nil {
 		verified = make(historyVerification)
 	}
-	for _, id := range []domain.ContentHash{event.Source, event.Target, event.SharedTarget, event.MemorySource} {
+	roots := []domain.ContentHash{event.Source, event.Target, event.SharedTarget, event.MemorySource}
+	if predecessor.MemoryHash != "" {
+		roots = append(roots, predecessor.Source, predecessor.Target, predecessor.SharedTarget, predecessor.MemorySource)
+	}
+	for _, id := range roots {
 		if id == "" {
 			continue
 		}
@@ -118,6 +122,28 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 			hash, err := domain.MemoryDigestHash(memory)
 			if err != nil || hash != event.MemoryHash || memory.SnapshotID != event.Target || memory.PreviousMemoryHash != "" {
 				return domain.ErrIntegrity
+			}
+			// An accepted inherited pin is evidence only while its immutable
+			// chain verifies. Keep every read in this repository write transaction.
+			seen := map[domain.ContentHash]bool{}
+			for id := predecessor.MemoryHash; id != ""; {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if domain.ValidateContentHash(id) != nil || seen[id] {
+					return domain.ErrIntegrity
+				}
+				seen[id] = true
+				prior, err := s.blobs.GetMemory(ctx, repoID, id)
+				if err != nil {
+					return err
+				}
+				actual, err := domain.MemoryDigestHash(prior)
+				if err != nil || actual != id || prior.SnapshotID != predecessor.MemorySource ||
+					domain.ValidateOptionalContentHash(prior.PreviousMemoryHash) != nil {
+					return domain.ErrIntegrity
+				}
+				id = prior.PreviousMemoryHash
 			}
 		}
 	}
