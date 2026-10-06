@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -98,71 +99,78 @@ func TestDocVerificationReceiptSurvivesNewStoreAndRepacking(t *testing.T) {
 }
 
 func TestDocVerificationRejectsChangedBytesAndForgedReceipts(t *testing.T) {
-	for _, damage := range []string{"doc", "chunk", "forged-mac", "missing-chunk", "symlink", "receipt-other-doc"} {
-		t.Run(damage, func(t *testing.T) {
-			s := verificationStore(t)
-			id, err := s.PutDoc(context.Background(), domain.SessionDoc{CIR: bigDoc(30)})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := s.VerifyStoredDoc(context.Background(), id); err != nil {
-				t.Fatal(err)
-			}
-			r := receiptFor(t, s, id)
-			fileIndex := 1
-			if damage == "doc" {
-				fileIndex = 0
-			}
-			file := r.Proof.Files[fileIndex]
-			path := s.objectPath(file.Kind, file.ID)
-			raw, _ := os.ReadFile(path)
-			info, _ := os.Stat(path)
-			switch damage {
-			case "missing-chunk":
-				if err := os.Remove(path); err != nil {
-					t.Fatal(err)
-				}
-			case "symlink":
-				outside := filepath.Join(t.TempDir(), "object")
-				if err := os.WriteFile(outside, raw, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Remove(path); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(outside, path); err != nil {
-					t.Fatal(err)
-				}
-			default:
-				// Same length and restored timestamp: metadata cannot certify bytes.
-				raw[len(raw)/2] ^= 0x40
-				if err := os.WriteFile(path, raw, 0o644); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
-					t.Fatal(err)
-				}
-				if damage == "forged-mac" || damage == "receipt-other-doc" {
-					r.Proof.Files[fileIndex].Stored = domain.HashContent(raw)
-					if damage == "receipt-other-doc" {
-						r.Proof.Doc = domain.HashContent([]byte("other"))
-					}
-					r.MAC = signDocProof(r.Proof, bytes.Repeat([]byte{1}, 32))
-					forged, _ := json.Marshal(r)
-					if err := writeAtomic(s.docReceiptPath(id), forged); err != nil {
+	for _, version := range []int{1, docVerificationVersion} {
+		t.Run(fmt.Sprintf("receipt-v%d", version), func(t *testing.T) {
+			for _, damage := range []string{"doc", "chunk", "forged-mac", "missing-chunk", "symlink", "receipt-other-doc"} {
+				t.Run(damage, func(t *testing.T) {
+					s := verificationStore(t)
+					id, err := s.PutDoc(context.Background(), domain.SessionDoc{CIR: bigDoc(30)})
+					if err != nil {
 						t.Fatal(err)
 					}
-				}
-			}
-			if err := s.VerifyStoredDoc(context.Background(), id); err == nil {
-				t.Fatalf("accepted %s", damage)
+					if err := s.VerifyStoredDoc(context.Background(), id); err != nil {
+						t.Fatal(err)
+					}
+					if version == 1 {
+						writeV1DocReceipt(t, s, id)
+					}
+					r := receiptFor(t, s, id)
+					fileIndex := 1
+					if damage == "doc" {
+						fileIndex = 0
+					}
+					file := r.Proof.Files[fileIndex]
+					path := s.objectPath(file.Kind, file.ID)
+					raw, _ := os.ReadFile(path)
+					info, _ := os.Stat(path)
+					switch damage {
+					case "missing-chunk":
+						if err := os.Remove(path); err != nil {
+							t.Fatal(err)
+						}
+					case "symlink":
+						outside := filepath.Join(t.TempDir(), "object")
+						if err := os.WriteFile(outside, raw, 0o600); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Remove(path); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(outside, path); err != nil {
+							t.Fatal(err)
+						}
+					default:
+						// Same length and restored timestamp: metadata cannot certify bytes.
+						raw[len(raw)/2] ^= 0x40
+						if err := os.WriteFile(path, raw, 0o644); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+							t.Fatal(err)
+						}
+						if damage == "forged-mac" || damage == "receipt-other-doc" {
+							r.Proof.Files[fileIndex].Stored = domain.HashContent(raw)
+							if damage == "receipt-other-doc" {
+								r.Proof.Doc = domain.HashContent([]byte("other"))
+							}
+							r.MAC = signDocProof(r.Proof, bytes.Repeat([]byte{1}, 32))
+							forged, _ := json.Marshal(r)
+							if err := writeAtomic(s.docReceiptPath(id), forged); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+					if err := s.VerifyStoredDoc(context.Background(), id); err == nil {
+						t.Fatalf("accepted %s", damage)
+					}
+				})
 			}
 		})
 	}
 }
 
 func TestDocVerificationCacheFailureFallsBackAndColdSemanticsRemainStrict(t *testing.T) {
-	for _, failure := range []string{"no-key", "key-lost", "key-corrupt", "receipt-corrupt", "old-version", "cache-unwritable"} {
+	for _, failure := range []string{"no-key", "key-lost", "key-corrupt", "receipt-corrupt", "zero-version", "future-version", "cache-unwritable"} {
 		t.Run(failure, func(t *testing.T) {
 			s := verificationStore(t)
 			id, err := s.PutDoc(context.Background(), domain.SessionDoc{CIR: bigDoc(1)})
@@ -187,9 +195,12 @@ func TestDocVerificationCacheFailureFallsBackAndColdSemanticsRemainStrict(t *tes
 				if err := writeAtomic(s.docReceiptPath(id), []byte("{")); err != nil {
 					t.Fatal(err)
 				}
-			case "old-version":
+			case "zero-version", "future-version":
 				r := receiptFor(t, s, id)
-				r.Proof.Version--
+				r.Proof.Version = 0
+				if failure == "future-version" {
+					r.Proof.Version = docVerificationVersion + 1
+				}
 				key, _ := s.docVerificationKey()
 				r.MAC = signDocProof(r.Proof, key)
 				raw, _ := json.Marshal(r)
@@ -206,6 +217,11 @@ func TestDocVerificationCacheFailureFallsBackAndColdSemanticsRemainStrict(t *tes
 			}
 			if err := s.VerifyStoredDoc(context.Background(), id); err != nil {
 				t.Fatal(err)
+			}
+			if failure == "zero-version" || failure == "future-version" {
+				if receiptFor(t, s, id).Proof.Version != docVerificationVersion {
+					t.Fatal("unsupported receipt was not revalidated")
+				}
 			}
 		})
 	}
