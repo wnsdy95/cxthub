@@ -177,7 +177,11 @@ func validateOrdinaryAttachment(row map[string]json.RawMessage, sessionID, cwd, 
 			return "", ErrUnsupported
 		}
 		identity, err := object(m["identity"])
-		if err != nil || !exchangeKeys(identity, "modelId", "marketingName", "knowledgeCutoff") || !ordinaryLiteral(identity["modelId"], model) {
+		if err != nil || !exchangeKeys(identity, "modelId", "marketingName", "knowledgeCutoff") {
+			return "", ErrProtocol
+		}
+		actual, err := stringField(identity, "modelId")
+		if err != nil || !sameResponseModel(actual, model) {
 			return "", ErrProtocol
 		}
 		for _, key := range []string{"marketingName", "knowledgeCutoff"} {

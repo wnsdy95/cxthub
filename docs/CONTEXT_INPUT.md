@@ -188,7 +188,11 @@ Native resume, help and noninteractive provider commands preserve their own
 argument and session semantics; incompatible context prefixes fail.
 
 For a verified runtime, preparation resolves the actual model and its context
-window `W` before selecting history. Budgeted initial input is limited to
+window `W` before selecting history. Claude Code's terminal `[1m]` selector stays
+in the selected runtime identity and budget. A response, usage record or archive
+may omit that selector from the same full `claude-...` API model ID. That narrow
+identity comparison never resolves a different model or infers a context window;
+preparation and admission still use the unchanged measured runtime summary. Budgeted initial input is limited to
 `floor(0.8 * W)`, including host system instructions, tools, prompt and other
 fixed host input, package framing, project memory, exact personal constraints,
 provenance and selected history. Required output/reasoning/work capacity is
