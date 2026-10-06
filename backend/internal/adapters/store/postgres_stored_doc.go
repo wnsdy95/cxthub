@@ -9,14 +9,27 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func (s *PostgresStore) readDocBytes(ctx context.Context, repo, hash domain.ContentHash) ([]byte, bool, error) {
+// Ownership is checked through the caller's transaction for documents and
+// chunks alike, even when a disposable physical proof is already cached.
+func (s *PostgresStore) readOwnedDocObject(ctx context.Context, repo domain.ContentHash, kind string, hash domain.ContentHash) ([]byte, error) {
 	if err := validateHashes(repo, hash); err != nil {
-		return nil, false, err
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	var raw []byte
 	if err := s.db(ctx).QueryRow(ctx, `SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
- WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2`, string(repo), string(hash)).Scan(&raw); err != nil {
-		return nil, false, mapNoRows(err)
+ WHERE rb.repo_id=$1 AND rb.kind=$2 AND rb.hash=$3`, string(repo), kind, string(hash)).Scan(&raw); err != nil {
+		return nil, mapNoRows(err)
+	}
+	return raw, nil
+}
+
+func (s *PostgresStore) readDocBytes(ctx context.Context, repo, hash domain.ContentHash) ([]byte, bool, error) {
+	raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
+	if err != nil {
+		return nil, false, err
 	}
 	data, err := docDecompress(raw)
 	if err != nil {
@@ -31,11 +44,13 @@ func (s *PostgresStore) readDocBytes(ctx context.Context, repo, hash domain.Cont
 	return data, false, nil
 }
 func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.VerifiedDocReference, error) {
-	raw, _, err := s.readDocBytes(ctx, repo, hash)
+	raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
 	if err != nil {
 		return domain.VerifiedDocReference{}, err
 	}
-	return s.docProofs.verify(ctx, repo, hash, raw)
+	return s.docProofs.verifyStored(ctx, repo, hash, raw, func(ctx context.Context, ch domain.ContentHash) ([]byte, error) {
+		return s.readOwnedDocObject(ctx, repo, "chunk", ch)
+	})
 }
 
 var _ outbound.StoredDocVerifier = (*PostgresStore)(nil)

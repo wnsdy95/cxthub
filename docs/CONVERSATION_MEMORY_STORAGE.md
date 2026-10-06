@@ -64,6 +64,17 @@ upload failures are errors, not compatibility signals. Server verification and
 repository ownership checks remain mandatory. Memory uses its independent
 version/attachment protocol and does not enter this conversation upload path.
 
+Server history verification also uses bounded, process-local hash-only proofs.
+For chunked storage, a proof binds the repository, canonical document ID, exact
+stored manifest and every distinct chunk's current stored bytes. FS and
+PostgreSQL still read current repository-owned objects on every call. A warm
+match avoids chunk decompression and cumulative document assembly; it does not
+cache ownership or trust file existence. A cold or changed representation is
+assembled from the same captured bytes and checked for canonical identity and
+CIR validity. Repacking, rollback, cache eviction or restart never grants trust
+to different bytes. Authorization and history writes retain their transaction
+boundaries, and memory versioning is unchanged.
+
 Eliminating that remaining full-stream verification requires a separately
 versioned manifest-root identity and a durable verified-chunk contract. Such a
 protocol must be explicitly negotiated; an old server must never interpret a
