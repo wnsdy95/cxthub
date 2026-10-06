@@ -3,14 +3,11 @@ package storage
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 )
 
 // An OS lock cannot expire while its owner is still writing, and is released
@@ -24,56 +21,7 @@ func (s *FileStore) withMutationLock(ctx context.Context, namespace, key string,
 }
 
 func (s *FileStore) withOSLock(ctx context.Context, namespace, key string, mode int, wait bool, fn func() error) (bool, error) {
-	dir := filepath.Join(s.storeDir(), "locks", namespace)
-	if err := validateCxtDir(dir); err != nil {
-		return false, err
-	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return false, err
-	}
-	path := filepath.Join(dir, key+".flock")
-	if err := validateCxtWritePath(path); err != nil {
-		return false, err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return false, err
-	}
-	if !info.Mode().IsRegular() {
-		return false, domain.ErrHashMismatch
-	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		err = syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EINTR) {
-			return false, err
-		}
-		if errors.Is(err, syscall.EINTR) {
-			continue
-		}
-		if !wait {
-			return false, nil
-		}
-		timer := time.NewTimer(10 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false, ctx.Err()
-		case <-timer.C:
-		}
-	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return true, fn()
+	return providerfs.WithCxtLock(ctx, s.repoRoot, namespace, key, mode, wait, fn)
 }
 
 func deadMutationOwner(path string) bool {

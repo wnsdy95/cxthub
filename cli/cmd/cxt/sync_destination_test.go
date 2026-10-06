@@ -43,7 +43,7 @@ func TestNamedSyncDestinationVerifiesIdentityAndIsolatesCredentials(t *testing.T
 		_ = json.NewEncoder(w).Encode(domain.RepositoryConnection{RepoID: response})
 	}))
 	defer server.Close()
-	if err := remotecfg.Save(root, remotecfg.Remotes{"origin": "https://origin.test/acme/repo", "mirror": server.URL + "/acme/repo"}); err != nil {
+	if err := configFixtureSave(root, remotecfg.Remotes{"origin": "https://origin.test/acme/repo", "mirror": server.URL + "/acme/repo"}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config{RepoRoot: root, GitDir: filepath.Join(root, ".git"), RemoteToken: "origin-private-token"}

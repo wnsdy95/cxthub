@@ -42,7 +42,7 @@ func historyFixtureWithRemote(t *testing.T, remote string) (string, *Container, 
 	runLifecycleGit(t, cwd, "config", "user.email", "test@example.test")
 	runLifecycleGit(t, cwd, "commit", "--allow-empty", "-qm", "base")
 	if remote != "" {
-		if err := remotecfg.Save(cwd, remotecfg.Remotes{"origin": remote}); err != nil {
+		if err := configFixtureSave(cwd, remotecfg.Remotes{"origin": remote}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -38,7 +38,7 @@ func setupTrackingFixture(t *testing.T) *tracking290Fixture {
 	}
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CXT_TOKEN", "")
-	if err := remotecfg.Save(f.cwd, remotecfg.Remotes{"origin": "https://example.invalid/team/context"}); err != nil {
+	if err := configFixtureSave(f.cwd, remotecfg.Remotes{"origin": "https://example.invalid/team/context"}); err != nil {
 		t.Fatal(err)
 	}
 	runLifecycleGit(t, f.cwd, "remote", "add", "origin", "https://example.invalid/team/code.git")
@@ -118,7 +118,7 @@ func TestSetupFirstTrackingStopsBeforeHooks(t *testing.T) {
 				conn.after = func() { runLifecycleGit(t, f.cwd, "config", "branch.local-task.merge", "refs/heads/other") }
 			case "connection-changes-after-observation":
 				conn.after = func() {
-					if err := remotecfg.Save(f.cwd, remotecfg.Remotes{"origin": "https://example.invalid/other/context"}); err != nil {
+					if err := configFixtureSave(f.cwd, remotecfg.Remotes{"origin": "https://example.invalid/other/context"}); err != nil {
 						t.Fatal(err)
 					}
 				}

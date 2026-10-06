@@ -12,22 +12,14 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
-type captureTrackingKey struct{}
-
-// Shared across worktrees/processes. No network runs under this gate. Nested
-// pending writes reuse the Save context so a waiting setup cannot deadlock them.
+// Shared across worktrees/processes; nested writes reuse the capture context.
 func (s *FileStore) WithCaptureTrackingGate(ctx context.Context, fn func(context.Context) error) error {
-	if root, _ := ctx.Value(captureTrackingKey{}).(string); root == s.storeDir() {
-		return fn(ctx)
-	}
-	_, err := s.withOSLock(ctx, "first-tracking", "repo", syscall.LOCK_SH, true, func() error {
-		return fn(context.WithValue(ctx, captureTrackingKey{}, s.storeDir()))
-	})
-	return err
+	return providerfs.WithCaptureGate(ctx, s.repoRoot, fn)
 }
 
 func (s *FileStore) TrackingPristine(ctx context.Context, repo string) (bool, error) {

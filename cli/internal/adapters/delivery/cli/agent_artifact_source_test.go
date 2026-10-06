@@ -50,7 +50,7 @@ func TestArtifactDefaultPreviewsMainAndExplicitRefInspectsArchive(t *testing.T) 
 func TestStoredReplayPreferenceCannotOverrideManagedMain(t *testing.T) {
 	cwd := t.TempDir()
 	for _, mode := range []string{"full", "reconstructed", "memory"} {
-		if err := remotecfg.SetLoadMode(cwd, mode); err != nil {
+		if err := remotecfg.SetLoadMode(context.Background(), cwd, mode); err != nil {
 			t.Fatal(err)
 		}
 		if got := loadModeOr(cwd, ""); got != "" {

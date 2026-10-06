@@ -20,7 +20,7 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 	}
 
 	r["origin"] = "http://127.0.0.1:8907/acme/demo"
-	if err := Save(root, r); err != nil {
+	if err := configFixtureSave(root, r); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(root)
@@ -61,14 +61,14 @@ func TestLinkedWorktreeReadsAndWritesSharedConfig(t *testing.T) {
 	git(primary, "worktree", "add", "-b", "feature/app", linked)
 
 	const first = "https://cxthub.example.com/alice/orders"
-	if err := Save(primary, Remotes{"origin": first}); err != nil {
+	if err := configFixtureSave(primary, Remotes{"origin": first}); err != nil {
 		t.Fatal(err)
 	}
 	if got, ok := Origin(linked); !ok || got != first {
 		t.Fatalf("linked origin = %q, %v", got, ok)
 	}
 	const second = "https://cxthub.example.com/alice/platform"
-	if err := Save(linked, Remotes{"origin": second}); err != nil {
+	if err := configFixtureSave(linked, Remotes{"origin": second}); err != nil {
 		t.Fatal(err)
 	}
 	if got, ok := Origin(primary); !ok || got != second {
@@ -85,7 +85,7 @@ func TestSaveRefusesSymlinkedCxtDirectory(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(repo, ".cxt")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	if err := Save(repo, Remotes{"origin": "https://cxthub.example.com/alice/orders"}); err == nil {
+	if err := configFixtureSave(repo, Remotes{"origin": "https://cxthub.example.com/alice/orders"}); err == nil {
 		t.Fatal("symlinked .cxt directory was accepted")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "config")); !os.IsNotExist(err) {
@@ -122,7 +122,7 @@ func TestValidate(t *testing.T) {
 
 func TestSaveCanonicalizesAndLoadRejectsPoisonedRemote(t *testing.T) {
 	repo := t.TempDir()
-	if err := Save(repo, Remotes{"origin": "HTTPS://CXTHUB.EXAMPLE.COM/Alice/Orders/"}); err != nil {
+	if err := configFixtureSave(repo, Remotes{"origin": "HTTPS://CXTHUB.EXAMPLE.COM/Alice/Orders/"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(repo)
@@ -143,7 +143,7 @@ func TestSaveCanonicalizesAndLoadRejectsPoisonedRemote(t *testing.T) {
 }
 
 func TestSaveRejectsUnsafeRemoteName(t *testing.T) {
-	if err := Save(t.TempDir(), Remotes{"-origin": "https://cxthub.example.com/alice/orders"}); err == nil {
+	if err := configFixtureSave(t.TempDir(), Remotes{"-origin": "https://cxthub.example.com/alice/orders"}); err == nil {
 		t.Fatal("option-like remote name was accepted")
 	}
 }
@@ -207,7 +207,7 @@ func TestWrapReanchorsIdentity(t *testing.T) {
 
 	// Origin registered → resolve to URL-derived ID, maintain branch/path.
 	url := "http://127.0.0.1:8907/acme/demo"
-	if err := Save(root, Remotes{"origin": url}); err != nil {
+	if err := configFixtureSave(root, Remotes{"origin": url}); err != nil {
 		t.Fatal(err)
 	}
 	repo, err = g.CurrentRepo(context.Background(), root)

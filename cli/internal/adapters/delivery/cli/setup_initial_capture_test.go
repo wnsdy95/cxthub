@@ -215,7 +215,7 @@ func TestSetupInitialCaptureEligibilityAndAdmission(t *testing.T) {
 				r.afterQuery = func() { runLifecycleGit(t, f.cwd, "config", "branch.local-task.merge", "refs/heads/team-task") }
 			case "connection-change":
 				r.afterQuery = func() {
-					if err := remotecfg.Save(f.cwd, remotecfg.Remotes{"origin": "https://example.invalid/other/context"}); err != nil {
+					if err := configFixtureSave(f.cwd, remotecfg.Remotes{"origin": "https://example.invalid/other/context"}); err != nil {
 						t.Fatal(err)
 					}
 				}

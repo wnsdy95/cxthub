@@ -49,7 +49,7 @@ func selectionFixture(t *testing.T) (*SelectionReader, *positionsFake, string) {
 		t.Fatal(err)
 	}
 	origin := "https://cxthub.example/acme/project"
-	if err := remotecfg.Save(root, remotecfg.Remotes{"origin": origin}); err != nil {
+	if err := configFixtureSave(root, remotecfg.Remotes{"origin": origin}); err != nil {
 		t.Fatal(err)
 	}
 	p := &positionsFake{p: domain.WorkingPosition{RepoID: string(remotecfg.RepoIDFor(origin)), WorktreeID: fmt.Sprintf("%x", hash[:16]), Branch: "main", BranchID: "branch-main", Snapshot: domain.HashContent([]byte("snapshot")), GitCommit: head, MemoryPinned: true}}

@@ -73,7 +73,7 @@ func TestRepairInlineRemoteCannotFallBackToConfiguredOrigin(t *testing.T) {
 	defer server.Close()
 	origin := server.URL + "/team/repository"
 	root := bindRepairFixture(t, origin)
-	if err := remotecfg.Save(root, remotecfg.Remotes{"origin": origin}); err != nil {
+	if err := configFixtureSave(root, remotecfg.Remotes{"origin": origin}); err != nil {
 		t.Fatal(err)
 	}
 	err := run([]string{"cxt", "repair", "--from-server", "--remote=" + server.URL + "/team/other"})
