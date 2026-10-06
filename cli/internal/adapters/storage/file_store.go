@@ -45,11 +45,14 @@ type FileStore struct {
 	gitBranch       string
 	gitCommit       string
 	docProofKeyPath string // optional, outside the replica; configured before concurrent use
+	// Pointer because worktree views copy FileStore while sharing immutable
+	// event proofs. Current repository bytes are still read on every validation.
+	docVerifier *domain.StoredDocumentVerifier
 }
 
 // NewFileStore creates a FileStore.
 func NewFileStore(repoRoot string) *FileStore {
-	return &FileStore{repoRoot: repoRoot}
+	return &FileStore{repoRoot: repoRoot, docVerifier: &domain.StoredDocumentVerifier{}}
 }
 
 func (s *FileStore) storeDir() string { return filepath.Join(s.repoRoot, ".cxt") }

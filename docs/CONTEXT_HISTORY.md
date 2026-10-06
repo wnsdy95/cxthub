@@ -1663,6 +1663,19 @@ rollback cannot grant access because each later read repeats its ownership and
 physical-byte checks. Adapters without the capability retain full domain/engine
 validation; failure of an available verifier never falls back to weaker evidence.
 
+For CLI fetches without an authenticated document receipt, the local store can
+reuse at most 65,536 process-local canonical event proofs across cumulative
+documents. A proof binds the exact event bytes and CIR version to its validated
+sequence number. Every document still reads its current descriptor and chunks,
+checks its envelope, complete JSON framing/depth, event order and canonical
+document hash. Proofs contain no conversation text and are admitted only after a
+complete successful validation. The legacy typed normalizer remains authoritative
+for noncanonical stored representations; it uses the same bytes already read.
+This does not change document IDs, receipt versions, ownership checks, successful
+remote observations or the rule that interrupted fetches cannot publish partial
+metadata. Authenticated receipts remain bound to the actual stored representation
+and survive process restarts; the event cache is disposable.
+
 ### Human context viewer and agent memory queries
 
 The context viewer shows the selected snapshot's original saved memory and
