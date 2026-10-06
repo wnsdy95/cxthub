@@ -47,7 +47,7 @@ func TestMergeObservationCandidateRoots(t *testing.T) {
 				observer.observed.Snapshots = append(observer.observed.Snapshots, domain.Snapshot{ID: ids[1], Parents: []domain.ContentHash{ids[0]}}, domain.Snapshot{ID: ids[0]})
 				wantAppends = ids[1:]
 			}
-			got := appendMergedContexts(context.Background(), &Container{List: fixedBriefingList{out: inbound.ListOutput{Snapshots: local}}, Sync: observer}, t.TempDir(), "main", shas)
+			got := appendMergedContexts(context.Background(), &Container{List: fixedBriefingList{out: inbound.ListOutput{Snapshots: local}}, Sync: observer}, t.TempDir(), "main", shas, false)
 			wantRoots := ids
 			if len(wantRoots) > domain.MaxBranchPullRoots {
 				wantRoots = wantRoots[len(wantRoots)-domain.MaxBranchPullRoots:]

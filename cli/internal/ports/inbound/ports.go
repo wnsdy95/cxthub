@@ -382,6 +382,9 @@ type BranchHandoffInput struct {
 
 // SyncInput is an input DTO for SyncRepo.Push / SyncRepo.Pull.
 type SyncInput struct {
+	// RequireBranchPlan keeps metadata-first hook hydration scoped even if a
+	// later capability read reaches an older server. Explicit pull is unchanged.
+	RequireBranchPlan bool
 	// Publication selects frozen context identities for strict Push. A non-nil
 	// empty scope is invalid; nil with no Ref keeps ordinary repository-wide Push.
 	// HistoryOnly delivers recorded operations without final refs or pointer cleanup.

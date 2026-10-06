@@ -1480,7 +1480,7 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	if queued {
 		replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, origin, nil)
 	}
-	out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, FetchOnly: true})
+	out, err := fetchIncomingContexts(ctx, c, cwd, branch, shas)
 	if err != nil {
 		syncWarn(cwd, "pull", err)
 		return
@@ -1520,7 +1520,7 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	if !queued {
 		prReflected = replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, origin, nil)
 	}
-	mergeReflected := appendMergedContexts(ctx, c, cwd, branch, shas)
+	mergeReflected := appendMergedContexts(ctx, c, cwd, branch, shas, out.requireBranchPlan)
 	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
 		hookWarn("completed PR context position remains pending: %v", err)
 	}
@@ -1531,7 +1531,7 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	// Keep the pre-promotion local tip as the fallback baseline; the durable
 	// briefing cursor still wins when it is reachable from the final remote.
 	if remoteWasAhead || prReflected || mergeReflected || cursorNeedsReconcile {
-		writePullBriefingFromBaseline(ctx, c, cwd, branch, localBaseline)
+		writePullBriefingFromBaseline(ctx, c, cwd, branch, localBaseline, out.requireBranchPlan)
 	}
 }
 
@@ -1701,7 +1701,7 @@ func processMergedPRContexts(
 // — this hook fills that gap. Append is a lossless operation (overlay) that is idempotent and conflict-free (server CAS,
 // non-ff targets rejected → skip). Provider PR resolution above supplies the
 // squash/rebase path whose original commit links are absent from the base Git history.
-func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string, shas []string) bool {
+func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string, shas []string, requireBranchPlan bool) bool {
 	if branch == "" || branch == "HEAD" || len(shas) == 0 {
 		return false
 	}
@@ -1709,35 +1709,7 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	if err != nil {
 		return false
 	}
-	rewrites := loadRewrites(cwd)
-	// [git <sha>] link → snapshot. Multiple snapshots for the same commit are the latest (same as refSync).
-	type linked struct {
-		sha  string
-		snap domain.Snapshot
-	}
-	var links []linked
-	for _, snap := range list.Snapshots { // newest first
-		m := gitLinkRe.FindStringSubmatch(snap.Message)
-		if m == nil {
-			continue
-		}
-		links = append(links, linked{sha: resolveRewritten(rewrites, m[1]), snap: snap})
-	}
-	// Collect candidates in insertion commit order (oldest first) — ensure final tip is the latest merge.
-	seen := map[domain.ContentHash]bool{}
-	var cands []domain.Snapshot
-	for _, sha := range shas {
-		for _, l := range links {
-			if l.sha == "" || !strings.HasPrefix(sha, l.sha) {
-				continue
-			}
-			if !seen[l.snap.ID] {
-				seen[l.snap.ID] = true
-				cands = append(cands, l.snap)
-			}
-			break // only the latest snapshot
-		}
-	}
+	cands := mergedContextCandidates(list.Snapshots, loadRewrites(cwd), shas)
 	if len(cands) == 0 {
 		return false
 	}
@@ -1755,7 +1727,7 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	if len(roots) > domain.MaxBranchPullRoots {
 		roots = roots[len(roots)-domain.MaxBranchPullRoots:]
 	}
-	observed, err := observer.ResolveRemoteBranchObservation(ctx, inbound.SyncInput{Cwd: cwd, ObservationRoots: roots}, branch)
+	observed, err := observer.ResolveRemoteBranchObservation(ctx, inbound.SyncInput{Cwd: cwd, ObservationRoots: roots, RequireBranchPlan: requireBranchPlan}, branch)
 	if err != nil {
 		hookWarn("merge context observation failed (%s): %v", branch, err)
 		return false
@@ -2059,6 +2031,7 @@ func writePullBriefingFromBaseline(
 	c *Container,
 	cwd, branch string,
 	localBaseline domain.ContentHash,
+	requireBranchPlan bool,
 ) {
 	if err := capture.WithPullBriefingTransaction(cwd, branch, func() error {
 		read := c.Sync.ResolveRemoteBranch
@@ -2070,7 +2043,7 @@ func writePullBriefingFromBaseline(
 			// pullBriefingDelta below refuses to advance past any missing context.
 			read = reader.ReadRemoteBranch
 		}
-		ref, err := read(ctx, inbound.SyncInput{Cwd: cwd}, branch)
+		ref, err := read(ctx, inbound.SyncInput{Cwd: cwd, RequireBranchPlan: requireBranchPlan}, branch)
 		if err != nil || ref.Target == "" {
 			return err
 		}

@@ -214,6 +214,22 @@ work: the server still reads repository metadata/history before selecting the
 dependency closure. It does not read every memory body while planning. Later
 object requests reauthorize and can fail; the plan is not a retention lease.
 
+Automatic post-merge/rewrite discovery first reads snapshot labels from the
+authorized manifest and metadata-only object requests. It validates exact
+snapshot state tokens but treats these labels as transient candidates, never as
+verified ancestry. Local unpublished labels and rewrite aliases participate in
+the same Git-order selection. The hook then fetches the selected branch with
+candidate roots in batches of at most 256; each batch remains a separate verified
+observation. No candidate is dropped just because it lies beyond one batch.
+
+Durable PR discovery is recorded before this transfer. Failed authorization,
+changed metadata or canceled hydration leaves the PR discovery retryable and
+stops ordinary promotion. After choosing selected transfer, a capability change
+cannot silently trigger full hydration. Older unsupported paths retain their
+existing complete fetch. Explicit fetch/pull/repair commands are unchanged.
+Unrelated branch bodies are not fetched automatically; repository-wide metadata
+and the required selected closure can still be expensive.
+
 ## Graph and history browser
 
 Generic Git merge promotion selects candidate contexts in incoming Git commit
