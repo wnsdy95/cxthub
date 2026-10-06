@@ -50,6 +50,47 @@ func NewSaveSessionService(
 
 // Save snapshots the active session in the current cwd.
 func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
+	if err != nil {
+		return inbound.SaveOutput{}, err
+	}
+	if _, ok := s.store.(outbound.CapturePositionStore); ok {
+		if err := EnsureCapturePosition(ctx, s.store, repo.ID); err != nil {
+			return inbound.SaveOutput{}, err
+		}
+	}
+	capture := func(locked context.Context) (inbound.SaveOutput, error) {
+		current, err := s.gitCtx.CurrentRepo(locked, in.Cwd)
+		if err != nil {
+			return inbound.SaveOutput{}, err
+		}
+		if current.ID != repo.ID || current.LocalPath != repo.LocalPath {
+			return inbound.SaveOutput{}, domain.ErrSelectionChanged
+		}
+		if positions, ok := s.store.(outbound.WorkingPositionStore); ok {
+			position, err := positions.GetWorkingPosition(locked)
+			if err != nil && !errors.Is(err, domain.ErrNotFound) {
+				return inbound.SaveOutput{}, err
+			}
+			if err == nil && position.RepoID != repo.ID {
+				return inbound.SaveOutput{}, domain.ErrSelectionChanged
+			}
+		}
+		return s.save(locked, in, repo)
+	}
+	if gate, ok := s.store.(outbound.CaptureTrackingGate); ok {
+		var out inbound.SaveOutput
+		err := gate.WithCaptureTrackingGate(ctx, func(locked context.Context) error {
+			var err error
+			out, err = capture(locked)
+			return err
+		})
+		return out, err
+	}
+	return capture(ctx)
+}
+
+func (s *SaveSessionService) save(ctx context.Context, in inbound.SaveInput, repo domain.Repo) (inbound.SaveOutput, error) {
 	provider := in.Provider
 	if provider == "" {
 		provider = domain.ProviderClaude
@@ -63,10 +104,7 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 		return inbound.SaveOutput{}, domain.ErrUnsupportedProvider
 	}
 
-	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
-	if err != nil {
-		return inbound.SaveOutput{}, err
-	}
+	var err error
 
 	path := in.SessionPath
 	if path == "" {
@@ -246,8 +284,13 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 			return inbound.SaveOutput{}, err
 		}
 		p.MemoryHash = stored.MemoryHash
+		p.MemorySource = ""
+		if p.MemoryHash != "" {
+			p.MemorySource = docHash
+		}
+		p.MemoryPinned = true
 		key := sha256.Sum256([]byte(p.WorktreeID + "\x00" + string(position.Snapshot) + "\x00" + string(docHash)))
-		p.Selection = &domain.HistoryEvent{ID: fmt.Sprintf("%x", key[:16]), RepoID: repo.ID, BranchID: p.BranchID, Kind: "position", Source: position.Snapshot, Target: docHash, MemoryHash: p.MemoryHash, GitAfter: p.GitCommit, CreatedAt: stored.CreatedAt}
+		p.Selection = &domain.HistoryEvent{ID: fmt.Sprintf("%x", key[:16]), RepoID: repo.ID, BranchID: p.BranchID, Kind: "position", Source: position.Snapshot, Target: docHash, MemoryHash: p.MemoryHash, MemorySource: p.MemorySource, MemoryPinned: true, GitAfter: p.GitCommit, CreatedAt: stored.CreatedAt}
 		if err := s.store.(outbound.WorkingPositionStore).PutWorkingPosition(ctx, p); err != nil {
 			return inbound.SaveOutput{}, err
 		}
@@ -284,6 +327,11 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 			p.Snapshot = docHash
 			p.SharedTarget = docHash
 			p.MemoryHash = stored.MemoryHash
+			p.MemorySource = ""
+			if p.MemoryHash != "" {
+				p.MemorySource = docHash
+			}
+			p.MemoryPinned = true
 			p.Rewound = false
 			p.Orphan = false
 			p.Selection = nil

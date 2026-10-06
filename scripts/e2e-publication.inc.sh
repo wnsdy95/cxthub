@@ -8,11 +8,17 @@ git init -q; git remote add origin https://git.example.test/acme/publication.git
 cxt init >/dev/null 2>&1
 PUB_SLUG=$(ccurl -sb "$J" -X POST "$B/repositories" -H 'Content-Type: application/json' -d '{"name":"PublicationE2E"}' | jget "['slug']")
 PUB_REMOTE="$ORIGIN/$OWN/$PUB_SLUG"
+if [ -z "${CXT_E2E_DSN:-}" ]; then
+  fixture_register_legacy_repo "$PUB_REMOTE" https://git.example.test/acme/publication.git || { FAIL=1; return; }
+fi
 cxt remote add origin "$PUB_REMOTE" >/dev/null 2>&1
 session "$PWD" PUBBASE
 git add .gitignore; git commit -qm publication-base >"$TMP/pub-base.out" 2>&1
 if ! cxt push >"$TMP/pub-initial.out" 2>&1; then cat "$TMP/pub-initial.out"; FAIL=1; return; fi
 PUB_RID=$(curl -sb "$J" "$B/repos" | python3 -c 'import json,sys;print(next(r["id"] for r in json.load(sys.stdin) if r["remote_url"]==sys.argv[1]))' "$PUB_REMOTE")
+if [ -z "${CXT_E2E_DSN:-}" ]; then
+  ccurl -fsSb "$J" -X POST "$B/repos/$PUB_RID/context-protocol" -H 'Content-Type: application/json' -d '{}' >"$TMP/pub-protection.json" || { FAIL=1; return; }
+fi
 if ! git push -qu origin main >"$TMP/pub-base-code.out" 2>&1; then cat "$TMP/pub-base-code.out"; FAIL=1; return; fi
 if ! CXT_KEEP_SESSION=1 git switch -qc finalized-feature >"$TMP/pub-birth.out" 2>&1; then cat "$TMP/pub-birth.out"; FAIL=1; return; fi
 # Keep a real main worktree with an already selected/captured app session while
@@ -85,7 +91,9 @@ if ! git -C "$TMP/publication-host" fetch -q "$TMP/publication-client" finalized
 PUB_MERGE=$(git -C "$TMP/publication-host" rev-parse HEAD)
 PUB_REQUEST="{\"number\":175,\"base_branch\":\"main\",\"head_branch\":\"finalized-feature\",\"head_sha\":\"$PUB_HEAD\",\"merge_sha\":\"$PUB_MERGE\"}"
 expect "PR is queued before its context arrives" "$(ccurl -sb "$J" -X POST "$B/repos/$PUB_RID/prs/promotions" -H 'Content-Type: application/json' -d "$PUB_REQUEST" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("state"))')" waiting
-if ! cxt push --append >"$TMP/pub-push.out" 2>&1; then cat "$TMP/pub-push.out" "$TMP/pub-rebase.out"; FAIL=1; return; fi
+# Publish the PR source only. Its completion may concurrently advance server
+# main; this step does not authorize resending another worktree's older main.
+if ! cxt push origin finalized-feature --append >"$TMP/pub-push.out" 2>&1; then cat "$TMP/pub-push.out" "$TMP/pub-rebase.out"; FAIL=1; return; fi
 PUB_STATE=""
 for i in $(seq 1 60); do
   PUB_STATE=$(curl -sb "$J" "$B/repos/$PUB_RID/prs/promotions" | python3 -c 'import json,sys;print(next((j["state"] for j in json.load(sys.stdin) if j["pr"]["number"]==175),""))')
@@ -110,6 +118,8 @@ print("yes" if sys.argv[2] in seen else "no")' "$PUB_LAST" "$PUB_FIRST")" yes
 
 PUB_PROMOTED=$(printf '%s' "$PUB_HISTORY" | python3 -c 'import json,sys;rows=json.load(sys.stdin);print(next(e["target"] for e in rows if e.get("pr_completed") and e.get("pr",{}).get("number")==175))')
 expect "promotion advances beyond main's previous selection" "$([ -n "$PUB_PROMOTED" ] && [ "$PUB_PROMOTED" != "$PUB_BEFORE" ] && echo yes)" yes
+expect "source publication preserves the other worktree's local main" "$(ref_target "$PUB_STORE/refs/heads/main")" "$PUB_BEFORE"
+expect "server main follows the completed PR receipt" "$(curl -sb "$J" "$B/repos/$PUB_RID/refs" | python3 -c 'import json,sys;print(next(r["target"] for r in json.load(sys.stdin) if r["kind"]=="branch" and r["name"]=="main"))')" "$PUB_PROMOTED"
 cd "$PUB_MAIN"
 if ! git pull --ff-only origin main >"$TMP/pub-main-git-pull.out" 2>&1; then cat "$TMP/pub-main-git-pull.out"; FAIL=1; return; fi
 # Inspect the real Git-hook boundary before explicit context pull. The fake

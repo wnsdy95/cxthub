@@ -28,6 +28,7 @@ import (
 
 // Backend is a set of server actions required by REST handlers (app.Service implements).
 type Backend interface {
+	inbound.RepositoryInitialization
 	inbound.BranchPullPlanner
 	inbound.ContextQuery
 	inbound.GraphStateQuery
@@ -183,6 +184,9 @@ func (s *Server) Handler() http.Handler {
 	// GET at viewer level is allowed for public repositories. Detailed rules are in requireRepoRole.
 	mux.HandleFunc("GET /api/v1/repos", s.listRepos)
 	mux.HandleFunc("POST /api/v1/repos", s.requireUser(s.createRepo)) // distillation (empirically verified usage of bound repositoryRecord is checked by subsequent gate)
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/initialization", s.guard(domain.RoleMaintainer, s.getRepositoryInitialization))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/initialization", s.requireUser(s.beginRepositoryInitialization))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/initialization/finalize", s.guard(domain.RoleMaintainer, s.finalizeRepositoryInitialization))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}", s.guard(domain.RoleViewer, s.getRepo))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/fsck", s.guard(domain.RoleViewer, s.fsck))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/reflog", s.guard(domain.RoleViewer, s.reflog))
@@ -194,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promotions/{jobID}/retry", s.guard(domain.RoleMember, s.retryPRPromotion))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/prs/promote", s.guard(domain.RoleMember, s.promoteRepositoryPR))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/history", s.guard(domain.RoleMember, s.recordHistory))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/history/memory-selection", s.guard(domain.RoleMember, s.recordMemorySelection))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/manifest", s.guard(domain.RoleViewer, s.getManifest))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/branches", s.guard(domain.RoleViewer, s.listRefs))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/refs", s.guard(domain.RoleViewer, s.listRefs))
@@ -383,6 +388,24 @@ func (s *Server) createRepo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getRepo(w http.ResponseWriter, r *http.Request) {
+	branch := ""
+	queryValues, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "bad_request", "invalid query")
+		return
+	}
+	if values, present := queryValues["initial_branch"]; present {
+		if len(values) != 1 || domain.ValidateBranchName(values[0]) != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_request", "invalid initial branch")
+			return
+		}
+		branch = values[0]
+	}
+	if query, ok := s.b.(inbound.RepositoryInitializationQuery); ok {
+		out, pending, err := query.GetRepositoryInitializationView(r.Context(), s.repoID(r), branch)
+		s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), InitialAnchorAvailable: pending}, err)
+		return
+	}
 	out, err := s.b.GetRepo(r.Context(), s.repoID(r))
 	s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion()}, err)
 }
@@ -1264,6 +1287,10 @@ func mapError(err error) (code string, status int) {
 		return "usage_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrBranchPullUnsupported):
 		return "branch_pull_unsupported", http.StatusNotImplemented
+	case errors.Is(err, domain.ErrRepositoryInitializationUnsupported):
+		return "repository_initialization_unsupported", http.StatusNotImplemented
+	case errors.Is(err, domain.ErrRepositoryInitializationConflict):
+		return "repository_initialization_conflict", http.StatusConflict
 	case errors.Is(err, domain.ErrNotFound):
 		return "not_found", http.StatusNotFound
 	case errors.Is(err, domain.ErrIntegrity):

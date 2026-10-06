@@ -91,7 +91,11 @@ func (s *ContextHistoryService) PrepareTrackingAttachment(ctx context.Context, e
 			return zero, domain.ErrHashMismatch
 		}
 		byTarget := map[domain.ContentHash][]domain.WorkingPosition{}
-		for _, event := range byCode[code] {
+		events, err := s.initialMemorySelections(ctx, byCode[code])
+		if err != nil {
+			return zero, err
+		}
+		for _, event := range events {
 			if event.Kind == "pr-merge" {
 				p, err := s.ResolvePRSourcePositionFromHistory(ctx, event, history)
 				if err != nil {
@@ -208,7 +212,7 @@ func (s *ContextHistoryService) ApplyTrackingAttachment(ctx context.Context, in 
 	}
 	// The store checks current object bytes together with the final CAS. Doing
 	// this again here would duplicate reads and still leave a mutation gap.
-	change := outbound.TrackingAttachmentCommit{Attachment: a, ExpectedRef: in.ExpectedRef}
+	change := outbound.TrackingAttachmentCommit{Attachment: a, ExpectedRef: in.ExpectedRef, RequirePristine: in.RequirePristine, ObservedSnapshots: in.ObservedSnapshots}
 	if in.SelectPosition {
 		e := a.Event
 		p := domain.WorkingPosition{RepoID: e.RepoID, Branch: e.Branch, BranchID: e.BranchID, LocalBranch: e.LocalBranch, WorktreeID: e.WorktreeID, GitCommit: e.GitAfter, Snapshot: e.Target, SharedTarget: e.SharedTarget, MemoryHash: e.MemoryHash, MemorySource: e.MemorySource, MemoryPinned: true}
@@ -227,4 +231,20 @@ func (s *ContextHistoryService) ApplyTrackingAttachment(ctx context.Context, in 
 		change.Position = &outbound.TrackingPositionCAS{Expected: in.ExpectedPosition, Next: p}
 	}
 	return store.CommitTrackingAttachment(ctx, change)
+}
+
+func (s *ContextHistoryService) TrackingPristine(ctx context.Context, repo string) (bool, error) {
+	store, ok := s.store.(outbound.PristineTrackingStore)
+	if !ok {
+		return false, fmt.Errorf("pristine tracking store unavailable")
+	}
+	return store.TrackingPristine(ctx, repo)
+}
+
+func (s *ContextHistoryService) InitializeCapturePosition(ctx context.Context, expected *domain.WorkingPosition, next domain.WorkingPosition) error {
+	store, ok := s.store.(outbound.InitialCapturePositionStore)
+	if !ok {
+		return fmt.Errorf("safe initial capture position store unavailable")
+	}
+	return store.InitializeCapturePosition(ctx, expected, next)
 }

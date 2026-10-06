@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -88,6 +87,7 @@ func TestPrePushDiagnosticsAppendRetrySharesBudget(t *testing.T) {
 		calls   int
 	}{
 		{"success", nil, 1},
+		{"protocol_required", []error{domain.ErrContextProtocolRequired}, 1},
 		{"conflict", []error{domain.ErrSyncConflict}, 2},
 		{"wrapped_conflict", []error{fmt.Errorf("push: %w", domain.ErrSyncConflict)}, 2},
 		{"opaque_conflict", []error{diagnosticOpaqueConflict{}}, 2},
@@ -101,14 +101,10 @@ func TestPrePushDiagnosticsAppendRetrySharesBudget(t *testing.T) {
 		{"plain_text", []error{errors.New(domain.ErrSyncConflict.Error())}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := t.TempDir()
-			activationTestGit(t, repo, "init", "-b", "main")
-			if err := os.Mkdir(filepath.Join(repo, ".cxt"), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(repo, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
+			repo, c, _, repoID, _ := historyFixture(t)
+			runLifecycleGit(t, repo, "remote", "add", "origin", "https://example.invalid/code.git")
+			c.ResolveRepo = func(context.Context, string) (domain.Repo, error) { return domain.Repo{ID: repoID}, nil }
+			setGitPushInput(t, "refs/heads/main "+gitOut(repo, "rev-parse", "HEAD")+" refs/heads/main "+strings.Repeat("0", 40)+"\n")
 			output, err := os.CreateTemp(t.TempDir(), "hook-stderr")
 			if err != nil {
 				t.Fatal(err)
@@ -120,15 +116,16 @@ func TestPrePushDiagnosticsAppendRetrySharesBudget(t *testing.T) {
 			defer cancel()
 			wakes := 0
 			syncer := &diagnosticRetrySync{results: tc.results}
-			c := &Container{Sync: syncer, WakeHistoricalSync: func(string) { wakes++ }}
-			if err := runGitHook(caller, c, repo, []string{"pre-push"}); err != nil {
+			c.Sync = syncer
+			c.WakeHistoricalSync = func(string) { wakes++ }
+			if err := runGitHook(caller, c, repo, []string{"pre-push", "origin", "https://example.invalid/code.git"}); err != nil {
 				t.Fatalf("hook lost fail-open: %v", err)
 			}
 			if len(syncer.inputs) != tc.calls || wakes != 1 {
 				t.Fatalf("push calls=%d want=%d; historical wakeups=%d want=1", len(syncer.inputs), tc.calls, wakes)
 			}
 			for i, in := range syncer.inputs {
-				if in.Append != (i == 1) || !in.ForegroundOnly || in.Force || in.Cwd != repo {
+				if in.Append != (i == 1) || !in.ForegroundOnly || in.Force || in.Cwd != repo || in.Publication == nil || in.Publication.HistoryOnly || len(in.Publication.Branches) != 1 || in.Publication.Branches[0].Branch != "main" || in.Publication.Branches[0].BranchID != domain.LegacyContextBranchID(repoID, "main") {
 					t.Fatalf("attempt %d changed publication input: %+v", i+1, in)
 				}
 			}

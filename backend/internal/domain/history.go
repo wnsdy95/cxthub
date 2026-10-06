@@ -26,16 +26,18 @@ type HistoryEvent struct {
 	PreviousBranch   string            `json:"previous_branch,omitempty"`
 	BindingParent    string            `json:"binding_parent,omitempty"`
 	NameParent       string            `json:"name_parent,omitempty"`
-	Source           ContentHash       `json:"source,omitempty"`
-	Target           ContentHash       `json:"target,omitempty"`
-	SharedTarget     ContentHash       `json:"shared_target,omitempty"`
-	MemorySource     ContentHash       `json:"memory_source,omitempty"`
-	MemoryHash       ContentHash       `json:"memory_hash,omitempty"`
-	MemoryPinned     bool              `json:"memory_pinned,omitempty"`
-	GitBefore        string            `json:"git_before,omitempty"`
-	GitAfter         string            `json:"git_after,omitempty"`
-	WorktreeID       string            `json:"worktree_id,omitempty"`
-	CreatedAt        time.Time         `json:"created_at"`
+	// MemorySelectionParent is the exact pinned-empty position replaced by the first memory.
+	MemorySelectionParent string      `json:"memory_selection_parent,omitempty"`
+	Source                ContentHash `json:"source,omitempty"`
+	Target                ContentHash `json:"target,omitempty"`
+	SharedTarget          ContentHash `json:"shared_target,omitempty"`
+	MemorySource          ContentHash `json:"memory_source,omitempty"`
+	MemoryHash            ContentHash `json:"memory_hash,omitempty"`
+	MemoryPinned          bool        `json:"memory_pinned,omitempty"`
+	GitBefore             string      `json:"git_before,omitempty"`
+	GitAfter              string      `json:"git_after,omitempty"`
+	WorktreeID            string      `json:"worktree_id,omitempty"`
+	CreatedAt             time.Time   `json:"created_at"`
 }
 
 func ValidateHistoryEvent(e HistoryEvent) error {
@@ -92,7 +94,12 @@ func ValidateHistoryEvent(e HistoryEvent) error {
 	} else if e.PreviousBranch != "" || e.NameParent != "" {
 		return fmt.Errorf("unexpected rename metadata")
 	}
-	for _, parent := range []string{e.BindingParent, e.NameParent} {
+	if e.MemorySelectionParent != "" && (e.Kind != "position" || e.Target == "" || e.Source != e.Target ||
+		!e.MemoryPinned || e.MemoryHash == "" || (e.MemorySource != "" && e.MemorySource != e.Target) ||
+		e.WorktreeID == "" || !(ValidateGitOID(e.GitAfter) == nil)) {
+		return fmt.Errorf("invalid initial memory selection")
+	}
+	for _, parent := range HistoryDependencies(e) {
 		if parent == "" {
 			continue
 		}
@@ -140,4 +147,26 @@ func ValidateHistoryEvent(e HistoryEvent) error {
 		return fmt.Errorf("orphan creation cannot inherit conversation ancestry")
 	}
 	return nil
+}
+
+// HistoryDependencies lists distinct immutable operation dependencies. Identity
+// bindings and memory selection retain separate meanings but share ordering.
+func HistoryDependencies(e HistoryEvent) []string {
+	var out []string
+	for _, id := range []string{e.BindingParent, e.NameParent, e.MemorySelectionParent} {
+		if id == "" {
+			continue
+		}
+		duplicate := false
+		for _, prior := range out {
+			if prior == id {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, id)
+		}
+	}
+	return out
 }

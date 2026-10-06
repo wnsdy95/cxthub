@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -41,7 +42,18 @@ func (s *InitRepoService) Init(ctx context.Context, in inbound.InitInput) (inbou
 		branch = "main"
 	}
 	// .cxt/ initialization: creates store directory using HEAD symbolic ref.
-	if err := s.store.PutRef(ctx, domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: branch}); err != nil {
+	ref := domain.Ref{Kind: domain.RefHEAD, Name: "HEAD", RepoID: repo.ID, Symbolic: branch}
+	var initErr error
+	if in.PreserveExisting {
+		initializer, ok := s.store.(outbound.SetupHeadInitializer)
+		if !ok {
+			return inbound.InitOutput{}, fmt.Errorf("safe setup initializer unavailable")
+		}
+		initErr = initializer.InitializeHeadIfAbsent(ctx, ref)
+	} else {
+		initErr = s.store.PutRef(ctx, ref)
+	}
+	if err := initErr; err != nil {
 		return inbound.InitOutput{}, err
 	}
 	return inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(repo.LocalPath, ".cxt")}, nil

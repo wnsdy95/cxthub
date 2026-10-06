@@ -552,6 +552,45 @@ An unknown historical edge or unsynchronized object without another copy remains
 unknown/unrecoverable. Diagnostics expose that limitation rather than inventing
 an ancestry edge, branch identity, Git witness, or replacement conversation.
 
+### Proven-new repository initialization
+
+First clone attachment is separate from server creation. On a pristine local
+store, `cxt setup` verifies the actual origin upstream and checked-out Git code,
+then uses the existing tracking attachment journal to adopt the server identity,
+shared tip and code-aligned context/memory selection. The same observation
+supplies all of these facts. Setup rechecks Git evidence, empty worktree position
+and local state before accepting the journal; it does not create a branch birth.
+Capture and staging cannot race that acceptance, and a completed journal is
+recovered before retrying. Local captures, staged inputs, provisional-ID objects,
+other worktrees and queued operations are not overwritten. Repeated setup keeps
+an existing selection. Registration through `remote add` does not attach or
+inject context.
+
+The next capture may normalize a still-empty local init cursor from its
+provisional Git repository identity to the configured CXTHub identity. This is
+an atomic admission step shared by provider hooks, Save and commit capture,
+not an implicit pull or branch attachment. It changes only the repository ID
+and derived legacy branch ID. Existing selected context, memory, foreign
+repository evidence and frozen capture intentions prevent normalization.
+Already captured pending data owned by the connected repository is preserved;
+other worktree positions are never rewritten.
+
+If an authorized exact-branch query affirmatively reports initial-anchor
+eligibility for a proven-new protected repository, setup may instead establish
+the current worktree's canonical empty position. Local and upstream branch
+names must match. Under the same pristine admission and expected-position CAS,
+it records only the verified repository, actual branch/code/worktree and legacy
+branch identity. No ref, birth, attach event, anchor or server reservation is
+created. A concurrent server publication can invalidate later first-push
+eligibility; setup does not bypass that acceptance check. Missing context,
+permissions or capability alone do not authorize empty initialization.
+
+New creation and legacy migration are separate operations. `POST /repos/{repoID}/initialization` resolves the repository binding and current manage permission and proves that the per-code repository does not exist, under the same PostgreSQL graph/access transaction. It creates a protected empty repository and immutable receipt atomically. Registration of an existing repository, even an empty one, is not creation proof and never changes its protocol.
+
+A genuine observed birth uses ordinary history publication. Only a pre-existing legacy branch may need the optional `/initialization/finalize` observation. That operation accepts one exact legacy ref and a complete verified snapshot-state closure, requires current manage authorization and no current ref, prior ref movement, lifecycle, or conflicting identity for that branch name, and records ref, initial reflog and a branch-specific receipt atomically. It does not fabricate a Git birth, widen selected publication, or relax ordinary ref CAS.
+
+`GET /repos/{repoID}?initial_branch=<name>` returns `initial_anchor_available` as a coherent branch-specific eligibility projection. An absent receipt alone is not authority: existing ownership and history can prohibit observation. Independent branches do not consume one another's eligibility. `GET /repos/{repoID}/initialization` recovers immutable creation metadata with current manage authorization. Exact accepted retries return the historical receipt without restoring older refs, including after archive or subsequent advancement; modified retries conflict. Heavy immutable-body verification precedes the write transaction, which rechecks authorization and mutable/ownership evidence before applying. Unsupported filesystem storage fails without mutation.
+
 ### Branch graph event projection
 
 The graph includes separate event nodes for recorded branch births and proven
@@ -775,6 +814,37 @@ re-appending the original source. This preserves a later rewind or continuation,
 including when the prior process wrote the completion receipt but failed to mark
 its queue job complete. Later captures do not retroactively enlarge an already
 completed PR's scope.
+
+### First memory selection at an existing code position
+
+A pinned empty position and a later nonempty memory pin are not ordered by
+timestamps or by the snapshot's mutable memory attachment. When the first root
+digest is recorded for that exact selected snapshot, the producer records
+`memory_selection_parent` pointing to the accepted empty position. The pair
+must match repository, branch identity/name, local branch, worktree, Git code
+and snapshot. The successor digest must be hash-verified, owned by that snapshot
+and have no prior digest. This memory relation is separate from `binding_parent`,
+which retains its branch identity role.
+
+The server validates this dependency under the history write transaction. Both
+events remain immutable and travel with the dependency closure. CLI tracking
+and completed-PR source selection exclude only the explicitly superseded empty
+candidate, then apply the existing causal memory checks. Unlinked historical
+empty/nonempty observations, divergent memories and another worktree's empty
+pin remain conflicts. This does not repair old records by timestamp.
+
+Clients send these events through `POST /history/memory-selection`, which uses
+the ordinary history application service. Older servers lack the route and
+cannot silently accept a payload after discarding the new field. Failure leaves
+the operation pending; clients never retry it through the older history route.
+Upgrade API writers before publishing these dependencies. Older readers may
+still report an unresolved historical selection instead of applying the new
+causal relation.
+
+This historical selection contract differs from branch-memory queries that
+project current project knowledge. Those queries do not promise the exact
+recorded memory pin at an earlier code position. An explicit immutable memory
+hash remains the way to request that particular stored digest.
 
 ### Working position after promotion (#177)
 
@@ -1686,3 +1756,40 @@ Storage compatibility: the optional field is stored in existing history JSON
 unchanged. Updated clients must preserve this evidence when replaying history;
 an older client attempting to replace an event without its immutable evidence
 receives a conflict rather than silently erasing provenance.
+
+
+### Selected publication authority
+
+Explicit `cxt push origin <branch>` and Git-selected pre-push use the same
+identity planner. The local ref/binding freezes authority; accepted remote
+history can prove dependencies or reject a conflict but cannot select a new
+same-name identity. All immutable event collisions and publication-group
+ambiguities are checked before partitioning the chosen identities. Foreign
+ordinary witnesses must match the planned payload and precede their consumers;
+foreign lifecycle operations and source-completion events are not implicitly
+published as prerequisites.
+
+The executor uses a frozen approved graft FIFO prefix. It checks the queue head
+before each send and acknowledges the exact operation afterward, without holding
+a local lock across the network. A foreign predecessor blocks a selected later
+operation; concurrent additions never extend the approved prefix. A graph
+conflict invalidates the old plan instead of continuing with stale ancestry.
+
+Selected publication does not delete unsync markers through the name-only
+endpoint. A concurrent writer can replace the target or reuse the name between
+ref acceptance and cleanup; an old publication has no authority to clear that
+new status. Existing reachability-based queries determine what remains unpushed.
+
+Background history delivery uses the same planner in history-only mode. It
+preserves archived identities, never performs final current-tip reconciliation,
+and does not treat historical object backfill as event acceptance. It retries a
+blocked identity only after another selected identity has completed; no-progress
+and the existing hook deadline bound each run. Automatic completion wakeups occur
+after durable capture/rewrite completion, and pre-push local replay does not spawn
+a repository-wide publisher. Originals and unresolved records remain preserved.
+
+A first publication containing recorded rewind continuations starts from the first
+continuation's exact source, then replays those immutable events and finishes at
+the selected final tip. Incompatible continuation sequences fail before an
+observation is accepted. Selected publication never initializes an unselected
+`main`; bare push may initialize each of its explicitly authorized legacy refs.

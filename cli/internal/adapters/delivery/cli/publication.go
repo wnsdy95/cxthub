@@ -59,10 +59,49 @@ func beginCommitCapture(ctx context.Context, c *Container, cwd string, providers
 	if c.History == nil {
 		return nil, nil
 	}
+	var captureRepo string
+	if admission, ok := c.History.(inbound.ContextCaptureAdmission); ok {
+		repo, err := resolvePublicationRepo(ctx, c, cwd)
+		if err != nil {
+			return nil, err
+		}
+		if err := admission.EnsureCapturePosition(ctx, repo.ID); err != nil {
+			return nil, fmt.Errorf("prepare commit capture position: %w", err)
+		}
+		captureRepo = repo.ID
+	}
+	// Admission may need EX. Only its subsequent recheck and durable intent
+	// share the existing SH gate with capture writers.
+	if gate, ok := c.History.(inbound.ContextCaptureGate); ok {
+		var pass *commitCapturePass
+		err := gate.WithCaptureTrackingGate(ctx, func(locked context.Context) error {
+			var err error
+			pass, err = freezeCommitCapture(locked, c, cwd, providers, captureRepo)
+			return err
+		})
+		return pass, err
+	}
+	return freezeCommitCapture(ctx, c, cwd, providers, captureRepo)
+}
+
+func freezeCommitCapture(ctx context.Context, c *Container, cwd string, providers []string, captureRepo string) (*commitCapturePass, error) {
+	if captureRepo != "" {
+		repo, err := resolvePublicationRepo(ctx, c, cwd)
+		if err != nil {
+			return nil, err
+		}
+		if repo.ID != captureRepo {
+			return nil, domain.ErrSelectionChanged
+		}
+	}
 	position, err := c.History.CurrentPosition(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if captureRepo != "" && position.RepoID != captureRepo {
+		return nil, domain.ErrSelectionChanged
+	}
+
 	oid := gitOut(cwd, "rev-parse", "HEAD")
 	branch := gitOut(cwd, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if branch == "" {
@@ -138,6 +177,10 @@ func (p *commitCapturePass) recordOutcome(ctx context.Context, root string, inde
 // Only the frozen baseline and this pass's Save outputs can become its final
 // target. A mutable worktree tip may belong to another, incomplete pass.
 func recordCommitPublication(ctx context.Context, c *Container, cwd string, p *commitCapturePass) error {
+	return recordCommitPublicationWithWake(ctx, c, cwd, p, nil)
+}
+
+func recordCommitPublicationWithWake(ctx context.Context, c *Container, cwd string, p *commitCapturePass, publish func(string)) error {
 	if p == nil {
 		return nil
 	}
@@ -152,6 +195,11 @@ func recordCommitPublication(ctx context.Context, c *Container, cwd string, p *c
 	}
 	if err := completeCapturePass(ctx, cwd, cxtRepoRoot(ctx, cwd), p); err != nil {
 		return p.pending(err)
+	}
+	// Complete is now durable. A subsequent history-write failure still needs
+	// delivery; an in-memory Complete flag after a failed write is not enough.
+	if publish != nil {
+		publish(cwd)
 	}
 	return publishCommitCapture(ctx, c, cwd, p, nil)
 }
@@ -349,7 +397,7 @@ func publishCommitCapture(ctx context.Context, c *Container, cwd string, p *comm
 	return persistPublicationKnown(ctx, c, cwd, e, accepted)
 }
 
-func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, worktree string, accepted map[string]domain.HistoryEvent, resolutions map[string]domain.CaptureResolution) error {
+func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, worktree string, accepted map[string]domain.HistoryEvent, resolutions map[string]domain.CaptureResolution, branchIDs map[string]bool) error {
 	rel := filepath.Join(".cxt", "worktrees", worktree, "capture-passes")
 	dir, err := providerfs.EnsureRepoDir(root, rel, 0700)
 	if err != nil {
@@ -376,6 +424,9 @@ func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, wo
 		if err := p.validate(); err != nil {
 			return err
 		}
+		if branchIDs != nil && !branchIDs[p.Proof.BranchID] {
+			continue
+		}
 		if r, ok := resolutions[p.Proof.ID]; ok {
 			if r.AttemptHash != domain.CaptureAttempt(p).Fingerprint() {
 				return domain.ErrSyncConflict
@@ -385,6 +436,10 @@ func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, wo
 		if !p.Complete {
 			if err := recoverCommitCapture(ctx, c, cwd, root, &p, accepted); err != nil {
 				if errors.Is(err, errCaptureCompletionUnproven) {
+					if branchIDs != nil {
+						pending = append(pending, p.pending(err))
+						continue
+					}
 					hookWarn("%v", p.pending(err))
 					continue
 				}
@@ -501,6 +556,15 @@ func persistPublicationKnown(ctx context.Context, c *Container, cwd string, e do
 // All worktrees share the replica, including finalization jobs whose original
 // worktree is no longer checked out. Never rescan a live transcript on retry.
 func replayPublications(ctx context.Context, c *Container, cwd string) error {
+	return replayPublicationsForBranches(ctx, c, cwd, nil)
+}
+
+// Classify validated durable evidence before recovery or history writes. An
+// excluded identity stays untouched even when its source cannot be resolved.
+func replayPublicationsForBranches(ctx context.Context, c *Container, cwd string, branchIDs map[string]bool) error {
+	if branchIDs != nil && len(branchIDs) == 0 {
+		return nil
+	}
 	if c.History == nil {
 		return nil
 	}
@@ -536,7 +600,7 @@ func replayPublications(ctx context.Context, c *Container, cwd string) error {
 		if !wt.IsDir() {
 			return domain.ErrHashMismatch
 		}
-		if err := replayCommitCaptures(ctx, c, cwd, root, p.RepoID, wt.Name(), accepted, resolutions); err != nil {
+		if err := replayCommitCaptures(ctx, c, cwd, root, p.RepoID, wt.Name(), accepted, resolutions, branchIDs); err != nil {
 			pending = append(pending, err)
 		}
 		rel := filepath.Join(".cxt", "worktrees", wt.Name(), "publication-journal")
@@ -559,6 +623,14 @@ func replayPublications(ctx context.Context, c *Container, cwd string) error {
 			var e domain.HistoryEvent
 			if json.Unmarshal(raw, &e) != nil || e.Kind != "publish" || e.RepoID != p.RepoID || e.WorktreeID != wt.Name() || e.ID != publicationID(e) || entry.Name() != e.ID+".json" {
 				return domain.ErrHashMismatch
+			}
+			if branchIDs != nil {
+				if err := domain.ValidateHistoryEvent(e); err != nil {
+					return err
+				}
+				if !branchIDs[e.BranchID] {
+					continue
+				}
 			}
 			if err = recordPublicationEvent(ctx, c, e, accepted); err != nil {
 				return err

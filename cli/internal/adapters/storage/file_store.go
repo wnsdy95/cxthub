@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -361,7 +362,10 @@ func (s *FileStore) withSnapshotMutationLock(ctx context.Context, id domain.Cont
 	if err := domain.ValidateContentHash(id); err != nil {
 		return err
 	}
-	return s.withMutationLock(ctx, "snapshots", hexOf(id), fn)
+	_, err := s.withOSLock(ctx, "first-tracking", "snapshots", syscall.LOCK_SH, true, func() error {
+		return s.withMutationLock(ctx, "snapshots", hexOf(id), fn)
+	})
+	return err
 }
 
 func (s *FileStore) withPendingMutationLock(ctx context.Context, sessionID string, fn func() error) error {
@@ -369,7 +373,9 @@ func (s *FileStore) withPendingMutationLock(ctx context.Context, sessionID strin
 		return domain.ErrHashMismatch
 	}
 	sum := sha256.Sum256([]byte(sessionID))
-	return s.withMutationLock(ctx, "pending", hex.EncodeToString(sum[:]), fn)
+	return s.WithCaptureTrackingGate(ctx, func(locked context.Context) error {
+		return s.withMutationLock(locked, "pending", hex.EncodeToString(sum[:]), fn)
+	})
 }
 
 // withRefMutationLock serializes all ref projections for this local repo.

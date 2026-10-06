@@ -62,6 +62,7 @@ func TestBranchPullLiveProtocol(t *testing.T) {
 		t.Fatal("unknown branch plan version")
 	}
 	var ids []domain.ContentHash
+	var branchIDs []string
 	for _, branch := range []string{"branch-pull-wire", "branch-pull-unrelated"} {
 		cir := domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: "1", SourceProvider: domain.ProviderCodex, Fidelity: domain.FidelityFull}, Events: []domain.Event{{Kind: domain.EventMessage, Seq: 0, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: branch}}}}}
 		raw, err := domain.CanonicalBytes(cir)
@@ -71,8 +72,15 @@ func TestBranchPullLiveProtocol(t *testing.T) {
 		id := domain.HashContent(raw)
 		ids = append(ids, id)
 		snap := domain.Snapshot{ID: id, DocHash: id, RepoID: repo, Branch: branch, Provider: domain.ProviderCodex, Fidelity: domain.FidelityFull, CreatedAt: time.Now().UTC()}
-		ref := domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: branch, Target: id}
-		if err := c.Push(ctx, repo, []domain.Snapshot{snap}, []domain.SessionDoc{{Hash: id, CIR: cir}}, []domain.Ref{ref}, false, false); err != nil {
+		if err := c.Push(ctx, repo, []domain.Snapshot{snap}, []domain.SessionDoc{{Hash: id, CIR: cir}}, nil, false, false); err != nil {
+			t.Fatal(err)
+		}
+		// Fixture branches are new identities, including in protocol-1 repos.
+		// Upload dependencies first, then use the normal durable birth command.
+		branchID := strings.ReplaceAll(domain.NewSessionID(), "-", "")
+		branchIDs = append(branchIDs, branchID)
+		birth := domain.HistoryEvent{ID: branchID, RepoID: repo, Kind: "birth", Branch: branch, BranchID: branchID, Source: id, Target: id, CreatedAt: snap.CreatedAt}
+		if err := c.PushHistoryEvent(ctx, birth); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -83,7 +91,7 @@ func TestBranchPullLiveProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(plan.SnapshotIndex, ids[:1]) || len(snaps) != 1 || len(receiver) != 1 || p.plans != 1 || p.objects == 0 || p.broad != 0 {
+	if plan.SelectedRef.BranchID != branchIDs[0] || !reflect.DeepEqual(plan.SnapshotIndex, ids[:1]) || len(snaps) != 1 || len(receiver) != 1 || p.plans != 1 || p.objects == 0 || p.broad != 0 {
 		t.Fatalf("cold plan: nodes=%d metadata=%d docs=%d plans=%d objects=%d broad=%d", len(plan.SnapshotIndex), len(snaps), len(receiver), p.plans, p.objects, p.broad)
 	}
 	p.plans, p.objects, p.broad = 0, 0, 0
@@ -92,7 +100,7 @@ func TestBranchPullLiveProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(plan.SnapshotIndex, ids[:1]) || len(snaps) != 0 || len(warm) != 0 || p.plans != 1 || p.objects != 0 || p.broad != 0 {
+	if plan.SelectedRef.BranchID != branchIDs[0] || !reflect.DeepEqual(plan.SnapshotIndex, ids[:1]) || len(snaps) != 0 || len(warm) != 0 || p.plans != 1 || p.objects != 0 || p.broad != 0 {
 		t.Fatalf("warm plan: nodes=%d metadata=%d docs=%d plans=%d objects=%d broad=%d", len(plan.SnapshotIndex), len(snaps), len(warm), p.plans, p.objects, p.broad)
 	}
 	t.Log("actual PG API/CLI: selected node only; unchanged warm plan transfers no objects; no full catalog/history queries")

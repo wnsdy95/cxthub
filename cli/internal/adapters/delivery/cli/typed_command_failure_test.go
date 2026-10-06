@@ -73,6 +73,11 @@ func TestSyncPresentationPreservesTypedConflictOnly(t *testing.T) {
 		c := &Container{ResolveSyncDestination: func(context.Context, string, string) (SyncDestination, error) {
 			return SyncDestination{Sync: tc.sync}, nil
 		}}
+		if tc.command == "push" {
+			_, local, _, _, _, _ := manualPublicationFixture(t, "main")
+			c.Queries, c.History, c.ResolveRepo = local.Queries, local.History, local.ResolveRepo
+			c.WakeHistoricalSync = func(string) {}
+		}
 		err := Run(c, []string{"cxt", tc.command, "origin", "main"})
 		if err == nil || ClassifyCommandFailure(err).Code != tc.want {
 			t.Fatalf("%s: %v", tc.command, err)

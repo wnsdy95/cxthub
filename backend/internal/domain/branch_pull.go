@@ -172,7 +172,7 @@ func SelectBranchPullDependencies(ctx context.Context, repo Repo, request Branch
 		}
 		id := queue[len(queue)-1]
 		queue = queue[:len(queue)-1]
-		for _, dep := range []string{byEvent[id].BindingParent, byEvent[id].NameParent} {
+		for _, dep := range HistoryDependencies(byEvent[id]) {
 			if dep != "" && !wanted[dep] {
 				wanted[dep] = true
 				queue = append(queue, dep)

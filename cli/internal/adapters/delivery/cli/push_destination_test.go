@@ -49,6 +49,12 @@ func TestPushExplicitOriginPreservesBackgroundHistoryPolicy(t *testing.T) {
 						},
 						WakeHistoricalSync: func(string) { wakes++ },
 					}
+					var selectedID string
+					if branch != "" {
+						_, local, _, _, _, id := manualPublicationFixture(t, branch)
+						c.Queries, c.History, c.ResolveRepo = local.Queries, local.History, local.ResolveRepo
+						selectedID = id
+					}
 					args := []string{"cxt", "push"}
 					if remote != "" {
 						args = append(args, remote)
@@ -70,8 +76,11 @@ func TestPushExplicitOriginPreservesBackgroundHistoryPolicy(t *testing.T) {
 						t.Fatal("wrong sync destination", resolved, len(syncer.inputs))
 					}
 					in := syncer.inputs[0]
-					if in.Ref != branch || in.ForegroundOnly != ((remote == "" || remote == "origin") && !wait) {
+					if in.Ref != "" || in.ForegroundOnly != ((remote == "" || remote == "origin") && !wait) {
 						t.Fatalf("push changed target or wait policy: ref=%q foreground=%t", in.Ref, in.ForegroundOnly)
+					}
+					if branch == "" && in.Publication != nil || branch != "" && (in.Publication == nil || in.Publication.HistoryOnly || len(in.Publication.Branches) != 1 || in.Publication.Branches[0].Branch != branch || in.Publication.Branches[0].BranchID != selectedID) {
+						t.Fatalf("wrong explicit publication scope: %+v", in.Publication)
 					}
 					wantWakes := 0
 					if remote == "" || remote == "origin" {

@@ -87,7 +87,7 @@ func TestPublicationSourceNamesMatchBackendAliasEligibility(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			a, o := attached, proof
 			tt.edit(&a, &o)
-			got := publicationSourceNames(p, []domain.HistoryEvent{a, o})
+			got := domain.PublicationSourceNames(p, []domain.HistoryEvent{a, o})
 			if !slices.Contains(got, p.Branch) || slices.Contains(got, p.LocalBranch) != tt.want {
 				t.Fatalf("source names=%v, want alias eligible=%v", got, tt.want)
 			}

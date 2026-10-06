@@ -1101,6 +1101,15 @@ components:
         local_branch: {type: string, description: Native branch name in the observing replica.}
         previous_branch: {type: string, description: Previous name for a verified rename.}
         binding_parent: {type: string, description: Prior identity operation required by this transition.}
+        memory_selection_parent:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: |
+            Accepted empty position replaced by this first-memory position.
+            Both observations must refer to the same repository, branch identity,
+            local branch, worktree, Git code and snapshot. The successor pins a
+            verified root digest owned by that snapshot. This is memory-selection
+            causality, not a branch identity transition; both records are retained.
         pr: { $ref: '#/components/schemas/PullRequestMerge' }
         recovery_evidence: { type: string, enum: [user-confirmed-unborn-head] }
         source_branch_id: { type: string, maxLength: 128 }
@@ -1364,18 +1373,61 @@ components:
           description: "Sorted unique settings hashes/kinds of included snapshots; existing object endpoints still enforce ownership and bytes must pass kind/hash verification. No secrets."
           items: { $ref: '#/components/schemas/BranchPullSettings' }
 
+    RepositoryInitializationRequest:
+      type: object
+      additionalProperties: false
+      required: [remote_url]
+      properties:
+        remote_url: { type: string }
+        git_remote_url: { type: string }
+        default_branch: { type: string, default: main }
+    RepositoryInitializationAnchor:
+      type: object
+      additionalProperties: false
+      required: [ref, snapshot_states]
+      description: "One observed legacy branch, not a Git birth. Ref identity must equal LegacyContextBranchID(repoID,name). No symbolic target. Genuine birth uses ordinary protected history publication instead of this optional exception."
+      properties:
+        ref: { $ref: '#/components/schemas/Ref' }
+        snapshot_states:
+          type: object
+          minProperties: 1
+          maxProperties: 10000
+          description: "Exact complete natural+graft ancestry of the initial target, keyed by snapshot ID with existing SnapshotStateHash values. Missing/extra nodes and changed state fail. Actual owned documents, settings and same-owner memory ancestry are verified before completion."
+          additionalProperties: { $ref: '#/components/schemas/ContentHash' }
+    RepositoryInitializationFinalize:
+      type: object
+      additionalProperties: false
+      required: [creation_id, anchor]
+      properties:
+        creation_id: { type: string, pattern: '^init_[0-9a-f]{32}$' }
+        anchor: { $ref: '#/components/schemas/RepositoryInitializationAnchor' }
+    RepositoryInitializationReceipt:
+      type: object
+      additionalProperties: false
+      required: [version, creation_id, repo]
+      description: "Immutable creation evidence for an actually absent per-code Repo, not its containing UI Repository. The identifier is not a credential. Repo is frozen protected creation metadata (protocol 1), not current state. Optional anchor presence proves atomic legacy-ref acceptance but does not assert that its tip is still current."
+      properties:
+        version: { type: integer, const: 1 }
+        creation_id: { type: string, pattern: '^init_[0-9a-f]{32}$' }
+        repo: { $ref: '#/components/schemas/Repo' }
+        anchor: { $ref: '#/components/schemas/RepositoryInitializationAnchor' }
+
     Repo:
       type: object
       description: "Repo metadata. local_path is always an empty string on the server (local-only field)."
       required: [id, remote_url, default_branch]
       additionalProperties: false
       properties:
+        initial_anchor_available:
+          type: boolean
+          readOnly: true
+          description: "GET Repo with initial_branch only: matching protected creation receipt and branch-local availability in one coherent read. Omitted/false without the query. Prior publication of other branches is allowed. Not authority or a gate for modern member publication. Never persisted from client registration input; FS omits/returns false."
         branch_pull_version:
           type: integer
           enum: [0, 1]
           readOnly: true
           description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Absent/zero means legacy full transfer. One requires repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol. After a one response, errors are failures, never fallback permission."
-        context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Only an explicit upgrade can enable version 1." }
+        context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Version 1 requires explicit legacy upgrade or atomic new-repository initialization; existing repositories are never silently upgraded." }
         id:
           $ref: "#/components/schemas/ContentHash"
         remote_url:
@@ -1415,7 +1467,7 @@ components:
       required: [repo_id, refs, snapshot_index, version, updated_at]
       additionalProperties: false
       properties:
-        context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Only an explicit upgrade can enable version 1." }
+        context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Version 1 requires explicit legacy upgrade or atomic new-repository initialization; existing repositories are never silently upgraded." }
         repo_id:
           $ref: "#/components/schemas/ContentHash"
         refs:
@@ -2501,6 +2553,12 @@ paths:
       - $ref: "#/components/parameters/repoID"
     get:
       operationId: getRepo
+      parameters:
+        - name: initial_branch
+          in: query
+          required: false
+          description: Canonical branch name for legacy observation availability; absent means false. Empty, repeated or invalid names are rejected.
+          schema: { type: string, minLength: 1, maxLength: 1024 }
       summary: Single repo retrieval
       tags: [repos]
       responses:
@@ -2577,6 +2635,88 @@ paths:
                       properties:
                         snapshot: { type: string }
                         missing: { type: string }
+  /repos/{repoID}/initialization:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    get:
+      operationId: getRepositoryInitialization
+      summary: Recover the immutable creation receipt under current manage authorization
+      description: Returns creation only, with anchor omitted. Does not mutate graph state or infer newness from current metadata.
+      responses:
+        '200':
+          description: Immutable creation receipt without branch anchor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepositoryInitializationReceipt' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '501': { description: Transactional initialization unsupported }
+    post:
+      operationId: beginRepositoryInitialization
+      summary: Create an atomically proven new protected per-code repository
+      description: |
+        Current maintainer/manage authorization is checked inside the PG repository
+        transaction against the server-resolved UI Repository. Creation of protocol-1
+        Repo and immutable receipt is atomic. Existing Repo without a receipt conflicts,
+        including empty Repo. Exact retries recover creation only (anchor omitted); changed normalized
+        creation metadata conflicts. Ordinary registration preserves receipts and protocol.
+        FS explicitly returns unsupported; old-server 404/405 never authorizes broad fallback.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RepositoryInitializationRequest' }
+      responses:
+        '200':
+          description: Prepared or previously completed immutable creation receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepositoryInitializationReceipt' }
+        '400': { description: Invalid or unknown initialization fields }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 'repository_initialization_conflict: existing Repo or changed creation request' }
+        '501': { description: 'repository_initialization_unsupported: storage cannot provide transaction and authorization guarantees' }
+  /repos/{repoID}/initialization/finalize:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+    post:
+      operationId: finalizeRepositoryInitialization
+      summary: Atomically accept one optional branch-local legacy observation
+      description: |
+        Requires current maintainer/manage authorization, a matching creation receipt,
+        and actual staged dependencies. Rejects a current ref or prior branch reflog for
+        this name, lifecycle evidence for this name/legacy identity, conflicting identity
+        evidence and changed repository binding/protocol or an originally nonempty Git origin.
+        Mutable defaults and empty-to-filled Git origin are allowed. Independent branch publication and same
+        legacy position/publish observations are allowed. Acceptance is immutable per name. Pending captures and unsync pointers are permitted and retained
+        unchanged. No unrelated refs, lifecycle events, settings or pending reconciliation
+        are executed. Exact completed retries return the receipt even after tip movement;
+        they never overwrite newer state or recheck changed bodies. Protection is already enabled
+        at creation; genuine births use ordinary member history/ref APIs with no Finalize.
+        Heavy validation runs outside the write transaction; frozen evidence and current
+        ownership are rechecked at commit. Unknown fields and bodies over 2 MiB are rejected.
+        Memory ancestry has a 1024-node bound, with explicit failure rather than truncation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RepositoryInitializationFinalize' }
+      responses:
+        '200':
+          description: Immutable creation receipt plus the requested branch anchor, not a current-ref observation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepositoryInitializationReceipt' }
+        '400': { description: Invalid anchor, unsupported modern identity or malformed message }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Missing receipt or owned dependency }
+        '409': { description: Changed payload, selected metadata or competing publication }
+        '422': { description: Invalid, foreign, cyclic or over-bound dependency evidence }
+        '501': { description: Storage cannot provide atomic initialization }
+
   /repos/{repoID}/context-protocol:
     post:
       summary: Enable identity-checked context branch writes
@@ -2708,6 +2848,46 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "409": { description: Shared tip changed or operation ID has different data }
+
+  /repos/{repoID}/history/memory-selection:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: recordMemorySelection
+      summary: Record an evidenced first-memory selection
+      description: |
+        Requires member access and application/json. Uses the same authorized
+        history transaction and immutable replay rules as history recording.
+        memory_selection_parent is required and must name an accepted exact
+        empty position. The server verifies the successor root digest and owner
+        before accepting the new dependency. Neither event moves a branch ref.
+        Older servers lack this route; clients must retain the operation and
+        report the failure instead of falling back to the ordinary history route.
+      tags: [repos]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/HistoryEvent'
+                - type: object
+                  required: [memory_selection_parent]
+      responses:
+        '200':
+          description: Recorded or an identical operation was already recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+        '400': { description: Malformed JSON request }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { description: Required context or predecessor unavailable; older servers do not support this route }
+        '409': { description: Conflicting selection or operation ID has different data }
+        '422': { description: Invalid or cross-repository memory selection }
 
   /repos/{repoID}/reflog:
     parameters:

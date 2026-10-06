@@ -103,6 +103,10 @@ func commitProviders(cwd string) []string {
 // snapshotForCommit snapshots active sessions by provider (common for commits/hooks).
 // Returns: number of successful snapshots.
 func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (int, error) {
+	return snapshotForCommitWithPublication(ctx, c, cwd, message, nil)
+}
+
+func snapshotForCommitWithPublication(ctx context.Context, c *Container, cwd, message string, publish func(string)) (int, error) {
 	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
 		return 0, err
 	}
@@ -183,7 +187,7 @@ func snapshotForCommit(ctx context.Context, c *Container, cwd, message string) (
 		}
 	}
 	if lastErr == nil {
-		lastErr = recordCommitPublication(ctx, c, cwd, pass)
+		lastErr = recordCommitPublicationWithWake(ctx, c, cwd, pass, publish)
 		if lastErr != nil {
 			hookWarn("commit context finalization remains pending: %v", lastErr)
 		}
@@ -1105,10 +1109,10 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 		return nil
 	}
 	repoRoot := state.Root
-	if event == "post-checkout" {
+	if event == "post-checkout" || event == "post-commit" {
 		// This hook's replay and activation must not publish between the source
 		// reads used to prepare/commit its replacement. Start one helper after
-		// every return path, including failed preparation; durable votes/refs
+		// every return path, including failed preparation/capture; durable votes/refs
 		// still need publication. Never wait for branch-replay: it waits for Git.
 		start, pending := publish, false
 		publish = func(string) { pending = true }
@@ -1118,7 +1122,7 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 			}
 		}()
 	}
-	if event == "post-checkout" || event == "pre-push" || event == "post-commit" {
+	if event == "post-checkout" || event == "post-commit" {
 		ref := gitOut(cwd, "symbolic-ref", "--quiet", "HEAD")
 		// Detached capture has no branch birth to resolve. The full journal is
 		// handled separately; it must not consume this commit's capture budget.
@@ -1174,7 +1178,7 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 		if sha != "" {
 			msg = fmt.Sprintf("%s [git %s]", msg, sha)
 		}
-		_, _ = snapshotForCommit(ctx, c, cwd, msg)
+		_, _ = snapshotForCommitWithPublication(ctx, c, cwd, msg, publish)
 
 	case "live-capture":
 		return runLiveCapture(ctx, c, cwd, args)
@@ -1213,8 +1217,8 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 		}
 		release := acquireSyncLock(repoRoot)
 		defer release()
-		if _, err := c.Sync.Push(ctx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true}); err != nil {
-			hookWarn("branch archive sync: %v", err)
+		if err := runBranchHistorySync(ctx, c, cwd); err != nil {
+			hookWarn("branch history sync remains pending: %v", err)
 		}
 
 	case "branch-deletion-finalize":
@@ -1291,46 +1295,7 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 		}
 
 	case "pre-push":
-		defer wakeHistoricalSync(c, cwd)
-		endReplay := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageHookReplay, outbound.SyncDiagnosticCounts{})
-		replayErr := replayRewriteHistory(ctx, c, cwd)
-		endReplay(replayErr)
-		if err := replayErr; err != nil {
-			hookWarn("rewritten context associations remain pending: %v", err)
-			return nil
-		}
-		// git push → cxt push. If origin is not registered, only provides instructions (code push continues).
-		if _, ok := remotecfg.Origin(cwd); !ok && os.Getenv("CXT_REMOTE") == "" {
-			hookWarn("Context not pushed — connect with cxt remote add origin <url>")
-			return nil
-		}
-		pushCtx := outbound.WithSyncDiagnosticAttempt(ctx, 1)
-		out, err := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, ForegroundOnly: true})
-		if errors.Is(err, domain.ErrSyncConflict) {
-			// A non-fast-forward rejection triggers an automatic append retry. Context does not force replicas
-			// to converge (the local lineage is authoritative for this session; pulling is the user's choice), so
-			// every divergent push must succeed without loss. The server leaves natural Parents unchanged and adds
-			// the remote head as a graft overlay at the new segment boundary, preserving and only expanding reachability.
-			pushCtx = outbound.WithSyncDiagnosticAttempt(ctx, 2)
-			out2, aerr := c.Sync.Push(pushCtx, inbound.SyncInput{Cwd: cwd, Append: true, ForegroundOnly: true})
-			if aerr == nil {
-				out, err = out2, nil
-				fmt.Println("cxt: repositioned and appended after the remote head — no history lost")
-			} else {
-				// Expose append failure cause (usually 60s hook timeout — large backlog graft).
-				// Remove misleading "just conflict" diagnosis and guide manual recovery.
-				err = fmt.Errorf("auto append failed (%v) — run 'cxt push --append' manually", aerr)
-			}
-		}
-		if err != nil {
-			syncWarn(cwd, "push", err)
-			return nil
-		}
-		clearAuthHint(cwd)
-		fmt.Printf("cxt: pushed %d snapshot(s), checked %d ref(s) → origin\n", out.Pushed, len(out.NewRefs))
-		if out.BackfillPending > 0 {
-			fmt.Printf("cxt: %d retained historical snapshot(s) remain queued; current publication completed\n", out.BackfillPending)
-		}
+		return runGitPrePush(ctx, c, cwd, args, os.Stdin)
 
 	case "ref-sync":
 		// reference-transaction(committed) branch ref change. stdin: "<old> <new> <ref>" lines.
@@ -1430,6 +1395,8 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 		}
 		if err := replayRewriteHistory(ctx, c, cwd); err != nil {
 			hookWarn("rewritten context associations remain pending: %v", err)
+		} else if added > 0 {
+			publish(cwd)
 		}
 		refSync(ctx, c, cwd)
 		// git pull --rebase (pull.rebase=true team default) goes here instead of post-merge —

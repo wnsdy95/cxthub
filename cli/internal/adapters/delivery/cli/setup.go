@@ -19,6 +19,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
+	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/githooks"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
@@ -108,20 +109,22 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	warn := func(f string, a ...interface{}) { fmt.Printf("  ⚠ "+f+"\n", a...) }
 
 	// 1) .cxt store (git repo required — otherwise, fail here).
-	out, err := c.Init.Init(ctx, inbound.InitInput{Cwd: cwd})
+	var out inbound.InitOutput
+	var err error
+	// Init writes the working HEAD; rerunning setup must not reset a selection.
+	if state := gitctx.InspectContextRoot(ctx, cwd); state.Initialized {
+		repo, rerr := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+		err = rerr
+		out = inbound.InitOutput{RepoID: repo.ID, LocalStorePath: filepath.Join(state.Root, ".cxt")}
+	} else {
+		out, err = c.Init.Init(ctx, inbound.InitInput{Cwd: cwd, PreserveExisting: true})
+	}
 	if err != nil {
 		return fmt.Errorf(".cxt initialization failed: %w", err)
 	}
 	ok(".cxt store (repo %s)", shortHash(out.RepoID))
 	_, _ = githooks.EnsureGitignore(cwd)
 	_ = githooks.EnsureExcluded(cwd)
-
-	// 2) git hooks — wiring for "cxt follows git".
-	if installed, herr := githooks.Install(cwd); herr == nil {
-		ok("git hooks %d (commit·checkout·merge·push·ref-tx·rewrite; stash detected as ref-tx)", len(installed))
-	} else {
-		bad("git hook installation failed: %v", herr)
-	}
 
 	// Verify a new connection only after login, so private repository aliases
 	// cannot create a different URL-derived identity before authentication.
@@ -150,7 +153,7 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 			if matches {
 				ok("remote origin already registered = %s", cur)
 			} else {
-				warn("remote origin is registered with a different URL (%s) — change: cxt remote remove origin then setup", cur)
+				return fmt.Errorf("requested repository differs from configured origin (%s); preserved without attachment — change: cxt remote remove origin then setup", cur)
 			}
 		} else if rerr := runRemote(ctx, c, cwd, []string{"add", "origin", remoteURL}); rerr != nil {
 			// Git origin mismatch is server rejection — invalid folder, so stop setup.
@@ -182,6 +185,20 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 				}
 			}
 		}
+	}
+
+	// Resolve first-connection identity before enabling automatic capture.
+	if status, err := setupFirstTracking(ctx, c, cwd); err != nil {
+		return fmt.Errorf("setup tracking stopped; local captures and queued operations are preserved. Resolve the reported conflict or use explicit cxt pull, then rerun cxt setup: %w", err)
+	} else if status != "" {
+		ok("%s", status)
+	}
+
+	// 2) git hooks — wiring for "cxt follows git".
+	if installed, herr := githooks.Install(cwd); herr == nil {
+		ok("git hooks %d (commit·checkout·merge·push·ref-tx·rewrite; stash detected as ref-tx)", len(installed))
+	} else {
+		bad("git hook installation failed: %v", herr)
 	}
 
 	// 5) Agent hooks — the same lifecycle capture works in Claude Code/Codex

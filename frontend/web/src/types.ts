@@ -387,6 +387,7 @@ export interface HistoryEvent {
   local_branch?: string;
   previous_branch?: string;
   binding_parent?: string;
+  memory_selection_parent?: string;
   name_parent?: string;
   id: string;
   repo_id: string;

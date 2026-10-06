@@ -1132,6 +1132,37 @@ func (s *Service) getManifest(ctx context.Context, repoID domain.ContentHash) (d
 	return s.meta.GetManifest(ctx, repoID)
 }
 func (s *Service) ensureRepo(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error) {
+	repo, err := s.resolveRepoRegistration(ctx, actorID, repo)
+	if err != nil {
+		return domain.Repo{}, err
+	}
+	return s.meta.PutRepo(ctx, repo)
+}
+
+// Resolving identity/authorization does not register or infer a new repository.
+func (s *Service) resolveRepoRegistration(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error) {
+	var err error
+	repo, err = s.resolveRepoRegistrationIdentity(ctx, actorID, repo)
+	if err != nil {
+		return domain.Repo{}, err
+	}
+	// Git origin verification (onboarding safety measure): If another team member has already connected to the same cxthub URL (same RepoID), and the git origin of the code repo is confirmed, the git origin of the newly connecting local folder must also be the same. If different, it is rejected — "A folder not connected to git in that repository" is prevented from being attached to the same cxthub URL (same origin: URL is the destination, origin is the substance).
+	// The first connector confirms the origin (empty → filled), and thereafter, that value holds authority.
+	existing, err := s.meta.GetRepo(ctx, repo.ID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return domain.Repo{}, err
+	}
+	if err == nil && existing.GitRemoteURL != "" {
+		if normalizeGitURL(repo.GitRemoteURL) != normalizeGitURL(existing.GitRemoteURL) {
+			return domain.Repo{}, fmt.Errorf(
+				"%w: The git origin (%s) of this folder is different from the git (%s) connected to this repository — try again in the corresponding code repo",
+				domain.ErrGitOriginMismatch, gitOriginLabel(repo.GitRemoteURL), gitOriginLabel(existing.GitRemoteURL))
+		}
+	}
+	return repo, nil
+}
+
+func (s *Service) resolveRepoRegistrationIdentity(ctx context.Context, actorID string, repo domain.Repo) (domain.Repo, error) {
 	if err := domain.ValidateContentHash(repo.ID); err != nil {
 		return domain.Repo{}, err
 	}
@@ -1168,20 +1199,7 @@ func (s *Service) ensureRepo(ctx context.Context, actorID string, repo domain.Re
 		return domain.Repo{}, domain.ErrForbidden
 	}
 
-	// Git origin verification (onboarding safety measure): If another team member has already connected to the same cxthub URL (same RepoID), and the git origin of the code repo is confirmed, the git origin of the newly connecting local folder must also be the same. If different, it is rejected — "A folder not connected to git in that repository" is prevented from being attached to the same cxthub URL (same origin: URL is the destination, origin is the substance).
-	// The first connector confirms the origin (empty → filled), and thereafter, that value holds authority.
-	existing, err := s.meta.GetRepo(ctx, repo.ID)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return domain.Repo{}, err
-	}
-	if err == nil && existing.GitRemoteURL != "" {
-		if normalizeGitURL(repo.GitRemoteURL) != normalizeGitURL(existing.GitRemoteURL) {
-			return domain.Repo{}, fmt.Errorf(
-				"%w: The git origin (%s) of this folder is different from the git (%s) connected to this repository — try again in the corresponding code repo",
-				domain.ErrGitOriginMismatch, gitOriginLabel(repo.GitRemoteURL), gitOriginLabel(existing.GitRemoteURL))
-		}
-	}
-	return s.meta.PutRepo(ctx, repo)
+	return repo, nil
 }
 
 func (s *Service) repositoryRole(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool) {

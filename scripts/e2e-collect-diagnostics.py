@@ -14,6 +14,7 @@ FILES = (
     "doctor-after.json", "doctor-after.err", "doctor-after.status",
     "wrapper-proof.tsv", "wrapper-proof.err", "wrapper-observation.out",
     "sw.out", "wrapper.out", "holder.out",
+    "initial-init.out", "initial-commit.out", "initial-push.out", "initial-follow-push.out",
 )
 MAX_BYTES = 1024 * 1024
 
