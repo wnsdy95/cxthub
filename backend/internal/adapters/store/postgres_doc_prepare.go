@@ -13,12 +13,11 @@ import (
 // adapter-private: it is neither a stored trust flag nor client-provided input.
 // Heavy canonical scanning and index planning precede repository/row locks.
 type preparedDocPG struct {
-	doc       domain.VerifiedSessionDoc
-	canonical []byte
-	chunks    domain.DocChunkPlan
-	chunked   bool
-	payload   []byte
-	read      preparedReadIndexPG
+	doc     domain.VerifiedSessionDoc
+	chunks  domain.DocChunkPlan
+	chunked bool
+	payload []byte
+	read    preparedReadIndexPG
 }
 
 type preparedReadIndexPG struct {
@@ -32,7 +31,7 @@ func prepareReadIndexPG(ctx context.Context, doc domain.VerifiedSessionDoc) (pre
 	if err := ctx.Err(); err != nil {
 		return preparedReadIndexPG{}, err
 	}
-	plan, err := doc.PlanReadIndex()
+	plan, err := doc.PlanReadIndexContext(ctx)
 	if err != nil {
 		return preparedReadIndexPG{}, err
 	}
@@ -53,18 +52,20 @@ func prepareVerifiedDocPG(ctx context.Context, doc domain.VerifiedSessionDoc) (p
 	if !doc.Valid() {
 		return preparedDocPG{}, domain.ErrIntegrity
 	}
-	out := preparedDocPG{doc: doc, canonical: doc.Bytes()}
-	out.chunks, out.chunked = domain.PlanDocChunks(out.canonical)
+	out := preparedDocPG{doc: doc}
+	out.chunks, out.chunked = doc.ChunkPlan()
 	if err := ctx.Err(); err != nil {
 		return preparedDocPG{}, err
 	}
-	payload := out.canonical
+	var payload []byte
 	if out.chunked {
 		var err error
 		payload, err = json.Marshal(out.chunks.Manifest)
 		if err != nil {
 			return preparedDocPG{}, err
 		}
+	} else {
+		payload = doc.Bytes()
 	}
 	out.payload = docCompress(payload)
 	var err error

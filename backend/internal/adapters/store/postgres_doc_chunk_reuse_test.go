@@ -101,7 +101,7 @@ func TestPGReusedChunkRetainedUntilOwnershipCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(context.Background())
-	if err := retainOrPutDocChunkPG(ctx, tx, hash, body); err != nil {
+	if err := retainDocChunkPG(ctx, tx, hash, body, true); err != nil {
 		t.Fatal(err)
 	}
 	deleting, err := st.pool.Begin(ctx)
@@ -144,7 +144,7 @@ func TestPGConcurrentChunkInsertionValidatesTheWinner(t *testing.T) {
 			defer second.Rollback(context.Background())
 			pid := second.Conn().PgConn().PID()
 			done := make(chan error, 1)
-			go func() { done <- retainOrPutDocChunkPG(ctx, second, hash, body) }()
+			go func() { done <- retainDocChunkPG(ctx, second, hash, body, true) }()
 			// Establish the real insertion conflict before publishing the winner.
 			deadline := time.Now().Add(5 * time.Second)
 			for {

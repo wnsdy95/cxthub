@@ -76,47 +76,11 @@ func (s *Service) GetDocFinalization(ctx context.Context, repo domain.ContentHas
 	return docJobStatus(j), err
 }
 func (s *Service) verifyDocJob(ctx context.Context, j domain.DocFinalizationJob) (domain.VerifiedSessionDoc, error) {
-	var zero domain.VerifiedSessionDoc
-	chunks := make([][]byte, 0, len(j.Manifest.Chunks))
-	total := len(j.Manifest.Envelope)
-	for _, h := range j.Manifest.Chunks {
-		if err := ctx.Err(); err != nil {
-			return zero, err
-		}
-		body, err := s.blobs.GetChunk(ctx, j.RepoID, h)
-		if err != nil {
-			return zero, err
-		}
-		total += len(body)
-		if total > domain.MaxFinalizedDocBytes {
-			return zero, fmt.Errorf("%w: document exceeds finalization limit", domain.ErrValidation)
-		}
-		if domain.HashContent(body) != h {
-			return zero, domain.ErrIntegrity
-		}
-		chunks = append(chunks, body)
-	}
-	if err := ctx.Err(); err != nil {
-		return zero, err
-	}
-	cb, err := domain.AssembleDocChunks(j.Manifest, chunks, j.DocHash)
-	if err != nil {
-		return zero, err
-	}
-	if err := ctx.Err(); err != nil {
-		return zero, err
-	}
-	if len(cb) > domain.MaxFinalizedDocBytes {
-		return zero, fmt.Errorf("%w: assembled document exceeds finalization limit", domain.ErrValidation)
-	}
-	verified, err := s.docVerifier.Verify(ctx, j.DocHash, cb)
-	if err != nil {
-		return zero, err
-	}
-	if err := ctx.Err(); err != nil {
-		return zero, err
-	}
-	return verified, nil
+	return s.docVerifier.VerifyChunks(ctx, j.DocHash, j.Manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
+		// A semantic proof never authorizes another repository's chunk. Read
+		// the current owned bytes even when the verifier has seen their events.
+		return s.blobs.GetChunk(ctx, j.RepoID, hash)
+	})
 }
 func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j domain.DocFinalizationJob) error {
 	work, cancel := context.WithTimeout(ctx, docJobWorkLimit)

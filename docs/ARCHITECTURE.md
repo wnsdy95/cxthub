@@ -64,8 +64,12 @@ branch target under the repository lock; recovery cannot leave HEAD attached to
 a branch it just removed. Legacy unborn HEAD bootstrap remains supported.
 
 Document finalization separates pure preparation from publication. The worker
-renews its durable lease while the PostgreSQL adapter derives chunk boundaries
-and read-index blocks from an immutable verified document. Preparation acquires
+verifies current owned v2 chunks and retains an immutable segmented document;
+publication reuses those chunk boundaries instead of assembling and re-chunking
+the cumulative transcript. Its legacy whole-document identity still requires
+streaming all canonical bytes through the hash. V1 remains a compatibility path.
+The worker renews its durable lease while the PostgreSQL adapter prepares chunk
+references and read-index blocks from that verified document. Preparation acquires
 no database transaction and grants no ownership. A private prepared-publication
 handle then rechecks the current job version, lease and document hash inside the
 repository transaction. Chunk retention/integrity checks, selective search-row
@@ -74,6 +78,11 @@ commit together. The lease is not renewed concurrently with the locked job row.
 An expired or replaced worker cannot publish its prepared result. This reduces
 CPU work under the repository lock; it does not remove database contention or
 make document publication cost-independent of document size.
+
+[Conversation chunks and memory versions](CONVERSATION_MEMORY_STORAGE.md)
+defines why memory recompression publishes a separate version without replacing
+conversation chunks. A manifest-root protocol that removes full-stream hashing
+is a separate compatibility change, not implied by this allocation improvement.
 
 ## CLI native capture and local retry work
 
