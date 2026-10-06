@@ -83,8 +83,13 @@ type reviewTransferFixture struct {
 
 func reviewTransferSetup(t *testing.T, warm bool) reviewTransferFixture {
 	t.Helper()
+	return reviewTransferSetupAt(t, warm, t.TempDir())
+}
+
+func reviewTransferSetupAt(t *testing.T, warm bool, root string) reviewTransferFixture {
+	t.Helper()
 	ctx := context.Background()
-	st := storage.NewFileStore(t.TempDir())
+	st := storage.NewFileStore(root)
 	repo := string(domain.HashContent([]byte("review scoped repo")))
 	docs := []domain.SessionDoc{pullDoc(t, "review target"), pullDoc(t, "review source")}
 	var snaps []domain.Snapshot

@@ -13,7 +13,7 @@ import (
 )
 
 func TestSelectedBranchTransportUsesOnlyPlanInventory(t *testing.T) {
-	for _, mode := range []string{"cold", "local-doc", "warm", "changed-state", "forbidden", "not-found", "invalid-plan"} {
+	for _, mode := range []string{"cold", "local-doc", "staged-doc", "warm", "changed-state", "forbidden", "not-found", "invalid-plan"} {
 		t.Run(mode, func(t *testing.T) {
 			repo := string(domain.HashContent([]byte("selected transport")))
 			snap, doc := makePullClientDoc(t, repo)
@@ -89,6 +89,11 @@ func TestSelectedBranchTransportUsesOnlyPlanInventory(t *testing.T) {
 				states[snap.ID] = state
 			}
 			receiver := stagedPullDocs{}
+			if mode == "staged-doc" {
+				// A cold branch observation has no document inventory yet.
+				// Reuse a verified local body without another download.
+				receiver[doc.Hash] = doc
+			}
 			got, snaps, err := client.PullSelectedBranchTo(context.Background(), repo, domain.BranchPullRequest{Version: 1, Branch: "feature"}, states, haves, receiver)
 			if mode == "forbidden" || mode == "not-found" || mode == "invalid-plan" || mode == "changed-state" {
 				if err == nil || got.Version != 0 || len(snaps) != 0 || len(receiver) != 0 {
