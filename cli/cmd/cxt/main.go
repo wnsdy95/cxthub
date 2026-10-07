@@ -287,6 +287,7 @@ func buildReadContainer(cfg config) container {
 // The read-only composition above uses the same passive repository adapters.
 func buildContainer(cfg config) container {
 	store, remote, gitCtx := buildRepositoryAdapters(cfg)
+	remote.SetMetadataCheckpointStore(store)
 	// Masking policy loader injection (capture ← remotecfg circular prevention — DI here only).
 	capture.LoadScrubOptions = func(repoRoot string) capture.ScrubOptions {
 		return capture.ScrubOptions{

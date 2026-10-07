@@ -81,6 +81,51 @@ protocol must be explicitly negotiated; an old server must never interpret a
 manifest-root hash as a legacy whole-document hash. Persisted verification also
 needs a defined corruption/invalidation policy and repository ownership checks.
 
+## Metadata acquisition and verified observations
+
+CLI sync keeps two separate checkpoints:
+
+- A **metadata checkpoint** contains snapshot records received from a specific
+  repository and credential-free API endpoint. Every acquisition first reads an
+  authorized manifest or selected-branch plan. A cache-only response also makes
+  an empty pull request: manifest access alone does not grant pull permission.
+  Only records with the exact
+  current snapshot-state token can be reused; other records are fetched in
+  batches of at most 256. Each complete, validated batch becomes an immutable
+  metadata page. A small checksummed head lists page hashes in append order and
+  advances by compare-and-swap, so a later failure can resume acquisition without
+  rewriting all previous metadata. A legacy server without state tokens gets
+  fresh reads.
+- A **remote observation** is published by the application only after its
+  document, attachment and history preflight succeeds. Metadata checkpoints
+  cannot supply verified negotiation haves, change the working position, adopt
+  snapshot pointers, or move refs. A cache hit still returns every requested
+  snapshot to the application's existing validation path.
+
+The checkpoint is a hint cache, not a complete repository view. A complete
+manifest retires absent IDs with metadata tombstones, including when the catalog
+becomes empty. A selected-branch plan must not evict another branch's records.
+Only IDs selected by the fresh server response are returned. Losing an optional
+cache insertion race leaves the winning head intact and can finish acquisition
+without persisting more metadata. Retirement conflicts, stored corruption,
+cancellation, denied access and inconsistent responses remain errors. Read-only
+CLI composition does not create this cache.
+
+Reading a checkpoint verifies every referenced page and applies later metadata
+for repeated IDs. Compaction replaces a long page list with pages of the latest
+records, preserving the CAS boundary. Its threshold grows with the compacted
+page count so a large initial catalog does not compact after every new batch.
+Unreferenced metadata pages are retained; this cache does not perform archive
+garbage collection or establish a server-side Merkle synchronization protocol.
+
+This avoids repeated metadata downloads, including after interrupted content
+verification. It does not remove the server's full-manifest scan, local metadata
+cache reads, cold document verification or legacy canonical hashing. A durable
+server change feed and Merkle reconciliation require a separate contract with
+committed cursors, scope, repository epochs, tombstones and coherent pagination.
+The existing graph/pending revision counters intentionally exclude staged
+objects and therefore cannot serve as a complete catalog cursor.
+
 ## Required validation
 
 1. Appending conversation changes only the new/tail chunks; old archives remain

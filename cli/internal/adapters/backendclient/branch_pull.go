@@ -28,7 +28,7 @@ func (c *BackendClient) PullSelectedBranchTo(ctx context.Context, repo string, r
 		}
 		return domain.Manifest{RepoID: repo, ContextProtocol: plan.ContextProtocol, Refs: plan.Refs, SnapshotIndex: plan.SnapshotIndex, SnapshotStates: plan.SnapshotStates}, nil
 	}
-	snaps, _, _, err := c.pullCatalog(ctx, repo, states, haves, receiver, request.Branch, catalog)
+	snaps, _, _, err := c.pullCatalog(ctx, repo, states, haves, receiver, request.Branch, catalog, false)
 	if err != nil {
 		return domain.BranchPullPlan{}, nil, err
 	}

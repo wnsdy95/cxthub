@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
@@ -52,59 +52,67 @@ func TestScopedBranchFetchMaterializesOnlyDeclaredServerGraph(t *testing.T) {
 			ref := domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "feature", Target: snap.ID}
 			stale := domain.Snapshot{RepoID: repo, ID: domain.HashContent([]byte("old candidate")), DocHash: domain.HashContent([]byte("old candidate")), GraftParents: []domain.ContentHash{snap.ID}}
 			plan := domain.BranchPullPlan{Version: 1, RepoID: repo, Branch: "feature", SelectedRef: ref, Refs: []domain.Ref{ref}, SnapshotIndex: []domain.ContentHash{snap.ID}, SnapshotStates: map[domain.ContentHash]domain.ContentHash{snap.ID: state}, AbsentRoots: []domain.ContentHash{stale.ID}}
-			capReads, planReads, metadata, bodies, memoryReads := 0, 0, 0, 0, 0
+			var capReads, planReads, metadata, bodies, memoryReads, authorizations atomic.Int32
+			base := "/repos/" + repo
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
-				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+repo):
-					capReads++
+				case r.Method == http.MethodGet && r.URL.Path == base:
+					capReads.Add(1)
 					_ = json.NewEncoder(w).Encode(map[string]any{"id": repo, "default_branch": "main", "branch_pull_version": 1})
-				case strings.HasSuffix(r.URL.Path, "/pull/branch-plan"):
-					planReads++
+				case r.Method == http.MethodPost && r.URL.Path == base+"/pull/branch-plan":
+					planReads.Add(1)
 					var request domain.BranchPullRequest
-					if json.NewDecoder(r.Body).Decode(&request) != nil || !reflect.DeepEqual(request.ObservationRoots, []domain.ContentHash{stale.ID}) {
-						t.Error("candidate roots not forwarded")
+					if json.NewDecoder(r.Body).Decode(&request) != nil || request.Version != domain.BranchPullVersion || request.Branch != "feature" || !reflect.DeepEqual(request.ObservationRoots, []domain.ContentHash{stale.ID}) {
+						t.Errorf("unexpected selected branch request: %+v", request)
+						w.WriteHeader(http.StatusBadRequest)
+						return
 					}
 					if mode == "denied" {
 						w.WriteHeader(403)
 						return
 					}
 					_ = json.NewEncoder(w).Encode(plan)
-				case strings.HasSuffix(r.URL.Path, "/pull/objects"):
+				case r.URL.Path == base+"/pull/objects":
 					var request struct {
-						Snapshots []domain.ContentHash `json:"snapshot_wants"`
-						Docs      []domain.ContentHash `json:"doc_manifest_wants"`
+						Snapshots    []domain.ContentHash `json:"snapshot_wants"`
+						Docs         []domain.ContentHash `json:"doc_manifest_wants"`
+						DocWants     []domain.ContentHash `json:"doc_wants"`
+						Chunks       []domain.ContentHash `json:"chunk_wants"`
+						ChunkFormats []string             `json:"chunk_formats_supported"`
+						CIRVersions  []string             `json:"cir_versions_supported"`
 					}
-					if json.NewDecoder(r.Body).Decode(&request) != nil {
+					decoder := json.NewDecoder(r.Body)
+					decoder.DisallowUnknownFields()
+					if r.Method != http.MethodPost || decoder.Decode(&request) != nil || !reflect.DeepEqual(request.CIRVersions, domain.SupportedCIRVersions()) {
 						t.Error("bad wants")
 						w.WriteHeader(400)
 						return
 					}
-					if len(request.Snapshots) > 0 {
-						metadata++
-						if !reflect.DeepEqual(request.Snapshots, []domain.ContentHash{snap.ID}) {
-							t.Errorf("unexpected snapshots %v", request.Snapshots)
-						}
+					switch {
+					case len(request.Snapshots)+len(request.Docs)+len(request.DocWants)+len(request.Chunks)+len(request.ChunkFormats) == 0:
+						// Permission probes carry no transfer wants and return no objects.
+						authorizations.Add(1)
+						_ = json.NewEncoder(w).Encode(map[string]any{})
+					case reflect.DeepEqual(request.Snapshots, []domain.ContentHash{snap.ID}) && len(request.Docs)+len(request.DocWants)+len(request.Chunks)+len(request.ChunkFormats) == 0:
+						metadata.Add(1)
 						_ = json.NewEncoder(w).Encode(map[string]any{"snapshots": []domain.Snapshot{snap}})
-					} else {
-						bodies++
-						if !reflect.DeepEqual(request.Docs, []domain.ContentHash{doc.Hash}) {
-							t.Errorf("unexpected bodies %v", request.Docs)
-						}
+					case reflect.DeepEqual(request.Docs, []domain.ContentHash{doc.Hash}) && len(request.Snapshots)+len(request.DocWants)+len(request.Chunks) == 0:
+						bodies.Add(1)
 						_ = json.NewEncoder(w).Encode(map[string]any{"docs": []domain.SessionDoc{doc}})
+					default:
+						t.Errorf("unexpected object request: %+v", request)
+						w.WriteHeader(http.StatusBadRequest)
 					}
-				case strings.Contains(r.URL.Path, "/memory-objects/"):
-					memoryReads++
-					if strings.HasSuffix(r.URL.Path, string(ah)) {
+				case r.Method == http.MethodGet && (r.URL.Path == base+"/memory-objects/"+string(ah) || r.URL.Path == base+"/memory-objects/"+string(th)):
+					memoryReads.Add(1)
+					if r.URL.Path == base+"/memory-objects/"+string(ah) {
 						if mode == "missing-memory" {
 							w.WriteHeader(404)
 							return
 						}
 						_ = json.NewEncoder(w).Encode(ancestor)
-					} else if strings.HasSuffix(r.URL.Path, string(th)) {
-						_ = json.NewEncoder(w).Encode(tip)
 					} else {
-						t.Errorf("unexpected memory %s", r.URL.Path)
-						w.WriteHeader(404)
+						_ = json.NewEncoder(w).Encode(tip)
 					}
 				default:
 					t.Errorf("unscoped or mutable query %s", r.URL.Path)
@@ -192,17 +200,21 @@ func TestScopedBranchFetchMaterializesOnlyDeclaredServerGraph(t *testing.T) {
 					t.Fatalf("local graft changed: %+v %v", local, err)
 				}
 			}
-			if capReads != 1 || planReads != 1 {
-				t.Fatalf("capability/plan reads %d/%d", capReads, planReads)
+			if capReads.Load() != 1 || planReads.Load() != 1 {
+				t.Fatalf("capability/plan reads %d/%d", capReads.Load(), planReads.Load())
 			}
-			if mode == "warm" && (metadata != 0 || bodies != 0 || memoryReads != 0) {
-				t.Fatalf("warm I/O metadata/body/memory=%d/%d/%d", metadata, bodies, memoryReads)
-			}
-			if mode == "warm-missing-ancestor" && (metadata != 0 || bodies != 0 || memoryReads != 1) {
-				t.Fatalf("warm repair I/O %d/%d/%d", metadata, bodies, memoryReads)
-			}
-			if mode == "denied" && (metadata != 0 || bodies != 0 || memoryReads != 0) {
-				t.Fatal("denied plan transferred objects")
+			want := map[string][4]int32{
+				"cold":                         {0, 1, 1, 2},
+				"warm":                         {1, 0, 0, 0},
+				"warm-missing-ancestor":        {1, 0, 0, 1},
+				"local-only-graft":             {0, 1, 0, 0},
+				"omitted-parent-already-local": {0, 1, 1, 0},
+				"missing-memory":               {0, 1, 1, 2},
+				"denied":                       {0, 0, 0, 0},
+			}[mode]
+			got := [4]int32{authorizations.Load(), metadata.Load(), bodies.Load(), memoryReads.Load()}
+			if got != want {
+				t.Fatalf("authorization/metadata/body/memory requests=%v, want %v", got, want)
 			}
 		})
 	}

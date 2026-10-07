@@ -70,6 +70,10 @@ func TestSelectedBranchTransportUsesOnlyPlanInventory(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(pullResp{Snapshots: []domain.Snapshot{returned}})
 					return
 				}
+				if mode == "warm" && len(req.SnapshotWants)+len(req.DocWants)+len(req.DocManifestWants)+len(req.ChunkWants) == 0 {
+					_ = json.NewEncoder(w).Encode(pullResp{})
+					return
+				}
 				if !reflect.DeepEqual(req.DocManifestWants, []domain.ContentHash{doc.Hash}) {
 					t.Errorf("out-of-plan bodies: %+v", req)
 					w.WriteHeader(400)
