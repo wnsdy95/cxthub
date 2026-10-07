@@ -81,6 +81,38 @@ protocol must be explicitly negotiated; an old server must never interpret a
 manifest-root hash as a legacy whole-document hash. Persisted verification also
 needs a defined corruption/invalidation policy and repository ownership checks.
 
+## Metadata acquisition and verified observations
+
+CLI sync keeps two separate checkpoints:
+
+- A **metadata checkpoint** contains snapshot records received from a specific
+  repository and credential-free API endpoint. Every acquisition first reads an
+  authorized manifest or selected-branch plan. Only records with the exact
+  current snapshot-state token can be reused; other records are fetched in
+  batches of at most 256. Each complete, validated batch is saved atomically
+  with checksum and compare-and-swap protection, so a later failure can resume
+  metadata acquisition. A legacy server without state tokens gets fresh reads.
+- A **remote observation** is published by the application only after its
+  document, attachment and history preflight succeeds. Metadata checkpoints
+  cannot supply verified negotiation haves, change the working position, adopt
+  snapshot pointers, or move refs. A cache hit still returns every requested
+  snapshot to the application's existing validation path.
+
+The checkpoint is a hint cache, not a complete repository view. Historical
+records may remain cached after removal from the current manifest, and a scoped
+fetch must not evict another branch's records. Only IDs selected by the fresh
+server response are returned. Stored corruption, cancellation, denied access,
+inconsistent responses and stale checkpoint writers fail without publishing a
+verified observation. Read-only CLI composition does not create this cache.
+
+This avoids repeated metadata downloads, including after interrupted content
+verification. It does not remove the server's full-manifest scan, local metadata
+cache reads, cold document verification or legacy canonical hashing. A durable
+server change feed and Merkle reconciliation require a separate contract with
+committed cursors, scope, repository epochs, tombstones and coherent pagination.
+The existing graph/pending revision counters intentionally exclude staged
+objects and therefore cannot serve as a complete catalog cursor.
+
 ## Required validation
 
 1. Appending conversation changes only the new/tail chunks; old archives remain

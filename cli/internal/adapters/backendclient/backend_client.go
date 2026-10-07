@@ -31,6 +31,7 @@ type BackendClient struct {
 	// chunks accesses local chunk store (optional — for pull delta, inject with SetChunkLocal).
 	chunks      ChunkLocal
 	memoryReuse memoryReuseCache
+	metadata    outbound.MetadataCheckpointStore
 }
 
 // NewBackendClient creates a BackendClient.
@@ -143,6 +144,12 @@ type ChunkLocal interface {
 
 // SetChunkLocal injects local chunk access (composition root — DI).
 func (c *BackendClient) SetChunkLocal(cl ChunkLocal) { c.chunks = cl }
+
+// SetMetadataCheckpointStore enables resumable metadata acquisition. These
+// records never replace the application's verified remote observation.
+func (c *BackendClient) SetMetadataCheckpointStore(store outbound.MetadataCheckpointStore) {
+	c.metadata = store
+}
 
 // do sends JSON request and decodes response to out (error on non-2xx).
 func (c *BackendClient) do(ctx context.Context, method, path string, body, out any) error {
@@ -1221,6 +1228,7 @@ func (c *BackendClient) pull(ctx context.Context, repoID string, snapshotStates 
 // pullCatalog keeps inventory verification and body/chunk negotiation identical
 // for a complete manifest and a selected-branch dependency plan.
 func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshotStates map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash, receiver outbound.PullDocumentReceiver, branch string, catalog func(context.Context, string) (domain.Manifest, error)) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
+	remote := c.SyncRemoteIdentity()
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return nil, nil, nil, err
 	}
@@ -1247,7 +1255,6 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 		return nil, nil, nil, domain.ErrHashMismatch
 	}
 	legacyStates := man.SnapshotStates == nil
-	wantedSnapshots := make(map[domain.ContentHash]bool, len(man.SnapshotIndex))
 	var snapshotWants []domain.ContentHash
 	docWantSet := make(map[domain.ContentHash]bool, len(man.SnapshotIndex))
 	var docWants []domain.ContentHash
@@ -1260,7 +1267,6 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 			docWants = append(docWants, id)
 		}
 		if legacyStates || snapshotStates[id] != man.SnapshotStates[id] || !haveDoc[id] {
-			wantedSnapshots[id] = true
 			snapshotWants = append(snapshotWants, id)
 		}
 	}
@@ -1282,30 +1288,9 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 	if len(man.SnapshotIndex) == 0 {
 		return nil, nil, man.Refs, nil
 	}
-	var snapResp pullResp
-	if len(snapshotWants) > 0 {
-		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/pull/objects", pullReq{SnapshotWants: snapshotWants, CIRVersionsSupported: domain.SupportedCIRVersions()}, &snapResp); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-	seenSnapshots := make(map[domain.ContentHash]bool, len(snapResp.Snapshots))
-	for _, s := range snapResp.Snapshots {
-		if err := validateSnapshotObject(s); err != nil {
-			return nil, nil, nil, err
-		}
-		if s.RepoID != repoID || !wantedSnapshots[s.ID] || seenSnapshots[s.ID] {
-			return nil, nil, nil, domain.ErrHashMismatch
-		}
-		seenSnapshots[s.ID] = true
-		if man.SnapshotStates != nil {
-			state, serr := domain.SnapshotStateHash(s)
-			if serr != nil || state != man.SnapshotStates[s.ID] {
-				return nil, nil, nil, domain.ErrHashMismatch
-			}
-		}
-	}
-	if len(seenSnapshots) != len(wantedSnapshots) {
-		return nil, nil, nil, domain.ErrHashMismatch
+	snapshots, err := c.readSnapshotMetadata(ctx, man, snapshotWants, remote)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	if receiver != nil {
 		for _, id := range docWants {
@@ -1332,13 +1317,13 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 				return nil, nil, nil, err
 			}
 		}
-		return snapResp.Snapshots, nil, man.Refs, ctx.Err()
+		return snapshots, nil, man.Refs, ctx.Err()
 	}
 	pulledDocs, err := c.pullDocs(ctx, repoID, docWants, docWantSet)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return snapResp.Snapshots, pulledDocs, man.Refs, nil
+	return snapshots, pulledDocs, man.Refs, nil
 }
 
 // pullDocs receives missing doc bodies — for chunked server, only manifest+missing chunks (delta), for old server, entire body (original path). Recalculates integrity hashes for all paths.
