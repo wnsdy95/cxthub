@@ -2,7 +2,10 @@ package backendclient
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
@@ -12,20 +15,17 @@ import (
 // authorized manifest or branch plan. A checkpoint can avoid downloading a
 // record, but the record is still returned to the caller for content validation.
 // In particular it is never added to verified snapshot/doc negotiation haves.
-func (c *BackendClient) readSnapshotMetadata(ctx context.Context, man domain.Manifest, wants []domain.ContentHash, remote string) ([]domain.Snapshot, error) {
+func (c *BackendClient) readSnapshotMetadata(ctx context.Context, man domain.Manifest, wants []domain.ContentHash, remote string, complete bool) ([]domain.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if c.SyncRemoteIdentity() != remote {
 		return nil, domain.ErrSyncConflict
 	}
-	if len(wants) == 0 {
-		return nil, nil
-	}
 	// Legacy manifests have no exact metadata tokens. Retain their full reads,
 	// even if another invocation has a modern checkpoint for this endpoint.
 	cache := c.metadata
-	if man.SnapshotStates == nil || remote == "" {
+	if remote == "" {
 		cache = nil
 	}
 	checkpoint := outbound.MetadataCheckpoint{Version: 1, RepoID: man.RepoID, Remote: remote}
@@ -33,7 +33,7 @@ func (c *BackendClient) readSnapshotMetadata(ctx context.Context, man domain.Man
 		var err error
 		checkpoint, err = cache.ReadMetadataCheckpoint(ctx, man.RepoID, remote)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read metadata checkpoint: %w", err)
 		}
 		if checkpoint.Version != 1 || checkpoint.RepoID != man.RepoID || checkpoint.Remote != remote {
 			return nil, domain.ErrHashMismatch
@@ -48,6 +48,48 @@ func (c *BackendClient) readSnapshotMetadata(ctx context.Context, man domain.Man
 			return nil, domain.ErrHashMismatch
 		}
 		known[snap.ID] = snap
+	}
+	var removed []domain.ContentHash
+	if complete {
+		present := setOf(man.SnapshotIndex)
+		for id := range known {
+			if !present[id] {
+				removed = append(removed, id)
+			}
+		}
+		sort.Slice(removed, func(i, j int) bool { return removed[i] < removed[j] })
+	}
+	const batchSize = 256
+	save := func(snapshots []domain.Snapshot, deleted []domain.ContentHash) error {
+		if cache == nil {
+			return nil
+		}
+		if c.SyncRemoteIdentity() != remote {
+			return domain.ErrSyncConflict
+		}
+		revision, err := cache.AppendMetadataCheckpoint(ctx, checkpoint.Revision, man.RepoID, remote, snapshots, deleted)
+		if errors.Is(err, domain.ErrSyncConflict) && len(deleted) == 0 {
+			// Losing an optional cache update must not abort valid acquisition.
+			// Leave the winning head intact and finish using this response only.
+			cache = nil
+			return nil
+		}
+		checkpoint.Revision = revision
+		if err != nil {
+			return fmt.Errorf("write metadata checkpoint: %w", err)
+		}
+		return nil
+	}
+	prune := func() error {
+		// A complete catalog's observed deletion must be durable before success:
+		// the same ID can later be reinserted with different immutable metadata.
+		for start := 0; start < len(removed); start += batchSize {
+			if err := save(nil, removed[start:min(start+batchSize, len(removed))]); err != nil {
+				return err
+			}
+		}
+		removed = nil
+		return nil
 	}
 	selected := make(map[domain.ContentHash]domain.Snapshot, len(wants))
 	seen := make(map[domain.ContentHash]bool, len(wants))
@@ -69,7 +111,20 @@ func (c *BackendClient) readSnapshotMetadata(ctx context.Context, man domain.Man
 		}
 		missing = append(missing, id)
 	}
-	const batchSize = 256
+	if len(missing) == 0 {
+		// GET /manifest admits viewers, whereas POST /pull/objects requires
+		// pull permission. Cached metadata must not bypass that stronger gate.
+		var permission pullResp
+		if err := c.do(ctx, http.MethodPost, c.reposPath(man.RepoID)+"/pull/objects", pullReq{CIRVersionsSupported: domain.SupportedCIRVersions()}, &permission); err != nil {
+			return nil, err
+		}
+		if len(permission.Snapshots)+len(permission.Docs)+len(permission.DocManifests)+len(permission.ChunkObjects) != 0 {
+			return nil, domain.ErrHashMismatch
+		}
+		if err := prune(); err != nil {
+			return nil, err
+		}
+	}
 	for start := 0; start < len(missing); start += batchSize {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -103,19 +158,16 @@ func (c *BackendClient) readSnapshotMetadata(ctx context.Context, man domain.Man
 					return nil, domain.ErrHashMismatch
 				}
 			}
-			selected[snap.ID], known[snap.ID] = snap, snap
+			selected[snap.ID] = snap
 		}
 		if len(wanted) != 0 {
 			return nil, domain.ErrHashMismatch
 		}
-		if cache != nil {
-			checkpoint.Snapshots = make([]domain.Snapshot, 0, len(known))
-			for _, snap := range known {
-				checkpoint.Snapshots = append(checkpoint.Snapshots, snap)
-			}
-			var err error
-			checkpoint, err = cache.CompareAndSwapMetadataCheckpoint(ctx, checkpoint.Revision, checkpoint)
-			if err != nil {
+		if err := prune(); err != nil {
+			return nil, err
+		}
+		if man.SnapshotStates != nil {
+			if err := save(response.Snapshots, nil); err != nil {
 				return nil, err
 			}
 		}

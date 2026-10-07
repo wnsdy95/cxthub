@@ -87,23 +87,36 @@ CLI sync keeps two separate checkpoints:
 
 - A **metadata checkpoint** contains snapshot records received from a specific
   repository and credential-free API endpoint. Every acquisition first reads an
-  authorized manifest or selected-branch plan. Only records with the exact
+  authorized manifest or selected-branch plan. A cache-only response also makes
+  an empty pull request: manifest access alone does not grant pull permission.
+  Only records with the exact
   current snapshot-state token can be reused; other records are fetched in
-  batches of at most 256. Each complete, validated batch is saved atomically
-  with checksum and compare-and-swap protection, so a later failure can resume
-  metadata acquisition. A legacy server without state tokens gets fresh reads.
+  batches of at most 256. Each complete, validated batch becomes an immutable
+  metadata page. A small checksummed head lists page hashes in append order and
+  advances by compare-and-swap, so a later failure can resume acquisition without
+  rewriting all previous metadata. A legacy server without state tokens gets
+  fresh reads.
 - A **remote observation** is published by the application only after its
   document, attachment and history preflight succeeds. Metadata checkpoints
   cannot supply verified negotiation haves, change the working position, adopt
   snapshot pointers, or move refs. A cache hit still returns every requested
   snapshot to the application's existing validation path.
 
-The checkpoint is a hint cache, not a complete repository view. Historical
-records may remain cached after removal from the current manifest, and a scoped
-fetch must not evict another branch's records. Only IDs selected by the fresh
-server response are returned. Stored corruption, cancellation, denied access,
-inconsistent responses and stale checkpoint writers fail without publishing a
-verified observation. Read-only CLI composition does not create this cache.
+The checkpoint is a hint cache, not a complete repository view. A complete
+manifest retires absent IDs with metadata tombstones, including when the catalog
+becomes empty. A selected-branch plan must not evict another branch's records.
+Only IDs selected by the fresh server response are returned. Losing an optional
+cache insertion race leaves the winning head intact and can finish acquisition
+without persisting more metadata. Retirement conflicts, stored corruption,
+cancellation, denied access and inconsistent responses remain errors. Read-only
+CLI composition does not create this cache.
+
+Reading a checkpoint verifies every referenced page and applies later metadata
+for repeated IDs. Compaction replaces a long page list with pages of the latest
+records, preserving the CAS boundary. Its threshold grows with the compacted
+page count so a large initial catalog does not compact after every new batch.
+Unreferenced metadata pages are retained; this cache does not perform archive
+garbage collection or establish a server-side Merkle synchronization protocol.
 
 This avoids repeated metadata downloads, including after interrupted content
 verification. It does not remove the server's full-manifest scan, local metadata

@@ -24,5 +24,5 @@ func (c *BackendClient) ReadSnapshotCatalog(ctx context.Context, repo string) ([
 	if man.SnapshotStates == nil && len(man.SnapshotIndex) != 0 {
 		return nil, domain.ErrHashMismatch
 	}
-	return c.readSnapshotMetadata(ctx, man, man.SnapshotIndex, remote)
+	return c.readSnapshotMetadata(ctx, man, man.SnapshotIndex, remote, true)
 }

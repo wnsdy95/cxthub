@@ -6,7 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"reflect"
 	"sync/atomic"
 	"testing"
 
@@ -41,9 +41,10 @@ func TestResolveRemoteBranchHTTPNegotiatesOnce(t *testing.T) {
 				}
 			}
 			manifest := domain.Manifest{RepoID: repo, SnapshotIndex: []domain.ContentHash{snap.ID}, SnapshotStates: map[domain.ContentHash]domain.ContentHash{snap.ID: state}, Refs: []domain.Ref{ref}}
-			var catalogs, objects, histories atomic.Int32
+			var catalogs, objects, histories, metadata, bodies, authorizations atomic.Int32
+			base := "/repos/" + repo
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasSuffix(r.URL.Path, "/manifest") {
+				if r.Method == http.MethodGet && r.URL.Path == base+"/manifest" {
 					catalogs.Add(1)
 					if name == "denied" {
 						w.WriteHeader(http.StatusForbidden)
@@ -52,26 +53,38 @@ func TestResolveRemoteBranchHTTPNegotiatesOnce(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(manifest)
 					return
 				}
-				if strings.HasSuffix(r.URL.Path, "/history") {
+				if r.Method == http.MethodGet && r.URL.Path == base+"/history" {
 					histories.Add(1)
 					_ = json.NewEncoder(w).Encode([]domain.HistoryEvent{})
 					return
 				}
-				if strings.HasSuffix(r.URL.Path, "/pull/objects") {
+				if r.URL.Path == base+"/pull/objects" {
 					objects.Add(1)
 					var req struct {
-						Snapshots []domain.ContentHash `json:"snapshot_wants"`
-						Docs      []domain.ContentHash `json:"doc_manifest_wants"`
+						Snapshots    []domain.ContentHash `json:"snapshot_wants"`
+						Docs         []domain.ContentHash `json:"doc_manifest_wants"`
+						DocWants     []domain.ContentHash `json:"doc_wants"`
+						Chunks       []domain.ContentHash `json:"chunk_wants"`
+						ChunkFormats []string             `json:"chunk_formats_supported"`
+						CIRVersions  []string             `json:"cir_versions_supported"`
 					}
-					if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&req) != nil {
+					decoder := json.NewDecoder(r.Body)
+					decoder.DisallowUnknownFields()
+					if r.Method != http.MethodPost || decoder.Decode(&req) != nil || !reflect.DeepEqual(req.CIRVersions, domain.SupportedCIRVersions()) {
 						t.Error("invalid object request")
 						w.WriteHeader(http.StatusBadRequest)
 						return
 					}
 					switch {
-					case len(req.Snapshots) == 1 && req.Snapshots[0] == snap.ID:
+					case len(req.Snapshots)+len(req.Docs)+len(req.DocWants)+len(req.Chunks)+len(req.ChunkFormats) == 0:
+						// The warm request authorizes reuse without transferring objects.
+						authorizations.Add(1)
+						_ = json.NewEncoder(w).Encode(map[string]any{})
+					case reflect.DeepEqual(req.Snapshots, []domain.ContentHash{snap.ID}) && len(req.Docs)+len(req.DocWants)+len(req.Chunks)+len(req.ChunkFormats) == 0:
+						metadata.Add(1)
 						_ = json.NewEncoder(w).Encode(map[string]any{"snapshots": []domain.Snapshot{snap}})
-					case len(req.Docs) == 1 && req.Docs[0] == doc.Hash:
+					case reflect.DeepEqual(req.Docs, []domain.ContentHash{doc.Hash}) && len(req.Snapshots)+len(req.DocWants)+len(req.Chunks) == 0:
+						bodies.Add(1)
 						_ = json.NewEncoder(w).Encode(map[string]any{"docs": []domain.SessionDoc{doc}})
 					default:
 						t.Errorf("unexpected object request: %+v", req)
@@ -79,7 +92,7 @@ func TestResolveRemoteBranchHTTPNegotiatesOnce(t *testing.T) {
 					}
 					return
 				}
-				if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/"+repo) {
+				if r.Method != http.MethodGet || r.URL.Path != base {
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 					w.WriteHeader(http.StatusNotFound)
 					return
@@ -124,13 +137,16 @@ func TestResolveRemoteBranchHTTPNegotiatesOnce(t *testing.T) {
 				if len(observation.Snapshots) != 1 || observation.Snapshots[0].ID != snap.ID {
 					t.Fatalf("verified graph missing locally known snapshot: %+v", observation.Snapshots)
 				}
-				wantObjects := int32(2)
-				if name == "local-only" {
-					wantObjects = 1
+				want := map[string][3]int32{
+					"cold":       {0, 1, 1},
+					"local-only": {0, 1, 0},
+					"warm":       {1, 0, 0},
+				}[name]
+				gotRequests := [3]int32{authorizations.Load(), metadata.Load(), bodies.Load()}
+				if gotRequests != want {
+					t.Fatalf("authorization/metadata/body requests=%v, want %v", gotRequests, want)
 				}
-				if name == "warm" {
-					wantObjects = 0
-				}
+				wantObjects := want[0] + want[1] + want[2]
 				if objects.Load() != wantObjects || histories.Load() != 1 {
 					t.Fatalf("object/history requests: %d/%d, want %d/1", objects.Load(), histories.Load(), wantObjects)
 				}

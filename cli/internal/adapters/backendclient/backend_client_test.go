@@ -174,7 +174,12 @@ func TestPullSkipsUnchangedSnapshotMetadata(t *testing.T) {
 			})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pull/objects"):
 			objectCalls++
-			http.Error(w, "unchanged pull requested objects", http.StatusInternalServerError)
+			var req pullReq
+			if json.NewDecoder(r.Body).Decode(&req) != nil || len(req.SnapshotWants)+len(req.DocWants)+len(req.DocManifestWants)+len(req.ChunkWants) != 0 {
+				http.Error(w, "unchanged pull requested objects", http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(pullResp{})
 		default:
 			http.NotFound(w, r)
 		}
@@ -186,7 +191,7 @@ func TestPullSkipsUnchangedSnapshotMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if objectCalls != 0 || len(snaps) != 0 || len(docs) != 0 || len(refs) != 1 || refs[0].Target != ref.Target {
+	if objectCalls != 1 || len(snaps) != 0 || len(docs) != 0 || len(refs) != 1 || refs[0].Target != ref.Target {
 		t.Fatalf("calls=%d snapshots=%d docs=%d refs=%+v", objectCalls, len(snaps), len(docs), refs)
 	}
 }

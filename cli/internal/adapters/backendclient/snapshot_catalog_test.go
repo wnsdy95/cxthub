@@ -60,7 +60,7 @@ func TestIncomingSnapshotCatalogWire(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 						t.Fatal(err)
 					}
-					if len(in.SnapshotWants) == 0 || len(in.SnapshotWants) > 256 || len(in.DocWants)+len(in.DocManifestWants)+len(in.ChunkWants) != 0 {
+					if (len(in.SnapshotWants) == 0 && mode != "empty") || len(in.SnapshotWants) > 256 || len(in.DocWants)+len(in.DocManifestWants)+len(in.ChunkWants) != 0 {
 						t.Fatalf("body requests in metadata catalog: %+v", in)
 					}
 					batches = append(batches, len(in.SnapshotWants))

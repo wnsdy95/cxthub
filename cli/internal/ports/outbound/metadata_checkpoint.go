@@ -23,12 +23,18 @@ type MetadataCheckpointStore interface {
 	// ReadMetadataCheckpoint returns version 1 with an empty revision when absent.
 	// Corrupt records are errors and must not be silently replaced.
 	ReadMetadataCheckpoint(ctx context.Context, repo, remote string) (MetadataCheckpoint, error)
-	// CompareAndSwapMetadataCheckpoint returns the persisted checkpoint with its
-	// checksum revision, replacing next.Revision. Expected must match the stored
-	// revision, or be empty for an absent checkpoint. A mismatch is ErrSyncConflict.
-	// Snapshots are sorted by ID without reordering the caller's slice. Nil and
-	// empty snapshot lists are equivalent. The checksum covers the canonical JSON
-	// payload (version, repo_id, remote, snapshots), excluding revision entirely.
-	// Other snapshot fields, including parent order, retain their JSON semantics.
-	CompareAndSwapMetadataCheckpoint(ctx context.Context, expected domain.ContentHash, next MetadataCheckpoint) (MetadataCheckpoint, error)
+	// AppendMetadataCheckpoint atomically publishes 1..256 snapshots/removals and
+	// returns the new head checksum. Expected must match the head revision, or be
+	// empty when absent; a mismatch is ErrSyncConflict. Duplicate IDs within a
+	// batch or across snapshots/removals are invalid. Later batches replace or
+	// delete earlier metadata for the same ID. Removals require an authoritative
+	// full manifest; a partial branch plan must never prune retained metadata.
+	// The head checksum binds a monotonic generation so compaction cannot revive
+	// a stale revision when it produces the same live page list again.
+	// Immutable pages are sorted by ID without changing the caller's slice; all
+	// other fields, including parent order, retain their JSON semantics.
+	// Ordinary appends validate only the head and the new page. Full reads and
+	// periodic compaction verify all referenced pages from their current bytes.
+	// Unreferenced pages are retained; publication failures may leave safe orphans.
+	AppendMetadataCheckpoint(ctx context.Context, expected domain.ContentHash, repo, remote string, snapshots []domain.Snapshot, removed []domain.ContentHash) (domain.ContentHash, error)
 }

@@ -1222,12 +1222,12 @@ func (c *BackendClient) pullTo(ctx context.Context, repoID, branch string, state
 }
 
 func (c *BackendClient) pull(ctx context.Context, repoID string, snapshotStates map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash, receiver outbound.PullDocumentReceiver, branch string) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
-	return c.pullCatalog(ctx, repoID, snapshotStates, docHaves, receiver, branch, c.RemoteManifest)
+	return c.pullCatalog(ctx, repoID, snapshotStates, docHaves, receiver, branch, c.RemoteManifest, true)
 }
 
 // pullCatalog keeps inventory verification and body/chunk negotiation identical
 // for a complete manifest and a selected-branch dependency plan.
-func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshotStates map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash, receiver outbound.PullDocumentReceiver, branch string, catalog func(context.Context, string) (domain.Manifest, error)) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
+func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshotStates map[domain.ContentHash]domain.ContentHash, docHaves []domain.ContentHash, receiver outbound.PullDocumentReceiver, branch string, catalog func(context.Context, string) (domain.Manifest, error), complete bool) ([]domain.Snapshot, []domain.SessionDoc, []domain.Ref, error) {
 	remote := c.SyncRemoteIdentity()
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return nil, nil, nil, err
@@ -1285,10 +1285,7 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 	if !foundBranch {
 		return nil, nil, nil, domain.ErrNotFound
 	}
-	if len(man.SnapshotIndex) == 0 {
-		return nil, nil, man.Refs, nil
-	}
-	snapshots, err := c.readSnapshotMetadata(ctx, man, snapshotWants, remote)
+	snapshots, err := c.readSnapshotMetadata(ctx, man, snapshotWants, remote, complete)
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -11,27 +11,31 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
 type metadataFixture struct {
-	t       *testing.T
-	store   *storage.FileStore
-	client  *BackendClient
-	man     domain.Manifest
-	snaps   map[domain.ContentHash]domain.Snapshot
-	batches []int
-	reads   int
-	status  int
-	base    string
-	onBatch func(int, *pullResp) error
+	t           *testing.T
+	store       *storage.FileStore
+	client      *BackendClient
+	man         domain.Manifest
+	snaps       map[domain.ContentHash]domain.Snapshot
+	batches     []int
+	reads       int
+	status      int
+	pullStatus  int
+	permissions int
+	base        string
+	onBatch     func(int, *pullResp) error
+	plan        *domain.BranchPullPlan
 }
 
 func newMetadataFixture(t *testing.T, count int) *metadataFixture {
 	t.Helper()
-	f := &metadataFixture{t: t, store: storage.NewFileStore(t.TempDir()), status: 200, base: "https://catalog.invalid/api/v1", snaps: map[domain.ContentHash]domain.Snapshot{}}
+	f := &metadataFixture{t: t, store: storage.NewFileStore(t.TempDir()), status: 200, pullStatus: 200, base: "https://catalog.invalid/api/v1", snaps: map[domain.ContentHash]domain.Snapshot{}}
 	f.man = domain.Manifest{RepoID: domain.HashContent([]byte("metadata checkpoint repo")), SnapshotStates: map[domain.ContentHash]domain.ContentHash{}}
 	for i := range count {
 		id := domain.HashContent([]byte(fmt.Sprint(i)))
@@ -50,18 +54,26 @@ func newMetadataFixture(t *testing.T, count int) *metadataFixture {
 			return nil, err
 		}
 		var value any
+		status := f.status
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/manifest") {
 			f.reads++
 			value = f.man
+		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pull/branch-plan") && f.plan != nil {
+			value, status = f.plan, f.pullStatus
 		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pull/objects") {
 			var in pullReq
 			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 				t.Fatal(err)
 			}
-			if len(in.SnapshotWants) == 0 || len(in.SnapshotWants) > 256 || len(in.DocWants)+len(in.DocManifestWants)+len(in.ChunkWants) != 0 {
+			status = f.pullStatus
+			if len(in.SnapshotWants) > 256 || len(in.DocWants)+len(in.DocManifestWants)+len(in.ChunkWants) != 0 {
 				t.Fatalf("unexpected request: %+v", in)
 			}
-			f.batches = append(f.batches, len(in.SnapshotWants))
+			if len(in.SnapshotWants) == 0 {
+				f.permissions++
+			} else {
+				f.batches = append(f.batches, len(in.SnapshotWants))
+			}
 			response := pullResp{}
 			for _, id := range in.SnapshotWants {
 				response.Snapshots = append(response.Snapshots, f.snaps[id])
@@ -79,7 +91,7 @@ func newMetadataFixture(t *testing.T, count int) *metadataFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &http.Response{StatusCode: f.status, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(raw)), Request: r}, nil
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(raw)), Request: r}, nil
 	})
 	return f
 }
@@ -181,6 +193,16 @@ func TestMetadataCheckpointFreshAuthorizationAndEndpointIsolation(t *testing.T) 
 		t.Fatalf("cache bypassed authorization: %v %v", got, err)
 	}
 	f.status = 200
+	for _, status := range []int{401, 403} {
+		f.pullStatus = status
+		if got, err := f.read(ctx); err == nil || got != nil || len(f.batches) != 0 {
+			t.Fatalf("viewer manifest bypassed pull authorization: %v %v", got, err)
+		}
+	}
+	if f.permissions != 2 {
+		t.Fatalf("missing fresh pull permission checks: %d", f.permissions)
+	}
+	f.pullStatus = 200
 	f.base = "https://another.invalid/api/v1"
 	if _, err := f.read(ctx); err != nil || !reflect.DeepEqual(f.batches, []int{1}) {
 		t.Fatalf("endpoint isolation batches=%v err=%v", f.batches, err)
@@ -225,5 +247,103 @@ func TestMetadataCheckpointDoesNotOmitUnverifiedPullRecords(t *testing.T) {
 	}
 	if !reflect.DeepEqual(f.batches, []int{2, 2}) {
 		t.Fatalf("legacy reused unauthenticated checkpoint: %v", f.batches)
+	}
+}
+
+func TestMetadataCheckpointRejectsUnsolicitedPermissionPayload(t *testing.T) {
+	f := newMetadataFixture(t, 1)
+	ctx := context.Background()
+	if _, err := f.read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.onBatch = func(_ int, response *pullResp) error {
+		response.Snapshots = []domain.Snapshot{f.snaps[f.man.SnapshotIndex[0]]}
+		return nil
+	}
+	if got, err := f.read(ctx); !errors.Is(err, domain.ErrHashMismatch) || got != nil {
+		t.Fatalf("unsolicited permission payload accepted: %v %v", got, err)
+	}
+}
+
+func TestMetadataCheckpointContentionPreservesWinnerAndAcquisition(t *testing.T) {
+	ctx := context.Background()
+	f := newMetadataFixture(t, 1)
+	id := domain.HashContent([]byte("concurrent acquisition"))
+	winner := domain.Snapshot{ID: id, DocHash: id, RepoID: f.man.RepoID}
+	f.onBatch = func(_ int, _ *pullResp) error {
+		_, err := f.store.AppendMetadataCheckpoint(ctx, "", f.man.RepoID, f.client.SyncRemoteIdentity(), []domain.Snapshot{winner}, nil)
+		return err
+	}
+	got, err := f.read(ctx)
+	if err != nil || len(got) != 1 || got[0].ID != f.man.SnapshotIndex[0] {
+		t.Fatalf("optional cache contention aborted acquisition: %v %v", got, err)
+	}
+	checkpoint, err := f.store.ReadMetadataCheckpoint(ctx, f.man.RepoID, f.client.SyncRemoteIdentity())
+	if err != nil || len(checkpoint.Snapshots) != 1 || checkpoint.Snapshots[0].ID != id {
+		t.Fatalf("losing writer overwrote winning checkpoint: %+v %v", checkpoint, err)
+	}
+}
+
+func TestMetadataCheckpointObservedDeletionRequiresFreshReappearance(t *testing.T) {
+	ctx := context.Background()
+	f := newMetadataFixture(t, 1)
+	id := f.man.SnapshotIndex[0]
+	first := f.snaps[id]
+	first.CreatedAt = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	f.snaps[id] = first
+	if _, err := f.read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.man.SnapshotIndex, f.man.SnapshotStates = nil, nil
+	if got, err := f.read(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("empty full catalog: %v %v", got, err)
+	}
+	checkpoint, err := f.store.ReadMetadataCheckpoint(ctx, f.man.RepoID, f.client.SyncRemoteIdentity())
+	if err != nil || len(checkpoint.Snapshots) != 0 {
+		t.Fatalf("observed deletion was not retired: %+v %v", checkpoint, err)
+	}
+	recreated := first
+	recreated.CreatedAt = first.CreatedAt.Add(time.Hour)
+	f.snaps[id] = recreated
+	state, _ := domain.SnapshotStateHash(first)
+	f.man.SnapshotIndex = []domain.ContentHash{id}
+	f.man.SnapshotStates = map[domain.ContentHash]domain.ContentHash{id: state}
+	f.batches = nil
+	got, err := f.read(ctx)
+	if err != nil || len(got) != 1 || !got[0].CreatedAt.Equal(recreated.CreatedAt) || !reflect.DeepEqual(f.batches, []int{1}) {
+		t.Fatalf("reappearance reused deleted metadata: %v batches=%v err=%v", got, f.batches, err)
+	}
+}
+
+func TestMetadataCheckpointPartialPlanRetainsOtherBranches(t *testing.T) {
+	ctx := context.Background()
+	f := newMetadataFixture(t, 2)
+	if _, err := f.read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := f.man.SnapshotIndex[0]
+	ref := domain.Ref{RepoID: f.man.RepoID, Kind: domain.RefBranch, Name: "feature", Target: id}
+	f.plan = &domain.BranchPullPlan{Version: 1, RepoID: f.man.RepoID, Branch: "feature", SelectedRef: ref, Refs: []domain.Ref{ref}, SnapshotIndex: []domain.ContentHash{id}, SnapshotStates: map[domain.ContentHash]domain.ContentHash{id: f.man.SnapshotStates[id]}}
+	f.batches = nil
+	_, got, err := f.client.PullSelectedBranchTo(ctx, f.man.RepoID, domain.BranchPullRequest{Version: 1, Branch: "feature"}, nil, []domain.ContentHash{id}, stagedPullDocs{})
+	if err != nil || len(got) != 1 || len(f.batches) != 0 {
+		t.Fatalf("partial acquisition: %v batches=%v err=%v", got, f.batches, err)
+	}
+	checkpoint, err := f.store.ReadMetadataCheckpoint(ctx, f.man.RepoID, f.client.SyncRemoteIdentity())
+	if err != nil || len(checkpoint.Snapshots) != 2 {
+		t.Fatalf("partial plan pruned another branch: %+v %v", checkpoint, err)
+	}
+}
+
+func TestMetadataCheckpointZeroWantsStillRequiresPullPermission(t *testing.T) {
+	for _, count := range []int{0, 1} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			f := newMetadataFixture(t, count)
+			f.pullStatus = http.StatusForbidden
+			got, docs, refs, err := f.client.Pull(context.Background(), f.man.RepoID, f.man.SnapshotStates, f.man.SnapshotIndex)
+			if err == nil || got != nil || docs != nil || refs != nil || f.permissions != 1 {
+				t.Fatalf("zero-wants pull bypassed permission: %v %v permissions=%d", got, err, f.permissions)
+			}
+		})
 	}
 }

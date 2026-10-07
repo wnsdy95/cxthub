@@ -21,24 +21,27 @@ import (
 )
 
 type metadataCheckpointCalls struct {
-	manifests, plans, metadata, documents, memories int
+	manifests, plans, metadata, documents, memories, authorizations int
 }
 
 // Only the HTTP peer is synthetic. Discovery, transfer, validation, checkpoint
 // persistence, and observation publication use the production adapters.
 type metadataCheckpointFixture struct {
-	mu        sync.Mutex
-	calls     metadataCheckpointCalls
-	root      string
-	key       string
-	repo      string
-	url       string
-	store     *storage.FileStore
-	snaps     []domain.Snapshot
-	docs      map[domain.ContentHash]domain.SessionDoc
-	memories  map[domain.ContentHash]domain.MemoryDigest
-	ref       domain.Ref
-	localRefs []domain.Ref
+	mu                    sync.Mutex
+	calls                 metadataCheckpointCalls
+	root                  string
+	key                   string
+	repo                  string
+	url                   string
+	store                 *storage.FileStore
+	snaps                 []domain.Snapshot
+	docs                  map[domain.ContentHash]domain.SessionDoc
+	memories              map[domain.ContentHash]domain.MemoryDigest
+	ref                   domain.Ref
+	localRefs             []domain.Ref
+	endpointStatus        int
+	pullStatus            int
+	authorizationResponse map[string]any
 }
 
 func newMetadataCheckpointFixture(t *testing.T) *metadataCheckpointFixture {
@@ -65,6 +68,24 @@ func newMetadataCheckpointFixture(t *testing.T) *metadataCheckpointFixture {
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).Encode(value); err != nil {
 				t.Error(err)
+			}
+		}
+		deny := func(status int) bool {
+			if status == 0 || status == http.StatusOK {
+				return false
+			}
+			http.Error(w, "fixture authorization revoked", status)
+			return true
+		}
+		if f.endpointStatus >= http.StatusMultipleChoices {
+			if strings.HasSuffix(r.URL.Path, "/manifest") {
+				f.calls.manifests++
+			}
+			if strings.HasSuffix(r.URL.Path, "/pull/branch-plan") {
+				f.calls.plans++
+			}
+			if deny(f.endpointStatus) {
+				return
 			}
 		}
 		man := domain.Manifest{RepoID: f.repo, Refs: []domain.Ref{f.ref}, SnapshotStates: map[domain.ContentHash]domain.ContentHash{}}
@@ -101,14 +122,35 @@ func newMetadataCheckpointFixture(t *testing.T) *metadataCheckpointFixture {
 				SnapshotWants    []domain.ContentHash `json:"snapshot_wants"`
 				DocWants         []domain.ContentHash `json:"doc_wants"`
 				DocManifestWants []domain.ContentHash `json:"doc_manifest_wants"`
+				ChunkWants       []domain.ContentHash `json:"chunk_wants"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Error(err)
 				http.Error(w, "invalid object request", http.StatusBadRequest)
 				return
 			}
+			if len(req.ChunkWants) != 0 {
+				t.Error("unexpected chunk request")
+				http.Error(w, "unexpected chunk request", http.StatusBadRequest)
+				return
+			}
+			if len(req.SnapshotWants)+len(req.DocWants)+len(req.DocManifestWants) == 0 {
+				f.calls.authorizations++
+				if deny(f.pullStatus) {
+					return
+				}
+				if f.authorizationResponse != nil {
+					write(f.authorizationResponse)
+				} else {
+					write(map[string]any{})
+				}
+				return
+			}
 			if len(req.SnapshotWants) != 0 {
 				f.calls.metadata++
+				if deny(f.pullStatus) {
+					return
+				}
 				if len(req.DocWants)+len(req.DocManifestWants) != 0 {
 					t.Error("metadata discovery requested document bodies")
 				}
@@ -124,10 +166,10 @@ func newMetadataCheckpointFixture(t *testing.T) *metadataCheckpointFixture {
 				return
 			}
 			f.calls.documents++
-			wants := append(req.DocManifestWants, req.DocWants...)
-			if len(wants) == 0 {
-				t.Error("unexpected empty document request")
+			if deny(f.pullStatus) {
+				return
 			}
+			wants := append(req.DocManifestWants, req.DocWants...)
 			var docs []domain.SessionDoc
 			for _, id := range wants {
 				doc, ok := f.docs[id]
@@ -288,7 +330,7 @@ func TestMetadataCheckpointDiscoveryAndPullDoNotPublish(t *testing.T) {
 
 	client = f.reopen()
 	f.discover(t, client)
-	if calls := f.takeCalls(); calls != (metadataCheckpointCalls{manifests: 1}) {
+	if calls := f.takeCalls(); calls != (metadataCheckpointCalls{manifests: 1, authorizations: 1}) {
 		t.Fatalf("warm discovery did not reuse persisted metadata: %+v", calls)
 	}
 	// No verified negotiation haves exist. Every snapshot must still be returned,
@@ -309,7 +351,7 @@ func TestMetadataCheckpointDiscoveryAndPullDoNotPublish(t *testing.T) {
 			t.Fatalf("unexpected document: %s", doc.Hash)
 		}
 	}
-	if calls := f.takeCalls(); calls != (metadataCheckpointCalls{manifests: 1, documents: 1}) {
+	if calls := f.takeCalls(); calls != (metadataCheckpointCalls{manifests: 1, documents: 1, authorizations: 1}) {
 		t.Fatalf("warm pull did not separate metadata reuse from body transfer: %+v", calls)
 	}
 	f.assertUnobserved(t, client)
@@ -364,7 +406,7 @@ func TestMetadataCheckpointFetchRejectsCorruptStoredDocument(t *testing.T) {
 				t.Fatalf("cached metadata hid a corrupt stored document: %v", err)
 			}
 			calls := f.takeCalls()
-			if calls.metadata != 0 || calls.documents != 0 || calls.manifests+calls.plans != 1 {
+			if calls.metadata != 0 || calls.documents != 0 || calls.manifests+calls.plans != 1 || calls.authorizations != 1 {
 				t.Fatalf("cached document failure performed unexpected I/O: %+v", calls)
 			}
 			f.assertUnobserved(t, client)
@@ -380,7 +422,7 @@ func TestMetadataCheckpointFetchRejectsCorruptStoredDocument(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if calls := f.takeCalls(); calls.metadata != 0 || calls.documents != 0 || calls.manifests+calls.plans != 1 {
+			if calls := f.takeCalls(); calls.metadata != 0 || calls.documents != 0 || calls.manifests+calls.plans != 1 || calls.authorizations != 1 {
 				t.Fatalf("repair discarded cached acquisition progress: %+v", calls)
 			}
 			f.assertObserved(t, client, branch, out, len(f.snaps))
@@ -425,7 +467,7 @@ func TestMetadataCheckpointFetchValidatesChangedMemory(t *testing.T) {
 				if previous == "" {
 					wantDocuments = len(f.docs)
 				}
-				if calls := f.takeCalls(); calls.metadata != 0 || calls.documents != wantDocuments || calls.memories != 1 || calls.manifests+calls.plans != 1 {
+				if calls := f.takeCalls(); calls.metadata != 0 || calls.documents != wantDocuments || calls.memories != 1 || calls.manifests+calls.plans != 1 || calls.authorizations != 1 {
 					t.Fatalf("memory failure did not reuse metadata and validate bodies: %+v", calls)
 				}
 				if got := f.observations(t, client); !reflect.DeepEqual(got, before) {
@@ -453,7 +495,7 @@ func TestMetadataCheckpointFetchValidatesChangedMemory(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if calls := f.takeCalls(); calls.metadata != 0 || calls.documents != 0 || calls.memories != 1 || calls.manifests+calls.plans != 1 {
+				if calls := f.takeCalls(); calls.metadata != 0 || calls.documents != 0 || calls.memories != 1 || calls.manifests+calls.plans != 1 || calls.authorizations != 1 {
 					t.Fatalf("memory retry lost reusable progress: %+v", calls)
 				}
 				// On the second repository fetch the unchanged parent is omitted by
@@ -473,6 +515,125 @@ func TestMetadataCheckpointFetchValidatesChangedMemory(t *testing.T) {
 					}
 				}
 				previous = hash
+			}
+		})
+	}
+}
+
+func TestMetadataCheckpointWarmCacheRequiresFreshPullAuthorization(t *testing.T) {
+	for _, scenario := range []struct {
+		name           string
+		endpointStatus int
+		pullStatus     int
+		responseField  string
+	}{
+		{name: "viewer-manifest-puller-revoked", pullStatus: http.StatusForbidden},
+		{name: "pull-credentials-revoked", pullStatus: http.StatusUnauthorized},
+		{name: "endpoint-access-revoked", endpointStatus: http.StatusForbidden},
+		{name: "endpoint-credentials-revoked", endpointStatus: http.StatusUnauthorized},
+		{name: "unsolicited-snapshot", responseField: "snapshots"},
+		{name: "unsolicited-document", responseField: "docs"},
+		{name: "unsolicited-document-manifest", responseField: "doc_manifests"},
+		{name: "unsolicited-chunk", responseField: "chunk_objects"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			for _, operation := range []string{"discovery", "plain-pull", "repository-fetch", "selected-branch-fetch"} {
+				t.Run(operation, func(t *testing.T) {
+					f := newMetadataCheckpointFixture(t)
+					ctx := context.Background()
+					client := f.reopen()
+					f.discover(t, client)
+					f.takeCalls()
+					// Existing immutable bodies cannot authorize cached metadata.
+					var haves []domain.ContentHash
+					for _, snap := range f.snaps {
+						if _, err := f.store.PutDoc(ctx, f.docs[snap.DocHash]); err != nil {
+							t.Fatal(err)
+						}
+						haves = append(haves, snap.DocHash)
+					}
+					before, err := f.store.ReadMetadataCheckpoint(ctx, f.repo, client.SyncRemoteIdentity())
+					if err != nil {
+						t.Fatal(err)
+					}
+					f.mu.Lock()
+					f.endpointStatus, f.pullStatus = scenario.endpointStatus, scenario.pullStatus
+					if scenario.responseField != "" {
+						// Each array contains one object. Even an otherwise successful
+						// authorization response must not smuggle transfer objects.
+						f.authorizationResponse = map[string]any{scenario.responseField: []map[string]any{{}}}
+					}
+					f.mu.Unlock()
+					client = f.reopen()
+					switch operation {
+					case "discovery":
+						var snaps []domain.Snapshot
+						snaps, err = client.ReadSnapshotCatalog(ctx, f.repo)
+						if len(snaps) != 0 {
+							t.Fatalf("rejected discovery returned cached metadata: %+v", snaps)
+						}
+					case "plain-pull":
+						var snaps []domain.Snapshot
+						var docs []domain.SessionDoc
+						var refs []domain.Ref
+						snaps, docs, refs, err = client.Pull(ctx, f.repo, nil, haves)
+						if len(snaps)+len(docs)+len(refs) != 0 {
+							t.Fatalf("rejected pull returned objects: snapshots=%d docs=%d refs=%d", len(snaps), len(docs), len(refs))
+						}
+					default:
+						input := inbound.SyncInput{RepoID: f.repo, FetchOnly: true}
+						if operation == "selected-branch-fetch" {
+							input.Ref, input.RequireBranchPlan = "feature", true
+						}
+						var out inbound.SyncOutput
+						out, err = newTestSyncService(f.store, client, nil).Pull(ctx, input)
+						if !reflect.DeepEqual(out, inbound.SyncOutput{}) {
+							t.Fatalf("rejected fetch returned a successful selection: %+v", out)
+						}
+					}
+					if scenario.responseField != "" {
+						if !errors.Is(err, domain.ErrHashMismatch) {
+							t.Fatalf("authorization response accepted unsolicited objects: %v", err)
+						}
+					} else {
+						status := scenario.pullStatus
+						if scenario.endpointStatus != 0 {
+							status = scenario.endpointStatus
+						}
+						var denied *backendclient.HTTPError
+						if !errors.As(err, &denied) || denied.Status != status {
+							t.Fatalf("warm cache bypassed fresh authorization: %v; want HTTP %d", err, status)
+						}
+						if scenario.pullStatus != 0 && denied.Operation != "POST /repos/"+f.repo+"/pull/objects" {
+							t.Fatalf("wrong endpoint enforced pull authorization: %s", denied.Operation)
+						}
+					}
+					wantCalls := metadataCheckpointCalls{}
+					if scenario.endpointStatus == 0 {
+						wantCalls.authorizations = 1
+						if operation == "selected-branch-fetch" {
+							wantCalls.plans = 1
+						} else {
+							wantCalls.manifests = 1
+						}
+					} else if operation == "discovery" || operation == "plain-pull" {
+						wantCalls.manifests = 1
+					}
+					if calls := f.takeCalls(); calls != wantCalls {
+						t.Fatalf("rejected request performed unexpected I/O: got %+v, want %+v", calls, wantCalls)
+					}
+					f.assertUnobserved(t, client)
+					f.assertNoAdoption(t)
+					for _, snap := range f.snaps {
+						if _, err := f.store.GetSnapshot(ctx, snap.ID); !errors.Is(err, domain.ErrNotFound) {
+							t.Fatalf("authorization failure adopted snapshot %s: %v", snap.ID, err)
+						}
+					}
+					after, err := f.store.ReadMetadataCheckpoint(ctx, f.repo, client.SyncRemoteIdentity())
+					if err != nil || !reflect.DeepEqual(after, before) {
+						t.Fatalf("authorization failure changed acquired metadata: %v", err)
+					}
+				})
 			}
 		})
 	}
