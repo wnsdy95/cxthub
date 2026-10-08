@@ -16,6 +16,10 @@ func (c *BackendClient) ReadSnapshotCatalog(ctx context.Context, repo string) ([
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return nil, err
 	}
+	_, snapshots, supported, err := c.acquireCatalog(ctx, repo)
+	if err != nil || supported {
+		return snapshots, err
+	}
 	remote := c.SyncRemoteIdentity()
 	man, err := c.RemoteManifest(ctx, repo)
 	if err != nil {

@@ -1505,6 +1505,11 @@ components:
           enum: [0, 1]
           readOnly: true
           description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Absent/zero means legacy full transfer. One requires repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol. After a one response, errors are failures, never fallback permission."
+        catalog_version:
+          type: integer
+          enum: [0, 1]
+          readOnly: true
+          description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Only absent/zero permits legacy full-manifest fallback. One requires a catalog store and repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol and branch_pull_version. Unknown versions must fail. After a one response, catalog endpoint errors are failures, never fallback permission."
         context_protocol: { type: integer, enum: [0, 1], description: "Repository write compatibility version. Version 1 requires explicit legacy upgrade or atomic new-repository initialization; existing repositories are never silently upgraded." }
         id:
           $ref: "#/components/schemas/ContentHash"

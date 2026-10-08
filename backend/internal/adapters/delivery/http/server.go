@@ -402,13 +402,17 @@ func (s *Server) getRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		branch = values[0]
 	}
+	catalogVersion := 0
+	if capabilities, ok := s.b.(inbound.CatalogCapabilities); ok {
+		catalogVersion = capabilities.CatalogVersion()
+	}
 	if query, ok := s.b.(inbound.RepositoryInitializationQuery); ok {
 		out, pending, err := query.GetRepositoryInitializationView(r.Context(), s.repoID(r), branch)
-		s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), InitialAnchorAvailable: pending}, err)
+		s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion, InitialAnchorAvailable: pending}, err)
 		return
 	}
 	out, err := s.b.GetRepo(r.Context(), s.repoID(r))
-	s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion()}, err)
+	s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion}, err)
 }
 
 // fsck returns reference reachability audit results (read-only — makes no changes).
