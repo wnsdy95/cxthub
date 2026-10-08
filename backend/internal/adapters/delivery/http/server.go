@@ -269,6 +269,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/chunks", s.guard(domain.RolePuller, s.pullChunks))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/branch-plan", s.guard(domain.RolePuller, s.pullBranchPlan))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/catalog", s.guard(domain.RolePuller, s.pullCatalog))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/catalog/merkle", s.guard(domain.RolePuller, s.pullCatalogMerkle))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/objects", s.guard(domain.RolePuller, s.pullObjects))
 
 	// Actions exposed by the server. Provider-session restoration remains a local
@@ -406,13 +407,17 @@ func (s *Server) getRepo(w http.ResponseWriter, r *http.Request) {
 	if capabilities, ok := s.b.(inbound.CatalogCapabilities); ok {
 		catalogVersion = capabilities.CatalogVersion()
 	}
+	merkleVersion := 0
+	if capabilities, ok := s.b.(inbound.CatalogMerkleCapabilities); ok {
+		merkleVersion = capabilities.CatalogMerkleVersion()
+	}
 	if query, ok := s.b.(inbound.RepositoryInitializationQuery); ok {
 		out, pending, err := query.GetRepositoryInitializationView(r.Context(), s.repoID(r), branch)
-		s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion, InitialAnchorAvailable: pending}, err)
+		s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion, CatalogMerkleVersion: merkleVersion, InitialAnchorAvailable: pending}, err)
 		return
 	}
 	out, err := s.b.GetRepo(r.Context(), s.repoID(r))
-	s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion}, err)
+	s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion, CatalogMerkleVersion: merkleVersion}, err)
 }
 
 // fsck returns reference reachability audit results (read-only — makes no changes).

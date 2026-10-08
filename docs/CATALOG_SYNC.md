@@ -9,8 +9,9 @@ for snapshot discovery and complete pull metadata when the freshly authorized
 repository view advertises `catalog_version: 1`. Absent/zero means the existing
 full-manifest protocol; unknown versions and errors after advertising version 1
 fail without fallback. Selected-branch dependency plans and viewer-readable
-manifest calls keep their existing contracts. Merkle reconciliation remains a
-subsequent stage. Reduced metadata transfer does not by itself establish faster
+manifest calls keep their existing contracts. A separately advertised
+`catalog_merkle_version: 1` enables range reconciliation after checkpoint expiry.
+Reduced metadata transfer does not by itself establish faster
 end-to-end document fetches.
 
 ## Scope and images
@@ -101,8 +102,9 @@ cursor. Catalog metadata alone does not justify updating verified/applied state.
 | 415 | `bad_request` | JSON content type required |
 | 501 | `catalog_unsupported` | Store lacks the optional catalog capability |
 
-On `reset_required`, discard the incomplete staged run and request a fresh
-baseline. Do not turn a failed/partial page into successful progress. A new
+On `reset_required`, a capable CLI with a verified complete cache reconciles
+Merkle ranges as described below. Without that optional capability/cache, discard
+the incomplete staged run and request a fresh baseline. Do not turn a failed/partial page into successful progress. A new
 baseline replaces the metadata cache only when its final checkpoint is reached.
 Unsupported storage can use the established full-manifest protocol; it does not
 claim catalog consistency by scanning mutable rows. Errors other than explicit
@@ -178,3 +180,53 @@ reads and validation remain linear in catalog size; this is not Merkle lookup.
 Document, chunk, memory, settings and history dependency validation still runs
 through the existing synchronization paths. No metadata checkpoint can prove
 that an object is available or has been applied locally.
+
+## Merkle reconciliation after checkpoint expiry
+
+`POST /api/v1/repos/{repoID}/pull/catalog/merkle` is optional version 1, scope
+`sync-metadata-merkle-v1`. Its capability is independent of document identity,
+branch protocol and catalog version. PostgreSQL advertises it together with
+catalog version 1. Unknown versions fail; failures from an advertised endpoint
+are never interpreted as permission to use a legacy endpoint.
+
+Start with `{"version":1}`. The response returns a published `root_hash` and
+`checkpoint`, with sixteen ordered child descriptors. Subsequent requests send
+both fields unchanged and a lower-case hexadecimal `prefix`: one digit for an
+internal node, two for a leaf. Leaf `offset` starts at zero, `limit` defaults to
+256 and is capped at 1000; `next_offset` is present only while entries remain.
+Every page is freshly authorized. An epoch reset invalidates old roots; catalog
+journal pruning does not destroy already-published immutable trees.
+
+The fixed radix-16, depth-two tree has 256 leaves and 17 internal nodes, including
+empty ranges. A typed normalized key hashes into one leaf. Ref keys normalize
+JSON whitespace/escaping; identities cannot be duplicated through aliases. Leaf
+hashes include each original sequence and full canonical metadata value in
+ordered `(kind, normalized-key)` order. Internal hashes include child prefixes,
+hashes and counts. Both hashes are domain-separated and bound to the repository,
+scope and version. Chunk/body bytes are outside this tree.
+
+The CLI first verifies all bytes of its existing complete cache, then compares
+roots and descends only through unequal hashes. It verifies each parent/child
+hash and count, page boundary, ordering and duplicate identity, whole leaf hash,
+entry sequence, complete manifest and reconstructed root. Only then does one
+local generation/CAS operation publish the replacement image and checkpoint.
+Partial leaves do not acknowledge progress. A failed reconciliation, corrupted
+old cache, endpoint change or concurrent cache writer leaves the prior complete
+image intact. Catalog-only acquisition never writes refs, snapshots or remote
+observations. Ordinary delta runs retain their existing durable page resume.
+
+The server cache is derived, separate from source mutations. Migration
+`0075_catalog_merkle.sql` adds immutable nodes and published root/checkpoint
+bindings without new source triggers. A current root hit does not enumerate
+source entries. A prior usable root consumes committed catalog deltas and
+rebuilds touched leaves and their ancestors. Without a usable root, the server
+builds a complete baseline. Publication uses an independent cache transaction,
+compares conflicting immutable bytes and never acquires the repository graph
+write lock. Caller-owned transactions are rejected rather than escaped.
+
+Limits are explicit: cold builds still enumerate all required metadata; a
+changed leaf costs its complete bucket, not a constant number of entries; local
+image verification and final projection remain linear. The CLI limits response
+bodies to 32 MiB and retries oversized leaf pages at the same offset with a
+smaller limit. A single oversized entry fails without acknowledging it. Derived
+cache roots/nodes are retained; this feature introduces no GC or source repair.

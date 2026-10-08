@@ -946,10 +946,10 @@ PYREUSE
 CXT_MEMORY_REUSE_TEST_URL="$B" CXT_MEMORY_REUSE_TEST_TOKEN="$REUSE_TOKEN" \
   CXT_BRANCH_PULL_TEST_REQUIRED="$([ -n "${CXT_E2E_DSN:-}" ] && echo 1 || echo 0)" \
   CXT_MEMORY_REUSE_TEST_REPO="$RID" "$TMP/bin/memory-reuse-test" \
-  -test.run '^(TestMemoryReuseLiveProtocol|TestBranchPullLiveProtocol)$' -test.v >"$TMP/memory-reuse.out" 2>&1
+  -test.run '^(TestMemoryReuseLiveProtocol|TestBranchPullLiveProtocol|TestCatalogMerkleLiveProtocol)$' -test.v >"$TMP/memory-reuse.out" 2>&1
 REUSE_EXIT=$?
 if [ "$REUSE_EXIT" != 0 ]; then cat "$TMP/memory-reuse.out"; fi
-expect "memory reuse and selected-branch wire protocol verified by server" "$REUSE_EXIT" 0
+expect "memory reuse, branch and Merkle wire protocols verified by server" "$REUSE_EXIT" 0
 unset REUSE_TOKEN
 
 source "$ROOT/scripts/e2e-initialization.inc.sh"
