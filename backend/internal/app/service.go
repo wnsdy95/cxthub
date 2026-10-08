@@ -363,6 +363,24 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 	if err := domain.ValidateContentHash(in.RepoID); err != nil {
 		return inbound.CommitOutput{}, err
 	}
+	// The staged discriminator is not an advertised publication capability.
+	// Reject a mixed batch before reassembly, body reads or any object writes,
+	// including snapshots whose legacy body is supplied in this same request.
+	for _, doc := range in.Docs {
+		if doc.Identity != domain.DocumentIdentityLegacy {
+			return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
+		}
+	}
+	for _, doc := range in.ChunkedDocs {
+		if doc.Identity != domain.DocumentIdentityLegacy {
+			return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
+		}
+	}
+	for _, snap := range in.Snapshots {
+		if snap.DocIdentity != domain.DocumentIdentityLegacy {
+			return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
+		}
+	}
 	// Reassemble a chunked wire document from chunks received in this request plus repository-owned stored chunks. Verify the canonical document hash, then pass the complete document through the ordinary validation and storage path.
 	docs := in.Docs
 	if len(in.ChunkedDocs) > 0 {
@@ -457,7 +475,7 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 			return inbound.CommitOutput{}, err
 		}
 		if d, ok := docByHash[snap.DocHash]; ok {
-			if !d.Valid() || d.Hash() != snap.DocHash {
+			if !d.Reference().Matches(snap) {
 				return inbound.CommitOutput{}, domain.ErrIntegrity
 			}
 		} else {

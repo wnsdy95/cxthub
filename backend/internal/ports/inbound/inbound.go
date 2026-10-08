@@ -103,7 +103,8 @@ type Authenticate interface {
 
 // ChunkedDoc represents a doc as a manifest (envelope+chunk hash) in a wire format (chunk delta transmission).
 type ChunkedDoc struct {
-	Hash domain.ContentHash `json:"hash"`
+	Hash     domain.ContentHash      `json:"hash"`
+	Identity domain.DocumentIdentity `json:"identity,omitempty"`
 	// Format is explicit for v2. Empty is the legacy wire representation and means v1.
 	Format   string               `json:"format,omitempty"`
 	Envelope json.RawMessage      `json:"envelope"`

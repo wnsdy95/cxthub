@@ -1,9 +1,43 @@
 package domain
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestSnapshotStateHashDocumentIdentityWire(t *testing.T) {
+	id := ContentHash("sha256:" + strings.Repeat("1", 64))
+	legacyWire := fmt.Sprintf(`{"id":%q,"branch":"main","memory_hash":"","message":"","grafted":false,"graft_parents":[],"graft_seq":0}`, id)
+	// The root field is appended in the same order as the backend encoder.
+	rootWire := strings.TrimSuffix(legacyWire, "}") + `,"doc_identity":"cxt-manifest-sha256-v1"}`
+	for _, tc := range []struct {
+		name     string
+		identity DocumentIdentity
+		wire     string
+	}{
+		{"legacy", DocumentIdentityLegacy, legacyWire},
+		{"root", DocumentIdentityRootV1, rootWire},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := Snapshot{ID: id, DocHash: id, Branch: "main", DocIdentity: tc.identity}
+			got, err := SnapshotStateHash(snapshot)
+			if err != nil || got != HashContent([]byte(tc.wire)) {
+				t.Fatalf("state wire/hash parity: %s, error %v", got, err)
+			}
+			raw, err := json.Marshal(snapshotStateWire{ID: string(id), Branch: "main", GraftParents: []string{}, DocIdentity: tc.identity})
+			if err != nil || string(raw) != tc.wire {
+				t.Fatalf("state encoding changed: %s, error %v", raw, err)
+			}
+		})
+	}
+	if got, err := SnapshotStateHash(Snapshot{ID: id, DocIdentity: "future"}); got != "" || !errors.Is(err, ErrUnsupportedDocumentIdentity) {
+		t.Fatalf("unknown identity fingerprinted: %s, error %v", got, err)
+	}
+}
 
 func TestSnapshotStateHashParityAndMutableMetadata(t *testing.T) {
 	base := Snapshot{

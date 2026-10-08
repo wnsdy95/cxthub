@@ -341,4 +341,7 @@ type LockedBlob struct {
 type SessionDoc struct {
 	Hash ContentHash `json:"hash"`
 	CIR  CIRDocument `json:"cir"`
+	// Identity is absent for existing canonical-CIR hashes. Root acceptance is
+	// gated separately from this additive metadata declaration.
+	Identity DocumentIdentity `json:"identity,omitempty"`
 }

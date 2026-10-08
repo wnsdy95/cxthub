@@ -85,6 +85,11 @@ func ValidateSessionDocHash(doc SessionDoc) error {
 // ValidatedSessionDocBytes lets storage reuse exactly the bytes it validates,
 // avoiding a second canonicalization of a cumulative session.
 func ValidatedSessionDocBytes(doc SessionDoc) ([]byte, error) {
+	// Existing publication adapters only store legacy representations. Declaring
+	// a root scheme must not accidentally route through their canonical writer.
+	if doc.Identity != DocumentIdentityLegacy {
+		return nil, ErrUnsupportedDocumentIdentity
+	}
 	if err := ValidateContentHash(doc.Hash); err != nil {
 		return nil, err
 	}

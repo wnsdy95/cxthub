@@ -97,7 +97,8 @@ func canonicalEvents(events []Event) []Event {
 	return sorted
 }
 
-// ValidateSessionDocHash recalculates the claimed hash from wire as a canonical CIR and validates it.
+// ValidateSessionDocHash is the legacy-only production boundary. Dual readers
+// must explicitly use VerifySessionDocIdentity once their consumers are wired.
 func ValidateSessionDocHash(doc SessionDoc) error {
 	return validateSessionDocHash(doc, nil)
 }
@@ -105,6 +106,9 @@ func ValidateSessionDocHash(doc SessionDoc) error {
 func validateSessionDocHash(doc SessionDoc, observe func([]byte, int)) error {
 	if err := ValidateContentHash(doc.Hash); err != nil {
 		return err
+	}
+	if doc.Identity != DocumentIdentityLegacy {
+		return fmt.Errorf("%w: legacy document verifier requires absent identity", ErrUnsupportedDocumentIdentity)
 	}
 	canonical, err := canonicalBytes(doc.CIR, observe)
 	if err != nil {

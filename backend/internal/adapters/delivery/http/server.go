@@ -1227,7 +1227,7 @@ func (s *Server) decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		s.writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		s.writeDecodeError(w, err)
 		return false
 	}
 	return true
@@ -1245,10 +1245,19 @@ func (s *Server) decodeLimited(w http.ResponseWriter, r *http.Request, v any, ma
 			s.writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body exceeds transport limit")
 			return false
 		}
-		s.writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		s.writeDecodeError(w, err)
 		return false
 	}
 	return true
+}
+
+func (s *Server) writeDecodeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
+		code, status := mapError(err)
+		s.writeError(w, status, code, err.Error())
+		return
+	}
+	s.writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 }
 
 func (s *Server) respond(w http.ResponseWriter, v any, err error) {
@@ -1321,6 +1330,8 @@ func mapError(err error) (code string, status int) {
 		return "git_origin_mismatch", http.StatusConflict
 	case errors.Is(err, domain.ErrUnsupportedCIRVersion):
 		return "unsupported_cir_version", http.StatusConflict
+	case errors.Is(err, domain.ErrUnsupportedDocumentIdentity):
+		return "unsupported_document_identity", http.StatusConflict
 	case errors.Is(err, domain.ErrJoinPreviewChanged):
 		return "join_preview_changed", http.StatusConflict
 	case errors.Is(err, domain.ErrEffectiveMemoryCursorStale):

@@ -162,14 +162,10 @@ func (e *Engine) VerifyIntegrity(_ context.Context, snap domain.Snapshot, doc do
 	if snap.ID == "" || snap.DocHash == "" || doc.Hash == "" {
 		return domain.ErrIntegrity
 	}
-	if snap.ID != snap.DocHash || snap.DocHash != doc.Hash {
+	if !doc.DocumentRef().MatchesSnapshot(snap) {
 		return domain.ErrIntegrity
 	}
-	cb, err := domain.CanonicalBytes(doc.CIR)
-	if err != nil {
-		return domain.ErrIntegrity
-	}
-	if domain.HashContent(cb) != doc.Hash {
+	if err := domain.ValidateSessionDocHash(doc); err != nil {
 		return domain.ErrIntegrity
 	}
 	return nil

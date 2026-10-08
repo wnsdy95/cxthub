@@ -116,6 +116,9 @@ func validateHashes(hashes ...domain.ContentHash) error {
 }
 
 func validateSnapshotRefs(snap domain.Snapshot) error {
+	if err := snap.DocIdentity.Validate(); err != nil {
+		return err
+	}
 	if err := validateHashes(snap.RepoID, snap.ID, snap.DocHash); err != nil {
 		return err
 	}
@@ -986,6 +989,9 @@ func (s *FSStore) PutSnapshot(ctx context.Context, snap domain.Snapshot) error {
 		existing, err := s.GetSnapshot(context.Background(), snap.RepoID, snap.ID)
 		if err != nil {
 			return err
+		}
+		if existing.DocumentRef() != snap.DocumentRef() {
+			return domain.ErrIntegrity
 		}
 		if snap.Branch == domain.StashBranchLabel {
 			return nil

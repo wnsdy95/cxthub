@@ -1130,6 +1130,14 @@ components:
         worktree_id: { type: string }
         created_at: { type: string, format: date-time }
 
+    DocumentIdentity:
+      type: string
+      enum: ["", cxt-manifest-sha256-v1]
+      description: |
+        Missing or empty means the existing canonical-CIR SHA-256 identity.
+        The manifest-root value is staged metadata; current publication paths
+        reject it until dual readers and peer negotiation are enabled.
+
     Snapshot:
       type: object
       description: |
@@ -1153,6 +1161,8 @@ components:
           description: "List of parent snapshot IDs. DAG root is an empty array."
         doc_hash:
           $ref: "#/components/schemas/ContentHash"
+        doc_identity:
+          $ref: "#/components/schemas/DocumentIdentity"
         provider:
           type: string
           enum: [claude, codex, unknown]
@@ -1219,6 +1229,8 @@ components:
       properties:
         hash:
           $ref: "#/components/schemas/ContentHash"
+        identity:
+          $ref: "#/components/schemas/DocumentIdentity"
         cir:
           type: object
           description: "CIR v1/v2 object. Schema: schemas/cir.schema.json."
@@ -1291,6 +1303,8 @@ components:
       required: [hash, envelope, chunks]
       additionalProperties: false
       properties:
+        identity:
+          $ref: "#/components/schemas/DocumentIdentity"
         hash:
           $ref: "#/components/schemas/ContentHash"
         format:

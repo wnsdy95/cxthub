@@ -132,10 +132,11 @@ type Snapshot struct {
 	Branch string      `json:"branch"`
 	// Branches is Git branch membership projected from branch reflogs. Branch is the legacy birth-label field;
 	// content deduplication allows multiple branches to share one snapshot.
-	Branches   []string      `json:"branches,omitempty"`
-	Parents    []ContentHash `json:"parents"`
-	DocHash    ContentHash   `json:"doc_hash"`
-	MemoryHash ContentHash   `json:"memory_hash,omitempty"`
+	Branches    []string         `json:"branches,omitempty"`
+	Parents     []ContentHash    `json:"parents"`
+	DocHash     ContentHash      `json:"doc_hash"`
+	DocIdentity DocumentIdentity `json:"doc_identity,omitempty"`
+	MemoryHash  ContentHash      `json:"memory_hash,omitempty"`
 	// Content-addressed hash of the .claude/.agents/.codex folder snapshots at the commit point.
 	ClaudeSettings ContentHash  `json:"claude_settings,omitempty"`
 	AgentsSettings ContentHash  `json:"agents_settings,omitempty"`

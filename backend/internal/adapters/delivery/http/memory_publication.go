@@ -1,7 +1,6 @@
 package http
 
 import (
-	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"net/http"
 )
@@ -12,10 +11,7 @@ func (s *Server) publishMemoryArchive(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, 503, "unavailable", "Memory archive publication unavailable")
 		return
 	}
-	var body struct {
-		Objects objectsBody         `json:"objects"`
-		Memory  domain.MemoryDigest `json:"memory"`
-	}
+	var body memoryPublicationBody
 	if !s.decodeLimited(w, r, &body, 32<<20) {
 		return
 	}

@@ -85,6 +85,9 @@ func validateSnapshotRefs(snap domain.Snapshot) error {
 	if err := validateHashes(snap.ID, snap.DocHash); err != nil {
 		return err
 	}
+	if err := snap.DocIdentity.Validate(); err != nil {
+		return err
+	}
 	if snap.ID != snap.DocHash {
 		return domain.ErrHashMismatch
 	}
@@ -447,6 +450,9 @@ func (s *FileStore) putSnapshotLocked(snap domain.Snapshot) error {
 		if err != nil {
 			return err
 		}
+		if existing.DocumentRef() != snap.DocumentRef() {
+			return domain.ErrHashMismatch
+		}
 		changed := false
 		// MemoryHash has a dedicated causal CAS. Generic snapshot adoption must
 		// never turn an authoritative read or stale local copy into LWW rollback.
@@ -548,7 +554,7 @@ func (s *FileStore) reconcileGraftStateLocked(authoritative domain.Snapshot) err
 	if err != nil {
 		return err
 	}
-	if existing.RepoID != authoritative.RepoID || !sameHashList(existing.Parents, authoritative.Parents) {
+	if existing.DocumentRef() != authoritative.DocumentRef() || existing.RepoID != authoritative.RepoID || !sameHashList(existing.Parents, authoritative.Parents) {
 		return domain.ErrHashMismatch
 	}
 	existing.GraftParents = dedupGraft(existing.ID, existing.Parents, authoritative.GraftParents)
