@@ -818,6 +818,29 @@ a newer sibling session. Automatic background capture and branch-switch ownershi
 worktree. No cross-worktree recency fallback is introduced, and native ID/path
 checks plus the capture-exclusion ledger still apply.
 
+### Codex rollout eligibility and managed ownership
+
+Removing a wrapper ownership binding or app-session liveness pointer does not
+delete or permanently exclude the transcript. Broad inventory for isolation,
+capture eligibility, and exact managed ownership have separate purposes:
+
+| Retired rollout state | Broad inventory for isolation | Staging and latest-file discovery |
+|---|---|---|
+| Binding ended; ordinary `.jsonl` retained | Included | Eligible |
+| Renamed `.jsonl.superseded` | Excluded | Excluded |
+| Ordinary `.jsonl` marked superseded in the ledger | Included | Excluded, even after growth |
+| Moved to `.codex/archived_sessions` | Excluded | Excluded |
+
+A retained eligible file may therefore be staged by an all-sources operation or
+selected by latest-file discovery. A newer timestamp or additional bytes cannot
+restore its retired managed binding. Exact managed capture retains the live
+replacement's identity and rejects a missing binding instead of choosing another
+session. Discovery preserves transcript bytes.
+
+These distinctions have synthetic regression coverage; they do not establish
+dynamic native model/window support, provider acceptance of 800k tokens, or
+compaction behavior. See the [native input limitations](CONTEXT_INPUT.md).
+
 ## Linkage reliability audit (2026-09-16, #175)
 
 The completion criterion is recovery from an interrupted operation, not just a
