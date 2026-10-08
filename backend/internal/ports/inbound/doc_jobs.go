@@ -2,7 +2,6 @@ package inbound
 
 import (
 	"context"
-	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -13,10 +12,6 @@ type DocFinalization interface {
 	SubmitDocFinalization(context.Context, domain.ContentHash, ChunkedDoc) (DocFinalizationStatus, error)
 	GetDocFinalization(context.Context, domain.ContentHash, string) (DocFinalizationStatus, error)
 }
-type DocFinalizationStatus struct {
-	ID        string             `json:"id"`
-	DocHash   domain.ContentHash `json:"doc_hash"`
-	State     string             `json:"state"`
-	Reason    string             `json:"reason,omitempty"`
-	UpdatedAt time.Time          `json:"updated_at"`
-}
+
+// Shared receipt metadata. App projection must preserve the explicit identity.
+type DocFinalizationStatus = domain.DocFinalizationStatus

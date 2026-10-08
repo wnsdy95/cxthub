@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -24,7 +25,7 @@ func TestContextDiffExactEventsNotTextDedup(t *testing.T) {
 	b.ID = "second"
 	before := diffDoc(t, "one", a)
 	after := diffDoc(t, "one", a, b)
-	got, err := CompareContextDocuments(&before, after)
+	got, err := CompareContextDocuments(context.Background(), &before, after)
 	if err != nil || got.State != "extended" || !got.CountsKnown || got.Added.Start != 1 || got.Added.End != 2 || got.Added.Kinds[EventMessage] != 1 {
 		t.Fatal(got, err)
 	}
@@ -33,17 +34,17 @@ func TestContextDiffExactEventsNotTextDedup(t *testing.T) {
 		t.Fatal("diagnostic leaked source text")
 	}
 	other := diffDoc(t, "two", a, b)
-	if _, err = CompareContextDocuments(&before, other); !errors.Is(err, ErrHashMismatch) {
+	if _, err = CompareContextDocuments(context.Background(), &before, other); !errors.Is(err, ErrHashMismatch) {
 		t.Fatal("cross-session equality claimed coverage", err)
 	}
 	// Same visible text with a different provider event ID is a rewrite.
 	rewritten := a
 	rewritten.ID = "replacement"
-	got, err = CompareContextDocuments(&before, diffDoc(t, "one", rewritten, b))
+	got, err = CompareContextDocuments(context.Background(), &before, diffDoc(t, "one", rewritten, b))
 	if err != nil || got.State != "replacement" || got.Removed.End != 1 || got.Added.End != 2 {
 		t.Fatal(got, err)
 	}
-	got, err = CompareContextDocuments(&after, before)
+	got, err = CompareContextDocuments(context.Background(), &after, before)
 	if err != nil || got.State != "older_observation" {
 		t.Fatal(got, err)
 	}
@@ -53,12 +54,12 @@ func TestContextDiffUsesCanonicalOrderAndAuthenticatesBody(t *testing.T) {
 	b := Event{Kind: EventTurn, Role: "assistant", Seq: 2}
 	before := diffDoc(t, "one", a, b)
 	after := diffDoc(t, "one", b, a)
-	got, err := CompareContextDocuments(&before, after)
+	got, err := CompareContextDocuments(context.Background(), &before, after)
 	if err != nil || got.State != "unchanged" {
 		t.Fatal(got, err)
 	}
 	after.CIR.Events[0].Role = "user"
-	if _, err = CompareContextDocuments(&before, after); !errors.Is(err, ErrHashMismatch) {
+	if _, err = CompareContextDocuments(context.Background(), &before, after); !errors.Is(err, ErrHashMismatch) {
 		t.Fatal(err)
 	}
 }

@@ -27,7 +27,7 @@ func NewGitChanges(core *Service, reader outbound.GitEvidenceReader) (*GitChange
 	if !ok || reader == nil {
 		return nil, fmt.Errorf("durable Git change verification unavailable")
 	}
-	return &GitChanges{core: core, gitChangeQuery: &gitChangeQuery{store: st}, reader: reader}, nil
+	return &GitChanges{core: core, gitChangeQuery: &gitChangeQuery{store: st, core: core}, reader: reader}, nil
 }
 func (g *GitChanges) Submit(ctx context.Context, repo domain.ContentHash, r domain.GitChangeRequest) (domain.GitChangeJob, error) {
 	if err := domain.ValidateContentHash(repo); err != nil {
@@ -62,7 +62,7 @@ func (g *GitChanges) Retry(ctx context.Context, repo domain.ContentHash, id stri
 func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
 	work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 90*time.Second)
 	defer cancel()
-	repo, err := g.core.meta.GetRepo(work, j.RepoID)
+	repo, err := g.core.workerRepository(work, j.RepoID)
 	if err == nil && repo.GitRemoteURL != j.GitOrigin {
 		err = domain.ErrConflict
 	}
@@ -135,7 +135,7 @@ func (g *GitChanges) run(ctx context.Context, j domain.GitChangeJob) error {
 	return errors.Join(err, e)
 }
 func (g *GitChanges) Process(ctx context.Context, limit int) error {
-	ctx = inbound.WithSystemActor(ctx)
+	ctx = g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
 	for i := 0; i < limit; i++ {
 		if err := ctx.Err(); err != nil {
 			return err

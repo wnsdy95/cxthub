@@ -72,6 +72,10 @@ func PublicOrigin(addr, configured string) (string, error) {
 }
 
 func Open(ctx context.Context, addr, dataDir string, requirePostgres bool) (_ *Runtime, err error) {
+	rootPublication := EnvBool(os.Getenv("CXT_CONVERSATION_ROOT_PUBLICATION"))
+	if err := app.ValidateConversationRootPublicationConfig(rootPublication); err != nil {
+		return nil, err
+	}
 	var verifier outbound.IdentityVerifier
 	mode := strings.TrimSpace(os.Getenv("CXT_AUTH"))
 	switch mode {
@@ -123,6 +127,9 @@ func Open(ctx context.Context, addr, dataDir string, requirePostgres bool) (_ *R
 		log.Printf("migrations: applied %d", n)
 	}
 	r.Context = app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	if err = r.Context.ConfigureConversationRootPublication(rootPublication); err != nil {
+		return nil, err
+	}
 	r.Identity = app.NewIdentityService(verifier, st).WithDomainResolver(net.DefaultResolver)
 	return r, nil
 }

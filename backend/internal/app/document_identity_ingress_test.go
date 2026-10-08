@@ -91,8 +91,14 @@ func TestDocumentIdentityCommitRejectsMixedBatchBeforePublication(t *testing.T) 
 		{ID: first.Hash, DocHash: first.Hash, Parents: []domain.ContentHash{seed}},
 		{ID: second.Hash, DocHash: second.Hash, DocIdentity: domain.DocumentIdentityRootV1, Parents: []domain.ContentHash{first.Hash}},
 	}})
-	if !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
-		t.Errorf("mixed identity batch: %v", err)
+	want := domain.ErrUnsupportedDocumentIdentity
+	if hasDocumentIdentity(svc.DocumentIdentitiesSupported(), domain.DocumentIdentityRootV1) {
+		// This legacy repository never opted in. A complete binary reaches
+		// that policy fence; both paths must reject before the first write.
+		want = domain.ErrRootPublicationDisabled
+	}
+	if !errors.Is(err, want) {
+		t.Errorf("mixed identity batch: got %v, want %v", err, want)
 	}
 	afterSnaps, err := st.ListSnapshots(ctx, repo, "")
 	if err != nil || !reflect.DeepEqual(beforeSnaps, afterSnaps) {

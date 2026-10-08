@@ -216,6 +216,9 @@ func (s *IdentityService) mutateUpdateOrganizationMember(ctx context.Context, ac
 			return domain.ErrConflict
 		}
 	}
+	if err := s.checkOrganizationDocumentIdentities(ctx, organizationID); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	membership := domain.OrganizationMembership{OrganizationID: organizationID, UserID: targetID, Role: role, CreatedAt: now}
 	audit := organizationAudit(ctx, organizationID, actorID, "organization.member.updated", "user", targetID, string(role), now)
@@ -255,6 +258,9 @@ func (s *IdentityService) mutateRemoveOrganizationMember(ctx context.Context, ac
 	if err := s.checkOrganizationRemoval(ctx, actorID, organizationID, targetID); err != nil {
 		return err
 	}
+	if err := s.checkOrganizationDocumentIdentities(ctx, organizationID); err != nil {
+		return err
+	}
 	audit := organizationAudit(ctx, organizationID, actorID, "organization.member.removed", "user", targetID, "", time.Now().UTC())
 	return s.organization.RemoveOrganizationMemberWithAudit(ctx, organizationID, targetID, audit)
 }
@@ -290,6 +296,9 @@ func (s *IdentityService) mutateUpdateOrganizationPolicy(ctx context.Context, ac
 	}
 	policy.UpdatedBy, policy.UpdatedAt = actorID, revision
 	if err := domain.ValidateOrganizationPolicy(policy); err != nil {
+		return domain.OrganizationPolicy{}, err
+	}
+	if err := s.checkOrganizationDocumentIdentities(ctx, policy.OrganizationID); err != nil {
 		return domain.OrganizationPolicy{}, err
 	}
 	audit := organizationAudit(ctx, policy.OrganizationID, actorID, "organization.policy.updated", "organization", policy.OrganizationID, "", policy.UpdatedAt)
@@ -399,6 +408,9 @@ func (s *IdentityService) mutateCreateBreakGlassGrant(ctx context.Context, actor
 	if repository.OwnerNamespaceID != organizationRecord.NamespaceID {
 		return domain.BreakGlassGrant{}, domain.ErrForbidden
 	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+		return domain.BreakGlassGrant{}, err
+	}
 	now := time.Now().UTC()
 	grant := domain.BreakGlassGrant{
 		ID:             domain.NewID("bg_"),
@@ -420,6 +432,9 @@ func (s *IdentityService) mutateCreateBreakGlassGrant(ctx context.Context, actor
 }
 
 func (s *IdentityService) HasBreakGlassAccess(ctx context.Context, repositoryID, userID string) (bool, error) {
+	return identityResult(ctx, s, func(ctx context.Context) (bool, error) { return s.hasBreakGlassAccess(ctx, repositoryID, userID) })
+}
+func (s *IdentityService) hasBreakGlassAccess(ctx context.Context, repositoryID, userID string) (bool, error) {
 	if s.organization == nil || repositoryID == "" || userID == "" {
 		return false, nil
 	}
@@ -441,6 +456,9 @@ func (s *IdentityService) HasBreakGlassAccess(ctx context.Context, repositoryID,
 	}
 	if !policy.BreakGlassEnabled {
 		return false, nil
+	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+		return false, err
 	}
 	now := time.Now().UTC()
 	used := organizationAudit(ctx, ns.OrganizationID, userID, "organization.break_glass.used", "repository", repositoryID, "", now)
@@ -469,6 +487,9 @@ func (s *IdentityService) OffboardOrganizationMember(ctx context.Context, actor,
 			return fmt.Errorf("%w: choose revoke or retain for direct repository access", domain.ErrValidation)
 		}
 		if err := s.checkOrganizationRemoval(ctx, actor, org, target); err != nil {
+			return err
+		}
+		if err := s.checkOrganizationDocumentIdentities(ctx, org); err != nil {
 			return err
 		}
 		var direct []string

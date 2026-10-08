@@ -37,7 +37,7 @@ func (s *Service) QueryEffectiveMemory(ctx context.Context, repo domain.ContentH
 	if in.Limit == 0 {
 		in.Limit = 20
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.EffectiveMemoryPage, error) {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.EffectiveMemoryPage, error) {
 		return s.queryEffectiveMemory(ctx, repo, in)
 	})
 }

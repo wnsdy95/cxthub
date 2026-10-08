@@ -28,7 +28,7 @@ func (s *Service) PullBranchPlan(ctx context.Context, repoID domain.ContentHash,
 	if s.BranchPullVersion() == 0 {
 		return domain.BranchPullPlan{}, domain.ErrBranchPullUnsupported
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.BranchPullPlan, error) {
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) (domain.BranchPullPlan, error) {
 		var zero domain.BranchPullPlan
 		repo, err := s.meta.GetRepo(ctx, repoID)
 		if err != nil {

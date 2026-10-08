@@ -204,9 +204,9 @@ func TestPGSnapshotDocumentIdentityUpgradePreservesLegacy(t *testing.T) {
 	// Start with an actual pre-0076 row and a retained catalog/Merkle checkpoint.
 	repo := domain.HashContent([]byte("identity upgrade repo"))
 	id := domain.HashContent([]byte("identity upgrade snapshot"))
-	if _, err := s.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
-		t.Fatal(err)
-	}
+	// Seed the old schema through its SQL contract. The current adapter requires
+	// the later repository-identity column and must not run before migration.
+	catalogExecPG(t, ctx, s.pool, `INSERT INTO repos(id,remote_url,team) VALUES($1,'https://example.test/identity-upgrade','fixture')`, string(repo))
 	catalogExecPG(t, ctx, s.pool, `INSERT INTO blobs(hash,bytes) VALUES($1,$2)`, string(id), []byte(`{}`))
 	catalogExecPG(t, ctx, s.pool, `INSERT INTO snapshots(repo_id,id,branch,doc_hash,parents,provider,fidelity) VALUES($1,$2,'main',$2,'{}','codex','full')`, string(repo), string(id))
 	copyMigration := func(dir, name string) {
@@ -224,8 +224,30 @@ func TestPGSnapshotDocumentIdentityUpgradePreservesLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	contents := catalogUpgradeContents(t, ctx, s)
-	before := catalogMerklePagePG(t, ctx, s, repo, domain.CatalogMerkleRequest{Version: 1})
-	entries, checkpoint := catalogDrainPG(t, ctx, s, repo, catalogPagePG(t, ctx, s, repo, domain.CatalogRequest{Version: 1}), 1)
+	state := catalogReadStatePG(t, ctx, s, repo)
+	checkpoint := domain.CatalogCheckpoint{Version: domain.CatalogVersion, RepoID: repo, Epoch: state.epoch, Sequence: state.head}
+	var entries []domain.CatalogEntry
+	for _, row := range catalogRowsPG(t, ctx, s, repo, -1) {
+		entries = append(entries, domain.CatalogEntry{Sequence: row.seq, Kind: row.kind, Key: row.key, Deleted: row.deleted, Value: row.value})
+	}
+	// The immutable node format is unchanged. Install an old-generation cache
+	// without calling current read-policy code against the pre-upgrade schema.
+	root, nodes, err := domain.BuildCatalogMerkle(repo, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootHash, err := domain.CatalogMerkleHash(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for hash, node := range nodes {
+		payload, err := catalogMerklePayload(node)
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalogExecPG(t, ctx, s.pool, `INSERT INTO repository_catalog_merkle_nodes(repo_id,hash,payload) VALUES($1,$2,$3)`, string(repo), string(hash), payload)
+	}
+	catalogExecPG(t, ctx, s.pool, `INSERT INTO repository_catalog_merkle_roots(repo_id,epoch,seq,root_hash) VALUES($1,$2,$3,$4)`, string(repo), checkpoint.Epoch, checkpoint.Sequence, string(rootHash))
 	legacy := catalogJSONPG[domain.Snapshot](t, entries[1].Value)
 	fingerprint, err := domain.SnapshotStateHash(legacy)
 	if err != nil {
@@ -233,7 +255,8 @@ func TestPGSnapshotDocumentIdentityUpgradePreservesLegacy(t *testing.T) {
 	}
 	upgrade := t.TempDir()
 	copyMigration(upgrade, "0076_snapshot_doc_identity.sql")
-	if n, err := s.ApplyMigrations(ctx, upgrade); err != nil || n != 1 {
+	copyMigration(upgrade, "0077_repository_doc_identity.sql")
+	if n, err := s.ApplyMigrations(ctx, upgrade); err != nil || n != 2 {
 		t.Fatal("identity upgrade", n, err)
 	}
 	if got := catalogUpgradeContents(t, ctx, s); got != contents {
@@ -254,7 +277,7 @@ func TestPGSnapshotDocumentIdentityUpgradePreservesLegacy(t *testing.T) {
 		t.Fatal("new image function changed legacy encoding")
 	}
 	warm := catalogMerklePagePG(t, ctx, s, repo, domain.CatalogMerkleRequest{Version: 1})
-	if !reflect.DeepEqual(warm, before) {
+	if warm.RootHash != rootHash || warm.Checkpoint != checkpoint || warm.Count != root.Count || !reflect.DeepEqual(warm.Children, root.Children) {
 		t.Fatal("migration invalidated legacy Merkle root/checkpoint")
 	}
 	delta := catalogPagePG(t, ctx, s, repo, domain.CatalogRequest{Version: 1, After: &checkpoint})

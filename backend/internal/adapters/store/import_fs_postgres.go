@@ -309,6 +309,9 @@ func (s *PostgresStore) ImportFrozenFS(ctx context.Context, root string, apply b
 			if e = json.Unmarshal(b, &r); e != nil {
 				return f.report, e
 			}
+			if e = r.RequiredDocIdentity.Validate(); e != nil {
+				return f.report, e
+			}
 			if p != "repos/"+hexOf(r.ID)+"/repo.json" {
 				return f.report, domain.ErrIntegrity
 			}
@@ -321,7 +324,16 @@ func (s *PostgresStore) ImportFrozenFS(ctx context.Context, root string, apply b
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].ID < repos[j].ID })
 	for _, r := range repos {
-		if _, err = s.PutRepo(ctx, r); err != nil {
+		registration := r
+		registration.RequiredDocIdentity = domain.DocumentIdentityLegacy
+		if _, err = s.PutRepo(ctx, registration); err != nil {
+			return f.report, err
+		}
+		// The importer already owns every target table in this serializable
+		// transaction. Bind the narrow requirement API to that same transaction;
+		// never publish configuration in a separately committed transaction.
+		repoCtx := context.WithValue(ctx, repositoryTxKey{}, &repositoryTx{Tx: tx, owner: s, repo: r.ID})
+		if err = s.RequireDocumentIdentity(repoCtx, r.ID, r.RequiredDocIdentity); err != nil {
 			return f.report, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE repos SET context_protocol=$2, protect_default=$3 WHERE id=$1`, r.ID, r.ContextProtocol, r.ProtectDefault); err != nil {
@@ -342,6 +354,13 @@ func (s *PostgresStore) ImportFrozenFS(ctx context.Context, root string, apply b
 	}
 	// Compare the actual query projection, not only raw row counts.
 	for _, r := range repos {
+		imported, e := s.GetRepo(ctx, r.ID)
+		if e != nil {
+			return f.report, e
+		}
+		if imported.RequiredDocIdentity != r.RequiredDocIdentity {
+			return f.report, domain.ErrIntegrity
+		}
 		a, e := source.GetManifest(ctx, r.ID)
 		if e != nil {
 			return f.report, e

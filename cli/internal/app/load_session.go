@@ -25,7 +25,7 @@ import (
 //     - Branch name → GetRef(RefBranch, name).Target
 //     - Tag name → GetRef(RefTag, name).Target
 //     - sha256:* → Direct use
-//  2. SessionStore.GetSnapshot(snapID) + GetDoc(snap.DocHash)
+//  2. SessionStore.GetSnapshot(snapID) + verified document reference read
 //  3. Branch on Mode (compatibility rules):
 //     full (or reconstructed):
 //     a. ProviderCodec[TargetProvider].Encode(cir, TargetProvider)
@@ -120,7 +120,7 @@ func (s *LoadSessionService) Load(ctx context.Context, in inbound.LoadInput) (in
 	if _, _, err := selectedMemory(ctx, s.store, snapID); err != nil {
 		return inbound.LoadOutput{}, err
 	}
-	doc, err := s.store.GetDoc(ctx, snap.DocHash)
+	doc, err := readDocumentReference(ctx, s.store, snap.DocumentRef())
 	if err != nil {
 		return inbound.LoadOutput{}, err
 	}

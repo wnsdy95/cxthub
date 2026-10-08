@@ -9,14 +9,17 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
-type docJobStatus struct {
-	ID      string             `json:"id"`
-	DocHash domain.ContentHash `json:"doc_hash"`
-	State   string             `json:"state"`
-	Reason  string             `json:"reason,omitempty"`
-}
+type docJobStatus = domain.DocFinalizationStatus
 
 func (c *BackendClient) finalizeDocument(ctx context.Context, repo string, doc chunkedDocWire) error {
+	if err := doc.DocumentRef().Validate(); err != nil {
+		return err
+	}
+	if doc.Identity != domain.DocumentIdentityLegacy {
+		if _, err := doc.ConversationManifest(); err != nil {
+			return err
+		}
+	}
 	var job docJobStatus
 	path := c.reposPath(repo) + "/push/doc-jobs"
 	if err := c.do(ctx, http.MethodPost, path, doc, &job); err != nil {
@@ -25,7 +28,7 @@ func (c *BackendClient) finalizeDocument(ctx context.Context, repo string, doc c
 	id := job.ID
 	delay := time.Second
 	for {
-		if err := domain.ValidateContentHash(domain.ContentHash(job.ID)); err != nil || job.ID != id || job.DocHash != doc.Hash {
+		if err := job.ValidateFor(domain.ContentHash(repo), doc); err != nil || job.ID != id {
 			return fmt.Errorf("%w: document finalization receipt identity", domain.ErrHashMismatch)
 		}
 		switch job.State {

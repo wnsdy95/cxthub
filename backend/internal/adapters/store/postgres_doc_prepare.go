@@ -14,6 +14,7 @@ import (
 // Heavy canonical scanning and index planning precede repository/row locks.
 type preparedDocPG struct {
 	doc     domain.VerifiedSessionDoc
+	root    *preparedRootDoc
 	chunks  domain.DocChunkPlan
 	chunked bool
 	payload []byte

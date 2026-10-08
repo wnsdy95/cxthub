@@ -36,5 +36,6 @@ func (s *Service) CatalogMerkle(ctx context.Context, repo domain.ContentHash, re
 	if !ok {
 		return zero, domain.ErrCatalogUnsupported
 	}
+	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
 	return store.CatalogMerkle(ctx, repo, request)
 }

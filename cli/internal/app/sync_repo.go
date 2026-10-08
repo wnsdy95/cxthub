@@ -70,6 +70,9 @@ func (s *SyncRepoService) repoID(ctx context.Context, in inbound.SyncInput) (str
 }
 
 func validateSnapshotObject(snap domain.Snapshot) error {
+	if err := snap.DocumentRef().Validate(); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(snap.ID); err != nil {
 		return err
 	}
@@ -120,9 +123,9 @@ func validatePullBatch(ctx context.Context, store outbound.SessionStore, repoID 
 	return validatePullBatchWithVerified(ctx, store, repoID, snaps, docs, refs, nil)
 }
 
-func validatePullBatchWithVerified(ctx context.Context, store outbound.SessionStore, repoID string, snaps []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, verified map[domain.ContentHash]bool) error {
+func validatePullBatchWithVerified(ctx context.Context, store outbound.SessionStore, repoID string, snaps []domain.Snapshot, docs []domain.SessionDoc, refs []domain.Ref, verified map[domain.DocumentRef]bool) error {
 	if verified == nil {
-		verified = make(map[domain.ContentHash]bool)
+		verified = make(map[domain.DocumentRef]bool)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -156,7 +159,11 @@ func validatePullBatchWithVerified(ctx context.Context, store outbound.SessionSt
 		snapByID[snap.ID] = snap
 		referencedDocs[snap.DocHash] = true
 
-		if _, err := store.GetSnapshot(ctx, snap.ID); err != nil && !errors.Is(err, domain.ErrNotFound) {
+		if previous, err := store.GetSnapshot(ctx, snap.ID); err == nil {
+			if previous.DocumentRef() != snap.DocumentRef() {
+				return domain.ErrHashMismatch
+			}
+		} else if !errors.Is(err, domain.ErrNotFound) {
 			return err
 		}
 	}
@@ -166,16 +173,19 @@ func validatePullBatchWithVerified(ctx context.Context, store outbound.SessionSt
 		}
 	}
 	for _, snap := range snaps {
-		if verified[snap.DocHash] {
+		if verified[snap.DocumentRef()] {
 			continue
 		}
-		if _, ok := docByHash[snap.DocHash]; ok {
+		if doc, ok := docByHash[snap.DocHash]; ok {
+			if doc.DocumentRef() != snap.DocumentRef() {
+				return domain.ErrHashMismatch
+			}
 			continue
 		}
-		if err := verifyStoredDocument(ctx, store, snap.DocHash); err != nil {
+		if err := verifyStoredDocumentReference(ctx, store, snap.DocumentRef()); err != nil {
 			return pullReadError(err, fmt.Sprintf("snapshot %s doc %s", snap.ID, snap.DocHash))
 		}
-		verified[snap.DocHash] = true
+		verified[snap.DocumentRef()] = true
 	}
 
 	getSnapshot := func(id domain.ContentHash) (domain.Snapshot, error) {
@@ -323,6 +333,9 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (resul
 	if err != nil {
 		return inbound.SyncOutput{}, err
 	}
+	if err := s.preflightLocalRoots(ctx, repoID); err != nil {
+		return inbound.SyncOutput{}, err
+	}
 	if in.Publication != nil || in.Ref != "" {
 		return s.pushPublication(ctx, in, repoID)
 	}
@@ -379,7 +392,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (resul
 		wanted[snap.ID] = true
 	}
 	for _, hash := range pushDocs {
-		wanted[hash] = true
+		wanted[hash.Hash] = true
 	}
 	if in.ForegroundOnly && canBackfill {
 		remoteMemoryAttachments, err = s.remoteMemoryCatalog(ctx, repoID)
@@ -402,7 +415,7 @@ func (s *SyncRepoService) push(ctx context.Context, in inbound.SyncInput) (resul
 			}
 		}
 		for _, hash := range pushDocs {
-			if selected[hash] {
+			if selected[hash.Hash] {
 				keptDocs = append(keptDocs, hash)
 			}
 		}
@@ -1010,13 +1023,16 @@ func (s *SyncRepoService) collectSnapshots(ctx context.Context, repoID string, m
 // snapshot while losing its doc (or vice versa), so manifest snapshot indexes
 // are not a sufficient repair proof. Optional capability fallback preserves
 // compatibility with non-HTTP remotes and older adapters.
-func (s *SyncRepoService) selectPushObjects(ctx context.Context, repoID string, snaps []domain.Snapshot) ([]domain.Snapshot, []domain.ContentHash, error) {
+func (s *SyncRepoService) selectPushObjects(ctx context.Context, repoID string, snaps []domain.Snapshot) ([]domain.Snapshot, []domain.DocumentRef, error) {
+	if err := s.preflightSnapshotReferences(ctx, repoID, snaps); err != nil {
+		return nil, nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	negotiator, ok := s.remote.(outbound.PushObjectNegotiator)
 	if !ok {
-		return snaps, pushDocumentHashes(snaps, nil), ctx.Err()
+		return snaps, pushDocumentReferences(snaps, nil), ctx.Err()
 	}
 
 	snapshotHaves := make([]domain.ContentHash, 0, len(snaps))
@@ -1048,7 +1064,7 @@ func (s *SyncRepoService) selectPushObjects(ctx context.Context, repoID string, 
 			pushSnaps = append(pushSnaps, snap)
 		}
 	}
-	return pushSnaps, pushDocumentHashes(snaps, wantDocs), ctx.Err()
+	return pushSnaps, pushDocumentReferences(snaps, wantDocs), ctx.Err()
 }
 
 func negotiatedWantSet(haves, wants []domain.ContentHash) (map[domain.ContentHash]bool, error) {
@@ -1071,16 +1087,16 @@ func negotiatedWantSet(haves, wants []domain.ContentHash) (map[domain.ContentHas
 
 // Selection holds identifiers only. A backlog of cumulative transcripts must
 // not retain every decoded body until the final upload starts.
-func pushDocumentHashes(snaps []domain.Snapshot, wanted map[domain.ContentHash]bool) []domain.ContentHash {
-	var hashes []domain.ContentHash
-	seen := map[domain.ContentHash]bool{}
+func pushDocumentReferences(snaps []domain.Snapshot, wanted map[domain.ContentHash]bool) []domain.DocumentRef {
+	var hashes []domain.DocumentRef
+	seen := map[domain.DocumentRef]bool{}
 	for _, snap := range snaps {
 		hash := snap.DocHash
-		if hash == "" || seen[hash] || (wanted != nil && !wanted[hash]) {
+		if hash == "" || seen[snap.DocumentRef()] || (wanted != nil && !wanted[hash]) {
 			continue
 		}
-		hashes = append(hashes, hash)
-		seen[hash] = true
+		hashes = append(hashes, snap.DocumentRef())
+		seen[snap.DocumentRef()] = true
 	}
 	return hashes
 }
@@ -1090,7 +1106,7 @@ func pushDocumentHashes(snaps []domain.Snapshot, wanted map[domain.ContentHash]b
 // unsync pointers advance until the entire prerequisite object phase succeeds.
 // Peak decoded-body retention is proportional to the largest document, not the
 // sum of the backlog. Chunk negotiation still reuses prior uploads on retry.
-func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string, offered, snaps []domain.Snapshot, hashes []domain.ContentHash, observers ...func(inbound.SyncProgress)) error {
+func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string, offered, snaps []domain.Snapshot, hashes []domain.DocumentRef, observers ...func(inbound.SyncProgress)) error {
 	// Negotiation is an observation, not a remote retention lease. A concurrent
 	// pending replacement can collect a previously present prefix while large
 	// bodies upload. Recover only newly missing prerequisites, at most twice.
@@ -1163,7 +1179,11 @@ func (s *SyncRepoService) pushSelectedObjects(ctx context.Context, repoID string
 	}
 }
 
-func (s *SyncRepoService) pushDocument(ctx context.Context, repoID string, hash domain.ContentHash) error {
+func (s *SyncRepoService) pushDocument(ctx context.Context, repoID string, ref domain.DocumentRef) error {
+	hash := ref.Hash
+	if err := ref.Validate(); err != nil {
+		return err
+	}
 	// Preserve the stored representation when both adapters support it. The
 	// callback keeps its lazy chunk reader alive until the server acknowledges
 	// the document; snapshot/ref publication still happens in the caller.
@@ -1171,12 +1191,12 @@ func (s *SyncRepoService) pushDocument(ctx context.Context, repoID string, hash 
 		if remote, ok := s.remote.(outbound.ChunkedDocumentPusher); ok {
 			endRead := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageDocumentRead, outbound.SyncDiagnosticCounts{Documents: 1})
 			uploaded := false
-			_, err := source.WithVerifiedDocChunks(ctx, hash, func(doc outbound.DocumentChunks) error {
+			_, err := source.WithVerifiedDocChunks(ctx, ref, func(doc outbound.DocumentChunks) error {
 				endRead(nil)
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				if doc.Hash != hash {
+				if doc.Representation.DocumentRef() != ref {
 					return domain.ErrHashMismatch
 				}
 				var err error
@@ -1191,6 +1211,9 @@ func (s *SyncRepoService) pushDocument(ctx context.Context, repoID string, hash 
 				return ctx.Err()
 			}
 		}
+	}
+	if ref.Identity != domain.DocumentIdentityLegacy {
+		return domain.ErrUnsupportedDocumentIdentity
 	}
 	endRead := outbound.BeginSyncDiagnostic(ctx, outbound.SyncStageDocumentRead, outbound.SyncDiagnosticCounts{Documents: 1})
 	doc, err := s.store.GetDoc(ctx, hash)
@@ -1220,6 +1243,9 @@ func (s *SyncRepoService) SyncPendings(ctx context.Context, in inbound.SyncInput
 func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput, resolutions []inbound.PendingResolution) (int, error) {
 	repoID, err := s.repoID(ctx, in)
 	if err != nil {
+		return 0, err
+	}
+	if err := s.preflightLocalRoots(ctx, repoID); err != nil {
 		return 0, err
 	}
 	for _, resolution := range resolutions {
@@ -1345,8 +1371,9 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 		}
 		if len(ahead) > 0 {
 			if snaps, cerr := s.collectSnapshots(ctx, repoID, man); cerr == nil {
-				if serr := s.pushSettingsObjects(ctx, repoID, snaps); serr == nil {
-					pushSnaps, pushDocs, perr := s.selectPushObjects(ctx, repoID, snaps)
+				pushSnaps, pushDocs, perr := s.selectPushObjects(ctx, repoID, snaps)
+				if perr == nil {
+					perr = s.pushSettingsObjects(ctx, repoID, snaps)
 					objectsReady := perr == nil
 					if objectsReady && (len(pushSnaps) > 0 || len(pushDocs) > 0) {
 						objectsReady = s.pushSelectedObjects(ctx, repoID, snaps, pushSnaps, pushDocs) == nil
@@ -1646,14 +1673,18 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 			}
 			snapshotStates[observed.ID] = state
 			if ok, herr := s.store.HasDoc(ctx, observed.ID); herr == nil && ok {
-				docHaves = append(docHaves, observed.ID)
+				if local.DocIdentity == domain.DocumentIdentityLegacy {
+					docHaves = append(docHaves, observed.ID)
+				}
 			}
 		}
 	} else if man, merr := s.store.Manifest(ctx, repoID); merr == nil {
 		snapshotStates = man.SnapshotStates
 		for _, id := range man.SnapshotIndex {
 			if ok, herr := s.store.HasDoc(ctx, id); herr == nil && ok {
-				docHaves = append(docHaves, id)
+				if snap, err := s.store.GetSnapshot(ctx, id); err == nil && snap.DocIdentity == domain.DocumentIdentityLegacy {
+					docHaves = append(docHaves, id)
+				}
 			}
 		}
 	}
@@ -1673,7 +1704,7 @@ func (s *SyncRepoService) pull(ctx context.Context, in inbound.SyncInput) (inbou
 	var docs []domain.SessionDoc
 	var refs []domain.Ref
 	syncProgress(in, "pull", "download-and-verify-documents", 0, 0)
-	verified := make(map[domain.ContentHash]bool)
+	verified := make(map[domain.DocumentRef]bool)
 	var scopedPlan domain.BranchPullPlan
 	request := domain.BranchPullRequest{Version: domain.BranchPullVersion, Branch: in.Ref, ObservationRoots: in.ObservationRoots}
 	if useScope {

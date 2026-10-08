@@ -13,7 +13,7 @@ import (
 )
 
 func TestContextDiffFrozenIndexAndLatePending(t *testing.T) {
-	s, f := newWorkingReadFixture(t)
+	s, f := newContextDiffFixture(t)
 	ctx := context.Background()
 	prior := f.entry(t, 1)
 	frozen := f.entry(t, 2)
@@ -58,7 +58,7 @@ func TestContextDiffFrozenIndexAndLatePending(t *testing.T) {
 	}
 }
 func TestContextDiffRewoundPositionExcludesFutureFinalizedCoverage(t *testing.T) {
-	s, f := newWorkingReadFixture(t)
+	s, f := newContextDiffFixture(t)
 	entry := f.entry(t, 3)
 	f.index.Entries = []domain.StagedSession{entry}
 	f.index = f.index.WithRevision()
@@ -75,7 +75,7 @@ func TestContextDiffRewoundPositionExcludesFutureFinalizedCoverage(t *testing.T)
 	}
 }
 func TestContextDiffCannotDisambiguateReusedSessionAcrossProviderFiles(t *testing.T) {
-	s, f := newWorkingReadFixture(t)
+	s, f := newContextDiffFixture(t)
 	one, two := f.entry(t, 2), f.entry(t, 2)
 	two.SourceID = domain.HashContent([]byte("other-provider-file"))
 	two.Key = domain.StagedSessionKey(two.Provider, two.SessionID, two.SourceID, two.Generation)
@@ -91,7 +91,7 @@ func TestContextDiffCannotDisambiguateReusedSessionAcrossProviderFiles(t *testin
 	}
 }
 func TestContextDiffMissingAndUnknownAreNotClean(t *testing.T) {
-	s, f := newWorkingReadFixture(t)
+	s, f := newContextDiffFixture(t)
 	ctx := context.Background()
 	out, err := s.Diff(ctx, inbound.ContextDiffInput{})
 	if err != nil || len(out.Changes) != 0 || !containsWorkingGap(out.Gaps, "no_stored_pending_observation") || out.Freshness.WatcherState != "unknown" {
@@ -110,9 +110,10 @@ func TestContextDiffMissingAndUnknownAreNotClean(t *testing.T) {
 	}
 }
 func TestContextDiffNewSessionDoesNotDeduplicateSameText(t *testing.T) {
-	s, f := newWorkingReadFixture(t)
+	s, f := newContextDiffFixture(t)
 	other := workingDoc(t, "different-session", 1)
 	f.docs[other.Hash] = other
+	f.snapshots[other.Hash] = domain.Snapshot{ID: other.Hash, DocHash: other.Hash, RepoID: f.repo, Provider: domain.ProviderCodex, SessionID: "different-session"}
 	f.pending = []domain.Pending{{RepoID: f.repo, Provider: domain.ProviderCodex, SessionID: "different-session", Target: other.Hash}}
 	out, err := s.Diff(context.Background(), inbound.ContextDiffInput{})
 	if err != nil || len(out.Changes) != 1 || out.Changes[0].State != "new_source" || out.Changes[0].Added.End != 1 {
@@ -125,7 +126,7 @@ func TestContextDiffNewSessionDoesNotDeduplicateSameText(t *testing.T) {
 	}
 }
 func TestContextDiffCorruptImmutableBodyFailsClosed(t *testing.T) {
-	s, f := newWorkingReadFixture(t)
+	s, f := newContextDiffFixture(t)
 	doc := workingDoc(t, "session", 2)
 	f.pending = []domain.Pending{{RepoID: f.repo, Provider: domain.ProviderCodex, SessionID: "session", Target: doc.Hash}}
 	doc.CIR.Events[0].Blocks[0].Text = "altered"
@@ -144,7 +145,7 @@ func containsWorkingGap(gaps []string, want string) bool {
 }
 
 func TestContextDiffDoesNotOpenOlderCumulativeVersionsToHideRewrite(t *testing.T) {
-	s, f := newWorkingReadFixture(t)
+	s, f := newContextDiffFixture(t)
 	newest := workingDoc(t, "session", 2)
 	newest.CIR.Events[0].ID = "rewritten-event"
 	raw, err := domain.CanonicalBytes(newest.CIR)
@@ -167,4 +168,15 @@ func TestContextDiffDoesNotOpenOlderCumulativeVersionsToHideRewrite(t *testing.T
 	if reads != 2 {
 		t.Fatalf("opened %d documents, want current and latest selected only", reads)
 	}
+}
+
+// Pending captures have published snapshot metadata, which selects the identity.
+func newContextDiffFixture(t *testing.T) (*WorkingStateService, *workingReadFixture) {
+	s, f := newWorkingReadFixture(t)
+	for hash, doc := range f.docs {
+		if _, ok := f.snapshots[hash]; !ok {
+			f.snapshots[hash] = domain.Snapshot{ID: hash, DocHash: hash, DocIdentity: doc.Identity, RepoID: f.repo, Provider: doc.CIR.Envelope.SourceProvider, SessionID: doc.CIR.Envelope.SessionOriginID}
+		}
+	}
+	return s, f
 }

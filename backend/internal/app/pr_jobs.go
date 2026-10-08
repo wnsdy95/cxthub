@@ -74,11 +74,13 @@ func (s *Service) submitPRPromotion(ctx context.Context, repo domain.ContentHash
 	return st.EnqueuePRJob(ctx, domain.PRPromotionJob{ID: domain.PRPromotionID(repo, pr.Number), RepoID: repo, PR: pr, BaseBranchID: baseID, GitOrigin: normalizeGitURL(metadata.GitRemoteURL), State: "waiting", CreatedAt: now, UpdatedAt: now, NextAttempt: now})
 }
 func (s *Service) ListPRPromotions(ctx context.Context, repo domain.ContentHash) ([]domain.PRPromotionJob, error) {
-	st, err := s.prJobs()
-	if err != nil {
-		return nil, err
-	}
-	return st.ListPRJobs(ctx, repo)
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) ([]domain.PRPromotionJob, error) {
+		st, err := s.prJobs()
+		if err != nil {
+			return nil, err
+		}
+		return st.ListPRJobs(ctx, repo)
+	})
 }
 func (s *Service) retryPRPromotionCommand(ctx context.Context, repo domain.ContentHash, id string) error {
 	st, err := s.prJobs()
@@ -90,6 +92,7 @@ func (s *Service) retryPRPromotionCommand(ctx context.Context, repo domain.Conte
 
 // Compatibility path: acceptance survives caller cancellation and synchronous failure.
 func (s *Service) DeliverPRPromotion(ctx context.Context, repo domain.ContentHash, pr domain.PullRequestMerge) (inbound.UpdateRefOutput, error) {
+	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
 	j, err := s.SubmitPRPromotion(ctx, repo, pr)
 	if err != nil {
 		return inbound.UpdateRefOutput{}, err
@@ -216,7 +219,7 @@ func prJobFailureClass(err error) string {
 
 // ProcessPRPromotions is bounded per tick, safe to run on multiple instances.
 func (s *Service) ProcessPRPromotions(ctx context.Context, limit int) error {
-	ctx = inbound.WithSystemActor(ctx)
+	ctx = s.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
 	st, err := s.prJobs()
 	if err != nil {
 		return err

@@ -47,29 +47,30 @@ type Container struct {
 	PrepareRemoteConnection func(context.Context, string, string, string) (PreparedRemoteConnection, error)
 	ResolveSyncDestination  func(context.Context, string, string) (SyncDestination, error)
 	// ResolveRepo identifies a configured replica without registering or mutating it.
-	ResolveRepo      func(context.Context, string) (domain.Repo, error)
-	Init             inbound.InitRepo
-	Save             inbound.SaveSession
-	Fork             inbound.ForkSession
-	Branches         inbound.BranchLifecycle
-	Checkout         inbound.CheckoutSession
-	Load             inbound.LoadSession
-	List             inbound.ListSessions
-	HistoryQuery     inbound.HistoryQuery
-	WorkingState     inbound.WorkingStateQuery
-	ContextDiff      inbound.ContextDiffQuery
-	Staging          inbound.Staging
-	IndexStash       inbound.StagingStash
-	ListIndexStashes func(context.Context, string) ([]domain.StagingStash, error)
-	CodePosition     outbound.CodePosition
-	Memorize         inbound.Memorize
-	Sync             inbound.SyncRepo
-	Seed             inbound.SeedBranch
-	Tag              inbound.TagRef
-	Queries          inbound.LocalRefQueries
-	Stash            inbound.StashSession
-	Handoff          inbound.BranchHandoff
-	History          inbound.ContextHistory
+	SetCaptureIdentity func(context.Context, string, domain.DocumentIdentity) error
+	ResolveRepo        func(context.Context, string) (domain.Repo, error)
+	Init               inbound.InitRepo
+	Save               inbound.SaveSession
+	Fork               inbound.ForkSession
+	Branches           inbound.BranchLifecycle
+	Checkout           inbound.CheckoutSession
+	Load               inbound.LoadSession
+	List               inbound.ListSessions
+	HistoryQuery       inbound.HistoryQuery
+	WorkingState       inbound.WorkingStateQuery
+	ContextDiff        inbound.ContextDiffQuery
+	Staging            inbound.Staging
+	IndexStash         inbound.StagingStash
+	ListIndexStashes   func(context.Context, string) ([]domain.StagingStash, error)
+	CodePosition       outbound.CodePosition
+	Memorize           inbound.Memorize
+	Sync               inbound.SyncRepo
+	Seed               inbound.SeedBranch
+	Tag                inbound.TagRef
+	Queries            inbound.LocalRefQueries
+	Stash              inbound.StashSession
+	Handoff            inbound.BranchHandoff
+	History            inbound.ContextHistory
 	// PRMerges resolves incoming Git commits to merged provider PRs so post-merge
 	// can promote the source branch context into the checked-out base timeline.
 	PRMerges outbound.PullRequestMergeResolver
@@ -316,7 +317,7 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "config":
-		// cxt config <key> [value] — checkout.mode | load.mode | secrets.redact | secrets.minlen | secrets.scrub.
+		// cxt config <key> [value] — local preferences; root capture requires fresh confirmation.
 		key := parsed.first()
 		val := parsed.last()
 		hasVal := len(parsed.positionals) == 2
@@ -356,6 +357,32 @@ func Run(c *Container, args []string) error {
 				}
 			}
 			fmt.Printf("boundary.enforce = %s\n", remotecfg.BoundaryEnforce(cwd))
+			return nil
+		case "capture.identity":
+			if hasVal {
+				if val == "default" || val == "legacy" {
+					val = ""
+				}
+				identity := domain.DocumentIdentity(val)
+				if err := identity.Validate(); err != nil {
+					return err
+				}
+				if c.SetCaptureIdentity == nil {
+					return fmt.Errorf("capture identity configuration unavailable")
+				}
+				if err := c.SetCaptureIdentity(ctx, cwd, identity); err != nil {
+					return err
+				}
+			}
+			identity, err := remotecfg.CaptureIdentity(ctx, cwd)
+			if err != nil {
+				return err
+			}
+			display := string(identity)
+			if identity == domain.DocumentIdentityLegacy {
+				display = "legacy"
+			}
+			fmt.Printf("capture.identity = %s\n", display)
 			return nil
 		case "capture.debounce":
 			// hook Stop capture debounce window (seconds). "default"/0 to disable (60 seconds).
@@ -423,7 +450,7 @@ func Run(c *Container, args []string) error {
 			}
 			return nil
 		default:
-			return fmt.Errorf("supported keys: checkout.mode | load.mode | boundary.enforce | capture.debounce | secrets.scrub | secrets.redact | secrets.minlen")
+			return fmt.Errorf("supported keys: checkout.mode | load.mode | boundary.enforce | capture.debounce | capture.identity | secrets.scrub | secrets.redact | secrets.minlen")
 		}
 
 	case "login":

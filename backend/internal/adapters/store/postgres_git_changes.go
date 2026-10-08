@@ -87,13 +87,25 @@ func (s *PostgresStore) ClaimGitChange(ctx context.Context, repo domain.ContentH
 		return domain.GitChangeJob{}, err
 	}
 	defer tx.Rollback(ctx)
+	allowed, err := workerDocumentRequirements(ctx)
+	if err != nil {
+		return domain.GitChangeJob{}, err
+	}
+	if repo != "" {
+		if err = s.checkRepositoryDocumentIdentity(ctx, tx, repo, true); err != nil {
+			return domain.GitChangeJob{}, err
+		}
+	}
 	var raw []byte
 	var j domain.GitChangeJob
-	err = tx.QueryRow(ctx, `SELECT payload FROM git_change_jobs WHERE ($1='' OR repo_id=$1) AND ($2='' OR id=$2) AND state IN ('waiting','retrying','running') AND next_attempt<=$3 AND (state<>'running' OR lease_until<=$3) ORDER BY next_attempt,id FOR UPDATE SKIP LOCKED LIMIT 1`, repo, id, now).Scan(&raw)
+	err = tx.QueryRow(ctx, `SELECT payload FROM git_change_jobs WHERE ($1='' OR repo_id=$1) AND ($2='' OR id=$2) AND state IN ('waiting','retrying','running') AND next_attempt<=$3 AND (state<>'running' OR lease_until<=$3) AND EXISTS(SELECT 1 FROM repos r WHERE r.id=git_change_jobs.repo_id AND r.required_doc_identity=ANY($4)) ORDER BY next_attempt,id FOR UPDATE SKIP LOCKED LIMIT 1`, repo, id, now, allowed).Scan(&raw)
 	if err != nil {
 		return j, mapNoRows(err)
 	}
 	if err = json.Unmarshal(raw, &j); err != nil {
+		return j, err
+	}
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, j.RepoID, true); err != nil {
 		return j, err
 	}
 	j, err = j.Claim(now, lease)
@@ -111,6 +123,9 @@ func (s *PostgresStore) FinishGitChange(ctx context.Context, j domain.GitChangeJ
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, j.RepoID, true); err != nil {
+		return err
+	}
 	var raw []byte
 	var old domain.GitChangeJob
 	err = tx.QueryRow(ctx, `SELECT payload FROM git_change_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, j.RepoID, j.ID).Scan(&raw)

@@ -10,7 +10,7 @@ func (s *Service) QueryGraphState(ctx context.Context, repo domain.ContentHash, 
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return domain.GraphState{}, err
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.GraphState, error) {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.GraphState, error) {
 		v, err := s.loadRepositoryView(ctx, repo)
 		if err != nil {
 			return domain.GraphState{}, err

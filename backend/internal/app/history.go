@@ -11,11 +11,13 @@ import (
 )
 
 func (s *Service) ListHistory(ctx context.Context, repoID domain.ContentHash) ([]domain.HistoryEvent, error) {
-	store, ok := s.meta.(outbound.HistoryStore)
-	if !ok {
-		return nil, fmt.Errorf("context history storage unavailable")
-	}
-	return store.ListHistoryEvents(ctx, repoID)
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) ([]domain.HistoryEvent, error) {
+		store, ok := s.meta.(outbound.HistoryStore)
+		if !ok {
+			return nil, fmt.Errorf("context history storage unavailable")
+		}
+		return store.ListHistoryEvents(ctx, repoID)
+	})
 }
 
 func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) error {

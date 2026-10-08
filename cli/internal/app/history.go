@@ -27,7 +27,7 @@ func (s *ContextHistoryService) ValidateHistorySource(ctx context.Context, e dom
 	}
 	// This verifier belongs to one operation. Every new operation checks current
 	// stored bytes again, including when the adapter reuses an authenticated receipt.
-	verified := historySourceVerification{store: s.store, repo: e.RepoID, documents: map[domain.ContentHash]bool{}}
+	verified := historySourceVerification{store: s.store, repo: e.RepoID, documents: map[domain.DocumentRef]bool{}}
 	for _, id := range []domain.ContentHash{e.Source, e.Target, e.SharedTarget, e.MemorySource} {
 		if id == "" {
 			continue
@@ -282,7 +282,7 @@ func selectedMemory(ctx context.Context, store MemoryReader, id domain.ContentHa
 type historySourceVerification struct {
 	store     outbound.SessionStore
 	repo      string
-	documents map[domain.ContentHash]bool
+	documents map[domain.DocumentRef]bool
 }
 
 func (v *historySourceVerification) snapshot(ctx context.Context, id domain.ContentHash) (domain.Snapshot, error) {
@@ -296,11 +296,12 @@ func (v *historySourceVerification) snapshot(ctx context.Context, id domain.Cont
 	if snap.ID != id || snap.RepoID != v.repo {
 		return snap, domain.ErrHashMismatch
 	}
-	if !v.documents[snap.DocHash] {
-		if err := verifyStoredDocument(ctx, v.store, snap.DocHash); err != nil {
+	ref := snap.DocumentRef()
+	if !v.documents[ref] {
+		if err := verifyStoredDocumentReference(ctx, v.store, ref); err != nil {
 			return snap, err
 		}
-		v.documents[snap.DocHash] = true
+		v.documents[ref] = true
 	}
 	return snap, ctx.Err()
 }

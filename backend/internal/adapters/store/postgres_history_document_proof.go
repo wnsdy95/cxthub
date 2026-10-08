@@ -73,8 +73,8 @@ func (p *historyDocumentProofPG) Capture(ctx context.Context, evidence []domain.
 	snapshots, blobs := map[string]string{}, map[string]string{}
 	grants := map[string]map[string]string{"chunk": {}, "doc": {}}
 	for _, snap := range evidence {
-		if snap.DocIdentity != domain.DocumentIdentityLegacy {
-			return domain.ErrUnsupportedDocumentIdentity
+		if err := snap.DocumentRef().Validate(); err != nil {
+			return err
 		}
 		if snap.RepoID != p.repo || snap.ID != snap.DocHash || validateHash(snap.ID) != nil {
 			return domain.ErrIntegrity
@@ -105,6 +105,52 @@ func (p *historyDocumentProofPG) Capture(ctx context.Context, evidence []domain.
 		raw, err := p.owner.readOwnedDocObject(ctx, p.repo, "doc", snap.DocHash)
 		if err != nil {
 			return err
+		}
+		manifest, root, err := storedConversationManifest(ctx, raw)
+		if err != nil {
+			return err
+		}
+		if root {
+			if snap.DocIdentity != domain.DocumentIdentityRootV1 {
+				return domain.ErrIntegrity
+			}
+			repo, err := p.owner.GetRepo(ctx, p.repo)
+			if err != nil {
+				return err
+			}
+			if err := outbound.CheckDocumentIdentityCompatibility(ctx, repo.RequiredDocIdentity); err != nil {
+				return err
+			}
+			if repo.RequiredDocIdentity != domain.DocumentIdentityRootV1 {
+				return domain.ErrRootPublicationDisabled
+			}
+			// Root descriptors are strict and hash-bound. Re-read the complete
+			// ordered owned closure in this SAME RR snapshot; no receipt or
+			// generic full-CIR/legacy descriptor can authorize root pins.
+			proof, err := verifyStoredConversation(ctx, snap.DocHash, manifest, p.owner.ownedDocChunkReader(p.repo, conversationChunkOrder(manifest)))
+			if err != nil {
+				return err
+			}
+			if proof.DocumentRef() != snap.DocumentRef() || !proof.Reference().Matches(snap) {
+				return domain.ErrIntegrity
+			}
+			// Canonical root hashing binds the complete descriptor, including
+			// every ordered/repeated occurrence and declared length.
+			hash, err := domain.ConversationManifestHash(manifest)
+			if err != nil {
+				return err
+			}
+			if hash != snap.DocHash {
+				return domain.ErrIntegrity
+			}
+			for _, chunk := range manifest.Chunks {
+				grants["chunk"][string(chunk.Hash)] = ""
+				blobs[string(chunk.Hash)] = ""
+			}
+			continue
+		}
+		if snap.DocIdentity != domain.DocumentIdentityLegacy {
+			return domain.ErrIntegrity
 		}
 		data, err := docDecompress(raw)
 		if err != nil {

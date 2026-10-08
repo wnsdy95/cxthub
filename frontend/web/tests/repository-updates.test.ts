@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {api} from '../src/api';
 import {mergePendingView,pendingViewNeedsFull,parseRevision,revisionCovers,subscribeRepository} from '../src/repositoryUpdates';
 import {validateGraphState} from '../src/graphState';
 import {serverGraphFixture} from './serverGraphFixture';
@@ -44,7 +45,7 @@ class FakeEventSource {
   listener?: (event: {data: string}) => void;
   onerror?: () => void;
   closed = false;
-  constructor() { FakeEventSource.instances.push(this); }
+  constructor(readonly url: string, readonly options: EventSourceInit) { FakeEventSource.instances.push(this); }
   addEventListener(_type: string, listener: (event: {data: string}) => void) { this.listener = listener; }
   close() { this.closed = true; }
 }
@@ -53,10 +54,15 @@ Object.assign(globalThis, {EventSource: FakeEventSource});
 try {
   let changes = 0, failures = 0;
   const listener = () => ({changed: () => changes++, failed: () => failures++});
-  const releaseA = subscribeRepository('/synthetic/repo/changes', listener());
-  const releaseB = subscribeRepository('/synthetic/repo/changes', listener());
+  const url = api.repositoryChangesURL('synthetic/repo');
+  const releaseA = subscribeRepository(url, listener());
+  const releaseB = subscribeRepository(url, listener());
   assert.equal(FakeEventSource.instances.length, 1);
   const stream = FakeEventSource.instances[0];
+  const parsed = new URL(stream.url, 'https://synthetic.invalid');
+  assert.equal(parsed.pathname, '/api/v1/repos/synthetic%2Frepo/changes');
+  assert.deepEqual(parsed.searchParams.getAll('doc_identities'), ['cxt-manifest-sha256-v1']);
+  assert.equal(stream.options.withCredentials, true, 'capabilities do not replace cookie authentication');
   stream.listener?.({data: '{"graph":"1","pending":"2"}'});
   assert.equal(changes, 2);
   stream.listener?.({data: '{"graph":"bad","pending":"2"}'});

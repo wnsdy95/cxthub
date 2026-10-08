@@ -11,14 +11,14 @@ import (
 
 type pullDocumentReceiver struct {
 	store    outbound.SessionStore
-	verified map[domain.ContentHash]bool
+	verified map[domain.DocumentRef]bool
 }
 
-func (r *pullDocumentReceiver) HasVerifiedDoc(ctx context.Context, id domain.ContentHash) (bool, error) {
-	if r.verified[id] {
+func (r *pullDocumentReceiver) HasVerifiedDoc(ctx context.Context, ref domain.DocumentRef) (bool, error) {
+	if r.verified[ref] {
 		return true, nil
 	}
-	err := verifyStoredDocument(ctx, r.store, id)
+	err := verifyStoredDocumentReference(ctx, r.store, ref)
 	if errors.Is(err, domain.ErrNotFound) {
 		// A missing referenced chunk is corruption of an existing document,
 		// not permission to repair it implicitly through normal fetch. Only an
@@ -26,19 +26,22 @@ func (r *pullDocumentReceiver) HasVerifiedDoc(ctx context.Context, id domain.Con
 		if cerr := ctx.Err(); cerr != nil {
 			return false, cerr
 		}
-		exists, herr := r.store.HasDoc(ctx, id)
+		exists, herr := r.store.HasDoc(ctx, ref.Hash)
 		if herr != nil {
 			return false, herr
 		}
 		if exists {
-			return false, fmt.Errorf("%w: incomplete stored document %s: %w", domain.ErrHashMismatch, id, err)
+			return false, fmt.Errorf("%w: incomplete stored document %s: %w", domain.ErrHashMismatch, ref.Hash, err)
 		}
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	r.verified[id] = true
+	if r.verified == nil {
+		r.verified = make(map[domain.DocumentRef]bool)
+	}
+	r.verified[ref] = true
 	return true, nil
 }
 
@@ -56,6 +59,30 @@ func (r *pullDocumentReceiver) ReceiveDoc(ctx context.Context, doc domain.Sessio
 	if id != doc.Hash {
 		return domain.ErrHashMismatch
 	}
-	r.verified[id] = true
+	if r.verified == nil {
+		r.verified = make(map[domain.DocumentRef]bool)
+	}
+	r.verified[doc.DocumentRef()] = true
+	return nil
+}
+
+func (r *pullDocumentReceiver) ReceiveRoot(ctx context.Context, rep domain.DocumentRepresentation) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := rep.ConversationManifest(); err != nil {
+		return err
+	}
+	installer, ok := r.store.(outbound.RootDocumentStore)
+	if !ok {
+		return domain.ErrUnsupportedDocumentIdentity
+	}
+	if err := installer.PutConversationManifest(ctx, rep); err != nil {
+		return err
+	}
+	if r.verified == nil {
+		r.verified = make(map[domain.DocumentRef]bool)
+	}
+	r.verified[rep.DocumentRef()] = true
 	return nil
 }

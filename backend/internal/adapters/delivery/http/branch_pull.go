@@ -8,7 +8,9 @@ import (
 // A runtime capability, never persisted as repository configuration. Old
 // clients ignore it; new clients treat an absent/zero version as unsupported.
 type repoPullView struct {
-	InitialAnchorAvailable bool `json:"initial_anchor_available,omitempty"`
+	DocIdentitiesSupported []domain.DocumentIdentity `json:"doc_identities_supported"`
+	RootPublicationEnabled bool                      `json:"root_publication_enabled"`
+	InitialAnchorAvailable bool                      `json:"initial_anchor_available,omitempty"`
 	domain.Repo
 	BranchPullVersion    int `json:"branch_pull_version,omitempty"`
 	CatalogMerkleVersion int `json:"catalog_merkle_version,omitempty"`

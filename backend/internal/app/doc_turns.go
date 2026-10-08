@@ -20,39 +20,40 @@ func (s *Service) ReadAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 	if err := validateHashes(repo, hash); err != nil {
 		return domain.AgentHistoryPage{}, err
 	}
-	if req.Before < -1 || req.Limit < 1 || req.Limit > domain.MaxAgentHistoryPageTurns || req.MaxBytes < 1 || req.MaxBytes > domain.MaxAgentHistoryPageBytes || domain.ValidateOptionalContentHash(req.CoveredBy) != nil || req.IncompleteTail != "" && req.IncompleteTail != "omit" {
-		return domain.AgentHistoryPage{}, fmt.Errorf("%w: invalid history page range or byte budget", domain.ErrValidation)
+	if err := domain.ValidateAgentHistoryPageRequest(req); err != nil {
+		return domain.AgentHistoryPage{}, err
 	}
-	return repositoryRead(outbound.WithDocReadOnly(ctx), s, func(ctx context.Context) (domain.AgentHistoryPage, error) {
+
+	return repositoryReadForRepo(outbound.WithDocReadOnly(ctx), s, repo, func(ctx context.Context) (domain.AgentHistoryPage, error) {
 		return s.readAgentHistoryPage(ctx, repo, hash, req)
 	})
 }
 
 func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.ContentHash, req domain.AgentHistoryPageRequest) (domain.AgentHistoryPage, error) {
-	out := domain.AgentHistoryPage{Version: domain.AgentHistoryPageVersion, Hash: hash, NextBefore: -1, Turns: []domain.AgentHistoryTurn{}}
+	out := domain.AgentHistoryPage{Version: domain.AgentHistoryPageVersion, Hash: hash, DocIdentity: req.DocIdentity, NextBefore: -1, Turns: []domain.AgentHistoryTurn{}}
 	projection := req.IncompleteTail == "omit"
 	if projection {
 		out.Version = domain.AgentHistoryProjectionVersion
 	}
-	store, ok := s.blobs.(outbound.DocReadStore)
-	if !ok {
-		return out, domain.ErrAgentHistoryUnavailable
+	// Cache only within this coherent read and key by the complete reference.
+	sources := map[domain.DocumentRef]docReadSource{}
+	sourceFor := func(ref domain.DocumentRef) (docReadSource, error) {
+		if source, ok := sources[ref]; ok {
+			return source, nil
+		}
+		source, err := s.agentHistoryReadSource(ctx, repo, ref)
+		if err == nil {
+			sources[ref] = source
+		}
+		return source, err
 	}
-	index := func(hash domain.ContentHash) (domain.DocReadIndex, error) {
-		// The current page wire contract has no document-identity assertion.
-		// Fence both the requested archive and coverage hint until its client
-		// and server contracts migrate together; warm indexes are not proof.
-		snapshot, err := s.meta.GetSnapshot(ctx, repo, hash)
-		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+	index := func(ref domain.DocumentRef) (domain.DocReadIndex, error) {
+		source, err := sourceFor(ref)
+		if err != nil {
 			return domain.DocReadIndex{}, err
 		}
-		if err == nil && snapshot.DocIdentity != domain.DocumentIdentityLegacy {
-			return domain.DocReadIndex{}, domain.ErrUnsupportedDocumentIdentity
-		}
-		idx, err := store.DocReadIndex(ctx, repo, hash)
-		if err != nil {
-			return idx, err
-		}
+		idx := source.index
+		hash := ref.Hash
 		if idx.Version != 1 || idx.Hash != hash {
 			return idx, domain.ErrIntegrity
 		}
@@ -75,7 +76,8 @@ func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 		}
 		return idx, nil
 	}
-	idx, err := index(hash)
+	ref := domain.DocumentRef{Hash: hash, Identity: req.DocIdentity}
+	idx, err := index(ref)
 	if err != nil {
 		return out, err
 	}
@@ -88,7 +90,7 @@ func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 		return out, fmt.Errorf("%w: before must be a complete turn boundary", domain.ErrValidation)
 	}
 	if req.CoveredBy != "" {
-		other, err := index(req.CoveredBy)
+		other, err := index(domain.DocumentRef{Hash: req.CoveredBy, Identity: req.CoveredByIdentity})
 		if err != nil {
 			return out, err
 		}
@@ -111,10 +113,7 @@ func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 	if previousUser(out.Before) < 0 {
 		return out, nil
 	}
-	read, err := s.eventRangeReader(ctx, repo, hash)
-	if err != nil {
-		return out, err
-	}
+	read := sources[ref].read
 	// V2 may classify a tail whose body will not be returned. Bound that work
 	// separately from MaxBytes, sharing one allowance across every inspected
 	// event (including marker look-behind) and all selected turns. Chunks may

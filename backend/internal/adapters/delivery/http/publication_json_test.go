@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
@@ -19,6 +20,27 @@ func TestPublicationContainerCannotEraseIdentity(t *testing.T) {
 			identity = "doc_identity"
 		}
 		root := fmt.Sprintf(`[{%q:"cxt-manifest-sha256-v1"}]`, identity)
+		if field == "chunked_docs" {
+			// A valid strict root union must reach the duplicate-container guard;
+			// malformed unions would fail earlier and would not test erasure.
+			manifest, _, err := domain.ConversationManifestForCIR(domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			hash, err := domain.ConversationManifestHash(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := domain.CanonicalConversationManifest(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := json.Marshal(inbound.ChunkedDoc{Hash: hash, Identity: domain.DocumentIdentityRootV1, RootManifest: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root = "[" + string(wire) + "]"
+		}
 		empty := `[]`
 		if field == "objects" {
 			root = `{"snapshots":[{"doc_identity":"cxt-manifest-sha256-v1"}]}`
@@ -42,7 +64,7 @@ func TestPublicationContainerCannotEraseIdentity(t *testing.T) {
 func TestPublicationDecoderPreservesErrorContract(t *testing.T) {
 	for _, limited := range []bool{false, true} {
 		for _, manifest := range []string{`null`, `{}`} {
-			checkPublicationDecode(t, `{"root_manifest":`+manifest+`}`, &inbound.ChunkedDoc{}, limited, 409, "unsupported_document_identity")
+			checkPublicationDecode(t, `{"root_manifest":`+manifest+`}`, &inbound.ChunkedDoc{}, limited, 400, "bad_request")
 		}
 		checkPublicationDecode(t, `{"snapshots":}`, &objectsBody{}, limited, 400, "bad_request")
 	}

@@ -217,7 +217,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending-view", s.guard(domain.RoleViewer, compressedGraphRead(s.pendingView)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/graph-state", s.guard(domain.RoleViewer, compressedGraphRead(s.graphState)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/revision", s.guard(domain.RoleViewer, s.repositoryRevision))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/changes", s.guard(domain.RoleViewer, s.repositoryChanges))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/changes", s.withDocumentIdentityStream(s.guard(domain.RoleViewer, s.repositoryChanges)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots", s.guard(domain.RoleViewer, s.listSnapshots))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/snapshots/{id}", s.guard(domain.RoleViewer, s.getSnapshot))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/promote", s.guard(domain.RoleMember, s.promoteSnapshot))
@@ -280,7 +280,7 @@ func (s *Server) Handler() http.Handler {
 	// Authentication · Repository · Invite (all Firebase/dev tokens required — requireUser middleware).
 	s.registerIdentity(mux)
 
-	return s.withSecurityHeaders(s.withCORS(s.withCSRF(s.withCorrelation(mux))))
+	return s.withSecurityHeaders(s.withCORS(s.withCSRF(s.withCorrelation(s.withDocumentIdentityPeer(mux)))))
 }
 
 func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
@@ -403,6 +403,24 @@ func (s *Server) getRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		branch = values[0]
 	}
+	ids, enabled := s.documentIdentityCapabilities()
+	var out domain.Repo
+	var pending bool
+	if query, ok := s.b.(inbound.RepositoryInitializationQuery); ok {
+		// The service pins requirement and any permitted initialization state in
+		// one snapshot. Incompatible discovery returns metadata only.
+		out, pending, err = query.GetRepositoryInitializationView(r.Context(), s.repoID(r), branch)
+	} else {
+		out, err = s.b.GetRepo(r.Context(), s.repoID(r))
+	}
+	if err != nil {
+		s.respond(w, nil, err)
+		return
+	}
+	if !documentIdentitySupported(ids, out.RequiredDocIdentity) || !documentIdentitySupported(inbound.DocumentIdentities(r.Context()), out.RequiredDocIdentity) {
+		s.respond(w, repoPullView{Repo: out, DocIdentitiesSupported: ids, RootPublicationEnabled: enabled}, nil)
+		return
+	}
 	catalogVersion := 0
 	if capabilities, ok := s.b.(inbound.CatalogCapabilities); ok {
 		catalogVersion = capabilities.CatalogVersion()
@@ -411,13 +429,8 @@ func (s *Server) getRepo(w http.ResponseWriter, r *http.Request) {
 	if capabilities, ok := s.b.(inbound.CatalogMerkleCapabilities); ok {
 		merkleVersion = capabilities.CatalogMerkleVersion()
 	}
-	if query, ok := s.b.(inbound.RepositoryInitializationQuery); ok {
-		out, pending, err := query.GetRepositoryInitializationView(r.Context(), s.repoID(r), branch)
-		s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion, CatalogMerkleVersion: merkleVersion, InitialAnchorAvailable: pending}, err)
-		return
-	}
-	out, err := s.b.GetRepo(r.Context(), s.repoID(r))
-	s.respond(w, repoPullView{Repo: out, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion, CatalogMerkleVersion: merkleVersion}, err)
+	s.respond(w, repoPullView{Repo: out, DocIdentitiesSupported: ids, RootPublicationEnabled: enabled, BranchPullVersion: s.b.BranchPullVersion(), CatalogVersion: catalogVersion, CatalogMerkleVersion: merkleVersion, InitialAnchorAvailable: pending}, nil)
+
 }
 
 // fsck returns reference reachability audit results (read-only — makes no changes).
@@ -963,6 +976,8 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "Webhook signature mismatch")
 		return
 	}
+	ids, _ := s.documentIdentityCapabilities()
+	r = r.WithContext(outbound.WithDocumentIdentityCompatibility(inbound.WithDocumentIdentities(r.Context(), ids), ids, ids))
 	if r.Header.Get("X-GitHub-Event") == "push" {
 		s.githubPush(w, r, body)
 		return
@@ -1330,6 +1345,10 @@ func mapError(err error) (code string, status int) {
 		return "git_origin_mismatch", http.StatusConflict
 	case errors.Is(err, domain.ErrUnsupportedCIRVersion):
 		return "unsupported_cir_version", http.StatusConflict
+	case errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired):
+		return "document_identity_upgrade_required", http.StatusConflict
+	case errors.Is(err, domain.ErrRootPublicationDisabled):
+		return "root_publication_disabled", http.StatusConflict
 	case errors.Is(err, domain.ErrUnsupportedDocumentIdentity):
 		return "unsupported_document_identity", http.StatusConflict
 	case errors.Is(err, domain.ErrJoinPreviewChanged):
@@ -1414,7 +1433,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			h.Set("Access-Control-Allow-Credentials", "true")
 			h.Add("Vary", "Origin")
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cxt-CSRF, X-Cxt-Identity")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cxt-CSRF, X-Cxt-Identity, X-Cxt-Doc-Identities")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

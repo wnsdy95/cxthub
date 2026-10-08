@@ -93,3 +93,10 @@ func TestCatalogServiceValidationCancellationAndUnsupported(t *testing.T) {
 		t.Fatalf("FS=%v", err)
 	}
 }
+
+func (s *catalogTestStore) GetRepo(ctx context.Context, repo domain.ContentHash) (domain.Repo, error) {
+	if ctx.Value(catalogReadKey{}) != true {
+		panic("compatibility read escaped snapshot")
+	}
+	return domain.Repo{ID: repo}, nil
+}

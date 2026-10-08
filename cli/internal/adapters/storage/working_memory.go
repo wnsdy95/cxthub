@@ -177,7 +177,9 @@ func (s *FileStore) validateWorkingMemory(ctx context.Context, j workingMemory) 
 	if snap.RepoID != c.RepoID {
 		return domain.ErrHashMismatch
 	}
-	if _, err = s.GetDoc(ctx, snap.DocHash); err != nil {
+	// Collection also validates memory pins while holding the exclusive object
+	// lock. Use the current-byte reader without reacquiring a shared lock.
+	if err = s.inspectDocReference(ctx, snap.DocumentRef(), nil); err != nil {
 		return err
 	}
 	next, err := s.GetMemory(ctx, c.Memory)

@@ -63,6 +63,9 @@ func (s *IdentityService) TransferRepositoryNamespace(ctx context.Context, actor
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
 			return domain.Repository{}, err
 		}
+		if err := s.checkRepositoryDocumentIdentities(ctx, id); err != nil {
+			return domain.Repository{}, err
+		}
 		repo.OwnerNamespaceID, repo.OwnerUsername = next.ID, next.Slug
 		if next.Kind == domain.NamespaceUser {
 			repo.OwnerID = actor

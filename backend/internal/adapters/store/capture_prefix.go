@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -12,6 +13,9 @@ type captureByteReader interface {
 
 func compareStoredCaptures(ctx context.Context, s captureByteReader, cache *docProofCache, repo, old, next domain.ContentHash, provider domain.ProviderKind, session string) (bool, error) {
 	oldBody, _, err := s.readDocBytes(ctx, repo, old)
+	if errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
+		return false, nil // Root-involved pairs are retained until reference-aware compaction.
+	}
 	if err != nil {
 		return false, err
 	}
@@ -20,6 +24,9 @@ func compareStoredCaptures(ctx context.Context, s captureByteReader, cache *docP
 		return false, err
 	}
 	nextBody, _, err := s.readDocBytes(ctx, repo, next)
+	if errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}

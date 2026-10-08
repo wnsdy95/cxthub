@@ -14,7 +14,7 @@ func (s *Service) PreviewJoin(ctx context.Context, in inbound.JoinPreviewInput) 
 	if err := domain.ValidateContentHash(in.Snapshot); err != nil {
 		return inbound.JoinPreviewOutput{}, err
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (inbound.JoinPreviewOutput, error) {
+	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.JoinPreviewOutput, error) {
 		if err := s.authorizeJoin(ctx, in.RepoID, in.ActorID, false); err != nil {
 			return inbound.JoinPreviewOutput{}, err
 		}

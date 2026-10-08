@@ -45,6 +45,12 @@ func NewStashService(
 
 // Stash saves the active session to the stack and restores the branch head context.
 func (s *StashService) Stash(ctx context.Context, in inbound.StashInput) (inbound.StashOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return inbound.StashOutput{}, err
+	}
+	if err := in.DocIdentity.Validate(); err != nil {
+		return inbound.StashOutput{}, err
+	}
 	var out inbound.StashOutput
 	var restoreHead bool
 	capture := func(locked context.Context) error {
@@ -90,6 +96,10 @@ func (s *StashService) captureStash(ctx context.Context, in inbound.StashInput) 
 	if err != nil {
 		return inbound.StashOutput{}, false, err
 	}
+	in.DocIdentity, err = captureDocumentIdentity(ctx, s.gitCtx, repo, in.DocIdentity)
+	if err != nil {
+		return inbound.StashOutput{}, false, err
+	}
 	branch, _ := s.gitCtx.CurrentBranch(ctx, in.Cwd)
 	if branch == "" {
 		branch = repo.DefaultBranch
@@ -107,11 +117,21 @@ func (s *StashService) captureStash(ctx context.Context, in inbound.StashInput) 
 			return inbound.StashOutput{}, false, domain.ErrNoActiveSession
 		}
 	}
-	envelope, docHash, _, _, err := s.capture.Project(ctx, repo.LocalPath, path, capt, cdc, false)
+	envelope, docRef, _, _, err := s.capture.Project(ctx, repo.LocalPath, path, capt, cdc, false, in.DocIdentity)
 	if err != nil {
 		return inbound.StashOutput{}, false, err
 	}
 
+	if err := docRef.Validate(); err != nil {
+		return inbound.StashOutput{}, false, err
+	}
+	if docRef.Identity != in.DocIdentity {
+		return inbound.StashOutput{}, false, domain.ErrHashMismatch
+	}
+	if err := ctx.Err(); err != nil {
+		return inbound.StashOutput{}, false, err
+	}
+	docHash := docRef.Hash
 	msg := in.Message
 	if msg == "" {
 		msg = fmt.Sprintf("WIP on %s", branch)
@@ -126,18 +146,19 @@ func (s *StashService) captureStash(ctx context.Context, in inbound.StashInput) 
 		}
 	}
 	snap := domain.Snapshot{
-		ID:        docHash,
-		RepoID:    string(repo.ID),
-		Branch:    domain.StashBranchLabel, // branch history/push excluded
-		Parents:   parents,
-		DocHash:   docHash,
-		Provider:  provider,
-		Fidelity:  envelope.Fidelity,
-		Message:   msg,
-		Author:    in.Author,
-		CreatedAt: time.Now().UTC(),
-		SessionID: envelope.SessionOriginID,
-		Models:    envelope.OrderedModels(),
+		ID:          docHash,
+		RepoID:      string(repo.ID),
+		Branch:      domain.StashBranchLabel, // branch history/push excluded
+		Parents:     parents,
+		DocHash:     docHash,
+		DocIdentity: docRef.Identity,
+		Provider:    provider,
+		Fidelity:    envelope.Fidelity,
+		Message:     msg,
+		Author:      in.Author,
+		CreatedAt:   time.Now().UTC(),
+		SessionID:   envelope.SessionOriginID,
+		Models:      envelope.OrderedModels(),
 	}
 	if err := s.store.PutSnapshot(ctx, snap); err != nil {
 		return inbound.StashOutput{}, false, err

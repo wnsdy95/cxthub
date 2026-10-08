@@ -30,7 +30,7 @@ func (s *Service) VerifyGitReversal(ctx context.Context, reader outbound.GitEvid
 	if reader == nil {
 		return empty, fmt.Errorf("Git evidence reader unavailable")
 	}
-	repo, err := s.meta.GetRepo(ctx, repoID)
+	repo, err := repositoryReadForRepo(ctx, s, repoID, func(bound context.Context) (domain.Repo, error) { return s.meta.GetRepo(bound, repoID) })
 	if err != nil {
 		return empty, err
 	}

@@ -34,7 +34,7 @@ func (s *StagingService) StashIndex(ctx context.Context, cwd string, expected do
 	if _, err := rand.Read(id[:]); err != nil {
 		return domain.StagingStash{}, err
 	}
-	return store.StashIndex(ctx, domain.StagingStash{Version: domain.StagingVersion, ID: hex.EncodeToString(id[:]), Index: index, Position: p, CreatedAt: time.Now().UTC()})
+	return store.StashIndex(ctx, domain.StagingStash{Version: index.RecordVersion(), ID: hex.EncodeToString(id[:]), Index: index, Position: p, CreatedAt: time.Now().UTC()})
 }
 func (s *StagingService) PopIndex(ctx context.Context, cwd, id string, expected domain.ContentHash) (domain.StagingIndex, error) {
 	store, ok := s.index.(outbound.StagingStashStore)

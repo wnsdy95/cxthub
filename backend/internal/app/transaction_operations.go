@@ -46,35 +46,38 @@ func (s *Service) GraftSnapshotParents(ctx context.Context, repo, id domain.Cont
 	return repositoryWriteError(ctx, s, repo, func(ctx context.Context) error { return s.graftSnapshotParents(ctx, repo, id, parents, seq) })
 }
 func (s *Service) GetMemoryProjection(ctx context.Context, repo, id domain.ContentHash) (domain.MemoryProjection, error) {
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.MemoryProjection, error) {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.MemoryProjection, error) {
 		return s.getMemoryProjection(ctx, repo, id)
 	})
 }
 func (s *Service) List(ctx context.Context, in inbound.ListSnapshotsInput) ([]domain.Snapshot, error) {
-	return repositoryRead(ctx, s, func(ctx context.Context) ([]domain.Snapshot, error) { return s.list(ctx, in) })
+	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) ([]domain.Snapshot, error) { return s.list(ctx, in) })
 }
 func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.PullSendOutput, error) {
-	return repositoryRead(ctx, s, func(ctx context.Context) (inbound.PullSendOutput, error) { return s.send(ctx, in) })
+	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.PullSendOutput, error) { return s.send(ctx, in) })
 }
 func (s *Service) GetManifest(ctx context.Context, repo domain.ContentHash) (domain.Manifest, error) {
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.Manifest, error) { return s.getManifest(ctx, repo) })
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.Manifest, error) { return s.getManifest(ctx, repo) })
 }
 
 func (s *Service) EnsureRepo(ctx context.Context, actor string, repo domain.Repo) (domain.Repo, error) {
+	if repo.RequiredDocIdentity != domain.DocumentIdentityLegacy {
+		return domain.Repo{}, domain.ErrValidation
+	}
 	ctx = writeAction(inbound.WithRepositoryActor(ctx, actor), "register")
 	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, repo.ID, func(ctx context.Context) (domain.Repo, error) { return s.ensureRepo(ctx, actor, repo) })
 }
 func (s *Service) ListRefs(ctx context.Context, repo domain.ContentHash) ([]domain.Ref, error) {
-	return repositoryRead(ctx, s, func(ctx context.Context) ([]domain.Ref, error) { return s.listRefs(ctx, repo) })
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) ([]domain.Ref, error) { return s.listRefs(ctx, repo) })
 }
 func (s *Service) Fsck(ctx context.Context, repo domain.ContentHash) (inbound.FsckReport, error) {
-	return repositoryRead(ctx, s, func(ctx context.Context) (inbound.FsckReport, error) { return s.fsck(ctx, repo) })
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (inbound.FsckReport, error) { return s.fsck(ctx, repo) })
 }
 func (s *Service) GetDoc(ctx context.Context, repo, id domain.ContentHash) (domain.SessionDoc, error) {
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.SessionDoc, error) { return s.getDoc(ctx, repo, id) })
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.SessionDoc, error) { return s.getDoc(ctx, repo, id) })
 }
 func (s *Service) GetMemoryDigest(ctx context.Context, repo, id domain.ContentHash) (domain.MemoryDigest, error) {
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.MemoryDigest, error) { return s.getMemoryDigest(ctx, repo, id) })
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.MemoryDigest, error) { return s.getMemoryDigest(ctx, repo, id) })
 }
 func (s *Service) PutUnsync(ctx context.Context, repo domain.ContentHash, user, branch string, u domain.Unsync) error {
 	ctx = auditOperation(ctx, "context.unsync.updated")

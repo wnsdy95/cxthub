@@ -45,14 +45,28 @@ func (s *PostgresStore) ClaimNotification(ctx context.Context, _ time.Time, leas
 		return outbound.NotificationDelivery{}, err
 	}
 	defer rollbackPG(tx)
+	if err = lockNotificationPolicy(ctx, tx); err != nil {
+		return outbound.NotificationDelivery{}, err
+	}
+	allowed, err := workerDocumentRequirements(ctx)
+	if err != nil {
+		return outbound.NotificationDelivery{}, err
+	}
 	var d outbound.NotificationDelivery
 	var raw []byte
 	var now time.Time
-	err = tx.QueryRow(ctx, `SELECT payload,destination,clock_timestamp() FROM notification_outbox WHERE (state IN ('pending','retrying') AND next_attempt<=clock_timestamp()) OR (state='running' AND lease_until<=clock_timestamp()) ORDER BY next_attempt,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&raw, &d.Destination, &now)
+	var storedID, repository string
+	err = tx.QueryRow(ctx, `SELECT payload,destination,clock_timestamp(),id,repository_id FROM notification_outbox n WHERE ((state IN ('pending','retrying') AND next_attempt<=clock_timestamp()) OR (state='running' AND lease_until<=clock_timestamp())) AND NOT EXISTS(SELECT 1 FROM repos r WHERE r.repository_id=n.repository_id AND NOT (r.required_doc_identity=ANY($1))) ORDER BY next_attempt,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1`, allowed).Scan(&raw, &d.Destination, &now, &storedID, &repository)
 	if err != nil {
 		return d, mapNoRows(err)
 	}
 	if err = json.Unmarshal(raw, &d.Job); err != nil {
+		return d, err
+	}
+	if d.Job.ID != storedID || d.Job.RepositoryID != repository {
+		return d, domain.ErrIntegrity
+	}
+	if err = checkNotificationPolicy(ctx, tx, repository); err != nil {
 		return d, err
 	}
 	j := &d.Job
@@ -72,18 +86,41 @@ func (s *PostgresStore) ClaimNotification(ctx context.Context, _ time.Time, leas
 	return d, tx.Commit(ctx)
 }
 func (s *PostgresStore) FinishNotification(ctx context.Context, j domain.NotificationJob, _ time.Time) error {
+	tx, err := s.db(ctx).Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollbackPG(tx)
+	if err = lockNotificationPolicy(ctx, tx); err != nil {
+		return err
+	}
+	var raw []byte
+	var repository string
+	if err = tx.QueryRow(ctx, `SELECT payload,repository_id FROM notification_outbox WHERE id=$1 FOR UPDATE`, j.ID).Scan(&raw, &repository); err != nil {
+		return mapNoRows(err)
+	}
+	var current domain.NotificationJob
+	if err = json.Unmarshal(raw, &current); err != nil {
+		return err
+	}
+	if current.RepositoryID != repository || !notificationPayloadMatches(current, j) {
+		return domain.ErrRefConflict
+	}
+	if err = checkNotificationPolicy(ctx, tx, current.RepositoryID); err != nil {
+		return err
+	}
 	b, err := json.Marshal(j)
 	if err != nil {
 		return err
 	}
-	tag, err := s.db(ctx).Exec(ctx, `UPDATE notification_outbox SET payload=$3,state=$4,next_attempt=$5,lease_until=$6 WHERE id=$1 AND version=$2 AND state='running' AND lease_until>clock_timestamp()`, j.ID, j.Version, b, j.State, j.NextAttempt, j.LeaseUntil)
+	tag, err := tx.Exec(ctx, `UPDATE notification_outbox SET payload=$3,state=$4,next_attempt=$5,lease_until=$6 WHERE id=$1 AND version=$2 AND state='running' AND lease_until>clock_timestamp()`, j.ID, j.Version, b, j.State, j.NextAttempt, j.LeaseUntil)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() != 1 {
 		return domain.ErrRefConflict
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 func (s *PostgresStore) RetryNotification(ctx context.Context, repository, id, destination string, _ time.Time) error {
 	tx, err := s.db(ctx).Begin(ctx)
@@ -150,3 +187,37 @@ func (s *PostgresStore) WithinRepositoryMetadata(ctx context.Context, repository
 
 var _ outbound.NotificationStore = (*PostgresStore)(nil)
 var _ outbound.RepositoryMetadataTransactions = (*PostgresStore)(nil)
+
+func (s *PostgresStore) ValidateNotificationDelivery(ctx context.Context, claimed outbound.NotificationDelivery, _ time.Time) error {
+	return s.WithinIdentity(ctx, func(ctx context.Context) error {
+		tx := s.db(ctx)
+		var current outbound.NotificationDelivery
+		var raw []byte
+		var repository string
+		if err := tx.QueryRow(ctx, `SELECT payload,destination,repository_id FROM notification_outbox WHERE id=$1 FOR UPDATE`, claimed.Job.ID).Scan(&raw, &current.Destination, &repository); err != nil {
+			return mapNoRows(err)
+		}
+		if err := json.Unmarshal(raw, &current.Job); err != nil {
+			return err
+		}
+		if current.Job.ID != claimed.Job.ID || current.Job.RepositoryID != repository {
+			return domain.ErrIntegrity
+		}
+		if err := checkNotificationPolicy(ctx, tx, repository); err != nil {
+			return err
+		}
+		repo, err := s.GetRepository(ctx, current.Job.RepositoryID)
+		if err != nil {
+			return err
+		}
+		// Sample the database clock after every policy/configuration wait,
+		// while the identity transaction and current claim remain pinned.
+		var now time.Time
+		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			return err
+		}
+		return checkNotificationDelivery(current, claimed, repo, now)
+	})
+}
+
+var _ outbound.NotificationDeliveryGuard = (*PostgresStore)(nil)

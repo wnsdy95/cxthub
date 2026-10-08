@@ -269,6 +269,9 @@ func (s *FSStore) GetRepo(_ context.Context, id domain.ContentHash) (domain.Repo
 
 // PutRepo is idempotent: if it already exists, it returns the existing record (sync protocol). Exception: for unowned (repository_id="") records, it fills in a delayed binding if a new binding arrives.
 func (s *FSStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
+	if repo.RequiredDocIdentity != domain.DocumentIdentityLegacy {
+		return domain.Repo{}, domain.ErrValidation
+	}
 	if repo.RepositoryID != "" {
 		if err := domain.ValidateRepositoryID(repo.RepositoryID); err != nil {
 			return domain.Repo{}, err
@@ -338,6 +341,9 @@ func (s *FSStore) UpdateRepoAbout(ctx context.Context, id domain.ContentHash, de
 	if err := validateHash(id); err != nil {
 		return err
 	}
+	lock := s.refLock(id, domain.RefBranch, "")
+	lock.Lock()
+	defer lock.Unlock()
 	r, err := s.GetRepo(ctx, id)
 	if err != nil {
 		return err

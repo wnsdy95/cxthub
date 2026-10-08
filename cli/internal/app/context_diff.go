@@ -36,7 +36,7 @@ func (s *WorkingStateService) Diff(ctx context.Context, in inbound.ContextDiffIn
 }
 
 type contextDiffCandidate struct {
-	Hash       domain.ContentHash
+	Ref        domain.DocumentRef
 	SourceID   domain.ContentHash
 	Generation domain.ContentHash
 	Kind       string
@@ -45,27 +45,24 @@ type contextDiffCandidate struct {
 
 type diffDocuments struct {
 	service *WorkingStateService
-	docs    map[domain.ContentHash]domain.SessionDoc
+	docs    map[domain.DocumentRef]domain.SessionDoc
 }
 
-func (d *diffDocuments) read(ctx context.Context, hash domain.ContentHash, provider domain.ProviderKind, session string) (domain.SessionDoc, error) {
+func (d *diffDocuments) read(ctx context.Context, ref domain.DocumentRef, provider domain.ProviderKind, session string) (domain.SessionDoc, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.SessionDoc{}, err
 	}
-	doc, ok := d.docs[hash]
+	doc, ok := d.docs[ref]
 	if !ok {
 		var err error
-		doc, err = d.service.docs.GetDoc(ctx, hash)
+		doc, err = readDocumentReference(ctx, d.service.docs, ref)
 		if err != nil {
 			return doc, err
 		}
-		if doc.Hash != hash {
+		if doc.DocumentRef() != ref {
 			return doc, domain.ErrHashMismatch
 		}
-		if err = domain.ValidateSessionDocHash(doc); err != nil {
-			return doc, err
-		}
-		d.docs[hash] = doc
+		d.docs[ref] = doc
 	}
 	if doc.CIR.Envelope.SourceProvider != provider || doc.CIR.Envelope.SessionOriginID != session {
 		return doc, domain.ErrHashMismatch
@@ -84,15 +81,15 @@ func (s *WorkingStateService) diffObservation(ctx context.Context, o workingObse
 	// This revision fences the entire comparison, including receipt changes that
 	// can alter baseline selection without changing the HEAD or index hashes.
 	out.Revision = o.State.Revision
-	docs := diffDocuments{service: s, docs: map[domain.ContentHash]domain.SessionDoc{}}
+	docs := diffDocuments{service: s, docs: map[domain.DocumentRef]domain.SessionDoc{}}
 	if staged {
 		for _, e := range o.Index.Entries {
 			candidates := finalizedCandidates(o, e.Provider, e.SessionID, e.SourceID, e.Key)
-			change, err := docs.compare(ctx, o, e.DocHash, e.Provider, e.SessionID, candidates, e.SourceID, e.Generation)
+			change, err := docs.compare(ctx, o, e.DocumentRef(), e.Provider, e.SessionID, candidates, e.SourceID, e.Generation)
 			if err != nil {
 				return out, err
 			}
-			if doc, ok := docs.docs[e.DocHash]; ok && len(doc.CIR.Events) != e.Events {
+			if doc, ok := docs.docs[e.DocumentRef()]; ok && len(doc.CIR.Events) != e.Events {
 				return out, domain.ErrHashMismatch
 			}
 			out.Changes = append(out.Changes, change)
@@ -102,13 +99,24 @@ func (s *WorkingStateService) diffObservation(ctx context.Context, o workingObse
 			candidates := []contextDiffCandidate{}
 			for _, e := range o.Index.Entries {
 				if e.Provider == p.Provider && e.SessionID == p.SessionID {
-					candidates = append(candidates, contextDiffCandidate{Hash: e.DocHash, SourceID: e.SourceID, Generation: e.Generation, Kind: "staged", Rank: 0})
+					candidates = append(candidates, contextDiffCandidate{Ref: e.DocumentRef(), SourceID: e.SourceID, Generation: e.Generation, Kind: "staged", Rank: 0})
 				}
 			}
 			if len(candidates) == 0 {
 				candidates = finalizedCandidates(o, p.Provider, p.SessionID, "", "")
 			}
-			change, err := docs.compare(ctx, o, p.Target, p.Provider, p.SessionID, candidates, "", "")
+			snap, err := s.store.GetSnapshot(ctx, p.Target)
+			if errors.Is(err, domain.ErrNotFound) {
+				out.Changes = append(out.Changes, domain.ContextChange{Provider: p.Provider, SessionID: p.SessionID, After: p.Target, State: "unavailable", Baseline: "unknown", Reason: "pending_snapshot_missing", Added: domain.EventRange{Kinds: map[string]int{}}, Removed: domain.EventRange{Kinds: map[string]int{}}})
+				continue
+			}
+			if err != nil {
+				return out, err
+			}
+			if snap.ID != p.Target || !snap.DocumentRef().MatchesSnapshot(snap) || snap.RepoID != p.RepoID || snap.Provider != p.Provider || snap.SessionID != p.SessionID {
+				return out, domain.ErrHashMismatch
+			}
+			change, err := docs.compare(ctx, o, snap.DocumentRef(), p.Provider, p.SessionID, candidates, "", "")
 			if err != nil {
 				return out, err
 			}
@@ -148,7 +156,7 @@ func finalizedCandidates(o workingObservation, provider domain.ProviderKind, ses
 			if e.Provider != provider || e.SessionID != session || (source != "" && e.SourceID != source) {
 				continue
 			}
-			c := contextDiffCandidate{Hash: e.DocHash, SourceID: e.SourceID, Generation: e.Generation, Kind: "finalized_index", Rank: rank}
+			c := contextDiffCandidate{Ref: e.DocumentRef(), SourceID: e.SourceID, Generation: e.Generation, Kind: "finalized_index", Rank: rank}
 			if key != "" && e.Key == key {
 				exact = append(exact, c)
 			} else {
@@ -166,7 +174,7 @@ func finalizedCandidates(o workingObservation, provider domain.ProviderKind, ses
 	// fingerprint. They can prove an exact prefix, never a cross-source rewrite.
 	for i, s := range o.History.Snapshots {
 		if s.Provider == provider && s.SessionID == session {
-			related = append(related, contextDiffCandidate{Hash: s.DocHash, Kind: "selected_context", Rank: i})
+			related = append(related, contextDiffCandidate{Ref: s.DocumentRef(), Kind: "selected_context", Rank: i})
 			// Compare with the latest selected capture, not an older matching
 			// prefix that could conceal a subsequent rewrite. This also avoids
 			// opening every cumulative version of a long session.
@@ -192,9 +200,9 @@ func latestDiffCandidates(in []contextDiffCandidate) []contextDiffCandidate {
 	return out
 }
 
-func (d *diffDocuments) compare(ctx context.Context, o workingObservation, hash domain.ContentHash, provider domain.ProviderKind, session string, candidates []contextDiffCandidate, source, generation domain.ContentHash) (domain.ContextChange, error) {
-	unknown := domain.ContextChange{Provider: provider, SessionID: session, SourceID: source, Generation: generation, After: hash, State: "unavailable", Baseline: "unknown", Reason: "stored_document_missing", Added: domain.EventRange{Kinds: map[string]int{}}, Removed: domain.EventRange{Kinds: map[string]int{}}}
-	after, err := d.read(ctx, hash, provider, session)
+func (d *diffDocuments) compare(ctx context.Context, o workingObservation, ref domain.DocumentRef, provider domain.ProviderKind, session string, candidates []contextDiffCandidate, source, generation domain.ContentHash) (domain.ContextChange, error) {
+	unknown := domain.ContextChange{Provider: provider, SessionID: session, SourceID: source, Generation: generation, After: ref.Hash, AfterIdentity: ref.Identity, State: "unavailable", Baseline: "unknown", Reason: "stored_document_missing", Added: domain.EventRange{Kinds: map[string]int{}}, Removed: domain.EventRange{Kinds: map[string]int{}}}
+	after, err := d.read(ctx, ref, provider, session)
 	if errors.Is(err, domain.ErrNotFound) {
 		return unknown, nil
 	}
@@ -220,7 +228,7 @@ func (d *diffDocuments) compare(ctx context.Context, o workingObservation, hash 
 		return unknown, nil
 	}
 	for i, c := range candidates {
-		before, err := d.read(ctx, c.Hash, provider, session)
+		before, err := d.read(ctx, c.Ref, provider, session)
 		if errors.Is(err, domain.ErrNotFound) {
 			missing = true
 			continue
@@ -228,7 +236,7 @@ func (d *diffDocuments) compare(ctx context.Context, o workingObservation, hash 
 		if err != nil {
 			return unknown, err
 		}
-		change, err := domain.CompareContextDocuments(&before, after)
+		change, err := domain.CompareContextDocuments(ctx, &before, after)
 		if err != nil {
 			return unknown, err
 		}
@@ -243,11 +251,11 @@ func (d *diffDocuments) compare(ctx context.Context, o workingObservation, hash 
 		return unknown, nil
 	}
 	if best < 0 && len(candidates) == 1 {
-		before, err := d.read(ctx, candidates[0].Hash, provider, session)
+		before, err := d.read(ctx, candidates[0].Ref, provider, session)
 		if err != nil {
 			return unknown, err
 		}
-		bestChange, err = domain.CompareContextDocuments(&before, after)
+		bestChange, err = domain.CompareContextDocuments(ctx, &before, after)
 		if err != nil {
 			return unknown, err
 		}
@@ -277,7 +285,7 @@ func (d *diffDocuments) compare(ctx context.Context, o workingObservation, hash 
 		unknown.Reason = "history_incomplete"
 		return unknown, nil
 	}
-	change, err := domain.CompareContextDocuments(nil, after)
+	change, err := domain.CompareContextDocuments(ctx, nil, after)
 	change.Baseline = "empty_selected_coverage"
 	change.SourceID = source
 	change.Generation = generation

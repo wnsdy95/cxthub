@@ -2,7 +2,6 @@ package outbound
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -12,11 +11,8 @@ import (
 // ReadChunk is valid only during WithVerifiedDocChunks' callback. It accepts
 // only listed IDs and verifies each requested body's current content hash.
 type DocumentChunks struct {
-	Hash      domain.ContentHash
-	Format    string
-	Envelope  json.RawMessage
-	Chunks    []domain.ContentHash
-	ReadChunk func(context.Context, domain.ContentHash) ([]byte, error)
+	Representation domain.DocumentRepresentation
+	ReadChunk      func(context.Context, domain.ContentHash) ([]byte, error)
 }
 
 // ChunkedDocumentStore exposes a descriptor bound to the exact representation
@@ -28,7 +24,7 @@ type DocumentChunks struct {
 // All errors, including corruption and cancellation, must propagate without
 // fallback. The callback is synchronous and must not retain ReadChunk.
 type ChunkedDocumentStore interface {
-	WithVerifiedDocChunks(ctx context.Context, hash domain.ContentHash, use func(DocumentChunks) error) (bool, error)
+	WithVerifiedDocChunks(ctx context.Context, ref domain.DocumentRef, use func(DocumentChunks) error) (bool, error)
 }
 
 // ChunkedDocumentPusher negotiates and uploads missing bounded chunks before

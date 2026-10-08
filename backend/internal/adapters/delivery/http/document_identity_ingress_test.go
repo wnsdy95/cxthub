@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -185,8 +186,15 @@ func TestDocumentIdentityHTTPPublicationIngress(t *testing.T) {
 				if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil {
 					t.Fatal(err)
 				}
-				if response.Code != http.StatusConflict || failure.Error.Code != "unsupported_document_identity" {
-					t.Errorf("unsupported identity: got %d %s; want 409 unsupported_document_identity", response.Code, response.Body.String())
+				wantCode := "unsupported_document_identity"
+				if snap.DocIdentity == domain.DocumentIdentityRootV1 && doc.Identity == domain.DocumentIdentityLegacy &&
+					slices.Contains(svc.DocumentIdentitiesSupported(), domain.DocumentIdentityRootV1) {
+					// Complete readers reach the opt-in fence on this legacy repo.
+					// Inline root documents still use an unsupported write path.
+					wantCode = "root_publication_disabled"
+				}
+				if response.Code != http.StatusConflict || failure.Error.Code != wantCode {
+					t.Errorf("root publication: got %d %s; want 409 %s", response.Code, response.Body.String(), wantCode)
 				}
 				afterSnaps, err := st.ListSnapshots(ctx, repo, "")
 				if err != nil || !reflect.DeepEqual(beforeSnaps, afterSnaps) {
@@ -254,9 +262,6 @@ func TestDocumentIdentityChunkedHTTPTagPreservation(t *testing.T) {
 						t.Fatalf("stage %s chunks: %d", format, code)
 					}
 					chunked := inbound.ChunkedDoc{Hash: doc.Hash, Format: format, Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks}
-					if declaration == "root_identity" {
-						chunked.Identity = domain.DocumentIdentityRootV1
-					}
 					encoded, err := json.Marshal(chunked)
 					if err != nil {
 						t.Fatal(err)
@@ -264,6 +269,11 @@ func TestDocumentIdentityChunkedHTTPTagPreservation(t *testing.T) {
 					var wire map[string]any
 					if err := json.Unmarshal(encoded, &wire); err != nil {
 						t.Fatal(err)
+					}
+					// Inject malformed wire directly: the strict tagged union
+					// deliberately refuses to marshal a root with legacy fields.
+					if declaration == "root_identity" {
+						wire["identity"] = domain.DocumentIdentityRootV1
 					}
 					if declaration == "root_manifest" {
 						wire["root_manifest"] = map[string]any{}
@@ -322,7 +332,7 @@ func TestDocumentIdentityChunkedHTTPTagPreservation(t *testing.T) {
 					if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil {
 						t.Fatal(err)
 					}
-					wantStatus, wantCode := http.StatusConflict, "unsupported_document_identity"
+					wantStatus, wantCode := http.StatusBadRequest, "bad_request"
 					if response.Code != wantStatus || failure.Error.Code != wantCode {
 						t.Errorf("lost %s declaration: got %d %s; want %d %s", declaration, response.Code, response.Body.String(), wantStatus, wantCode)
 					}

@@ -32,7 +32,7 @@ type auditView struct {
 }
 
 func (a *GitSyncAudit) load(ctx context.Context, repo domain.ContentHash, project bool) (auditView, error) {
-	return repositoryRead(ctx, a.core, func(ctx context.Context) (auditView, error) {
+	return repositoryReadForRepo(ctx, a.core, repo, func(ctx context.Context) (auditView, error) {
 		var out auditView
 		r, err := a.core.meta.GetRepo(ctx, repo)
 		if err != nil {

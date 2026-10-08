@@ -11,41 +11,60 @@ import (
 // NewGitChangeQuery reads previously verified evidence without provider access
 // or command methods. The API command service embeds the same query rules.
 func NewGitChangeQuery(st outbound.GitChangeStore) inbound.GitChangeQuery {
-	return &gitChangeQuery{store: st}
+	var core *Service
+	if metadata, ok := st.(outbound.MetadataStore); ok {
+		core = NewService(metadata, nil, nil, nil, nil)
+	}
+	return &gitChangeQuery{store: st, core: core}
 }
 
-type gitChangeQuery struct{ store outbound.GitChangeStore }
+type gitChangeQuery struct {
+	store outbound.GitChangeStore
+	core  *Service
+}
 
 func (g *gitChangeQuery) Get(ctx context.Context, repo domain.ContentHash, id string) (domain.GitChangeJob, error) {
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return domain.GitChangeJob{}, err
+	if g.core == nil {
+		var zero domain.GitChangeJob
+		return zero, domain.ErrDocumentIdentityUpgradeRequired
 	}
-	if err := domain.ValidateGitChangeID(id); err != nil {
-		return domain.GitChangeJob{}, err
-	}
-	return g.store.GetGitChange(ctx, repo, id)
+	return repositoryReadForRepo(ctx, g.core, repo, func(ctx context.Context) (domain.GitChangeJob, error) {
+		if err := domain.ValidateContentHash(repo); err != nil {
+			return domain.GitChangeJob{}, err
+		}
+		if err := domain.ValidateGitChangeID(id); err != nil {
+			return domain.GitChangeJob{}, err
+		}
+		return g.store.GetGitChange(ctx, repo, id)
+	})
 }
 func (g *gitChangeQuery) List(ctx context.Context, repo domain.ContentHash, cursor string, limit int) (domain.GitChangePage, error) {
-	out := domain.GitChangePage{Items: []domain.GitChangeSummary{}}
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return out, err
+	if g.core == nil {
+		var zero domain.GitChangePage
+		return zero, domain.ErrDocumentIdentityUpgradeRequired
 	}
-	if cursor != "" {
-		if err := domain.ValidateGitChangeID(cursor); err != nil {
+	return repositoryReadForRepo(ctx, g.core, repo, func(ctx context.Context) (domain.GitChangePage, error) {
+		out := domain.GitChangePage{Items: []domain.GitChangeSummary{}}
+		if err := domain.ValidateContentHash(repo); err != nil {
 			return out, err
 		}
-	}
-	if limit < 1 || limit > 100 {
-		return out, domain.ErrValidation
-	}
-	jobs, err := g.store.ListGitChanges(ctx, repo, cursor, limit+1)
-	if err != nil {
-		return out, err
-	}
-	if len(jobs) > limit {
-		out.NextCursor = jobs[limit-1].ID
-		jobs = jobs[:limit]
-	}
-	out.Items = jobs
-	return out, nil
+		if cursor != "" {
+			if err := domain.ValidateGitChangeID(cursor); err != nil {
+				return out, err
+			}
+		}
+		if limit < 1 || limit > 100 {
+			return out, domain.ErrValidation
+		}
+		jobs, err := g.store.ListGitChanges(ctx, repo, cursor, limit+1)
+		if err != nil {
+			return out, err
+		}
+		if len(jobs) > limit {
+			out.NextCursor = jobs[limit-1].ID
+			jobs = jobs[:limit]
+		}
+		out.Items = jobs
+		return out, nil
+	})
 }

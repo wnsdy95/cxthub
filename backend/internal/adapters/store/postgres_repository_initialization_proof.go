@@ -23,6 +23,7 @@ type initializationProofPG struct {
 	anchor    domain.RepositoryInitializationAnchor
 	snapshots map[domain.ContentHash]domain.ContentHash
 	blobs     map[initializationBlobPG]string
+	documents map[domain.ContentHash]domain.DocumentIdentity
 	settings  map[domain.ContentHash]string
 }
 type initializationBlobPG struct {
@@ -40,14 +41,14 @@ func (s *PostgresStore) CaptureRepositoryInitialization(ctx context.Context, rep
 	if err := anchor.Validate(repo); err != nil {
 		return nil, err
 	}
-	p := &initializationProofPG{owner: s, repo: repo, anchor: anchor, snapshots: map[domain.ContentHash]domain.ContentHash{}, blobs: map[initializationBlobPG]string{}, settings: map[domain.ContentHash]string{}}
+	p := &initializationProofPG{owner: s, repo: repo, anchor: anchor, snapshots: map[domain.ContentHash]domain.ContentHash{}, blobs: map[initializationBlobPG]string{}, documents: map[domain.ContentHash]domain.DocumentIdentity{}, settings: map[domain.ContentHash]string{}}
 	p.anchor.SnapshotStates = make(map[domain.ContentHash]domain.ContentHash, len(anchor.SnapshotStates))
 	for id, state := range anchor.SnapshotStates {
 		p.anchor.SnapshotStates[id] = state
 	}
 	for _, snap := range evidence.Snapshots {
-		if snap.DocIdentity != domain.DocumentIdentityLegacy {
-			return nil, domain.ErrUnsupportedDocumentIdentity
+		if err := snap.DocumentRef().Validate(); err != nil {
+			return nil, err
 		}
 		if snap.RepoID != repo {
 			return nil, domain.ErrIntegrity
@@ -57,7 +58,7 @@ func (s *PostgresStore) CaptureRepositoryInitialization(ctx context.Context, rep
 			return nil, err
 		}
 		p.snapshots[snap.ID] = domain.HashContent(raw)
-		if err := p.captureBlob(ctx, "doc", snap.DocHash); err != nil {
+		if err := p.captureBlob(ctx, "doc", snap.DocHash, snap.DocIdentity); err != nil {
 			return nil, err
 		}
 		for _, hash := range []domain.ContentHash{snap.ClaudeSettings, snap.AgentsSettings, snap.CodexSettings} {
@@ -80,16 +81,19 @@ func (s *PostgresStore) CaptureRepositoryInitialization(ctx context.Context, rep
 		}
 	}
 	for _, hash := range evidence.Memories {
-		if err := p.captureBlob(ctx, "memory", hash); err != nil {
+		if err := p.captureBlob(ctx, "memory", hash, domain.DocumentIdentityLegacy); err != nil {
 			return nil, err
 		}
 	}
 	return p, nil
 }
 
-func (p *initializationProofPG) captureBlob(ctx context.Context, kind string, hash domain.ContentHash) error {
+func (p *initializationProofPG) captureBlob(ctx context.Context, kind string, hash domain.ContentHash, identity domain.DocumentIdentity) error {
 	key := initializationBlobPG{kind, hash}
 	if _, ok := p.blobs[key]; ok {
+		if kind == "doc" && p.documents[hash] != identity {
+			return domain.ErrIntegrity
+		}
 		return nil
 	}
 	var version string
@@ -98,23 +102,44 @@ func (p *initializationProofPG) captureBlob(ctx context.Context, kind string, ha
  FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash WHERE rb.repo_id=$1 AND rb.kind=$2 AND rb.hash=$3`, p.repo, kind, hash).Scan(&version, &raw); err != nil {
 		return mapNoRows(err)
 	}
-	if kind == "doc" {
-		if err := rejectStoredRoot(ctx, raw); err != nil {
-			return err
-		}
-	}
-	p.blobs[key] = version
-	data, err := docDecompress(raw)
-	if err != nil {
-		return domain.ErrIntegrity
-	}
 	var chunks []domain.ContentHash
 	chunkKind := "chunk"
 	if kind == "doc" {
-		if manifest, ok := domain.ParseDocChunkManifest(data); ok {
-			chunks = manifest.Chunks
+		manifest, root, err := storedConversationManifest(ctx, raw)
+		if err != nil {
+			return err
+		}
+		if root {
+			if identity != domain.DocumentIdentityRootV1 {
+				return domain.ErrIntegrity
+			}
+			doc, err := verifyStoredConversation(ctx, hash, manifest, p.owner.ownedDocChunkReader(p.repo, conversationChunkOrder(manifest)))
+			if err != nil {
+				return err
+			}
+			if doc.DocumentRef() != (domain.DocumentRef{Hash: hash, Identity: identity}) {
+				return domain.ErrIntegrity
+			}
+			for _, chunk := range manifest.Chunks {
+				chunks = append(chunks, chunk.Hash)
+			}
+		} else {
+			if identity != domain.DocumentIdentityLegacy {
+				return domain.ErrIntegrity
+			}
+			data, err := docDecompress(raw)
+			if err != nil {
+				return domain.ErrIntegrity
+			}
+			if manifest, ok := domain.ParseDocChunkManifest(data); ok {
+				chunks = manifest.Chunks
+			}
 		}
 	} else {
+		data, err := docDecompress(raw)
+		if err != nil {
+			return domain.ErrIntegrity
+		}
 		manifest, ok, err := domain.ParseMemoryChunkManifest(data)
 		if err != nil {
 			return domain.ErrIntegrity
@@ -123,6 +148,10 @@ func (p *initializationProofPG) captureBlob(ctx context.Context, kind string, ha
 			chunks = append(append([]domain.ContentHash{}, manifest.SummaryChunks...), manifest.FragmentChunks...)
 		}
 		chunkKind = "memory_chunk"
+	}
+	p.blobs[key] = version
+	if kind == "doc" {
+		p.documents[hash] = identity
 	}
 	for _, id := range chunks {
 		key := initializationBlobPG{chunkKind, id}

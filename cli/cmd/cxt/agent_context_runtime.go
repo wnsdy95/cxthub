@@ -32,6 +32,10 @@ func (r cloudAgentDocuments) GetDoc(ctx context.Context, hash domain.ContentHash
 	return r.remote.FetchAgentDocument(ctx, r.repo, hash)
 }
 
+func (r cloudAgentDocuments) GetDocReference(ctx context.Context, ref domain.DocumentRef) (domain.SessionDoc, error) {
+	return r.remote.FetchAgentDocumentReference(ctx, r.repo, ref)
+}
+
 func (r cloudAgentDocuments) ReadAgentHistoryPage(ctx context.Context, hash domain.ContentHash, req domain.AgentHistoryPageRequest) (domain.AgentHistoryPage, error) {
 	return r.remote.ReadAgentHistoryPage(ctx, r.repo, hash, req)
 }

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 )
 
@@ -14,20 +15,22 @@ type EventRange struct {
 }
 
 type ContextChange struct {
-	CountsKnown  bool         `json:"counts_known"`
-	Provider     ProviderKind `json:"provider"`
-	SessionID    string       `json:"session_id"`
-	SourceID     ContentHash  `json:"source_id,omitempty"`
-	Generation   ContentHash  `json:"generation,omitempty"`
-	Before       ContentHash  `json:"before,omitempty"`
-	After        ContentHash  `json:"after"`
-	State        string       `json:"state"`
-	Baseline     string       `json:"baseline"`
-	Reason       string       `json:"reason,omitempty"`
-	BeforeEvents int          `json:"before_events"`
-	AfterEvents  int          `json:"after_events"`
-	Added        EventRange   `json:"added"`
-	Removed      EventRange   `json:"removed"`
+	CountsKnown    bool             `json:"counts_known"`
+	Provider       ProviderKind     `json:"provider"`
+	SessionID      string           `json:"session_id"`
+	SourceID       ContentHash      `json:"source_id,omitempty"`
+	Generation     ContentHash      `json:"generation,omitempty"`
+	BeforeIdentity DocumentIdentity `json:"before_identity,omitempty"`
+	AfterIdentity  DocumentIdentity `json:"after_identity,omitempty"`
+	Before         ContentHash      `json:"before,omitempty"`
+	After          ContentHash      `json:"after"`
+	State          string           `json:"state"`
+	Baseline       string           `json:"baseline"`
+	Reason         string           `json:"reason,omitempty"`
+	BeforeEvents   int              `json:"before_events"`
+	AfterEvents    int              `json:"after_events"`
+	Added          EventRange       `json:"added"`
+	Removed        EventRange       `json:"removed"`
 }
 
 type ContextDiff struct {
@@ -47,9 +50,9 @@ type ContextDiff struct {
 // Canonical full events must match (including tool calls, locked state and IDs)
 // before a suffix can be called an extension. Divergence is a replacement, not
 // a bag-of-text diff. The caller supplies provenance and baseline selection.
-func CompareContextDocuments(before *SessionDoc, after SessionDoc) (ContextChange, error) {
-	out := ContextChange{Provider: after.CIR.Envelope.SourceProvider, SessionID: after.CIR.Envelope.SessionOriginID, After: after.Hash}
-	if err := ValidateSessionDocHash(after); err != nil {
+func CompareContextDocuments(ctx context.Context, before *SessionDoc, after SessionDoc) (ContextChange, error) {
+	out := ContextChange{Provider: after.CIR.Envelope.SourceProvider, SessionID: after.CIR.Envelope.SessionOriginID, After: after.Hash, AfterIdentity: after.Identity}
+	if err := VerifySessionDocIdentity(ctx, after); err != nil {
 		return out, err
 	}
 	if out.SessionID == "" {
@@ -64,16 +67,20 @@ func CompareContextDocuments(before *SessionDoc, after SessionDoc) (ContextChang
 		out.Added = eventRange(next, 0, len(next))
 		return out, nil
 	}
-	if err := ValidateSessionDocHash(*before); err != nil {
+	if err := VerifySessionDocIdentity(ctx, *before); err != nil {
 		return out, err
 	}
 	if before.CIR.Envelope.SourceProvider != out.Provider || before.CIR.Envelope.SessionOriginID != out.SessionID {
 		return out, fmt.Errorf("%w: different source sessions cannot share coverage", ErrHashMismatch)
 	}
 	prior := canonicalEvents(before.CIR.Events)
+	out.BeforeIdentity = before.Identity
 	out.Before, out.BeforeEvents = before.Hash, len(prior)
 	common := 0
 	for common < len(prior) && common < len(next) {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		a, err := canonicalJSON(prior[common])
 		if err != nil {
 			return out, err

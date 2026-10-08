@@ -20,9 +20,10 @@ const (
 )
 
 type agentTailAnchor struct {
-	hash   domain.ContentHash
-	total  int
-	events []domain.ContentHash // only the full-document fallback needs hashes
+	hash     domain.ContentHash
+	identity domain.DocumentIdentity
+	total    int
+	events   []domain.ContentHash // only the full-document fallback needs hashes
 }
 
 type agentTailExclusions struct {
@@ -85,7 +86,7 @@ func (e *agentTailExclusions) contains(ctx context.Context, session string, hash
 func markAgentIncompleteTail(p *domain.AgentContextPackage, snapshot domain.Snapshot, tail *domain.AgentHistoryTail) {
 	p.Content.Gaps = append(append([]domain.AgentCoverageGap(nil), p.Content.Gaps...), domain.AgentCoverageGap{
 		Reason: "history_incomplete_tool_pair",
-		Source: &domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash,
+		Source: &domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, DocIdentity: snapshot.DocIdentity,
 			StartEvent: tail.Start, EndEvent: tail.End, Tool: "context_fetch"},
 	})
 }

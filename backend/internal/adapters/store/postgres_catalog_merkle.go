@@ -52,6 +52,13 @@ func (s *PostgresStore) CatalogMerkle(ctx context.Context, repo domain.ContentHa
 	if err := req.Validate(); err != nil {
 		return zero, err
 	}
+	// This preflight avoids incompatible cache/source work. The page snapshot
+	// and cache publication transaction independently recheck before effects.
+	if err := s.WithinReadSnapshot(ctx, func(bound context.Context) error {
+		return s.checkRepositoryDocumentIdentity(bound, s.db(bound), repo, false)
+	}); err != nil {
+		return zero, err
+	}
 	if req.RootHash == "" {
 		state, err := s.catalogMerkleState(ctx, s.pool, repo)
 		if err != nil {
@@ -373,6 +380,9 @@ func (s *PostgresStore) publishCatalogMerkle(ctx context.Context, repo domain.Co
 		return err
 	}
 	defer rollbackPG(tx)
+	if err := s.checkRepositoryDocumentIdentity(ctx, tx, repo, true); err != nil {
+		return err
+	}
 	check := func() error {
 		st, err := s.catalogMerkleState(ctx, tx, repo)
 		if err != nil {
@@ -430,6 +440,9 @@ func (s *PostgresStore) publishCatalogMerkle(ctx context.Context, repo domain.Co
 func (s *PostgresStore) readCatalogMerklePage(ctx context.Context, repo domain.ContentHash, req domain.CatalogMerkleRequest) (domain.CatalogMerklePage, error) {
 	var page domain.CatalogMerklePage
 	err := s.WithinReadSnapshot(ctx, func(ctx context.Context) error {
+		if err := s.checkRepositoryDocumentIdentity(ctx, s.db(ctx), repo, false); err != nil {
+			return err
+		}
 		st, err := s.catalogMerkleState(ctx, s.db(ctx), repo)
 		if err != nil {
 			return err

@@ -97,7 +97,7 @@ func TestRootDocumentLegacyBoundariesRemainClosed(t *testing.T) {
 		"wrong-expected-scheme":    func() error { return s.VerifyStoredDocReference(ctx, domain.DocumentRef{Hash: ref.Hash}) },
 		"wrong-materialize-scheme": func() error { _, err := s.GetDocReference(ctx, domain.DocumentRef{Hash: ref.Hash}); return err },
 		"upload": func() error {
-			_, err := s.WithVerifiedDocChunks(ctx, ref.Hash, func(outbound.DocumentChunks) error { t.Fatal("root reached upload callback"); return nil })
+			_, err := s.WithVerifiedDocChunks(ctx, domain.DocumentRef{Hash: ref.Hash}, func(outbound.DocumentChunks) error { t.Fatal("root reached upload callback"); return nil })
 			return err
 		},
 		"capture-append": func() error { _, err := s.AppendCaptureDoc(ctx, ref.Hash, sampleCIR("delta")); return err },

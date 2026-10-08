@@ -83,7 +83,7 @@ func (r *fetchInventoryRemote) PullSelectedBranchTo(ctx context.Context, repo st
 		if have[id] {
 			continue
 		}
-		ok, err := receiver.HasVerifiedDoc(ctx, id)
+		ok, err := receiver.HasVerifiedDoc(ctx, domain.DocumentRef{Hash: id})
 		if err != nil {
 			return plan, nil, err
 		}

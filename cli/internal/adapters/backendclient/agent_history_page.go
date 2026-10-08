@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,6 +25,12 @@ func (c *BackendClient) ReadAgentHistoryPage(ctx context.Context, repo string, h
 		return page, err
 	}
 	q := url.Values{"before": {strconv.Itoa(req.Before)}, "limit": {strconv.Itoa(req.Limit)}, "max_bytes": {strconv.Itoa(req.MaxBytes)}}
+	if req.DocIdentity != "" {
+		q.Set("doc_identity", string(req.DocIdentity))
+	}
+	if req.CoveredByIdentity != "" {
+		q.Set("covered_by_identity", string(req.CoveredByIdentity))
+	}
 	if req.CoveredBy != "" {
 		q.Set("covered_by", string(req.CoveredBy))
 	}
@@ -100,9 +107,31 @@ func verifyHistoryEventWire(raw []byte, page domain.AgentHistoryPage) error {
 
 func historyPageWireShape(raw []byte) error {
 	check := func(raw []byte, keys []string, optional ...string) (map[string]json.RawMessage, error) {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			return nil, err
+		fields := map[string]json.RawMessage{}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+			return nil, domain.ErrHashMismatch
+		}
+		for decoder.More() {
+			token, err := decoder.Token()
+			key, ok := token.(string)
+			if err != nil || !ok {
+				return nil, domain.ErrHashMismatch
+			}
+			if _, seen := fields[key]; seen {
+				return nil, domain.ErrHashMismatch
+			}
+			var value json.RawMessage
+			if err := decoder.Decode(&value); err != nil {
+				return nil, err
+			}
+			fields[key] = value
+		}
+		if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+			return nil, domain.ErrHashMismatch
+		}
+		if _, err := decoder.Token(); err != io.EOF {
+			return nil, domain.ErrHashMismatch
 		}
 		for _, key := range keys {
 			if value, ok := fields[key]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -123,7 +152,7 @@ func historyPageWireShape(raw []byte) error {
 		}
 		return fields, nil
 	}
-	fields, err := check(raw, []string{"version", "hash", "provider", "session_id", "total", "before", "next_before", "covered", "turns"}, "omitted_tail")
+	fields, err := check(raw, []string{"version", "hash", "provider", "session_id", "total", "before", "next_before", "covered", "turns"}, "omitted_tail", "doc_identity")
 	if err != nil {
 		return err
 	}

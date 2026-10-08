@@ -95,6 +95,14 @@ func (s *FSStore) ClaimNotification(ctx context.Context, now time.Time, lease ti
 		if !((j.State == "pending" || j.State == "retrying") && !j.NextAttempt.After(now) || j.State == "running" && !j.LeaseUntil.After(now)) {
 			continue
 		}
+		release, policyErr := s.pinWorkerRepositoryPolicy(ctx, j.RepositoryID)
+		if errors.Is(policyErr, domain.ErrDocumentIdentityUpgradeRequired) {
+			continue
+		}
+		if policyErr != nil {
+			return outbound.NotificationDelivery{}, policyErr
+		}
+		defer release()
 		j.State = "running"
 		j.Attempts++
 		j.Version++
@@ -115,6 +123,14 @@ func (s *FSStore) FinishNotification(ctx context.Context, j domain.NotificationJ
 	if d.Job.State != "running" || d.Job.Version != j.Version || !d.Job.LeaseUntil.After(now) {
 		return domain.ErrRefConflict
 	}
+	if !notificationPayloadMatches(d.Job, j) {
+		return domain.ErrRefConflict
+	}
+	release, err := s.pinWorkerRepositoryPolicy(ctx, d.Job.RepositoryID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	d.Job = j
 	return s.writeNotification(d)
 }
@@ -146,3 +162,30 @@ func (s *FSStore) RetryNotification(ctx context.Context, repository, id, destina
 }
 
 var _ outbound.NotificationStore = (*FSStore)(nil)
+
+func (s *FSStore) ValidateNotificationDelivery(ctx context.Context, claimed outbound.NotificationDelivery, now time.Time) error {
+	l := s.oauthLock()
+	l.Lock()
+	defer l.Unlock()
+	var current outbound.NotificationDelivery
+	if err := readJSON(s.notificationPath(claimed.Job.ID), &current); err != nil {
+		return err
+	}
+	release, err := s.pinWorkerRepositoryPolicy(ctx, current.Job.RepositoryID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	repo, err := s.GetRepository(ctx, current.Job.RepositoryID)
+	if err != nil {
+		return err
+	}
+	// Lock waits and configuration reads may outlive the caller's sample.
+	// Preserve later caller times while requiring the lease to be live now.
+	if currentTime := time.Now().UTC(); currentTime.After(now) {
+		now = currentTime
+	}
+	return checkNotificationDelivery(current, claimed, repo, now)
+}
+
+var _ outbound.NotificationDeliveryGuard = (*FSStore)(nil)

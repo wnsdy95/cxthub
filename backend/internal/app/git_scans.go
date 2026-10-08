@@ -97,7 +97,7 @@ func (g *GitScans) run(ctx context.Context, j domain.GitScanJob) error {
 	p.Job.UpdatedAt = time.Now().UTC()
 	p.Job.NextAttempt = p.Job.UpdatedAt
 	p.Job.State = "waiting"
-	repo, err := g.core.meta.GetRepo(work, j.RepoID)
+	repo, err := g.core.workerRepository(work, j.RepoID)
 	if err == nil && repo.GitRemoteURL != j.GitOrigin {
 		err = domain.ErrConflict
 	}
@@ -215,7 +215,7 @@ func planGitIndex(p *domain.GitScanFinish, deltas []domain.GitCommitDelta) error
 	return p.Validate()
 }
 func (g *GitScans) Process(ctx context.Context, limit int) error {
-	ctx = inbound.WithSystemActor(ctx)
+	ctx = g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
 	for i := 0; i < limit; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -308,7 +308,7 @@ func (g *GitScans) RetryScan(ctx context.Context, repo domain.ContentHash, id st
 // Reconcile observes one durable page per repository on each pass. Failed or
 // canceled reads retain their page; other repositories continue independently.
 func (g *GitScans) Reconcile(ctx context.Context) error {
-	ctx = inbound.WithSystemActor(ctx)
+	ctx = g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
 	st, ok := g.core.meta.(outbound.GitHeadScanStore)
 	if !ok {
 		return domain.ErrValidation
@@ -325,14 +325,18 @@ func (g *GitScans) Reconcile(ctx context.Context) error {
 			return err
 		}
 		j, e := st.ClaimGitHeadScan(ctx, repo.ID, repo.GitRemoteURL, time.Now().UTC(), time.Minute)
-		if errors.Is(e, domain.ErrNotFound) {
+		if errors.Is(e, domain.ErrNotFound) || errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
 			continue
 		}
 		if e != nil {
 			return e
 		}
 		work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 30*time.Second)
-		fence, e := authorizeGitRead(work, g.sourceAccess, j.RepoID)
+		_, e = g.core.workerRepository(work, j.RepoID)
+		var fence GitReadFence
+		if e == nil {
+			fence, e = authorizeGitRead(work, g.sourceAccess, j.RepoID)
+		}
 		var heads []outbound.GitHead
 		var more bool
 		if e == nil {

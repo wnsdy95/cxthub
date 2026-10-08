@@ -29,87 +29,91 @@ func (s *Service) legacyDocReadIndex(ctx context.Context, repo, hash domain.Cont
 // ReadDocEvents reads a bounded window from verified chunks. A base hash only
 // selects the exact inherited prefix; it never rewrites or truncates the archive.
 func (s *Service) ReadDocEvents(ctx context.Context, repo, hash, base domain.ContentHash, offset, limit int) (domain.DocEventPage, error) {
-	out := domain.DocEventPage{Hash: hash, Next: -1, Events: []domain.CIREvent{}}
-	if offset < -1 || limit < 0 || limit > 100 {
-		return out, fmt.Errorf("%w: invalid event range", domain.ErrValidation)
-	}
-	if limit == 0 {
-		limit = 50
-	}
-	source, err := s.documentReadSource(ctx, repo, hash)
-	if err != nil {
-		return out, err
-	}
-	idx := source.index
-	out.Envelope = idx.Envelope
-	out.Total = len(idx.Events)
-	if base != "" {
-		previous, err := s.docReadIndex(ctx, repo, base)
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.DocEventPage, error) {
+		out := domain.DocEventPage{Hash: hash, Next: -1, Events: []domain.CIREvent{}}
+		if offset < -1 || limit < 0 || limit > 100 {
+			return out, fmt.Errorf("%w: invalid event range", domain.ErrValidation)
+		}
+		if limit == 0 {
+			limit = 50
+		}
+		source, err := s.documentReadSource(ctx, repo, hash)
 		if err != nil {
 			return out, err
 		}
-		for out.Inherited < len(idx.Events) && out.Inherited < len(previous.Events) && idx.Events[out.Inherited].Hash == previous.Events[out.Inherited].Hash {
-			out.Inherited++
+		idx := source.index
+		out.Envelope = idx.Envelope
+		out.Total = len(idx.Events)
+		if base != "" {
+			previous, err := s.docReadIndex(ctx, repo, base)
+			if err != nil {
+				return out, err
+			}
+			for out.Inherited < len(idx.Events) && out.Inherited < len(previous.Events) && idx.Events[out.Inherited].Hash == previous.Events[out.Inherited].Hash {
+				out.Inherited++
+			}
 		}
-	}
-	if offset == -1 {
-		offset = out.Inherited
-	}
-	if offset > out.Total {
-		return out, fmt.Errorf("%w: event offset exceeds document", domain.ErrValidation)
-	}
-	out.Offset = offset
-	if offset == out.Total {
-		return out, nil
-	}
-	read := source.read
-	bytes := 0
-	for i := offset; i < out.Total && len(out.Events) < limit; i++ {
-		if err := ctx.Err(); err != nil {
-			return out, err
+		if offset == -1 {
+			offset = out.Inherited
 		}
-		item := idx.Events[i]
-		if len(out.Events) > 0 && bytes+item.Length > 512<<10 {
-			out.Next = i
+		if offset > out.Total {
+			return out, fmt.Errorf("%w: event offset exceeds document", domain.ErrValidation)
+		}
+		out.Offset = offset
+		if offset == out.Total {
 			return out, nil
 		}
-		raw, err := read(item.Offset, item.Length)
-		if err != nil {
-			return out, err
+		read := source.read
+		bytes := 0
+		for i := offset; i < out.Total && len(out.Events) < limit; i++ {
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
+			item := idx.Events[i]
+			if len(out.Events) > 0 && bytes+item.Length > 512<<10 {
+				out.Next = i
+				return out, nil
+			}
+			raw, err := read(item.Offset, item.Length)
+			if err != nil {
+				return out, err
+			}
+			ev, err := domain.DecodeIndexedEvent(raw, item)
+			if err != nil {
+				return out, err
+			}
+			out.Events = append(out.Events, ev)
+			bytes += item.Length
 		}
-		ev, err := domain.DecodeIndexedEvent(raw, item)
-		if err != nil {
-			return out, err
+		if next := offset + len(out.Events); next < out.Total {
+			out.Next = next
 		}
-		out.Events = append(out.Events, ev)
-		bytes += item.Length
-	}
-	if next := offset + len(out.Events); next < out.Total {
-		out.Next = next
-	}
-	return out, nil
+		return out, nil
+	})
 }
 
 func (s *Service) SearchDocEvents(ctx context.Context, repo, hash domain.ContentHash, q string, after, limit int) ([]domain.DocEventIndex, error) {
-	q = strings.ToLower(strings.TrimSpace(q))
-	if len([]rune(q)) < 2 || len([]rune(q)) > 256 || after < -1 || limit < 1 || limit > 201 {
-		return nil, fmt.Errorf("%w: invalid event search", domain.ErrValidation)
-	}
-	root, err := s.rootReadSource(ctx, repo, hash)
-	if err != nil {
-		return nil, err
-	}
-	if root != nil {
-		return searchReadIndex(ctx, root.index, q, after, limit)
-	}
-	if indexed, ok := s.blobs.(outbound.DocReadStore); ok {
-		return indexed.SearchDocEvents(ctx, repo, hash, q, after, limit)
-	}
-	idx, err := s.legacyDocReadIndex(ctx, repo, hash)
-	if err != nil {
-		return nil, err
-	}
-	return searchReadIndex(ctx, idx, q, after, limit)
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) ([]domain.DocEventIndex, error) {
+		q = strings.ToLower(strings.TrimSpace(q))
+		if len([]rune(q)) < 2 || len([]rune(q)) > 256 || after < -1 || limit < 1 || limit > 201 {
+			return nil, fmt.Errorf("%w: invalid event search", domain.ErrValidation)
+		}
+		root, err := s.rootReadSource(ctx, repo, hash)
+		if err != nil {
+			return nil, err
+		}
+		if root != nil {
+			return searchReadIndex(ctx, root.index, q, after, limit)
+		}
+		if indexed, ok := s.blobs.(outbound.DocReadStore); ok {
+			return indexed.SearchDocEvents(ctx, repo, hash, q, after, limit)
+		}
+		idx, err := s.legacyDocReadIndex(ctx, repo, hash)
+		if err != nil {
+			return nil, err
+		}
+		return searchReadIndex(ctx, idx, q, after, limit)
+	})
 }
 
 func searchReadIndex(ctx context.Context, idx domain.DocReadIndex, q string, after, limit int) ([]domain.DocEventIndex, error) {
@@ -132,12 +136,14 @@ func searchReadIndex(ctx context.Context, idx domain.DocReadIndex, q string, aft
 // non-nil set excludes legacy indexed documents only; roots still require their
 // explicit current-byte reader before searching the verified projection.
 func (s *Service) MatchingDocHashes(ctx context.Context, repo domain.ContentHash, q string) (map[domain.ContentHash]bool, error) {
-	if indexed, ok := s.blobs.(interface {
-		MatchingDocHashes(context.Context, domain.ContentHash, string) (map[domain.ContentHash]bool, error)
-	}); ok {
-		return indexed.MatchingDocHashes(ctx, repo, strings.ToLower(strings.TrimSpace(q)))
-	}
-	return nil, nil
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (map[domain.ContentHash]bool, error) {
+		if indexed, ok := s.blobs.(interface {
+			MatchingDocHashes(context.Context, domain.ContentHash, string) (map[domain.ContentHash]bool, error)
+		}); ok {
+			return indexed.MatchingDocHashes(ctx, repo, strings.ToLower(strings.TrimSpace(q)))
+		}
+		return nil, nil
+	})
 }
 
 func (s *Service) eventRangeReader(ctx context.Context, repo, hash domain.ContentHash) (func(int, int) ([]byte, error), error) {
@@ -189,59 +195,61 @@ func (s *Service) eventRangeReader(ctx context.Context, repo, hash domain.Conten
 // indexes use bounded chunk ranges. Roots first verify the whole current source,
 // then return ranges from those owned bytes, preserving UTF-8 and exact JSON.
 func (s *Service) ReadDocFragments(ctx context.Context, repo, hash domain.ContentHash, index, offset, limit, budget int) (domain.DocFragmentPage, error) {
-	out := domain.DocFragmentPage{Fragments: []domain.DocEventFragment{}}
-	if index < 0 || offset < 0 || limit < 1 || limit > 50 || budget < 4 || budget > 64<<10 {
-		return out, domain.ErrValidation
-	}
-	source, err := s.documentReadSource(ctx, repo, hash)
-	if err != nil {
-		return out, err
-	}
-	idx := source.index
-	out.Total = len(idx.Events)
-	out.NextIndex = index
-	out.NextOffset = offset
-	if index > out.Total || (index == out.Total && offset != 0) {
-		return out, domain.ErrValidation
-	}
-	if index == out.Total {
-		return out, nil
-	}
-	read := source.read
-	for index < out.Total && len(out.Fragments) < limit && budget >= 4 {
-		if err := ctx.Err(); err != nil {
-			return out, err
-		}
-		item := idx.Events[index]
-		if offset >= item.Length {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.DocFragmentPage, error) {
+		out := domain.DocFragmentPage{Fragments: []domain.DocEventFragment{}}
+		if index < 0 || offset < 0 || limit < 1 || limit > 50 || budget < 4 || budget > 64<<10 {
 			return out, domain.ErrValidation
 		}
-		n := min(item.Length-offset, budget)
-		raw, err := read(item.Offset+offset, n)
+		source, err := s.documentReadSource(ctx, repo, hash)
 		if err != nil {
 			return out, err
 		}
-		if len(raw) == 0 || !utf8.RuneStart(raw[0]) {
+		idx := source.index
+		out.Total = len(idx.Events)
+		out.NextIndex = index
+		out.NextOffset = offset
+		if index > out.Total || (index == out.Total && offset != 0) {
 			return out, domain.ErrValidation
 		}
-		if offset+n < item.Length {
-			for len(raw) > 0 && !utf8.Valid(raw) {
-				raw = raw[:len(raw)-1]
+		if index == out.Total {
+			return out, nil
+		}
+		read := source.read
+		for index < out.Total && len(out.Fragments) < limit && budget >= 4 {
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
+			item := idx.Events[index]
+			if offset >= item.Length {
+				return out, domain.ErrValidation
+			}
+			n := min(item.Length-offset, budget)
+			raw, err := read(item.Offset+offset, n)
+			if err != nil {
+				return out, err
+			}
+			if len(raw) == 0 || !utf8.RuneStart(raw[0]) {
+				return out, domain.ErrValidation
+			}
+			if offset+n < item.Length {
+				for len(raw) > 0 && !utf8.Valid(raw) {
+					raw = raw[:len(raw)-1]
+				}
+			}
+			if len(raw) == 0 {
+				return out, domain.ErrIntegrity
+			}
+			complete := offset+len(raw) == item.Length
+			out.Fragments = append(out.Fragments, domain.DocEventFragment{Index: index, Offset: offset, Complete: complete, JSON: string(raw)})
+			budget -= len(raw)
+			offset += len(raw)
+			if complete {
+				index++
+				offset = 0
 			}
 		}
-		if len(raw) == 0 {
-			return out, domain.ErrIntegrity
-		}
-		complete := offset+len(raw) == item.Length
-		out.Fragments = append(out.Fragments, domain.DocEventFragment{Index: index, Offset: offset, Complete: complete, JSON: string(raw)})
-		budget -= len(raw)
-		offset += len(raw)
-		if complete {
-			index++
-			offset = 0
-		}
-	}
-	out.NextIndex = index
-	out.NextOffset = offset
-	return out, nil
+		out.NextIndex = index
+		out.NextOffset = offset
+		return out, nil
+	})
 }

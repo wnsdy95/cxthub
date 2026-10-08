@@ -225,7 +225,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 				memoryHash = in.MemoryPin.MemoryHash
 			}
 		}
-		p.Content.Sources = append(p.Content.Sources, domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, MemoryHash: memoryHash, Tool: "context_fetch"})
+		p.Content.Sources = append(p.Content.Sources, domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, DocIdentity: snapshot.DocIdentity, MemoryHash: memoryHash, Tool: "context_fetch"})
 	}
 	// Reserve the coverage notice up front, so adding a truncation marker cannot
 	// itself push mandatory constraints outside the requested token budget.
@@ -430,7 +430,7 @@ func validAgentHistory(v domain.HistoryQueryResult, in inbound.PrepareAgentConte
 	}
 	seen := map[domain.ContentHash]bool{}
 	for _, snapshot := range v.Snapshots {
-		if snapshot.RepoID != in.RepoID || seen[snapshot.ID] || domain.ValidateContentHash(snapshot.ID) != nil || domain.ValidateContentHash(snapshot.DocHash) != nil {
+		if snapshot.RepoID != in.RepoID || seen[snapshot.ID] || domain.ValidateContentHash(snapshot.ID) != nil || snapshot.DocumentRef().Validate() != nil {
 			return domain.ErrHashMismatch
 		}
 		seen[snapshot.ID] = true
@@ -497,7 +497,7 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 	if s.documents == nil {
 		return fmt.Errorf("%w: verified historical body reader is unavailable", domain.ErrAgentContextUnavailable)
 	}
-	seenDocs := map[domain.ContentHash]bool{}
+	seenDocs := map[domain.DocumentRef]bool{}
 	// Prefix proofs contain hashes of original events, not plaintext. Equality is
 	// useful only within one provider/session; identical prose in another session
 	// remains an independent contribution.
@@ -509,18 +509,12 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if seenDocs[snapshot.DocHash] {
+		if seenDocs[snapshot.DocumentRef()] {
 			continue
 		}
-		seenDocs[snapshot.DocHash] = true
-		doc, err := s.documents.GetDoc(ctx, snapshot.DocHash)
+		seenDocs[snapshot.DocumentRef()] = true
+		doc, err := readDocumentReference(ctx, s.documents, snapshot.DocumentRef())
 		if err != nil {
-			return err
-		}
-		if doc.Hash != snapshot.DocHash {
-			return domain.ErrHashMismatch
-		}
-		if err = domain.ValidateSessionDocHash(doc); err != nil {
 			return err
 		}
 		sessionKey := string(doc.CIR.Envelope.SourceProvider) + "\x00" + doc.CIR.Envelope.SessionOriginID
@@ -562,7 +556,7 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 		if tail != nil {
 			markAgentIncompleteTail(p, snapshot, tail)
 			if doc.CIR.Envelope.SessionOriginID != "" {
-				if err := exclusions.remember(sessionKey, agentTailAnchor{hash: snapshot.DocHash, total: len(hashes), events: hashes}); err != nil {
+				if err := exclusions.remember(sessionKey, agentTailAnchor{hash: snapshot.DocHash, identity: snapshot.DocIdentity, total: len(hashes), events: hashes}); err != nil {
 					return err
 				}
 			}
@@ -593,7 +587,7 @@ func (s *AgentContextService) selectHistory(ctx context.Context, in inbound.Prep
 			if stable && duplicate {
 				continue
 			}
-			candidates = append(candidates, domain.AgentHistorySegment{Source: domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, StartEvent: turn.Start, EndEvent: turn.End, Tool: "context_fetch"}, SessionID: doc.CIR.Envelope.SessionOriginID, Events: turn.Events})
+			candidates = append(candidates, domain.AgentHistorySegment{Source: domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, DocIdentity: snapshot.DocIdentity, StartEvent: turn.Start, EndEvent: turn.End, Tool: "context_fetch"}, SessionID: doc.CIR.Envelope.SessionOriginID, Events: turn.Events})
 		}
 		// Measure complete candidates with logarithmically many tokenizer calls.
 		// Every accepted candidate is measured in its final chronological rendering;

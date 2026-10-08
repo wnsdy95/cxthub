@@ -33,8 +33,8 @@ func docUploadFixture(t *testing.T, version string) outbound.DocumentChunks {
 	if !ok {
 		t.Fatal("fixture did not produce a manifest")
 	}
-	return outbound.DocumentChunks{Hash: domain.HashContent(raw), Format: plan.Manifest.Format,
-		Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks,
+	return outbound.DocumentChunks{Representation: domain.DocumentRepresentation{Hash: domain.HashContent(raw), Format: plan.Manifest.Format,
+		Envelope: plan.Manifest.Envelope, Chunks: plan.Manifest.Chunks},
 		ReadChunk: func(_ context.Context, hash domain.ContentHash) ([]byte, error) {
 			body, ok := plan.Bodies[hash]
 			if !ok {
@@ -52,9 +52,9 @@ func docUploadPartitionFixture(t *testing.T, count, bodySize int) (outbound.Docu
 	var bodies [][]byte
 	var raw bytes.Buffer
 	raw.WriteString(`{"envelope":`)
-	raw.Write(doc.Envelope)
+	raw.Write(doc.Representation.Envelope)
 	raw.WriteString(`,"events":[`)
-	doc.Chunks = nil
+	doc.Representation.Chunks = nil
 	byHash := map[domain.ContentHash][]byte{}
 	for i := 0; i < count; i++ {
 		body := []byte(fmt.Sprintf(`{"blocks":[{"text":"%s","type":"text"}],"kind":"message","role":"user","seq":%d}`, strings.Repeat("x", bodySize), i))
@@ -62,18 +62,18 @@ func docUploadPartitionFixture(t *testing.T, count, bodySize int) (outbound.Docu
 			body = append([]byte(","), body...)
 		}
 		hash := domain.HashContent(body)
-		doc.Chunks = append(doc.Chunks, hash)
+		doc.Representation.Chunks = append(doc.Representation.Chunks, hash)
 		byHash[hash] = body
 		bodies = append(bodies, body)
 		raw.Write(body)
 	}
 	raw.WriteString(`]}`)
-	doc.Hash = domain.HashContent(raw.Bytes())
+	doc.Representation.Hash = domain.HashContent(raw.Bytes())
 	var cir domain.CIRDocument
 	if err := json.Unmarshal(raw.Bytes(), &cir); err != nil {
 		t.Fatal(err)
 	}
-	if err := domain.ValidateSessionDocHash(domain.SessionDoc{Hash: doc.Hash, CIR: cir}); err != nil {
+	if err := domain.ValidateSessionDocHash(domain.SessionDoc{Hash: doc.Representation.Hash, CIR: cir}); err != nil {
 		t.Fatalf("fixture must preserve canonical identity: %v", err)
 	}
 	doc.ReadChunk = func(_ context.Context, hash domain.ContentHash) ([]byte, error) {
@@ -87,7 +87,7 @@ func docUploadPartitionFixture(t *testing.T, count, bodySize int) (outbound.Docu
 }
 
 func docUploadCapabilities(doc outbound.DocumentChunks) negotiateResp {
-	return negotiateResp{DocWants: []domain.ContentHash{doc.Hash}, ChunkWants: doc.Chunks,
+	return negotiateResp{DocWants: []domain.ContentHash{doc.Representation.Hash}, ChunkWants: doc.Representation.Chunks,
 		ChunksSupported: true, BoundedChunksSupported: true,
 		ChunkFormatsSupported: []string{chunkcas.FormatV1, chunkcas.FormatV2}, CIRVersionsSupported: domain.SupportedCIRVersions()}
 }
@@ -118,21 +118,29 @@ func TestPushDocChunksValidatesDescriptorBeforeNegotiation(t *testing.T) {
 		want error
 	}{
 		{"repo", func(_ *outbound.DocumentChunks, r *string) { *r = "invalid" }, domain.ErrHashMismatch},
-		{"document hash", func(d *outbound.DocumentChunks, _ *string) { d.Hash = "invalid" }, domain.ErrHashMismatch},
-		{"format", func(d *outbound.DocumentChunks, _ *string) { d.Format = "future" }, domain.ErrHashMismatch},
-		{"empty chunks", func(d *outbound.DocumentChunks, _ *string) { d.Chunks = nil }, domain.ErrHashMismatch},
-		{"chunk hash", func(d *outbound.DocumentChunks, _ *string) { d.Chunks[0] = "invalid" }, domain.ErrHashMismatch},
+		{"document hash", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Hash = "invalid" }, domain.ErrHashMismatch},
+		{"format", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Format = "future" }, domain.ErrHashMismatch},
+		{"empty chunks", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Chunks = nil }, domain.ErrHashMismatch},
+		{"chunk hash", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Chunks[0] = "invalid" }, domain.ErrHashMismatch},
 		{"nil loader", func(d *outbound.DocumentChunks, _ *string) { d.ReadChunk = nil }, domain.ErrHashMismatch},
-		{"missing envelope", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = nil }, domain.ErrInvalidCIR},
-		{"empty envelope", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = json.RawMessage(`{}`) }, domain.ErrInvalidCIR},
-		{"incomplete envelope", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = json.RawMessage(`{"cir_version":"1"}`) }, domain.ErrInvalidCIR},
-		{"noncanonical envelope", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = append([]byte(" "), d.Envelope...) }, domain.ErrInvalidCIR},
-		{"null envelope", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = json.RawMessage(`null`) }, domain.ErrInvalidCIR},
-		{"array envelope", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = json.RawMessage(`[]`) }, domain.ErrInvalidCIR},
-		{"string envelope", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = json.RawMessage(`"oops"`) }, domain.ErrInvalidCIR},
-		{"malformed envelope", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = json.RawMessage(`{`) }, domain.ErrInvalidCIR},
-		{"malformed version", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = json.RawMessage(`{"cir_version":2}`) }, domain.ErrInvalidCIR},
-		{"unknown version", func(d *outbound.DocumentChunks, _ *string) { d.Envelope = json.RawMessage(`{"cir_version":"999"}`) }, domain.ErrUnsupportedCIRVersion},
+		{"missing envelope", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Envelope = nil }, domain.ErrInvalidCIR},
+		{"empty envelope", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Envelope = json.RawMessage(`{}`) }, domain.ErrInvalidCIR},
+		{"incomplete envelope", func(d *outbound.DocumentChunks, _ *string) {
+			d.Representation.Envelope = json.RawMessage(`{"cir_version":"1"}`)
+		}, domain.ErrInvalidCIR},
+		{"noncanonical envelope", func(d *outbound.DocumentChunks, _ *string) {
+			d.Representation.Envelope = append([]byte(" "), d.Representation.Envelope...)
+		}, domain.ErrInvalidCIR},
+		{"null envelope", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Envelope = json.RawMessage(`null`) }, domain.ErrInvalidCIR},
+		{"array envelope", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Envelope = json.RawMessage(`[]`) }, domain.ErrInvalidCIR},
+		{"string envelope", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Envelope = json.RawMessage(`"oops"`) }, domain.ErrInvalidCIR},
+		{"malformed envelope", func(d *outbound.DocumentChunks, _ *string) { d.Representation.Envelope = json.RawMessage(`{`) }, domain.ErrInvalidCIR},
+		{"malformed version", func(d *outbound.DocumentChunks, _ *string) {
+			d.Representation.Envelope = json.RawMessage(`{"cir_version":2}`)
+		}, domain.ErrInvalidCIR},
+		{"unknown version", func(d *outbound.DocumentChunks, _ *string) {
+			d.Representation.Envelope = json.RawMessage(`{"cir_version":"999"}`)
+		}, domain.ErrUnsupportedCIRVersion},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			doc := docUploadFixture(t, domain.CIRVersionV1)
@@ -212,9 +220,9 @@ func TestPushDocChunksManifestLimitsFallBackBeforeRequests(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			doc := docUploadFixture(t, domain.CIRVersionV1)
 			if kind == "ordered-count" {
-				id := doc.Chunks[0]
-				for len(doc.Chunks) <= chunkcas.MaxPortableManifestChunks {
-					doc.Chunks = append(doc.Chunks, id)
+				id := doc.Representation.Chunks[0]
+				for len(doc.Representation.Chunks) <= chunkcas.MaxPortableManifestChunks {
+					doc.Representation.Chunks = append(doc.Representation.Chunks, id)
 				}
 			} else {
 				raw, err := domain.CanonicalBytes(domain.CIRDocument{Envelope: domain.Envelope{
@@ -229,7 +237,7 @@ func TestPushDocChunksManifestLimitsFallBackBeforeRequests(t *testing.T) {
 				if err := json.Unmarshal(raw, &value); err != nil {
 					t.Fatal(err)
 				}
-				doc.Envelope = value.Envelope
+				doc.Representation.Envelope = value.Envelope
 			}
 			doc.ReadChunk = func(context.Context, domain.ContentHash) ([]byte, error) {
 				t.Error("nonportable manifest read an upload body")
@@ -293,11 +301,11 @@ func TestPushDocChunksMissingOnlyAndEmptyWants(t *testing.T) {
 	for _, mode := range []string{"missing only", "all chunks present", "document present", "document present on old peer"} {
 		t.Run(mode, func(t *testing.T) {
 			doc, _ := docUploadPartitionFixture(t, 4, 10)
-			doc.Chunks = append(doc.Chunks, doc.Chunks[1]) // Repeated IDs must survive publication.
+			doc.Representation.Chunks = append(doc.Representation.Chunks, doc.Representation.Chunks[1]) // Repeated IDs must survive publication.
 			repo := domain.HashContent([]byte("repo"))
 			neg := docUploadCapabilities(doc)
-			neg.ChunkWants = []domain.ContentHash{doc.Chunks[3], doc.Chunks[1]}
-			wantReads := []domain.ContentHash{doc.Chunks[1], doc.Chunks[3]}
+			neg.ChunkWants = []domain.ContentHash{doc.Representation.Chunks[3], doc.Representation.Chunks[1]}
+			wantReads := []domain.ContentHash{doc.Representation.Chunks[1], doc.Representation.Chunks[3]}
 			wantCommit := 1
 			if mode != "missing only" {
 				wantReads = nil
@@ -325,7 +333,7 @@ func TestPushDocChunksMissingOnlyAndEmptyWants(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 						t.Fatal(err)
 					}
-					if len(req.SnapshotHaves) != 0 || !reflect.DeepEqual(req.DocHaves, []domain.ContentHash{doc.Hash}) || !reflect.DeepEqual(req.ChunkHaves, doc.Chunks[:4]) {
+					if len(req.SnapshotHaves) != 0 || !reflect.DeepEqual(req.DocHaves, []domain.ContentHash{doc.Representation.Hash}) || !reflect.DeepEqual(req.ChunkHaves, doc.Representation.Chunks[:4]) {
 						t.Fatalf("incorrect/duplicate offers %+v", req)
 					}
 					_ = json.NewEncoder(w).Encode(neg)
@@ -346,7 +354,7 @@ func TestPushDocChunksMissingOnlyAndEmptyWants(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 						t.Fatal(err)
 					}
-					want := objectsReq{ChunkedDocs: []chunkedDocWire{{Hash: doc.Hash, Format: doc.Format, Envelope: doc.Envelope, Chunks: doc.Chunks}}}
+					want := objectsReq{ChunkedDocs: []chunkedDocWire{{Hash: doc.Representation.Hash, Format: doc.Representation.Format, Envelope: doc.Representation.Envelope, Chunks: doc.Representation.Chunks}}}
 					if !reflect.DeepEqual(req, want) || !reflect.DeepEqual(sent, wantReads) {
 						t.Fatalf("manifest changed or published early: %+v", req)
 					}
@@ -401,7 +409,7 @@ func TestPushDocChunksStreamsBoundedBatchesBeforeReadingWholeDocument(t *testing
 					}
 					total := 0
 					for _, chunk := range req.Chunks {
-						if chunk.Hash != doc.Chunks[uploaded] || domain.HashContent(chunk.Data) != chunk.Hash {
+						if chunk.Hash != doc.Representation.Chunks[uploaded] || domain.HashContent(chunk.Data) != chunk.Hash {
 							t.Fatal("chunk order/identity changed")
 						}
 						uploaded++
@@ -448,13 +456,13 @@ func TestPushDocChunksLoaderFailuresNeverFallbackOrPublish(t *testing.T) {
 					badBody = bytes.Repeat([]byte{'x'}, maxChunkWireRawBytes+1)
 				}
 				if failure == "empty" || failure == "oversized" {
-					doc.Chunks[failAt] = domain.HashContent(badBody)
+					doc.Representation.Chunks[failAt] = domain.HashContent(badBody)
 				}
 				read := doc.ReadChunk
 				reads, batches := 0, 0
 				doc.ReadChunk = func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
 					reads++
-					if hash == doc.Chunks[failAt] {
+					if hash == doc.Representation.Chunks[failAt] {
 						switch failure {
 						case "loader error":
 							return nil, loaderErr
@@ -572,7 +580,7 @@ func TestPushDocChunksCancellationNeverFallback(t *testing.T) {
 					cancel()
 				case strings.HasSuffix(r.URL.Path, "/doc-jobs"):
 					writes++
-					_ = json.NewEncoder(w).Encode(docJobStatus{ID: domain.HashContent([]byte("job")), DocHash: doc.Hash, State: "running"})
+					_ = json.NewEncoder(w).Encode(docJobStatus{ID: domain.HashContent([]byte("job")), DocHash: doc.Representation.Hash, State: "running"})
 					cancel()
 				default:
 					t.Fatalf("unexpected write %s", r.URL.Path)
@@ -615,7 +623,7 @@ func TestPushDocChunksAsyncReceiptValidation(t *testing.T) {
 					if chunks != 1 {
 						t.Fatal("job before chunks")
 					}
-					job := docJobStatus{ID: id, DocHash: doc.Hash, State: "completed"}
+					job := docJobStatus{ID: id, DocHash: doc.Representation.Hash, State: "completed"}
 					if r.Method == http.MethodGet {
 						polls++
 						if jobs != 1 {
@@ -632,7 +640,7 @@ func TestPushDocChunksAsyncReceiptValidation(t *testing.T) {
 						if err := json.NewDecoder(r.Body).Decode(&manifest); err != nil {
 							t.Fatal(err)
 						}
-						want := chunkedDocWire{Hash: doc.Hash, Format: doc.Format, Envelope: doc.Envelope, Chunks: doc.Chunks}
+						want := chunkedDocWire{Hash: doc.Representation.Hash, Format: doc.Representation.Format, Envelope: doc.Representation.Envelope, Chunks: doc.Representation.Chunks}
 						if !reflect.DeepEqual(manifest, want) {
 							t.Fatalf("manifest changed: %+v", manifest)
 						}
@@ -773,7 +781,7 @@ func TestPushDocChunksLegacyManifestEncoding(t *testing.T) {
 		t.Run(fmt.Sprintf("format=%q", format), func(t *testing.T) {
 			// A single event has the same bytes in v1 and v2.
 			doc := docUploadFixture(t, "1")
-			doc.Format = format
+			doc.Representation.Format = format
 			repo := domain.HashContent([]byte("repo"))
 			commits := 0
 			c := docUploadClient(t, repo, func(w http.ResponseWriter, r *http.Request) {
@@ -789,7 +797,7 @@ func TestPushDocChunksLegacyManifestEncoding(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 						t.Fatal(err)
 					}
-					if len(req.ChunkedDocs) != 1 || req.ChunkedDocs[0].Format != "" || req.ChunkedDocs[0].Hash != doc.Hash || !reflect.DeepEqual(req.ChunkedDocs[0].Chunks, doc.Chunks) {
+					if len(req.ChunkedDocs) != 1 || req.ChunkedDocs[0].Format != "" || req.ChunkedDocs[0].Hash != doc.Representation.Hash || !reflect.DeepEqual(req.ChunkedDocs[0].Chunks, doc.Representation.Chunks) {
 						t.Fatalf("changed legacy manifest: %+v", req)
 					}
 				default:

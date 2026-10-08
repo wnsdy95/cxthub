@@ -16,14 +16,14 @@ type firstTrackingBlockedCapture struct {
 	entered, release chan struct{}
 }
 
-func (b firstTrackingBlockedCapture) Project(ctx context.Context, root, path string, source outbound.CaptureSource, codec outbound.ProviderCodec, pending bool) (domain.Envelope, domain.ContentHash, int64, *time.Time, error) {
+func (b firstTrackingBlockedCapture) Project(ctx context.Context, root, path string, source outbound.CaptureSource, codec outbound.ProviderCodec, pending bool, identity domain.DocumentIdentity) (domain.Envelope, domain.DocumentRef, int64, *time.Time, error) {
 	close(b.entered)
 	select {
 	case <-b.release:
 	case <-ctx.Done():
-		return domain.Envelope{}, "", 0, nil, ctx.Err()
+		return domain.Envelope{}, domain.DocumentRef{}, 0, nil, ctx.Err()
 	}
-	return b.SessionCapture.Project(ctx, root, path, source, codec, pending)
+	return b.SessionCapture.Project(ctx, root, path, source, codec, pending, identity)
 }
 
 func TestFirstTrackingAdmissionWaitsForRealCapture(t *testing.T) {

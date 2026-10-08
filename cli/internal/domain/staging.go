@@ -11,10 +11,12 @@ import (
 )
 
 const StagingVersion = 1
+const RootStagingVersion = 2
+const RootStagingCommitVersion = 3
 
 // Version 2 records one final memory selection for the selected target. Index
-// and stash formats remain version 1; interrupted version 1 commits retain
-// their original observations when replayed.
+// and stash formats remain version 1 for legacy documents. Root-bearing
+// indexes/stashes use 2 and commits use 3; old journals retain their semantics.
 const StagingCommitVersion = 2
 
 var ErrStagingVersion = errors.New("unsupported staging version")
@@ -24,20 +26,46 @@ var ErrEmptyIndex = errors.New("no frozen sessions staged; run cxt add first")
 // replaces its entry; replacement/rewritten transcripts create another entry.
 // No field is a live provider selector or a provider file path.
 type StagedSession struct {
-	Key           ContentHash  `json:"key"`
-	Provider      ProviderKind `json:"provider"`
-	SessionID     string       `json:"session_id"`
-	SourceID      ContentHash  `json:"source_id"`
-	Generation    ContentHash  `json:"generation"`
-	DocHash       ContentHash  `json:"doc_hash"`
-	Events        int          `json:"events"`
-	StartEvent    int          `json:"start_event"`
-	CapturedBytes int64        `json:"captured_bytes"`
-	CodeCommit    string       `json:"code_commit"`
-	Branch        string       `json:"branch"`
-	BranchID      string       `json:"branch_id"`
-	Base          ContentHash  `json:"base,omitempty"`
-	CapturedAt    time.Time    `json:"captured_at"`
+	Key           ContentHash      `json:"key"`
+	Provider      ProviderKind     `json:"provider"`
+	SessionID     string           `json:"session_id"`
+	SourceID      ContentHash      `json:"source_id"`
+	Generation    ContentHash      `json:"generation"`
+	DocHash       ContentHash      `json:"doc_hash"`
+	DocIdentity   DocumentIdentity `json:"doc_identity,omitempty"`
+	Events        int              `json:"events"`
+	StartEvent    int              `json:"start_event"`
+	CapturedBytes int64            `json:"captured_bytes"`
+	CodeCommit    string           `json:"code_commit"`
+	Branch        string           `json:"branch"`
+	BranchID      string           `json:"branch_id"`
+	Base          ContentHash      `json:"base,omitempty"`
+	CapturedAt    time.Time        `json:"captured_at"`
+}
+
+func (e StagedSession) DocumentRef() DocumentRef {
+	return DocumentRef{Hash: e.DocHash, Identity: e.DocIdentity}
+}
+
+func (i StagingIndex) HasRootDocuments() bool {
+	for _, e := range i.Entries {
+		if e.DocIdentity != DocumentIdentityLegacy {
+			return true
+		}
+	}
+	return false
+}
+func (i StagingIndex) RecordVersion() int {
+	if i.HasRootDocuments() {
+		return RootStagingVersion
+	}
+	return StagingVersion
+}
+func (i StagingIndex) CommitVersion() int {
+	if i.HasRootDocuments() {
+		return RootStagingCommitVersion
+	}
+	return StagingCommitVersion
 }
 
 func StagedSessionKey(provider ProviderKind, session string, source, generation ContentHash) ContentHash {
@@ -57,6 +85,9 @@ type StagingIndex struct {
 }
 
 func (i StagingIndex) WithRevision() StagingIndex {
+	if i.Version == StagingVersion || i.Version == RootStagingVersion {
+		i.Version = i.RecordVersion()
+	}
 	i.Entries = append([]StagedSession{}, i.Entries...)
 	sort.Slice(i.Entries, func(a, b int) bool { return i.Entries[a].Key < i.Entries[b].Key })
 	i.Revision = ""
@@ -66,7 +97,7 @@ func (i StagingIndex) WithRevision() StagingIndex {
 }
 
 func ValidateStagingIndex(i StagingIndex) error {
-	if i.Version != StagingVersion {
+	if (i.Version != StagingVersion && i.Version != RootStagingVersion) || i.Version != i.RecordVersion() {
 		return ErrStagingVersion
 	}
 	if ValidateContentHash(ContentHash(i.RepoID)) != nil || len(i.WorktreeID) != 32 {
@@ -92,6 +123,9 @@ func ValidateStagingIndex(i StagingIndex) error {
 }
 
 func ValidateStagedSession(e StagedSession) error {
+	if err := e.DocumentRef().Validate(); err != nil {
+		return err
+	}
 	if e.Provider != ProviderClaude && e.Provider != ProviderCodex {
 		return ErrUnsupportedProvider
 	}
@@ -178,7 +212,7 @@ func StagingObservations(op StagingCommit) []HistoryEvent {
 	}
 	publications := make([]HistoryEvent, 0, len(op.Publications)+1)
 	for _, event := range op.Publications {
-		if op.Version == StagingCommitVersion && publicationProof(event, final) {
+		if op.Version >= StagingCommitVersion && publicationProof(event, final) {
 			continue
 		}
 		publications = append(publications, event)

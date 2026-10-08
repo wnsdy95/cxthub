@@ -126,7 +126,10 @@ func prepareRemoteConnection(cfg config) func(context.Context, string, string, s
 		}
 		repo := before
 		repo.ID, repo.RemoteURL = connection.RepoID, stable
-		service := app.NewSyncRepoService(nil, client, nil, nil)
+		// Connection preflight inspects existing document identities before any
+		// registration writes. Constructing this local reader creates no files.
+		store := storage.NewWorktreeFileStore(cfg.RepoRoot, cfg.GitDir, cfg.GitBranch, cfg.GitCommit)
+		service := app.NewSyncRepoService(store, client, nil, nil)
 		out.URL = stable
 		out.Connect = func(ctx context.Context) (inbound.ConnectOutput, error) { return service.ConnectRepository(ctx, repo) }
 		out.ValidateLocal = func(ctx context.Context) error {

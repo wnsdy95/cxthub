@@ -130,7 +130,18 @@ func (s *IdentityService) UpdateEnterprise(ctx context.Context, user, id string,
 		if patch.Logo != nil {
 			e.Logo = strings.TrimSpace(*patch.Logo)
 		}
+
 		if patch.Policy != nil {
+			orgs, err := st.ListEnterpriseOrganizations(ctx, id)
+			if err != nil {
+				return e, err
+			}
+			for _, org := range orgs {
+				if err := s.checkOrganizationDocumentIdentities(ctx, org.ID); err != nil {
+					return e, err
+				}
+			}
+
 			// Public records cannot silently become private as a side effect of parent
 			// policy. Owners must explicitly change their repositories before tightening.
 			if !patch.Policy.AllowPublicRepositories {
@@ -315,6 +326,9 @@ func (s *IdentityService) LinkEnterpriseOrganization(ctx context.Context, user, 
 				return err
 			}
 			target, action = id, "enterprise.organization.added"
+		}
+		if err := s.checkOrganizationDocumentIdentities(ctx, org); err != nil {
+			return err
 		}
 		if err = st.SetOrganizationEnterprise(ctx, org, target); err != nil {
 			return err

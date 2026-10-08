@@ -126,6 +126,14 @@ func (s *FSStore) ClaimGitChange(ctx context.Context, repo domain.ContentHash, i
 		if err != nil {
 			return j, err
 		}
+		release, policyErr := s.pinWorkerRepoPolicy(ctx, j.RepoID)
+		if errors.Is(policyErr, domain.ErrDocumentIdentityUpgradeRequired) && repo == "" {
+			continue
+		}
+		if policyErr != nil {
+			return domain.GitChangeJob{}, policyErr
+		}
+		defer release()
 		return next, s.writeGitChange(next)
 	}
 	return domain.GitChangeJob{}, domain.ErrNotFound
@@ -134,6 +142,11 @@ func (s *FSStore) FinishGitChange(ctx context.Context, j domain.GitChangeJob) er
 	l := s.oauthLock()
 	l.Lock()
 	defer l.Unlock()
+	release, policyErr := s.pinWorkerRepoPolicy(ctx, j.RepoID)
+	if policyErr != nil {
+		return policyErr
+	}
+	defer release()
 	old, err := s.GetGitChange(ctx, j.RepoID, j.ID)
 	if err != nil {
 		return err

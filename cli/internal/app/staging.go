@@ -90,6 +90,12 @@ func (s *StagingService) Stage(ctx context.Context, in inbound.StageInput) (resu
 }
 
 func (s *StagingService) stage(ctx context.Context, in inbound.StageInput) (result domain.StagingIndex, err error) {
+	if err := in.DocIdentity.Validate(); err != nil {
+		return result, err
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if len(in.Sessions) == 0 {
 		return result, fmt.Errorf("add requires explicitly resolved source sessions")
 	}
@@ -98,6 +104,10 @@ func (s *StagingService) stage(ctx context.Context, in inbound.StageInput) (resu
 	}
 	err = s.retention.WithObjectsRetained(ctx, func() error {
 		repo, index, p, err := s.selection(ctx, in.Cwd)
+		if err != nil {
+			return err
+		}
+		in.DocIdentity, err = captureDocumentIdentity(ctx, s.git, repo, in.DocIdentity)
 		if err != nil {
 			return err
 		}
@@ -140,14 +150,18 @@ func (s *StagingService) stage(ctx context.Context, in inbound.StageInput) (resu
 			if !s.save.capture.Eligible(repo.LocalPath, input.Path) {
 				return domain.ErrNoActiveSession
 			}
-			env, hash, bytes, _, err := s.save.capture.Project(ctx, repo.LocalPath, input.Path, capt, codec, true)
+			env, docRef, bytes, _, err := s.save.capture.Project(ctx, repo.LocalPath, input.Path, capt, codec, true, in.DocIdentity)
 			if err != nil {
 				return fmt.Errorf("freeze %s session: %w", input.Provider, err)
 			}
 			if env.SourceProvider != input.Provider || env.SessionOriginID == "" || (input.SessionID != "" && env.SessionOriginID != input.SessionID) {
 				return fmt.Errorf("provider session changed while staging: %w", domain.ErrHashMismatch)
 			}
-			doc, err := s.store.GetDoc(ctx, hash)
+			if docRef.Identity != in.DocIdentity {
+				return domain.ErrHashMismatch
+			}
+			hash := docRef.Hash
+			doc, err := readDocumentReference(ctx, s.store, docRef)
 			if err != nil {
 				return err
 			}
@@ -156,7 +170,7 @@ func (s *StagingService) stage(ctx context.Context, in inbound.StageInput) (resu
 				if old.Provider != input.Provider || old.SessionID != env.SessionOriginID || old.SourceID != sourceID || old.Events > len(doc.CIR.Events) {
 					continue
 				}
-				oldDoc, err := s.store.GetDoc(ctx, old.DocHash)
+				oldDoc, err := readDocumentReference(ctx, s.store, old.DocumentRef())
 				if err != nil {
 					return err
 				}
@@ -165,7 +179,7 @@ func (s *StagingService) stage(ctx context.Context, in inbound.StageInput) (resu
 					break
 				}
 			}
-			entry := domain.StagedSession{Provider: input.Provider, SessionID: env.SessionOriginID, SourceID: sourceID, Generation: generation, DocHash: hash, Events: len(doc.CIR.Events), CapturedBytes: bytes, CodeCommit: p.GitCommit, Branch: p.Branch, BranchID: p.BranchID, Base: p.Snapshot, CapturedAt: time.Now().UTC()}
+			entry := domain.StagedSession{Provider: input.Provider, SessionID: env.SessionOriginID, SourceID: sourceID, Generation: generation, DocHash: hash, DocIdentity: docRef.Identity, Events: len(doc.CIR.Events), CapturedBytes: bytes, CodeCommit: p.GitCommit, Branch: p.Branch, BranchID: p.BranchID, Base: p.Snapshot, CapturedAt: time.Now().UTC()}
 			entry.Key = domain.StagedSessionKey(entry.Provider, entry.SessionID, sourceID, generation)
 			for _, op := range operations {
 				if !op.LocalFinalized || !included[op.Position.Snapshot] {
@@ -173,7 +187,7 @@ func (s *StagingService) stage(ctx context.Context, in inbound.StageInput) (resu
 				}
 				for _, old := range op.Index.Entries {
 					if old.Key == entry.Key && old.Events > entry.StartEvent && old.Events <= entry.Events {
-						oldDoc, err := s.store.GetDoc(ctx, old.DocHash)
+						oldDoc, err := readDocumentReference(ctx, s.store, old.DocumentRef())
 						if err != nil {
 							return err
 						}
@@ -308,7 +322,7 @@ func (s *StagingService) Commit(ctx context.Context, in inbound.StagingCommitInp
 		if _, err := rand.Read(random[:]); err != nil {
 			return err
 		}
-		result = domain.StagingCommit{Version: domain.StagingCommitVersion, ID: hex.EncodeToString(random[:]), Index: index, ExpectedPosition: p, ExpectedRef: ref, CreatedAt: time.Now().UTC()}
+		result = domain.StagingCommit{Version: index.CommitVersion(), ID: hex.EncodeToString(random[:]), Index: index, ExpectedPosition: p, ExpectedRef: ref, CreatedAt: time.Now().UTC()}
 		entries := append([]domain.StagedSession{}, index.Entries...)
 		sort.Slice(entries, func(i, j int) bool {
 			if entries[i].CapturedAt.Equal(entries[j].CapturedAt) {
@@ -321,7 +335,7 @@ func (s *StagingService) Commit(ctx context.Context, in inbound.StagingCommitInp
 			tip = ref.Target
 		}
 		for _, entry := range entries {
-			doc, err := s.store.GetDoc(ctx, entry.DocHash)
+			doc, err := readDocumentReference(ctx, s.store, entry.DocumentRef())
 			if err != nil {
 				return err
 			}
@@ -330,7 +344,7 @@ func (s *StagingService) Commit(ctx context.Context, in inbound.StagingCommitInp
 			}
 			snap, err := s.store.GetSnapshot(ctx, entry.DocHash)
 			if errors.Is(err, domain.ErrNotFound) {
-				snap = domain.Snapshot{ID: entry.DocHash, DocHash: entry.DocHash, RepoID: repo.ID, Branch: p.Branch, Provider: entry.Provider, SessionID: entry.SessionID, Fidelity: doc.CIR.Envelope.Fidelity, Models: doc.CIR.Envelope.OrderedModels(), CompactionCount: doc.CIR.Envelope.CompactionCount, Author: in.Author, Message: in.Message, CreatedAt: entry.CapturedAt}
+				snap = domain.Snapshot{ID: entry.DocHash, DocHash: entry.DocHash, DocIdentity: entry.DocIdentity, RepoID: repo.ID, Branch: p.Branch, Provider: entry.Provider, SessionID: entry.SessionID, Fidelity: doc.CIR.Envelope.Fidelity, Models: doc.CIR.Envelope.OrderedModels(), CompactionCount: doc.CIR.Envelope.CompactionCount, Author: in.Author, Message: in.Message, CreatedAt: entry.CapturedAt}
 				if snap.Message == "" {
 					snap.Message = "staged session"
 				}
@@ -355,7 +369,7 @@ func (s *StagingService) Commit(ctx context.Context, in inbound.StagingCommitInp
 			} else if err != nil {
 				return err
 			}
-			if snap.RepoID != repo.ID || snap.DocHash != entry.DocHash || snap.Provider != entry.Provider || snap.SessionID != entry.SessionID {
+			if snap.RepoID != repo.ID || !entry.DocumentRef().MatchesSnapshot(snap) || snap.Provider != entry.Provider || snap.SessionID != entry.SessionID {
 				return domain.ErrHashMismatch
 			}
 			if strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {

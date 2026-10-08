@@ -23,14 +23,15 @@ import (
 
 // Service implements all server inbound use-cases and HTTP read-through.
 type Service struct {
-	branchCache   branchProjectionCache
-	segmentCache  contextSegmentCache
-	deliveryCache effectiveMemoryDeliveryCache
-	docVerifier   domain.CanonicalDocVerifier
-	meta          outbound.MetadataStore
-	blobs         outbound.BlobStore
-	auth          outbound.AuthProvider
-	engine        outbound.GitEngine
+	rootPublication bool // configured before serving; cannot override release readiness
+	branchCache     branchProjectionCache
+	segmentCache    contextSegmentCache
+	deliveryCache   effectiveMemoryDeliveryCache
+	docVerifier     domain.CanonicalDocVerifier
+	meta            outbound.MetadataStore
+	blobs           outbound.BlobStore
+	auth            outbound.AuthProvider
+	engine          outbound.GitEngine
 	// repositories resolves bindings and current write authority. A missing adapter
 	// denies user writes; explicit trusted system jobs may operate without one.
 	repositories outbound.RepositoryStore
@@ -118,20 +119,6 @@ func validateSnapshotHashes(snap domain.Snapshot) error {
 		}
 	}
 	return nil
-}
-
-func validateSessionDocHash(doc domain.SessionDoc) error {
-	return domain.ValidateSessionDocHash(doc)
-}
-
-func validateSnapshotDocPair(snap domain.Snapshot, doc domain.SessionDoc) error {
-	if snap.ID == "" || snap.DocHash == "" || doc.Hash == "" {
-		return domain.ErrIntegrity
-	}
-	if snap.ID != snap.DocHash || snap.DocHash != doc.Hash {
-		return domain.ErrIntegrity
-	}
-	return validateSessionDocHash(doc)
 }
 
 func equalHashList(left, right []domain.ContentHash) bool {
@@ -234,47 +221,51 @@ func settingsObjectHash(bundle domain.SettingsBundle) (domain.ContentHash, error
 
 // Negotiate: want (server missing parts) = client haves \ server has (sync protocol step A).
 func (s *Service) Negotiate(ctx context.Context, in inbound.PushNegotiateInput) (inbound.PushNegotiateOutput, error) {
-	if err := domain.ValidateContentHash(in.RepoID); err != nil {
-		return inbound.PushNegotiateOutput{}, err
-	}
-	if err := validateHashes(in.SnapshotHaves...); err != nil {
-		return inbound.PushNegotiateOutput{}, err
-	}
-	if err := validateHashes(in.DocHaves...); err != nil {
-		return inbound.PushNegotiateOutput{}, err
-	}
-	haveSnaps, err := s.meta.HasSnapshots(ctx, in.RepoID, in.SnapshotHaves)
-	if err != nil {
-		return inbound.PushNegotiateOutput{}, err
-	}
-	haveDocs, err := s.blobs.HasDocs(ctx, in.RepoID, in.DocHaves)
-	if err != nil {
-		return inbound.PushNegotiateOutput{}, err
-	}
-	if err := validateHashes(in.ChunkHaves...); err != nil {
-		return inbound.PushNegotiateOutput{}, err
-	}
-	var chunkWants []domain.ContentHash
-	if len(in.ChunkHaves) > 0 {
-		haveChunks, cerr := s.blobs.HasChunks(ctx, in.RepoID, in.ChunkHaves)
-		if cerr != nil {
-			return inbound.PushNegotiateOutput{}, cerr
+	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.PushNegotiateOutput, error) {
+		if err := domain.ValidateContentHash(in.RepoID); err != nil {
+			return inbound.PushNegotiateOutput{}, err
 		}
-		chunkWants = difference(in.ChunkHaves, haveChunks)
-	}
-	_, asyncDocs := s.blobs.(outbound.DocJobStore)
-	_, storedDocVerification := s.blobs.(outbound.StoredDocVerifier)
-	return inbound.PushNegotiateOutput{
-		PreparedMemoryArchivesSupported: asyncDocs && storedDocVerification,
-		AsyncDocsSupported:              asyncDocs,
-		SnapshotWants:                   difference(in.SnapshotHaves, haveSnaps),
-		DocWants:                        difference(in.DocHaves, haveDocs),
-		ChunksSupported:                 true,
-		BoundedChunksSupported:          true,
-		ChunkFormatsSupported:           []string{domain.ChunkFormatV1, domain.ChunkFormatV2},
-		CIRVersionsSupported:            domain.SupportedCIRVersions(),
-		ChunkWants:                      chunkWants,
-	}, nil
+		if err := validateHashes(in.SnapshotHaves...); err != nil {
+			return inbound.PushNegotiateOutput{}, err
+		}
+		if err := validateHashes(in.DocHaves...); err != nil {
+			return inbound.PushNegotiateOutput{}, err
+		}
+		haveSnaps, err := s.meta.HasSnapshots(ctx, in.RepoID, in.SnapshotHaves)
+		if err != nil {
+			return inbound.PushNegotiateOutput{}, err
+		}
+		haveDocs, err := s.blobs.HasDocs(ctx, in.RepoID, in.DocHaves)
+		if err != nil {
+			return inbound.PushNegotiateOutput{}, err
+		}
+		if err := validateHashes(in.ChunkHaves...); err != nil {
+			return inbound.PushNegotiateOutput{}, err
+		}
+		var chunkWants []domain.ContentHash
+		if len(in.ChunkHaves) > 0 {
+			haveChunks, cerr := s.blobs.HasChunks(ctx, in.RepoID, in.ChunkHaves)
+			if cerr != nil {
+				return inbound.PushNegotiateOutput{}, cerr
+			}
+			chunkWants = difference(in.ChunkHaves, haveChunks)
+		}
+		_, asyncDocs := s.blobs.(outbound.DocJobStore)
+		_, storedDocVerification := s.blobs.(outbound.StoredDocVerifier)
+		return inbound.PushNegotiateOutput{
+			DocIdentitiesSupported:          s.DocumentIdentitiesSupported(),
+			RootPublicationEnabled:          s.RootPublicationEnabled(),
+			PreparedMemoryArchivesSupported: asyncDocs && storedDocVerification,
+			AsyncDocsSupported:              asyncDocs,
+			SnapshotWants:                   difference(in.SnapshotHaves, haveSnaps),
+			DocWants:                        difference(in.DocHaves, haveDocs),
+			ChunksSupported:                 true,
+			BoundedChunksSupported:          true,
+			ChunkFormatsSupported:           []string{domain.ChunkFormatV1, domain.ChunkFormatV2},
+			CIRVersionsSupported:            domain.SupportedCIRVersions(),
+			ChunkWants:                      chunkWants,
+		}, nil
+	})
 }
 
 // StoreChunks is the content-addressed staging phase before a complete doc commit. It limits the sum of each request's raw content, ensuring it stays within the operational proxy body limit even with JSON base64 overhead.
@@ -322,37 +313,39 @@ func (s *Service) storeChunksCommand(ctx context.Context, in inbound.StoreChunks
 
 // PullChunks returns the request prefix up to the raw upper bound. If the first chunk exceeds the upper bound, it stops with an explicit validation error to preserve the cause instead of the proxy's ambiguous 413.
 func (s *Service) PullChunks(ctx context.Context, in inbound.PullChunksInput) (inbound.PullChunksOutput, error) {
-	if err := domain.ValidateContentHash(in.RepoID); err != nil {
-		return inbound.PullChunksOutput{}, err
-	}
-	if len(in.Wants) == 0 || len(in.Wants) > inbound.MaxChunkWireObjects {
-		return inbound.PullChunksOutput{}, fmt.Errorf("%w: chunk want count must be 1..%d", domain.ErrValidation, inbound.MaxChunkWireObjects)
-	}
-	if err := validateHashes(in.Wants...); err != nil {
-		return inbound.PullChunksOutput{}, err
-	}
-	seen := make(map[domain.ContentHash]bool, len(in.Wants))
-	total := 0
-	var out inbound.PullChunksOutput
-	for _, hash := range in.Wants {
-		if seen[hash] {
-			return inbound.PullChunksOutput{}, fmt.Errorf("%w: duplicate chunk want %s", domain.ErrValidation, hash)
-		}
-		seen[hash] = true
-		body, err := s.blobs.GetChunk(ctx, in.RepoID, hash)
-		if err != nil {
+	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.PullChunksOutput, error) {
+		if err := domain.ValidateContentHash(in.RepoID); err != nil {
 			return inbound.PullChunksOutput{}, err
 		}
-		if len(body) == 0 || len(body) > inbound.MaxChunkWireRawBytes {
-			return inbound.PullChunksOutput{}, fmt.Errorf("%w: chunk %s exceeds bounded transport size", domain.ErrValidation, hash)
+		if len(in.Wants) == 0 || len(in.Wants) > inbound.MaxChunkWireObjects {
+			return inbound.PullChunksOutput{}, fmt.Errorf("%w: chunk want count must be 1..%d", domain.ErrValidation, inbound.MaxChunkWireObjects)
 		}
-		if len(out.ChunkObjects) > 0 && total+len(body) > inbound.MaxChunkWireRawBytes {
-			break
+		if err := validateHashes(in.Wants...); err != nil {
+			return inbound.PullChunksOutput{}, err
 		}
-		total += len(body)
-		out.ChunkObjects = append(out.ChunkObjects, inbound.ChunkObject{Hash: hash, Data: body})
-	}
-	return out, nil
+		seen := make(map[domain.ContentHash]bool, len(in.Wants))
+		total := 0
+		var out inbound.PullChunksOutput
+		for _, hash := range in.Wants {
+			if seen[hash] {
+				return inbound.PullChunksOutput{}, fmt.Errorf("%w: duplicate chunk want %s", domain.ErrValidation, hash)
+			}
+			seen[hash] = true
+			body, err := s.blobs.GetChunk(ctx, in.RepoID, hash)
+			if err != nil {
+				return inbound.PullChunksOutput{}, err
+			}
+			if len(body) == 0 || len(body) > inbound.MaxChunkWireRawBytes {
+				return inbound.PullChunksOutput{}, fmt.Errorf("%w: chunk %s exceeds bounded transport size", domain.ErrValidation, hash)
+			}
+			if len(out.ChunkObjects) > 0 && total+len(body) > inbound.MaxChunkWireRawBytes {
+				break
+			}
+			total += len(body)
+			out.ChunkObjects = append(out.ChunkObjects, inbound.ChunkObject{Hash: hash, Data: body})
+		}
+		return out, nil
+	})
 }
 
 // Commit: stores docs in the order of blobs → snapshots (W1). Full integrity verification followed by content-addressed deduplication.
@@ -377,8 +370,20 @@ func (s *Service) commit(ctx context.Context, in inbound.CommitInput) (inbound.C
 		}
 	}
 	for _, snap := range in.Snapshots {
-		if snap.DocIdentity != domain.DocumentIdentityLegacy {
-			return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
+		if err := snap.DocIdentity.Validate(); err != nil {
+			return inbound.CommitOutput{}, err
+		}
+		if snap.DocIdentity == domain.DocumentIdentityRootV1 {
+			if !hasDocumentIdentity(s.DocumentIdentitiesSupported(), snap.DocIdentity) {
+				return inbound.CommitOutput{}, domain.ErrUnsupportedDocumentIdentity
+			}
+			// This route attaches metadata to an already-owned, verified root.
+			// New root admission belongs to the durable finalization endpoint;
+			// disabling it must not freeze existing snapshots or memory archives.
+			bound := outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
+			if err := requireRootDocumentRepository(bound, s.meta, in.RepoID); err != nil {
+				return inbound.CommitOutput{}, err
+			}
 		}
 	}
 	// Reassemble a chunked wire document from chunks received in this request plus repository-owned stored chunks. Verify the canonical document hash, then pass the complete document through the ordinary validation and storage path.
@@ -834,15 +839,39 @@ func (s *Service) send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 		if err != nil {
 			return inbound.PullSendOutput{}, err
 		}
+		if err := snap.DocumentRef().Validate(); err != nil {
+			return inbound.PullSendOutput{}, err
+		}
+		if err := outbound.CheckDocumentIdentityCompatibility(ctx, snap.DocIdentity); err != nil {
+			return inbound.PullSendOutput{}, err
+		}
+		if snap.DocIdentity == domain.DocumentIdentityRootV1 {
+			if err := requireRootDocumentRepository(ctx, s.meta, in.RepoID); err != nil {
+				return inbound.PullSendOutput{}, err
+			}
+		}
 		out.Snapshots = append(out.Snapshots, snap)
 	}
 	for _, h := range in.DocWants {
+		if snap, err := s.meta.GetSnapshot(ctx, in.RepoID, h); err == nil {
+			if snap.DocIdentity != domain.DocumentIdentityLegacy {
+				return inbound.PullSendOutput{}, domain.ErrUnsupportedDocumentIdentity
+			}
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return inbound.PullSendOutput{}, err
+		}
 		doc, err := s.blobs.GetDoc(ctx, in.RepoID, h)
 		if err != nil {
 			return inbound.PullSendOutput{}, err
 		}
+		if doc.Identity != domain.DocumentIdentityLegacy {
+			return inbound.PullSendOutput{}, domain.ErrUnsupportedDocumentIdentity
+		}
 		if err := requireSupportedCIRVersion(doc.CIR.Envelope.CIRVersion, supportedCIR); err != nil {
 			return inbound.PullSendOutput{}, err
+		}
+		if doc.Identity != domain.DocumentIdentityLegacy {
+			return inbound.PullSendOutput{}, domain.ErrUnsupportedDocumentIdentity
 		}
 		out.Docs = append(out.Docs, doc)
 	}
@@ -852,6 +881,27 @@ func (s *Service) send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 	}
 	supportedFormats := requestedChunkFormats(in.ChunkFormatsSupported)
 	for _, h := range in.DocManifestWants {
+		snap, snapshotErr := s.meta.GetSnapshot(ctx, in.RepoID, h)
+		if snapshotErr == nil && snap.DocIdentity != domain.DocumentIdentityLegacy {
+			root, err := s.publishedRootRepresentation(ctx, in.RepoID, h, snap, supportedCIR)
+			if err != nil {
+				return inbound.PullSendOutput{}, err
+			}
+			out.DocManifests = append(out.DocManifests, root)
+			continue
+		}
+		if snapshotErr != nil {
+			if !errors.Is(snapshotErr, domain.ErrNotFound) {
+				return inbound.PullSendOutput{}, snapshotErr
+			}
+			repo, err := s.meta.GetRepo(ctx, in.RepoID)
+			if err != nil && !errors.Is(err, domain.ErrNotFound) {
+				return inbound.PullSendOutput{}, err
+			}
+			if repo.RequiredDocIdentity != domain.DocumentIdentityLegacy {
+				return inbound.PullSendOutput{}, snapshotErr
+			}
+		}
 		man, merr := s.blobs.GetDocManifest(ctx, in.RepoID, h)
 		if merr != nil {
 			if errors.Is(merr, domain.ErrNotFound) {
@@ -859,8 +909,14 @@ func (s *Service) send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 				if derr != nil {
 					return inbound.PullSendOutput{}, derr
 				}
+				if doc.Identity != domain.DocumentIdentityLegacy {
+					return inbound.PullSendOutput{}, domain.ErrUnsupportedDocumentIdentity
+				}
 				if err := requireSupportedCIRVersion(doc.CIR.Envelope.CIRVersion, supportedCIR); err != nil {
 					return inbound.PullSendOutput{}, err
+				}
+				if doc.Identity != domain.DocumentIdentityLegacy {
+					return inbound.PullSendOutput{}, domain.ErrUnsupportedDocumentIdentity
 				}
 				out.Docs = append(out.Docs, doc)
 				continue
@@ -886,6 +942,9 @@ func (s *Service) send(ctx context.Context, in inbound.PullSendInput) (inbound.P
 		doc, derr := s.blobs.GetDoc(ctx, in.RepoID, h)
 		if derr != nil {
 			return inbound.PullSendOutput{}, derr
+		}
+		if doc.Identity != domain.DocumentIdentityLegacy {
+			return inbound.PullSendOutput{}, domain.ErrUnsupportedDocumentIdentity
 		}
 		out.Docs = append(out.Docs, doc)
 	}
@@ -1122,10 +1181,12 @@ func (s *Service) fsck(ctx context.Context, repoID domain.ContentHash) (inbound.
 
 // Reflog: Returns the ref movement history of the repo (latest first) (read-only). Basis for recovering hidden tips.
 func (s *Service) Reflog(ctx context.Context, repoID domain.ContentHash) ([]domain.RefLogEntry, error) {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return nil, err
-	}
-	return s.meta.ReadReflog(ctx, repoID)
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) ([]domain.RefLogEntry, error) {
+		if err := domain.ValidateContentHash(repoID); err != nil {
+			return nil, err
+		}
+		return s.meta.ReadReflog(ctx, repoID)
+	})
 }
 
 // Authenticate: Token → Team interpretation (v1: identity enhancement). Invalid tokens result in an error from AuthProvider.
@@ -1347,10 +1408,12 @@ func (s *Service) putMemoryDigest(ctx context.Context, repoID domain.ContentHash
 // GetMemoryObject reads one immutable attachment object by its own hash. Pull
 // uses this to prove ancestry before moving a local memory ref.
 func (s *Service) GetMemoryObject(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error) {
-	if err := validateHashes(repoID, hash); err != nil {
-		return domain.MemoryDigest{}, err
-	}
-	return s.blobs.GetMemory(ctx, repoID, hash)
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) (domain.MemoryDigest, error) {
+		if err := validateHashes(repoID, hash); err != nil {
+			return domain.MemoryDigest{}, err
+		}
+		return s.blobs.GetMemory(ctx, repoID, hash)
+	})
 }
 
 // GetMemoryDigest resolves the authoritative MemoryHash pointer. Metadata-only
@@ -1510,21 +1573,23 @@ func (s *Service) undismissPending(ctx context.Context, repoID domain.ContentHas
 
 // ListPendings returns the durable uncommitted capture pointers for the repo.
 func (s *Service) ListPendings(ctx context.Context, repoID domain.ContentHash) ([]domain.Pending, error) {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return nil, err
-	}
-	items, err := s.meta.ListPendings(ctx, repoID)
-	if err != nil {
-		return nil, err
-	}
-	// Repair the display of legacy pointers whose timestamp was overwritten on
-	// every sync. Immutable snapshot creation remains the capture-time fallback.
-	for i := range items {
-		if snap, err := s.meta.GetSnapshot(ctx, repoID, items[i].Target); err == nil && !snap.CreatedAt.IsZero() {
-			items[i].UpdatedAt = snap.CreatedAt
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) ([]domain.Pending, error) {
+		if err := domain.ValidateContentHash(repoID); err != nil {
+			return nil, err
 		}
-	}
-	return items, nil
+		items, err := s.meta.ListPendings(ctx, repoID)
+		if err != nil {
+			return nil, err
+		}
+		// Repair the display of legacy pointers whose timestamp was overwritten on
+		// every sync. Immutable snapshot creation remains the capture-time fallback.
+		for i := range items {
+			if snap, err := s.meta.GetSnapshot(ctx, repoID, items[i].Target); err == nil && !snap.CreatedAt.IsZero() {
+				items[i].UpdatedAt = snap.CreatedAt
+			}
+		}
+		return items, nil
+	})
 }
 
 // DeletePending is the legacy unconditional commit-resolution path. Current
@@ -1816,10 +1881,12 @@ func (s *Service) putUnsync(ctx context.Context, repoID domain.ContentHash, user
 
 // ListUnsyncs returns the entire push wait pointer set for the repo (for web On Hold display).
 func (s *Service) ListUnsyncs(ctx context.Context, repoID domain.ContentHash) ([]domain.Unsync, error) {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return nil, err
-	}
-	return s.meta.ListUnsyncs(ctx, repoID)
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) ([]domain.Unsync, error) {
+		if err := domain.ValidateContentHash(repoID); err != nil {
+			return nil, err
+		}
+		return s.meta.ListUnsyncs(ctx, repoID)
+	})
 }
 
 // DeleteUnsync resolves a push wait pointer (git push/manual cleanup — idempotent).
@@ -1841,10 +1908,12 @@ func (s *Service) deleteUnsync(ctx context.Context, repoID domain.ContentHash, u
 
 // GetSecrets returns secret ciphertext envelopes (ciphertext as-is — decryption is on the client).
 func (s *Service) GetSecrets(ctx context.Context, repoID domain.ContentHash) ([]byte, error) {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return nil, err
-	}
-	return s.meta.GetSecretsEnvelope(ctx, repoID)
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) ([]byte, error) {
+		if err := domain.ValidateContentHash(repoID); err != nil {
+			return nil, err
+		}
+		return s.meta.GetSecretsEnvelope(ctx, repoID)
+	})
 }
 
 // PutSettingsObject stores a commit attachment settings object (path/size validation, content-addressed idempotency).
@@ -1860,21 +1929,25 @@ func (s *Service) putSettingsObjectCommand(ctx context.Context, repoID domain.Co
 
 // GetSettingsObjectByHash retrieves a commit attachment settings object by hash.
 func (s *Service) GetSettingsObjectByHash(ctx context.Context, repoID domain.ContentHash, hash domain.ContentHash) (domain.SettingsBundle, error) {
-	if err := validateHashes(repoID, hash); err != nil {
-		return domain.SettingsBundle{}, err
-	}
-	return s.meta.GetSettingsObject(ctx, repoID, hash)
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) (domain.SettingsBundle, error) {
+		if err := validateHashes(repoID, hash); err != nil {
+			return domain.SettingsBundle{}, err
+		}
+		return s.meta.GetSettingsObject(ctx, repoID, hash)
+	})
 }
 
 // GetSettings retrieves setting bundles.
 func (s *Service) GetSettings(ctx context.Context, repoID domain.ContentHash, kind string) (domain.SettingsBundle, error) {
-	if err := domain.ValidateContentHash(repoID); err != nil {
-		return domain.SettingsBundle{}, err
-	}
-	if !settingsKindOK(kind) {
-		return domain.SettingsBundle{}, domain.ErrNotFound
-	}
-	return s.meta.GetSettingsBundle(ctx, repoID, kind)
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) (domain.SettingsBundle, error) {
+		if err := domain.ValidateContentHash(repoID); err != nil {
+			return domain.SettingsBundle{}, err
+		}
+		if !settingsKindOK(kind) {
+			return domain.SettingsBundle{}, domain.ErrNotFound
+		}
+		return s.meta.GetSettingsBundle(ctx, repoID, kind)
+	})
 }
 
 // pathSegs splits a URL path into a slice of non-empty segment strings.
@@ -1975,13 +2048,28 @@ func normalizeAboutWebsite(raw string) (string, error) {
 	return normalized, nil
 }
 func (s *Service) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
-	return s.meta.ListRepos(ctx, team)
+	return repositoryRead(ctx, s, func(ctx context.Context) ([]domain.Repo, error) {
+		repos, err := s.meta.ListRepos(ctx, team)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range repos {
+			if err := r.RequiredDocIdentity.Validate(); err != nil {
+				return nil, err
+			}
+		}
+		return repos, nil
+	})
 }
 
 // Activity groups the "Contribution activity" feed by month (latest month first):
 // Monthly context commit bundles (repository counts) + repositories created that month.
 // Repositories are already filtered by visibility in the caller (PublicUser).
 func (s *Service) Activity(ctx context.Context, repositories []domain.Repository) ([]domain.ActivityMonth, error) {
+	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
+	return repositoryRead(ctx, s, func(ctx context.Context) ([]domain.ActivityMonth, error) { return s.activity(ctx, repositories) })
+}
+func (s *Service) activity(ctx context.Context, repositories []domain.Repository) ([]domain.ActivityMonth, error) {
 	repositoryByID := make(map[string]domain.Repository, len(repositories))
 	for _, w := range repositories {
 		repositoryByID[w.ID] = w
@@ -1994,6 +2082,12 @@ func (s *Service) Activity(ctx context.Context, repositories []domain.Repository
 	for _, r := range repos {
 		if _, ok := repositoryByID[r.RepositoryID]; !ok {
 			continue
+		}
+		if err := outbound.CheckDocumentIdentityCompatibility(ctx, r.RequiredDocIdentity); err != nil {
+			if errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
+				continue
+			}
+			return nil, err
 		}
 		snaps, err := s.meta.ListSnapshots(ctx, r.ID, "")
 		if err != nil {
@@ -2066,6 +2160,10 @@ func (s *Service) Activity(ctx context.Context, repositories []domain.Repository
 // (for contribution heatmap). Hooks and stash are excluded — only actual context commits are counted.
 // Note: repo/snapshot full traversal, inefficient for large-scale — assumes small self-hosted (future DB aggregation optimization possible).
 func (s *Service) Contributions(ctx context.Context, repositoryIDs []string) (map[string]int, error) {
+	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
+	return repositoryRead(ctx, s, func(ctx context.Context) (map[string]int, error) { return s.contributions(ctx, repositoryIDs) })
+}
+func (s *Service) contributions(ctx context.Context, repositoryIDs []string) (map[string]int, error) {
 	out := map[string]int{}
 	if len(repositoryIDs) == 0 {
 		return out, nil
@@ -2081,6 +2179,12 @@ func (s *Service) Contributions(ctx context.Context, repositoryIDs []string) (ma
 	for _, r := range repos {
 		if !wanted[r.RepositoryID] {
 			continue
+		}
+		if err := outbound.CheckDocumentIdentityCompatibility(ctx, r.RequiredDocIdentity); err != nil {
+			if errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
+				continue
+			}
+			return nil, err
 		}
 		snaps, err := s.meta.ListSnapshots(ctx, r.ID, "")
 		if err != nil {
@@ -2102,16 +2206,18 @@ func (s *Service) GetRepo(ctx context.Context, id domain.ContentHash) (domain.Re
 	return s.meta.GetRepo(ctx, id)
 }
 func (s *Service) GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error) {
-	if err := validateHashes(repoID, id); err != nil {
-		return domain.Snapshot{}, err
-	}
-	return s.meta.GetSnapshot(ctx, repoID, id)
+	return repositoryReadForRepo(ctx, s, repoID, func(ctx context.Context) (domain.Snapshot, error) {
+		if err := validateHashes(repoID, id); err != nil {
+			return domain.Snapshot{}, err
+		}
+		return s.meta.GetSnapshot(ctx, repoID, id)
+	})
 }
 func (s *Service) getDoc(ctx context.Context, repoID, hash domain.ContentHash) (domain.SessionDoc, error) {
 	if err := validateHashes(repoID, hash); err != nil {
 		return domain.SessionDoc{}, err
 	}
-	return s.blobs.GetDoc(ctx, repoID, hash)
+	return s.materializedDocumentRead(ctx, repoID, hash)
 }
 func (s *Service) listRefs(ctx context.Context, repoID domain.ContentHash) ([]domain.Ref, error) {
 	if err := domain.ValidateContentHash(repoID); err != nil {
@@ -2250,15 +2356,20 @@ func (s *Service) Diff(ctx context.Context, in inbound.DiffInput) (inbound.DiffO
 	if err := validateHashes(in.RepoID, in.Left, in.Right); err != nil {
 		return inbound.DiffOutput{}, err
 	}
-	left, err := s.blobs.GetDoc(ctx, in.RepoID, in.Left)
-	if err != nil {
-		return inbound.DiffOutput{}, err
-	}
-	right, err := s.blobs.GetDoc(ctx, in.RepoID, in.Right)
-	if err != nil {
-		return inbound.DiffOutput{}, err
-	}
-	return inbound.DiffOutput{Changes: diffEvents(left.CIR.Events, right.CIR.Events)}, nil
+	return repositoryReadForRepo(ctx, s, in.RepoID, func(bound context.Context) (inbound.DiffOutput, error) {
+		left, err := s.getDoc(bound, in.RepoID, in.Left)
+		if err != nil {
+			return inbound.DiffOutput{}, err
+		}
+		right := left
+		if in.Right != in.Left {
+			right, err = s.getDoc(bound, in.RepoID, in.Right)
+			if err != nil {
+				return inbound.DiffOutput{}, err
+			}
+		}
+		return inbound.DiffOutput{Changes: diffEvents(left.CIR.Events, right.CIR.Events)}, nil
+	})
 }
 
 // eventKey is the content equality key for events (seq agnostic, content-based).

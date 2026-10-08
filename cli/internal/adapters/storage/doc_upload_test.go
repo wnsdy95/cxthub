@@ -54,11 +54,11 @@ func writeUploadPlan(t testing.TB, s *FileStore, id domain.ContentHash, plan chu
 
 func checkUploadDescriptor(t testing.TB, doc outbound.DocumentChunks, id domain.ContentHash, canonical []byte, plan chunkcas.Plan) {
 	t.Helper()
-	if doc.Hash != id || doc.Format != chunkcas.FormatV2 || !bytes.Equal(doc.Envelope, plan.Manifest.Envelope) || !reflect.DeepEqual(doc.Chunks, plan.Manifest.Chunks) {
+	if doc.Representation.Hash != id || doc.Representation.Format != chunkcas.FormatV2 || !bytes.Equal(doc.Representation.Envelope, plan.Manifest.Envelope) || !reflect.DeepEqual(doc.Representation.Chunks, plan.Manifest.Chunks) {
 		t.Fatal("descriptor differs from verified representation")
 	}
 	var bodies [][]byte
-	for _, hash := range doc.Chunks {
+	for _, hash := range doc.Representation.Chunks {
 		body, err := doc.ReadChunk(context.Background(), hash)
 		if err != nil || !bytes.Equal(body, plan.Bodies[hash]) {
 			t.Fatalf("chunk %s: %v", hash, err)
@@ -97,7 +97,7 @@ func TestVerifiedDocChunksColdWarmAndDisabledCache(t *testing.T) {
 				s.EnableDocVerificationCache(s.objectPath("keys", id))
 			}
 			called := false
-			supported, err := s.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+			supported, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 				called = true
 				checkUploadDescriptor(t, doc, id, canonical, plan)
 				return nil
@@ -126,7 +126,7 @@ func TestVerifiedDocChunksCurrentManifest(t *testing.T) {
 	plan.Manifest.Chunks = []domain.ContentHash{domain.HashContent(left), domain.HashContent(right)}
 	plan.Bodies = map[domain.ContentHash][]byte{plan.Manifest.Chunks[0]: left, plan.Manifest.Chunks[1]: right}
 	writeUploadPlan(t, s, id, plan)
-	ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+	ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 		checkUploadDescriptor(t, doc, id, canonical, plan)
 		return nil
 	})
@@ -200,7 +200,7 @@ func TestVerifiedDocChunksUnsupportedAndCorrupt(t *testing.T) {
 					writeUploadPlan(t, s, id, invalid)
 				}
 				unsupported := kind == "raw" || kind == "compressed-raw" || kind == "v1"
-				ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(outbound.DocumentChunks) error {
+				ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(outbound.DocumentChunks) error {
 					t.Fatal("unsupported/corrupt input reached callback")
 					return nil
 				})
@@ -227,7 +227,7 @@ func TestVerifiedDocChunksPortablePartitions(t *testing.T) {
 			writeUploadPlan(t, s, id, plan)
 			for _, warm := range []bool{false, true} {
 				called := false
-				ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+				ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 					called = true
 					checkUploadDescriptor(t, doc, id, canonical, plan)
 					return nil
@@ -263,11 +263,11 @@ func TestVerifiedDocChunksMembershipOwnershipAndCurrentBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	var retained outbound.DocumentChunks
-	ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+	ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 		retained = doc
-		original := doc.Chunks[0]
-		doc.Chunks[0] = otherID
-		doc.Envelope[0] = '!'
+		original := doc.Representation.Chunks[0]
+		doc.Representation.Chunks[0] = otherID
+		doc.Representation.Envelope[0] = '!'
 		for _, denied := range []domain.ContentHash{otherID, "../../escape"} {
 			if _, err := doc.ReadChunk(context.Background(), denied); !errors.Is(err, domain.ErrHashMismatch) {
 				t.Fatal("mutable descriptor expanded membership", err)
@@ -309,8 +309,8 @@ func TestVerifiedDocChunksMembershipOwnershipAndCurrentBody(t *testing.T) {
 	if err := writeAtomic(s.objectPath("chunks", plan.Order[0]), docCompress(plan.Bodies[plan.Order[0]])); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
-		if doc.Chunks[0] != plan.Order[0] || doc.Envelope[0] != '{' {
+	_, err = s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
+		if doc.Representation.Chunks[0] != plan.Order[0] || doc.Representation.Envelope[0] != '{' {
 			t.Fatal("callback mutated future descriptor")
 		}
 		return nil
@@ -337,7 +337,7 @@ func TestVerifiedDocChunksRetentionAndLifetime(t *testing.T) {
 							t.Fatal(got)
 						}
 					}()
-					ok, err := s.WithVerifiedDocChunks(ctx, id, func(doc outbound.DocumentChunks) error {
+					ok, err := s.WithVerifiedDocChunks(ctx, domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 						retained = doc
 						acquired, err := other.TryCollectObjects(ctx, func() error { t.Fatal("collected inside callback"); return nil })
 						if err != nil || acquired {
@@ -379,7 +379,7 @@ func TestVerifiedDocChunksCancellation(t *testing.T) {
 	for _, warm := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		ok, err := s.WithVerifiedDocChunks(ctx, id, func(outbound.DocumentChunks) error { t.Fatal("canceled callback"); return nil })
+		ok, err := s.WithVerifiedDocChunks(ctx, domain.DocumentRef{Hash: id}, func(outbound.DocumentChunks) error { t.Fatal("canceled callback"); return nil })
 		if ok || !errors.Is(err, context.Canceled) {
 			t.Fatalf("warm=%v: %v %v", warm, ok, err)
 		}
@@ -389,14 +389,14 @@ func TestVerifiedDocChunksCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ok, err := s.WithVerifiedDocChunks(ctx, id, func(doc outbound.DocumentChunks) error {
+	ok, err := s.WithVerifiedDocChunks(ctx, domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 		readCtx, readCancel := context.WithCancel(context.Background())
 		readCancel()
-		if _, err := doc.ReadChunk(readCtx, doc.Chunks[0]); !errors.Is(err, context.Canceled) {
+		if _, err := doc.ReadChunk(readCtx, doc.Representation.Chunks[0]); !errors.Is(err, context.Canceled) {
 			t.Fatal("read cancellation lost", err)
 		}
 		cancel()
-		if _, err := doc.ReadChunk(context.Background(), doc.Chunks[0]); !errors.Is(err, context.Canceled) {
+		if _, err := doc.ReadChunk(context.Background(), doc.Representation.Chunks[0]); !errors.Is(err, context.Canceled) {
 			t.Fatal("parent cancellation lost", err)
 		}
 		return nil // even an ignored callback cancellation must propagate
@@ -407,7 +407,7 @@ func TestVerifiedDocChunksCancellation(t *testing.T) {
 	_, err = s.TryCollectObjects(context.Background(), func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer cancel()
-		ok, err := s.WithVerifiedDocChunks(ctx, id, func(outbound.DocumentChunks) error { t.Fatal("callback entered during collection"); return nil })
+		ok, err := s.WithVerifiedDocChunks(ctx, domain.DocumentRef{Hash: id}, func(outbound.DocumentChunks) error { t.Fatal("callback entered during collection"); return nil })
 		if ok || !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal("retention cancellation lost", ok, err)
 		}
@@ -487,7 +487,7 @@ func BenchmarkVerifiedDocChunks(b *testing.B) {
 				if warm {
 					fresh.EnableDocVerificationCache(s.docProofKeyPath)
 				}
-				ok, err := fresh.WithVerifiedDocChunks(context.Background(), id, func(outbound.DocumentChunks) error { return nil })
+				ok, err := fresh.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(outbound.DocumentChunks) error { return nil })
 				if !ok || err != nil {
 					b.Fatalf("descriptor: %v %v", ok, err)
 				}
@@ -505,12 +505,12 @@ func TestVerifiedDocChunksNilCallbackAndMissingDocument(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if ok, err := s.WithVerifiedDocChunks(context.Background(), id, nil); ok || err == nil {
+		if ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, nil); ok || err == nil {
 			t.Fatalf("nil callback accepted (raw=%v): %v %v", raw, ok, err)
 		}
 	}
 	missing := domain.HashContent([]byte("not stored"))
-	if ok, err := s.WithVerifiedDocChunks(context.Background(), missing, func(outbound.DocumentChunks) error {
+	if ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: missing}, func(outbound.DocumentChunks) error {
 		t.Fatal("missing document reached callback")
 		return nil
 	}); ok || !errors.Is(err, domain.ErrNotFound) {
@@ -532,7 +532,7 @@ func TestVerifiedDocChunksSizeFallbackCannotHideCorruptChunkIdentity(t *testing.
 	plan.Bodies = map[domain.ContentHash][]byte{largeID: large, wrong: suffix}
 	writeUploadPlan(t, s, id, plan)
 	for range 2 { // cold and warm must inspect the suffix despite the large prefix
-		if ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(outbound.DocumentChunks) error {
+		if ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(outbound.DocumentChunks) error {
 			t.Fatal("corrupt oversized representation reached callback")
 			return nil
 		}); ok || !errors.Is(err, domain.ErrHashMismatch) {
@@ -552,7 +552,7 @@ func TestVerifiedDocChunksCancellationDuringVerification(t *testing.T) {
 		}
 		base, cancel := context.WithCancel(context.Background())
 		ctx := &uploadSwapContext{Context: base, at: 8, swap: cancel}
-		ok, err := s.WithVerifiedDocChunks(ctx, id, func(outbound.DocumentChunks) error {
+		ok, err := s.WithVerifiedDocChunks(ctx, domain.DocumentRef{Hash: id}, func(outbound.DocumentChunks) error {
 			t.Fatal("verification cancellation reached callback")
 			return nil
 		})
@@ -597,7 +597,7 @@ func TestVerifiedDocChunksRepeatedIDsAndConflictingReceiptMetadata(t *testing.T)
 			if s.matchesDocReceipt(context.Background(), id, key) != (change == "matching") {
 				t.Fatal("receipt accepted conflicting metadata or rejected a consistent duplicate")
 			}
-			ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+			ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 				checkUploadDescriptor(t, doc, id, canonical, plan)
 				return nil
 			})
@@ -637,7 +637,7 @@ func TestVerifiedDocChunksManifestEntryLimit(t *testing.T) {
 			writeUploadPlan(t, s, id, plan)
 			for _, warm := range []bool{false, true} {
 				called := false
-				ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+				ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 					called = true
 					checkUploadDescriptor(t, doc, id, canonical, plan)
 					return nil
@@ -692,7 +692,7 @@ func TestVerifiedDocChunksEncodedManifestLimit(t *testing.T) {
 			}
 			for _, warm := range []bool{false, true} {
 				called := false
-				ok, err := s.WithVerifiedDocChunks(context.Background(), id, func(outbound.DocumentChunks) error {
+				ok, err := s.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(outbound.DocumentChunks) error {
 					called = true
 					return nil
 				})

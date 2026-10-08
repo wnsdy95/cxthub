@@ -80,13 +80,25 @@ func (s *PostgresStore) ClaimGitScan(ctx context.Context, repo domain.ContentHas
 		return domain.GitScanJob{}, err
 	}
 	defer tx.Rollback(ctx)
+	allowed, err := workerDocumentRequirements(ctx)
+	if err != nil {
+		return domain.GitScanJob{}, err
+	}
+	if repo != "" {
+		if err = s.checkRepositoryDocumentIdentity(ctx, tx, repo, true); err != nil {
+			return domain.GitScanJob{}, err
+		}
+	}
 	var b []byte
 	var j domain.GitScanJob
-	err = tx.QueryRow(ctx, `SELECT payload FROM git_scan_jobs WHERE ($2='' OR repo_id=$2) AND (state IN ('waiting','running','retrying') OR (state='completed' AND NOT coalesce((payload->>'tree_indexed')::boolean,false))) AND next_attempt<=$1 AND (state<>'running' OR lease_until<=$1) ORDER BY next_attempt,id FOR UPDATE SKIP LOCKED LIMIT 1`, now, repo).Scan(&b)
+	err = tx.QueryRow(ctx, `SELECT payload FROM git_scan_jobs WHERE ($2='' OR repo_id=$2) AND (state IN ('waiting','running','retrying') OR (state='completed' AND NOT coalesce((payload->>'tree_indexed')::boolean,false))) AND next_attempt<=$1 AND (state<>'running' OR lease_until<=$1) AND EXISTS(SELECT 1 FROM repos r WHERE r.id=git_scan_jobs.repo_id AND r.required_doc_identity=ANY($3)) ORDER BY next_attempt,id FOR UPDATE SKIP LOCKED LIMIT 1`, now, repo, allowed).Scan(&b)
 	if err != nil {
 		return j, mapNoRows(err)
 	}
 	if err = json.Unmarshal(b, &j); err != nil {
+		return j, err
+	}
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, j.RepoID, true); err != nil {
 		return j, err
 	}
 	j, err = j.Claim(now, lease)
@@ -109,6 +121,9 @@ func (s *PostgresStore) FinishGitScan(ctx context.Context, p domain.GitScanFinis
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, p.Job.RepoID, true); err != nil {
+		return err
+	}
 	var b []byte
 	var old domain.GitScanJob
 	if err = tx.QueryRow(ctx, `SELECT payload FROM git_scan_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, p.Job.RepoID, p.Job.ID).Scan(&b); err != nil {
@@ -293,6 +308,9 @@ func (s *PostgresStore) ClaimGitHeadScan(ctx context.Context, repo domain.Conten
 		return j, err
 	}
 	defer tx.Rollback(ctx)
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, repo, true); err != nil {
+		return j, err
+	}
 	b, _ := json.Marshal(j)
 	if _, err = tx.Exec(ctx, `INSERT INTO git_head_scans(repo_id,origin,payload) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, repo, origin, b); err != nil {
 		return j, err
@@ -325,6 +343,9 @@ func (s *PostgresStore) FinishGitHeadScan(ctx context.Context, j domain.GitHeadS
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, j.RepoID, true); err != nil {
+		return err
+	}
 	var b []byte
 	var old domain.GitHeadScan
 	if err = tx.QueryRow(ctx, `SELECT payload FROM git_head_scans WHERE repo_id=$1 AND origin=$2 FOR UPDATE`, j.RepoID, j.GitOrigin).Scan(&b); err != nil {
@@ -380,12 +401,20 @@ func (s *PostgresStore) FailGitHeadScan(ctx context.Context, j domain.GitHeadSca
 	if err != nil {
 		return err
 	}
-	tag, err := s.db(ctx).Exec(ctx, `UPDATE git_head_scans SET payload=$3 WHERE repo_id=$1 AND origin=$2 AND (payload->>'version')::bigint=$4 AND (payload->>'page')::int=$5 AND payload->>'state'='running'`, j.RepoID, j.GitOrigin, b, j.Version, j.Page)
+	tx, err := s.db(ctx).Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollbackPG(tx)
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, j.RepoID, true); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE git_head_scans SET payload=$3 WHERE repo_id=$1 AND origin=$2 AND (payload->>'version')::bigint=$4 AND (payload->>'page')::int=$5 AND payload->>'state'='running'`, j.RepoID, j.GitOrigin, b, j.Version, j.Page)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() != 1 {
 		return domain.ErrConflict
 	}
-	return nil
+	return tx.Commit(ctx)
 }

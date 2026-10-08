@@ -29,14 +29,15 @@ type appendCaptureStore interface {
 // A disposable projection hint, not an accepted capture/commit receipt. The
 // content-addressed document is durable before this checkpoint is published.
 type captureProjection struct {
-	Version  int                `json:"version"`
-	Offset   int64              `json:"offset"`
-	Prefix   string             `json:"prefix"`
-	Policy   string             `json:"policy"`
-	Doc      domain.ContentHash `json:"doc"`
-	Envelope domain.Envelope    `json:"envelope"`
-	Events   int                `json:"events"`
-	Checksum string             `json:"checksum"`
+	Version     int                     `json:"version"`
+	Offset      int64                   `json:"offset"`
+	Prefix      string                  `json:"prefix"`
+	Policy      string                  `json:"policy"`
+	Doc         domain.ContentHash      `json:"doc"`
+	DocIdentity domain.DocumentIdentity `json:"doc_identity,omitempty"`
+	Envelope    domain.Envelope         `json:"envelope"`
+	Events      int                     `json:"events"`
+	Checksum    string                  `json:"checksum"`
 }
 
 func (p captureProjection) sum() string {
@@ -48,7 +49,7 @@ func (p captureProjection) sum() string {
 // Project reuses normalized chunks while checking the complete native
 // prefix with a bounded-memory hash. Merely observing growth cannot prove that
 // older native bytes were not edited; a prefix mismatch rebuilds the projection.
-func (s *SessionCaptureAdapter) Project(ctx context.Context, root, path string, capt outbound.CaptureSource, cdc outbound.ProviderCodec, allowPartial bool) (domain.Envelope, domain.ContentHash, int64, *time.Time, error) {
+func (s *SessionCaptureAdapter) projectLegacy(ctx context.Context, root, path string, capt outbound.CaptureSource, cdc outbound.ProviderCodec, allowPartial bool) (domain.Envelope, domain.ContentHash, int64, *time.Time, error) {
 	incremental, codecOK := cdc.(appendCodec)
 	store, storeOK := s.store.(appendCaptureStore)
 	native, nativeOK := capt.(interface{ IncrementalCapture() bool })
@@ -116,7 +117,7 @@ func (s *SessionCaptureAdapter) Project(ctx context.Context, root, path string, 
 		_ = json.Unmarshal(b, &prior)
 	}
 	h := sha256.New()
-	valid := prior.Version == 1 && prior.Offset > 0 && prior.Offset <= stat.Size() && prior.Events >= 0 && prior.Policy == policy && prior.Checksum == prior.sum() && domain.ValidateContentHash(prior.Doc) == nil
+	valid := prior.Version == 1 && prior.DocIdentity == domain.DocumentIdentityLegacy && prior.Offset > 0 && prior.Offset <= stat.Size() && prior.Events >= 0 && prior.Policy == policy && prior.Checksum == prior.sum() && domain.ValidateContentHash(prior.Doc) == nil
 	if valid {
 		_, err = io.CopyN(h, contextReader{ctx, f}, prior.Offset)
 		valid = err == nil && hex.EncodeToString(h.Sum(nil)) == prior.Prefix

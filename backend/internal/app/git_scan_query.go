@@ -25,7 +25,7 @@ type gitScanQuery struct {
 }
 
 func (g *gitScanQuery) ListScans(ctx context.Context, repo domain.ContentHash, cursor string, limit int) (domain.GitScanPage, error) {
-	return repositoryRead(ctx, g.core, func(ctx context.Context) (domain.GitScanPage, error) {
+	return repositoryReadForRepo(ctx, g.core, repo, func(ctx context.Context) (domain.GitScanPage, error) {
 		out := domain.GitScanPage{Items: []domain.GitScanJob{}}
 		if domain.ValidateContentHash(repo) != nil || limit < 1 || limit > 100 {
 			return out, domain.ErrValidation

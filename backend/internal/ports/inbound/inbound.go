@@ -5,7 +5,6 @@ package inbound
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -102,14 +101,7 @@ type Authenticate interface {
 // --- DTO (name/type only; derive from sync protocol wire form) ---
 
 // ChunkedDoc represents a doc as a manifest (envelope+chunk hash) in a wire format (chunk delta transmission).
-type ChunkedDoc struct {
-	Hash     domain.ContentHash      `json:"hash"`
-	Identity domain.DocumentIdentity `json:"identity,omitempty"`
-	// Format is explicit for v2. Empty is the legacy wire representation and means v1.
-	Format   string               `json:"format,omitempty"`
-	Envelope json.RawMessage      `json:"envelope"`
-	Chunks   []domain.ContentHash `json:"chunks"`
-}
+type ChunkedDoc = domain.DocumentRepresentation
 
 // ChunkObject is the chunk body (Data = uncompressed chunk bytes — JSON base64).
 type ChunkObject struct {
@@ -261,10 +253,12 @@ type PushNegotiateInput struct {
 
 // PushNegotiateOutput: missing parts (want) the server actually needs. (wire: snake_case)
 type PushNegotiateOutput struct {
-	PreparedMemoryArchivesSupported bool                 `json:"prepared_memory_archives_supported,omitempty"`
-	AsyncDocsSupported              bool                 `json:"async_docs_supported,omitempty"`
-	SnapshotWants                   []domain.ContentHash `json:"snapshot_wants"`
-	DocWants                        []domain.ContentHash `json:"doc_wants"`
+	DocIdentitiesSupported          []domain.DocumentIdentity `json:"doc_identities_supported"`
+	RootPublicationEnabled          bool                      `json:"root_publication_enabled"`
+	PreparedMemoryArchivesSupported bool                      `json:"prepared_memory_archives_supported,omitempty"`
+	AsyncDocsSupported              bool                      `json:"async_docs_supported,omitempty"`
+	SnapshotWants                   []domain.ContentHash      `json:"snapshot_wants"`
+	DocWants                        []domain.ContentHash      `json:"doc_wants"`
 	// ChunksSupported true = chunk wire support (GCS ignores — operates as-is).
 	ChunksSupported bool `json:"chunks_supported,omitempty"`
 	// BoundedChunksSupported true if chunk bodies are sent as bounded batches to /push/chunks·/pull/chunks. For old servers, the existing push/objects compatibility paths are used.

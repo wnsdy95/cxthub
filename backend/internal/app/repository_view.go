@@ -15,7 +15,7 @@ func (s *Service) GetRepositoryView(ctx context.Context, repo domain.ContentHash
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return domain.RepositoryView{}, err
 	}
-	v, err := repositoryRead(ctx, s, func(ctx context.Context) (domain.RepositoryView, error) {
+	v, err := repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.RepositoryView, error) {
 		v, err := s.loadRepositoryView(ctx, repo)
 		if err != nil {
 			return v, err
@@ -86,19 +86,21 @@ func nonNil[T any](items []T) []T {
 }
 
 func (s *Service) RepositoryRevision(ctx context.Context, repo domain.ContentHash) (domain.RepositoryRevision, error) {
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return domain.RepositoryRevision{}, err
-	}
-	if store, ok := s.meta.(outbound.RepositoryRevisions); ok {
-		return store.RepositoryRevision(ctx, repo)
-	}
-	return domain.RepositoryRevision{}, nil
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.RepositoryRevision, error) {
+		if err := domain.ValidateContentHash(repo); err != nil {
+			return domain.RepositoryRevision{}, err
+		}
+		if store, ok := s.meta.(outbound.RepositoryRevisions); ok {
+			return store.RepositoryRevision(ctx, repo)
+		}
+		return domain.RepositoryRevision{}, nil
+	})
 }
 func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (domain.PendingView, error) {
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return domain.PendingView{}, err
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (v domain.PendingView, err error) {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (v domain.PendingView, err error) {
 		// Both endpoints classify the same coherent metadata generation. Only the
 		// pending target metadata is retransmitted; no documents are loaded.
 		base, err := s.loadRepositoryView(ctx, repo)

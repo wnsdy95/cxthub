@@ -135,6 +135,8 @@ type LocalRefQueries interface {
 
 // StashInput is the input DTO for StashSession.Stash.
 type StashInput struct {
+	// DocIdentity explicitly selects local capture identity; empty uses local policy, defaulting to legacy.
+	DocIdentity domain.DocumentIdentity
 	Cwd         string
 	Provider    domain.ProviderKind // if empty, claude
 	SessionPath string              // exact wrapper-owned session; empty uses provider discovery
@@ -200,6 +202,8 @@ type Memorize interface {
 
 // SaveInput is the input DTO for SaveSession.Save.
 type SaveInput struct {
+	// DocIdentity explicitly selects local capture identity; empty uses local policy, defaulting to legacy.
+	DocIdentity domain.DocumentIdentity
 	// Cwd is the capture target working directory (session detection criterion).
 	Cwd string
 	// Provider is the capture provider (claude|codex).

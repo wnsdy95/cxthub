@@ -39,6 +39,13 @@ const (
 )
 
 func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw json.RawMessage) (string, error) {
+	// This adapter reads through the current server binary; a remote MCP
+	// caller cannot select compatibility or gain repository authority.
+	identities := []domain.DocumentIdentity{domain.DocumentIdentityLegacy}
+	if capabilities, ok := s.context.(inbound.DocumentIdentityCapabilities); ok {
+		identities = capabilities.DocumentIdentitiesSupported()
+	}
+	ctx = inbound.WithDocumentIdentities(ctx, identities)
 	var args toolArgs
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &args); err != nil {

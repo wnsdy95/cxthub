@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
@@ -17,7 +19,11 @@ func (s *Server) getDocTurns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := domain.AgentHistoryPageRequest{Before: -1, Limit: 16, MaxBytes: domain.MaxAgentHistoryPageBytes}
-	query := r.URL.Query()
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		s.respond(w, nil, domain.ErrValidation)
+		return
+	}
 	for key, dst := range map[string]*int{"before": &req.Before, "limit": &req.Limit, "max_bytes": &req.MaxBytes} {
 		if values, ok := query[key]; ok {
 			var err error
@@ -32,12 +38,24 @@ func (s *Server) getDocTurns(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if len(query["covered_by"]) > 1 || len(query["incomplete_tail"]) > 1 {
+	if len(query["covered_by"]) > 1 || len(query["incomplete_tail"]) > 1 || len(query["doc_identity"]) > 1 || len(query["covered_by_identity"]) > 1 {
 		s.respond(w, nil, domain.ErrValidation)
 		return
 	}
+	for key := range query {
+		if key != "doc_identity" && strings.EqualFold(key, "doc_identity") || key != "covered_by_identity" && strings.EqualFold(key, "covered_by_identity") {
+			s.respond(w, nil, domain.ErrValidation)
+			return
+		}
+	}
+	req.DocIdentity = domain.DocumentIdentity(query.Get("doc_identity"))
+	req.CoveredByIdentity = domain.DocumentIdentity(query.Get("covered_by_identity"))
 	req.CoveredBy = domain.ContentHash(query.Get("covered_by"))
 	req.IncompleteTail = query.Get("incomplete_tail")
+	if err := domain.ValidateAgentHistoryPageRequest(req); err != nil {
+		s.respond(w, nil, err)
+		return
+	}
 	out, err := reader.ReadAgentHistoryPage(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")), req)
 	switch {
 	case errors.Is(err, domain.ErrContextBudgetExceeded):

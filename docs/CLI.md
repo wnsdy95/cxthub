@@ -1054,6 +1054,7 @@ Reading a key prints its effective local value. Supported keys are:
 | `load.mode` | `full`, `reconstructed`, `memory`, `default` | structured memory | Retained for compatibility; does not override managed latest-server-main input. Archive replay requires explicit `--mode` per command; `default` clears the stored preference. |
 | `boundary.enforce` | `kill`, `none`, `default` | `kill` | Managed fresh wrappers prepare and validate the next input before stopping their current child; failed preparation preserves it. Legacy native-resume wrappers use the prepared-seed restart path. Unmanaged app sessions stay open and receive a bounded handoff. |
 | `capture.debounce` | non-negative seconds, `default` | 60 seconds | Minimum interval for repeated Stop-event captures |
+| `capture.identity` | `cxt-manifest-sha256-v1`, `legacy`, `default` | `legacy` | Explicit local capture-format preference; root selection requires a successful capability confirmation for the configured origin. |
 | `secrets.scrub` | `off`, `standard`, `strict`, `default` | `standard` | Pattern-based scrub tier |
 | `secrets.redact` | replacement text, `default` | built-in redaction token | Exact-secret replacement text |
 | `secrets.minlen` | `0` through `64` | `4` | Minimum exact-secret length; `0` restores the default |
@@ -1068,6 +1069,29 @@ cxt config capture.debounce 120
 ```
 
 Configuration is repository-local.
+
+Root capture is available only after the server release supports it, an
+administrator opts the repository into the root identity, and new root
+publication is enabled. Then use:
+
+```bash
+cxt config capture.identity cxt-manifest-sha256-v1
+```
+
+This command checks the selected origin's current repository and upload
+capabilities before storing a preference bound to that exact destination. It
+does not enable server policy. A concurrent configuration change rejects the
+update. Ordinary save, add, stash and automatic captures subsequently use that
+preference offline; hooks do not poll the server for format selection.
+
+The preference is not a cached permission to publish. Every push checks current
+server capabilities, ownership and admission again. If new publication becomes
+disabled, new local roots remain pending and keep their identity. Switching
+origin or having no matching preference selects legacy for future captures.
+`cxt config capture.identity default` clears the preference offline without
+rewriting any existing root, staged record or archived memory. See
+[conversation storage](CONVERSATION_MEMORY_STORAGE.md#explicit-conversation-roots)
+for rollout and verification limits.
 
 ## Maintenance and diagnostics
 

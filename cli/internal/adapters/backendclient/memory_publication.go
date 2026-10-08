@@ -8,6 +8,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 // PublishMemoryArchive stages bounded immutable chunks, then creates archive
@@ -20,18 +21,30 @@ func (c *BackendClient) PublishMemoryArchive(ctx context.Context, repoID string,
 	if err := validateSnapshotObject(snap); err != nil {
 		return err
 	}
-	if snap.RepoID != repoID || snap.ID != root.SnapshotID || snap.DocHash != doc.Hash || root.PreviousMemoryHash != "" {
+	if snap.RepoID != repoID || snap.ID != root.SnapshotID || snap.DocumentRef() != doc.DocumentRef() || root.PreviousMemoryHash != "" {
 		return domain.ErrHashMismatch
 	}
 	if err := root.ValidateMemoryClaims(); err != nil {
 		return err
 	}
-	raw, err := domain.CanonicalBytes(doc.CIR)
-	if err != nil {
+	if err := doc.DocumentRef().Validate(); err != nil {
 		return err
 	}
-	if domain.HashContent(raw) != doc.Hash {
-		return domain.ErrHashMismatch
+	isRoot := doc.Identity == domain.DocumentIdentityRootV1
+	var raw []byte
+	if isRoot {
+		if err := c.PreflightDocumentReferences(ctx, repoID, []domain.DocumentRef{doc.DocumentRef()}); err != nil {
+			return err
+		}
+	} else {
+		var err error
+		raw, err = domain.CanonicalBytes(doc.CIR)
+		if err != nil {
+			return err
+		}
+		if domain.HashContent(raw) != doc.Hash {
+			return domain.ErrHashMismatch
+		}
 	}
 	want, err := domain.MemoryDigestHash(root)
 	if err != nil {
@@ -41,7 +54,47 @@ func (c *BackendClient) PublishMemoryArchive(ctx context.Context, repoID string,
 	snap.MemoryHash = ""
 	objects := objectsReq{Snapshots: []domain.Snapshot{snap}}
 	plan, chunked := chunkcas.PlanDoc(raw)
-	if chunked {
+	if isRoot {
+		source, ok := c.chunks.(outbound.ChunkedDocumentStore)
+		if !ok {
+			return domain.ErrUnsupportedDocumentIdentity
+		}
+		var neg negotiateResp
+		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{DocHaves: []domain.ContentHash{doc.Hash}}, &neg); err != nil {
+			return err
+		}
+		if !neg.PreparedMemoryArchivesSupported || !neg.AsyncDocsSupported || !supportsRootIdentity(neg.DocIdentitiesSupported) {
+			return domain.ErrUnsupportedDocumentIdentity
+		}
+		if err := validateNegotiatedSubset([]domain.ContentHash{doc.Hash}, neg.DocWants); err != nil {
+			return err
+		}
+		if len(neg.SnapshotWants) != 0 || len(neg.ChunkWants) != 0 {
+			return domain.ErrHashMismatch
+		}
+		if len(neg.DocWants) != 0 && !neg.RootPublicationEnabled {
+			return domain.ErrUnsupportedDocumentIdentity
+		}
+		supported, err := source.WithVerifiedDocChunks(ctx, doc.DocumentRef(), func(chunks outbound.DocumentChunks) error {
+			if chunks.Representation.DocumentRef() != doc.DocumentRef() {
+				return domain.ErrHashMismatch
+			}
+			accepted, err := c.PushDocChunks(ctx, repoID, chunks)
+			if err != nil {
+				return err
+			}
+			if !accepted {
+				return domain.ErrUnsupportedDocumentIdentity
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if !supported {
+			return domain.ErrUnsupportedDocumentIdentity
+		}
+	} else if chunked {
 		var neg negotiateResp
 		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/negotiate", negotiateReq{ChunkHaves: plan.Order}, &neg); err != nil {
 			return err

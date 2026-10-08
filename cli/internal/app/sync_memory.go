@@ -297,9 +297,15 @@ func (s *SyncRepoService) restoreMemoryArchive(ctx context.Context, repoID strin
 		return err
 	}
 	snap.RepoID = repoID
-	doc, err := s.store.GetDoc(ctx, snap.DocHash)
+	if err := s.preflightSnapshotReferences(ctx, repoID, []domain.Snapshot{snap}); err != nil {
+		return err
+	}
+	doc, err := readDocumentReference(ctx, s.store, snap.DocumentRef())
 	if err != nil {
 		return err
+	}
+	if doc.DocumentRef() != snap.DocumentRef() {
+		return domain.ErrHashMismatch
 	}
 	root := plan.chain[len(plan.chain)-1]
 	if err := publisher.PublishMemoryArchive(ctx, repoID, snap, doc, root.digest); err != nil {

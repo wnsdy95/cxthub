@@ -98,6 +98,7 @@ func (g *GitHubConnections) Run(ctx context.Context) {
 	}
 }
 func (g *GitHubConnections) Tick(ctx context.Context) error {
+	ctx = g.core.workerDocumentIdentityContext(ctx)
 	all, err := g.store.ListGitHubConnections(ctx)
 	if err != nil {
 		return err
@@ -106,7 +107,7 @@ func (g *GitHubConnections) Tick(ctx context.Context) error {
 		if !c.Enabled || c.NextSync.After(time.Now()) {
 			continue
 		}
-		if err = g.reconcile(ctx, c.NamespaceID); err != nil && !errors.Is(err, domain.ErrConflict) {
+		if err = g.reconcile(ctx, c.NamespaceID); err != nil && !errors.Is(err, domain.ErrConflict) && !errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
 			return err
 		}
 	}
@@ -118,7 +119,7 @@ func (g *GitHubConnections) Tick(ctx context.Context) error {
 		if j.Done || j.NextAttempt.After(time.Now()) || j.LeaseUntil.After(time.Now()) {
 			continue
 		}
-		if err = g.deliver(ctx, j.ID); err != nil {
+		if err = g.deliver(ctx, j.ID); err != nil && !errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
 			return err
 		}
 	}
@@ -134,6 +135,9 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 		}
 		if !c.Enabled || c.NextSync.After(time.Now()) {
 			return domain.ErrConflict
+		}
+		if e = g.checkConnectionWorkerPolicy(tx, c); e != nil {
+			return e
 		}
 		c.NextSync = time.Now().UTC().Add(2 * time.Minute)
 		return g.store.PutGitHubConnection(tx, c)
@@ -232,6 +236,9 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 		if !current.Enabled || current.Generation != c.Generation || !current.NextSync.Equal(lease) {
 			return domain.ErrConflict
 		}
+		if e = g.checkConnectionWorkerPolicy(tx, current); e != nil {
+			return e
+		}
 		current.NextSync = time.Now().UTC().Add(5 * time.Minute)
 		current.Status = "connected"
 		current.UnresolvedMembers = unresolved
@@ -306,6 +313,18 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 		if page < 1 {
 			page = 1
 		}
+		if err := g.id.withIdentity(ctx, func(tx context.Context) error {
+			current, err := g.store.GetGitHubConnection(tx, ns)
+			if err != nil {
+				return err
+			}
+			if !current.Enabled || current.Generation != c.Generation {
+				return domain.ErrConflict
+			}
+			return g.checkConnectionWorkerPolicy(tx, current)
+		}); err != nil {
+			return err
+		}
 		prs, more, e := g.remote.MergedPullRequests(ctx, inst.ID, remote, page)
 		if e != nil {
 			continue
@@ -329,6 +348,9 @@ func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 			}
 			if v.Generation != c.Generation || !v.Enabled {
 				return domain.ErrConflict
+			}
+			if e = g.checkConnectionWorkerPolicy(tx, v); e != nil {
+				return e
 			}
 			if v.PRPages == nil {
 				v.PRPages = map[int64]int{}
@@ -385,7 +407,7 @@ func (g *GitHubConnections) binding(ctx context.Context, c domain.GitHubConnecti
 	return repo, nil
 }
 func (g *GitHubConnections) enqueuePR(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding, pr domain.PullRequestMerge) error {
-	return repositoryWriteError(inbound.WithSystemActor(ctx), g.core, b.ContextRepoID, func(tx context.Context) error {
+	return repositoryWriteError(g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx)), g.core, b.ContextRepoID, func(tx context.Context) error {
 		if _, e := g.binding(tx, c, b); e != nil {
 			return e
 		}
@@ -403,6 +425,9 @@ func (g *GitHubConnections) deliver(ctx context.Context, id string) error {
 		}
 		if job.Done || job.LeaseUntil.After(time.Now()) || job.NextAttempt.After(time.Now()) {
 			return domain.ErrConflict
+		}
+		if e = g.checkDeliveryWorkerPolicy(tx, job); e != nil {
+			return e
 		}
 		job.Lease = opaqueGitHub()
 		job.LeaseUntil = time.Now().Add(2 * time.Minute)
@@ -423,6 +448,9 @@ func (g *GitHubConnections) deliver(ctx context.Context, id string) error {
 		}
 		if current.Lease != job.Lease {
 			return domain.ErrConflict
+		}
+		if e = g.checkDeliveryWorkerPolicy(tx, current); e != nil {
+			return e
 		}
 		current.LeaseUntil = time.Time{}
 		current.Done = workErr == nil
@@ -504,7 +532,7 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 					}
 					return s
 				}
-				err = repositoryWriteError(evidenceWriteContext(inbound.WithSystemActor(ctx)), g.core, b.ContextRepoID, func(tx context.Context) error {
+				err = repositoryWriteError(evidenceWriteContext(g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.core, b.ContextRepoID, func(tx context.Context) error {
 					repo, e := g.binding(tx, c, b)
 					if e != nil {
 						return e

@@ -66,6 +66,9 @@ func (s *PostgresStore) CatalogChanges(ctx context.Context, repo domain.ContentH
 		return out, err
 	}
 	err := s.WithinReadSnapshot(ctx, func(ctx context.Context) error {
+		if err := s.checkRepositoryDocumentIdentity(ctx, s.db(ctx), repo, false); err != nil {
+			return err
+		}
 		if !s.InReadOnlyTransaction(ctx) {
 			// Do not advertise uncommitted writes from a caller-owned write
 			// transaction as a committed synchronization checkpoint.

@@ -33,7 +33,8 @@ export class ApiError extends Error {
 }
 
 async function call<T>(method: string, path: string, body?: unknown, idpToken?: string, signal?: AbortSignal): Promise<T> {
-  const headers: Record<string, string> = {};
+  // Compatibility declaration only; cookies continue to carry authentication.
+  const headers: Record<string, string> = {'X-Cxt-Doc-Identities': 'cxt-manifest-sha256-v1'};
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') headers['X-Cxt-CSRF'] = '1';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idpToken) headers['Authorization'] = `Bearer ${idpToken}`; // Only used for exchangeSession
@@ -108,7 +109,7 @@ export const api = {
  retryGitScan: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-scans/${encodeURIComponent(id)}/retry`, {}),
  gitChanges: (repo: string, cursor: string, signal?: AbortSignal) => call<import('./types').GitChangePage>('GET', `/repos/${encodeURIComponent(repo)}/git-changes?limit=20&cursor=${encodeURIComponent(cursor)}`, undefined, undefined, signal),
  retryGitChange: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-changes/${encodeURIComponent(id)}/retry`, {}),
-  repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes`,
+  repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes?doc_identities=cxt-manifest-sha256-v1`,
   repositoryRevision: (repo: string) => call<import('./types').RepositoryRevision>('GET', `/repos/${encodeURIComponent(repo)}/revision`),
   pendingView: async (repo: string) => {
     const view = await call<Omit<import('./types').PendingView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repo)}/pending-view?graph_encoding=indexed-v2`);

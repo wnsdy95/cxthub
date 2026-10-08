@@ -368,6 +368,7 @@ func buildContainer(cfg config) container {
 	clictr := &delivcli.Container{
 		ProviderLaunch:          providerLaunchHooks(cfg),
 		WakeHistoricalSync:      delivcli.SpawnHistoricalSync,
+		SetCaptureIdentity:      setCaptureIdentity(cfg),
 		ResolveRepo:             gitCtx.CurrentRepo,
 		PrepareRemoteConnection: prepareRemoteConnection(cfg),
 		Queries:                 app.NewLocalRefQueryService(gitCtx, store),

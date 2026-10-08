@@ -16,8 +16,8 @@ type failingCapture struct {
 }
 
 func (f failingCapture) Eligible(string, string) bool { return true }
-func (f failingCapture) Project(context.Context, string, string, outbound.CaptureSource, outbound.ProviderCodec, bool) (domain.Envelope, domain.ContentHash, int64, *time.Time, error) {
-	return domain.Envelope{}, "", 0, nil, f.err
+func (f failingCapture) Project(context.Context, string, string, outbound.CaptureSource, outbound.ProviderCodec, bool, domain.DocumentIdentity) (domain.Envelope, domain.DocumentRef, int64, *time.Time, error) {
+	return domain.Envelope{}, domain.DocumentRef{}, 0, nil, f.err
 }
 
 type portRepo struct{ outbound.GitContext }
