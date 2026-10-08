@@ -1269,6 +1269,20 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 			}
 		}
 		pendings = filtered
+		if len(pendings) == 0 {
+			// Shared reconciliation filters unresolved pointers too. An observer
+			// must retry if its pointer still exists after a failed remote/local CAS.
+			current, err := s.store.ListPendings(ctx, repoID)
+			if err != nil {
+				return 0, err
+			}
+			for _, p := range current {
+				if p.SessionID == in.PendingSessionID {
+					return 0, fmt.Errorf("%w: live pending resolution did not complete", domain.ErrSyncConflict)
+				}
+			}
+			return 0, nil // No current obligation, or reconciliation resolved it.
+		}
 	}
 	remoteMan, rerr := s.remote.RemoteManifest(ctx, repoID)
 	// Known remote set: reachability walk from remote branch/session/tag ref to local objects.
@@ -1296,11 +1310,13 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 	// Chain mode gate: if remote manifest cannot be read or remote has no refs (new repo first push), remoteKnown is empty and walking the local entire history happens — hook path can load up to several GB of docs into memory (weekly 0.9GB empirically) so force a single target push.
 	chainMode := rerr == nil && len(remoteKnown) > 0
 	synced := 0
+	var pendingErr error
 	// pending pushes the target snapshot "and its push ancestor chain" — pushing the target alone would result in server rejection (after hardening) or orphaned in the graph (actual case). renegotiate dedupes known ancestors so they are not retransmitted. If chain assembly is incorrect (ancestor snapshot/doc local failure, walk limit exceeded, push rejected), fallback to single target push — no failure state is worse than the previous (single push).
 	const maxPendingChain = 200 // walk limit — large backlog defense (same spirit as appendMergedContexts)
 	for _, p := range pendings {
 		targetSnap, gerr := s.store.GetSnapshot(ctx, p.Target)
 		if gerr != nil {
+			pendingErr = gerr
 			continue
 		}
 		targetSnap.RepoID = repoID
@@ -1327,6 +1343,38 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 			}
 		}
 
+		// Memory is an independent mutable attachment, even when negotiation
+		// wants no objects. Validate its causal plan before publishing metadata.
+		memorySnaps := chainSnaps
+		if len(memorySnaps) == 0 {
+			memorySnaps = []domain.Snapshot{targetSnap}
+		}
+		var withMemory []domain.Snapshot
+		for _, snap := range memorySnaps {
+			if snap.MemoryHash != "" {
+				withMemory = append(withMemory, snap)
+			}
+		}
+		var attachments map[domain.ContentHash]domain.ContentHash
+		var memoryPlans []memoryPushPlan
+		var memoryAhead map[domain.ContentHash]bool
+		if len(withMemory) > 0 {
+			if rerr == nil {
+				attachments, err = validatedMemoryCatalog(repoID, remoteMan)
+			} else {
+				attachments, err = s.remoteMemoryCatalog(ctx, repoID)
+			}
+			if err != nil {
+				pendingErr = err
+				continue
+			}
+			memoryPlans, memoryAhead, err = s.prepareMemoryPushPlans(ctx, repoID, withMemory, attachments)
+			if err != nil {
+				pendingErr = err
+				continue
+			}
+		}
+
 		push := func(snaps []domain.Snapshot) error {
 			selected, docs, err := s.selectPushObjects(ctx, repoID, snaps)
 			if err != nil {
@@ -1343,12 +1391,32 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 		pushed := len(chainSnaps) > 0 && push(chainSnaps) == nil
 		if !pushed {
 			if err := push([]domain.Snapshot{targetSnap}); err != nil {
+				pendingErr = err
 				continue
 			}
+			// The object fallback publishes only the target. Do not attach memory
+			// to ancestors whose publication failed.
+			memoryPlans = slices.DeleteFunc(memoryPlans, func(plan memoryPushPlan) bool { return plan.snapshotID != targetSnap.ID })
 		}
-		if perr := s.remote.PushPending(ctx, repoID, p); perr == nil {
-			synced++
+		// Attachment failure never enters the single-target object fallback and
+		// never acknowledges a pointer. Retained objects make the retry cheap.
+		if err := s.sendMemoryPushPlans(ctx, repoID, memoryPlans, attachments, memoryAhead, in.Progress); err != nil {
+			pendingErr = err
+			continue
 		}
+		if current, err := s.pendingPublicationCurrent(ctx, p, targetSnap.MemoryHash); err != nil || !current {
+			pendingErr = err
+			continue
+		}
+		if err := s.remote.PushPending(ctx, repoID, p); err != nil {
+			pendingErr = err
+			continue
+		}
+		if current, err := s.pendingPublicationCurrent(ctx, p, targetSnap.MemoryHash); err != nil || !current {
+			pendingErr = err
+			continue
+		}
+		synced++
 	}
 	// Push unsync reconciliation: If local branch ref differs from server and server is my ancestor (meaning I am ahead), create a shadow push (ref unchanged — negotiate dedup) and update the pointer. If the same or behind, release my pointer.
 	if in.PendingSessionID == "" && merr == nil && rerr == nil {
@@ -1391,10 +1459,50 @@ func (s *SyncRepoService) syncPendings(ctx context.Context, in inbound.SyncInput
 			}
 		}
 	}
-	if in.PendingSessionID != "" && len(pendings) > 0 && synced == 0 {
-		return 0, fmt.Errorf("live capture remains local; pending upload did not complete")
+	if in.PendingSessionID != "" && pendingErr != nil {
+		return synced, fmt.Errorf("live capture remains local; pending upload did not complete: %w", pendingErr)
 	}
 	return synced, nil
+}
+
+// Recheck the local obligation before publication and before acknowledging it to
+// the observer. These reads do not make the remote write atomic with local
+// capture, but a detected replacement or memory advance must remain retryable.
+// A removed pointer has been resolved and needs no further upload.
+func (s *SyncRepoService) pendingPublicationCurrent(ctx context.Context, p domain.Pending, memory domain.ContentHash) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	current, err := s.store.ListPendings(ctx, p.RepoID)
+	if err != nil {
+		return false, err
+	}
+	for _, next := range current {
+		if next.SessionID != p.SessionID {
+			continue
+		}
+		// RepoID is normalized to the destination above; SessionID is the key.
+		// Compare the remaining publication fields, including legacy UpdatedAt.
+		// Time equality must not depend on timezone or pointer representation.
+		activityChanged := (next.ActivityAt == nil) != (p.ActivityAt == nil)
+		if !activityChanged && p.ActivityAt != nil {
+			activityChanged = !next.ActivityAt.Equal(*p.ActivityAt)
+		}
+		if next.Target != p.Target || next.Provider != p.Provider ||
+			next.Branch != p.Branch || next.Author != p.Author || next.Dismissed != p.Dismissed ||
+			!next.UpdatedAt.Equal(p.UpdatedAt) || activityChanged {
+			return false, fmt.Errorf("%w: pending capture changed during upload", domain.ErrSyncConflict)
+		}
+		snap, err := s.store.GetSnapshot(ctx, p.Target)
+		if err != nil {
+			return false, err
+		}
+		if snap.MemoryHash != memory {
+			return false, fmt.Errorf("%w: pending memory changed during upload", domain.ErrSyncConflict)
+		}
+		return true, ctx.Err()
+	}
+	return false, ctx.Err()
 }
 
 // reconcileSharedPendings resolves mutable pointers whose targets are already
