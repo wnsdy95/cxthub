@@ -73,7 +73,7 @@ func (s *Service) Search(ctx context.Context, in inbound.SearchInput) (inbound.S
 			docSeen[sn.DocumentRef()] = true
 			var root *docReadSource
 			if sn.DocIdentity != domain.DocumentIdentityLegacy {
-				root, err = s.rootReadSource(ctx, in.RepoID, sn.DocHash)
+				root, err = s.rootReadSource(ctx, in.RepoID, sn.DocHash, docReadSearch)
 				if err != nil {
 					return out, err
 				}

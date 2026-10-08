@@ -57,7 +57,7 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 			return err
 		}
 		if root {
-			doc, err := verifyStoredConversation(ctx, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
+			doc, err := s.docProofs.verifyConversation(ctx, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
 			proof = doc.Reference()
 			return err
 		}
@@ -83,7 +83,7 @@ func (s *PostgresStore) ReadVerifiedDoc(ctx context.Context, repo, hash domain.C
 			return err
 		}
 		if root {
-			doc, err = verifyStoredConversation(ctx, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
+			doc, err = s.docProofs.verifyConversation(ctx, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
 		} else {
 			// Legacy representations retain their existing byte/semantic rules.
 			doc, err = verifyLegacyStoredDoc(ctx, hash, raw, func(ctx context.Context, h domain.ContentHash) ([]byte, error) {

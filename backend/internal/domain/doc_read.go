@@ -145,6 +145,25 @@ func (p DocReadPlan) EventHashes() []ContentHash {
 // current-version search index. That adapter must retain those rows through its
 // publication transaction. This is not a persisted validation or ownership proof.
 func (p DocReadPlan) Build(reusedSearch map[ContentHash]bool) (DocReadIndex, error) {
+	return p.BuildContext(context.Background(), reusedSearch)
+}
+
+// BuildContext derives the full search projection with cooperative cancellation.
+func (p DocReadPlan) BuildContext(ctx context.Context, reusedSearch map[ContentHash]bool) (DocReadIndex, error) {
+	return p.build(ctx, reusedSearch, false)
+}
+
+// BuildMetadataContext derives locations, sequence and exact role strings from
+// verified bytes without decoding event payloads or retaining searchable text.
+// It is for page/range readers, not for publishing or querying a search index.
+func (p DocReadPlan) BuildMetadataContext(ctx context.Context) (DocReadIndex, error) {
+	return p.build(ctx, nil, true)
+}
+
+func (p DocReadPlan) build(ctx context.Context, reusedSearch map[ContentHash]bool, metadataOnly bool) (DocReadIndex, error) {
+	if err := ctx.Err(); err != nil {
+		return DocReadIndex{}, err
+	}
 	if p.index.Hash == "" {
 		return DocReadIndex{}, ErrIntegrity
 	}
@@ -153,8 +172,14 @@ func (p DocReadPlan) Build(reusedSearch map[ContentHash]bool) (DocReadIndex, err
 	out.Events = append([]DocEventIndex{}, p.index.Events...)
 	var body []byte
 	for i, span := range p.bodies {
+		if err := ctx.Err(); err != nil {
+			return DocReadIndex{}, err
+		}
 		body = p.stream.appendRange(body[:0], span)
-		if reusedSearch[out.Events[i].Hash] {
+		if err := ctx.Err(); err != nil {
+			return DocReadIndex{}, err
+		}
+		if metadataOnly || reusedSearch[out.Events[i].Hash] {
 			var metadata struct {
 				Seq  int    `json:"seq"`
 				Role string `json:"role"`
@@ -170,6 +195,9 @@ func (p DocReadPlan) Build(reusedSearch map[ContentHash]bool) (DocReadIndex, err
 			return DocReadIndex{}, err
 		}
 		out.Events[i].Seq, out.Events[i].Role, out.Events[i].Text = ev.Seq, string(ev.Role), SearchableEventText(ev)
+	}
+	if err := ctx.Err(); err != nil {
+		return DocReadIndex{}, err
 	}
 	return out, nil
 }

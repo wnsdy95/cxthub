@@ -113,7 +113,7 @@ func (p *initializationProofPG) captureBlob(ctx context.Context, kind string, ha
 			if identity != domain.DocumentIdentityRootV1 {
 				return domain.ErrIntegrity
 			}
-			doc, err := verifyStoredConversation(ctx, hash, manifest, p.owner.ownedDocChunkReader(p.repo, conversationChunkOrder(manifest)))
+			doc, err := p.owner.docProofs.verifyConversation(ctx, hash, manifest, p.owner.ownedDocChunkReader(p.repo, conversationChunkOrder(manifest)))
 			if err != nil {
 				return err
 			}

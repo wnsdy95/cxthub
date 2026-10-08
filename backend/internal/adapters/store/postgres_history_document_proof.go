@@ -127,7 +127,7 @@ func (p *historyDocumentProofPG) Capture(ctx context.Context, evidence []domain.
 			// Root descriptors are strict and hash-bound. Re-read the complete
 			// ordered owned closure in this SAME RR snapshot; no receipt or
 			// generic full-CIR/legacy descriptor can authorize root pins.
-			proof, err := verifyStoredConversation(ctx, snap.DocHash, manifest, p.owner.ownedDocChunkReader(p.repo, conversationChunkOrder(manifest)))
+			proof, err := p.owner.docProofs.verifyConversation(ctx, snap.DocHash, manifest, p.owner.ownedDocChunkReader(p.repo, conversationChunkOrder(manifest)))
 			if err != nil {
 				return err
 			}

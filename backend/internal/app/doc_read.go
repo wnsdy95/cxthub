@@ -98,7 +98,7 @@ func (s *Service) SearchDocEvents(ctx context.Context, repo, hash domain.Content
 		if len([]rune(q)) < 2 || len([]rune(q)) > 256 || after < -1 || limit < 1 || limit > 201 {
 			return nil, fmt.Errorf("%w: invalid event search", domain.ErrValidation)
 		}
-		root, err := s.rootReadSource(ctx, repo, hash)
+		root, err := s.rootReadSource(ctx, repo, hash, docReadSearch)
 		if err != nil {
 			return nil, err
 		}
