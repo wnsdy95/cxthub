@@ -9,6 +9,17 @@ import (
 )
 
 var _ inbound.CatalogQuery = (*Service)(nil)
+var _ inbound.CatalogCapabilities = (*Service)(nil)
+
+// CatalogVersion advertises only store-owned catalogs with a coherent read snapshot.
+func (s *Service) CatalogVersion() int {
+	_, catalog := s.meta.(outbound.CatalogStore)
+	_, transactional := s.meta.(outbound.RepositoryTransactions)
+	if catalog && transactional {
+		return domain.CatalogVersion
+	}
+	return 0
+}
 
 // CatalogChanges preserves store-owned pagination and original metadata images.
 // In particular, it does not substitute graph projections or object reads.

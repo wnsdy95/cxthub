@@ -29,9 +29,10 @@ type BackendClient struct {
 	identity domain.TeamIdentity
 	httpc    *http.Client
 	// chunks accesses local chunk store (optional — for pull delta, inject with SetChunkLocal).
-	chunks      ChunkLocal
-	memoryReuse memoryReuseCache
-	metadata    outbound.MetadataCheckpointStore
+	chunks       ChunkLocal
+	memoryReuse  memoryReuseCache
+	metadata     outbound.MetadataCheckpointStore
+	catalogCache outbound.CatalogCacheStore
 }
 
 // NewBackendClient creates a BackendClient.
@@ -151,6 +152,13 @@ func (c *BackendClient) SetMetadataCheckpointStore(store outbound.MetadataCheckp
 	c.metadata = store
 }
 
+// SetCatalogCacheStore enables committed catalog acquisition without applying it.
+func (c *BackendClient) SetCatalogCacheStore(store outbound.CatalogCacheStore) {
+	c.catalogCache = store
+}
+
+var errBoundedResponse = errors.New("response exceeds bounded transport limit")
+
 // do sends JSON request and decodes response to out (error on non-2xx).
 func (c *BackendClient) do(ctx context.Context, method, path string, body, out any) error {
 	return c.doLimited(ctx, method, path, body, out, 0)
@@ -240,7 +248,7 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 				return err
 			}
 			if int64(len(b)) > max {
-				return fmt.Errorf("%s %s response exceeds bounded transport limit", method, path)
+				return fmt.Errorf("%s %s: %w", method, path, errBoundedResponse)
 			}
 			return json.Unmarshal(b, out)
 		}
@@ -1247,7 +1255,16 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 		}
 		haveDoc[hash] = true
 	}
-	man, err := catalog(ctx, repoID)
+	var man domain.Manifest
+	var acquired []domain.Snapshot
+	var incremental bool
+	var err error
+	if complete {
+		man, acquired, incremental, err = c.acquireCatalog(ctx, repoID)
+	}
+	if err == nil && !incremental {
+		man, err = catalog(ctx, repoID)
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1285,7 +1302,20 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 	if !foundBranch {
 		return nil, nil, nil, domain.ErrNotFound
 	}
-	snapshots, err := c.readSnapshotMetadata(ctx, man, snapshotWants, remote, complete)
+	var snapshots []domain.Snapshot
+	if incremental {
+		wants := setOf(snapshotWants)
+		for _, snap := range acquired {
+			if wants[snap.ID] {
+				snapshots = append(snapshots, snap)
+			}
+		}
+	} else {
+		snapshots, err = c.readSnapshotMetadata(ctx, man, snapshotWants, remote, complete)
+	}
+	if c.SyncRemoteIdentity() != remote {
+		return nil, nil, nil, domain.ErrSyncConflict
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -4,10 +4,14 @@
 `sync-metadata-v1`, as an optional PostgreSQL metadata query. Pull permission is
 checked on every request, including continuation pages and empty deltas.
 Filesystem storage explicitly returns HTTP 501 `catalog_unsupported`. Existing
-manifest and object routes remain available. CLI consumption and Merkle
-reconciliation belong to subsequent stages and are not wired by this change.
-Existing clients continue their current synchronization behavior. Adding this
-server capability alone makes no end-to-end latency or performance claim.
+manifest and object routes remain available. The CLI uses catalog acquisition
+for snapshot discovery and complete pull metadata when the freshly authorized
+repository view advertises `catalog_version: 1`. Absent/zero means the existing
+full-manifest protocol; unknown versions and errors after advertising version 1
+fail without fallback. Selected-branch dependency plans and viewer-readable
+manifest calls keep their existing contracts. Merkle reconciliation remains a
+subsequent stage. Reduced metadata transfer does not by itself establish faster
+end-to-end document fetches.
 
 ## Scope and images
 
@@ -138,3 +142,39 @@ journal/state tables while serving clients. Use ordinary transactional source
 mutations with capture enabled, or an offline recovery followed by epoch reset.
 Pruning bounds retained history only when an operator invokes it; it is not
 object/blob GC and gives no object retention guarantee.
+
+## CLI acquisition cache
+
+The CLI keeps an endpoint/repository-scoped catalog cache in `.cxt/catalog-cache`,
+separate from snapshot storage, verified remote observations, refs, history
+imports and worktree selection. Tokens and URL credentials are not persisted.
+Each received page is immutable and checksummed. Unfinished pages form an
+immutable linked chain; completed indexes live in a separate immutable descriptor.
+A bounded head with a monotonic generation points to their roots and records the
+last complete checkpoint separately. Partial pages do not rewrite the growing
+list of all previously received page hashes.
+Publication is atomic and compare-and-swap guarded across CLI processes. A losing
+writer returns a synchronization conflict rather than overwriting the winner.
+
+The CLI starts with 256 entries per page and a 32 MiB response bound. If a
+response exceeds that bound, it retries the same checkpoint/cursor with half the
+entry limit, down to one. Oversized responses never advance progress; a single
+entry that still cannot fit reports an explicit error. Other errors do not
+trigger this retry. Empty legacy default branch names remain valid for capability
+negotiation.
+
+Every invocation checks current capability and pull authorization. A warm empty
+delta still contacts the server. An interrupted run resumes its opaque cursor,
+then requests a fresh delta once to catch up beyond the old fixed bound. Only a
+validated final page can publish the replacement baseline or complete delta.
+A reset abandons unfinished progress but retains the last complete image until
+the new baseline finishes. Repeated resets fail instead of retrying forever.
+
+Reads validate current cache bytes and metadata identities; malformed or corrupt
+records are errors, not permission to reconstruct or overwrite silently. Page
+logs compact at an adaptive threshold so a small update does not rewrite the
+entire image each time. Unreferenced pages are retained. Current full-image local
+reads and validation remain linear in catalog size; this is not Merkle lookup.
+Document, chunk, memory, settings and history dependency validation still runs
+through the existing synchronization paths. No metadata checkpoint can prove
+that an object is available or has been applied locally.
