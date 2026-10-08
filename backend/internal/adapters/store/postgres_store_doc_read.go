@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -165,7 +166,19 @@ func (s *PostgresStore) BackfillReadIndexes(ctx context.Context, progress func(i
 	}
 	for i, p := range missing {
 		if _, err := s.DocReadIndex(ctx, p.repo, p.hash); err != nil {
-			return err
+			if !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
+				return err
+			}
+			// Classification comes from the owned stored descriptor, never an
+			// absent or mislabeled snapshot. Check the whole current root before
+			// counting it as handled; do not create a legacy index or repair it.
+			proof, err := s.VerifyStoredDoc(ctx, p.repo, p.hash)
+			if err != nil {
+				return err
+			}
+			if proof.DocumentRef() != (domain.DocumentRef{Hash: p.hash, Identity: domain.DocumentIdentityRootV1}) {
+				return domain.ErrUnsupportedDocumentIdentity
+			}
 		}
 		progress(i + 1)
 	}

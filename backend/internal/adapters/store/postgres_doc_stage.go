@@ -31,6 +31,11 @@ func (p *pgDocPublication) stageReadBlocks(ctx context.Context, j domain.DocFina
 	if !p.doc.doc.Valid() || p.doc.doc.Hash() != j.DocHash {
 		return domain.ErrIntegrity
 	}
+	if p.doc.doc.DocumentRef().Identity == domain.DocumentIdentityRootV1 {
+		// Roots have no legacy derivatives. Common identity/transaction checks
+		// above and the final durable job/byte/lease fences still apply.
+		return ctx.Err()
+	}
 	if nested {
 		return nil // Preserve doc -> blocks order and enclosing rollback/quota.
 	}

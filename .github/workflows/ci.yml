@@ -83,6 +83,7 @@ jobs:
           go test -tags postgres ./internal/adapters/delivery/http/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/adapters/federation/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/mcpserver/ -race -run '^TestPG' -timeout=120s -v
+          go test -tags postgres ./internal/adapters/delivery/mcp/ -race -run '^TestRootProjectionPGConsumersWithoutPersistentIndex$' -count=1 -timeout=120s -v
 
   cli:
     runs-on: ubuntu-latest

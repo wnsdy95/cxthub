@@ -79,6 +79,15 @@ reads use one read snapshot or the caller's existing transaction. These reads
 do not publish indexes, rewrite documents or grant future write authority.
 Root search cannot be excluded by legacy search-index candidate filters.
 
+PostgreSQL root publication atomically stores verified manifest ownership and
+the completed job receipt. It does not build the legacy persistent read/search
+index, which root consumers do not use. Search is immediately available through
+the verified-root path above; there is no asynchronous search-readiness state.
+Legacy documents still publish their existing index. Previously stored indexes
+remain intact, and old staged derivatives retain their normal transactional
+cleanup and shared-owner protection. Backfill verifies current root bytes
+without creating a legacy index.
+
 Page and fragment reads use the event locations, hashes and sequence already
 established by root verification; they do not scan every event again for role
 or searchable text. Agent-history reads still derive exact roles, and search
