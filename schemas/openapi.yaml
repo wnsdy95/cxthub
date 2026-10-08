@@ -1318,6 +1318,81 @@ components:
           type: string
           format: byte
 
+    CatalogCheckpoint:
+      type: object
+      additionalProperties: false
+      required: [version, repo_id, epoch, sequence]
+      description: "Complete committed metadata checkpoint for scope sync-metadata-v1. Not an object availability proof or applied client state. Only final pages issue checkpoints."
+      properties:
+        version: { type: integer, const: 1 }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        epoch: { type: string, format: uuid }
+        sequence: { type: integer, format: int64, minimum: 0 }
+
+    CatalogRequest:
+      type: object
+      additionalProperties: false
+      required: [version]
+      not:
+        required: [after, cursor]
+        properties:
+          cursor: { minLength: 1 }
+      description: "Neither after nor cursor starts a baseline; after starts a delta; cursor resumes an adapter-owned bounded page. A zero/omitted limit means 256. Cursor contents must not be constructed or interpreted by clients."
+      properties:
+        version: { type: integer, const: 1 }
+        after: { $ref: '#/components/schemas/CatalogCheckpoint' }
+        cursor: { type: string, description: "Opaque base64url continuation. Empty means absent. Bound to repository, scope, version, epoch, retention floor and fixed upper sequence." }
+        limit: { type: integer, minimum: 0, maximum: 1000, default: 256 }
+
+    CatalogEntry:
+      type: object
+      additionalProperties: false
+      required: [sequence, kind, key]
+      description: "Original immutable journal image or deletion tombstone. Multiple keys in one transaction share a sequence. Snapshot values exclude derived branches; refs include raw lifecycle tags; history values retain the full stored event."
+      properties:
+        sequence: { type: integer, format: int64, minimum: 0 }
+        kind: { type: string, enum: [snapshot, ref, history, protocol] }
+        key: { type: string, minLength: 1, description: 'For ref, a JSON array encoded as a string: [kind,name]. For snapshot/history, the entity ID; for protocol, the repository ID.' }
+        deleted: { type: boolean, default: false }
+        value:
+          type: object
+          additionalProperties: true
+          description: "Original stored snapshot metadata, raw ref, full history.event, or {context_protocol: integer}. Absent for a deletion. Raw lifecycle refs require projection under the recorded protocol before use as visible refs."
+      oneOf:
+        - required: [value]
+          properties:
+            deleted: { const: false }
+        - required: [deleted]
+          properties:
+            deleted: { const: true }
+          not:
+            required: [value]
+
+    CatalogPage:
+      type: object
+      additionalProperties: false
+      required: [version, repo_id, epoch, through, mode, entries]
+      description: "Fixed committed upper sequence across all pages. Baseline returns the latest nondeleted journal image per key, ordered by kind/key. Delta returns changes ordered by sequence/kind/key. Pages may split transactions; stage all pages and apply only with the final checkpoint. No partial page advances a complete checkpoint."
+      properties:
+        version: { type: integer, const: 1 }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        epoch: { type: string, format: uuid }
+        through: { type: integer, format: int64, minimum: 0 }
+        mode: { type: string, enum: [baseline, delta] }
+        entries:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/CatalogEntry' }
+        next_cursor: { type: string, minLength: 1 }
+        checkpoint: { $ref: '#/components/schemas/CatalogCheckpoint' }
+      oneOf:
+        - required: [next_cursor]
+          not:
+            required: [checkpoint]
+        - required: [checkpoint]
+          not:
+            required: [next_cursor]
+
     BranchPullRequest:
       type: object
       additionalProperties: false
@@ -4389,6 +4464,44 @@ paths:
   # =========================================================================
   # Pull Negotiation
   # =========================================================================
+  /repos/{repoID}/pull/catalog:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: pullCatalog
+      summary: Read a committed synchronization metadata baseline or delta
+      description: "Version 1, scope sync-metadata-v1. Requires puller on every page, including empty deltas and cursor resumes. Includes stored snapshots, raw refs, history events and context protocol; excludes memory bodies, legacy memory metadata, blob grants, pending state, authorization and derived graph data. This is not an object availability proof. PostgreSQL reads immutable journal images at a fixed committed upper sequence. Stage partial pages until the final checkpoint; raw lifecycle refs must be projected under the recorded protocol. JSON requests reject unknown fields and trailing values, with a 64 KiB body limit. Filesystem/other unsupported stores return 501 catalog_unsupported. CLI consumption and Merkle reconciliation are not wired by this endpoint."
+      tags: [pull]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CatalogRequest' }
+      responses:
+        '200':
+          description: Metadata page; only the final page includes a complete checkpoint
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CatalogPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "reset_required: checkpoint/cursor belongs to another repository, epoch or scope, references future/pruned progress, or uses an unsupported checkpoint/cursor version. Restart from a fresh baseline; no successful partial progress. Any retention-floor change invalidates continuation cursors."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '413':
+          description: Request body exceeds 64 KiB
+        '415':
+          description: JSON content type required
+        '501':
+          description: "catalog_unsupported: storage lacks the optional catalog capability."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /repos/{repoID}/pull/branch-plan:
     parameters:
       - $ref: "#/components/parameters/repoID"

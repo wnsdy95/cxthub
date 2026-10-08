@@ -268,6 +268,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/objects", s.guard(domain.RoleMember, s.pushObjects))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/chunks", s.guard(domain.RolePuller, s.pullChunks))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/branch-plan", s.guard(domain.RolePuller, s.pullBranchPlan))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/catalog", s.guard(domain.RolePuller, s.pullCatalog))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/objects", s.guard(domain.RolePuller, s.pullObjects))
 
 	// Actions exposed by the server. Provider-session restoration remains a local

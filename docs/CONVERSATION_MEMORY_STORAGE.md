@@ -121,8 +121,10 @@ garbage collection or establish a server-side Merkle synchronization protocol.
 This avoids repeated metadata downloads, including after interrupted content
 verification. It does not remove the server's full-manifest scan, local metadata
 cache reads, cold document verification or legacy canonical hashing. A durable
-server change feed and Merkle reconciliation require a separate contract with
-committed cursors, scope, repository epochs, tombstones and coherent pagination.
+server change feed now has an optional [version 1 query contract](CATALOG_SYNC.md)
+with committed cursors, scope, repository epochs, tombstones and coherent
+pagination. CLI adoption and Merkle reconciliation remain subsequent stages;
+existing clients still use the full manifest.
 The existing graph/pending revision counters intentionally exclude staged
 objects and therefore cannot serve as a complete catalog cursor.
 
