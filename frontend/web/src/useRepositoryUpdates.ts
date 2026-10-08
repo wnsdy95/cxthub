@@ -15,7 +15,8 @@ export function useRepositoryUpdates(repo: string | null) {
     let evidence = 0n;
     let unsubscribe: (() => void) | undefined;
     const clearRetry = () => { if (retry) clearTimeout(retry); retry = undefined; };
-    const full = () => qc.fetchQuery({queryKey: key, queryFn: () => api.repositoryView(repo), staleTime: 0});
+    // React Query owns cancellation: another observer may still need this view.
+    const full = () => qc.fetchQuery({queryKey: key, queryFn: ({signal}) => api.repositoryView(repo, signal), staleTime: 0});
     const readRevision = async () => {
       try { await changed(await api.repositoryRevision(repo)); }
       catch (error) {
@@ -42,6 +43,7 @@ export function useRepositoryUpdates(repo: string | null) {
         while (wanted && !disposed && !document.hidden) {
           let current = qc.getQueryData<RepositoryView>(key);
           if (!current) current = await full();
+          if (disposed || document.hidden) break;
           if (current.revision && revisionCovers(current.revision, wanted)) break;
           if (!current.revision || current.revision.graph !== wanted.graph) {
             void qc.invalidateQueries({queryKey: ['git-changes', repo]});
@@ -50,14 +52,16 @@ export function useRepositoryUpdates(repo: string | null) {
             void qc.invalidateQueries({queryKey: ['effective-memory', repo]});
             void qc.invalidateQueries({queryKey: ['memory-positions', repo]});
             const next = await full();
+            if (disposed || document.hidden) break;
             if (!next.revision) break; // rolling upgrade: old backend
           } else {
             const live = await api.pendingView(repo);
-            if (disposed) break;
+            if (disposed || document.hidden) break;
             const latest = qc.getQueryData<RepositoryView>(key);
             if (!latest || pendingViewNeedsFull(latest, live)) await full();
             else qc.setQueryData<RepositoryView>(key, old => old ? mergePendingView(old, live) : old);
           }
+          if (disposed || document.hidden) break;
           const next = qc.getQueryData<RepositoryView>(key)?.revision;
           // A lagging replica must not cause an unbounded synchronous fetch loop.
           if (next && current.revision && revisionCovers(current.revision, next)) throw new Error('Repository replica has not advanced');
@@ -66,6 +70,7 @@ export function useRepositoryUpdates(repo: string | null) {
       finally { busy = false; }
     };
     const changed = async (r: RepositoryRevision) => {
+      if (disposed || document.hidden) return;
       const nextEvidence = BigInt(r.evidence ?? '0');
       if (nextEvidence > evidence) {
         evidence = nextEvidence;

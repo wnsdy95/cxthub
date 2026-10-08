@@ -436,7 +436,7 @@ export function useDismissPending() {
 // One server generation shared by the context and On Hold views.
 export function useRepoView(repoId: string | null, _primaryBranch?: string) {
   useRepositoryUpdates(repoId);
-  const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:()=>api.repositoryView(repoId!),retry:false,
+  const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>api.repositoryView(repoId!,signal),retry:false,
     enabled:Boolean(repoId),refetchOnWindowFocus:false});
   const view = viewQuery.data;
   const rows = useMemo(()=>graphViewRows(view),[view]);

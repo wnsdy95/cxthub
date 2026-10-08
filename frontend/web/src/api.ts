@@ -323,8 +323,8 @@ export const api = {
     validateGraphState(g, g.revision);
     return g;
   },
-  repositoryView: async (repoId: string) => {
-    const wire = await call<Omit<import('./types').RepositoryView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repoId)}/view?graph_encoding=indexed-v2`);
+  repositoryView: async (repoId: string, signal?: AbortSignal) => {
+    const wire = await call<Omit<import('./types').RepositoryView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repoId)}/view?graph_encoding=indexed-v2`, undefined, undefined, signal);
     const view = {...wire, graph: decodeGraphState(wire.graph)};
     validateContextSemantics(view.history, view.semantics);
     validateGraphState(view.graph, view.revision);

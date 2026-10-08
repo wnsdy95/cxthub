@@ -10,8 +10,8 @@ const root=fileURLToPath(new URL('..',import.meta.url));
 const output=await mkdtemp(path.join(tmpdir(),'cxt-graph-benchmark-'));
 try {
   const file=path.join(output,'graph.cjs');
-  await build({stdin:{contents:`export {GraphIndex} from './src/graphIndex'; export {projectBranchGraph,visibleBranchGraph} from './src/graphProjection'; export {completedBranchEvidence} from './src/graphEvidence'; export {layoutGraph} from './src/graph'; export {graphProgress} from './src/graphState'; export {decodeGraphState} from './src/graphWire'; export {serverGraphWireFixture} from './tests/serverGraphFixture';`,resolveDir:root},bundle:true,platform:'node',format:'cjs',outfile:file});
-  const {GraphIndex,projectBranchGraph,visibleBranchGraph,completedBranchEvidence,layoutGraph,graphProgress,decodeGraphState,serverGraphWireFixture}=createRequire(import.meta.url)(file);
+  await build({stdin:{contents:`export {GraphIndex} from './src/graphIndex'; export {projectBranchGraph,visibleBranchGraph} from './src/graphProjection'; export {completedBranchEvidence,validateContextSemantics} from './src/graphEvidence'; export {layoutGraph} from './src/graph'; export {graphProgress,graphViewRows,validateGraphState} from './src/graphState'; export {decodeGraphState} from './src/graphWire'; export {serverGraphWireFixture} from './tests/serverGraphFixture';`,resolveDir:root},bundle:true,platform:'node',format:'cjs',outfile:file});
+  const {GraphIndex,projectBranchGraph,visibleBranchGraph,completedBranchEvidence,validateContextSemantics,layoutGraph,graphProgress,graphViewRows,validateGraphState,decodeGraphState,serverGraphWireFixture}=createRequire(import.meta.url)(file);
   const at=n=>new Date(1750000000000+n*1000).toISOString();
   const s=(id,parents,n,branch='main')=>({id,repo_id:'repo',doc_hash:id,branch,parents,created_at:at(n),provider:'codex',fidelity:'full'});
   const chain=Array.from({length:10_000},(_,n)=>s(`s${n}`,n?[`s${n-1}`]:[],n)).reverse();
@@ -33,19 +33,28 @@ try {
     reflog:Array.from({length:100},(_,n)=>({kind:'branch',name:'main',old:`s${5049+n*50}`,new:'s99',created_at:at(11000+n)}))});
   const median=values=>[...values].sort((a,b)=>a-b)[Math.floor(values.length/2)];
   // Compile the real server fixture before measuring reads.
-  serverGraphWireFixture({});
+  serverGraphWireFixture({}, '', 2);
   for(const c of cases) {
     const serverStart=performance.now();
-    const wire=serverGraphWireFixture(c);
+    const wire=serverGraphWireFixture(c, '', 2);
     const serverProcessMs=performance.now()-serverStart;
-    const state=decodeGraphState(wire.graph);
+    if(wire.graph.encoding!=='indexed-v2') throw Error('benchmark must use the production graph encoding');
+    // Serialization/fixture construction is outside client timing. The saved
+    // JSON is parsed afresh on every run, just like api.repositoryView.
+    const json=JSON.stringify(wire);
     const runs=[];
     for(let run=0;run<3;run++) {
-      const start=performance.now(),index=new GraphIndex(c.snapshots);
-      const evidence=completedBranchEvidence(c.snapshots,c.history,index,wire.semantics);
+      const parseStart=performance.now(),parsed=JSON.parse(json),parseEnd=performance.now();
+      const view={...parsed,graph:decodeGraphState(parsed.graph)};
+      validateContextSemantics(view.history,view.semantics);
+      validateGraphState(view.graph,view.revision);
+      const decodeEnd=performance.now();
+      const viewRows=graphViewRows(view),rowsEnd=performance.now(),state=view.graph;
+      const start=performance.now(),index=new GraphIndex(view.snapshots);
+      completedBranchEvidence(view.snapshots,view.history,index,view.semantics);
       const groups=graphProgress(state);
       const t1=performance.now();
-      const projection=projectBranchGraph(c.snapshots,c.refs,state,c.refs[0].target,c.refs[0].name);
+      const projection=projectBranchGraph(viewRows.graphSnapshots,view.refs,state,c.refs[0].target,c.refs[0].name);
       const t2=performance.now(),layout=layoutGraph(projection.snapshots,projection.pinHead),t3=performance.now();
       const stats=JSON.stringify(index.stats);
       for(let mask=0;mask<8;mask++) {
@@ -56,9 +65,9 @@ try {
       if(JSON.stringify(index.stats)!==stats) throw Error('visibility must not query ancestry');
       if(index.stats.cachedMemberships>index.cacheBudget) throw Error('cache exceeds membership budget');
       if(layout.issues.length) throw Error('benchmark generated invalid projection');
-      runs.push({evidenceAndGroupsMs:t1-start,projectionMs:t2-t1,layoutMs:t3-t2,eightVisibilityChangesMs:t4-t3,rows:layout.rows.length,lanes:layout.laneCount,groups:groups.length,cachedMemberships:index.stats.cachedMemberships});
+      runs.push({jsonParseMs:parseEnd-parseStart,decodeAndValidateMs:decodeEnd-parseEnd,rowDerivationMs:rowsEnd-decodeEnd,evidenceAndGroupsMs:t1-start,projectionMs:t2-t1,layoutMs:t3-t2,eightVisibilityChangesMs:t4-t3,rows:layout.rows.length,lanes:layout.laneCount,groups:groups.length,cachedMemberships:index.stats.cachedMemberships});
     }
-    const result={name:c.name,serverProcessMs:Math.round(serverProcessMs),graphWireBytes:Buffer.byteLength(JSON.stringify(wire.graph))};
+    const result={name:c.name,encoding:wire.graph.encoding,serverProcessMs:Math.round(serverProcessMs),viewWireBytes:Buffer.byteLength(json),graphWireBytes:Buffer.byteLength(JSON.stringify(wire.graph))};
     for(const key of Object.keys(runs[0])) result[key]=Math.round(median(runs.map(r=>r[key]))*10)/10;
     console.log(JSON.stringify(result));
   }
