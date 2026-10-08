@@ -14,11 +14,9 @@ func prepareRootDocPG(ctx context.Context, doc domain.VerifiedSessionDoc) (prepa
 	if err != nil {
 		return preparedDocPG{}, err
 	}
-	read, err := prepareReadIndexPG(ctx, doc)
-	if err != nil {
-		return preparedDocPG{}, err
-	}
-	return preparedDocPG{doc: doc, root: &root, payload: docCompress(root.canonical), read: read}, ctx.Err()
+	// Root consumers derive their projection from current verified bytes. The
+	// legacy persistent index is neither consumed nor a root readiness proof.
+	return preparedDocPG{doc: doc, root: &root, payload: docCompress(root.canonical)}, ctx.Err()
 }
 
 // Only durable job completion calls this branch, inside its repository/job
@@ -59,9 +57,6 @@ func (s *PostgresStore) putRootDocJob(ctx context.Context, repo domain.ContentHa
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO repo_blobs(repo_id,kind,hash) VALUES($1,'doc',$2) ON CONFLICT DO NOTHING`, repo, prepared.doc.Hash()); err != nil {
-		return err
-	}
-	if err := putPreparedReadIndexPG(ctx, tx, prepared.read); err != nil {
 		return err
 	}
 	return ctx.Err()
