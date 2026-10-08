@@ -77,6 +77,14 @@ func (c *docProofCache) verify(ctx context.Context, repo, hash domain.ContentHas
 // an existence-only shortcut. Every call still reads all distinct chunks; a
 // warm proof saves decompression, cumulative assembly and CIR validation only.
 func (c *docProofCache) verifyStored(ctx context.Context, repo, hash domain.ContentHash, stored []byte, readChunk func(context.Context, domain.ContentHash) ([]byte, error)) (domain.VerifiedDocReference, error) {
+	return c.verifyStoredWithLoader(ctx, repo, hash, stored, func(domain.DocChunkManifest) storedChunkReader { return readChunk })
+}
+
+type storedChunkReader func(context.Context, domain.ContentHash) ([]byte, error)
+
+// Construct an adapter reader only after the stored representation is decoded
+// once. Legacy whole documents never pay a second decompression for prefetch.
+func (c *docProofCache) verifyStoredWithLoader(ctx context.Context, repo, hash domain.ContentHash, stored []byte, reader func(domain.DocChunkManifest) storedChunkReader) (domain.VerifiedDocReference, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.VerifiedDocReference{}, err
 	}
@@ -88,6 +96,7 @@ func (c *docProofCache) verifyStored(ctx context.Context, repo, hash domain.Cont
 	if !chunked {
 		return c.verify(ctx, repo, hash, data)
 	}
+	readChunk := reader(man)
 	// Fixed-width hashes after a domain separator bind the exact descriptor and
 	// each distinct chunk identity/body pair. The descriptor includes ordering,
 	// duplicate occurrences, format and envelope. Repacking is a cache miss.
