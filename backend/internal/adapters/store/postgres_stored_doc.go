@@ -31,6 +31,9 @@ func (s *PostgresStore) readDocBytes(ctx context.Context, repo, hash domain.Cont
 	if err != nil {
 		return nil, false, err
 	}
+	if err := rejectStoredRoot(ctx, raw); err != nil {
+		return nil, false, err
+	}
 	data, err := docDecompress(raw)
 	if err != nil {
 		return nil, false, err
@@ -43,29 +46,79 @@ func (s *PostgresStore) readDocBytes(ctx context.Context, repo, hash domain.Cont
 	}
 	return data, false, nil
 }
-func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.ContentHash) (domain.VerifiedDocReference, error) {
-	raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
+func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.ContentHash) (proof domain.VerifiedDocReference, err error) {
+	err = s.WithinReadSnapshot(ctx, func(ctx context.Context) error {
+		raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
+		if err != nil {
+			return err
+		}
+		manifest, root, err := storedConversationManifest(ctx, raw)
+		if err != nil {
+			return err
+		}
+		if root {
+			doc, err := verifyStoredConversation(ctx, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
+			proof = doc.Reference()
+			return err
+		}
+		proof, err = s.docProofs.verifyStoredWithLoader(ctx, repo, hash, raw, func(man domain.DocChunkManifest) storedChunkReader {
+			return s.ownedDocChunkReader(repo, man.Chunks)
+		})
+		return err
+	})
 	if err != nil {
 		return domain.VerifiedDocReference{}, err
 	}
-	return s.docProofs.verifyStoredWithLoader(ctx, repo, hash, raw, func(man domain.DocChunkManifest) storedChunkReader {
-		return s.ownedDocChunkReader(repo, man)
+	return proof, nil
+}
+
+func (s *PostgresStore) ReadVerifiedDoc(ctx context.Context, repo, hash domain.ContentHash) (doc domain.VerifiedSessionDoc, err error) {
+	err = s.WithinReadSnapshot(ctx, func(ctx context.Context) error {
+		raw, err := s.readOwnedDocObject(ctx, repo, "doc", hash)
+		if err != nil {
+			return err
+		}
+		manifest, root, err := storedConversationManifest(ctx, raw)
+		if err != nil {
+			return err
+		}
+		if root {
+			doc, err = verifyStoredConversation(ctx, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
+		} else {
+			// Legacy representations retain their existing byte/semantic rules.
+			doc, err = verifyLegacyStoredDoc(ctx, hash, raw, func(ctx context.Context, h domain.ContentHash) ([]byte, error) {
+				return s.readOwnedDocObject(ctx, repo, "chunk", h)
+			})
+		}
+		return err
 	})
+	if err != nil {
+		return domain.VerifiedSessionDoc{}, err
+	}
+	return doc, nil
+}
+
+func conversationChunkOrder(manifest domain.ConversationManifest) []domain.ContentHash {
+	order := make([]domain.ContentHash, len(manifest.Chunks))
+	for i, chunk := range manifest.Chunks {
+		order[i] = chunk.Hash
+	}
+	return order
 }
 
 // Prefetch a bounded window through the caller's transaction. These are current
 // owned bytes, not existence receipts or a cross-request body cache. The proof
 // verifier still hashes every distinct body and validates exactly those bytes.
-func (s *PostgresStore) ownedDocChunkReader(repo domain.ContentHash, man domain.DocChunkManifest) storedChunkReader {
+func (s *PostgresStore) ownedDocChunkReader(repo domain.ContentHash, chunks []domain.ContentHash) storedChunkReader {
 	one := func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
 		return s.readOwnedDocObject(ctx, repo, "chunk", hash)
 	}
-	if len(man.Chunks) > domain.MaxDocJobChunks {
+	if len(chunks) > domain.MaxDocJobChunks {
 		return one // Preserve the unbounded legacy reader's accepted inputs.
 	}
-	order := make([]string, 0, len(man.Chunks))
-	positions := make(map[domain.ContentHash]int, len(man.Chunks))
-	for _, hash := range man.Chunks {
+	order := make([]string, 0, len(chunks))
+	positions := make(map[domain.ContentHash]int, len(chunks))
+	for _, hash := range chunks {
 		if domain.ValidateContentHash(hash) != nil {
 			return one
 		}
@@ -120,6 +173,7 @@ func (s *PostgresStore) ownedDocChunkReader(repo domain.ContentHash, man domain.
 }
 
 var _ outbound.StoredDocVerifier = (*PostgresStore)(nil)
+var _ outbound.VerifiedDocReader = (*PostgresStore)(nil)
 
 func (s *PostgresStore) CaptureSupersedes(ctx context.Context, repo, old, next domain.ContentHash, provider domain.ProviderKind, session string) (bool, error) {
 	return compareStoredCaptures(ctx, s, &s.docProofs, repo, old, next, provider, session)

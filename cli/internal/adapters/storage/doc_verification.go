@@ -187,7 +187,13 @@ func (s *FileStore) matchingDocReceipt(ctx context.Context, id domain.ContentHas
 		if i == 0 && capture {
 			out = &captured
 		}
-		got, err := hashDocVerificationFileObserved(ctx, s.objectPath(file.Kind, file.ID), buf, out)
+		var got domain.ContentHash
+		var err error
+		if i == 0 {
+			got, err = hashLegacyDocReceiptFile(ctx, s.objectPath(file.Kind, file.ID), out)
+		} else {
+			got, err = hashDocVerificationFileObserved(ctx, s.objectPath(file.Kind, file.ID), buf, out)
+		}
 		if err != nil || got != file.Stored {
 			return storedDocEvidence{}, false
 		}

@@ -46,6 +46,9 @@ func prepareReadIndexPG(ctx context.Context, doc domain.VerifiedSessionDoc) (pre
 }
 
 func prepareVerifiedDocPG(ctx context.Context, doc domain.VerifiedSessionDoc) (preparedDocPG, error) {
+	if doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
+		return preparedDocPG{}, domain.ErrUnsupportedDocumentIdentity
+	}
 	if err := ctx.Err(); err != nil {
 		return preparedDocPG{}, err
 	}

@@ -1,8 +1,9 @@
 # Staged conversation identity contract
 
-Status: domain and metadata preparation. Root publication, reader negotiation
-and capture are **not enabled**. Existing CLI/API/MCP paths continue using the
-canonical-CIR hash. An explicit root declaration at the current publication
+Status: explicit internal root readers and metadata are implemented. Root
+publication, peer negotiation and capture are **not enabled**. Existing
+published CLI/API/MCP data continues using the canonical-CIR hash. An explicit
+root declaration at the current publication
 boundary returns `unsupported_document_identity`; it is never silently treated
 as a legacy hash.
 
@@ -64,6 +65,31 @@ This preparation adds no durable verification certificates. Existing body
 checks remain mandatory. A metadata catalog root, completed upload, cache hit
 or known chunk ID never substitutes for current-byte verification.
 
+## Explicit readers and retention
+
+The server's `ReadVerifiedDoc` and CLI's `GetDocReference` and
+`VerifyStoredDocReference` read canonical root manifests and their current
+chunks. Callers join both the declared identity and hash to the expected
+snapshot/reference. Hash-only legacy readers reject root storage, including
+when a stale read/search index exists or snapshot metadata is absent.
+
+Server event pages, fragments and search can derive their projection from one
+owned, fully verified root document. They retain those same bytes for range
+reads; a later file mutation cannot substitute different content. PostgreSQL
+reads use one read snapshot or the caller's existing transaction. These reads
+do not publish indexes, rewrite documents or grant future write authority.
+Root search cannot be excluded by legacy search-index candidate filters.
+
+Local and FS maintenance mark root chunk dependencies without repacking the
+root as a legacy object. An undecodable document aborts destructive chunk
+sweeping. PostgreSQL document deletion continues retaining chunk grants.
+
+These internal readers are not a negotiated public root transport. Agent
+history, import, initialization and publication remain explicitly gated until
+their tagged contracts and consumers are complete. Full root reads and search
+still verify all current body bytes; this stage makes no incremental-read or
+search speedup claim.
+
 ## Rollout requirements
 
 Before enabling a root writer, all of these paths must support the tagged
@@ -83,7 +109,7 @@ rehashed into a legacy object during retry. Creating a legacy equivalent would
 be a separate object with separate provenance, never an implicit fallback.
 
 Until those gates are complete, no production-facing capability advertises
-root support and no capture path creates roots. Domain and metadata tests are
+root support and no capture path creates roots. Internal reader tests are
 preparation, not end-to-end root support.
 
 Root hashing is proportional to manifest size. Full current-byte verification

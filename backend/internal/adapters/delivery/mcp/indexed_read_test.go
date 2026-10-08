@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
@@ -30,6 +31,58 @@ func (b *indexedPageBackend) ReadDocFragments(ctx context.Context, r, h domain.C
 }
 func (b *indexedPageBackend) SearchDocEvents(ctx context.Context, r, h domain.ContentHash, q string, a, n int) ([]domain.DocEventIndex, error) {
 	return b.reader.SearchDocEvents(ctx, r, h, q, a, n)
+}
+
+type rootCandidateBackend struct {
+	indexedPageBackend
+	searches int
+	err      error
+}
+
+func (b *rootCandidateBackend) MatchingDocHashes(context.Context, domain.ContentHash, string) (map[domain.ContentHash]bool, error) {
+	return map[domain.ContentHash]bool{}, nil
+}
+
+func (b *rootCandidateBackend) SearchDocEvents(context.Context, domain.ContentHash, domain.ContentHash, string, int, int) ([]domain.DocEventIndex, error) {
+	b.searches++
+	if b.err != nil {
+		return nil, b.err
+	}
+	return []domain.DocEventIndex{{Index: 0, Seq: 7, Role: string(domain.RoleUser), Text: "needle"}}, nil
+}
+
+func TestIndexedMCPSearchRootBypassesLegacyCandidateExclusion(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		identity domain.DocumentIdentity
+		err      error
+		reads    int
+		hits     int
+	}{
+		{"root", domain.DocumentIdentityRootV1, nil, 1, 1},
+		{"root-corrupt", domain.DocumentIdentityRootV1, domain.ErrIntegrity, 1, 0},
+		{"legacy", domain.DocumentIdentityLegacy, nil, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := domain.Repo{ID: pageHash(1)}
+			snap := domain.Snapshot{ID: pageHash(2), DocHash: pageHash(2), DocIdentity: tc.identity, RepoID: repo.ID, Branch: "main"}
+			b := &rootCandidateBackend{indexedPageBackend: indexedPageBackend{pageBackend: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {snap}}}}}, err: tc.err}
+			s := &Server{context: b}
+			raw, err := s.searchPage(systemTestContext(), repo, toolArgs{Repository: string(repo.ID), Query: "needle", Limit: 2})
+			if !errors.Is(err, tc.err) || b.searches != tc.reads {
+				t.Fatalf("searches=%d, error=%v", b.searches, err)
+			}
+			if err != nil {
+				return
+			}
+			var page struct {
+				Hits []json.RawMessage `json:"hits"`
+			}
+			if err := json.Unmarshal([]byte(raw), &page); err != nil || len(page.Hits) != tc.hits {
+				t.Fatalf("hits=%d, error=%v", len(page.Hits), err)
+			}
+		})
+	}
 }
 
 func TestIndexedMCPFetchAndSearchPreserveCursorContract(t *testing.T) {

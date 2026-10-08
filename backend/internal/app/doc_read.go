@@ -11,6 +11,11 @@ import (
 )
 
 func (s *Service) docReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {
+	source, err := s.documentReadSource(ctx, repo, hash)
+	return source.index, err
+}
+
+func (s *Service) legacyDocReadIndex(ctx context.Context, repo, hash domain.ContentHash) (domain.DocReadIndex, error) {
 	if indexed, ok := s.blobs.(outbound.DocReadStore); ok {
 		return indexed.DocReadIndex(ctx, repo, hash)
 	}
@@ -31,10 +36,11 @@ func (s *Service) ReadDocEvents(ctx context.Context, repo, hash, base domain.Con
 	if limit == 0 {
 		limit = 50
 	}
-	idx, err := s.docReadIndex(ctx, repo, hash)
+	source, err := s.documentReadSource(ctx, repo, hash)
 	if err != nil {
 		return out, err
 	}
+	idx := source.index
 	out.Envelope = idx.Envelope
 	out.Total = len(idx.Events)
 	if base != "" {
@@ -56,10 +62,7 @@ func (s *Service) ReadDocEvents(ctx context.Context, repo, hash, base domain.Con
 	if offset == out.Total {
 		return out, nil
 	}
-	read, err := s.eventRangeReader(ctx, repo, hash)
-	if err != nil {
-		return out, err
-	}
+	read := source.read
 	bytes := 0
 	for i := offset; i < out.Total && len(out.Events) < limit; i++ {
 		if err := ctx.Err(); err != nil {
@@ -92,15 +95,29 @@ func (s *Service) SearchDocEvents(ctx context.Context, repo, hash domain.Content
 	if len([]rune(q)) < 2 || len([]rune(q)) > 256 || after < -1 || limit < 1 || limit > 201 {
 		return nil, fmt.Errorf("%w: invalid event search", domain.ErrValidation)
 	}
-	if indexed, ok := s.blobs.(outbound.DocReadStore); ok {
-		return indexed.SearchDocEvents(ctx, repo, hash, q, after, limit)
-	}
-	idx, err := s.docReadIndex(ctx, repo, hash)
+	root, err := s.rootReadSource(ctx, repo, hash)
 	if err != nil {
 		return nil, err
 	}
+	if root != nil {
+		return searchReadIndex(ctx, root.index, q, after, limit)
+	}
+	if indexed, ok := s.blobs.(outbound.DocReadStore); ok {
+		return indexed.SearchDocEvents(ctx, repo, hash, q, after, limit)
+	}
+	idx, err := s.legacyDocReadIndex(ctx, repo, hash)
+	if err != nil {
+		return nil, err
+	}
+	return searchReadIndex(ctx, idx, q, after, limit)
+}
+
+func searchReadIndex(ctx context.Context, idx domain.DocReadIndex, q string, after, limit int) ([]domain.DocEventIndex, error) {
 	out := []domain.DocEventIndex{}
 	for _, e := range idx.Events {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if e.Index > after && e.Text != "" && strings.Contains(strings.ToLower(e.Text), q) {
 			out = append(out, e)
 			if len(out) == limit {
@@ -112,7 +129,8 @@ func (s *Service) SearchDocEvents(ctx context.Context, repo, hash domain.Content
 }
 
 // A nil candidate set means the adapter searches each indexed document. An empty
-// non-nil set proves no readable event in this repository matches the literal.
+// non-nil set excludes legacy indexed documents only; roots still require their
+// explicit current-byte reader before searching the verified projection.
 func (s *Service) MatchingDocHashes(ctx context.Context, repo domain.ContentHash, q string) (map[domain.ContentHash]bool, error) {
 	if indexed, ok := s.blobs.(interface {
 		MatchingDocHashes(context.Context, domain.ContentHash, string) (map[domain.ContentHash]bool, error)
@@ -167,18 +185,19 @@ func (s *Service) eventRangeReader(ctx context.Context, repo, hash domain.Conten
 	}, nil
 }
 
-// ReadDocFragments caps I/O and response text independently of event size.
-// Full-event verification occurs when building the index; every range is read
-// from hash-verified manifest chunks, preserving UTF-8 and exact JSON bytes.
+// ReadDocFragments caps response text independently of event size. Legacy
+// indexes use bounded chunk ranges. Roots first verify the whole current source,
+// then return ranges from those owned bytes, preserving UTF-8 and exact JSON.
 func (s *Service) ReadDocFragments(ctx context.Context, repo, hash domain.ContentHash, index, offset, limit, budget int) (domain.DocFragmentPage, error) {
 	out := domain.DocFragmentPage{Fragments: []domain.DocEventFragment{}}
 	if index < 0 || offset < 0 || limit < 1 || limit > 50 || budget < 4 || budget > 64<<10 {
 		return out, domain.ErrValidation
 	}
-	idx, err := s.docReadIndex(ctx, repo, hash)
+	source, err := s.documentReadSource(ctx, repo, hash)
 	if err != nil {
 		return out, err
 	}
+	idx := source.index
 	out.Total = len(idx.Events)
 	out.NextIndex = index
 	out.NextOffset = offset
@@ -188,10 +207,7 @@ func (s *Service) ReadDocFragments(ctx context.Context, repo, hash domain.Conten
 	if index == out.Total {
 		return out, nil
 	}
-	read, err := s.eventRangeReader(ctx, repo, hash)
-	if err != nil {
-		return out, err
-	}
+	read := source.read
 	for index < out.Total && len(out.Fragments) < limit && budget >= 4 {
 		if err := ctx.Err(); err != nil {
 			return out, err

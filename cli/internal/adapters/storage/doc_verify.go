@@ -61,9 +61,9 @@ func (s *FileStore) verifyDoc(ctx context.Context, hash domain.ContentHash, reus
 		}
 		return err
 	}
-	data, err := docDecompress(raw)
+	data, err := legacyDocumentData(ctx, raw)
 	if err != nil {
-		return domain.ErrInvalidCIR
+		return err
 	}
 	manifest, chunked := chunkcas.ParseManifest(data)
 	if !chunked {

@@ -30,6 +30,13 @@ func (v *CanonicalDocVerifier) VerifyChunks(ctx context.Context, want ContentHas
 }
 
 func (v *CanonicalDocVerifier) verifyChunks(ctx context.Context, want ContentHash, manifest DocChunkManifest, load func(context.Context, ContentHash) ([]byte, error), maxBytes int) (VerifiedSessionDoc, error) {
+	return v.verifyChunkDocument(ctx, want, manifest, load, maxBytes, nil)
+}
+
+// Both identities share current-byte hashing, immutable stream ownership and
+// exact event validation. A root has already authenticated its strict metadata;
+// the legacy entry retains its complete-CIR digest and partition normalization.
+func (v *CanonicalDocVerifier) verifyChunkDocument(ctx context.Context, want ContentHash, manifest DocChunkManifest, load func(context.Context, ContentHash) ([]byte, error), maxBytes int, root *verifiedManifestIdentity) (VerifiedSessionDoc, error) {
 	var zero VerifiedSessionDoc
 	if err := ctx.Err(); err != nil {
 		return zero, err
@@ -72,9 +79,11 @@ func (v *CanonicalDocVerifier) verifyChunks(ctx context.Context, want ContentHas
 		owned.hashes = append(owned.hashes, HashContent(body))
 	}
 	fullHash, chunkHash := sha256.New(), sha256.New()
-	fullHash.Write([]byte(canonicalDocPrefix))
-	fullHash.Write(manifest.Envelope)
-	fullHash.Write([]byte(canonicalDocMiddle))
+	if root == nil {
+		fullHash.Write([]byte(canonicalDocPrefix))
+		fullHash.Write(manifest.Envelope)
+		fullHash.Write([]byte(canonicalDocMiddle))
+	}
 	total := canonicalFrameBytes + len(manifest.Envelope)
 	if !v2 {
 		// V1 inserts a comma between chunks, in addition to replacing each
@@ -84,7 +93,7 @@ func (v *CanonicalDocVerifier) verifyChunks(ctx context.Context, want ContentHas
 	if total > maxBytes {
 		return zero, ErrIntegrity
 	}
-	for _, h := range manifest.Chunks {
+	for i, h := range manifest.Chunks {
 		if err := ctx.Err(); err != nil {
 			return zero, err
 		}
@@ -94,6 +103,9 @@ func (v *CanonicalDocVerifier) verifyChunks(ctx context.Context, want ContentHas
 		}
 		if err := ctx.Err(); err != nil {
 			return zero, err
+		}
+		if root != nil && int64(len(body)) != root.manifest.Chunks[i].Bytes {
+			return zero, ErrIntegrity
 		}
 		// Subtract before adding to avoid overflow for hostile body sizes.
 		if len(body) > maxBytes-total {
@@ -107,12 +119,20 @@ func (v *CanonicalDocVerifier) verifyChunks(ctx context.Context, want ContentHas
 			}
 			part := body[start:min(start+canonicalCheckBytes, len(body))]
 			chunkHash.Write(part)
-			if v2 {
+			if v2 && root == nil {
 				fullHash.Write(part)
 			}
 		}
 		if ContentHash("sha256:"+hex.EncodeToString(chunkHash.Sum(nil))) != h {
 			return zero, ErrIntegrity
+		}
+		if root != nil {
+			// Root partitions are committed identity, never normalized. The
+			// string owns these just-checked bytes before the loader can reuse
+			// its buffer for the next occurrence, including a repeated hash.
+			owned.stream.add(string(body))
+			owned.hashes = append(owned.hashes, h)
+			continue
 		}
 		if !v2 {
 			legacy = append(legacy, bytes.Clone(body))
@@ -151,8 +171,12 @@ func (v *CanonicalDocVerifier) verifyChunks(ctx context.Context, want ContentHas
 	if len(tail) > 0 {
 		retain(tail)
 	}
-	fullHash.Write([]byte(canonicalDocSuffix))
-	if ContentHash("sha256:"+hex.EncodeToString(fullHash.Sum(nil))) != want {
+	if root == nil {
+		fullHash.Write([]byte(canonicalDocSuffix))
+		if ContentHash("sha256:"+hex.EncodeToString(fullHash.Sum(nil))) != want {
+			return zero, ErrIntegrity
+		}
+	} else if int64(owned.stream.size) != root.manifest.StreamBytes {
 		return zero, ErrIntegrity
 	}
 	previous, havePrevious := 0, false
@@ -160,6 +184,9 @@ func (v *CanonicalDocVerifier) verifyChunks(ctx context.Context, want ContentHas
 	var scratch []byte
 	hasher := newCanonicalSpanHasher()
 	err = owned.stream.visit(ctx, func(span canonicalSpan) error {
+		if root != nil && int64(len(owned.events)) >= root.manifest.EventCount {
+			return ErrIntegrity
+		}
 		h, err := hasher.sum(ctx, owned.stream, span)
 		if err != nil {
 			return err
@@ -188,9 +215,17 @@ func (v *CanonicalDocVerifier) verifyChunks(ctx context.Context, want ContentHas
 	if err != nil {
 		return zero, err
 	}
+	if root != nil && int64(len(owned.events)) != root.manifest.EventCount {
+		return zero, ErrIntegrity
+	}
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
 	v.remember(pending)
-	return VerifiedSessionDoc{hash: want, chunks: owned}, nil
+	doc := VerifiedSessionDoc{hash: want, chunks: owned}
+	if root != nil {
+		doc.identity = DocumentIdentityRootV1
+		doc.rootManifest = root.canonical
+	}
+	return doc, nil
 }
