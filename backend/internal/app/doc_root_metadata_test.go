@@ -31,13 +31,16 @@ func TestRootMetadataReadAndSearchParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	full.Hash = root.Hash
-	wantMetadata := full
-	wantMetadata.Events = append([]domain.DocEventIndex{}, full.Events...)
-	for i := range wantMetadata.Events {
-		wantMetadata.Events[i].Text = ""
-	}
 	// Assert selection of the cheaper projection, not just equal HTTP results.
 	for _, agent := range []bool{false, true} {
+		wantMetadata := full
+		wantMetadata.Events = append([]domain.DocEventIndex{}, full.Events...)
+		for i := range wantMetadata.Events {
+			wantMetadata.Events[i].Text = ""
+			if !agent {
+				wantMetadata.Events[i].Role = ""
+			}
+		}
 		var source docReadSource
 		before := spy.reads
 		if agent {

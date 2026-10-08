@@ -16,11 +16,12 @@ type docReadSource struct {
 	read  func(int, int) ([]byte, error)
 }
 
-type docReadProjection bool
+type docReadProjection uint8
 
 const (
-	docReadMetadata docReadProjection = false
-	docReadSearch   docReadProjection = true
+	docReadMetadata docReadProjection = iota
+	docReadRanges
+	docReadSearch
 )
 
 func (s *Service) rootReadSource(ctx context.Context, repo, hash domain.ContentHash, projection docReadProjection) (*docReadSource, error) {
@@ -92,10 +93,15 @@ func (s *Service) verifiedRootReadSource(ctx context.Context, repo domain.Conten
 		return docReadSource{}, err
 	}
 	var index domain.DocReadIndex
-	if projection == docReadSearch {
-		index, err = plan.BuildContext(ctx, nil)
-	} else {
+	switch projection {
+	case docReadRanges:
+		index, err = plan.BuildRangesContext(ctx)
+	case docReadMetadata:
 		index, err = plan.BuildMetadataContext(ctx)
+	case docReadSearch:
+		index, err = plan.BuildContext(ctx, nil)
+	default:
+		return docReadSource{}, domain.ErrIntegrity
 	}
 	if err != nil {
 		return docReadSource{}, err
@@ -178,7 +184,7 @@ func (s *Service) materializedDocumentRead(ctx context.Context, repo, hash domai
 }
 
 func (s *Service) documentReadSource(ctx context.Context, repo, hash domain.ContentHash) (docReadSource, error) {
-	root, err := s.rootReadSource(ctx, repo, hash, docReadMetadata)
+	root, err := s.rootReadSource(ctx, repo, hash, docReadRanges)
 	if err != nil {
 		return docReadSource{}, err
 	}
