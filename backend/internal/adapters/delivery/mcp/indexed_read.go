@@ -87,7 +87,7 @@ func (s *Server) indexedSearchPage(ctx context.Context, repo domain.Repo, a tool
 			return pageJSON(map[string]any{"notice": archiveNotice, "hits": hits, "next_cursor": encodeCursor(cur)})
 		}
 		var found []domain.DocEventIndex
-		if candidates == nil || candidates[snap.DocHash] {
+		if snap.DocIdentity != domain.DocumentIdentityLegacy || candidates == nil || candidates[snap.DocHash] {
 			found, err = reader.SearchDocEvents(ctx, repo.ID, snap.DocHash, q, cur.Index-2, limit-len(hits)+1)
 		}
 		if err != nil {

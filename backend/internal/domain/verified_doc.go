@@ -1,6 +1,9 @@
 package domain
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // VerifiedSessionDoc carries immutable canonical content after schema and hash
 // validation. Its private strings cannot alias caller-owned CIR or byte slices.
@@ -9,6 +12,9 @@ type VerifiedSessionDoc struct {
 	hash      ContentHash
 	canonical string
 	chunks    *verifiedDocChunks
+	identity  DocumentIdentity
+	// Root identity commits this exact canonical manifest, not Bytes().
+	rootManifest string
 }
 
 func VerifySessionDoc(doc SessionDoc) (VerifiedSessionDoc, error) {
@@ -26,12 +32,38 @@ func VerifySessionDoc(doc SessionDoc) (VerifiedSessionDoc, error) {
 }
 
 func (d VerifiedSessionDoc) Valid() bool {
-	return d.hash != "" && (d.canonical != "" || d.chunks != nil)
+	if d.hash == "" {
+		return false
+	}
+	switch d.identity {
+	case DocumentIdentityLegacy:
+		return d.rootManifest == "" && (d.canonical != "" || d.chunks != nil)
+	case DocumentIdentityRootV1:
+		return d.rootManifest != "" && d.chunks != nil && d.canonical == ""
+	default:
+		return false
+	}
 }
 func (d VerifiedSessionDoc) Hash() ContentHash { return d.hash }
 
-// Bytes materializes an owned canonical document for legacy consumers. Chunk
-// storage and read-index planning do not need this cumulative allocation.
+func (d VerifiedSessionDoc) DocumentRef() DocumentRef {
+	return DocumentRef{Hash: d.hash, Identity: d.identity}
+}
+
+// ConversationManifest returns an owned copy of the exact verified root
+// manifest. Legacy and invalid proofs have no root manifest.
+func (d VerifiedSessionDoc) ConversationManifest() (ConversationManifest, bool) {
+	if !d.Valid() || d.identity != DocumentIdentityRootV1 {
+		return ConversationManifest{}, false
+	}
+	// Private immutable bytes were validated before this proof was created.
+	manifest, err := DecodeConversationManifest([]byte(d.rootManifest))
+	return manifest, err == nil
+}
+
+// Bytes materializes owned canonical CIR under either identity. For a root,
+// SHA256(Bytes()) is NOT Hash(). Chunk-backed reads and index planning do not
+// need this cumulative allocation.
 func (d VerifiedSessionDoc) Bytes() []byte {
 	if d.chunks == nil {
 		return []byte(d.canonical)
@@ -47,12 +79,51 @@ func (d VerifiedSessionDoc) Bytes() []byte {
 	return append(out, canonicalDocSuffix...)
 }
 
-// ChunkPlan exports owned v2 chunks at the standard ChunkTarget boundaries,
+// EventStreamRange copies bytes from the canonical events-array interior of
+// this proof, never from current storage or caller-owned slices. A zero-length
+// range at the end is valid, including for an empty root.
+func (d VerifiedSessionDoc) EventStreamRange(ctx context.Context, offset, length int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !d.Valid() {
+		return nil, ErrIntegrity
+	}
+	_, stream, err := d.segmented()
+	if err != nil {
+		return nil, err
+	}
+	if offset < 0 || length < 0 || offset > stream.size || length > stream.size-offset {
+		return nil, ErrIntegrity
+	}
+	out := make([]byte, 0, length)
+	stream.ranges(canonicalSpan{offset, length}, func(part string) {
+		for len(part) > 0 && err == nil {
+			if err = ctx.Err(); err != nil {
+				return
+			}
+			n := min(len(part), canonicalCheckBytes)
+			out = append(out, part[:n]...)
+			part = part[n:]
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ChunkPlan exports legacy owned v2 chunks at the standard ChunkTarget boundaries,
 // regardless of the partition supplied to VerifyChunks. This is important for
 // readers that derive chunk numbers from byte offsets. Empty/invalid documents
 // have no chunk plan, as with PlanDocChunks. Raw and v1 values are split lazily.
+// Root proofs never export a lossy legacy descriptor. Publication callers must
+// reject unsupported identities before interpreting false as whole-CIR fallback.
 func (d VerifiedSessionDoc) ChunkPlan() (DocChunkPlan, bool) {
-	if !d.Valid() {
+	if !d.Valid() || d.identity != DocumentIdentityLegacy {
 		return DocChunkPlan{}, false
 	}
 	env, stream, err := d.segmented()

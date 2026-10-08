@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -196,6 +197,9 @@ func (s *FSStore) GetDocManifest(ctx context.Context, repoID, hash domain.Conten
 		}
 		return domain.DocChunkManifest{}, err
 	}
+	if err := rejectStoredRoot(ctx, raw); err != nil {
+		return domain.DocChunkManifest{}, err
+	}
 	data, err := docDecompress(raw)
 	if err != nil {
 		return domain.DocChunkManifest{}, domain.ErrIntegrity
@@ -291,28 +295,45 @@ func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved in
 	}
 	for _, e := range entries {
 		if e.IsDir() {
-			continue
+			return converted, saved, domain.ErrIntegrity
 		}
 		hash := domain.ContentHash("sha256:" + e.Name())
 		if validateHash(hash) != nil {
-			continue
+			return converted, saved, domain.ErrIntegrity
 		}
 		path := filepath.Join(docsDir, e.Name())
 		raw, rerr := os.ReadFile(path)
 		if rerr != nil {
-			continue
+			return converted, saved, rerr
+		}
+		root, recognized, rootErr := storedConversationManifest(context.Background(), raw)
+		if rootErr != nil {
+			return converted, saved, rootErr
+		}
+		if recognized {
+			want, err := domain.ConversationManifestHash(root)
+			if err != nil || want != hash {
+				return converted, saved, domain.ErrIntegrity
+			}
+			for _, chunk := range root.Chunks {
+				live[chunk.Hash] = true
+			}
+			continue // Preserve the exact root representation; no rechunk/relabel.
 		}
 		data, derr := docDecompress(raw)
 		if derr != nil {
-			continue
+			return converted, saved, domain.ErrIntegrity
 		}
 		if cb, isMan, chunkErr := s.getDocChunked(repoID, hash, data); isMan {
 			var man domain.DocChunkManifest
 			if json.Unmarshal(data, &man) != nil {
-				continue
+				return converted, saved, domain.ErrIntegrity
 			}
 			if chunkErr != nil {
 				for _, ch := range man.Chunks {
+					if validateHash(ch) != nil {
+						return converted, saved, domain.ErrIntegrity
+					}
 					live[ch] = true
 				}
 				continue
@@ -325,17 +346,28 @@ func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved in
 			}
 			data = cb
 		}
+		// Establish a known complete representation before dropping fields or
+		// deleting unmarked chunks. A future descriptor can contain valid CIR
+		// fields without those fields declaring all of its dependencies.
+		var cir domain.CIRDocument
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&cir); err != nil {
+			return converted, saved, domain.ErrIntegrity
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return converted, saved, domain.ErrIntegrity
+		}
 		if domain.HashContent(data) != hash {
 			// Legacy non-canonical storage (server records before canonical sorting — empirically verified 162/214): raw bytes may differ, but if parsing→canonical recalculation matches the hash, it is a valid doc. Also normalizes storage by repacking into canonical form. If recalculation also mismatches, it is corrupted — fsck's job.
-			var cir domain.CIRDocument
-			if json.Unmarshal(data, &cir) != nil {
-				continue
-			}
 			cb, cerr := domain.CanonicalBytes(cir)
 			if cerr != nil || domain.HashContent(cb) != hash {
-				continue
+				return converted, saved, domain.ErrIntegrity
 			}
 			data = cb
+		}
+		if _, err := domain.VerifyStoredDocBytes(hash, data); err != nil {
+			return converted, saved, err
 		}
 		before := int64(len(raw))
 		ok, added, perr := s.putDocChunked(repoID, hash, data)
@@ -345,15 +377,25 @@ func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved in
 		if !ok {
 			continue
 		}
-		if mraw, rerr := os.ReadFile(path); rerr == nil {
-			var man domain.DocChunkManifest
-			if mdata, derr := docDecompress(mraw); derr == nil && json.Unmarshal(mdata, &man) == nil {
-				for _, ch := range man.Chunks {
-					live[ch] = true
-				}
-				saved += before - int64(len(mraw)) - added
-			}
+		mraw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return converted, saved, rerr
 		}
+		mdata, derr := docDecompress(mraw)
+		if derr != nil {
+			return converted, saved, domain.ErrIntegrity
+		}
+		man, isMan := domain.ParseDocChunkManifest(mdata)
+		if !isMan {
+			return converted, saved, domain.ErrIntegrity
+		}
+		for _, ch := range man.Chunks {
+			if validateHash(ch) != nil {
+				return converted, saved, domain.ErrIntegrity
+			}
+			live[ch] = true
+		}
+		saved += before - int64(len(mraw)) - added
 		converted++
 	}
 	// Orphan chunk mark&sweep — recently created files (concurrent push possibility) are deferred.

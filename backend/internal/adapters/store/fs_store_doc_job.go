@@ -247,6 +247,9 @@ func (s *FSStore) FinishDocJob(ctx context.Context, j domain.DocFinalizationJob,
 // Development only: serialization + idempotent recovery, not cross-file ACID.
 // A crash after the body write leaves a reclaimable job; replay verifies/dedups it.
 func (s *FSStore) CompleteDocJob(ctx context.Context, j domain.DocFinalizationJob, doc domain.VerifiedSessionDoc, now time.Time) error {
+	if doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
+		return domain.ErrUnsupportedDocumentIdentity
+	}
 	l := s.docQueue()
 	l.Lock()
 	defer l.Unlock()
@@ -280,6 +283,9 @@ type fsDocPublication struct {
 }
 
 func (s *FSStore) PrepareDocJob(ctx context.Context, doc domain.VerifiedSessionDoc) (outbound.PreparedDocPublication, error) {
+	if doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
+		return nil, domain.ErrUnsupportedDocumentIdentity
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

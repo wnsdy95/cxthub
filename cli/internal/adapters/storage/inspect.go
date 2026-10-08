@@ -73,7 +73,7 @@ func (s *FileStore) inspectReplica(ctx context.Context, beforeRead func(string))
 		if read(label) {
 			return r
 		}
-		if issue(label, s.verifyDoc(ctx, snap.DocHash, &reuse)) {
+		if issue(label, s.inspectDocReference(ctx, snap.DocumentRef(), &reuse)) {
 			return r
 		}
 		r.DocumentsChecked++

@@ -233,6 +233,12 @@ func syncCxtParents(path string) error {
 // (for example, documents with no events) fall back to whole-blob storage. Existing objects
 // are a no-op (idempotent deduplication).
 func (s *FileStore) PutDoc(ctx context.Context, doc domain.SessionDoc) (domain.ContentHash, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if doc.Identity != domain.DocumentIdentityLegacy {
+		return "", domain.ErrUnsupportedDocumentIdentity
+	}
 	var hash domain.ContentHash
 	err := s.WithObjectsRetained(ctx, func() error {
 		var err error
@@ -243,6 +249,9 @@ func (s *FileStore) PutDoc(ctx context.Context, doc domain.SessionDoc) (domain.C
 }
 
 func (s *FileStore) putDoc(doc domain.SessionDoc) (domain.ContentHash, error) {
+	if doc.Identity != domain.DocumentIdentityLegacy {
+		return "", domain.ErrUnsupportedDocumentIdentity
+	}
 	cb, err := domain.CanonicalBytes(doc.CIR)
 	if err != nil {
 		return "", err

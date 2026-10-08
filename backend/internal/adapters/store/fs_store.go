@@ -2368,6 +2368,9 @@ func (s *FSStore) PutDoc(ctx context.Context, repoID domain.ContentHash, doc dom
 }
 
 func (s *FSStore) PutVerifiedDoc(ctx context.Context, repoID domain.ContentHash, doc domain.VerifiedSessionDoc) (bool, error) {
+	if doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
+		return false, domain.ErrUnsupportedDocumentIdentity
+	}
 	if err := validateHash(repoID); err != nil {
 		return false, err
 	}

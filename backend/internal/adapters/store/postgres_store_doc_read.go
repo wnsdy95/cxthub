@@ -38,12 +38,9 @@ func (s *PostgresStore) DocReadIndex(ctx context.Context, repo, hash domain.Cont
 	if err := validateHashes(repo, hash); err != nil {
 		return idx, err
 	}
-	var owned, ready bool
-	if err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2),EXISTS(SELECT 1 FROM doc_read_index_current WHERE hash=$2)`, string(repo), string(hash)).Scan(&owned, &ready); err != nil {
+	ready, err := s.legacyDocIndexReady(ctx, repo, hash)
+	if err != nil {
 		return idx, err
-	}
-	if !owned {
-		return idx, domain.ErrNotFound
 	}
 	if !ready {
 		if outbound.DocReadOnly(ctx) {
@@ -95,12 +92,9 @@ func (s *PostgresStore) SearchDocEvents(ctx context.Context, repo, hash domain.C
 	if err := validateHashes(repo, hash); err != nil {
 		return nil, err
 	}
-	var owned, ready bool
-	if err := s.db(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='doc' AND hash=$2), EXISTS(SELECT 1 FROM doc_read_index_current WHERE hash=$2)`, string(repo), string(hash)).Scan(&owned, &ready); err != nil {
+	ready, err := s.legacyDocIndexReady(ctx, repo, hash)
+	if err != nil {
 		return nil, err
-	}
-	if !owned {
-		return nil, domain.ErrNotFound
 	}
 	if !ready {
 		idx, err := s.DocReadIndex(ctx, repo, hash)

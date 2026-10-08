@@ -224,6 +224,9 @@ func (s *PostgresStore) importRepo(ctx context.Context, f *frozenFS, source *FSS
 // Verify the complete document identity with bounded component memory. This
 // reproduces the public chunk-format contract; it never trusts a read/search cache.
 func verifyFrozenDoc(ctx context.Context, source *FSStore, repo, want domain.ContentHash, body []byte) error {
+	if err := rejectStoredRoot(ctx, body); err != nil {
+		return err
+	}
 	man, chunked := domain.ParseDocChunkManifest(body)
 	if !chunked {
 		var cir domain.CIRDocument

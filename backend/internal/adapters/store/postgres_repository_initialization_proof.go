@@ -46,6 +46,9 @@ func (s *PostgresStore) CaptureRepositoryInitialization(ctx context.Context, rep
 		p.anchor.SnapshotStates[id] = state
 	}
 	for _, snap := range evidence.Snapshots {
+		if snap.DocIdentity != domain.DocumentIdentityLegacy {
+			return nil, domain.ErrUnsupportedDocumentIdentity
+		}
 		if snap.RepoID != repo {
 			return nil, domain.ErrIntegrity
 		}
@@ -94,6 +97,11 @@ func (p *initializationProofPG) captureBlob(ctx context.Context, kind string, ha
 	if err := p.owner.db(ctx).QueryRow(ctx, `SELECT b.xmin::text||':'||b.ctid::text||':'||rb.xmin::text||':'||rb.ctid::text,b.bytes
  FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash WHERE rb.repo_id=$1 AND rb.kind=$2 AND rb.hash=$3`, p.repo, kind, hash).Scan(&version, &raw); err != nil {
 		return mapNoRows(err)
+	}
+	if kind == "doc" {
+		if err := rejectStoredRoot(ctx, raw); err != nil {
+			return err
+		}
 	}
 	p.blobs[key] = version
 	data, err := docDecompress(raw)

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -112,9 +113,9 @@ func (s *FileStore) readStoredDoc(ctx context.Context, hash domain.ContentHash, 
 		}
 		return nil, false, err
 	}
-	data, err := docDecompress(raw)
+	data, err := legacyDocumentData(ctx, raw)
 	if err != nil {
-		return nil, false, domain.ErrInvalidCIR
+		return nil, false, err
 	}
 	if observe != nil {
 		observe("docs", hash, raw, data)
@@ -199,26 +200,51 @@ func (s *FileStore) repackDocs() (converted int, saved int64, err error) {
 	}
 	live := map[domain.ContentHash]bool{}
 	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
 		hash := domain.ContentHash("sha256:" + e.Name())
 		if domain.ValidateContentHash(hash) != nil {
 			continue
 		}
+		if e.IsDir() {
+			return converted, saved, fmt.Errorf("%w: document object is a directory", domain.ErrInvalidCIR)
+		}
 		path := filepath.Join(docsDir, e.Name())
 		raw, rerr := readCxtFile(path)
 		if rerr != nil {
-			continue
+			return converted, saved, rerr
+		}
+		root, rerr := storedRootDeclaration(context.Background(), bytes.NewReader(raw))
+		if rerr != nil {
+			return converted, saved, rerr
+		}
+		if root {
+			data, err := boundedRootData(context.Background(), bytes.NewReader(raw), domain.MaxConversationManifestBytes)
+			if err != nil {
+				return converted, saved, err
+			}
+			manifest, err := domain.DecodeConversationManifest(data)
+			if err != nil {
+				return converted, saved, err
+			}
+			if _, err := s.verifyRootDocument(context.Background(), domain.DocumentRef{Hash: hash, Identity: domain.DocumentIdentityRootV1}, manifest, false); err != nil {
+				return converted, saved, err
+			}
+			for _, chunk := range manifest.Chunks {
+				live[chunk.Hash] = true
+			}
+			continue // Roots keep their exact manifest, partitions and identity.
 		}
 		data, derr := docDecompress(raw)
 		if derr != nil {
-			continue
+			return converted, saved, derr
+		}
+		_, knownManifest := chunkcas.ParseManifest(data)
+		if err := validateRepackDocShape(data, knownManifest); err != nil {
+			return converted, saved, err
 		}
 		if cb, isMan, chunkErr := s.getDocChunked(context.Background(), hash, data); isMan {
 			var man chunkcas.Manifest
-			if json.Unmarshal(data, &man) != nil {
-				continue
+			if err := json.Unmarshal(data, &man); err != nil {
+				return converted, saved, err
 			}
 			if chunkErr != nil {
 				// Preserve every referenced body when an existing manifest cannot be
@@ -240,15 +266,15 @@ func (s *FileStore) repackDocs() (converted int, saved int64, err error) {
 		}
 		// Legacy monolithic: hash verification then chunk transformation.
 		if domain.HashContent(data) != hash {
-			// Irregular byte storage (old version record): parsing→canonical recalculation matches —
-			// repack canonical (normalization included). Recalculation mismatch suggests contamination — preserved (fsck's job).
+			// Older noncanonical records may still have the canonical CIR hash.
+			// Otherwise preserve the object and stop before destructive sweeping.
 			var cir domain.CIRDocument
 			if json.Unmarshal(data, &cir) != nil {
-				continue
+				return converted, saved, domain.ErrInvalidCIR
 			}
 			cb, cerr := domain.CanonicalBytes(cir)
 			if cerr != nil || domain.HashContent(cb) != hash {
-				continue
+				return converted, saved, domain.ErrHashMismatch
 			}
 			data = cb
 		}
@@ -258,17 +284,18 @@ func (s *FileStore) repackDocs() (converted int, saved int64, err error) {
 			return converted, saved, perr
 		}
 		if !ok {
-			continue // insufficient shape assumption — monolithic maintenance
-		}
-		var man chunkcas.Manifest
-		if mraw, rerr := readCxtFile(path); rerr == nil {
-			if mdata, derr := docDecompress(mraw); derr == nil && json.Unmarshal(mdata, &man) == nil {
-				for _, ch := range man.Chunks {
-					live[ch] = true
-				}
-				saved += before - int64(len(mraw)) - added
+			// A self-hashed unknown object is not a verified legacy monolith.
+			// Establish its empty dependency set before allowing any sweep.
+			if _, err := decodeStoredSessionDoc(context.Background(), hash, data, false); err != nil {
+				return converted, saved, err
 			}
+			continue
 		}
+		storedBytes, err := markRepackedDoc(path, live)
+		if err != nil {
+			return converted, saved, err
+		}
+		saved += before - storedBytes - added
 		converted++
 	}
 	// Orphan chunk cleanup (mark&sweep): all chunks from manifests marked above.
@@ -295,4 +322,90 @@ func (s *FileStore) repackDocs() (converted int, saved int64, err error) {
 		_ = os.Remove(filepath.Join(chunksDir, e.Name()))
 	}
 	return converted, saved, nil
+}
+
+// GC must classify a known representation before a typed CIR decode can drop
+// unknown dependency fields. Only top-level keys are restricted here; legacy
+// whitespace, key order/case and nested CIR decoding retain their behavior.
+// Scan keys without making another copy of the complete events array.
+func validateRepackDocShape(data []byte, manifest bool) error {
+	if !json.Valid(data) || !bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
+		return domain.ErrInvalidCIR
+	}
+	seen := map[string]bool{}
+	depth, start := 0, 0
+	quoted, escaped := false, false
+	for i, ch := range data {
+		if quoted {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				quoted = false
+				if depth != 1 {
+					continue
+				}
+				j := i + 1
+				for j < len(data) && (data[j] == ' ' || data[j] == '\n' || data[j] == '\r' || data[j] == '\t') {
+					j++
+				}
+				if j == len(data) || data[j] != ':' {
+					continue
+				}
+				var key string
+				if i-start > 256 || json.Unmarshal(data[start:i+1], &key) != nil {
+					return domain.ErrInvalidCIR
+				}
+				key = strings.ToLower(key)
+				allowed := key == "envelope" || (!manifest && key == "events") || (manifest && (key == "format" || key == "chunks"))
+				if !allowed || seen[key] {
+					return fmt.Errorf("%w: unknown or ambiguous document representation", domain.ErrInvalidCIR)
+				}
+				seen[key] = true
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			quoted, start = true, i
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+		}
+	}
+	if !seen["envelope"] {
+		return domain.ErrInvalidCIR
+	}
+	return nil
+}
+
+// Conversion is not complete until its current descriptor supplies a known
+// dependency set. A failed reread must abort before accounting or sweeping.
+func markRepackedDoc(path string, live map[domain.ContentHash]bool) (int64, error) {
+	raw, err := readCxtFile(path)
+	if err != nil {
+		return 0, err
+	}
+	data, err := docDecompress(raw)
+	if err != nil {
+		return 0, err
+	}
+	manifest, ok := chunkcas.ParseManifest(data)
+	if !ok || manifest.Format != chunkcas.FormatV2 {
+		return 0, domain.ErrInvalidCIR
+	}
+	if err := validateRepackDocShape(data, true); err != nil {
+		return 0, err
+	}
+	for _, hash := range manifest.Chunks {
+		if err := domain.ValidateContentHash(hash); err != nil {
+			return 0, err
+		}
+	}
+	for _, hash := range manifest.Chunks {
+		live[hash] = true
+	}
+	return int64(len(raw)), nil
 }

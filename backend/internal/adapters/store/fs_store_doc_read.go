@@ -61,10 +61,8 @@ func (s *FSStore) DocReadIndex(ctx context.Context, repo, hash domain.ContentHas
 	if err := validateHashes(repo, hash); err != nil {
 		return idx, err
 	}
-	// An index never grants ownership of a missing/foreign document.
-	if _, err := os.Stat(s.docPath(repo, hash)); os.IsNotExist(err) {
-		return idx, domain.ErrNotFound
-	} else if err != nil {
+	// Legacy projections cannot hide an unsnapshotted or mistagged root.
+	if err := s.requireLegacyIndexedDoc(ctx, repo, hash); err != nil {
 		return idx, err
 	}
 	raw, err := os.ReadFile(s.readIndexPath(repo, hash))
@@ -111,9 +109,7 @@ func (s *FSStore) SearchDocEvents(ctx context.Context, repo, hash domain.Content
 	if err := validateHashes(repo, hash); err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(s.docPath(repo, hash)); os.IsNotExist(err) {
-		return nil, domain.ErrNotFound
-	} else if err != nil {
+	if err := s.requireLegacyIndexedDoc(ctx, repo, hash); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {

@@ -1151,6 +1151,9 @@ func (s *PostgresStore) PutDoc(ctx context.Context, repoID domain.ContentHash, d
 }
 
 func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.ContentHash, doc domain.VerifiedSessionDoc) (bool, error) {
+	if doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
+		return false, domain.ErrUnsupportedDocumentIdentity
+	}
 	if err := validateHash(repoID); err != nil {
 		return false, err
 	}
@@ -1162,6 +1165,9 @@ func (s *PostgresStore) PutVerifiedDoc(ctx context.Context, repoID domain.Conten
 }
 
 func (s *PostgresStore) putPreparedDoc(ctx context.Context, repoID domain.ContentHash, prepared preparedDocPG) (bool, error) {
+	if prepared.doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
+		return false, domain.ErrUnsupportedDocumentIdentity
+	}
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -1438,6 +1444,9 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 	 WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2`, string(repoID), string(hash)).Scan(&current); err != nil {
 		return domain.DocChunkManifest{}, mapNoRows(err)
 	}
+	if err := rejectStoredRoot(ctx, current); err != nil {
+		return domain.DocChunkManifest{}, err
+	}
 	current, err := docDecompress(current)
 	if err != nil {
 		return domain.DocChunkManifest{}, domain.ErrIntegrity
@@ -1464,6 +1473,9 @@ func (s *PostgresStore) GetDocManifest(ctx context.Context, repoID, hash domain.
 		 WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2 FOR UPDATE OF b`,
 		string(repoID), string(hash)).Scan(&raw); err != nil {
 		return domain.DocChunkManifest{}, mapNoRows(err)
+	}
+	if err := rejectStoredRoot(ctx, raw); err != nil {
+		return domain.DocChunkManifest{}, err
 	}
 	data, err := docDecompress(raw)
 	if err != nil {

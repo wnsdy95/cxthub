@@ -39,6 +39,16 @@ func (s *Service) readAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 		return out, domain.ErrAgentHistoryUnavailable
 	}
 	index := func(hash domain.ContentHash) (domain.DocReadIndex, error) {
+		// The current page wire contract has no document-identity assertion.
+		// Fence both the requested archive and coverage hint until its client
+		// and server contracts migrate together; warm indexes are not proof.
+		snapshot, err := s.meta.GetSnapshot(ctx, repo, hash)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return domain.DocReadIndex{}, err
+		}
+		if err == nil && snapshot.DocIdentity != domain.DocumentIdentityLegacy {
+			return domain.DocReadIndex{}, domain.ErrUnsupportedDocumentIdentity
+		}
 		idx, err := store.DocReadIndex(ctx, repo, hash)
 		if err != nil {
 			return idx, err

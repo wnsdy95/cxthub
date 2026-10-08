@@ -63,16 +63,31 @@ func (s *Service) Search(ctx context.Context, in inbound.SearchInput) (inbound.S
 	if err != nil {
 		return out, err
 	}
-	docSeen := map[domain.ContentHash]bool{}
+	docSeen := map[domain.DocumentRef]bool{}
 	evSeen := map[string]bool{}
 	for _, sn := range snaps {
-		if sn.DocHash == "" || docSeen[sn.DocHash] || (candidates != nil && !candidates[sn.DocHash]) {
+		if sn.DocHash == "" || docSeen[sn.DocumentRef()] || (sn.DocIdentity == domain.DocumentIdentityLegacy && candidates != nil && !candidates[sn.DocHash]) {
 			continue
 		}
-		docSeen[sn.DocHash] = true
+		docSeen[sn.DocumentRef()] = true
+		var root *docReadSource
+		if sn.DocIdentity != domain.DocumentIdentityLegacy {
+			root, err = s.rootReadSource(ctx, in.RepoID, sn.DocHash)
+			if err != nil {
+				return out, err
+			}
+			if root == nil {
+				return out, domain.ErrIntegrity
+			}
+		}
 		after := -1
 		for {
-			hits, err := s.SearchDocEvents(ctx, in.RepoID, sn.DocHash, q, after, 200)
+			var hits []domain.DocEventIndex
+			if root != nil {
+				hits, err = searchReadIndex(ctx, root.index, q, after, 200)
+			} else {
+				hits, err = s.SearchDocEvents(ctx, in.RepoID, sn.DocHash, q, after, 200)
+			}
 			if err != nil {
 				return out, err
 			}
