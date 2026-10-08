@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -60,6 +61,7 @@ func (s *PostgresStore) ListPRJobs(ctx context.Context, repo domain.ContentHash)
 
 const claimPRJobSQL = `SELECT j.payload FROM pr_promotion_jobs j
  WHERE ($1='' OR j.repo_id=$1) AND ($2='' OR j.id=$2)
+ AND EXISTS(SELECT 1 FROM repos r WHERE r.id=j.repo_id AND r.required_doc_identity=ANY($4))
  AND j.state IN ('waiting','retrying','running') AND j.next_attempt<=$3
  AND (j.state<>'running' OR j.lease_until<=$3)
  AND NOT EXISTS(SELECT 1 FROM pr_promotion_jobs p WHERE p.repo_id=j.repo_id AND p.id<>j.id AND p.state='running')
@@ -72,8 +74,17 @@ func (s *PostgresStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash,
 		return domain.PRPromotionJob{}, err
 	}
 	defer tx.Rollback(ctx)
+	allowed, err := workerDocumentRequirements(ctx)
+	if err != nil {
+		return domain.PRPromotionJob{}, err
+	}
+	if repo != "" {
+		if err = s.checkRepositoryDocumentIdentity(ctx, tx, repo, true); err != nil {
+			return domain.PRPromotionJob{}, err
+		}
+	}
 	var b []byte
-	err = tx.QueryRow(ctx, claimPRJobSQL, repo, id, now).Scan(&b)
+	err = tx.QueryRow(ctx, claimPRJobSQL, repo, id, now, allowed).Scan(&b)
 	if err != nil {
 		return domain.PRPromotionJob{}, mapNoRows(err)
 	}
@@ -91,10 +102,13 @@ func (s *PostgresStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash,
 	if !locked {
 		return domain.PRPromotionJob{}, domain.ErrNotFound
 	}
-	if err = tx.QueryRow(ctx, claimPRJobSQL, j.RepoID, j.ID, now).Scan(&b); err != nil {
+	if err = tx.QueryRow(ctx, claimPRJobSQL, j.RepoID, j.ID, now, allowed).Scan(&b); err != nil {
 		return domain.PRPromotionJob{}, mapNoRows(err)
 	}
 	if err = json.Unmarshal(b, &j); err != nil {
+		return j, err
+	}
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, j.RepoID, true); err != nil {
 		return j, err
 	}
 	old := j
@@ -124,6 +138,9 @@ func (s *PostgresStore) FinishPRJob(ctx context.Context, j domain.PRPromotionJob
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = s.checkRepositoryDocumentIdentity(ctx, tx, j.RepoID, true); err != nil {
+		return err
+	}
 	var b []byte
 	var version int64
 	var state string
@@ -238,36 +255,45 @@ func (s *PostgresStore) WakePRSourceJobs(ctx context.Context, repo domain.Conten
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	history := map[domain.ContentHash][]domain.HistoryEvent{}
 	for _, j := range jobs {
-		events, ok := history[j.RepoID]
-		if !ok {
-			events, err = s.ListHistoryEvents(ctx, j.RepoID)
-			if err != nil {
-				return err
-			}
-			history[j.RepoID] = events
-		}
-		if !hasPRSourcePublication(j, events) {
+		err = func() error {
+			return s.WithinRepository(ctx, j.RepoID, func(ctx context.Context) error {
+				if err := s.checkRepositoryDocumentIdentity(ctx, s.db(ctx), j.RepoID, true); err != nil {
+					return err
+				}
+				events, err := s.ListHistoryEvents(ctx, j.RepoID)
+				if err != nil {
+					return err
+				}
+				if !hasPRSourcePublication(j, events) {
+					return nil
+				}
+				version := j.Version
+				old := j
+				j.State, j.Reason, j.Attempts, j.FailureClass = "waiting", "", 0, ""
+				j.NextAttempt, j.UpdatedAt, j.LeaseUntil = now, now, time.Time{}
+				j.Version++
+				j = domain.AppendPRJobDiagnostic(old, j, "source_available", now)
+				if err := j.Validate(); err != nil {
+					return err
+				}
+				raw, err := json.Marshal(j)
+				if err != nil {
+					return err
+				}
+				// A concurrent retry/claim/finish must never be replaced by this wake.
+				if _, err := s.db(ctx).Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6,version=$7
+ WHERE repo_id=$1 AND id=$2 AND version=$8 AND state='attention' AND payload->>'reason'='source_finalization_required'`,
+					j.RepoID, j.ID, raw, j.State, j.NextAttempt, j.LeaseUntil, j.Version, version); err != nil {
+					return err
+				}
+				return nil
+			})
+		}()
+		if errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) && repo == "" {
 			continue
 		}
-		version := j.Version
-		old := j
-		j.State, j.Reason, j.Attempts, j.FailureClass = "waiting", "", 0, ""
-		j.NextAttempt, j.UpdatedAt, j.LeaseUntil = now, now, time.Time{}
-		j.Version++
-		j = domain.AppendPRJobDiagnostic(old, j, "source_available", now)
-		if err := j.Validate(); err != nil {
-			return err
-		}
-		raw, err := json.Marshal(j)
 		if err != nil {
-			return err
-		}
-		// A concurrent retry/claim/finish must never be replaced by this wake.
-		if _, err := s.db(ctx).Exec(ctx, `UPDATE pr_promotion_jobs SET payload=$3,state=$4,next_attempt=$5,lease_until=$6,version=$7
- WHERE repo_id=$1 AND id=$2 AND version=$8 AND state='attention' AND payload->>'reason'='source_finalization_required'`,
-			j.RepoID, j.ID, raw, j.State, j.NextAttempt, j.LeaseUntil, j.Version, version); err != nil {
 			return err
 		}
 	}

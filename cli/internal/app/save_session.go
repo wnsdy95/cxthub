@@ -50,6 +50,12 @@ func NewSaveSessionService(
 
 // Save snapshots the active session in the current cwd.
 func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (inbound.SaveOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return inbound.SaveOutput{}, err
+	}
+	if err := in.DocIdentity.Validate(); err != nil {
+		return inbound.SaveOutput{}, err
+	}
 	repo, err := s.gitCtx.CurrentRepo(ctx, in.Cwd)
 	if err != nil {
 		return inbound.SaveOutput{}, err
@@ -76,7 +82,11 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 				return inbound.SaveOutput{}, domain.ErrSelectionChanged
 			}
 		}
-		return s.save(locked, in, repo)
+		in.DocIdentity, err = captureDocumentIdentity(locked, s.gitCtx, current, in.DocIdentity)
+		if err != nil {
+			return inbound.SaveOutput{}, err
+		}
+		return s.save(locked, in, current)
 	}
 	if gate, ok := s.store.(outbound.CaptureTrackingGate); ok {
 		var out inbound.SaveOutput
@@ -91,6 +101,12 @@ func (s *SaveSessionService) Save(ctx context.Context, in inbound.SaveInput) (in
 }
 
 func (s *SaveSessionService) save(ctx context.Context, in inbound.SaveInput, repo domain.Repo) (inbound.SaveOutput, error) {
+	if err := in.DocIdentity.Validate(); err != nil {
+		return inbound.SaveOutput{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return inbound.SaveOutput{}, err
+	}
 	provider := in.Provider
 	if provider == "" {
 		provider = domain.ProviderClaude
@@ -118,11 +134,21 @@ func (s *SaveSessionService) save(ctx context.Context, in inbound.SaveInput, rep
 			return inbound.SaveOutput{}, domain.ErrNoActiveSession
 		}
 	}
-	envelope, docHash, capturedBytes, activityAt, err := s.capture.Project(ctx, repo.LocalPath, path, capt, cdc, in.Pending)
+	envelope, docRef, capturedBytes, activityAt, err := s.capture.Project(ctx, repo.LocalPath, path, capt, cdc, in.Pending, in.DocIdentity)
 	if err != nil {
 		return inbound.SaveOutput{}, err
 	}
 
+	if err := docRef.Validate(); err != nil {
+		return inbound.SaveOutput{}, err
+	}
+	if docRef.Identity != in.DocIdentity {
+		return inbound.SaveOutput{}, domain.ErrHashMismatch
+	}
+	if err := ctx.Err(); err != nil {
+		return inbound.SaveOutput{}, err
+	}
+	docHash := docRef.Hash
 	branch := in.Branch // explicit branch takes precedence over checkpoint, etc.
 	if branch == "" {
 		branch, _ = s.gitCtx.CurrentBranch(ctx, in.Cwd)
@@ -208,6 +234,7 @@ func (s *SaveSessionService) save(ctx context.Context, in inbound.SaveInput, rep
 		Branch:          branch,
 		Parents:         parents,
 		DocHash:         docHash,
+		DocIdentity:     docRef.Identity,
 		ClaudeSettings:  settingsHashes["claude"],
 		AgentsSettings:  settingsHashes["agents"],
 		CodexSettings:   settingsHashes["codex"],
@@ -537,6 +564,9 @@ func (s *SaveSessionService) collectHookLeaf(ctx context.Context, repoID string,
 	replacement, err := s.store.GetSnapshot(ctx, current)
 	if err != nil {
 		return false
+	}
+	if snap.DocIdentity != domain.DocumentIdentityLegacy || replacement.DocIdentity != domain.DocumentIdentityLegacy {
+		return true
 	}
 	if snap.Provider == "" || snap.SessionID == "" ||
 		replacement.Provider != snap.Provider || replacement.SessionID != snap.SessionID {

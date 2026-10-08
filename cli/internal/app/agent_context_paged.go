@@ -16,25 +16,25 @@ import (
 // the enclosing package rechecks context/memory revisions before delivery.
 func (s *AgentContextService) selectPagedHistory(ctx context.Context, in inbound.PrepareAgentContextInput, p *domain.AgentContextPackage, snapshots []domain.Snapshot, reader outbound.AgentHistoryPageReader) error {
 	type nativeEventKey struct{ session, id string }
-	seenDocs := map[domain.ContentHash]bool{}
-	covered := map[string]domain.ContentHash{}
+	seenDocs := map[domain.DocumentRef]bool{}
+	covered := map[string]domain.DocumentRef{}
 	var exclusions agentTailExclusions
 	seenEvents := map[nativeEventKey]domain.ContentHash{}
 	newest := []domain.AgentHistorySegment{}
 snapshotLoop:
 	for _, snapshot := range snapshots {
-		if seenDocs[snapshot.DocHash] {
+		if seenDocs[snapshot.DocumentRef()] {
 			continue
 		}
-		seenDocs[snapshot.DocHash] = true
-		req := domain.AgentHistoryPageRequest{Before: -1, Limit: 16, MaxBytes: 4 << 20, IncompleteTail: "omit"}
+		seenDocs[snapshot.DocumentRef()] = true
+		req := domain.AgentHistoryPageRequest{DocIdentity: snapshot.DocIdentity, Before: -1, Limit: 16, MaxBytes: 4 << 20, IncompleteTail: "omit"}
 		sessionKey := ""
 		total := -1
 		if len(covered) > 0 || exclusions.anchors > 0 {
 			// An empty event range reveals the verified native identity without
 			// reading the newest turn. An older capture may end mid-tool-pair;
 			// reading its body first would fail before coverage can be proved.
-			metadataReq := domain.AgentHistoryPageRequest{Before: 0, Limit: 1, MaxBytes: 1, IncompleteTail: "omit"}
+			metadataReq := domain.AgentHistoryPageRequest{DocIdentity: snapshot.DocIdentity, Before: 0, Limit: 1, MaxBytes: 1, IncompleteTail: "omit"}
 			metadata, err := reader.ReadAgentHistoryPage(ctx, snapshot.DocHash, metadataReq)
 			if err != nil {
 				return err
@@ -54,6 +54,7 @@ snapshotLoop:
 					}
 					proofReq := metadataReq
 					proofReq.CoveredBy = anchor.hash
+					proofReq.CoveredByIdentity = anchor.identity
 					proof, err := reader.ReadAgentHistoryPage(ctx, snapshot.DocHash, proofReq)
 					if err != nil {
 						return err
@@ -70,7 +71,8 @@ snapshotLoop:
 				}
 				// This hash selects only a proof candidate. The backend still
 				// checks both native identities and the entire event-hash prefix.
-				req.CoveredBy = covered[sessionKey]
+				req.CoveredBy = covered[sessionKey].Hash
+				req.CoveredByIdentity = covered[sessionKey].Identity
 			}
 		}
 		for {
@@ -83,7 +85,7 @@ snapshotLoop:
 					// The omitted turn can exceed the server's byte bound even when
 					// token capacity remains. Report that gap instead of claiming the
 					// requested token budget caused the stop.
-					p.Content.Gaps = append(p.Content.Gaps, domain.AgentCoverageGap{Reason: "older_turn_exceeds_transfer_bound", Source: &domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, Tool: "context_fetch"}})
+					p.Content.Gaps = append(p.Content.Gaps, domain.AgentCoverageGap{Reason: "older_turn_exceeds_transfer_bound", Source: &domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, DocIdentity: snapshot.DocIdentity, Tool: "context_fetch"}})
 					return s.fitAgentHistoryProjection(ctx, in, p)
 				}
 				return err
@@ -104,7 +106,7 @@ snapshotLoop:
 			if page.OmittedTail != nil {
 				markAgentIncompleteTail(p, snapshot, page.OmittedTail)
 				if page.SessionID != "" {
-					if err := exclusions.remember(key, agentTailAnchor{hash: snapshot.DocHash, total: page.Total}); err != nil {
+					if err := exclusions.remember(key, agentTailAnchor{hash: snapshot.DocHash, identity: snapshot.DocIdentity, total: page.Total}); err != nil {
 						return err
 					}
 				}
@@ -151,7 +153,7 @@ snapshotLoop:
 					}
 				}
 				if !duplicate {
-					candidates = append(candidates, domain.AgentHistorySegment{Source: domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, StartEvent: turn.Start + filtered.Start, EndEvent: turn.Start + filtered.End, Tool: "context_fetch"}, SessionID: page.SessionID, Events: filtered.Events})
+					candidates = append(candidates, domain.AgentHistorySegment{Source: domain.AgentSourcePointer{SnapshotID: snapshot.ID, DocHash: snapshot.DocHash, DocIdentity: snapshot.DocIdentity, StartEvent: turn.Start + filtered.Start, EndEvent: turn.Start + filtered.End, Tool: "context_fetch"}, SessionID: page.SessionID, Events: filtered.Events})
 				}
 			}
 			build := func(n int) domain.AgentContextPackage {
@@ -195,7 +197,7 @@ snapshotLoop:
 			}
 			if page.NextBefore == -1 {
 				if page.SessionID != "" {
-					covered[key] = snapshot.DocHash
+					covered[key] = snapshot.DocumentRef()
 				}
 				break
 			}

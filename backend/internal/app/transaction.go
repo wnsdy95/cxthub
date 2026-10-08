@@ -43,6 +43,10 @@ func repositoryWrite[T any](ctx context.Context, s *Service, repo domain.Content
 			var zero T
 			return zero, e
 		}
+		if err := s.checkDocumentIdentity(ctx, repo, true); err != nil {
+			var zero T
+			return zero, err
+		}
 		return original(ctx)
 	}
 	tx, ok := s.meta.(outbound.RepositoryTransactions)

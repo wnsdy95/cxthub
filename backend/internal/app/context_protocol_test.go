@@ -79,8 +79,9 @@ func TestCheckContextWriteReadCounts(t *testing.T) {
 					want = 1
 				}
 				t.Logf("repo=%d history=%d current-ref=%d", spy.repoReads, spy.historyReads, spy.refs)
-				if spy.repoReads != 1 || spy.historyReads != want || spy.refs != want {
-					t.Fatalf("want repo=1 history=%d current-ref=%d", want, want)
+				// The public history read adds its own pinned compatibility check.
+				if spy.repoReads != 1+want || spy.historyReads != want || spy.refs != want {
+					t.Fatalf("want repo=%d history=%d current-ref=%d", 1+want, want, want)
 				}
 				if protocol == 2 {
 					if !errors.Is(err, domain.ErrConflict) {

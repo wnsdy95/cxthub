@@ -174,7 +174,7 @@ func TestHistoryCatalogWorkingQueriesKeepAllFences(t *testing.T) {
 	ctx := context.Background()
 	for _, op := range []string{"status", "diff", "diff_staged"} {
 		t.Run(op, func(t *testing.T) {
-			work, f := newWorkingReadFixture(t)
+			work, f := newContextDiffFixture(t)
 			f.index.Entries = []domain.StagedSession{f.entry(t, 2)}
 			f.index = f.index.WithRevision()
 			f.pending = []domain.Pending{{RepoID: f.repo, Provider: domain.ProviderCodex, SessionID: "session", Target: workingDoc(t, "session", 3).Hash}}
@@ -190,6 +190,11 @@ func TestHistoryCatalogWorkingQueriesKeepAllFences(t *testing.T) {
 			want, err := query()
 			if err != nil {
 				t.Fatal(err)
+			}
+			if diff, ok := want.(domain.ContextDiff); ok {
+				if len(diff.Changes) != 1 || diff.Changes[0].State != "extended" || !diff.Changes[0].CountsKnown {
+					t.Fatal("catalog fixture did not compare stored bodies", diff)
+				}
 			}
 			wantReads := 3
 			if op == "status" {

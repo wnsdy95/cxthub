@@ -18,3 +18,16 @@ type StoredDocumentReferenceVerifier interface {
 type DocumentReferenceReader interface {
 	GetDocReference(context.Context, domain.DocumentRef) (domain.SessionDoc, error)
 }
+
+// RootDocumentStore installs a fully verified direct canonical root manifest.
+// Its bounded bodies must already be staged, and installation grants no graph
+// adoption or outbound publication authority.
+type RootDocumentStore interface {
+	PutConversationManifest(context.Context, domain.DocumentRepresentation) error
+}
+
+// DocumentPublicationPreflight checks current peer policy before any writes.
+// A missing port cannot authorize publication of existing nonlegacy objects.
+type DocumentPublicationPreflight interface {
+	PreflightDocumentReferences(context.Context, string, []domain.DocumentRef) error
+}

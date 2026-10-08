@@ -20,7 +20,7 @@ type workingHistoryQueryOnly struct{ inbound.HistoryQuery }
 
 func newWorkingHistoryObservationFixture(t *testing.T) (*WorkingStateService, *workingReadFixture, *HistoryQueryService, *observedHistoryCatalogReader) {
 	t.Helper()
-	work, f := newWorkingReadFixture(t)
+	work, f := newContextDiffFixture(t)
 	f.index.Entries = []domain.StagedSession{f.entry(t, 2)}
 	f.index = f.index.WithRevision()
 	f.pending = []domain.Pending{{RepoID: f.repo, Provider: domain.ProviderCodex, SessionID: "session", Target: workingDoc(t, "session", 3).Hash}}

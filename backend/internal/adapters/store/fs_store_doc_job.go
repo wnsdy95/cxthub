@@ -64,6 +64,7 @@ func (q *fsDocQueue) record(j domain.DocFinalizationJob) {
 	// Scheduling uses only metadata. The selected job is read and validated from
 	// its durable receipt before execution; mutable manifest slices never escape.
 	j.Manifest = domain.DocChunkManifest{}
+	j.RootManifest = nil
 	q.pending[j.ID] = j
 }
 
@@ -139,6 +140,24 @@ func (s *FSStore) EnqueueDocJob(ctx context.Context, j domain.DocFinalizationJob
 	l := s.docQueue()
 	l.Lock()
 	defer l.Unlock()
+	if j.DocIdentity == domain.DocumentIdentityRootV1 {
+		retention := s.oauthLock()
+		retention.Lock()
+		defer retention.Unlock()
+		chunks, err := publicationJobChunks(j)
+		if err != nil {
+			return j, err
+		}
+		for _, h := range chunks {
+			present, err := regularObjectExists(s.chunkPath(j.RepoID, h))
+			if err != nil {
+				return j, err
+			}
+			if !present {
+				return j, domain.ErrNotFound
+			}
+		}
+	}
 	old, err := s.readDocJob(j.RepoID, j.ID)
 	if err == nil {
 		if old.State != "completed" {
@@ -149,6 +168,15 @@ func (s *FSStore) EnqueueDocJob(ctx context.Context, j domain.DocFinalizationJob
 			return old, err
 		}
 		if len(have) > 0 {
+			if j.DocIdentity == domain.DocumentIdentityRootV1 {
+				proof, err := s.VerifyStoredDoc(ctx, j.RepoID, j.DocHash)
+				if err != nil {
+					return old, err
+				}
+				if proof.DocumentRef() != j.DocumentRef() {
+					return old, domain.ErrIntegrity
+				}
+			}
 			return old, nil
 		}
 		j.Version = old.Version + 1 // a previously collected body needs verification again
@@ -247,8 +275,8 @@ func (s *FSStore) FinishDocJob(ctx context.Context, j domain.DocFinalizationJob,
 // Development only: serialization + idempotent recovery, not cross-file ACID.
 // A crash after the body write leaves a reclaimable job; replay verifies/dedups it.
 func (s *FSStore) CompleteDocJob(ctx context.Context, j domain.DocFinalizationJob, doc domain.VerifiedSessionDoc, now time.Time) error {
-	if doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
-		return domain.ErrUnsupportedDocumentIdentity
+	if err := publicationJobMatches(j, doc); err != nil {
+		return err
 	}
 	l := s.docQueue()
 	l.Lock()
@@ -264,10 +292,45 @@ func (s *FSStore) CompleteDocJob(ctx context.Context, j domain.DocFinalizationJo
 	if !old.Fences(j, now) {
 		return domain.ErrConflict
 	}
-	if !doc.Valid() || doc.Hash() != old.DocHash {
-		return domain.ErrIntegrity
+	if err := publicationJobMatches(old, doc); err != nil {
+		return err
 	}
-	if _, err := s.PutVerifiedDoc(ctx, j.RepoID, doc); err != nil {
+	if doc.DocumentRef().Identity == domain.DocumentIdentityRootV1 {
+		retention := s.oauthLock()
+		retention.Lock()
+		defer retention.Unlock()
+	}
+	// Serialize requirement changes through publication and the job receipt.
+	metadata := s.refLock(j.RepoID, domain.RefBranch, "")
+	metadata.Lock()
+	defer metadata.Unlock()
+	repo, err := s.GetRepo(ctx, j.RepoID)
+	if err != nil {
+		return err
+	}
+	if err := checkDocJobPublicationPolicy(ctx, repo, doc.DocumentRef().Identity); err != nil {
+		return err
+	}
+	if !old.Fences(j, time.Now().UTC()) {
+		return domain.ErrConflict
+	}
+	if doc.DocumentRef().Identity == domain.DocumentIdentityRootV1 {
+		if err := s.putRootDocJob(ctx, j.RepoID, doc, func() error {
+			if !old.Fences(j, time.Now().UTC()) {
+				return domain.ErrConflict
+			}
+			return ctx.Err()
+		}); err != nil {
+			return err
+		}
+	} else if _, err := s.PutVerifiedDoc(ctx, j.RepoID, doc); err != nil {
+		return err
+	}
+	now = time.Now().UTC()
+	if !old.Fences(j, now) {
+		return domain.ErrConflict
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	old.State = "completed"
@@ -283,7 +346,11 @@ type fsDocPublication struct {
 }
 
 func (s *FSStore) PrepareDocJob(ctx context.Context, doc domain.VerifiedSessionDoc) (outbound.PreparedDocPublication, error) {
-	if doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
+	if doc.DocumentRef().Identity == domain.DocumentIdentityRootV1 {
+		if _, err := prepareRootPublication(ctx, doc); err != nil {
+			return nil, err
+		}
+	} else if doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
 		return nil, domain.ErrUnsupportedDocumentIdentity
 	}
 	if err := ctx.Err(); err != nil {

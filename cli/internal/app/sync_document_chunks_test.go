@@ -19,7 +19,8 @@ type chunkPushStore struct {
 	opened      int
 }
 
-func (s *chunkPushStore) WithVerifiedDocChunks(_ context.Context, id domain.ContentHash, use func(outbound.DocumentChunks) error) (bool, error) {
+func (s *chunkPushStore) WithVerifiedDocChunks(_ context.Context, ref domain.DocumentRef, use func(outbound.DocumentChunks) error) (bool, error) {
+	id := ref.Hash
 	s.opened++
 	if s.failure != nil || s.unsupported {
 		return false, s.failure
@@ -29,7 +30,7 @@ func (s *chunkPushStore) WithVerifiedDocChunks(_ context.Context, id domain.Cont
 	}
 	s.active = true
 	defer func() { s.active = false }()
-	return true, use(outbound.DocumentChunks{Hash: id})
+	return true, use(outbound.DocumentChunks{Representation: domain.DocumentRepresentation{Hash: id, Identity: ref.Identity}})
 }
 
 type chunkPushRemote struct {
@@ -43,7 +44,7 @@ func (r *chunkPushRemote) PushDocChunks(ctx context.Context, _ string, doc outbo
 	r.calls++
 	ok, err := r.upload(ctx, doc)
 	if ok && err == nil {
-		r.acked = append(r.acked, doc.Hash)
+		r.acked = append(r.acked, doc.Representation.Hash)
 	}
 	return ok, err
 }
@@ -152,7 +153,7 @@ func (r *chunkPendingRemote) PushDocChunks(_ context.Context, _ string, doc outb
 	if r.docs == nil {
 		r.docs = make(map[domain.ContentHash]bool)
 	}
-	r.docs[doc.Hash] = true
+	r.docs[doc.Representation.Hash] = true
 	return true, nil
 }
 

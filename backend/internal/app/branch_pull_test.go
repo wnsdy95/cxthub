@@ -27,6 +27,9 @@ func (s *branchPullStore) WithinRepository(context.Context, domain.ContentHash, 
 	return nil
 }
 func (s *branchPullStore) WithinReadSnapshot(ctx context.Context, f func(context.Context) error) error {
+	if ctx.Value(branchPullReadKey{}) == true {
+		return f(ctx)
+	}
 	s.reads++
 	if err := f(context.WithValue(ctx, branchPullReadKey{}, true)); err != nil {
 		return err

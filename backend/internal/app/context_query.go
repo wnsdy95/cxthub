@@ -17,7 +17,7 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 	if in.CodeCommit != "" && domain.ValidateGitOID(in.CodeCommit) != nil {
 		return domain.ContextQueryView{}, domain.ErrValidation
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.ContextQueryView, error) {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.ContextQueryView, error) {
 		r, err := s.meta.GetRepo(ctx, repo)
 		if err != nil {
 			return domain.ContextQueryView{}, err

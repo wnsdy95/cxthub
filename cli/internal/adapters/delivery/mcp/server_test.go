@@ -42,8 +42,11 @@ func (f fakeStore) GetSnapshot(_ context.Context, id domain.ContentHash) (domain
 	}
 	return domain.Snapshot{}, domain.ErrNotFound
 }
-func (f fakeStore) GetDoc(_ context.Context, h domain.ContentHash) (domain.SessionDoc, error) {
-	if d, ok := f.docs[h]; ok {
+func (f fakeStore) GetDocReference(_ context.Context, ref domain.DocumentRef) (domain.SessionDoc, error) {
+	if d, ok := f.docs[ref.Hash]; ok {
+		if d.DocumentRef() != ref {
+			return domain.SessionDoc{}, domain.ErrHashMismatch
+		}
 		return d, nil
 	}
 	return domain.SessionDoc{}, domain.ErrNotFound

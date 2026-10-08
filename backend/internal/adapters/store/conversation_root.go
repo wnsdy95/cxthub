@@ -172,9 +172,24 @@ func rootChunkBytes(ctx context.Context, raw []byte, length int64) ([]byte, erro
 	}
 	defer close()
 	body := make([]byte, int(length)+1)
-	n, err := io.ReadFull(r, body)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return nil, fmt.Errorf("%w: %v", domain.ErrIntegrity, err)
+	n := 0
+	for n < len(body) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		read, err := r.Read(body[n:min(n+(32<<10), len(body))])
+		n += read
+		if err == io.EOF {
+			break
+		}
+		// A decoder's unexpected EOF is corrupt framing even when it emitted
+		// exactly the claimed length. Only clean EOF terminates a valid frame.
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", domain.ErrIntegrity, err)
+		}
+		if read == 0 {
+			return nil, fmt.Errorf("%w: stalled chunk decoder", domain.ErrIntegrity)
+		}
 	}
 	if int64(n) != length {
 		return nil, domain.ErrIntegrity

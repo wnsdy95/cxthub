@@ -62,6 +62,9 @@ func (s *IdentityService) RenameCollaborationSpace(ctx context.Context, actor, k
 		if err != nil {
 			return "", err
 		}
+		if err := s.checkRepositoryRecordsDocumentIdentities(ctx, repositories); err != nil {
+			return "", err
+		}
 		if err = st.RenameOrganizationNamespace(ctx, id, next); err != nil {
 			return "", err
 		}

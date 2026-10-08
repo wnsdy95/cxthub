@@ -15,9 +15,9 @@ import (
 
 type stagedPullDocs map[domain.ContentHash]domain.SessionDoc
 
-func (s stagedPullDocs) HasVerifiedDoc(_ context.Context, id domain.ContentHash) (bool, error) {
-	_, ok := s[id]
-	return ok, nil
+func (s stagedPullDocs) HasVerifiedDoc(_ context.Context, ref domain.DocumentRef) (bool, error) {
+	doc, ok := s[ref.Hash]
+	return ok && doc.DocumentRef() == ref, nil
 }
 func (s stagedPullDocs) ReceiveDoc(_ context.Context, doc domain.SessionDoc) error {
 	s[doc.Hash] = doc
@@ -153,4 +153,8 @@ func TestInterruptedPullRetainsVerifiedChunks(t *testing.T) {
 	if err = storage.NewFileStore(root).PutChunk(context.Background(), plan.Order[0], []byte("tampered")); !errors.Is(err, domain.ErrHashMismatch) {
 		t.Fatalf("accepted bad chunk: %v", err)
 	}
+}
+
+func (s stagedPullDocs) ReceiveRoot(context.Context, domain.DocumentRepresentation) error {
+	return domain.ErrUnsupportedDocumentIdentity
 }

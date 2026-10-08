@@ -27,13 +27,23 @@ func (s *Service) docJobs() (outbound.DocJobStore, error) {
 	return st, nil
 }
 func docJobStatus(j domain.DocFinalizationJob) inbound.DocFinalizationStatus {
-	return inbound.DocFinalizationStatus{ID: j.ID, DocHash: j.DocHash, State: j.State, Reason: j.Reason, UpdatedAt: j.UpdatedAt}
+	return inbound.DocFinalizationStatus{ID: j.ID, DocHash: j.DocHash, DocIdentity: j.DocIdentity, State: j.State, Reason: j.Reason, UpdatedAt: j.UpdatedAt}
 }
 func (s *Service) submitDocFinalizationCommand(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {
-	if doc.Identity != domain.DocumentIdentityLegacy {
-		return inbound.DocFinalizationStatus{}, domain.ErrUnsupportedDocumentIdentity
+	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
+	return s.submitDocFinalizationWithPolicy(ctx, repo, doc, s.RootPublicationEnabled())
+}
+
+// enabled comes only from startup policy at the public command boundary. Tests
+// can exercise ready admission without changing the binary's release fuse.
+func (s *Service) submitDocFinalizationWithPolicy(ctx context.Context, repo domain.ContentHash, doc domain.DocumentRepresentation, enabled bool) (inbound.DocFinalizationStatus, error) {
+	if err := doc.Identity.Validate(); err != nil {
+		return inbound.DocFinalizationStatus{}, err
 	}
-	j, err := domain.NewDocFinalizationJob(repo, doc.Hash, domain.DocChunkManifest{Format: doc.Format, Envelope: doc.Envelope, Chunks: doc.Chunks}, time.Now().UTC())
+	if doc.Identity == domain.DocumentIdentityRootV1 && !enabled {
+		return inbound.DocFinalizationStatus{}, domain.ErrRootPublicationDisabled
+	}
+	j, err := domain.NewDocFinalizationJobForRepresentation(repo, doc, time.Now().UTC())
 	if err != nil {
 		return inbound.DocFinalizationStatus{}, err
 	}
@@ -44,11 +54,28 @@ func (s *Service) submitDocFinalizationCommand(ctx context.Context, repo domain.
 	if metadata.RepositoryID == "" {
 		return inbound.DocFinalizationStatus{}, domain.ErrForbidden
 	}
+	if err := outbound.CheckDocumentIdentityCompatibility(ctx, metadata.RequiredDocIdentity); err != nil {
+		return inbound.DocFinalizationStatus{}, err
+	}
+	if doc.Identity == domain.DocumentIdentityRootV1 && metadata.RequiredDocIdentity != doc.Identity {
+		return inbound.DocFinalizationStatus{}, domain.ErrRootPublicationDisabled
+	}
 	st, err := s.docJobs()
 	if err != nil {
 		return inbound.DocFinalizationStatus{}, err
 	}
-	have, err := s.blobs.HasChunks(ctx, repo, j.Manifest.Chunks)
+	chunks := j.Manifest.Chunks
+	if doc.Identity == domain.DocumentIdentityRootV1 {
+		manifest, err := doc.ConversationManifest()
+		if err != nil {
+			return inbound.DocFinalizationStatus{}, err
+		}
+		chunks = make([]domain.ContentHash, len(manifest.Chunks))
+		for i, chunk := range manifest.Chunks {
+			chunks[i] = chunk.Hash
+		}
+	}
+	have, err := s.blobs.HasChunks(ctx, repo, chunks)
 	if err != nil {
 		return inbound.DocFinalizationStatus{}, err
 	}
@@ -56,7 +83,7 @@ func (s *Service) submitDocFinalizationCommand(ctx context.Context, repo domain.
 	for _, h := range have {
 		owned[h] = true
 	}
-	for _, h := range j.Manifest.Chunks {
+	for _, h := range chunks {
 		if !owned[h] {
 			return inbound.DocFinalizationStatus{}, fmt.Errorf("%w: upload repository-owned chunks before finalization", domain.ErrValidation)
 		}
@@ -64,6 +91,7 @@ func (s *Service) submitDocFinalizationCommand(ctx context.Context, repo domain.
 	j, err = st.EnqueueDocJob(ctx, j)
 	return docJobStatus(j), err
 }
+
 func (s *Service) GetDocFinalization(ctx context.Context, repo domain.ContentHash, id string) (inbound.DocFinalizationStatus, error) {
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return inbound.DocFinalizationStatus{}, err
@@ -75,10 +103,39 @@ func (s *Service) GetDocFinalization(ctx context.Context, repo domain.ContentHas
 	if err != nil {
 		return inbound.DocFinalizationStatus{}, err
 	}
-	j, err := st.GetDocJob(ctx, repo, id)
-	return docJobStatus(j), err
+	return repositoryReadForRepo(ctx, s, repo, func(read context.Context) (inbound.DocFinalizationStatus, error) {
+		j, err := st.GetDocJob(read, repo, id)
+		return docJobStatus(j), err
+	})
 }
 func (s *Service) verifyDocJob(ctx context.Context, j domain.DocFinalizationJob) (domain.VerifiedSessionDoc, error) {
+	if err := j.Validate(); err != nil {
+		return domain.VerifiedSessionDoc{}, err
+	}
+	representation, err := j.Representation()
+	if err != nil {
+		return domain.VerifiedSessionDoc{}, err
+	}
+	if representation.Identity == domain.DocumentIdentityRootV1 {
+		manifest, err := representation.ConversationManifest()
+		if err != nil {
+			return domain.VerifiedSessionDoc{}, err
+		}
+		reader, ok := s.blobs.(outbound.ConversationChunkReader)
+		if !ok {
+			return domain.VerifiedSessionDoc{}, domain.ErrUnsupportedDocumentIdentity
+		}
+		lengths := make(map[domain.ContentHash]int64, len(manifest.Chunks))
+		for _, chunk := range manifest.Chunks {
+			if old, seen := lengths[chunk.Hash]; seen && old != chunk.Bytes {
+				return domain.VerifiedSessionDoc{}, domain.ErrIntegrity
+			}
+			lengths[chunk.Hash] = chunk.Bytes
+		}
+		return s.docVerifier.VerifyConversationManifestDoc(ctx, j.DocHash, manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
+			return reader.ReadConversationChunk(ctx, j.RepoID, hash, lengths[hash])
+		})
+	}
 	return s.docVerifier.VerifyChunks(ctx, j.DocHash, j.Manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
 		// A semantic proof never authorizes another repository's chunk. Read
 		// the current owned bytes even when the verifier has seen their events.
@@ -116,7 +173,7 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 			}
 		}
 	}()
-	verified, err := s.verifyDocJob(work, j)
+	verified, err := repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (domain.VerifiedSessionDoc, error) { return s.verifyDocJob(read, j) })
 	var publication outbound.PreparedDocPublication
 	if err == nil {
 		publication, err = st.PrepareDocJob(work, verified)
@@ -142,7 +199,7 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 	j.UpdatedAt = now
 	j.LeaseUntil = time.Time{}
 	j.NextAttempt = now.Add(time.Second << min(j.Attempts, 8))
-	if errors.Is(err, domain.ErrIntegrity) || errors.Is(err, domain.ErrValidation) || errors.Is(err, domain.ErrUnsupportedCIRVersion) {
+	if errors.Is(err, domain.ErrIntegrity) || errors.Is(err, domain.ErrValidation) || errors.Is(err, domain.ErrUnsupportedCIRVersion) || errors.Is(err, domain.ErrConversationManifest) || errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
 		j.State = "rejected"
 		j.Reason = "invalid_document"
 	}
@@ -151,7 +208,8 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 	return errors.Join(err, st.FinishDocJob(finish, j, now))
 }
 func (s *Service) ProcessDocFinalizations(ctx context.Context, limit int) error {
-	ctx = inbound.WithSystemActor(ctx)
+	ctx = s.DocumentIdentityWorkerContext(inbound.WithSystemActor(ctx))
+	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
 	st, err := s.docJobs()
 	if err != nil {
 		return err

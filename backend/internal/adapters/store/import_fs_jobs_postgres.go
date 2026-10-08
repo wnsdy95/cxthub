@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
@@ -28,7 +29,29 @@ func (s *PostgresStore) importJobs(ctx context.Context, f *frozenFS, repos []dom
 	for _, r := range repos {
 		origin(r.ID, r.GitRemoteURL)
 	}
-	if e := importJSON(f, "doc-jobs", func(_ string, j domain.DocFinalizationJob, _ []byte) error {
+	knownRepos := map[domain.ContentHash]domain.Repo{}
+	for _, repo := range repos {
+		knownRepos[repo.ID] = repo
+	}
+	if e := importJSON(f, "doc-jobs", func(path string, j domain.DocFinalizationJob, _ []byte) error {
+		repo, ok := knownRepos[j.RepoID]
+		if !ok {
+			return domain.ErrIntegrity
+		}
+		if err := repo.RequiredDocIdentity.Validate(); err != nil {
+			return err
+		}
+		if j.DocIdentity == domain.DocumentIdentityRootV1 && repo.RequiredDocIdentity != domain.DocumentIdentityRootV1 {
+			return fmt.Errorf("root job without repository requirement: %w", domain.ErrIntegrity)
+		}
+		if filepath.Base(path) != opaqueName(string(j.RepoID)+":"+j.ID)+".json" {
+			return domain.ErrIntegrity
+		}
+		var e error
+		j, e = verifyFrozenDocJob(ctx, f, j, time.Now().UTC())
+		if e != nil {
+			return e
+		}
 		if e := s.writeDocJob(ctx, j); e != nil {
 			return e
 		}

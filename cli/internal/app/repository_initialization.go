@@ -13,6 +13,9 @@ import (
 // The server proves creation. A missing GET is only a reason to ask for its
 // atomic create-only operation, never permission to upgrade an existing repo.
 func (s *SyncRepoService) prepareRepositoryConnection(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
+	if err := s.preflightLocalRoots(ctx, repo.ID); err != nil {
+		return domain.Repo{}, err
+	}
 	initializer, ok := s.remote.(outbound.RepositoryInitialization)
 	if !ok {
 		return s.remote.RegisterRepo(ctx, repo)

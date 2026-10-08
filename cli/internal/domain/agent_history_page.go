@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -14,15 +15,18 @@ const MaxAgentHistoryPageBytes = 4 << 20
 const MaxAgentHistoryPageTurns = 100
 
 type AgentHistoryPageRequest struct {
-	Before    int         `json:"before"`
-	Limit     int         `json:"limit"`
-	MaxBytes  int         `json:"max_bytes"`
-	CoveredBy ContentHash `json:"covered_by,omitempty"`
+	DocIdentity       DocumentIdentity `json:"doc_identity,omitempty"`
+	CoveredByIdentity DocumentIdentity `json:"covered_by_identity,omitempty"`
+	Before            int              `json:"before"`
+	Limit             int              `json:"limit"`
+	MaxBytes          int              `json:"max_bytes"`
+	CoveredBy         ContentHash      `json:"covered_by,omitempty"`
 	// IncompleteTail may be empty (strict) or "omit" (version 2 projection).
 	IncompleteTail string `json:"incomplete_tail,omitempty"`
 }
 
 type AgentHistoryPage struct {
+	DocIdentity DocumentIdentity   `json:"doc_identity,omitempty"`
 	Version     int                `json:"version"`
 	Hash        ContentHash        `json:"hash"`
 	Provider    ProviderKind       `json:"provider"`
@@ -54,7 +58,13 @@ type AgentHistoryTurn struct {
 }
 
 func ValidateAgentHistoryPageRequest(req AgentHistoryPageRequest) error {
-	if req.Before < -1 || req.Limit < 1 || req.Limit > MaxAgentHistoryPageTurns || req.MaxBytes < 1 || req.MaxBytes > MaxAgentHistoryPageBytes || req.CoveredBy != "" && ValidateContentHash(req.CoveredBy) != nil || req.IncompleteTail != "" && req.IncompleteTail != "omit" {
+	if err := req.DocIdentity.Validate(); err != nil {
+		return err
+	}
+	if err := req.CoveredByIdentity.Validate(); err != nil {
+		return err
+	}
+	if req.Before < -1 || req.Limit < 1 || req.Limit > MaxAgentHistoryPageTurns || req.MaxBytes < 1 || req.MaxBytes > MaxAgentHistoryPageBytes || req.CoveredBy != "" && ValidateContentHash(req.CoveredBy) != nil || req.CoveredBy == "" && req.CoveredByIdentity != DocumentIdentityLegacy || req.IncompleteTail != "" && req.IncompleteTail != "omit" {
 		return fmt.Errorf("%w: invalid history page request", ErrAgentContextUnavailable)
 	}
 	return nil
@@ -72,7 +82,7 @@ func ValidateAgentHistoryPage(hash ContentHash, req AgentHistoryPageRequest, pag
 	if req.IncompleteTail == "omit" {
 		version = AgentHistoryProjectionVersion
 	}
-	if ValidateContentHash(hash) != nil || page.Version != version || page.Hash != hash || page.Total < 0 || page.Before < 0 || page.Before > page.Total || page.Turns == nil || len(page.Turns) > req.Limit || (page.Provider != ProviderClaude && page.Provider != ProviderCodex) {
+	if page.DocumentRef().Validate() != nil || page.DocIdentity != req.DocIdentity || ValidateContentHash(hash) != nil || page.Version != version || page.Hash != hash || page.Total < 0 || page.Before < 0 || page.Before > page.Total || page.Turns == nil || len(page.Turns) > req.Limit || (page.Provider != ProviderClaude && page.Provider != ProviderCodex) {
 		return bad("identity or shape")
 	}
 	before := req.Before
@@ -149,5 +159,48 @@ func ValidateAgentHistoryPage(hash ContentHash, req AgentHistoryPageRequest, pag
 	if page.NextBefore != -1 && (page.NextBefore != end || end <= 0 || end >= page.Before) {
 		return bad("next cursor")
 	}
+	return nil
+}
+
+// DocumentRef identifies the source of an authorized partial projection, not
+// an independently verified whole-document proof.
+func (p AgentHistoryPage) DocumentRef() DocumentRef {
+	return DocumentRef{Hash: p.Hash, Identity: p.DocIdentity}
+}
+
+func (req *AgentHistoryPageRequest) UnmarshalJSON(raw []byte) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return ErrUnsupportedDocumentIdentity
+	}
+	type wire AgentHistoryPageRequest
+	var next wire
+	input := struct {
+		*wire
+		DocIdentity       singleDocumentIdentity `json:"doc_identity"`
+		CoveredByIdentity singleDocumentIdentity `json:"covered_by_identity"`
+	}{wire: &next}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return err
+	}
+	next.DocIdentity = input.DocIdentity.value
+	next.CoveredByIdentity = input.CoveredByIdentity.value
+	*req = AgentHistoryPageRequest(next)
+	return nil
+}
+func (page *AgentHistoryPage) UnmarshalJSON(raw []byte) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return ErrUnsupportedDocumentIdentity
+	}
+	type wire AgentHistoryPage
+	var next wire
+	input := struct {
+		*wire
+		DocIdentity singleDocumentIdentity `json:"doc_identity"`
+	}{wire: &next}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return err
+	}
+	next.DocIdentity = input.DocIdentity.value
+	*page = AgentHistoryPage(next)
 	return nil
 }

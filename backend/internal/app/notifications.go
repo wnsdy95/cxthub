@@ -20,6 +20,7 @@ const notificationLease = 2 * time.Minute
 // ProcessNotification never keeps a database transaction open across network IO.
 // The stable event ID lets compatible receivers deduplicate lost acknowledgments.
 func (s *Service) ProcessNotification(ctx context.Context) (bool, error) {
+	ctx = s.workerDocumentIdentityContext(ctx)
 	st, ok := s.meta.(outbound.NotificationStore)
 	if !ok || s.repositories == nil {
 		return false, nil
@@ -86,6 +87,13 @@ func (s *Service) ProcessNotification(ctx context.Context) (bool, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CXTHub-Event-ID", j.ID)
+	guard, ok := st.(outbound.NotificationDeliveryGuard)
+	if !ok {
+		return true, domain.ErrForbidden
+	}
+	if err := guard.ValidateNotificationDelivery(sendCtx, d, time.Now().UTC()); err != nil {
+		return true, err
+	}
 	resp, err := safeWebhookClient().Do(req)
 	if err != nil {
 		return retry("transport_failed", 0, 0)
@@ -133,7 +141,15 @@ func (s *IdentityService) notificationManager(ctx context.Context, user, reposit
 	return s.repositories.GetRepository(ctx, repository)
 }
 func (s *IdentityService) ListNotifications(ctx context.Context, user, repository string) ([]domain.NotificationJob, error) {
+	return identityResult(ctx, s, func(ctx context.Context) ([]domain.NotificationJob, error) {
+		return s.listNotifications(ctx, user, repository)
+	})
+}
+func (s *IdentityService) listNotifications(ctx context.Context, user, repository string) ([]domain.NotificationJob, error) {
 	if _, err := s.notificationManager(ctx, user, repository); err != nil {
+		return nil, err
+	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repository); err != nil {
 		return nil, err
 	}
 	st, ok := s.repositories.(outbound.NotificationStore)
@@ -153,6 +169,9 @@ func (s *IdentityService) retryNotification(ctx context.Context, user, repositor
 	}
 	if repositoryRecord.Archived || repositoryRecord.WebhookURL == "" {
 		return fmt.Errorf("%w: configure an active webhook first", domain.ErrConflict)
+	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repository); err != nil {
+		return err
 	}
 	st, ok := s.repositories.(outbound.NotificationStore)
 	if !ok {

@@ -21,93 +21,95 @@ const (
 )
 
 func (s *Service) Search(ctx context.Context, in inbound.SearchInput) (inbound.SearchOutput, error) {
-	q := strings.ToLower(strings.TrimSpace(in.Query))
-	if len([]rune(q)) < 2 || len([]rune(q)) > 256 {
-		return inbound.SearchOutput{}, fmt.Errorf("%w: Search term must contain 2 to 256 characters", domain.ErrValidation)
-	}
-	limit := in.Limit
-	if limit <= 0 || limit > searchMaxLimit {
-		limit = searchDefaultLimit
-	}
-	snaps, err := s.meta.ListSnapshots(ctx, in.RepoID, "")
-	if err != nil {
-		return inbound.SearchOutput{}, err
-	}
-	sort.Slice(snaps, func(i, j int) bool { return snaps[i].CreatedAt.Before(snaps[j].CreatedAt) })
+	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.SearchOutput, error) {
+		q := strings.ToLower(strings.TrimSpace(in.Query))
+		if len([]rune(q)) < 2 || len([]rune(q)) > 256 {
+			return inbound.SearchOutput{}, fmt.Errorf("%w: Search term must contain 2 to 256 characters", domain.ErrValidation)
+		}
+		limit := in.Limit
+		if limit <= 0 || limit > searchMaxLimit {
+			limit = searchDefaultLimit
+		}
+		snaps, err := s.meta.ListSnapshots(ctx, in.RepoID, "")
+		if err != nil {
+			return inbound.SearchOutput{}, err
+		}
+		sort.Slice(snaps, func(i, j int) bool { return snaps[i].CreatedAt.Before(snaps[j].CreatedAt) })
 
-	out := inbound.SearchOutput{Hits: []inbound.SearchHit{}}
-	add := func(h inbound.SearchHit) bool {
-		if len(out.Hits) >= limit {
-			out.Truncated = true
-			return false
+		out := inbound.SearchOutput{Hits: []inbound.SearchHit{}}
+		add := func(h inbound.SearchHit) bool {
+			if len(out.Hits) >= limit {
+				out.Truncated = true
+				return false
+			}
+			out.Hits = append(out.Hits, h)
+			return true
 		}
-		out.Hits = append(out.Hits, h)
-		return true
-	}
 
-	// 1) Commit message/author match.
-	for _, sn := range snaps {
-		if !strings.Contains(strings.ToLower(sn.Message), q) && !strings.Contains(strings.ToLower(sn.Author.Name), q) {
-			continue
+		// 1) Commit message/author match.
+		for _, sn := range snaps {
+			if !strings.Contains(strings.ToLower(sn.Message), q) && !strings.Contains(strings.ToLower(sn.Author.Name), q) {
+				continue
+			}
+			if !add(inbound.SearchHit{
+				SnapshotID: sn.ID, Branch: sn.Branch, Kind: "commit",
+				Snippet: searchSnippet(sn.Message, q), CreatedAt: sn.CreatedAt.UTC().Format(time.RFC3339),
+			}) {
+				return out, nil
+			}
 		}
-		if !add(inbound.SearchHit{
-			SnapshotID: sn.ID, Branch: sn.Branch, Kind: "commit",
-			Snippet: searchSnippet(sn.Message, q), CreatedAt: sn.CreatedAt.UTC().Format(time.RFC3339),
-		}) {
-			return out, nil
-		}
-	}
 
-	// 2) Conversation body (message/turn text blocks + reasoning summary) match.
-	candidates, err := s.MatchingDocHashes(ctx, in.RepoID, q)
-	if err != nil {
-		return out, err
-	}
-	docSeen := map[domain.DocumentRef]bool{}
-	evSeen := map[string]bool{}
-	for _, sn := range snaps {
-		if sn.DocHash == "" || docSeen[sn.DocumentRef()] || (sn.DocIdentity == domain.DocumentIdentityLegacy && candidates != nil && !candidates[sn.DocHash]) {
-			continue
+		// 2) Conversation body (message/turn text blocks + reasoning summary) match.
+		candidates, err := s.MatchingDocHashes(ctx, in.RepoID, q)
+		if err != nil {
+			return out, err
 		}
-		docSeen[sn.DocumentRef()] = true
-		var root *docReadSource
-		if sn.DocIdentity != domain.DocumentIdentityLegacy {
-			root, err = s.rootReadSource(ctx, in.RepoID, sn.DocHash)
-			if err != nil {
-				return out, err
+		docSeen := map[domain.DocumentRef]bool{}
+		evSeen := map[string]bool{}
+		for _, sn := range snaps {
+			if sn.DocHash == "" || docSeen[sn.DocumentRef()] || (sn.DocIdentity == domain.DocumentIdentityLegacy && candidates != nil && !candidates[sn.DocHash]) {
+				continue
 			}
-			if root == nil {
-				return out, domain.ErrIntegrity
-			}
-		}
-		after := -1
-		for {
-			var hits []domain.DocEventIndex
-			if root != nil {
-				hits, err = searchReadIndex(ctx, root.index, q, after, 200)
-			} else {
-				hits, err = s.SearchDocEvents(ctx, in.RepoID, sn.DocHash, q, after, 200)
-			}
-			if err != nil {
-				return out, err
-			}
-			for _, hit := range hits {
-				after = hit.Index
-				key := string(hit.Hash)
-				if evSeen[key] {
-					continue
+			docSeen[sn.DocumentRef()] = true
+			var root *docReadSource
+			if sn.DocIdentity != domain.DocumentIdentityLegacy {
+				root, err = s.rootReadSource(ctx, in.RepoID, sn.DocHash)
+				if err != nil {
+					return out, err
 				}
-				evSeen[key] = true
-				if !add(inbound.SearchHit{SnapshotID: sn.ID, Branch: sn.Branch, Kind: "event", Role: hit.Role, Seq: hit.Seq, Snippet: searchSnippet(hit.Text, q), CreatedAt: sn.CreatedAt.UTC().Format(time.RFC3339)}) {
-					return out, nil
+				if root == nil {
+					return out, domain.ErrIntegrity
 				}
 			}
-			if len(hits) < 200 {
-				break
+			after := -1
+			for {
+				var hits []domain.DocEventIndex
+				if root != nil {
+					hits, err = searchReadIndex(ctx, root.index, q, after, 200)
+				} else {
+					hits, err = s.SearchDocEvents(ctx, in.RepoID, sn.DocHash, q, after, 200)
+				}
+				if err != nil {
+					return out, err
+				}
+				for _, hit := range hits {
+					after = hit.Index
+					key := string(hit.Hash)
+					if evSeen[key] {
+						continue
+					}
+					evSeen[key] = true
+					if !add(inbound.SearchHit{SnapshotID: sn.ID, Branch: sn.Branch, Kind: "event", Role: hit.Role, Seq: hit.Seq, Snippet: searchSnippet(hit.Text, q), CreatedAt: sn.CreatedAt.UTC().Format(time.RFC3339)}) {
+						return out, nil
+					}
+				}
+				if len(hits) < 200 {
+					break
+				}
 			}
 		}
-	}
-	return out, nil
+		return out, nil
+	})
 }
 
 // searchableText extracts the search target text from the event — only the readable conversation surface is considered

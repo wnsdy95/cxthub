@@ -127,6 +127,14 @@ func (s *FSStore) ClaimGitScan(ctx context.Context, repo domain.ContentHash, now
 		if err != nil {
 			return j, err
 		}
+		release, policyErr := s.pinWorkerRepoPolicy(ctx, j.RepoID)
+		if errors.Is(policyErr, domain.ErrDocumentIdentityUpgradeRequired) && repo == "" {
+			continue
+		}
+		if policyErr != nil {
+			return domain.GitScanJob{}, policyErr
+		}
+		defer release()
 		return n, s.writeGitScan(n)
 	}
 	return domain.GitScanJob{}, domain.ErrNotFound
@@ -138,6 +146,11 @@ func (s *FSStore) FinishGitScan(ctx context.Context, p domain.GitScanFinish) err
 	l := s.oauthLock()
 	l.Lock()
 	defer l.Unlock()
+	release, policyErr := s.pinWorkerRepoPolicy(ctx, p.Job.RepoID)
+	if policyErr != nil {
+		return policyErr
+	}
+	defer release()
 	old, err := s.GetGitScan(ctx, p.Job.RepoID, p.Job.ID)
 	if err != nil {
 		return err
@@ -342,6 +355,11 @@ func (s *FSStore) ClaimGitHeadScan(ctx context.Context, repo domain.ContentHash,
 	if err := j.Validate(); err != nil {
 		return j, err
 	}
+	release, policyErr := s.pinWorkerRepoPolicy(ctx, repo)
+	if policyErr != nil {
+		return j, policyErr
+	}
+	defer release()
 	path := s.gitEvidencePath("git-head-scans", repo, origin)
 	err := readJSON(path, &j)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, os.ErrNotExist) {
@@ -367,6 +385,11 @@ func (s *FSStore) FinishGitHeadScan(ctx context.Context, j domain.GitHeadScan, o
 	l := s.oauthLock()
 	l.Lock()
 	defer l.Unlock()
+	release, policyErr := s.pinWorkerRepoPolicy(ctx, j.RepoID)
+	if policyErr != nil {
+		return policyErr
+	}
+	defer release()
 	path := s.gitEvidencePath("git-head-scans", j.RepoID, j.GitOrigin)
 	var old domain.GitHeadScan
 	if err := readJSON(path, &old); err != nil {
@@ -413,6 +436,11 @@ func (s *FSStore) FailGitHeadScan(ctx context.Context, j domain.GitHeadScan, now
 	l := s.oauthLock()
 	l.Lock()
 	defer l.Unlock()
+	release, policyErr := s.pinWorkerRepoPolicy(ctx, j.RepoID)
+	if policyErr != nil {
+		return policyErr
+	}
+	defer release()
 	old, err := s.GetGitHeadScan(ctx, j.RepoID, j.GitOrigin)
 	if err != nil {
 		return err

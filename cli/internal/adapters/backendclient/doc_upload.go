@@ -25,14 +25,31 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return true, err
 	}
-	if err := domain.ValidateContentHash(doc.Hash); err != nil {
+	rep := doc.Representation
+	if err := rep.DocumentRef().Validate(); err != nil {
 		return true, err
 	}
-	if !chunkcas.SupportedFormat(doc.Format) || len(doc.Chunks) == 0 || doc.ReadChunk == nil {
+	root := rep.Identity == domain.DocumentIdentityRootV1
+	format, envelopeBytes, hashes := rep.Format, rep.Envelope, rep.Chunks
+	if root {
+		manifest, err := rep.ConversationManifest()
+		if err != nil {
+			return true, err
+		}
+		format, envelopeBytes = manifest.ChunkFormat, manifest.Envelope
+		hashes = make([]domain.ContentHash, 0, len(manifest.Chunks))
+		for _, chunk := range manifest.Chunks {
+			hashes = append(hashes, chunk.Hash)
+		}
+	} else if rep.RootManifest != nil {
+		return true, domain.ErrHashMismatch
+	}
+	if !chunkcas.SupportedFormat(format) || (!root && len(hashes) == 0) || doc.ReadChunk == nil {
 		return true, fmt.Errorf("%w: invalid document chunk descriptor", domain.ErrHashMismatch)
 	}
+
 	var envelope *domain.Envelope
-	if err := json.Unmarshal(doc.Envelope, &envelope); err != nil || envelope == nil {
+	if err := json.Unmarshal(envelopeBytes, &envelope); err != nil || envelope == nil {
 		return true, fmt.Errorf("%w: invalid document chunk envelope", domain.ErrInvalidCIR)
 	}
 	// Normalize only the envelope through the existing canonical rules. This
@@ -41,14 +58,14 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 	if err != nil {
 		return true, err
 	}
-	if !bytes.Equal(canonical, chunkcas.Assemble(doc.Envelope, nil)) {
+	if !bytes.Equal(canonical, chunkcas.Assemble(envelopeBytes, nil)) {
 		return true, fmt.Errorf("%w: noncanonical document chunk envelope", domain.ErrInvalidCIR)
 	}
 	// Repeated IDs are legitimate in a byte-stream manifest. Advertise and read
 	// each body once, while preserving every occurrence in the final manifest.
-	chunkHaves := make([]domain.ContentHash, 0, len(doc.Chunks))
-	seen := make(map[domain.ContentHash]bool, len(doc.Chunks))
-	for _, hash := range doc.Chunks {
+	chunkHaves := make([]domain.ContentHash, 0, len(hashes))
+	seen := make(map[domain.ContentHash]bool, len(hashes))
+	for _, hash := range hashes {
 		if err := domain.ValidateContentHash(hash); err != nil {
 			return true, err
 		}
@@ -57,10 +74,15 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 			chunkHaves = append(chunkHaves, hash)
 		}
 	}
-	if !chunkcas.PortableManifest(chunkcas.Manifest{Format: doc.Format, Envelope: doc.Envelope, Chunks: doc.Chunks}) {
+	if !root && !chunkcas.PortableManifest(chunkcas.Manifest{Format: format, Envelope: envelopeBytes, Chunks: hashes}) {
 		return false, nil
 	}
-	docHaves := []domain.ContentHash{doc.Hash}
+	if root {
+		if err := c.PreflightDocumentReferences(ctx, repoID, []domain.DocumentRef{rep.DocumentRef()}); err != nil {
+			return true, err
+		}
+	}
+	docHaves := []domain.ContentHash{rep.Hash}
 	var neg negotiateResp
 	negotiationCtx := outbound.WithSyncDiagnosticRole(ctx, outbound.SyncRoleDocumentChunks)
 	outbound.RecordSyncDiagnostic(negotiationCtx, outbound.SyncStagePreparation, outbound.SyncDiagnosticCounts{Documents: 1, Chunks: len(chunkHaves)}, nil)
@@ -81,8 +103,15 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 	if err := ctx.Err(); err != nil {
 		return true, err
 	}
+	if root && (!supportsRootIdentity(neg.DocIdentitiesSupported) || !neg.AsyncDocsSupported || !neg.ChunksSupported || !neg.BoundedChunksSupported || !containsString(neg.ChunkFormatsSupported, chunkcas.FormatV2)) {
+		return true, domain.ErrUnsupportedDocumentIdentity
+	}
 	if len(neg.DocWants) == 0 {
 		return true, nil
+	}
+	// Existing roots remain usable when admission of new roots is disabled.
+	if root && !neg.RootPublicationEnabled {
+		return true, domain.ErrUnsupportedDocumentIdentity
 	}
 	version := envelope.CIRVersion
 	if version == "" {
@@ -91,7 +120,6 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 	if !domain.SupportsCIRVersion(neg.CIRVersionsSupported, version) && (version != domain.CIRVersionV1 || len(neg.CIRVersionsSupported) > 0) {
 		return true, fmt.Errorf("%w: server does not advertise CIR %s support", domain.ErrUnsupportedCIRVersion, version)
 	}
-	format := doc.Format
 	if format == "" {
 		format = chunkcas.FormatV1
 	}
@@ -107,7 +135,10 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 	if format == chunkcas.FormatV1 {
 		format = "" // Match the existing legacy manifest wire encoding.
 	}
-	manifest := chunkedDocWire{Hash: doc.Hash, Format: format, Envelope: doc.Envelope, Chunks: doc.Chunks}
+	manifest := rep
+	if !root {
+		manifest = chunkedDocWire{Hash: rep.Hash, Format: format, Envelope: envelopeBytes, Chunks: hashes}
+	}
 	if neg.AsyncDocsSupported {
 		return true, c.finalizeDocument(ctx, repoID, manifest)
 	}
@@ -115,6 +146,17 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 }
 
 func (c *BackendClient) pushRequestedDocChunks(ctx context.Context, repoID string, doc outbound.DocumentChunks, order []domain.ContentHash, wants map[domain.ContentHash]bool) error {
+	var rootSizes map[domain.ContentHash]int
+	if doc.Representation.Identity == domain.DocumentIdentityRootV1 {
+		manifest, err := doc.Representation.ConversationManifest()
+		if err != nil {
+			return err
+		}
+		rootSizes = map[domain.ContentHash]int{}
+		for _, chunk := range manifest.Chunks {
+			rootSizes[chunk.Hash] = int(chunk.Bytes)
+		}
+	}
 	var pending []chunkObjWire
 	for _, hash := range order {
 		if !wants[hash] {
@@ -130,7 +172,7 @@ func (c *BackendClient) pushRequestedDocChunks(ctx context.Context, repoID strin
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if domain.HashContent(body) != hash {
+		if domain.HashContent(body) != hash || (rootSizes != nil && len(body) != rootSizes[hash]) {
 			return fmt.Errorf("%w: document chunk %s", domain.ErrHashMismatch, hash)
 		}
 		// Keep at most a bounded batch plus one lookahead body. Reuse the same

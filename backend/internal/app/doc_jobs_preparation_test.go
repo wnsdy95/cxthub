@@ -76,7 +76,7 @@ func preparationFixture(t *testing.T) (*Service, domain.DocFinalizationJob) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewService(nil, preparationChunks{repo: repo, bodies: plan.Bodies}, nil, nil, nil), j.Claim(time.Now().UTC(), docJobLease)
+	return NewService(preparationMetadata{}, preparationChunks{repo: repo, bodies: plan.Bodies}, nil, nil, nil), j.Claim(time.Now().UTC(), docJobLease)
 }
 
 func TestDocJobPreparationRenewsAndJoinsBeforeCompletion(t *testing.T) {
@@ -328,4 +328,10 @@ func TestDocJobPreparationErrorClassification(t *testing.T) {
 			})
 		})
 	}
+}
+
+type preparationMetadata struct{ outbound.MetadataStore }
+
+func (preparationMetadata) GetRepo(_ context.Context, repo domain.ContentHash) (domain.Repo, error) {
+	return domain.Repo{ID: repo}, nil
 }

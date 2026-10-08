@@ -96,10 +96,10 @@ func (s *FileStore) validateConditionalPosition(ctx context.Context, p domain.Wo
 		if err != nil {
 			return err
 		}
-		if snap.RepoID != p.RepoID {
+		if snap.RepoID != p.RepoID || snap.ID != id || !snap.DocumentRef().MatchesSnapshot(snap) {
 			return domain.ErrHashMismatch
 		}
-		if _, err := s.GetDoc(ctx, snap.DocHash); err != nil {
+		if _, err := s.GetDocReference(ctx, snap.DocumentRef()); err != nil {
 			return err
 		}
 	}

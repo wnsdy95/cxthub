@@ -17,7 +17,7 @@ func (s *Service) QueryCodeApplicability(ctx context.Context, repo domain.Conten
 	if domain.ValidateContentHash(repo) != nil || in.Validate() != nil {
 		return domain.CodeApplicability{}, domain.ErrValidation
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.CodeApplicability, error) {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.CodeApplicability, error) {
 		evidence, err := s.newCodeEvidence(ctx, repo)
 		if err != nil {
 			return domain.CodeApplicability{}, err

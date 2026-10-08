@@ -42,11 +42,16 @@ func (c *BackendClient) PersonalWorkPrincipal(ctx context.Context) (id, email st
 // budget on the HTTP body before decoding. Personal handoff must never use the
 // much larger general archive reader or silently truncate a source document.
 func (c *BackendClient) FetchPersonalWorkDocument(ctx context.Context, repo string, hash domain.ContentHash, remaining int64) (domain.SessionDoc, int64, error) {
+	return c.FetchPersonalWorkDocumentReference(ctx, repo, domain.DocumentRef{Hash: hash}, remaining)
+}
+
+// Explicit references preserve root identity without changing the cumulative byte cap.
+func (c *BackendClient) FetchPersonalWorkDocumentReference(ctx context.Context, repo string, ref domain.DocumentRef, remaining int64) (domain.SessionDoc, int64, error) {
 	var doc domain.SessionDoc
-	if remaining <= 0 || remaining > 8<<20 || domain.ValidateContentHash(domain.ContentHash(repo)) != nil || domain.ValidateContentHash(hash) != nil {
+	if remaining <= 0 || remaining > 8<<20 || domain.ValidateContentHash(domain.ContentHash(repo)) != nil || ref.Validate() != nil {
 		return doc, 0, domain.ErrHashMismatch
 	}
-	path := c.reposPath(repo) + "/docs/" + url.PathEscape(string(hash))
+	path := c.reposPath(repo) + "/docs/" + url.PathEscape(string(ref.Hash))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL()+path, nil)
 	if err != nil {
 		return doc, 0, err
@@ -54,6 +59,7 @@ func (c *BackendClient) FetchPersonalWorkDocument(ctx context.Context, repo stri
 	if token := c.token(); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	req.Header.Set("X-Cxt-Doc-Identities", string(domain.DocumentIdentityRootV1))
 	response, err := c.httpc.Do(req)
 	if err != nil {
 		return doc, 0, err
@@ -73,10 +79,10 @@ func (c *BackendClient) FetchPersonalWorkDocument(ctx context.Context, repo stri
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return doc, 0, err
 	}
-	if doc.Hash != hash {
+	if doc.DocumentRef() != ref {
 		return doc, 0, domain.ErrHashMismatch
 	}
-	if err := domain.ValidateSessionDocHash(doc); err != nil {
+	if err := domain.VerifySessionDocIdentity(ctx, doc); err != nil {
 		return doc, 0, err
 	}
 	return doc, int64(len(raw)), nil

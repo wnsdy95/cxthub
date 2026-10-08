@@ -110,6 +110,9 @@ func (s *IdentityService) DeleteTeam(ctx context.Context, actor, org, id string)
 		if role, _ := s.OrganizationRoleOf(ctx, org, actor); !role.AtLeast(domain.OrganizationAdmin) {
 			return domain.ErrForbidden
 		}
+		if err := s.checkTeamDocumentIdentities(ctx, id); err != nil {
+			return err
+		}
 		if err := s.teams.DeleteTeam(ctx, id); err != nil {
 			return err
 		}
@@ -134,6 +137,9 @@ func (s *IdentityService) UpdateTeamMember(ctx context.Context, actor, org, id, 
 		if err := domain.ValidateTeamMembership(m); err != nil {
 			return err
 		}
+		if err := s.checkTeamDocumentIdentities(ctx, id); err != nil {
+			return err
+		}
 		if err := s.teams.PutTeamMember(ctx, m); err != nil {
 			return err
 		}
@@ -143,6 +149,9 @@ func (s *IdentityService) UpdateTeamMember(ctx context.Context, actor, org, id, 
 func (s *IdentityService) RemoveTeamMember(ctx context.Context, actor, org, id, target string) error {
 	return s.withIdentity(ctx, func(ctx context.Context) error {
 		if _, err := s.teamForActor(ctx, actor, org, id, actor != target); err != nil {
+			return err
+		}
+		if err := s.checkTeamDocumentIdentities(ctx, id); err != nil {
 			return err
 		}
 		if err := s.teams.RemoveTeamMember(ctx, id, target); err != nil {
@@ -195,6 +204,9 @@ func (s *IdentityService) SetTeamRepository(ctx context.Context, actor, org, id,
 		if err := domain.ValidateTeamRepositoryGrant(grant); err != nil {
 			return err
 		}
+		if err := s.checkRepositoryDocumentIdentities(ctx, repository); err != nil {
+			return err
+		}
 		if err := s.teams.PutTeamRepositoryGrant(ctx, grant); err != nil {
 			return err
 		}
@@ -208,6 +220,9 @@ func (s *IdentityService) RemoveTeamRepository(ctx context.Context, actor, org, 
 		}
 		if !s.IsOwner(ctx, repository, actor) {
 			return domain.ErrForbidden
+		}
+		if err := s.checkRepositoryDocumentIdentities(ctx, repository); err != nil {
+			return err
 		}
 		if err := s.teams.RemoveTeamRepositoryGrant(ctx, id, repository); err != nil {
 			return err

@@ -112,7 +112,7 @@ func TestMetadataPullResumesVerificationWithoutPublishingPartialState(t *testing
 }
 
 func (r *interruptedDocumentPull) PullTo(ctx context.Context, _ string, _ map[domain.ContentHash]domain.ContentHash, _ []domain.ContentHash, receiver outbound.PullDocumentReceiver) ([]domain.Snapshot, []domain.Ref, error) {
-	has, err := receiver.HasVerifiedDoc(ctx, r.doc.Hash)
+	has, err := receiver.HasVerifiedDoc(ctx, r.doc.DocumentRef())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -163,7 +163,7 @@ func TestStreamingPullStagesBodiesBeforePublishingMetadata(t *testing.T) {
 }
 func TestPullReceiverRejectsCorruptBodyBeforeStaging(t *testing.T) {
 	st := storage.NewFileStore(t.TempDir())
-	receiver := &pullDocumentReceiver{store: st, verified: map[domain.ContentHash]bool{}}
+	receiver := &pullDocumentReceiver{store: st, verified: map[domain.DocumentRef]bool{}}
 	doc := pullDoc(t, "original")
 	doc.CIR.Events[0].Blocks[0].Text = "tampered"
 	if err := receiver.ReceiveDoc(context.Background(), doc); !errors.Is(err, domain.ErrHashMismatch) {

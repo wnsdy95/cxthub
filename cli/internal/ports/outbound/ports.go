@@ -276,8 +276,9 @@ type RemoteSync interface {
 // PullDocumentReceiver stages immutable, hash-verified bodies independently of
 // metadata/ref publication. Completed bodies survive a failed or canceled pull.
 type PullDocumentReceiver interface {
-	HasVerifiedDoc(context.Context, domain.ContentHash) (bool, error)
+	HasVerifiedDoc(context.Context, domain.DocumentRef) (bool, error)
 	ReceiveDoc(context.Context, domain.SessionDoc) error
+	ReceiveRoot(context.Context, domain.DocumentRepresentation) error
 }
 
 type StreamingRemotePull interface {

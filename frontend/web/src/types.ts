@@ -179,7 +179,12 @@ export interface Invite {
   expires_at?: string;
 }
 
+export type DocumentIdentity = '' | 'cxt-manifest-sha256-v1';
+
 export interface Repo {
+  required_doc_identity?: DocumentIdentity;
+  doc_identities_supported?: DocumentIdentity[];
+  root_publication_enabled?: boolean;
   context_protocol?: number;
   id: string;
   remote_url: string;
@@ -217,6 +222,7 @@ export interface Snapshot {
   branches?: string[];
   parents: string[] | null;
   doc_hash: string;
+  doc_identity?: DocumentIdentity;
 /** Attached compressed memory (MemoryDigest) hash — if present, provides memory view */
   memory_hash?: string;
   provider: string;
@@ -352,6 +358,7 @@ export interface MemoryDigest {
 /** Content-addressed session body (CIR) */
 export interface SessionDoc {
   hash: string;
+  identity?: DocumentIdentity;
   cir: {
     envelope: {
       cir_version?: '1' | '2';

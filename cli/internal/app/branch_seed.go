@@ -83,7 +83,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
-	fromDoc, err := s.store.GetDoc(ctx, fromSnap.DocHash)
+	fromDoc, err := readDocumentReference(ctx, s.store, fromSnap.DocumentRef())
 	if err != nil {
 		return inbound.SeedOutput{}, err
 	}
@@ -114,7 +114,7 @@ func (s *BranchSeedService) Seed(ctx context.Context, in inbound.SeedInput) (inb
 	} else if mref, merr := s.store.GetRef(ctx, repo.ID, domain.RefBranch, mainBranch); merr == nil && mref.Target != "" {
 		if msnap, serr := s.store.GetSnapshot(ctx, mref.Target); serr == nil {
 			mainSnap = msnap
-			if mdoc, derr := s.store.GetDoc(ctx, msnap.DocHash); derr == nil {
+			if mdoc, derr := readDocumentReference(ctx, s.store, msnap.DocumentRef()); derr == nil {
 				mainDoc = mdoc
 				mainDocAvailable = true
 			}

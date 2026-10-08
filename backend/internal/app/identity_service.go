@@ -165,6 +165,9 @@ func (s *IdentityService) mutateUpdateProfile(ctx context.Context, u domain.User
 			if other, err := s.repositories.GetUserByUsername(ctx, next); err == nil && other.ID != u.ID {
 				return domain.User{}, domain.ErrConflict // handle already in use
 			}
+			if err := s.checkPersonalDocumentIdentities(ctx, u.ID); err != nil {
+				return domain.User{}, err
+			}
 			if s.organization != nil {
 				var err error
 				personalNamespace, err = s.ensurePersonalNamespace(ctx, u)
@@ -237,6 +240,9 @@ func (s *IdentityService) mutateUpdateRepositorySettings(ctx context.Context, us
 	}
 	if !s.IsOwner(ctx, repositoryID, userID) {
 		return domain.Repository{}, domain.ErrForbidden // Repository settings are owner exclusive
+	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+		return domain.Repository{}, err
 	}
 	if p.GHVisibilitySync != nil {
 		repositoryRecord.GHVisibilitySync = *p.GHVisibilitySync
@@ -343,6 +349,9 @@ func (s *IdentityService) mutateTransferOwnership(ctx context.Context, actorID, 
 	if ok, err := s.repositories.IsMember(ctx, repositoryID, targetID); err != nil || !ok {
 		return domain.Repository{}, domain.ErrNotFound // only existing members can transfer
 	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+		return domain.Repository{}, err
+	}
 	organizationOwned := false
 	if repositoryRecord.OwnerNamespaceID != "" && s.organization != nil {
 		namespace, nerr := s.organization.GetNamespace(ctx, repositoryRecord.OwnerNamespaceID)
@@ -440,6 +449,9 @@ func (s *IdentityService) mutateUpdateMemberRole(ctx context.Context, actorID, r
 	if !ok {
 		return domain.ErrNotFound
 	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+		return err
+	}
 	return s.repositories.AddMember(ctx, domain.Membership{RepositoryID: repositoryID, UserID: targetID, Role: role, CreatedAt: time.Now().UTC()})
 }
 
@@ -455,6 +467,9 @@ func (s *IdentityService) mutateRemoveMember(ctx context.Context, actorID, repos
 	}
 	if actorID != targetID && !s.IsOwner(ctx, repositoryID, actorID) {
 		return domain.ErrForbidden // Removing others is only for owner
+	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+		return err
 	}
 	return s.repositories.RemoveMember(ctx, repositoryID, targetID)
 }
@@ -788,6 +803,19 @@ func (s *IdentityService) ListRepositories(ctx context.Context, userID string) (
 
 // backfillRepository fills in legacy records with slug/owner_username.
 func (s *IdentityService) backfillRepository(ctx context.Context, w domain.Repository) (domain.Repository, error) {
+	return identityResult(ctx, s, func(ctx context.Context) (domain.Repository, error) {
+		current, err := s.repositories.GetRepository(ctx, w.ID)
+		if err != nil {
+			return domain.Repository{}, err
+		}
+		if err := s.checkRepositoryDocumentIdentities(ctx, w.ID); err != nil {
+			return domain.Repository{}, err
+		}
+		return s.backfillRepositoryCommand(ctx, current)
+	})
+}
+
+func (s *IdentityService) backfillRepositoryCommand(ctx context.Context, w domain.Repository) (domain.Repository, error) {
 	owner, err := s.repositories.GetUser(ctx, w.OwnerID)
 	if err != nil {
 		return w, err
@@ -843,6 +871,9 @@ func (s *IdentityService) mutateInvite(ctx context.Context, userID, repositoryID
 	}
 	if ttl < 0 {
 		return domain.Invite{}, domain.ErrValidation
+	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+		return domain.Invite{}, err
 	}
 	var expires *time.Time
 	if ttl > 0 {
@@ -911,6 +942,9 @@ func (s *IdentityService) acceptInvite(ctx context.Context, user domain.User, to
 		if _, err := s.repositories.GetRepository(ctx, id); err != nil {
 			return domain.Repository{}, err
 		}
+	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, targets...); err != nil {
+		return domain.Repository{}, err
 	}
 	var result domain.Repository
 	for _, id := range targets {
@@ -1010,6 +1044,9 @@ func (s *IdentityService) mutateRevokeInvite(ctx context.Context, userID, reposi
 	actor, ok := s.RoleOf(ctx, inv.RepositoryID, userID)
 	if !ok || !actor.AtLeast(domain.RoleMaintainer) {
 		return domain.ErrForbidden
+	}
+	if err := s.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+		return err
 	}
 	return s.repositories.UpdateInviteStatus(ctx, token, domain.InviteRevoked)
 }

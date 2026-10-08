@@ -19,11 +19,12 @@ const MemoryProjectionVersion uint32 = 1
 // The server trusts the ID as a multi-tenant isolation key (output is CLI responsibility).
 // LocalPath is always an empty string on the server (local-only field, sync protocol).
 type Repo struct {
-	ContextProtocol int         `json:"context_protocol,omitempty"`
-	ID              ContentHash `json:"id"`
-	RemoteURL       string      `json:"remote_url"`
-	LocalPath       string      `json:"local_path"`
-	DefaultBranch   string      `json:"default_branch"`
+	RequiredDocIdentity DocumentIdentity `json:"required_doc_identity,omitempty"`
+	ContextProtocol     int              `json:"context_protocol,omitempty"`
+	ID                  ContentHash      `json:"id"`
+	RemoteURL           string           `json:"remote_url"`
+	LocalPath           string           `json:"local_path"`
+	DefaultBranch       string           `json:"default_branch"`
 	// RepositoryID is the containing repository (visibility boundary). During push it is
 	// derived from /<owner_username>/<repository-slug>/… in RemoteURL. "" means unowned (legacy).
 	RepositoryID string `json:"repository_id,omitempty"`

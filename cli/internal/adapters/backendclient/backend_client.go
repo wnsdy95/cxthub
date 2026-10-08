@@ -41,6 +41,17 @@ func NewBackendClient(baseURL, token func() string, identity domain.TeamIdentity
 	return &BackendClient{baseURL: baseURL, token: token, identity: identity, httpc: &http.Client{Timeout: 30 * time.Second}}
 }
 
+// Freeze the destination and credentials for HTTP requests without copying the
+// owning client's mutex-protected caches or local synchronization stores.
+func (c *BackendClient) frozenRequestClient(endpoint, token string) *BackendClient {
+	return &BackendClient{
+		baseURL:  func() string { return endpoint },
+		token:    func() string { return token },
+		identity: c.identity,
+		httpc:    c.httpc,
+	}
+}
+
 var _ outbound.RemoteSync = (*BackendClient)(nil)
 var _ outbound.PushObjectNegotiator = (*BackendClient)(nil)
 
@@ -53,10 +64,12 @@ type negotiateReq struct {
 	ChunkHaves []domain.ContentHash `json:"chunk_haves,omitempty"`
 }
 type negotiateResp struct {
-	PreparedMemoryArchivesSupported bool                 `json:"prepared_memory_archives_supported,omitempty"`
-	AsyncDocsSupported              bool                 `json:"async_docs_supported,omitempty"`
-	SnapshotWants                   []domain.ContentHash `json:"snapshot_wants"`
-	DocWants                        []domain.ContentHash `json:"doc_wants"`
+	DocIdentitiesSupported          []domain.DocumentIdentity `json:"doc_identities_supported,omitempty"`
+	RootPublicationEnabled          bool                      `json:"root_publication_enabled,omitempty"`
+	PreparedMemoryArchivesSupported bool                      `json:"prepared_memory_archives_supported,omitempty"`
+	AsyncDocsSupported              bool                      `json:"async_docs_supported,omitempty"`
+	SnapshotWants                   []domain.ContentHash      `json:"snapshot_wants"`
+	DocWants                        []domain.ContentHash      `json:"doc_wants"`
 	// ChunksSupported true = chunk wire support server (old servers lack field → false — blanket fallback).
 	ChunksSupported        bool                 `json:"chunks_supported,omitempty"`
 	BoundedChunksSupported bool                 `json:"bounded_chunks_supported,omitempty"`
@@ -66,12 +79,7 @@ type negotiateResp struct {
 }
 
 // chunkedDocWire is the wire form sending doc as manifest (envelope+chunk hash).
-type chunkedDocWire struct {
-	Hash     domain.ContentHash   `json:"hash"`
-	Format   string               `json:"format,omitempty"`
-	Envelope json.RawMessage      `json:"envelope"`
-	Chunks   []domain.ContentHash `json:"chunks"`
-}
+type chunkedDocWire = domain.DocumentRepresentation
 
 // chunkObjWire is the chunk body (Data is the uncompressed chunk bytes — JSON base64).
 type chunkObjWire struct {
@@ -193,6 +201,9 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// A protocol declaration only; the server still checks repository policy,
+	// current authorization and every referenced document's actual bytes.
+	req.Header.Set("X-Cxt-Doc-Identities", string(domain.DocumentIdentityRootV1))
 	endToken := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageTokenLookup, outbound.SyncDiagnosticCounts{})
 	token := c.token()
 	endToken(diagnosticCtx.Err())
@@ -343,6 +354,9 @@ func escapePathName(name string) string {
 }
 
 func validateSnapshotObject(snap domain.Snapshot) error {
+	if err := snap.DocumentRef().Validate(); err != nil {
+		return err
+	}
 	if err := domain.ValidateContentHash(snap.ID); err != nil {
 		return err
 	}
@@ -848,6 +862,18 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 	if err := domain.ValidateContentHash(domain.ContentHash(repoID)); err != nil {
 		return err
 	}
+	for _, doc := range docs {
+		if doc.Identity != domain.DocumentIdentityLegacy {
+			return domain.ErrUnsupportedDocumentIdentity
+		}
+	}
+	refsToCheck := make([]domain.DocumentRef, 0, len(snapshots))
+	for _, snap := range snapshots {
+		refsToCheck = append(refsToCheck, snap.DocumentRef())
+	}
+	if err := c.PreflightDocumentReferences(ctx, repoID, refsToCheck); err != nil {
+		return err
+	}
 	snapHaves := make([]domain.ContentHash, 0, len(snapshots))
 	for _, s := range snapshots {
 		if err := validateSnapshotObject(s); err != nil {
@@ -1319,6 +1345,25 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	expected := make(map[domain.ContentHash]domain.DocumentRef, len(snapshots))
+	for _, snap := range snapshots {
+		ref := snap.DocumentRef()
+		if err := ref.Validate(); err != nil {
+			return nil, nil, nil, err
+		}
+		if snap.ID != ref.Hash {
+			return nil, nil, nil, domain.ErrHashMismatch
+		}
+		if old, exists := expected[ref.Hash]; exists && old != ref {
+			return nil, nil, nil, domain.ErrHashMismatch
+		}
+		expected[ref.Hash] = ref
+		// A legacy hash-only have cannot establish a root identity/current closure.
+		if ref.Identity == domain.DocumentIdentityRootV1 && !docWantSet[ref.Hash] {
+			docWantSet[ref.Hash] = true
+			docWants = append(docWants, ref.Hash)
+		}
+	}
 	if receiver != nil {
 		for _, id := range docWants {
 			if err := ctx.Err(); err != nil {
@@ -1326,11 +1371,21 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 			}
 			// A prior attempt may have staged the body but not its snapshot.
 			// Such bodies are deliberately absent from the metadata manifest.
-			has, err := receiver.HasVerifiedDoc(ctx, id)
+			ref, known := expected[id]
+			if !known {
+				return nil, nil, nil, domain.ErrHashMismatch
+			}
+			has, err := receiver.HasVerifiedDoc(ctx, ref)
 			if err != nil {
 				return nil, nil, nil, err
 			}
 			if has {
+				continue
+			}
+			if ref.Identity == domain.DocumentIdentityRootV1 {
+				if err := c.pullRootDocument(ctx, repoID, ref, receiver); err != nil {
+					return nil, nil, nil, err
+				}
 				continue
 			}
 			docs, err := c.pullDocs(ctx, repoID, []domain.ContentHash{id}, map[domain.ContentHash]bool{id: true})
@@ -1345,6 +1400,11 @@ func (c *BackendClient) pullCatalog(ctx context.Context, repoID string, snapshot
 			}
 		}
 		return snapshots, nil, man.Refs, ctx.Err()
+	}
+	for _, ref := range expected {
+		if ref.Identity != domain.DocumentIdentityLegacy {
+			return nil, nil, nil, domain.ErrUnsupportedDocumentIdentity
+		}
 	}
 	pulledDocs, err := c.pullDocs(ctx, repoID, docWants, docWantSet)
 	if err != nil {
@@ -1401,7 +1461,7 @@ func (c *BackendClient) pullDocs(ctx context.Context, repoID string, docWants []
 	var need []domain.ContentHash
 	bodies := map[domain.ContentHash][]byte{}
 	for _, m := range manResp.DocManifests {
-		if !docWantSet[m.Hash] || seenMan[m.Hash] || len(m.Chunks) == 0 || !chunkcas.SupportedFormat(m.Format) {
+		if m.Identity != domain.DocumentIdentityLegacy || !docWantSet[m.Hash] || seenMan[m.Hash] || len(m.Chunks) == 0 || !chunkcas.SupportedFormat(m.Format) {
 			return nil, domain.ErrHashMismatch
 		}
 		seenMan[m.Hash] = true

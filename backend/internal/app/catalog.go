@@ -41,7 +41,7 @@ func (s *Service) CatalogChanges(ctx context.Context, repo domain.ContentHash, r
 	if request.Limit == 0 {
 		request.Limit = domain.DefaultCatalogLimit
 	}
-	return repositoryRead(ctx, s, func(bound context.Context) (domain.CatalogPage, error) {
+	return repositoryReadForRepo(ctx, s, repo, func(bound context.Context) (domain.CatalogPage, error) {
 		return store.CatalogChanges(bound, repo, request)
 	})
 }

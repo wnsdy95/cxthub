@@ -51,7 +51,7 @@ func TestCaptureProjectionMatchesFullDecode(t *testing.T) {
 					t.Fatal(err)
 				}
 				counting.bytes = 0
-				_, got, offset, _, err := svc.Project(context.Background(), root, path, source, counting, true)
+				_, got, offset, _, err := svc.Project(context.Background(), root, path, source, counting, true, domain.DocumentIdentityLegacy)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -65,7 +65,7 @@ func TestCaptureProjectionMatchesFullDecode(t *testing.T) {
 				}
 				full = capture.ScrubDoc(full, root)
 				b, _ := domain.CanonicalBytes(full)
-				if got != domain.HashContent(b) {
+				if got.Hash != domain.HashContent(b) {
 					t.Fatalf("incremental hash %s != full %s", got, domain.HashContent(b))
 				}
 				if offset != int64(len(raw)) {
@@ -74,7 +74,7 @@ func TestCaptureProjectionMatchesFullDecode(t *testing.T) {
 				if counting.bytes > decodeLimit {
 					t.Fatalf("decoded %d bytes; budget %d", counting.bytes, decodeLimit)
 				}
-				if _, err := store.GetDoc(context.Background(), got); err != nil {
+				if _, err := store.GetDoc(context.Background(), got.Hash); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -99,10 +99,10 @@ func TestCaptureProjectionMatchesFullDecode(t *testing.T) {
 			if err := os.WriteFile(path, []byte(broken), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, _, _, err := svc.Project(context.Background(), root, path, source, counting, false); err == nil {
+			if _, _, _, _, err := svc.Project(context.Background(), root, path, source, counting, false, domain.DocumentIdentityLegacy); err == nil {
 				t.Fatal("explicit save accepted an incomplete record")
 			}
-			_, _, offset, _, err := svc.Project(context.Background(), root, path, source, counting, true)
+			_, _, offset, _, err := svc.Project(context.Background(), root, path, source, counting, true, domain.DocumentIdentityLegacy)
 			if err != nil {
 				t.Fatal(err)
 			}

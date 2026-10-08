@@ -116,7 +116,7 @@ func (s *FileStore) writeStaging(index domain.StagingIndex) error {
 
 func (s *FileStore) verifyStagedDocs(ctx context.Context, index domain.StagingIndex) error {
 	for _, e := range index.Entries {
-		doc, err := s.GetDoc(ctx, e.DocHash)
+		doc, err := s.GetDocReference(ctx, e.DocumentRef())
 		if err != nil {
 			return fmt.Errorf("staged document %s: %w", e.DocHash, err)
 		}
@@ -206,7 +206,7 @@ func (s *FileStore) readStagingOperation(repo, id string) (domain.StagingCommit,
 	return op, nil
 }
 func (s *FileStore) validateStagingOperation(op domain.StagingCommit) error {
-	if op.Version != 1 && op.Version != domain.StagingCommitVersion {
+	if op.Version != 1 && op.Version != domain.StagingCommitVersion && op.Version != domain.RootStagingCommitVersion {
 		return domain.ErrStagingVersion
 	}
 	if _, err := s.stagingOperationPath(op.ID); err != nil {
@@ -214,6 +214,9 @@ func (s *FileStore) validateStagingOperation(op domain.StagingCommit) error {
 	}
 	if err := domain.ValidateStagingIndex(op.Index); err != nil {
 		return err
+	}
+	if op.Index.HasRootDocuments() != (op.Version == domain.RootStagingCommitVersion) {
+		return domain.ErrStagingVersion
 	}
 	if len(op.Index.Entries) == 0 || op.CreatedAt.IsZero() || op.Index.WorktreeID != s.worktreeID {
 		return domain.ErrHashMismatch
@@ -264,7 +267,7 @@ func (s *FileStore) validateStagingOperation(op domain.StagingCommit) error {
 		if e.Kind != "publish" || e.RepoID != p.RepoID || e.GitAfter != p.GitCommit || e.BranchID != p.BranchID || e.WorktreeID != s.worktreeID {
 			return domain.ErrHashMismatch
 		}
-		if op.Version == domain.StagingCommitVersion && (!p.MemoryPinned || e.Branch != p.Branch || e.LocalBranch != p.LocalBranch || e.Source != e.Target || !e.MemoryPinned) {
+		if op.Version >= domain.StagingCommitVersion && (!p.MemoryPinned || e.Branch != p.Branch || e.LocalBranch != p.LocalBranch || e.Source != e.Target || !e.MemoryPinned) {
 			return domain.ErrHashMismatch
 		}
 	}
@@ -334,19 +337,33 @@ func (s *FileStore) stagingApplied(op domain.StagingCommit) (bool, error) {
 }
 
 func (s *FileStore) finishStagingCommit(ctx context.Context, op *domain.StagingCommit, apply bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	root := op.Index.HasRootDocuments()
 	if op.LocalFinalized {
+		if root {
+			return s.verifyRootStagingReplay(ctx, *op)
+		}
 		return nil
 	}
 	applied, err := s.stagingApplied(*op)
 	if err != nil {
 		return err
 	}
-	if !applied {
-		if !apply {
-			return nil
-		}
-		if err := s.verifyStagedDocs(ctx, op.Index); err != nil {
+	if !applied && !apply {
+		return nil
+	}
+	if root {
+		if err := s.verifyRootStagingReplay(ctx, *op); err != nil {
 			return err
+		}
+	}
+	if !applied {
+		if !root {
+			if err := s.verifyStagedDocs(ctx, op.Index); err != nil {
+				return err
+			}
 		}
 		index, err := s.readStagingIndex(op.Index.RepoID)
 		if err != nil {
@@ -400,7 +417,7 @@ func (s *FileStore) finishStagingCommit(ctx context.Context, op *domain.StagingC
 			if err != nil {
 				return err
 			}
-			if snap.RepoID != op.Index.RepoID || snap.DocHash != entry.DocHash {
+			if snap.RepoID != op.Index.RepoID || !entry.DocumentRef().MatchesSnapshot(snap) {
 				return domain.ErrHashMismatch
 			}
 		}
@@ -429,6 +446,9 @@ func (s *FileStore) finishStagingCommit(ctx context.Context, op *domain.StagingC
 	}
 	// Immutable publication records are the existing synchronization outbox. An
 	// interrupted acknowledgement never requires reopening the provider source.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for _, e := range append(append(domain.StagingObservations(*op), op.Publications...), *op.Position.Selection) {
 		if err := s.putHistoryEvent(e); err != nil {
 			return err

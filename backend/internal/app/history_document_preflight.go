@@ -6,10 +6,12 @@ import (
 	"reflect"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 func (s *Service) recordHistoryWithDocumentPreparation(ctx context.Context, event domain.HistoryEvent) error {
+	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
 	repo := domain.ContentHash(event.RepoID)
 	original := func(ctx context.Context) error {
 		return repositoryWriteError(ctx, s, repo, func(tx context.Context) error { return s.recordHistory(tx, event, false, nil) })
@@ -32,6 +34,9 @@ func (s *Service) recordHistoryWithDocumentPreparation(ctx context.Context, even
 		// unaccepted preflight must not advance revisions or create audit rows.
 		err := tx.WithinRepository(ctx, repo, func(bound context.Context) error {
 			if err := s.authorizeRepositoryWrite(bound, repo); err != nil {
+				return err
+			}
+			if err := s.checkDocumentIdentity(bound, repo, true); err != nil {
 				return err
 			}
 			if err := domain.ValidateHistoryEvent(event); err != nil {
@@ -68,6 +73,9 @@ func (s *Service) recordHistoryWithDocumentPreparation(ctx context.Context, even
 		preparationErr := tx.WithinReadSnapshot(ctx, func(read context.Context) error {
 			if !state.InReadOnlyTransaction(read) {
 				return domain.ErrConflict
+			}
+			if err := s.checkDocumentIdentity(read, repo, true); err != nil {
+				return err
 			}
 			for _, id := range roots {
 				if id == "" {

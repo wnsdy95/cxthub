@@ -91,7 +91,7 @@ func (r *incomingTransferRemote) PullSelectedBranchTo(ctx context.Context, repo 
 		if states[id] != plan.SnapshotStates[id] {
 			changed = append(changed, s)
 		}
-		have, err := receiver.HasVerifiedDoc(ctx, id)
+		have, err := receiver.HasVerifiedDoc(ctx, s.DocumentRef())
 		if err != nil {
 			return plan, nil, err
 		}

@@ -29,12 +29,12 @@ func (*configCoordinationProjection) Settings(string, string) (domain.SettingsBu
 	return domain.SettingsBundle{}, false
 }
 func (*configCoordinationProjection) RecordAffinity(string, domain.ProviderKind, string) {}
-func (p *configCoordinationProjection) Project(ctx context.Context, root, path string, source outbound.CaptureSource, codec outbound.ProviderCodec, partial bool) (domain.Envelope, domain.ContentHash, int64, *time.Time, error) {
+func (p *configCoordinationProjection) Project(ctx context.Context, root, path string, source outbound.CaptureSource, codec outbound.ProviderCodec, partial bool, identity domain.DocumentIdentity) (domain.Envelope, domain.DocumentRef, int64, *time.Time, error) {
 	close(p.entered)
 	<-p.release
 	envelope := domain.Envelope{SessionOriginID: "config-race", GitBranch: "main"}
 	h, err := p.store.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{Envelope: envelope}})
-	return envelope, h, 1, nil, err
+	return envelope, domain.DocumentRef{Hash: h}, 1, nil, err
 }
 
 // Pause real Save after admission. Config publication must wait for the entire

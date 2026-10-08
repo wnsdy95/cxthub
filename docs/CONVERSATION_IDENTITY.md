@@ -1,11 +1,10 @@
-# Staged conversation identity contract
+# Conversation identity contract
 
-Status: explicit internal root readers and metadata are implemented. Root
-publication, peer negotiation and capture are **not enabled**. Existing
-published CLI/API/MCP data continues using the canonical-CIR hash. An explicit
-root declaration at the current publication
-boundary returns `unsupported_document_identity`; it is never silently treated
-as a legacy hash.
+Root reads, publication, negotiation and capture use an explicit tagged
+contract. New root publication remains opt-in: it requires a compatible
+released binary, the server admission setting and the repository requirement.
+Existing archives retain their canonical-CIR IDs. An incompatible binary or
+peer must reject a root reference; it must never treat it as a legacy hash.
 
 ## Identity and representation
 
@@ -16,7 +15,7 @@ legacy objects, preserving their wire bytes and snapshot-state fingerprints.
 immutable; replay cannot relabel a stored snapshot. Memory and graph overlays
 remain separate from the conversation identity.
 
-The staged `cxt-manifest-sha256-v1` scheme hashes the exact bytes:
+The `cxt-manifest-sha256-v1` scheme hashes the exact bytes:
 
 ```
 "cxt-conversation-root-v1\0" || canonical_manifest
@@ -84,11 +83,9 @@ Local and FS maintenance mark root chunk dependencies without repacking the
 root as a legacy object. An undecodable document aborts destructive chunk
 sweeping. PostgreSQL document deletion continues retaining chunk grants.
 
-These internal readers are not a negotiated public root transport. Agent
-history, import, initialization and publication remain explicitly gated until
-their tagged contracts and consumers are complete. Full root reads and search
-still verify all current body bytes; this stage makes no incremental-read or
-search speedup claim.
+Agent history, import, initialization and publication carry the same tagged
+reference. Full root reads and search still verify all current body bytes;
+root identity alone does not make reads or search incremental.
 
 ## Rollout requirements
 
@@ -102,15 +99,24 @@ identity and reject incompatible peers before side effects:
 5. Repository-level compatibility checks, including metadata-only operations
    and a concurrent first-root publication.
 
-Root support will be negotiated independently from CIR version, chunk format
+Root support is negotiated independently from CIR version, chunk format
 and metadata catalog capabilities. An old peer's empty missing-object list is
 not proof of compatibility. A previously created root cannot be relabeled or
 rehashed into a legacy object during retry. Creating a legacy equivalent would
 be a separate object with separate provenance, never an implicit fallback.
 
-Until those gates are complete, no production-facing capability advertises
-root support and no capture path creates roots. Internal reader tests are
-preparation, not end-to-end root support.
+Read support requires complete reader and accepted-job recovery adapters.
+New publication additionally requires production repository transactions.
+Admission is off by default. Disabling it after opt-in keeps existing root
+reads, metadata updates, memory versions and accepted-job recovery available;
+it does not remove the repository requirement or make old clients compatible.
+
+Before repository opt-in, replace and verify every API, MCP, worker and
+maintenance binary that can access it. A schema migration alone cannot protect
+data from an old binary. See [conversation storage](CONVERSATION_MEMORY_STORAGE.md)
+for admission settings and [CLI configuration](CLI.md) for the capture
+preference. Configuring capture checks the server; later offline captures can
+use that saved preference, but every upload checks current admission again.
 
 Root hashing is proportional to manifest size. Full current-byte verification
 still reads existing bytes, and the flat manifest remains proportional to chunk

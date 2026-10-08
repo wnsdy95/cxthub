@@ -235,7 +235,7 @@ func TestStagingReadIsPureAndCorruptionFailsClosed(t *testing.T) {
 	}
 	f := newFrozenFixture(t)
 	future := f.index
-	future.Version++
+	future.Version = domain.RootStagingVersion + 1
 	future = future.WithRevision()
 	raw, _ := json.Marshal(future)
 	if err := writeAtomic(f.store.stagingPath(), raw); err != nil {

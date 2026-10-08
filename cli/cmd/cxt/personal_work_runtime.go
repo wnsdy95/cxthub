@@ -30,6 +30,11 @@ type personalWorkBackend interface {
 	FetchPersonalWorkDocument(context.Context, string, domain.ContentHash, int64) (domain.SessionDoc, int64, error)
 }
 
+// Optional explicit-reference transport keeps older fixtures/adapters legacy-only.
+type personalWorkReferenceBackend interface {
+	FetchPersonalWorkDocumentReference(context.Context, string, domain.DocumentRef, int64) (domain.SessionDoc, int64, error)
+}
+
 type importedPersonalWork struct {
 	repo  string
 	state domain.PersonalWorkState
@@ -180,14 +185,15 @@ func validatePersonalWorkSources(ctx context.Context, remote personalWorkBackend
 	if len(state.Sources) == 0 || len(state.Sources) > 128 || len(state.Constraints) > 128 {
 		return fail("requires 1..128 explicit sources and at most 128 exact constraints")
 	}
-	docs := map[domain.ContentHash]domain.SessionDoc{}
+	docs := map[domain.DocumentRef]domain.SessionDoc{}
 	const maxDocuments = 8
 	remaining := int64(8 << 20)
 	validate := func(source domain.AgentSourcePointer) ([]domain.Event, error) {
-		if domain.ValidateContentHash(source.SnapshotID) != nil || source.DocHash != source.SnapshotID || source.MemoryHash != "" || source.Tool != "context_fetch" || source.StartEvent < 0 || source.EndEvent <= source.StartEvent {
+		if domain.ValidateContentHash(source.SnapshotID) != nil || source.DocHash != source.SnapshotID || source.DocIdentity.Validate() != nil || source.MemoryHash != "" || source.Tool != "context_fetch" || source.StartEvent < 0 || source.EndEvent <= source.StartEvent {
 			return nil, fail("source must address a document and a nonempty [start_event,end_event) range")
 		}
-		doc, found := docs[source.DocHash]
+		ref := domain.DocumentRef{Hash: source.DocHash, Identity: source.DocIdentity}
+		doc, found := docs[ref]
 		if !found {
 			if len(docs) >= maxDocuments || remaining <= 0 {
 				return nil, fail("source validation exceeds 8 documents or 8 MiB; select a smaller explicit handoff")
@@ -196,11 +202,17 @@ func validatePersonalWorkSources(ctx context.Context, remote personalWorkBackend
 			if err != nil {
 				return nil, fmt.Errorf("--work-state source snapshot unavailable: %w", err)
 			}
-			if snap.RepoID != repo || snap.ID != source.SnapshotID || snap.DocHash != source.DocHash || snap.SessionID != state.Scope.SessionID || email == "" || snap.Author.Email != email {
+			if snap.RepoID != repo || snap.ID != source.SnapshotID || snap.DocumentRef() != ref || snap.SessionID != state.Scope.SessionID || email == "" || snap.Author.Email != email {
 				return nil, fail("source repository, recorded author email, or exact session mismatch")
 			}
 			var used int64
-			doc, used, err = remote.FetchPersonalWorkDocument(ctx, repo, source.DocHash, remaining)
+			if explicit, ok := remote.(personalWorkReferenceBackend); ok {
+				doc, used, err = explicit.FetchPersonalWorkDocumentReference(ctx, repo, ref, remaining)
+			} else if ref.Identity == domain.DocumentIdentityLegacy {
+				doc, used, err = remote.FetchPersonalWorkDocument(ctx, repo, ref.Hash, remaining)
+			} else {
+				return nil, domain.ErrUnsupportedDocumentIdentity
+			}
 			if err != nil {
 				return nil, fmt.Errorf("--work-state source document unavailable: %w", err)
 			}
@@ -208,10 +220,10 @@ func validatePersonalWorkSources(ctx context.Context, remote personalWorkBackend
 				return nil, fail("source validation exceeds the remaining 8 MiB document budget")
 			}
 			remaining -= used
-			if doc.Hash != source.DocHash || domain.ValidateSessionDocHash(doc) != nil || doc.CIR.Envelope.SessionOriginID != state.Scope.SessionID {
+			if doc.DocumentRef() != ref || domain.VerifySessionDocIdentity(ctx, doc) != nil || doc.CIR.Envelope.SessionOriginID != state.Scope.SessionID {
 				return nil, fail("source document hash or exact session mismatch")
 			}
-			docs[source.DocHash] = doc
+			docs[ref] = doc
 		}
 		if source.EndEvent > len(doc.CIR.Events) {
 			return nil, fail("source event range is outside the document")

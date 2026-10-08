@@ -24,6 +24,13 @@ func (s *Service) GetRepositoryInitializationView(ctx context.Context, id domain
 		if err != nil {
 			return false, err
 		}
+		// Basic discovery may return metadata to an old peer, but no state query.
+		if err := repo.RequiredDocIdentity.Validate(); err != nil {
+			return false, err
+		}
+		if !hasDocumentIdentity(s.DocumentIdentitiesSupported(), repo.RequiredDocIdentity) || !hasDocumentIdentity(inbound.DocumentIdentities(tx), repo.RequiredDocIdentity) {
+			return false, nil
+		}
 		if branch == "" {
 			return false, nil
 		}
@@ -96,6 +103,9 @@ func (s *Service) GetRepositoryInitialization(ctx context.Context, id domain.Con
 	var receipt domain.RepositoryInitializationReceipt
 	err = s.meta.(outbound.RepositoryTransactions).WithinRepository(writeAction(ctx, "manage"), id, func(tx context.Context) error {
 		if err := s.authorizeRepositoryWrite(tx, id); err != nil {
+			return err
+		}
+		if err := s.checkDocumentIdentity(tx, id, false); err != nil {
 			return err
 		}
 		var err error
@@ -174,7 +184,7 @@ func (s *Service) FinalizeRepositoryInitialization(ctx context.Context, id domai
 	if err != nil || receipt.Anchor != nil {
 		return receipt, err
 	}
-	proof, verificationErr := repositoryRead(ctx, s, func(read context.Context) (outbound.RepositoryInitializationProof, error) {
+	proof, verificationErr := repositoryReadForRepo(ctx, s, id, func(read context.Context) (outbound.RepositoryInitializationProof, error) {
 		state, ok := s.meta.(outbound.RepositoryTransactionState)
 		if !ok || !state.InReadOnlyTransaction(read) {
 			return nil, domain.ErrRepositoryInitializationUnsupported

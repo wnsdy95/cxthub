@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -21,6 +22,13 @@ import (
 
 func (s *PostgresStore) importRepo(ctx context.Context, f *frozenFS, source *FSStore, r domain.Repo) error {
 	prefix := "repos/" + hexOf(r.ID)
+	verifiedDocs := map[domain.ContentHash]domain.DocumentRef{}
+	readChunk := func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return f.read(prefix + "/objects/chunks/" + hexOf(hash))
+	}
 	// Components first. Verify content hashes independently, including currently
 	// unreferenced objects, so queued uploads retain all of their input chunks.
 	for _, kind := range []struct{ dir, wire string }{{"chunks", "chunk"}, {"memory_chunks", "memory_chunk"}, {"docs", "doc"}, {"memories", "memory"}} {
@@ -43,9 +51,12 @@ func (s *PostgresStore) importRepo(ctx context.Context, f *frozenFS, source *FSS
 			if err != nil {
 				return err
 			}
-			body, err := docDecompress(raw)
-			if err != nil {
-				return err
+			var body []byte
+			if kind.wire != "doc" {
+				body, err = docDecompress(raw)
+				if err != nil {
+					return err
+				}
 			}
 			switch kind.wire {
 			case "chunk", "memory_chunk":
@@ -53,9 +64,15 @@ func (s *PostgresStore) importRepo(ctx context.Context, f *frozenFS, source *FSS
 					return domain.ErrIntegrity
 				}
 			case "doc":
-				if err = verifyFrozenDoc(ctx, source, r.ID, h, body); err != nil {
+				var ref domain.DocumentRef
+				ref, err = verifyFrozenDocWithReader(ctx, h, raw, readChunk)
+				if err != nil {
 					return fmt.Errorf("document %s: %w", h, err)
 				}
+				if ref.Identity == domain.DocumentIdentityRootV1 && r.RequiredDocIdentity != domain.DocumentIdentityRootV1 {
+					return fmt.Errorf("root document without repository requirement: %w", domain.ErrIntegrity)
+				}
+				verifiedDocs[h] = ref
 			case "memory":
 				if _, err = source.GetMemory(ctx, r.ID, h); err != nil {
 					return err
@@ -82,6 +99,10 @@ func (s *PostgresStore) importRepo(ctx context.Context, f *frozenFS, source *FSS
 	}
 	if err := importJSON(f, prefix+"/snapshots", func(p string, snap domain.Snapshot, _ []byte) error {
 		if snap.RepoID != r.ID || filepath.Base(p) != hexOf(snap.ID) {
+			return domain.ErrIntegrity
+		}
+		ref, present := verifiedDocs[snap.DocHash]
+		if (present && ref != snap.DocumentRef()) || (!present && snap.DocIdentity != domain.DocumentIdentityLegacy) {
 			return domain.ErrIntegrity
 		}
 		if e := s.PutSnapshot(ctx, snap); e != nil {
@@ -221,22 +242,38 @@ func (s *PostgresStore) importRepo(ctx context.Context, f *frozenFS, source *FSS
 	return ensureNoReachabilityCycle(ctx, ctx.Value(repositoryTxKey{}).(*repositoryTx), r.ID)
 }
 
-// Verify the complete document identity with bounded component memory. This
-// reproduces the public chunk-format contract; it never trusts a read/search cache.
-func verifyFrozenDoc(ctx context.Context, source *FSStore, repo, want domain.ContentHash, body []byte) error {
-	if err := rejectStoredRoot(ctx, body); err != nil {
-		return err
+func verifyFrozenDocWithReader(ctx context.Context, want domain.ContentHash, stored []byte, read storedChunkReader) (domain.DocumentRef, error) {
+	ref := domain.DocumentRef{Hash: want}
+	manifest, root, err := storedConversationManifest(ctx, stored)
+	if err != nil {
+		return domain.DocumentRef{}, err
+	}
+	if root {
+		doc, err := verifyStoredConversation(ctx, want, manifest, read)
+		if err != nil {
+			return domain.DocumentRef{}, err
+		}
+		return doc.DocumentRef(), nil
+	}
+	body, err := docDecompress(stored)
+	if err != nil {
+		return domain.DocumentRef{}, domain.ErrIntegrity
 	}
 	man, chunked := domain.ParseDocChunkManifest(body)
 	if !chunked {
 		var cir domain.CIRDocument
-		if err := json.Unmarshal(body, &cir); err != nil {
-			return domain.ErrIntegrity
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&cir); err != nil {
+			return domain.DocumentRef{}, domain.ErrIntegrity
 		}
-		return domain.ValidateSessionDocHash(domain.SessionDoc{Hash: want, CIR: cir})
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return domain.DocumentRef{}, domain.ErrIntegrity
+		}
+		return ref, domain.ValidateSessionDocHash(domain.SessionDoc{Hash: want, CIR: cir})
 	}
 	if !domain.SupportedChunkFormat(man.Format) || !json.Valid(man.Envelope) {
-		return domain.ErrIntegrity
+		return domain.DocumentRef{}, domain.ErrIntegrity
 	}
 	h := sha256.New()
 	h.Write([]byte(`{"envelope":`))
@@ -245,14 +282,18 @@ func verifyFrozenDoc(ctx context.Context, source *FSStore, repo, want domain.Con
 	first := true
 	for _, ch := range man.Chunks {
 		if err := ctx.Err(); err != nil {
-			return err
+			return domain.DocumentRef{}, err
 		}
-		b, err := source.GetChunk(ctx, repo, ch)
+		raw, err := read(ctx, ch)
 		if err != nil {
-			return err
+			return domain.DocumentRef{}, err
+		}
+		b, err := docDecompress(raw)
+		if err != nil {
+			return domain.DocumentRef{}, err
 		}
 		if domain.HashContent(b) != ch {
-			return domain.ErrIntegrity
+			return domain.DocumentRef{}, domain.ErrIntegrity
 		}
 		if man.Format == domain.ChunkFormatV2 {
 			h.Write(b)
@@ -268,7 +309,7 @@ func verifyFrozenDoc(ctx context.Context, source *FSStore, repo, want domain.Con
 	}
 	h.Write([]byte(`]}`))
 	if "sha256:"+hex.EncodeToString(h.Sum(nil)) != string(want) {
-		return domain.ErrIntegrity
+		return domain.DocumentRef{}, domain.ErrIntegrity
 	}
-	return nil
+	return ref, nil
 }

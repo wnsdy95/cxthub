@@ -1,0 +1,63 @@
+{
+  "root": [
+    {
+      "name": "empty",
+      "repo_id": "sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699",
+      "document_json": "{\"hash\":\"sha256:ed840f598f733b77a265c201a5b47878c405243c373574972cf109f5a412b774\",\"identity\":\"cxt-manifest-sha256-v1\",\"root_manifest\":{\"chunk_format\":\"cxt-doc-chunks-v2\",\"chunks\":[],\"envelope\":{\"captured_at\":\"2026-10-07T00:00:00Z\",\"cir_version\":\"2\",\"cwd\":\"/tmp/\ud55c\uae00\",\"fidelity\":\"full\",\"git_branch\":\"main\",\"session_origin_id\":\"synthetic\",\"source_model\":\"model\",\"source_provider\":\"codex\"},\"event_count\":0,\"identity\":\"cxt-manifest-sha256-v1\",\"stream_bytes\":0,\"version\":1}}",
+      "job_id": "sha256:db8ddf01e0f62737b715a7da92480fc0c0d5556806c0f6cb18095bc6bab52754"
+    },
+    {
+      "name": "precise",
+      "repo_id": "sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699",
+      "document_json": "{\"hash\":\"sha256:de98c015a8f54f56ca88b074683afa744ebaac7867a1e06cb825d43914368cbd\",\"identity\":\"cxt-manifest-sha256-v1\",\"root_manifest\":{\"chunk_format\":\"cxt-doc-chunks-v2\",\"chunks\":[],\"envelope\":{\"captured_at\":\"2026-10-07T00:00:00Z\",\"cir_version\":\"2\",\"cwd\":\"/tmp/\ud55c\uae00\",\"fidelity\":\"full\",\"git_branch\":\"main\",\"output_tokens\":9007199254740993,\"session_origin_id\":\"synthetic\",\"source_model\":\"model\",\"source_provider\":\"codex\"},\"event_count\":0,\"identity\":\"cxt-manifest-sha256-v1\",\"stream_bytes\":0,\"version\":1}}",
+      "job_id": "sha256:28bc0158a31945aa0a14665b5428d2ef15f6b10a8dda13adf5e14ac0eec587e1"
+    },
+    {
+      "name": "repeat",
+      "repo_id": "sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699",
+      "document_json": "{\"hash\":\"sha256:61c8b2acd54ac042ea0b0ce13715b762cdfa84e37d123677f4ed30df1904b835\",\"identity\":\"cxt-manifest-sha256-v1\",\"root_manifest\":{\"chunk_format\":\"cxt-doc-chunks-v2\",\"chunks\":[{\"bytes\":524288,\"hash\":\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"},{\"bytes\":524288,\"hash\":\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"}],\"envelope\":{\"captured_at\":\"2026-10-07T00:00:00Z\",\"cir_version\":\"2\",\"cwd\":\"/tmp/\ud55c\uae00\",\"fidelity\":\"full\",\"git_branch\":\"main\",\"session_origin_id\":\"synthetic\",\"source_model\":\"model\",\"source_provider\":\"codex\"},\"event_count\":2,\"identity\":\"cxt-manifest-sha256-v1\",\"stream_bytes\":1048576,\"version\":1}}",
+      "job_id": "sha256:718f2202e92b5982b8d1ac60d610ddbd7a53a9102159575a4b424e65a0e75dd5"
+    },
+    {
+      "name": "ordered",
+      "repo_id": "sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699",
+      "document_json": "{\"hash\":\"sha256:d89e0a94407bd787ea7f3189f1a107e7af21f2e952af296be0902a53fe91b94d\",\"identity\":\"cxt-manifest-sha256-v1\",\"root_manifest\":{\"chunk_format\":\"cxt-doc-chunks-v2\",\"chunks\":[{\"bytes\":524288,\"hash\":\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"},{\"bytes\":524288,\"hash\":\"sha256:0f276ace01c571d7587f5417db6f19cb95c1ce4891f3cee9852d278ca385c442\"}],\"envelope\":{\"captured_at\":\"2026-10-07T00:00:00Z\",\"cir_version\":\"2\",\"cwd\":\"/tmp/\ud55c\uae00\",\"fidelity\":\"full\",\"git_branch\":\"main\",\"session_origin_id\":\"synthetic\",\"source_model\":\"model\",\"source_provider\":\"codex\"},\"event_count\":2,\"identity\":\"cxt-manifest-sha256-v1\",\"stream_bytes\":1048576,\"version\":1}}",
+      "job_id": "sha256:a3c78c77788970ad399a9a5043b197554355fa2dbe543305a8133cf6c3b2d1ea"
+    },
+    {
+      "name": "reversed",
+      "repo_id": "sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699",
+      "document_json": "{\"hash\":\"sha256:74a8a0bd046e148515969106dd088af7a8e89dd08d7c091df7427d62ad3ce390\",\"identity\":\"cxt-manifest-sha256-v1\",\"root_manifest\":{\"chunk_format\":\"cxt-doc-chunks-v2\",\"chunks\":[{\"bytes\":524288,\"hash\":\"sha256:0f276ace01c571d7587f5417db6f19cb95c1ce4891f3cee9852d278ca385c442\"},{\"bytes\":524288,\"hash\":\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"}],\"envelope\":{\"captured_at\":\"2026-10-07T00:00:00Z\",\"cir_version\":\"2\",\"cwd\":\"/tmp/\ud55c\uae00\",\"fidelity\":\"full\",\"git_branch\":\"main\",\"session_origin_id\":\"synthetic\",\"source_model\":\"model\",\"source_provider\":\"codex\"},\"event_count\":2,\"identity\":\"cxt-manifest-sha256-v1\",\"stream_bytes\":1048576,\"version\":1}}",
+      "job_id": "sha256:fd670dad7c3ebbf82c3aa318b98d2e9ef78541488fe9fe1ce448ee85af283485"
+    },
+    {
+      "name": "other-repo",
+      "repo_id": "sha256:8ad0a588c5d3937ab2fbf47ab0aea06574155cb91af833f311cac171d5f4d0d1",
+      "document_json": "{\"hash\":\"sha256:ed840f598f733b77a265c201a5b47878c405243c373574972cf109f5a412b774\",\"identity\":\"cxt-manifest-sha256-v1\",\"root_manifest\":{\"chunk_format\":\"cxt-doc-chunks-v2\",\"chunks\":[],\"envelope\":{\"captured_at\":\"2026-10-07T00:00:00Z\",\"cir_version\":\"2\",\"cwd\":\"/tmp/\ud55c\uae00\",\"fidelity\":\"full\",\"git_branch\":\"main\",\"session_origin_id\":\"synthetic\",\"source_model\":\"model\",\"source_provider\":\"codex\"},\"event_count\":0,\"identity\":\"cxt-manifest-sha256-v1\",\"stream_bytes\":0,\"version\":1}}",
+      "job_id": "sha256:91f91ca53053809c3ca2f96da3a1324c2dfef46523e76e99be1440c8a6b856fc"
+    }
+  ],
+  "legacy": [
+    {
+      "name": "implicit-v1",
+      "repo_id": "sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699",
+      "document_json": "{\"hash\":\"sha256:9dccad672280d219a98f95e188ee0b3c4a7bdfbb1424bb3ccd9dd84a0fa55336\",\"format\":\"\",\"envelope\":{\"b\":9007199254740993,\"a\":\"\\u003ctag\\u003e\\u0026\"},\"chunks\":[\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\",\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"]}",
+      "preimage": "{\"Repo\":\"sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699\",\"Hash\":\"sha256:9dccad672280d219a98f95e188ee0b3c4a7bdfbb1424bb3ccd9dd84a0fa55336\",\"Manifest\":{\"format\":\"cxt-doc-chunks-v1\",\"envelope\":{\"b\":9007199254740993,\"a\":\"\\u003ctag\\u003e\\u0026\"},\"chunks\":[\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\",\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"]}}",
+      "job_id": "sha256:2223eb17389289fde6add498e78bd520fb4c991b08cf2f75a5edd691eae5621b"
+    },
+    {
+      "name": "cxt-doc-chunks-v1",
+      "repo_id": "sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699",
+      "document_json": "{\"hash\":\"sha256:9dccad672280d219a98f95e188ee0b3c4a7bdfbb1424bb3ccd9dd84a0fa55336\",\"format\":\"cxt-doc-chunks-v1\",\"envelope\":{\"b\":9007199254740993,\"a\":\"\\u003ctag\\u003e\\u0026\"},\"chunks\":[\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\",\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"]}",
+      "preimage": "{\"Repo\":\"sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699\",\"Hash\":\"sha256:9dccad672280d219a98f95e188ee0b3c4a7bdfbb1424bb3ccd9dd84a0fa55336\",\"Manifest\":{\"format\":\"cxt-doc-chunks-v1\",\"envelope\":{\"b\":9007199254740993,\"a\":\"\\u003ctag\\u003e\\u0026\"},\"chunks\":[\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\",\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"]}}",
+      "job_id": "sha256:2223eb17389289fde6add498e78bd520fb4c991b08cf2f75a5edd691eae5621b"
+    },
+    {
+      "name": "cxt-doc-chunks-v2",
+      "repo_id": "sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699",
+      "document_json": "{\"hash\":\"sha256:9dccad672280d219a98f95e188ee0b3c4a7bdfbb1424bb3ccd9dd84a0fa55336\",\"format\":\"cxt-doc-chunks-v2\",\"envelope\":{\"b\":9007199254740993,\"a\":\"\\u003ctag\\u003e\\u0026\"},\"chunks\":[\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\",\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"]}",
+      "preimage": "{\"Repo\":\"sha256:c09c004bf0961e6ddb2b8caccb7f90d74d0273a85bcc62e479c67fbc449bf699\",\"Hash\":\"sha256:9dccad672280d219a98f95e188ee0b3c4a7bdfbb1424bb3ccd9dd84a0fa55336\",\"Manifest\":{\"format\":\"cxt-doc-chunks-v2\",\"envelope\":{\"b\":9007199254740993,\"a\":\"\\u003ctag\\u003e\\u0026\"},\"chunks\":[\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\",\"sha256:ba6e04391775aa27f39df72198b6394dbf99fc52a39f26acbd5f3d78983b745c\"]}}",
+      "job_id": "sha256:3e239b2078413c8aa657a383746d9f8788d5650bb99a5fa526b43c3154186714"
+    }
+  ]
+}

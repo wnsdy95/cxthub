@@ -26,7 +26,7 @@ func (s *FileStore) stagingStashPath(id string) (string, error) {
 	return filepath.Join(s.storeDir(), "worktrees", s.worktreeID, "index-stashes", id+".json"), nil
 }
 func (s *FileStore) validateStagingStash(stash domain.StagingStash) error {
-	if stash.Version != domain.StagingVersion {
+	if stash.Version != stash.Index.RecordVersion() {
 		return domain.ErrStagingVersion
 	}
 	if _, err := s.stagingStashPath(stash.ID); err != nil {

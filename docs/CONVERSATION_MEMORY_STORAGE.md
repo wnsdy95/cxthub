@@ -89,6 +89,55 @@ protocol must be explicitly negotiated; an old server must never interpret a
 manifest-root hash as a legacy whole-document hash. Persisted verification also
 needs a defined corruption/invalidation policy and repository ownership checks.
 
+### Explicit conversation roots
+
+The new `cxt-manifest-sha256-v1` identity hashes a canonical ordered conversation
+manifest. It is a separate identity scheme, carried in snapshot `doc_identity`
+and document `identity` fields. An absent identity retains the legacy meaning.
+Neither a root hash nor its current transcript may be relabeled as a legacy
+object. Existing IDs, natural parents and memory versions remain unchanged.
+
+Publication follows this sequence:
+
+1. Confirm the destination repository and its supported identity schemes.
+2. Upload missing repository-owned chunks in bounded batches.
+3. Submit an identity-bound document finalization job containing the canonical
+   manifest. This also applies to a conversation with no events.
+4. The worker verifies current owned bytes, ordered occurrences and CIR
+   semantics. Completion rechecks the lease, ownership, repository requirement,
+   quota and any existing winner before accepting the document.
+5. Publish snapshot/history metadata only after successful finalization. Pull
+   likewise verifies the complete document before adopting metadata or refs.
+
+Full current-byte checks remain mandatory. A root makes identity hashing
+proportional to the manifest and allows stored chunks to be reused; it does not
+make verification, initial indexing or capture constant-time. The first root
+capture implementation decodes and scrubs the current native source again,
+then reuses unchanged chunks. Incremental native-source parsing and durable
+verification certificates are separate optimizations.
+
+Compatible peers declare `X-Cxt-Doc-Identities: cxt-manifest-sha256-v1`.
+Browser event streams use the `doc_identities` query parameter instead because
+EventSource cannot set custom request headers. A request cannot supply both.
+This declaration does not authenticate the caller, grant access, prove bytes
+or enable publication.
+
+Repository `required_doc_identity` is monotonic: once it requires roots,
+incompatible readers and writers must fail before context-state effects.
+Read support and permission to create new roots are separate capabilities.
+Turning off `CXT_CONVERSATION_ROOT_PUBLICATION` stops new root admission, while
+compatible binaries keep reading existing roots, exchanging already-owned
+documents and publishing independent memory versions. Accepted jobs retain
+their recovery checks. Never clear the requirement to roll back a server.
+
+The release readiness guard stays disabled until publication, import,
+initialization, recovery, worker and consumer acceptance gates pass. The
+environment variable cannot bypass that guard. Before repository opt-in,
+replace all API/MCP instances, workers and maintenance binaries with compatible
+versions and drain older instances. PostgreSQL migrations alone cannot make an
+older binary safe. Root-involved local capture collection is conservatively
+retained; this release does not add general PostgreSQL chunk garbage collection.
+
 ## Metadata acquisition and verified observations
 
 CLI sync keeps two separate checkpoints:

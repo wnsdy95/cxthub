@@ -10,7 +10,7 @@ func (s *Service) QueryMemoryPositions(ctx context.Context, repo, snapshot domai
 	if domain.ValidateContentHash(repo) != nil || domain.ValidateContentHash(snapshot) != nil || len(event) > 128 {
 		return domain.MemoryPositions{}, domain.ErrValidation
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.MemoryPositions, error) {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.MemoryPositions, error) {
 		if _, err := s.meta.GetSnapshot(ctx, repo, snapshot); err != nil {
 			return domain.MemoryPositions{}, err
 		}

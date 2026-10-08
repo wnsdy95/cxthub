@@ -115,8 +115,8 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 		return domain.Repo{}, err
 	}
 	var r domain.Repo
-	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE id=$1`, string(id)).
-		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol)
+	err := s.db(ctx).QueryRow(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol, required_doc_identity FROM repos WHERE id=$1`, string(id)).
+		Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol, &r.RequiredDocIdentity)
 	if err != nil {
 		return domain.Repo{}, mapNoRows(err)
 	}
@@ -128,12 +128,18 @@ func (s *PostgresStore) GetRepo(ctx context.Context, id domain.ContentHash) (dom
 			return domain.Repo{}, err
 		}
 	}
+	if err := r.RequiredDocIdentity.Validate(); err != nil {
+		return domain.Repo{}, err
+	}
 	r.RemoteURL = domain.SanitizeRemoteURL(r.RemoteURL)
 	r.GitRemoteURL = domain.SanitizeRemoteURL(r.GitRemoteURL)
 	return r, nil
 }
 
 func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.Repo, error) {
+	if repo.RequiredDocIdentity != domain.DocumentIdentityLegacy {
+		return domain.Repo{}, domain.ErrValidation
+	}
 	if err := validateHash(repo.ID); err != nil {
 		return domain.Repo{}, storageWriteError(mapPGConstraint(err))
 	}
@@ -165,7 +171,7 @@ func (s *PostgresStore) PutRepo(ctx context.Context, repo domain.Repo) (domain.R
 }
 
 func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Repo, error) {
-	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol FROM repos WHERE team=$1`, team)
+	rows, err := s.db(ctx).Query(ctx, `SELECT id, remote_url, default_branch, COALESCE(repository_id,''), COALESCE(git_remote_url,''), COALESCE(protect_default,false), context_protocol, required_doc_identity FROM repos WHERE team=$1`, team)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +179,7 @@ func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Re
 	var out []domain.Repo
 	for rows.Next() {
 		var r domain.Repo
-		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol); err != nil {
+		if err := rows.Scan(&r.ID, &r.RemoteURL, &r.DefaultBranch, &r.RepositoryID, &r.GitRemoteURL, &r.ProtectDefault, &r.ContextProtocol, &r.RequiredDocIdentity); err != nil {
 			return nil, err
 		}
 		if err := validateHash(r.ID); err != nil {
@@ -183,6 +189,9 @@ func (s *PostgresStore) ListRepos(ctx context.Context, team string) ([]domain.Re
 			if err := domain.ValidateBranchName(r.DefaultBranch); err != nil {
 				return nil, err
 			}
+		}
+		if err := r.RequiredDocIdentity.Validate(); err != nil {
+			return nil, err
 		}
 		r.RemoteURL = domain.SanitizeRemoteURL(r.RemoteURL)
 		r.GitRemoteURL = domain.SanitizeRemoteURL(r.GitRemoteURL)
@@ -1053,7 +1062,7 @@ func (s *PostgresStore) GetManifest(ctx context.Context, repoID domain.ContentHa
 	}
 	rows, err := s.db(ctx).Query(ctx, `
 		SELECT id, branch, COALESCE(memory_hash,''), message, grafted,
-		       COALESCE(graft_parents,'{}'), COALESCE(graft_seq,0)
+		       COALESCE(graft_parents,'{}'), COALESCE(graft_seq,0), doc_identity
 		  FROM snapshots WHERE repo_id=$1`, string(repoID))
 	if err != nil {
 		return domain.Manifest{}, err
@@ -1067,12 +1076,16 @@ func (s *PostgresStore) GetManifest(ctx context.Context, repoID domain.ContentHa
 		var grafted bool
 		var graftParents []string
 		var graftSeq uint64
-		if err := rows.Scan(&id, &branch, &memoryHash, &message, &grafted, &graftParents, &graftSeq); err != nil {
+		var identity domain.DocumentIdentity
+		if err := rows.Scan(&id, &branch, &memoryHash, &message, &grafted, &graftParents, &graftSeq, &identity); err != nil {
 			return domain.Manifest{}, err
 		}
 		snap := domain.Snapshot{
 			ID: domain.ContentHash(id), Branch: branch, MemoryHash: domain.ContentHash(memoryHash), Message: message,
-			Grafted: grafted, GraftParents: hashes(graftParents), GraftSeq: graftSeq,
+			Grafted: grafted, GraftParents: hashes(graftParents), GraftSeq: graftSeq, DocIdentity: identity,
+		}
+		if err := snap.DocIdentity.Validate(); err != nil {
+			return domain.Manifest{}, err
 		}
 		if err := domain.ValidateContentHash(snap.ID); err != nil {
 			return domain.Manifest{}, err

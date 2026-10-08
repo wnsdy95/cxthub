@@ -439,7 +439,9 @@ func (s *FileStore) verifyTrackingObjects(ctx context.Context, j trackingAttachm
 			if snap.ID != id || snap.DocHash != id || snap.RepoID != j.Commit.Attachment.Event.RepoID {
 				return domain.ErrHashMismatch
 			}
-			if err := s.VerifyStoredDoc(ctx, snap.DocHash); err != nil {
+			// Acceptance and redo already hold the ref lock. Recovery can run
+			// under exclusive collection, so do not reacquire retention here.
+			if err := s.inspectDocReference(ctx, snap.DocumentRef(), nil); err != nil {
 				return err
 			}
 		}

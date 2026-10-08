@@ -81,12 +81,13 @@ func (s PersonalWorkScope) Complete() bool {
 }
 
 type AgentSourcePointer struct {
-	SnapshotID ContentHash `json:"snapshot_id"`
-	DocHash    ContentHash `json:"doc_hash,omitempty"`
-	MemoryHash ContentHash `json:"memory_hash,omitempty"`
-	StartEvent int         `json:"start_event,omitempty"`
-	EndEvent   int         `json:"end_event,omitempty"`
-	Tool       string      `json:"tool"`
+	SnapshotID  ContentHash      `json:"snapshot_id"`
+	DocHash     ContentHash      `json:"doc_hash,omitempty"`
+	DocIdentity DocumentIdentity `json:"doc_identity,omitempty"`
+	MemoryHash  ContentHash      `json:"memory_hash,omitempty"`
+	StartEvent  int              `json:"start_event,omitempty"`
+	EndEvent    int              `json:"end_event,omitempty"`
+	Tool        string           `json:"tool"`
 }
 
 type ExactUserConstraint struct {

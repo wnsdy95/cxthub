@@ -87,7 +87,7 @@ func TestDocVerificationV1ReceiptReusedUntilUpload(t *testing.T) {
 		t.Fatalf("cached verification ignored cancellation: %v", err)
 	}
 	called := false
-	ok, err := fresh.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+	ok, err := fresh.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 		called = true
 		checkUploadDescriptor(t, doc, id, canonical, plan)
 		return nil

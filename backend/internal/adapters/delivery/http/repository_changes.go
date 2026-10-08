@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
 // One inexpensive durable-cursor read per observed repository per server,
@@ -16,7 +17,13 @@ import (
 // or database transaction is held for the lifetime of an HTTP stream.
 type repositoryChangeHub struct {
 	mu    sync.Mutex
-	repos map[domain.ContentHash]*repositoryWatch
+	repos map[repositoryWatchKey]*repositoryWatch
+}
+
+// Peer classes never share cached state or the first subscriber's actor.
+type repositoryWatchKey struct {
+	repo domain.ContentHash
+	root bool
 }
 type repositoryWatch struct {
 	cancel context.CancelFunc
@@ -28,17 +35,23 @@ type revisionNotice struct {
 	err      error
 }
 
-func (h *repositoryChangeHub) subscribe(repo domain.ContentHash, read func(context.Context, domain.ContentHash) (domain.RepositoryRevision, error)) (<-chan revisionNotice, func()) {
+func (h *repositoryChangeHub) subscribe(repo domain.ContentHash, read func(context.Context, domain.ContentHash) (domain.RepositoryRevision, error), identities ...domain.DocumentIdentity) (<-chan revisionNotice, func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.repos == nil {
-		h.repos = map[domain.ContentHash]*repositoryWatch{}
+		h.repos = map[repositoryWatchKey]*repositoryWatch{}
 	}
-	watch := h.repos[repo]
+	key := repositoryWatchKey{repo: repo}
+	for _, identity := range identities {
+		if identity == domain.DocumentIdentityRootV1 {
+			key.root = true
+		}
+	}
+	watch := h.repos[key]
 	if watch == nil {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(inbound.WithDocumentIdentities(context.Background(), identities))
 		watch = &repositoryWatch{cancel: cancel, subs: map[chan revisionNotice]bool{}}
-		h.repos[repo] = watch
+		h.repos[key] = watch
 		go h.run(ctx, repo, watch, read)
 	}
 	ch := make(chan revisionNotice, 1)
@@ -52,8 +65,8 @@ func (h *repositoryChangeHub) subscribe(repo domain.ContentHash, read func(conte
 		delete(watch.subs, ch)
 		if len(watch.subs) == 0 {
 			watch.cancel()
-			if h.repos[repo] == watch {
-				delete(h.repos, repo)
+			if h.repos[key] == watch {
+				delete(h.repos, key)
 			}
 		}
 	}
@@ -106,7 +119,13 @@ func (s *Server) repositoryChanges(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	ch, release := s.changes.subscribe(s.repoID(r), s.b.RepositoryRevision)
+	// Reject before subscribing or receiving a cached notice. Each subsequent
+	// poll checks this class against the requirement in its own pinned snapshot.
+	if _, err := s.b.RepositoryRevision(r.Context(), s.repoID(r)); err != nil {
+		s.respond(w, nil, err)
+		return
+	}
+	ch, release := s.changes.subscribe(s.repoID(r), s.b.RepositoryRevision, inbound.DocumentIdentities(r.Context())...)
 	defer release()
 	// Reconnection re-runs normal membership/token authorization. A revocation
 	// cannot leave a permanent, previously authorized stream alive.

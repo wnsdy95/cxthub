@@ -288,7 +288,11 @@ func (s *FSStore) repackRepo(repoID domain.ContentHash) (converted int, saved in
 	}
 	for _, j := range jobs {
 		if j.RepoID == repoID && j.Pending() {
-			for _, h := range j.Manifest.Chunks {
+			chunks, err := publicationJobChunks(j)
+			if err != nil {
+				return 0, 0, err
+			}
+			for _, h := range chunks {
 				live[h] = true
 			}
 		}

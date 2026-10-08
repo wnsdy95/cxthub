@@ -131,6 +131,9 @@ func (s *FileStore) ApplyRemoteRepair(ctx context.Context, plan outbound.RemoteR
 						if snap.RepoID != plan.RepoID || (snap.MemoryHash != plan.BeforeMemory && snap.MemoryHash != plan.AfterMemory) {
 							return domain.ErrSyncConflict
 						}
+						if err := s.inspectDocReference(ctx, snap.DocumentRef(), nil); err != nil {
+							return err
+						}
 						if err := writeAtomic(intentPath, raw); err != nil {
 							return err
 						}
@@ -166,7 +169,7 @@ func (s *FileStore) ApplyRemoteRepair(ctx context.Context, plan outbound.RemoteR
 				if snap.RepoID != plan.RepoID {
 					return domain.ErrHashMismatch
 				}
-				if _, err := s.GetDoc(ctx, snap.DocHash); err != nil {
+				if err := s.inspectDocReference(ctx, snap.DocumentRef(), nil); err != nil {
 					return err
 				}
 				if err := writeAtomic(intentPath, raw); err != nil {

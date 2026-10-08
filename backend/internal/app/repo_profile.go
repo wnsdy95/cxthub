@@ -13,6 +13,11 @@ func (s *Service) PatchRepoProfile(ctx context.Context, id domain.ContentHash, p
 		if err != nil {
 			return domain.Repo{}, err
 		}
+		if p.RequiredDocIdentity != nil {
+			if err := s.requireDocumentIdentityCommand(ctx, id, *p.RequiredDocIdentity); err != nil {
+				return domain.Repo{}, err
+			}
+		}
 		if p.DefaultBranch != nil && *p.DefaultBranch != "" {
 			if err := domain.ValidateBranchName(*p.DefaultBranch); err != nil {
 				return domain.Repo{}, err

@@ -129,6 +129,14 @@ func (s *FSStore) ClaimPRJob(ctx context.Context, repo domain.ContentHash, id st
 		if (repo != "" && j.RepoID != repo) || (id != "" && j.ID != id) || (j.State == "running" && j.LeaseUntil.After(now)) {
 			continue
 		}
+		release, policyErr := s.pinWorkerRepoPolicy(ctx, j.RepoID)
+		if errors.Is(policyErr, domain.ErrDocumentIdentityUpgradeRequired) && repo == "" {
+			continue
+		}
+		if policyErr != nil {
+			return domain.PRPromotionJob{}, policyErr
+		}
+		defer release()
 		old := j
 		j.State = "running"
 		j.FailureClass = ""
@@ -145,6 +153,11 @@ func (s *FSStore) FinishPRJob(ctx context.Context, j domain.PRPromotionJob) erro
 	l := s.oauthLock()
 	l.Lock()
 	defer l.Unlock()
+	release, policyErr := s.pinWorkerRepoPolicy(ctx, j.RepoID)
+	if policyErr != nil {
+		return policyErr
+	}
+	defer release()
 	var old domain.PRPromotionJob
 	if err := readJSON(s.prJobPath(j.RepoID, j.ID), &old); err != nil {
 		return err
@@ -202,28 +215,41 @@ func (s *FSStore) WakePRSourceJobs(ctx context.Context, repo domain.ContentHash,
 	if err != nil {
 		return err
 	}
-	history := map[domain.ContentHash][]domain.HistoryEvent{}
 	for _, j := range jobs {
 		if j.State != "attention" || j.Reason != "source_finalization_required" || (repo != "" && j.RepoID != repo) {
 			continue
 		}
-		events, ok := history[j.RepoID]
-		if !ok {
-			events, err = s.ListHistoryEvents(ctx, j.RepoID)
+		err = func() error {
+			release, err := s.pinWorkerRepoPolicy(ctx, j.RepoID)
 			if err != nil {
 				return err
 			}
-			history[j.RepoID] = events
-		}
-		if !hasPRSourcePublication(j, events) {
+			defer release()
+			// The policy pin already holds ListHistoryEvents' metadata lock.
+			if err := s.recoverHistoryEvent(ctx, j.RepoID); err != nil {
+				return err
+			}
+			events, err := s.listHistoryEventsRaw(j.RepoID)
+			if err != nil {
+				return err
+			}
+			if !hasPRSourcePublication(j, events) {
+				return nil
+			}
+			old := j
+			j.State, j.Reason, j.Attempts, j.FailureClass = "waiting", "", 0, ""
+			j.NextAttempt, j.UpdatedAt, j.LeaseUntil = now, now, time.Time{}
+			j.Version++
+			j = domain.AppendPRJobDiagnostic(old, j, "source_available", now)
+			if err := s.writePRJob(j); err != nil {
+				return err
+			}
+			return nil
+		}()
+		if errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) && repo == "" {
 			continue
 		}
-		old := j
-		j.State, j.Reason, j.Attempts, j.FailureClass = "waiting", "", 0, ""
-		j.NextAttempt, j.UpdatedAt, j.LeaseUntil = now, now, time.Time{}
-		j.Version++
-		j = domain.AppendPRJobDiagnostic(old, j, "source_available", now)
-		if err := s.writePRJob(j); err != nil {
+		if err != nil {
 			return err
 		}
 	}

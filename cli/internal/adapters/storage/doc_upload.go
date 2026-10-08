@@ -16,11 +16,11 @@ var _ outbound.ChunkedDocumentStore = (*FileStore)(nil)
 // WithVerifiedDocChunks retains a verified v2 representation through the
 // synchronous upload. Shared retention leases can nest inside the app's push
 // lease: each uses its own shared flock, with no process-local exclusive mutex.
-func (s *FileStore) WithVerifiedDocChunks(ctx context.Context, id domain.ContentHash, use func(outbound.DocumentChunks) error) (bool, error) {
+func (s *FileStore) WithVerifiedDocChunks(ctx context.Context, ref domain.DocumentRef, use func(outbound.DocumentChunks) error) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if err := domain.ValidateContentHash(id); err != nil {
+	if err := ref.Validate(); err != nil {
 		return false, err
 	}
 	if use == nil {
@@ -28,22 +28,45 @@ func (s *FileStore) WithVerifiedDocChunks(ctx context.Context, id domain.Content
 	}
 	var supported bool
 	err := s.WithObjectsRetained(ctx, func() error {
-		evidence, err := s.verifyStoredDoc(ctx, id, true)
-		if err != nil {
-			return err
-		}
-		manifest, allowed, ok, err := uploadDocManifest(ctx, evidence)
-		if err != nil || !ok {
-			return err
+		var representation domain.DocumentRepresentation
+		var allowed map[domain.ContentHash]struct{}
+		var rootLengths map[domain.ContentHash]int
+		if ref.Identity == domain.DocumentIdentityRootV1 {
+			raw, err := readRootObject(ctx, s.objectPath("docs", ref.Hash), domain.MaxConversationManifestBytes)
+			if err != nil {
+				return err
+			}
+			manifest, err := domain.DecodeConversationManifest(raw)
+			if err != nil {
+				return err
+			}
+			if _, err := s.verifyRootDocument(ctx, ref, manifest, false); err != nil {
+				return err
+			}
+			representation = domain.DocumentRepresentation{Hash: ref.Hash, Identity: ref.Identity, RootManifest: bytes.Clone(raw)}
+			allowed = make(map[domain.ContentHash]struct{}, len(manifest.Chunks))
+			rootLengths = make(map[domain.ContentHash]int, len(manifest.Chunks))
+			for _, chunk := range manifest.Chunks {
+				allowed[chunk.Hash] = struct{}{}
+				rootLengths[chunk.Hash] = int(chunk.Bytes)
+			}
+		} else {
+			evidence, err := s.verifyStoredDoc(ctx, ref.Hash, true)
+			if err != nil {
+				return err
+			}
+			manifest, permitted, ok, err := uploadDocManifest(ctx, evidence)
+			if err != nil || !ok {
+				return err
+			}
+			allowed = permitted
+			representation = domain.DocumentRepresentation{Hash: ref.Hash, Format: manifest.Format, Envelope: bytes.Clone(manifest.Envelope), Chunks: append([]domain.ContentHash(nil), manifest.Chunks...)}
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		doc := outbound.DocumentChunks{
-			Hash: id, Format: manifest.Format,
-			Envelope: bytes.Clone(manifest.Envelope),
-			Chunks:   append([]domain.ContentHash(nil), manifest.Chunks...),
-		}
+		doc := outbound.DocumentChunks{Representation: representation}
+
 		// Neither callback-owned slice can alter the loader's authorization.
 		var mu sync.RWMutex
 		active := true
@@ -69,7 +92,13 @@ func (s *FileStore) WithVerifiedDocChunks(ctx context.Context, id domain.Content
 			if _, ok := allowed[hash]; !ok {
 				return nil, fmt.Errorf("%w: chunk is not listed in verified document", domain.ErrHashMismatch)
 			}
-			body, err := s.GetChunk(hash)
+			var body []byte
+			var err error
+			if rootLengths != nil {
+				body, err = readRootObject(readCtx, s.objectPath("chunks", hash), rootLengths[hash])
+			} else {
+				body, err = s.GetChunk(hash)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -79,7 +108,7 @@ func (s *FileStore) WithVerifiedDocChunks(ctx context.Context, id domain.Content
 			if err := readCtx.Err(); err != nil {
 				return nil, err
 			}
-			if domain.HashContent(body) != hash {
+			if domain.HashContent(body) != hash || (rootLengths != nil && len(body) != rootLengths[hash]) {
 				return nil, domain.ErrHashMismatch
 			}
 			return body, nil

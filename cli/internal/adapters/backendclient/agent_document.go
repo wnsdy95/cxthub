@@ -12,17 +12,26 @@ import (
 // FetchAgentDocument performs a fresh repository-authorized read. Package
 // assembly cannot bypass revocation by serving a body from an unrelated cache.
 func (c *BackendClient) FetchAgentDocument(ctx context.Context, repo string, hash domain.ContentHash) (domain.SessionDoc, error) {
+	return c.FetchAgentDocumentReference(ctx, repo, domain.DocumentRef{Hash: hash})
+}
+
+// FetchAgentDocumentReference keeps the caller's selected scheme and verifies
+// the freshly returned complete CIR. The legacy entry point remains legacy-only.
+func (c *BackendClient) FetchAgentDocumentReference(ctx context.Context, repo string, ref domain.DocumentRef) (domain.SessionDoc, error) {
 	var doc domain.SessionDoc
-	if domain.ValidateContentHash(domain.ContentHash(repo)) != nil || domain.ValidateContentHash(hash) != nil {
+	if domain.ValidateContentHash(domain.ContentHash(repo)) != nil {
 		return doc, domain.ErrHashMismatch
 	}
-	if err := c.doLimited(ctx, http.MethodGet, c.reposPath(repo)+"/docs/"+url.PathEscape(string(hash)), nil, &doc, 64<<20); err != nil {
+	if err := ref.Validate(); err != nil {
 		return doc, err
 	}
-	if doc.Hash != hash {
+	if err := c.doLimited(ctx, http.MethodGet, c.reposPath(repo)+"/docs/"+url.PathEscape(string(ref.Hash)), nil, &doc, 64<<20); err != nil {
+		return doc, err
+	}
+	if doc.DocumentRef() != ref {
 		return doc, domain.ErrHashMismatch
 	}
-	return doc, domain.ValidateSessionDocHash(doc)
+	return doc, domain.VerifySessionDocIdentity(ctx, doc)
 }
 
 // SyncRemoteIdentity is stable across token rotation and excludes userinfo,

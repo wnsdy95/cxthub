@@ -1274,7 +1274,8 @@ components:
       required: [version, hash, provider, session_id, total, before, next_before, covered, turns]
       properties:
         version: { type: integer, enum: [1, 2], description: "1 for strict requests; 2 whenever incomplete_tail=omit, including metadata and covered responses." }
-        hash: { $ref: "#/components/schemas/ContentHash", description: "Source document identity; a partial page does not independently prove this canonical hash." }
+        hash: { $ref: "#/components/schemas/ContentHash", description: "Source document hash under doc_identity; a partial page does not independently prove the full document identity." }
+        doc_identity: { $ref: "#/components/schemas/DocumentIdentity" }
         provider: { type: string, enum: [claude, codex] }
         session_id: { type: string }
         total: { type: integer, minimum: 0, description: "Total document events, not turns." }
@@ -1291,34 +1292,69 @@ components:
       properties:
         id: { $ref: "#/components/schemas/ContentHash" }
         doc_hash: { $ref: "#/components/schemas/ContentHash" }
+        doc_identity: { $ref: "#/components/schemas/DocumentIdentity" }
         state: { type: string, enum: [waiting, running, retrying, completed, rejected] }
         reason: { type: string }
         updated_at: { type: string, format: date-time }
 
     ChunkedDoc:
-      type: object
       description: |
-        SessionDoc canonical body chunk manifest. hash is not the chunk itself,
-        the ContentHash of the fully reassembled canonical CIR body.
+        Tagged descriptor union. Omitted/empty identity retains the deployed legacy
+        canonical-CIR hash. Root identity binds a canonical manifest and ordered chunk
+        descriptors, not a whole-CIR hash. Metadata validation never proves current
+        chunk ownership or bytes. Root publication uses durable finalization only;
+        synchronous full-body/ChunkedDocs publication remains legacy-only.
+      oneOf:
+        - $ref: "#/components/schemas/LegacyChunkedDoc"
+        - $ref: "#/components/schemas/RootChunkedDoc"
+
+    LegacyChunkedDoc:
+      type: object
       required: [hash, envelope, chunks]
-      additionalProperties: false
       properties:
-        identity:
-          $ref: "#/components/schemas/DocumentIdentity"
-        hash:
-          $ref: "#/components/schemas/ContentHash"
-        format:
-          type: string
-          enum: [cxt-doc-chunks-v1, cxt-doc-chunks-v2]
-          description: "Manifest assembly format. Omitted legacy wire values mean cxt-doc-chunks-v1."
-        envelope:
-          type: object
-          additionalProperties: true
-        chunks:
-          type: array
-          minItems: 1
-          items:
-            $ref: "#/components/schemas/ContentHash"
+        identity: { type: string, enum: [""] }
+        hash: { $ref: "#/components/schemas/ContentHash" }
+        format: { type: string, enum: [cxt-doc-chunks-v1, cxt-doc-chunks-v2], description: "Omitted means cxt-doc-chunks-v1." }
+        envelope: { type: object, additionalProperties: true }
+        chunks: { type: array, minItems: 1, items: { $ref: "#/components/schemas/ContentHash" } }
+      not: { required: [root_manifest] }
+
+    RootChunkedDoc:
+      type: object
+      additionalProperties: false
+      required: [hash, identity, root_manifest]
+      properties:
+        hash: { $ref: "#/components/schemas/ContentHash" }
+        identity: { type: string, const: cxt-manifest-sha256-v1 }
+        root_manifest: { $ref: "#/components/schemas/ConversationManifest" }
+
+    ConversationManifest:
+      type: object
+      additionalProperties: false
+      required: [version, identity, chunk_format, envelope, chunks, stream_bytes, event_count]
+      description: |
+        Canonical-only metadata, at most 256 KiB. Exact field order and encoding follow
+        the domain manifest codec. Every nonfinal chunk contains 524288 decoded bytes;
+        ordered occurrences, including repeated hashes, contribute to stream_bytes.
+        Empty events require zero chunks and zero stream_bytes. Counts and envelope
+        remain untrusted until the complete current dependency closure is verified.
+        The full reconstructed CIR, including envelope/framing, must fit within 512 MiB.
+      properties:
+        version: { type: integer, const: 1 }
+        identity: { type: string, const: cxt-manifest-sha256-v1 }
+        chunk_format: { type: string, const: cxt-doc-chunks-v2 }
+        envelope: { type: object, additionalProperties: true }
+        chunks: { type: array, maxItems: 2048, items: { $ref: "#/components/schemas/ConversationManifestChunk" } }
+        stream_bytes: { type: integer, format: int64, minimum: 0, maximum: 536870912 }
+        event_count: { type: integer, format: int64, minimum: 0 }
+
+    ConversationManifestChunk:
+      type: object
+      additionalProperties: false
+      required: [hash, bytes]
+      properties:
+        hash: { $ref: "#/components/schemas/ContentHash" }
+        bytes: { type: integer, format: int64, minimum: 1, maximum: 524288 }
 
     ChunkObject:
       type: object
@@ -1579,6 +1615,18 @@ components:
       required: [id, remote_url, default_branch]
       additionalProperties: false
       properties:
+        required_doc_identity:
+          $ref: "#/components/schemas/DocumentIdentity"
+          description: "Monotonic repository requirement. Ordinary registration cannot opt in or downgrade it."
+        doc_identities_supported:
+          type: array
+          readOnly: true
+          items: { $ref: "#/components/schemas/DocumentIdentity" }
+          description: "Actual binary read support, independent of root publication admission. Absence means legacy."
+        root_publication_enabled:
+          type: boolean
+          readOnly: true
+          description: "Deployment policy permitting new root jobs and authorized opt-in; false does not erase an existing requirement."
         initial_anchor_available:
           type: boolean
           readOnly: true
@@ -2217,6 +2265,12 @@ components:
         created_at: {"type": "string", "format": "date-time"}
 
   parameters:
+    DocIdentities:
+      name: X-Cxt-Doc-Identities
+      in: header
+      required: false
+      description: "Compatibility declaration, never authentication. Absent means legacy. Only one exact root token is allowed; duplicate, empty-present, unknown and over-256-byte declarations fail. Incompatible repository state reads/writes return 409 document_identity_upgrade_required, checked within the state transaction."
+      schema: { type: string, enum: [cxt-manifest-sha256-v1], maxLength: 256 }
     repoID:
       name: repoID
       in: path
@@ -2722,6 +2776,7 @@ paths:
   /repos/{repoID}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: getRepo
       parameters:
@@ -2752,6 +2807,7 @@ paths:
   /repos/{repoID}/manifest:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: getManifest
       summary: Server Manifest retrieval (push/pull negotiation phase 1)
@@ -2781,6 +2837,7 @@ paths:
   /repos/{repoID}/fsck:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: fsck
       summary: Reference reachability audit (read-only, git fsck response)
@@ -2809,6 +2866,7 @@ paths:
   /repos/{repoID}/initialization:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: getRepositoryInitialization
       summary: Recover the immutable creation receipt under current manage authorization
@@ -2852,6 +2910,7 @@ paths:
   /repos/{repoID}/initialization/finalize:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: finalizeRepositoryInitialization
       summary: Atomically accept one optional branch-local legacy observation
@@ -2895,6 +2954,7 @@ paths:
       operationId: enableContextProtocol
       parameters:
         - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
       requestBody:
         required: true
         content:
@@ -2915,6 +2975,7 @@ paths:
   /repos/{repoID}/prs/promotions:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listPRPromotions
       summary: List the latest 100 durable PR jobs (viewer access)
@@ -2944,6 +3005,7 @@ paths:
   /repos/{repoID}/prs/promotions/{jobID}/retry:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
       - in: path
         name: jobID
         required: true
@@ -2958,6 +3020,7 @@ paths:
   /repos/{repoID}/prs/promote:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       summary: Bind a merged PR to exact context history and append it to its base
       description: Requires member access. Names never select the current source tip. Missing or ambiguous Git revision evidence requires source synchronization and retry.
@@ -2977,6 +3040,7 @@ paths:
   /repos/{repoID}/history:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listContextHistory
       summary: List retained context operations
@@ -3023,6 +3087,7 @@ paths:
   /repos/{repoID}/history/memory-selection:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: recordMemorySelection
       summary: Record an evidenced first-memory selection
@@ -3064,6 +3129,7 @@ paths:
   /repos/{repoID}/reflog:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: reflog
       summary: Ref movement history (latest first, git reflog response)
@@ -3087,6 +3153,7 @@ paths:
   /repos/{repoID}/branches:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listBranches
       summary: Get branch list (refs kind=branch projection)
@@ -3127,6 +3194,7 @@ paths:
   /repos/{repoID}/revision:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: getRepositoryRevision
       summary: Read durable graph and pending change counters
@@ -3145,6 +3213,7 @@ paths:
   /repos/{repoID}/pending-view:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: graph_encoding
         in: query
         description: Optional compact branch timeline encoding; old clients receive indexed-v1.
@@ -3167,8 +3236,14 @@ paths:
   /repos/{repoID}/changes:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: streamRepositoryChanges
+      parameters:
+        - in: query
+          name: doc_identities
+          description: "EventSource equivalent of the compatibility header; it never carries authentication. Repeated/unknown values or simultaneous header declaration are rejected. Only this stream endpoint accepts the query declaration."
+          schema: { type: string, enum: [cxt-manifest-sha256-v1] }
       summary: Observe durable repository revisions over server-sent events
       description: Requires viewer access. Revision counters survive server restarts. Streams send the current counters on every connection, recover missed updates by comparison, and reconnect periodically to recheck authorization.
       tags: [snapshots]
@@ -3185,6 +3260,7 @@ paths:
   /repos/{repoID}/effective-memory/positions:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: queryMemoryPositions
       summary: Resolve code positions recorded for a selected context
@@ -3207,6 +3283,7 @@ paths:
   /repos/{repoID}/effective-memory:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: queryEffectiveMemory
       summary: Assess sourced memory at an explicit code position
@@ -3236,6 +3313,7 @@ paths:
   /repos/{repoID}/code-applicability:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: queryCodeApplicability
       summary: Compare source file changes at an explicit code position
@@ -3265,6 +3343,7 @@ paths:
   /repos/{repoID}/github-sync-check:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: checkGitHubSync
       summary: Check recorded context history against GitHub without AI
@@ -3292,6 +3371,7 @@ paths:
   /repos/{repoID}/git-scans:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listGitScans
       summary: Read automatic Git discovery progress
@@ -3312,6 +3392,7 @@ paths:
   /repos/{repoID}/git-scans/{scanID}/retry:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
       - { name: scanID, in: path, required: true, schema: { type: string } }
     post:
       operationId: retryGitScan
@@ -3328,6 +3409,7 @@ paths:
   /repos/{repoID}/git-changes:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listGitChanges
       summary: List retained Git change verification requests and evidence
@@ -3368,6 +3450,7 @@ paths:
   /repos/{repoID}/git-changes/{changeID}:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
       - { name: changeID, in: path, required: true, schema: { type: string } }
     get:
       operationId: getGitChange
@@ -3385,6 +3468,7 @@ paths:
   /repos/{repoID}/git-changes/{changeID}/retry:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
       - { name: changeID, in: path, required: true, schema: { type: string } }
     post:
       operationId: retryGitChange
@@ -3401,6 +3485,7 @@ paths:
   /repos/{repoID}/context-query:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: queryContext
       summary: Select context using the shared Web and MCP history rules
@@ -3429,6 +3514,7 @@ paths:
   /repos/{repoID}/graph-state:
     parameters:
       - $ref: '#/components/parameters/repoID'
+      - $ref: "#/components/parameters/DocIdentities"
       - name: graph_encoding
         in: query
         description: Optional compact branch timeline encoding; old clients receive indexed-v1.
@@ -3453,6 +3539,7 @@ paths:
   /repos/{repoID}/view:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: graph_encoding
         in: query
         description: Optional compact branch timeline encoding; old clients receive indexed-v1.
@@ -3497,6 +3584,7 @@ paths:
   /repos/{repoID}/snapshots:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listSnapshots
       summary: Get snapshot list (metadata only)
@@ -3533,6 +3621,7 @@ paths:
   /repos/{repoID}/snapshots/{id}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/snapshotID"
     get:
       operationId: getSnapshot
@@ -3555,6 +3644,7 @@ paths:
   /repos/{repoID}/search:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: searchRepo
       summary: Search commit messages and conversation body
@@ -3627,6 +3717,7 @@ paths:
   /repos/{repoID}/docs/{hash}/events:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/docHash"
     get:
       operationId: getDocEvents
@@ -3650,6 +3741,7 @@ paths:
   /repos/{repoID}/docs/{hash}/turns:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/docHash"
     get:
       operationId: getDocTurns
@@ -3671,11 +3763,15 @@ paths:
         An unclassified oversized first candidate produces a bounded error, never omission.
         A gap-only page may advance next_before to the omitted tail start if older turns
         cannot be read within the remaining allowance or returned within max_bytes.
-        before=0 remains metadata-only and never reads or classifies a tail.
+        before=0 never returns or classifies a tail. Explicit root requests still verify
+        current full root dependencies before metadata or covered shortcuts. This is
+        a bounded response contract, not an O(page-size) physical read guarantee.
         covered_by proves only complete prefix containment in the same native provider/session;
         a shared text fragment or an incomplete prefix never authorizes deduplication.
       tags: [docs]
       parameters:
+        - { in: query, name: doc_identity, schema: { $ref: "#/components/schemas/DocumentIdentity" }, description: "Exact source identity; omission means legacy. Root requires matching repository-owned snapshot metadata." }
+        - { in: query, name: covered_by_identity, schema: { $ref: "#/components/schemas/DocumentIdentity" }, description: "Exact covered_by identity; only meaningful with covered_by. Both references are checked in one coherent read." }
         - { in: query, name: before, schema: { type: integer, minimum: -1, default: -1 }, description: "Exclusive complete-turn boundary; -1 starts at total events." }
         - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 16 } }
         - { in: query, name: max_bytes, schema: { type: integer, minimum: 1, maximum: 4194304, default: 4194304 }, description: "Maximum sum of json.Marshal(turn.events) bytes. This range cap is independent of token budgets." }
@@ -3696,6 +3792,7 @@ paths:
   /repos/{repoID}/docs/{hash}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/docHash"
     get:
       operationId: getDoc
@@ -3724,6 +3821,7 @@ paths:
   /repos/{repoID}/refs:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listRefs
       summary: Retrieve all ref lists
@@ -3748,6 +3846,7 @@ paths:
   /repos/{repoID}/refs/batch:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: updateRefs
       summary: Apply a bounded ref projection batch
@@ -3831,6 +3930,7 @@ paths:
   /repos/{repoID}/refs/{kind}/{name}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/refKind"
       - $ref: "#/components/parameters/refName"
     put:
@@ -3926,6 +4026,7 @@ paths:
   /repos/{repoID}/memories/{snapshotID}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: snapshotID
         in: path
         required: true
@@ -3998,6 +4099,7 @@ paths:
   /repos/{repoID}/memory-publications:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: publishMemoryArchive
       summary: Atomically restore a collected snapshot with its first memory
@@ -4075,6 +4177,7 @@ paths:
   /repos/{repoID}/memory-attachments/{snapshotID}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: snapshotID
         in: path
         required: true
@@ -4129,6 +4232,7 @@ paths:
   /repos/{repoID}/memory-reuses/{snapshotID}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: snapshotID
         in: path
         required: true
@@ -4179,6 +4283,7 @@ paths:
   /repos/{repoID}/typed-memory-attachments/{snapshotID}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: snapshotID
         in: path
         required: true
@@ -4235,6 +4340,7 @@ paths:
   /repos/{repoID}/memory-objects/{hash}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: hash
         in: path
         required: true
@@ -4265,6 +4371,7 @@ paths:
   /repos/{repoID}/push/negotiate:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: pushNegotiate
       summary: Push Negotiation — Server returns list of needed objects (Step A)
@@ -4316,6 +4423,11 @@ paths:
                   chunks_supported:
                     type: boolean
                     description: "Chunk manifest wire support."
+                  doc_identities_supported:
+                    type: array
+                    items: { $ref: "#/components/schemas/DocumentIdentity" }
+                  root_publication_enabled:
+                    type: boolean
                   async_docs_supported:
                     type: boolean
                     description: "Durable document acceptance at POST /push/doc-jobs. Caller cancellation does not cancel accepted work."
@@ -4351,6 +4463,7 @@ paths:
   /repos/{repoID}/push/doc-jobs:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: submitDocFinalization
       summary: Durably accept one staged document for background verification
@@ -4389,6 +4502,7 @@ paths:
   /repos/{repoID}/push/doc-jobs/{jobID}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: jobID
         in: path
         required: true
@@ -4415,6 +4529,7 @@ paths:
   /repos/{repoID}/push/objects:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: pushObjects
       summary: Object batch upload (Step B)
@@ -4498,6 +4613,7 @@ paths:
   /repos/{repoID}/push/chunks:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: pushChunks
       summary: Bounded chunk batch upload
@@ -4560,6 +4676,7 @@ paths:
   /repos/{repoID}/pull/catalog:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: pullCatalog
       summary: Read a committed synchronization metadata baseline or delta
@@ -4598,6 +4715,7 @@ paths:
   /repos/{repoID}/pull/catalog/merkle:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: pullCatalogMerkle
       summary: Reconcile mismatched committed metadata ranges
@@ -4630,6 +4748,7 @@ paths:
   /repos/{repoID}/pull/branch-plan:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: pullBranchPlan
       summary: Plan selected-branch snapshot/history dependencies
@@ -4673,6 +4792,7 @@ paths:
   /repos/{repoID}/pull/objects:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: pullObjects
       summary: Object batch download (Step B)
@@ -4767,6 +4887,7 @@ paths:
   /repos/{repoID}/pull/chunks:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: pullChunks
       summary: Bounded chunk batch download
@@ -4831,6 +4952,7 @@ paths:
   /repos/{repoID}/diff:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: diffSnapshots
       summary: Return event delta of two snapshots (DiffSnapshots)
@@ -4885,6 +5007,7 @@ paths:
   /repos/{repoID}/fork:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: forkSession
       summary: Create branch (ForkSession)
@@ -4954,6 +5077,7 @@ paths:
   /repos/{repoID}/about:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     patch:
       operationId: updateAbout
       summary: Update About metadata (description, website, topics) — maintainer or higher
@@ -4970,6 +5094,9 @@ paths:
                 topics: { type: array, items: { type: string } }
                 default_branch: { type: string }
                 protect_default: { type: boolean, description: "Default branch --force move forbidden (protected branch)" }
+                required_doc_identity:
+                  $ref: "#/components/schemas/DocumentIdentity"
+                  description: "Explicit monotonic opt-in. Requires manage permission, compatible peer/binary, publication enabled and transactional storage. Unknown/null or downgrade is rejected; omission preserves the requirement."
       responses:
         "200": { description: OK }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -4978,6 +5105,7 @@ paths:
   /repos/{repoID}/settings/{kind}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: kind
         in: path
         required: true
@@ -5012,6 +5140,7 @@ paths:
   /repos/{repoID}/settings-objects/{hash}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/docHash"
     get:
       operationId: getSettingsObject
@@ -5040,6 +5169,7 @@ paths:
   /repos/{repoID}/pending:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listPending
       summary: List of uncommitted context pointers — puller and above (for web display)
@@ -5056,6 +5186,7 @@ paths:
   /repos/{repoID}/pending/{sessionID}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/sessionID"
     put:
       operationId: putPending
@@ -5101,6 +5232,7 @@ paths:
   /repos/{repoID}/snapshots/{id}/promote:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: id
         in: path
         required: true
@@ -5127,6 +5259,7 @@ paths:
   /repos/{repoID}/snapshots/{id}/graft:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: id
         in: path
         required: true
@@ -5164,6 +5297,7 @@ paths:
   /repos/{repoID}/join/preview:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: previewJoin
       summary: Preview a same-branch session reorder using the complete server graph — member or higher
@@ -5206,6 +5340,7 @@ paths:
   /repos/{repoID}/join:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     post:
       operationId: joinSnapshot
       summary: Reorder a same-Git-branch session fork behind its branch head (graph drag and drop) — member or higher
@@ -5242,6 +5377,7 @@ paths:
   /repos/{repoID}/pending/{sessionID}/dismiss:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/sessionID"
     post:
       operationId: dismissPending
@@ -5254,6 +5390,7 @@ paths:
   /repos/{repoID}/pending/{sessionID}/undismiss:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - $ref: "#/components/parameters/sessionID"
     post:
       operationId: undismissPending
@@ -5265,6 +5402,7 @@ paths:
   /repos/{repoID}/unsync:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: listUnsync
       summary: List of push pending pointers (unsync) — puller level and above (for web On Hold display)
@@ -5281,6 +5419,7 @@ paths:
   /repos/{repoID}/unsync/{branch}:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
       - name: branch
         in: path
         required: true
@@ -5308,6 +5447,7 @@ paths:
   /repos/{repoID}/secrets:
     parameters:
       - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
     get:
       operationId: getSecrets
       summary: Secret ciphertext envelope retrieval — puller level (decryption requires team passphrase only)

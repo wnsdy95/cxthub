@@ -28,7 +28,8 @@ type TeamIdentity struct {
 
 // Repo is the root of the session storage space (domain model). One Repo per code repository.
 type Repo struct {
-	ContextProtocol int `json:"context_protocol,omitempty"`
+	RequiredDocIdentity DocumentIdentity `json:"required_doc_identity,omitempty"`
+	ContextProtocol     int              `json:"context_protocol,omitempty"`
 	// ID is the normalized remote URL or ContentHash of cwd fallback.
 	ID string `json:"id"`
 	// RemoteURL is the git remote URL of the code repo (empty if not available).

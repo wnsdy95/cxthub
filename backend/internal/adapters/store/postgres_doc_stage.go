@@ -15,8 +15,8 @@ import (
 // completion, rejection, retry or reclaim. Nested publication uses the original
 // atomic path: a savepoint cannot release staged block locks before doc locking.
 func (p *pgDocPublication) stageReadBlocks(ctx context.Context, j domain.DocFinalizationJob) error {
-	if p.doc.doc.DocumentRef().Identity != domain.DocumentIdentityLegacy {
-		return domain.ErrUnsupportedDocumentIdentity
+	if err := publicationJobMatches(j, p.doc.doc); err != nil {
+		return err
 	}
 	nested := false
 	if prior, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx); ok {
@@ -47,7 +47,10 @@ func (p *pgDocPublication) stageReadBlocks(ctx context.Context, j domain.DocFina
 	if err := json.Unmarshal(raw, &old); err != nil {
 		return err
 	}
-	if !old.Fences(j, time.Now().UTC()) || old.DocHash != p.doc.doc.Hash() {
+	if err := publicationJobMatches(old, p.doc.doc); err != nil {
+		return err
+	}
+	if !old.Fences(j, time.Now().UTC()) {
 		return domain.ErrConflict
 	}
 	if err := putPreparedReadBlocksPG(ctx, tx, p.doc.read.blocks); err != nil {

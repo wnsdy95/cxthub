@@ -199,7 +199,7 @@ func (s *Service) QueryBranchMemory(ctx context.Context, repo domain.ContentHash
 	if domain.ValidateContentHash(repo) != nil || domain.ValidateContentHash(snapshot) != nil || domain.ValidateBranchName(branch) != nil || (code != "" && domain.ValidateGitOID(code) != nil) {
 		return domain.MemoryProjection{}, domain.ErrValidation
 	}
-	return repositoryRead(ctx, s, func(ctx context.Context) (domain.MemoryProjection, error) {
+	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.MemoryProjection, error) {
 		return s.queryBranchMemory(ctx, repo, branch, snapshot, code)
 	})
 }

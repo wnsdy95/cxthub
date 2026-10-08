@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
 type RepairReport struct {
@@ -29,8 +32,22 @@ func (s *FileStore) RepairFromReplica(ctx context.Context, source *FileStore, re
 	if source.repoRoot == s.repoRoot {
 		return report, fmt.Errorf("repair source must be isolated")
 	}
+	// Both replicas keep every dependency alive through final metadata adoption.
+	// Shared leases also permit the source's scoped verified-chunk callback.
+	err := source.WithObjectsRetained(ctx, func() error {
+		return s.WithObjectsRetained(ctx, func() error {
+			var err error
+			report, err = s.repairFromRetainedReplica(ctx, source, repoID, refs, backup)
+			return err
+		})
+	})
+	return report, err
+}
+
+func (s *FileStore) repairFromRetainedReplica(ctx context.Context, source *FileStore, repoID string, refs []domain.Ref, backup string) (RepairReport, error) {
+	report := RepairReport{Backup: backup, Repaired: []string{}, Issues: []string{}}
 	inspection := source.InspectReplica(ctx)
-	if len(inspection.Issues) > 0 {
+	if !inspection.Completed || len(inspection.Issues) > 0 {
 		return report, fmt.Errorf("unverified server replica: %v", inspection.Issues)
 	}
 	snapshots, err := source.ListSnapshots(ctx, repoID, "")
@@ -103,25 +120,32 @@ func (s *FileStore) RepairFromReplica(ctx context.Context, source *FileStore, re
 		report.Repaired = append(report.Repaired, relative)
 		return nil
 	}
-	// Whole-object encoding deliberately removes a damaged chunk dependency from
-	// the repaired object's read path. Existing chunk bytes stay in place as
-	// evidence and valid local-only documents continue to use them.
 	for _, snap := range snapshots {
-		if _, err := s.GetDoc(ctx, snap.DocHash); err != nil {
-			doc, err := source.GetDoc(ctx, snap.DocHash)
-			if err != nil {
+		ref := snap.DocumentRef()
+		if err := s.inspectDocReference(ctx, ref, nil); err == nil {
+			continue
+		}
+		if ref.Identity == domain.DocumentIdentityRootV1 {
+			if err := s.repairRootFromReplica(ctx, source, ref, replace); err != nil {
 				return report, err
 			}
-			raw, err := domain.CanonicalBytes(doc.CIR)
-			if err != nil {
-				return report, err
-			}
-			if domain.HashContent(raw) != snap.DocHash {
-				return report, domain.ErrHashMismatch
-			}
-			if err := replace(s.objectPath("docs", snap.DocHash), docCompress(raw)); err != nil {
-				return report, err
-			}
+			continue
+		}
+		// Legacy whole-object encoding removes damaged chunk dependencies from
+		// this read path, preserving the old chunks as local-only evidence.
+		doc, err := source.GetDocReference(ctx, ref)
+		if err != nil {
+			return report, err
+		}
+		raw, err := domain.CanonicalBytes(doc.CIR)
+		if err != nil {
+			return report, err
+		}
+		if domain.HashContent(raw) != ref.Hash {
+			return report, domain.ErrHashMismatch
+		}
+		if err := replace(s.objectPath("docs", ref.Hash), docCompress(raw)); err != nil {
+			return report, err
 		}
 	}
 	// Include all historical memory objects, not just each current attachment.
@@ -178,7 +202,7 @@ func (s *FileStore) RepairFromReplica(ctx context.Context, source *FileStore, re
 	for _, snap := range snapshots {
 		err := s.withSnapshotMutationLock(ctx, snap.ID, func() error {
 			local, err := s.GetSnapshot(ctx, snap.ID)
-			if err == nil && local.RepoID == repoID && local.DocHash == snap.DocHash && slices.Equal(local.Parents, snap.Parents) {
+			if err == nil && local.RepoID == repoID && local.DocumentRef() == snap.DocumentRef() && slices.Equal(local.Parents, snap.Parents) {
 				return nil
 			}
 			raw, err := json.Marshal(snap)
@@ -200,6 +224,9 @@ func (s *FileStore) RepairFromReplica(ctx context.Context, source *FileStore, re
 	err = s.withMutationLock(ctx, "refs", "repo", func() error {
 		if err := s.recoverWorkingCommit(); err != nil {
 			return fmt.Errorf("local transaction still needs evidence: %w", err)
+		}
+		if err := s.recoverCheckoutTransition(); err != nil {
+			return fmt.Errorf("checkout transition still needs evidence: %w", err)
 		}
 		if err := s.recoverTrackingAttachment(); err != nil {
 			return fmt.Errorf("tracking attachment still needs evidence: %w", err)
@@ -256,4 +283,65 @@ func (s *FileStore) RepairFromReplica(ctx context.Context, source *FileStore, re
 		return report, fmt.Errorf("verified server objects restored; %d local issue(s) have no verified replacement", len(report.Issues))
 	}
 	return report, nil
+}
+
+// Root repair never substitutes the canonical CIR hash for the manifest identity.
+// The caller retains both stores; the source capability owns its allowed chunk
+// set, and the root lock serializes descriptor installation with ordinary pull.
+func (s *FileStore) repairRootFromReplica(ctx context.Context, source *FileStore, ref domain.DocumentRef, replace func(string, []byte) error) error {
+	supported, err := source.WithVerifiedDocChunks(ctx, ref, func(chunks outbound.DocumentChunks) error {
+		if chunks.Representation.DocumentRef() != ref {
+			return domain.ErrHashMismatch
+		}
+		manifest, err := chunks.Representation.ConversationManifest()
+		if err != nil {
+			return err
+		}
+		raw, err := domain.CanonicalConversationManifest(manifest)
+		if err != nil {
+			return err
+		}
+		_, err = s.withOSLock(ctx, "root-document", hexOf(ref.Hash), syscall.LOCK_EX, true, func() error {
+			if _, err := s.readRootDocument(ctx, ref, false); err == nil {
+				return nil
+			}
+			seen := make(map[domain.ContentHash]bool, len(manifest.Chunks))
+			for _, chunk := range manifest.Chunks {
+				if seen[chunk.Hash] {
+					continue
+				}
+				seen[chunk.Hash] = true
+				body, err := chunks.ReadChunk(ctx, chunk.Hash)
+				if err != nil {
+					return err
+				}
+				path := s.objectPath("chunks", chunk.Hash)
+				current, err := readRootObject(ctx, path, int(chunk.Bytes))
+				if err == nil && bytes.Equal(current, body) {
+					continue
+				}
+				if err := replace(path, docCompress(body)); err != nil {
+					return err
+				}
+			}
+			// Check the complete destination before making a new descriptor visible.
+			if _, err := s.verifyRootDocument(ctx, ref, manifest, false); err != nil {
+				return err
+			}
+			path := s.objectPath("docs", ref.Hash)
+			current, err := readRootObject(ctx, path, domain.MaxConversationManifestBytes)
+			if err == nil && bytes.Equal(current, raw) {
+				return nil
+			}
+			return replace(path, docCompress(raw))
+		})
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if !supported {
+		return domain.ErrUnsupportedDocumentIdentity
+	}
+	return ctx.Err()
 }

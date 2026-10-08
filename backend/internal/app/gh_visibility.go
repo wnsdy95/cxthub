@@ -136,6 +136,9 @@ func (s *Service) SyncRepositoryVisibility(ctx context.Context, repositoryID str
 				}
 			}
 		}
+		if err := identity.checkRepositoryDocumentIdentities(ctx, repositoryID); err != nil {
+			return domain.Repository{}, err
+		}
 		now := time.Now().UTC()
 		current.Visibility = vis
 		current.GHSyncedAt = &now

@@ -2,6 +2,7 @@ package inbound
 
 import (
 	"context"
+
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
 
@@ -11,6 +12,8 @@ type StageSession struct {
 	SessionID string
 }
 type StageInput struct {
+	// DocIdentity explicitly selects local capture identity; empty uses local policy, defaulting to legacy.
+	DocIdentity      domain.DocumentIdentity
 	Cwd              string
 	Sessions         []StageSession
 	ExpectedRevision domain.ContentHash

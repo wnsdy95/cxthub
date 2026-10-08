@@ -92,7 +92,7 @@ func (s *MemorizeService) memorize(ctx context.Context, in inbound.MemorizeInput
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
 	}
-	doc, err := s.store.GetDoc(ctx, snap.DocHash)
+	doc, err := readDocumentReference(ctx, s.store, snap.DocumentRef())
 	if err != nil {
 		return inbound.MemorizeOutput{}, err
 	}

@@ -159,10 +159,10 @@ func (s *FileStore) recoverWorkingCommit() error {
 		if err != nil {
 			return err
 		}
-		if snapshot.RepoID != op.Ref.RepoID {
+		if snapshot.RepoID != op.Ref.RepoID || snapshot.ID != id || !snapshot.DocumentRef().MatchesSnapshot(snapshot) {
 			return domain.ErrHashMismatch
 		}
-		if _, err := s.GetDoc(context.Background(), snapshot.DocHash); err != nil {
+		if _, err := s.GetDocReference(context.Background(), snapshot.DocumentRef()); err != nil {
 			return err
 		}
 	}

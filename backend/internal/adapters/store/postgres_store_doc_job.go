@@ -46,6 +46,18 @@ func (s *PostgresStore) EnqueueDocJob(ctx context.Context, j domain.DocFinalizat
 		return j, domain.ErrValidation
 	}
 	err = s.WithinRepository(ctx, j.RepoID, func(ctx context.Context) error {
+		if j.DocIdentity == domain.DocumentIdentityRootV1 {
+			chunks, err := publicationJobChunks(j)
+			if err != nil {
+				return err
+			}
+			for _, h := range chunks {
+				var one int
+				if err := s.db(ctx).QueryRow(ctx, `SELECT 1 FROM repo_blobs WHERE repo_id=$1 AND kind='chunk' AND hash=$2 FOR SHARE`, j.RepoID, h).Scan(&one); err != nil {
+					return mapNoRows(err)
+				}
+			}
+		}
 		old, e := s.GetDocJob(ctx, j.RepoID, j.ID)
 		if e == nil {
 			if old.State != "completed" {
@@ -57,6 +69,15 @@ func (s *PostgresStore) EnqueueDocJob(ctx context.Context, j domain.DocFinalizat
 				return e
 			}
 			if len(have) > 0 {
+				if j.DocIdentity == domain.DocumentIdentityRootV1 {
+					proof, err := s.VerifyStoredDoc(ctx, j.RepoID, j.DocHash)
+					if err != nil {
+						return err
+					}
+					if proof.DocumentRef() != j.DocumentRef() {
+						return domain.ErrIntegrity
+					}
+				}
 				out = old
 				return nil
 			}
@@ -188,7 +209,13 @@ type pgDocPublication struct {
 }
 
 func (s *PostgresStore) PrepareDocJob(ctx context.Context, doc domain.VerifiedSessionDoc) (outbound.PreparedDocPublication, error) {
-	prepared, err := prepareVerifiedDocPG(ctx, doc)
+	var prepared preparedDocPG
+	var err error
+	if doc.DocumentRef().Identity == domain.DocumentIdentityRootV1 {
+		prepared, err = prepareRootDocPG(ctx, doc)
+	} else {
+		prepared, err = prepareVerifiedDocPG(ctx, doc)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -215,10 +242,30 @@ func (p pgDocPublication) Complete(ctx context.Context, j domain.DocFinalization
 		if !old.Fences(j, now) {
 			return domain.ErrConflict
 		}
-		if !doc.Valid() || doc.Hash() != old.DocHash {
-			return domain.ErrIntegrity
+		if err := publicationJobMatches(old, doc); err != nil {
+			return err
 		}
-		if _, err := s.putPreparedDoc(ctx, j.RepoID, p.doc); err != nil {
+		// WithinRepository retains the current repository policy row through
+		// commit, including a requirement changed after proof preparation.
+		repo, err := s.GetRepo(ctx, j.RepoID)
+		if err != nil {
+			return err
+		}
+		if err := checkDocJobPublicationPolicy(ctx, repo, doc.DocumentRef().Identity); err != nil {
+			return err
+		}
+		if doc.DocumentRef().Identity == domain.DocumentIdentityRootV1 {
+			if err := s.putRootDocJob(ctx, j.RepoID, p.doc); err != nil {
+				return err
+			}
+		} else if _, err := s.putPreparedDoc(ctx, j.RepoID, p.doc); err != nil {
+			return err
+		}
+		now = time.Now().UTC()
+		if !old.Fences(j, now) {
+			return domain.ErrConflict
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		old.State = "completed"

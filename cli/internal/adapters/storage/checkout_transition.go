@@ -188,7 +188,7 @@ func (s *FileStore) CommitCheckout(ctx context.Context, change outbound.Checkout
 				if snap.MemoryHash != change.ExpectedMemoryHash {
 					return domain.ErrSelectionChanged
 				}
-				if _, err := s.GetDoc(ctx, snap.DocHash); err != nil {
+				if err := s.inspectDocReference(ctx, snap.DocumentRef(), nil); err != nil {
 					return err
 				}
 				memoryHash, memorySource := checkoutPreparedMemory(change, target)
@@ -251,7 +251,7 @@ func (s *FileStore) validateCheckoutMemory(ctx context.Context, repo string, tar
 	if owner.RepoID != repo {
 		return domain.ErrHashMismatch
 	}
-	if _, err := s.GetDoc(ctx, owner.DocHash); err != nil {
+	if err := s.inspectDocReference(ctx, owner.DocumentRef(), nil); err != nil {
 		return err
 	}
 	memory, err := s.GetMemory(ctx, hash)
@@ -407,7 +407,7 @@ func (s *FileStore) recoverCheckoutTransition() error {
 	if (op.Transition.RepoID != "" && snap.RepoID != op.Transition.RepoID) || (op.Position != nil && op.Position.RepoID != snap.RepoID) {
 		return domain.ErrHashMismatch
 	}
-	if _, err := s.GetDoc(context.Background(), snap.DocHash); err != nil {
+	if err := s.inspectDocReference(context.Background(), snap.DocumentRef(), nil); err != nil {
 		return err
 	}
 	if op.Position != nil {

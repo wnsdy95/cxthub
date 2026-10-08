@@ -126,7 +126,7 @@ func TestStoredChunkUploadPreservesCanonicalIdentity(t *testing.T) {
 			defer server.Close()
 			remote := backendclient.NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
 			source := any(store).(outbound.ChunkedDocumentStore)
-			ok, err := source.WithVerifiedDocChunks(context.Background(), id, func(doc outbound.DocumentChunks) error {
+			ok, err := source.WithVerifiedDocChunks(context.Background(), domain.DocumentRef{Hash: id}, func(doc outbound.DocumentChunks) error {
 				read := doc.ReadChunk
 				doc.ReadChunk = func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
 					chunksRead.Add(1)
@@ -228,7 +228,7 @@ func TestStoredNonportableChunksUseLegacyPlannerBeforeUpload(t *testing.T) {
 	}))
 	defer server.Close()
 	remote := backendclient.NewBackendClient(func() string { return server.URL }, func() string { return "" }, domain.TeamIdentity{})
-	if err := newTestSyncService(store, remote, nil).pushDocument(ctx, string(domain.HashContent([]byte("repo"))), id); err != nil {
+	if err := newTestSyncService(store, remote, nil).pushDocument(ctx, string(domain.HashContent([]byte("repo"))), domain.DocumentRef{Hash: id}); err != nil {
 		t.Fatal(err)
 	}
 	if negotiated.Load() != 1 || finalized.Load() != 1 {
@@ -266,7 +266,7 @@ func BenchmarkStoredDocumentUpload(b *testing.B) {
 				b.SetBytes(int64(len(raw)))
 				b.ResetTimer()
 				for b.Loop() {
-					if err := svc.pushDocument(context.Background(), string(domain.HashContent([]byte("repo"))), id); err != nil {
+					if err := svc.pushDocument(context.Background(), string(domain.HashContent([]byte("repo"))), domain.DocumentRef{Hash: id}); err != nil {
 						b.Fatal(err)
 					}
 				}

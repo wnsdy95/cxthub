@@ -33,7 +33,7 @@ import (
 type ReadStore interface {
 	ListSnapshots(ctx context.Context, repoID, branch string) ([]domain.Snapshot, error)
 	GetSnapshot(ctx context.Context, id domain.ContentHash) (domain.Snapshot, error)
-	GetDoc(ctx context.Context, hash domain.ContentHash) (domain.SessionDoc, error)
+	GetDocReference(ctx context.Context, ref domain.DocumentRef) (domain.SessionDoc, error)
 	GetMemory(ctx context.Context, hash domain.ContentHash) (domain.MemoryDigest, error)
 	GetRef(ctx context.Context, repoID string, kind domain.RefKind, name string) (domain.Ref, error)
 }
@@ -301,19 +301,23 @@ func (s *Server) toolFetch(ctx context.Context, cwd string, repo domain.Repo, re
 	if d, ok := s.nearestDigest(ctx, snap); ok {
 		fmt.Fprintf(&b, "\n## Memory Summary\n%s\n", truncateRunes(d.Summary, 2000))
 	}
-	doc, err := s.store.GetDoc(ctx, snap.DocHash)
-	if err == nil {
-		fmt.Fprintf(&b, "\n## Recent Chat (Last %d Messages)\n", events)
-		msgs := make([]domain.Event, 0, events)
-		for i := len(doc.CIR.Events) - 1; i >= 0 && len(msgs) < events; i-- {
-			ev := doc.CIR.Events[i]
-			if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && strings.TrimSpace(ev.Blocks[0].Text) != "" {
-				msgs = append(msgs, ev)
-			}
+	doc, err := s.store.GetDocReference(ctx, snap.DocumentRef())
+	if err != nil {
+		return "", err
+	}
+	if doc.DocumentRef() != snap.DocumentRef() {
+		return "", domain.ErrHashMismatch
+	}
+	fmt.Fprintf(&b, "\n## Recent Chat (Last %d Messages)\n", events)
+	msgs := make([]domain.Event, 0, events)
+	for i := len(doc.CIR.Events) - 1; i >= 0 && len(msgs) < events; i-- {
+		ev := doc.CIR.Events[i]
+		if ev.Kind == domain.EventMessage && len(ev.Blocks) > 0 && strings.TrimSpace(ev.Blocks[0].Text) != "" {
+			msgs = append(msgs, ev)
 		}
-		for i := len(msgs) - 1; i >= 0; i-- {
-			fmt.Fprintf(&b, "[%s] %s\n", msgs[i].Role, truncateRunes(msgs[i].Blocks[0].Text, 500))
-		}
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		fmt.Fprintf(&b, "[%s] %s\n", msgs[i].Role, truncateRunes(msgs[i].Blocks[0].Text, 500))
 	}
 	return b.String(), nil
 }

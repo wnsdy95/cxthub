@@ -139,8 +139,8 @@ func TestRootFSReaderCurrentBytesAndScope(t *testing.T) {
 			if _, err := st.GetDocManifest(ctx, repo, f.hash); !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
 				t.Fatal("legacy manifest fallback", err)
 			}
-			if _, err := st.CaptureSupersedes(ctx, repo, f.hash, f.hash, domain.ProviderCodex, ""); !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
-				t.Fatal("root capture collection", err)
+			if supersedes, err := st.CaptureSupersedes(ctx, repo, f.hash, f.hash, domain.ProviderCodex, ""); err != nil || supersedes {
+				t.Fatal("root capture must be retained", supersedes, err)
 			}
 			if got := rootFSImage(t, st.dataDir); !reflect.DeepEqual(before, got) {
 				t.Fatal("read wrote source/index/receipt")
@@ -304,10 +304,10 @@ func TestRootFSProofCannotPublishLegacy(t *testing.T) {
 		if _, err := st.PutDoc(context.Background(), repo, domain.SessionDoc{Hash: f.hash, Identity: domain.DocumentIdentityRootV1, CIR: f.cir}); !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
 			t.Fatal(err)
 		}
-		if _, err := st.PrepareDocJob(context.Background(), doc); !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
+		if _, err := st.PrepareDocJob(context.Background(), doc); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.CompleteDocJob(context.Background(), domain.DocFinalizationJob{}, doc, time.Now()); !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
+		if err := st.CompleteDocJob(context.Background(), domain.DocFinalizationJob{}, doc, time.Now()); err == nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(st.dataDir); !os.IsNotExist(err) {
