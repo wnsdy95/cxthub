@@ -130,7 +130,7 @@ func FuzzScrubStandardPrefilter(f *testing.F) {
 		"Authorization: BeArEr abcdef0123456789TOKENVALUE",
 		"https://user:synthetic-password@example.invalid/path",
 		"-----BEGIN RSA PRIVATE KEY-----\nsynthetic\n-----END RSA PRIVATE KEY-----",
-		"가sk-proj-abcdefghijklmnopqrstuvwx나",
+		"\uac00sk-proj-abcdefghijklmnopqrstuvwx\ub098",
 		"_sk-proj-abcdefghijklmnopqrstuvwx sk-proj-abcdefghijklmnopqrstuvwx_",
 		"\xffsk-proj-abcdefghijklmnopqrstuvwx\x00",
 	}

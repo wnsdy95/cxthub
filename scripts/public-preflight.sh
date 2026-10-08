@@ -2,6 +2,11 @@
 # Fail-closed checks for the file set that will become the public repository.
 set -euo pipefail
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "[public-check] required dependency is missing: rg (ripgrep)" >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODE="${1:-tree}"
 cd "$ROOT"
