@@ -15,22 +15,11 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-// A separately supplied empty target keeps migration tests away from ordinary
-// PG fixtures. The harness provisions a private schema in its owned database.
+// Reuse the import fixture's owned empty database so the ordinary PostgreSQL
+// CI contract runs this migration without touching other suites' data.
 func TestP5FrozenImportAtomicRootGraph(t *testing.T) {
-	dsn := os.Getenv("CXT_P5_IMPORT_DSN")
-	if dsn == "" {
-		t.Skip("CXT_P5_IMPORT_DSN unset")
-	}
 	ctx := context.Background()
-	pg, err := NewPostgresStore(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pg.Close()
-	if _, err := pg.ApplyMigrations(ctx, "../../../../schemas/db/migrations"); err != nil {
-		t.Fatal(err)
-	}
+	pg := importTestStore(t)
 	if err := pg.CheckImportTargetEmpty(ctx); err != nil {
 		t.Fatal(err)
 	}
