@@ -32,7 +32,7 @@ func VerifyStoredDocBytes(hash ContentHash, raw []byte) (VerifiedDocReference, e
 	if err := json.Unmarshal(raw, &cir); err != nil {
 		return VerifiedDocReference{}, ErrIntegrity
 	}
-	_, err := ValidatedSessionDocBytes(SessionDoc{Hash: hash, CIR: cir})
+	_, err := validatedSessionDocBytes(SessionDoc{Hash: hash, CIR: cir}, canonicalDecodedEventJSON)
 	if err != nil {
 		return VerifiedDocReference{}, err
 	}
