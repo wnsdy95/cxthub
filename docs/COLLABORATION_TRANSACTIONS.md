@@ -226,8 +226,23 @@ Use only disposable PostgreSQL 16 databases. Do not point fixtures at production
   authentication pairing, checks tenant isolation and executes REST/MCP load.
 - From the repository root, `CXT_RECOVERY_DSN=… CXT_RECOVERY_RESTORE_DSN=… bash scripts/verify-postgres-recovery.sh`
   backs up and restores into an explicitly empty target, then compares every
-  public table's row count and sorted row-content digests. It refuses a nonempty
-  target; temporary dumps are permission-restricted and removed afterwards.
+  public table's row count and sorted row-content digests. After equality is
+  verified, it calls `cxt_reset_catalog` for every restored repository in ID
+  order within one transaction. Before committing, it checks that every epoch
+  differs from the source and every repository has a complete generation-zero
+  baseline. It then verifies that the source is unchanged and that all restored
+  tables except the two catalog tables still match. It refuses a nonempty target;
+  temporary dumps are permission-restricted and removed afterwards.
+
+Keep catalog clients and source writers stopped on both validation databases
+throughout the rehearsal. Exact backup equality must be verified **before**
+rotating restored epochs, and rotation must commit **before serving** the restored
+database. Otherwise, a checkpoint issued before recovery could incorrectly appear
+current after a database rewind. For an older schema without `cxt_reset_catalog`,
+the script reports `catalog epoch rotation not available; migrate before serving`;
+the content comparison alone does not validate catalog recovery. See
+[Catalog maintenance and restore](CATALOG_SYNC.md#maintenance-retention-and-restore)
+for epoch rotation and checkpoint reset semantics.
 
 Local validation: 100 MiB text, 4,096 events, 1,001 snapshots, 16 concurrent readers,
 320 successful requests across two server processes. Observed p95 REST 12.6 ms,
