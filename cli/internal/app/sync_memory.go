@@ -376,6 +376,10 @@ func (s *SyncRepoService) remoteMemoryCatalog(ctx context.Context, repoID string
 	if err != nil {
 		return nil, err
 	}
+	return validatedMemoryCatalog(repoID, remoteManifest)
+}
+
+func validatedMemoryCatalog(repoID string, remoteManifest domain.Manifest) (map[domain.ContentHash]domain.ContentHash, error) {
 	if remoteManifest.RepoID != "" && remoteManifest.RepoID != repoID {
 		return nil, domain.ErrHashMismatch
 	}
