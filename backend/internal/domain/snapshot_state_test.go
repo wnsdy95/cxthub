@@ -95,3 +95,33 @@ func TestSnapshotStateHashNormalizesNilSlices(t *testing.T) {
 		t.Fatalf("nil/empty state hashes differ: %s != %s", a, b)
 	}
 }
+
+func TestSnapshotStateHashDocumentIdentity(t *testing.T) {
+	legacy := Snapshot{ID: HashContent([]byte("snapshot")), DocHash: HashContent([]byte("snapshot"))}
+	before, err := SnapshotStateHash(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := legacy
+	root.DocIdentity = DocumentIdentityRootV1
+	after, err := SnapshotStateHash(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantRoot ContentHash = "sha256:1ffe2f0ee6a7516de8b10cdb004ff6480b2ef50c4a41063ddbc368a3f9e316d1"
+	if after != wantRoot {
+		t.Fatalf("root state hash = %s, want %s", after, wantRoot)
+	}
+	if before == after {
+		t.Fatal("document identity did not change metadata fingerprint")
+	}
+	root.DocIdentity = DocumentIdentityLegacy
+	restored, err := SnapshotStateHash(root)
+	if err != nil || restored != before {
+		t.Fatal("legacy discriminator changed fingerprint", restored, err)
+	}
+	root.DocIdentity = DocumentIdentity("future-identity")
+	if _, err := SnapshotStateHash(root); err == nil {
+		t.Fatal("unknown identity fingerprint accepted")
+	}
+}

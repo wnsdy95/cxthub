@@ -202,7 +202,7 @@ func scanSnapshot(row pgx.Row) (domain.Snapshot, error) {
 	if err := row.Scan(&snap.ID, &snap.RepoID, &snap.Branch, &parents, &snap.DocHash, &memHash,
 		&snap.ClaudeSettings, &snap.AgentsSettings, &snap.CodexSettings,
 		&snap.Provider, &snap.Fidelity, &snap.Message,
-		&snap.Author.Name, &snap.Author.Email, &snap.Author.Team, &snap.CreatedAt, &snap.Grafted, &snap.SessionID, &models, &snap.CompactionCount, &graftParents, &snap.GraftSeq); err != nil {
+		&snap.Author.Name, &snap.Author.Email, &snap.Author.Team, &snap.CreatedAt, &snap.Grafted, &snap.SessionID, &models, &snap.CompactionCount, &graftParents, &snap.GraftSeq, &snap.DocIdentity); err != nil {
 		return domain.Snapshot{}, err
 	}
 	snap.Parents = hashes(parents)
@@ -221,7 +221,7 @@ func scanSnapshot(row pgx.Row) (domain.Snapshot, error) {
 	return snap, nil
 }
 
-const snapCols = `id, repo_id, branch, parents, doc_hash, memory_hash, COALESCE(claude_settings,''), COALESCE(agents_settings,''), COALESCE(codex_settings,''), provider, fidelity, message, author_name, author_email, author_team, created_at, grafted, COALESCE(session_id,''), COALESCE(models,'{}'), COALESCE(compaction_count,0), COALESCE(graft_parents,'{}'), COALESCE(graft_seq,0)`
+const snapCols = `id, repo_id, branch, parents, doc_hash, memory_hash, COALESCE(claude_settings,''), COALESCE(agents_settings,''), COALESCE(codex_settings,''), provider, fidelity, message, author_name, author_email, author_team, created_at, grafted, COALESCE(session_id,''), COALESCE(models,'{}'), COALESCE(compaction_count,0), COALESCE(graft_parents,'{}'), COALESCE(graft_seq,0), doc_identity`
 
 func (s *PostgresStore) GetSnapshot(ctx context.Context, repoID, id domain.ContentHash) (domain.Snapshot, error) {
 	if err := validateHashes(repoID, id); err != nil {
@@ -280,15 +280,27 @@ func (s *PostgresStore) PutSnapshot(ctx context.Context, snap domain.Snapshot) e
 		m := string(snap.MemoryHash)
 		memHash = &m
 	}
-	_, err = tx.Exec(ctx,
-		`INSERT INTO snapshots (id, repo_id, branch, parents, doc_hash, memory_hash, claude_settings, agents_settings, codex_settings, provider, fidelity, message, author_name, author_email, author_team, grafted, session_id, models, compaction_count, graft_parents, graft_seq)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) ON CONFLICT (repo_id, id) DO NOTHING`,
+	inserted, err := tx.Exec(ctx,
+		`INSERT INTO snapshots (id, repo_id, branch, parents, doc_hash, memory_hash, claude_settings, agents_settings, codex_settings, provider, fidelity, message, author_name, author_email, author_team, grafted, session_id, models, compaction_count, graft_parents, graft_seq, doc_identity)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) ON CONFLICT (repo_id, id) DO NOTHING`,
 		string(snap.ID), string(snap.RepoID), snap.Branch, strs(snap.Parents), string(snap.DocHash), memHash,
 		string(snap.ClaudeSettings), string(snap.AgentsSettings), string(snap.CodexSettings),
 		string(snap.Provider), string(snap.Fidelity), snap.Message,
-		snap.Author.Name, snap.Author.Email, snap.Author.Team, snap.Grafted, snap.SessionID, emptyIfNil(snap.Models), snap.CompactionCount, strs(snap.GraftParents), snap.GraftSeq)
+		snap.Author.Name, snap.Author.Email, snap.Author.Team, snap.Grafted, snap.SessionID, emptyIfNil(snap.Models), snap.CompactionCount, strs(snap.GraftParents), snap.GraftSeq, string(snap.DocIdentity))
 	if err != nil {
 		return err
+	}
+	if inserted.RowsAffected() == 0 {
+		// A concurrent winner may have the same hash but a different identity
+		// discriminator. Do not silently accept or promote that metadata.
+		var identity, docHash string
+		if err := tx.QueryRow(ctx, `SELECT doc_hash, doc_identity FROM snapshots WHERE repo_id=$1 AND id=$2 FOR UPDATE`,
+			string(snap.RepoID), string(snap.ID)).Scan(&docHash, &identity); err != nil {
+			return err
+		}
+		if identity != string(snap.DocIdentity) || docHash != string(snap.DocHash) {
+			return fmt.Errorf("%w: snapshot document identity is immutable", domain.ErrIntegrity)
+		}
 	}
 	// stash → Commit promotion (like FS/CLI rules): If an existing row has the "(stash)" label and non-stash storage is
 	// added, it updates branch/message to commit (hash-external derived metadata — ID/content immutable).

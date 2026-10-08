@@ -24,7 +24,11 @@ func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) 
 
 // A verification set lives for one operation, not on the service or store.
 // Keys include repository ownership and both immutable snapshot/document IDs.
-type historyVerification map[[3]domain.ContentHash]struct{}
+type historyDocumentKey struct {
+	repo, snapshot domain.ContentHash
+	document       domain.DocumentRef
+}
+type historyVerification map[historyDocumentKey]struct{}
 
 func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, serverReceipt bool, verified historyVerification) error {
 	if err := domain.ValidateHistoryEvent(event); err != nil {
@@ -101,7 +105,7 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 		if err != nil {
 			return err
 		}
-		key := [3]domain.ContentHash{repoID, snap.ID, snap.DocHash}
+		key := historyDocumentKey{repo: repoID, snapshot: snap.ID, document: snap.DocumentRef()}
 		if _, ok := verified[key]; ok {
 			continue
 		}

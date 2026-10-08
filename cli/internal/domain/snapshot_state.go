@@ -5,9 +5,10 @@ import "encoding/json"
 // SnapshotStateHash fingerprints the mutable snapshot projection replicated
 // after object creation. Snapshot.ID detects new immutable objects; this token
 // detects metadata-only changes to branch/message promotion, memory attachment,
-// and the versioned graft register.
+// and the versioned graft register. The document identity discriminator binds
+// that metadata to its identity interpretation without changing legacy tokens.
 //
-// Immutable fields are deliberately excluded. In particular, PostgreSQL may
+// Other immutable fields are deliberately excluded. In particular, PostgreSQL may
 // assign CreatedAt at insert time, so hashing the whole wire object would make
 // equivalent replicas appear changed forever.
 func SnapshotStateHash(s Snapshot) (ContentHash, error) {
@@ -19,6 +20,7 @@ func SnapshotStateHash(s Snapshot) (ContentHash, error) {
 		Grafted:      s.Grafted,
 		GraftParents: snapshotStateHashes(s.GraftParents),
 		GraftSeq:     s.GraftSeq,
+		DocIdentity:  s.DocIdentity,
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -28,13 +30,14 @@ func SnapshotStateHash(s Snapshot) (ContentHash, error) {
 }
 
 type snapshotStateWire struct {
-	ID           string   `json:"id"`
-	Branch       string   `json:"branch"`
-	MemoryHash   string   `json:"memory_hash"`
-	Message      string   `json:"message"`
-	Grafted      bool     `json:"grafted"`
-	GraftParents []string `json:"graft_parents"`
-	GraftSeq     uint64   `json:"graft_seq"`
+	ID           string           `json:"id"`
+	Branch       string           `json:"branch"`
+	MemoryHash   string           `json:"memory_hash"`
+	Message      string           `json:"message"`
+	Grafted      bool             `json:"grafted"`
+	GraftParents []string         `json:"graft_parents"`
+	GraftSeq     uint64           `json:"graft_seq"`
+	DocIdentity  DocumentIdentity `json:"doc_identity,omitempty"`
 }
 
 func snapshotStateHashes(in []ContentHash) []string {

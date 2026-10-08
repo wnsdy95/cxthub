@@ -11,6 +11,9 @@ import (
 // Legacy narrow adapters retain complete domain/engine verification. A stronger
 // adapter's error is terminal and never falls back to weaker cached evidence.
 func (s *Service) verifyStoredSnapshotDoc(ctx context.Context, repo domain.ContentHash, snap domain.Snapshot) error {
+	if snap.DocIdentity != domain.DocumentIdentityLegacy {
+		return domain.ErrUnsupportedDocumentIdentity
+	}
 	if snap.ID == "" || snap.DocHash == "" || snap.ID != snap.DocHash {
 		return domain.ErrIntegrity
 	}

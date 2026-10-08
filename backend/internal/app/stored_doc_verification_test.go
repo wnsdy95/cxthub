@@ -73,3 +73,18 @@ func TestHistoryAndMetadataUseStoredDocumentVerification(t *testing.T) {
 		t.Fatal("verification failure fell back to archive decoder")
 	}
 }
+
+func TestUnreadyDocumentIdentityStopsBeforeStorageRead(t *testing.T) {
+	blobs := &referenceOnlyBlobs{}
+	svc := &Service{blobs: blobs}
+	hash := domain.HashContent([]byte("synthetic staged identity"))
+	for _, identity := range []domain.DocumentIdentity{domain.DocumentIdentityRootV1, "unknown"} {
+		snap := domain.Snapshot{ID: hash, DocHash: hash, DocIdentity: identity}
+		if err := svc.verifyStoredSnapshotDoc(context.Background(), hash, snap); !errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
+			t.Fatal(identity, err)
+		}
+	}
+	if blobs.decoded != 0 || blobs.verified != 0 {
+		t.Fatal("unready identity reached storage", blobs.decoded, blobs.verified)
+	}
+}

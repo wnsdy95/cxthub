@@ -10,7 +10,7 @@ type VerifiedDocReference struct{ hash ContentHash }
 func (v VerifiedDocReference) Valid() bool       { return v.hash != "" }
 func (v VerifiedDocReference) Hash() ContentHash { return v.hash }
 func (v VerifiedDocReference) Matches(s Snapshot) bool {
-	return v.Valid() && s.ID == s.DocHash && s.DocHash == v.hash
+	return v.Valid() && s.DocIdentity == DocumentIdentityLegacy && s.ID == s.DocHash && s.DocHash == v.hash
 }
 func (d VerifiedSessionDoc) Reference() VerifiedDocReference {
 	if !d.Valid() {

@@ -59,9 +59,10 @@ type Branch struct {
 // Snapshot is the state of one session at a point in time. The body addressed by ID and its natural
 // Parents are immutable; out-of-hash projections and overlays change only under their documented merge/CAS rules.
 //
-// Invariant S-ID/H1: Snapshot.ID == Snapshot.DocHash == ContentHash(canonical_bytes(SessionDoc.CIR)).
+// Invariant S-ID/H1: Snapshot.ID == Snapshot.DocHash. DocIdentity selects the
+// document hash scheme; its absence retains the canonical-CIR identity.
 type Snapshot struct {
-	// ID is the ContentHash of the CIR normalized bytes and is immutable.
+	// ID is the immutable document identity selected by DocIdentity.
 	ID ContentHash `json:"id"`
 	// RepoID is the ID of the containing repo.
 	RepoID string `json:"repo_id"`
@@ -71,6 +72,8 @@ type Snapshot struct {
 	Parents []ContentHash `json:"parents"`
 	// DocHash is the ContentHash of the SessionDoc this snapshot points to (== ID).
 	DocHash ContentHash `json:"doc_hash"`
+	// DocIdentity is omitted for legacy canonical-CIR hashes.
+	DocIdentity DocumentIdentity `json:"doc_identity,omitempty"`
 	// MemoryHash is the ContentHash of the MemoryDigest attached to this snapshot (optional, can be "").
 	MemoryHash ContentHash `json:"memory_hash,omitempty"`
 	// ClaudeSettings/AgentsSettings/CodexSettings is the commit-time .claude/.agents/.codex folder snapshot (content-addressed SettingsBundle object) hash. Pushes and pulls with the commit.
@@ -147,10 +150,12 @@ type Ref struct {
 
 // SessionDoc is a CIR container (regular conversation body, immutable, domain model).
 //
-// Invariant: Hash == ContentHash(canonical_bytes(CIR)).
+// Invariant: Hash addresses CIR under Identity; absent Identity means the
+// unchanged legacy ContentHash(canonical_bytes(CIR)) scheme.
 type SessionDoc struct {
 	// Hash is the ContentHash of this SessionDoc.
-	Hash ContentHash `json:"hash"`
+	Hash     ContentHash      `json:"hash"`
+	Identity DocumentIdentity `json:"identity,omitempty"`
 	// CIR is a provider-independent regular conversation representation (domain model).
 	CIR CIRDocument `json:"cir"`
 }

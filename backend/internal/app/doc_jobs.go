@@ -30,6 +30,9 @@ func docJobStatus(j domain.DocFinalizationJob) inbound.DocFinalizationStatus {
 	return inbound.DocFinalizationStatus{ID: j.ID, DocHash: j.DocHash, State: j.State, Reason: j.Reason, UpdatedAt: j.UpdatedAt}
 }
 func (s *Service) submitDocFinalizationCommand(ctx context.Context, repo domain.ContentHash, doc inbound.ChunkedDoc) (inbound.DocFinalizationStatus, error) {
+	if doc.Identity != domain.DocumentIdentityLegacy {
+		return inbound.DocFinalizationStatus{}, domain.ErrUnsupportedDocumentIdentity
+	}
 	j, err := domain.NewDocFinalizationJob(repo, doc.Hash, domain.DocChunkManifest{Format: doc.Format, Envelope: doc.Envelope, Chunks: doc.Chunks}, time.Now().UTC())
 	if err != nil {
 		return inbound.DocFinalizationStatus{}, err
