@@ -94,7 +94,9 @@ def service_plists(cfg):
             "WorkingDirectory": cfg["root"], "RunAtLoad": True, "KeepAlive": True,
             "StandardOutPath": str(logs / (kind + ".out.log")),
             "StandardErrorPath": str(logs / (kind + ".err.log")),
-            "ProcessType": "Background", "ExitTimeOut": 20,
+            # API/MCP serve user requests; retain launchd's default Standard
+            # scheduling instead of forcing background CPU and I/O limits.
+            "ExitTimeOut": 20,
         }
     return result
 
