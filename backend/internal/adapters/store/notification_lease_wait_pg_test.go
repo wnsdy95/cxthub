@@ -48,6 +48,15 @@ func TestWorkerPGNotificationGuardLeaseWait(t *testing.T) {
 			if err != nil || claim.Job.ID != job.ID {
 				t.Fatal("wrong synthetic claim", err)
 			}
+			// Compare persisted images, not pgx and JSON time representations.
+			before, err := st.ListNotifications(ctx, record.ID)
+			if err != nil || len(before) != 1 || before[0].ID != claim.Job.ID {
+				t.Fatal("read persisted claim baseline", before, err)
+			}
+			var beforeRow string
+			if err := st.pool.QueryRow(ctx, `SELECT row_to_json(n)::text FROM notification_outbox n WHERE id=$1`, claim.Job.ID).Scan(&beforeRow); err != nil {
+				t.Fatal(err)
+			}
 			if err := st.ValidateNotificationDelivery(ctx, claim, now); err != nil {
 				t.Fatal("unexpired positive control", err)
 			}
@@ -128,8 +137,15 @@ func TestWorkerPGNotificationGuardLeaseWait(t *testing.T) {
 				}
 			}
 			jobs, err := st.ListNotifications(ctx, record.ID)
-			if err != nil || len(jobs) != 1 || !reflect.DeepEqual(jobs[0], claim.Job) {
+			if err != nil || len(jobs) != 1 || !reflect.DeepEqual(jobs, before) {
 				t.Fatal("guard changed durable claim", jobs, err)
+			}
+			var afterRow string
+			if err := st.pool.QueryRow(ctx, `SELECT row_to_json(n)::text FROM notification_outbox n WHERE id=$1`, claim.Job.ID).Scan(&afterRow); err != nil {
+				t.Fatal(err)
+			}
+			if afterRow != beforeRow {
+				t.Fatal("guard changed durable notification row", beforeRow, afterRow)
 			}
 		})
 	}
