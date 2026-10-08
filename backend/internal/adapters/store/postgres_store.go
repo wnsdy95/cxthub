@@ -372,25 +372,49 @@ func requireSnapshotIDsPG(ctx context.Context, tx pgx.Tx, repoID domain.ContentH
 }
 
 func ensureNoReachabilityCycle(ctx context.Context, tx pgx.Tx, repoID domain.ContentHash) error {
-	var cycle bool
-	err := tx.QueryRow(ctx, `
-		WITH RECURSIVE edges(child,parent) AS (
-			SELECT id, unnest(COALESCE(parents,'{}'::text[]) || COALESCE(graft_parents,'{}'::text[]))
-			  FROM snapshots WHERE repo_id=$1
-		), reach(start,node) AS (
-			SELECT child,parent FROM edges
-			UNION
-			SELECT reach.start, edges.parent
-			  FROM reach JOIN edges ON edges.child=reach.node
-		)
-		SELECT EXISTS(SELECT 1 FROM reach WHERE start=node)`, string(repoID)).Scan(&cycle)
+	// The caller holds the repository graph lock until commit. Load only edges
+	// from that same transaction; materializing every transitive pair in SQL
+	// grows quadratically even for a simple chain.
+	rows, err := tx.Query(ctx, `SELECT id, COALESCE(parents,'{}'::text[]), COALESCE(graft_parents,'{}'::text[])
+ FROM snapshots WHERE repo_id=$1`, string(repoID))
 	if err != nil {
 		return err
 	}
-	if cycle {
+	defer rows.Close()
+	snapshots := make(map[domain.ContentHash]domain.Snapshot)
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var id string
+		var parents, grafts []*string
+		if err := rows.Scan(&id, &parents, &grafts); err != nil {
+			return err
+		}
+		hash := domain.ContentHash(id)
+		snapshots[hash] = domain.Snapshot{ID: hash, Parents: nonNullGraphHashes(parents), GraftParents: nonNullGraphHashes(grafts)}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := domain.ValidateAcyclicAncestry(ctx, snapshots); errors.Is(err, domain.ErrIntegrity) {
 		return fmt.Errorf("%w: graft would create a reachability cycle", domain.ErrConflict)
+	} else if err != nil {
+		return err
 	}
 	return nil
+}
+
+// NULL array elements were terminal edges in the former SQL closure. Ignore
+// only those elements; ordinary missing IDs remain part of the graph input.
+func nonNullGraphHashes(values []*string) []domain.ContentHash {
+	out := make([]domain.ContentHash, 0, len(values))
+	for _, value := range values {
+		if value != nil {
+			out = append(out, domain.ContentHash(*value))
+		}
+	}
+	return out
 }
 
 // Read the locked graph; the same domain invariant is used by FS and commands.
