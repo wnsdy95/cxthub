@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -126,34 +127,8 @@ func newGraphStateIndex(snaps []Snapshot) (*graphStateIndex, error) {
 		}
 		x.byID[s.ID] = s
 	}
-	degrees := map[ContentHash]int{}
-	children := map[ContentHash][]ContentHash{}
-	ready := []ContentHash{}
-	for id, s := range x.byID {
-		for _, p := range s.ReachabilityParents() {
-			if _, ok := x.byID[p]; ok {
-				degrees[id]++
-				children[p] = append(children[p], id)
-			}
-		}
-		if degrees[id] == 0 {
-			ready = append(ready, id)
-		}
-	}
-	n := 0
-	for len(ready) > 0 {
-		id := ready[len(ready)-1]
-		ready = ready[:len(ready)-1]
-		n++
-		for _, c := range children[id] {
-			degrees[c]--
-			if degrees[c] == 0 {
-				ready = append(ready, c)
-			}
-		}
-	}
-	if n != len(x.byID) {
-		return nil, fmt.Errorf("%w: cyclic graph ancestry", ErrIntegrity)
+	if err := ValidateAcyclicAncestry(context.Background(), x.byID); err != nil {
+		return nil, err
 	}
 	x.ordinal = make(map[ContentHash]int, len(snaps))
 	x.nodeIDs = make([]ContentHash, 0, len(snaps))
