@@ -19,6 +19,12 @@ func HashContent(data []byte) ContentHash {
 //
 // Server push re-hashes this byte to compare with the content hash provided by the client.
 func CanonicalBytes(doc CIRDocument) ([]byte, error) {
+	return canonicalBytes(doc, nil)
+}
+
+// A nil event serializer preserves generic normalization for arbitrary public
+// Go inputs. Only the stored-byte decoder selects the decoded-event serializer.
+func canonicalBytes(doc CIRDocument, eventJSON func(CIREvent) ([]byte, error)) ([]byte, error) {
 	if err := ValidateCIRVersion(doc); err != nil {
 		return nil, fmt.Errorf("canonical bytes: %w", err)
 	}
@@ -33,7 +39,12 @@ func CanonicalBytes(doc CIRDocument) ([]byte, error) {
 	out.Write(env)
 	out.WriteString(`,"events":[`)
 	for i, event := range canonicalEvents(doc.Events) {
-		raw, err := canonicalJSON(event)
+		var raw []byte
+		if eventJSON == nil {
+			raw, err = canonicalJSON(event)
+		} else {
+			raw, err = eventJSON(event)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -85,6 +96,10 @@ func ValidateSessionDocHash(doc SessionDoc) error {
 // ValidatedSessionDocBytes lets storage reuse exactly the bytes it validates,
 // avoiding a second canonicalization of a cumulative session.
 func ValidatedSessionDocBytes(doc SessionDoc) ([]byte, error) {
+	return validatedSessionDocBytes(doc, nil)
+}
+
+func validatedSessionDocBytes(doc SessionDoc, eventJSON func(CIREvent) ([]byte, error)) ([]byte, error) {
 	// Existing publication adapters only store legacy representations. Declaring
 	// a root scheme must not accidentally route through their canonical writer.
 	if doc.Identity != DocumentIdentityLegacy {
@@ -93,7 +108,7 @@ func ValidatedSessionDocBytes(doc SessionDoc) ([]byte, error) {
 	if err := ValidateContentHash(doc.Hash); err != nil {
 		return nil, err
 	}
-	canonical, err := CanonicalBytes(doc.CIR)
+	canonical, err := canonicalBytes(doc.CIR, eventJSON)
 	if err != nil {
 		return nil, fmt.Errorf("%w: doc canonicalization failed: %v", ErrIntegrity, err)
 	}
