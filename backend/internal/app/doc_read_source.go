@@ -16,7 +16,14 @@ type docReadSource struct {
 	read  func(int, int) ([]byte, error)
 }
 
-func (s *Service) rootReadSource(ctx context.Context, repo, hash domain.ContentHash) (*docReadSource, error) {
+type docReadProjection bool
+
+const (
+	docReadMetadata docReadProjection = false
+	docReadSearch   docReadProjection = true
+)
+
+func (s *Service) rootReadSource(ctx context.Context, repo, hash domain.ContentHash, projection docReadProjection) (*docReadSource, error) {
 	return repositoryReadForRepo(ctx, s, repo, func(bound context.Context) (*docReadSource, error) {
 		snapshot, err := s.meta.GetSnapshot(bound, repo, hash)
 		if errors.Is(err, domain.ErrNotFound) {
@@ -31,7 +38,7 @@ func (s *Service) rootReadSource(ctx context.Context, repo, hash domain.ContentH
 		if snapshot.DocIdentity == domain.DocumentIdentityLegacy {
 			return nil, nil
 		}
-		source, err := s.verifiedRootReadSource(bound, repo, snapshot)
+		source, err := s.verifiedRootReadSource(bound, repo, snapshot, projection)
 		return &source, err
 	})
 }
@@ -75,7 +82,7 @@ func (s *Service) verifiedRootDoc(ctx context.Context, repo domain.ContentHash, 
 	}
 	return doc, ctx.Err()
 }
-func (s *Service) verifiedRootReadSource(ctx context.Context, repo domain.ContentHash, snapshot domain.Snapshot) (docReadSource, error) {
+func (s *Service) verifiedRootReadSource(ctx context.Context, repo domain.ContentHash, snapshot domain.Snapshot, projection docReadProjection) (docReadSource, error) {
 	doc, err := s.verifiedRootDoc(ctx, repo, snapshot)
 	if err != nil {
 		return docReadSource{}, err
@@ -84,7 +91,12 @@ func (s *Service) verifiedRootReadSource(ctx context.Context, repo domain.Conten
 	if err != nil {
 		return docReadSource{}, err
 	}
-	index, err := plan.Build(nil)
+	var index domain.DocReadIndex
+	if projection == docReadSearch {
+		index, err = plan.BuildContext(ctx, nil)
+	} else {
+		index, err = plan.BuildMetadataContext(ctx)
+	}
 	if err != nil {
 		return docReadSource{}, err
 	}
@@ -110,7 +122,7 @@ func (s *Service) agentHistoryReadSource(ctx context.Context, repo domain.Conten
 		return docReadSource{}, err
 	}
 	if ref.Identity == domain.DocumentIdentityRootV1 {
-		return s.verifiedRootReadSource(ctx, repo, snapshot)
+		return s.verifiedRootReadSource(ctx, repo, snapshot, docReadMetadata)
 	}
 	// Legacy prepared docs may lack snapshots. The indexed adapter must still
 	// assert ownership and reject a root object, even behind a warm projection.
@@ -166,7 +178,7 @@ func (s *Service) materializedDocumentRead(ctx context.Context, repo, hash domai
 }
 
 func (s *Service) documentReadSource(ctx context.Context, repo, hash domain.ContentHash) (docReadSource, error) {
-	root, err := s.rootReadSource(ctx, repo, hash)
+	root, err := s.rootReadSource(ctx, repo, hash, docReadMetadata)
 	if err != nil {
 		return docReadSource{}, err
 	}

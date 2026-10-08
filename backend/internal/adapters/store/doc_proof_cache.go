@@ -19,6 +19,10 @@ type docProofCache struct {
 	proofs map[docProofKey]domain.VerifiedDocReference
 	order  []docProofKey
 	next   int
+
+	// Root reads share only bounded event semantics, never legacy physical
+	// proofs. Current owned bytes and the complete root are checked every time.
+	rootVerifier domain.CanonicalDocVerifier
 }
 
 func (c *docProofCache) get(key docProofKey) (domain.VerifiedDocReference, bool) {

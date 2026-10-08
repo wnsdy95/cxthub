@@ -198,6 +198,16 @@ func rootChunkBytes(ctx context.Context, raw []byte, length int64) ([]byte, erro
 }
 
 func verifyStoredConversation(ctx context.Context, hash domain.ContentHash, manifest domain.ConversationManifest, read storedChunkReader) (domain.VerifiedSessionDoc, error) {
+	// Frozen transfers keep an independent, disposable verifier.
+	var verifier domain.CanonicalDocVerifier
+	return verifyStoredConversationWithVerifier(ctx, &verifier, hash, manifest, read)
+}
+
+func (c *docProofCache) verifyConversation(ctx context.Context, hash domain.ContentHash, manifest domain.ConversationManifest, read storedChunkReader) (domain.VerifiedSessionDoc, error) {
+	return verifyStoredConversationWithVerifier(ctx, &c.rootVerifier, hash, manifest, read)
+}
+
+func verifyStoredConversationWithVerifier(ctx context.Context, verifier *domain.CanonicalDocVerifier, hash domain.ContentHash, manifest domain.ConversationManifest, read storedChunkReader) (domain.VerifiedSessionDoc, error) {
 	lengths := make(map[domain.ContentHash]int64, len(manifest.Chunks))
 	for _, chunk := range manifest.Chunks {
 		if old, seen := lengths[chunk.Hash]; seen && old != chunk.Bytes {
@@ -205,7 +215,6 @@ func verifyStoredConversation(ctx context.Context, hash domain.ContentHash, mani
 		}
 		lengths[chunk.Hash] = chunk.Bytes
 	}
-	var verifier domain.CanonicalDocVerifier
 	return verifier.VerifyConversationManifestDoc(ctx, hash, manifest, func(ctx context.Context, h domain.ContentHash) ([]byte, error) {
 		raw, err := read(ctx, h)
 		if err != nil {
