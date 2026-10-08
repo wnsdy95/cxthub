@@ -553,14 +553,16 @@ func TestConversationManifestDepthIncludesOuterFrame(t *testing.T) {
 	}
 }
 
-func TestConversationManifestIndependentModuleParity(t *testing.T) {
+func TestConversationManifestWireAndFixtureParity(t *testing.T) {
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Go tests run in the package directory, including builds using -trimpath.
 	root := filepath.Clean(filepath.Join(dir, "..", "..", ".."))
-	for _, name := range []string{"conversation_manifest.go", "conversation_manifest_build.go", "conversation_manifest_verify.go", "conversation_manifest_test.go"} {
+	// Verification caches are module-local. Keep the wire format, builder and
+	// identical semantic fixture suite aligned while allowing different readers.
+	for _, name := range []string{"conversation_manifest.go", "conversation_manifest_build.go", "conversation_manifest_test.go"} {
 		backend, err := os.ReadFile(filepath.Join(root, "backend", "internal", "domain", name))
 		if err != nil {
 			t.Fatal(err)
@@ -570,7 +572,7 @@ func TestConversationManifestIndependentModuleParity(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(backend, cli) {
-			t.Fatalf("independent algorithm/fixture drift: %s", name)
+			t.Fatalf("independent wire/fixture drift: %s", name)
 		}
 	}
 }

@@ -65,8 +65,9 @@ func (s *FileStore) VerifyStoredDocReference(ctx context.Context, ref domain.Doc
 	})
 }
 
-// Inspection deliberately uses no lock/cache writes and makes no atomic-scan
-// claim. It still joins the snapshot's explicit scheme to the stored bytes.
+// Inspection creates no store lock files or persistent cache writes and makes
+// no atomic-scan claim. Root reads may use the in-memory semantic verifier and
+// its mutex; they still join the snapshot's explicit scheme to current bytes.
 func (s *FileStore) inspectDocReference(ctx context.Context, ref domain.DocumentRef, reuse *inspectionEventReuse) error {
 	if err := ref.Validate(); err != nil {
 		return err
@@ -98,7 +99,7 @@ func (s *FileStore) verifyRootDocument(ctx context.Context, ref domain.DocumentR
 		canonical.WriteString(`,"events":[`)
 	}
 	next := 0
-	err := domain.VerifyConversationManifest(ctx, ref.Hash, manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
+	err := s.docVerifier.VerifyConversation(ctx, ref.Hash, manifest, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
 		// The domain verifier owns the ordered metadata and invokes this loader
 		// once per occurrence. Do not deduplicate away a current-byte check.
 		chunk := manifest.Chunks[next]

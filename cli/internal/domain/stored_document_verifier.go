@@ -68,8 +68,7 @@ func (v *StoredDocumentVerifier) Verify(ctx context.Context, want ContentHash, r
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	v.remember(pending, firstBytes)
-	return nil
+	return v.remember(ctx, pending, &firstBytes)
 }
 
 func (v *StoredDocumentVerifier) lookup(key storedEventKey) (int, bool) {
@@ -82,13 +81,26 @@ func (v *StoredDocumentVerifier) lookup(key storedEventKey) (int, bool) {
 	return seq, ok
 }
 
-func (v *StoredDocumentVerifier) remember(proofs []storedEventProof, firstBytes int) {
+func (v *StoredDocumentVerifier) remember(ctx context.Context, proofs []storedEventProof, firstBytes *int) error {
 	if v == nil {
-		return
+		return ctx.Err()
 	}
 	v.mu.Lock()
+	// Cancellation may arrive while waiting for a concurrent admission. Check
+	// Done under the metadata lock, but never call an arbitrary context's Err
+	// method while locked. Failed/canceled calls must not insert or evict proofs.
+	select {
+	case <-ctx.Done():
+		v.mu.Unlock()
+		return ctx.Err()
+	default:
+	}
 	defer v.mu.Unlock()
-	v.firstBytes = firstBytes
+	// Only legacy verification predicts a first-event boundary. Root admission
+	// leaves the latest concurrent legacy hint intact, including an explicit 0.
+	if firstBytes != nil {
+		v.firstBytes = *firstBytes
+	}
 	if v.events == nil {
 		v.events = make(map[storedEventKey]int)
 	}
@@ -105,6 +117,7 @@ func (v *StoredDocumentVerifier) remember(proofs []storedEventProof, firstBytes 
 		}
 		v.events[proof.key] = proof.seq
 	}
+	return nil
 }
 
 // A miss is a request for the original normalizer, not weaker acceptance. Only
@@ -202,8 +215,7 @@ func (v *StoredDocumentVerifier) canonical(ctx context.Context, want ContentHash
 	if ContentHash("sha256:"+hex.EncodeToString(digest.Sum(nil))) != want || ctx.Err() != nil {
 		return false
 	}
-	v.remember(pending, firstBytes)
-	return true
+	return v.remember(ctx, pending, &firstBytes) == nil
 }
 
 // Framing mirrors the backend canonical event scanner. Every event must then
