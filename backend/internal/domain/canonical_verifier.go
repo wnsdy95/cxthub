@@ -54,7 +54,7 @@ func (v *CanonicalDocVerifier) eventWithKey(ctx context.Context, key canonicalEv
 	// canonical rules as ordinary typed document validation, including union and
 	// explicit optional-field presence checks.
 	event = canonicalEvents(doc.Events)[0]
-	canonical, err := canonicalJSON(event)
+	canonical, err := canonicalDecodedEventJSON(event)
 	if err != nil || !bytes.Equal(canonical, raw) {
 		return 0, ErrIntegrity
 	}

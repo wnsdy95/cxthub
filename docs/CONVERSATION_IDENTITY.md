@@ -79,10 +79,12 @@ reads use one read snapshot or the caller's existing transaction. These reads
 do not publish indexes, rewrite documents or grant future write authority.
 Root search cannot be excluded by legacy search-index candidate filters.
 
-Page, fragment and agent-history reads build event locations, sequence and role
-metadata without building searchable text. Search requests retain the complete
-search projection. Store instances may reuse up to 65,536 exact event-hash/CIR-
-version semantic proofs to avoid repeated typed decoding; they retain no event
+Page and fragment reads use the event locations, hashes and sequence already
+established by root verification; they do not scan every event again for role
+or searchable text. Agent-history reads still derive exact roles, and search
+requests retain the complete search projection. Store instances may reuse up
+to 65,536 exact event-hash/CIR-version semantic proofs to avoid repeated typed
+decoding; they retain no event
 bodies. Every read still checks current owned chunks, framing and ordering.
 Eviction or a process restart affects speed only. This does not make a first
 page proportional to page size: full current-byte verification remains required.

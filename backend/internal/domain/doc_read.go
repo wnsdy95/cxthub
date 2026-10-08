@@ -74,9 +74,10 @@ func (doc VerifiedSessionDoc) ReadIndex() (DocReadIndex, error) {
 // document offsets, sequence and role are always derived from this document.
 // The private bodies prevent a caller from changing the bytes behind the hash.
 type DocReadPlan struct {
-	index  DocReadIndex
-	stream canonicalSegments
-	bodies []canonicalSpan
+	index          DocReadIndex
+	stream         canonicalSegments
+	bodies         []canonicalSpan
+	sequencesKnown bool // Exact sequences retained by a chunk-backed proof.
 }
 
 func (doc VerifiedSessionDoc) PlanReadIndex() (DocReadPlan, error) {
@@ -115,7 +116,7 @@ func (doc VerifiedSessionDoc) PlanReadIndexContext(ctx context.Context) (DocRead
 		if err := ctx.Err(); err != nil {
 			return DocReadPlan{}, err
 		}
-		return DocReadPlan{index: out, stream: stream, bodies: spans}, nil
+		return DocReadPlan{index: out, stream: stream, bodies: spans, sequencesKnown: true}, nil
 	}
 	hasher := newCanonicalSpanHasher()
 	err = stream.visit(ctx, func(span canonicalSpan) error {
@@ -155,9 +156,44 @@ func (p DocReadPlan) BuildContext(ctx context.Context, reusedSearch map[ContentH
 
 // BuildMetadataContext derives locations, sequence and exact role strings from
 // verified bytes without decoding event payloads or retaining searchable text.
-// It is for page/range readers, not for publishing or querying a search index.
+// It is for role-aware readers, not for publishing or querying a search index.
 func (p DocReadPlan) BuildMetadataContext(ctx context.Context) (DocReadIndex, error) {
 	return p.build(ctx, nil, true)
+}
+
+// BuildRangesContext returns owned locations, hashes and exact sequences, with
+// Role and Text empty. Chunk-backed proofs need no event-byte scan. Legacy
+// plans without retained sequences use the metadata decoder rather than treating
+// their zero-valued planning fields as verified event sequences.
+func (p DocReadPlan) BuildRangesContext(ctx context.Context) (DocReadIndex, error) {
+	if err := ctx.Err(); err != nil {
+		return DocReadIndex{}, err
+	}
+	if p.index.Hash == "" {
+		return DocReadIndex{}, ErrIntegrity
+	}
+	var out DocReadIndex
+	if p.sequencesKnown {
+		out = p.index
+		out.Envelope = p.Envelope()
+		out.Events = append([]DocEventIndex{}, p.index.Events...)
+	} else {
+		var err error
+		out, err = p.BuildMetadataContext(ctx)
+		if err != nil {
+			return DocReadIndex{}, err
+		}
+	}
+	for i := range out.Events {
+		if err := ctx.Err(); err != nil {
+			return DocReadIndex{}, err
+		}
+		out.Events[i].Role, out.Events[i].Text = "", ""
+	}
+	if err := ctx.Err(); err != nil {
+		return DocReadIndex{}, err
+	}
+	return out, nil
 }
 
 func (p DocReadPlan) build(ctx context.Context, reusedSearch map[ContentHash]bool, metadataOnly bool) (DocReadIndex, error) {

@@ -133,6 +133,14 @@ type CIREvent struct {
 // empty arrays/objects are part of canonical bytes and cannot be dropped by
 // struct-level omitempty tags.
 func (e CIREvent) MarshalJSON() ([]byte, error) {
+	m, err := eventJSONObject(e)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(m)
+}
+
+func eventJSONObject(e CIREvent) (map[string]any, error) {
 	if err := e.validateKindFieldPresence(); err != nil {
 		return nil, err
 	}
@@ -225,7 +233,7 @@ func (e CIREvent) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("cir: unknown event kind %q", e.Kind)
 	}
 
-	return json.Marshal(m)
+	return m, nil
 }
 
 type eventFieldPresence uint16
