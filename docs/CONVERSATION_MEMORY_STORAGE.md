@@ -75,6 +75,14 @@ CIR validity. Repacking, rollback, cache eviction or restart never grants trust
 to different bytes. Authorization and history writes retain their transaction
 boundaries, and memory versioning is unchanged.
 
+PostgreSQL stored-document checks read current repository-owned chunks in
+windows of at most 16 distinct hashes through the caller's transaction. Every
+stored byte is still fingerprinted; a window is not an ownership receipt or a
+body cache across requests. Canonical validation, compatibility and disposable
+proof semantics remain unchanged. This reduces query roundtrips, not the
+requirement to read all current bytes, cold transcript assembly or the initial
+search-index cost. Verification memory remains proportional to document size.
+
 Eliminating that remaining full-stream verification requires a separately
 versioned manifest-root identity and a durable verified-chunk contract. Such a
 protocol must be explicitly negotiated; an old server must never interpret a
