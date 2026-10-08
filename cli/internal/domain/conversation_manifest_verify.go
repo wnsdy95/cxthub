@@ -20,6 +20,15 @@ const conversationCheckBytes = 64 << 10
 // not concurrently mutate a returned slice while this call reads it. Metadata
 // is snapshotted before loader callbacks, and a bounded chunk copy is retained.
 func VerifyConversationManifest(ctx context.Context, want ContentHash, manifest ConversationManifest, load func(context.Context, ContentHash) ([]byte, error)) error {
+	return (*StoredDocumentVerifier)(nil).VerifyConversation(ctx, want, manifest, load)
+}
+
+// VerifyConversation preserves the stateless verifier's complete current-byte
+// checks, reusing only exact canonical event semantics across successful roots
+// and legacy documents. A nil receiver remains stateless. Proofs are bounded and
+// admitted only after the entire root succeeds; root reads never alter the legacy
+// first-event hint or establish ownership, authorization or durable receipts.
+func (v *StoredDocumentVerifier) VerifyConversation(ctx context.Context, want ContentHash, manifest ConversationManifest, load func(context.Context, ContentHash) ([]byte, error)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -38,7 +47,7 @@ func VerifyConversationManifest(ctx context.Context, want ContentHash, manifest 
 		return conversationManifestError("expected root or loader")
 	}
 	version, _ := conversationManifestEnvelope(manifest.Envelope) // validated above
-	scanner := conversationEventScanner{version: version, limit: manifest.EventCount}
+	scanner := conversationEventScanner{version: version, limit: manifest.EventCount, verifier: v}
 	for _, chunk := range manifest.Chunks {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -71,7 +80,13 @@ func VerifyConversationManifest(ctx context.Context, want ContentHash, manifest 
 	if len(scanner.stack) != 0 || scanner.quoted || scanner.afterComma || scanner.count != manifest.EventCount {
 		return conversationManifestError("incomplete framing or actual event count")
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if v != nil {
+		return v.remember(ctx, scanner.pending, nil)
+	}
+	return nil
 }
 
 // This is the same compact event framing discipline as the strict canonical
@@ -85,6 +100,23 @@ type conversationEventScanner struct {
 	afterComma, havePrevious   bool
 	previous                   int
 	count, limit               int64
+	verifier                   *StoredDocumentVerifier
+	pending                    []storedEventProof
+}
+
+func (s *conversationEventScanner) verifyEvent(ctx context.Context) (int, error) {
+	if s.verifier == nil {
+		return conversationManifestEvent(ctx, s.version, s.event)
+	}
+	key := storedEventKey{sha256.Sum256(s.event), s.version}
+	if seq, found := s.verifier.lookup(key); found {
+		return seq, nil
+	}
+	seq, err := conversationManifestEvent(ctx, s.version, s.event)
+	if err == nil && len(s.pending) < storedEventProofLimit {
+		s.pending = append(s.pending, storedEventProof{key, seq})
+	}
+	return seq, err
 }
 
 func (s *conversationEventScanner) add(ctx context.Context, body []byte) error {
@@ -142,7 +174,7 @@ func (s *conversationEventScanner) add(ctx context.Context, body []byte) error {
 				if !utf8.Valid(s.event) {
 					return conversationManifestError("event UTF-8")
 				}
-				seq, err := conversationManifestEvent(ctx, s.version, s.event)
+				seq, err := s.verifyEvent(ctx)
 				if err != nil {
 					return fmt.Errorf("%w: event canonical validation: %w", ErrConversationManifest, err)
 				}
