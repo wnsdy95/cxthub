@@ -116,3 +116,36 @@ func TestScrubOff(t *testing.T) {
 		t.Fatal("off tier performs masking")
 	}
 }
+
+// Compare the prefiltered path with the original ordered replacements. In
+// particular, a broader precheck must never change word-boundary redaction.
+func FuzzScrubStandardPrefilter(f *testing.F) {
+	seeds := []string{
+		"", "ordinary project context", "AKIAIOSFODNN7EXAMPLE",
+		"github_pat_11ABCDEFG0123456789012_tail",
+		"ghp_" + strings.Repeat("a1B2", 9),
+		"sk-proj-abcdefghijklmnopqrstuvwx",
+		"xoxb-1234567890-abcdefghijk",
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.SflKxwRJSMeKKF2QT4fwpM", // gitleaks:allow -- synthetic scrubber fixture
+		"Authorization: BeArEr abcdef0123456789TOKENVALUE",
+		"https://user:synthetic-password@example.invalid/path",
+		"-----BEGIN RSA PRIVATE KEY-----\nsynthetic\n-----END RSA PRIVATE KEY-----",
+		"가sk-proj-abcdefghijklmnopqrstuvwx나",
+		"_sk-proj-abcdefghijklmnopqrstuvwx sk-proj-abcdefghijklmnopqrstuvwx_",
+		"\xffsk-proj-abcdefghijklmnopqrstuvwx\x00",
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+		f.Add("prefix" + seed + "suffix")
+	}
+	f.Add(strings.Join(seeds, "\n"))
+	f.Fuzz(func(t *testing.T, input string) {
+		want := input
+		for _, p := range scrubStandardPatterns {
+			want = p.re.ReplaceAllString(want, p.repl)
+		}
+		if got := maskString(input, ScrubStandard); got != want {
+			t.Fatal("prefilter changed ordered replacement output")
+		}
+	})
+}

@@ -3,6 +3,7 @@ package capture
 import (
 	"math"
 	"regexp"
+	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -40,6 +41,17 @@ var scrubStandardPatterns = []struct {
 	// URL credentials: scheme://user:password@host → only masks password.
 	{regexp.MustCompile("\\b([a-z][a-z0-9+.-]*://[^/\\s:@\"'`]+:)[^@/\\s\"'`]+@"), "${1}«redacted:password»@"},
 }
+
+// Dropping only a leading word-boundary assertion makes the precheck broader,
+// never narrower, and lets regexp search literal prefixes without a per-rune
+// boundary scan. The original expression still performs every replacement.
+var scrubStandardMatchers = func() []*regexp.Regexp {
+	matchers := make([]*regexp.Regexp, len(scrubStandardPatterns))
+	for i, p := range scrubStandardPatterns {
+		matchers[i] = regexp.MustCompile(strings.TrimPrefix(p.re.String(), `\b`))
+	}
+	return matchers
+}()
 
 var scrubStrictPatterns = []struct {
 	re   *regexp.Regexp
@@ -114,12 +126,18 @@ func maskString(s string, tier ScrubTier) string {
 	if s == "" {
 		return s
 	}
-	for _, p := range scrubStandardPatterns {
-		s = p.re.ReplaceAllString(s, p.repl)
+	// ReplaceAllString copies even unmatched input. Avoid those full-text copies
+	// while keeping each exact pattern and its replacement order.
+	for i, p := range scrubStandardPatterns {
+		if scrubStandardMatchers[i].MatchString(s) {
+			s = p.re.ReplaceAllString(s, p.repl)
+		}
 	}
 	if tier == ScrubStrict {
 		for _, p := range scrubStrictPatterns {
-			s = p.re.ReplaceAllString(s, p.repl)
+			if p.re.MatchString(s) {
+				s = p.re.ReplaceAllString(s, p.repl)
+			}
 		}
 		s = entropyRunRe.ReplaceAllStringFunc(s, func(run string) string {
 			if isLikelySecretRun(run) {
