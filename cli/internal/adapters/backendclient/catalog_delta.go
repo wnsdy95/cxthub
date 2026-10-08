@@ -46,18 +46,24 @@ func (c *BackendClient) acquireCatalog(ctx context.Context, repo string) (domain
 	if err := fence(); err != nil {
 		return zero, nil, false, err
 	}
-	version, err := peer.catalogCapability(ctx, repo)
+	capability, err := peer.catalogCapability(ctx, repo)
 	if err != nil {
 		return zero, nil, false, err
 	}
 	if err = fence(); err != nil {
 		return zero, nil, false, err
 	}
-	if version == 0 {
+	if capability.CatalogMerkleVersion != 0 && capability.CatalogMerkleVersion != domain.CatalogMerkleVersion {
+		return zero, nil, false, fmt.Errorf("unsupported catalog Merkle version %d", capability.CatalogMerkleVersion)
+	}
+	if capability.CatalogMerkleVersion != 0 && capability.CatalogVersion == 0 {
+		return zero, nil, false, domain.ErrHashMismatch
+	}
+	if capability.CatalogVersion == 0 {
 		return zero, nil, false, nil
 	}
-	if version != domain.CatalogVersion {
-		return zero, nil, false, fmt.Errorf("unsupported catalog version %d", version)
+	if capability.CatalogVersion != domain.CatalogVersion {
+		return zero, nil, false, fmt.Errorf("unsupported catalog version %d", capability.CatalogVersion)
 	}
 	state, err := c.catalogCache.ReadCatalogCache(ctx, repo, remote)
 	if err != nil {
@@ -108,6 +114,10 @@ func (c *BackendClient) acquireCatalog(ctx context.Context, repo string) (domain
 		if err != nil {
 			var he *HTTPError
 			if errors.As(err, &he) && he.Status == http.StatusConflict && he.Code == "reset_required" && resets == 0 {
+				if installer, ok := c.catalogCache.(outbound.CatalogImageInstaller); ok && capability.CatalogMerkleVersion == domain.CatalogMerkleVersion && state.Checkpoint != nil {
+					manifest, snapshots, err := peer.reconcileCatalogMerkle(ctx, repo, remote, state, installer, fence)
+					return manifest, snapshots, true, err
+				}
 				revision, resetErr := c.catalogCache.ResetCatalogRun(ctx, state.Revision, repo, remote)
 				if resetErr != nil {
 					return zero, nil, true, resetErr
@@ -249,47 +259,49 @@ func completeCatalogImage(entries []domain.CatalogEntry, pending []domain.Catalo
 // Capability is obtained from the small, freshly authorized repository view.
 // Duplicate/case-aliased/null version fields cannot turn a protocol error into
 // an apparent old server. Unrelated repository fields retain their contract.
-func (c *BackendClient) catalogCapability(ctx context.Context, repo string) (int, error) {
+func (c *BackendClient) catalogCapability(ctx context.Context, repo string) (repositoryView, error) {
+	var view repositoryView
 	var raw json.RawMessage
 	if err := c.doLimited(ctx, http.MethodGet, c.reposPath(repo), nil, &raw, 1<<20); err != nil {
-		return 0, err
+		return view, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {
-		return 0, domain.ErrHashMismatch
+		return view, domain.ErrHashMismatch
 	}
 	seen := map[string]bool{}
 	for decoder.More() {
 		token, err = decoder.Token()
 		if err != nil {
-			return 0, err
+			return view, err
 		}
 		name, ok := token.(string)
 		if !ok || seen[strings.ToLower(name)] {
-			return 0, domain.ErrHashMismatch
+			return view, domain.ErrHashMismatch
 		}
 		seen[strings.ToLower(name)] = true
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
-			return 0, err
+			return view, err
 		}
-		if strings.EqualFold(name, "catalog_version") && (name != "catalog_version" || bytes.Equal(bytes.TrimSpace(value), []byte("null"))) {
-			return 0, domain.ErrHashMismatch
+		for _, field := range []string{"catalog_version", "catalog_merkle_version"} {
+			if strings.EqualFold(name, field) && (name != field || bytes.Equal(bytes.TrimSpace(value), []byte("null"))) {
+				return view, domain.ErrHashMismatch
+			}
 		}
 	}
 	if _, err = decoder.Token(); err != nil {
-		return 0, err
+		return view, err
 	}
 	if _, err = decoder.Token(); err != io.EOF {
-		return 0, domain.ErrHashMismatch
+		return view, domain.ErrHashMismatch
 	}
-	var view repositoryView
 	if err := json.Unmarshal(raw, &view); err != nil {
-		return 0, err
+		return view, err
 	}
 	if view.ID != repo || (view.DefaultBranch != "" && domain.ValidateBranchName(view.DefaultBranch) != nil) {
-		return 0, domain.ErrHashMismatch
+		return view, domain.ErrHashMismatch
 	}
-	return view.CatalogVersion, nil
+	return view, nil
 }

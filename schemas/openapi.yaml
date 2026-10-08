@@ -1393,6 +1393,75 @@ components:
           not:
             required: [next_cursor]
 
+    CatalogMerkleChild:
+      type: object
+      additionalProperties: false
+      required: [prefix, hash, count]
+      properties:
+        prefix: { type: string, pattern: '^[0-9a-f]{1,2}$' }
+        hash: { $ref: '#/components/schemas/ContentHash' }
+        count: { type: integer, format: int64, minimum: 0 }
+
+    CatalogMerkleNode:
+      type: object
+      additionalProperties: false
+      required: [version, scope, repo_id, prefix, count, children, entries]
+      description: "Immutable radix-16 depth-two node. Internal nodes contain exactly sixteen ordered children and no entries. Leaves contain ordered live metadata with original sequences. Hash includes domain, scope, repository, prefix, count and all canonical values."
+      properties:
+        version: { type: integer, const: 1 }
+        scope: { type: string, const: sync-metadata-merkle-v1 }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        prefix: { type: string, pattern: '^[0-9a-f]{0,2}$' }
+        count: { type: integer, format: int64, minimum: 0 }
+        children:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/CatalogMerkleChild' }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/CatalogEntry' }
+
+    CatalogMerkleRequest:
+      type: object
+      additionalProperties: false
+      required: [version]
+      dependentRequired:
+        root_hash: [checkpoint]
+        checkpoint: [root_hash]
+      description: "Without root_hash/checkpoint, acquire the current root (empty prefix, zero offset). Subsequent nodes/pages use that root and exact checkpoint together. Internal nodes require offset zero. Default leaf limit 256."
+      properties:
+        version: { type: integer, const: 1 }
+        root_hash: { $ref: '#/components/schemas/ContentHash' }
+        checkpoint: { $ref: '#/components/schemas/CatalogCheckpoint' }
+        prefix: { type: string, pattern: '^[0-9a-f]{0,2}$', default: '' }
+        offset: { type: integer, minimum: 0, default: 0 }
+        limit: { type: integer, minimum: 0, maximum: 1000, default: 256 }
+
+    CatalogMerklePage:
+      type: object
+      additionalProperties: false
+      required: [version, scope, repo_id, checkpoint, root_hash, prefix, node_hash, count, children, entries, offset]
+      description: "A root-bound internal node or leaf page. Verify parent hash/count and concatenate leaf pages in received order to verify node_hash before reuse. A root checkpoint is a source boundary, not permission to acknowledge a partial image."
+      properties:
+        version: { type: integer, const: 1 }
+        scope: { type: string, const: sync-metadata-merkle-v1 }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        checkpoint: { $ref: '#/components/schemas/CatalogCheckpoint' }
+        root_hash: { $ref: '#/components/schemas/ContentHash' }
+        prefix: { type: string, pattern: '^[0-9a-f]{0,2}$' }
+        node_hash: { $ref: '#/components/schemas/ContentHash' }
+        count: { type: integer, format: int64, minimum: 0 }
+        children:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/CatalogMerkleChild' }
+        entries:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/CatalogEntry' }
+        offset: { type: integer, minimum: 0 }
+        next_offset: { type: integer, minimum: 1 }
+
     BranchPullRequest:
       type: object
       additionalProperties: false
@@ -1505,6 +1574,11 @@ components:
           enum: [0, 1]
           readOnly: true
           description: "Runtime capability on GET /repos/{repoID}, not persisted repo configuration. Absent/zero means legacy full transfer. One requires repository read transactions (currently PostgreSQL); FS reports zero/omits it. Distinct from context_protocol. After a one response, errors are failures, never fallback permission."
+        catalog_merkle_version:
+          type: integer
+          enum: [0, 1]
+          readOnly: true
+          description: "Optional runtime Merkle capability. With catalog_version 1, an expired checkpoint can reconcile mismatched metadata buckets. Absent/zero retains full-baseline reset. Unknown versions and advertised-endpoint failures must fail. Not persisted configuration or object integrity proof."
         catalog_version:
           type: integer
           enum: [0, 1]
@@ -4475,7 +4549,7 @@ paths:
     post:
       operationId: pullCatalog
       summary: Read a committed synchronization metadata baseline or delta
-      description: "Version 1, scope sync-metadata-v1. Requires puller on every page, including empty deltas and cursor resumes. Includes stored snapshots, raw refs, history events and context protocol; excludes memory bodies, legacy memory metadata, blob grants, pending state, authorization and derived graph data. This is not an object availability proof. PostgreSQL reads immutable journal images at a fixed committed upper sequence. Stage partial pages until the final checkpoint; raw lifecycle refs must be projected under the recorded protocol. JSON requests reject unknown fields and trailing values, with a 64 KiB body limit. Filesystem/other unsupported stores return 501 catalog_unsupported. CLI consumption and Merkle reconciliation are not wired by this endpoint."
+      description: "Version 1, scope sync-metadata-v1. Requires puller on every page, including empty deltas and cursor resumes. Includes stored snapshots, raw refs, history events and context protocol; excludes memory bodies, legacy memory metadata, blob grants, pending state, authorization and derived graph data. This is not an object availability proof. PostgreSQL reads immutable journal images at a fixed committed upper sequence. Stage partial pages until the final checkpoint; raw lifecycle refs must be projected under the recorded protocol. JSON requests reject unknown fields and trailing values, with a 64 KiB body limit. Filesystem/other unsupported stores return 501 catalog_unsupported. The CLI stages pages atomically; the separate optional Merkle endpoint handles expired checkpoint reconciliation."
       tags: [pull]
       requestBody:
         required: true
@@ -4506,6 +4580,38 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /repos/{repoID}/pull/catalog/merkle:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+    post:
+      operationId: pullCatalogMerkle
+      summary: Reconcile mismatched committed metadata ranges
+      description: "Optional version 1. Puller authorization is freshly checked on every root, subtree and leaf page. An immutable derived PostgreSQL index reuses committed catalog deltas without adding hashing to source writes. Frozen requests require a published root/checkpoint in the current epoch; journal pruning alone does not invalidate published immutable trees. No body availability claim, source state mutation, or observation update. Complete all range and image validation before atomic local checkpoint replacement. Request limit 64 KiB."
+      tags: [pull]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CatalogMerkleRequest' }
+      responses:
+        '200':
+          description: Root-bound internal node or paginated leaf
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CatalogMerklePage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "reset_required: unpublished root, checkpoint disagreement, or obsolete epoch; reacquire the root without acknowledging partial progress."
+        '413':
+          description: Request body exceeds 64 KiB
+        '415':
+          description: JSON content type required
+        '501':
+          description: "catalog_unsupported: storage lacks the optional Merkle capability."
 
   /repos/{repoID}/pull/branch-plan:
     parameters:

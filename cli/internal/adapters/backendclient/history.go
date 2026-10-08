@@ -57,6 +57,7 @@ func (c *BackendClient) PromotePullRequest(ctx context.Context, repoID string, p
 // local repository configuration.
 type repositoryView struct {
 	domain.Repo
+	CatalogMerkleVersion   int  `json:"catalog_merkle_version,omitempty"`
 	CatalogVersion         int  `json:"catalog_version,omitempty"`
 	BranchPullVersion      int  `json:"branch_pull_version,omitempty"`
 	InitialAnchorAvailable bool `json:"initial_anchor_available,omitempty"`

@@ -10,8 +10,9 @@ import (
 type repoPullView struct {
 	InitialAnchorAvailable bool `json:"initial_anchor_available,omitempty"`
 	domain.Repo
-	BranchPullVersion int `json:"branch_pull_version,omitempty"`
-	CatalogVersion    int `json:"catalog_version,omitempty"`
+	BranchPullVersion    int `json:"branch_pull_version,omitempty"`
+	CatalogMerkleVersion int `json:"catalog_merkle_version,omitempty"`
+	CatalogVersion       int `json:"catalog_version,omitempty"`
 }
 
 func (s *Server) pullBranchPlan(w http.ResponseWriter, r *http.Request) {

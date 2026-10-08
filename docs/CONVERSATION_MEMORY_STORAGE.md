@@ -123,8 +123,9 @@ verification. It does not remove the server's full-manifest scan, local metadata
 cache reads, cold document verification or legacy canonical hashing. A durable
 server change feed now has an optional [version 1 query contract](CATALOG_SYNC.md)
 with committed cursors, scope, repository epochs, tombstones and coherent
-pagination. CLI adoption and Merkle reconciliation remain subsequent stages;
-existing clients still use the full manifest.
+pagination. Capable CLI clients consume that journal and reconcile expired
+checkpoints through optional Merkle ranges. Legacy clients still use the full
+manifest. See the catalog contract for separate acquisition/verification limits.
 The existing graph/pending revision counters intentionally exclude staged
 objects and therefore cannot serve as a complete catalog cursor.
 
