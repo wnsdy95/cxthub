@@ -19,7 +19,7 @@ func (s *Service) ListHistory(ctx context.Context, repoID domain.ContentHash) ([
 }
 
 func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) error {
-	return repositoryWriteError(ctx, s, domain.ContentHash(event.RepoID), func(ctx context.Context) error { return s.recordHistory(ctx, event, false, nil) })
+	return s.recordHistoryWithDocumentPreparation(ctx, event)
 }
 
 // A verification set lives for one operation, not on the service or store.
@@ -31,6 +31,10 @@ type historyDocumentKey struct {
 type historyVerification map[historyDocumentKey]struct{}
 
 func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, serverReceipt bool, verified historyVerification) error {
+	return s.recordHistoryPrepared(ctx, event, serverReceipt, verified, nil)
+}
+
+func (s *Service) recordHistoryPrepared(ctx context.Context, event domain.HistoryEvent, serverReceipt bool, verified historyVerification, prepare func(context.Context, []domain.ContentHash) (historyVerification, error)) error {
 	if err := domain.ValidateHistoryEvent(event); err != nil {
 		return fmt.Errorf("%w: %v", domain.ErrValidation, err)
 	}
@@ -96,6 +100,12 @@ func (s *Service) recordHistory(ctx context.Context, event domain.HistoryEvent, 
 	roots := []domain.ContentHash{event.Source, event.Target, event.SharedTarget, event.MemorySource}
 	if predecessor.MemoryHash != "" {
 		roots = append(roots, predecessor.Source, predecessor.Target, predecessor.SharedTarget, predecessor.MemorySource)
+	}
+	if prepare != nil {
+		verified, err = prepare(ctx, roots)
+		if err != nil {
+			return err
+		}
 	}
 	for _, id := range roots {
 		if id == "" {
