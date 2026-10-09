@@ -14,7 +14,7 @@ import (
 // Invocation-scoped calibration avoids reading/copying native credentials.
 type nativeCodexWindowReader struct {
 	session *nativecodex.Session
-	binding nativecodex.WindowBinding
+	binding nativecodex.WindowPolicy
 	thread  nativecodex.Thread
 	host    string
 	counter outbound.AgentTokenCounter
@@ -28,7 +28,7 @@ func (r nativeCodexWindowReader) AgentCapability(ctx context.Context, provider d
 	if err := ctx.Err(); err != nil {
 		return domain.AgentHostCapability{}, err
 	}
-	if provider != domain.ProviderCodex || model != r.thread.Model || r.counter == nil || r.host == "" {
+	if provider != domain.ProviderCodex || model != r.thread.Model || r.counter == nil || r.host == "" || r.binding == nil {
 		return domain.AgentHostCapability{}, domain.ErrProviderCapabilityUnknown
 	}
 	if err := r.binding.Validate(ctx, r.thread); err != nil {
@@ -42,9 +42,6 @@ func (r nativeCodexWindowReader) AgentCapability(ctx context.Context, provider d
 	if err != nil {
 		return domain.AgentHostCapability{}, err
 	}
-	if !usage.Exact || usage.Tokenizer == "" {
-		return domain.AgentHostCapability{}, domain.ErrProviderCapabilityUnknown
-	}
 	c := domain.AgentHostCapability{
 		Provider: provider, Model: model, HostVersion: r.host, Verified: true,
 		Evidence:      "native 0.157.1 existing static catalog; startup and pre-injection drift checks; provider acceptance unverified",
@@ -52,9 +49,24 @@ func (r nativeCodexWindowReader) AgentCapability(ctx context.Context, provider d
 		RuntimeScope:          domain.ContentHash(r.binding.RuntimeScope()),
 		InputAccountingPolicy: domain.MeasuredInputReserveV1,
 	}
+	if estimate, ok := r.binding.(nativecodex.WindowEstimate); ok {
+		c.Verified = false
+		c.Evidence = estimate.Evidence()
+		c.InputAccountingPolicy = domain.CatalogEstimateReserveV1
+		c.WindowEstimateSource = estimate.Source()
+		c.WindowEstimateObservedAt = estimate.ObservedAt()
+		c.WindowEstimateHash = domain.ContentHash(estimate.CatalogHash())
+		c.WindowEstimateClientVersion = estimate.CatalogClientVersion()
+	}
+	if _, err := domain.ValidateAgentTokenAccounting(c.InputAccountingPolicy, provider, c.Tokenizer, usage); err != nil {
+		return domain.AgentHostCapability{}, err
+	}
 	if window.AutoCompactTokenLimitScope == "total" && window.AutoCompactTokenLimit > 0 && window.AutoCompactTokenLimit <= int64(^uint(0)>>1) {
 		c.AutoCompactKnown = true
 		c.AutoCompactTokens = int(window.AutoCompactTokenLimit)
+	}
+	if c.InputAccountingPolicy == domain.CatalogEstimateReserveV1 {
+		return c, nil
 	}
 	scope, err := c.CalibrationScope()
 	if err != nil {
@@ -65,15 +77,15 @@ func (r nativeCodexWindowReader) AgentCapability(ctx context.Context, provider d
 }
 
 // startWithWindow preserves the same parsed native arguments as inspection.
-// Dynamic catalogs currently return a precise unsupported binding error; neither
-// a default model name nor a window override bypasses the native evidence path.
+// Static catalogs retain their binding; stock dynamic catalogs supply an
+// explicitly estimated policy. Neither path changes native configuration.
 func (n nativeCodexLaunch) startWithWindow(ctx context.Context, env []string) (*nativecodex.Session, nativecodex.Thread, nativeCodexWindowReader, error) {
 	opts := n.process
 	opts.ConfigArgs = append([]string(nil), opts.ConfigArgs...)
 	if env != nil {
 		opts.Env = append([]string{}, env...)
 	}
-	session, thread, binding, err := nativecodex.StartWindowBound(ctx, opts, n.thread)
+	session, thread, binding, err := nativecodex.StartWindowPolicy(ctx, opts, n.thread)
 	if err != nil {
 		return nil, nativecodex.Thread{}, nativeCodexWindowReader{}, err
 	}
@@ -91,7 +103,7 @@ func (n nativeCodexLaunch) startWithWindow(ctx context.Context, env []string) (*
 func newNativeCodexWindowGenerationPrepare(bound nativeCodexLaunch, session *nativecodex.Session, reader nativeCodexWindowReader,
 	prepare nativeCodexPackagePrepare, validate nativeCodexPackageValidate, store outbound.AgentInputCalibrationStore,
 ) (func(context.Context, nativecodex.Thread, string) (nativecodex.PreparedGeneration, error), error) {
-	if session == nil || reader.session != session || prepare == nil || validate == nil {
+	if session == nil || reader.session != session || reader.binding == nil || prepare == nil || validate == nil {
 		return nil, domain.ErrProviderCapabilityUnknown
 	}
 	window := reader.binding.ModelWindow()
@@ -128,11 +140,14 @@ func newNativeCodexWindowGenerationPrepare(bound nativeCodexLaunch, session *nat
 }
 func checkNativeWindowPackage(c domain.AgentHostCapability, p domain.AgentContextPackage) error {
 	b := p.Budget
-	if !c.Verified || b == nil || b.Provider != c.Provider || b.Model != c.Model || b.HostVersion != c.HostVersion ||
+	if b == nil || b.Provider != c.Provider || b.Model != c.Model || b.HostVersion != c.HostVersion ||
 		b.ContextWindow != c.ContextWindow || b.Tokenizer != c.Tokenizer || b.RuntimeScope != c.RuntimeScope ||
 		b.AutoCompactTokens != c.AutoCompactTokens || b.AutoCompactUnverified == c.AutoCompactKnown ||
-		b.InputAccountingPolicy != domain.MeasuredInputReserveV1 {
+		b.InputAccountingPolicy != c.InputAccountingPolicy ||
+		b.WindowEstimateSource != c.WindowEstimateSource || b.WindowEstimateObservedAt != c.WindowEstimateObservedAt || b.WindowEstimateHash != c.WindowEstimateHash || b.WindowEstimateClientVersion != c.WindowEstimateClientVersion {
 		return domain.ErrProviderCapabilityUnknown
 	}
-	return nil
+	c.InitialPromptTokens = b.InitialPromptTokens
+	_, err := c.ResolveBudget(p.Provider, b.Model, p.Policy.BudgetTokens, p.Usage)
+	return err
 }

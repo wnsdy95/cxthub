@@ -1,6 +1,10 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // AgentContextBudget records preparation limits, never provider acceptance.
 // Host input is outside the package; its memory, constraints and provenance
@@ -23,6 +27,10 @@ type AgentContextBudget struct {
 	AdjustmentReason            string       `json:"adjustment_reason,omitempty"`
 	InputAccountingPolicy       string       `json:"input_accounting_policy,omitempty"`
 	RuntimeScope                ContentHash  `json:"runtime_scope,omitempty"`
+	WindowEstimateSource        string       `json:"window_estimate_source,omitempty"`
+	WindowEstimateObservedAt    string       `json:"window_estimate_observed_at,omitempty"`
+	WindowEstimateHash          ContentHash  `json:"window_estimate_hash,omitempty"`
+	WindowEstimateClientVersion string       `json:"window_estimate_client_version,omitempty"`
 	HostInputUnverified         bool         `json:"host_input_unverified,omitempty"`
 	AutoCompactUnverified       bool         `json:"auto_compact_unverified,omitempty"`
 	OverheadAllowanceTokens     int          `json:"overhead_allowance_tokens,omitempty"`
@@ -36,8 +44,9 @@ type AgentContextBudget struct {
 // ResolveBudget must run before body selection. A model name or user-supplied
 // window setting cannot replace adapter evidence or declared text accounting.
 func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, requested int, counter AgentTokenUsage) (AgentContextBudget, error) {
-	if (provider != ProviderCodex && provider != ProviderClaude) || !c.Verified || c.Provider != provider || c.Model != model || c.Model == "" || c.HostVersion == "" || c.Evidence == "" || c.ContextWindow <= 0 || c.HostInputTokens < 0 || c.ReservedTokens < 0 || c.FramingTokens < 0 || c.AutoCompactTokens < 0 {
-		return AgentContextBudget{}, fmt.Errorf("%w: verified runtime model/window is required for history", ErrProviderCapabilityUnknown)
+	catalog := c.InputAccountingPolicy == CatalogEstimateReserveV1
+	if (provider != ProviderCodex && provider != ProviderClaude) || (!catalog && !c.Verified) || c.Provider != provider || c.Model != model || c.Model == "" || c.HostVersion == "" || c.Evidence == "" || c.ContextWindow <= 0 || c.HostInputTokens < 0 || c.ReservedTokens < 0 || c.FramingTokens < 0 || c.AutoCompactTokens < 0 {
+		return AgentContextBudget{}, fmt.Errorf("%w: model/window evidence must match the declared preparation policy", ErrProviderCapabilityUnknown)
 	}
 	if _, err := ValidateAgentTokenAccounting(c.InputAccountingPolicy, provider, c.Tokenizer, counter); err != nil {
 		return AgentContextBudget{}, err
@@ -47,8 +56,19 @@ func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, 
 	if !estimated && (c.BaselineInputEstimateTokens != 0 || c.BaselineInputMeasurement != "" || c.FramingAllowanceTokens != 0) {
 		return AgentContextBudget{}, fmt.Errorf("%w: estimate fields require their own input policy", ErrProviderCapabilityUnknown)
 	}
+	if !catalog && c.hasWindowEstimate() {
+		return AgentContextBudget{}, fmt.Errorf("%w: window estimate provenance requires the catalog policy", ErrProviderCapabilityUnknown)
+	}
 	allowance := 0
-	if estimated {
+	if catalog {
+		if err := c.validateWindowEstimate(); err != nil {
+			return AgentContextBudget{}, err
+		}
+		if ValidateContentHash(c.RuntimeScope) != nil || c.HostInputKnown || c.HostInputTokens != 0 || c.FramingTokens != 0 || c.Calibration != (AgentInputCalibration{}) || (!c.AutoCompactKnown && c.AutoCompactTokens != 0) {
+			return AgentContextBudget{}, fmt.Errorf("%w: invalid catalog estimate capability", ErrProviderCapabilityUnknown)
+		}
+		allowance = InputReserveMargin(c.ContextWindow)
+	} else if estimated {
 		if ValidateContentHash(c.RuntimeScope) != nil || c.HostInputKnown || c.HostInputTokens != 0 || c.FramingTokens != 0 || c.BaselineInputEstimateTokens < 0 || c.BaselineInputMeasurement != NativeLocalEstimate || c.FramingAllowanceTokens < 0 || c.Calibration != (AgentInputCalibration{}) || (!c.AutoCompactKnown && c.AutoCompactTokens != 0) {
 			return AgentContextBudget{}, fmt.Errorf("%w: invalid native estimate capability", ErrProviderCapabilityUnknown)
 		}
@@ -126,7 +146,9 @@ func (c AgentHostCapability) ResolveBudget(provider ProviderKind, model string, 
 		InitialPromptTokens: c.InitialPromptTokens,
 		AutoCompactTokens:   c.AutoCompactTokens, AdjustmentReason: reason,
 		InputAccountingPolicy: c.InputAccountingPolicy, RuntimeScope: c.RuntimeScope,
-		HostInputUnverified: (measured || estimated) && !c.HostInputKnown, AutoCompactUnverified: (measured || estimated) && !c.AutoCompactKnown,
+		WindowEstimateSource: c.WindowEstimateSource, WindowEstimateObservedAt: c.WindowEstimateObservedAt, WindowEstimateHash: c.WindowEstimateHash,
+		WindowEstimateClientVersion: c.WindowEstimateClientVersion,
+		HostInputUnverified:         (measured || estimated || catalog) && !c.HostInputKnown, AutoCompactUnverified: (measured || estimated || catalog) && !c.AutoCompactKnown,
 		OverheadAllowanceTokens: allowance, ObservedOverheadTokens: c.Calibration.OverheadTokens,
 		ObservedInputCeilingTokens:  c.Calibration.InputCeilingTokens,
 		BaselineInputEstimateTokens: c.BaselineInputEstimateTokens, BaselineInputMeasurement: c.BaselineInputMeasurement,
@@ -156,10 +178,12 @@ func (b AgentContextBudget) Validate(provider ProviderKind, model string, reques
 // Reconstruct accounting for integrity checks, never runtime attestation.
 func (b AgentContextBudget) capability() AgentHostCapability {
 	c := AgentHostCapability{Provider: b.Provider, Model: b.Model, HostVersion: b.HostVersion, Tokenizer: b.Tokenizer,
-		Verified: true, Evidence: "recorded preparation accounting", HostInputKnown: !b.HostInputUnverified, AutoCompactKnown: !b.AutoCompactUnverified,
+		Verified: b.InputAccountingPolicy != CatalogEstimateReserveV1, Evidence: "recorded preparation accounting", HostInputKnown: !b.HostInputUnverified, AutoCompactKnown: !b.AutoCompactUnverified,
 		ContextWindow: b.ContextWindow, HostInputTokens: b.HostInputTokens, FramingTokens: b.FramingTokens,
 		InitialPromptTokens: b.InitialPromptTokens, ReservedTokens: b.ReservedTokens, AutoCompactTokens: b.AutoCompactTokens,
 		InputAccountingPolicy: b.InputAccountingPolicy, RuntimeScope: b.RuntimeScope,
+		WindowEstimateSource: b.WindowEstimateSource, WindowEstimateObservedAt: b.WindowEstimateObservedAt, WindowEstimateHash: b.WindowEstimateHash,
+		WindowEstimateClientVersion: b.WindowEstimateClientVersion,
 		BaselineInputEstimateTokens: b.BaselineInputEstimateTokens, BaselineInputMeasurement: b.BaselineInputMeasurement,
 		FramingAllowanceTokens: b.FramingAllowanceTokens}
 	if b.InputAccountingPolicy == MeasuredInputReserveV1 {
@@ -167,6 +191,28 @@ func (b AgentContextBudget) capability() AgentHostCapability {
 		c.Calibration = AgentInputCalibration{Scope: scope, OverheadTokens: b.ObservedOverheadTokens, InputCeilingTokens: b.ObservedInputCeilingTokens}
 	}
 	return c
+}
+
+func (c AgentHostCapability) hasWindowEstimate() bool {
+	return c.WindowEstimateSource != "" || c.WindowEstimateObservedAt != "" || c.WindowEstimateHash != "" || c.WindowEstimateClientVersion != ""
+}
+
+func (c AgentHostCapability) validateWindowEstimate() error {
+	_, err := time.Parse(time.RFC3339, c.WindowEstimateObservedAt)
+	// The adapter owns cache-writer compatibility; the domain preserves its version.
+	if c.Provider != ProviderCodex || c.Verified || c.WindowEstimateSource != "native_model_cache" || err != nil || ValidateContentHash(c.WindowEstimateHash) != nil || strings.TrimSpace(c.WindowEstimateClientVersion) == "" {
+		return fmt.Errorf("%w: catalog estimates require unverified native model-cache provenance", ErrProviderCapabilityUnknown)
+	}
+	return nil
+}
+
+// ExpectedPreparationCapability labels the budget's evidence, never provider acceptance.
+// Callers must still validate the budget and its text accounting.
+func (b AgentContextBudget) ExpectedPreparationCapability() string {
+	if b.InputAccountingPolicy == CatalogEstimateReserveV1 {
+		return "estimated_for_preparation"
+	}
+	return "verified_for_preparation"
 }
 
 // EffectiveBudget leaves legacy memory/artifact requests unchanged.

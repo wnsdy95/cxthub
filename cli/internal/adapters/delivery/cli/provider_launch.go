@@ -86,25 +86,43 @@ type PreparedProviderLaunch struct {
 }
 
 type ProviderLaunchReceipt struct {
-	SessionID           string                           `json:"session_id,omitempty"`
-	TurnID              string                           `json:"turn_id,omitempty"`
-	Outcome             string                           `json:"outcome,omitempty"`
-	Bootstrap           *domain.AgentBootstrapProof      `json:"bootstrap,omitempty"`
-	Budget              *domain.AgentContextBudget       `json:"budget,omitempty"`
-	NativeInputEstimate *domain.AgentNativeInputEstimate `json:"native_input_estimate,omitempty"`
-	Version             int                              `json:"version"`
-	Provider            domain.ProviderKind              `json:"provider"`
-	PackageHash         domain.ContentHash               `json:"package_hash,omitempty"`
-	Mode                string                           `json:"mode"`
-	RequestedBudget     int                              `json:"requested_budget,omitempty"`
-	SelectedTokens      int                              `json:"selected_tokens,omitempty"`
-	TokenMeasurement    string                           `json:"token_measurement,omitempty"`
-	CodeCommit          string                           `json:"code_commit,omitempty"`
-	SourceRevision      string                           `json:"source_revision,omitempty"`
-	Capability          string                           `json:"capability,omitempty"`
-	State               string                           `json:"state"`
-	Acceptance          string                           `json:"acceptance"`
-	Failure             string                           `json:"failure,omitempty"`
+	SessionID              string                           `json:"session_id,omitempty"`
+	TurnID                 string                           `json:"turn_id,omitempty"`
+	Outcome                string                           `json:"outcome,omitempty"`
+	Bootstrap              *domain.AgentBootstrapProof      `json:"bootstrap,omitempty"`
+	Budget                 *domain.AgentContextBudget       `json:"budget,omitempty"`
+	NativeInputEstimate    *domain.AgentNativeInputEstimate `json:"native_input_estimate,omitempty"`
+	NativeInputObservation *ProviderInputObservation        `json:"native_input_observation,omitempty"`
+	Version                int                              `json:"version"`
+	Provider               domain.ProviderKind              `json:"provider"`
+	PackageHash            domain.ContentHash               `json:"package_hash,omitempty"`
+	Mode                   string                           `json:"mode"`
+	RequestedBudget        int                              `json:"requested_budget,omitempty"`
+	SelectedTokens         int                              `json:"selected_tokens,omitempty"`
+	TokenMeasurement       string                           `json:"token_measurement,omitempty"`
+	CodeCommit             string                           `json:"code_commit,omitempty"`
+	SourceRevision         string                           `json:"source_revision,omitempty"`
+	Capability             string                           `json:"capability,omitempty"`
+	State                  string                           `json:"state"`
+	Acceptance             string                           `json:"acceptance"`
+	Failure                string                           `json:"failure,omitempty"`
+}
+
+// ProviderInputObservation is correlated first-turn telemetry. Missing usage
+// or a changed model is explicitly unknown; a completed turn alone is not
+// evidence that the original history fit without compaction.
+type ProviderInputObservation struct {
+	UsageKnown            bool   `json:"usage_known"`
+	UsageBeforeCompaction bool   `json:"usage_before_compaction"`
+	TotalInputTokens      int    `json:"total_input_tokens,omitempty"`
+	ContextWindow         int    `json:"context_window,omitempty"`
+	WindowComparison      string `json:"window_comparison"`
+	InputBudgetStatus     string `json:"input_budget_status"`
+	InitialCompaction     bool   `json:"initial_compaction"`
+	ModelRerouted         bool   `json:"model_rerouted"`
+	Ineligible            bool   `json:"ineligible"`
+	ExecutionKnown        bool   `json:"execution_known"`
+	ExecutionStarted      bool   `json:"execution_started"`
 }
 
 // RunProviderLaunch launches CLI providers only. Desktop apps require their
@@ -674,6 +692,10 @@ func cloneAgentContextBudget(budget *domain.AgentContextBudget) *domain.AgentCon
 }
 
 func cloneProviderLaunchReceipt(receipt ProviderLaunchReceipt) ProviderLaunchReceipt {
+	if receipt.NativeInputObservation != nil {
+		copy := *receipt.NativeInputObservation
+		receipt.NativeInputObservation = &copy
+	}
 	return receipt.Clone()
 }
 

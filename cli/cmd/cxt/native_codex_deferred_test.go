@@ -147,7 +147,7 @@ func TestNativeDeferredPersistenceSeparatesRuntimeInjectionAndOutcome(t *testing
 		records = append(records, r)
 		return recordProviderLaunchReceipt(ctx, root, r)
 	}
-	p, err := persistNativeGeneration(context.Background(), root, f.bridge.expected, f.returned, prepared, record)
+	p, err := persistNativeGeneration(context.Background(), root, f.bridge.expected, f.returned, prepared, f.bridge.expectedNativeWindow, record)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestNativeDeferredPersistenceFailuresDoNotGrantRelease(t *testing.T) {
 				}
 				return nil
 			}
-			p, err := persistNativeGeneration(context.Background(), root, f.bridge.expected, f.returned, prepared, record)
+			p, err := persistNativeGeneration(context.Background(), root, f.bridge.expected, f.returned, prepared, f.bridge.expectedNativeWindow, record)
 			if stage == "package" || stage == "prepared receipt" {
 				if err == nil || p.BeforeRelease != nil {
 					t.Fatal("failed preparation granted release")

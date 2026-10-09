@@ -1,11 +1,10 @@
 # Native host transport development
 
 The `nativecodex` adapter connects fresh `cxt --pull codex` launches to the
-delayed first-turn path described below. Only the supported native version,
-an already-configured static catalog, supported launch options and an exact
-text tokenizer qualify. Ordinary refreshable catalogs still report
-`provider_capability_unknown`. CXTHub does not change a catalog, model,
-authentication or window setting to enable this path. Transport success and
+delayed first-turn path described below. Supported stock native versions and
+launch options use either an existing static catalog binding or an explicitly
+estimated window from native's current model cache. CXTHub does not fork Codex
+or change a catalog, model, authentication or window setting to enable this path. Transport success and
 runtime readiness never establish actual model acceptance.
 
 ## Owned Codex app-server
@@ -103,13 +102,36 @@ across invocations. This does not attest account identity or detect account chan
 the approved measured reserve. Body-relative compaction thresholds are not
 misrepresented as whole-input limits.
 
-**Refreshable native catalogs remain unsupported for preparation.** `model/list`
-omits window metadata; `modelProvider/capabilities/read` returns feature booleans.
-A debug/cache snapshot cannot prove the descriptor retained by the execution
-thread. General support needs a native read/admission contract exposing that
-owned thread's resolved model descriptor and revision. Public launch uses the
-existing static binding and rejects unsupported configurations before starting
-the TUI. It does not fall back to unverified materialized history.
+**Refreshable native catalogs use an estimated preparation policy.**
+`StartWindowPolicy` selects the static or dynamic path from effective native
+configuration; a bad explicit static catalog cannot silently fall back.
+`WindowEstimate` reads native's model cache for the exact acknowledged model,
+preserves its source, fetch timestamp, cache-writer version and selected-entry
+fingerprint, and checks schema,
+freshness and observed config/catalog drift. Reviewed cache writers 0.157.1 and
+0.162.0 are supported independently of the executing native 0.157.1 version;
+unknown formats remain unsupported. The five-minute freshness limit follows
+native cache TTL. Timestamp/ETag changes and compatible cache-writer changes do not invalidate
+identical selected-model evidence; receipts retain the original observation. It is never a `WindowBinding`.
+Missing, malformed, stale or nonmatching model evidence remains
+`provider_capability_unknown`; CXTHub does not invent a model or window.
+
+The package records `catalog_estimate_reserve_v1`,
+`estimated_for_preparation` and the catalog provenance. Preparation targets 80%
+of the estimated usable window, capped by the requested 800k ceiling and known
+compaction constraints, with question and hidden-input reserves deducted. An
+exact local text tokenizer is used when supported. Otherwise the existing UTF-8
+byte allowance is labelled `utf8_byte_allowance`, not actual model tokens.
+Window confidence and text-count accuracy are independent.
+
+A cache snapshot cannot prove the descriptor retained by native for the upcoming
+request. No warmup inference or modified Codex binary is required. First-turn
+receipts therefore record observed window, eligible input usage, initial
+compaction, model rerouting, and whether usage was within the original and
+observed 80% targets. Missing usage stays unknown. Window disagreement on this
+estimated path does not terminate a productive conversation or replay its
+question. Estimated receipts never feed the strict token-overhead calibration.
+Transport tests do not establish real large-model acceptance.
 
 ## Public CLI lifecycle
 

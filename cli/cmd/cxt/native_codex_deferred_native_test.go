@@ -28,6 +28,14 @@ import (
 // first-question preparation, where invalid cloud state blocks model requests.
 // This verifies readiness, source authorization and cleanup, never acceptance.
 func TestNativeDeferredPublicCompositionReadiness(t *testing.T) {
+	testNativeDeferredPublicComposition(t, false)
+}
+
+func TestNativeDeferredPublicCatalogEstimate(t *testing.T) {
+	testNativeDeferredPublicComposition(t, true)
+}
+
+func testNativeDeferredPublicComposition(t *testing.T, dynamic bool) {
 	executable := os.Getenv("CXT_TEST_NATIVE_CODEX")
 	if executable == "" {
 		t.Skip("set CXT_TEST_NATIVE_CODEX to installed native executable")
@@ -107,12 +115,23 @@ func TestNativeDeferredPublicCompositionReadiness(t *testing.T) {
 		t.Fatal("missing fixture catalog")
 	}
 	model := catalog.Models[0]
+	modelName := "gpt-5.4"
+	if dynamic {
+		if json.Unmarshal(model["slug"], &modelName) != nil || modelName == "" {
+			t.Fatal("missing native fixture model")
+		}
+	}
 	for k, v := range map[string]string{"slug": `"gpt-5.4"`, "context_window": "272000", "max_context_window": "1000000", "effective_context_window_percent": "95", "auto_compact_token_limit": "null"} {
 		model[k] = json.RawMessage(v)
 	}
+	model["slug"], _ = json.Marshal(modelName)
 	delete(model, "used_fallback_model_metadata")
 	raw, _ = json.Marshal(map[string]any{"models": []any{model}})
 	path := filepath.Join(f.home, "fixture-catalog.json")
+	if dynamic {
+		path = filepath.Join(os.Getenv("CODEX_HOME"), "models_cache.json")
+		raw, _ = json.Marshal(map[string]any{"models": []any{model}, "client_version": "0.157.1", "identity": "synthetic-test-identity", "fetched_at": time.Now().UTC().Format(time.RFC3339Nano)})
+	}
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -121,10 +140,13 @@ func TestNativeDeferredPublicCompositionReadiness(t *testing.T) {
 		k string
 		v any
 	}{
-		{"model_provider", "openai"}, {"model", "gpt-5.4"}, {"service_tier", "default"}, {"model_catalog_json", path},
+		{"model_provider", "openai"}, {"model", modelName}, {"service_tier", "default"}, {"model_catalog_json", path},
 		{"openai_base_url", server.URL + "/v1"}, {"web_search", "disabled"},
 		{"analytics.enabled", false}, {"cli_auth_credentials_store", "file"},
 	} {
+		if dynamic && setting.k == "model_catalog_json" {
+			continue
+		}
 		value, _ := json.Marshal(setting.v)
 		args = append(args, "-c", setting.k+"="+string(value))
 	}
@@ -156,7 +178,11 @@ func TestNativeDeferredPublicCompositionReadiness(t *testing.T) {
 	if len(packages) != 0 {
 		t.Fatal("runtime readiness claimed package delivery")
 	}
-	if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+	changed := append(append([]byte(nil), raw...), '\n')
+	if dynamic {
+		changed = []byte(strings.Replace(string(raw), "272000", "271000", 1))
+	}
+	if err := os.WriteFile(path, changed, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := prepared.Validate(ctx); err == nil {
@@ -263,6 +289,33 @@ func TestNativeDeferredPublicCompositionReadiness(t *testing.T) {
 
 	if posts.Load() != 1 || !exactInput.Load() || !nativeDeferredHasReceipt(f.root, "first_turn_observed") {
 		t.Fatalf("canned composition: requests=%d exact=%v outcome=%v", posts.Load(), exactInput.Load(), nativeDeferredHasReceipt(f.root, "first_turn_observed"))
+	}
+	if dynamic {
+		files, _ := filepath.Glob(filepath.Join(f.root, ".cxt", "delivery-receipts", "*.json"))
+		observed := false
+		for _, path := range files {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var saved struct {
+				Receipt delivcli.ProviderLaunchReceipt `json:"receipt"`
+			}
+			if json.Unmarshal(raw, &saved) != nil {
+				t.Fatal("invalid receipt")
+			}
+			r := saved.Receipt
+			if r.State == "first_turn_observed" {
+				t.Logf("catalog receipt: capability=%s outcome=%s telemetry=%+v", r.Capability, r.Outcome, r.NativeInputObservation)
+				observed = r.Capability == "estimated_for_preparation" && r.Budget != nil && r.Budget.WindowEstimateSource == "native_model_cache" && r.NativeInputObservation != nil && r.Outcome == "completed" && r.NativeInputObservation.ExecutionStarted
+				if r.NativeInputObservation != nil && !r.NativeInputObservation.UsageKnown && (r.NativeInputObservation.TotalInputTokens != 0 || r.NativeInputObservation.InputBudgetStatus != "unknown") {
+					t.Fatal("ambiguous native usage was presented as measured acceptance")
+				}
+			}
+		}
+		if !observed {
+			t.Fatal("dynamic native path lost catalog estimate or first-turn observation")
+		}
 	}
 	t.Log("public composition: latest main history+memory, actual question, durable receipt before one loopback request, correlated completion; real_model_calls=0")
 	stopThird()

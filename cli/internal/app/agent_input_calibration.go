@@ -10,7 +10,8 @@ import (
 
 // MeasuredAgentCapabilities retains the runtime's model/window authority while
 // replacing the requirement for exact hidden input with explicit scoped reserve
-// accounting. Preparation can read feedback but cannot write or execute turns.
+// accounting. Explicit estimate policies pass through without calibration.
+// Preparation can read measured feedback but cannot write or execute turns.
 type MeasuredAgentCapabilities struct {
 	Runtime      outbound.AgentCapabilityReader
 	Observations outbound.AgentInputCalibrationReader
@@ -28,12 +29,12 @@ func (r MeasuredAgentCapabilities) AgentCapability(ctx context.Context, provider
 		return domain.AgentHostCapability{}, err
 	}
 	switch c.InputAccountingPolicy {
-	case domain.NativeEstimateReserveV1:
+	case domain.NativeEstimateReserveV1, domain.CatalogEstimateReserveV1:
 		if c.Calibration != (domain.AgentInputCalibration{}) {
 			return domain.AgentHostCapability{}, domain.ErrProviderCapabilityUnknown
 		}
-		// This policy has an ephemeral native baseline, not reusable measured
-		// overhead. Preserve it and never consult the calibration store.
+		// Estimates do not authorize reusable measured overhead. Preserve the
+		// declared policy and never consult the calibration store.
 		return c, ctx.Err()
 	case "", domain.MeasuredInputReserveV1:
 	default:
