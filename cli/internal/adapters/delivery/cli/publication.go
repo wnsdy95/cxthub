@@ -445,13 +445,10 @@ func publishCommitCapture(ctx context.Context, c *Container, cwd string, p *comm
 			return err
 		}
 	}
-	e := p.Proof
-	e.Kind = "publish"
-	e.Creation = nil // The immutable creation observation is retained separately.
+	// The immutable creation observation is retained separately.
 	// Eligibility carries no new memory selection. The ordinary observation
 	// above retains the exact memory tuple and is uploaded first.
-	e.MemoryHash, e.MemorySource, e.MemoryPinned = "", "", true
-	return persistPublicationKnown(ctx, c, cwd, e, accepted)
+	return persistPublicationKnown(ctx, c, cwd, domain.CaptureAttempt(*p).Publication(), accepted)
 }
 
 func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, worktree string, accepted map[string]domain.HistoryEvent, resolutions map[string]domain.CaptureResolution, branchIDs map[string]bool) error {
