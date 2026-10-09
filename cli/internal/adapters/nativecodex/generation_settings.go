@@ -41,6 +41,9 @@ func (p *handoffProtocol) observeGenerationSettings(raw json.RawMessage) error {
 	if string(instructions) == "null" {
 		return nil
 	}
+	if len(p.defaultInstructions) == 0 && p.generation.firstDone {
+		return handoffError("default instructions were not established by the initial turn")
+	}
 	var text string
 	if json.Unmarshal(instructions, &text) != nil || text == "" || len(p.defaultInstructions) != 0 && !sameJSON(instructions, p.defaultInstructions) {
 		return handoffError("generation default instructions changed")

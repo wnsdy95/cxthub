@@ -40,11 +40,25 @@ func TestGenerationFollowupRepeatsOnlyObservedNativeDefault(t *testing.T) {
 	generationNotice(t, f, "turn/completed", map[string]any{"threadId": f.p.thread.ID, "turn": generationTurn("completed")}, false)
 	// The second question preserves the observed native setting and first gate.
 	handoffUnitObserve(t, f.p, handoffUnitRequest(t, "next", "turn/start", start), true, false, false)
+	generationNotice(t, f, "thread/settings/updated", notice, false)
 	if f.p.generation.firstKey != "s:first" || !f.p.generation.firstDone {
 		t.Fatal("follow-up consumed a new initial gate")
 	}
 	if !f.p.preservesDefaultInstructions(json.RawMessage("null")) || f.p.preservesDefaultInstructions(json.RawMessage(`"arbitrary override"`)) {
 		t.Fatal("default instruction identity was weakened")
+	}
+}
+
+func TestGenerationCannotEstablishDefaultAfterFirstCompletion(t *testing.T) {
+	f := generationUnit(t)
+	generationStart(t, f, "first")
+	generationNotice(t, f, "turn/started", map[string]any{"threadId": f.p.thread.ID, "turn": generationTurn("inProgress")}, false)
+	handoffUnitObserve(t, f.p, handoffUnitResponse(t, "first", map[string]any{"turn": generationTurn("inProgress")}), false, false, false)
+	generationNotice(t, f, "turn/completed", map[string]any{"threadId": f.p.thread.ID, "turn": generationTurn("completed")}, false)
+	generationStart(t, f, "second")
+	generationNotice(t, f, "thread/settings/updated", generationSettingsNotice(f, defaultCollaboration(f, "late native text")), true)
+	if len(f.p.defaultInstructions) != 0 {
+		t.Fatal("later turn established the initial instruction baseline")
 	}
 }
 

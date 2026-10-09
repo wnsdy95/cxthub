@@ -262,7 +262,7 @@ receiving a native ACK does not supply verified model-window evidence.
 Known turn parameters may only repeat the acknowledged runtime settings.
 Stock native resolves null default-mode instructions during the first turn and
 reports them in `thread/settings/updated`. CXT binds that private value only from
-its owned server after releasing a turn whose settings already passed validation.
+its owned server during the initial turn whose settings already passed validation.
 The notification must retain thread/model/provider/directory/permission/tier/
 effort identity and default mode. Subsequent turns may repeat that exact value;
 client-supplied text cannot establish or replace it. No template is copied into
