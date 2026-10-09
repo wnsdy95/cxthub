@@ -132,7 +132,7 @@ func (p *handoffProtocol) generationParams(params map[string]json.RawMessage) (s
 			if string(v) != "null" {
 				mode, ok := identityObject(v, "mode", "settings")
 				settings, valid := identityObject(mode["settings"], "model", "reasoning_effort", "developer_instructions")
-				if !ok || !valid || len(mode) != 2 || len(settings) != 3 || !stringEquals(mode["mode"], "default") || !stringEquals(settings["model"], p.thread.Model) || !sameJSON(settings["reasoning_effort"], p.settings["reasoningEffort"]) || string(settings["developer_instructions"]) != "null" {
+				if !ok || !valid || len(mode) != 2 || len(settings) != 3 || !stringEquals(mode["mode"], "default") || !stringEquals(settings["model"], p.thread.Model) || !sameJSON(settings["reasoning_effort"], p.settings["reasoningEffort"]) || !p.preservesDefaultInstructions(settings["developer_instructions"]) {
 					return "", false
 				}
 			}

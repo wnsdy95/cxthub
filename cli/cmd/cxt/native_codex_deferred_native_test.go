@@ -28,14 +28,18 @@ import (
 // first-question preparation, where invalid cloud state blocks model requests.
 // This verifies readiness, source authorization and cleanup, never acceptance.
 func TestNativeDeferredPublicCompositionReadiness(t *testing.T) {
-	testNativeDeferredPublicComposition(t, false)
+	testNativeDeferredPublicComposition(t, false, false)
 }
 
 func TestNativeDeferredPublicCatalogEstimate(t *testing.T) {
-	testNativeDeferredPublicComposition(t, true)
+	testNativeDeferredPublicComposition(t, true, false)
 }
 
-func testNativeDeferredPublicComposition(t *testing.T, dynamic bool) {
+func TestNativeDeferredPublicDefaultSearch(t *testing.T) {
+	testNativeDeferredPublicComposition(t, true, true)
+}
+
+func testNativeDeferredPublicComposition(t *testing.T, dynamic, defaultSearch bool) {
 	executable := os.Getenv("CXT_TEST_NATIVE_CODEX")
 	if executable == "" {
 		t.Skip("set CXT_TEST_NATIVE_CODEX to installed native executable")
@@ -56,28 +60,33 @@ func testNativeDeferredPublicComposition(t *testing.T, dynamic bool) {
 		t.Fatal(err)
 	}
 	var posts atomic.Int64
-	var allowCanned, exactInput atomic.Bool
+	var allowCanned, exactInput, exactFollowup atomic.Bool
 	var authorization atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if auth := r.Header.Get("Authorization"); auth != "" && auth != "Bearer cxt-offline-fixture-not-a-real-key" {
 			authorization.Store(true)
 		}
 		if r.Method == http.MethodPost {
-			posts.Add(1)
+			requestNumber := posts.Add(1)
 			if allowCanned.Load() {
 				data, _ := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 				var body struct {
 					Input []struct{ Content []struct{ Text string } }
 				}
 				_ = json.Unmarshal(data, &body)
-				archive, question := false, false
+				archive, question, followup := false, false, false
 				for _, item := range body.Input {
 					for _, c := range item.Content {
 						archive = archive || strings.Contains(c.Text, "SYNTHETIC_MAIN_ARCHIVE") && strings.Contains(c.Text, "SYNTHETIC_PROJECT_MEMORY")
 						question = question || c.Text == "PRIVATE_TASK\nnext"
+						followup = followup || c.Text == "SYNTHETIC_FOLLOWUP"
 					}
 				}
-				exactInput.Store(archive && question && nativeDeferredHasReceipt(f.root, "injected_ready"))
+				if requestNumber == 1 {
+					exactInput.Store(archive && question && nativeDeferredHasReceipt(f.root, "injected_ready"))
+				} else if requestNumber == 2 {
+					exactFollowup.Store(followup && nativeDeferredHasReceipt(f.root, "first_turn_observed"))
+				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				for _, event := range []string{
 					`{"type":"response.created","response":{"id":"response-1"}}`,
@@ -86,6 +95,8 @@ func testNativeDeferredPublicComposition(t *testing.T, dynamic bool) {
 					`{"type":"response.output_item.done","output_index":0,"item":{"id":"answer-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"READY","annotations":[]}]}}`,
 					`{"type":"response.completed","response":{"id":"response-1","status":"completed","usage":{"input_tokens":12000,"input_tokens_details":{"cached_tokens":0},"output_tokens":1,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":12001}}}`,
 				} {
+					event = strings.ReplaceAll(event, "response-1", fmt.Sprintf("response-%d", requestNumber))
+					event = strings.ReplaceAll(event, "answer-1", fmt.Sprintf("answer-%d", requestNumber))
 					fmt.Fprintf(w, "data: %s\n\n", event)
 					w.(http.Flusher).Flush()
 				}
@@ -145,6 +156,9 @@ func testNativeDeferredPublicComposition(t *testing.T, dynamic bool) {
 		{"analytics.enabled", false}, {"cli_auth_credentials_store", "file"},
 	} {
 		if dynamic && setting.k == "model_catalog_json" {
+			continue
+		}
+		if defaultSearch && setting.k == "web_search" {
 			continue
 		}
 		value, _ := json.Marshal(setting.v)
@@ -265,7 +279,7 @@ func testNativeDeferredPublicComposition(t *testing.T, dynamic bool) {
 	}
 	defer third.Cleanup()
 	allowCanned.Store(true)
-	stopThird := startNativeDeferredPTY(t, python, executable, f.root, third)
+	stopThird, sendThird := startNativeDeferredPTYWithInput(t, python, executable, f.root, third)
 	defer stopThird()
 	if err := third.Activate(ctx); err != nil {
 		t.Fatal(err)
@@ -318,6 +332,38 @@ func testNativeDeferredPublicComposition(t *testing.T, dynamic bool) {
 		}
 	}
 	t.Log("public composition: latest main history+memory, actual question, durable receipt before one loopback request, correlated completion; real_model_calls=0")
+	if defaultSearch {
+		if err := sendThird("SYNTHETIC_FOLLOWUP"); err != nil {
+			t.Fatal("send synthetic follow-up", err)
+		}
+		// A separate Enter after the TUI's paste-detection window submits the
+		// text as a normal user turn, instead of adding a pasted newline.
+		enterDelay := time.NewTimer(250 * time.Millisecond)
+		defer enterDelay.Stop()
+		select {
+		case failure := <-third.Failure:
+			t.Fatalf("follow-up before Enter failed: %v", failure)
+		case <-ctx.Done():
+			t.Fatal("follow-up input timed out", ctx.Err())
+		case <-enterDelay.C:
+		}
+		if err := sendThird("\r"); err != nil {
+			t.Fatal("submit synthetic follow-up", err)
+		}
+		for !exactFollowup.Load() {
+			select {
+			case failure := <-third.Failure:
+				t.Fatalf("default-search follow-up rejected before second loopback POST: requests=%d error=%v", posts.Load(), failure)
+			case <-ctx.Done():
+				t.Fatalf("default-search follow-up did not reach loopback: requests=%d error=%v", posts.Load(), ctx.Err())
+			case <-ticker.C:
+			}
+		}
+		if posts.Load() != 2 || authorization.Load() {
+			t.Fatalf("follow-up composition: requests=%d unexpected_credentials=%v", posts.Load(), authorization.Load())
+		}
+		t.Log("default-search follow-up reached second loopback POST after first_turn_observed; real_model_calls=0")
+	}
 	stopThird()
 	select {
 	case failure, open := <-third.Failure:
@@ -330,8 +376,8 @@ func testNativeDeferredPublicComposition(t *testing.T, dynamic bool) {
 
 }
 
-// Discard terminal output; only answer cursor-position queries. EOF from the
-// test terminates/reaps its own child, so failed assertions cannot leak a TUI.
+// Discard terminal output and answer cursor-position queries. Forward controlled
+// stdin bytes to the TUI; EOF terminates/reaps the child even after a test failure.
 const nativeDeferredPTY = `
 import fcntl,json,os,pty,selectors,struct,subprocess,sys,termios,time
 argv=json.loads(sys.stdin.readline())
@@ -349,7 +395,9 @@ try:
     while child.poll() is None and time.monotonic()<deadline and not stop:
         for key,_ in selector.select(.1):
             if key.fileobj is sys.stdin:
-                if not os.read(sys.stdin.fileno(),4096):stop=True
+                controlled=os.read(sys.stdin.fileno(),4096)
+                if controlled:os.write(master,controlled)
+                else:stop=True
             else:
                 try:part=os.read(master,65536)
                 except OSError:stop=True;break
@@ -365,6 +413,12 @@ finally:
 `
 
 func startNativeDeferredPTY(t *testing.T, python, executable, cwd string, p delivcli.DeferredProviderLaunch) func() {
+	t.Helper()
+	stop, _ := startNativeDeferredPTYWithInput(t, python, executable, cwd, p)
+	return stop
+}
+
+func startNativeDeferredPTYWithInput(t *testing.T, python, executable, cwd string, p delivcli.DeferredProviderLaunch) (func(), func(string) error) {
 	t.Helper()
 	argv, _ := json.Marshal(append([]string{executable}, p.Args...))
 	cmd := exec.Command(python, "-c", nativeDeferredPTY)
@@ -395,7 +449,10 @@ func startNativeDeferredPTY(t *testing.T, python, executable, cwd string, p deli
 		stop()
 		t.Fatal(err)
 	}
-	return stop
+	return stop, func(text string) error {
+		_, err := io.WriteString(stdin, text)
+		return err
+	}
 }
 
 func nativeDeferredHasReceipt(root, state string) bool {

@@ -73,6 +73,73 @@ func initializeHandoff(t *testing.T, c *websocket.Conn) *rpcClient {
 	return rpc
 }
 
+func TestGenerationHandoffDefaultSearchConfig(t *testing.T) {
+	for _, mode := range []string{"search-omitted", "search-null", "search-invalid", "search-aliased", "search-duplicate"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := startFixture(t, mode)
+			ctx := context.Background()
+			if _, err := s.StartThread(ctx, ThreadOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			h, err := s.OpenGenerationHandoff(ctx, func(context.Context, Thread, string) (PreparedGeneration, error) {
+				t.Fatal("unexpected generation")
+				return PreparedGeneration{}, ErrState
+			})
+			wantOK := mode == "search-omitted" || mode == "search-null"
+			if (err == nil) != wantOK {
+				t.Fatalf("handoff outcome: %v", err)
+			}
+			if h != nil {
+				_ = h.Close()
+			}
+		})
+	}
+}
+
+func TestHandoffCannotResumeWithoutOriginalRuntime(t *testing.T) {
+	for _, mode := range []string{"search-omitted", "search-unloaded"} {
+		t.Run(mode, func(t *testing.T) {
+			s, trace := startFixture(t, mode)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if _, err := s.StartThread(ctx, ThreadOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			h, err := s.OpenGenerationHandoff(ctx, func(context.Context, Thread, string) (PreparedGeneration, error) {
+				t.Fatal("unexpected generation")
+				return PreparedGeneration{}, ErrState
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			client, err := dialHandoff(t, h)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rpc := initializeHandoff(t, client)
+			if mode == "search-omitted" {
+				_ = s.rpc.close()
+			}
+			if _, err := rpc.call(ctx, "thread/resume", map[string]any{"threadId": s.thread.ID, "config": map[string]string{"web_search": "cached"}, "excludeTurns": true}); err == nil {
+				t.Fatal("missing original runtime allowed resume")
+			}
+			if _, err := h.Wait(ctx); err == nil {
+				t.Fatal("missing original runtime reported ready")
+			}
+			traceBytes, err := os.ReadFile(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, method := range strings.Fields(string(traceBytes)) {
+				if method == "thread/resume" || method == "turn/start" || method == "thread/inject-items" {
+					t.Fatalf("forwarded %s after losing original runtime", method)
+				}
+			}
+		})
+	}
+}
+
 func TestHandoffSameConnectionReceiptAndNoGeneration(t *testing.T) {
 	s, h, injection, trace := handoffFixture(t)
 	info, err := os.Stat(strings.TrimPrefix(h.URL(), "unix://"))
@@ -86,6 +153,14 @@ func TestHandoffSameConnectionReceiptAndNoGeneration(t *testing.T) {
 	rpc := initializeHandoff(t, c)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	beforeRead, _ := os.ReadFile(trace)
+	if _, err = rpc.call(ctx, "thread/read", map[string]any{"threadId": "background-thread", "includeTurns": false}); err == nil {
+		t.Fatal("other thread read was allowed")
+	}
+	afterRead, _ := os.ReadFile(trace)
+	if strings.Count(string(beforeRead), "thread/read\n") != strings.Count(string(afterRead), "thread/read\n") {
+		t.Fatal("background read reached native server")
+	}
 	if _, err = rpc.call(ctx, "thread/loaded/list", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}

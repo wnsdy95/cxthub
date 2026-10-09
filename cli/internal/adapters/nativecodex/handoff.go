@@ -16,6 +16,10 @@ import (
 	"github.com/coder/websocket"
 )
 
+// ErrClientExit means the owned TUI acknowledged unsubscribe and then closed
+// its connection. It says nothing about input acceptance or model completion.
+var ErrClientExit = errors.New("native Codex client exited")
+
 // HandoffReceipt proves that a matching resume response was forwarded on
 // the requesting client's private connection. It is not proof of rendered pixels, available model
 // capacity, or provider acceptance. Injection bytes remain private.
@@ -56,9 +60,8 @@ func (h *Handoff) GoString() string { return h.String() }
 // URL is for the owned TUI's --remote argument, never for a shared receipt.
 func (h *Handoff) URL() string { return h.url }
 
-// OpenHandoff requires a successful one-shot injection and an explicit native
-// web_search setting. Do not guess the effective default or forward arbitrary
-// TUI configuration writes into an already prepared runtime.
+// OpenHandoff requires a successful one-shot injection. Omitted native search
+// configuration is inherited from the prepared thread, never guessed locally.
 func (s *Session) OpenHandoff(ctx context.Context) (*Handoff, error) {
 	return s.openHandoff(ctx, nil)
 }
@@ -108,11 +111,10 @@ func (s *Session) openHandoff(ctx context.Context, prepare func(context.Context,
 		return nil, err
 	}
 	result, ok := identityObject(raw, "config")
-	config, valid := identityObject(result["config"], "web_search")
-	var search string
-	if !ok || !valid || json.Unmarshal(config["web_search"], &search) != nil ||
-		(search != "cached" && search != "live" && search != "disabled" && search != "indexed") {
-		return nil, fmt.Errorf("%w: handoff requires an explicit native web search setting", ErrState)
+	config, valid := windowObject(result["config"], "web_search")
+	search, searchOK := handoffSearchSetting(config["web_search"])
+	if !ok || !valid || !searchOK {
+		return nil, fmt.Errorf("%w: handoff has an invalid native web search setting", ErrState)
 	}
 	if prepare != nil {
 		if err := s.materializeFreshThread(ctx); err != nil {
@@ -180,6 +182,7 @@ func (s *Session) openHandoff(ctx context.Context, prepare func(context.Context,
 		select {
 		case <-hctx.Done():
 		case <-s.closed:
+		case <-s.rpc.closed:
 		case <-s.process.done:
 		}
 		h.finish(ErrClosed)
@@ -201,12 +204,15 @@ func (h *Handoff) relay(from, to *websocket.Conn, state *handoffProtocol, client
 	read := func() (websocket.MessageType, []byte, error) { return from.Read(h.ctx) }
 	if client && h.prepare != nil {
 		var stop func()
-		read, stop = h.readGenerationClient(from)
+		read, stop = h.readGenerationClient(from, state)
 		defer stop()
 	}
 	for {
 		kind, data, err := read()
 		if err != nil {
+			if client {
+				return state.clientReadError(err)
+			}
 			return ErrClosed
 		}
 		if kind != websocket.MessageText {
@@ -216,8 +222,12 @@ func (h *Handoff) relay(from, to *websocket.Conn, state *handoffProtocol, client
 		if err != nil {
 			var denied *deniedAuxiliaryRequest
 			if client && errors.As(err, &denied) {
+				message := "Auxiliary title generation is unavailable on this managed connection."
+				if denied.inspection {
+					message = "Other-thread inspection is unavailable on this managed connection."
+				}
 				response, _ := json.Marshal(map[string]any{"id": denied.id, "error": map[string]any{
-					"code": -32601, "message": "Auxiliary title generation is unavailable on this managed connection.",
+					"code": -32601, "message": message,
 				}})
 				if err := from.Write(h.ctx, websocket.MessageText, response); err != nil {
 					return ErrClosed
@@ -227,7 +237,14 @@ func (h *Handoff) relay(from, to *websocket.Conn, state *handoffProtocol, client
 			return err
 		}
 		if client {
+			if err = session.checkHandoffResumeOwner(h.ctx, data); err != nil {
+				return err
+			}
 			if err = h.prepareGeneration(state, session); err != nil {
+				return err
+			}
+			data, err = state.forwardResume(data)
+			if err != nil {
 				return err
 			}
 		}

@@ -112,6 +112,37 @@ func TestNativeDeferredMonitorClosureAndOwnerCancellation(t *testing.T) {
 	}
 }
 
+func TestNativeDeferredMonitorConfirmedClientExit(t *testing.T) {
+	for _, afterTurn := range []bool{false, true} {
+		t.Run(fmt.Sprint(afterTurn), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f := nativeLifecycleFixture{
+				generation: func(context.Context) (nativecodex.GenerationObservation, error) {
+					if !afterTurn {
+						return nativecodex.GenerationObservation{}, nativecodex.ErrClientExit
+					}
+					return nativecodex.GenerationObservation{Outcome: "completed"}, nil
+				},
+				lifecycle: func(context.Context) error {
+					if !afterTurn {
+						t.Error("exit before first turn continued lifecycle wait")
+					}
+					return nativecodex.ErrClientExit
+				},
+			}
+			select {
+			case err, open := <-monitorNativeCodexLifecycle(ctx, f, func() { t.Error("unexpected warning") }):
+				if open || err != nil {
+					t.Fatal("confirmed exit reported as fatal", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("confirmed exit did not finish monitoring")
+			}
+		})
+	}
+}
+
 func TestNativeDeferredCleanupJoinsFailuresAndRunsOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -169,12 +169,39 @@ A local private capture binding ties the supervisor PID to the actual native
 thread. Tool processes supply their native thread ID; managed capture verifies
 that binding instead of borrowing an old terminal affinity. Prepared replacement
 and current threads have separate entries, retired only by their own cleanup.
-The transport remains monitored after the first turn. Unexpected disconnects
-stop the owned lifecycle; unsuccessful cleanup blocks replacement launch.
+The transport remains monitored after the first turn. A correlated unsubscribe
+of the owned thread followed by a normal client close is an ordinary exit.
+Foreign or unacknowledged unsubscribe, queued requests after exit, oversized
+frames, abnormal closes and lost upstream connections remain failures. The
+supervisor still reaps its own child on normal exit; an exit acknowledgement does
+not establish input acceptance. Unexpected disconnects stop the owned lifecycle;
+unsuccessful cleanup blocks replacement launch.
 Post-generation feedback/receipt write failures are reported separately and do
 not terminate a productive conversation or replay the model request.
 
 ## Interactive readiness
+
+When `web_search` is omitted or null, CXT preserves the owned thread's native
+search configuration. The stock TUI includes its resolved default in a resume
+request; after validating the entire request, CXT omits that one redundant
+override instead of reapplying another client's default. It does not calculate
+or attest an effective search mode. Explicit settings still require an exact
+match, and other configuration or permission changes remain rejected. A lost
+owned runtime cannot be replaced by a cold resume.
+
+Stock ChatGPT-authenticated startup may query account rate limits, the owned
+thread's installed connector cache, and other recent threads. Rate-limit reads
+and cached `app/installed` reads are supported; forced connector refreshes remain
+blocked because they can change model-visible tools. Other-thread reads receive
+bounded local errors without disconnecting the owned conversation. They are not
+forwarded upstream. During deferred preparation, the client queue uses the same
+64-request bound as the protocol, with its existing byte and cancellation limits.
+
+Source revalidation requires a consistent authorized history/memory/history read.
+If a concurrent write changes repository revisions but both prepared delivery
+proofs still match, CXT retries that complete read check at most three times.
+Changed content, missing proofs, revoked access and legacy packages do not gain
+this retry. It never replays history injection or a model request.
 
 After successful injection, `OpenHandoff` opens a one-client Unix WebSocket in
 the same private directory (0700 directory, 0600 socket). Its upstream connection
@@ -199,14 +226,12 @@ server requests and changed settings terminate the handoff. Disconnect cannot
 be retried on this handoff. Closing it cancels its connections and removes its
 socket; the separate owned control session remains available until it is closed.
 
-This is still a **readiness-only** bridge. Turns, tool/approval requests, config
+`OpenHandoff` is an **inspection-only** bridge. Turns, tool/approval requests, config
 writes and other mutations remain blocked even after the resume ACK. The native
 project must already be trusted; CXTHub neither accepts its trust dialog nor
-writes that decision. `config/read` must return an explicit `web_search` mode
-(`disabled`, `cached`, `indexed` or `live`). An absent mode is not guessed from
-a default, since native features and managed requirements can change it. Resume
-may only repeat that search setting, not introduce other configuration or
-instruction overrides.
+writes that decision. Explicit `web_search` modes must match; an omitted or null
+mode stays inherited as described above. Resume cannot introduce other
+configuration or instruction overrides.
 
 ## Prepared first-turn generation
 
@@ -235,6 +260,14 @@ and validation remain application responsibilities; passing a callback or
 receiving a native ACK does not supply verified model-window evidence.
 
 Known turn parameters may only repeat the acknowledged runtime settings.
+Stock native resolves null default-mode instructions during the first turn and
+reports them in `thread/settings/updated`. CXT binds that private value only from
+its owned server after releasing a turn whose settings already passed validation.
+The notification must retain thread/model/provider/directory/permission/tier/
+effort identity and default mode. Subsequent turns may repeat that exact value;
+client-supplied text cannot establish or replace it. No template is copied into
+CXT and no preparation budget is enlarged. This preserves native's follow-up
+behavior without permitting arbitrary developer instruction overrides.
 For `serviceTier`, omission inherits while explicit null selects `default`;
 null cannot change an acknowledged priority/flex or unspecified tier. A TUI
 which resolves an unspecified tier to explicit default is rejected until that
@@ -321,8 +354,9 @@ The public Codex history route uses this binding and the delayed supervisor.
 The first question remains blocked until the runtime-launched receipt is
 persisted. Configuration/source freshness, actual question reservation and the
 measured reserve are checked again before generation release. Dynamic model
-metadata and additional launch modes remain unsupported; normal catalog lookup
-must not be mistaken for a bound runtime descriptor. Actual large-model input
+metadata uses the estimated policy above; normal catalog lookup must not be
+mistaken for a bound runtime descriptor. Additional launch modes require their
+own mapping and validation. Actual large-model input
 acceptance and immediate compaction still require provider validation. A package,
 injection ACK, TUI attachment and model completion are distinct evidence.
 Claude uses its own local estimate policy and owned first exchange. Neither

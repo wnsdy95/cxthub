@@ -181,7 +181,7 @@ func TestHandoffProtocolInitializationOrder(t *testing.T) {
 func TestHandoffProtocolReadOnlyOperations(t *testing.T) {
 	methods := []string{
 		"thread/read", "thread/turns/list", "thread/items/list", "thread/goal/get",
-		"account/read", "config/read", "configRequirements/read", "hooks/list", "model/list",
+		"account/read", "account/rateLimits/read", "config/read", "configRequirements/read", "hooks/list", "model/list",
 		"collaborationMode/list", "thread/loaded/list", "thread/list", "skills/list", "plugin/list", "app/list", "mcpServerStatus/list",
 	}
 	for _, afterACK := range []bool{false, true} {
@@ -204,12 +204,79 @@ func TestHandoffProtocolReadOnlyOperations(t *testing.T) {
 	}
 	for _, method := range methods[:4] {
 		for _, threadID := range []any{"other-thread", nil, 1} {
+			if method == "thread/read" && threadID == "other-thread" {
+				continue
+			} // bounded local denial below
 			t.Run(fmt.Sprintf("wrong thread/%s/%v", method, threadID), func(t *testing.T) {
 				f := newHandoffUnitFixture(t)
 				f.initialize(t)
 				handoffUnitObserve(t, f.p, handoffUnitRequest(t, 1, method, map[string]any{"threadId": threadID}), true, false, true)
 			})
 		}
+	}
+}
+
+func TestHandoffBackgroundOtherThreadReadDoesNotConsumeResume(t *testing.T) {
+	f := newHandoffUnitFixture(t)
+	f.initialize(t)
+	request := handoffUnitRequest(t, "background", "thread/read", map[string]any{"threadId": "other-thread", "includeTurns": false})
+	for i := 0; i < 128; i++ {
+		ready, err := f.p.observe(request, true)
+		var denied *deniedAuxiliaryRequest
+		if ready || !errors.As(err, &denied) || !denied.inspection || len(f.p.pending) != 0 || f.p.resumeSent {
+			t.Fatal("background read terminated or changed owned resume authority")
+		}
+	}
+	handoffUnitObserve(t, f.p, request, true, false, true)
+	handoffUnitObserve(t, f.p, handoffUnitRequest(t, "resume", "thread/resume", map[string]any{"threadId": f.p.thread.ID, "excludeTurns": true}), true, false, false)
+	handoffUnitObserve(t, f.p, handoffUnitResponse(t, "resume", f.result), false, true, false)
+}
+
+func TestHandoffInstalledAppsReadsPreparedThreadCache(t *testing.T) {
+	for _, tc := range []struct {
+		params string
+		reject bool
+	}{
+		{`{"threadId":"prepared-thread"}`, false},
+		{`{"threadId":"prepared-thread","forceRefresh":false}`, false},
+		{`{"threadId":"prepared-thread","forceRefresh":true}`, true},
+		{`{"threadId":"prepared-thread","forceRefresh":null}`, true},
+		{`{"threadId":"prepared-thread","force_refresh":true}`, true},
+		{`{"threadId":"other-thread"}`, true},
+		{`{}`, true},
+	} {
+		t.Run(tc.params, func(t *testing.T) {
+			f := newHandoffUnitFixture(t)
+			f.initialize(t)
+			handoffUnitObserve(t, f.p, handoffUnitRequest(t, "apps", "app/installed", json.RawMessage(tc.params)), true, false, tc.reject)
+			if !tc.reject {
+				handoffUnitObserve(t, f.p, handoffUnitResponse(t, "apps", map[string]any{"apps": []any{}}), false, false, false)
+			}
+		})
+	}
+}
+
+func TestHandoffAppMetadataReadPreservesPreparedTools(t *testing.T) {
+	for _, tc := range []struct {
+		params string
+		reject bool
+	}{
+		{`{"threadId":"prepared-thread","appIds":["fixture-app"]}`, false},
+		{`{"threadId":"prepared-thread","appIds":[],"includeTools":true}`, false},
+		{`{"threadId":"prepared-thread","appIds":null}`, true},
+		{`{"threadId":"prepared-thread","appIds":[1]}`, true},
+		{`{"threadId":"prepared-thread","appIds":[],"forceRefresh":true}`, true},
+		{`{"threadId":"prepared-thread","appIds":[],"includeTools":null}`, true},
+		{`{"threadId":"other-thread","appIds":[]}`, true},
+	} {
+		t.Run(tc.params, func(t *testing.T) {
+			f := newHandoffUnitFixture(t)
+			f.initialize(t)
+			handoffUnitObserve(t, f.p, handoffUnitRequest(t, "metadata", "app/read", json.RawMessage(tc.params)), true, false, tc.reject)
+			if !tc.reject {
+				handoffUnitObserve(t, f.p, handoffUnitResponse(t, "metadata", map[string]any{"apps": []any{}}), false, false, false)
+			}
+		})
 	}
 }
 

@@ -198,6 +198,9 @@ func monitorNativeCodexLifecycle(ctx context.Context, h nativeCodexLifecycle, wa
 		if ctx.Err() != nil {
 			return // owner cleanup, not an unexpected transport failure
 		}
+		if err == nativecodex.ErrClientExit {
+			return // confirmed owned TUI unsubscribe; supervisor still reaps it
+		}
 		if err == nil {
 			err = nativecodex.ErrClosed
 		}
