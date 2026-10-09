@@ -38,7 +38,7 @@ func (s *AgentContextService) PrepareAgentContext(ctx context.Context, in inboun
 		working := *in.WorkingPosition
 		in.WorkingPosition = &working
 	}
-	// Repository revision or verified runtime-limit changes can reselect input.
+	// Repository revision or runtime budget evidence changes can reselect input.
 	// Each attempt reauthorizes sources and keeps the first code/context pinned.
 	// A moved worktree, revoked permission or malformed source is not contention.
 	var anchor *agentPreparationAnchor
@@ -341,7 +341,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 		if err = p.Budget.Validate(in.Provider, in.Model, policy.BudgetTokens, usage); err != nil {
 			return domain.AgentContextPackage{}, err
 		}
-		p.Capability = "verified_for_preparation"
+		p.Capability = p.Budget.ExpectedPreparationCapability()
 	}
 	// Reauthorize both reads after body selection. A generation move, revoked
 	// membership, or changed code fails before a caller materializes any session.
@@ -402,7 +402,7 @@ func (s *AgentContextService) prepareAgentContext(ctx context.Context, in inboun
 			return domain.AgentContextPackage{}, err
 		}
 		if latest != *p.Budget {
-			return domain.AgentContextPackage{}, &agentCapabilityContention{fmt.Errorf("%w: verified runtime limits changed during selection; reprepare recent input", domain.ErrProviderCapabilityUnknown)}
+			return domain.AgentContextPackage{}, &agentCapabilityContention{fmt.Errorf("%w: runtime budget evidence changed during selection; reprepare recent input", domain.ErrProviderCapabilityUnknown)}
 		}
 	}
 	p.ID, err = p.Digest()
@@ -464,7 +464,7 @@ func (s *AgentContextService) measure(ctx context.Context, in inbound.PrepareAge
 		}
 		kind, err := domain.ValidateAgentTokenAccounting(policy, in.Provider, tokenizer, usage)
 		if err != nil {
-			if kind == domain.AgentTextExact {
+			if kind == domain.AgentTextExact && policy != domain.CatalogEstimateReserveV1 {
 				return usage, agentTokenMeasurementFailure(usage, p.EffectiveBudget(), true)
 			}
 			// Allowance provenance drift is not a candidate-fit problem and must

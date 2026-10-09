@@ -18,7 +18,7 @@ import (
 
 // Runtime readiness is separate from input delivery. The original TUI supplies
 // its first question; only then do we authorize and assemble latest server main.
-// Static native catalogs are supported by the binding, not manufactured here.
+// Native catalog evidence is kept separate from actual first-turn telemetry.
 func prepareNativeCodexDeferred(ctx context.Context, cfg config, req delivcli.ProviderLaunchRequest) (result delivcli.DeferredProviderLaunch, resultErr error) {
 	var empty delivcli.DeferredProviderLaunch
 	if req.Intent.Provider != domain.ProviderCodex || !req.Intent.Pull {
@@ -131,7 +131,7 @@ func prepareNativeCodexDeferred(ctx context.Context, cfg config, req delivcli.Pr
 		if err != nil {
 			return p, err
 		}
-		return persistNativeGeneration(ctx, cfg.RepoRoot, thread, selected, p, record)
+		return persistNativeGeneration(ctx, cfg.RepoRoot, thread, selected, p, int(reader.binding.ModelWindow().NativeUsableWindow), record)
 	})
 	if err != nil {
 		return empty, err
@@ -147,6 +147,9 @@ func prepareNativeCodexDeferred(ctx context.Context, cfg config, req delivcli.Pr
 	}
 	if err := validateRuntime(ctx); err != nil {
 		return empty, err
+	}
+	if _, estimated := reader.binding.(nativecodex.WindowEstimate); estimated {
+		fmt.Fprintln(os.Stderr, "cxt: Codex context budget uses a catalog estimate; actual input and compaction are checked after the first turn")
 	}
 	failures := monitorNativeCodexLifecycle(life, handoff, func() {
 		fmt.Fprintln(os.Stderr, "cxt: native input feedback was not confirmed saved; the conversation remains active")
@@ -268,10 +271,10 @@ func validateNativeMeasuredBudget(ctx context.Context, reader outbound.AgentCapa
 // for release, and a correlated first-turn outcome. No successful process start
 // or injection ACK is written as model acceptance. Original question/config
 // and the transport's raw-history hash stay out of routine receipts.
-func persistNativeGeneration(ctx context.Context, root string, thread nativecodex.Thread, selected domain.AgentContextPackage, prepared nativecodex.PreparedGeneration,
+func persistNativeGeneration(ctx context.Context, root string, thread nativecodex.Thread, selected domain.AgentContextPackage, prepared nativecodex.PreparedGeneration, expectedWindow int,
 	record func(context.Context, delivcli.ProviderLaunchReceipt) error,
 ) (nativecodex.PreparedGeneration, error) {
-	if record == nil || prepared.Validate == nil || prepared.Observe == nil || len(prepared.History) != 1 || selected.Budget == nil {
+	if expectedWindow <= 0 || record == nil || prepared.Validate == nil || prepared.Observe == nil || len(prepared.History) != 1 || selected.Budget == nil {
 		return nativecodex.PreparedGeneration{}, domain.ErrDeliveryFailed
 	}
 	p, err := cloneAgentContextPackage(selected)
@@ -285,10 +288,14 @@ func persistNativeGeneration(ctx context.Context, root string, thread nativecode
 	if err = persistAgentInputPackage(ctx, root, p); err != nil {
 		return nativecodex.PreparedGeneration{}, nativeCodexGenerationFailure("package persistence", err)
 	}
+	measurement, err := domain.ValidateAgentTokenAccounting(p.Budget.InputAccountingPolicy, p.Provider, p.Budget.Tokenizer, p.Usage)
+	if err != nil {
+		return nativecodex.PreparedGeneration{}, err
+	}
 	receipt := delivcli.ProviderLaunchReceipt{Version: 1, Provider: p.Provider, Mode: p.Policy.Mode, RequestedBudget: p.Policy.BudgetTokens,
 		SessionID:   thread.ID,
 		PackageHash: p.ID, CodeCommit: p.Content.Selection.DeliveryCodeCommit(), SourceRevision: string(p.Content.Selection.ContextStateHash),
-		SelectedTokens: p.Usage.Tokens, TokenMeasurement: "exact", Capability: p.Capability, Budget: p.Budget,
+		SelectedTokens: p.Usage.Tokens, TokenMeasurement: string(measurement), Capability: p.Capability, Budget: p.Budget,
 		State: "package_prepared", Acceptance: "unknown"}
 	if err = record(ctx, receipt); err != nil {
 		return nativecodex.PreparedGeneration{}, nativeCodexGenerationFailure("preparation receipt", err)
@@ -316,6 +323,7 @@ func persistNativeGeneration(ctx context.Context, root string, thread nativecode
 		r := receipt
 		r.State = "first_turn_observed"
 		r.TurnID, r.Outcome = o.TurnID, o.Outcome
+		r.NativeInputObservation = nativeCodexInputObservation(*p.Budget, expectedWindow, o)
 		// Completion is recorded separately from fidelity or full-history use.
 		if o.Outcome == "completed" && !o.Ineligible && !o.ModelRerouted {
 			r.Acceptance = "first_turn_completed"

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,7 +15,7 @@ import (
 
 // WindowBinding is an invocation-local binding to native's configured packing
 // policy, not an account entitlement or a claim that inference will accept it.
-// Only StartWindowBound can create a usable binding. Private config/catalog
+// Only StartWindowBound or StartWindowPolicy can create a usable binding. Private config/catalog
 // contents and paths are never returned, serialized, or included in errors.
 type WindowBinding struct {
 	session     *Session
@@ -43,34 +42,17 @@ func (b WindowBinding) RuntimeScope() string     { return b.scope }
 // cannot prove their binding. Revalidation detects observed drift, not atomic
 // filesystem isolation (including an ABA edit entirely between observations).
 func StartWindowBound(ctx context.Context, opts Options, threadOpts ThreadOptions) (*Session, Thread, WindowBinding, error) {
+	opts, config, configHash, err := discoverWindowConfig(ctx, opts, threadOpts)
+	if err != nil {
+		return nil, Thread{}, WindowBinding{}, err
+	}
+	return startWindowBound(ctx, opts, threadOpts, config, configHash)
+}
+
+func startWindowBound(ctx context.Context, opts Options, threadOpts ThreadOptions, config map[string]json.RawMessage, configHash string) (*Session, Thread, WindowBinding, error) {
 	empty := WindowBinding{}
-	opts.ConfigArgs = append([]string(nil), opts.ConfigArgs...)
-	if opts.Env != nil {
-		opts.Env = append([]string{}, opts.Env...)
-	} else {
-		opts.Env = os.Environ()
-	}
-	if threadOpts.ModelProvider != "" && threadOpts.ModelProvider != "openai" {
-		return nil, Thread{}, empty, windowBindingError("thread provider catalog semantics unsupported")
-	}
-	discovery, err := Start(ctx, opts)
-	if err != nil {
-		return nil, Thread{}, empty, err
-	}
-	if !SupportedHostIdentity(discovery.HostIdentity()) {
-		_ = discovery.Close()
-		return nil, Thread{}, empty, windowBindingError("unsupported native version")
-	}
-	config, configHash, err := discovery.windowConfig(ctx, "")
-	closeErr := discovery.Close()
-	if err != nil {
-		return nil, Thread{}, empty, err
-	}
-	if closeErr != nil {
-		return nil, Thread{}, empty, closeErr
-	}
-	if err = windowStartupProvider(config); err != nil {
-		return nil, Thread{}, empty, err
+	if dynamicWindowCatalog(config) {
+		return nil, Thread{}, empty, windowBindingError("active dynamic catalog is not exposed by this native version")
 	}
 	var path string
 	if json.Unmarshal(config["model_catalog_json"], &path) != nil || !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n") {
@@ -196,6 +178,20 @@ func readWindowCatalog(path string) ([]byte, string, error) {
 }
 
 func (s *Session) windowConfig(ctx context.Context, path string) (map[string]json.RawMessage, string, error) {
+	config, hash, err := s.effectiveWindowConfig(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if dynamicWindowCatalog(config) {
+		return nil, "", windowBindingError("active dynamic catalog is not exposed by this native version")
+	}
+	if path != "" && !stringEquals(config["model_catalog_json"], path) {
+		return nil, "", windowBindingError("effective catalog mismatch")
+	}
+	return config, hash, nil
+}
+
+func (s *Session) effectiveWindowConfig(ctx context.Context) (map[string]json.RawMessage, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	raw, err := s.rpc.call(ctx, "config/read", map[string]any{"cwd": s.cwd, "includeLayers": false})
@@ -203,13 +199,8 @@ func (s *Session) windowConfig(ctx context.Context, path string) (map[string]jso
 		return nil, "", err
 	}
 	root, ok := identityObject(raw, "config")
-	config, valid := identityObject(root["config"])
-	if ok && valid {
-		if value, exists := config["model_catalog_json"]; !exists || string(value) == "null" {
-			return nil, "", windowBindingError("active dynamic catalog is not exposed by this native version")
-		}
-	}
-	if !ok || !valid || (path != "" && !stringEquals(config["model_catalog_json"], path)) {
+	config, valid := windowObject(root["config"], "model_catalog_json", "model_provider")
+	if !ok || !valid {
 		return nil, "", windowBindingError("effective catalog mismatch")
 	}
 	// Fingerprint a detached, version-normalized copy. The resolver receives the
@@ -222,10 +213,22 @@ func (s *Session) windowConfig(ctx context.Context, path string) (map[string]jso
 }
 
 func resolveBoundModelWindow(thread Thread, catalog []byte, config map[string]json.RawMessage) (ModelWindow, error) {
+	selected, err := windowCatalogModel(thread, catalog)
+	if err != nil {
+		return ModelWindow{}, err
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return ModelWindow{}, windowBindingError("invalid configuration")
+	}
+	return ResolveModelWindow(thread, thread.ModelProvider, selected, raw)
+}
+
+func windowCatalogModel(thread Thread, catalog []byte) (json.RawMessage, error) {
 	root, ok := identityObject(catalog, "models")
 	var models []json.RawMessage
 	if !ok || json.Unmarshal(root["models"], &models) != nil || len(models) == 0 || len(models) > 10000 {
-		return ModelWindow{}, windowBindingError("invalid catalog models")
+		return nil, windowBindingError("invalid catalog models")
 	}
 	seen := map[string]bool{}
 	var selected json.RawMessage
@@ -233,7 +236,7 @@ func resolveBoundModelWindow(thread Thread, catalog []byte, config map[string]js
 		item, ok := identityObject(raw, "slug")
 		var slug string
 		if !ok || json.Unmarshal(item["slug"], &slug) != nil || !windowIdentity(slug) || seen[slug] {
-			return ModelWindow{}, windowBindingError("ambiguous catalog model")
+			return nil, windowBindingError("ambiguous catalog model")
 		}
 		seen[slug] = true
 		if slug == thread.Model {
@@ -241,13 +244,9 @@ func resolveBoundModelWindow(thread Thread, catalog []byte, config map[string]js
 		}
 	}
 	if selected == nil {
-		return ModelWindow{}, windowBindingError("exact catalog model unavailable")
+		return nil, windowBindingError("exact catalog model unavailable")
 	}
-	raw, err := json.Marshal(config)
-	if err != nil {
-		return ModelWindow{}, windowBindingError("invalid configuration")
-	}
-	return ResolveModelWindow(thread, thread.ModelProvider, selected, raw)
+	return selected, nil
 }
 
 // The shared manager is constructed from startup config. An explicit thread

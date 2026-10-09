@@ -127,16 +127,22 @@ func nativeGenerationPackageFixture(t *testing.T, capability domain.AgentHostCap
 	t.Helper()
 	capability.InitialPromptTokens = len(question.Text())
 	questionUsage := domain.AgentTokenUsage{Exact: true, Tokens: len(question.Text()), Tokenizer: capability.Tokenizer}
+	if capability.Tokenizer == domain.UTF8ByteBoundCounter {
+		questionUsage.Exact, questionUsage.Scope, questionUsage.Reason = false, "text", "model_tokenizer_unavailable"
+	}
 	budget, err := capability.ResolveBudget(capability.Provider, capability.Model, domain.MaxAgentContextTokens, questionUsage)
 	if err != nil {
 		t.Fatal(err)
 	}
 	reservation, err := domain.NewAgentPromptReservation(question, capability.Provider, capability.Model, questionUsage)
+	if capability.InputAccountingPolicy == domain.CatalogEstimateReserveV1 {
+		reservation, err = domain.NewAgentPromptReservationForCapability(question, capability, questionUsage)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := domain.AgentContextPackage{
-		Version: domain.AgentContextVersion, Provider: domain.ProviderCodex, Delivery: "prepared", Capability: "verified_for_preparation",
+		Version: domain.AgentContextVersion, Provider: domain.ProviderCodex, Delivery: "prepared", Capability: budget.ExpectedPreparationCapability(),
 		Policy: domain.InputPolicy{Version: domain.AgentContextVersion, Mode: "history", BudgetTokens: domain.MaxAgentContextTokens, Source: "explicit"},
 		Budget: &budget,
 		Content: domain.AgentContextContent{
@@ -154,7 +160,8 @@ func nativeGenerationPackageFixture(t *testing.T, capability domain.AgentHostCap
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Usage = domain.AgentTokenUsage{Exact: true, Tokens: len(text), Tokenizer: capability.Tokenizer}
+	p.Usage = questionUsage
+	p.Usage.Tokens = len(text)
 	p.BindInitialPrompt(reservation)
 	p.ID, err = p.Digest()
 	if err != nil {

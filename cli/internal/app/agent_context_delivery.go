@@ -52,8 +52,8 @@ func (s *LoadSessionService) materializeAgentPackage(ctx context.Context, in inb
 		return inbound.LoadOutput{}, domain.ErrUnsupportedProvider
 	}
 	if in.Policy.Mode == "history" || p.Policy.Mode == "history" {
-		if p.Policy != in.Policy || p.Budget == nil || p.Capability != "verified_for_preparation" {
-			return inbound.LoadOutput{}, fmt.Errorf("%w: history delivery requires the original request and verified budget", domain.ErrProviderCapabilityUnknown)
+		if p.Policy != in.Policy || p.Budget == nil || p.Capability != p.Budget.ExpectedPreparationCapability() {
+			return inbound.LoadOutput{}, fmt.Errorf("%w: history delivery requires the original request and declared preparation budget", domain.ErrProviderCapabilityUnknown)
 		}
 		model := in.Model
 		if model == "" {

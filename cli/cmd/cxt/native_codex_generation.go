@@ -82,11 +82,15 @@ func (b nativeCodexGenerationBridge) checkPackage(p domain.AgentContextPackage, 
 	if err := p.ValidateIdentity(); err != nil {
 		return err
 	}
-	if p.ArtifactOnly || p.Policy.Mode != "history" || p.Capability != "verified_for_preparation" || p.Budget == nil ||
+	if p.Budget == nil {
+		return domain.ErrProviderCapabilityUnknown
+	}
+	estimated := p.Budget.InputAccountingPolicy == domain.CatalogEstimateReserveV1
+	if p.ArtifactOnly || p.Policy.Mode != "history" || p.Capability != p.Budget.ExpectedPreparationCapability() ||
 		p.Provider != domain.ProviderCodex || p.Budget.Provider != domain.ProviderCodex ||
 		p.Budget.Model != b.expected.Model || p.Budget.HostVersion != b.expectedHost ||
 		p.Budget.ContextWindow > b.expectedNativeWindow ||
-		p.Budget.InputAccountingPolicy != domain.MeasuredInputReserveV1 ||
+		(!estimated && p.Budget.InputAccountingPolicy != domain.MeasuredInputReserveV1) ||
 		p.Content.Selection.SourcePolicy != domain.AgentSourceLatestMain {
 		return domain.ErrProviderCapabilityUnknown
 	}
@@ -162,9 +166,13 @@ func (b nativeCodexGenerationBridge) prepareGeneration(ctx context.Context, thre
 	if err := validate(ctx); err != nil {
 		return empty, err
 	}
-	scope, err := nativeCodexGenerationCalibrationScope(*p.Budget)
-	if err != nil {
-		return empty, nativeCodexGenerationFailure("calibration scope", err)
+	estimated := p.Budget.InputAccountingPolicy == domain.CatalogEstimateReserveV1
+	var scope domain.ContentHash
+	if !estimated {
+		scope, err = nativeCodexGenerationCalibrationScope(*p.Budget)
+		if err != nil {
+			return empty, nativeCodexGenerationFailure("calibration scope", err)
+		}
 	}
 	// Budget validation bounded both terms inside InitialInputLimit. This sum
 	// excludes host/framing/reserve tokens, which native total input measures.
@@ -175,6 +183,16 @@ func (b nativeCodexGenerationBridge) prepareGeneration(ctx context.Context, thre
 		}
 		if observed.ThreadID != thread.ID || !domain.ValidSessionID(observed.TurnID) {
 			return nativeCodexGenerationFailure("observation identity", domain.ErrHashMismatch)
+		}
+		if estimated {
+			// A cache estimate is not a runtime descriptor. A different observed
+			// window is recorded in the launch journal, never a fatal session
+			// error or authorization to replay the already-submitted question.
+			// Inexact text counts must not be used to calibrate token overhead.
+			if observed.ModelContextWindow < 0 || observed.TotalInputTokens < 0 {
+				return nativeCodexGenerationFailure("observation counts", domain.ErrProviderCapabilityUnknown)
+			}
+			return checkSnapshot(ctx)
 		}
 		if observed.Ineligible || observed.ModelRerouted {
 			return nil // no feedback may cross the prepared runtime/model scope

@@ -214,8 +214,8 @@ type AgentTokenUsage struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// AgentHostCapability must come from a verified adapter, not a larger arbitrary
-// model_context_window setting. Prepared is not provider-accepted.
+// AgentHostCapability must come from adapter evidence, not an arbitrary window
+// setting. Catalog estimates explicitly remain unverified runtime capacity.
 type AgentHostCapability struct {
 	Provider        ProviderKind `json:"provider"`
 	Model           string       `json:"model"`
@@ -242,6 +242,11 @@ type AgentHostCapability struct {
 	InputAccountingPolicy string                `json:"input_accounting_policy,omitempty"`
 	RuntimeScope          ContentHash           `json:"runtime_scope,omitempty"`
 	Calibration           AgentInputCalibration `json:"-"`
+	// Catalog estimate policy only: preserve the adapter's model-cache provenance.
+	WindowEstimateSource        string      `json:"window_estimate_source,omitempty"`
+	WindowEstimateObservedAt    string      `json:"window_estimate_observed_at,omitempty"`
+	WindowEstimateHash          ContentHash `json:"window_estimate_hash,omitempty"`
+	WindowEstimateClientVersion string      `json:"window_estimate_client_version,omitempty"`
 	// Native estimate policy only. The baseline precedes reference append and
 	// is not known exact host input. A measurement tag distinguishes zero from
 	// absent evidence. FramingAllowanceTokens covers the reference projection.
@@ -321,8 +326,11 @@ func (p AgentContextPackage) ValidateIdentity() error {
 	if err := p.Content.Selection.ValidateSource(); err != nil {
 		return err
 	}
+	if p.Capability == "estimated_for_preparation" && p.Budget == nil {
+		return ErrAgentContextUnavailable
+	}
 	if p.Budget != nil {
-		if p.Policy.Mode != "history" || p.ArtifactOnly || p.Capability != "verified_for_preparation" {
+		if p.Policy.Mode != "history" || p.ArtifactOnly || p.Capability != p.Budget.ExpectedPreparationCapability() {
 			return ErrAgentContextUnavailable
 		}
 		if err := p.Budget.Validate(p.Budget.Provider, p.Budget.Model, p.Policy.BudgetTokens, p.Usage); err != nil {

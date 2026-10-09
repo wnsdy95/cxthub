@@ -48,8 +48,8 @@ func NewAgentPromptReservation(prompt AgentInitialPrompt, provider ProviderKind,
 }
 
 // NewAgentPromptReservationForCapability binds the actual question to the
-// capability-owned policy and runtime scope. It does not confer runtime authority.
-// Native allowances count actual UTF-8 bytes, never runes or an estimated codec.
+// capability-owned policy, runtime scope and catalog provenance. It does not
+// confer runtime authority. Allowances count UTF-8 bytes, never runes.
 func NewAgentPromptReservationForCapability(prompt AgentInitialPrompt, c AgentHostCapability, usage AgentTokenUsage) (AgentPromptReservation, error) {
 	if usage.Tokenizer != c.Tokenizer {
 		return AgentPromptReservation{}, ErrProviderCapabilityUnknown
@@ -60,18 +60,25 @@ func NewAgentPromptReservationForCapability(prompt AgentInitialPrompt, c AgentHo
 	}
 	validate := r.validate
 	policy, scope := c.InputAccountingPolicy, c.RuntimeScope
+	source, observedAt, hash := c.WindowEstimateSource, c.WindowEstimateObservedAt, c.WindowEstimateHash
+	clientVersion := c.WindowEstimateClientVersion
 	r.validateBudget = func(actual AgentInitialPrompt, b AgentContextBudget) error {
-		if b.InputAccountingPolicy != policy || b.RuntimeScope != scope {
+		if b.InputAccountingPolicy != policy || b.RuntimeScope != scope || b.WindowEstimateSource != source || b.WindowEstimateObservedAt != observedAt || b.WindowEstimateHash != hash || b.WindowEstimateClientVersion != clientVersion {
 			return fmt.Errorf("%w: initial prompt policy or runtime changed", ErrProviderCapabilityUnknown)
 		}
 		return validate(actual, b.Provider, b.Model, b.Tokenizer, b.InitialPromptTokens)
 	}
-	if policy == NativeEstimateReserveV1 {
+	if policy == CatalogEstimateReserveV1 {
+		if err := c.validateWindowEstimate(); err != nil {
+			return AgentPromptReservation{}, err
+		}
+	}
+	if policy == NativeEstimateReserveV1 || policy == CatalogEstimateReserveV1 {
 		if ValidateContentHash(scope) != nil {
 			return AgentPromptReservation{}, ErrProviderCapabilityUnknown
 		}
 		// The legacy API has no policy/scope parameters and cannot authorize an
-		// allowance reservation, even when its text and numeric count match.
+		// estimate reservation, even when its text and numeric count match.
 		r.validate = func(AgentInitialPrompt, ProviderKind, string, string, int) error {
 			return ErrProviderCapabilityUnknown
 		}
@@ -108,13 +115,13 @@ func newAgentPromptReservation(prompt AgentInitialPrompt, provider ProviderKind,
 }
 
 // ValidateForBudget retains the opaque byte/presence binding and also verifies
-// policy/scope for reservations created from a runtime capability.
+// policy/scope/provenance for reservations created from a runtime capability.
 func (r AgentPromptReservation) ValidateForBudget(prompt AgentInitialPrompt, b AgentContextBudget) error {
 	if r.validateBudget != nil {
 		return r.validateBudget(prompt, b)
 	}
-	// A decoded/legacy reservation cannot authorize the new allowance policy.
-	if b.InputAccountingPolicy == NativeEstimateReserveV1 {
+	// A decoded/legacy reservation cannot authorize an estimate policy.
+	if b.InputAccountingPolicy == NativeEstimateReserveV1 || b.InputAccountingPolicy == CatalogEstimateReserveV1 {
 		return ErrProviderCapabilityUnknown
 	}
 	return r.Validate(prompt, b.Provider, b.Model, b.Tokenizer, b.InitialPromptTokens)

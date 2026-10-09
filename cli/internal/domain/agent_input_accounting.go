@@ -5,6 +5,10 @@ import "fmt"
 const NativeEstimateReserveV1 = "native_estimate_reserve_v1"
 const NativeLocalEstimate = "local_estimate"
 
+// CatalogEstimateReserveV1 uses unverified Codex model-cache window evidence.
+// Exact owned-text accounting does not promote that evidence to runtime authority.
+const CatalogEstimateReserveV1 = "catalog_estimate_reserve_v1"
+
 // AgentTextAccounting describes owned text, not the assembled native request.
 type AgentTextAccounting string
 
@@ -24,14 +28,22 @@ func ValidateAgentTokenAccounting(policy string, provider ProviderKind, tokenize
 		kind = AgentTextExact
 	case NativeEstimateReserveV1:
 		kind = AgentTextUTF8Allowance
+	case CatalogEstimateReserveV1:
+		kind = AgentTextExact
+		if !usage.Exact {
+			kind = AgentTextUTF8Allowance
+		}
 	default:
 		return "", fmt.Errorf("%w: unsupported input accounting policy", ErrProviderCapabilityUnknown)
 	}
 	valid := (provider == ProviderCodex || provider == ProviderClaude) && tokenizer != "" && usage.Tokenizer == tokenizer
 	if kind == AgentTextExact {
 		valid = valid && usage.Exact
+		if policy == CatalogEstimateReserveV1 {
+			valid = valid && provider == ProviderCodex && tokenizer != UTF8ByteBoundCounter && (usage.Scope == "" || usage.Scope == "text") && usage.Reason == ""
+		}
 	} else {
-		valid = valid && provider == ProviderClaude && !usage.Exact && tokenizer == UTF8ByteBoundCounter && usage.Scope == "text" && usage.Reason == "model_tokenizer_unavailable"
+		valid = valid && ((policy == NativeEstimateReserveV1 && provider == ProviderClaude) || (policy == CatalogEstimateReserveV1 && provider == ProviderCodex)) && !usage.Exact && tokenizer == UTF8ByteBoundCounter && usage.Scope == "text" && usage.Reason == "model_tokenizer_unavailable"
 	}
 	if !valid {
 		return kind, fmt.Errorf("%w: text accounting does not match its input policy", ErrProviderCapabilityUnknown)

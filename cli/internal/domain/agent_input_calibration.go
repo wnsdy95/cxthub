@@ -41,8 +41,8 @@ func (c AgentInputCalibration) Merge(other AgentInputCalibration) (AgentInputCal
 // The adapter must change RuntimeScope when routing, account or effective
 // instruction/tool settings change. The hash is not a capacity attestation.
 func (c AgentHostCapability) CalibrationScope() (ContentHash, error) {
-	if c.InputAccountingPolicy == NativeEstimateReserveV1 {
-		return "", fmt.Errorf("%w: native estimates do not authorize measured calibration", ErrProviderCapabilityUnknown)
+	if c.InputAccountingPolicy == NativeEstimateReserveV1 || c.InputAccountingPolicy == CatalogEstimateReserveV1 || c.hasWindowEstimate() {
+		return "", fmt.Errorf("%w: estimates do not authorize measured calibration", ErrProviderCapabilityUnknown)
 	}
 	if !c.Verified || c.Evidence == "" || (c.Provider != ProviderCodex && c.Provider != ProviderClaude) || c.Model == "" || c.HostVersion == "" || c.Tokenizer == "" || c.ContextWindow <= 0 || ValidateContentHash(c.RuntimeScope) != nil {
 		return "", fmt.Errorf("%w: runtime scope and model window evidence are required", ErrProviderCapabilityUnknown)
