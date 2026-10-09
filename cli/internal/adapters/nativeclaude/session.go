@@ -530,7 +530,7 @@ func validArgs(args []string, version string) bool {
 	if len(args) > 128 || version != supportedVersion {
 		return false
 	}
-	values := map[string]bool{"--settings": true, "--setting-sources": true, "--mcp-config": true, "--tools": true, "--allowedTools": true, "--disallowedTools": true, "--add-dir": true, "--plugin-dir": true, "--agent": true, "--system-prompt": true, "--append-system-prompt": true, "--system-prompt-file": true, "--append-system-prompt-file": true, "--effort": true, "--permission-mode": true}
+	values := map[string]bool{"--settings": true, "--setting-sources": true, "--mcp-config": true, "--tools": true, "--allowedTools": true, "--disallowedTools": true, "--add-dir": true, "--plugin-dir": true, "--agent": true, "--system-prompt": true, "--append-system-prompt": true, "--system-prompt-file": true, "--append-system-prompt-file": true, "--effort": true, "--permission-mode": true, "--name": true}
 	for i := 0; i < len(args); i++ {
 		name, value, equal := strings.Cut(args[i], "=")
 		if standaloneConfigFlag(name, version) && !equal {

@@ -556,6 +556,63 @@ func TestFirstExchangeAdmissionNeverWritesOnFailure(t *testing.T) {
 	}
 }
 
+func TestAdmissionErrorFormatting(t *testing.T) {
+	redacted := admissionError{cause: errors.New("PRIVATE_SOURCE_CAUSE")}
+	for _, err := range []error{redacted, &redacted} {
+		for _, format := range []string{"%v", "%+v", "%#v"} {
+			if fmt.Sprintf(format, err) != ErrAdmission.Error() {
+				t.Errorf("admission error did not redact its cause with %s", format)
+			}
+		}
+	}
+}
+
+func TestFirstExchangeAdmissionPreservesRedactedCause(t *testing.T) {
+	for _, joined := range []bool{false, true} {
+		t.Run(fmt.Sprintf("joined=%t", joined), func(t *testing.T) {
+			f := newFirstExchangeFixture(t, "normal")
+			s := f.start(t, true)
+			cause := errors.New("PRIVATE_SOURCE_CAUSE")
+			source := &os.PathError{Op: "read", Path: "PRIVATE_SOURCE_PATH", Err: cause}
+			callbackErr := fmt.Errorf("PRIVATE_CALLBACK: %w", source)
+			if joined {
+				callbackErr = errors.Join(callbackErr, errors.New("PRIVATE_SECOND_CAUSE"))
+			}
+			calls := 0
+			result, err := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_QUESTION", func(context.Context, FirstQuestionEvidence) error {
+				calls++
+				return callbackErr
+			}, InteractionHandlers{})
+			if result != (FirstExchangeResult{}) || !errors.Is(err, ErrAdmission) {
+				t.Error("rejected admission must return only an admission failure")
+			}
+			for _, returned := range []error{err, s.Close()} {
+				if !errors.Is(returned, ErrAdmission) || !errors.Is(returned, cause) || !errors.Is(returned, callbackErr) {
+					t.Error("admission or original source cause lost across rejection/cleanup")
+				}
+				var got *os.PathError
+				if !errors.As(returned, &got) || got != source {
+					t.Error("original typed source error was not preserved")
+				}
+				for _, format := range []string{"%v", "%+v", "%#v"} {
+					if strings.Contains(fmt.Sprintf(format, returned), "PRIVATE") {
+						t.Errorf("admission failure exposed private data with %s", format)
+					}
+				}
+			}
+			if _, retryErr := s.RunOrdinary(firstExchangeRunContext(t), "PRIVATE_RETRY", func(context.Context, FirstQuestionEvidence) error {
+				calls++
+				return nil
+			}, InteractionHandlers{}); !errors.Is(retryErr, ErrState) {
+				t.Error("rejected admission did not consume the one-shot exchange")
+			}
+			if calls != 1 || len(f.queries(t)) != 0 {
+				t.Fatal("rejected admission retried or wrote a question")
+			}
+		})
+	}
+}
+
 func TestFirstExchangeSummaryAndLaunchDrift(t *testing.T) {
 	for _, mode := range []string{"summary-total-drift", "summary-model-drift", "summary-window-drift", "summary-threshold-drift", "summary-used", "launch-before", "launch-after"} {
 		t.Run(mode, func(t *testing.T) {
