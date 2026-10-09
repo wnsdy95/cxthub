@@ -15,6 +15,15 @@ var (
 	ErrUnsupported        = errors.New("native Claude interaction or transcript form is unsupported")
 )
 
+// Preserve the caller's typed failure without rendering private source details.
+type admissionError struct{ cause error }
+
+func (admissionError) Error() string          { return ErrAdmission.Error() }
+func (e admissionError) String() string       { return e.Error() }
+func (e admissionError) GoString() string     { return e.Error() }
+func (e admissionError) Unwrap() error        { return e.cause }
+func (e admissionError) Is(target error) bool { return target == ErrAdmission }
+
 // FirstExchange is an owned first-question transport for 2.1.287. The CLI
 // composition supplies source/budget admission and user interaction handlers.
 // The transport does not itself grant tools or measure exact tokens.
@@ -154,7 +163,7 @@ func (e *FirstExchange) RunOrdinary(ctx context.Context, question string, admit 
 		if ctx.Err() != nil {
 			return result, ctx.Err()
 		}
-		return result, ErrAdmission
+		return result, admissionError{cause: err}
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
