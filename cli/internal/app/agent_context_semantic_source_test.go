@@ -156,8 +156,8 @@ func TestAgentSemanticSourceRejectsWritesBetweenCurrentReads(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				// A prior unrelated generation is allowed, a write inside the
-				// three current reads is not, even with matching semantic proofs.
+				// Continuous writes must exhaust the bounded read retry; no
+				// mixed-generation set becomes valid just because proofs match.
 				rev := *h.view.Revision
 				rev.Graph += 10
 				h.view.Revision, m.rev = &rev, rev
@@ -173,7 +173,7 @@ func TestAgentSemanticSourceRejectsWritesBetweenCurrentReads(t *testing.T) {
 				historyCalls := 0
 				s.history = retryHistoryFunc(func(ctx context.Context, in inbound.HistoryQueryInput) (domain.HistoryQueryResult, error) {
 					historyCalls++
-					if stage == "last history" && historyCalls == 2 {
+					if stage == "last history" && historyCalls%2 == 0 {
 						advance()
 					}
 					return h.QueryHistory(ctx, in)
@@ -188,6 +188,77 @@ func TestAgentSemanticSourceRejectsWritesBetweenCurrentReads(t *testing.T) {
 				err = s.ValidateLatestMain(context.Background(), in.Cwd, p.Content.Selection)
 				if !errors.Is(err, domain.ErrSelectionChanged) || !strings.Contains(err.Error(), "current source reads changed") || !strings.Contains(err.Error(), counter+"_revision=") {
 					t.Fatal("mixed current generation accepted or opaque", err)
+				}
+				want := 3
+				if stage == "last history" {
+					want = 6
+				}
+				if historyCalls != want {
+					t.Fatalf("read retry not bounded: %d calls, want %d", historyCalls, want)
+				}
+			})
+		}
+	}
+}
+
+func TestAgentSemanticSourceRetriesConcurrentUnrelatedWrite(t *testing.T) {
+	for _, stage := range []string{"memory", "last history"} {
+		for _, change := range []string{"unrelated", "history changed", "memory changed", "permission revoked", "cancelled"} {
+			t.Run(stage+"/"+change, func(t *testing.T) {
+				s, in, h, m := semanticAgentFixture(t)
+				p, err := s.PrepareAgentContext(context.Background(), in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				advanced := false
+				advance := func() {
+					rev := *h.view.Revision
+					rev.Evidence++
+					h.view.Revision, m.rev = &rev, rev
+					advanced = true
+				}
+				hc, mc := 0, 0
+				s.history = retryHistoryFunc(func(ctx context.Context, query inbound.HistoryQueryInput) (domain.HistoryQueryResult, error) {
+					hc++
+					if advanced {
+						switch change {
+						case "history changed":
+							h.view.DeliveryStateHash = agentHash("changed selected content")
+						case "permission revoked":
+							return domain.HistoryQueryResult{}, errors.New("permission revoked")
+						case "cancelled":
+							cancel()
+						}
+					}
+					if stage == "last history" && hc == 2 {
+						advance()
+					}
+					return h.QueryHistory(ctx, query)
+				})
+				memory := s.memory
+				s.memory = promptReadFunc(func(ctx context.Context, repo string, req domain.EffectiveMemoryRequest) (domain.EffectiveMemoryPage, error) {
+					mc++
+					if stage == "memory" && mc == 1 {
+						advance()
+					}
+					v, err := memory.QueryEffectiveMemory(ctx, repo, req)
+					if mc > 1 && change == "memory changed" {
+						v.DeliveryStateHash = agentHash("changed selected memory")
+					}
+					return v, err
+				})
+				err = s.ValidateLatestMain(ctx, in.Cwd, p.Content.Selection)
+				if change == "unrelated" {
+					if err != nil || mc != 2 {
+						t.Fatal("stable authorized retry failed", err)
+					}
+				} else if err == nil {
+					t.Fatal("retry accepted source drift or lost authorization")
+				}
+				if hc > 4 || mc > 2 {
+					t.Fatal("retried a changed source or failed authorization")
 				}
 			})
 		}

@@ -159,12 +159,29 @@ func nativeHelper() {
 				}
 			case "config/read":
 				result = map[string]any{"config": map[string]any{"web_search": "disabled"}}
+				switch mode {
+				case "search-omitted", "search-unloaded":
+					result = json.RawMessage(`{"config":{}}`)
+				case "search-null":
+					result = json.RawMessage(`{"config":{"web_search":null}}`)
+				case "search-invalid":
+					result = json.RawMessage(`{"config":{"web_search":true}}`)
+				case "search-aliased":
+					result = json.RawMessage(`{"config":{"Web_Search":"live"}}`)
+				case "search-duplicate":
+					result = json.RawMessage(`{"config":{"web_search":null,"web_search":"live"}}`)
+				}
 				if strings.HasPrefix(mode, "window-") {
 					raw, _ := os.ReadFile(os.Getenv("CXT_NATIVE_WINDOW_CONFIG"))
 					result = map[string]any{"config": json.RawMessage(raw)}
 				}
 			case "thread/loaded/list":
 				result = map[string]any{"data": []string{"fresh-fixture-thread"}}
+				if mode == "search-unloaded" {
+					result = map[string]any{"data": []string{}}
+				}
+			case "thread/unsubscribe":
+				result = map[string]any{"status": "unsubscribed"}
 			case "thread/section/move":
 				if mode == "materialize-invalid" {
 					result = map[string]any{"unexpected": true}

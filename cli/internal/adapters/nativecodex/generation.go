@@ -21,13 +21,15 @@ const generationPersistenceTimeout = 5 * time.Second
 // preparation. The bounded queue carries bytes only; all protocol decisions
 // still run serially in the relay. Overflow cancels rather than hiding a close
 // behind an unbounded queue. stop joins the reader on every relay exit.
-func (h *Handoff) readGenerationClient(conn *websocket.Conn) (func() (websocket.MessageType, []byte, error), func()) {
+func (h *Handoff) readGenerationClient(conn *websocket.Conn, state *handoffProtocol) (func() (websocket.MessageType, []byte, error), func()) {
 	type frame struct {
 		kind websocket.MessageType
 		data []byte
 	}
 	ctx, cancel := context.WithCancel(h.ctx)
-	queue := make(chan frame, 8)
+	// Stock TUI startup issues concurrent inspections while preparation waits.
+	// Accommodate the protocol's existing request bound, not just eight frames.
+	queue := make(chan frame, maxHandoffPendingRequests)
 	done := make(chan struct{})
 	var queuedBytes atomic.Int64
 	go func() {
@@ -37,7 +39,11 @@ func (h *Handoff) readGenerationClient(conn *websocket.Conn) (func() (websocket.
 			kind, data, err := conn.Read(ctx)
 			if err != nil {
 				if ctx.Err() == nil {
-					h.finish(ErrClosed)
+					if queuedBytes.Load() > 0 && state.clientExiting() {
+						h.finish(handoffError("queued request after client exit"))
+					} else {
+						h.finish(state.clientReadError(err))
+					}
 				}
 				return
 			}
@@ -60,6 +66,13 @@ func (h *Handoff) readGenerationClient(conn *websocket.Conn) (func() (websocket.
 		case f, ok := <-queue:
 			if !ok || ctx.Err() != nil {
 				return 0, nil, ErrClosed
+			}
+			// Check before releasing queuedBytes: a concurrent close must not
+			// erase an unvalidated frame that followed terminal unsubscribe.
+			if state.clientExiting() {
+				err := handoffError("request after client exit")
+				h.finish(err)
+				return 0, nil, err
 			}
 			queuedBytes.Add(-int64(len(f.data)))
 			return f.kind, f.data, nil

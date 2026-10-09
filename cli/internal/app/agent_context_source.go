@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -20,6 +21,24 @@ func (s *AgentContextService) ValidateLatestMain(ctx context.Context, cwd string
 	if selected.SourcePolicy != domain.AgentSourceLatestMain || s == nil || s.history == nil || s.memory == nil {
 		return domain.ErrAgentContextUnavailable
 	}
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		err = s.validateLatestMainReads(ctx, cwd, selected)
+		var mixed *agentSourceReadChanged
+		if selected.ContextDeliveryHash == "" || !errors.As(err, &mixed) {
+			return err
+		}
+		// Retry reads only when both semantic proofs matched but repository
+		// generations straddled a concurrent write. Never retry changed source,
+		// revoked access, injection, or a model request.
+	}
+	return err
+}
+
+func (s *AgentContextService) validateLatestMainReads(ctx context.Context, cwd string, selected domain.AgentContextSelection) error {
 	semantic := selected.ContextDeliveryHash != "" // ValidateSource requires both.
 	query := inbound.HistoryQueryInput{Cwd: cwd, Server: true, ServerTip: true, Branch: "main"}
 	check := func() (domain.RepositoryRevision, error) {
@@ -73,10 +92,15 @@ func (s *AgentContextService) ValidateLatestMain(ctx context.Context, cwd string
 
 func sameAgentReadRevision(stage string, before, after domain.RepositoryRevision) error {
 	if before.Graph != after.Graph || before.Evidence != after.Evidence {
-		return fmt.Errorf("%w: current source reads changed during validation (%s, graph_revision=%d->%d, evidence_revision=%d->%d)", domain.ErrSelectionChanged, stage, before.Graph, after.Graph, before.Evidence, after.Evidence)
+		return &agentSourceReadChanged{fmt.Errorf("%w: current source reads changed during validation (%s, graph_revision=%d->%d, evidence_revision=%d->%d)", domain.ErrSelectionChanged, stage, before.Graph, after.Graph, before.Evidence, after.Evidence)}
 	}
 	return nil
 }
+
+type agentSourceReadChanged struct{ cause error }
+
+func (e *agentSourceReadChanged) Error() string { return e.cause.Error() }
+func (e *agentSourceReadChanged) Unwrap() error { return e.cause }
 
 // A retry can cross repository generations only while the selected semantic
 // source is unchanged. Proof appearance/disappearance is never an equivalence.

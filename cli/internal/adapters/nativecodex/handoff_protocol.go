@@ -3,11 +3,17 @@ package nativecodex
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/coder/websocket"
 )
+
+const maxHandoffPendingRequests = 64
 
 // Inspection is the default. The optional generation state permits only turns
 // and correlated approvals on the owned thread; config writes and forks remain
@@ -21,7 +27,10 @@ type handoffProtocol struct {
 	initSent, initAck, initialized, resumeSent, resumed bool
 	frames, bytes                                       int
 	deniedAuxiliary                                     int
+	deniedInspections                                   int
+	unsubscribeSent, unsubscribed                       bool
 	generation                                          *generationProtocol
+	defaultInstructions                                 json.RawMessage
 }
 
 func newHandoffProtocol(thread Thread, raw json.RawMessage, search string) *handoffProtocol {
@@ -33,7 +42,10 @@ func handoffError(reason string) error { return fmt.Errorf("%w: handoff %s", Err
 
 // Deny native title-generation requests locally. They must not create a second
 // model request, consume the initial input budget, or disconnect the owned turn.
-type deniedAuxiliaryRequest struct{ id json.RawMessage }
+type deniedAuxiliaryRequest struct {
+	id         json.RawMessage
+	inspection bool
+}
 
 func (*deniedAuxiliaryRequest) Error() string { return "auxiliary generation unavailable" }
 
@@ -92,6 +104,11 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 				return false, handoffError("server request before generation enabled")
 			}
 			if p.generation != nil {
+				if method == "thread/settings/updated" {
+					if err := p.observeGenerationSettings(f["params"]); err != nil {
+						return false, err
+					}
+				}
 				return false, p.generation.notification(method, f["params"])
 			}
 			return false, nil // notifications never establish readiness
@@ -103,7 +120,7 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 			p.initialized = true
 			return false, nil
 		}
-		if _, exists := p.pending[key]; exists || len(p.pending) >= 64 {
+		if _, exists := p.pending[key]; exists || len(p.pending) >= maxHandoffPendingRequests {
 			return false, handoffError("duplicate or excessive requests")
 		}
 		params, ok := rpcObject(f["params"])
@@ -125,7 +142,15 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 			if !p.initialized {
 				return false, handoffError("not initialized")
 			}
+			if p.unsubscribeSent {
+				return false, handoffError("client is exiting")
+			}
 			switch method {
+			case "thread/unsubscribe":
+				if !p.resumed || len(params) != 1 || !stringEquals(params["threadId"], p.thread.ID) {
+					return false, handoffError("invalid client exit")
+				}
+				p.unsubscribeSent = true
 			case "thread/start":
 				if p.resumed && p.generation != nil && p.deniedAuxiliary < 16 &&
 					string(params["ephemeral"]) == "true" && stringEquals(params["threadSource"], "thread_title") {
@@ -147,9 +172,43 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 				p.resumeSent = true
 			case "thread/read", "thread/turns/list", "thread/items/list", "thread/goal/get":
 				if !stringEquals(params["threadId"], p.thread.ID) {
+					if method == "thread/read" && p.deniedInspections < 128 && observationID(params["threadId"]) {
+						p.deniedInspections++
+						return false, &deniedAuxiliaryRequest{id: append(json.RawMessage(nil), id...), inspection: true}
+					}
 					return false, handoffError("different thread requested")
 				}
-			case "account/read", "config/read", "configRequirements/read", "hooks/list", "model/list", "collaborationMode/list", "thread/loaded/list", "thread/list", "skills/list", "plugin/list", "app/list", "mcpServerStatus/list":
+			case "app/installed":
+				// Only inspect the committed connector snapshot. A forced refresh
+				// changes model-visible tools and invalidates the prepared budget.
+				if !stringEquals(params["threadId"], p.thread.ID) {
+					return false, handoffError("different thread requested")
+				}
+				for key, value := range params {
+					if key != "threadId" && (key != "forceRefresh" || string(value) != "false") {
+						return false, handoffError("connector refresh not permitted")
+					}
+				}
+			case "app/read":
+				if !stringEquals(params["threadId"], p.thread.ID) {
+					return false, handoffError("different thread requested")
+				}
+				for key, value := range params {
+					switch key {
+					case "threadId", "appIds":
+					case "includeTools":
+						if string(value) != "true" && string(value) != "false" {
+							return false, handoffError("invalid connector metadata read")
+						}
+					default:
+						return false, handoffError("invalid connector metadata read")
+					}
+				}
+				var ids []string
+				if json.Unmarshal(params["appIds"], &ids) != nil || ids == nil || len(ids) > 100 {
+					return false, handoffError("invalid connector metadata read")
+				}
+			case "account/read", "account/rateLimits/read", "config/read", "configRequirements/read", "hooks/list", "model/list", "collaborationMode/list", "thread/loaded/list", "thread/list", "skills/list", "plugin/list", "app/list", "mcpServerStatus/list":
 			default:
 				return false, handoffError("operation requires a separate generation or mutation gate")
 			}
@@ -175,12 +234,18 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 		return false, p.generation.startResponse(key, f["result"], hasError)
 	}
 	if hasError {
-		if method == "initialize" || method == "thread/resume" {
+		if method == "initialize" || method == "thread/resume" || method == "thread/unsubscribe" {
 			return false, handoffError("native initialization or resume rejected")
 		}
 		return false, nil // inspection errors can be displayed by the native UI
 	}
 	switch method {
+	case "thread/unsubscribe":
+		ack, ok := identityObject(f["result"], "status")
+		if !ok || !stringEquals(ack["status"], "unsubscribed") {
+			return false, handoffError("client exit was not acknowledged")
+		}
+		p.unsubscribed = true
 	case "initialize":
 		init, ok := identityObject(f["result"], "userAgent")
 		var host string
@@ -196,6 +261,37 @@ func (p *handoffProtocol) observe(data []byte, client bool) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func (p *handoffProtocol) clientCloseError() error {
+	if p != nil {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.unsubscribed {
+			return ErrClientExit
+		}
+	}
+	return ErrClosed
+}
+
+func (p *handoffProtocol) clientReadError(err error) error {
+	if errors.Is(err, websocket.ErrMessageTooBig) {
+		return handoffError("incoming message too large")
+	}
+	status := websocket.CloseStatus(err)
+	if errors.Is(err, io.EOF) || status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway || status == websocket.StatusNoStatusRcvd {
+		return p.clientCloseError()
+	}
+	return ErrClosed
+}
+
+func (p *handoffProtocol) clientExiting() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.unsubscribeSent
 }
 
 func handoffID(raw json.RawMessage) (string, bool) {
@@ -265,7 +361,7 @@ func (p *handoffProtocol) resumeParams(params map[string]json.RawMessage) bool {
 					return false
 				}
 				for k, v := range config {
-					if k != "web_search" || !stringEquals(v, p.search) {
+					if k != "web_search" || !p.preservesSearch(v) {
 						return false
 					}
 				}
