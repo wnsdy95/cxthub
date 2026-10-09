@@ -23,7 +23,7 @@ BOUND = 45
 POLL = 0.02
 LIVE_EVENTS = {"live-watch", "live-capture", "live-publish"}
 EVENTS = {"branch-replay", "branch-deletion-finalize", "pending-sync",
-          "branch-state-sync", "historical-sync"} | LIVE_EVENTS
+          "branch-state-sync", "capture-replay", "historical-sync"} | LIVE_EVENTS
 HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 

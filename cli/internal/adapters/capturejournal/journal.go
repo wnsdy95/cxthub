@@ -206,3 +206,24 @@ func (j *Journal) WriteCaptureResolution(ctx context.Context, r domain.CaptureRe
 		return nil
 	})
 }
+
+func (j *Journal) ReadCaptureRetry(ctx context.Context, p domain.CaptureAttempt) (*domain.CaptureRetryState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	raw, err := providerfs.ReadRepoFile(j.root, filepath.Join(".cxt", "worktrees", p.Proof.WorktreeID, "capture-retries", p.Proof.ID+".json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var r domain.CaptureRetryState
+	if json.Unmarshal(raw, &r) != nil || r.Version != 1 || r.Attempt != p.Proof.ID || r.Tries < 1 || r.Tries > 8 || r.Next.IsZero() {
+		return nil, domain.ErrHashMismatch
+	}
+	return &r, nil
+}

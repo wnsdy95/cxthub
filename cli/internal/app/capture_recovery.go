@@ -75,17 +75,39 @@ func (s *CaptureRecoveryService) inspect(ctx context.Context, repo string, disco
 			return nil, nil, err
 		}
 		st := domain.CaptureRecoveryStatus{ID: p.Proof.ID, RepoID: repo, WorktreeID: p.Proof.WorktreeID, Branch: p.Proof.Branch, CodeCommit: p.Proof.GitAfter, Fingerprint: p.Fingerprint(), State: "needs-review", Outcomes: p.Outcomes}
+		// Diagnostics expose provenance and hashes, never private native-memory
+		// bodies from the replay receipt (which may contain unmasked secrets).
+		st.Outcomes = append([]domain.CaptureOutcome(nil), p.Outcomes...)
+		for i, o := range st.Outcomes {
+			if o.Input != nil {
+				input := *o.Input
+				input.NativeMemory = nil
+				st.Outcomes[i].Input = &input
+			}
+		}
+		if retryReader, ok := s.journal.(outbound.CaptureRetryReader); ok {
+			st.Retry, err = retryReader.ReadCaptureRetry(ctx, p)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 		if p.Complete {
 			st.State = "ready-to-publish"
 			if p.Proof.Target == "" || acceptedPublication(p, accepted) {
 				st.State = "completed"
 			}
 		} else if resolution == nil {
+			if p.Version == 2 && p.InputsReady {
+				st.State = "ready-to-capture"
+				if st.Retry != nil && st.Retry.Tries >= 8 {
+					st.State = "capture-retry-paused"
+				}
+			}
 			ready := true
 			for _, o := range p.Outcomes {
 				ready = ready && (o.State == "saved" || o.State == "absent")
 			}
-			if ready {
+			if ready && st.State != "capture-retry-paused" {
 				st.State = "ready-to-retry"
 			}
 			for _, candidate := range passes {
@@ -248,7 +270,7 @@ func (s *CaptureRecoveryService) RetryAttempt(ctx context.Context, repo, id stri
 		if st.Fingerprint != expect {
 			return domain.CaptureAttempt{}, domain.ErrSyncConflict
 		}
-		if st.Resolution != nil || (st.State != "ready-to-retry" && st.State != "ready-to-publish" && st.State != "completed") {
+		if st.Resolution != nil || (st.State != "capture-retry-paused" && st.State != "ready-to-capture" && st.State != "ready-to-retry" && st.State != "ready-to-publish" && st.State != "completed") {
 			return domain.CaptureAttempt{}, fmt.Errorf("capture %s has no replayable completion evidence (%s)", id, st.State)
 		}
 		return passes[id], nil

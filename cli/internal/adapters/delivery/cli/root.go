@@ -37,6 +37,8 @@ import (
 type Container struct {
 	// WakeHistoricalSync is process lifecycle wiring, absent in embedded/test drivers.
 	WakeHistoricalSync      func(string)
+	WakeCommitCapture       func(string)
+	CommitCapture           inbound.CommitCapture
 	ProviderLaunch          ProviderLaunchHooks
 	PrepareAgent            inbound.PrepareAgentContext
 	ApplySelectedPull       func(context.Context, string) (outbound.SelectedPullReceipt, error)
@@ -802,6 +804,9 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "push":
+		if c.WakeCommitCapture != nil {
+			defer c.WakeCommitCapture(cwd)
+		}
 		var finishDiagnostics func()
 		ctx, finishDiagnostics = beginPushDiagnostics(ctx)
 		defer finishDiagnostics()

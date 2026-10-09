@@ -78,7 +78,7 @@ class PublicationFenceTests(unittest.TestCase):
 
     def test_argv_boundaries_and_all_supported_helpers(self):
         exe = str(self.binary)
-        valid = ["branch-replay 123", "branch-replay", "branch-state-sync", "historical-sync",
+        valid = ["branch-replay 123", "branch-replay", "branch-state-sync", "capture-replay", "historical-sync",
                  "branch-deletion-finalize topic " + "a" * 40 + " 123",
                  "pending-sync --resolve opaque-session sha256:" + "b" * 64,
                  "live-watch claude private-session", "live-capture codex private-session",
@@ -95,7 +95,7 @@ class PublicationFenceTests(unittest.TestCase):
             output += f"\n106 {exe} git-hook {event}-extra claude private-session"
         self.assertEqual([e for _, e in drain.matching_helpers(output, {exe})],
                          [v.split()[0] for v in valid])
-        for args in ("branch-state-sync private-argument", "branch-replay bad-pid",
+        for args in ("branch-state-sync private-argument", "capture-replay private-argument", "branch-replay bad-pid",
                      "pending-sync --resolve private-session bad-hash",
                      "live-watch", "live-capture claude", "live-publish unknown private-session",
                      "live-publish claude private session", "live-watch codex " + "s" * 257):
@@ -231,7 +231,7 @@ class PublicationFenceTests(unittest.TestCase):
 
     def test_producer_deadline_does_not_start_publication(self):
         start = time.monotonic()
-        for event in ["branch-replay"] + sorted(drain.LIVE_EVENTS):
+        for event in ["branch-replay", "capture-replay"] + sorted(drain.LIVE_EVENTS):
             args = " claude private-session" if event in drain.LIVE_EVENTS else ""
             with self.subTest(event=event), patch.object(drain, "command", return_value=
                     f"7 {self.binary} git-hook {event}{args}") as command:

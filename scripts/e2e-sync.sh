@@ -899,6 +899,19 @@ PYBIGBINDING
 if [ "$?" != 0 ]; then cat "$TMP/big-binding.out"; exit 1; fi
 large_session "$TMP/repo1" BIG
 echo big > big.txt; git add big.txt; git commit -qm big-event >/dev/null 2>&1
+# Large sealed input is normalized outside the Git hook deadline. Wait for its
+# actual worker/publication chain; never substitute a second live capture.
+if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$TMP/repo1" >"$TMP/big-drain.out" 2>&1; then
+  cat "$TMP/big-drain.out"; exit 1
+fi
+python3 - "$(git rev-parse HEAD)" <<'PYBIGCAPTURE'
+import json,pathlib,sys
+passes=[json.loads(p.read_text()) for p in pathlib.Path('.cxt/worktrees').glob('*/capture-passes/*.json')]
+p=[p for p in passes if p['proof']['git_after']==sys.argv[1]]
+assert len(p)==1 and p[0].get('inputs_ready') and p[0].get('memory_finalized') and p[0].get('complete'), 'large frozen capture did not complete'
+assert any(o.get('state')=='saved' and o.get('input',{}).get('size',0)>1024*1024 for o in p[0]['outcomes']), 'large source was not saved from sealed input'
+PYBIGCAPTURE
+if [ "$?" != 0 ]; then exit 1; fi
 BIG_EXPECTED=$(python3 - <<'PYBIGEXPECTED'
 import json,re
 with open('.cxt/refs/heads/main') as f:

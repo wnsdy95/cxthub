@@ -120,6 +120,9 @@ func freezeCommitCapture(ctx context.Context, c *Container, cwd string, provider
 		Kind: "position", GitAfter: oid, MemoryPinned: true, CreatedAt: time.Now().UTC(),
 		MemoryHash: position.MemoryHash, MemorySource: position.MemorySource,
 	}}
+	if c.CommitCapture != nil {
+		p.Version, p.FrozenPosition = 2, &position
+	}
 	for _, provider := range providers {
 		p.Outcomes = append(p.Outcomes, commitCaptureOutcome{Provider: provider, State: "pending"})
 	}
@@ -139,39 +142,21 @@ func (p *commitCapturePass) recordOutcome(ctx context.Context, root string, inde
 	if p == nil {
 		return nil
 	}
-	expected := domain.CaptureAttempt(*p).Fingerprint()
 	next := *p
 	next.Outcomes = append([]commitCaptureOutcome(nil), p.Outcomes...)
 	o := &next.Outcomes[index]
 	o.State, o.SessionPath, o.Target = state, path, out.SnapshotID
+	if p.Version == 2 {
+		o.MemoryHash, o.MemorySource = out.MemoryHash, out.MemorySource
+	}
+	o.Error = ""
 	if state == "failed" && domain.ValidateContentHash(o.Target) != nil {
 		o.Target = "" // A malformed Save result is a failed pass, not corrupt journal metadata.
 	}
 	if cause != nil {
 		o.Error = cause.Error()
 	}
-	j, err := branchjournal.Open(ctx, root)
-	if err != nil {
-		return err
-	}
-	return j.Transaction(ctx, func() error {
-		raw, err := providerfs.ReadRepoFile(root, p.relativePath())
-		if err != nil {
-			return err
-		}
-		var current domain.CaptureAttempt
-		if json.Unmarshal(raw, &current) != nil {
-			return domain.ErrHashMismatch
-		}
-		if current.Fingerprint() != expected {
-			return domain.ErrSyncConflict
-		}
-		if err := next.write(root); err != nil {
-			return err
-		}
-		*p = next
-		return nil
-	})
+	return p.replace(ctx, root, next)
 }
 
 // Only the frozen baseline and this pass's Save outputs can become its final
@@ -257,6 +242,9 @@ func prepareCommitProof(ctx context.Context, c *Container, p *commitCapturePass)
 		}
 		for i := len(targets) - 1; i >= 0; i-- {
 			tip, complete := targets[i], true
+			if p.FinalMemory != nil && tip != p.FinalMemory.Snapshot {
+				continue
+			}
 			for _, target := range targets {
 				if !contains(tip, target) {
 					complete = false
@@ -299,6 +287,32 @@ func (p *commitCapturePass) matchesObservation(target domain.ContentHash, e doma
 }
 
 func (p *commitCapturePass) observation(target domain.ContentHash, accepted map[string]domain.HistoryEvent) *domain.HistoryEvent {
+	if p.Version == 2 {
+		check := func(id string, memoryHash, memorySource domain.ContentHash) *domain.HistoryEvent {
+			e, ok := accepted[id]
+			if !ok || !p.matchesObservation(target, e) || e.Kind != "position" || e.Source != target || !e.MemoryPinned || e.MemoryHash != memoryHash || e.MemorySource != memorySource || !e.CreatedAt.Equal(p.Proof.CreatedAt) {
+				return nil
+			}
+			return &e
+		}
+		if p.FinalMemory != nil && target == p.FinalMemory.Snapshot {
+			if found := check(domain.CaptureFinalObservationID(p.Proof.ID), p.FinalMemory.Memory, target); found != nil {
+				return found
+			}
+		}
+		for i, o := range p.Outcomes {
+			if o.State != "saved" || o.Target != target {
+				continue
+			}
+			if found := check(domain.CaptureProviderObservationID(p.Proof.ID, i), o.MemoryHash, o.MemorySource); found != nil {
+				return found
+			}
+		}
+		if target == p.Initial {
+			return check(domain.CaptureBaselineObservationID(p.Proof.ID), p.Proof.MemoryHash, p.Proof.MemorySource)
+		}
+		return nil
+	}
 	var latest *domain.HistoryEvent
 	for _, e := range accepted {
 		if p.matchesObservation(target, e) && (latest == nil || e.CreatedAt.After(latest.CreatedAt) || e.CreatedAt.Equal(latest.CreatedAt) && e.ID > latest.ID) {
@@ -312,6 +326,17 @@ func (p *commitCapturePass) observation(target domain.ContentHash, accepted map[
 // Recovery may use immutable observations of this pass's own recorded outputs.
 // It never infers a missing/failed Save from the current worktree selection.
 func recoverCommitCapture(ctx context.Context, c *Container, cwd, root string, p *commitCapturePass, accepted map[string]domain.HistoryEvent) error {
+	if p.Version == 2 {
+		if !p.MemoryFinalized {
+			return fmt.Errorf("%w: final memory derivation is not durable", errCaptureCompletionUnproven)
+		}
+		if p.FinalMemory != nil {
+			e := p.observation(p.FinalMemory.Snapshot, accepted)
+			if e == nil || e.ID != domain.CaptureFinalObservationID(p.Proof.ID) {
+				return fmt.Errorf("%w: final memory observation unavailable", errCaptureCompletionUnproven)
+			}
+		}
+	}
 	for _, o := range p.Outcomes {
 		if o.State != "saved" && o.State != "absent" {
 			return fmt.Errorf("%w: %s capture is %s: %s", errCaptureCompletionUnproven, o.Provider, o.State, o.Error)
@@ -337,6 +362,9 @@ func completeCapturePass(ctx context.Context, cwd, root string, p *commitCapture
 		return err
 	}
 	return j.Transaction(ctx, func() error {
+		if err := ensureCaptureUnresolved(root, p); err != nil {
+			return err
+		}
 		raw, err := providerfs.ReadRepoFile(root, p.relativePath())
 		if err != nil {
 			return err
@@ -352,7 +380,7 @@ func completeCapturePass(ctx context.Context, cwd, root string, p *commitCapture
 		left.Complete, right.Complete = false, false
 		left.Observation, right.Observation = nil, nil
 		left.Proof.Source, left.Proof.Target, right.Proof.Source, right.Proof.Target = "", "", "", ""
-		if !reflect.DeepEqual(left, right) {
+		if domain.CaptureAttempt(left).Fingerprint() != domain.CaptureAttempt(right).Fingerprint() {
 			return domain.ErrHashMismatch
 		}
 		if stored.Complete {
@@ -417,7 +445,7 @@ func replayCommitCaptures(ctx context.Context, c *Container, cwd, root, repo, wo
 			return err
 		}
 		var p commitCapturePass
-		if json.Unmarshal(raw, &p) != nil || p.Version != 1 || p.Proof.Kind != "position" ||
+		if json.Unmarshal(raw, &p) != nil || (p.Version != 1 && p.Version != 2) || p.Proof.Kind != "position" ||
 			p.Proof.RepoID != repo || p.Proof.WorktreeID != worktree || p.Proof.ID+".json" != entry.Name() {
 			return domain.ErrHashMismatch
 		}

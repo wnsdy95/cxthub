@@ -68,3 +68,9 @@ type WorkingCommitCASStore interface {
 type WorkingCodePositionCASStore interface {
 	CompareAndSwapWorkingCodePosition(context.Context, domain.WorkingPosition, domain.WorkingPosition, domain.Ref) error
 }
+
+// FrozenCommitStore never substitutes a process-start code point for a frozen
+// job's point. A stale worker can retain history but cannot apply its selection.
+type FrozenCommitStore interface {
+	CommitFrozenSnapshotIfCurrent(context.Context, domain.Ref, domain.ContentHash, domain.WorkingPosition, domain.WorkingPosition, *domain.HistoryEvent) error
+}
