@@ -32,7 +32,7 @@ func conversationManifestEvent(ctx context.Context, version string, raw []byte) 
 		return 0, err
 	}
 	event = canonicalEvents(doc.Events)[0]
-	canonical, err := canonicalJSON(event)
+	canonical, err := canonicalDecodedEventJSON(event)
 	if err != nil || !bytes.Equal(canonical, raw) {
 		return 0, ErrConversationManifest
 	}

@@ -218,6 +218,16 @@ const (
 // MarshalJSON serializes an Event to a schema (cir.schema.json) kind-specific union form.
 // Only common fields (kind/seq always, id/ts non-empty if present) and kind-specific fields are emitted.
 func (e Event) MarshalJSON() ([]byte, error) {
+	m, err := eventJSONObject(e)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(m)
+}
+
+// eventJSONObject is the single union definition shared by ordinary JSON and
+// the private typed-decoded canonical event serializer.
+func eventJSONObject(e Event) (map[string]any, error) {
 	if err := e.validateKindFieldPresence(); err != nil {
 		return nil, err
 	}
@@ -310,7 +320,7 @@ func (e Event) MarshalJSON() ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("cir: unknown event kind %q", e.Kind)
 	}
-	return json.Marshal(m)
+	return m, nil
 }
 
 // eventWire is the flattened JSON representation for deserializing an Event.

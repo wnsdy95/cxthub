@@ -20,6 +20,14 @@ jobs:
         with:
           go-version: "1.26.6"
           cache: false
+      - name: Install public-check dependencies
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+      - name: Verify public checks reject a missing dependency
+        run: |
+          status=0
+          result="$(PATH=/nonexistent /bin/bash scripts/public-preflight.sh tree 2>&1)" || status=$?
+          test "$status" -eq 1
+          test "$result" = "[public-check] required dependency is missing: rg (ripgrep)"
       - name: Validate the publishable tree
         run: bash scripts/public-preflight.sh tree
       - name: Verify local dogfood auth resolution
