@@ -101,11 +101,12 @@ func contextSelectionAtCode(cwd, oid, branch string, snaps []domain.Snapshot, hi
 			if identity != "" {
 				matches = e.BranchID == identity
 			}
-			if matches && e.GitAfter == code && e.Target != "" && (best == "" || e.CreatedAt.After(observed)) {
+			isExplicit := e.Kind == "advance" || (e.Kind == "position" && e.GitBefore == code)
+			if matches && e.GitAfter == code && e.Target != "" && (best == "" || e.CreatedAt.After(observed) || e.CreatedAt.Equal(observed) && isExplicit && !explicit) {
 				best = e.Target
 				selected = domain.WorkingPosition{Snapshot: e.Target, MemoryHash: e.MemoryHash, MemorySource: e.MemorySource, MemoryPinned: e.MemoryPinned}
 				observed = e.CreatedAt
-				explicit = e.Kind == "advance" || (e.Kind == "position" && e.GitBefore == code)
+				explicit = isExplicit
 			}
 		}
 		if explicit {

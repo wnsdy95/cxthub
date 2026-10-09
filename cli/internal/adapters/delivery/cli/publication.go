@@ -126,6 +126,11 @@ func freezeCommitCapture(ctx context.Context, c *Container, cwd string, provider
 	for _, provider := range providers {
 		p.Outcomes = append(p.Outcomes, commitCaptureOutcome{Provider: provider, State: "pending"})
 	}
+	if p.Version == 2 {
+		if err := selectCapturePredecessor(ctx, cwd, cxtRepoRoot(ctx, cwd), p); err != nil {
+			return nil, err
+		}
+	}
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
@@ -197,6 +202,9 @@ func prepareCommitProof(ctx context.Context, c *Container, p *commitCapturePass)
 	targets := []domain.ContentHash{}
 	if p.Initial != "" {
 		targets = append(targets, p.Initial)
+	}
+	if e := p.PredecessorObservation; e != nil && e.Target != "" {
+		targets = append(targets, e.Target)
 	}
 	for _, o := range p.Outcomes {
 		switch o.State {
@@ -297,6 +305,11 @@ func (p *commitCapturePass) observation(target domain.ContentHash, accepted map[
 		}
 		if p.FinalMemory != nil && target == p.FinalMemory.Snapshot {
 			if found := check(domain.CaptureFinalObservationID(p.Proof.ID), p.FinalMemory.Memory, target); found != nil {
+				return found
+			}
+		}
+		if e := p.PredecessorObservation; e != nil && target == e.Target {
+			if found := check(domain.CaptureContinuationObservationID(p.Proof.ID), e.MemoryHash, e.MemorySource); found != nil {
 				return found
 			}
 		}
@@ -402,6 +415,9 @@ func publishCommitCapture(ctx context.Context, c *Container, cwd string, p *comm
 	if p.Proof.Target == "" {
 		return nil // No initial context and no active provider.
 	}
+	if p.Version == 2 && (!p.MemoryFinalized || p.Observation == nil) {
+		return errCaptureCompletionUnproven
+	}
 	if accepted == nil {
 		var err error
 		accepted, err = publicationHistory(ctx, c, p.Proof.RepoID)
@@ -415,6 +431,19 @@ func publishCommitCapture(ctx context.Context, c *Container, cwd string, p *comm
 	}
 	if err := recordPublicationEvent(ctx, c, ordinary, accepted); err != nil {
 		return err
+	}
+	if p.Version == 2 {
+		// Intermediate provider/baseline observations share the commit's frozen
+		// time. Finalization selects the exact code association explicitly, while
+		// preserving that time so a delayed replay cannot override a later user
+		// selection. This is ordinary history, not a live worktree/ref mutation.
+		final := ordinary
+		final.ID = domain.CaptureCompletionObservationID(p.Proof.ID)
+		final.GitBefore = final.GitAfter
+		final.MemorySelectionParent = ""
+		if err := recordPublicationEvent(ctx, c, final, accepted); err != nil {
+			return err
+		}
 	}
 	e := p.Proof
 	e.Kind = "publish"

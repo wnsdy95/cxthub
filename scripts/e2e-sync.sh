@@ -508,8 +508,66 @@ expect "new branch keeps the recorded source snapshot" "$(ref_target .cxt/refs/h
 expect "branch birth pins the inherited memory object" "$(birth_field feature-x memory_hash)" "$SEEDMEM"
 
 # Capture exclusion: a commit before the seed session grows must not capture another session.
+# Check the exact commit's durable result even when a background worker wins
+# the foreground lock. Finish nocap before growing its previously idle seed.
+seed_capture_proof() {
+  local mode="$1" sha="$2"
+  python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/g-$mode-drain.out" 2>&1 || {
+    cat "$TMP/g-$mode-drain.out"; return 1
+  }
+  python3 - "$PWD" "$sha" "$SEED" "$SEEDID" "$mode" <<'PYGSEED'
+import hashlib,json,pathlib,re,sys
+root,sha,seed,session,mode=sys.argv[1:]
+cxt=pathlib.Path(root)/'.cxt'
+receipts=[json.loads(p.read_text()) for p in cxt.glob('worktrees/*/capture-passes/*.json')]
+matches=[p for p in receipts if p['proof']['git_after']==sha and p['proof']['branch']=='feature-x']
+assert len(matches)==1, 'expected one receipt for the exact feature-x commit'
+p=matches[0]
+assert p['version']==2 and all(p.get(k) is True for k in ('complete','inputs_ready','memory_finalized')), 'capture not complete'
+proof,obs=p['proof'],p['observation']
+assert all(obs.get(k)==proof.get(k) for k in ('repo_id','worktree_id','branch_id','branch','git_after','target')), 'observation position mismatch'
+assert re.fullmatch('[0-9a-f]{32}',obs['id']), 'invalid observation ID'
+assert json.loads((cxt/'history'/(obs['id']+'.json')).read_text())==obs, 'capture observation not durable'
+outcomes=p['outcomes']
+assert len(outcomes)==2 and {o['provider'] for o in outcomes}=={'claude','codex'}, 'missing provider outcome'
+if mode=='nocap':
+    assert all(o['state']=='absent' and not o.get('input') and not o.get('target') for o in outcomes), 'unresumed seed or another session was captured'
+    assert proof['target']==p['initial'], 'uncaptured commit changed context'
+else:
+    saved=[o for o in outcomes if o['state']=='saved']
+    assert len(saved)==1 and all(o['state'] in ('saved','absent') for o in outcomes), 'resumed seed was not the sole saved session'
+    o=saved[0]; inp=o['input']
+    assert pathlib.Path(inp['source_path']).resolve()==pathlib.Path(seed).resolve(), 'captured another session file'
+    assert inp['session_id']==o['session_id']==session and inp['provider']==o['provider'], 'captured another session identity'
+    assert re.fullmatch('sha256:[0-9a-f]{64}',o['target']) and o['target']==proof['target']!=p['initial'], 'missing new saved target'
+    snap=json.loads((cxt/'objects/snapshots'/o['target'][7:]).read_text())
+    assert snap['id']==snap['doc_hash']==o['target'] and snap['session_id']==session and snap['provider']==o['provider'], 'saved snapshot identity mismatch'
+    assert snap['branch']=='feature-x' and snap['message']==p['message']=='cap [git '+sha[:7]+']', 'saved snapshot lost commit metadata'
+    # Read only the fixture's retained native chunks, never a later provider file.
+    assert 0<inp['size']<=16<<20 and len(inp['chunks'])==(inp['size']+(1<<20)-1)//(1<<20), 'unexpected synthetic input size'
+    raw=bytearray()
+    for chunk in inp['chunks']:
+        assert re.fullmatch('sha256:[0-9a-f]{64}',chunk['hash']), 'invalid chunk hash'
+        assert chunk['size']==min(1<<20,inp['size']-len(raw)), 'invalid chunk size'
+        with (cxt/'capture/inputs'/chunk['hash'][7:]).open('rb') as f:
+            data=f.read(chunk['size']+1)
+        assert len(data)==chunk['size'] and 'sha256:'+hashlib.sha256(data).hexdigest()==chunk['hash'], 'frozen chunk mismatch'
+        raw.extend(data)
+    assert len(raw)==inp['size'] and 'sha256:'+hashlib.sha256(raw).hexdigest()==inp['hash'], 'frozen input mismatch'
+    last=[json.loads(line) for line in raw.splitlines() if line.strip()][-1]
+    if o['provider']=='claude':
+        assert last['type']=='user' and last['message']=={'role':'user','content':'resumed work'}, 'resumed message missing from frozen input'
+    else:
+        assert last['type']=='event_msg' and last['payload']=={'type':'user_message','message':'resumed work'}, 'resumed message missing from frozen input'
+print('exact commit capture proof verified: '+mode)
+PYGSEED
+}
 echo x > x.txt; git add x.txt; git commit -qm nocap >"$TMP/nc.out" 2>&1
-expect "unresumed seed is not captured" "$(grep -c 'cxt: snapshot' "$TMP/nc.out")" 0
+G_NOCAP_SHA=$(git rev-parse HEAD)
+if ! seed_capture_proof nocap "$G_NOCAP_SHA" >"$TMP/g-nocap-proof.out" 2>&1; then
+  cat "$TMP/g-nocap-proof.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
+expect "unresumed seed is not captured" yes yes
 # After resuming (file growth), it captures as a formal active session.
 case "$SEED" in
   "$HOME"/.codex/sessions/*)
@@ -520,7 +578,11 @@ case "$SEED" in
     ;;
 esac
 echo y > y.txt; git add y.txt; git commit -qm cap >"$TMP/cap.out" 2>&1
-expect "resumed seed captures" "$(grep -c 'cxt: snapshot' "$TMP/cap.out")" 1
+G_CAP_SHA=$(git rev-parse HEAD)
+if ! seed_capture_proof cap "$G_CAP_SHA" >"$TMP/g-cap-proof.out" 2>&1; then
+  cat "$TMP/g-cap-proof.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; exit 1
+fi
+expect "resumed seed captures" yes yes
 
 # Enforcement: boundary-enforce terminates processes that still hold isolated session files.
 # BEGIN wrapper holder readiness.
@@ -899,6 +961,8 @@ PYBIGBINDING
 if [ "$?" != 0 ]; then cat "$TMP/big-binding.out"; exit 1; fi
 large_session "$TMP/repo1" BIG
 echo big > big.txt; git add big.txt; git commit -qm big-event >/dev/null 2>&1
+# The user can push immediately, before background normalization finishes.
+git push -q origin main >"$TMP/big-push.out" 2>&1 || { cat "$TMP/big-push.out"; exit 1; }
 # Large sealed input is normalized outside the Git hook deadline. Wait for its
 # actual worker/publication chain; never substitute a second live capture.
 if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$TMP/repo1" >"$TMP/big-drain.out" 2>&1; then
@@ -910,6 +974,8 @@ passes=[json.loads(p.read_text()) for p in pathlib.Path('.cxt/worktrees').glob('
 p=[p for p in passes if p['proof']['git_after']==sys.argv[1]]
 assert len(p)==1 and p[0].get('inputs_ready') and p[0].get('memory_finalized') and p[0].get('complete'), 'large frozen capture did not complete'
 assert any(o.get('state')=='saved' and o.get('input',{}).get('size',0)>1024*1024 for o in p[0]['outcomes']), 'large source was not saved from sealed input'
+ref=json.loads(pathlib.Path('.cxt/refs/heads/main').read_text())
+assert p[0]['proof']['target']==ref['target'], 'background capture did not advance its unchanged local branch'
 PYBIGCAPTURE
 if [ "$?" != 0 ]; then exit 1; fi
 BIG_EXPECTED=$(python3 - <<'PYBIGEXPECTED'
@@ -921,7 +987,6 @@ assert ref.get('branch_id') and re.fullmatch(r'sha256:[0-9a-f]{64}',target), 'mi
 print(target)
 PYBIGEXPECTED
 ) || exit 1
-git push -q origin main >"$TMP/big-push.out" 2>&1 || { cat "$TMP/big-push.out"; exit 1; }
 BIG_HEAD=$(main_head)
 expect "oversized captured context is the published main" "$BIG_HEAD" "$BIG_EXPECTED"
 [ "$BIG_HEAD" = "$BIG_EXPECTED" ] || { cat "$TMP/big-push.out"; exit 1; }

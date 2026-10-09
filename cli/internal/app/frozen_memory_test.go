@@ -14,6 +14,7 @@ import (
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
 )
 
@@ -114,6 +115,18 @@ func TestFrozenMemoryPreparationLeavesSelectionAndAttachmentsUnchanged(t *testin
 
 			p = prepareFrozenMemoryReceipt(t, f, p)
 			plan := p.Outcomes[0].MemoryPlan
+			if !existing {
+				original, err := f.store.GetMemory(ctx, p.Proof.MemoryHash)
+				if err != nil {
+					t.Fatal(err)
+				}
+				inherited := domain.MergeDigests(original, domain.MemoryDigest{SnapshotID: plan.Snapshot, Provider: p.Outcomes[0].Provider})
+				inherited.PreviousMemoryHash = ""
+				a, err = domain.MemoryDigestHash(inherited)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if plan.ExpectedMemory != a || plan.Memory == a || (existing && plan.Snapshot != target) {
 				t.Fatalf("plan lost the observed attachment: %+v; original=%s", plan, a)
 			}
@@ -149,6 +162,124 @@ func TestFrozenMemoryPreparationLeavesSelectionAndAttachmentsUnchanged(t *testin
 			snap, err := f.store.GetSnapshot(ctx, plan.Snapshot)
 			if err != nil || snap.MemoryHash != plan.Memory {
 				t.Fatal("save did not attach the prepared memory", err)
+			}
+			requireFrozenMemorySelection(t, f, before)
+		})
+	}
+}
+
+func TestFrozenMemoryLivePendingCreationMatchesPreparedInitialMemory(t *testing.T) {
+	for _, competing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same-imported-A", true: "unrelated-C"}[competing], func(t *testing.T) {
+			f, p := frozenFixture(t)
+			ctx := context.Background()
+			f.svc.save.WithFrozenMemory(nil, memory.NewRuleDistiller())
+			before := readFrozenMemorySelection(t, f)
+			p = prepareFrozenMemoryReceipt(t, f, p)
+			plan := *p.Outcomes[0].MemoryPlan
+			if _, err := f.store.GetSnapshot(ctx, plan.Snapshot); !errors.Is(err, domain.ErrNotFound) {
+				t.Fatal("preparation must precede the first live snapshot creation", err)
+			}
+			if plan.ExpectedMemory == "" || plan.ExpectedMemory == plan.Memory {
+				t.Fatalf("expected separate imported A and prepared B: %+v", plan)
+			}
+
+			// The fixture removed the provider file after FreezeInput. Recreate
+			// the exact transcript so the real live path, not a seeded snapshot,
+			// wins first creation between preparation and frozen attachment.
+			source := f.source(t, "frozen", "only the frozen message")
+			live, err := f.svc.save.Save(ctx, inbound.SaveInput{Cwd: f.root, Provider: source.Provider,
+				SessionPath: source.Path, Pending: true, Message: domain.HookMessagePrefix + " live capture",
+				DocIdentity: p.Outcomes[0].Input.DocIdentity})
+			if err != nil {
+				t.Fatal("live pending save", err)
+			}
+			if live.SnapshotID != plan.Snapshot || live.SessionID != source.SessionID {
+				t.Fatalf("live and frozen capture did not deduplicate: live=%+v plan=%+v", live, plan)
+			}
+			snap, err := f.store.GetSnapshot(ctx, live.SnapshotID)
+			if err != nil || snap.MemoryHash != plan.ExpectedMemory {
+				t.Fatalf("live Save imported a different A: got=%s want=%s err=%v", snap.MemoryHash, plan.ExpectedMemory, err)
+			}
+			imported, err := f.store.GetMemory(ctx, snap.MemoryHash)
+			if err != nil || imported.PreviousMemoryHash != "" || !strings.Contains(imported.Summary, "ORIGINAL MEMORY") || strings.Contains(imported.Summary, "only the frozen message") {
+				t.Fatal("live A is not the original imported baseline", err)
+			}
+			prepared, err := f.store.GetMemory(ctx, plan.Memory)
+			if err != nil || prepared.PreviousMemoryHash != snap.MemoryHash || !strings.Contains(prepared.Summary, "ORIGINAL MEMORY") || !strings.Contains(prepared.Summary, "only the frozen message") {
+				t.Fatal("prepared B does not extend live A with the frozen contribution", err)
+			}
+			pendings, err := f.store.ListPendings(ctx, f.git.repo.ID)
+			if err != nil || len(pendings) != 1 || pendings[0].Target != plan.Snapshot || pendings[0].SessionID != live.SessionID {
+				t.Fatal("live Save did not create the expected pending capture", err)
+			}
+			requireFrozenMemorySelection(t, f, before)
+			if err := os.Remove(source.Path); err != nil {
+				t.Fatal(err)
+			}
+
+			if competing {
+				c, err := f.store.PutMemory(ctx, domain.MemoryDigest{SnapshotID: plan.Snapshot,
+					PreviousMemoryHash: plan.ExpectedMemory, Summary: "unrelated C after live A"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.store.CompareAndSwapSnapshotMemory(ctx, plan.Snapshot, plan.ExpectedMemory, c); err != nil {
+					t.Fatal(err)
+				}
+				if out, err := f.svc.save.SaveFrozen(ctx, f.root, p, 0); !errors.Is(err, domain.ErrSyncConflict) {
+					t.Fatalf("compatibility with live A accepted unrelated C: out=%+v err=%v", out, err)
+				}
+				snap, err = f.store.GetSnapshot(ctx, plan.Snapshot)
+				if err != nil || snap.MemoryHash != c {
+					t.Fatal("frozen replay overwrote competing C", err)
+				}
+				events, err := f.store.ListHistoryEvents(ctx, f.git.repo.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, event := range events {
+					if event.ID == domain.CaptureProviderObservationID(p.Proof.ID, 0) || event.ID == domain.CaptureFinalObservationID(p.Proof.ID) {
+						t.Fatal("conflicting capture recorded successful frozen memory")
+					}
+				}
+				requireFrozenMemorySelection(t, f, before)
+				return
+			}
+
+			out, err := f.svc.save.SaveFrozen(ctx, f.root, p, 0)
+			if err != nil || out.SnapshotID != live.SnapshotID || out.MemoryHash != plan.Memory || out.MemorySource != plan.Snapshot {
+				t.Fatalf("frozen B could not follow live A: out=%+v err=%v", out, err)
+			}
+			p.Outcomes[0].State, p.Outcomes[0].Target = "saved", out.SnapshotID
+			p.Outcomes[0].MemoryHash, p.Outcomes[0].MemorySource = out.MemoryHash, out.MemorySource
+			p.Proof.Source, p.Proof.Target = out.SnapshotID, out.SnapshotID
+			final, err := f.svc.save.PrepareFrozenMemory(ctx, f.root, p, -1)
+			if err != nil || final == nil {
+				t.Fatal("prepare final frozen memory", err)
+			}
+			if final.Memory != plan.Memory || final.ExpectedMemory != plan.Memory || final.Snapshot != plan.Snapshot {
+				t.Fatalf("single-provider finalization changed prepared B: %+v", final)
+			}
+			p.FinalMemory = final
+			if err := p.Validate(); err != nil {
+				t.Fatal("invalid final memory receipt", err)
+			}
+			event, err := f.svc.save.FinishFrozenMemory(ctx, f.root, p)
+			if err != nil || event.ID != domain.CaptureFinalObservationID(p.Proof.ID) || event.MemoryHash != plan.Memory || event.MemorySource != plan.Snapshot || !event.MemoryPinned {
+				t.Fatalf("final observation did not pin B: event=%+v err=%v", event, err)
+			}
+			again, err := f.svc.save.FinishFrozenMemory(ctx, f.root, p)
+			if err != nil || !reflect.DeepEqual(event, again) {
+				t.Fatal("final memory retry changed its observation", err)
+			}
+			snap, err = f.store.GetSnapshot(ctx, plan.Snapshot)
+			if err != nil || snap.MemoryHash != plan.Memory {
+				t.Fatal("final attachment does not retain B", err)
+			}
+			events, err := f.store.ListHistoryEvents(ctx, f.git.repo.ID)
+			if err != nil || !slices.ContainsFunc(events, func(stored domain.HistoryEvent) bool { return reflect.DeepEqual(stored, event) }) {
+				t.Fatal("final B observation was not durable", err)
 			}
 			requireFrozenMemorySelection(t, f, before)
 		})

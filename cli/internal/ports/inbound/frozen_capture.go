@@ -10,6 +10,7 @@ import (
 type CommitCapture interface {
 	FreezeInput(context.Context, string, domain.ProviderKind, string) (domain.FrozenCaptureInput, error)
 	FreezeSettings(context.Context, string) (map[string]domain.ContentHash, error)
+	RecordFrozenContinuation(context.Context, string, domain.CaptureAttempt) error
 	PrepareFrozenMemory(context.Context, string, domain.CaptureAttempt, int) (*domain.FrozenCaptureMemory, error)
 	FinishFrozenMemory(context.Context, string, domain.CaptureAttempt) (domain.HistoryEvent, error)
 	SaveFrozen(context.Context, string, domain.CaptureAttempt, int) (SaveOutput, error)

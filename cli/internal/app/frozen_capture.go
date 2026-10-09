@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
@@ -94,6 +95,9 @@ func (s *SaveSessionService) SaveFrozen(ctx context.Context, cwd string, p domai
 	if err = p.Validate(); err != nil {
 		return out, err
 	}
+	if err = s.verifyFrozenPredecessor(ctx, p); err != nil {
+		return out, err
+	}
 	if p.Version != 2 || !p.InputsReady || index < 0 || index >= len(p.Outcomes) || p.Outcomes[index].Input == nil {
 		return out, domain.ErrHashMismatch
 	}
@@ -153,7 +157,11 @@ func (s *SaveSessionService) SaveFrozen(ctx context.Context, cwd string, p domai
 				parents = append(parents, h)
 			}
 		}
-		addParent(p.Initial)
+		if p.PredecessorObservation != nil {
+			addParent(p.PredecessorObservation.Target)
+		} else {
+			addParent(p.Initial)
+		}
 		for _, previous := range p.Outcomes[:index] {
 			if previous.State == "saved" {
 				addParent(previous.Target)
@@ -195,6 +203,9 @@ func (s *SaveSessionService) SaveFrozen(ctx context.Context, cwd string, p domai
 				return err
 			}
 		} else {
+			if plan := p.Outcomes[index].MemoryPlan; plan != nil {
+				snap.MemoryHash = plan.ExpectedMemory
+			}
 			if memoryHash != "" && s.frozenDistiller == nil {
 				memory, err := s.store.GetMemory(ctx, memoryHash)
 				if err != nil {
@@ -287,6 +298,48 @@ func (s *SaveSessionService) SaveFrozen(ctx context.Context, cwd string, p domai
 	return out, err
 }
 
+// The admission/worker layer pins the predecessor's completed observation.
+// Replay accepts only that exact immutable record, never today's selection or
+// the predecessor snapshot's current memory attachment.
+func (s *SaveSessionService) verifyFrozenPredecessor(ctx context.Context, p domain.CaptureAttempt) error {
+	if p.Predecessor == nil {
+		return nil
+	}
+	if p.PredecessorObservation == nil {
+		return fmt.Errorf("frozen capture predecessor is unresolved: %w", domain.ErrSyncConflict)
+	}
+	history, ok := s.store.(outbound.HistoryStore)
+	if !ok {
+		return fmt.Errorf("durable capture history unavailable")
+	}
+	events, err := history.ListHistoryEvents(ctx, p.Proof.RepoID)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if event.ID != p.PredecessorObservation.ID {
+			continue
+		}
+		if !reflect.DeepEqual(event, *p.PredecessorObservation) {
+			return domain.ErrHashMismatch
+		}
+		if _, err := NewContextHistoryService(s.store, history).ValidateHistorySource(ctx, event); err != nil {
+			return err
+		}
+		if p.Initial != "" {
+			contains, err := s.frozenReachable(ctx, p.Proof.RepoID, event.Target, p.Initial)
+			if err != nil {
+				return err
+			}
+			if !contains {
+				return domain.ErrHashMismatch
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("frozen capture predecessor observation is missing: %w", domain.ErrNotFound)
+}
+
 // Unlike the legacy best-effort ancestry helper, replay never treats a read
 // failure as permission to add an edge.
 func (s *SaveSessionService) frozenReachable(ctx context.Context, repo string, tip, ancestor domain.ContentHash) (bool, error) {
@@ -318,6 +371,9 @@ func (s *SaveSessionService) frozenReachable(ctx context.Context, repo string, t
 // selection still matches. Historical completion never rewinds active work.
 func (s *SaveSessionService) ApplyFrozen(ctx context.Context, cwd string, p domain.CaptureAttempt) error {
 	if err := p.Validate(); err != nil {
+		return err
+	}
+	if err := s.verifyFrozenPredecessor(ctx, p); err != nil {
 		return err
 	}
 	if p.Version != 2 || !p.Complete || p.Proof.Target == "" {
@@ -379,7 +435,24 @@ func (s *SaveSessionService) ApplyFrozen(ctx context.Context, cwd string, p doma
 		next.MemoryHash, next.MemorySource, next.MemoryPinned = p.Observation.MemoryHash, p.Observation.MemorySource, true
 	}
 	ref.Target, ref.BranchID = p.Proof.Target, p.Proof.BranchID
-	err = commits.CommitFrozenSnapshotIfCurrent(ctx, ref, current.SharedTarget, current, next, nil)
+	var advance *domain.HistoryEvent
+	if current.Rewound && current.SharedTarget != "" && current.SharedTarget != next.Snapshot {
+		if p.Observation == nil || !p.Observation.MemoryPinned {
+			return domain.ErrHashMismatch
+		}
+		key := domain.HashContent([]byte("frozen-capture-advance\x00" + p.Proof.ID + "\x00" + string(current.SharedTarget) + "\x00" + string(next.Snapshot)))
+		advance = &domain.HistoryEvent{
+			ID: strings.TrimPrefix(string(key), "sha256:")[:32], Kind: "advance",
+			RepoID: repo.ID, BranchID: next.BranchID, Branch: next.Branch, LocalBranch: next.LocalBranch,
+			Source: current.SharedTarget, Target: next.Snapshot,
+			MemoryHash: next.MemoryHash, MemorySource: next.MemorySource, MemoryPinned: next.MemoryPinned,
+			GitBefore: current.GitCommit, GitAfter: next.GitCommit, WorktreeID: next.WorktreeID,
+			// This records the working selection change, not the frozen capture.
+			// The working-commit WAL retains this timestamp once the CAS accepts it.
+			CreatedAt: time.Now().UTC(),
+		}
+	}
+	err = commits.CommitFrozenSnapshotIfCurrent(ctx, ref, current.SharedTarget, current, next, advance)
 	if errors.Is(err, domain.ErrSyncConflict) || errors.Is(err, domain.ErrSelectionChanged) || errors.Is(err, domain.ErrBranchArchived) {
 		return nil
 	}

@@ -278,6 +278,13 @@ func runCommitCaptureWorker(ctx context.Context, c *Container, cwd string) error
 				}
 			}
 		}
+		pushWake, err := drainCapturePush(ctx, c, cwd, root, repo.ID)
+		if err != nil {
+			return err
+		}
+		if !pushWake.IsZero() && (nextWake.IsZero() || pushWake.Before(nextWake)) {
+			nextWake = pushWake
+		}
 		if nextWake.IsZero() {
 			// Release before checking generation: a later notifier can now acquire the
 			// lock; an earlier notifier that lost the lock changed this durable marker.
@@ -315,6 +322,9 @@ func processFrozenCapture(ctx context.Context, c *Container, cwd, root string, p
 	}
 	if p.Version != 2 || !p.InputsReady {
 		return fmt.Errorf("capture input was not durably sealed")
+	}
+	if err := resolveCapturePredecessor(ctx, c, cwd, root, p); err != nil {
+		return err
 	}
 	if !p.Complete {
 		for i, o := range p.Outcomes {

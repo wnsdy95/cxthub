@@ -47,7 +47,9 @@ type Container struct {
 	CaptureRecovery         inbound.CaptureRecovery
 	ResolveConnection       func(context.Context, string) (domain.RepositoryConnection, error)
 	PrepareRemoteConnection func(context.Context, string, string, string) (PreparedRemoteConnection, error)
-	ResolveSyncDestination  func(context.Context, string, string) (SyncDestination, error)
+	// PrepareCapturePush binds the supplied observed URL, credentials and repo; it must not reselect origin.
+	PrepareCapturePush     func(context.Context, string, CapturePushDestination, string) (inbound.SyncRepo, error)
+	ResolveSyncDestination func(context.Context, string, string) (SyncDestination, error)
 	// ResolveRepo identifies a configured replica without registering or mutating it.
 	SetCaptureIdentity func(context.Context, string, domain.DocumentIdentity) error
 	ResolveRepo        func(context.Context, string) (domain.Repo, error)

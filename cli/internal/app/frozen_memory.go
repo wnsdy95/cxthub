@@ -14,11 +14,14 @@ import (
 // index -1 produces the final aggregate even when an earlier provider's dedup
 // snapshot is the only target that contains all captured conversations.
 func (s *SaveSessionService) PrepareFrozenMemory(ctx context.Context, cwd string, p domain.CaptureAttempt, index int) (*domain.FrozenCaptureMemory, error) {
-	if s.frozenDistiller == nil {
-		return nil, nil
-	}
 	if err := p.Validate(); err != nil {
 		return nil, err
+	}
+	if err := s.verifyFrozenPredecessor(ctx, p); err != nil {
+		return nil, err
+	}
+	if s.frozenDistiller == nil {
+		return nil, nil
 	}
 	if !p.InputsReady || p.Version != 2 || index < -1 || index >= len(p.Outcomes) {
 		return nil, domain.ErrHashMismatch
@@ -29,8 +32,11 @@ func (s *SaveSessionService) PrepareFrozenMemory(ctx context.Context, cwd string
 			saved = saved || o.State == "saved"
 		}
 		if !saved {
+			// The worker already recorded B's immutable continuation of A.
+			// With no new contribution, preserve that exact pin rather than
+			// replacing a later attachment on A with its older frozen content.
 			return nil, nil
-		} // Keep the original empty/inherited selection.
+		}
 	}
 	repo, err := s.gitCtx.CurrentRepo(ctx, cwd)
 	if err != nil {
@@ -61,6 +67,13 @@ func (s *SaveSessionService) PrepareFrozenMemory(ctx context.Context, cwd string
 			if err != nil {
 				return err
 			}
+		}
+		if predecessor := p.PredecessorObservation; predecessor != nil && predecessor.MemoryHash != "" {
+			memory, err := s.store.GetMemory(ctx, predecessor.MemoryHash)
+			if err != nil {
+				return err
+			}
+			digest = domain.MergeDigests(digest, memory)
 		}
 		count := index
 		if index == -1 {
@@ -150,6 +163,21 @@ func (s *SaveSessionService) PrepareFrozenMemory(ctx context.Context, cwd string
 			previous = snap.MemoryHash
 		} else if !errors.Is(err, domain.ErrNotFound) {
 			return err
+		} else if index >= 0 && p.Proof.MemoryHash != "" {
+			// Normal/live Save imports the selected memory when first creating a
+			// snapshot. Freeze the identical initial version so that creation by
+			// either producer is compatible; later, genuinely different versions
+			// still lose the attachment CAS without being overwritten.
+			memory, err := s.store.GetMemory(ctx, p.Proof.MemoryHash)
+			if err != nil {
+				return err
+			}
+			inherited := domain.MergeDigests(memory, domain.MemoryDigest{SnapshotID: target, Provider: p.Outcomes[index].Provider})
+			inherited.PreviousMemoryHash = ""
+			previous, err = s.store.PutMemory(ctx, inherited)
+			if err != nil {
+				return err
+			}
 		}
 		digest.PreviousMemoryHash = previous
 		if previous != "" {
@@ -172,32 +200,18 @@ func (s *SaveSessionService) PrepareFrozenMemory(ctx context.Context, cwd string
 		// Empty/inherited -> first self-owned memory is an explicit transition,
 		// not an order inferred from timestamps or mutable attachment pointers.
 		{
-			rootHash := hash
-			rootDigest := digest
-			seen := map[domain.ContentHash]bool{}
-			for {
-				if len(seen) >= maxMemoryAttachmentDepth || seen[rootHash] {
-					return domain.ErrHashMismatch
-				}
-				seen[rootHash] = true
-				if rootDigest.PreviousMemoryHash == "" {
-					break
-				}
-				rootHash = rootDigest.PreviousMemoryHash
-				var err error
-				rootDigest, err = s.store.GetMemory(ctx, rootHash)
-				if err != nil {
-					return err
-				}
-				if err := validateMemoryAttachmentObject(rootDigest, rootHash, target); err != nil {
-					return err
-				}
+			rootHash, err := s.frozenMemoryRoot(ctx, target, hash)
+			if err != nil {
+				return err
 			}
 			events, err := history.ListHistoryEvents(ctx, repo.ID)
 			if err != nil {
 				return err
 			}
-			candidates := map[string]bool{domain.CaptureBaselineObservationID(p.Proof.ID): true}
+			candidates := map[string]bool{
+				domain.CaptureBaselineObservationID(p.Proof.ID):     true,
+				domain.CaptureContinuationObservationID(p.Proof.ID): true,
+			}
 			for i, o := range p.Outcomes {
 				if o.State == "saved" {
 					candidates[domain.CaptureProviderObservationID(p.Proof.ID, i)] = true
@@ -234,6 +248,33 @@ func (s *SaveSessionService) PrepareFrozenMemory(ctx context.Context, cwd string
 		return plan.Validate()
 	})
 	return plan, err
+}
+
+// Follow only immutable predecessor hashes from the supplied pin. Snapshot
+// attachments and current selections are not evidence for this root.
+func (s *SaveSessionService) frozenMemoryRoot(ctx context.Context, owner, hash domain.ContentHash) (domain.ContentHash, error) {
+	seen := map[domain.ContentHash]bool{}
+	for hash != "" {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if len(seen) >= maxMemoryAttachmentDepth || seen[hash] {
+			return "", domain.ErrHashMismatch
+		}
+		seen[hash] = true
+		digest, err := s.store.GetMemory(ctx, hash)
+		if err != nil {
+			return "", err
+		}
+		if err := validateMemoryAttachmentObject(digest, hash, owner); err != nil {
+			return "", err
+		}
+		if digest.PreviousMemoryHash == "" {
+			return hash, nil
+		}
+		hash = digest.PreviousMemoryHash
+	}
+	return "", domain.ErrHashMismatch
 }
 
 func (s *SaveSessionService) attachFrozenMemory(ctx context.Context, repo string, p domain.FrozenCaptureMemory) error {
@@ -277,11 +318,14 @@ func (s *SaveSessionService) attachFrozenMemory(ctx context.Context, repo string
 
 func (s *SaveSessionService) FinishFrozenMemory(ctx context.Context, cwd string, p domain.CaptureAttempt) (domain.HistoryEvent, error) {
 	var empty domain.HistoryEvent
-	if p.FinalMemory == nil {
-		return empty, nil
-	}
 	if err := p.Validate(); err != nil {
 		return empty, err
+	}
+	if err := s.verifyFrozenPredecessor(ctx, p); err != nil {
+		return empty, err
+	}
+	if p.FinalMemory == nil {
+		return empty, nil
 	}
 	repo, err := s.gitCtx.CurrentRepo(ctx, cwd)
 	if err != nil {

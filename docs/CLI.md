@@ -453,15 +453,41 @@ work; `cxt capture list` / `show` report retry counts and failures. After resolv
 a failure, `cxt capture retry <id> --expect <fingerprint>` explicitly retries the
 same archived input. An unsealed capture cannot rediscover missing input later.
 
+If `git push origin` selects a commit whose sealed capture is still running,
+the hook records that exact Git ref, SHA, context branch identity and destination
+under `.cxt/capture/push-requests`. After capture and publication evidence complete,
+the same worker retries only that selection (eight attempts, one minute each).
+It never turns a background capture into an implicit all-branches push. Changed
+code, branch identity, destination or context target leaves the request retained;
+run an explicit `cxt push` after resolving the mismatch. A successful Git push
+alone does not prove that its context upload has completed.
+
 Replay first persists each derived memory hash and its attachment predecessor.
+Live capture and deferred commit capture share the same initial inherited memory
+version when creating the same snapshot concurrently.
 Attachment-only compare-and-swap retains concurrent winners; a conflicting
 independent memory version remains pending instead of being silently replaced.
 A final immutable observation aggregates both providers, including when snapshot
 deduplication makes an earlier capture the covering target. Frozen imports are
 retained explicitly, without claiming that the current graph was projected.
 
-Completion records the original commit and the derived immutable memory selection. The current
-worktree advances only when its entire original selection still matches; another
+Consecutive queued commits retain an explicit capture dependency: when the Git
+first parent has an unfinished capture from the same worktree, branch identity
+and unchanged context selection, the successor records that attempt's ID. It
+waits for the exact finalized predecessor observation before deriving memory or
+storing its snapshot, then inherits both the predecessor context and its pinned
+memory. It does not choose a predecessor by completion time, and an explicit
+context/memory selection change breaks that implicit continuation. Missing or
+ambiguous predecessor evidence leaves publication pending.
+
+Completion records an explicit code-position observation with the original
+capture time and finalized memory. Intermediate baseline/provider observations
+remain retained but cannot win the same-time code selection by hash order. A later
+independent user selection keeps precedence over delayed completion. Empty-provider
+continuations retain their predecessor's exact memory and its root-selection
+witness, without rewriting the snapshot's current memory attachment.
+
+The current worktree advances only when its entire original selection still matches; another
 branch, newer commit or memory repin is left intact. Local completion and remote
 PR/context acceptance remain separate states. Old version-1 attempts without
 frozen input are preserved and cannot be repaired from a newer conversation.

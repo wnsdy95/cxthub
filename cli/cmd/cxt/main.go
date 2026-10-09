@@ -378,6 +378,7 @@ func buildContainer(cfg config) container {
 		SetCaptureIdentity:      setCaptureIdentity(cfg),
 		ResolveRepo:             gitCtx.CurrentRepo,
 		PrepareRemoteConnection: prepareRemoteConnection(cfg),
+		PrepareCapturePush:      prepareCapturePush(cfg, store),
 		Queries:                 app.NewLocalRefQueryService(gitCtx, store),
 		HistoryQuery:            history,
 		WorkingState:            working,

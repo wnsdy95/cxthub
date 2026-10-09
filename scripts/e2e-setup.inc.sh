@@ -70,6 +70,9 @@ PYTCONNECTED
   fi
   printf '{"cwd":"%s","session_id":"sess-TSETUPSEED","transcript_path":"%s"}\n' "$PWD" "$D/sess-TSETUPSEED.jsonl" |
     cxt hook --provider claude --event SessionEnd >>"$TMP/t-seed-hook.out" 2>&1 || exit 1
+  if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/t-seed-drain.out" 2>&1; then
+    cat "$TMP/t-seed-drain.out"; exit 1
+  fi
   # main did not exist before this command. No rename, fabricated history or
   # initial-legacy observation may substitute for its actual creation event.
   CXT_KEEP_SESSION=1 git switch -q -c main >"$TMP/t-birth.out" 2>&1 || { cat "$TMP/t-birth.out"; exit 1; }
@@ -80,6 +83,9 @@ PYTCONNECTED
   git add a.txt && git commit -qm setup-A >"$TMP/t-a-commit.out" 2>&1 || { cat "$TMP/t-a-commit.out"; exit 1; }
   printf '{"cwd":"%s","session_id":"sess-TSETUPA","transcript_path":"%s"}\n' "$PWD" "$D/sess-TSETUPA.jsonl" |
     cxt hook --provider claude --event SessionEnd >>"$TMP/t-a-hook.out" 2>&1 || exit 1
+  if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/t-a-drain.out" 2>&1; then
+    cat "$TMP/t-a-drain.out"; exit 1
+  fi
   T_CODE_A=$(git rev-parse HEAD) || exit 1
   git push -qu origin main >"$TMP/t-a-push.out" 2>&1 || { cat "$TMP/t-a-push.out"; exit 1; }
   ccurl -fsSb "$J" "$B/repos/$T_RID" >"$TMP/t-server-before.json" || exit 1
@@ -156,6 +162,10 @@ PYTNOREF
   git add b.txt && git commit -qm setup-B >"$TMP/t-b-commit.out" 2>&1 || { cat "$TMP/t-b-commit.out"; exit 1; }
   printf '{"cwd":"%s","session_id":"sess-TSETUPB","transcript_path":"%s"}\n' "$PWD" "$D/sess-TSETUPB.jsonl" |
     cxt hook --provider claude --event SessionEnd >>"$TMP/t-b-hook.out" 2>&1 || exit 1
+  # SessionEnd can return before durable capture applies the current ref.
+  if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/t-b-drain.out" 2>&1; then
+    cat "$TMP/t-b-drain.out"; exit 1
+  fi
   T_CODE_B=$(git rev-parse HEAD) || exit 1
   if ! python3 - "$TMP" "$T_CODE_B" <<'PYTCAPTURE'
 import json,pathlib,sys

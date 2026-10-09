@@ -25,6 +25,15 @@ type CaptureAttempt struct {
 	InputsReady     bool                   `json:"inputs_ready,omitempty"`
 	FinalMemory     *FrozenCaptureMemory   `json:"final_memory,omitempty"`
 	MemoryFinalized bool                   `json:"memory_finalized,omitempty"`
+	// A queued predecessor is selected at admission by the exact Git parent and
+	// unchanged worktree cursor. Its result is pinned before any successor effect.
+	Predecessor            *CapturePredecessor `json:"predecessor,omitempty"`
+	PredecessorObservation *HistoryEvent       `json:"predecessor_observation,omitempty"`
+}
+
+type CapturePredecessor struct {
+	AttemptID string `json:"attempt_id"`
+	GitCommit string `json:"git_commit"`
 }
 
 type CaptureOutcome struct {
@@ -74,6 +83,25 @@ func (p CaptureAttempt) MatchesObservation(target ContentHash, e HistoryEvent) b
 }
 
 func (p CaptureAttempt) Validate() error {
+	if p.Predecessor != nil {
+		d := p.Predecessor
+		if p.Version != 2 || len(d.AttemptID) != 32 || strings.Trim(d.AttemptID, "0123456789abcdef") != "" || d.AttemptID == p.Proof.ID || !validCaptureOID(d.GitCommit) || d.GitCommit == p.Proof.GitAfter {
+			return ErrHashMismatch
+		}
+		if e := p.PredecessorObservation; e != nil {
+			knownID := e.ID == CaptureFinalObservationID(d.AttemptID) || e.ID == CaptureBaselineObservationID(d.AttemptID) || e.ID == CaptureContinuationObservationID(d.AttemptID)
+			for i := 0; i < 2; i++ {
+				knownID = knownID || e.ID == CaptureProviderObservationID(d.AttemptID, i)
+			}
+			if !knownID || ValidateHistoryEvent(*e) != nil || e.Kind != "position" || e.RepoID != p.Proof.RepoID || e.WorktreeID != p.Proof.WorktreeID || e.BranchID != p.Proof.BranchID || e.Branch != p.Proof.Branch || e.LocalBranch != p.Proof.LocalBranch || e.GitAfter != d.GitCommit || e.Source != e.Target || !e.MemoryPinned {
+				return ErrHashMismatch
+			}
+		} else if p.Complete || p.FinalMemory != nil || p.MemoryFinalized {
+			return ErrHashMismatch
+		}
+	} else if p.PredecessorObservation != nil {
+		return ErrHashMismatch
+	}
 	if (p.Version != 1 && p.Version != 2) || p.Proof.Kind != "position" || p.Proof.WorktreeID == "" ||
 		!validCaptureOID(p.Proof.GitAfter) || p.Proof.Source != p.Proof.Target || len(p.Outcomes) == 0 {
 		return ErrHashMismatch
@@ -105,6 +133,9 @@ func (p CaptureAttempt) Validate() error {
 		}
 	}
 	member, hasTarget := p.Proof.Target == p.Initial, p.Initial != ""
+	if e := p.PredecessorObservation; e != nil && e.Target != "" {
+		member, hasTarget = member || p.Proof.Target == e.Target, true
+	}
 	seen := map[string]bool{}
 	for _, o := range p.Outcomes {
 		if o.MemoryPlan != nil && (p.Version != 2 || o.MemoryPlan.Validate() != nil || o.State == "absent" || (o.State == "saved" && (o.MemoryPlan.Snapshot != o.Target || o.MemoryPlan.Memory != o.MemoryHash))) {
@@ -186,6 +217,14 @@ func CaptureBaselineObservationID(attempt string) string {
 
 func CaptureFinalObservationID(attempt string) string {
 	return strings.TrimPrefix(string(HashContent([]byte("capture-final-memory\x00"+attempt))), "sha256:")[:32]
+}
+
+func CaptureContinuationObservationID(attempt string) string {
+	return strings.TrimPrefix(string(HashContent([]byte("capture-continuation\x00"+attempt))), "sha256:")[:32]
+}
+
+func CaptureCompletionObservationID(attempt string) string {
+	return strings.TrimPrefix(string(HashContent([]byte("capture-completion\x00"+attempt))), "sha256:")[:32]
 }
 
 func CapturePublicationID(e HistoryEvent) string {

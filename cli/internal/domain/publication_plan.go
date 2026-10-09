@@ -12,6 +12,9 @@ type PublicationBranch struct{ Branch, BranchID string }
 type PublicationScope struct {
 	Branches    []PublicationBranch
 	HistoryOnly bool
+	// Deferred Git pushes authorize the completed capture, never a newer local
+	// context tip. Empty preserves the interactive publication contract.
+	ExpectedTargets map[string]ContentHash
 }
 
 // PlanPublication is only for selected publication. The existing unselected
@@ -104,6 +107,17 @@ func PlanPublication(in PublicationPlanInput) (PublicationPlan, error) {
 	}
 	if len(branches) == 0 {
 		return PublicationPlan{}, ErrInvalidRef
+	}
+	if len(in.Scope.ExpectedTargets) > 0 {
+		if in.Scope.HistoryOnly || len(in.Scope.ExpectedTargets) != len(branches) {
+			return PublicationPlan{}, ErrInvalidRef
+		}
+		for _, b := range branches {
+			target := in.Scope.ExpectedTargets[b.BranchID]
+			if ValidateContentHash(target) != nil || refs[b.Branch].Target != target {
+				return PublicationPlan{}, ErrSyncConflict
+			}
+		}
 	}
 	projection, err := projectPublicationBranches(catalog.all, branches)
 	if err != nil {
