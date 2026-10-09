@@ -133,6 +133,11 @@ func runGitPrePush(ctx context.Context, c *Container, cwd string, args []string,
 	}
 	scope, err := resolveGitPushScope(ctx, c, cwd, updates)
 	if err == nil {
+		// Persist the selected code/identity before replay can encounter an
+		// unfinished capture. The worker must not infer this intent later.
+		if queueErr := queueCapturePush(ctx, c, cwd, updates, scope); queueErr != nil {
+			hookWarn("deferred context push could not be recorded: %v", queueErr)
+		}
 		ids := map[string]bool{}
 		for _, b := range scope.Branches {
 			ids[b.BranchID] = true

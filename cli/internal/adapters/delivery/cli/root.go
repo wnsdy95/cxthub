@@ -37,6 +37,8 @@ import (
 type Container struct {
 	// WakeHistoricalSync is process lifecycle wiring, absent in embedded/test drivers.
 	WakeHistoricalSync      func(string)
+	WakeCommitCapture       func(string)
+	CommitCapture           inbound.CommitCapture
 	ProviderLaunch          ProviderLaunchHooks
 	PrepareAgent            inbound.PrepareAgentContext
 	ApplySelectedPull       func(context.Context, string) (outbound.SelectedPullReceipt, error)
@@ -45,7 +47,9 @@ type Container struct {
 	CaptureRecovery         inbound.CaptureRecovery
 	ResolveConnection       func(context.Context, string) (domain.RepositoryConnection, error)
 	PrepareRemoteConnection func(context.Context, string, string, string) (PreparedRemoteConnection, error)
-	ResolveSyncDestination  func(context.Context, string, string) (SyncDestination, error)
+	// PrepareCapturePush binds the supplied observed URL, credentials and repo; it must not reselect origin.
+	PrepareCapturePush     func(context.Context, string, CapturePushDestination, string) (inbound.SyncRepo, error)
+	ResolveSyncDestination func(context.Context, string, string) (SyncDestination, error)
 	// ResolveRepo identifies a configured replica without registering or mutating it.
 	SetCaptureIdentity func(context.Context, string, domain.DocumentIdentity) error
 	ResolveRepo        func(context.Context, string) (domain.Repo, error)
@@ -802,6 +806,9 @@ func Run(c *Container, args []string) error {
 		return nil
 
 	case "push":
+		if c.WakeCommitCapture != nil {
+			defer c.WakeCommitCapture(cwd)
+		}
 		var finishDiagnostics func()
 		ctx, finishDiagnostics = beginPushDiagnostics(ctx)
 		defer finishDiagnostics()

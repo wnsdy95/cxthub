@@ -28,12 +28,14 @@ import (
 //  7. If existing branch HEAD exists, connect to parent
 //  8. Snapshot(ID=docHash) → PutSnapshot, branch ref/HEAD updated
 type SaveSessionService struct {
-	capture  outbound.SessionCapture
-	outbox   outbound.SyncOutbox
-	gitCtx   outbound.GitContext
-	captures map[domain.ProviderKind]outbound.CaptureSource
-	codecs   map[domain.ProviderKind]outbound.ProviderCodec
-	store    outbound.SessionStore
+	frozenMemorySources map[domain.ProviderKind]outbound.MemorySource
+	frozenDistiller     outbound.MemoryDistiller
+	capture             outbound.SessionCapture
+	outbox              outbound.SyncOutbox
+	gitCtx              outbound.GitContext
+	captures            map[domain.ProviderKind]outbound.CaptureSource
+	codecs              map[domain.ProviderKind]outbound.ProviderCodec
+	store               outbound.SessionStore
 }
 
 // NewSaveSessionService creates a SaveSessionService and injects its dependencies.
@@ -671,7 +673,20 @@ func hasLegacyGraftEvent(state []domain.GraftQueueEvent, snapshot string) bool {
 
 // graftLocalAndQueue serializes local LWW register advancement and remote propagation events under the same process lock. It durable writes the queue first and then increments local seq. It avoids creating a state where "there is an edge locally but no remote event". The opposite (queue only) can be idempotently recovered on retry, and the ref does not move, making it safe.
 func (s *SaveSessionService) graftLocalAndQueue(ctx context.Context, repoRoot string, head, parent domain.ContentHash) error {
+	return s.graftLocalAndQueueChecked(ctx, repoRoot, head, parent, nil)
+}
+
+func (s *SaveSessionService) graftLocalAndQueueChecked(ctx context.Context, repoRoot string, head, parent domain.ContentHash, admit func() (bool, error)) error {
 	return s.outbox.WithGrafts(ctx, repoRoot, func(q outbound.GraftQueueAccess) error {
+		if admit != nil {
+			allowed, err := admit()
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return nil
+			}
+		}
 		state, err := q.Load()
 		if err != nil {
 			return err

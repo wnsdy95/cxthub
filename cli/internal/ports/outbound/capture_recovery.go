@@ -17,3 +17,8 @@ type CaptureRecoveryEvidence interface {
 	ListHistoryEvents(context.Context, string) ([]domain.HistoryEvent, error)
 	GetSnapshot(context.Context, domain.ContentHash) (domain.Snapshot, error)
 }
+
+// Retry diagnostics are separate from immutable input/proof fingerprints.
+type CaptureRetryReader interface {
+	ReadCaptureRetry(context.Context, domain.CaptureAttempt) (*domain.CaptureRetryState, error)
+}

@@ -97,6 +97,12 @@ func run(args []string) error {
 		}
 		service := app.NewCaptureRecoveryService(capturejournal.New(state.Root, cwd), store)
 		c := &delivcli.Container{CaptureRecovery: service, History: app.NewContextHistoryService(store, store), List: app.NewListSessionsService(store)}
+		if len(args) > 2 && args[2] == "retry" {
+			git := remotecfg.Wrap(state.Root, gitctx.NewGitContextAdapter())
+			captures := map[domain.ProviderKind]outbound.CaptureSource{domain.ProviderClaude: capture.NewClaudeCapture(), domain.ProviderCodex: capture.NewCodexCapture()}
+			codecs := map[domain.ProviderKind]outbound.ProviderCodec{domain.ProviderClaude: codec.NewClaudeCodec(), domain.ProviderCodex: codec.NewCodexCodec()}
+			c.CommitCapture = app.NewSaveSessionService(git, captures, codecs, store, capture.NewSessionCapture(store), storage.NewSyncOutbox()).WithFrozenMemory(map[domain.ProviderKind]outbound.MemorySource{domain.ProviderClaude: memory.NewClaudeMemorySource(), domain.ProviderCodex: memory.NewCodexMemorySource()}, memory.NewRuleDistiller())
+		}
 		return delivcli.RunCaptureRecovery(ctx, c, cwd, string(repo.ID), args[2:], os.Stdout)
 	}
 	if args[1] == "repair" && slices.Contains(args[2:], "--from-server") {
@@ -332,6 +338,7 @@ func buildContainer(cfg config) container {
 	// --- use-case services (inbound implementation, outbound injection) ---
 	initSvc := app.NewInitRepoService(gitCtx, store)
 	saveSvc := app.NewSaveSessionService(gitCtx, captures, codecs, store, capture.NewSessionCapture(store), storage.NewSyncOutbox())
+	saveSvc.WithFrozenMemory(memSources, distiller)
 	stagingSvc := app.NewStagingService(gitCtx, gitctx.NewGitContextAdapter(), store, store, captures, codecs, capture.NewSessionCapture(store), storage.NewSyncOutbox())
 	forkSvc := app.NewForkSessionService(store)
 	branchLifecycleSvc := app.NewBranchLifecycleService(gitCtx, store)
@@ -371,6 +378,7 @@ func buildContainer(cfg config) container {
 		SetCaptureIdentity:      setCaptureIdentity(cfg),
 		ResolveRepo:             gitCtx.CurrentRepo,
 		PrepareRemoteConnection: prepareRemoteConnection(cfg),
+		PrepareCapturePush:      prepareCapturePush(cfg, store),
 		Queries:                 app.NewLocalRefQueryService(gitCtx, store),
 		HistoryQuery:            history,
 		WorkingState:            working,
@@ -389,26 +397,28 @@ func buildContainer(cfg config) container {
 			}, cfg.Identity)
 			return client.ResolveRepositoryConnection(ctx, raw)
 		},
-		Init:            initSvc,
-		Save:            saveSvc,
-		Fork:            forkSvc,
-		Branches:        branchLifecycleSvc,
-		Checkout:        checkoutSvc,
-		Load:            loadSvc,
-		List:            listSvc,
-		Memorize:        memorizeSvc,
-		Sync:            syncSvc,
-		Seed:            seedSvc,
-		Tag:             tagSvc,
-		Stash:           stashSvc,
-		Handoff:         handoffSvc,
-		History:         contextHistory,
-		CaptureRecovery: app.NewCaptureRecoveryService(capturejournal.New(cfg.RepoRoot, cfg.RepoRoot), store),
-		PRMerges:        gitctx.NewGitHubPRMergeResolver(),
-		Settings:        remote,
-		SettingsObjects: store,
-		Repack:          store.RepackObjects,
-		Identity:        cfg.Identity,
+		Init:              initSvc,
+		Save:              saveSvc,
+		CommitCapture:     saveSvc,
+		WakeCommitCapture: delivcli.SpawnCommitCapture,
+		Fork:              forkSvc,
+		Branches:          branchLifecycleSvc,
+		Checkout:          checkoutSvc,
+		Load:              loadSvc,
+		List:              listSvc,
+		Memorize:          memorizeSvc,
+		Sync:              syncSvc,
+		Seed:              seedSvc,
+		Tag:               tagSvc,
+		Stash:             stashSvc,
+		Handoff:           handoffSvc,
+		History:           contextHistory,
+		CaptureRecovery:   app.NewCaptureRecoveryService(capturejournal.New(cfg.RepoRoot, cfg.RepoRoot), store),
+		PRMerges:          gitctx.NewGitHubPRMergeResolver(),
+		Settings:          remote,
+		SettingsObjects:   store,
+		Repack:            store.RepackObjects,
+		Identity:          cfg.Identity,
 	}
 	preparer := runtimeAgentPreparer{git: gitCtx, store: store, remote: remote, history: history}
 	hookHdl.WithAgentContext(preparer)

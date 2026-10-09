@@ -11,6 +11,7 @@ SOURCE = (ROOT / "scripts/e2e-sync.sh").read_text()
 GATE = SOURCE.split("# BEGIN wrapper prerequisite gate", 1)[1].split("\n", 1)[1].split("# END wrapper prerequisite gate.", 1)[0]
 CLEANUP = SOURCE.split("# BEGIN fixture job cleanup", 1)[1].split("\n", 1)[1].split("# END fixture job cleanup.", 1)[0]
 HOLDER = SOURCE.split("# BEGIN wrapper holder readiness.\n", 1)[1].split("# END wrapper holder readiness.", 1)[0]
+CAPTURE_GATE = GATE.split("# Capture exclusion:", 1)[1].split("\n", 1)[1].split("# Enforcement:", 1)[0]
 
 
 class WrapperGateTest(unittest.TestCase):
@@ -65,6 +66,12 @@ python3() {
   if [ "$1" = "$ROOT/scripts/e2e-wrapper-proof.py" ]; then
     printf '%s' "$PROOF_OUTPUT"; return "$PROOF_STATUS"
   fi
+  if [ "$1" = "$ROOT/scripts/e2e-drain-publication.py" ]; then
+    mark; return 0
+  fi
+  if [ "$#" = 6 ] && [ "$1" = - ] && { [ "$6" = nocap ] || [ "$6" = cap ]; }; then
+    mark; return 0
+  fi
   mark; return 1
 }
 expect() { mark; }
@@ -82,6 +89,47 @@ finish_fixture_job() { wait "$1" 2>/dev/null || true; }
                         self.assertEqual(seed.read_text(), "original")
                         self.assertIn("RESULT:1", result.stdout)
                         self.assertIn("dependent assertions not evaluated", result.stdout)
+
+    def test_capture_proof_failure_stops_before_dependent_actions(self):
+        for mode in ("nocap", "cap"):
+            for stage in ("drain", "proof"):
+                with self.subTest(mode=mode, stage=stage), tempfile.TemporaryDirectory() as tmp:
+                    seed = Path(tmp) / "seed"
+                    seed.write_text("original\n")
+                    script = '''set -u
+FAIL=0; SEEDID=seed-id
+python3() {
+  if [ "$1" = "$ROOT/scripts/e2e-drain-publication.py" ]; then
+    echo "drain:$CURRENT_MODE" >> "$TMP/actions"
+    [ "$FAIL_STAGE:$FAIL_MODE" != "drain:$CURRENT_MODE" ]; return $?
+  fi
+  echo "proof:$6" >> "$TMP/actions"
+  [ "$FAIL_STAGE:$FAIL_MODE" != "proof:$6" ]
+}
+git() {
+  if [ "$1" = commit ]; then CURRENT_MODE="$3"; fi
+  if [ "$1" = rev-parse ]; then printf 'synthetic-sha\\n'; fi
+}
+expect() { echo "$1" >> "$TMP/assertions"; }
+trap 'printf "STATE:%s:%s\\n" "$FAIL" "${CXT_E2E_KEEP_TMP:-0}"' EXIT
+''' + CAPTURE_GATE + '\necho CONTINUED\n'
+                    env = dict(os.environ, ROOT=str(ROOT), TMP=tmp, SEED=str(seed),
+                               FAIL_MODE=mode, FAIL_STAGE=stage)
+                    result = subprocess.run(["bash", "-c", script], cwd=tmp, env=env,
+                                            capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("STATE:1:1", result.stdout)
+                    self.assertNotIn("CONTINUED", result.stdout)
+                    actions = (Path(tmp) / "actions").read_text().splitlines()
+                    expected = [] if mode == "nocap" else ["drain:nocap", "proof:nocap"]
+                    expected += [f"drain:{mode}"]
+                    if stage == "proof":
+                        expected += [f"proof:{mode}"]
+                    self.assertEqual(actions, expected)
+                    assertions = Path(tmp) / "assertions"
+                    self.assertEqual(assertions.read_text().splitlines() if assertions.exists() else [],
+                                     [] if mode == "nocap" else ["unresumed seed is not captured"])
+                    self.assertEqual("resumed work" in seed.read_text(), mode == "cap")
 
     def test_cleanup_joins_only_direct_shell_jobs(self):
         with tempfile.TemporaryDirectory() as tmp:

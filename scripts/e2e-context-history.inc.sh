@@ -10,10 +10,18 @@ if ! CXT_KEEP_SESSION=1 git checkout -qb history-pair >"$TMP/paired-birth.out" 2
 fi
 session "$TMP/history-client" PA
 echo a > paired.txt; git add paired.txt; git commit -qm paired-A >"$TMP/paired-A.out" 2>&1
+# L/M assert each completed operation; asynchronous sequence correctness is
+# covered separately. Join capture/publication before recording its context.
+if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/paired-A-drain.out" 2>&1; then
+  cat "$TMP/paired-A-drain.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; return
+fi
 CODE_A=$(git rev-parse HEAD)
 SNAP_A=$(ref_target .cxt/refs/heads/history-pair)
 session "$TMP/history-client" PB
 echo b > paired.txt; git add paired.txt; git commit -qm paired-B >"$TMP/paired-B.out" 2>&1
+if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/paired-B-drain.out" 2>&1; then
+  cat "$TMP/paired-B-drain.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; return
+fi
 CODE_B=$(git rev-parse HEAD)
 SNAP_B=$(ref_target .cxt/refs/heads/history-pair)
 if [ -z "$SNAP_A" ] || [ -z "$SNAP_B" ]; then cat "$TMP/paired-A.out" "$TMP/paired-B.out"; FAIL=1; return; fi
@@ -35,6 +43,9 @@ expect "reset keeps shared context tip B" "$(ref_target .cxt/refs/heads/history-
 expect "reset leaves peer position B intact" "$(position_snapshot "$TMP/history-peer")" "$SNAP_B"
 session "$TMP/history-client" PC
 echo c > paired.txt; git add paired.txt; git commit -qm paired-C >"$TMP/paired-C.out" 2>&1
+if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/paired-C-drain.out" 2>&1; then
+  cat "$TMP/paired-C-drain.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; return
+fi
 SNAP_C=$(ref_target .cxt/refs/heads/history-pair)
 expect "new continuation excludes later ancestry" "$(python3 - "$SNAP_A" "$SNAP_B" "$SNAP_C" <<'PYPARENTS'
 import json,pathlib,sys
@@ -63,6 +74,9 @@ expect "tracking alias retains shared tip C" "$(ref_target .cxt/refs/heads/histo
 expect "tracking alias creates no duplicate context ref" "$([ ! -f .cxt/refs/heads/my-history ] && echo yes)" yes
 session "$TMP/history-client" PD
 echo d > paired.txt; git add paired.txt; git commit -qm alias-D >"$TMP/alias-D.out" 2>&1
+if ! python3 "$ROOT/scripts/e2e-drain-publication.py" "$TMP/bin/cxt" "$PWD" >"$TMP/alias-D-drain.out" 2>&1; then
+  cat "$TMP/alias-D-drain.out"; FAIL=1; CXT_E2E_KEEP_TMP=1; return
+fi
 SNAP_D=$(ref_target .cxt/refs/heads/history-pair)
 expect "alias capture uses the canonical branch and historical parent A" "$(python3 - "$SNAP_A" "$SNAP_C" "$SNAP_D" <<'PYALIAS'
 import json,pathlib,sys

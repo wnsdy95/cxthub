@@ -34,7 +34,7 @@ Native Windows archives are not currently published.
 
 Source builds additionally require:
 
-- Go 1.26.5 or newer for `cxt` and `cxtd`;
+- Go 1.26.9 or newer for `cxt` and `cxtd`;
 - Node.js 22 and npm for the web application; and
 - PostgreSQL 16 for PostgreSQL adapter and migration testing.
 

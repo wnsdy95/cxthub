@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
 )
@@ -44,6 +45,9 @@ func RunCaptureRecovery(ctx context.Context, c *Container, cwd, repo string, arg
 		}
 		for _, st := range selected {
 			fmt.Fprintf(w, "%s  %s  %s  Git %s\n  expect: %s\n", st.ID, st.State, st.Branch, st.CodeCommit, st.Fingerprint)
+			if st.Retry != nil {
+				fmt.Fprintf(w, "  Replay attempts: %d; last error: %s\n", st.Retry.Tries, st.Retry.Error)
+			}
 			if st.Resolution != nil {
 				fmt.Fprintf(w, "  Recorded decision: %s\n", st.Resolution.Kind)
 			}
@@ -59,7 +63,7 @@ func RunCaptureRecovery(ctx context.Context, c *Container, cwd, repo string, arg
 				switch st.State {
 				case "superseded":
 					fmt.Fprintf(w, "  Resolve: cxt capture resolve %s --expect %s\n", st.ID, st.Fingerprint)
-				case "ready-to-retry", "ready-to-publish":
+				case "capture-retry-paused", "ready-to-capture", "ready-to-retry", "ready-to-publish":
 					fmt.Fprintf(w, "  Retry: cxt capture retry %s --expect %s\n", st.ID, st.Fingerprint)
 				case "needs-review":
 					fmt.Fprintf(w, "  Inspect: cxt capture show %s. Missing capture evidence cannot be inferred from the current session.\n", st.ID)
@@ -78,6 +82,33 @@ func RunCaptureRecovery(ctx context.Context, c *Container, cwd, repo string, arg
 			return err
 		}
 		pass := commitCapturePass(attempt)
+		if pass.Version == 2 && pass.InputsReady {
+			if c.CommitCapture == nil {
+				return fmt.Errorf("frozen-input replay unavailable")
+			}
+			root := cxtRepoRoot(ctx, cwd)
+			release, err := claimCaptureWorker(root)
+			if err != nil {
+				return err
+			}
+			if release == nil {
+				return fmt.Errorf("capture worker is busy; retry after it finishes")
+			}
+			defer release()
+			// Another worker may have completed after the initial inspection.
+			attempt, err = c.CaptureRecovery.RetryAttempt(ctx, repo, pos[1], expect)
+			if err != nil {
+				return err
+			}
+			pass = commitCapturePass(attempt)
+			jobCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			if err := processFrozenCapture(jobCtx, c, cwd, root, &pass); err != nil {
+				return err
+			}
+			fmt.Fprintln(w, "Capture publication recovered from frozen input. Run cxt push to deliver it to the server.")
+			return nil
+		}
 		accepted, err := publicationHistory(ctx, c, repo)
 		if err != nil {
 			return err

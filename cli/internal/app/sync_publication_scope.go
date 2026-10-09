@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 
@@ -19,6 +20,7 @@ func (s *SyncRepoService) pushPublication(ctx context.Context, in inbound.SyncIn
 	if in.Publication != nil {
 		scope = *in.Publication
 		scope.Branches = append([]domain.PublicationBranch(nil), scope.Branches...)
+		scope.ExpectedTargets = maps.Clone(scope.ExpectedTargets)
 	}
 	if (in.Ref != "" && in.Publication != nil) || (in.Ref == "" && len(scope.Branches) == 0) {
 		return fail(domain.ErrInvalidRef)

@@ -119,6 +119,15 @@ func snapshotForCommitWithPublication(ctx context.Context, c *Container, cwd, me
 		return 0, err
 	}
 	root := cxtRepoRoot(ctx, cwd)
+	if pass != nil && pass.Version == 2 {
+		if c.WakeCommitCapture != nil {
+			defer c.WakeCommitCapture(cwd)
+		}
+		if err := freezeCommitInputs(ctx, c, cwd, root, message, pass); err != nil {
+			return 0, err
+		}
+		return finishFrozenCaptureInline(ctx, c, cwd, root, pass, publish)
+	}
 	for i, p := range providers {
 		claimed := p == domain.ProviderCodex && (providerfs.ValidSessionID(os.Getenv("CODEX_THREAD_ID")) || providerfs.ValidSessionID(os.Getenv("CODEX_SESSION_ID")))
 		if owner, managed := supervisedProvider(ctx, cwd); managed && owner == p {
@@ -807,6 +816,7 @@ func activeProviderForCwd(ctx context.Context, cwd string) domain.ProviderKind {
 }
 
 type commandCaptureTarget struct {
+	SessionID   string
 	Provider    domain.ProviderKind
 	SessionPath string
 }
@@ -865,6 +875,10 @@ func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTa
 	target := commandCaptureTarget{Provider: provider}
 	if !managed && provider == domain.ProviderCodex && appPath != "" {
 		target.SessionPath = appPath
+		target.SessionID = strings.TrimSpace(os.Getenv("CODEX_THREAD_ID"))
+		if target.SessionID == "" {
+			target.SessionID = strings.TrimSpace(os.Getenv("CODEX_SESSION_ID"))
+		}
 		return target, nil
 	}
 	if !managed || provider != wrappedProvider {
@@ -908,6 +922,7 @@ func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTa
 		return commandCaptureTarget{}, fmt.Errorf("cannot locate the %s session %s owned by this cxt wrapper: %w", provider, sessionID, err)
 	}
 	target.SessionPath = path
+	target.SessionID = sessionID
 	return target, nil
 }
 
@@ -1058,6 +1073,9 @@ func runGitHook(ctx context.Context, c *Container, cwd string, rest []string) er
 }
 
 func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, rest []string, publish func(string)) error {
+	if len(rest) > 0 && rest[0] == "capture-replay" {
+		return runCommitCaptureWorker(ctx, c, cwd)
+	}
 	if len(rest) > 0 && rest[0] == "historical-sync" {
 		return runHistoricalSync(ctx, c, cwd)
 	}
@@ -1066,6 +1084,9 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	if c.WakeCommitCapture != nil && len(rest) > 0 && (rest[0] == "pre-push" || rest[0] == "branch-state-sync") {
+		defer c.WakeCommitCapture(cwd)
+	}
 	if len(rest) > 0 && rest[0] == "pre-push" {
 		var finish func()
 		ctx, finish = beginPushDiagnostics(ctx)

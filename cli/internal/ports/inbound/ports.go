@@ -228,6 +228,9 @@ type SaveInput struct {
 
 // SaveOutput is the output DTO of SaveSession.Save.
 type SaveOutput struct {
+	// Frozen commit replay pins this exact derived memory independently of later attachments.
+	MemoryHash   domain.ContentHash
+	MemorySource domain.ContentHash
 	// SnapshotID is the generated snapshot ID (= CIR content hash).
 	SnapshotID domain.ContentHash
 	// Branch is the stored branch name (auto-detection result).

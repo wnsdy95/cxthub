@@ -1,7 +1,7 @@
 # cxtd container — API deployment (Render or Cloud Run) (multi-stage, postgres tag build).
 # build (from repo root): docker build -f deploy/Dockerfile -t <registry>/cxtd:<git-sha> .
 
-FROM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS build
+FROM golang:1.26.9-alpine@sha256:cdfd4fe2da6b225d8b40c6b7a105736e548e83ff56d5d8f9394446eeb5eb84e0 AS build
 WORKDIR /src
 COPY backend/ backend/
 RUN cd backend && CGO_ENABLED=0 go build -tags postgres -o /out/cxtd ./cmd/cxtd

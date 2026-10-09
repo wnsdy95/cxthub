@@ -86,7 +86,7 @@ curl -fsSL https://raw.githubusercontent.com/wnsdy95/cxthub/main/distrib/install
   CXT_VERSION=v0.1.0 sh
 ```
 
-To build the Go binaries from source, install Go 1.26.5+ and Git 2.28+:
+To build the Go binaries from source, install Go 1.26.9+ and Git 2.28+:
 
 ```bash
 git clone https://github.com/wnsdy95/cxthub.git

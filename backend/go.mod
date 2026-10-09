@@ -5,7 +5,7 @@
 // External dependencies cover PostgreSQL, compression and maintained OIDC/JOSE and SAML/XML-signature verification.
 module github.com/wnsdy95/cxthub/backend
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/beevik/etree v1.7.0

@@ -3,7 +3,7 @@
 // Hexagonal architecture (ports & adapters); adapters use at-rest compression and native WebSocket transport.
 module github.com/wnsdy95/cxthub/cli
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/coder/websocket v1.8.15

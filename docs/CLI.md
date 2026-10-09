@@ -430,6 +430,72 @@ The automatic hook does not consume or clear the manual frozen index. The old
 provider-selector `staged` configuration is ignored: it contains no frozen content
 and cannot safely be migrated into an index.
 
+Before heavy processing, automatic commit capture now stores an exact native
+input prefix, its hash, selected Git/worktree/branch, settings references and
+memory selection. Provider memory found at freeze time is retained in the private
+receipt (at most 8 MiB); replay derives a fresh summary from those bytes and the
+frozen conversation, never from subsequently changed provider files. The private input is split into reusable 1 MiB chunks under
+`.cxt/capture/inputs`; it is not part of the public object store or synchronization.
+Directories use mode 0700 and files 0600. Raw evidence remains local and is not
+automatically collected; it may contain secrets. Each input is limited to 2 GiB.
+The source prefix is read again to detect rewrites while freezing. Appends after
+the frozen boundary are left for a subsequent capture.
+
+Inputs totaling at most 1 MiB may finish in the hook, reserving five seconds
+of the unchanged 60-second hook budget for return and handoff. Larger inputs
+are queued immediately after sealing, before normalization. A separate local
+worker resumes sealed input, even after the provider file is edited or removed.
+It revalidates every private chunk and masking-policy fingerprint; changed policy,
+corrupt/missing input, or an incomplete final JSONL record cannot be published.
+The worker runs for at most 30 minutes, with a 10-minute per-attempt limit and
+eight persisted automatic attempts. Further Git synchronization wakes pending
+work; `cxt capture list` / `show` report retry counts and failures. After resolving
+a failure, `cxt capture retry <id> --expect <fingerprint>` explicitly retries the
+same archived input. An unsealed capture cannot rediscover missing input later.
+
+If `git push origin` selects a commit whose sealed capture is still running,
+the hook records that exact Git ref, SHA, context branch identity and destination
+under `.cxt/capture/push-requests`. After capture and publication evidence complete,
+the same worker retries only that selection (eight attempts, one minute each).
+It never turns a background capture into an implicit all-branches push. Changed
+code, branch identity, destination or context target leaves the request retained;
+run an explicit `cxt push` after resolving the mismatch. A successful Git push
+alone does not prove that its context upload has completed.
+
+Replay first persists each derived memory hash and its attachment predecessor.
+Live capture and deferred commit capture share the same initial inherited memory
+version when creating the same snapshot concurrently.
+Attachment-only compare-and-swap retains concurrent winners; a conflicting
+independent memory version remains pending instead of being silently replaced.
+A final immutable observation aggregates both providers, including when snapshot
+deduplication makes an earlier capture the covering target. Frozen imports are
+retained explicitly, without claiming that the current graph was projected.
+
+Consecutive queued commits retain an explicit capture dependency: when the Git
+first parent has an unfinished capture from the same worktree, branch identity
+and unchanged context selection, the successor records that attempt's ID. It
+waits for the exact finalized predecessor observation before deriving memory or
+storing its snapshot, then inherits both the predecessor context and its pinned
+memory. It does not choose a predecessor by completion time, and an explicit
+context/memory selection change breaks that implicit continuation. Missing or
+ambiguous predecessor evidence leaves publication pending.
+
+Completion records an explicit code-position observation with the original
+capture time and finalized memory. Intermediate baseline/provider observations
+remain retained but cannot win the same-time code selection by hash order. A later
+independent user selection keeps precedence over delayed completion. Empty-provider
+continuations retain their predecessor's exact memory and its root-selection
+witness, without rewriting the snapshot's current memory attachment.
+
+The current worktree advances only when its entire original selection still matches; another
+branch, newer commit or memory repin is left intact. Local completion and remote
+PR/context acceptance remain separate states. Old version-1 attempts without
+frozen input are preserved and cannot be repaired from a newer conversation.
+Older CLIs do not understand version-2 receipts; keep the updated CLI while these
+receipts exist. Normalization still reads the whole frozen input, and journal
+inspection still scans retained attempts; this is durable replay, not incremental
+normalization or a retention policy.
+
 ### `cxt restore`
 
 ```text
