@@ -1,4 +1,6 @@
 import { GitHubConnectionsPage } from './components/GitHubConnections';
+import './account.css';
+import './repository.css';
 import { useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { repositoryPath, parseRoute, replacePath, findByRoute, navigate } from './route';
@@ -9,6 +11,8 @@ import { EnterpriseProfile } from './components/EnterpriseProfile';
 import { Dashboard } from './components/Dashboard';
 import { PublicBrowse } from './components/PublicBrowse';
 import { UserProfile } from './components/UserProfile';
+import { AccountPage } from './components/AccountPages';
+import { CreateRepositoryPage } from './components/CreateRepositoryPage';
 import { Landing } from './components/Landing';
 import { Pricing } from './components/Pricing';
 import { DeviceApprove } from './components/DeviceApprove';
@@ -104,6 +108,8 @@ function Root() {
   }
   {
     const r = parseRoute();
+    if (r?.kind === 'account') return <AccountPage user={me.data!} section={r.section} create={r.create} />;
+    if (r?.kind === 'repositoryCreate') return <CreateRepositoryPage user={me.data!} />;
     if (r?.kind === 'invite' && r.token.startsWith('ci_')) return <InvitationPage key={r.token} id={r.token} />;
     if (r?.kind === 'githubConnections') return <GitHubConnectionsPage />;
     if (r?.kind === 'device') return <DeviceApprove code={r.code} />;

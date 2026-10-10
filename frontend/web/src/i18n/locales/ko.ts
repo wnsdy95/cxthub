@@ -6,6 +6,45 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+ createMenu: {
+  personalAccount: '개인 계정',
+  title: '새로 만들기',
+  repository: '새 레포지토리',
+  organization: '새 조직',
+  enterprise: '새 엔터프라이즈',
+  repositoryHint: '개인 계정에 레포지토리를 만든 뒤, cxt setup으로 로컬 Git 저장소를 연결하세요.',
+ },
+ repositorySidebar: {
+  title: '저장소 정보',
+  show: '저장소 정보 펼치기',
+  hide: '저장소 정보 숨기기',
+ },
+ accountUI: {
+  intro: '프로필부터 작업 환경, 연결된 도구까지 한곳에서 관리하세요.',
+  profileTitle: '공개 프로필',
+  profileHint: '팀원에게 표시되는 내 정보를 관리합니다.',
+  preferencesTitle: '사용 환경',
+  preferencesHint: '내 작업 방식에 맞게 기본값을 설정합니다.',
+  languageHint: '저장 없이 바로 적용됩니다.',
+  contextHelp: '컨텍스트 기본값은 어떻게 적용되나요?',
+  saveHint: '프로필과 컨텍스트 변경은 저장 후 적용됩니다.',
+  connectionsTitle: '연결 및 접근 관리',
+  connectionsHint: '연결된 도구와 로그인한 기기를 확인하세요.',
+  githubHint: '저장소 접근과 조직 연결을 관리합니다.',
+  manageGitHub: '연결 관리',
+  storageHint: '저장 공간 사용량과 변경 이력을 확인합니다.',
+ },
+ accountNav: {
+  menu: '프로필 메뉴',
+  navigation: '개인 메뉴',
+  profile: '내 프로필',
+  organizations: '내 조직',
+  enterprises: '내 엔터프라이즈',
+  loading: '목록을 불러오는 중…',
+  retry: '다시 시도',
+  noOrganizations: '참여 중인 조직이 없습니다.',
+  enterpriseSlugHint: '엔터프라이즈 URL의 마지막 경로가 됩니다. 비워두면 이름을 바탕으로 생성합니다.',
+ },
  ownerRecovery: {
   title: '소유자 복구 준비',
   note: '소유자 계정에 묶인 일회용 복구 코드를 준비합니다. 현재는 준비·확인 기능이며 필수 SSO 정책을 켜거나 끄지 않습니다.',

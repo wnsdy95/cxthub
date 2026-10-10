@@ -584,7 +584,7 @@ test('signed-in non-member stays on the public repository route and gets setting
   await expect(page).toHaveURL(/\/alice\/cxthub\?tab=settings$/);
   await expect(page.getByText('Public view', { exact: true })).toBeVisible();
   await expect(page.locator('.access-denied')).toContainText('Repository settings require owner access');
-  await expect(page.locator('.app-side')).toHaveCount(0);
+  await expect(page.locator('.app-side-left')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
@@ -1531,9 +1531,12 @@ test('independent API and MCP complete remote OAuth consent, PKCE, read-only cal
   const me = await (await api.get('/api/v1/me')).json();
   await api.patch('/api/v1/me', {headers:{Origin:origin,'X-Cxt-CSRF':'1'},data:{locale:'en'}});
   await page.goto(`/${me.username}`);
-  await page.getByRole('button', {name:'Account settings',exact:true}).click();
+  await page.getByRole('button', {name:'Profile menu',exact:true}).click();
+  await page.getByRole('link', {name:'Account settings',exact:true}).click();
+  await expect(page).toHaveURL(/\/settings\/account$/);
   await expect(page.getByText('Connected MCP applications', {exact:true})).toBeVisible();
-  await expect(page.getByRole('dialog', {name:'Account settings',exact:true})).toContainText('Codex App E2E');
+  await expect(page.getByRole('main')).toContainText('Codex App E2E');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByRole('button', {name:'Disconnect application',exact:true}).click();
   await expect(page.getByText('No connected applications', {exact:true})).toBeVisible();
   const refresh = await api.post('/oauth/token', {form:{grant_type:'refresh_token',client_id:client.client_id,refresh_token:tokens.refresh_token,resource:`${origin}/mcp`}});
@@ -1559,6 +1562,7 @@ test('repository history protection is explicit, survives reload, and reports up
     }
     if (method !== 'GET') return undefined;
     if (pathname === `/api/v1/repos/${repoId}/secrets`) return { status: 404, body: { error: { message: 'No secrets configured' } } };
+    if (pathname.startsWith(`/api/v1/repos/${repoId}/settings/`)) return { body: null };
     if (pathname === '/api/v1/me') return { body: { id: 'owner', username: 'alice', name: 'Alice', locale: 'en' } };
     if (pathname === '/api/v1/repositories') return { body: [{ id: repositoryId, owner_id: 'owner', effective_role: 'owner', owner_username: 'alice', name: 'cxthub', slug: 'cxthub', visibility: 'private' }] };
     if (pathname === `/api/v1/repositories/${repositoryId}/members`) return { body: [{ repository_id: repositoryId, user_id: 'owner', role: 'owner' }] };

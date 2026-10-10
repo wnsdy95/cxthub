@@ -8,32 +8,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { useMe, useOrganizations } from '../hooks';
 import { useT } from '../i18n';
-import { enterprisePath, navigate } from '../route';
+import { navigate } from '../route';
 import { safeAvatarUrl } from '../urls';
 import type { Enterprise, EnterpriseMembership, EnterprisePolicy } from '../types';
 import { Logo } from './Logo';
-import { Avatar, avatarColor } from './Avatar';
+import { avatarColor } from './Avatar';
+import { HeaderActions } from './HeaderActions';
 import { resizeToDataURL } from './Settings';
-
-function useEnterprises() { return useQuery({ queryKey: ['enterprises'], queryFn: api.listEnterprises, enabled: Boolean(useMe().data) }); }
-
-export function MyEnterprises() {
- const t = useT(); const qc = useQueryClient(); const list = useEnterprises();
- const [name, setName] = useState(''); const [slug, setSlug] = useState('');
- const create = useMutation({ mutationFn: () => api.createEnterprise(name, slug), onSuccess: async (created) => { await qc.invalidateQueries({ queryKey: ['enterprises'] }); navigate(enterprisePath(created.slug)); } });
- return <section className="profile-organizations"><div className="profile-section-head"><h2 className="profile-section">{t('enterprise.title')}</h2><span className="count-badge">{list.data?.length ?? 0}</span></div>
-  <div className="organization-list">{list.data?.map((enterprise) => <button className="organization-card" key={enterprise.id} onClick={() => navigate(enterprisePath(enterprise.slug))}><strong>{enterprise.name}</strong><small>/enterprises/{enterprise.slug}</small></button>)}</div>
-  {list.data?.length === 0 && <p className="hint">{t('enterprise.empty')}</p>}
-  <details className="organization-create"><summary>{t('enterprise.create')}</summary><form className="management-form" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}>
-   <label>{t('enterprise.name')}<input value={name} onChange={(event) => setName(event.target.value)} required maxLength={128} /></label><label>{t('enterprise.slug')}<input value={slug} onChange={(event) => setSlug(event.target.value)} maxLength={64} /></label><button disabled={create.isPending || !name.trim()}>{t('enterprise.create')}</button>
-  </form></details>{(list.error || create.error) && <p className="err" role="alert">{(list.error ?? create.error)?.message}</p>}
- </section>;
-}
 
 export function EnterpriseProfile({ slug }: { slug: string }) {
  const t = useT(); const me = useMe().data;
  const query = useQuery({ queryKey: ['enterprise', slug], queryFn: () => api.getEnterprise(slug), retry: false });
- return <div className="app"><header className="topbar"><button className="linkish-logo" onClick={() => navigate('/')} aria-label={t('common.home')}><div className="brand sm"><Logo /></div></button><div className="who">{me && <Avatar user={me} link />}</div></header>
+ return <div className="app"><header className="topbar"><button className="linkish-logo" onClick={() => navigate('/')} aria-label={t('common.home')}><div className="brand sm"><Logo /></div></button><div className="who">{me && <HeaderActions user={me} />}</div></header>
   {query.isLoading ? <div className="loading">…</div> : query.data ? <EnterpriseBody key={query.data.id} enterprise={query.data} /> : <div className="empty-box" role="alert">{t('enterprise.unavailable')}</div>}
  </div>;
 }

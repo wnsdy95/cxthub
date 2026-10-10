@@ -17,7 +17,7 @@ for (const conflict of [false, true]) test(`GitHub sync audit runs only on click
   if (r.pathname.endsWith('/members')) return {body:[{repository_id:repository.id,user_id:'owner',role:'owner'}]};
   if (r.pathname.endsWith('/view')) return {body:{refs:[],snapshots:[],history:[],reflog:[],pending:[],unsync:[]}};
   if (/\/(refs|snapshots|pending|unsync|history|reflog|notifications|invites)$/.test(r.pathname)) return {body:[]};
-  if (r.pathname.endsWith('/secrets')) return {body:null};
+  if (r.pathname.endsWith('/secrets') || /\/settings\/(claude|agents|codex)$/.test(r.pathname)) return {body:null};
   return undefined;
  });
  await page.goto('/alice/project?tab=settings');

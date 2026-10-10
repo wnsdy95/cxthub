@@ -13,7 +13,8 @@ assert.doesNotMatch(
   'generic .side layout selectors can collide with row state classes',
 );
 assert.match(styles, /\.app-side\s*\{[^}]*height:\s*calc\(100vh - 52px\)/s);
-assert.match(dashboard, /<aside className="app-side">/);
+assert.doesNotMatch(dashboard, /<aside/);
+assert.match(source('src/components/RepositorySidebar.tsx'), /className="app-side app-side-right"/);
 
 assert.match(contextView, /' off-mainline'/);
 assert.match(styles, /\.commit-row\.off-mainline\s*\{/);

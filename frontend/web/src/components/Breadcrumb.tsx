@@ -1,6 +1,6 @@
 // GitHub style location breadcrumb: {owner} / [lock]{repository} [▾].
 // Lock icon is on the left (private). repositories/onSelect opens a repository switch dropdown — search input, current display (✓), private (lock)/public (repo) icon, keyboard navigation (↑↓/Enter/Esc).
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Repository } from '../types';
 import { navigate } from '../route';
 import { useT } from '../i18n';
@@ -48,107 +48,140 @@ export function Breadcrumb({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const hasSwitch = Boolean(repositories && repositories.length > 0 && onSelect);
+  const hasSwitch = Boolean(repositories && onSelect);
+  const menuId = useId();
+  const container = useRef<HTMLElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLUListElement>(null);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = repositories ?? [];
-    if (!q) return list;
-    return list.filter((w) => w.name.toLowerCase().includes(q) || w.owner_username.toLowerCase().includes(q));
+    const search = query.trim().toLowerCase();
+    const entries = repositories ?? [];
+    if (!search) return entries;
+    return entries.filter((entry) => `${entry.owner_username}/${entry.name} ${entry.slug}`.toLowerCase().includes(search));
   }, [repositories, query]);
+  const activeIndex = Math.min(active, Math.max(0, filtered.length - 1));
 
-  // Initializes search and highlight on open (current repository as active item).
   useEffect(() => {
     if (!open) return;
-    setQuery('');
-    const idx = (repositories ?? []).findIndex((w) => w.id === currentId);
-    setActive(idx >= 0 ? idx : 0);
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, repositories, currentId]);
+    const onOutside = (event: PointerEvent) => {
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onOutside);
+    return () => document.removeEventListener('pointerdown', onOutside);
+  }, [open]);
 
-  // Resets highlight to first result when search term changes.
   useEffect(() => {
-    setActive(0);
-  }, [query]);
+    if (open) list.current?.children[activeIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [open, activeIndex, query]);
 
-  function choose(w: Repository | undefined) {
-    if (!w) return;
-    onSelect!(w);
+  function close() {
     setOpen(false);
+    trigger.current?.focus();
+  }
+
+  function choose(entry: Repository | undefined) {
+    if (!entry) return;
+    close();
+    onSelect?.(entry);
   }
 
   function onSearchKey(e: React.KeyboardEvent) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActive((a) => Math.min(a + 1, filtered.length - 1));
+      setActive(Math.min(activeIndex + 1, Math.max(0, filtered.length - 1)));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActive((a) => Math.max(a - 1, 0));
+      setActive(Math.max(activeIndex - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      choose(filtered[active]);
+      choose(filtered[activeIndex]);
     }
   }
 
   return (
-    <nav className="topbar-crumb" aria-label={t('common.currentLocation')}>
+    <nav ref={container} className="topbar-crumb" aria-label={t('common.currentLocation')} onKeyDown={(event) => {
+      if (open && event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }
+    }} onBlur={(event) => {
+      if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false);
+    }}>
       <button type="button" className="crumb-owner" onClick={() => navigate(`/${owner}`)} title={t('common.profileOf', { name: owner })}>
         {owner}
       </button>
       <span className="crumb-sep">/</span>
-      <span className="crumb-repositoryMetadata" title={`${owner}/${name}`}>
+      {!hasSwitch && <span className="crumb-repositoryMetadata" title={`${owner}/${name}`}>
         {isPrivate && <LockIcon className="crumb-lock" />}
         <span className="crumb-name">{name}</span>
-      </span>
+      </span>}
       {hasSwitch && (
         <div className="crumb-switch">
           <button
             type="button"
-            className="crumb-caret"
-            onClick={() => setOpen((v) => !v)}
+            ref={trigger}
+            className="crumb-trigger"
+            title={`${owner}/${name}`}
+            onClick={() => {
+              if (!open) {
+                setQuery('');
+                setActive(Math.max(0, repositories!.findIndex((entry) => entry.id === currentId)));
+              }
+              setOpen(!open);
+            }}
             aria-label={t('common.switchRepository')}
             aria-expanded={open}
+            aria-haspopup="dialog"
+            aria-controls={open ? menuId : undefined}
           >
-            ▾
+            {isPrivate && <LockIcon className="crumb-lock" />}
+            <span className="crumb-name">{name}</span>
+            <span className="crumb-chevron" aria-hidden="true">▾</span>
           </button>
           {open && (
-            <>
-              <div className="dropdown-backdrop" onClick={() => setOpen(false)} />
-              <div className="crumb-menu" role="dialog" aria-label={t('common.switchRepository')}>
+              <div id={menuId} className="crumb-menu" role="dialog" aria-label={t('common.switchRepository')}>
                 <div className="crumb-menu-head">{t('common.switchRepository')}</div>
                 <input
                   className="crumb-search"
                   placeholder={t('common.searchRepository')}
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  onChange={(event) => { setQuery(event.target.value); setActive(0); }}
                   onKeyDown={onSearchKey}
                   autoFocus
                   spellCheck={false}
                   aria-label={t('common.searchRepository')}
+                  role="combobox"
+                  aria-expanded="true"
+                  aria-controls={`${menuId}-list`}
+                  aria-autocomplete="list"
+                  aria-activedescendant={filtered.length ? `${menuId}-option-${activeIndex}` : undefined}
                 />
-                <ul className="crumb-menu-list" role="menu">
-                  {filtered.map((w, i) => (
-                    <li key={w.id} role="none">
+                <ul ref={list} id={`${menuId}-list`} className="crumb-menu-list" role="listbox" aria-label={t('common.repositories')}>
+                  {filtered.map((entry, index) => (
+                    <li key={entry.id} role="none">
                       <button
                         type="button"
-                        role="menuitem"
-                        className={`crumb-menu-item${i === active ? ' active' : ''}${w.id === currentId ? ' on' : ''}`}
-                        onMouseEnter={() => setActive(i)}
-                        onClick={() => choose(w)}
+                        id={`${menuId}-option-${index}`}
+                        role="option"
+                        aria-selected={entry.id === currentId}
+                        tabIndex={-1}
+                        title={`${entry.owner_username}/${entry.name} · ${t(priv(entry) ? 'common.private' : 'common.public')}`}
+                        className={`crumb-menu-item${index === activeIndex ? ' active' : ''}${entry.id === currentId ? ' on' : ''}`}
+                        onMouseEnter={() => setActive(index)}
+                        onClick={() => choose(entry)}
                       >
-                        <span className="crumb-check">{w.id === currentId ? '✓' : ''}</span>
-                        {priv(w) ? <LockIcon className="crumb-type" /> : <RepoIcon className="crumb-type" />}
-                        <span className="crumb-menu-name">{w.name}</span>
-                        <span className="crumb-menu-owner">{w.owner_username}</span>
+                        <span className="crumb-check" aria-hidden="true">{entry.id === currentId ? '✓' : ''}</span>
+                        {priv(entry) ? <LockIcon className="crumb-type" /> : <RepoIcon className="crumb-type" />}
+                        <span className="crumb-menu-name">{entry.name}</span>
+                        <span className="crumb-menu-owner">{entry.owner_username}</span>
                       </button>
                     </li>
                   ))}
-                  {filtered.length === 0 && <li className="crumb-menu-empty">{t('common.noRepositoryMatch')}</li>}
                 </ul>
+                {filtered.length === 0 && <div className="crumb-menu-empty" role="status">{t('common.noRepositoryMatch')}</div>}
               </div>
-            </>
           )}
         </div>
       )}

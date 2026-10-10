@@ -77,6 +77,23 @@ modify their own grant or acquire organization administration privileges.
 
 ## API and UI contract
 
+- Repository pages have no fixed left repository list. The repository name in
+  the header opens a searchable switcher with the current selection, owner,
+  visibility, and keyboard navigation. Creation is separate: the authenticated
+  header's plus menu links to new repository, Organization, and Enterprise pages.
+  Personal repositories are created at `/settings/repositories/new`, including
+  for accounts with no repositories. This page uses the existing creation API;
+  organization-owned repository creation stays with the Organization's controls.
+- Repository details (About, team defaults, and secrets) live in a separate
+  collapsible right panel. Its visibility is a local UI preference; hiding it
+  does not change context selection or graph state. Asset access still follows
+  repository roles and policies, including public read-only restrictions.
+- The profile menu links to the personal profile, My organizations at
+  `/settings/organizations`, My enterprises at `/settings/enterprises`, and
+  Account settings at `/settings/account`. These are independent pages, not
+  dialogs. Organization and Enterprise creation use the corresponding `/new`
+  child pages; the personal profile contains neither directory nor creation
+  form. These management pages require login and retain their URL through login.
 - `GET/POST /api/v1/repositories` manages repositories; `repos/{contentID}`
   remains the content-sync API. The two IDs have distinct purposes, not a
   parent/child product hierarchy. Each repository has at most one content ID.

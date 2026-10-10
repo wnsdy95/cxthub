@@ -1,14 +1,10 @@
-import { GitHubConnectionsLink } from './GitHubConnections';
+import { AppLink } from './AppLink';
 import { MCPApplications } from './MCPApplications';
 import { GitHubAccount } from './GitHubAccount';
 import { TransferNamespace } from './NamespaceAdministration';
 import { GitHubSyncCheck } from './GitHubSyncCheck';
 import { NotificationHistory } from './NotificationHistory';
 import { PersonalStorageUsage } from './StorageUsage';
-// Settings — Account settings (top bar ⚙) and repository settings (title bar ⚙, owner-only).
-//
-// Account: nickname (light alias, free to change) / username (part of URL — heavy change, red warning).
-// Repository: public status (default private, red warning and toggle). GitHub public status sync planned.
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
 import type { Repo, User, Repository, RepositoryPatch } from '../types';
 import { LocaleSwitcher } from './LocaleSwitcher';
@@ -29,8 +25,6 @@ import {
   useUpdateAbout,
   useEnableContextProtocol,
 } from '../hooks';
-import { GearBtn } from './About';
-import { Portal } from './Portal';
 import { useT, Rich } from '../i18n';
 import { safeAvatarUrl } from '../urls';
 
@@ -58,164 +52,189 @@ export async function resizeToDataURL(file: File, t: ReturnType<typeof useT>, si
   }
 }
 
-export function AccountSettings({ user, trigger = 'gear' }: { user: User; trigger?: 'gear' | 'button' }) {
+export function AccountSettings({ user }: { user: User }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
-  const [nickname, setNickname] = useState('');
-  const [username, setUsername] = useState('');
-  const [loadMode, setLoadMode] = useState('');
-  const [avatar, setAvatar] = useState('');
+  const [nickname, setNickname] = useState(user.nickname ?? '');
+  const [username, setUsername] = useState(user.username);
+  const [loadMode, setLoadMode] = useState(user.load_mode ?? '');
+  const [avatar, setAvatar] = useState(safeAvatarUrl(user.avatar));
   const [avatarErr, setAvatarErr] = useState('');
+  const [avatarBusy, setAvatarBusy] = useState(false);
   const save = useUpdateMe();
-
-  function openModal() {
-    setNickname(user.nickname ?? '');
-    setUsername(user.username);
-    setLoadMode(user.load_mode ?? '');
-    setAvatar(safeAvatarUrl(user.avatar));
-    setAvatarErr('');
-    save.reset();
-    setOpen(true);
-  }
 
   async function onPickAvatar(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ''; // Allows reselecting the same file
     if (!file) return;
     setAvatarErr('');
+    setAvatarBusy(true);
     try {
       setAvatar(await resizeToDataURL(file, t));
     } catch (err) {
       setAvatarErr(err instanceof Error ? err.message : t('settings.imgProcessFail'));
+    } finally {
+      setAvatarBusy(false);
     }
   }
 
   const usernameChanged = username.trim() !== user.username;
+  const changed = usernameChanged || nickname.trim() !== (user.nickname ?? '') || loadMode !== (user.load_mode ?? '') || avatar !== safeAvatarUrl(user.avatar);
 
   function submit(e: FormEvent) {
     e.preventDefault();
+    if (save.isPending || avatarBusy || !changed) return;
     const patch: { username?: string; nickname?: string; load_mode?: string; avatar?: string } = {};
     if (nickname.trim() !== (user.nickname ?? '')) patch.nickname = nickname.trim();
     if (usernameChanged) patch.username = username.trim();
     if (loadMode !== (user.load_mode ?? '')) patch.load_mode = loadMode;
-    if (avatar !== (user.avatar ?? '')) patch.avatar = avatar;
-    if (Object.keys(patch).length === 0) {
-      setOpen(false);
-      return;
-    }
-    save.mutate(patch, { onSuccess: () => setOpen(false) });
+    if (avatar !== safeAvatarUrl(user.avatar)) patch.avatar = avatar;
+    save.mutate(patch, {
+      onSuccess: (updated) => {
+        setUsername(updated.username);
+        setNickname(updated.nickname ?? '');
+        setLoadMode(updated.load_mode ?? '');
+        setAvatar(safeAvatarUrl(updated.avatar));
+      },
+    });
   }
 
   return (
-    <>
-      {trigger === 'button' ? (
-        <button type="button" className="edit-profile-btn" onClick={openModal}>
-          {t('settings.editProfile')}
-        </button>
-      ) : (
-        <GearBtn label={t('settings.account')} onClick={openModal} />
-      )}
-      {open && (
-        <Portal>
-        <div className="modal-back" onClick={() => setOpen(false)}>
-          <div className="modal" role="dialog" aria-label={t('settings.account')} onClick={(e) => e.stopPropagation()}>
-            <h3>{t('settings.account')}</h3>
-            <form onSubmit={submit} className="form">
-              <div className="avatar-field">
-                <div className="avatar-preview">
-                  {avatar ? (
-                    <img src={avatar} alt={t('settings.avatarPreview')} />
-                  ) : (
-                    <span className="avatar-preview-empty">
-                      {(nickname || username || '?').trim().charAt(0).toUpperCase()}
-                    </span>
-                  )}
-                </div>
-                <div className="avatar-actions">
-                  <label className="file-btn">
-                    {t('settings.uploadPhoto')}
-                    <input type="file" accept="image/*" onChange={onPickAvatar} hidden />
-                  </label>
-                  {avatar && (
-                    <button type="button" className="ghost mini" onClick={() => setAvatar('')}>
-                      {t('common.remove')}
-                    </button>
-                  )}
-                  {avatarErr && <p className="err">{avatarErr}</p>}
-                </div>
-              </div>
-
-              <label>
-                {t('settings.nicknameLabel')}
-                <input
-                  value={nickname}
-                  onChange={(e) => setNickname(e.target.value)}
-                  placeholder={t('settings.nicknamePlaceholder')}
-                />
-              </label>
-              <p className="hint">{t('settings.nicknameHint')}</p>
-
-              <label>
-                {t('settings.usernameLabel')}
-                <input
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="url-handle"
-                  spellCheck={false}
-                />
-              </label>
-              {usernameChanged ? (
-                <p className="warn-red">
-                  <Rich>{t('settings.usernameWarn', { username: user.username })}</Rich>
-                </p>
+    <div className="account-settings">
+      <form onSubmit={submit} className="account-profile-form" aria-label={t('settings.editProfile')}>
+        <fieldset disabled={save.isPending || avatarBusy}>
+          <section className="account-card" aria-labelledby="account-profile-title">
+          <header className="account-card-heading">
+            <h2 id="account-profile-title">{t('accountUI.profileTitle')}</h2>
+            <p>{t('accountUI.profileHint')}</p>
+          </header>
+          <div className="avatar-field">
+            <div className="avatar-preview">
+              {avatar ? (
+                <img src={avatar} alt={t('settings.avatarPreview')} />
               ) : (
-                <p className="hint">{t('settings.usernameHint')}</p>
+                <span className="avatar-preview-empty">
+                  {(nickname || username || '?').trim().charAt(0).toUpperCase()}
+                </span>
               )}
-
-              <label>
-                {t('common.language')}
-                <LocaleSwitcher className="in-form" />
+            </div>
+            <div className="account-avatar-identity">
+              <strong>{user.nickname || user.name || user.username}</strong>
+              <span>@{user.username}</span>
+            </div>
+            <div className="avatar-actions">
+              <label className="file-btn">
+                {t('settings.uploadPhoto')}
+                <input type="file" accept="image/*" onChange={onPickAvatar} className="account-file-input" />
               </label>
-
-              <label>
-                {t('settings.loadModeLabel')}
-                <select value={loadMode} onChange={(e) => setLoadMode(e.target.value)}>
-                  <option value="">{t('settings.loadDefault')}</option>
-                  <option value="full">{t('settings.loadFull')}</option>
-                  <option value="reconstructed">{t('settings.loadReconstructed')}</option>
-                  <option value="memory">{t('settings.loadMemory')}</option>
-                </select>
-              </label>
-              <p className="hint">
-                <Rich>{t('settings.loadModeHint')}</Rich>
-              </p>
-
-              <PersonalStorageUsage />
-              <GitHubAccount uid={user.id} />
-              <GitHubConnectionsLink />
-              <CliTokenSection />
-              <WebSessionSection />
-              <MCPApplications />
-
-              <div className="modal-actions">
-                <button type="button" className="ghost" onClick={() => setOpen(false)}>
-                  {t('common.cancel')}
+              {avatar && (
+                <button type="button" className="ghost mini" onClick={() => setAvatar('')}>
+                  {t('common.remove')}
                 </button>
-                <button type="submit" disabled={save.isPending}>
-                  {save.isPending ? t('common.saving') : t('common.save')}
-                </button>
-              </div>
-              {save.error && (
-                <p className="err">
-                  {save.error.message.includes('conflict') ? t('settings.usernameTaken') : save.error.message}
-                </p>
               )}
-            </form>
+              {avatarErr && <p className="err">{avatarErr}</p>}
+            </div>
           </div>
+
+          <div className="account-field-grid">
+          <div className="account-field">
+          <label htmlFor="account-nickname">
+            {t('settings.nicknameLabel')}
+          </label>
+            <input
+              id="account-nickname"
+              aria-describedby="account-nickname-hint"
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              placeholder={t('settings.nicknamePlaceholder')}
+            />
+          <p className="hint" id="account-nickname-hint">{t('settings.nicknameHint')}</p>
+          </div>
+
+          <div className="account-field">
+          <label htmlFor="account-username">
+            {t('settings.usernameLabel')}
+          </label>
+            <input
+              id="account-username"
+              aria-describedby="account-username-hint"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="url-handle"
+              spellCheck={false}
+            />
+          {usernameChanged ? (
+            <p className="warn-red" id="account-username-hint">
+              <Rich>{t('settings.usernameWarn', { username: user.username })}</Rich>
+            </p>
+          ) : (
+            <p className="hint" id="account-username-hint">{t('settings.usernameHint')}</p>
+          )}
+          </div>
+          </div>
+          </section>
+
+          <section className="account-card" aria-labelledby="account-preferences-title">
+          <header className="account-card-heading">
+            <h2 id="account-preferences-title">{t('accountUI.preferencesTitle')}</h2>
+            <p>{t('accountUI.preferencesHint')}</p>
+          </header>
+          <div className="account-preference-row">
+            <div><span className="account-field-label">{t('common.language')}</span><p className="hint">{t('accountUI.languageHint')}</p></div>
+            <LocaleSwitcher className="in-form" />
+          </div>
+
+          <div className="account-field">
+          <label htmlFor="account-load-mode">
+            {t('settings.loadModeLabel')}
+          </label>
+            <select id="account-load-mode" value={loadMode} onChange={(e) => setLoadMode(e.target.value)}>
+              <option value="">{t('settings.loadDefault')}</option>
+              <option value="full">{t('settings.loadFull')}</option>
+              <option value="reconstructed">{t('settings.loadReconstructed')}</option>
+              <option value="memory">{t('settings.loadMemory')}</option>
+            </select>
+          <details className="account-context-help">
+          <summary>{t('accountUI.contextHelp')}</summary>
+          <p className="hint">
+            <Rich>{t('settings.loadModeHint')}</Rich>
+          </p>
+          </details>
+          </div>
+          </section>
+
+          <div className="account-savebar">
+            <span className={save.isSuccess && !changed ? 'ok-msg' : 'hint'} role="status">
+              {save.isSuccess && !changed ? t('settings.saved') : changed ? t('settings.unsaved') : t('accountUI.saveHint')}
+            </span>
+            <button type="submit" disabled={!changed || save.isPending || avatarBusy}>
+              {save.isPending ? t('common.saving') : t('common.save')}
+            </button>
+          </div>
+        </fieldset>
+        {save.error && (
+          <p className="err" role="alert">
+            {save.error.message.includes('conflict') ? t('settings.usernameTaken') : save.error.message}
+          </p>
+        )}
+      </form>
+      <section className="account-access" aria-labelledby="account-access-title">
+      <header className="account-group-heading">
+        <h2 id="account-access-title">{t('accountUI.connectionsTitle')}</h2>
+        <p>{t('accountUI.connectionsHint')}</p>
+      </header>
+      <section className="account-card account-github" aria-labelledby="account-github-title">
+        <div className="account-card-toolbar">
+          <div><h3 id="account-github-title">GitHub</h3><p className="hint">{t('accountUI.githubHint')}</p></div>
+          <AppLink className="account-secondary-button" href="/connect/github">{t('accountUI.manageGitHub')} <span aria-hidden="true">→</span></AppLink>
         </div>
-        </Portal>
-      )}
-    </>
+        <GitHubAccount uid={user.id} />
+      </section>
+      <MCPApplications />
+      <CliTokenSection />
+      <WebSessionSection />
+      </section>
+      <PersonalStorageUsage />
+    </div>
   );
 }
 
@@ -357,8 +376,8 @@ function WebSessionSection() {
   const sessions = useWebSessions(true).data ?? [];
   const revoke = useRevokeWebSession();
   return (
-    <div className="settings-upload">
-      <span className="label">{tr('settings.webSessions')}</span>
+    <section className="account-card" aria-labelledby="account-sessions-title">
+      <h3 id="account-sessions-title">{tr('settings.webSessions')}</h3>
       <p className="hint">{tr('settings.webSessionsHint')}</p>
       {(sessions ?? []).map((t) => (
         <div key={t.suffix} className="settings-slot">
@@ -373,9 +392,9 @@ function WebSessionSection() {
           </button>
         </div>
       ))}
-      {(sessions ?? []).length === 0 && <p className="hint">{tr('settings.noSessions')}</p>}
+      {(sessions ?? []).length === 0 && <p className="account-empty-state">{tr('settings.noSessions')}</p>}
       {revoke.error && <p className="err">{revoke.error.message}</p>}
-    </div>
+    </section>
   );
 }
 
@@ -396,11 +415,16 @@ function CliTokenSection() {
   }
 
   return (
-    <div className="settings-upload">
-      <span className="label">{tr('settings.cliTokens')}</span>
+    <section className="account-card" aria-labelledby="account-cli-title">
+      <div className="account-card-toolbar">
+      <div><h3 id="account-cli-title">{tr('settings.cliTokens')}</h3>
       <p className="hint">
         <Rich>{tr('settings.cliTokensHint')}</Rich>
-      </p>
+      </p></div>
+      {!tok && <button type="button" className="ghost" onClick={() => create.mutate()} disabled={create.isPending}>
+        {create.isPending ? tr('settings.issuing') : tr('settings.issueToken')}
+      </button>}
+      </div>
       {(tokens ?? []).map((t) => (
         <div key={t.suffix} className="settings-slot">
           <div className="settings-slot-info">
@@ -413,21 +437,17 @@ function CliTokenSection() {
           </button>
         </div>
       ))}
-      {tok ? (
+      {tok && (
         <div className="invite-row">
           <code>cxt login {tok}</code>
           <button type="button" className={`copy${copied ? ' done' : ''}`} onClick={copy}>
             {copied ? tr('common.copied') : tr('common.copy')}
           </button>
         </div>
-      ) : (
-        <button type="button" className="ghost" onClick={() => create.mutate()} disabled={create.isPending}>
-          {create.isPending ? tr('settings.issuing') : tr('settings.issueToken')}
-        </button>
       )}
       {tok && <p className="warn-red">{tr('settings.tokenOnce')}</p>}
       {(create.error || revoke.error) && <p className="err">{(create.error ?? revoke.error)!.message}</p>}
-    </div>
+    </section>
   );
 }
 

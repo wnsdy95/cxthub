@@ -4,23 +4,22 @@ import { InvitationInbox } from './CollaborationInvitations';
 // (Contribution graph/activity feed requires commit date aggregation — next step.)
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
-import { useMe, useLogout } from '../hooks';
-import { navigate, repositoryPath } from '../route';
+import { useMe } from '../hooks';
+import { accountPath, navigate, repositoryPath } from '../route';
 import { Logo } from './Logo';
-import { Avatar, avatarColor } from './Avatar';
+import { avatarColor } from './Avatar';
 import { useT } from '../i18n';
 import { LockIcon } from './Breadcrumb';
-import { AccountSettings } from './Settings';
+import { HeaderActions } from './HeaderActions';
+import { AppLink } from './AppLink';
 import { ContributionGraph } from './ContributionGraph';
 import { ActivityFeed } from './ActivityFeed';
 import { safeAvatarUrl } from '../urls';
-import { MyEnterprises } from './EnterpriseProfile';
-import { OrganizationProfile, MyOrganizations } from './OrganizationProfile';
+import { OrganizationProfile } from './OrganizationProfile';
 
 export function UserProfile({ username, onLogin }: { username: string; onLogin?: () => void }) {
   const t = useT();
   const me = useMe().data;
-  const logout = useLogout();
   const q = useQuery({
     queryKey: ['publicUser', username],
     queryFn: () => api.publicUser(username),
@@ -59,14 +58,7 @@ export function UserProfile({ username, onLogin }: { username: string; onLogin?:
         </div>
         <div className="who">
           {me ? (
-            <>
-              <Avatar user={me} link />
-              <span>{me.nickname || me.name || me.email}</span>
-              <AccountSettings user={me} />
-              <button className="ghost" onClick={() => logout.mutate()} disabled={logout.isPending}>
-                {t('common.logout')}
-              </button>
-            </>
+            <HeaderActions user={me} />
           ) : (
             <button className="ghost" onClick={() => onLogin?.()}>
               {t('common.signIn')}
@@ -121,7 +113,7 @@ function ProfileBody({
           <h1 className="profile-name">{displayName}</h1>
           <div className="profile-handle">{u.username}</div>
         </div>
-        {isSelf && me && <AccountSettings user={me} trigger="button" />}
+        {isSelf && me && <AppLink className="edit-profile-btn" href={accountPath('account')}>{t('settings.editProfile')}</AppLink>}
       </aside>
 
       <main className="profile-main">
@@ -157,7 +149,7 @@ function ProfileBody({
           </div>
         )}
 
-        {isSelf && <><InvitationInbox /><MyOrganizations /><MyEnterprises /></>}
+        {isSelf && <InvitationInbox />}
 
         <ContributionGraph username={u.username} />
         <ActivityFeed username={u.username} />

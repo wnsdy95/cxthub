@@ -1,9 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import type { Invite } from '../types';
 import type { Repository } from '../types';
 import { useUiStore } from '../store';
 import {
   repositoryPath,
+  repositoryCreationPath,
   repoPath,
   invitePath,
   parseRoute,
@@ -18,26 +19,26 @@ import {
   useRepositories,
   useMembers,
   useRepos,
-  useCreateRepository,
   useCreateInvite,
   useInvites,
   useRevokeInvite,
-  useLogout,
   useUpdateMemberRole,
   useRemoveMember,
 } from '../hooks';
 import { Logo } from './Logo';
-import { Avatar } from './Avatar';
+import { HeaderActions } from './HeaderActions';
+import { AppLink } from './AppLink';
 import { useT } from '../i18n';
 import { Breadcrumb } from './Breadcrumb';
 import { ContextView } from './ContextView';
 import { OnHoldView } from './OnHoldView';
-import { AccountSettings, RepositorySettings } from './Settings';
+import { RepositorySettings } from './Settings';
 import { RoleCapabilities } from './RoleCapabilities';
 import { LockIcon } from './Breadcrumb';
 import { myRole, atLeast, ROLES } from '../roles';
 import { gitWebUrl, sanitizeRemoteUrl } from '../urls';
 import { AccessDenied } from './AccessDenied';
+import { RepositorySidebar, RepositorySidebarToggle } from './RepositorySidebar';
 
 function short(hash: string): string {
   return hash.replace(/^sha256:/, '').slice(0, 12);
@@ -48,6 +49,7 @@ export function Dashboard() {
   const user = useMe().data;
   const selectedId = useUiStore((s) => s.selectedRepositoryId);
   const selectRepository = useUiStore((s) => s.selectRepository);
+  const detailsOpen = useUiStore((state) => state.repositoryDetailsOpen);
 
   const repositoriesQ = useRepositories();
   const repositories = repositoriesQ.data ?? [];
@@ -55,15 +57,8 @@ export function Dashboard() {
   const members = useMembers(selectedId).data ?? [];
   const repos = useRepos(selectedId).data ?? [];
 
-  const createRepositoryAction = useCreateRepository();
-  const logout = useLogout();
   const setRole = useUpdateMemberRole();
   const removeMember = useRemoveMember();
-
-  const [newName, setNewName] = useState('');
-  // Repository name rules (enforced in English): start with a letter, end with a letter or number, middle can be letters, numbers, -, or _.
-  const NAME_RE = /^[A-Za-z]([A-Za-z0-9_-]*[A-Za-z0-9])?$/;
-  const nameValid = NAME_RE.test(newName.trim());
 
   // A repository has one stable content identity; routes never select an arbitrary child.
   const [accessNotice, setAccessNotice] = useState<string | null>(null);
@@ -133,19 +128,7 @@ export function Dashboard() {
     navigate(repositoryPath(selected, next));
   }
 
-  function createRepository(e: FormEvent) {
-    e.preventDefault();
-    const name = newName.trim();
-    if (!name || !nameValid) return;
-    createRepositoryAction.mutate(name, {
-      onSuccess: (w) => {
-        setNewName('');
-        goRepository(w);
-      },
-    });
-  }
-
-  const err = repositoriesQ.error ?? createRepositoryAction.error;
+  const err = repositoriesQ.error;
 
   return (
     <div className="app">
@@ -158,6 +141,7 @@ export function Dashboard() {
           </button>
           {selected && (
             <Breadcrumb
+              key={selected.id}
               owner={selected.owner_username}
               name={selected.name}
               isPrivate={selected.visibility !== 'public'}
@@ -168,54 +152,12 @@ export function Dashboard() {
           )}
         </div>
         <div className="who">
-          {user && <Avatar user={user} link />}
-          <span>{user?.nickname || user?.name || user?.email}</span>
-          {user && <AccountSettings user={user} />}
-          <button className="ghost" onClick={() => logout.mutate()} disabled={logout.isPending}>
-            {t('common.logout')}
-          </button>
+          {selected && activeRepo && <RepositorySidebarToggle />}
+          {user && <HeaderActions user={user} />}
         </div>
       </header>
 
-      <div className="cols">
-        <aside className="app-side">
-          <div className="side-head">
-            <span className="label">{t('common.repositories')}</span>
-            <span className="count-badge">{repositories.length}</span>
-          </div>
-          {repositoriesQ.isLoading ? (
-            <div className="repository-list" aria-hidden="true">
-              <div className="skel" />
-              <div className="skel" />
-              <div className="skel" />
-            </div>
-          ) : (
-            <ul className="repository-list">
-              {repositories.map((w) => (
-                <li key={w.id}>
-                  <button className={`repository-item${selectedId === w.id ? ' on' : ''}`} onClick={() => goRepository(w)}>
-                    {w.name}
-                  </button>
-                </li>
-              ))}
-              {repositories.length === 0 && <li className="repository-empty">{t('dashboard.noRepositoriesShort')}</li>}
-            </ul>
-          )}
-          <form onSubmit={createRepository} className="newws">
-            <input
-              placeholder={t('dashboard.newWsPlaceholder')}
-              aria-label={t('dashboard.newWsAria')}
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              spellCheck={false}
-            />
-            {newName.trim() !== '' && !nameValid && <p className="err name-rule">{t('dashboard.nameRule')}</p>}
-            <button type="submit" disabled={createRepositoryAction.isPending || !nameValid}>
-              {createRepositoryAction.isPending ? t('common.creating') : t('dashboard.createRepositoryAction')}
-            </button>
-          </form>
-        </aside>
-
+      <div className={`cols repository-cols${selected && activeRepo && detailsOpen ? ' has-details' : ''}`}>
         <main className="main">
           {err && <p className="err-banner">{err.message}</p>}
           {selected ? (
@@ -354,7 +296,7 @@ export function Dashboard() {
                     </h4>
                   </div>
                   {activeRepo ? (
-                    <OnHoldView repo={activeRepo} repositoryMetadata={selected} role={role} />
+                    <OnHoldView repo={activeRepo} role={role} />
                   ) : (
                     <div className="empty-box">{t('dashboard.noRepo')}</div>
                   )}
@@ -433,9 +375,13 @@ export function Dashboard() {
           ) : repositoriesQ.isLoading ? (
             <div className="skel" style={{ height: 120, marginTop: '8vh' }} aria-label={t('common.loadingLabel')} />
           ) : (
-            <div className="empty-box">{t('dashboard.pickRepository')}</div>
+            <div className="empty-box">
+              <p>{t('dashboard.pickRepository')}</p>
+              <AppLink className="account-create-link" href={repositoryCreationPath()}>{t('createMenu.repository')}</AppLink>
+            </div>
           )}
         </main>
+        {selected && activeRepo && <RepositorySidebar key={activeRepo.id} repo={activeRepo} repositoryMetadata={selected} role={role} />}
       </div>
     </div>
   );

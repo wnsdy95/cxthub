@@ -1,6 +1,5 @@
 // PublicBrowse — Public read-only access for GitHub public repos.
 // On entering /<username>/<slug>, if it's a public repository, show the context in read-only mode.
-// No write UI (role=null → ContextView hides the rail assets section and ⚙).
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { PublicRepository } from '../types';
@@ -19,6 +18,10 @@ import { Breadcrumb } from './Breadcrumb';
 import { useT } from '../i18n';
 import { ContextView } from './ContextView';
 import { AccessDenied } from './AccessDenied';
+import { useMe, useRepositories } from '../hooks';
+import { HeaderActions } from './HeaderActions';
+import { RepositorySidebar, RepositorySidebarToggle } from './RepositorySidebar';
+import { useUiStore } from '../store';
 
 export function PublicBrowse({
   route,
@@ -28,6 +31,9 @@ export function PublicBrowse({
   onLogin?: () => void;
 }) {
   const t = useT();
+  const me = useMe().data;
+  const repositories = useRepositories().data ?? [];
+  const detailsOpen = useUiStore((state) => state.repositoryDetailsOpen);
   const { username, slug } = route;
   const repositoryQuery = useQuery<PublicRepository>({
     queryKey: ['public-repository', username, slug],
@@ -63,7 +69,7 @@ export function PublicBrowse({
 
   return (
     <div className="app">
-      <header className="topbar">
+      <header className="topbar public-topbar">
         <div className="topbar-left">
           <button className="linkish-logo" onClick={() => navigate('/')} aria-label={t('common.home')}>
             <div className="brand sm">
@@ -72,12 +78,19 @@ export function PublicBrowse({
           </button>
           {repositoryMetadata && (
             <Breadcrumb
+              key={repositoryMetadata.id}
               owner={repositoryMetadata.owner_username}
               name={repositoryMetadata.name}
+              isPrivate={repositoryMetadata.visibility !== 'public'}
+              repositories={me ? repositories : undefined}
+              currentId={repositoryMetadata.id}
+              onSelect={(entry) => navigate(repositoryPath(entry))}
             />
           )}
         </div>
         <div className="who">
+          {activeRepo && <RepositorySidebarToggle />}
+          {me && <HeaderActions user={me} />}
           <LocaleSwitcher />
           <span className={`vis-chip${repositoryMetadata.visibility === 'public' ? '' : ' emergency'}`}>
             {repositoryMetadata.visibility === 'public' ? t('common.publicView') : t('organization.emergencyReadOnly')}
@@ -96,7 +109,7 @@ export function PublicBrowse({
         </div>
       </header>
 
-      <div className="cols public-cols">
+      <div className={`cols public-cols repository-cols${activeRepo && detailsOpen ? ' has-details' : ''}`}>
         <main className="main">
           <div className="repository-head">
             <h2>
@@ -123,6 +136,7 @@ export function PublicBrowse({
             )}
           </section>
         </main>
+        {activeRepo && <RepositorySidebar key={activeRepo.id} repo={activeRepo} repositoryMetadata={repositoryMetadata} role={null} />}
       </div>
     </div>
   );

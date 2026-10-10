@@ -110,11 +110,13 @@ test('real server enforces organization teams and enterprise policy through the 
   await expect.poll(async()=> (await (await member.get('/api/v1/repositories')).json()).length).toBe(0);
 
   await page.goto(`/${me.username}`);
-  const createForm = page.locator('details.organization-create').filter({has:page.locator('summary',{hasText:'Create enterprise'})});
-  await createForm.locator('summary').click();
+  await page.getByRole('button', { name: 'Profile menu', exact: true }).click();
+  await page.getByRole('link', { name: 'My enterprises', exact: true }).click();
+  await page.getByRole('link', { name: 'Create enterprise', exact: true }).click();
+  const createForm = page.locator('.account-create-form');
   await createForm.getByLabel('Enterprise name',{exact:true}).fill('Acme Group');
   await createForm.getByLabel('URL slug',{exact:true}).fill(`group-${suffix}`);
-  await createForm.getByRole('button',{name:'Create enterprise',exact:true}).click();
+  await createForm.getByRole('button',{name:'Create',exact:true}).click();
   await expect(page.locator('.profile-name')).toHaveText('Acme Group');
   await expect(page).toHaveURL(new RegExp(`/enterprises/group-${suffix}$`));
   await page.getByRole('combobox',{name:'Select an organization you own'}).selectOption(org.id);
