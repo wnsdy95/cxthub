@@ -72,6 +72,7 @@ export interface DocEventPage {
 }
 
 export const api = {
+  setSessionArchived: (repo: string, snapshot: string, archived: boolean) => call<{archived: boolean}>('POST', `/repos/${encodeURIComponent(repo)}/snapshots/${encodeURIComponent(snapshot)}/archive`, {archived}),
   githubOverview: () => call<import('./github').GitHubOverview>('GET', '/github/connections'),
   githubStart: (namespace_id = '', installation_id = 0) => call<{ url: string }>('POST', '/github/requests', { namespace_id, installation_id }),
   githubEdit: (namespace: string, edit: import('./github').GitHubEdit) => call<{ saved: boolean }>('POST', `/github/connections/${encodeURIComponent(namespace)}`, edit),

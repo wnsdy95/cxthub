@@ -19,7 +19,7 @@ import {CodeApplicability} from './CodeApplicability';
 import { GitChanges } from './GitChanges';
 import { MemoryPanel } from './MemoryPanel';
 import { saveBlob } from '../zip';
-import { api } from '../api';
+import { ArchivedSessionNotice, SessionArchiveActions } from './SessionArchive';
 import { DocEvents } from './DocEvents';
 import { useT, Rich } from '../i18n';
 
@@ -86,7 +86,7 @@ type ContextRepository = Pick<Repository, 'id' | 'owner_username' | 'slug' | 'vi
 export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; repositoryMetadata: ContextRepository | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
+  const { refs, snapshots: allSnapshots, archiveSnapshots, archivedSessions, archiveBySnapshot, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
@@ -106,11 +106,11 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
   const snapshots = useMemo(() => {
     const ids = branch ? graphState?.branch_snapshots[branch] ?? [] : [];
     if (!branch || !graphState?.branch_contexts?.[branch]) {
-      const keep = new Set(ids); return allSnapshots.filter(s => keep.has(s.id));
+      const keep = new Set(ids); return allSnapshots.filter(s => keep.has(s.id) && !archiveBySnapshot.has(s.id));
     }
     const byID = new Map(allSnapshots.map(s => [s.id,s]));
-    return ids.flatMap(id => byID.has(id) ? [byID.get(id)!] : []);
-  }, [branch, allSnapshots, graphState]);
+    return ids.flatMap(id => byID.has(id) && !archiveBySnapshot.has(id) ? [byID.get(id)!] : []);
+  }, [branch, allSnapshots, graphState, archiveBySnapshot]);
   // Selected branch's main lineage (head's first-parent direct ancestor) — distinguishes merge branches (⎘).
   const mainline = useMemo(() => {
     const head = refs.find((r) => r.kind === 'branch' && r.name === branch)?.target;
@@ -136,8 +136,12 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
   // otherwise set to branch head. (Orphan commits selected in the graph are also kept).
   useEffect(() => {
     const head = branch ? graphState?.branch_contexts?.[branch]?.snapshot_id : undefined;
-    setSnapId((cur) => (cur && allSnapshots.some((s) => s.id === cur) ? cur : head ?? snapshots[0]?.id ?? null));
-  }, [branch, snapshots, allSnapshots, graphState]);
+    setSnapId(current => {
+      if (current && (allSnapshots.some(snapshot => snapshot.id === current)
+        || archiveBySnapshot.has(current) && archiveSnapshots.some(snapshot => snapshot.id === current))) return current;
+      return head && !archiveBySnapshot.has(head) ? head : snapshots[0]?.id ?? null;
+    });
+  }, [branch, snapshots, allSnapshots, graphState, archiveBySnapshot, archiveSnapshots]);
 
   // View mode — Full / Prompt only (folded) / Prompt + Response (message only).
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
@@ -161,34 +165,23 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
   const searchQ = useSearch(repo.id, dq);
   const searching = dq.length >= 2;
 
-  const selected = allSnapshots.find((s) => s.id === snapId) ?? null;
+  const selected = allSnapshots.find((s) => s.id === snapId) ?? archiveSnapshots.find(snapshot => snapshot.id === snapId && archiveBySnapshot.has(snapshot.id)) ?? null;
   const diffQ = useSnapDiff(
     repo.id,
     compareBase && selected && compareBase.id !== selected.id ? compareBase.doc_hash : null,
     compareBase && selected && compareBase.id !== selected.id ? selected.doc_hash : null,
   );
-  const parent = useMemo(() => allSnapshots.find(s => s.id === selected?.parents?.[0]) ?? null, [allSnapshots, selected]);
+  const parent = useMemo(() => archiveSnapshots.find(s => s.id === selected?.parents?.[0]) ?? null, [archiveSnapshots, selected]);
   const docQ = useDocPages(repo.id, selected?.doc_hash ?? null, parent?.doc_hash);
   const page = docQ.data?.pages[0];
   const doc = page ? { cir: { envelope: page.envelope, events: page.events } } : undefined;
   const inheritedCount = page?.inherited ?? 0;
   const [inheritedOpen, setInheritedOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
-  const [downloadError, setDownloadError] = useState('');
-  const [downloading, setDownloading] = useState(false);
-  useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); setDownloadError(''); }, [selected?.id]);
+  useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); }, [selected?.id]);
   const memoryQ = useMemory(repo.id, selected?.memory_hash ?? null, memoryOpen);
   const memory = memoryQ.data;
   const tailPending = selected ? continuing.get(selected.id) ?? null : null;
-  async function downloadRaw() {
-    if (!selected) return;
-    setDownloading(true); setDownloadError('');
-    try {
-      const full = await api.getDoc(repo.id, selected.doc_hash);
-      saveBlob(new Blob([JSON.stringify(full.cir, null, 2)], { type: 'application/json' }), `${short(selected.id)}-context.json`);
-    } catch (err) { setDownloadError((err as Error).message); }
-    finally { setDownloading(false); }
-  }
 
   const mainRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -209,7 +202,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
     return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure); };
   }, [branches.length > 0]);
 
-  if (branches.length === 0 && !graphLoading && !graphError) {
+  if (branches.length === 0 && !selected && !archivedSessions.length && !graphLoading && !graphError) {
     return <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>;
   }
 
@@ -415,16 +408,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
                 <option value="prompts">{t('common.promptOnly')}</option>
                 <option value="chat">{t('context.viewModeChat')}</option>
               </select>
-              {doc && (
-                <button
-                  className="dl-btn"
-                  title={t('context.rawTitle')}
-                  disabled={downloading}
-                  onClick={() => void downloadRaw()}
-                >
-                  ↓ raw
-                </button>
-              )}
+              <SessionArchiveActions key={selected.id} repoId={repo.id} snapshotId={selected.id} docHash={selected.doc_hash} archive={archiveBySnapshot.get(selected.id)} role={role} />
               {memory && (
                 <button
                   className="dl-btn"
@@ -441,6 +425,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
               )}
             </span>
           </div>
+          <ArchivedSessionNotice archive={archiveBySnapshot.get(selected.id)} snapshots={archiveSnapshots} onSelect={openSnapshot} />
           {forkOpen && (
             <div className="action-row">
               <code>{short(selected.id)}</code> {t('onhold.forkFromSuffix')}
@@ -517,7 +502,6 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
               )}
             </div>
           )}
-          {downloadError && <p role="alert" className="err">{downloadError}</p>}
           {selected.memory_hash && <MemoryPanel memory={memory} open={memoryOpen} onToggle={setMemoryOpen}>
             {memoryOpen && memoryQ.isLoading && <div className="skel" style={{ height: 60 }} />}
             {memoryOpen && memoryQ.isError && <p role="alert" className="err">{memoryQ.error.message} <button onClick={() => void memoryQ.refetch()}>{t('context.retryRead')}</button></p>}
@@ -542,8 +526,8 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
 
       <aside className="ctx-side">
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null}
-          afterGraph={<AIBar snapshots={committedSnapshots} />}
+        <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} archivedSessions={archivedSessions} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null}
+          allSnapshots={archiveSnapshots} afterGraph={<AIBar snapshots={committedSnapshots} />}
           diagnostics={<>
             <PRPromotions repoId={repo.id} canRetry={atLeast(role, 'member')} />
             <CodeApplicability key={`code-state:${repo.id}`} repoId={repo.id} />

@@ -1128,7 +1128,7 @@ test('sidebar keeps graph first and groups collapsed history and diagnostics at 
     : base(request));
   const details = page.locator('.graph-details');
   await expect(details.getByRole('heading', { name: 'History & sync' })).toBeVisible();
-  const panels = ['.graph-merge-records', '.graph-births', '.graph-previous', '.graph-archive-panel', '.pr-promotions', '.code-applicability', '.git-scans', '.git-changes', '.reflog'];
+  const panels = ['.graph-merge-records', '.graph-births', '.graph-previous', '.graph-branch-archives', '.graph-session-archives', '.pr-promotions', '.code-applicability', '.git-scans', '.git-changes', '.reflog'];
   for (const selector of panels) {
     await expect(details.locator(selector)).toHaveCount(1);
     await expect(details.locator(selector)).not.toHaveAttribute('open');
@@ -1385,7 +1385,7 @@ test('PR-joined branch lanes keep their name while truly deleted branches stay a
   await joinedRow.hover();
   await expect(page.locator('.graph-tip .tip-badges')).toContainText('joined · feature/merged');
 
-  const panel = page.locator('.graph-archive-panel');
+  const panel = page.locator('.graph-branch-archives');
   await expect(panel.locator('summary')).toContainText('Archived branches 1');
   await panel.locator('summary').click();
   await expect(panel).not.toContainText('feature/merged');
@@ -2189,7 +2189,7 @@ test('tag preservation and unused branch archive do not fabricate publication or
   await expect(page.locator(`.graph-row[data-graph-snapshot="${graftTarget}"]`)).toHaveAttribute('aria-label', /Preserved by a server tag/);
   await expect(page.locator('.graph-status-item.tagged')).toHaveText('Tagged 1');
   await expect(page.locator('.graph-status-item.unpushed')).toHaveText('Not pushed 0');
-  await page.locator('.graph-archive-panel summary').click();
+  await page.locator('.graph-branch-archives summary').click();
   await expect(page.locator('.graph-archive-entry')).toContainText('unused');
   await expect(page.locator('.graph-row[data-graph-event="merge"]')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -2291,7 +2291,7 @@ test('PR evidence survives every combination of archive and overlapping progress
   await page.locator('.graph-merge-records summary').click();
   const evidence=page.locator('.graph-merge-records li');
   const evidenceText=await evidence.innerText();
-  await page.locator('.graph-archive-panel summary').click();
+  await page.locator('.graph-branch-archives summary').click();
   await page.locator('.graph-previous > summary').click();
   const controls=[page.locator('.graph-history-toggle').nth(0),page.locator('.graph-history-toggle').nth(1),page.locator('.graph-archive-toggle')];
   await expect(controls[1]).toBeVisible();

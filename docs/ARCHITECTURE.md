@@ -171,3 +171,11 @@ same tests cover live capture changes with PR history, superseded grafts,
 renames/name reuse, read-only position selection and invalid-response recovery.
 A rejected refresh preserves the last coherent conversation; an invalid first
 read shows an error and does not draw a guessed graph.
+
+Session archiving uses a separate repository-wide `SessionArchiveStore` port.
+The application owns authorization and transactions; a domain projection groups
+provider/session snapshots and resolves evidence-backed provenance. The Web
+receives explicit archived snapshot IDs, then filters visibility only after the
+complete branch graph projection. Archiving never changes publication tiers,
+branch refs, PR completion, memory applicability or MCP/CLI context selection.
+See [session archives](LIVE_CAPTURE.md#session-archives).

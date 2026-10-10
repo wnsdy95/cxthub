@@ -460,7 +460,30 @@ export interface StorageUsageReport {
 export interface RepositoryRevision { graph: string; pending: string; evidence?: string }
 /** Raw capture patch: branch memberships belong to the full graph generation. */
 export type PendingSnapshot = Omit<Snapshot, 'branches'>;
-export interface PendingView { graph: GraphState; revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[] }
+export interface SessionArchiveView {
+  repo_id: string;
+  key: string;
+  snapshot_id: string;
+  provider: string;
+  session_id: string;
+  archived_at: string;
+  archived_by: string;
+  latest_snapshot_id: string;
+  snapshot_ids: string[];
+  message: string;
+  branch: string;
+  author: Snapshot['author'];
+  updated_at: string;
+  origin: {
+    parent_snapshot_id?: string;
+    parent_session_id?: string;
+    parent_provider?: string;
+    main_snapshot_id?: string;
+    main_git_commit?: string;
+    main_branch: string;
+  };
+}
+export interface PendingView { graph: GraphState; revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[]; archived_sessions?: SessionArchiveView[] }
 export type BranchLineage = 'natural' | 'unchanged' | 'graft' | 'disconnected' | 'missing' | 'unknown' | 'orphan';
 export interface ContextSemantics {
   version: 1;
@@ -478,6 +501,7 @@ export interface RepositoryView {
   history: HistoryEvent[];
   pending: Pending[];
   unsync: Unsync[];
+  archived_sessions?: SessionArchiveView[];
 }
 
 export interface NotificationJob {

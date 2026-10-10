@@ -1145,6 +1145,20 @@ func (s *Service) fsck(ctx context.Context, repoID domain.ContentHash) (inbound.
 			stack = append(stack, pending.Target)
 		}
 	}
+	archives, err := s.sessionArchiveRecords(ctx, repoID)
+	if err != nil {
+		return inbound.FsckReport{}, err
+	}
+	archivedKeys := make(map[domain.ContentHash]bool, len(archives))
+	for _, archive := range archives {
+		archivedKeys[archive.Key] = true
+		stack = append(stack, archive.SnapshotID)
+	}
+	for _, snapshot := range snaps {
+		if archivedKeys[domain.SessionArchiveKey(snapshot)] {
+			stack = append(stack, snapshot.ID)
+		}
+	}
 	// Reachability rule single source: domain.Snapshot.ReachabilityParents(Parents ∪ GraftParents).
 	parentsOf := make(map[domain.ContentHash][]domain.ContentHash, len(snaps))
 	for _, sn := range snaps {
@@ -1739,6 +1753,15 @@ func (s *Service) gcHookLeaf(ctx context.Context, repoID domain.ContentHash, old
 	snap, err := s.meta.GetSnapshot(ctx, repoID, old)
 	if err != nil || !strings.HasPrefix(snap.Message, domain.HookMessagePrefix) {
 		return
+	}
+	archives, err := s.sessionArchiveRecords(ctx, repoID)
+	if err != nil {
+		return
+	}
+	for _, archive := range archives {
+		if archive.SnapshotID == old || archive.Key == domain.SessionArchiveKey(snap) {
+			return
+		}
 	}
 	// A repeated event prefix does not carry the separately authored memory.
 	// An attached digest makes this an archive, even without a current ref.

@@ -3,7 +3,9 @@
 // Lane layout is handled in graph.ts (pure function), this file renders only the SVG.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { ContextSemantics, GraphState, HistoryEvent, Ref, RefLogEntry, Snapshot } from '../types';
+import type { ContextSemantics, GraphState, HistoryEvent, Ref, RefLogEntry, SessionArchiveView, Snapshot } from '../types';
+import { sessionArchiveIndex } from '../sessionArchives';
+import { ArchivedSessions } from './SessionArchive';
 import { layoutGraph, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { projectBranchGraph, visibleBranchGraph, type GraphEvent } from '../graphProjection';
 import { completedBranchEvidence } from '../graphEvidence';
@@ -19,6 +21,7 @@ const ROW_H = 26; // Row height (text-free — compact)
 const HEAD_H = 44; // Sticky lane-label area; kept in sync with .graph-head.
 const R = 4.5; // Node radius
 const EMPTY_HISTORY: HistoryEvent[] = [];
+const EMPTY_ARCHIVES: SessionArchiveView[] = [];
 
 // Cycle lane colors (ink + desaturated colors).
 const LANE_COLORS = ['#16181d', '#2e7d5b', '#8250df', '#b4452c', '#0969da', '#bf8700'];
@@ -61,6 +64,8 @@ function when(iso?: string): string {
 
 export function CommitGraph({
   snapshots,
+  allSnapshots = snapshots,
+  archivedSessions = EMPTY_ARCHIVES,
   selectedId,
   selectedEventId,
   onSelect,
@@ -82,6 +87,8 @@ export function CommitGraph({
   diagnostics,
 }: {
   snapshots: Snapshot[];
+  allSnapshots?: Snapshot[];
+  archivedSessions?: SessionArchiveView[];
   selectedId: string | null;
   selectedEventId?: string;
   onSelect: (id: string, event?: GraphEvent) => void;
@@ -111,8 +118,9 @@ export function CommitGraph({
   diagnostics?: ReactNode;
 }) {
   const t = useT();
-  const graphIndex = useMemo(() => new GraphIndex(snapshots), [snapshots]);
-  const mergeEvidence = useMemo(() => completedBranchEvidence(snapshots, history, graphIndex, semantics), [snapshots, history, graphIndex, semantics]);
+  const graphIndex = useMemo(() => new GraphIndex(allSnapshots), [allSnapshots]);
+  const archiveBySnapshot = useMemo(() => sessionArchiveIndex(archivedSessions), [archivedSessions]);
+  const mergeEvidence = useMemo(() => completedBranchEvidence(allSnapshots, history, graphIndex, semantics), [allSnapshots, history, graphIndex, semantics]);
   const [showArchived, setShowArchived] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
   const [positionId, setPositionId] = useState('');
@@ -139,12 +147,13 @@ export function CommitGraph({
   const revealedHistory = useMemo(() => new Set(historyGroups
     .filter((group) => expandedKeys.has(group.key)).flatMap((group) => [...group.snapshotIds])), [historyGroups, expandedKeys]);
   const status = useMemo(()=>graphStatus(currentGraph ?? graphState),[currentGraph,graphState]);
+  const displayedCount = (ids: Set<string>) => [...ids].filter(id => !archiveBySnapshot.has(id)).length;
   const selectedArchived = selectedId !== null && status.archivedOnly.has(selectedId);
   const archivedVisible = showArchived || selectedArchived;
   const visibleSnapshots = useMemo(
-    () => snapshots.filter((snapshot) => !hiddenHistory.has(snapshot.id)
+    () => snapshots.filter((snapshot) => !archiveBySnapshot.has(snapshot.id) && !hiddenHistory.has(snapshot.id)
       && (archivedVisible || !status.archivedOnly.has(snapshot.id) || revealedHistory.has(snapshot.id))),
-    [archivedVisible, snapshots, status.archivedOnly, hiddenHistory, revealedHistory],
+    [archivedVisible, snapshots, status.archivedOnly, hiddenHistory, revealedHistory, archiveBySnapshot],
   );
   const graphIdentity = refs?.[0]?.repo_id ?? repoId ?? '';
   useEffect(() => { setShowArchived(false); setExpandedHistory(new Set()); setPositionId(''); }, [graphIdentity]);
@@ -152,7 +161,7 @@ export function CommitGraph({
     () => position && !position.archived && position.branch === pinBranch ? position.snapshot : (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
     [refs, pinBranch, position?.branch, position?.snapshot, position?.archived],
   );
-  const fullProjection = useMemo(() => projectBranchGraph(snapshots, refs ?? [], currentGraph, pinHead, pinBranch), [snapshots, refs, currentGraph, pinHead, pinBranch]);
+  const fullProjection = useMemo(() => projectBranchGraph(allSnapshots, refs ?? [], currentGraph, pinHead, pinBranch), [allSnapshots, refs, currentGraph, pinHead, pinBranch]);
   // Validate before folding too: hiding a bad component must not hide its error.
   const projectedIndex = useMemo(() => new GraphIndex(fullProjection.snapshots), [fullProjection]);
   const projection = useMemo(() => visibleBranchGraph(fullProjection, new Set(visibleSnapshots.map(s => s.id))), [fullProjection, visibleSnapshots]);
@@ -209,7 +218,7 @@ export function CommitGraph({
     return segments;
   }, [rows, projection]);
   // Session boundary edge: matches child bot·through·parent top with the same key system (`${lane}:${expectedHash}`).
-  const boundaries = useMemo(() => sessionBoundaries(snapshots), [snapshots]);
+  const boundaries = useMemo(() => sessionBoundaries(allSnapshots), [allSnapshots]);
   const sessionSeams = useMemo(() => {
     const s = new Set<string>();
     for (const r of rows) {
@@ -219,7 +228,7 @@ export function CommitGraph({
     return s;
   }, [rows, boundaries]);
   // Compression boundary: nodes after context compression (same session — lineage unchanged, only node markers).
-  const compactions = useMemo(() => compactionBoundaries(snapshots), [snapshots]);
+  const compactions = useMemo(() => compactionBoundaries(allSnapshots), [allSnapshots]);
   // Main lineage (union of all branch refs' first-parents) — shared nodes not here = join paths.
   // Different branches: distinguish "current trunk vs appended branch".
   const mainlines = useMemo(() => mainlinesOf(fullProjection.refs, fullProjection.snapshots), [fullProjection]);
@@ -648,15 +657,15 @@ export function CommitGraph({
         <h3 className="graph-details-title">{t('graph.detailsTitle')}</h3>
         <div className="graph-status" aria-label={t('graph.statusLabel')}>
           <span className="graph-status-item pushed">
-            <i aria-hidden="true" /> {t('graph.pushedCount', { count: status.pushed.size })}
+            <i aria-hidden="true" /> {t('graph.pushedCount', { count: displayedCount(status.pushed) })}
           </span>
           <span className="graph-status-item unpushed">
-            <i aria-hidden="true" /> {t('graph.unpushedCount', { count: status.unpushed.size })}
+            <i aria-hidden="true" /> {t('graph.unpushedCount', { count: displayedCount(status.unpushed) })}
           </span>
           <span className="graph-status-item uncommitted">
-            <i aria-hidden="true" /> {t('graph.uncommittedCount', { count: status.uncommitted.size })}
+            <i aria-hidden="true" /> {t('graph.uncommittedCount', { count: displayedCount(status.uncommitted) })}
           </span>
-          {status.tagged.size > 0 && <span className="graph-status-item tagged">{t('graph.taggedCount', { count: status.tagged.size })}</span>}
+          {displayedCount(status.tagged) > 0 && <span className="graph-status-item tagged">{t('graph.taggedCount', { count: displayedCount(status.tagged) })}</span>}
         </div>
         {!graphIssues.length && projection.foldedParents.size > 0 && <p role="status" className="graph-folded-edges">{t('graph.foldedConnections', { count: projection.foldedParents.size })}</p>}
         {mergeEvidence.length > 0 && <details className="graph-history-panel graph-merge-records">
@@ -745,8 +754,7 @@ export function CommitGraph({
             </ul>
           </details>
         )}
-        {status.archived.length > 0 && (
-          <details className="graph-archive-panel">
+        <details className="graph-archive-panel graph-branch-archives">
             <summary title={t('graph.archivedBranchesTitle', { count: status.archivedBranches })}>
               {t('graph.archivedBranchList', { count: status.archived.length })}
             </summary>
@@ -798,8 +806,8 @@ export function CommitGraph({
                   : t('graph.showArchived', { count: status.archivedOnly.size })}
               </button>
             )}
-          </details>
-        )}
+        </details>
+        <ArchivedSessions archives={archivedSessions} snapshots={allSnapshots} onSelect={onSelect} />
         {projection.lifecycleEdges.size > 0 && <p className="graph-lifecycle-legend">{t('graph.lifecycleLine')}</p>}
         {diagnostics}
       </section>

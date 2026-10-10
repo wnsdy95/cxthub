@@ -775,11 +775,31 @@ func (s *FSStore) UpdateSnapshotMessage(ctx context.Context, repoID, id domain.C
 }
 
 // DeleteSnapshot removes snapshot metadata (hook capture leaf GC exclusive — idempotent).
-func (s *FSStore) DeleteSnapshot(_ context.Context, repoID, id domain.ContentHash) error {
+func (s *FSStore) DeleteSnapshot(ctx context.Context, repoID, id domain.ContentHash) error {
 	if err := validateHashes(repoID, id); err != nil {
 		return err
 	}
-	err := os.Remove(s.snapshotPath(repoID, id))
+	lock := s.sessionArchiveLock(repoID)
+	lock.Lock()
+	defer lock.Unlock()
+	snapshot, err := s.GetSnapshot(ctx, repoID, id)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	archives, err := s.listSessionArchives(ctx, repoID)
+	if err != nil {
+		return err
+	}
+	key := domain.SessionArchiveKey(snapshot)
+	for _, archive := range archives {
+		if archive.SnapshotID == id || archive.Key == key {
+			return fmt.Errorf("%w: archived session is retained", domain.ErrConflict)
+		}
+	}
+	err = os.Remove(s.snapshotPath(repoID, id))
 	if os.IsNotExist(err) {
 		return nil
 	}

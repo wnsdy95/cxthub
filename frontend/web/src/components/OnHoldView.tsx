@@ -19,6 +19,7 @@ import { AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK } from './AIBar';
 import { AIBar } from './AIBar';
 import { CommitGraph } from './CommitGraph';
 import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
+import { ArchivedSessionNotice, SessionArchiveActions } from './SessionArchive';
 import { short, when } from '../snapshotFormat';
 import type { ViewMode } from './EventStream';
 import { pendingIsLive, PENDING_LIVE_MS } from '../onhold';
@@ -31,7 +32,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
   const [now, setNow] = useState(Date.now);
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, snapshots: allSnapshots, badges, graphState, chains, orphans, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
+  const { refs, archiveSnapshots, archivedSessions, archiveBySnapshot, badges, graphState, chains, orphans, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const activityTimes = pendings.map(p => p.activity_at ?? '').join(',');
   useEffect(() => {
@@ -59,7 +60,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
     });
   };
 
-  const byId = useMemo(() => new Map(allSnapshots.map((s) => [s.id, s])), [allSnapshots]);
+  const byId = useMemo(() => new Map(archiveSnapshots.map((s) => [s.id, s])), [archiveSnapshots]);
   const branches = useMemo(() => [...new Set([...refs.filter((r) => r.kind === 'branch').map((r) => r.name), ...pendings.map(p => p.branch).filter(Boolean)])].sort(), [refs, pendings]);
 
   // Branch/member filters — pending items can span multiple branches/authors, default is all.
@@ -362,8 +363,12 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
                     {t('onhold.dismissPending')}
                   </button>
                 )}
+                <SessionArchiveActions key={selected?.id ?? selectedPending!.target} repoId={repo.id}
+                  snapshotId={selected?.id ?? selectedPending!.target} docHash={selectedHash!}
+                  archive={archiveBySnapshot.get(selected?.id ?? selectedPending!.target)} role={role} />
               </span>
             </div>
+            <ArchivedSessionNotice archive={archiveBySnapshot.get(selected?.id ?? selectedPending!.target)} snapshots={archiveSnapshots} onSelect={openSnapshot} />
             {forkOpen && selected && (
               <div className="action-row">
                 <code>{short(selected.id)}</code> {t('onhold.forkFromSuffix')}
@@ -414,6 +419,8 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
         <CommitGraph readRepoId={repo.id} graphState={graphState}
           snapshots={graphSnapshots}
+          allSnapshots={archiveSnapshots}
+          archivedSessions={archivedSessions}
           selectedId={selSnap}
           selectedEventId={selectedEvent?.id}
           onSelect={openSnapshot}

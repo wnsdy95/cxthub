@@ -57,9 +57,10 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
     try {
       const full=serverGraphWireFixture({...body,revision},input.pathname.endsWith('/graph-state')?input.searchParams.get('position') ?? '':'');
       if(input.pathname.endsWith('/graph-state')) return {body:full.graph};
-      if(input.pathname.endsWith('/pending-view')) return {body:{revision,graph:full.graph,pending:full.pending,
-        snapshots:full.snapshots.filter(s=>pendingIDs.has(s.id)).map(({branches:_membership,...s})=>s)}};
-      return {...response,body:full};
+      const archivedIDs = new Set((body.archived_sessions ?? []).flatMap((archive: import('../src/types').SessionArchiveView) => [archive.snapshot_id, archive.latest_snapshot_id, ...archive.snapshot_ids]));
+      if(input.pathname.endsWith('/pending-view')) return {body:{revision,graph:full.graph,pending:full.pending,archived_sessions:body.archived_sessions ?? [],
+        snapshots:full.snapshots.filter(s=>pendingIDs.has(s.id) || archivedIDs.has(s.id)).map(({branches:_membership,...s})=>s)}};
+      return {...response,body:{...full,archived_sessions:body.archived_sessions ?? []}};
     } catch(error) {
       const cause=error as Error & {stderr?:string};
       return {status:500,body:{error:{message:String(cause.stderr || cause.message)}}};

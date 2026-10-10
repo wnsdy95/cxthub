@@ -59,7 +59,7 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 	handler := NewServer(svc, ids).Handler()
 	var scenarios []string
 	for _, cause := range []string{"direct", "organization", "team", "archive", "base"} {
-		for _, command := range []string{"ref", "refs", "settings", "about", "config", "memory", "memory-cas", "typed-memory", "memory-reuse", "pending", "unsync", "promote", "objects", "chunks"} {
+		for _, command := range []string{"ref", "refs", "settings", "about", "config", "memory", "memory-cas", "typed-memory", "memory-reuse", "pending", "unsync", "promote", "objects", "chunks", "session-archive", "session-restore"} {
 			scenarios = append(scenarios, cause+"/"+command)
 		}
 	}
@@ -146,6 +146,11 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 				t.Fatal(err)
 			}
 			method, suffix, value := revocationRequest(kind, target, doc)
+			if kind == "session-restore" {
+				if err := svc.SetSessionArchived(inbound.WithRepositoryActor(ctx, owner.ID), repo.ID, target, true); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if kind == "memory-reuse" {
 				d := domain.MemoryDigest{SnapshotID: target, Summary: "review race"}
 				base, err := st.PutMemory(ctx, repo.ID, d)
@@ -269,6 +274,8 @@ func revocationRequest(kind string, target domain.ContentHash, doc domain.Sessio
 	switch kind {
 	case "ref":
 		return "PUT", "/refs/tag/review-race", map[string]any{"target": target}
+	case "session-archive", "session-restore":
+		return "POST", "/snapshots/" + string(target) + "/archive", map[string]any{"archived": kind == "session-archive"}
 	case "refs":
 		return "POST", "/refs/batch", map[string]any{"updates": []any{map[string]any{"ref": domain.Ref{Kind: domain.RefTag, Name: "review-race", Target: target}}}}
 	case "settings":

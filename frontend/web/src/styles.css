@@ -503,6 +503,19 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .graph-archive-entry code { color: var(--faint); font-size: 0.62rem; }
 .graph-archive-entry em { grid-column: 1 / -1; color: var(--faint); font-style: normal; }
 .graph-archive-panel > .graph-archive-toggle { margin: 0 7px 7px; font-size: 0.62rem; }
+.graph-session-archive > summary { display: flex; align-items: center; gap: 6px; padding: 8px 7px; cursor: pointer; color: var(--ink); }
+.graph-session-archive > summary::-webkit-details-marker { display: none; }
+.graph-session-archive > summary::before { content: '›'; flex: none; color: var(--faint); }
+.graph-session-archive[open] > summary::before { transform: rotate(90deg); }
+.graph-session-archive > summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-session-archive > summary:hover { background: var(--hover); }
+.graph-session-archive > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.session-archive-notice { padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--hover); font-size: 0.78rem; }
+.session-archive-notice p { margin: 6px 0; }
+.session-archive-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 4px 8px; margin: 8px; font-size: 0.7rem; }
+.session-archive-details dt { color: var(--muted); }
+.session-archive-details dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.session-archive-link { padding: 0; border: 0; border-radius: 0; background: none; color: var(--ink); font-size: inherit; text-align: left; text-decoration: underline; }
 .graph-history-panel { margin: 0 0 8px; padding: 0; border: 1px solid var(--line); border-radius: 6px;
   overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 0.64rem; }
 .graph-history-heading { padding: 5px 7px; background: var(--hover); }

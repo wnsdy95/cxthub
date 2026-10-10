@@ -214,6 +214,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes/{changeID}", s.guard(domain.RoleViewer, s.getGitChange))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes/{changeID}/retry", s.guard(domain.RoleMember, s.retryGitChange))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/view", s.guard(domain.RoleViewer, compressedGraphRead(s.repositoryView)))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/archive", s.guard(domain.RoleMaintainer, s.archiveSession))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/pending-view", s.guard(domain.RoleViewer, compressedGraphRead(s.pendingView)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/graph-state", s.guard(domain.RoleViewer, compressedGraphRead(s.graphState)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/revision", s.guard(domain.RoleViewer, s.repositoryRevision))
