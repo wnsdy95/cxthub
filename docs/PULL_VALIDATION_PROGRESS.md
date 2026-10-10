@@ -584,3 +584,39 @@ Each new client process starts without hints. The first body, changed content,
 new scope and unsupported peer still use complete transfer. A process handling
 only one capture receives no reuse benefit. Existing at-rest chunk sharing and
 retention remain unchanged; independently stored capture memories are preserved.
+
+# Incoming baseline ordering (2026-10-10)
+
+Issue #491 separates a local baseline read from repository-wide snapshot
+inspection. The post-merge hook previously fetched objects and handed off PR
+work before reading every local snapshot merely to find one branch ref. A
+deadline or unrelated metadata error became an unexplained "baseline is
+unavailable" warning; concurrent promotion could also move the ref before the
+briefing baseline was saved.
+
+The hook now reads the existing ref-only application query and preserves its
+briefing cursor before remote work. An existing cursor wins. Ref or cursor errors
+retain their cause, prevent baseline-dependent promotion, and never fall back
+from a failed ref query to another source. Durable PR discovery/handoff and
+object fetching still proceed independently. Legacy embedded containers without
+the ref-query capability retain their existing list-based adapter fallback.
+
+Deterministic regressions cover unrelated invalid snapshot metadata, fetch
+cancellation, promotion before a failed fetch, retry after ORIG_HEAD changes,
+ref failure without fabricated baseline, and retention of the original error.
+This changes neither object identity nor archive/graph membership and increases
+no deadlines. Saving a briefing cursor does not claim that its delta was delivered;
+the existing validated briefing path alone advances delivery state.
+
+Read-only development inspection found PR #490 completed on the server despite
+the old hook warning. The separately observed 1,268 eligible historical-upload
+jobs predated that merge; eligibility does not mean an active worker or server
+acknowledgment. This fix does not claim to drain that queue. Non-PR generic merge
+promotion still depends on the Git incoming range and needs its own durable
+retry contract if that range is replaced after failure (tracked in #492).
+
+A candidate-binary post-merge run against the existing development replica
+stopped at the unchanged 60-second deadline while reading a fetched document
+(60.28 seconds wall, 49.05 seconds user CPU). It did not report baseline absence.
+The isolated baseline and cancellation regressions pass, but this live fetch
+still does not complete; full-history validation cost remains under #290.
