@@ -5,6 +5,8 @@ import type { GitHubOwner, GitHubEdit } from '../github';
 import { navigate } from '../route';
 import { useT } from '../i18n';
 import { Logo } from './Logo';
+import { HeaderActions } from './HeaderActions';
+import { useMe } from '../hooks';
 
 function statusKey(status: string) {
  const keys = { connected: 'github.connected', pending: 'github.pending', retrying: 'github.retrying', access_removed: 'github.accessRemoved', disconnected: 'github.disconnected', team_access_required: 'github.teamAccessRequired', not_connected: 'github.notConnected' } as const;
@@ -16,11 +18,12 @@ export function GitHubConnectionsLink({ namespace }: { namespace?: string }) {
 }
 export function GitHubConnectionsPage() {
  const t = useT();
+ const me = useMe().data;
  const query = useQuery({ queryKey: ['github-connections'], queryFn: api.githubOverview,
   refetchInterval: q => q.state.data?.owners.some(o => o.connection?.enabled && (o.connection.status === 'pending' || Date.parse(o.connection.next_sync) <= Date.now() + 30_000)) ? 30_000 : false });
  const identity = useMutation({ mutationFn: () => api.githubStart(), onSuccess: v => location.assign(v.url) });
  const params = new URLSearchParams(location.search), selected = params.get('namespace'), result = params.get('result');
- return <div className="page github-connections"><header className="topbar"><span className="brand sm"><Logo /></span><button className="ghost" onClick={() => navigate('/')}>{t('common.home')}</button></header>
+ return <div className="page github-connections"><header className="topbar"><button className="linkish-logo" aria-label={t('common.home')} onClick={() => navigate('/')}><span className="brand sm"><Logo /></span></button><div className="who">{me && <HeaderActions user={me} />}</div></header>
   <main className="github-connections-body"><h1>{t('github.title')}</h1><p className="hint">{t('github.intro')}</p>
    {result && <p role="status" className={result === 'failed' ? 'err' : 'hint'}>{result === 'connected' ? t('github.callbackSuccess') : result === 'approval-required' ? t('github.approvalRequired') : t('github.callbackFailed')}</p>}
    {query.isPending && <p role="status">{t('common.loading')}</p>}

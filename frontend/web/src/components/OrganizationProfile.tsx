@@ -7,7 +7,6 @@ import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type Re
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api } from '../api';
 import {
-  useCreateOrganization,
   useCreateOrganizationRepository,
   useOrganizationMembers,
   useOrganizationPolicy,
@@ -159,66 +158,6 @@ function OrganizationTabButton({
     <button type="button" role="tab" aria-selected={active} className={`tab${active ? ' on' : ''}`} onClick={onClick}>
       {children}
     </button>
-  );
-}
-
-export function MyOrganizations() {
-  const t = useT();
-  const organizations = useOrganizations();
-  const create = useCreateOrganization();
-  const [name, setName] = useState('');
-  const [slug, setSlug] = useState('');
-
-  return (
-    <section className="profile-organizations">
-      <div className="profile-section-head">
-        <h2 className="profile-section">{t('organization.plural')}</h2>
-        <span className="count-badge">{(organizations.data ?? []).length}</span>
-      </div>
-      <div className="organization-list">
-        {(organizations.data ?? []).map((organization) => (
-          <button key={organization.id} className="organization-list-card" onClick={() => navigate(`/${organization.slug}`)}>
-            {safeAvatarUrl(organization.logo) ? (
-              <img src={safeAvatarUrl(organization.logo)} alt="" />
-            ) : (
-              <span style={{ background: avatarColor(organization.slug) }}>{organization.name.charAt(0).toUpperCase()}</span>
-            )}
-            <span>
-              <strong>{organization.name}</strong>
-              <code>/{organization.slug}</code>
-            </span>
-          </button>
-        ))}
-      </div>
-      <form
-        className="organization-create-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!name.trim()) return;
-          create.mutate(
-            { name: name.trim(), slug: slug.trim() },
-            {
-              onSuccess: (organization) => {
-                setName('');
-                setSlug('');
-                navigate(`/${organization.slug}`);
-              },
-            },
-          );
-        }}
-      >
-        <h3>{t('organization.createTitle')}</h3>
-        <div className="organization-inline-form">
-          <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('organization.displayName')} />
-          <input value={slug} onChange={(event) => setSlug(event.target.value.toLowerCase())} placeholder={t('organization.namespace')} spellCheck={false} />
-          <button className="primary" disabled={!name.trim() || create.isPending}>
-            {create.isPending ? t('common.creating') : t('common.create')}
-          </button>
-        </div>
-        <p className="hint">{t('organization.createHint')}</p>
-        {create.isError && <p className="err">{create.error.message}</p>}
-      </form>
-    </section>
   );
 }
 

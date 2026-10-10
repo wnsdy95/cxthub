@@ -144,6 +144,7 @@ export function useUpdateMe() {
       api.updateMe(patch),
     onSuccess: (u) => {
       qc.setQueryData(['me'], u);
+      void qc.invalidateQueries({ queryKey: ['publicUser'] });
       qc.invalidateQueries({ queryKey: ['repositories'] }); // owner_username denormalization reflected
     },
   });
@@ -459,7 +460,10 @@ export function useCreateRepository() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => api.createRepository(name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['repositories'] }),
+    onSuccess: (repository) => Promise.all([
+      qc.invalidateQueries({ queryKey: ['repositories'] }),
+      qc.invalidateQueries({ queryKey: ['publicUser', repository.owner_username] }),
+    ]),
   });
 }
 export function useCreateInvite() {
@@ -599,6 +603,11 @@ export function useLogout() {
       }
       if (firebaseEnabled) await firebaseSignOut();
     },
-    onSuccess: () => qc.clear(), // Clear me cache and all others → Gate transitions to Login
+    onSuccess: async () => {
+      await qc.cancelQueries();
+      qc.setQueryData(['me'], null);
+      qc.removeQueries({ predicate: (query) => query.queryKey[0] !== 'me' });
+      qc.getMutationCache().clear();
+    },
   });
 }

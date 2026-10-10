@@ -26,7 +26,7 @@ code { font-family: var(--mono); }
 
 /* GitHub style breadcrumb: logo + {owner}/[lock]{repository}[▾] to the left group. */
 .topbar-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
-.topbar-crumb { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 0.9rem; min-width: 0; }
+.topbar-crumb { position: relative; display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 0.9rem; min-width: 0; }
 .crumb-owner { color: var(--muted); white-space: nowrap; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
 .crumb-owner:hover { color: var(--ink); text-decoration: underline; }
 .crumb-sep { color: var(--faint); }
@@ -36,27 +36,31 @@ code { font-family: var(--mono); }
 .crumb-lock { color: var(--muted); flex: none; }
 
 /* Repository switch dropdown (▾) */
-.crumb-switch { position: relative; display: inline-flex; }
-.crumb-caret { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 2px 5px; font-size: 0.7rem; line-height: 1; border-radius: 4px; }
-.crumb-caret:hover { color: var(--ink); background: var(--hover); }
+.crumb-switch { display: inline-flex; min-width: 0; }
+button.crumb-trigger { display: inline-flex; align-items: center; gap: 8px; min-width: 0; background: transparent; border: 1px solid transparent; color: var(--ink); padding: 6px 9px; font: 600 0.9rem var(--sans); border-radius: 6px; }
+button.crumb-trigger:hover, button.crumb-trigger[aria-expanded="true"] { background: var(--hover); border-color: var(--line); }
+.crumb-chevron { color: var(--muted); font-size: 0.75rem; flex: none; }
 .dropdown-backdrop { position: fixed; inset: 0; z-index: 40; }
-.crumb-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 41; width: 300px; max-width: 86vw;
-  background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 28px rgba(20, 24, 29, 0.12); overflow: hidden; }
-.crumb-menu-head { padding: 10px 12px 6px; font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-.crumb-search { display: block; width: calc(100% - 16px); margin: 0 8px 6px; padding: 7px 10px; font-family: var(--sans); font-size: 0.84rem;
+.crumb-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 41; width: 360px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 72px); overflow-y: auto;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px rgba(20, 24, 29, 0.12); }
+.crumb-menu-head { padding: 16px 16px 12px; font: 600 0.94rem var(--sans); color: var(--ink); }
+.crumb-search { display: block; width: calc(100% - 32px); margin: 0 16px 12px; padding: 9px 12px; font-family: var(--sans); font-size: 0.88rem;
   border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
 .crumb-search:focus { border-color: var(--ink); outline: none; }
 .crumb-menu-list { list-style: none; margin: 0; padding: 4px; max-height: 50vh; overflow-y: auto; border-top: 1px solid var(--line); }
 .crumb-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0;
-  padding: 8px; border-radius: 6px; cursor: pointer; font-family: var(--mono); font-size: 0.84rem; color: var(--text); }
+  padding: 11px 12px; border-radius: 6px; cursor: pointer; font-family: var(--sans); font-size: 0.88rem; color: var(--text); }
 .crumb-menu-item.active { background: var(--hover); }
 .crumb-menu-item.on { color: var(--ink); font-weight: 600; }
 .crumb-check { width: 13px; flex: none; text-align: center; color: var(--ink); }
 .crumb-type { color: var(--muted); flex: none; }
 .crumb-menu-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.crumb-menu-owner { color: var(--faint); font-size: 0.74rem; flex: none; }
+.crumb-menu-owner { color: var(--muted); font-size: 0.74rem; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .crumb-menu-empty { padding: 12px; color: var(--muted); font-size: 0.8rem; text-align: center; }
-@media (max-width: 720px) { .crumb-owner, .crumb-sep { display: none; } }
+@media (max-width: 720px) {
+  .crumb-owner, .crumb-sep { display: none; }
+  .crumb-menu { position: fixed; top: 58px; left: 12px; right: 12px; width: auto; }
+}
 .label { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
 .loading { min-height: 100vh; display: grid; place-items: center; color: var(--muted); font-family: var(--mono); }
 
@@ -113,9 +117,6 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
 .err { color: var(--danger); font-size: 0.82rem; margin: 12px 0 0; }
 
 /* ── App Shell ────────────────────────────────────────── */
-/* App Shell: The shell expands to accommodate the main content (scroll — no internal scroll lock).
-   The left sidebar is sticky, fixed to the viewport, and the grid expands with the content.
-   The add button does not move off-screen (past min-height regression). */
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 /* Topbar — Fixed to the viewport top (sticky), below dropdown (z40+). */
 .topbar { display: flex; justify-content: space-between; align-items: center; padding: 0 28px; height: 52px;
@@ -123,23 +124,13 @@ button.ghost:hover { color: var(--ink); opacity: 1; }
   position: sticky; top: 0; z-index: 30; }
 .who { display: flex; align-items: center; gap: 14px; font-size: 0.85rem; color: var(--muted); }
 
-/* Left sidebar fixed width 240px, main content 1fr. Stacks below 720px on small screens. */
-.cols { display: grid; grid-template-columns: 240px 1fr; flex: 1; min-height: 0; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-height: 0; }
 
 /* Sidebar — Sticky, remains in place (topbar 52px below viewport height). */
 .app-side { border-right: 1px solid var(--line); padding: 28px 20px; display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow: hidden;
   position: sticky; top: 52px; height: calc(100vh - 52px); align-self: start; }
-.side-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 8px; }
 .count-badge { font-family: var(--mono); font-size: 0.7rem; color: var(--faint); }
-/* Repository list with internal scroll — the add button (.newws) always visible. */
-.repository-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.repository-item { display: block; width: 100%; text-align: left; padding: 7px 8px; border: 0; border-radius: 5px;
-  font-size: 0.88rem; font-weight: 400; background: transparent; color: var(--muted); }
-.repository-item:hover { background: var(--hover); color: var(--text); opacity: 1; }
-.repository-item.on { color: var(--ink); font-weight: 600; }
 .repository-empty { color: var(--faint); font-size: 0.82rem; padding: 7px 8px; }
-.newws { display: flex; flex-direction: column; gap: 8px; flex: none; }
-.newws button { font-size: 0.8rem; padding: 8px 12px; }
 
 /* Main — Section + Header without card */
 .main { padding: 40px 48px 64px; max-width: 1100px; width: 100%; min-width: 0; }
@@ -286,8 +277,6 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   .cols { grid-template-columns: 1fr; }
   .app-side { position: static; top: auto; height: auto; align-self: stretch; border-right: 0; border-bottom: 1px solid var(--line);
     padding: 20px; overflow: visible; }
-  .repository-list { flex: initial; min-height: 0; overflow-y: visible; }
-  .newws { margin-top: 4px; }
   .main { max-width: 100%; padding: 28px 20px 48px; overflow-y: visible; }
   .tabs { width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
@@ -454,8 +443,8 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .turn-lead:hover { color: var(--ink); }
 
 /* Context 2-pane: body (logs/viewer) | right rail (graph/AI) */
-.ctx-cols { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 32px; align-items: start; }
-.ctx-main { min-width: 0; }
+.ctx-cols { display: grid; grid-template-columns: minmax(0, 1024px) 280px; gap: 32px; align-items: start; justify-content: center; }
+.ctx-main { min-width: 0; width: 100%; max-width: 1024px; justify-self: center; }
 @media (min-width: 1001px) {
   .ctx-main { position: sticky; top: 68px; max-height: max(240px, calc(100dvh - var(--context-top, 68px) - 16px));
     overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding-right: 4px; }
@@ -766,19 +755,6 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 .organization-audit-row code, .organization-audit-row time { color: var(--muted); font-size: 0.68rem; }
 .organization-audit-row p { grid-column: 1 / -1; margin: 4px 0 0; color: var(--text); }
 .organization-settings-form { max-width: 560px; margin-top: 16px; }
-.profile-organizations { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--line); }
-.organization-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.organization-list-card { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 11px;
-  border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); text-align: left; }
-.organization-list-card:hover { background: var(--hover); border-color: var(--faint); }
-.organization-list-card > img, .organization-list-card > span:first-child { width: 38px; height: 38px; border-radius: 9px;
-  object-fit: cover; flex: none; display: grid; place-items: center; color: #fff; font-weight: 700; }
-.organization-list-card > span:last-child { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
-.organization-list-card strong, .organization-list-card code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.organization-list-card code { color: var(--muted); font-size: 0.7rem; }
-.organization-create-form { margin-top: 14px; padding: 14px; border: 1px dashed var(--line); border-radius: 8px; }
-.organization-create-form h3 { margin: 0 0 10px; font-size: 0.86rem; }
-.organization-create-form .organization-inline-form { margin-bottom: 5px; }
 
 /* Contribution heatmap (commit graph) */
 .contrib { margin-top: 36px; }

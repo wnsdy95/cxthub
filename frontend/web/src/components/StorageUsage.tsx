@@ -44,5 +44,5 @@ export function StorageUsage({ namespace, canReconcile }: { namespace: string; c
 }
 export function PersonalStorageUsage() {
   const t = useT(); const [open, setOpen] = useState(false);
-  return <details open={open} onToggle={e => setOpen(e.currentTarget.open)}><summary>{t('storage.title')}</summary>{open && <StorageUsage namespace="self" canReconcile />}</details>;
+  return <details className="account-card account-storage" open={open} onToggle={e => setOpen(e.currentTarget.open)}><summary><span>{t('storage.title')}<small>{t('accountUI.storageHint')}</small></span></summary>{open && <StorageUsage namespace="self" canReconcile />}</details>;
 }

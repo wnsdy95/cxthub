@@ -1,25 +1,19 @@
-import type { MouseEvent, ReactNode } from 'react';
-import { useMe, useLogout } from '../hooks';
+import type { ReactNode } from 'react';
+import { useMe } from '../hooks';
 import { navigate } from '../route';
 import { useT } from '../i18n';
 import { Logo } from './Logo';
-import { Avatar } from './Avatar';
 import { LocaleSwitcher } from './LocaleSwitcher';
-import { AccountSettings } from './Settings';
+import { HeaderActions } from './HeaderActions';
+import { AppLink } from './AppLink';
 
 export function MarketingLink({ to, current, children }: { to: string; current?: boolean; children: ReactNode }) {
-  function follow(e: MouseEvent<HTMLAnchorElement>) {
-    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    e.preventDefault();
-    navigate(to);
-  }
-  return <a href={to} aria-current={current ? 'page' : undefined} onClick={follow}>{children}</a>;
+  return <AppLink href={to} aria-current={current ? 'page' : undefined}>{children}</AppLink>;
 }
 
 export function MarketingHeader({ onSignIn, children }: { onSignIn?: () => void; children: ReactNode }) {
   const t = useT();
   const me = useMe().data;
-  const logout = useLogout();
   return (
     <header className="landing-header">
       <button className="linkish-logo" onClick={() => navigate('/')} aria-label={t('common.home')}>
@@ -29,14 +23,7 @@ export function MarketingHeader({ onSignIn, children }: { onSignIn?: () => void;
       <div className="who">
         <LocaleSwitcher />
         {me ? (
-          <>
-            <Avatar user={me} link />
-            <span>{me.nickname || me.name || me.email}</span>
-            <AccountSettings user={me} />
-            <button className="ghost" onClick={() => logout.mutate()} disabled={logout.isPending}>
-              {t('common.logout')}
-            </button>
-          </>
+          <HeaderActions user={me} />
         ) : (
           <>
             <button className="ghost" onClick={onSignIn}>{t('common.signIn')}</button>

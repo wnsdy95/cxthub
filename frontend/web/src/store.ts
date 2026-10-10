@@ -7,9 +7,20 @@ import { create } from 'zustand';
 interface UiState {
   selectedRepositoryId: string | null;
   selectRepository: (id: string | null) => void;
+  repositoryDetailsOpen: boolean;
+  setRepositoryDetailsOpen: (open: boolean) => void;
+}
+
+function readRepositoryDetailsOpen(): boolean {
+  try { return localStorage.getItem('cxt:repository-details') !== 'hidden'; } catch { return true; }
 }
 
 export const useUiStore = create<UiState>((set) => ({
   selectedRepositoryId: null,
   selectRepository: (id) => set({ selectedRepositoryId: id }),
+  repositoryDetailsOpen: readRepositoryDetailsOpen(),
+  setRepositoryDetailsOpen: (open) => {
+    try { localStorage.setItem('cxt:repository-details', open ? 'visible' : 'hidden'); } catch {}
+    set({ repositoryDetailsOpen: open });
+  },
 }));

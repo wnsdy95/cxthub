@@ -5,9 +5,8 @@ import { DocEvents } from './DocEvents';
 //      similar commit list by author. Moves to context tab upon git push.
 //   2) Pending orphan sessions (pending): Sessions that don't connect to any tip (server ref/unsync included). Resolved by git commit. Saved manually until deleted.
 // Pending following an unsync tip is rendered as the "following thread" tail of the commit viewer.
-// Layout is similar to the context tab: branch filter bar + list/viewer + right rail (About→Settings→Secrets→Commit Graph→AI Configuration).
 import { useEffect, useMemo, useState } from 'react';
-import type { Repo, Repository, Pending } from '../types';
+import type { Repo, Pending } from '../types';
 import {
   useDismissPending,
   useUndismissPending,
@@ -15,19 +14,18 @@ import {
   useFork,
   useRepoView,
 } from '../hooks';
-import { atLeast, canWriteAsset, type Role } from '../roles';
+import { atLeast, type Role } from '../roles';
 import { AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK } from './AIBar';
 import { AIBar } from './AIBar';
 import { CommitGraph } from './CommitGraph';
 import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
-import { About, TeamSettings, SecretsPanel } from './About';
 import { short, when } from '../snapshotFormat';
 import type { ViewMode } from './EventStream';
 import { pendingIsLive, PENDING_LIVE_MS } from '../onhold';
 import { usePaged, PageControl } from './Pagination';
 import { useT, Rich } from '../i18n';
 
-export function OnHoldView({ repo, repositoryMetadata, role }: { repo: Repo; repositoryMetadata: Repository | null; role: Role | null }) {
+export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
   const t = useT();
   const me = useMe().data;
   const [now, setNow] = useState(Date.now);
@@ -412,24 +410,7 @@ export function OnHoldView({ repo, repositoryMetadata, role }: { repo: Repo; rep
         )}
       </div>
 
-      {/* Right rail — same as context tab: About → Team Settings → Secrets → Commit Graph → AI Configuration */}
       <aside className="ctx-side">
-        <About repo={repo} canEdit={canWriteAsset(role, undefined)} />
-        {atLeast(role, 'puller') && (
-          <TeamSettings
-            repoId={repo.id}
-            canWrite={canWriteAsset(role, repositoryMetadata?.settings_policy)}
-            showLockedControl={repositoryMetadata?.visibility === 'public'}
-          />
-        )}
-        {atLeast(role, 'puller') && (
-          <SecretsPanel
-            key={repo.id}
-            repoId={repo.id}
-            canWrite={canWriteAsset(role, repositoryMetadata?.secrets_policy)}
-            showLockedControl={repositoryMetadata?.visibility === 'public'}
-          />
-        )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
         <CommitGraph readRepoId={repo.id} graphState={graphState}
           snapshots={graphSnapshots}

@@ -5,8 +5,11 @@ import type { Repo, Repository } from './types';
 type RepositoryAddress = Pick<Repository, 'id' | 'owner_username' | 'slug'>;
 const RESERVED = new Set(['invite', 'w', 'login', 'settings', 'pricing', 'api', 'assets', 'public', 'admin', 'static', 'cxt', 'connect', 'oauth', 'mcp', 'enterprises']);
 export type RepositoryTab = 'members' | 'connections' | 'onhold' | 'settings';
+export type AccountSection = 'organizations' | 'enterprises' | 'account';
 const TABS = new Set<RepositoryTab>(['members', 'connections', 'onhold', 'settings']);
 export type Route =
+ | { kind: 'repositoryCreate' }
+ | { kind: 'account'; section: AccountSection; create?: true }
  | { kind: 'githubConnections' }
  | { kind: 'repository'; username: string; slug: string; tab?: RepositoryTab }
  | { kind: 'repositoryId'; id: string; tab?: RepositoryTab }
@@ -34,6 +37,9 @@ export function repoPath(repository: RepositoryAddress, _repo: Pick<Repo, 'remot
  return repositoryPath(repository, tab);
 }
 export function enterprisePath(slug: string): string { return `/enterprises/${encodeURIComponent(slug)}`; }
+export function accountPath(section: AccountSection): string { return `/settings/${section}`; }
+export function repositoryCreationPath(): string { return '/settings/repositories/new'; }
+export function accountCreationPath(section: Exclude<AccountSection, 'account'>): string { return `${accountPath(section)}/new`; }
 export function invitePath(token: string): string { return `/invite/${encodeURIComponent(token)}`; }
 export function parseRoute(pathname: string = location.pathname, search: string = typeof location === 'undefined' ? '' : location.search): Route {
  let segments: string[];
@@ -42,6 +48,13 @@ export function parseRoute(pathname: string = location.pathname, search: string 
  if (segments.length === 0) return null;
  if (segments.some((part) => part === '.' || part === '..' || part.includes('/') || part.includes('\\'))) return { kind: 'notFound' };
  const query = new URLSearchParams(search);
+ if (segments[0] === 'settings') {
+  const section = segments[1];
+  if (segments.length === 3 && section === 'repositories' && segments[2] === 'new') return { kind: 'repositoryCreate' };
+  if (segments.length === 2 && (section === 'account' || section === 'organizations' || section === 'enterprises')) return { kind: 'account', section };
+  if (segments.length === 3 && segments[2] === 'new' && (section === 'organizations' || section === 'enterprises')) return { kind: 'account', section, create: true };
+  return { kind: 'notFound' };
+ }
  if (segments[0] === 'pricing' && segments.length === 1) return { kind: 'pricing' };
  if (segments[0] === 'enterprises' && segments.length === 2) return { kind: 'enterprise', slug: segments[1] };
  if (segments[0] === 'invite' && segments.length === 2) return { kind: 'invite', token: segments[1] };

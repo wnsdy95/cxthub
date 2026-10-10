@@ -7,11 +7,10 @@ import { useDocPages, useMemory, useMe, useFork, useSnapDiff, useSearch, useRepo
 import { navigate, repoPath } from '../route';
 import { usePaged, PageControl } from './Pagination';
 import { mainlineOf, sessionBoundaries, compactionBoundaries } from '../graph';
-import { atLeast, canWriteAsset, type Role } from '../roles';
+import { atLeast, type Role } from '../roles';
 import { CommitGraph } from './CommitGraph';
 import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
 import { AIBar, AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK, modelColor, modelLogo } from './AIBar';
-import { About, TeamSettings, SecretsPanel } from './About';
 import type { ViewMode } from './EventStream';
 import { short, when } from '../snapshotFormat';
 import { PRPromotions } from './PRPromotions';
@@ -541,24 +540,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
       )}
       </div>
 
-      {/* Right rail: repository tools → graph → AI participants → history and sync. */}
       <aside className="ctx-side">
-        <About repo={repo} canEdit={canWriteAsset(role, undefined)} />
-        {atLeast(role, 'puller') && (
-          <TeamSettings
-            repoId={repo.id}
-            canWrite={canWriteAsset(role, repositoryMetadata?.settings_policy)}
-            showLockedControl={repositoryMetadata?.visibility === 'public'}
-          />
-        )}
-        {atLeast(role, 'puller') && (
-          <SecretsPanel
-            key={repo.id}
-            repoId={repo.id}
-            canWrite={canWriteAsset(role, repositoryMetadata?.secrets_policy)}
-            showLockedControl={repositoryMetadata?.visibility === 'public'}
-          />
-        )}
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
         <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null}
           afterGraph={<AIBar snapshots={committedSnapshots} />}

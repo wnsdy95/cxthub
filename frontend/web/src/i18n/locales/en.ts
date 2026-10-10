@@ -3,6 +3,45 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+ createMenu: {
+  personalAccount: 'Personal account',
+  title: 'Create new',
+  repository: 'New repository',
+  organization: 'New organization',
+  enterprise: 'New enterprise',
+  repositoryHint: 'Create a repository under your personal account, then connect your local Git repository with cxt setup.',
+ },
+ repositorySidebar: {
+  title: 'Repository details',
+  show: 'Show repository details',
+  hide: 'Hide repository details',
+ },
+ accountUI: {
+  intro: 'Your profile, preferences, and connected tools — in one place.',
+  profileTitle: 'Public profile',
+  profileHint: 'How you appear to your team.',
+  preferencesTitle: 'Preferences',
+  preferencesHint: 'Make CXTHub fit the way you work.',
+  languageHint: 'Changes immediately. No need to save.',
+  contextHelp: 'How context preferences work',
+  saveHint: 'Save to apply profile and context changes.',
+  connectionsTitle: 'Connections & access',
+  connectionsHint: 'Manage connected tools and signed-in devices.',
+  githubHint: 'Manage repository access and organization connections.',
+  manageGitHub: 'Manage connection',
+  storageHint: 'View storage usage and history.',
+ },
+ accountNav: {
+  menu: 'Profile menu',
+  navigation: 'Personal navigation',
+  profile: 'My profile',
+  organizations: 'My organizations',
+  enterprises: 'My enterprises',
+  loading: 'Loading your spaces…',
+  retry: 'Try again',
+  noOrganizations: 'You haven’t joined any organizations yet.',
+  enterpriseSlugHint: 'The last segment of your enterprise URL. Leave blank to generate it from the name.',
+ },
  ownerRecovery: {
   title: 'Owner recovery preparation',
   note: 'Prepare a one-use recovery code bound to your owner account. This release supports preparation and verification; it does not enable or disable mandatory SSO.',
