@@ -9,6 +9,7 @@ export const en: Messages = {
   archived: 'Archived session',
   list: 'Archived sessions ({count})',
   open: 'Open archived session {provider} / {session}',
+  viewContext: 'View context',
   empty: 'No archived sessions.',
   warning: 'Archiving applies to the entire session repository-wide, including every committed, unpushed and uncommitted snapshot. It hides the session from normal lists and the graph for everyone, but preserves its content, memory, branches, graph connections and PR records. You can still read and restore it here.',
   restoreWarning: 'Restore this entire session repository-wide to normal lists and the graph. Content, memory, branches and PR records remain unchanged.',

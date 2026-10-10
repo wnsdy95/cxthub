@@ -53,14 +53,15 @@ test('real API and PostgreSQL preserve archived sessions through live capture an
   expect(live.archived_sessions).toEqual(archived.archived_sessions);
   await page.reload();
   const panel = page.locator('.graph-session-archives');
-  await panel.locator('summary').click();
+  await panel.locator(':scope > summary').click();
+  await panel.locator('.graph-session-archive > summary').click();
   await panel.getByRole('button', {name: 'Open archived session codex / archive-session'}).click();
   await expect(page.locator('.viewer')).toContainText('Latest message');
   await expect(page.locator(`[data-graph-snapshot="${docs[1].hash}"]`)).toHaveCount(0);
   await page.locator('.viewer').getByRole('button', {name: 'Restore session', exact: true}).click();
   await page.getByRole('dialog').getByRole('button', {name: 'Restore session', exact: true}).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(panel.locator('summary')).toHaveText('Archived sessions (0)');
+  await expect(panel.locator(':scope > summary')).toHaveText('Archived sessions (0)');
   const restored = await readView();
   expect(restored.archived_sessions).toEqual([]);
   expect(restored.refs).toEqual(before.refs);

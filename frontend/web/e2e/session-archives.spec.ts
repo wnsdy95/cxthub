@@ -98,9 +98,10 @@ for (const [session, selected, latest] of [['committed', 2, 3], ['unpushed', 4, 
     }
     await page.reload();
     const panel = page.locator('.graph-session-archives');
-    await panel.locator('summary').click();
+    await panel.locator(':scope > summary').click();
     await expect(panel).toContainText('Archived sessions (1)');
     expect(await panel.evaluate(element => element.previousElementSibling?.querySelector('summary')?.textContent)).toContain('Archived branches');
+    await panel.locator('.graph-session-archive > summary').click();
     await expect(panel).toContainText(baseline);
     await expect(panel).toContainText('codex / parent');
     await expect(panel.locator('time')).toHaveAttribute('datetime', snapshots.find(snapshot => snapshot.id === id(latest))!.created_at);
@@ -118,15 +119,64 @@ for (const [session, selected, latest] of [['committed', 2, 3], ['unpushed', 4, 
     if (session === 'committed') await page.screenshot({path: testInfo.outputPath('archived-session-desktop.png'), fullPage: true});
     await confirmAction(page, 'Restore session');
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await expect(panel.locator('summary')).toHaveText('Archived sessions (0)');
+    await expect(panel.locator(':scope > summary')).toHaveText('Archived sessions (0)');
     await expect(page.locator('.commit-row code').filter({hasText: String(selected).repeat(10)})).toHaveCount(1);
     await expect(page.locator(`[data-graph-snapshot="${id(latest)}"]`)).toHaveCount(1);
     expect(state.mutations).toEqual([{snapshot: id(selected), archived: true}, {snapshot: id(selected), archived: false}]);
     await page.reload();
-    await expect(page.locator('.graph-session-archives summary')).toHaveText('Archived sessions (0)');
+    await expect(page.locator('.graph-session-archives > summary')).toHaveText('Archived sessions (0)');
     expect(errors).toEqual([]);
     expect(unexpected).toEqual([]);
   });
+}
+
+for (const width of [1280, 390]) {
+  for (const tab of ['', '?tab=onhold']) {
+    test(`archived session titles independently toggle details at ${width}px ${tab || 'context'}`, async ({page}, testInfo) => {
+      await page.setViewportSize({width, height: 900});
+      const first = {...archiveFor(id(2)), session_id: `synthetic-session-${'a'.repeat(80)}`};
+      const {state, errors, unexpected} = await fixture(page, 'maintainer', [first, archiveFor(id(6))]);
+      await page.goto(`/alice/cxthub${tab}`);
+      if (tab) await page.locator('.commit-row').filter({has: page.locator('code', {hasText: '4444444444'})}).click();
+      const panel = page.locator('.graph-session-archives');
+      await panel.locator(':scope > summary').click();
+      const entries = panel.locator('.graph-session-archive');
+      await expect(entries).toHaveCount(2);
+      const selectedBefore = await page.locator('.viewer-head > code').textContent();
+      for (const entry of await entries.all()) {
+        await expect(entry.locator('summary')).toBeVisible();
+        await expect(entry.locator('.session-archive-details')).toBeHidden();
+        await expect(entry.locator('.graph-archive-entry')).toBeHidden();
+      }
+      const firstTitle = entries.nth(0).locator('summary');
+      await expect(firstTitle).toHaveAttribute('title', `codex / ${first.session_id}`);
+      expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await firstTitle.focus();
+      await page.keyboard.press('Enter');
+      await expect(entries.nth(0).locator('.session-archive-details')).toBeVisible();
+      await expect(entries.nth(0).getByRole('button', {name: `Open archived session codex / ${first.session_id}`})).toBeVisible();
+      await expect(entries.nth(1).locator('.session-archive-details')).toBeHidden();
+      await entries.nth(1).locator('summary').click();
+      await expect(entries.nth(1).locator('.session-archive-details')).toBeVisible();
+      await firstTitle.focus();
+      await page.keyboard.press('Space');
+      await expect(entries.nth(0).locator('.session-archive-details')).toBeHidden();
+      await expect(entries.nth(1).locator('.session-archive-details')).toBeVisible();
+      await entries.nth(1).locator('summary').click();
+      await expect(entries.nth(1).locator('.session-archive-details')).toBeHidden();
+      await expect(page.locator('.viewer-head > code')).toHaveText(selectedBefore!);
+      expect(state.mutations).toEqual([]);
+      await page.screenshot({path: testInfo.outputPath('collapsed-archive-titles.png'), fullPage: true});
+      await firstTitle.click();
+      await page.reload();
+      await panel.locator(':scope > summary').click();
+      for (const entry of await entries.all()) {
+        await expect(entry.locator('.session-archive-details')).toBeHidden();
+      }
+      expect(errors).toEqual([]);
+      expect(unexpected).toEqual([]);
+    });
+  }
 }
 
 test('failed archive and restore keep selection, content and server state', async ({page}) => {
@@ -159,7 +209,8 @@ for (const role of ['viewer', 'puller', 'member'] as const) {
     await expect(page.locator('.viewer-head > code')).toHaveText('1111111111');
     await expect(page.getByRole('button', {name: 'Archive session', exact: true})).toHaveCount(0);
     const panel = page.locator('.graph-session-archives');
-    await panel.locator('summary').click();
+    await panel.locator(':scope > summary').click();
+    await panel.locator('.graph-session-archive > summary').click();
     await expect(panel.locator('dd')).toHaveText(['Unknown', 'Unknown', 'Unknown', 'Unknown']);
     await panel.getByRole('button', {name: 'Open archived session codex / committed'}).click();
     await expect(page.locator('.viewer')).toContainText(`Conversation ${id(3)}`);
@@ -168,7 +219,8 @@ for (const role of ['viewer', 'puller', 'member'] as const) {
     await page.locator('.commit-row').filter({has: page.locator('code', {hasText: '4444444444'})}).click();
     await expect(page.locator('.viewer')).toContainText(`Conversation ${id(4)}`);
     await expect(page.getByRole('button', {name: 'Archive session', exact: true})).toHaveCount(0);
-    await page.locator('.graph-session-archives summary').click();
+    await page.locator('.graph-session-archives > summary').click();
+    await page.locator('.graph-session-archive > summary').click();
     await page.getByRole('button', {name: 'Open archived session codex / committed'}).click();
     await expect(page.locator('.viewer')).toContainText(`Conversation ${id(3)}`);
     await expect(page.getByRole('button', {name: 'Restore session', exact: true})).toHaveCount(0);
@@ -181,7 +233,8 @@ for (const role of ['viewer', 'puller', 'member'] as const) {
 test('archived sessions remain readable and restorable without any branches', async ({page}) => {
   const {state, errors, unexpected} = await fixture(page, 'maintainer', [archiveFor(id(2))], true);
   await page.goto('/alice/cxthub');
-  await page.locator('.graph-session-archives summary').click();
+  await page.locator('.graph-session-archives > summary').click();
+  await page.locator('.graph-session-archive > summary').click();
   await page.getByRole('button', {name: 'Open archived session codex / committed'}).click();
   await expect(page.locator('.viewer')).toContainText(`Conversation ${id(3)}`);
   await confirmAction(page, 'Restore session');
@@ -196,7 +249,8 @@ test('archived captures remain readable after their pending pointer is removed',
   state.pendingRemoved = true;
   for (const url of ['/alice/cxthub', '/alice/cxthub?tab=onhold']) {
     await page.goto(url);
-    await page.locator('.graph-session-archives summary').click();
+    await page.locator('.graph-session-archives > summary').click();
+    await page.locator('.graph-session-archive > summary').click();
     await page.getByRole('button', {name: 'Open archived session codex / uncommitted'}).click();
     await expect(page.locator('.viewer')).toContainText(`Conversation ${id(6)}`);
     await expect(page.getByRole('button', {name: 'Restore session', exact: true})).toBeEnabled();

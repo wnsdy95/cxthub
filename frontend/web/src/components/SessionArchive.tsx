@@ -101,14 +101,19 @@ export function ArchivedSessions({ archives, snapshots, onSelect }: {
     <summary>{t('sessionArchive.list', {count: archives.length})}</summary>
     <ul className="graph-archive-list">
       {archives.map(archive => <li key={archive.key}>
-        <button type="button" className="graph-archive-entry" onClick={() => onSelect(archive.latest_snapshot_id)}
-          disabled={!snapshots.some(snapshot => snapshot.id === archive.latest_snapshot_id)}
-          aria-label={t('sessionArchive.open', {provider: archive.provider, session: archive.session_id || t('sessionArchive.unknown')})}>
-          <span title={`${archive.provider} / ${archive.session_id}`}>{archive.provider} / {archive.session_id || t('sessionArchive.unknown')}</span>
-          <code title={archive.latest_snapshot_id}>{short(archive.latest_snapshot_id)}</code>
-          <em><time dateTime={archive.updated_at} title={archive.updated_at}>{when(archive.updated_at)}</time> · {archive.message || t('common.noMessage')}</em>
-        </button>
-        <SessionArchiveDetails archive={archive} snapshots={snapshots} onSelect={onSelect} />
+        <details className="graph-session-archive">
+          <summary title={`${archive.provider} / ${archive.session_id || t('sessionArchive.unknown')}`}>
+            <span>{archive.provider} / {archive.session_id || t('sessionArchive.unknown')}</span>
+          </summary>
+          <button type="button" className="graph-archive-entry" onClick={() => onSelect(archive.latest_snapshot_id)}
+            disabled={!snapshots.some(snapshot => snapshot.id === archive.latest_snapshot_id)}
+            aria-label={t('sessionArchive.open', {provider: archive.provider, session: archive.session_id || t('sessionArchive.unknown')})}>
+            <span>{t('sessionArchive.viewContext')}</span>
+            <code title={archive.latest_snapshot_id}>{short(archive.latest_snapshot_id)}</code>
+            <em><time dateTime={archive.updated_at} title={archive.updated_at}>{when(archive.updated_at)}</time> · {archive.message || t('common.noMessage')}</em>
+          </button>
+          <SessionArchiveDetails archive={archive} snapshots={snapshots} onSelect={onSelect} />
+        </details>
       </li>)}
     </ul>
     {!archives.length && <p className="repository-empty">{t('sessionArchive.empty')}</p>}
