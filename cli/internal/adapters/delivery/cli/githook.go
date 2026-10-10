@@ -1477,7 +1477,7 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 }
 
 // handleIncomingContexts processes team contexts incoming through code merge/merge/pull/pull --rebase:
-// fetch(only objects) → preserve local baseline → promote merge context → queue the final remote delta.
+// preserve local baseline → fetch(only objects) → promote merge context → queue the final remote delta.
 // Called from post-merge (merge pull) and post-rewrite (rebase pull — pull.rebase=true team default path).
 // If origin is not registered, do nothing silently.
 func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
@@ -1491,6 +1491,19 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 		if err := persistPRDiscovery(ctx, cwd, branch, origin, shas); err != nil {
 			hookWarn("incoming PR discovery was not saved: %v", err)
 			return
+		}
+	}
+	var localBaseline domain.ContentHash
+	var baselineErr error
+	if branch != "" && branch != "HEAD" {
+		localBaseline, baselineErr = localBranchTarget(ctx, c, cwd, branch)
+		if baselineErr == nil {
+			if err := preservePullBriefingBaseline(cwd, branch, localBaseline); err != nil {
+				baselineErr = fmt.Errorf("save briefing baseline: %w", err)
+			}
+		}
+		if baselineErr != nil {
+			hookWarn("incoming context promotion deferred: local %q baseline is unavailable: %v", branch, baselineErr)
 		}
 	}
 	// A durable handoff is independent of fetching context objects. Older sync
@@ -1513,7 +1526,6 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	for _, b := range out.RemoteAhead {
 		hookWarn("New context on remote %q — history move is 'cxt pull', session injection is 'cxt load'", b)
 	}
-	localBaseline, baselineOK := localBranchTarget(ctx, c, branch)
 	remoteWasAhead := false
 	for _, b := range out.RemoteAhead {
 		if b == branch && branch != "" && branch != "HEAD" {
@@ -1524,12 +1536,7 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	if branch == "" || branch == "HEAD" {
 		return
 	}
-	if !baselineOK {
-		hookWarn("incoming context promotion deferred: local %q baseline is unavailable", branch)
-		return
-	}
-	if err := preservePullBriefingBaseline(cwd, branch, localBaseline); err != nil {
-		hookWarn("incoming context promotion deferred: local %q baseline was not saved: %v", branch, err)
+	if baselineErr != nil {
 		return
 	}
 	cursorTarget, cursorOK := capture.ReadPullBriefingCursor(cwd, branch)
@@ -1579,20 +1586,30 @@ func preservePullBriefingBaseline(cwd, branch string, baseline domain.ContentHas
 	return nil
 }
 
-func localBranchTarget(ctx context.Context, c *Container, branch string) (domain.ContentHash, bool) {
-	if c == nil || c.List == nil || branch == "" || branch == "HEAD" {
-		return "", false
+func localBranchTarget(ctx context.Context, c *Container, cwd, branch string) (domain.ContentHash, error) {
+	if c == nil || branch == "" || branch == "HEAD" {
+		return "", fmt.Errorf("local branch query unavailable")
 	}
-	all, err := c.List.List(ctx, inbound.ListInput{})
+	var refs []domain.Ref
+	var err error
+	if c.Queries != nil {
+		refs, err = c.Queries.Refs(ctx, cwd)
+	} else if c.List != nil {
+		var all inbound.ListOutput
+		all, err = c.List.List(ctx, inbound.ListInput{})
+		refs = all.Refs
+	} else {
+		return "", fmt.Errorf("local branch query unavailable")
+	}
 	if err != nil {
-		return "", false
+		return "", fmt.Errorf("read local branch refs: %w", err)
 	}
-	for _, ref := range all.Refs {
+	for _, ref := range refs {
 		if ref.Kind == domain.RefBranch && ref.Name == branch {
-			return ref.Target, true
+			return ref.Target, nil
 		}
 	}
-	return "", true
+	return "", nil
 }
 
 func incomingCommitSHAs(cwd string) []string {
