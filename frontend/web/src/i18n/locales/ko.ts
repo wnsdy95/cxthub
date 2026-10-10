@@ -6,6 +6,22 @@
 // 변수 보간: '{name} 프로필' → t('common.profileOf', { name }).
 // 복수(주로 en): '{count} commit|{count} commits' 처럼 '|' 로 단수·복수를 나누면 vars.count 로 선택.
 export const ko = {
+ sessionArchive: {
+  archive: '세션 보관',
+  restore: '세션 복원',
+  archived: '보관된 세션',
+  list: '보관된 세션 ({count})',
+  open: '보관된 세션 열기 {provider} / {session}',
+  empty: '보관된 세션이 없습니다.',
+  warning: '보관은 커밋, 미푸시, 미커밋 스냅샷을 포함한 세션 전체에 저장소 단위로 적용됩니다. 모든 사용자의 기본 목록과 그래프에서 숨겨지지만 콘텐츠, 메모리, 브랜치, 그래프 연결과 PR 기록은 그대로 유지됩니다. 여기에서 계속 읽거나 복원할 수 있습니다.',
+  restoreWarning: '세션 전체를 저장소의 기본 목록과 그래프에 다시 표시합니다. 콘텐츠, 메모리, 브랜치와 PR 기록은 바뀌지 않습니다.',
+  saving: '세션 보관 상태 저장 중…',
+  parentSession: '부모 세션',
+  parentSnapshot: '부모 스냅샷',
+  mainSnapshot: '메인 스냅샷 ({branch})',
+  mainCommit: '메인 Git 커밋 기준점',
+  unknown: '알 수 없음',
+ },
  createMenu: {
   personalAccount: '개인 계정',
   title: '새로 만들기',

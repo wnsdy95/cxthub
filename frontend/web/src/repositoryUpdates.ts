@@ -1,4 +1,5 @@
 import { validateGraphState } from './graphState';
+import { sessionArchiveMetadataIds } from './sessionArchives';
 import type { PendingView, RepositoryRevision, RepositoryView } from './types';
 
 // Verified Git evidence affects branch inclusion as well as memory. A compact
@@ -16,6 +17,7 @@ export function pendingViewNeedsFull(view: RepositoryView, pending: PendingView)
   const existing = new Set(view.snapshots.map(s => s.id));
   const known = new Set([...existing, ...pending.snapshots.map(s => s.id)]);
   if (pending.graph.snapshot_ids.some(id => !known.has(id))) return true;
+  if ([...sessionArchiveMetadataIds(pending.archived_sessions ?? [])].some(id => !known.has(id))) return true;
   return pending.snapshots.some(s => !existing.has(s.id) &&
     [...(s.parents ?? []), ...(s.graft_parents ?? [])].some(id => !known.has(id)));
 }
@@ -24,11 +26,11 @@ export function pendingViewNeedsFull(view: RepositoryView, pending: PendingView)
 export function mergePendingView(view: RepositoryView, pending: PendingView): RepositoryView {
   if (!view.revision || view.revision.graph !== pending.revision.graph || BigInt(view.revision.pending) > BigInt(pending.revision.pending) || BigInt(view.revision.evidence ?? '0') > BigInt(pending.revision.evidence ?? '0')) return view;
   validateGraphState(pending.graph,pending.revision);
-  const keep = new Set(pending.graph.snapshot_ids);
+  const keep = new Set([...pending.graph.snapshot_ids, ...sessionArchiveMetadataIds(pending.archived_sessions ?? [])]);
   const memberships = new Map(view.snapshots.map(s => [s.id,s.branches]));
   const snapshots = new Map(view.snapshots.filter(s => keep.has(s.id)).map(s => [s.id,s]));
   for (const s of pending.snapshots) snapshots.set(s.id,{...s,branches:memberships.get(s.id)});
-  return {...view,graph:pending.graph,revision:pending.revision,pending:pending.pending,snapshots:[...snapshots.values()]};
+  return {...view,graph:pending.graph,revision:pending.revision,pending:pending.pending,snapshots:[...snapshots.values()],archived_sessions:pending.archived_sessions ?? []};
 }
 
 type Listener = { changed: (r: RepositoryRevision) => void; failed: () => void };

@@ -54,6 +54,8 @@ func TestOpenAPISchemaFieldDrift(t *testing.T) {
 		{"SyncAuditCheck", reflect.TypeOf(domain.SyncAuditCheck{})},
 		{"SyncAuditPage", reflect.TypeOf(domain.SyncAuditPage{})},
 		{"PendingView", reflect.TypeOf(domain.PendingView{})},
+		{"SessionArchiveView", reflect.TypeOf(domain.SessionArchiveView{})},
+		{"SessionOrigin", reflect.TypeOf(domain.SessionOrigin{})},
 		{"GraphState", reflect.TypeOf(graphwire.State{})},
 		{"GraphBranchHead", reflect.TypeOf(domain.GraphBranchHead{})},
 		{"GraphBranchMarker", reflect.TypeOf(domain.GraphBranchMarker{})},

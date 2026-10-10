@@ -56,6 +56,11 @@ func (s *Service) loadRepositoryView(ctx context.Context, repo domain.ContentHas
 	if v.Unsync, err = s.ListUnsyncs(ctx, repo); err != nil {
 		return
 	}
+	archives, archiveErr := s.sessionArchiveRecords(ctx, repo)
+	if archiveErr != nil {
+		return v, archiveErr
+	}
+	v.ArchivedSessions = domain.ProjectSessionArchives(archives, v.Snapshots, v.History, v.DefaultBranch)
 	byID := make(map[domain.ContentHash]domain.Snapshot, len(v.Snapshots))
 	for _, snap := range v.Snapshots {
 		byID[snap.ID] = snap
@@ -113,6 +118,7 @@ func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (
 		}
 		v.Revision = base.Revision
 		v.Pending = base.Pending
+		v.ArchivedSessions = base.ArchivedSessions
 		v.Graph = &graph
 		byID := make(map[domain.ContentHash]domain.Snapshot, len(base.Snapshots))
 		for _, snap := range base.Snapshots {

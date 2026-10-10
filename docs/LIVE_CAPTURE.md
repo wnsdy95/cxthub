@@ -4,6 +4,41 @@ Live capture preserves the native provider transcript and publishes a per-sessio
 pending pointer. It does not commit context, advance a branch or inject another
 session's conversation into an active provider window.
 
+## Session archives
+
+The **Archive** action immediately after **raw** archives the entire selected
+session for the repository, whether its captures are committed, unpushed or
+uncommitted. Only maintainers and owners can archive or restore. All readers can
+open the original conversation from **Archived sessions**, below **Archived
+branches** in the graph sidebar, without restoring it first.
+
+Archiving is a server-persisted visibility overlay, not a deletion, commit,
+branch archive or memory invalidation. The ordinary lists and graph hide the
+session, but original content, memory attachments, refs and verified PR joins
+remain unchanged. CLI and MCP reads and AI context assembly still use the
+original history. A future capture of the same provider/session stays archived.
+Different providers with the same native session ID remain distinct. Legacy
+records with no session ID can only be archived one snapshot at a time.
+
+The archive list exposes the recorded parent session and historical main code
+position where evidence is available. Missing or ambiguous provenance is shown
+as unknown; the current main tip is never substituted for a historical baseline.
+An older grafted record without immutable origin evidence is also unknown;
+publishing its parent later does not establish where the session started.
+Opening an archive prefers a terminal capture in that session's natural lineage,
+then the latest recorded time, so equal-time batch uploads do not open an ancestor.
+Displaying an archived session does not restore it; **Restore** explicitly
+returns it to the normal view. Existing pending-list dismissals are a separate
+legacy setting, not automatically converted or deleted.
+
+`POST /repos/{repoID}/snapshots/{id}/archive` accepts `{"archived":true}` or
+`{"archived":false}`. PostgreSQL serializes the command with repository writes,
+rechecks management permission and commits the visibility change, graph revision
+and applicable organization audit event atomically. Both full and live views
+return the same `archived_sessions` projection. The graph's full evidence remains
+available before the browser applies visibility filtering. Archived snapshots
+are retention roots and are protected from sliding-capture garbage collection.
+
 ## Incremental native projection
 
 The observer checks source size, modification time and masking-policy fingerprint.

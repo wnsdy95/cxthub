@@ -1,4 +1,5 @@
 import type { GraphState, RepositoryRevision, RepositoryView, Snapshot } from './types';
+import { sessionArchiveIndex } from './sessionArchives';
 
 /** Reject an incomplete or mixed generation rather than locally guessing facts. */
 export function validateGraphState(graph: GraphState | undefined, revision?: RepositoryRevision) {
@@ -22,6 +23,20 @@ export function graphViewRows(view?: RepositoryView) {
   // Server list order remains newest first; classification sets are deterministic.
   const pickOrdered = (ids?: string[]) => { const keep = new Set(ids); return (view?.snapshots ?? []).filter(s => keep.has(s.id)); };
   const pending = new Map(view?.pending.map(p => [p.session_id,p]));
+  const archivedSessions = view?.archived_sessions ?? [];
+  const archiveBySnapshot = sessionArchiveIndex(archivedSessions);
+  const visible = (snapshot: Snapshot) => !archiveBySnapshot.has(snapshot.id);
+  const chains = (g?.hold ?? []).map(cluster => ({tips: cluster.tips, chain: pick(cluster.ids).filter(visible)})).filter(cluster => cluster.chain.length);
+  const pendings = (view?.pending ?? []).filter(item => !archiveBySnapshot.has(item.target));
+  const orphans = (g?.orphan_sessions ?? []).flatMap(id => {
+    const item = pending.get(id);
+    return item && !archiveBySnapshot.has(item.target) ? [item] : [];
+  });
+  const holdCount = new Map<string, number>();
+  for (const item of orphans) holdCount.set(item.branch, (holdCount.get(item.branch) ?? 0) + 1);
+  for (const cluster of chains) for (const branch of new Set(cluster.tips.map(tip => tip.branch))) {
+    holdCount.set(branch, (holdCount.get(branch) ?? 0) + cluster.chain.length);
+  }
   const badges = new Map<string,{name:string;kind:string}[]>();
   for (const r of view?.refs ?? []) {
     if ((r.kind !== 'branch' && r.kind !== 'tag') || (r.name.startsWith('cxt/branch-state/') || r.name.startsWith('cxt/history/'))) continue;
@@ -29,12 +44,11 @@ export function graphViewRows(view?: RepositoryView) {
   }
   for (const m of g?.markers ?? []) { const list=badges.get(m.target) ?? [];list.push({name:m.branch,kind:m.kind});badges.set(m.target,list); }
   return {
-    snapshots:pickOrdered(g?.snapshot_ids),graphSnapshots:pickOrdered(g?.graph_ids),committedSnapshots:pickOrdered(g?.committed_ids),badges,
+    snapshots:pickOrdered(g?.snapshot_ids),graphSnapshots:pickOrdered(g?.graph_ids),committedSnapshots:pickOrdered(g?.committed_ids).filter(visible),badges,
+    archivedSessions, archiveBySnapshot, archiveSnapshots:view?.snapshots ?? [], pendings,
     uncommittedIds:new Set(g?.uncommitted_ids),sharedIds:new Set(g?.shared_ids),
     localAhead:{ids:new Set(g?.ahead_ids),tips:new Set(g?.ahead_tips)},
-    chains:(g?.hold ?? []).map(c=>({tips:c.tips,chain:pick(c.ids)})),
-    orphans:(g?.orphan_sessions ?? []).flatMap(id=>pending.has(id)?[pending.get(id)!]:[]),
-    holdCount:new Map(Object.entries(g?.hold_counts ?? {})),
+    chains, orphans, holdCount,
   };
 }
 

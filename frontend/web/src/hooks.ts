@@ -442,8 +442,16 @@ export function useRepoView(repoId: string | null, _primaryBranch?: string) {
   const view = viewQuery.data;
   const rows = useMemo(()=>graphViewRows(view),[view]);
   return {...rows,refs:view?.refs ?? [],reflog:view?.reflog ?? [],history:view?.history ?? [],graphState:view?.graph,
-    pendings:view?.pending ?? [],unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError,
+    unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError,
     graphLoading:viewQuery.isPending,graphError:viewQuery.error?.message,retryGraph:()=>{void viewQuery.refetch();}};
+}
+
+export function useSessionArchive() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (value: {repoId: string; snapshotId: string; archived: boolean}) => api.setSessionArchived(value.repoId, value.snapshotId, value.archived),
+    onSuccess: (_result, value) => qc.invalidateQueries({queryKey: ['repo-view', value.repoId]}),
+  });
 }
 
 export function useGraphPosition(repoId: string | null | undefined, position: string, revision?: import('./types').RepositoryRevision) {

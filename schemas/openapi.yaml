@@ -695,12 +695,48 @@ components:
     PendingView:
       type: object
       description: Raw capture patches at a matching graph revision. Snapshot branches is omitted and must not replace membership from RepositoryView. Other capture metadata may update; unknown new ancestors require a complete view refresh.
-      required: [revision, pending, snapshots, graph]
+      required: [revision, pending, snapshots, graph, archived_sessions]
       properties:
+        archived_sessions: { type: array, items: { $ref: '#/components/schemas/SessionArchiveView' } }
         graph: { $ref: '#/components/schemas/GraphState' }
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
         snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+    SessionOrigin:
+      type: object
+      required: [main_branch]
+      description: Evidence-backed session provenance. Missing fields mean unknown; current main and mutable graft placement are never substituted for historical evidence.
+      properties:
+        parent_snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        parent_session_id: { type: string }
+        parent_provider: { type: string }
+        main_snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        main_git_commit: { type: string }
+        main_branch: { type: string }
+    SessionArchiveView:
+      type: object
+      required: [repo_id, key, snapshot_id, provider, session_id, archived_at, archived_by, latest_snapshot_id, snapshot_ids, message, branch, author, updated_at, origin]
+      description: Repository-wide non-destructive visibility overlay. Stable provider/session identity also covers subsequent captures; legacy snapshots without a session ID are archived individually. Does not alter publication, memory applicability, branch refs or PR history.
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        key: { $ref: '#/components/schemas/ContentHash' }
+        snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        provider: { type: string }
+        session_id: { type: string }
+        archived_at: { type: string, format: date-time }
+        archived_by: { type: string }
+        latest_snapshot_id: { $ref: '#/components/schemas/ContentHash' }
+        snapshot_ids: { type: array, items: { $ref: '#/components/schemas/ContentHash' } }
+        message: { type: string }
+        branch: { type: string }
+        author:
+          type: object
+          properties:
+            name: { type: string }
+            email: { type: string }
+            team: { type: string }
+        updated_at: { type: string, format: date-time }
+        origin: { $ref: '#/components/schemas/SessionOrigin' }
     ContentHash:
       type: string
       description: "Content address hash. Format: sha256:<hex64>. Same content → same value."
@@ -3556,8 +3592,9 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [revision, refs, snapshots, reflog, history, pending, unsync, semantics, graph, default_branch]
+                required: [revision, refs, snapshots, reflog, history, pending, unsync, semantics, graph, default_branch, archived_sessions]
                 properties:
+                  archived_sessions: { type: array, items: { $ref: '#/components/schemas/SessionArchiveView' } }
                   graph: { $ref: '#/components/schemas/GraphState' }
                   default_branch: { type: string }
                   semantics: { $ref: '#/components/schemas/ContextSemantics' }
@@ -3580,6 +3617,48 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+
+  /repos/{repoID}/snapshots/{id}/archive:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+      - name: id
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/ContentHash' }
+    post:
+      operationId: setSessionArchived
+      summary: Archive or restore a session for every repository member
+      description: Maintainer or owner required, rechecked inside the repository transaction. The selected snapshot identifies the provider/session, not just one capture. Repeating a request is idempotent. Original content, memory and PR/branch history remain readable. No CLI, MCP or AI-context selection is removed by this display operation.
+      tags: [snapshots]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [archived]
+              properties:
+                archived: { type: boolean }
+      responses:
+        '200':
+          description: Repository-wide archive visibility saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [archived]
+                properties:
+                  archived: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Repository or archive state conflict }
+        '415': { description: Content-Type must be application/json }
+        '422': { description: Invalid repository or snapshot identity }
+        '503': { description: Archive service unavailable }
 
   /repos/{repoID}/snapshots:
     parameters:
