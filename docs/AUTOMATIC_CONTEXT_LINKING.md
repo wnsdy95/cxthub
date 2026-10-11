@@ -1295,14 +1295,14 @@ initial graph query. Full history, contribution/proof collections and relevant
 alias matches still have proportional cost; indexed pagination of every read
 collection is not implemented here. No customer records were edited, no new
 GitHub evidence was fabricated, and installed services were not replaced. The
-changes remain uncommitted in the development worktree; PR/CI, local installation
-and real #488 recovery remain rollout gates. The latter still requires a valid
+changes were uncommitted at this checkpoint; release progress is recorded below.
+PR/CI, local installation and real #488 recovery are separate rollout gates. The latter still requires a valid
 GitHub App connection, not operator database repair or a personal-token bypass.
 
 ### Release preparation (2026-10-11)
 
-The cumulative implementation is being packaged on `codex/494-automatic-context`
-from the unchanged `main` baseline. Final web unit, dependency-direction, locale
+The cumulative implementation is published in PR #498 from
+`codex/494-automatic-context` and the unchanged `main` baseline. Final web unit, dependency-direction, locale
 and production-build checks pass. The PostgreSQL store suite passes against a
 disposable PostgreSQL 16 database (64.217s), with no customer records changed.
 
@@ -1316,6 +1316,9 @@ delivery tests use the same batching because their aggregate run previously
 exhausted the default package budget. Other CLI packages remain in the normal
 test command. The populated PostgreSQL REST/MCP contribution-parity regression
 is explicitly included in CI, not just the existing empty-repository check.
+The PostgreSQL store suite also uses batching: although it passed locally in
+64.217s, its first Linux CI run exhausted the aggregate 120-second budget. The
+individual test bound remains unchanged.
 
 The first complete PostgreSQL application diagnostic passed 174 of 175 tests.
 The remaining pre-existing concurrent-PR fixture provided no verified Git order
@@ -1326,6 +1329,21 @@ rewinding or rewriting natural parents. Its three race repetitions pass; all
 nine collaboration tests also pass three repetitions without skips. Product
 validation was not relaxed to preserve the old fixture.
 
+The final bounded runs account for all 175 PostgreSQL application tests exactly
+three times (525 passes) and all 440 CLI delivery tests once, with no top-level
+skips or failures. The populated REST/MCP contribution-parity and root-projection
+tests pass with race detection (8.662s).
+
+Linux CI also exposed a fixture-only source-object gap: a plain simulated forge
+clone had the final squash merge but not the queued pre-squash commits. The
+fixture now references the actual client object database; it neither invents
+objects nor suppresses failed scans. A regression proves a plain clone fails
+closed, and verifies the original commits, trees and parent deltas with that
+reference. Publication-only real-Git E2E passes all 27 assertions on both FS and
+PostgreSQL after this change. This does not turn FS into transactional storage.
+Batch-runner cancellation also terminates retained members of its owned process
+group when the immediate child exits before a TERM-ignoring descendant.
+
 Migrations 0079–0091 are additive and use the existing serialized transactional
 migration runner. Migration 0091 creates ordinary indexes on existing history;
 it is not a zero-downtime operation for a large database. Local installation must
@@ -1334,8 +1352,8 @@ stop only the API/MCP services, apply migrations before serving, then verify
 readiness and authenticated query contracts. Never change the transactional SQL
 to `CREATE INDEX CONCURRENTLY` or restart the legacy FS service over PostgreSQL.
 
-PR/CI, installed-service validation and provider-backed #488 recovery remain
-separate gates. The local API has no GitHub App credentials configured. A green
+PR #498 records CI and installed-service rollout results; provider-backed #488
+recovery is a separate gate. The local API has no GitHub App credentials configured. A green
 test suite cannot establish that real historical recovery has completed.
 
 ### Evidence and rollout gates

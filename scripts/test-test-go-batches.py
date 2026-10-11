@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import subprocess
 import sys
 root = Path(os.environ["GO_BATCH_FIXTURE"])
 config = json.loads((root / "config.json").read_text())
@@ -40,6 +41,10 @@ with (root / "batches.jsonl").open("a") as output:
     output.write(json.dumps({"tests": selected, "count": count, "cwd": os.getcwd(), "args": args}) + "\\n")
 if config.get("cancel"):
     (root / "child.pid").write_text(str(os.getpid()))
+    if config.get("descendant"):
+        child = subprocess.Popen([sys.executable, "-c", "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); signal.pause()"], stdout=subprocess.PIPE, text=True)
+        assert child.stdout.readline().strip() == "ready"
+        (root / "descendant.pid").write_text(str(child.pid))
     print("fixture-batch-ready", flush=True)
     signal.pause()
 sys.exit(config.get("batch_status", 0))
@@ -164,11 +169,12 @@ class GoBatchesTest(unittest.TestCase):
                 self.assertEqual(self.read_log("go.jsonl"), [])
 
     def test_cancel_fails_and_reaps_active_batch(self):
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            with self.subTest(signal=signum):
+        for signum, descendant in ((signal.SIGINT, False), (signal.SIGTERM, False), (signal.SIGINT, True), (signal.SIGTERM, True)):
+            with self.subTest(signal=signum, descendant=descendant):
                 (self.root / "batches.jsonl").unlink(missing_ok=True)
-                self.configure(cancel=True)
+                self.configure(cancel=True, descendant=descendant)
                 process = subprocess.Popen(self.command(), cwd=self.root, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                child = None
                 try:
                     output = b""
                     with selectors.DefaultSelector() as selector:
@@ -178,14 +184,22 @@ class GoBatchesTest(unittest.TestCase):
                             chunk = os.read(process.stdout.fileno(), 4096)
                             self.assertTrue(chunk, output.decode())
                             output += chunk
+                    child = int((self.root / "child.pid").read_text())
+                    if descendant:
+                        descendant_pid = int((self.root / "descendant.pid").read_text())
+                        self.assertEqual(os.getpgid(descendant_pid), child)
                     process.send_signal(signum)
                     remainder, _ = process.communicate(timeout=8)
                     self.assertEqual(process.returncode, 128 + signum, (output + remainder).decode())
-                    child = int((self.root / "child.pid").read_text())
                     with self.assertRaises(ProcessLookupError):
                         os.kill(child, 0)
                     self.assertEqual(len(self.read_log("batches.jsonl")), 1)
                 finally:
+                    if child is not None:
+                        try:
+                            os.killpg(child, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                     if process.poll() is None:
                         process.kill()
                     process.communicate(timeout=5)

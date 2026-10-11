@@ -84,7 +84,7 @@ if ! CXT_KEEP_SESSION=1 GIT_EDITOR=true GIT_SEQUENCE_EDITOR="$TMP/squash-editor"
 PUB_HEAD=$(git rev-parse HEAD)
 # Model the hosting service with a plain Git clone: merge the actual squashed
 # source into main without running client capture hooks on the service side.
-git clone -q https://git.example.test/acme/publication.git "$TMP/publication-host"
+if ! git clone -q --reference "$TMP/publication-client" https://git.example.test/acme/publication.git "$TMP/publication-host"; then FAIL=1; return; fi
 if ! git -C "$TMP/publication-host" fetch -q "$TMP/publication-client" finalized-feature ||
    ! git -C "$TMP/publication-host" merge --no-ff -qm publication-merge FETCH_HEAD ||
    ! git -C "$TMP/publication-host" push -q origin main; then FAIL=1; return; fi

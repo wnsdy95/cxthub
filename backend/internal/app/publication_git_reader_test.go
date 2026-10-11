@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,7 +25,16 @@ type publicationLocalGit struct {
 func (reader publicationLocalGit) git(ctx context.Context, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", reader.directory}, args...)...)
 	command.Env = append(os.Environ(), "GIT_NO_REPLACE_OBJECTS=1", "GIT_NO_LAZY_FETCH=1", "GIT_GRAFT_FILE="+os.DevNull, "GIT_TERMINAL_PROMPT=0", "GIT_ALLOW_PROTOCOL=")
-	return command.Output()
+	output, err := command.Output()
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		diagnostic := strings.TrimSpace(string(exitError.Stderr))
+		if len(diagnostic) > 2048 {
+			diagnostic = diagnostic[:2048] + " [truncated]"
+		}
+		return nil, fmt.Errorf("fixture git %v: %w: %s", args, err, diagnostic)
+	}
+	return output, err
 }
 
 func (reader publicationLocalGit) commit(ctx context.Context, origin, oid string) (domain.GitCommitTree, error) {

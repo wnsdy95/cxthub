@@ -38,11 +38,13 @@ def run_command(command, cwd, capture=False):
         try:
             process.communicate(timeout=5)
         except subprocess.TimeoutExpired:
+            pass
+        finally:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            process.communicate(timeout=5)
+        process.communicate(timeout=5)
         raise
     if process.returncode != 0:
         raise subprocess.CalledProcessError(process.returncode, command, output)

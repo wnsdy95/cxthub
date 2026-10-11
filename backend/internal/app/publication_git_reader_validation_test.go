@@ -202,3 +202,128 @@ func TestPublicationGitScanRecoversProviderFailureWithoutMovingContext(t *testin
 		t.Fatalf("evidence scan changed context history: %+v %v", history, err)
 	}
 }
+
+func TestPublicationGitScanReadsRewrittenSourcesFromReferenceClone(t *testing.T) {
+	client, commits := newPublicationGitFixture(t)
+	git := func(args ...string) string { return publicationFixtureGit(t, client.directory, args...) }
+	git("switch", "-qc", "rewritten-feature")
+	var originals []string
+	for _, body := range []string{"first source\n", "final source\n"} {
+		if err := os.WriteFile(filepath.Join(client.directory, "nested", "file"), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		git("add", "nested/file")
+		git("commit", "-qm", body)
+		originals = append(originals, git("rev-parse", "HEAD"))
+	}
+	git("reset", "--soft", commits[3])
+	git("commit", "-qm", "squashed source")
+	git("switch", "-q", "main")
+	git("merge", "--no-ff", "-qm", "rewritten merge", "rewritten-feature")
+	merge := git("rev-parse", "HEAD")
+	for _, original := range originals {
+		if refs := git("for-each-ref", "--contains", original); refs != "" {
+			t.Fatalf("original source still reachable from fixture refs: %s %s", original, refs)
+		}
+	}
+	forge := filepath.Join(t.TempDir(), "publication-code.git")
+	git("init", "--bare", "-q", forge)
+	git("push", "-q", forge, "main")
+	publicationFixtureGit(t, forge, "symbolic-ref", "HEAD", "refs/heads/main")
+	for _, referenced := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain_clone_fails_closed", true: "reference_clone_indexes_originals"}[referenced], func(t *testing.T) {
+			host := filepath.Join(t.TempDir(), "publication-host")
+			args := []string{"-c", "url." + forge + ".insteadOf=" + publicationGitOrigin, "clone", "-q"}
+			if referenced {
+				args = append(args, "--reference", client.directory)
+			}
+			publicationFixtureGit(t, client.directory, append(args, publicationGitOrigin, host)...)
+			if origin := publicationFixtureGit(t, host, "config", "--get", "remote.origin.url"); origin != publicationGitOrigin {
+				t.Fatalf("fixture changed external origin: %s", origin)
+			}
+			reader := publicationLocalGit{directory: host}
+			core, storage := newFsckSvc(t)
+			ctx, cancel := context.WithTimeout(systemTestContext(), 10*time.Second)
+			defer cancel()
+			repo := hh(t.Name())
+			if _, err := storage.PutRepo(ctx, domain.Repo{ID: repo, GitRemoteURL: publicationGitOrigin}); err != nil {
+				t.Fatal(err)
+			}
+			originalJob := domain.NewGitScan(repo, publicationGitOrigin, originals[1], time.Now().UTC())
+			if err := storage.EnqueueGitScan(ctx, originalJob); err != nil {
+				t.Fatal(err)
+			}
+			count, err := scanPublicationFixture(ctx, core, repo, reader, merge)
+			if !referenced {
+				var exitError *exec.ExitError
+				if count != 0 || !errors.As(err, &exitError) || exitError.ExitCode() != 128 || !strings.Contains(err.Error(), originals[1]) || !strings.Contains(err.Error(), "fatal:") {
+					t.Fatalf("missing original object did not fail closed with Git diagnostics: count=%d err=%v", count, err)
+				}
+				failed, err := storage.GetGitScan(ctx, repo, originalJob.ID)
+				if err != nil || failed.State != "retrying" || failed.TreeIndexed || failed.Indexed {
+					t.Fatalf("missing original object was indexed: %+v %v", failed, err)
+				}
+				return
+			}
+			if err != nil || count != len(commits)+2 {
+				t.Fatalf("actual merge closure failed with older source queued first: count=%d err=%v", count, err)
+			}
+			scans, err := NewGitScans(core, reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := scans.Process(ctx, 32); err != nil {
+				t.Fatal(err)
+			}
+			for _, original := range originals {
+				job, err := storage.GetGitScan(ctx, repo, domain.NewGitScan(repo, publicationGitOrigin, original, time.Now().UTC()).ID)
+				if err != nil || job.State != "completed" || !job.TreeIndexed || !job.Indexed {
+					t.Fatalf("original source not fully indexed: %+v %v", job, err)
+				}
+				evidence, err := client.ReadCommitTree(ctx, publicationGitOrigin, original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stored, err := storage.GetGitCommitTree(ctx, repo, publicationGitOrigin, original)
+				if err != nil || !reflect.DeepEqual(stored, evidence.Commit) {
+					t.Fatalf("original commit evidence changed: %+v %v", stored, err)
+				}
+				for _, node := range evidence.Nodes {
+					stored, err := storage.GetGitTreeNode(ctx, repo, publicationGitOrigin, node.OID)
+					if err != nil || !reflect.DeepEqual(stored, node) {
+						t.Fatalf("original tree evidence changed: %+v %v", stored, err)
+					}
+				}
+				deltas, err := client.ReadCommitDeltas(ctx, publicationGitOrigin, original)
+				if err != nil || len(deltas) != 1 || len(deltas[0].Changes) != 1 {
+					t.Fatalf("expected real nonempty original delta: %+v %v", deltas, err)
+				}
+				for _, delta := range deltas {
+					stored, err := storage.GetGitDelta(ctx, repo, publicationGitOrigin, original, delta.Parent)
+					if err != nil || !reflect.DeepEqual(stored, delta) {
+						t.Fatalf("original parent delta changed: %+v %v", stored, err)
+					}
+				}
+			}
+			refs, err := core.ListRefs(ctx, repo)
+			if err != nil || len(refs) != 0 {
+				t.Fatalf("evidence scan changed context refs: %+v %v", refs, err)
+			}
+			history, err := core.ListHistory(ctx, repo)
+			if err != nil || len(history) != 0 {
+				t.Fatalf("evidence scan changed context history: %+v %v", history, err)
+			}
+		})
+	}
+}
+
+func TestPublicationLocalGitBoundsFailureDiagnostics(t *testing.T) {
+	reader, _ := newPublicationGitFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := reader.git(ctx, "-c", "alias.fixture-failure=!printf '%03000d' 0 >&2; exit 7", "fixture-failure")
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 7 || !strings.Contains(err.Error(), " [truncated]") || len(err.Error()) > 2300 {
+		t.Fatalf("missing bounded Git failure diagnostic: %v", err)
+	}
+}
