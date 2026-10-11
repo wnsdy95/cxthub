@@ -13,6 +13,8 @@ import (
 )
 
 type toolArgs struct {
+	Kind         string   `json:"kind"`
+	State        string   `json:"state"`
 	EventStart   *int     `json:"event_start"`
 	EventEnd     *int     `json:"event_end"`
 	CodeCommit   string   `json:"code_commit"`
@@ -79,6 +81,8 @@ func (s *Server) runTool(ctx context.Context, user domain.User, name string, raw
 		return s.codeApplicabilityPage(ctx, repo, args)
 	case "git_observations":
 		return s.gitScansPage(ctx, repo, args)
+	case "context_link_status":
+		return s.gitAssociationStatusPage(ctx, repo, args)
 	case "git_changes":
 		return s.gitChangesPage(ctx, repo, args)
 	case "context_history":

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -240,6 +241,9 @@ func (g *GitScans) Run(ctx context.Context) {
 		if err := g.Process(ctx, 2); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Git observation worker: %v", err)
 		}
+		if err := g.ProcessContributions(ctx, 2); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("Git contribution worker: %v", err)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -308,44 +312,100 @@ func (g *GitScans) RetryScan(ctx context.Context, repo domain.ContentHash, id st
 // Reconcile observes one durable page per repository on each pass. Failed or
 // canceled reads retain their page; other repositories continue independently.
 func (g *GitScans) Reconcile(ctx context.Context) error {
+	_, err := g.reconcile(ctx)
+	return err
+}
+
+func (g *GitScans) reconcile(ctx context.Context) (bool, error) {
 	ctx = g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
 	st, ok := g.core.meta.(outbound.GitHeadScanStore)
 	if !ok {
-		return domain.ErrValidation
+		return false, domain.ErrValidation
 	}
 	repos, err := g.core.meta.ListRepos(ctx, "default")
 	if err != nil {
-		return err
+		return false, err
 	}
+	progress := false
+	var claimErrors []error
 	for _, repo := range repos {
+		if err = ctx.Err(); err != nil {
+			return progress, errors.Join(append(claimErrors, err)...)
+		}
 		if repo.GitRemoteURL == "" {
 			continue
 		}
+		advanced, discoveryErr := g.discoverGitAssociations(ctx, repo)
+		progress = progress || advanced
+		if discoveryErr != nil && !errors.Is(discoveryErr, domain.ErrForbidden) && !errors.Is(discoveryErr, domain.ErrConflict) && !errors.Is(discoveryErr, domain.ErrDocumentIdentityUpgradeRequired) {
+			log.Printf("Git association discovery %s deferred", repo.ID)
+		}
 		if err = ctx.Err(); err != nil {
-			return err
+			return progress, errors.Join(append(claimErrors, err)...)
 		}
 		j, e := st.ClaimGitHeadScan(ctx, repo.ID, repo.GitRemoteURL, time.Now().UTC(), time.Minute)
 		if errors.Is(e, domain.ErrNotFound) || errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
 			continue
 		}
 		if e != nil {
-			return e
+			claimErrors = append(claimErrors, fmt.Errorf("Git head reconciliation %s claim: %w", repo.ID, e))
+			continue
 		}
 		work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 30*time.Second)
 		_, e = g.core.workerRepository(work, j.RepoID)
 		var fence GitReadFence
+		var identity *domain.GitProviderObservation
 		if e == nil {
-			fence, e = authorizeGitRead(work, g.sourceAccess, j.RepoID)
+			identity, fence, e = authorizeGitObservation(work, g.sourceAccess, j.RepoID)
+		}
+		var frozenAdmissions *frozenGitAdmissionBatch
+		if e == nil {
+			var admissionErr error
+			frozenAdmissions, admissionErr = g.freezeGitAdmissionBatch(work, j, identity, fence)
+			if admissionErr != nil {
+				log.Printf("Git admission snapshot %s deferred", j.RepoID)
+			}
 		}
 		var heads []outbound.GitHead
+		var frozenContext *gitAdmissionSnapshot
+		if e == nil {
+			var contextErr error
+			frozenContext, contextErr = g.freezeGitHeadContext(work, j, identity, frozenAdmissions)
+			if contextErr != nil {
+				log.Printf("Git context head snapshot %s deferred", j.RepoID)
+			}
+		}
 		var more bool
+		var sourceHeads []domain.GitRefObservation
+		if e == nil {
+			sourceHeads, e = g.readGitAdmissionSources(work, frozenAdmissions)
+		}
 		if e == nil {
 			heads, more, e = g.reader.ListGitHeads(work, j.GitOrigin, j.Page)
 		}
 		if e == nil {
 			observations := []domain.GitRefObservation{}
 			for _, h := range heads {
-				observations = append(observations, domain.GitRefObservation{RepoID: j.RepoID, GitOrigin: j.GitOrigin, Source: "reconciliation", Ref: h.Ref, After: h.Commit}.WithID())
+				observations = append(observations, domain.GitRefObservation{RepoID: j.RepoID, GitOrigin: j.GitOrigin, Source: "reconciliation", Ref: h.Ref, After: h.Commit, Provider: identity}.WithID())
+			}
+			var preparedAdmissions *preparedGitAdmissionBatch
+			var boundHeads []domain.GitContextHead
+			receipt, receiptErr := domain.NewGitHeadReceiptWithSources(j, observations, sourceHeads, more)
+			if receiptErr == nil {
+				var contextErr error
+				boundHeads, contextErr = prepareGitContextHeads(frozenContext, receipt)
+				if contextErr != nil {
+					log.Printf("Git context head preparation %s deferred", j.RepoID)
+				}
+			}
+			if frozenAdmissions != nil {
+				admissionErr := receiptErr
+				if admissionErr == nil {
+					preparedAdmissions, admissionErr = g.prepareGitAdmissionBatch(work, frozenAdmissions, receipt)
+				}
+				if admissionErr != nil {
+					log.Printf("Git admission preparation %s deferred", j.RepoID)
+				}
 			}
 			e = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
 				r, e := g.core.meta.GetRepo(tx, j.RepoID)
@@ -358,7 +418,38 @@ func (g *GitScans) Reconcile(ctx context.Context) error {
 				if e := fence(tx); e != nil {
 					return e
 				}
-				return st.FinishGitHeadScan(tx, j, observations, more, time.Now().UTC())
+				var finishErr error
+				if len(sourceHeads) > 0 {
+					finishErr = g.core.meta.(outbound.GitHeadSourceScanStore).FinishGitHeadScanWithSources(tx, j, observations, sourceHeads, more, time.Now().UTC())
+				} else {
+					finishErr = st.FinishGitHeadScan(tx, j, observations, more, time.Now().UTC())
+				}
+				if finishErr != nil {
+					return finishErr
+				}
+				var current *gitAdmissionSnapshot
+				if len(boundHeads) > 0 || (preparedAdmissions != nil && len(preparedAdmissions.admissions) > 0) {
+					var err error
+					basis := frozenContext
+					if preparedAdmissions != nil && preparedAdmissions.frozen.snapshot != nil {
+						basis = preparedAdmissions.frozen.snapshot
+					}
+					current, err = g.core.reuseGitAdmissionSnapshot(tx, j.RepoID, basis)
+					if errors.Is(err, domain.ErrConflict) {
+						boundHeads = nil
+						if preparedAdmissions != nil {
+							preparedAdmissions.admissions = nil
+						}
+						err = nil
+					}
+					if err != nil {
+						return err
+					}
+				}
+				if err := g.persistGitContextHeads(tx, receipt, boundHeads, current); err != nil {
+					return err
+				}
+				return g.persistGitAdmissionBatch(tx, preparedAdmissions, current)
 			})
 		}
 		cancel()
@@ -369,19 +460,24 @@ func (g *GitScans) Reconcile(ctx context.Context) error {
 			log.Printf("Git head reconciliation %s page %d deferred", j.RepoID, j.Page)
 		}
 	}
-	return nil
+	return progress, errors.Join(append(claimErrors, ctx.Err())...)
 }
 func (g *GitScans) RunReconciler(ctx context.Context) {
-	t := time.NewTicker(time.Minute)
-	defer t.Stop()
 	for {
-		if err := g.Reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		progress, err := g.reconcile(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Git reconciliation: %v", err)
 		}
+		delay := time.Minute
+		if progress {
+			delay = time.Second
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-t.C:
+		case <-timer.C:
 		}
 	}
 }

@@ -38,6 +38,7 @@ type Container struct {
 	// WakeHistoricalSync is process lifecycle wiring, absent in embedded/test drivers.
 	WakeHistoricalSync      func(string)
 	WakeCommitCapture       func(string)
+	WakeFetchDiscovery      func(string)
 	CommitCapture           inbound.CommitCapture
 	ProviderLaunch          ProviderLaunchHooks
 	PrepareAgent            inbound.PrepareAgentContext
@@ -819,6 +820,9 @@ func Run(c *Container, args []string) error {
 		c = selected
 		if selectedRef == "" {
 			replaySavedPRDiscovery(ctx, c, cwd)
+			if remoteName == "origin" {
+				replaySavedMergeDeliveries(ctx, c, cwd)
+			}
 		}
 		var publication *domain.PublicationScope
 		if selectedRef == "" {
@@ -864,6 +868,9 @@ func Run(c *Container, args []string) error {
 		c = selected
 		if selectedRef == "" {
 			replaySavedPRDiscovery(ctx, c, cwd)
+			if remoteName == "origin" {
+				replaySavedMergeDeliveries(ctx, c, cwd)
+			}
 		}
 		force := parsed.has("--force") || parsed.has("-f")
 		out, err := c.Sync.Pull(ctx, inbound.SyncInput{Cwd: cwd, Ref: selectedRef, Force: force, Progress: syncProgressPrinter(os.Stderr)})

@@ -1,6 +1,38 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import { useT } from '../i18n';
+import type { PRJobAssociation } from '../types';
+
+function AssociationDetails({ association }: { association?: PRJobAssociation }) {
+ const t = useT();
+ const states: Record<string, string> = {
+  unknown: t('promotion.associationUnknown'),
+  unavailable: t('promotion.associationUnavailable'),
+  not_recorded: t('promotion.associationNone'),
+  recorded: t('promotion.associationRecorded'),
+  recorded_partial: t('promotion.associationPartial'),
+  recorded_complete: t('promotion.associationComplete'),
+ };
+ const state = (value: string) => states[value] ?? states.unknown;
+ return <details className="pr-association">
+  <summary>{t('promotion.associationTitle')}</summary>
+  {association ? <>
+   <p>{t('promotion.associationProvider')}: {state(association.provider_history)}
+    {association.provider_checkpoint_count != null && <> · {t('promotion.associationCheckpoints', { count: association.provider_checkpoint_count })}</>}
+   </p>
+   <p>{t('promotion.associationParticipation')}: {state(association.participation)}
+    {association.participation_count != null && <> · {t('promotion.associationProofs', { count: association.participation_count })}</>}
+    {association.publication_count != null && <> · {t('promotion.associationPublications', { count: association.publication_count })}</>}
+   </p>
+   <p>{t('promotion.associationContribution')}: {state(association.contribution)}
+    {association.contribution_count != null && <> · {t('promotion.associationContributions', { count: association.contribution_count })}</>}
+   </p>
+   <p>{t('promotion.associationScope')}</p>
+   <p>{t('promotion.associationRuntime')}</p>
+   <p>{t('promotion.associationApplicability')}</p>
+  </> : <p>{t('promotion.associationMissing')}</p>}
+ </details>;
+}
 
 export function PRPromotions({ repoId, canRetry }: { repoId: string; canRetry: boolean }) {
  const t = useT();
@@ -9,7 +41,7 @@ export function PRPromotions({ repoId, canRetry }: { repoId: string; canRetry: b
  const jobs = useQuery({ queryKey: key, queryFn: ({ signal }) => api.prPromotions(repoId, signal), refetchInterval: 10000 });
  const retry = useMutation({ mutationFn: (id: string) => api.retryPRPromotion(repoId, id), onSuccess: () => qc.invalidateQueries({ queryKey: key }) });
  const labels = { waiting: t('promotion.waiting'), retrying: t('promotion.retrying'), running: t('promotion.running'), completed: t('promotion.completed'), attention: t('promotion.attention') };
- const reasons: Record<string,string> = { policy_changed: t('promotion.policy'), source_context_pending: t('promotion.source'), source_finalization_required: t('promotion.finalization'), integrity_check_failed: t('promotion.integrity'), identity_or_history_conflict: t('promotion.conflict'), repository_or_base_missing: t('promotion.missing'), temporary_failure: t('promotion.temporary'), retry_limit_reached: t('promotion.exhausted'), invalid_request: t('promotion.invalid') };
+ const reasons: Record<string,string> = { policy_changed: t('promotion.policy'), source_context_pending: t('promotion.source'), source_finalization_required: t('promotion.finalization'), ordering_evidence_pending: t('promotion.ordering'), integrity_check_failed: t('promotion.integrity'), identity_or_history_conflict: t('promotion.conflict'), repository_or_base_missing: t('promotion.missing'), temporary_failure: t('promotion.temporary'), retry_limit_reached: t('promotion.exhausted'), invalid_request: t('promotion.invalid') };
  const failures = { deadline_exceeded: t('promotion.deadline'), canceled: t('promotion.canceled'), unspecified: t('promotion.unspecified') };
  const kinds = { queued: t('promotion.queued'), claimed: t('promotion.claimed'), finished: t('promotion.finished'), retry_requested: t('promotion.retryRequested'), source_available: t('promotion.sourceAvailable') };
  if (jobs.isError) return <p role="alert" className="err">{t('promotion.loadError')} <button onClick={() => void jobs.refetch()}>{t('context.retryRead')}</button></p>;
@@ -23,6 +55,7 @@ export function PRPromotions({ repoId, canRetry }: { repoId: string; canRetry: b
    <span>{j.pr.head_branch} → {j.pr.base_branch}</span>
    {j.reason && <p>{reasons[j.reason] ?? t('promotion.temporary')}</p>}
    {j.failure_class && <p>{failures[j.failure_class] ?? t('promotion.unspecified')}</p>}
+   <AssociationDetails association={j.association} />
    <details className="pr-diagnostics">
     <summary>{t('promotion.history')}</summary>
     {j.diagnostics ? <>

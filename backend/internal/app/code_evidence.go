@@ -24,16 +24,40 @@ type evidenceClosure struct {
 // One coherent read owns this cache. Missing immutable evidence is cached too;
 // a later request sees its own committed repository generation. No provider I/O.
 type codeEvidence struct {
-	repo     domain.ContentHash
-	origin   string
-	trees    outbound.GitTreeStore
-	deltas   outbound.GitDeltaReader
-	commits  map[string]evidenceValue[domain.GitCommitTree]
-	nodes    map[string]evidenceValue[domain.GitTreeNode]
-	changes  map[[2]string]evidenceValue[domain.GitCommitDelta]
-	closures map[string]*evidenceClosure
-	reads    int
-	limited  bool
+	repo                   domain.ContentHash
+	origin                 string
+	trees                  outbound.GitTreeStore
+	deltas                 outbound.GitDeltaReader
+	commits                map[string]evidenceValue[domain.GitCommitTree]
+	nodes                  map[string]evidenceValue[domain.GitTreeNode]
+	changes                map[[2]string]evidenceValue[domain.GitCommitDelta]
+	closures               map[string]*evidenceClosure
+	reads                  int
+	limited                bool
+	contributions          []verifiedPRContribution
+	contributionsLoaded    bool
+	gitContributions       []verifiedGitContribution
+	gitContributionsLoaded bool
+	contributionHistory    []domain.HistoryEvent
+}
+
+func (e *codeEvidence) bindContributionHistory(repo domain.ContentHash, history []domain.HistoryEvent) error {
+	if e == nil {
+		return nil
+	}
+	if e.repo != repo {
+		return domain.ErrIntegrity
+	}
+	same := len(e.contributionHistory) == len(history)
+	if same && len(history) != 0 {
+		same = &e.contributionHistory[0] == &history[0]
+	}
+	if !same {
+		e.contributions, e.gitContributions = nil, nil
+		e.contributionsLoaded, e.gitContributionsLoaded = false, false
+	}
+	e.contributionHistory = history
+	return nil
 }
 
 func (s *Service) newCodeEvidence(ctx context.Context, repo domain.ContentHash) (*codeEvidence, error) {

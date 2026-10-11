@@ -28,6 +28,39 @@ for (const head of ['continuation','A','base']) {
 }
 console.log('verified graph integration tests passed');
 
+{
+ const snapshots=[snap('base'),snap('original',['base']),snap('supplement',['original']),snap('current',['base'])];
+ const refs:Ref[]=[{kind:'branch',name:'main',repo_id:'repo',branch_id:'main-id',target:'current'}];
+ const history:HistoryEvent[]=['original','supplement'].map(source=>({id:`done-${source}`,repo_id:'repo',branch:'main',branch_id:'main-id',source_branch_id:'feature-id',kind:'pr-merge',source,target:'current',pr_completed:true,
+  pr:{number:488,base_branch:'main',head_branch:'feature',head_sha:'a'.repeat(40),merge_sha:'d'.repeat(40)},created_at:'2026-01-03T00:00:00Z'}));
+ const context:BranchContext={branch_id:'main-id',snapshot_id:'current',code_commit:'e'.repeat(40),reason:'selected_code',roots:['original','supplement','current'],snapshot_ids:['current','supplement','original','base'],merges:history.map(event=>({destination_branch_id:'main-id',event_id:event.id,source:event.source!,merge_sha:event.pr!.merge_sha,pr_number:488,state:'included',reason:'verified_git_order',order:1}))};
+ const view=serverGraphFixture({snapshots,refs,history,graph:{branch_contexts:{main:context}} as GraphState},'','integrations');
+ assert.equal(view.graph.operations.merges.length,1,'supplement duplicated the PR operation');
+ const result=projectBranchGraph(snapshots,refs,view.graph,'current','main');
+ const index=new GraphIndex(result.snapshots);
+ assert.deepEqual(index.issues,[],'grouped contribution created invalid topology');
+ for(const source of ['original','supplement']) assert.ok(index.reaches(result.pinHead!,source),`missing ${source} contribution`);
+ assert.deepEqual(snapshots.find(snapshot=>snapshot.id==='current')?.parents,['base']);
+}
+
+{
+ const snapshots=[snap('base'),snap('supplement',['base']),snap('current',['base'])];
+ const refs:Ref[]=[{kind:'branch',name:'main',repo_id:'repo',branch_id:'main-id',target:'current'}];
+ const birth:HistoryEvent={id:'feature-birth',repo_id:'repo',branch:'feature',branch_id:'feature-id',kind:'birth',source:'base',target:'base',created_at:'2026-01-01T00:00:00Z'};
+ const completions:HistoryEvent[]=['base','supplement'].map(source=>({id:`done-${source}`,repo_id:'repo',branch:'main',branch_id:'main-id',source_branch_id:'feature-id',kind:'pr-merge',source,target:'current',pr_completed:true,
+  pr:{number:488,base_branch:'main',head_branch:'feature',head_sha:'a'.repeat(40),merge_sha:'d'.repeat(40)},created_at:'2026-01-03T00:00:00Z'}));
+ const context:BranchContext={branch_id:'main-id',snapshot_id:'current',code_commit:'e'.repeat(40),reason:'selected_code',roots:['base','supplement','current'],snapshot_ids:['current','supplement','base'],merges:completions.map(event=>({destination_branch_id:'main-id',event_id:event.id,source:event.source!,merge_sha:event.pr!.merge_sha,pr_number:488,state:'included',reason:'verified_git_order',order:1}))};
+ const view=serverGraphFixture({snapshots,refs,history:[birth,...completions],graph:{branch_contexts:{main:context}} as GraphState},'','integrations');
+ assert.equal(view.graph.operations.merges.length,1);
+ const merge=view.graph.operations.merges[0];
+ assert.equal(merge.source_birth,'graph:birth:feature-birth');
+ const result=projectBranchGraph(snapshots,refs,view.graph,'current','main');
+ const index=new GraphIndex(result.snapshots);
+ assert.deepEqual(index.issues,[]);
+ for(const source of ['base','supplement','graph:birth:feature-birth']) assert.ok(index.reaches(result.pinHead!,source),`grouped birth lost ${source}`);
+ assert.equal(result.edgeBranches.get(merge.id)?.get('supplement'),'feature');
+}
+
 // The destination's checkpoints stay between its PRs. The source's recorded
 // birth remains on its actual parent branch, including nested feature work.
 for (const destination of ['main','release']) for (const origin of ['destination','other-feature']) for (const continuation of ['A','base']) {

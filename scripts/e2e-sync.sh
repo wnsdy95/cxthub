@@ -72,6 +72,7 @@ cleanup() {
     fi
   done
   if [ "$FAIL" -ne 0 ] && [ "$test_status" -eq 0 ]; then test_status=1; fi
+  if [ "$test_status" -ne 0 ] || [ "$FAIL" -ne 0 ]; then CXT_E2E_KEEP_TMP=1; fi
   if { [ "$test_status" -ne 0 ] || [ "$FAIL" -ne 0 ]; } && [ -n "${CXT_E2E_DIAGNOSTICS_DIR:-}" ]; then
     python3 "$ROOT/scripts/e2e-collect-diagnostics.py" "$TMP" "$CXT_E2E_DIAGNOSTICS_DIR" || echo "Could not collect E2E failure diagnostics" >&2
   fi
@@ -129,6 +130,9 @@ echo "── build(isolated bin) · server start :$PORT"
 server_build=(go build -o "$TMP/bin/cxtd")
 if [ -n "${CXT_E2E_DSN:-}" ]; then server_build+=(-tags postgres); fi
 ( cd "$ROOT/backend" && "${server_build[@]}" ./cmd/cxtd ) || { echo "cxtd build failed"; exit 1; }
+evidence_build=(go test -c -o "$TMP/bin/publication-git-evidence")
+if [ -n "${CXT_E2E_DSN:-}" ]; then evidence_build+=(-tags postgres); fi
+( cd "$ROOT/backend" && "${evidence_build[@]}" ./internal/app ) || { echo "Git evidence fixture build failed"; exit 1; }
 if [ -n "${CXT_E2E_CXT_BIN:-}" ]; then
   cp "$CXT_E2E_CXT_BIN" "$TMP/bin/cxt" || exit 1
 else
@@ -326,6 +330,8 @@ echo "── E. repo1: post-merge hook = fetch-only(keep local refs + upstream h
 cd "$TMP/repo1"
 LOCAL_BEFORE=$(ref_target .cxt/refs/heads/main)
 PULL_TERM=cxt-e2e-pull-terminal
+PULL_SESSION=cxt-e2e-pull-session
+OTHER_SESSION=cxt-e2e-other-session
 HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
 expect "fetch-only: keep local main ref" "$(ref_target .cxt/refs/heads/main)" "$LOCAL_BEFORE"
 expect "upstream hint output" "$(echo "$HOOKOUT" | grep -ci 'new context')" 1
@@ -337,19 +343,32 @@ expect "briefing creation notice output" "$(echo "$HOOKOUT" | grep -c 'briefed t
 BRIEF_FILE=$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)
 expect "briefing uses one scoped queue" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 1
 expect "briefing contains identifiers but no collaborator labels" "$(python3 -c "import json;d=json.load(open('$BRIEF_FILE'));t='\n'.join(d.get('texts') or [d.get('text','')]);print('identifiers only' in t and 'sha256:' in t and 'codeC' not in t and 'codeB' not in t)" 2>/dev/null)" True
-WRONG_BRIEF=$(echo "{\"cwd\":\"$TMP/repo1\",\"prompt\":\"go on elsewhere\"}" | TERM_SESSION_ID=cxt-e2e-other-terminal cxt hook --provider claude --event UserPromptSubmit)
-expect "another terminal cannot consume pull briefing" "$([ -z "$WRONG_BRIEF" ] && echo yes)" yes
-expect "wrong terminal leaves scoped briefing intact" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 1
-BRIEF=$(echo "{\"cwd\":\"$TMP/repo1\",\"prompt\":\"go on\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit)
-expect "hook emits additionalContext JSON" "$(echo "$BRIEF" | python3 -c "
+echo "{\"cwd\":\"$TMP/repo1\",\"session_id\":\"$OTHER_SESSION\",\"prompt\":\"go on elsewhere\"}" | TERM_SESSION_ID=cxt-e2e-other-terminal cxt hook --provider claude --event UserPromptSubmit >"$TMP/brief-wrong.out" 2>"$TMP/brief-wrong.err"
+expect "wrong-terminal hook exits successfully" "$?" 0
+expect "wrong-terminal hook stderr is empty" "$(wc -c < "$TMP/brief-wrong.err" | tr -d ' ')" 0
+expect "another terminal receives its selection notice but not the pull briefing" "$(python3 - "$TMP/brief-wrong.out" <<'PYWRONGBRIEF'
 import json,sys
-try:
-    text=json.load(sys.stdin)['hookSpecificOutput']['additionalContext']
-    print('identifiers only' in text and 'sha256:' in text and 'codeC' not in text and 'codeB' not in text)
-except Exception: print('parse-fail')")" True
+text=json.load(open(sys.argv[1]))['hookSpecificOutput']['additionalContext']
+print('[CXTHub context selection]' in text and 'Incoming snapshot IDs:' not in text)
+PYWRONGBRIEF
+)" True
+expect "wrong terminal leaves scoped briefing intact" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 1
+echo "{\"cwd\":\"$TMP/repo1\",\"session_id\":\"$PULL_SESSION\",\"prompt\":\"go on\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit >"$TMP/brief-first.out" 2>"$TMP/brief-first.err"
+expect "initiating-terminal hook exits successfully" "$?" 0
+expect "initiating-terminal hook stderr is empty" "$(wc -c < "$TMP/brief-first.err" | tr -d ' ')" 0
+expect "hook emits both pull briefing and session-selection notice" "$(python3 - "$TMP/brief-first.out" <<'PYFIRSTBRIEF'
+import json,sys
+text=json.load(open(sys.argv[1]))['hookSpecificOutput']['additionalContext']
+print('Incoming snapshot IDs:' in text and 'identifiers only' in text
+      and '[CXTHub context selection]' in text and 'sha256:' in text
+      and 'codeC' not in text and 'codeB' not in text)
+PYFIRSTBRIEF
+)" True
 expect "briefing is consumed once and deleted" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 0
-BRIEF2=$(echo "{\"cwd\":\"$TMP/repo1\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit)
-expect "subsequent prompt emits no briefing" "$([ -z "$BRIEF2" ] && echo yes)" yes
+echo "{\"cwd\":\"$TMP/repo1\",\"session_id\":\"$PULL_SESSION\"}" | TERM_SESSION_ID="$PULL_TERM" cxt hook --provider claude --event UserPromptSubmit >"$TMP/brief-repeat.out" 2>"$TMP/brief-repeat.err"
+expect "repeated hook exits successfully" "$?" 0
+expect "repeated hook stderr is empty" "$(wc -c < "$TMP/brief-repeat.err" | tr -d ' ')" 0
+expect "same session emits neither briefing nor selection twice" "$([ ! -s "$TMP/brief-repeat.out" ] && echo yes)" yes
 REPEAT_HOOKOUT=$(TERM_SESSION_ID="$PULL_TERM" cxt git-hook post-merge 0 2>&1)
 expect "same remote tip is not briefed again" "$(echo "$REPEAT_HOOKOUT" | grep -c 'briefed to the agent')" 0
 expect "repeat pull leaves no briefing queue" "$(find .cxt/briefings -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" 0

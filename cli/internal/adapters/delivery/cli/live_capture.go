@@ -13,7 +13,7 @@ import (
 	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
 )
 
-func runLiveObserver(ctx context.Context, cwd string, args []string) error {
+func runLiveObserver(ctx context.Context, c *Container, cwd string, args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("live-watch requires provider and registered session")
 	}
@@ -34,7 +34,14 @@ func runLiveObserver(ctx context.Context, cwd string, args []string) error {
 	}
 	// Capture and publication have independent bounds. The durable pending is
 	// the retry checkpoint, so publication never repeats transcript parsing.
-	return capture.WatchSession(ctx, cwd, domain.ProviderKind(args[0]), args[1], run("live-capture"), run("live-publish"))
+	return capture.WatchSession(ctx, cwd, domain.ProviderKind(args[0]), args[1], capture.SessionWatch{
+		Poll: run("live-capture"), Publish: run("live-publish"),
+		Wake: func(context.Context) {
+			if c.WakeFetchDiscovery != nil {
+				c.WakeFetchDiscovery(cwd)
+			}
+		},
+	})
 }
 
 func runLiveCapture(ctx context.Context, c *Container, cwd string, args []string) error {

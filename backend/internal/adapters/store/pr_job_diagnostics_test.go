@@ -44,6 +44,91 @@ func requireDiagnosticJobUnchanged(t *testing.T, st sourceJobStore, before domai
 func checkPRJobDiagnostics(t *testing.T, st sourceJobStore) {
 	t.Helper()
 	ctx := context.Background()
+	t.Run("ordering wait retains backoff claims and fences", func(t *testing.T) {
+		repo, proof, now := sourceJobFixture(t, st)
+		storeSourcePublication(t, st, proof)
+		job := sourceJob(repo, 352, now)
+		job.State, job.Reason, job.Attempts = "waiting", "", 0
+		pending, err := st.EnqueuePRJob(ctx, job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for attempt := 1; attempt <= 24; attempt++ {
+			claim, err := st.ClaimPRJob(ctx, repo, job.ID, pending.NextAttempt, time.Minute)
+			if err != nil || claim.Attempts != attempt || claim.Version != int64(attempt) {
+				t.Fatalf("ordering claim reset attempts/version: %+v %v", claim, err)
+			}
+			claim.State, claim.Reason = "waiting", "ordering_evidence_pending"
+			claim.UpdatedAt, claim.LeaseUntil = claim.UpdatedAt.Add(time.Second), time.Time{}
+			claim.NextAttempt = claim.UpdatedAt.Add(time.Second << min(attempt, 8))
+			if err := st.FinishPRJob(ctx, claim); err != nil {
+				t.Fatal(err)
+			}
+			pending = readDiagnosticJob(t, st, job)
+			for _, scope := range []domain.ContentHash{repo, ""} {
+				if err := st.WakePRSourceJobs(ctx, scope, pending.NextAttempt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := st.EnqueuePRJob(ctx, job); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.ClaimPRJob(ctx, repo, job.ID, pending.NextAttempt.Add(-time.Millisecond), time.Minute); !errors.Is(err, domain.ErrNotFound) {
+				t.Fatalf("ordering job bypassed backoff: %v", err)
+			}
+			requireDiagnosticJobUnchanged(t, st, pending)
+		}
+		if pending.Diagnostics.TotalClaims != 24 || len(pending.Diagnostics.Events) != domain.MaxPRJobDiagnosticEvents || pending.Diagnostics.Dropped != 17 {
+			t.Fatalf("unbounded or reset ordering diagnostics: %+v", pending.Diagnostics)
+		}
+		for _, event := range pending.Diagnostics.Events {
+			if event.Kind == "finished" && (event.Reason != "ordering_evidence_pending" || event.State != "waiting") {
+				t.Fatalf("ordering wait lost diagnostic classification: %+v", event)
+			}
+			if event.Kind == "source_available" || event.Kind == "retry_requested" {
+				t.Fatalf("publication restarted ordering wait: %+v", event)
+			}
+		}
+		younger := job
+		younger.PR.Number++
+		younger.ID = domain.PRPromotionID(repo, younger.PR.Number)
+		younger.CreatedAt, younger.UpdatedAt, younger.NextAttempt = pending.UpdatedAt, pending.UpdatedAt, pending.UpdatedAt
+		if _, err := st.EnqueuePRJob(ctx, younger); err != nil {
+			t.Fatal(err)
+		}
+		ready, err := st.ClaimPRJob(ctx, repo, "", pending.UpdatedAt, time.Minute)
+		if err != nil || ready.ID != younger.ID {
+			t.Fatalf("ordering wait blocked ready successor: %+v %v", ready, err)
+		}
+		ready.State = "completed"
+		if err := st.FinishPRJob(ctx, ready); err != nil {
+			t.Fatal(err)
+		}
+		claim, err := st.ClaimPRJob(ctx, repo, job.ID, pending.NextAttempt, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.ClaimPRJob(ctx, repo, job.ID, claim.UpdatedAt.Add(time.Second), time.Minute); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("ordering wait overlapped active lease: %v", err)
+		}
+		recovered, err := st.ClaimPRJob(ctx, repo, job.ID, claim.LeaseUntil.Add(time.Second), time.Minute)
+		if err != nil || recovered.Version != claim.Version+1 || recovered.Attempts != 26 {
+			t.Fatalf("ordering wait failed lease recovery: %+v %v", recovered, err)
+		}
+		claim.State, claim.Reason = "waiting", "ordering_evidence_pending"
+		if err := st.FinishPRJob(ctx, claim); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("stale worker overwrote ordering claim: %v", err)
+		}
+		requireDiagnosticJobUnchanged(t, st, recovered)
+		recovered.State, recovered.Reason, recovered.LeaseUntil = "completed", "", time.Time{}
+		if err := st.FinishPRJob(ctx, recovered); err != nil {
+			t.Fatal(err)
+		}
+		completed := readDiagnosticJob(t, st, job)
+		if completed.State != "completed" || completed.Attempts != 26 || completed.Reason != "" {
+			t.Fatalf("ordering wait failed to complete: %+v", completed)
+		}
+	})
 	t.Run("failure retry success replay and repository isolation", func(t *testing.T) {
 		j := diagnosticStoreJob(t, st)
 		// Enqueue does not trust even invalid replacement trails from a caller.

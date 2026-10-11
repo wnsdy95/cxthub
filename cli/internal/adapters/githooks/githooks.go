@@ -103,6 +103,9 @@ if [ "$1" = "aborted" ]; then
 fi
 [ "$1" = "committed" ] || exit "$user_status"
 case "$input" in
+*refs/remotes/*) printf '%%s\n' "$input" | "$CXT" git-hook remote-ref-observe "$1" || true ;;
+esac
+case "$input" in
 *refs/stash*) "$CXT" git-hook stash-sync || true ;;
 esac
 case "$input" in

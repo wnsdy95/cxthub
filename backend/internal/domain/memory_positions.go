@@ -28,8 +28,7 @@ type MemoryCodePosition struct {
 // snapshot timestamps, shared branch heads or another worker's newest position.
 // A selected event without code evidence must not fall back to a different event.
 func ResolveMemoryPositions(snapshot ContentHash, event string, history []HistoryEvent) MemoryPositions {
-	out := MemoryPositions{SnapshotID: snapshot, EventID: event, Reason: "unavailable", Options: []MemoryCodePosition{}}
-	codes := map[string]bool{}
+	options := []MemoryCodePosition{}
 	for _, h := range history {
 		code, pr := "", 0
 		switch h.Kind {
@@ -46,13 +45,22 @@ func ResolveMemoryPositions(snapshot ContentHash, event string, history []Histor
 				code, pr = h.PR.MergeSHA, h.PR.Number
 			}
 		}
-		if ValidateGitOID(code) != nil {
+		options = append(options, MemoryCodePosition{EventID: h.ID, CodeCommit: code, Branch: h.Branch, Kind: h.Kind, PRNumber: pr, CreatedAt: h.CreatedAt})
+	}
+	return ResolveMemoryPositionOptions(snapshot, event, options)
+}
+
+func ResolveMemoryPositionOptions(snapshot ContentHash, event string, options []MemoryCodePosition) MemoryPositions {
+	out := MemoryPositions{SnapshotID: snapshot, EventID: event, Reason: "unavailable", Options: []MemoryCodePosition{}}
+	codes := map[string]bool{}
+	for _, option := range options {
+		if ValidateGitOID(option.CodeCommit) != nil {
 			continue
 		}
-		out.Options = append(out.Options, MemoryCodePosition{EventID: h.ID, CodeCommit: code, Branch: h.Branch, Kind: h.Kind, PRNumber: pr, CreatedAt: h.CreatedAt})
-		codes[code] = true
-		if event != "" && h.ID == event {
-			out.CodeCommit, out.Reason = code, "selected_event"
+		out.Options = append(out.Options, option)
+		codes[option.CodeCommit] = true
+		if event != "" && option.EventID == event {
+			out.CodeCommit, out.Reason = option.CodeCommit, "selected_event"
 		}
 	}
 	sort.Slice(out.Options, func(i, j int) bool {

@@ -122,6 +122,7 @@ Thumbs.db
 !/docs/BRANCHING.md
 !/docs/CLI.md
 !/docs/COMPLETION_PLAN.md
+!/docs/AUTOMATIC_CONTEXT_LINKING.md
 !/docs/ENTERPRISE_IDENTITY.md
 !/docs/CONTEXT_HISTORY.md
 !/docs/CONTEXT_INPUT.md

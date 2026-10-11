@@ -84,11 +84,16 @@ if ! CXT_KEEP_SESSION=1 GIT_EDITOR=true GIT_SEQUENCE_EDITOR="$TMP/squash-editor"
 PUB_HEAD=$(git rev-parse HEAD)
 # Model the hosting service with a plain Git clone: merge the actual squashed
 # source into main without running client capture hooks on the service side.
-git clone -q https://git.example.test/acme/publication.git "$TMP/publication-host"
+if ! git clone -q --reference "$TMP/publication-client" https://git.example.test/acme/publication.git "$TMP/publication-host"; then FAIL=1; return; fi
 if ! git -C "$TMP/publication-host" fetch -q "$TMP/publication-client" finalized-feature ||
    ! git -C "$TMP/publication-host" merge --no-ff -qm publication-merge FETCH_HEAD ||
    ! git -C "$TMP/publication-host" push -q origin main; then FAIL=1; return; fi
 PUB_MERGE=$(git -C "$TMP/publication-host" rev-parse HEAD)
+if ! CXT_E2E_GIT_FIXTURE_ROOT="$TMP" CXT_E2E_GIT_FIXTURE_REPO="$PUB_RID" \
+  CXT_E2E_GIT_FIXTURE_MERGE="$PUB_MERGE" CXT_E2E_DSN="${CXT_E2E_DSN:-}" \
+  "$TMP/bin/publication-git-evidence" -test.run '^TestPublicationE2EGitEvidence$' -test.v >"$TMP/pub-git-evidence.out" 2>&1; then
+  cat "$TMP/pub-git-evidence.out"; FAIL=1; return
+fi
 PUB_REQUEST="{\"number\":175,\"base_branch\":\"main\",\"head_branch\":\"finalized-feature\",\"head_sha\":\"$PUB_HEAD\",\"merge_sha\":\"$PUB_MERGE\"}"
 expect "PR is queued before its context arrives" "$(ccurl -sb "$J" -X POST "$B/repos/$PUB_RID/prs/promotions" -H 'Content-Type: application/json' -d "$PUB_REQUEST" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("state"))')" waiting
 # Publish the PR source only. Its completion may concurrently advance server

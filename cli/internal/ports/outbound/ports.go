@@ -210,6 +210,10 @@ type PullRequestMergeResolver interface {
 	ResolveMergedPullRequests(ctx context.Context, gitRemoteURL, baseBranch string, commitSHAs []string) ([]MergedPullRequest, error)
 }
 
+type PullRequestMergePager interface {
+	ResolveMergedPullRequestsPage(ctx context.Context, gitRemoteURL, baseBranch string, commitSHAs []string, page int) ([]MergedPullRequest, int, error)
+}
+
 // RemoteSync is the sync port to the central server (domain model).
 //
 // Transfers only missing parts (push/pull) based on content-hash. Mimics git push/pull.

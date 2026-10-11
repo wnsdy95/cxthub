@@ -57,15 +57,16 @@ type BranchContext struct {
 	SnapshotIDs []ContentHash        `json:"snapshot_ids"`
 }
 type BranchContextMerge struct {
-	DestinationBranchID string      `json:"destination_branch_id"`
-	EventID             string      `json:"event_id"`
-	Source              ContentHash `json:"source"`
-	Before              ContentHash `json:"before,omitempty"`
-	MergeSHA            string      `json:"merge_sha"`
-	PRNumber            int         `json:"pr_number"`
-	State               string      `json:"state"`
-	Reason              string      `json:"reason"`
-	Order               int         `json:"order"`
+	DeliveryAcknowledged bool        `json:"delivery_acknowledged"`
+	DestinationBranchID  string      `json:"destination_branch_id"`
+	EventID              string      `json:"event_id"`
+	Source               ContentHash `json:"source"`
+	Before               ContentHash `json:"before,omitempty"`
+	MergeSHA             string      `json:"merge_sha"`
+	PRNumber             int         `json:"pr_number"`
+	State                string      `json:"state"`
+	Reason               string      `json:"reason"`
+	Order                int         `json:"order"`
 }
 type RepositoryRevision struct {
 	Evidence uint64 `json:"evidence,string,omitempty"`

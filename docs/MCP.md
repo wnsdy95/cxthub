@@ -58,6 +58,7 @@ See [Render deployment](../deploy/RENDER.md) for setup and migration steps.
 | `context_fetch` | Retrieve the entire archived event stream in bounded fragments |
 | `memory_load` | Project merged memory or retrieve an exact archived object in bounded fragments |
 | `context_search` | Search messages and readable events, continuing through older records |
+| `context_link_status` | Read recorded publication, integration and immutable memory-pin progress |
 
 Every tool is marked read-only, non-destructive, and idempotent. There are no
 MCP tools for save, commit, checkout, fork, restore, push, pull, settings,
@@ -66,6 +67,24 @@ secrets, membership, or break-glass administration.
 `repository_list` is the cloud discovery step. The other tools require an
 explicit repository selector (`owner/repository` or repository
 ID). A remote client never depends on a workstation's current directory.
+
+### Automatic linking status
+
+`context_link_status` uses the same application query as
+`GET /repos/{repoID}/git/associations`. Select `kind=publication|integration|memory`
+(default `integration`) and `state=pending|all` (default `pending`). MCP pages
+default to 10 rows, allow at most 20, and shrink to the response byte budget.
+Keep repository and filters unchanged when following `next_cursor`.
+
+The tool reads recorded evidence only: it cannot request a provider refresh,
+retry work or repair data. `admitted` means a publication has at least one
+prospective admission, not that integration completed. `completed` requires the
+historical integration proof or exact immutable memory pin; expired leases show
+`retrying` without changing the worker queue. An empty pending page or a recorded
+discovery checkpoint does not establish that every Git operation was captured.
+`current_applicability=not_evaluated` keeps historical completion separate from
+whether a selected code position currently includes the contribution. Start
+again without a cursor to include concurrent insertions before the current ID.
 
 ### History scope and working position
 

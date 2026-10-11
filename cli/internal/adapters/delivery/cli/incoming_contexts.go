@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/cli/internal/domain"
@@ -16,6 +17,10 @@ type incomingContextFetch struct {
 // fetchIncomingContexts narrows automatic discovery only. Explicit fetch/pull
 // and adapters without selected transfer retain their complete recovery path.
 func fetchIncomingContexts(ctx context.Context, c *Container, cwd, branch string, shas []string) (incomingContextFetch, error) {
+	return fetchIncomingContextsWithRewrites(ctx, c, cwd, branch, shas, loadRewrites(cwd), false, nil)
+}
+
+func fetchIncomingContextsWithRewrites(ctx context.Context, c *Container, cwd, branch string, shas []string, rewrites map[string]string, requirePlan bool, onPlan func() error) (incomingContextFetch, error) {
 	in := inbound.SyncInput{Cwd: cwd, FetchOnly: true}
 	discovery, ok := c.Sync.(inbound.IncomingContextDiscovery)
 	var snapshots []domain.Snapshot
@@ -28,10 +33,18 @@ func fetchIncomingContexts(ctx context.Context, c *Container, cwd, branch string
 		}
 	}
 	if !supported {
+		if requirePlan {
+			return incomingContextFetch{}, fmt.Errorf("required branch-plan discovery unavailable")
+		}
 		out, err := c.Sync.Pull(ctx, in)
 		return incomingContextFetch{SyncOutput: out}, err
 	}
-	candidates := mergedContextCandidates(snapshots, loadRewrites(cwd), shas)
+	if onPlan != nil {
+		if err := onPlan(); err != nil {
+			return incomingContextFetch{}, err
+		}
+	}
+	candidates := mergedContextCandidates(snapshots, rewrites, shas)
 	in.Ref, in.RequireBranchPlan = branch, true
 	var result inbound.SyncOutput
 	// Every candidate needs hydration now that discovery does not import bodies.

@@ -66,14 +66,22 @@ func branchCodeCandidates(ref domain.Ref, history []domain.HistoryEvent) map[str
 // choose a revision proven to contain every candidate. Explicit code requests
 // bypass this resolver. Ordinary conflicting observations remain ambiguous.
 func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.HistoryEvent, evidence *codeEvidence) (string, error) {
-	if evidence == nil {
-		return branchCode(ref, history), nil
+	index, err := newBranchHistoryIndex(ctx, ref.RepoID, history)
+	if err != nil {
+		return "", err
 	}
-	byTarget := map[domain.ContentHash][]domain.HistoryEvent{}
-	for _, h := range history {
-		if h.BranchID == ref.BranchID {
-			byTarget[h.Target] = append(byTarget[h.Target], h)
-		}
+	return resolvedBranchCodeFromIndex(ctx, ref, index, evidence)
+}
+
+func resolvedBranchCodeFromIndex(ctx context.Context, ref domain.Ref, index *branchHistoryIndex, evidence *codeEvidence) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if index.repo != ref.RepoID {
+		return "", domain.ErrIntegrity
+	}
+	if evidence == nil {
+		return branchCode(ref, index.targetEvents(ref.BranchID, ref.Target)), nil
 	}
 	// Keep each code association tied to its exact context. A squash receipt
 	// for one source must not normalize an unrelated worker's same-code record.
@@ -98,18 +106,13 @@ func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.Hi
 		defer delete(active, target)
 		r := ref
 		r.Target = target
-		rows := byTarget[target]
+		rows := index.targetEvents(ref.BranchID, target)
 		codes := branchCodeCandidates(r, rows)
 		merges := map[string]bool{}
 		for _, h := range rows {
 			if h.Kind == "pr-merge" && h.PRCompleted && h.PR != nil && domain.ValidateGitOID(h.PR.MergeSHA) == nil {
 				merges[h.PR.MergeSHA] = true
 				causalCompletions[h.ID] = true
-			}
-		}
-		for code := range codes {
-			if target == ref.Target && len(merges) != 0 && !merges[code] {
-				return errAmbiguousBranchCode
 			}
 		}
 		associations[target] = codes
@@ -139,15 +142,16 @@ func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.Hi
 	// exact receipt/completion pairs encountered in this causal selection can
 	// account for that source SHA. An unrelated/future receipt cannot advance a
 	// historical selection; unrelated observations still participate below.
-	for _, receipt := range history {
-		if receipt.Kind != "pr-merge" || receipt.PRCompleted || receipt.PR == nil || receipt.BranchID != ref.BranchID || receipt.PR.HeadSHA == receipt.PR.MergeSHA {
+	for _, position := range index.receipts[ref.BranchID] {
+		receipt := index.rows[position]
+		if receipt.PR.HeadSHA == receipt.PR.MergeSHA {
 			continue
 		}
 		key := sha256.Sum256([]byte(receipt.ID + ":completed"))
 		if !causalCompletions[fmt.Sprintf("%x", key[:16])] || !associations[receipt.Source][receipt.PR.HeadSHA] {
 			continue
 		}
-		complete, err := hasPRCompletion(history, receipt)
+		_, complete, err := index.completion(receipt)
 		if err != nil {
 			return "", err
 		}
@@ -172,13 +176,34 @@ func resolvedBranchCode(ctx context.Context, ref domain.Ref, history []domain.Hi
 		return "", nil
 	}
 	selected := codes[0]
-	for _, c := range codes[1:] {
-		relation, err := evidence.relation(ctx, selected, c)
-		if err != nil {
-			return "", err
+	var ordinary []domain.HistoryEvent
+	for _, h := range index.targetEvents(ref.BranchID, ref.Target) {
+		if h.Kind != "pr-merge" {
+			ordinary = append(ordinary, h)
 		}
-		if relation == "ancestor" {
-			selected = c
+	}
+	ordinaryCodes := branchCodeCandidates(ref, ordinary)
+	for code := range ordinaryCodes {
+		if !associations[ref.Target][code] {
+			delete(ordinaryCodes, code)
+		}
+	}
+	if len(ordinaryCodes) > 1 {
+		return "", nil
+	}
+	if len(ordinaryCodes) == 1 {
+		for code := range ordinaryCodes {
+			selected = code
+		}
+	} else {
+		for _, c := range codes[1:] {
+			relation, err := evidence.relation(ctx, selected, c)
+			if err != nil {
+				return "", err
+			}
+			if relation == "ancestor" {
+				selected = c
+			}
 		}
 	}
 	for _, c := range codes {
@@ -224,21 +249,29 @@ func (s *Service) queryBranchMemory(ctx context.Context, repo domain.ContentHash
 	if err != nil {
 		return domain.MemoryProjection{}, err
 	}
+	inputs, err := newBranchQueryInputs(ctx, repo, snaps, history)
+	if err != nil {
+		return domain.MemoryProjection{}, err
+	}
 	evidence, err := s.newCodeEvidence(ctx, repo)
 	if err != nil {
 		return domain.MemoryProjection{}, err
 	}
 	if code == "" {
-		code, err = resolvedBranchCode(ctx, ref, history, evidence)
+		code, err = resolvedBranchCodeFromIndex(ctx, ref, inputs.history, evidence)
 		if err != nil {
 			return domain.MemoryProjection{}, err
 		}
 	}
-	inclusion, err := s.branchContext(ctx, ref, code, snaps, history, evidence)
+	inclusion, err := s.branchContextFromInputs(ctx, ref, code, inputs, evidence)
 	if err != nil {
 		return domain.MemoryProjection{}, err
 	}
-	return s.projectBranchMemory(ctx, repo, inclusion, snaps)
+	contributions, err := s.contextContributionsForEvidence(ctx, repo, history, evidence)
+	if err != nil {
+		return domain.MemoryProjection{}, err
+	}
+	return s.projectBranchMemoryWithContributions(ctx, repo, inclusion, snaps, contributions)
 }
 
 // Both full and pending views use this same projection. No adapter enriches a
@@ -268,6 +301,10 @@ func (s *Service) projectGraphState(ctx context.Context, v domain.RepositoryView
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return graph, err
 	}
+	contributions, err := s.contextContributionsForEvidence(ctx, repo, v.History, evidence)
+	if err != nil {
+		return graph, err
+	}
 	// Only committed graph/evidence generations can reuse derived branch facts.
 	// Pending captures still rebuild their current display projection below.
 	key := branchProjectionKey{repo: repo, graph: v.Revision.Graph, evidence: v.Revision.Evidence}
@@ -282,9 +319,14 @@ func (s *Service) projectGraphState(ctx context.Context, v domain.RepositoryView
 			for branch, c := range cached {
 				graph.BranchSnapshots[branch] = append([]domain.ContentHash{}, c.SnapshotIDs...)
 			}
+			appendContributionOperations(&graph, contributions)
 			domain.ApplyGraphIntegrations(&graph, v.Snapshots)
 			return graph, nil
 		}
+	}
+	inputs, err := newBranchQueryInputs(ctx, repo, v.Snapshots, v.History)
+	if err != nil {
+		return graph, err
 	}
 	for _, ref := range v.Refs {
 		if ref.Kind != domain.RefBranch || ref.Target == "" {
@@ -293,14 +335,14 @@ func (s *Service) projectGraphState(ctx context.Context, v domain.RepositoryView
 		if ref.BranchID == "" {
 			ref.BranchID = graph.RefScopes[ref.Name]
 		}
-		code, err := resolvedBranchCode(ctx, ref, v.History, evidence)
+		code, err := resolvedBranchCodeFromIndex(ctx, ref, inputs.history, evidence)
 		if err != nil {
 			return graph, err
 		}
 		if evidence == nil {
 			code = ""
 		} // legacy metadata without a bound Git origin
-		inclusion, err := s.branchContext(ctx, ref, code, v.Snapshots, v.History, evidence)
+		inclusion, err := s.branchContextFromInputs(ctx, ref, code, inputs, evidence)
 		if err != nil {
 			return graph, err
 		}
@@ -310,6 +352,7 @@ func (s *Service) projectGraphState(ctx context.Context, v domain.RepositoryView
 	if cacheable {
 		s.branchCache.put(key, graph.BranchContexts)
 	}
+	appendContributionOperations(&graph, contributions)
 	domain.ApplyGraphIntegrations(&graph, v.Snapshots)
 	return graph, nil
 }

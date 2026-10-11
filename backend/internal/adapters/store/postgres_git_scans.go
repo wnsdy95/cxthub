@@ -332,11 +332,20 @@ func (s *PostgresStore) ClaimGitHeadScan(ctx context.Context, repo domain.Conten
 	return j, tx.Commit(ctx)
 }
 func (s *PostgresStore) FinishGitHeadScan(ctx context.Context, j domain.GitHeadScan, observations []domain.GitRefObservation, more bool, now time.Time) error {
-	if err := j.Validate(); err != nil {
+	return s.finishGitHeadScan(ctx, j, observations, nil, more, now)
+}
+
+func (s *PostgresStore) FinishGitHeadScanWithSources(ctx context.Context, claim domain.GitHeadScan, observations, priorSourceObservations []domain.GitRefObservation, more bool, now time.Time) error {
+	return s.finishGitHeadScan(ctx, claim, observations, priorSourceObservations, more, now)
+}
+
+func (s *PostgresStore) finishGitHeadScan(ctx context.Context, j domain.GitHeadScan, observations, priorSourceObservations []domain.GitRefObservation, more bool, now time.Time) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(observations) > 100 {
-		return domain.ErrValidation
+	receipt, err := domain.NewGitHeadReceiptWithSources(j, observations, priorSourceObservations, more)
+	if err != nil {
+		return err
 	}
 	tx, err := s.db(ctx).Begin(ctx)
 	if err != nil {
@@ -354,17 +363,21 @@ func (s *PostgresStore) FinishGitHeadScan(ctx context.Context, j domain.GitHeadS
 	if err = json.Unmarshal(b, &old); err != nil {
 		return err
 	}
-	if old.Version != j.Version || old.Page != j.Page || old.LeaseUntil.IsZero() {
-		return domain.ErrConflict
+	if err := validateGitHeadFinish(j, old, now); err != nil {
+		return err
 	}
 	for _, o := range observations {
-		if o.RepoID != j.RepoID || o.GitOrigin != j.GitOrigin || o.Source != "reconciliation" {
-			return domain.ErrIntegrity
-		}
-		if err = o.Validate(); err != nil {
+		if err = putGitObservationPG(ctx, tx, o, now); err != nil {
 			return err
 		}
-		if err = putGitObservationPG(ctx, tx, o, now); err != nil {
+	}
+	for _, observation := range priorSourceObservations {
+		if err := putGitObservationPG(ctx, tx, observation, now); err != nil {
+			return err
+		}
+	}
+	if receipt != nil {
+		if err := putGitHeadReceiptPG(ctx, tx, *receipt); err != nil {
 			return err
 		}
 	}
@@ -377,6 +390,7 @@ func (s *PostgresStore) FinishGitHeadScan(ctx context.Context, j domain.GitHeadS
 }
 
 var _ outbound.GitHeadScanStore = (*PostgresStore)(nil)
+var _ outbound.GitHeadSourceScanStore = (*PostgresStore)(nil)
 
 func (s *PostgresStore) GetGitHeadScan(ctx context.Context, repo domain.ContentHash, origin string) (domain.GitHeadScan, error) {
 	var b []byte

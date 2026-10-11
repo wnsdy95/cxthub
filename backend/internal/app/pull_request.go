@@ -71,6 +71,9 @@ func (s *Service) promoteBoundPRInTransaction(ctx context.Context, repoID domain
 	if err := pr.Validate(); err != nil {
 		return zero, fmt.Errorf("%w: %v", domain.ErrValidation, err)
 	}
+	if out, handled, err := s.promoteHistoricalPRContribution(ctx, repoID, pr, expectedBaseID); handled || err != nil {
+		return out, err
+	}
 	repo, err := s.meta.GetRepo(ctx, repoID)
 	if err != nil {
 		return zero, err
@@ -187,6 +190,45 @@ func (s *Service) promoteBoundPRInTransaction(ctx context.Context, repoID domain
 		}
 		if source != receipt.Source || identity != receipt.SourceBranchID {
 			return zero, fmt.Errorf("%w: finalized PR source differs from its stored binding", domain.ErrConflict)
+		}
+		evidence, err := s.newCodeEvidence(ctx, repoID)
+		if err != nil {
+			return zero, err
+		}
+		selected := current
+		selected.BranchID = receipt.BranchID
+		code, err := resolvedBranchCode(ctx, selected, latest, evidence)
+		if err != nil {
+			return zero, err
+		}
+		if code == "" {
+			legacyBootstrap := len(branchCodeCandidates(selected, latest)) == 0
+			for _, event := range latest {
+				if event.BranchID == receipt.BranchID && event.Kind == "pr-merge" && event.PRCompleted {
+					legacyBootstrap = false
+				}
+			}
+			if !legacyBootstrap {
+				return zero, fmt.Errorf("%w: current PR base code is unavailable or ambiguous", domain.ErrPROrderingPending)
+			}
+		} else if code != receipt.PR.MergeSHA {
+			relation, err := evidence.relation(ctx, receipt.PR.MergeSHA, code)
+			if err != nil {
+				return zero, err
+			}
+			if relation == "ancestor" {
+				return s.completePRPromotion(ctx, receipt, "", inbound.UpdateRefOutput{Ref: current, ServerTarget: current.Target, RequestedTarget: receipt.Source, Result: inbound.RefUpToDate}, verified)
+			}
+			forward, err := evidence.relation(ctx, code, receipt.PR.MergeSHA)
+			if err != nil {
+				return zero, err
+			}
+			if forward != "ancestor" {
+				if relation == "unknown" || forward == "unknown" {
+					return zero, fmt.Errorf("%w: PR merge ordering requires Git evidence", domain.ErrPROrderingPending)
+				}
+				return zero, fmt.Errorf("%w: PR merge is unrelated to current base code", domain.ErrConflict)
+			}
 		}
 		if yes, err := s.engine.IsAncestor(ctx, repoID, receipt.Source, current.Target); err != nil {
 			return zero, err

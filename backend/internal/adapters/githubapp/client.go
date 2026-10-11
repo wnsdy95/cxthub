@@ -89,8 +89,12 @@ func (c *Client) jwt() (string, error) {
 
 // Errors never contain response bodies, credentials, or authorization codes.
 func (c *Client) request(ctx context.Context, method, target, token, bucket string, body, out any) error {
+	resource := bucket + ":rest"
+	if target == c.api+"/graphql" {
+		resource = bucket + ":graphql"
+	}
 	c.mu.Lock()
-	blocked := time.Now().Before(c.limits[bucket])
+	blocked := time.Now().Before(c.limits[bucket]) || time.Now().Before(c.limits[resource])
 	c.mu.Unlock()
 	if blocked {
 		return errors.New("GitHub request is rate limited; retry later")
@@ -119,17 +123,12 @@ func (c *Client) request(ctx context.Context, method, target, token, bucket stri
 		return errors.New("GitHub request failed")
 	}
 	defer resp.Body.Close()
+	limitedBucket := bucket
+	if resp.Header.Get("X-RateLimit-Remaining") == "0" && resp.Header.Get("Retry-After") == "" {
+		limitedBucket = resource
+	}
 	if resp.StatusCode == 429 || resp.StatusCode == 403 && (resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != "") {
-		until := time.Now().Add(time.Minute)
-		if n, e := strconv.Atoi(resp.Header.Get("Retry-After")); e == nil && n > 0 {
-			until = time.Now().Add(time.Duration(min(n, 86400)) * time.Second)
-		}
-		if n, e := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); e == nil && time.Unix(n, 0).After(until) {
-			until = time.Unix(n, 0)
-		}
-		c.mu.Lock()
-		c.limits[bucket] = until
-		c.mu.Unlock()
+		c.deferRequests(limitedBucket, resp.Header)
 		return errors.New("GitHub request is rate limited; retry later")
 	}
 	if resp.StatusCode == 404 {
@@ -151,7 +150,46 @@ func (c *Client) request(ctx context.Context, method, target, token, bucket stri
 	if json.Unmarshal(data, out) != nil {
 		return domain.ErrIntegrity
 	}
+	if target == c.api+"/graphql" && graphQLRateLimited(data, resp.Header) {
+		c.deferRequests(limitedBucket, resp.Header)
+		return errors.New("GitHub request is rate limited; retry later")
+	}
 	return nil
+}
+
+func (c *Client) deferRequests(bucket string, headers http.Header) {
+	until := time.Now().Add(time.Minute)
+	if seconds, err := strconv.Atoi(headers.Get("Retry-After")); err == nil && seconds > 0 {
+		until = time.Now().Add(time.Duration(min(seconds, 86400)) * time.Second)
+	}
+	if reset, err := strconv.ParseInt(headers.Get("X-RateLimit-Reset"), 10, 64); err == nil && time.Unix(reset, 0).After(until) {
+		until = time.Unix(reset, 0)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if until.After(c.limits[bucket]) {
+		c.limits[bucket] = until
+	}
+}
+
+func graphQLRateLimited(data []byte, headers http.Header) bool {
+	var response struct {
+		Errors []struct {
+			Type string `json:"type"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(data, &response) != nil || len(response.Errors) == 0 {
+		return false
+	}
+	if headers.Get("X-RateLimit-Remaining") == "0" || headers.Get("Retry-After") != "" {
+		return true
+	}
+	for _, failure := range response.Errors {
+		if failure.Type == "RATE_LIMITED" {
+			return true
+		}
+	}
+	return false
 }
 func (c *Client) slot(id int64) *tokenSlot {
 	c.mu.Lock()
@@ -403,10 +441,10 @@ func (c *Client) MergedPullRequests(ctx context.Context, id int64, repo domain.G
 	if page < 1 {
 		return nil, false, domain.ErrValidation
 	}
-	if err := c.getInstalled(ctx, id, fmt.Sprintf("/repositories/%d/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=%d", repo.ID, page), &p); err != nil {
+	if err := c.getInstalled(ctx, id, fmt.Sprintf("/repositories/%d/pulls?state=all&sort=created&direction=asc&per_page=100&page=%d", repo.ID, page), &p); err != nil {
 		return nil, false, err
 	}
-	if p == nil {
+	if p == nil || len(p) > 100 {
 		return nil, false, domain.ErrIntegrity
 	}
 	out := []domain.PullRequestMerge{}

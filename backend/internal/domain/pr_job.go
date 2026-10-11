@@ -8,6 +8,7 @@ import (
 )
 
 var ErrPRSourcePending = errors.New("PR source context has not arrived")
+var ErrPROrderingPending = errors.New("PR merge ordering evidence is not available")
 
 // PRPromotionJob is delivery state; source/completion history remains immutable.
 // Version fences workers whose lease expired while they were executing.
@@ -23,6 +24,7 @@ type PRPromotionJob struct {
 	Reason       string            `json:"reason,omitempty"`
 	FailureClass string            `json:"failure_class,omitempty"`
 	Diagnostics  *PRJobDiagnostics `json:"diagnostics,omitempty"`
+	Association  *PRJobAssociation `json:"association,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
 	UpdatedAt    time.Time         `json:"updated_at"`
 	NextAttempt  time.Time         `json:"next_attempt"`

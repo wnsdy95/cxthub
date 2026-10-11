@@ -184,20 +184,59 @@ func (p GitScanFinish) Validate() error {
 // out of order, so observing it does NOT move a shared context ref. Blank before
 // or after represents ref creation/deletion respectively.
 type GitRefObservation struct {
-	Delivery  string      `json:"delivery,omitempty"`
-	ID        string      `json:"id"`
-	RepoID    ContentHash `json:"repo_id"`
-	GitOrigin string      `json:"git_origin"`
-	Source    string      `json:"source"` // github-push or reconciliation
-	Ref       string      `json:"ref"`
-	Before    string      `json:"before,omitempty"`
-	After     string      `json:"after,omitempty"`
-	Forced    bool        `json:"forced"`
+	Delivery    string                     `json:"delivery,omitempty"`
+	ID          string                     `json:"id"`
+	RepoID      ContentHash                `json:"repo_id"`
+	GitOrigin   string                     `json:"git_origin"`
+	Source      string                     `json:"source"`
+	Ref         string                     `json:"ref"`
+	Before      string                     `json:"before,omitempty"`
+	After       string                     `json:"after,omitempty"`
+	Forced      bool                       `json:"forced"`
+	PullRequest *GitPullRequestObservation `json:"pull_request,omitempty"`
+	Provider    *GitProviderObservation    `json:"provider,omitempty"`
+}
+
+type GitProviderObservation struct {
+	InstallationID int64 `json:"installation_id"`
+	RepositoryID   int64 `json:"repository_id"`
+}
+
+func (identity GitProviderObservation) Validate() error {
+	if identity.InstallationID <= 0 || identity.RepositoryID <= 0 {
+		return ErrValidation
+	}
+	return nil
+}
+
+type GitPullRequestObservation struct {
+	InstallationID   int64     `json:"installation_id"`
+	RepositoryID     int64     `json:"repository_id"`
+	ID               int64     `json:"id"`
+	Number           int       `json:"number"`
+	Action           string    `json:"action"`
+	HeadRepositoryID int64     `json:"head_repository_id"`
+	BaseRepositoryID int64     `json:"base_repository_id"`
+	BaseRef          string    `json:"base_ref"`
+	MergeSHA         string    `json:"merge_sha,omitempty"`
+	ProviderEventID  string    `json:"provider_event_id,omitempty"`
+	OccurredAt       time.Time `json:"occurred_at,omitempty,omitzero"`
 }
 
 func (o GitRefObservation) WithID() GitRefObservation {
 	o.ID = ""
-	if o.Source == "github-push" {
+	if o.Provider != nil {
+		if o.Source == "github-push" {
+			o.ID = gitEvidenceKey([]string{"qualified-git-ref-observation-v1", string(o.RepoID), o.GitOrigin, o.Source, o.Delivery})
+		} else {
+			o.ID = gitEvidenceKey(struct {
+				Version int `json:"version"`
+				GitRefObservation
+			}{Version: 1, GitRefObservation: o})
+		}
+		return o
+	}
+	if o.Source == "github-push" || o.Source == "github-pull-request" || o.Source == "github-pr-reconciliation" {
 		o.ID = gitEvidenceKey([]string{string(o.RepoID), o.GitOrigin, o.Source, o.Delivery})
 	} else {
 		o.ID = gitEvidenceKey(o)
@@ -208,13 +247,51 @@ func (o GitRefObservation) Validate() error {
 	if ValidateContentHash(o.RepoID) != nil || o.GitOrigin == "" || o.ID != o.WithID().ID || len(o.Ref) < 12 || o.Ref[:11] != "refs/heads/" || (o.Before == "" && o.After == "") {
 		return ErrValidation
 	}
-	if o.Source == "github-push" && (o.Delivery == "" || len(o.Delivery) > 128) {
+	if (o.Source == "github-push" || o.Source == "github-pull-request" || o.Source == "github-pr-reconciliation") && (o.Delivery == "" || len(o.Delivery) > 128) {
 		return ErrValidation
 	}
 	if err := ValidateBranchName(o.Ref[11:]); err != nil {
 		return err
 	}
-	if o.Source != "github-push" && o.Source != "reconciliation" {
+	if o.Source != "github-push" && o.Source != "reconciliation" && o.Source != "github-pull-request" && o.Source != "github-pr-reconciliation" {
+		return ErrValidation
+	}
+	if o.Provider != nil && (o.Provider.Validate() != nil || (o.Source != "github-push" && o.Source != "reconciliation") || (o.Before != "" && o.After != "" && len(o.Before) != len(o.After))) {
+		return ErrValidation
+	}
+	if o.Source == "github-pull-request" || o.Source == "github-pr-reconciliation" {
+		pr := o.PullRequest
+		if pr == nil || pr.InstallationID <= 0 || pr.RepositoryID <= 0 || pr.ID <= 0 || pr.Number <= 0 ||
+			pr.HeadRepositoryID != pr.RepositoryID || pr.BaseRepositoryID != pr.RepositoryID ||
+			ValidateBranchName(pr.BaseRef) != nil || ValidateGitOID(o.After) != nil || len(pr.ProviderEventID) > 256 {
+			return ErrValidation
+		}
+		if o.Source == "github-pr-reconciliation" {
+			if (pr.Action != "force-pushed" && pr.Action != "closed") || pr.ProviderEventID == "" || pr.OccurredAt.IsZero() {
+				return ErrValidation
+			}
+		}
+		switch pr.Action {
+		case "synchronize":
+			if ValidateGitOID(o.Before) != nil || len(o.Before) != len(o.After) || pr.MergeSHA != "" || o.Forced {
+				return ErrValidation
+			}
+		case "opened", "reopened":
+			if o.Before != "" || pr.MergeSHA != "" || o.Forced {
+				return ErrValidation
+			}
+		case "closed":
+			if o.Before != "" || ValidateGitOID(pr.MergeSHA) != nil || len(pr.MergeSHA) != len(o.After) || o.Forced {
+				return ErrValidation
+			}
+		case "force-pushed":
+			if o.Source != "github-pr-reconciliation" || !o.Forced || ValidateGitOID(o.Before) != nil || o.Before == o.After || len(o.Before) != len(o.After) || pr.MergeSHA != "" {
+				return ErrValidation
+			}
+		default:
+			return ErrValidation
+		}
+	} else if o.PullRequest != nil {
 		return ErrValidation
 	}
 	for _, s := range []string{o.Before, o.After} {

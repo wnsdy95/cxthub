@@ -28,6 +28,7 @@ type GraphMerge struct {
 	Before            ContentHash   `json:"before"`
 	After             ContentHash   `json:"after"`
 	Source            ContentHash   `json:"source"`
+	SourceArms        []ContentHash `json:"source_arms,omitempty"`
 	Branch            string        `json:"branch"`
 	Scope             string        `json:"scope"`
 	From              string        `json:"from"`
@@ -107,7 +108,7 @@ func graphOperations(v RepositoryView, x *graphStateIndex, state GraphState, sem
 		h := events[f.EventID]
 		_, before := x.byID[h.SharedTarget]
 		_, after := x.byID[h.Target]
-		if !f.Completed || !f.SourceAvailable || !before || !after || h.PR == nil {
+		if !f.Completed || !f.SourceAvailable || (!before && h.SharedTarget != "") || !after || h.PR == nil {
 			continue
 		}
 		completed = append(completed, h)

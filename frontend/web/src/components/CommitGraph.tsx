@@ -15,6 +15,7 @@ import { hiddenProgressIds } from '../contextHistory';
 import { useGraphPosition, useJoinPreview, useJoinSnapshot } from '../hooks';
 import { useT } from '../i18n';
 import { useGraphWindow } from './useGraphWindow';
+import { when as snapshotTime } from '../snapshotFormat';
 
 const LANE_W = 22; // Lane width
 const ROW_H = 26; // Row height (text-free — compact)
@@ -57,9 +58,7 @@ function occupiedLanes(row: {
 
 
 function when(iso?: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return snapshotTime(iso, true);
 }
 
 export function CommitGraph({

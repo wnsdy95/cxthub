@@ -32,7 +32,7 @@ tag does not deploy a hosted CXTHub service.
    make typecheck
    make lint
    make e2e
-   make e2e-sync
+   CXT_E2E_DSN="${DISPOSABLE_POSTGRES_DSN:?set a disposable PostgreSQL 16 DSN}" make e2e-sync
    make public-check-full
    ```
 
@@ -40,6 +40,11 @@ tag does not deploy a hosted CXTHub service.
 6. Confirm the version has not already been tagged or released.
 7. Confirm installer, module, repository, and release workflow URLs still point
    to `wnsdy95/cxthub`.
+
+Conditional automatic-merge append requires PostgreSQL transactions. An FS-only
+sync E2E run cannot certify this feature; it intentionally rejects conditional
+append and can leave delivery pending. Use only a disposable database for the
+release gate, never production data.
 
 Use a release candidate for changes that need broader installation or
 compatibility testing:

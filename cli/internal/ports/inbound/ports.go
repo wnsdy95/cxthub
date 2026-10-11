@@ -389,6 +389,9 @@ type BranchHandoffInput struct {
 
 // SyncInput is an input DTO for SyncRepo.Push / SyncRepo.Pull.
 type SyncInput struct {
+	ExpectedBranchID string
+	ExpectedTarget   domain.ContentHash
+	ExpectedRevision *domain.RepositoryRevision
 	// RequireBranchPlan keeps metadata-first hook hydration scoped even if a
 	// later capability read reaches an older server. Explicit pull is unchanged.
 	RequireBranchPlan bool

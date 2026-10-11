@@ -985,6 +985,13 @@ not marked completed or deleted. Arrival of the matching publication wakes it
 automatically; periodic reconciliation also covers a restart or a publication
 racing the transition into attention. Other conflicts still require review.
 
+Missing Git ordering is separate from a missing finalized source. Such jobs use
+`waiting / ordering_evidence_pending` and retain capped retry backoff; replaying
+the same source publication cannot reset their attempts or scheduling. Verified
+Git scans or a later unambiguous code-position observation allow a subsequent
+automatic attempt to complete. While evidence is absent, neither a retry count
+nor arrival order authorizes moving the current context pointer.
+
 PR delivery jobs retain up to 32 recent diagnostic events in the same fenced
 state transition: queue, claim, finish, manual retry and source availability.
 Completion and attempt-counter resets preserve this trail. `diagnostics.since`
@@ -1254,6 +1261,16 @@ reconciliation progress. Lists are bounded and ID-ordered; restart pagination
 for concurrent insertions earlier than a cursor. Web fetches these only when
 expanded and invalidates on repository revisions, with no additional polling
 timer. Only members can retry through the REST command.
+
+Automatic context-link processing has a separate read-only status contract:
+`GET /repos/{repoID}/git/associations` and MCP `context_link_status`. Both use
+the same repository-scoped application projection for discovered publications,
+prospective admissions, integration work and original-memory supplementation.
+Immutable completion evidence takes precedence over worker cleanup state.
+Neither query calls GitHub or modifies jobs, refs, ancestry or memory. Pending
+lists are not a completeness audit and historical completion is not current
+code applicability. The graph's collapsed diagnostics panel reads bounded
+pages on expansion or explicit refresh, without adding an interval timer.
 
 “Completed” means discovery against the index at that pass. Ancestors may still
 be queued and later records can add candidates. It is not a claim that all

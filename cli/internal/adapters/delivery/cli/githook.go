@@ -1079,8 +1079,11 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 	if len(rest) > 0 && rest[0] == "historical-sync" {
 		return runHistoricalSync(ctx, c, cwd)
 	}
+	if len(rest) > 0 && rest[0] == "remote-ref-discovery" {
+		return runFetchDiscoveryWorker(ctx, c, cwd)
+	}
 	if len(rest) > 0 && rest[0] == "live-watch" {
-		return runLiveObserver(ctx, cwd, rest[1:])
+		return runLiveObserver(ctx, c, cwd, rest[1:])
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -1122,6 +1125,9 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 	// any existing directory, but never interpret directory presence alone as
 	// permission to capture. cxt init/setup writes .cxt/HEAD before hooks exist.
 	state := gitctx.InspectContextRoot(ctx, cwd)
+	if event == "remote-ref-observe" && state.Exists && !state.GitRepository {
+		hookWarn("fetch observation remains unknown: a non-bare Git worktree is required")
+	}
 	if !state.GitRepository || !state.Exists {
 		return nil
 	}
@@ -1130,6 +1136,9 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 		return nil
 	}
 	repoRoot := state.Root
+	if c.WakeFetchDiscovery != nil && (event == "pre-push" || event == "post-merge" || event == "post-rewrite") {
+		defer c.WakeFetchDiscovery(cwd)
+	}
 	if event == "post-checkout" || event == "post-commit" {
 		// This hook's replay and activation must not publish between the source
 		// reads used to prepare/commit its replacement. Start one helper after
@@ -1162,6 +1171,18 @@ func runGitHookWithPublication(ctx context.Context, c *Container, cwd string, re
 	}
 
 	switch event {
+	case "remote-ref-observe":
+		if len(args) == 0 || args[0] != "committed" {
+			return nil
+		}
+		if err := observeFetchedRefs(ctx, cwd, os.Stdin); err != nil {
+			hookWarn("fetch observation remains unknown: %v", err)
+		}
+		if c.WakeFetchDiscovery != nil {
+			c.WakeFetchDiscovery(cwd)
+		}
+		return nil
+
 	case "ref-prepare":
 		var lines []string
 		scanner := bufio.NewScanner(os.Stdin)
@@ -1486,7 +1507,14 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	}
 	branch := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	origin := gitOut(cwd, "config", "--get", "remote.origin.url")
-	shas := incomingCommitSHAs(cwd)
+	incoming := readIncomingGitRange(cwd)
+	shas := incoming.SHAs
+	durableMerges := c.ResolveRepo != nil && c.History != nil
+	if durableMerges {
+		if err := persistMergeDelivery(ctx, c, cwd, incoming); err != nil {
+			hookWarn("incoming merge range was not saved: %v", err)
+		}
+	}
 	if c.PRMerges != nil {
 		if err := persistPRDiscovery(ctx, cwd, branch, origin, shas); err != nil {
 			hookWarn("incoming PR discovery was not saved: %v", err)
@@ -1514,7 +1542,15 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	if queued {
 		replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, origin, nil)
 	}
-	out, err := fetchIncomingContexts(ctx, c, cwd, branch, shas)
+	var out incomingContextFetch
+	var err error
+	mergeReflected, mergeAttempted := false, false
+	if durableMerges && baselineErr == nil {
+		out, mergeReflected, mergeAttempted = replayMergeDeliveries(ctx, c, cwd)
+	}
+	if !mergeAttempted {
+		out, err = fetchIncomingContexts(ctx, c, cwd, branch, shas)
+	}
 	if err != nil {
 		syncWarn(cwd, "pull", err)
 		return
@@ -1548,7 +1584,9 @@ func handleIncomingContexts(ctx context.Context, c *Container, cwd string) {
 	if !queued {
 		prReflected = replayPRDiscovery(ctx, c.PRMerges, c.Sync, cwd, branch, origin, nil)
 	}
-	mergeReflected := appendMergedContexts(ctx, c, cwd, branch, shas, out.requireBranchPlan)
+	if !durableMerges {
+		mergeReflected = appendMergedContexts(ctx, c, cwd, branch, shas, out.requireBranchPlan)
+	}
 	if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
 		hookWarn("completed PR context position remains pending: %v", err)
 	}
@@ -1613,16 +1651,22 @@ func localBranchTarget(ctx context.Context, c *Container, cwd, branch string) (d
 }
 
 func incomingCommitSHAs(cwd string) []string {
-	if gitOut(cwd, "rev-parse", "--verify", "-q", "ORIG_HEAD") == "" {
-		return nil // not merge/pull path (initial clone, etc.)
+	return readIncomingGitRange(cwd).SHAs
+}
+
+type incomingGitRange struct {
+	Before string
+	After  string
+	SHAs   []string
+}
+
+func readIncomingGitRange(cwd string) incomingGitRange {
+	incoming := incomingGitRange{Before: gitOut(cwd, "rev-parse", "--verify", "-q", "ORIG_HEAD"), After: gitOut(cwd, "rev-parse", "--verify", "-q", "HEAD")}
+	if !domain.ValidGitOID(incoming.Before) || !domain.ValidGitOID(incoming.After) {
+		return incomingGitRange{}
 	}
-	raw := gitOut(cwd, "rev-list", "--reverse", "ORIG_HEAD..HEAD")
-	if raw == "" {
-		return nil
-	}
-	shas := strings.Fields(raw) // oldest first
-	// Network work is bounded by durable discovery batches; do not discard old commits.
-	return shas
+	incoming.SHAs = strings.Fields(gitOut(cwd, "rev-list", "--reverse", incoming.Before+".."+incoming.After))
+	return incoming
 }
 
 type mergedPRContextSync interface {
@@ -1659,7 +1703,10 @@ func processMergedPRContexts(
 		hookWarn("GitHub PR context lookup failed (git continues): %v", err)
 		return false, false
 	}
+	return processResolvedPRContexts(ctx, syncer, cwd, branch, pulls)
+}
 
+func processResolvedPRContexts(ctx context.Context, syncer mergedPRContextSync, cwd, branch string, pulls []outbound.MergedPullRequest) (bool, bool) {
 	complete := true
 	appended := 0
 	reflected := false
@@ -1748,13 +1795,20 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 		return false
 	}
 	cands := mergedContextCandidates(list.Snapshots, loadRewrites(cwd), shas)
+	reflected, err := appendMergeCandidates(ctx, c, branch, cands, inbound.SyncInput{Cwd: cwd, RequireBranchPlan: requireBranchPlan}, "", nil)
+	if err != nil {
+		hookWarn("merge context promotion remains pending: %v", err)
+	}
+	return reflected
+}
+
+func appendMergeCandidates(ctx context.Context, c *Container, branch string, cands []domain.Snapshot, in inbound.SyncInput, incomingAfter string, beforeAppend func() error) (bool, error) {
 	if len(cands) == 0 {
-		return false
+		return false, nil
 	}
 	observer, ok := c.Sync.(inbound.RemoteBranchObserver)
 	if !ok {
-		hookWarn("merge context promotion deferred: remote observation unavailable")
-		return false
+		return false, fmt.Errorf("remote observation unavailable")
 	}
 	// Bound optional candidate evidence to the newest roots. Older candidates
 	// without observed ancestry are still appended conservatively below.
@@ -1765,13 +1819,16 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	if len(roots) > domain.MaxBranchPullRoots {
 		roots = roots[len(roots)-domain.MaxBranchPullRoots:]
 	}
-	observed, err := observer.ResolveRemoteBranchObservation(ctx, inbound.SyncInput{Cwd: cwd, ObservationRoots: roots, RequireBranchPlan: requireBranchPlan}, branch)
+	in.ObservationRoots = roots
+	observed, err := observer.ResolveRemoteBranchObservation(ctx, in, branch)
 	if err != nil {
-		hookWarn("merge context observation failed (%s): %v", branch, err)
-		return false
+		return false, err
 	}
 	if observed.Ref.Target == "" {
-		return false
+		return false, fmt.Errorf("remote branch target unavailable")
+	}
+	if in.ExpectedBranchID != "" && observedBranchIdentity(observed.Ref) != in.ExpectedBranchID {
+		return false, domain.ErrSyncConflict
 	}
 	// Local labels select candidates; only observed edges prove remote coverage.
 	// This also governs candidate pruning: AppendBranch does not publish local grafts.
@@ -1802,8 +1859,10 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	}
 	reflected := false
 	var kept []domain.Snapshot
+	_, contextSupported := c.Sync.(inbound.RemoteBranchContextReader)
+	authoritative := in.ExpectedBranchID != "" && contextSupported
 	for i := len(cands) - 1; i >= 0; i-- { // newest candidates first — absorb ancestor candidates as cover
-		if reach[cands[i].ID] {
+		if !authoritative && reach[cands[i].ID] {
 			if remoteReach[cands[i].ID] {
 				reflected = true
 			}
@@ -1814,13 +1873,44 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	}
 	appended := 0
 	for _, sn := range kept { // from oldest — tip = latest merge
-		if aerr := c.Sync.AppendBranch(ctx, inbound.SyncInput{Cwd: cwd}, branch, sn.ID); aerr != nil {
-			if appendAlreadyIncluded(aerr) {
+		if in.ExpectedBranchID != "" {
+			view, err := mergeBranchContext(ctx, c, in, branch)
+			if err != nil {
+				return reflected, err
+			}
+			if view != nil {
+				included, err := mergeCandidateIncluded(*view, sn.ID)
+				if err != nil {
+					return reflected, err
+				}
+				if included {
+					reflected = true
+					continue
+				}
+				if remoteReach[sn.ID] {
+					return reflected, fmt.Errorf("%w: raw ancestry does not prove server inclusion for %s", domain.ErrSelectionChanged, sn.ID)
+				}
+				if err := verifyMergeAppendOrder(ctx, in.Cwd, view.Inclusion.CodeCommit, incomingAfter); err != nil {
+					return reflected, err
+				}
+				in.ExpectedTarget, in.ExpectedRevision = view.Position, &view.Revision
+			}
+		}
+		if beforeAppend != nil {
+			if err := beforeAppend(); err != nil {
+				return reflected, err
+			}
+		}
+		if aerr := c.Sync.AppendBranch(ctx, in, branch, sn.ID); aerr != nil {
+			if !authoritative && appendAlreadyIncluded(aerr) {
 				reflected = true
 				continue // skip if another team member has already promoted (idempotent no-op)
 			}
-			hookWarn("merge context promotion failed(%s): %v", shortHash(sn.ID), aerr)
-			continue
+			if beforeAppend == nil && !authoritative {
+				hookWarn("merge context promotion failed(%s): %v", shortHash(sn.ID), aerr)
+				continue
+			}
+			return reflected, aerr
 		}
 		appended++
 		reflected = true
@@ -1828,7 +1918,14 @@ func appendMergedContexts(ctx context.Context, c *Container, cwd, branch string,
 	if appended > 0 {
 		fmt.Printf("cxt: promoted %d merge contexts to %q timeline (appended)\n", appended, branch)
 	}
-	return reflected
+	return reflected, nil
+}
+
+func observedBranchIdentity(ref domain.Ref) string {
+	if ref.BranchID != "" {
+		return ref.BranchID
+	}
+	return domain.LegacyContextBranchID(ref.RepoID, ref.Name)
 }
 
 // A branch path or server message can contain the code's text. Only the

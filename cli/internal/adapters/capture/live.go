@@ -23,11 +23,17 @@ func RegisteredSession(cwd string, provider domain.ProviderKind, id string) (App
 	return AppSession{}, false
 }
 
+type SessionWatch struct {
+	Poll    func(context.Context) error
+	Publish func(context.Context) error
+	Wake    func(context.Context)
+}
+
 // WatchSession owns an OS-released lock, so overlapping lifecycle hooks cannot
 // create duplicate observers and a crash cannot leave a stale ownership lock.
 // poll starts a fresh command: worktree Git position must be resolved again on
 // every capture, never retained from the observer's startup.
-func WatchSession(ctx context.Context, cwd string, provider domain.ProviderKind, id string, poll func(context.Context) error, publish ...func(context.Context) error) error {
+func WatchSession(ctx context.Context, cwd string, provider domain.ProviderKind, id string, watch SessionWatch) error {
 	root, _, enabled := appSessionRoots(ctx, cwd)
 	if !enabled || !validHookSessionID(id) {
 		return nil
@@ -51,10 +57,10 @@ func WatchSession(ctx context.Context, cwd string, provider domain.ProviderKind,
 		return err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	return observeSession(ctx, cwd, provider, id, 10*time.Second, 30*time.Minute, poll, publish...)
+	return observeSession(ctx, cwd, provider, id, 10*time.Second, 30*time.Minute, watch)
 }
 
-func observeSession(ctx context.Context, cwd string, provider domain.ProviderKind, id string, interval, idle time.Duration, poll func(context.Context) error, publish ...func(context.Context) error) error {
+func observeSession(ctx context.Context, cwd string, provider domain.ProviderKind, id string, interval, idle time.Duration, watch SessionWatch) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var size int64 = -1
@@ -74,17 +80,23 @@ func observeSession(ctx context.Context, cwd string, provider domain.ProviderKin
 		if err != nil || time.Since(info.ModTime()) > idle {
 			return nil
 		}
+		if watch.Wake != nil {
+			watch.Wake(ctx)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		currentPolicy, policyErr := ScrubPolicyFingerprint(root)
 		if !pending && policyErr == nil && (info.Size() != size || !info.ModTime().Equal(modified) || policy != currentPolicy) {
 			// Retain the old observation on failure, retrying even without new text.
-			if err := poll(ctx); err == nil {
+			if err := watch.Poll(ctx); err == nil {
 				size, modified, policy = info.Size(), info.ModTime(), currentPolicy
-				pending = len(publish) > 0
+				pending = watch.Publish != nil
 			}
 		}
 		// Finish the durable capture before reading a growing transcript again.
 		// A failed upload cannot starve behind repeated expensive recaptures.
-		if pending && publish[0](ctx) == nil {
+		if pending && watch.Publish(ctx) == nil {
 			pending = false
 		}
 		select {

@@ -643,6 +643,28 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 	if err := s.checkContextWrite(ctx, in.RepoID, in.Ref); err != nil {
 		return inbound.UpdateRefOutput{}, err
 	}
+	if in.ExpectedRevision != nil {
+		if !in.Append || in.Force || in.Ref.Kind != domain.RefBranch || in.Ref.BranchID == "" {
+			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: conditional append requires an identified branch and cannot force", domain.ErrValidation)
+		}
+		if err := domain.ValidateContentHash(in.ExpectedTarget); err != nil {
+			return inbound.UpdateRefOutput{}, err
+		}
+		if _, ok := s.meta.(outbound.RepositoryTransactions); !ok {
+			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: conditional append requires repository transactions", domain.ErrConflict)
+		}
+		revisions, ok := s.meta.(outbound.RepositoryRevisions)
+		if !ok {
+			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: conditional append requires repository revisions", domain.ErrConflict)
+		}
+		revision, err := revisions.RepositoryRevision(ctx, in.RepoID)
+		if err != nil {
+			return inbound.UpdateRefOutput{}, err
+		}
+		if revision.Graph != in.ExpectedRevision.Graph || revision.Evidence != in.ExpectedRevision.Evidence {
+			return inbound.UpdateRefOutput{}, domain.ErrRefConflict
+		}
+	}
 	if in.Ref.Kind == domain.RefTag && strings.HasPrefix(in.Ref.Name, "cxt/history/v1/") {
 		current, err := s.meta.GetRef(ctx, in.RepoID, in.Ref.Kind, in.Ref.Name)
 		if err == nil && current.Target == in.Ref.Target {
@@ -698,6 +720,15 @@ func (s *Service) updateRef(ctx context.Context, in inbound.UpdateRefInput) (inb
 		return inbound.UpdateRefOutput{}, err
 	}
 	out := inbound.UpdateRefOutput{Ref: in.Ref, RequestedTarget: in.Ref.Target, ServerTarget: serverTarget}
+	if in.ExpectedRevision != nil {
+		branchID := cur.BranchID
+		if branchID == "" {
+			branchID = domain.LegacyContextBranchID(string(in.RepoID), in.Ref.Name)
+		}
+		if serverTarget != in.ExpectedTarget || branchID != in.Ref.BranchID {
+			return inbound.UpdateRefOutput{}, domain.ErrRefConflict
+		}
+	}
 	// Honor the caller's observation, including force requests. Retrying an
 	// already-applied target is safe; a stale client cannot replace newer work.
 	if in.ExpectedTarget != "" && serverTarget != in.ExpectedTarget && serverTarget != in.Ref.Target {
