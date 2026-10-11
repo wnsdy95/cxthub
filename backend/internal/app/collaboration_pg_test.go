@@ -73,6 +73,23 @@ func collaborationPR(t *testing.T, svc *Service, st *store.PostgresStore, repo d
 	return pr, tip
 }
 
+type collaborationGitEvidencePG struct {
+	*store.PostgresStore
+	repo domain.ContentHash
+}
+
+func (storage *collaborationGitEvidencePG) ListRepos(ctx context.Context, _ string) ([]domain.Repo, error) {
+	repo, err := storage.GetRepo(ctx, storage.repo)
+	if err != nil {
+		return nil, err
+	}
+	return []domain.Repo{repo}, nil
+}
+
+func (storage *collaborationGitEvidencePG) ClaimGitScan(ctx context.Context, _ domain.ContentHash, now time.Time, lease time.Duration) (domain.GitScanJob, error) {
+	return storage.PostgresStore.ClaimGitScan(ctx, storage.repo, now, lease)
+}
+
 func TestPGCollaborationConcurrentPRsAndPushes(t *testing.T) {
 	svc, st, repo := collaborationPG(t)
 	ctx, cancel := context.WithTimeout(systemTestContext(), 30*time.Second)
@@ -88,6 +105,17 @@ func TestPGCollaborationConcurrentPRsAndPushes(t *testing.T) {
 		t.Fatal(err)
 	}
 	const count = 6
+	var commits []string
+	for index := 0; index < count+2; index++ {
+		commits = append(commits, fmt.Sprintf("%040x", 100+index))
+	}
+	repository, err := st.GetRepo(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidenceStore := &collaborationGitEvidencePG{PostgresStore: st, repo: repo}
+	evidenceService := NewService(evidenceStore, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
+	recordPRMergeChain(t, evidenceService, repository.GitRemoteURL, commits...)
 	var prs []domain.PullRequestMerge
 	var tips []domain.ContentHash
 	for i := 1; i <= count; i++ {
@@ -96,6 +124,18 @@ func TestPGCollaborationConcurrentPRsAndPushes(t *testing.T) {
 		tips = append(tips, tip)
 	}
 	push := collaborationSnapshot(t, st, repo, "concurrent push", base)
+	for index, position := range []struct {
+		target domain.ContentHash
+		code   string
+	}{
+		{base, commits[0]},
+		{push, commits[len(commits)-1]},
+	} {
+		event := domain.HistoryEvent{ID: fmt.Sprintf("%032x", 1000+index), RepoID: string(repo), BranchID: domain.LegacyContextBranchID(string(repo), "main"), Branch: "main", Kind: "position", Source: position.target, Target: position.target, GitAfter: position.code, CreatedAt: time.Now().UTC()}
+		if err := svc.RecordHistory(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
 	start := make(chan struct{})
 	errs := make(chan error, count*2+1)
 	var wg sync.WaitGroup
@@ -124,10 +164,50 @@ func TestPGCollaborationConcurrentPRsAndPushes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tip := range append(tips, push) {
-		yes, err := svc.engine.IsAncestor(ctx, repo, tip, head.Target)
-		if err != nil || !yes {
-			t.Fatalf("lost collaborator %s: %v", tip, err)
+	if head.Target != push {
+		t.Fatalf("main did not retain newest verified push: got=%s want=%s", head.Target, push)
+	}
+	logs, err := st.ReadReflog(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movements := map[domain.ContentHash]int{}
+	for _, entry := range logs {
+		if entry.Kind == domain.RefBranch && entry.Name == "main" {
+			movements[entry.New]++
+			if entry.Old == push && entry.New != push {
+				t.Fatalf("PR rewound the newer push: %+v", entry)
+			}
+		}
+	}
+	if movements[push] != 1 {
+		t.Fatalf("push movement count %d", movements[push])
+	}
+	for _, tip := range tips {
+		if movements[tip] > 1 {
+			t.Fatalf("duplicate PR moved main more than once: %s", tip)
+		}
+	}
+	view, err := svc.GetRepositoryView(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inclusion := view.Graph.BranchContexts["main"]
+	if inclusion.SnapshotID != push || inclusion.CodeCommit != commits[len(commits)-1] || len(inclusion.Merges) != count {
+		t.Fatalf("incorrect concurrent integration: %+v", inclusion)
+	}
+	for _, merge := range inclusion.Merges {
+		if merge.PRNumber < 1 || merge.PRNumber > count || merge.Source != tips[merge.PRNumber-1] || merge.MergeSHA != prs[merge.PRNumber-1].MergeSHA || merge.State != "included" || !merge.DeliveryAcknowledged {
+			t.Fatalf("lost PR integration: %+v", merge)
+		}
+	}
+	included := map[domain.ContentHash]int{}
+	for _, snapshot := range inclusion.SnapshotIDs {
+		included[snapshot]++
+	}
+	for _, tip := range append([]domain.ContentHash{base, push}, tips...) {
+		if included[tip] != 1 {
+			t.Fatalf("collaborator %s inclusion count %d", tip, included[tip])
 		}
 	}
 	events, err := svc.ListHistory(ctx, repo)

@@ -1317,6 +1317,15 @@ exhausted the default package budget. Other CLI packages remain in the normal
 test command. The populated PostgreSQL REST/MCP contribution-parity regression
 is explicitly included in CI, not just the existing empty-repository check.
 
+The first complete PostgreSQL application diagnostic passed 174 of 175 tests.
+The remaining pre-existing concurrent-PR fixture provided no verified Git order
+and asserted only raw DAG reachability. It now supplies repository-scoped merge
+evidence and exact base/push code observations, then checks the actual server
+inclusion, exactly-once completion and preservation of the newest push without
+rewinding or rewriting natural parents. Its three race repetitions pass; all
+nine collaboration tests also pass three repetitions without skips. Product
+validation was not relaxed to preserve the old fixture.
+
 Migrations 0079–0091 are additive and use the existing serialized transactional
 migration runner. Migration 0091 creates ordinary indexes on existing history;
 it is not a zero-downtime operation for a large database. Local installation must
