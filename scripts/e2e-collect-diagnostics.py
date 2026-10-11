@@ -15,6 +15,8 @@ FILES = (
     "wrapper-proof.tsv", "wrapper-proof.err", "wrapper-observation.out",
     "sw.out", "wrapper.out", "holder.out",
     "initial-init.out", "initial-commit.out", "initial-push.out", "initial-follow-push.out",
+    "brief-wrong.out", "brief-wrong.err", "brief-first.out", "brief-first.err", "brief-repeat.out", "brief-repeat.err",
+    "pub-git-evidence.out",
 )
 MAX_BYTES = 1024 * 1024
 

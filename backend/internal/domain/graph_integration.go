@@ -25,10 +25,7 @@ func ApplyGraphIntegrations(graph *GraphState, snapshots []Snapshot) {
 	for _, s := range snapshots {
 		byID[s.ID] = s
 	}
-	merges := map[string]GraphMerge{}
-	for _, m := range graph.Operations.Merges {
-		merges[m.EventID] = m
-	}
+	merges := groupIntegrationOperations(graph)
 	branches := make([]string, 0, len(graph.BranchContexts))
 	includedIDs := map[ContentHash]bool{}
 	for name := range graph.BranchContexts {
@@ -51,8 +48,11 @@ func ApplyGraphIntegrations(graph *GraphState, snapshots []Snapshot) {
 			if !ok || m.Scope != c.BranchID || m.Source != included.Source {
 				continue
 			}
-			parents := []string{}
-			if previous != "" {
+			parents, supplement := out.Parents[m.ID]
+			if !supplement {
+				parents = []string{}
+			}
+			if !supplement && previous != "" {
 				parents = append(parents, previous)
 			}
 			if included.Before != "" && included.Before != m.Source {
@@ -62,7 +62,9 @@ func ApplyGraphIntegrations(graph *GraphState, snapshots []Snapshot) {
 			}
 			parents = append(parents, string(m.Source))
 			out.Parents[m.ID] = parents
-			previous = m.ID
+			if !supplement {
+				previous = m.ID
+			}
 			closure, _ := contextEvidenceClosure(byID, m.Source, false)
 			headIncluded = headIncluded || closure[c.SnapshotID]
 		}
@@ -86,6 +88,36 @@ func ApplyGraphIntegrations(graph *GraphState, snapshots []Snapshot) {
 		}
 	}
 	graph.ArchivedOnlyIDs = archived
+	visible := graphSet{}
+	for _, id := range graph.GraphIDs {
+		visible[id] = true
+	}
+	pushed, shared := graphSet{}, graphSet{}
+	for _, id := range graph.PushedIDs {
+		pushed[id] = true
+	}
+	for _, id := range graph.SharedIDs {
+		shared[id] = true
+	}
+	for id := range includedIDs {
+		shared[id] = true
+		if visible[id] {
+			pushed[id] = true
+		}
+	}
+	graph.PushedIDs, graph.SharedIDs = graphIDs(pushed), graphIDs(shared)
+	withoutIncluded := func(ids []ContentHash) []ContentHash {
+		kept := []ContentHash{}
+		for _, id := range ids {
+			if !includedIDs[id] {
+				kept = append(kept, id)
+			}
+		}
+		return kept
+	}
+	graph.UnpushedIDs = withoutIncluded(graph.UnpushedIDs)
+	graph.AheadIDs = withoutIncluded(graph.AheadIDs)
+	graph.AheadTips = withoutIncluded(graph.AheadTips)
 	for i := range graph.Previous {
 		kept := []ContentHash{}
 		for _, id := range graph.Previous[i].CollapsibleIDs {

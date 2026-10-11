@@ -134,7 +134,7 @@ func TestPRJobDiagnosticsRejectUnsafeValuesAndBounds(t *testing.T) {
 			t.Fatalf("safe failure class rejected: %v", err)
 		}
 	}
-	for _, reason := range []string{"", "source_context_pending", "source_finalization_required", "integrity_check_failed", "policy_changed", "invalid_request", "identity_or_history_conflict", "repository_or_base_missing", "temporary_failure", "retry_limit_reached"} {
+	for _, reason := range []string{"", "source_context_pending", "source_finalization_required", "ordering_evidence_pending", "integrity_check_failed", "policy_changed", "invalid_request", "identity_or_history_conflict", "repository_or_base_missing", "temporary_failure", "retry_limit_reached"} {
 		j := base
 		j.Reason = reason
 		if err := j.Validate(); err != nil {

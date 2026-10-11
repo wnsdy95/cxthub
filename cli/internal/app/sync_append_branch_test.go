@@ -24,6 +24,83 @@ type appendBranchRemote struct {
 	deleted   map[string]domain.ContentHash
 }
 
+type conditionalAppendBranchRemote struct {
+	*appendBranchRemote
+	conditionalCalls int
+	expectedTarget   domain.ContentHash
+	expectedRevision domain.RepositoryRevision
+}
+
+func (remote *conditionalAppendBranchRemote) AppendRefConditional(_ context.Context, repo string, ref domain.Ref, target domain.ContentHash, revision domain.RepositoryRevision) error {
+	remote.conditionalCalls++
+	remote.updateRef = ref
+	remote.expectedTarget = target
+	remote.expectedRevision = revision
+	return remote.updateErr
+}
+
+func TestAppendBranchConditional(t *testing.T) {
+	fixture := newAppendBranchFixture(t)
+	remote := &conditionalAppendBranchRemote{appendBranchRemote: fixture.remote}
+	fixture.service.remote = remote
+	revision := domain.RepositoryRevision{Graph: 4, Evidence: 8, Pending: 12}
+	expected := domain.HashContent([]byte("server position differs from local"))
+	in := inbound.SyncInput{RepoID: fixture.repoID, ExpectedBranchID: domain.LegacyContextBranchID(fixture.repoID, "main"), ExpectedTarget: expected, ExpectedRevision: &revision}
+	if err := fixture.service.AppendBranch(context.Background(), in, "main", fixture.target); err != nil {
+		t.Fatal(err)
+	}
+	if remote.conditionalCalls != 1 || remote.updates != 0 || remote.expectedTarget != expected || remote.expectedRevision != revision || remote.updateRef.BranchID != in.ExpectedBranchID || remote.updateRef.Target != fixture.target {
+		t.Fatalf("conditional binding lost: %+v", remote)
+	}
+	ref, err := fixture.store.GetRef(context.Background(), fixture.repoID, domain.RefBranch, "main")
+	if err != nil || ref.Target != fixture.target {
+		t.Fatalf("successful conditional append did not converge: %+v %v", ref, err)
+	}
+}
+
+func TestAppendBranchConditionalFailsClosed(t *testing.T) {
+	for _, mode := range []string{"unsupported", "missing revision", "missing target", "force", "stale", "old server", "recreated branch"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newAppendBranchFixture(t)
+			remote := &conditionalAppendBranchRemote{appendBranchRemote: fixture.remote}
+			fixture.service.remote = remote
+			revision := domain.RepositoryRevision{Graph: 4, Evidence: 8}
+			in := inbound.SyncInput{RepoID: fixture.repoID, ExpectedBranchID: domain.LegacyContextBranchID(fixture.repoID, "main"), ExpectedTarget: fixture.oldHead, ExpectedRevision: &revision}
+			wantCalls := 0
+			switch mode {
+			case "unsupported":
+				fixture.service.remote = fixture.remote
+			case "missing revision":
+				in.ExpectedRevision = nil
+			case "missing target":
+				in.ExpectedTarget = ""
+			case "force":
+				in.Force = true
+			case "stale":
+				remote.updateErr, wantCalls = domain.ErrSyncConflict, 1
+			case "old server":
+				remote.updateErr, wantCalls = domain.ErrNotFound, 1
+			case "recreated branch":
+				in.ExpectedBranchID = "previous-context"
+			}
+			if err := fixture.service.AppendBranch(context.Background(), in, "main", fixture.target); err == nil {
+				t.Fatal("conditional failure accepted")
+			}
+			if remote.conditionalCalls != wantCalls || remote.updates != 0 || len(remote.getCalls) != 0 || len(remote.deleted) != 0 {
+				t.Fatalf("failure fell back or started convergence: %+v", remote)
+			}
+			ref, err := fixture.store.GetRef(context.Background(), fixture.repoID, domain.RefBranch, "main")
+			if err != nil || ref.Target != fixture.oldHead {
+				t.Fatalf("failure changed local ref: %+v %v", ref, err)
+			}
+			boundary, err := fixture.store.GetSnapshot(context.Background(), fixture.boundary)
+			if err != nil || boundary.Grafted || len(boundary.GraftParents) != 0 {
+				t.Fatalf("failure changed local graft: %+v %v", boundary, err)
+			}
+		})
+	}
+}
+
 func (r *appendBranchRemote) UpdateRefRemote(
 	_ context.Context,
 	_ string,
@@ -175,6 +252,27 @@ func TestAppendBranchReconcilesRemoteGraftPathAndAdvancesLocalRef(t *testing.T) 
 	pendings, err := f.store.ListPendings(ctx, f.repoID)
 	if err != nil || len(pendings) != 0 {
 		t.Fatalf("append left reachable local pending: %+v err=%v", pendings, err)
+	}
+}
+
+func TestAppendBranchRejectsRecreatedBranchBeforeRemoteWrite(t *testing.T) {
+	fixture := newAppendBranchFixture(t)
+	ctx := context.Background()
+	before, err := fixture.store.GetRef(ctx, fixture.repoID, domain.RefBranch, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fixture.service.AppendBranch(ctx, inbound.SyncInput{RepoID: fixture.repoID, ExpectedBranchID: "previous-branch-identity"}, "main", fixture.target)
+	if !errors.Is(err, domain.ErrSyncConflict) || fixture.remote.updates != 0 {
+		t.Fatalf("identity fence error=%v updates=%d", err, fixture.remote.updates)
+	}
+	after, err := fixture.store.GetRef(ctx, fixture.repoID, domain.RefBranch, "main")
+	if err != nil || before != after {
+		t.Fatalf("local pointer changed: %v", err)
+	}
+	err = fixture.service.AppendBranch(ctx, inbound.SyncInput{RepoID: fixture.repoID, ExpectedBranchID: domain.LegacyContextBranchID(fixture.repoID, "main")}, "main", fixture.target)
+	if err != nil || fixture.remote.updates != 1 {
+		t.Fatalf("valid identity rejected: %v updates=%d", err, fixture.remote.updates)
 	}
 }
 

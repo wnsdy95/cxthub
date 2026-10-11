@@ -6,6 +6,21 @@ existing repository, organization and Enterprise authority boundaries remain.
 
 ## Delivery order and acceptance
 
+Current priority (2026-10-10): [automatic context association](AUTOMATIC_CONTEXT_LINKING.md)
+tracks #494 and the related #492 delivery gap. GitHub changes, ordinary local
+fetch/pull and server reconciliation must converge without a customer-operated
+repair procedure. This supersedes a CLI pre-merge check as the proposed fix;
+original capture provenance and exact-publication validation stay immutable.
+
+2026-10-11 checkpoint: semantic historical contributions and publication-pinned
+memory now have a separate immutable ledger; verified late work does not replace
+the current main ref. PostgreSQL contribution/pin/job rollback and concurrency
+tests and common context/graph query regressions pass. Final backend test/vet,
+focused PostgreSQL race checks, frontend unit/build checks and 63 UI regression
+browser tests pass (two full-stack-only tests skipped). Installed-service checks,
+public contribution diagnostics, #492 integration and real #488 recovery remain
+open; changes are uncommitted, with no deployment or manual live-data repair.
+
 1. **Retained capture recovery.** Inspect attempts across worktrees without
    changing them. Distinguish exact replay, independently completed publication
    at the same code position, and an unprovable historical gap. Persist recovery

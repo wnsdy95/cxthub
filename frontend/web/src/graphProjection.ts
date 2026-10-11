@@ -77,7 +77,9 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], state: Gr
     if (merge.source_birth && nodes.has(merge.source_birth)) {
       // A no-change PR may use the same real snapshot for main and source.
       // Replace only the source arm, preserving main and prior integrations.
-      node.parents = [...(node.parents.length === 1 ? [merge.source] : node.parents.slice(0,-1)),merge.source_birth];
+      const sourceIndex = node.parents.lastIndexOf(merge.source);
+      if (sourceIndex === 0) node.parents = [merge.source,merge.source_birth,...node.parents.slice(1)];
+      else if (sourceIndex > 0) node.parents = node.parents.map((parent,index) => index === sourceIndex ? merge.source_birth! : parent);
     }
     const birth = merge.lifecycle_birth;
     if (!birth || !nodes.has(birth) || reachesSnapshot(nodes,merge.source,birth) || node.parents.includes(birth) || reachesSnapshot(nodes,birth,merge.id)) continue;
@@ -96,7 +98,7 @@ export function projectBranchGraph(snapshots: Snapshot[], refs: Ref[], state: Gr
     if (!node) continue;
     // Only the recorded source arm carries the source name. Extra destination
     // evidence must not inherit that label merely because it opens a lane.
-    const sourceArms = new Set([merge.source, merge.source_birth, merge.lifecycle_birth]);
+    const sourceArms = new Set([merge.source, merge.source_birth, merge.lifecycle_birth, ...(merge.source_arms ?? [])]);
     edgeBranches.set(merge.id, new Map(node.parents.map(parent => [parent, sourceArms.has(parent) ? merge.from : merge.branch])));
   }
   const projectedRefs = refs.map(ref => {

@@ -43,7 +43,7 @@ func validPRJobFailureClass(class string) bool {
 
 func validPRJobReason(reason string, diagnostic bool) bool {
 	switch reason {
-	case "", "source_context_pending", "source_finalization_required", "integrity_check_failed",
+	case "", "source_context_pending", "source_finalization_required", "ordering_evidence_pending", "integrity_check_failed",
 		"policy_changed", "invalid_request", "identity_or_history_conflict", "repository_or_base_missing",
 		"temporary_failure", "retry_limit_reached":
 		return true

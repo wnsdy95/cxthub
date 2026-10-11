@@ -189,9 +189,10 @@ type DiffOutput struct {
 
 // UpdateRefInput: CAS ref move (sync protocol).
 type UpdateRefInput struct {
-	RepoID         domain.ContentHash
-	Ref            domain.Ref
-	ExpectedTarget domain.ContentHash
+	RepoID           domain.ContentHash
+	Ref              domain.Ref
+	ExpectedTarget   domain.ContentHash
+	ExpectedRevision *domain.RepositoryRevision
 	// Force allows non-fast-forward moves (equivalent to git push --force). If false (default), non-fast-forward moves without the previous commit as an ancestor are rejected with ErrNonFastForward.
 	Force bool
 	// Append appends a diverged push with no common ancestor (orphaned) to the current head: attaches the current head as a parent to the root of the incoming lineage (graft) followed by a fast-forward. Parents are not included in the content-hash, so snapshot IDs are immutable, and the entire history is preserved (unlike Force, which results in no loss).

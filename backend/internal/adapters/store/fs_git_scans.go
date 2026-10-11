@@ -376,11 +376,12 @@ func (s *FSStore) ClaimGitHeadScan(ctx context.Context, repo domain.ContentHash,
 	return j, writeAtomic(path, b)
 }
 func (s *FSStore) FinishGitHeadScan(ctx context.Context, j domain.GitHeadScan, observations []domain.GitRefObservation, more bool, now time.Time) error {
-	if err := j.Validate(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(observations) > 100 {
-		return domain.ErrValidation
+	receipt, err := domain.NewGitHeadReceipt(j, observations, more)
+	if err != nil {
+		return err
 	}
 	l := s.oauthLock()
 	l.Lock()
@@ -395,14 +396,16 @@ func (s *FSStore) FinishGitHeadScan(ctx context.Context, j domain.GitHeadScan, o
 	if err := readJSON(path, &old); err != nil {
 		return err
 	}
-	if old.Version != j.Version || old.Page != j.Page || old.LeaseUntil.IsZero() {
-		return domain.ErrConflict
+	if err := validateGitHeadFinish(j, old, now); err != nil {
+		return err
+	}
+	if receipt != nil {
+		if err := s.checkGitHeadReceiptFS(*receipt); err != nil {
+			return err
+		}
 	}
 	for _, o := range observations {
-		if o.RepoID != j.RepoID || o.GitOrigin != j.GitOrigin || o.Source != "reconciliation" {
-			return domain.ErrIntegrity
-		}
-		if err := o.Validate(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if err := s.recordGitObservation(ctx, o, now); err != nil {
@@ -413,7 +416,16 @@ func (s *FSStore) FinishGitHeadScan(ctx context.Context, j domain.GitHeadScan, o
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, b)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := writeAtomic(path, b); err != nil {
+		return err
+	}
+	if receipt != nil {
+		return s.putGitHeadReceiptFS(ctx, *receipt)
+	}
+	return nil
 }
 
 var _ outbound.GitHeadScanStore = (*FSStore)(nil)

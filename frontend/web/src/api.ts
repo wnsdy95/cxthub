@@ -122,6 +122,10 @@ export const api = {
   retryNotification: (repository: string, id: string) => call('POST', `/repositories/${encodeURIComponent(repository)}/notifications/${encodeURIComponent(id)}/retry`, {}),
   storageUsage: (namespace: string, month: string, signal?: AbortSignal) => call<StorageUsageReport>('GET', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage?month=${encodeURIComponent(month)}`, undefined, undefined, signal),
   reconcileStorage: (namespace: string) => call<{ reconciled: boolean }>('POST', `${namespace === 'self' ? '/me' : '/namespaces/' + encodeURIComponent(namespace)}/storage/reconcile`, {}),
+  gitAssociations: (repo: string, kind: import('./types').GitAssociationKind, state: import('./types').GitAssociationFilter, cursor: string, signal?: AbortSignal) => {
+    const params = new URLSearchParams({kind, state, cursor, limit: '30'});
+    return call<import('./types').GitAssociationStatusPage>('GET', `/repos/${encodeURIComponent(repo)}/git/associations?${params}`, undefined, undefined, signal);
+  },
   prPromotions: (repoId: string, signal?: AbortSignal) => call<import('./types').PRPromotionJob[]>('GET', `/repos/${encodeURIComponent(repoId)}/prs/promotions`, undefined, undefined, signal),
   retryPRPromotion: (repoId: string, id: string) => call('POST', `/repos/${encodeURIComponent(repoId)}/prs/promotions/${encodeURIComponent(id)}/retry`, {}),
   // Session — exchangeSession exchanges the IDP token to have the server set the session cookie.

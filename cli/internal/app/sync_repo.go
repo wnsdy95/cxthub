@@ -921,7 +921,21 @@ func (s *SyncRepoService) AppendBranch(ctx context.Context, in inbound.SyncInput
 	if ref.BranchID == "" {
 		ref.BranchID = domain.LegacyContextBranchID(repoID, branch)
 	}
-	if err := s.remote.UpdateRefRemote(ctx, repoID, ref, true); err != nil {
+	if in.ExpectedBranchID != "" && ref.BranchID != in.ExpectedBranchID {
+		return domain.ErrSyncConflict
+	}
+	if in.ExpectedRevision != nil || in.ExpectedTarget != "" {
+		if in.ExpectedRevision == nil || in.ExpectedTarget == "" || in.Force {
+			return fmt.Errorf("%w: conditional append requires target and revision without force", domain.ErrSyncConflict)
+		}
+		writer, ok := s.remote.(outbound.ConditionalRefWriter)
+		if !ok {
+			return fmt.Errorf("%w: remote conditional append unavailable", domain.ErrSyncConflict)
+		}
+		if err := writer.AppendRefConditional(ctx, repoID, ref, in.ExpectedTarget, *in.ExpectedRevision); err != nil {
+			return err
+		}
+	} else if err := s.remote.UpdateRefRemote(ctx, repoID, ref, true); err != nil {
 		return err
 	}
 	return s.convergeAppendedBranch(ctx, repoID, ref)

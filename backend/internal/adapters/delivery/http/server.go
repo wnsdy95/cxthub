@@ -209,6 +209,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory/positions", s.guard(domain.RoleViewer, s.queryMemoryPositions))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/code-applicability", s.guard(domain.RoleViewer, s.queryCodeApplicability))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-scans", s.guard(domain.RoleViewer, s.listGitScans))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/git/associations", s.guard(domain.RoleViewer, s.getGitAssociationStatus))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-scans/{scanID}/retry", s.guard(domain.RoleMember, s.retryGitScan))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleViewer, s.listGitChanges))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-changes/{changeID}", s.guard(domain.RoleViewer, s.getGitChange))
@@ -258,6 +259,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/repos/{repoID}/unsync/{branch...}", s.guard(domain.RoleMember, s.deleteUnsync))
 	// {name...}: Branch names can include slashes like in git (feature/login, etc.) — full matching of the rest.
 	mux.HandleFunc("PUT /api/v1/repos/{repoID}/refs/{kind}/{name...}", s.guard(domain.RoleMember, s.putRef))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/conditional-appends/v1/{name...}", s.guard(domain.RoleMember, s.conditionalAppendV1))
 
 	// GitHub webhook reception (PR merged → context promotion). HMAC signature verification instead of authentication — inactive (404) if secret (CXT_GITHUB_WEBHOOK_SECRET) is not set.
 	mux.HandleFunc("POST /api/v1/hooks/github", s.githubWebhook)
@@ -1320,6 +1322,8 @@ func mapError(err error) (code string, status int) {
 		return "storage_limit", http.StatusConflict
 	case errors.Is(err, domain.ErrUsageUnavailable):
 		return "usage_unavailable", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrGitAssociationStatusUnavailable):
+		return "association_status_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrBranchPullUnsupported):
 		return "branch_pull_unsupported", http.StatusNotImplemented
 	case errors.Is(err, domain.ErrRepositoryInitializationUnsupported):
@@ -1356,6 +1360,8 @@ func mapError(err error) (code string, status int) {
 		return "join_preview_changed", http.StatusConflict
 	case errors.Is(err, domain.ErrEffectiveMemoryCursorStale):
 		return "memory_cursor_stale", http.StatusConflict
+	case errors.Is(err, domain.ErrPROrderingPending):
+		return "ordering_evidence_pending", http.StatusConflict
 	case errors.Is(err, domain.ErrConflict):
 		return "conflict", http.StatusConflict
 	case errors.Is(err, domain.ErrValidation):

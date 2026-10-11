@@ -79,7 +79,11 @@ func (s *Service) ListPRPromotions(ctx context.Context, repo domain.ContentHash)
 		if err != nil {
 			return nil, err
 		}
-		return st.ListPRJobs(ctx, repo)
+		jobs, err := st.ListPRJobs(ctx, repo)
+		if err != nil {
+			return nil, err
+		}
+		return s.projectPRJobAssociations(ctx, repo, jobs)
 	})
 }
 func (s *Service) retryPRPromotionCommand(ctx context.Context, repo domain.ContentHash, id string) error {
@@ -162,6 +166,9 @@ func (s *Service) runPRJob(ctx context.Context, j domain.PRPromotionJob) (inboun
 	j.Reason = ""
 	j.FailureClass = prJobFailureClass(runErr)
 	switch {
+	case errors.Is(runErr, domain.ErrPROrderingPending):
+		j.State = "waiting"
+		j.Reason = "ordering_evidence_pending"
 	case errors.Is(runErr, domain.ErrPRSourcePending):
 		j.State = "waiting"
 		j.Reason = "source_context_pending"

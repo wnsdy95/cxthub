@@ -1192,10 +1192,22 @@ details.memory-box > summary { cursor: pointer; color: #8957e5; list-style: reve
 .pr-promotions ul, .git-changes ul, .git-scans ul { list-style: none; padding: 0; }
 .pr-promotions li, .git-changes li, .git-scans li { padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .pr-promotions li > span, .git-changes li > span, .git-scans li > span { display: block; color: var(--muted); }
-.pr-diagnostics { margin-top: 8px; }
+.pr-diagnostics, .pr-association { margin-top: 8px; }
 .pr-diagnostics ol { padding-left: 20px; }
 .pr-diagnostics time { color: var(--muted); }
 .pr-promotions button, .git-changes button, .git-scans button { font-size: .75rem; padding: 3px 6px; }
+.git-associations { margin-bottom: 16px; font-size: .78rem; min-width: 0; }
+.git-associations summary { cursor: pointer; }
+.git-associations ul { list-style: none; padding: 0; max-height: 440px; overflow-y: auto; overscroll-behavior-y: contain; }
+.git-associations li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.git-association-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.git-association-controls label { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+.git-association-controls select { max-width: 100%; }
+.git-associations button, .git-associations select { font-size: .75rem; padding: 3px 6px; }
+.git-association-facts { margin: 8px 0; }
+.git-association-facts dt { color: var(--muted); margin-top: 6px; }
+.git-association-facts dd { margin: 2px 0; overflow-wrap: anywhere; }
+.git-association-facts code { white-space: normal; }
 
 .ctx-main .dl-btns { flex-wrap: wrap; max-width: 100%; }
 .storage-usage { min-width: 0; padding: 14px 0; }

@@ -117,9 +117,24 @@ func (r *GitHubPRMergeResolver) ResolveMergedPullRequests(
 	gitRemoteURL, baseBranch string,
 	commitSHAs []string,
 ) ([]outbound.MergedPullRequest, error) {
+	pulls, next, err := r.resolveMergedPullRequests(ctx, gitRemoteURL, baseBranch, commitSHAs, 1, githubPRPageLimit, false)
+	if err == nil && next != 0 {
+		return nil, fmt.Errorf("github PR resolver: provider history pagination is incomplete")
+	}
+	return pulls, err
+}
+
+func (r *GitHubPRMergeResolver) ResolveMergedPullRequestsPage(ctx context.Context, gitRemoteURL, baseBranch string, commitSHAs []string, page int) ([]outbound.MergedPullRequest, int, error) {
+	if page < 1 {
+		return nil, 0, fmt.Errorf("github PR resolver: invalid provider page")
+	}
+	return r.resolveMergedPullRequests(ctx, gitRemoteURL, baseBranch, commitSHAs, page, 1, true)
+}
+
+func (r *GitHubPRMergeResolver) resolveMergedPullRequests(ctx context.Context, gitRemoteURL, baseBranch string, commitSHAs []string, firstPage, pageCount int, stable bool) ([]outbound.MergedPullRequest, int, error) {
 	owner, repo, ok := githubRepository(gitRemoteURL)
 	if !ok || baseBranch == "" || len(commitSHAs) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	positions := make(map[string]int, len(commitSHAs))
@@ -130,7 +145,7 @@ func (r *GitHubPRMergeResolver) ResolveMergedPullRequests(
 		}
 	}
 	if len(positions) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	resolveCtx, cancel := context.WithTimeout(ctx, githubResolveWindow)
@@ -138,23 +153,34 @@ func (r *GitHubPRMergeResolver) ResolveMergedPullRequests(
 
 	repoFullName := strings.ToLower(owner + "/" + repo)
 	found := make(map[int]outbound.MergedPullRequest)
-	for page := 1; page <= githubPRPageLimit; page++ {
+	next := firstPage
+	for count := 0; count < pageCount; count++ {
+		page := next
 		endpoint, err := url.Parse(r.apiBase + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/pulls")
 		if err != nil {
-			return nil, fmt.Errorf("github PR resolver: build endpoint: %w", err)
+			return nil, 0, fmt.Errorf("github PR resolver: build endpoint: %w", err)
 		}
 		query := endpoint.Query()
 		query.Set("state", "closed")
 		query.Set("base", baseBranch)
 		query.Set("sort", "updated")
 		query.Set("direction", "desc")
+		if stable {
+			query.Set("state", "all")
+			query.Del("base")
+			query.Set("sort", "created")
+			query.Set("direction", "asc")
+		}
 		query.Set("per_page", "100")
 		query.Set("page", fmt.Sprintf("%d", page))
 		endpoint.RawQuery = query.Encode()
 
 		var pulls []githubPullRequest
 		if err := r.getJSON(resolveCtx, endpoint.String(), &pulls); err != nil {
-			return nil, err
+			return nil, 0, err
+		}
+		if pulls == nil || len(pulls) > 100 {
+			return nil, 0, fmt.Errorf("github PR resolver: invalid provider page")
 		}
 		for _, pull := range pulls {
 			sha := strings.ToLower(strings.TrimSpace(pull.MergeCommitSHA))
@@ -180,7 +206,12 @@ func (r *GitHubPRMergeResolver) ResolveMergedPullRequests(
 			}
 		}
 		if len(pulls) < 100 {
+			next = 0
 			break
+		}
+		next = page + 1
+		if next <= page {
+			return nil, 0, fmt.Errorf("github PR resolver: invalid provider cursor")
 		}
 	}
 
@@ -195,7 +226,7 @@ func (r *GitHubPRMergeResolver) ResolveMergedPullRequests(
 		}
 		return out[i].Number < out[j].Number
 	})
-	return out, nil
+	return out, next, nil
 }
 
 func (r *GitHubPRMergeResolver) getJSON(ctx context.Context, endpoint string, out any) error {

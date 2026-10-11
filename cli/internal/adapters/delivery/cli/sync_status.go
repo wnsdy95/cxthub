@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"time"
 
 	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
@@ -22,7 +23,20 @@ type syncStatus struct {
 	RetryWaiting     int                       `json:"retry_waiting"`
 	Historical       []domain.SnapshotBackfill `json:"historical_uploads"`
 	Branches         []branchOperationStatus   `json:"branch_operations"`
+	Merges           []mergeDeliveryStatus     `json:"merge_deliveries"`
 	Issues           []string                  `json:"issues"`
+}
+
+type mergeDeliveryStatus struct {
+	ID         string    `json:"id"`
+	Repository string    `json:"repository"`
+	Branch     string    `json:"branch"`
+	BranchID   string    `json:"branch_id"`
+	Before     string    `json:"before"`
+	After      string    `json:"after"`
+	Attempts   int       `json:"attempts"`
+	Reason     string    `json:"reason,omitempty"`
+	LeaseUntil time.Time `json:"lease_until,omitempty"`
 }
 
 // RunSyncStatus reads only durable queue metadata. No document/memory bodies,
@@ -39,6 +53,17 @@ func RunSyncStatus(ctx context.Context, cwd string, asJSON bool, w io.Writer) er
 			report.Issues = append(report.Issues, "repository identity: "+err.Error())
 		} else {
 			report.Repository = string(repo.ID)
+			merges, mergeErr := listMergeDeliveries(state.Root)
+			if mergeErr != nil {
+				report.Issues = append(report.Issues, mergeErr.Error())
+			}
+			for key, job := range merges {
+				if job.Completed {
+					continue
+				}
+				report.Merges = append(report.Merges, mergeDeliveryStatus{ID: key, Repository: job.Evidence.RepoID, Branch: job.Evidence.Branch, BranchID: job.Evidence.BranchID, Before: job.Evidence.Before, After: job.Evidence.After, Attempts: job.Attempts, Reason: job.Reason, LeaseUntil: job.LeaseUntil})
+			}
+			sort.Slice(report.Merges, func(left, right int) bool { return report.Merges[left].ID < report.Merges[right].ID })
 			jobs, err := storage.NewFileStore(state.Root).ListBackfills(ctx, report.Repository)
 			if err != nil {
 				report.Issues = append(report.Issues, "historical upload queue: "+err.Error())
@@ -79,6 +104,10 @@ func RunSyncStatus(ctx context.Context, cwd string, asJSON bool, w io.Writer) er
 			fmt.Fprintf(w, "  %s  %s  attempts=%d  next=%s\n", shortHash(job.Snapshot), reason, job.Attempts, job.NextAttempt.Format(time.RFC3339))
 		}
 		fmt.Fprintf(w, "Unresolved branch operations: %d (cxt branch operations --json).\n", len(report.Branches))
+		fmt.Fprintf(w, "Unresolved merge deliveries: %d (automatic retry while the original branch observer is active; cxt push or cxt pull also retries).\n", len(report.Merges))
+		for _, job := range report.Merges {
+			fmt.Fprintf(w, "  %s  %s  attempts=%d  %s\n", job.ID[:12], job.Branch, job.Attempts, job.Reason)
+		}
 		for _, issue := range report.Issues {
 			fmt.Fprintf(w, "- %s\n", issue)
 		}

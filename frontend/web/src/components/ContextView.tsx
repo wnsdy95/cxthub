@@ -14,6 +14,7 @@ import { AIBar, AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK, modelColor,
 import type { ViewMode } from './EventStream';
 import { short, when } from '../snapshotFormat';
 import { PRPromotions } from './PRPromotions';
+import { GitAssociations } from './GitAssociations';
 import {GitScans} from './GitScans';
 import {CodeApplicability} from './CodeApplicability';
 import { GitChanges } from './GitChanges';
@@ -203,7 +204,10 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
   }, [branches.length > 0]);
 
   if (branches.length === 0 && !selected && !archivedSessions.length && !graphLoading && !graphError) {
-    return <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>;
+    return <>
+      <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>
+      <GitAssociations key={`git-associations:${repo.id}`} repoId={repo.id} />
+    </>;
   }
 
   return (
@@ -530,6 +534,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
           allSnapshots={archiveSnapshots} afterGraph={<AIBar snapshots={committedSnapshots} />}
           diagnostics={<>
             <PRPromotions repoId={repo.id} canRetry={atLeast(role, 'member')} />
+            <GitAssociations key={`git-associations:${repo.id}`} repoId={repo.id} />
             <CodeApplicability key={`code-state:${repo.id}`} repoId={repo.id} />
             <GitScans key={`git-scans:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />
             <GitChanges key={`git-changes:${repo.id}`} repoId={repo.id} canRetry={atLeast(role, 'member')} />

@@ -64,7 +64,7 @@ func checkPRSourceWake(t *testing.T, st sourceJobStore) {
 	ctx := context.Background()
 	repo, proof, now := sourceJobFixture(t, st)
 	var jobs []domain.PRPromotionJob
-	for i := 1; i <= 6; i++ {
+	for i := 1; i <= 7; i++ {
 		j := sourceJob(repo, i, now.Add(time.Duration(i)*time.Second))
 		switch i {
 		case 2:
@@ -77,6 +77,8 @@ func checkPRSourceWake(t *testing.T, st sourceJobStore) {
 			j.Reason = "integrity_check_failed"
 		case 6:
 			j.State, j.Reason = "completed", ""
+		case 7:
+			j.State, j.Reason = "waiting", "ordering_evidence_pending"
 		}
 		if _, err := st.EnqueuePRJob(ctx, j); err != nil {
 			t.Fatal(err)
@@ -192,4 +194,31 @@ func checkPRReawakenedSerialization(t *testing.T, st sourceJobStore) {
 func TestFSPRSourceWake(t *testing.T) { checkPRSourceWake(t, NewFSStore(t.TempDir())) }
 func TestFSPRReawakenedSerialization(t *testing.T) {
 	checkPRReawakenedSerialization(t, NewFSStore(t.TempDir()))
+}
+
+func TestFSPROrderingWaitSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	st := NewFSStore(directory)
+	repo, proof, now := sourceJobFixture(t, st)
+	storeSourcePublication(t, st, proof)
+	job := sourceJob(repo, 352, now)
+	job.State, job.Reason, job.Attempts = "waiting", "ordering_evidence_pending", 30
+	job.Version, job.NextAttempt = 31, now.Add(256*time.Second)
+	stored, err := st.EnqueuePRJob(ctx, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = NewFSStore(directory)
+	if err := st.WakePRSourceJobs(ctx, "", job.NextAttempt); err != nil {
+		t.Fatal(err)
+	}
+	requireDiagnosticJobUnchanged(t, st, stored)
+	if _, err := st.ClaimPRJob(ctx, repo, job.ID, job.NextAttempt.Add(-time.Second), time.Minute); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("restart lost backoff: %v", err)
+	}
+	claim, err := st.ClaimPRJob(ctx, repo, job.ID, job.NextAttempt, time.Minute)
+	if err != nil || claim.Version != 32 || claim.Attempts != 31 {
+		t.Fatalf("restart lost automatic retry or fence: %+v %v", claim, err)
+	}
 }

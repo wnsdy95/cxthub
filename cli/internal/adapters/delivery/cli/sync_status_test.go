@@ -111,3 +111,24 @@ func TestSyncStatusArguments(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncStatusReportsMergeDeliveriesWithoutMutating(t *testing.T) {
+	root, container, syncer := newMergeDeliveryFixture(t)
+	syncer.pullErr = context.DeadlineExceeded
+	handleIncomingContexts(context.Background(), container, root)
+	before := treeBytes(t, root)
+	var output bytes.Buffer
+	if err := RunSyncStatus(context.Background(), root, true, &output); err != nil {
+		t.Fatal(err)
+	}
+	var report syncStatus
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Merges) != 1 || report.Merges[0].Attempts != 1 || report.Merges[0].Reason == "" || report.ServerChecked {
+		t.Fatalf("missing merge delivery status: %+v", report)
+	}
+	if !reflect.DeepEqual(before, treeBytes(t, root)) {
+		t.Fatal("merge status changed local files")
+	}
+}

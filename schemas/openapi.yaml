@@ -601,11 +601,22 @@ components:
       type: array
       items:
         type: object
-        required: [event_id, destination_branch_id, source, merge_sha, pr_number, state, reason, order]
+        required: [event_id, destination_branch_id, delivery_acknowledged, source, merge_sha, pr_number, state, reason, order]
         properties:
           event_id: { type: string }
           source: { $ref: '#/components/schemas/ContentHash' }
           destination_branch_id: { type: string }
+          delivery_acknowledged:
+            type: boolean
+            description: >-
+              Historical delivery is proven by a validated legacy completion pair
+              or a currently revalidated applied PR contribution. Independent of
+              current inclusion: may remain true when state is not_selected after
+              a reset, or when selected-code ancestry is unavailable. Unknown or
+              invalid completion evidence is false. Applies only to this exact
+              destination_branch_id, source and full merge_sha; inherited rows
+              do not acknowledge delivery to the inheriting branch. Missing on
+              older servers must be treated as false.
           before: { $ref: '#/components/schemas/ContentHash' }
           merge_sha: { type: string }
           pr_number: { type: integer }
@@ -691,6 +702,7 @@ components:
         represented_grafts: {"type": "array", "items": {"type": "string"}}
         redirect_children: {"type": "array", "items": {"type": "string"}}
         source_birth: {"type": "string"}
+        source_arms: {"type": "array", "items": {"type": "string"}}
         lifecycle_birth: {"type": "string"}
     PendingView:
       type: object
@@ -923,6 +935,53 @@ components:
         relation: { type: string, enum: [ancestor, not_ancestor, unknown] }
         paths: { type: array, items: { $ref: '#/components/schemas/CodePathState' } }
         reason: { type: string }
+    GitProviderObservation:
+      type: object
+      readOnly: true
+      additionalProperties: false
+      description: Immutable server-qualified GitHub installation and numeric repository identity. Never accepted as a client-supplied authority claim.
+      required: [installation_id, repository_id]
+      properties:
+        installation_id: { type: integer, format: int64, minimum: 1 }
+        repository_id: { type: integer, format: int64, minimum: 1 }
+    GitPullRequestObservation:
+      type: object
+      readOnly: true
+      required: [installation_id, repository_id, id, number, action, head_repository_id, base_repository_id, base_ref]
+      properties:
+        installation_id: { type: integer, format: int64, minimum: 1 }
+        repository_id: { type: integer, format: int64, minimum: 1 }
+        id: { type: integer, format: int64, minimum: 1 }
+        number: { type: integer, minimum: 1 }
+        action: { type: string, enum: [opened, reopened, synchronize, closed, force-pushed] }
+        head_repository_id: { type: integer, format: int64, minimum: 1 }
+        base_repository_id: { type: integer, format: int64, minimum: 1 }
+        base_ref: { type: string }
+        merge_sha: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
+        provider_event_id: { type: string, maxLength: 256 }
+        occurred_at: { type: string, format: date-time }
+    GitRefObservation:
+      type: object
+      readOnly: true
+      description: |
+        Immutable server-owned Git evidence, not a client submission contract or a current-head assertion.
+        Optional provider qualification is set only for authenticated GitHub pushes and binding-fenced
+        reconciliation reads. Legacy and operator-token observations omit provider and retain their exact
+        JSON encoding and identity. Qualified observations use versioned identities; repeated reconciliation
+        of the same ref/head/provider reuses evidence and does not establish freshness or arrival order.
+      required: [id, repo_id, git_origin, source, ref, forced]
+      properties:
+        delivery: { type: string, maxLength: 128 }
+        id: { type: string, pattern: '^[0-9a-f]{64}$' }
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        git_origin: { type: string }
+        source: { type: string, enum: [github-push, reconciliation, github-pull-request, github-pr-reconciliation] }
+        ref: { type: string, pattern: '^refs/heads/.+$' }
+        before: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
+        after: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
+        forced: { type: boolean }
+        pull_request: { $ref: '#/components/schemas/GitPullRequestObservation' }
+        provider: { $ref: '#/components/schemas/GitProviderObservation', readOnly: true }
     GitScanJob:
       type: object
       description: Automatic discovery for one immutable commit. Completed refers to this cursor pass, not to all ancestry or current code applicability. Late records discover their own inverse candidates.
@@ -963,6 +1022,52 @@ components:
         items: { type: array, items: { $ref: '#/components/schemas/GitScanJob' } }
         reconciliation: { $ref: '#/components/schemas/GitHeadScan' }
         next_cursor: { type: string }
+    GitAssociationStatus:
+      type: object
+      description: Recorded automatic-link work. Completion describes an immutable historical effect, never its current applicability. Admitted publications have at least one prospective admission, not necessarily a completed integration.
+      required: [id, kind, state, source_branch, source_branch_id, capture, original_head, publication_id, attempts]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [publication, integration, memory] }
+        state: { type: string, enum: [discovered, admitted, waiting, processing, retrying, completed, attention] }
+        reason: { type: string }
+        source_branch: { type: string }
+        source_branch_id: { type: string }
+        destination_branch: { type: string }
+        destination_branch_id: { type: string }
+        capture: { $ref: '#/components/schemas/ContentHash' }
+        original_head: { type: string }
+        publication_id: { type: string }
+        admission_id: { type: string }
+        contribution_id: { type: string }
+        attempts: { type: integer, minimum: 0 }
+        next_attempt: { type: string, format: date-time }
+    GitAssociationDiscoveryStatus:
+      type: object
+      required: [state, version]
+      properties:
+        state: { type: string, enum: [no_origin, unavailable, not_started, scanning, checkpoint_recorded] }
+        version: { type: string, pattern: '^[0-9]+$' }
+    GitAssociationHeadStatus:
+      type: object
+      required: [state, page]
+      properties:
+        state: { type: string, enum: [unavailable, not_started, waiting, running, retrying, completed] }
+        page: { type: integer }
+        reason: { type: string }
+    GitAssociationStatusPage:
+      type: object
+      description: Bounded recorded work only. An empty pending page or recorded checkpoint does not assert that all Git workflows have been captured or reconciled. Restart pagination to discover earlier IDs inserted concurrently.
+      required: [repo_id, kind, filter, items, discovery, reconciliation, current_applicability]
+      properties:
+        repo_id: { $ref: '#/components/schemas/ContentHash' }
+        kind: { type: string, enum: [publication, integration, memory] }
+        filter: { type: string, enum: [pending, all] }
+        items: { type: array, items: { $ref: '#/components/schemas/GitAssociationStatus' } }
+        next_cursor: { type: string }
+        discovery: { $ref: '#/components/schemas/GitAssociationDiscoveryStatus' }
+        reconciliation: { $ref: '#/components/schemas/GitAssociationHeadStatus' }
+        current_applicability: { type: string, enum: [not_evaluated] }
     GitChangeRequest:
       type: object
       description: Requests verification of a possible inverse change. Never accepted as proof; merge comparison parents must be explicit.
@@ -1040,10 +1145,26 @@ components:
         reason: { type: string }
         failure_class: { type: string, enum: [deadline_exceeded, canceled, unspecified] }
         diagnostics: { $ref: '#/components/schemas/PRJobDiagnostics' }
+        association: { $ref: '#/components/schemas/PRJobAssociation', readOnly: true }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         next_attempt: { type: string, format: date-time }
         lease_until: { type: string, format: date-time }
+
+    PRJobAssociation:
+      type: object
+      additionalProperties: false
+      description: Read-only projection on the jobs listing, never a persisted job transition. Counts are stored records scoped to the job, not revalidated associations or current code applicability. Provider history describes matching stored checkpoints only, not GitHub App configuration, active scanning, or completed recovery. No matching checkpoint means unknown, not scanning. One optional batch read inspects at most 4096 records plus an overflow sentinel per evidence table (filtered to the repository and listed PR numbers in PostgreSQL, per evidence directory in FS). When that scope exceeds the budget, that stage is unknown and counts are omitted rather than reporting a partial total. Unsupported or failed storage reads are unavailable. No raw provider payloads or errors are exposed.
+      required: [provider_history, participation, contribution, current_applicability]
+      properties:
+        provider_history: { type: string, enum: [unknown, unavailable, recorded_partial, recorded_complete] }
+        provider_checkpoint_count: { type: integer, minimum: 0, maximum: 4096, description: Matching stored checkpoints; not a global provider inventory or active scanner count. }
+        participation: { type: string, enum: [unknown, unavailable, not_recorded, recorded] }
+        participation_count: { type: integer, minimum: 0, maximum: 4096, description: Distinct stored witnesses for the job origin, PR number and merge. }
+        publication_count: { type: integer, minimum: 0, maximum: 4096, description: Distinct publications referenced by those witnesses. }
+        contribution: { type: string, enum: [unknown, unavailable, not_recorded, recorded] }
+        contribution_count: { type: integer, minimum: 0, maximum: 4096, description: Distinct immutable contributions matching the job PR tuple and destination identity; not a conversation count. }
+        current_applicability: { type: string, enum: [not_evaluated], description: No branch/code selection or file applicability assessment is performed by the job listing. Use selected context and effective memory queries. }
 
     PRJobDiagnostics:
       type: object
@@ -3425,6 +3546,30 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { description: Invalid pagination }
         '503': { description: Discovery unavailable }
+  /repos/{repoID}/git/associations:
+    parameters:
+      - $ref: '#/components/parameters/repoID'
+      - $ref: '#/components/parameters/DocIdentities'
+    get:
+      operationId: getGitAssociationStatus
+      summary: Read automatic context and memory linking status
+      description: Viewer access. Current-origin, ID-ordered keyset pages of accepted publication discovery, integration work or immutable memory supplementation. Completion is based on recorded effects rather than scheduler cleanup. No provider I/O or mutations. Expired worker leases display retrying without changing jobs.
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [publication, integration, memory], default: integration } }
+        - { name: state, in: query, schema: { type: string, enum: [pending, all], default: pending } }
+        - { name: cursor, in: query, description: Last ID; 32 lowercase hex digits for publication or 64 for integration and memory. Keep filters unchanged., schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 30 } }
+      responses:
+        '200':
+          description: Recorded automatic-link status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GitAssociationStatusPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { description: Invalid pagination or inconsistent recorded evidence }
+        '503': { description: Status query unsupported by configured storage }
   /repos/{repoID}/git-scans/{scanID}/retry:
     parameters:
       - $ref: '#/components/parameters/repoID'
@@ -4006,6 +4151,85 @@ paths:
   # Implementation note: Actual route is {name...} (allows branch names with slashes). Diverged automatic fork removal —
   # Non-fast-forward is 409 non_fast_forward (only pass with force), diverged is resolved by append (lossless reordering).
   # Authentication/Repository API is described in the section below. Remaining unmentioned: GET /repos?repository=(membership filter).
+  /repos/{repoID}/conditional-appends/v1/{name}:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
+      - $ref: "#/components/parameters/refName"
+    post:
+      operationId: appendRefConditionallyV1
+      summary: Append only against the observed branch and context generation
+      description: |
+        Requires member access and rechecks write policy inside the repository
+        transaction. The branch identity, current target and graph/evidence
+        revisions must match before any ref, graft or pending-pointer write.
+        Pending-only revisions do not invalidate the precondition. Never forces
+        or replaces a newer selection. Objects must already exist.
+        Clients must not fall back to an unconditional append when this versioned
+        endpoint is unavailable; retain the delivery for retry instead.
+      tags: [refs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [branch_id, target, expected_target, expected_revision]
+              properties:
+                branch_id: { type: string, minLength: 1, maxLength: 128 }
+                target:
+                  $ref: "#/components/schemas/ContentHash"
+                expected_target:
+                  $ref: "#/components/schemas/ContentHash"
+                expected_revision:
+                  type: object
+                  required: [graph, evidence]
+                  properties:
+                    graph: { type: string, pattern: '^[0-9]+$' }
+                    evidence: { type: string, pattern: '^[0-9]+$' }
+                    pending: { type: string, pattern: '^[0-9]+$' }
+                force: { type: boolean, const: false }
+                append: { type: boolean, const: true }
+      responses:
+        "200":
+          description: Conditional append accepted atomically.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result, ref]
+                properties:
+                  result: { type: string, enum: [fast_forward, up_to_date, appended] }
+                  ref:
+                    $ref: "#/components/schemas/Ref"
+                  requested_target:
+                    $ref: "#/components/schemas/ContentHash"
+                  server_target:
+                    $ref: "#/components/schemas/ContentHash"
+                  merge_base:
+                    $ref: "#/components/schemas/ContentHash"
+        "400":
+          description: Missing or invalid preconditions, force request, or invalid branch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Branch identity, target or graph/evidence generation changed; read fresh server context before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Request body exceeds 16 KiB.
+
   /repos/{repoID}/refs/{kind}/{name}:
     parameters:
       - $ref: "#/components/parameters/repoID"

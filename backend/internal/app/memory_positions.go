@@ -18,6 +18,22 @@ func (s *Service) QueryMemoryPositions(ctx context.Context, repo, snapshot domai
 		if err != nil {
 			return domain.MemoryPositions{}, err
 		}
-		return domain.ResolveMemoryPositions(snapshot, event, history), nil
+		contributions, err := s.contextContributionsForEvidence(ctx, repo, history, nil)
+		if err != nil {
+			return domain.MemoryPositions{}, err
+		}
+		options := domain.ResolveMemoryPositions(snapshot, "", history).Options
+		for _, contribution := range contributions {
+			record := contribution.record
+			if !contribution.valid || record.Capture != snapshot {
+				continue
+			}
+			kind := "merge"
+			if contribution.prNumber > 0 {
+				kind = "pr-merge"
+			}
+			options = append(options, domain.MemoryCodePosition{EventID: record.ID, CodeCommit: record.IntegrationSHA, Branch: contribution.destinationBranch, Kind: kind, PRNumber: contribution.prNumber, CreatedAt: contribution.mergedAt})
+		}
+		return domain.ResolveMemoryPositionOptions(snapshot, event, options), nil
 	})
 }

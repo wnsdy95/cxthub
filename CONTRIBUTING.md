@@ -35,9 +35,13 @@ Useful checks:
 ```bash
 make lint
 make e2e
-make e2e-sync
+CXT_E2E_DSN="${DISPOSABLE_POSTGRES_DSN:?set a disposable PostgreSQL 16 DSN}" make e2e-sync
 make public-check
 ```
+
+Use a disposable database: conditional automatic-merge append requires PostgreSQL
+transactions. The default FS sync E2E run is legacy compatibility coverage only;
+see [storage requirements](docs/AUTOMATIC_CONTEXT_LINKING.md#conditional-append-storage-requirement).
 
 PostgreSQL adapter or migration changes should run `make test-postgres` against
 PostgreSQL 16. Web changes should run `npm ci` and `npm run build` from

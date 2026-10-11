@@ -46,7 +46,7 @@ func routeIntegrationContinuations(graph *GraphState, snapshots map[ContentHash]
 			if !ok || included.State != "included" || m.Scope != plan.Scope || m.Source != included.Source {
 				continue
 			}
-			if previous.ID != "" && included.Before != "" && included.Before != m.Source {
+			if previous.ID != "" && previous.ID != m.ID && included.Before != "" && included.Before != m.Source {
 				if root, tail, parents, ok := integrationContinuation(included.Before, previous, snapshots, sources); ok {
 					add(route{i, m.ID, previous.ID, root, tail, parents})
 				}
@@ -103,7 +103,13 @@ func routeIntegrationContinuations(graph *GraphState, snapshots map[ContentHash]
 			parents := plan.Parents[r.merge]
 			// Replace the previous-operation and pre-merge arms with one proven
 			// destination path. The final source arm remains the PR contribution.
-			plan.Parents[r.merge] = []string{r.root, parents[len(parents)-1]}
+			kept := []string{r.root}
+			for _, parent := range parents {
+				if sources[ContentHash(parent)] && !slices.Contains(kept, parent) {
+					kept = append(kept, parent)
+				}
+			}
+			plan.Parents[r.merge] = kept
 			projected[r.merge] = plan.Parents[r.merge]
 		}
 	}

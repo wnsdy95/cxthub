@@ -415,6 +415,49 @@ export interface HistoryEvent {
   created_at: string;
 }
 
+export type GitAssociationKind = 'publication' | 'integration' | 'memory';
+export type GitAssociationFilter = 'pending' | 'all';
+
+export interface GitAssociationStatus {
+  id: string;
+  kind: string;
+  state: string;
+  reason?: string;
+  source_branch: string;
+  source_branch_id: string;
+  destination_branch?: string;
+  destination_branch_id?: string;
+  capture: string;
+  original_head: string;
+  publication_id: string;
+  admission_id?: string;
+  contribution_id?: string;
+  attempts: number;
+  next_attempt?: string;
+}
+
+export interface GitAssociationStatusPage {
+  repo_id: string;
+  kind: GitAssociationKind;
+  filter: GitAssociationFilter;
+  items: GitAssociationStatus[];
+  next_cursor?: string;
+  discovery: { state: string; version: string };
+  reconciliation: { state: string; page: number; reason?: string };
+  current_applicability: string;
+}
+
+export interface PRJobAssociation {
+ provider_history: 'unknown' | 'unavailable' | 'recorded_partial' | 'recorded_complete';
+ provider_checkpoint_count?: number;
+ participation: 'unknown' | 'unavailable' | 'not_recorded' | 'recorded';
+ participation_count?: number;
+ publication_count?: number;
+ contribution: 'unknown' | 'unavailable' | 'not_recorded' | 'recorded';
+ contribution_count?: number;
+ current_applicability: 'not_evaluated';
+}
+
 export interface PRPromotionJob {
  id: string;
  repo_id: string;
@@ -423,6 +466,7 @@ export interface PRPromotionJob {
  attempts: number;
  reason?: string;
  failure_class?: 'deadline_exceeded' | 'canceled' | 'unspecified';
+ association?: PRJobAssociation;
  diagnostics?: {
   since: string;
   total_claims: number;
@@ -614,7 +658,7 @@ export interface GraphState {
 export interface BranchContext {
   branch_id: string; snapshot_id: string; code_commit?: string; reason: string;
   roots: string[]; snapshot_ids: string[];
-  merges: {event_id: string; destination_branch_id?: string; source: string; before?: string; merge_sha: string; pr_number: number; state: 'included' | 'not_selected' | 'review'; reason: string; order: number}[];
+  merges: {event_id: string; destination_branch_id?: string; delivery_acknowledged?: boolean; source: string; before?: string; merge_sha: string; pr_number: number; state: 'included' | 'not_selected' | 'review'; reason: string; order: number}[];
 }
 export interface GraphBirth {
   id: string; event_id: string; branch: string; source: string; orphan: boolean; created_at: string; children: string[];
@@ -622,7 +666,7 @@ export interface GraphBirth {
 export interface GraphMerge {
   id: string; event_id: string; before: string; after: string; source: string; branch: string; scope: string; from: string;
   created_at: string; pr_number?: number; historical_only: boolean; withdrawn: boolean;
-  represented_grafts: string[]; redirect_children: string[]; source_birth?: string; lifecycle_birth?: string;
+  represented_grafts: string[]; redirect_children: string[]; source_birth?: string; lifecycle_birth?: string; source_arms?: string[];
 }
 
 export interface GitCreation {

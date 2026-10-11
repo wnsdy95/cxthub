@@ -421,6 +421,7 @@ func buildContainer(cfg config) container {
 		Identity:          cfg.Identity,
 	}
 	preparer := runtimeAgentPreparer{git: gitCtx, store: store, remote: remote, history: history}
+	clictr.WakeFetchDiscovery = delivcli.SpawnFetchDiscovery
 	hookHdl.WithAgentContext(preparer)
 	loadSvc.WithAgentContext(preparer).WithAgentCodePosition(gitctx.NewGitContextAdapter())
 	seedSvc.WithAgentContext(preparer)

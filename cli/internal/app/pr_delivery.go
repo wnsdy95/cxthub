@@ -11,7 +11,7 @@ import (
 
 // Only acceptance releases local delivery responsibility; it does not claim the
 // server has already appended the context. Pull observes completed server state.
-func (s *SyncRepoService) flushPRDeliveries(ctx context.Context, repo string) error {
+func (s *SyncRepoService) flushPRDeliveries(ctx context.Context, repo string, scope ...string) error {
 	local, ok := s.store.(outbound.PRDeliveryStore)
 	if !ok {
 		return nil
@@ -26,10 +26,19 @@ func (s *SyncRepoService) flushPRDeliveries(ctx context.Context, repo string) er
 	if !ok {
 		return nil
 	}
-	for i, pr := range pending {
-		if i >= 20 {
+	branch := ""
+	if len(scope) > 0 {
+		branch = scope[0]
+	}
+	processed := 0
+	for _, pr := range pending {
+		if branch != "" && pr.BaseBranch != branch {
+			continue
+		}
+		if processed >= 20 {
 			break
 		}
+		processed++
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -44,6 +53,35 @@ func (s *SyncRepoService) flushPRDeliveries(ctx context.Context, repo string) er
 		}
 	}
 	return nil
+}
+
+func (s *SyncRepoService) ReplayPRDeliveries(ctx context.Context, in inbound.SyncInput) (bool, error) {
+	if in.Ref != "" {
+		if err := domain.ValidateBranchName(in.Ref); err != nil {
+			return true, err
+		}
+	}
+	repo, err := s.repoID(ctx, in)
+	if err != nil {
+		return true, err
+	}
+	local, ok := s.store.(outbound.PRDeliveryStore)
+	if !ok {
+		return true, fmt.Errorf("durable PR delivery storage unavailable")
+	}
+	if err := s.flushPRDeliveries(ctx, repo, in.Ref); err != nil {
+		return true, err
+	}
+	pending, err := local.PendingPRDeliveries(ctx, repo)
+	if err != nil {
+		return true, fmt.Errorf("read remaining PR deliveries: %w", err)
+	}
+	for _, pr := range pending {
+		if in.Ref == "" || pr.BaseBranch == in.Ref {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // QueuePullRequest hands discovered host evidence to a durable delivery queue.

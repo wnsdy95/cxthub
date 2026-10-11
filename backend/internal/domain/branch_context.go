@@ -16,14 +16,15 @@ type BranchContext struct {
 }
 
 type BranchContextMerge struct {
-	DestinationBranchID string      `json:"destination_branch_id"`
-	EventID             string      `json:"event_id"`
-	Source              ContentHash `json:"source"`
-	Before              ContentHash `json:"before,omitempty"`
-	MergeSHA            string      `json:"merge_sha"`
-	PRNumber            int         `json:"pr_number"`
-	State               string      `json:"state"` // included, not_selected, review
-	Reason              string      `json:"reason"`
+	DeliveryAcknowledged bool        `json:"delivery_acknowledged"`
+	DestinationBranchID  string      `json:"destination_branch_id"`
+	EventID              string      `json:"event_id"`
+	Source               ContentHash `json:"source"`
+	Before               ContentHash `json:"before,omitempty"`
+	MergeSHA             string      `json:"merge_sha"`
+	PRNumber             int         `json:"pr_number"`
+	State                string      `json:"state"` // included, not_selected, review
+	Reason               string      `json:"reason"`
 	// Distance along the verified Git first-parent chain; zero is selected code.
 	// -1 means no ordered integration proof, never a timestamp fallback.
 	Order int `json:"order"`

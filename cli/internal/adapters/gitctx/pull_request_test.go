@@ -72,6 +72,22 @@ func TestCachedTokenResolvesOnce(t *testing.T) {
 	}
 }
 
+func TestGitHubPRMergeResolverPreservesUnknownOnPaginationLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pulls := make([]map[string]any, 100)
+		for index := range pulls {
+			pulls[index] = mergedPullJSON(index+1, "main", "feature", strings.Repeat("a", 40), "acme/project")
+		}
+		_ = json.NewEncoder(w).Encode(pulls)
+	}))
+	defer server.Close()
+	resolver := newGitHubPRMergeResolver(server.Client(), server.URL, nil)
+	pulls, err := resolver.ResolveMergedPullRequests(context.Background(), "https://github.com/acme/project.git", "main", []string{strings.Repeat("b", 40)})
+	if err == nil || len(pulls) != 0 {
+		t.Fatalf("truncated provider history reported complete: pulls=%v err=%v", pulls, err)
+	}
+}
+
 func TestGitHubPRMergeResolver(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +163,40 @@ func TestGitHubPRMergeResolver(t *testing.T) {
 	}
 	if got[1].Number != 22 || got[1].HeadBranch != "feature/new" || got[1].MergeCommitSHA != newSHA {
 		t.Fatalf("second resolved PR = %#v, want newest incoming PR #22", got[1])
+	}
+}
+
+func TestGitHubPRMergeResolverPageContinuesPastThousand(t *testing.T) {
+	var requests atomic.Int32
+	sha := strings.Repeat("b", 40)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		if query := request.URL.Query(); query.Get("sort") != "created" || query.Get("direction") != "asc" || query.Get("state") != "all" || query.Has("base") {
+			t.Errorf("mutable PR fields can change page membership: %s", request.URL.RawQuery)
+		}
+		page, _ := strconv.Atoi(request.URL.Query().Get("page"))
+		if page == 11 {
+			pulls := make([]map[string]any, 100)
+			for index := range pulls {
+				pulls[index] = mergedPullJSON(1100+index, "main", "feature", strings.Repeat("a", 40), "acme/project")
+			}
+			json.NewEncoder(w).Encode(pulls)
+			return
+		}
+		if page != 12 {
+			t.Errorf("unexpected continuation page: %d", page)
+		}
+		json.NewEncoder(w).Encode([]any{mergedPullJSON(1201, "main", "old-feature", sha, "acme/project")})
+	}))
+	defer server.Close()
+	resolver := newGitHubPRMergeResolver(server.Client(), server.URL, nil)
+	pulls, next, err := resolver.ResolveMergedPullRequestsPage(context.Background(), "https://github.com/acme/project.git", "main", []string{sha}, 11)
+	if err != nil || next != 12 || len(pulls) != 0 || requests.Load() != 1 {
+		t.Fatalf("bounded page failed: pulls=%v next=%d requests=%d err=%v", pulls, next, requests.Load(), err)
+	}
+	pulls, next, err = resolver.ResolveMergedPullRequestsPage(context.Background(), "https://github.com/acme/project.git", "main", []string{sha}, next)
+	if err != nil || next != 0 || len(pulls) != 1 || pulls[0].Number != 1201 || requests.Load() != 2 {
+		t.Fatalf("later matching PR lost: pulls=%v next=%d err=%v", pulls, next, err)
 	}
 }
 

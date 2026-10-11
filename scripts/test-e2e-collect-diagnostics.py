@@ -17,13 +17,15 @@ class DiagnosticsTest(unittest.TestCase):
             source, output = root / "fixture", root / "output"
             source.mkdir()
             (source / "doctor-after.json").write_text('{"issues":["exact first failure"]}')
+            (source / "pub-git-evidence.out").write_text("real Git evidence scan failed: fixture diagnostics")
             for name in ("cookies", "auth.json", "session.jsonl", "srv.log", ".env", "agent.log", "boundary.json", "seed.jsonl"):
                 (source / name).write_text("must not be collected")
             (source / "repair.out").symlink_to(source / ".env")
             entries = diagnostics.collect(source, output)
-            self.assertEqual([entry["file"] for entry in entries], ["doctor-after.json"])
+            self.assertEqual([entry["file"] for entry in entries], ["doctor-after.json", "pub-git-evidence.out"])
             self.assertEqual((output / "doctor-after.json").read_bytes(), (source / "doctor-after.json").read_bytes())
-            self.assertEqual({p.name for p in output.iterdir()}, {"doctor-after.json", "index.json"})
+            self.assertEqual((output / "pub-git-evidence.out").read_bytes(), (source / "pub-git-evidence.out").read_bytes())
+            self.assertEqual({p.name for p in output.iterdir()}, {"doctor-after.json", "pub-git-evidence.out", "index.json"})
 
     def test_oversized_output_is_bounded_and_explicitly_truncated(self):
         with tempfile.TemporaryDirectory() as tmp:

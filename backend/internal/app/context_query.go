@@ -68,27 +68,27 @@ func (s *Service) QueryContext(ctx context.Context, repo domain.ContentHash, in 
 			}
 			ref.Target = out.Position
 			code := in.CodeCommit
+			inputs, e := newBranchQueryInputs(ctx, repo, view.Snapshots, view.History)
+			if e != nil {
+				return out, e
+			}
 			evidence, e := s.newCodeEvidence(ctx, repo)
 			if e != nil {
 				return out, e
 			}
 			if code == "" {
-				code, e = resolvedBranchCode(ctx, ref, view.History, evidence)
+				code, e = resolvedBranchCodeFromIndex(ctx, ref, inputs.history, evidence)
 				if e != nil {
 					return out, e
 				}
 			}
-			included, e := s.branchContext(ctx, ref, code, view.Snapshots, view.History, evidence)
+			included, e := s.branchContextFromInputs(ctx, ref, code, inputs, evidence)
 			if e != nil {
 				return out, e
 			}
-			byID := map[domain.ContentHash]domain.Snapshot{}
-			for _, snapshot := range view.Snapshots {
-				byID[snapshot.ID] = snapshot
-			}
 			out.Snapshots = []domain.Snapshot{}
 			for _, id := range included.SnapshotIDs {
-				out.Snapshots = append(out.Snapshots, byID[id])
+				out.Snapshots = append(out.Snapshots, inputs.snapshots[id])
 			}
 			out.Inclusion = &included
 			out.Branch = name

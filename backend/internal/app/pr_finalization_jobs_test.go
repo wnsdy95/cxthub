@@ -73,6 +73,7 @@ func TestPRFinalizationAttentionAllowsLaterJobAndExactPublicationRecovery(t *tes
 	}
 	newPR := old.PR
 	newPR.Number, newPR.HeadSHA, newPR.MergeSHA = 176, strings.Repeat("c", 40), strings.Repeat("d", 40)
+	recordPRMergeChain(t, svc, "https://github.com/acme/finalization", old.PR.MergeSHA, newPR.MergeSHA)
 	newProof := proof
 	newProof.ID, newProof.Kind, newProof.GitAfter = strings.Repeat("2", 32), "position", newPR.HeadSHA
 	newProof.Target = prSnapshot(t, st, old.RepoID, "newer source", proof.Target)

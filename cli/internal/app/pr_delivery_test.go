@@ -114,6 +114,66 @@ func TestPRDiscoveryHandoffDoesNotRequirePullOrSourcePublication(t *testing.T) {
 	}
 }
 
+func TestReplayPRDeliveriesReportsPendingUntilServerAcceptance(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	repo := string(domain.HashContent([]byte("delivery-replay")))
+	remote := &prQueueRemote{fail: true}
+	service := newTestSyncService(storage.NewFileStore(root), remote, nil)
+	for _, branch := range []string{"main", "release"} {
+		pr := outbound.MergedPullRequest{Number: len(branch), BaseBranch: branch, HeadBranch: "feature", HeadSHA: strings.Repeat("a", 40), MergeCommitSHA: strings.Repeat("b", 40)}
+		if err := service.QueuePullRequest(ctx, inbound.SyncInput{RepoID: repo}, pr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service = newTestSyncService(storage.NewFileStore(root), remote, nil)
+	replayer, ok := any(service).(interface {
+		ReplayPRDeliveries(context.Context, inbound.SyncInput) (bool, error)
+	})
+	if !ok {
+		t.Fatal("production service cannot report remaining delivery responsibility")
+	}
+	input := inbound.SyncInput{RepoID: repo, Ref: "main"}
+	remote.numbers = nil
+	if pending, err := replayer.ReplayPRDeliveries(ctx, input); !pending || err != nil {
+		t.Fatalf("offline delivery reported accepted: pending=%v err=%v", pending, err)
+	}
+	remote.fail = false
+	if pending, err := replayer.ReplayPRDeliveries(ctx, input); pending || err != nil {
+		t.Fatalf("online delivery did not drain: pending=%v err=%v", pending, err)
+	}
+	if !reflect.DeepEqual(remote.numbers, []int{4, 4}) {
+		t.Fatalf("scoped replay submitted unrelated deliveries: %v", remote.numbers)
+	}
+	remaining, err := storage.NewFileStore(root).PendingPRDeliveries(ctx, repo)
+	if err != nil || len(remaining) != 1 || remaining[0].BaseBranch != "release" {
+		t.Fatalf("scoped replay lost unrelated responsibility: %+v %v", remaining, err)
+	}
+	if pending, err := replayer.ReplayPRDeliveries(ctx, inbound.SyncInput{RepoID: repo}); pending || err != nil {
+		t.Fatalf("unscoped replay did not drain: %v %v", pending, err)
+	}
+}
+
+func TestReplayPRDeliveriesRetainsResponsibilityWithoutSubmitCapability(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewFileStore(t.TempDir())
+	repo := string(domain.HashContent([]byte("delivery-capability")))
+	service := newTestSyncService(store, &prQueueRemote{fail: true}, nil)
+	if err := service.QueuePullRequest(ctx, inbound.SyncInput{RepoID: repo}, outbound.MergedPullRequest{Number: 42, BaseBranch: "main", HeadBranch: "feature", HeadSHA: strings.Repeat("a", 40), MergeCommitSHA: strings.Repeat("b", 40)}); err != nil {
+		t.Fatal(err)
+	}
+	service = newTestSyncService(store, nil, nil)
+	replayer, ok := any(service).(interface {
+		ReplayPRDeliveries(context.Context, inbound.SyncInput) (bool, error)
+	})
+	if !ok {
+		t.Fatal("production service lacks durable delivery replay")
+	}
+	if pending, err := replayer.ReplayPRDeliveries(ctx, inbound.SyncInput{RepoID: repo}); !pending || err != nil {
+		t.Fatalf("missing submission capability lost responsibility: %v %v", pending, err)
+	}
+}
+
 type scopedPRSyncRemote struct {
 	prQueueRemote
 	refs   []domain.Ref

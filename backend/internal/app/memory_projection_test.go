@@ -165,6 +165,7 @@ func TestPRPromotionProjectsMergedMemoryBeforeAnyMemorize(t *testing.T) {
 	if _, err := st.PutRepo(ctx, domain.Repo{ID: repo, DefaultBranch: "main", GitRemoteURL: "https://github.com/a/b"}); err != nil {
 		t.Fatal(err)
 	}
+	recordPRMergeChain(t, svc, "https://github.com/a/b", strings.Repeat("3", 40), strings.Repeat("4", 40))
 	origin := prSnapshot(t, st, repo, "origin")
 	base := prSnapshot(t, st, repo, "base", origin)
 	if err := st.CompareAndSwapRef(ctx, repo, domain.Ref{RepoID: repo, Kind: domain.RefBranch, Name: "main", Target: base}, ""); err != nil {

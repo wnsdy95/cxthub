@@ -620,3 +620,68 @@ stopped at the unchanged 60-second deadline while reading a fetched document
 (60.28 seconds wall, 49.05 seconds user CPU). It did not report baseline absence.
 The isolated baseline and cancellation regressions pass, but this live fetch
 still does not complete; full-history validation cost remains under #290.
+
+# Durable direct-merge delivery (2026-10-10)
+
+Issue #492 preserves incoming Git ranges independently of PR discovery. Before
+remote work, the CLI records the resolved before/after object IDs, oldest-first
+commit IDs, repository and context-branch identity, local branch name, hashed
+Git/context destinations, and the observed rewrite mapping. Later ORIG_HEAD or
+rewrite-map changes do not redefine that evidence. Each original range is one
+durable record, validated against its content-derived name; it is not split
+into repeated generic full-fetch executions merely to match PR API batch sizes.
+Raw destination URLs and credentials are not written to this journal.
+
+Post-merge/post-rewrite and unscoped `cxt push [origin]` / `cxt pull [origin]`
+retry saved work on the original branch. Named non-origin remotes and selected
+ref publication do not replay it. Each invocation selects at most one range,
+with branch-serialized expiring claims and fenced acknowledgments. Failed
+planned predecessors are retried before newer ranges, not overtaken by them.
+Source-unavailable discovery remains distinct and is revisited oldest-attempt
+first after active deliveries. Local
+file locks cover only metadata operations, never network work. A crashed worker
+leaves its claim recoverable; a cancelled worker records its failure using a
+separate bounded local-write context. This is retry on synchronization, not a
+new always-running background daemon.
+
+If an initially absent source arrives only after a later recorded merge has
+already completed, automatic append must not make that older source the newest
+tip. The exact frozen candidate is retained with `historical insertion requires
+review`, unless server inclusion is already proven. Retrying does not bypass
+this guard. Automatic insertion into an already-completed historical position
+is not provided by the current append API; no graph edge or capture is invented.
+
+Candidate snapshot IDs are frozen before the first append. A frozen retry reads
+those exact roots, without discovering or hydrating newer same-label snapshots.
+Missing sources
+remain pending rather than being reported complete. Capability negotiation is
+sticky: once a job observes selected branch plans, a later unsupported peer
+cannot silently downgrade it to full transfer. Replay requires the original
+repository/destinations/branch identity and a selected Git head containing the
+recorded merge. The context destination includes CXT_REMOTE's API-only fallback
+semantics, and production execution uses an explicitly bound transport. Scope,
+Git ancestry and lease ownership are rechecked after remote observation and
+immediately before each write. A recreated same-name branch cannot inherit its
+authority.
+
+Delivery reuses the existing verified remote-observation and lossless append
+policy. It does not infer remote inclusion from local grafts. After append, a
+new verified server observation must contain every frozen candidate before the
+journal is acknowledged. A lost response or acknowledgement is retried with
+idempotent inclusion checks; this is not an exactly-once network transport.
+Completed receipts remain to suppress repeated discovery of the same range.
+`cxt sync status --json` exposes unresolved `merge_deliveries` and read failures
+without fetching documents, auditing all objects, or modifying the queue.
+
+Compatibility: no server wire schema, snapshot identity, natural parent, memory
+format, or timeout is changed. Legacy embedded CLI containers without identity
+services retain the existing non-durable helper. Production composition supplies
+those services. Existing ranges lost before this change are not reconstructed
+from current ORIG_HEAD, labels, or an unrelated current conversation. This work
+does not resolve #290's full-fetch CPU/latency bottleneck or substitute for
+exact-head PR publication evidence such as #494.
+
+Regression coverage includes changed/deleted ORIG_HEAD, delayed source arrival,
+frozen candidates and rewrites, lost append responses, unsuccessful post-append
+verification, concurrent workers, expired claims, scope changes, backward code
+selection, corrupt journals/plans, capability loss, and read-only status.

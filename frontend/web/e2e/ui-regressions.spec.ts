@@ -158,6 +158,47 @@ test('completed PR deliveries retain failed attempts and distinguish unrecorded 
   expect(unexpected).toEqual([]);
 });
 
+test('PR association diagnostics are collapsed and never treat unknown evidence as no evidence', async ({ page }) => {
+  const base = publicRepositoryApi([auditSnapshot(pushedHead, 'main', [], 'Current main context', 1)], [{ kind: 'branch', name: 'main', target: pushedHead }]);
+  const { pageErrors, unexpected } = await openGraph(page, request => {
+    if (request.pathname.endsWith('/prs/promotions')) return { body: [
+      { id: 'association-recorded', repo_id: repoId, pr: { number: 488, head_branch: 'feature', base_branch: 'main' }, state: 'completed', attempts: 1, updated_at: '2026-10-11T01:00:00Z', association: {
+        provider_history: 'recorded_complete', provider_checkpoint_count: 1, participation: 'recorded', participation_count: 3, publication_count: 2,
+        contribution: 'recorded', contribution_count: 1, current_applicability: 'not_evaluated',
+      } },
+      { id: 'association-unknown', repo_id: repoId, pr: { number: 489, head_branch: 'another-feature', base_branch: 'main' }, state: 'waiting', attempts: 1, updated_at: '2026-10-11T01:00:00Z', association: {
+        provider_history: 'unknown', participation: 'unknown', contribution: 'unavailable', current_applicability: 'not_evaluated',
+      } },
+      { id: 'association-legacy', repo_id: repoId, pr: { number: 487, head_branch: 'older-feature', base_branch: 'main' }, state: 'completed', attempts: 1, updated_at: '2026-10-11T01:00:00Z' },
+    ] };
+    return base(request);
+  });
+  const panel = page.locator('.pr-promotions');
+  await panel.locator(':scope > summary').click();
+  const recorded = panel.locator(':scope > ul > li').filter({ hasText: 'PR #488' });
+  const details = recorded.locator('.pr-association');
+  await expect(details).not.toHaveAttribute('open', '');
+  await expect(details.getByText('3 witness records', { exact: false })).not.toBeVisible();
+  await details.locator(':scope > summary').click();
+  await expect(details).toContainText('3 witness records');
+  await expect(details).toContainText('2 distinct publications');
+  await expect(details).toContainText('1 contribution record');
+  await expect(details).toContainText('not revalidated associations');
+  await expect(details).toContainText('Provider scanner availability is unknown');
+  await expect(details).toContainText('Current code applicability is not evaluated');
+  await expect(recorded.locator('.pr-diagnostics')).not.toHaveAttribute('open', '');
+  const unknown = panel.locator(':scope > ul > li').filter({ hasText: 'PR #489' }).locator('.pr-association');
+  await unknown.locator(':scope > summary').click();
+  await expect(unknown).toContainText('Unknown within this read');
+  await expect(unknown).toContainText('Storage unavailable or unreadable');
+  await expect(unknown).not.toContainText('0 witness records');
+  const legacy = panel.locator(':scope > ul > li').filter({ hasText: 'PR #487' }).locator('.pr-association');
+  await legacy.locator(':scope > summary').click();
+  await expect(legacy).toContainText('Association diagnostics are not available in this response');
+  expect(pageErrors).toEqual([]);
+  expect(unexpected).toEqual([]);
+});
+
 test('large graph windows preserve paths, external selection, keyboard access and live scroll anchors', async ({ page }, testInfo) => {
   const hash = (i: number) => `sha256:${i.toString(16).padStart(64, '0')}`;
   let snapshots = Array.from({ length: 1000 }, (_, i) => auditSnapshot(hash(i + 1), 'main', i < 999 ? [hash(i + 2)] : [], `Large graph row ${i}`, 1000 - i));
@@ -1529,6 +1570,34 @@ test('independent API and MCP complete remote OAuth consent, PKCE, read-only cal
   expect(catalogue.next_cursor).toBe('');
 
   const me = await (await api.get('/api/v1/me')).json();
+  const repositoryResponse = await api.post('/api/v1/repositories', {
+    headers: { Origin: origin, 'X-Cxt-CSRF': '1' }, data: { name: 'MCP_Link_Status' },
+  });
+  expect(repositoryResponse.ok(), await repositoryResponse.text()).toBe(true);
+  const repository = await repositoryResponse.json();
+  const remote = `${origin}/${me.username}/${repository.slug}`;
+  const contextRepo = `sha256:${createHash('sha256').update(remote.replace(/^https?:\/\//, '').toLowerCase()).digest('hex')}`;
+  const contextRepository = await api.post('/api/v1/repos', {
+    headers: { Origin: origin, 'X-Cxt-CSRF': '1' },
+    data: { id: contextRepo, remote_url: remote, default_branch: 'main' },
+  });
+  expect(contextRepository.ok(), await contextRepository.text()).toBe(true);
+  for (const kind of ['publication', 'integration', 'memory']) {
+    const statusResponse = await api.get(`/api/v1/repos/${encodeURIComponent(contextRepo)}/git/associations?kind=${kind}`);
+    expect(statusResponse.ok()).toBe(true);
+    const status = await statusResponse.json();
+    expect(status.items).toEqual([]);
+    expect(status.discovery.state).toBe('no_origin');
+    expect(status.current_applicability).toBe('not_evaluated');
+    const toolResponse = await api.post('/mcp', {
+      headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/json, text/event-stream' },
+      data: { jsonrpc: '2.0', id: `status-${kind}`, method: 'tools/call', params: { name: 'context_link_status', arguments: { repository: contextRepo, kind } } },
+    });
+    expect(toolResponse.ok()).toBe(true);
+    const tool = await toolResponse.json();
+    expect(tool.result.isError).not.toBe(true);
+    expect(JSON.parse(tool.result.content[0].text)).toEqual(status);
+  }
   await api.patch('/api/v1/me', {headers:{Origin:origin,'X-Cxt-CSRF':'1'},data:{locale:'en'}});
   await page.goto(`/${me.username}`);
   await page.getByRole('button', {name:'Profile menu',exact:true}).click();
@@ -1892,14 +1961,14 @@ test('consecutive same-tip PR joins stay on main while unexplained birth gaps st
   expect(unexpected).toEqual([]);
 });
 
-test('PR delivery distinguishes waiting and completed jobs without viewer retry authority', async ({ page }) => {
+for (const [reason, message] of [['source_context_pending','Waiting for the exact source context'],['ordering_evidence_pending','Waiting for verified Git ordering']]) test(`PR delivery explains ${reason} without viewer retry authority`, async ({ page }) => {
   const snapshot = { id: pushedHead, repo_id: repoId, doc_hash: pushedHead, branch: 'main', parents: [], provider: 'codex', created_at: '2026-09-16T01:00:00Z' };
   const base = publicRepositoryApi([snapshot], [{ kind: 'branch', name: 'main', target: pushedHead }]);
-  const state = { id: 'job-1', repo_id: repoId, pr: { number: 42, base_branch: 'main', head_branch: 'feature/late' }, state: 'waiting', reason: 'source_context_pending', attempts: 1 };
+  const state = { id: 'job-1', repo_id: repoId, pr: { number: 42, base_branch: 'main', head_branch: 'feature/late' }, state: 'waiting', reason, attempts: 1 };
   const { pageErrors, unexpected } = await openGraph(page, request => request.pathname.endsWith('/prs/promotions') ? { body: [state] } : base(request));
   await expect(page.locator('.pr-promotions > summary')).toContainText('1 pending');
   await page.locator('.pr-promotions > summary').click();
-  await expect(page.locator('.pr-promotions')).toContainText('Waiting for the exact source context');
+  await expect(page.locator('.pr-promotions')).toContainText(message);
   await expect(page.locator('.pr-promotions button')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
   expect(unexpected).toEqual([]);
@@ -2494,6 +2563,33 @@ test('main includes PR conversations and evidence refreshes the graph without au
  await expectRenderedGraphPath(page,head,'graph:merge:integration-1');
  await expectRenderedGraphPath(page,'graph:merge:integration-1','graph:merge:integration-0');
  expect(fullReads).toBe(before);expect(patchReads).toBeGreaterThan(0);
+ expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
+});
+
+test('one PR merge preserves birth and supplemental context SVG paths', async ({page}) => {
+ const baseID=id('9'), supplement=appendedRoot, head=pushedHead;
+ const snapshots=[auditSnapshot(head,'main',[baseID],'Current main',4),auditSnapshot(supplement,'feature',[baseID],'Supplemental context',3),auditSnapshot(baseID,'main',[],'Original context',0)];
+ const refs=[{kind:'branch',name:'main',branch_id:'main-id',target:head,repo_id:repoId}];
+ const birth={id:'supplement-birth',repo_id:repoId,branch:'feature',branch_id:'feature-id',kind:'birth',source:baseID,target:baseID,created_at:'2026-01-01T00:00:00Z'};
+ const completions=[baseID,supplement].map((source,index)=>({id:`supplement-merge-${index}`,repo_id:repoId,branch:'main',branch_id:'main-id',source_branch_id:'feature-id',kind:'pr-merge',source,target:head,pr_completed:true,
+  pr:{number:488,base_branch:'main',head_branch:'feature',head_sha:'a'.repeat(40),merge_sha:'d'.repeat(40)},created_at:'2026-01-03T00:00:00Z'}));
+ const history=[birth,...completions];
+ const inclusion={branch_id:'main-id',snapshot_id:head,code_commit:'e'.repeat(40),reason:'selected_code',roots:[baseID,supplement,head],snapshot_ids:[head,supplement,baseID],merges:completions.map(event=>({destination_branch_id:'main-id',event_id:event.id,source:event.source,merge_sha:event.pr.merge_sha,pr_number:488,state:'included',reason:'verified_git_order',order:1}))};
+ const base=publicRepositoryApi(snapshots,refs,[],[],[],history);
+ const {pageErrors,unexpected}=await openGraph(page,request=>request.pathname.endsWith('/view')?{body:{snapshots,refs,history,pending:[],unsync:[],reflog:[],revision:{graph:'1',pending:'1',evidence:'1'},graph:{branch_contexts:{main:inclusion}}}}:base(request));
+ const assertPaths=async()=>{
+  const operation=page.locator('.graph-row[data-graph-event="merge"]');
+  await expect(operation).toHaveCount(1);
+  const merge=await operation.getAttribute('data-graph-id');
+  expect(merge).toBeTruthy();
+  await expectRenderedGraphPath(page,head,merge!);
+  await expectRenderedGraphPath(page,merge!,supplement);
+  await expectRenderedGraphPath(page,merge!,'graph:birth:supplement-birth');
+  await expectRenderedGraphPath(page,'graph:birth:supplement-birth',baseID);
+ };
+ await assertPaths();
+ await page.reload();
+ await assertPaths();
  expect(pageErrors).toEqual([]);expect(unexpected).toEqual([]);
 });
 

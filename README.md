@@ -210,9 +210,13 @@ make test
 make typecheck
 make lint
 make e2e
-make e2e-sync
+CXT_E2E_DSN="${DISPOSABLE_POSTGRES_DSN:?set a disposable PostgreSQL 16 DSN}" make e2e-sync
 make public-check
 ```
+
+Conditional automatic-merge append requires PostgreSQL; FS rejects it and leaves
+delivery pending. Running sync E2E without `CXT_E2E_DSN` covers legacy FS behavior,
+not this transactional feature. See [storage requirements](docs/AUTOMATIC_CONTEXT_LINKING.md#conditional-append-storage-requirement).
 
 PostgreSQL changes should also run `make test-postgres` against PostgreSQL 16.
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.

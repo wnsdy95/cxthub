@@ -99,6 +99,7 @@ func (g *GitHubConnections) Run(ctx context.Context) {
 }
 func (g *GitHubConnections) Tick(ctx context.Context) error {
 	ctx = g.core.workerDocumentIdentityContext(ctx)
+	var failures []error
 	all, err := g.store.ListGitHubConnections(ctx)
 	if err != nil {
 		return err
@@ -108,7 +109,7 @@ func (g *GitHubConnections) Tick(ctx context.Context) error {
 			continue
 		}
 		if err = g.reconcile(ctx, c.NamespaceID); err != nil && !errors.Is(err, domain.ErrConflict) && !errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
-			return err
+			failures = append(failures, err)
 		}
 	}
 	jobs, err := g.store.ListGitHubDeliveries(ctx)
@@ -120,10 +121,10 @@ func (g *GitHubConnections) Tick(ctx context.Context) error {
 			continue
 		}
 		if err = g.deliver(ctx, j.ID); err != nil && !errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
-			return err
+			failures = append(failures, err)
 		}
 	}
-	return nil
+	return errors.Join(append(failures, g.reconcilePRHistories(ctx, 4))...)
 }
 func (g *GitHubConnections) reconcile(ctx context.Context, ns string) error {
 	var c domain.GitHubConnection
@@ -475,6 +476,8 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 		} `json:"repository"`
 		Number int `json:"number"`
 		PR     struct {
+			ID     int64  `json:"id"`
+			Number int    `json:"number"`
 			Merged bool   `json:"merged"`
 			Merge  string `json:"merge_commit_sha"`
 			Head   struct {
@@ -499,13 +502,41 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 	if json.Unmarshal(j.Body, &p) != nil {
 		return domain.ErrValidation
 	}
-	if j.Kind == "pull_request" && (p.Action != "closed" || !p.PR.Merged || p.PR.Head.Repo.ID != p.Repository.ID) {
-		return nil
+	if j.Kind == "pull_request" {
+		switch p.Action {
+		case "opened", "reopened", "synchronize":
+			if p.PR.Merged {
+				return domain.ErrIntegrity
+			}
+		case "closed":
+			if !p.PR.Merged {
+				return nil
+			}
+		default:
+			return nil
+		}
+		if p.Installation.ID <= 0 || p.Repository.ID <= 0 || p.PR.ID <= 0 || p.Number <= 0 ||
+			domain.ValidateGitOID(p.PR.Head.SHA) != nil || domain.ValidateBranchName(p.PR.Head.Ref) != nil || domain.ValidateBranchName(p.PR.Base.Ref) != nil {
+			return domain.ErrValidation
+		}
+		if p.PR.Head.Repo.ID <= 0 || p.PR.Base.Repo.ID != p.Repository.ID || (p.PR.Number != 0 && p.PR.Number != p.Number) {
+			return domain.ErrIntegrity
+		}
+		if p.Action == "synchronize" && (domain.ValidateGitOID(p.Before) != nil || domain.ValidateGitOID(p.After) != nil || p.After != p.PR.Head.SHA) {
+			return domain.ErrValidation
+		}
+		if p.Action == "closed" && (domain.ValidateGitOID(p.PR.Merge) != nil || len(p.PR.Merge) != len(p.PR.Head.SHA)) {
+			return domain.ErrValidation
+		}
+		if p.PR.Head.Repo.ID != p.Repository.ID {
+			return nil
+		}
 	}
 	all, err := g.store.ListGitHubConnections(ctx)
 	if err != nil {
 		return err
 	}
+	applied := false
 	for _, c := range all {
 		if c.Installation.ID != p.Installation.ID || !c.Enabled {
 			continue
@@ -515,13 +546,37 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 				continue
 			}
 			if j.Kind == "pull_request" {
-				if p.PR.Base.Repo.ID != p.Repository.ID {
-					return domain.ErrIntegrity
-				}
-				pr := domain.PullRequestMerge{Number: p.Number, BaseBranch: p.PR.Base.Ref, HeadBranch: p.PR.Head.Ref, HeadSHA: p.PR.Head.SHA, MergeSHA: p.PR.Merge}
-				if err = g.enqueuePR(ctx, c, b, pr); err != nil {
+				err = repositoryWriteError(evidenceWriteContext(g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))), g.core, b.ContextRepoID, func(tx context.Context) error {
+					repo, e := g.binding(tx, c, b)
+					if e != nil {
+						return e
+					}
+					st, ok := g.core.meta.(outbound.GitScanStore)
+					if !ok {
+						return fmt.Errorf("Git scan queue unavailable")
+					}
+					metadata := &domain.GitPullRequestObservation{InstallationID: p.Installation.ID, RepositoryID: p.Repository.ID, ID: p.PR.ID, Number: p.Number, Action: p.Action, HeadRepositoryID: p.PR.Head.Repo.ID, BaseRepositoryID: p.PR.Base.Repo.ID, BaseRef: p.PR.Base.Ref}
+					observation := domain.GitRefObservation{RepoID: repo.ID, GitOrigin: repo.GitRemoteURL, Source: "github-pull-request", Ref: "refs/heads/" + p.PR.Head.Ref, After: p.PR.Head.SHA, Delivery: j.ID, PullRequest: metadata}
+					if p.Action == "synchronize" {
+						observation.Before = p.Before
+					}
+					if p.Action == "closed" {
+						metadata.MergeSHA = p.PR.Merge
+					}
+					if e := st.RecordGitRefObservation(tx, observation.WithID(), time.Now().UTC()); e != nil {
+						return e
+					}
+					if p.Action == "closed" {
+						pr := domain.PullRequestMerge{Number: p.Number, BaseBranch: p.PR.Base.Ref, HeadBranch: p.PR.Head.Ref, HeadSHA: p.PR.Head.SHA, MergeSHA: p.PR.Merge}
+						_, e = g.core.submitPRPromotion(tx, b.ContextRepoID, pr)
+						return e
+					}
+					return nil
+				})
+				if err != nil {
 					return err
 				}
+				applied = true
 			} else {
 				if !strings.HasPrefix(p.Ref, "refs/heads/") {
 					continue
@@ -541,7 +596,8 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 					if !ok {
 						return fmt.Errorf("Git scan queue unavailable")
 					}
-					observation := domain.GitRefObservation{RepoID: repo.ID, GitOrigin: repo.GitRemoteURL, Source: "github-push", Ref: p.Ref, Before: zero(p.Before), After: zero(p.After), Forced: p.Forced, Delivery: j.ID}.WithID()
+					identity := &domain.GitProviderObservation{InstallationID: c.Installation.ID, RepositoryID: b.ExternalID}
+					observation := domain.GitRefObservation{RepoID: repo.ID, GitOrigin: repo.GitRemoteURL, Source: "github-push", Ref: p.Ref, Before: zero(p.Before), After: zero(p.After), Forced: p.Forced, Delivery: j.ID, Provider: identity}.WithID()
 					return st.RecordGitRefObservation(tx, observation, time.Now().UTC())
 				})
 				if err != nil {
@@ -549,6 +605,9 @@ func (g *GitHubConnections) applyDelivery(ctx context.Context, j domain.GitHubDe
 				}
 			}
 		}
+	}
+	if j.Kind == "pull_request" && !applied {
+		return domain.ErrNotFound
 	}
 	return nil
 }

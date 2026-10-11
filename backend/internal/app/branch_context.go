@@ -3,7 +3,6 @@ package app
 import (
 	"container/heap"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,27 +15,32 @@ import (
 // an integration happened; verified Git ancestry determines its inclusion at
 // the selected code. Neither mutable graft placement nor receipt time does.
 func (s *Service) branchContext(ctx context.Context, ref domain.Ref, code string, snapshots []domain.Snapshot, history []domain.HistoryEvent, evidence *codeEvidence) (domain.BranchContext, error) {
+	inputs, err := newBranchQueryInputs(ctx, ref.RepoID, snapshots, history)
+	if err != nil {
+		return domain.BranchContext{}, err
+	}
+	return s.branchContextFromInputs(ctx, ref, code, inputs, evidence)
+}
+
+func (s *Service) branchContextFromInputs(ctx context.Context, ref domain.Ref, code string, inputs *branchQueryInputs, evidence *codeEvidence) (domain.BranchContext, error) {
 	out := domain.BranchContext{BranchID: ref.BranchID, SnapshotID: ref.Target, CodeCommit: code, Reason: "selected_code", Merges: []domain.BranchContextMerge{}, Roots: []domain.ContentHash{ref.Target}, SnapshotIDs: []domain.ContentHash{}}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	if inputs.history.repo != ref.RepoID {
+		return out, domain.ErrIntegrity
+	}
 	if code != "" && domain.ValidateGitOID(code) != nil {
 		return out, domain.ErrValidation
 	}
 	if code == "" {
 		out.Reason = "code_position_unavailable"
 	}
-	byID := map[domain.ContentHash]domain.Snapshot{}
-	for _, snap := range snapshots {
-		if snap.RepoID != ref.RepoID {
-			return out, domain.ErrIntegrity
-		}
-		if _, exists := byID[snap.ID]; exists {
-			return out, domain.ErrIntegrity
-		}
-		byID[snap.ID] = snap
-	}
+	byID := inputs.snapshots
 	if _, ok := byID[ref.Target]; !ok {
 		return out, domain.ErrNotFound
 	}
-	scopes, err := inheritedIntegrationScopes(ctx, ref.BranchID, byID, history)
+	scopes, err := inheritedIntegrationScopes(ctx, ref.BranchID, byID, inputs.history)
 	if err != nil {
 		return out, err
 	}
@@ -60,45 +64,51 @@ func (s *Service) branchContext(ctx context.Context, ref domain.Ref, code string
 		}
 		id = commit.Parents[0]
 	}
-	for _, receipt := range history {
-		if receipt.RepoID != string(ref.RepoID) {
-			return out, domain.ErrIntegrity
+	var receipts []int
+	for scope := range scopes {
+		receipts = append(receipts, inputs.history.receipts[scope]...)
+	}
+	sort.Ints(receipts)
+	for _, position := range receipts {
+		if err := ctx.Err(); err != nil {
+			return out, err
 		}
-		if receipt.Kind != "pr-merge" || receipt.PRCompleted || receipt.PR == nil || !scopes[receipt.BranchID] {
-			continue
-		}
-		complete, err := hasPRCompletion(history, receipt)
+		receipt := inputs.history.rows[position]
+		completion, complete, err := inputs.history.completion(receipt)
 		if err != nil {
 			return out, err
 		}
 		if !complete {
 			continue
 		}
-		completion := sha256.Sum256([]byte(receipt.ID + ":completed"))
-		m := domain.BranchContextMerge{EventID: fmt.Sprintf("%x", completion[:16]), DestinationBranchID: receipt.BranchID, Source: receipt.Source, MergeSHA: receipt.PR.MergeSHA, PRNumber: receipt.PR.Number, State: "review", Reason: "git_evidence_pending", Order: -1}
-		for _, h := range history {
-			if h.ID == m.EventID {
-				m.Before = h.SharedTarget
-				break
-			}
+		out.Merges = append(out.Merges, domain.BranchContextMerge{DeliveryAcknowledged: true, EventID: completion.ID, DestinationBranchID: receipt.BranchID, Source: receipt.Source, MergeSHA: receipt.PR.MergeSHA, PRNumber: receipt.PR.Number, Before: completion.SharedTarget, State: "review", Reason: "git_evidence_pending", Order: -1})
+	}
+	contributions, err := s.contextContributionsForEvidence(ctx, ref.RepoID, inputs.history.rows, evidence)
+	if err != nil {
+		return out, err
+	}
+	appendContributionMerges(&out, scopes, contributions)
+	for index := range out.Merges {
+		merge := &out.Merges[index]
+		if merge.Reason == "participation_evidence_conflict" {
+			continue
 		}
-		if _, exists := byID[m.Source]; !exists {
-			m.Reason = "source_unavailable"
-		} else if n, included := order[m.MergeSHA]; included {
-			m.State, m.Reason, m.Order = "included", "verified_git_order", n
+		if _, exists := byID[merge.Source]; !exists {
+			merge.Reason = "source_unavailable"
+		} else if rank, included := order[merge.MergeSHA]; included {
+			merge.State, merge.Reason, merge.Order = "included", "verified_git_order", rank
 		} else if code != "" {
-			relation, err := evidence.relation(ctx, m.MergeSHA, code)
+			relation, err := evidence.relation(ctx, merge.MergeSHA, code)
 			if err != nil {
 				return out, err
 			}
 			if relation == "not_ancestor" {
-				m.State, m.Reason = "not_selected", "merge_not_in_selected_code"
+				merge.State, merge.Reason = "not_selected", "merge_not_in_selected_code"
 			}
 			if relation == "ancestor" {
-				m.Reason = "integration_order_unavailable"
+				merge.Reason = "integration_order_unavailable"
 			}
 		}
-		out.Merges = append(out.Merges, m)
 	}
 	sort.Slice(out.Merges, func(i, j int) bool {
 		a, b := out.Merges[i], out.Merges[j]
@@ -199,8 +209,9 @@ func (s *Service) branchContext(ctx context.Context, ref domain.Ref, code string
 	out.Roots = append(out.Roots, ref.Target)
 	// Exact branch publications can order ordinary captures between PR merges.
 	// Conflicting same-snapshot associations stay at their oldest introduction.
-	for _, h := range history {
-		if h.BranchID != ref.BranchID || h.Kind != "publish" || h.Source != h.Target || !allowed[h.Target] {
+	for _, position := range inputs.history.byBranch[ref.BranchID] {
+		h := inputs.history.rows[position]
+		if h.Kind != "publish" || h.Source != h.Target || !allowed[h.Target] {
 			continue
 		}
 		if n, ok := order[h.GitAfter]; ok && ranks[h.Target] < 0 {
@@ -216,24 +227,14 @@ func (s *Service) branchContext(ctx context.Context, ref domain.Ref, code string
 // timestamps, mutable grafts or a reused binding's name-parent. Inclusion is
 // still checked against the selected Git code below. Orphans have no birth
 // source and do not inherit conversation membership through this path.
-func inheritedIntegrationScopes(ctx context.Context, branch string, snapshots map[domain.ContentHash]domain.Snapshot, history []domain.HistoryEvent) (map[string]bool, error) {
+func inheritedIntegrationScopes(ctx context.Context, branch string, snapshots map[domain.ContentHash]domain.Snapshot, history *branchHistoryIndex) (map[string]bool, error) {
 	scopes := map[string]bool{branch: true}
-	births := map[string][]domain.ContentHash{}
-	publications := map[domain.ContentHash][]string{}
-	for _, h := range history {
-		if h.Kind == "birth" && h.Source != "" {
-			births[h.BranchID] = append(births[h.BranchID], h.Source)
-		}
-		if h.Kind == "publish" && h.Source == h.Target && h.GitAfter != "" {
-			publications[h.Target] = append(publications[h.Target], h.BranchID)
-		}
-	}
 	queue := []string{branch}
 	seen := map[domain.ContentHash]bool{}
 	for len(queue) > 0 {
 		b := queue[len(queue)-1]
 		queue = queue[:len(queue)-1]
-		stack := append([]domain.ContentHash{}, births[b]...)
+		stack := append([]domain.ContentHash{}, history.births[b]...)
 		for len(stack) > 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -247,7 +248,7 @@ func inheritedIntegrationScopes(ctx context.Context, branch string, snapshots ma
 			if len(seen) > maxProjectionSnapshots {
 				return nil, fmt.Errorf("branch inheritance exceeds %d snapshots", maxProjectionSnapshots)
 			}
-			for _, scope := range publications[id] {
+			for _, scope := range history.publications[id] {
 				if !scopes[scope] {
 					scopes[scope] = true
 					queue = append(queue, scope)
@@ -327,12 +328,28 @@ func (q *branchContextQueue) Pop() any {
 // receipts or a replacement digest. All readers use the existing checked
 // projection walker, including its provenance deduplication and byte bounds.
 func (s *Service) projectBranchMemory(ctx context.Context, repo domain.ContentHash, inclusion domain.BranchContext, snapshots []domain.Snapshot) (domain.MemoryProjection, error) {
+	history, err := s.ListHistory(ctx, repo)
+	if err != nil {
+		return domain.MemoryProjection{}, err
+	}
+	contributions, err := s.contextContributionsForEvidence(ctx, repo, history, nil)
+	if err != nil {
+		return domain.MemoryProjection{}, err
+	}
+	return s.projectBranchMemoryWithContributions(ctx, repo, inclusion, snapshots, contributions)
+}
+
+func (s *Service) projectBranchMemoryWithContributions(ctx context.Context, repo domain.ContentHash, inclusion domain.BranchContext, snapshots []domain.Snapshot, contributions []contextContributionProjection) (domain.MemoryProjection, error) {
+	plan, err := s.prepareContextContributionMemory(ctx, repo, inclusion, snapshots, contributions)
+	if err != nil {
+		return domain.MemoryProjection{}, err
+	}
 	allowed := map[domain.ContentHash]bool{}
 	for _, id := range inclusion.SnapshotIDs {
 		allowed[id] = true
 	}
 	rows := make([]domain.Snapshot, 0, len(allowed)+1)
-	for _, snap := range snapshots {
+	for _, snap := range plan.Snapshots {
 		if !allowed[snap.ID] {
 			continue
 		}
@@ -357,7 +374,10 @@ func (s *Service) projectBranchMemory(ctx context.Context, repo domain.ContentHa
 	result, err := ProjectMemory(ctx, branchProjectionSource{serviceProjectionSource{s.meta, s.blobs}, rows}, repo, id)
 	result.Digest.SnapshotID = inclusion.SnapshotID
 	result.Inclusion = &inclusion
-	return result, err
+	if err != nil {
+		return result, err
+	}
+	return plan.Merge(ctx, result)
 }
 
 type branchProjectionSource struct {

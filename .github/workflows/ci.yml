@@ -34,6 +34,8 @@ jobs:
         run: bash scripts/test-dogfood-daemon.sh
       - name: Verify independent local service lifecycle
         run: python3 scripts/test-local-services.py
+      - name: Verify bounded Go test batches
+        run: python3 scripts/test-test-go-batches.py
       - name: Verify E2E publication fence and failure evidence
         run: |
           python3 scripts/test-e2e-drain-publication.py
@@ -86,12 +88,12 @@ jobs:
           CXT_TEST_DSN: postgres://cxt:cxt@localhost:5432/cxthub_test?sslmode=disable
         run: |
           go test -tags postgres ./internal/adapters/store/ -timeout=120s -v
-          go test -tags postgres ./internal/app/ -race -run '^TestPG' -count=3 -timeout=120s -v
+          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestPG' --count 3
           go test -tags postgres ./internal/app/ -race -run '^Test(P[69]PG|RootStartupPG|PostgresCatalogVersion)' -count=1 -timeout=120s -v
           go test -tags postgres ./internal/adapters/delivery/http/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/adapters/federation/ -race -run '^TestPG' -count=3 -timeout=120s -v
           go test -tags postgres ./internal/mcpserver/ -race -run '^TestPG' -timeout=120s -v
-          go test -tags postgres ./internal/adapters/delivery/mcp/ -race -run '^TestRootProjectionPGConsumersWithoutPersistentIndex$' -count=1 -timeout=120s -v
+          go test -tags postgres ./internal/adapters/delivery/mcp/ -race -run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity)$' -count=1 -timeout=120s -v
 
   cli:
     runs-on: ubuntu-latest
@@ -103,7 +105,11 @@ jobs:
           cache: false
       - name: build · vet · test
         working-directory: cli
-        run: go build ./... && go vet ./... && go test ./...
+        run: |
+          go build ./...
+          go vet ./...
+          go test $(go list ./... | grep -v '/internal/adapters/delivery/cli$')
+          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/cli/
       - name: vulnerability scan
         working-directory: cli
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...

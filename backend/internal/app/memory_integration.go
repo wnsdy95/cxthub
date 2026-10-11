@@ -16,6 +16,7 @@ type memoryIntegration struct {
 	receipts     map[string][]domain.HistoryEvent
 	snapshots    map[domain.ContentHash]domain.Snapshot
 	natural      map[domain.ContentHash]*memoryNaturalClosure
+	history      []domain.HistoryEvent
 }
 type memoryNaturalClosure struct {
 	seen, expanded map[domain.ContentHash]bool
@@ -24,7 +25,7 @@ type memoryNaturalClosure struct {
 }
 
 func newMemoryIntegration(s *Service, evidence *codeEvidence, repo domain.ContentHash, history []domain.HistoryEvent) (*memoryIntegration, error) {
-	r := &memoryIntegration{service: s, evidence: evidence, repo: repo, publications: map[[2]string][]domain.HistoryEvent{}, receipts: map[string][]domain.HistoryEvent{}, natural: map[domain.ContentHash]*memoryNaturalClosure{}}
+	r := &memoryIntegration{service: s, evidence: evidence, repo: repo, publications: map[[2]string][]domain.HistoryEvent{}, receipts: map[string][]domain.HistoryEvent{}, natural: map[domain.ContentHash]*memoryNaturalClosure{}, history: history}
 	observations := map[[2]string][]domain.HistoryEvent{}
 	byID := map[string]domain.HistoryEvent{}
 	for _, event := range history {
@@ -110,6 +111,34 @@ func (r *memoryIntegration) assess(ctx context.Context, item domain.EffectiveMem
 }
 func (r *memoryIntegration) proveIntegration(ctx context.Context, source domain.ContentHash, sourceCode, selected string, pubs []domain.HistoryEvent, direct string) (string, string, error) {
 	unknown := direct == "unknown"
+	contributions, err := r.service.contextContributionsForEvidence(ctx, r.repo, r.history, r.evidence)
+	if err != nil {
+		return "", "", err
+	}
+	for _, contribution := range contributions {
+		if !contribution.valid || contribution.record.Capture != source || contribution.record.OriginalHead != sourceCode {
+			continue
+		}
+		matched := false
+		for _, publication := range pubs {
+			accepted, exists := contribution.publications[publication.ID]
+			if exists && accepted == publication && publication.BranchID == contribution.record.SourceBranchID {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		relation, err := r.evidence.relation(ctx, contribution.record.IntegrationSHA, selected)
+		if err != nil {
+			return "", "", err
+		}
+		if relation == "ancestor" {
+			return "verified", contribution.record.ID, nil
+		}
+		unknown = unknown || relation == "unknown"
+	}
 	seen := map[string]bool{}
 	for _, p := range pubs {
 		for _, receipt := range r.receipts[p.BranchID] {

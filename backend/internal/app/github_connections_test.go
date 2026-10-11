@@ -352,7 +352,7 @@ func TestGitHubDeliveryQueuesOnlyBoundRepositoryAndSurvivesWorkerRestart(t *test
 	if _, err := st.PutRepo(ctx, other); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(fmt.Sprintf(`{"installation":{"id":789},"repository":{"id":91},"action":"closed","number":7,"pull_request":{"merged":true,"merge_commit_sha":%q,"head":{"ref":"feature","sha":%q,"repo":{"id":91}},"base":{"ref":"main","repo":{"id":91}}}}`, strings.Repeat("a", 40), strings.Repeat("b", 40)))
+	body := []byte(fmt.Sprintf(`{"installation":{"id":789},"repository":{"id":91},"action":"closed","number":7,"pull_request":{"id":701,"merged":true,"merge_commit_sha":%q,"head":{"ref":"feature","sha":%q,"repo":{"id":91}},"base":{"ref":"main","repo":{"id":91}}}}`, strings.Repeat("a", 40), strings.Repeat("b", 40)))
 	if err := g.Receive(ctx, "pr-delivery", "pull_request", body); err != nil {
 		t.Fatal(err)
 	}
