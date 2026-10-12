@@ -69,14 +69,24 @@ jobs:
           repositories: cxthub-cli,cxthub-backend,cxthub-frontend,cxthub-mcp
           permission-contents: write
           permission-workflows: write
-      - name: Publish verified component set without deployment
+      - name: Resolve publisher bot identity
+        id: publisher
+        env:
+          GH_TOKEN: ${{ steps.sync-auth.outputs.token }}
+          APP_SLUG: ${{ steps.sync-auth.outputs.app-slug }}
+        run: |
+          [[ "$APP_SLUG" =~ ^[a-z0-9-]+$ ]]
+          bot_id="$(gh api "users/${APP_SLUG}%5Bbot%5D" --jq .id)"
+          [[ "$bot_id" =~ ^[0-9]+$ ]]
+          printf 'name=%s[bot]\nemail=%s+%s[bot]@users.noreply.github.com\n' "$APP_SLUG" "$bot_id" "$APP_SLUG" >> "$GITHUB_OUTPUT"
+      - name: Publish verified component set
         env:
           GH_TOKEN: ${{ steps.sync-auth.outputs.token }}
           SOURCE_GITHUB_TOKEN: ${{ github.token }}
-          GIT_AUTHOR_NAME: cxthub-distribution
-          GIT_AUTHOR_EMAIL: distribution@users.noreply.github.com
-          GIT_COMMITTER_NAME: cxthub-distribution
-          GIT_COMMITTER_EMAIL: distribution@users.noreply.github.com
+          GIT_AUTHOR_NAME: ${{ steps.publisher.outputs.name }}
+          GIT_AUTHOR_EMAIL: ${{ steps.publisher.outputs.email }}
+          GIT_COMMITTER_NAME: ${{ steps.publisher.outputs.name }}
+          GIT_COMMITTER_EMAIL: ${{ steps.publisher.outputs.email }}
         run: python3 scripts/distribute-repositories.py publish --ref HEAD > "$RUNNER_TEMP/repository-release-set.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

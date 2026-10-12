@@ -230,6 +230,17 @@ class DistributionTests(unittest.TestCase):
         self.assertIn("github.event.workflow_run.event == 'push'", workflow)
         self.assertIn("persist-credentials: false", workflow)
 
+    def test_workflow_attributes_generated_commits_to_the_installation_bot(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/distribute.yml").read_text()
+        self.assertIn("APP_SLUG: ${{ steps.sync-auth.outputs.app-slug }}", workflow)
+        self.assertIn('gh api "users/${APP_SLUG}%5Bbot%5D" --jq .id', workflow)
+        self.assertIn("%s+%s[bot]@users.noreply.github.com", workflow)
+        for role in ["AUTHOR", "COMMITTER"]:
+            self.assertIn(f"GIT_{role}_NAME: ${{{{ steps.publisher.outputs.name }}}}", workflow)
+            self.assertIn(f"GIT_{role}_EMAIL: ${{{{ steps.publisher.outputs.email }}}}", workflow)
+        self.assertNotIn("distribution@users.noreply.github.com", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

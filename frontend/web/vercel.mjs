@@ -45,35 +45,38 @@ export function normalizeFirebaseWebConfig(env) {
   return { apiKey, authDomain, projectId };
 }
 
-const apiOrigin = normalizeApiOrigin(process.env.CXT_API_ORIGIN);
-const mcpOrigin = normalizeApiOrigin(process.env.CXT_MCP_ORIGIN, 'CXT_MCP_ORIGIN');
-if (apiOrigin === mcpOrigin) throw new Error('API and MCP must use independent service origins');
-normalizeFirebaseWebConfig(process.env);
+function createVercelConfig() {
+  const apiOrigin = normalizeApiOrigin(process.env.CXT_API_ORIGIN);
+  const mcpOrigin = normalizeApiOrigin(process.env.CXT_MCP_ORIGIN, 'CXT_MCP_ORIGIN');
+  if (apiOrigin === mcpOrigin) throw new Error('API and MCP must use independent service origins');
+  normalizeFirebaseWebConfig(process.env);
 
-export const config = {
-  rewrites: [
-    // Consent uses the API cookie but is handled by the MCP OAuth service.
-    { source: '/api/v1/oauth/requests/:path*', destination: `${mcpOrigin}/api/v1/oauth/requests/:path*` },
-    { source: '/api/:path*', destination: `${apiOrigin}/api/:path*` },
-    { source: '/mcp', destination: `${mcpOrigin}/mcp` },
-    { source: '/oauth/:path*', destination: `${mcpOrigin}/oauth/:path*` },
-    { source: '/.well-known/:path*', destination: `${mcpOrigin}/.well-known/:path*` },
-    { source: '/((?!assets/).*)', destination: '/index.html' },
-  ],
-  headers: [
-    {
-      source: '/(.*)',
-      headers: [
-        {
-          key: 'Content-Security-Policy',
-          value:
-            "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com; frame-src https://*.firebaseapp.com https://accounts.google.com; upgrade-insecure-requests",
-        },
-        { key: 'X-Content-Type-Options', value: 'nosniff' },
-        { key: 'X-Frame-Options', value: 'DENY' },
-        { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-        { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
-      ],
-    },
-  ],
-};
+  return {
+    rewrites: [
+      { source: '/api/v1/oauth/requests/:path*', destination: `${mcpOrigin}/api/v1/oauth/requests/:path*` },
+      { source: '/api/:path*', destination: `${apiOrigin}/api/:path*` },
+      { source: '/mcp', destination: `${mcpOrigin}/mcp` },
+      { source: '/oauth/:path*', destination: `${mcpOrigin}/oauth/:path*` },
+      { source: '/.well-known/:path*', destination: `${mcpOrigin}/.well-known/:path*` },
+      { source: '/((?!assets/).*)', destination: '/index.html' },
+    ],
+    headers: [
+      {
+        source: '/(.*)',
+        headers: [
+          {
+            key: 'Content-Security-Policy',
+            value:
+              "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com; frame-src https://*.firebaseapp.com https://accounts.google.com; upgrade-insecure-requests",
+          },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+        ],
+      },
+    ],
+  };
+}
+
+export const config = createVercelConfig();

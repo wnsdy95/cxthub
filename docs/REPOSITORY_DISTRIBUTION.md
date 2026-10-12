@@ -54,9 +54,9 @@ distribution.
   source commit SHA and need not match another component SHA.
 - Fail closed on unexpected paths, credentials, missing inputs, or independent
   mirror edits. Do not overwrite drift or force-push to make a check pass.
-- Exporting, pushing, or passing component CI must never call a cloud deploy
-  hook or API. Publication and deployment are separate, manually approved
-  operations.
+- The publisher must never call a cloud deploy hook or API. The owner-approved
+  Vercel Git integration deploys frontend mirror pushes automatically. Render
+  API/MCP deployment and database operations remain manual.
 
 The source monorepo maintains `distrib/repositories.json`,
 `scripts/distribute-repositories.py`, provenance/release-set verification, and
@@ -96,9 +96,11 @@ can run without monorepo-only peers. Their READMEs explicitly explain this.
 
 ## Authentication and owner bootstrap
 
-The dedicated repository-sync GitHub App **does not exist yet**. The user will
-register it later. Do not repurpose the product's GitHub integration App or copy
-an owner's PAT into Actions to bypass this pending setup.
+The dedicated `cxthub-repository-sync` GitHub App is installed on the four target
+repositories. Its App ID and private key are configured only in the source
+repository, and `REPOSITORY_SYNC_ENABLED=true` enables the gated workflow.
+Do not repurpose the product's GitHub integration App or copy an owner's PAT
+into Actions. These are separate integrations.
 
 For persistent synchronization, the owner must:
 
@@ -130,15 +132,24 @@ For persistent synchronization, the owner must:
    can update `main`, while preventing deletion/force-push and protecting
    immutable release tags. Do not weaken the source PR rules for mirror sync.
 
+Generated commits use the installation's real `<app-slug>[bot]` identity and
+numeric bot-ID noreply email, as documented by
+[create-github-app-token](https://github.com/actions/create-github-app-token#configure-git-cli-for-an-apps-bot-user).
+Do not use an unregistered placeholder author or impersonate the owner's account.
+The CLI mirror has deletion/non-fast-forward protection. Private mirror
+rulesets are unavailable on the current GitHub plan; exporter drift and
+expected-head checks still apply, but are not server-enforced branch protection.
+
 An explicitly authorized owner bootstrap using existing owner authentication is
 allowed before App registration, after source tests and merge. Use the same
 exact-commit exporter and verification; never copy the owner's credential into
 workflow secrets, a URL, or an export. Do not print token/key contents. Bootstrap
 does not establish unattended sync and does not authorize deployment. Empty
 repository creation or ownership changes require a separate owner action. The
-owner has now created all four repositories empty with the visibility listed
-above, with `main` as their default branch. No cloud integration is connected.
-Initial heads and persistent App registration are still pending.
+owner created and published all four repositories with the visibility listed
+above and `main` as their default branch. Initial publication used owner
+authentication; subsequent synchronization uses the dedicated App. The frontend
+is connected to Vercel with automatic Git deployment approved by the owner.
 
 ## Exporter commands
 
@@ -214,9 +225,9 @@ operator's controlled release record. Neither command deploys cloud services.
 The four pushes are **not atomic**. Even a successful source workflow step or
 three successful pushes is not a completed release set.
 
-1. Before the first push, confirm automatic Render deployments and Blueprint
-   synchronization are disabled and Vercel Git deployment is disconnected.
-   Do not connect new deployment integrations during bootstrap.
+1. Confirm automatic Render deployments and Blueprint synchronization remain
+   disabled. Vercel Git deployment is enabled for the frontend by explicit owner
+   approval; a frontend push may deploy before the remaining mirror checks finish.
 2. Publish the four generated heads using the approved owner bootstrap or the
    gated source App workflow. Record each destination's actual commit SHA.
 3. After **all four pushes**, fetch each remote `main` and verify its tree and
@@ -230,19 +241,21 @@ three successful pushes is not a completed release set.
    every target; a manually dispatched run does not substitute for it. Restore
    the correct push trigger or resolve the failed run without editing a mirror.
 5. Only then hand the verified source SHA, four destination SHAs, check results,
-   and rollback reference to the person responsible for manual deployment.
+   and rollback reference to the person responsible for manual Render deployment.
    Re-check remote heads immediately before handoff; use the recorded exact
    commits rather than resolving a later moving `main` at deploy time.
 
 If any push, verification, or check fails, mark the entire set incomplete and
-deploy nothing. Keep the existing live services unchanged. Investigate drift,
+do not manually deploy Render services. Vercel may already have deployed the
+frontend: inspect its exact commit and review rollback if compatibility is broken.
+Automatic frontend deployment is not an atomic four-service release. Investigate drift,
 retry only through the exporter using the same source SHA where appropriate,
 then repeat verification of **all four** heads. If a new source fix is required,
 merge it normally and publish a new complete set. Never repair a mirror by hand
 or roll its branch back with a force-push. Retain the previous verified set for
 an explicitly reviewed runtime rollback, including schema compatibility.
 
-## Manual deployment handoff
+## Deployment handoff
 
 This section is an operator plan, not authorization to create resources or
 change a service now. No cloud credentials or deploy hooks belong in generated
@@ -290,14 +303,15 @@ See [Render's manual deployment documentation](https://render.com/docs/deploys#m
 
 ### Vercel frontend
 
-Keep the existing project's Git connection disconnected for manual-only
-operation; Vercel documents this under
-[Git settings](https://vercel.com/docs/project-configuration/git-settings#disconnect-your-git-repository).
-This avoids changing the exported root `vercel.mjs` just to suppress automatic
-Git deployments. The mirror's CI has no deployment step.
+The existing Vercel project is connected to `wnsdy95/cxthub-frontend`, with
+production branch `main` and automatic Git deployment approved by the owner.
+The mirror's CI and repository publisher have no Vercel deployment step or token.
+Vercel reacts to the generated Git push independently; it does not wait for all
+four mirrors' CI. Keep frontend changes compatible with the deployed API/MCP.
+The source PR and successful source-main CI remain publication gates.
 
-For a later owner-approved deployment, use a clean checkout of the recorded
-`cxthub-frontend` commit, the existing Vercel project, repository root `.`,
+For a manual retry, use the recorded new `cxthub-frontend` commit, not a failed
+deployment of an older commit. Use the existing Vercel project, repository root `.`,
 `npm run build`, and output `dist`. Preserve the root `vercel.mjs` byte-for-byte
 from `frontend/web/vercel.mjs`, including rewrite order and security headers.
 Use the existing environment settings from [deploy/RENDER.md](../deploy/RENDER.md):
@@ -305,6 +319,19 @@ distinct `CXT_API_ORIGIN` and `CXT_MCP_ORIGIN`, the three Firebase web settings,
 and no `VITE_API_BASE` override for the same-origin setup. Never store service
 secrets in browser-exposed `VITE_*` variables. The public frontend origin,
 Firebase authorized domains, and API/MCP identity must stay consistent.
+
+Keep environment-dependent configuration behind the `createVercelConfig()`
+factory rather than an exported object literal containing computed destinations.
+The exported literal was rejected by Git import before the build with a missing
+rewrite destination. Local static-parser checks reject its template expressions;
+the factory avoids partial extraction and keeps the configuration together for
+build-time evaluation. The hosted Git-import parser is not part of the local test.
+`npm run check:vercel` guards the dynamic export boundary, bundles and evaluates
+the configuration in a separate Node process, and checks that every serialized
+rewrite retains its destination. Missing deployment variables still fail closed.
+Consent rewrites must precede the general API proxy.
+A local configuration check does not replace an owner-approved Git import and
+deployment check on Vercel.
 
 ### CLI compatibility and future releases
 
@@ -333,29 +360,28 @@ live rollout:
 - [x] Prepare root CLI release templates without changing legacy install paths.
 - [x] Prepare manual-only Render repository mapping with the same DB/env contract.
 - [x] Verify Render field semantics and manual-sync behavior against official docs.
-- [x] Owner created all four repositories empty with the specified visibility
-  and default branch `main`; no cloud integration is connected.
+- [x] Owner created all four repositories with the specified visibility and
+  default branch `main`; initial publication and target CI passed.
+- [x] Dedicated App installed with access to only the four target repositories;
+  source-only App settings registered and automatic synchronization enabled.
+- [x] Owner approved automatic Vercel frontend Git deployment.
 
-Standalone CLI build/vet and focused tests have passed during preparation.
-Broader CLI test runs reached their existing ten-minute timeout; this is not a
-full-suite pass. Full required CI remains pending and must pass before source
-merge and initial publication.
+PR #500 merged after source CI passed, and its initial four-repository release
+set was verified. Each later source revision must pass the same source and
+target checks; earlier success does not certify a new deployment.
 
-Still required before initial publication or deployment:
+Release gates and remaining deployment work:
 
 - [x] Review the source exporter, allowlist, provenance verification, and gated
   synchronization workflow; validate a committed rehearsal export without pushing.
-- [ ] Pass monorepo development/integration tests and required CI; merge the
-  source PR before publishing any initial component head.
+- [x] Pass initial monorepo CI and merge the source PR before initial publication.
 - [ ] Owner confirms deployment/verification access and target rulesets.
-- [ ] User registers the dedicated sync App later, scopes its installation and
-  permissions, and stores the two settings only in the source repository;
-  enable `REPOSITORY_SYNC_ENABLED=true` only after this setup is reviewed.
-- [ ] If using owner bootstrap first, record that persistent App sync is pending.
-- [ ] Confirm Render Auto-Deploy Off, Blueprint Auto Sync No, and disconnected
-  Vercel Git deployment before publishing any component heads.
-- [ ] Publish and verify all four heads as one release set; collect green CI on
-  each exact destination commit and retain the source CI evidence.
+- [x] Dedicated App installation, source-only credentials, and synchronization
+  opt-in configured after owner approval.
+- [ ] Keep Render Auto-Deploy Off and Blueprint Auto Sync No when provisioning;
+  frontend Vercel Git deployment is separately authorized and enabled.
+- [x] Publish and verify the initial four heads; repeat verification for every
+  new release set and collect CI on each exact destination commit.
 - [ ] Owner approves the manual service/repository handoff without creating or
   replacing any resource; verify health, routing, and rollback readiness.
 - [ ] Separately approve any first CLI binary release and immutable tag.
