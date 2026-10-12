@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "source": "wnsdy95/cxthub",
+  "common": [
+    ["LICENSE", "LICENSE"],
+    ["NOTICE", "NOTICE"],
+    ["THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"],
+    ["SECURITY.md", "SECURITY.md"],
+    ["CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT.md"],
+    ["TRADEMARKS.md", "TRADEMARKS.md"],
+    [".gitignore", ".gitignore"]
+  ],
+  "components": {
+    "cli": {
+      "repository": "wnsdy95/cxthub-cli",
+      "visibility": "public",
+      "paths": [
+        ["cli/", ""],
+        ["docs/CLI.md", "docs/CLI.md"],
+        ["integrations/", "integrations/"],
+        ["schemas/cir.schema.json", "schemas/cir.schema.json"],
+        ["schemas/testdata/", "schemas/testdata/"],
+        ["scripts/test-go-batches.py", "scripts/test-go-batches.py"],
+        ["distrib/repository-templates/cli/", ""]
+      ]
+    },
+    "backend": {
+      "repository": "wnsdy95/cxthub-backend",
+      "visibility": "private",
+      "paths": [
+        ["backend/", "backend/"],
+        ["schemas/", "schemas/"],
+        ["deploy/Dockerfile", "Dockerfile"],
+        [".dockerignore", ".dockerignore"],
+        ["distrib/repository-templates/backend/", ""]
+      ]
+    },
+    "frontend": {
+      "repository": "wnsdy95/cxthub-frontend",
+      "visibility": "private",
+      "paths": [
+        ["frontend/web/", ""],
+        ["distrib/repository-templates/frontend/", ""]
+      ]
+    },
+    "mcp": {
+      "repository": "wnsdy95/cxthub-mcp",
+      "visibility": "private",
+      "paths": [
+        ["backend/", "backend/"],
+        ["schemas/", "schemas/"],
+        ["deploy/Dockerfile.mcp", "Dockerfile"],
+        [".dockerignore", ".dockerignore"],
+        ["distrib/repository-templates/mcp/", ""]
+      ]
+    }
+  }
+}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // ResolvePRSourcePosition resolves the recorded memory of a completed PR's

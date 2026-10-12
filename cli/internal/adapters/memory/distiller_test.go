@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // claude distillation empirical form (cumulative version): Previous generation summary + latest summary coexist in one text.

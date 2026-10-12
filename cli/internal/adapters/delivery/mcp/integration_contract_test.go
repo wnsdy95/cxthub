@@ -6,25 +6,17 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/wnsdy95/cxthub-cli/internal/testutil"
 )
 
 var (
 	mcpExecution  = regexp.MustCompile(`\*\*Execution\*\*: MCP read via \x60([a-z_]+)\x60`)
 	legacyToolRef = regexp.MustCompile(`\b(?:repo_init|session_save|session_list|session_fork|session_checkout|session_load|session_diff|memory_save|sync_push|sync_pull)\b`)
 )
-
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve integration contract test path")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "../../../../.."))
-}
 
 func actualMCPTools(t *testing.T) []string {
 	t.Helper()
@@ -50,7 +42,7 @@ func TestIntegrationAssetsMatchReadOnlyMCPContract(t *testing.T) {
 		t.Fatalf("MCP instructions are %d bytes; keep the first 512 bytes self-contained", len(serverInstructions))
 	}
 
-	root := repoRoot(t)
+	root := testutil.RepositoryPath(t)
 	for _, config := range []string{
 		"integrations/codex/config.snippet.toml",
 		"integrations/claude-code/.mcp.json",

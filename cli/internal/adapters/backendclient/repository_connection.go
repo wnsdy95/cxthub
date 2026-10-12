@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func (c *BackendClient) ResolveRepositoryConnection(ctx context.Context, remote string) (domain.RepositoryConnection, error) {

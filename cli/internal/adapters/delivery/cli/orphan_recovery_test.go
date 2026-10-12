@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
 	"strings"
 	"testing"
 )

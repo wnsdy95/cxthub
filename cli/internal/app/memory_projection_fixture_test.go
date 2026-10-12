@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/testutil"
 )
 
 type projectionFixture struct {
@@ -25,7 +27,7 @@ type projectionFixture struct {
 }
 
 func TestMemoryProjectionSharedFixtures(t *testing.T) {
-	raw, err := os.ReadFile("../../../schemas/testdata/memory-projection.json")
+	raw, err := os.ReadFile(testutil.RepositoryPath(t, "schemas", "testdata", "memory-projection.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

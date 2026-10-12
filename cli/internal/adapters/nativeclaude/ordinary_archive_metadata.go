@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"math"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 // These fields were observed in the 2.1.287 SDK recorder. They describe

@@ -1,0 +1,31 @@
+name: CLI CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build and vet
+        run: |
+          go build ./...
+          go vet ./...
+      - name: Test ordinary CLI packages
+        run: go test $(go list ./... | grep -v '/internal/adapters/delivery/cli$')
+      - name: Test delivery CLI in bounded serial batches
+        run: python3 scripts/test-go-batches.py ./internal/adapters/delivery/cli/

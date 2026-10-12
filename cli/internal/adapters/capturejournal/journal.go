@@ -10,9 +10,9 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 type Journal struct{ root, cwd string }

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Only an explicit tracking creation joins a teammate's context. In particular,

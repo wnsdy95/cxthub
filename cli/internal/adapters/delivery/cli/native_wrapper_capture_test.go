@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestNativeDeferredCaptureUsesOwnedToolThreadNotStaleAffinity(t *testing.T) {

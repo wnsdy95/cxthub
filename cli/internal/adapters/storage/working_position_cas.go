@@ -5,8 +5,8 @@ import (
 	"errors"
 	"reflect"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 var _ outbound.WorkingPositionCASStore = (*FileStore)(nil)

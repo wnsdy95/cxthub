@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func (s *FileStore) ReadRemoteRepairReceipt(ctx context.Context, id domain.ContentHash) (outbound.RemoteRepairReceipt, error) {

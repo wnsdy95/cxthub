@@ -6,7 +6,7 @@ package codec
 import (
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Canonical tool_name vocabulary (canonical, compatibility rules):

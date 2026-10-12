@@ -2,8 +2,8 @@ package storage
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/chunkcas"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"testing"
 )
 

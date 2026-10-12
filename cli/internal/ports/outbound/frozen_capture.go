@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // FrozenSessionCapture is an optional durable native-input capture capability.

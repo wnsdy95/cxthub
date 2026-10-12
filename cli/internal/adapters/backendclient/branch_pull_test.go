@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestSelectedBranchTransportUsesOnlyPlanInventory(t *testing.T) {

@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 type serverPrefs struct {

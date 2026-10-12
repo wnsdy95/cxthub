@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"github.com/wnsdy95/cxthub-cli/internal/testutil"
 )
 
 func TestCIRSchemaDocumentsCompactionWireFields(t *testing.T) {
-	raw, err := os.ReadFile("../../../schemas/cir.schema.json")
+	raw, err := os.ReadFile(testutil.RepositoryPath(t, "schemas", "cir.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 const (

@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 // PreparedRemoteConnection is one remote-add attempt. Its network callback is

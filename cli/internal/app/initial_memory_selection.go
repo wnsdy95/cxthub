@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // initialMemorySelections omits only the exact proven empty or inherited

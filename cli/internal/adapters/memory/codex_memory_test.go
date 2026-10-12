@@ -10,7 +10,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // TestCodexReadNative verifies the reading of memories_1.sqlite and rollout files from a fake HOME directory, matching cwd to thread_id, reading from SQLite, and assembling NativeMemory.

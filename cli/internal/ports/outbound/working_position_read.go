@@ -2,7 +2,7 @@ package outbound
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // WorkingPositionQueryReader observes the persisted worktree cursor without

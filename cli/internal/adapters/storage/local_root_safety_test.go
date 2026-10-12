@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func safetyRoot(t *testing.T, store *FileStore, repo, text string) (domain.Snapshot, domain.ConversationManifest, map[domain.ContentHash][]byte) {

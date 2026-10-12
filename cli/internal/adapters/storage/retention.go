@@ -8,8 +8,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func (s *FileStore) WithObjectsRetained(ctx context.Context, fn func() error) error {

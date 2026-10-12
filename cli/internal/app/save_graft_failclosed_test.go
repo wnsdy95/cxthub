@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // TestQueueGraftFailClosed fixes error propagation in graft queue persistence — Save must stop ref movement on queue record failure (fail-closed invariant) so it cannot be silently swallowed. It checks three paths: success, idempotence, and record failure (.cxt is a file).

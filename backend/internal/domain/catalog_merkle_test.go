@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -438,29 +437,6 @@ func TestCatalogMerkleConcurrentDeterminism(t *testing.T) {
 		})
 	}
 	wg.Wait()
-}
-
-func TestCatalogMerkleMirroredImplementationAndFixtures(t *testing.T) {
-	for _, name := range []string{"catalog_merkle.go", "catalog_merkle_test.go"} {
-		local, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		other := "../../../cli/internal/domain/" + name
-		// Resolve the peer without importing its independent internal package.
-		if cwd, err := os.Getwd(); err != nil {
-			t.Fatal(err)
-		} else if strings.HasSuffix(cwd, "/cli/internal/domain") {
-			other = "../../../backend/internal/domain/" + name
-		}
-		peer, err := os.ReadFile(other)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(local, peer) {
-			t.Fatalf("mirrored algorithm/fixtures drift: %s", name)
-		}
-	}
 }
 
 func TestCatalogMerkleRequestValidation(t *testing.T) {

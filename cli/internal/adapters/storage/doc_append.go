@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/chunkcas"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // AppendCaptureDoc retains closed canonical event chunks. Old bytes are hashed

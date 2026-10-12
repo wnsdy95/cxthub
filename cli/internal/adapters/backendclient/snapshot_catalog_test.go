@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 type catalogRoundTrip func(*http.Request) (*http.Response, error)

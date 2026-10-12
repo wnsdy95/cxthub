@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/chunkcas"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func verificationV2Fixture(t testing.TB, envelope, events string) (*FileStore, domain.ContentHash, chunkcas.Manifest) {

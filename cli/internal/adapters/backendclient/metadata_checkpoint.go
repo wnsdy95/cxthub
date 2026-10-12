@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // readSnapshotMetadata acquires only the requested metadata from a freshly

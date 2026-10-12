@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 func syncProgressPrinter(w io.Writer) func(inbound.SyncProgress) {

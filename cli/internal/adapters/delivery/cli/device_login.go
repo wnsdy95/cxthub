@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
 )
 
 // device flow login — `cxt login` (no args) default path (RFC 8628 pattern, gh compatibility).

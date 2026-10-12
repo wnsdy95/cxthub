@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/boundary"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 const launchSessionID = "11111111-1111-4111-8111-111111111111"

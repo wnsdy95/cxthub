@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"os"
 	"os/exec"
 	"path/filepath"

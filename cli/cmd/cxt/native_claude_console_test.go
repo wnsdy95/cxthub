@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativeclaude"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativeclaude"
 )
 
 func scriptedClaudeConsole(lines ...string) (*nativeClaudeConsole, *bytes.Buffer) {

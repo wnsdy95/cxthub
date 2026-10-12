@@ -62,9 +62,9 @@ func sanitizeSCPRemote(raw string) string {
 //  5. Lowercase host
 //
 // Examples:
-// "git@github.com:wnsdy95/cxthub/cli.git" → "github.com/wnsdy95/cxthub/cli"
+// "git@github.com:wnsdy95/cxthub/cli.git" → "github.com/wnsdy95/cxthub-cli"
 //
-// "https://GITHUB.COM/wnsdy95/cxthub/cli.git" → "github.com/wnsdy95/cxthub/cli"
+// "https://GITHUB.COM/wnsdy95/cxthub/cli.git" → "github.com/wnsdy95/cxthub-cli"
 //
 // Standard URL and SCP-style SSH remotes are supported for any host. Invalid
 // credential-bearing inputs fail closed instead of becoming repository IDs.

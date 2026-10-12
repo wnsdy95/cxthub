@@ -3,7 +3,7 @@ package inbound
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // SaveSession is a use-case port that saves the active session of the current cwd as a snapshot (domain model).

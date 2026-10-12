@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // NewWorktreeFileStore shares immutable objects and branch refs, but never HEAD.

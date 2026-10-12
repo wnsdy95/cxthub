@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func supportsRootIdentity(identities []domain.DocumentIdentity) bool {

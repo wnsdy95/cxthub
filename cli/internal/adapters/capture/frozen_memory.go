@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // FrozenSessionID reads only the first verified private chunk, never SourcePath.

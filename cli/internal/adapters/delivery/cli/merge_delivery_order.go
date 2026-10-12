@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func verifyMergeAppendOrder(ctx context.Context, cwd, selectedCode, incomingAfter string) error {

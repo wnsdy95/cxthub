@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestSnapshotDocumentIdentityImmutable(t *testing.T) {

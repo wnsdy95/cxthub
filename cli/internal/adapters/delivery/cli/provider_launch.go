@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
-	memoryadapter "github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/boundary"
+	memoryadapter "github.com/wnsdy95/cxthub-cli/internal/adapters/memory"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // ProviderLaunchHooks connects the delivery adapter to the application package

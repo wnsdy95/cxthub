@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 func preparePagedHistoryFixture(t *testing.T, docs ...domain.SessionDoc) (*AgentContextService, inbound.PrepareAgentContextInput, *agentPageFixture, *agentHistoryFixture) {

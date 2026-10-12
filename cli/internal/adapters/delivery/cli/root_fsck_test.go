@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 )
 
 func TestFormatFsckReportDoesNotMislabelUnreachableSnapshotsAsLost(t *testing.T) {

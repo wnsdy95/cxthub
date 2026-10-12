@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func captureDocumentIdentity(ctx context.Context, git outbound.GitContext, repo domain.Repo, explicit domain.DocumentIdentity) (domain.DocumentIdentity, error) {

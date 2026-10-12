@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"testing"
 	"time"
 )

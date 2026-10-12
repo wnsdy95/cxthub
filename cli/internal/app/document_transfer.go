@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func (s *SyncRepoService) preflightSnapshotReferences(ctx context.Context, repo string, snaps []domain.Snapshot) error {

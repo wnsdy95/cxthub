@@ -3,7 +3,7 @@ package outbound
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // CatalogImageInstaller publishes a fully reconciled metadata image by CAS.

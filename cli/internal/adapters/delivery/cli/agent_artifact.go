@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 func runAgentArtifact(ctx context.Context, c *Container, cwd string, p parsedCommand) error {

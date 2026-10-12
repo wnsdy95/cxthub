@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Called only under retention and ref-mutation exclusion. An application or

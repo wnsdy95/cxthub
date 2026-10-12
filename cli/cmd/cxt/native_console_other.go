@@ -6,7 +6,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativeclaude"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativeclaude"
 )
 
 func nativeConsoleLine(context.Context, *os.File) (string, error) {

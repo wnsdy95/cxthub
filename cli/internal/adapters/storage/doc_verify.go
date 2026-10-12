@@ -11,8 +11,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/chunkcas"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func decodeStoredSessionDoc(ctx context.Context, hash domain.ContentHash, data []byte, chunked bool) (domain.SessionDoc, error) {

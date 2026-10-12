@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativecodex"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestNativeCodexObservationSeparatesEstimatedWindowAndActualInput(t *testing.T) {

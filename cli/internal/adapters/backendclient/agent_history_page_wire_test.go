@@ -7,8 +7,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/codec"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/testutil"
 )
 
 // Synthetic native records exercise the real capture codecs, not hand-mirrored
@@ -85,7 +86,7 @@ func TestAgentHistoryWireParityWithRealCodecs(t *testing.T) {
 		}
 		expected = append(expected, agentHistoryWireFixture{Name: item.name, Doc: doc, Page: page})
 	}
-	const path = "../../../../schemas/testdata/agent-history-page-v1.json"
+	path := testutil.RepositoryPath(t, "schemas", "testdata", "agent-history-page-v1.json")
 	want, err := json.MarshalIndent(expected, "", "  ")
 	if err != nil {
 		t.Fatal(err)

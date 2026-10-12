@@ -1,0 +1,33 @@
+name: MCP Packaging CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Build and vet default and PostgreSQL variants
+        working-directory: backend
+        run: |
+          go build ./...
+          go build -tags postgres ./...
+          go vet ./...
+          go vet -tags postgres ./...
+          go build -tags postgres -o ../bin/cxt-mcp ./cmd/cxt-mcp
+      - name: Build MCP container without publishing
+        run: docker build -f Dockerfile -t cxthub-mcp:ci .

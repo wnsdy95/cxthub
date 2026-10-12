@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "node scripts/run-unit-tests.mjs",
+    "test:unit": "node scripts/run-unit-tests.mjs --unit-only",
     "test:e2e": "tsc --noEmit -p tsconfig.e2e.json && playwright test",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

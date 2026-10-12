@@ -9,9 +9,9 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capturejournal"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capturejournal"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Code may advance while a pending capture still owns the same context cursor.

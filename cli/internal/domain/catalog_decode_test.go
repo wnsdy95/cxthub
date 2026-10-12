@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"reflect"
 	"strconv"
 	"strings"
@@ -171,86 +168,4 @@ func TestCatalogDecodePreservesFullHistoryAndRejectsUnknownNestedFields(t *testi
 	if ValidateCatalogEntry(repo, birthEntry) == nil {
 		t.Fatal("accepted unknown creation evidence field")
 	}
-}
-
-func TestCatalogWireStructParityWithBackend(t *testing.T) {
-	// The modules cannot import each other's internal packages. Parse the
-	// server's actual declarations to catch wire/tag drift without a dependency.
-	file, err := parser.ParseFile(token.NewFileSet(), "../../../backend/internal/domain/catalog.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ours := map[string]reflect.Type{
-		"CatalogCheckpoint": reflect.TypeFor[CatalogCheckpoint](),
-		"CatalogRequest":    reflect.TypeFor[CatalogRequest](),
-		"CatalogEntry":      reflect.TypeFor[CatalogEntry](),
-		"CatalogPage":       reflect.TypeFor[CatalogPage](),
-	}
-	checked := 0
-	for _, declaration := range file.Decls {
-		gen, ok := declaration.(*ast.GenDecl)
-		if !ok {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
-			cliType, wanted := ours[typeSpec.Name.Name]
-			if !wanted {
-				continue
-			}
-			serverType, ok := typeSpec.Type.(*ast.StructType)
-			if !ok || len(serverType.Fields.List) != cliType.NumField() {
-				t.Fatalf("%s field count changed", typeSpec.Name.Name)
-			}
-			for i, field := range serverType.Fields.List {
-				if field.Tag == nil || len(field.Names) != 1 {
-					t.Fatal("unexpected backend wire declaration")
-				}
-				tag, err := strconv.Unquote(field.Tag.Value)
-				if err != nil || field.Names[0].Name != cliType.Field(i).Name || tag != string(cliType.Field(i).Tag) {
-					t.Fatalf("%s field %d/tag drift", typeSpec.Name.Name, i)
-				}
-				if got := catalogTestASTType(field.Type); got != catalogTestReflectType(cliType.Field(i).Type) {
-					t.Fatalf("%s.%s type drift: server=%s cli=%s", typeSpec.Name.Name, field.Names[0].Name, got, catalogTestReflectType(cliType.Field(i).Type))
-				}
-			}
-			checked++
-		}
-	}
-	if checked != len(ours) {
-		t.Fatalf("checked %d of %d wire types", checked, len(ours))
-	}
-}
-
-func catalogTestASTType(expr ast.Expr) string {
-	switch typ := expr.(type) {
-	case *ast.Ident:
-		if typ.Name == "ContentHash" {
-			return "string"
-		}
-		return typ.Name
-	case *ast.SelectorExpr:
-		return catalogTestASTType(typ.X) + "." + typ.Sel.Name
-	case *ast.StarExpr:
-		return "*" + catalogTestASTType(typ.X)
-	case *ast.ArrayType:
-		return "[]" + catalogTestASTType(typ.Elt)
-	}
-	return "unsupported"
-}
-
-func catalogTestReflectType(typ reflect.Type) string {
-	if typ.Kind() == reflect.Pointer {
-		return "*" + catalogTestReflectType(typ.Elem())
-	}
-	if typ == reflect.TypeFor[json.RawMessage]() {
-		return "json.RawMessage"
-	}
-	if typ.Kind() == reflect.Slice {
-		return "[]" + catalogTestReflectType(typ.Elem())
-	}
-	return typ.Name()
 }

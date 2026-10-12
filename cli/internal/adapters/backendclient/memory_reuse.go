@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 const memoryReuseEntries = 16
