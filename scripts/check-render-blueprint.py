@@ -61,4 +61,19 @@ for name, port, dockerfile in (
         }, "API must trust the exact public origin used by the Vercel proxy"
     if name == "cxthub-mcp":
         assert set(env) == {"PORT", "CXT_AUTH", "CXT_PUBLIC_URL", "CXT_FIREBASE_PROJECT", "CXT_POSTGRES_DSN"}
-print("  ✓ Render isolation, shared database, identity, secure cookies and proxy origin")
+distribution = yaml.safe_load((root / "deploy/render-repositories.yaml").read_text())
+assert set(distribution) == set(blueprint), "Split Blueprint changed top-level resources"
+assert distribution["databases"] == blueprint["databases"], "Split services must retain the same database contract"
+assert len(distribution["services"]) == len(services)
+distributed_services = {service["name"]: service for service in distribution["services"]}
+assert set(distributed_services) == set(by_name)
+for name, component in (("cxthub-api", "backend"), ("cxthub-mcp", "mcp")):
+    actual = dict(distributed_services[name])
+    assert actual.pop("repo") == f"https://github.com/wnsdy95/cxthub-{component}"
+    assert actual.pop("branch") == "main"
+    assert actual.pop("autoDeployTrigger") == "off", "Partial publication must never deploy automatically"
+    assert actual["dockerfilePath"] == "./Dockerfile"
+    actual["dockerfilePath"] = by_name[name]["dockerfilePath"]
+    assert actual == by_name[name], "Split deployment changed the source environment, identity, or service contract"
+
+print("  ✓ Render isolation, shared database, identity, secure cookies, proxy origin and manual-only repository handoff")

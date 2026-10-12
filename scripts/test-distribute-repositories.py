@@ -220,6 +220,16 @@ class DistributionTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             distribution.write_export(distribution.export_files(self.source, self.first, "cli"), self.source)
 
+    def test_workflow_reconciles_main_instead_of_replaying_event_revision(self):
+        root = Path(__file__).resolve().parent.parent
+        workflow = (root / ".github/workflows/distribute.yml").read_text()
+        self.assertEqual(workflow.count("ref: main"), 2)
+        self.assertNotIn("ref: ${{ github.event.workflow_run.head_sha", workflow)
+        self.assertIn("needs: eligible", workflow)
+        self.assertIn("vars.REPOSITORY_SYNC_ENABLED == 'true'", workflow)
+        self.assertIn("github.event.workflow_run.event == 'push'", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

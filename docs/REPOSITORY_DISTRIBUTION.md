@@ -343,7 +343,7 @@ merge and initial publication.
 
 Still required before initial publication or deployment:
 
-- [ ] Review the source exporter, allowlist, provenance verification, and gated
+- [x] Review the source exporter, allowlist, provenance verification, and gated
   synchronization workflow; validate a committed rehearsal export without pushing.
 - [ ] Pass monorepo development/integration tests and required CI; merge the
   source PR before publishing any initial component head.
