@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 type personalPackageHistory struct{ view domain.HistoryQueryResult }

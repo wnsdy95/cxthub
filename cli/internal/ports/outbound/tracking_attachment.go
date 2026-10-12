@@ -3,7 +3,7 @@ package outbound
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // TrackingAttachmentCommit applies one frozen tracking operation. Nil expected

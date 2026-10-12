@@ -17,13 +17,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/githooks"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/githooks"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 // cxtHookEntry is an item in the agent hook settings (similar to Claude Code and Codex hooks.json).

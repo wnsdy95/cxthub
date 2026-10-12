@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // RunCaptureRecovery has no implicit replay, remote operation or live provider

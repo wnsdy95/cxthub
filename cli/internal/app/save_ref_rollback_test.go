@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // TestSaveNeverMovesRefBackward ensures that a branch ref does not move backward when content-hash dedup matches an existing ancestor snapshot. Without the reachability guard, repeatedly capturing an unchanged session (for example, an old Codex rollout) after other commits could roll the ref back and orphan intervening snapshots. Forward dedup for a replaceable hook leaf must continue to work because that leaf is not a head ancestor.

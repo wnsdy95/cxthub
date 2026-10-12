@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestCaptureAdmissionPrecedesLiveSessionEffects(t *testing.T) {

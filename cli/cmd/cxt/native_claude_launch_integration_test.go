@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativeclaude"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativeclaude"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Re-exec only this test binary, with a private environment and finite lifetime.

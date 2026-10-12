@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestStashConcurrentWritersAndRestoreCAS(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Executed by e2e-sync against its owned server/database. Only a temporary local

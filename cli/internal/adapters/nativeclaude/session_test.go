@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 func TestMain(m *testing.M) {

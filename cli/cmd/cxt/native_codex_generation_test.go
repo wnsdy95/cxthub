@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
-	"github.com/wnsdy95/cxthub/cli/internal/app"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativecodex"
+	"github.com/wnsdy95/cxthub-cli/internal/app"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 const nativeGenerationTestHost = "cxthub_native_transport/0.157.1 synthetic-fixture"

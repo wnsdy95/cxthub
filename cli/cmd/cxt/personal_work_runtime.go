@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // The explicit artifact selects a source session, never the latest session.

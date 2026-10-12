@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 // ReadRemoteBranch reads the current shared pointer without synchronizing local

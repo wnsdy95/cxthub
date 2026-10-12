@@ -6,7 +6,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // InstallCatalogImage replaces acquired metadata after Merkle reconciliation.

@@ -28,16 +28,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/githooks"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/boundary"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/githooks"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // gitOut runs a git subcommand in cwd and returns the trimmed stdout (empty on failure).

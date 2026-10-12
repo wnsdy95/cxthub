@@ -7,10 +7,10 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 func runLiveObserver(ctx context.Context, c *Container, cwd string, args []string) error {

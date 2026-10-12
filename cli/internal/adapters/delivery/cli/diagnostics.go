@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 type branchOperationStatus struct {

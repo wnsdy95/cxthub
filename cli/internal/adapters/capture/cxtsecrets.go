@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 // SecretsFile is a file in the repo root containing a list of secret values. One value per line (e.g., values from .env). Lines starting with '#' and empty lines are ignored. This file is excluded from git (.git/info/exclude) and from both sides of the context.

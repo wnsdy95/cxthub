@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // Reproduce T's Save -> first Memorize transition with the actual author store,

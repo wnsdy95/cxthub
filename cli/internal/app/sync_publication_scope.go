@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // This path never enters the global PR/pending/promotion/graft drains. The one

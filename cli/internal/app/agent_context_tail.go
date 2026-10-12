@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Exclusion proofs are distinct from selected-history deduplication. A later

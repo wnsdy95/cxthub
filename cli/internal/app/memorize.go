@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // MemorizeService implements the Memorize inbound port as per the compatibility rules.

@@ -4,10 +4,10 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
-	"github.com/wnsdy95/cxthub/cli/internal/app"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativecodex"
+	"github.com/wnsdy95/cxthub-cli/internal/app"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 type nativeCodexPackagePrepare func(context.Context, nativecodex.Thread, domain.AgentInitialPrompt) (domain.AgentContextPackage, error)

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // TestCollectObjectsIncludesReachableStash ensures that push target collection excludes stash by "reachability" rather than "label". Content-hash deduplication can lead to a "(stash)" label object being placed in the commit ancestry if the same session content is in both stash and commit (same ID). Simply removing the label can lead to parent loss on the server and permanent ref advancement blockage (real case 9b23182f68).

@@ -13,8 +13,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func installCatalogImage(t *testing.T, st *FileStore, f catalogCacheFixture, expected domain.ContentHash, cp domain.CatalogCheckpoint, entries []domain.CatalogEntry) domain.ContentHash {

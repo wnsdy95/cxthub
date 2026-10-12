@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // writeManagedMemory preserves user-owned instructions and replaces only one

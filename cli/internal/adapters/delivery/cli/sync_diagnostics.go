@@ -8,7 +8,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // Diagnostics are opt-in and process-local. They never alter the caller's

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativecodex"
 )
 
 const nativeHandoffTestID = "019abcde-1234-7123-8123-123456789abc"

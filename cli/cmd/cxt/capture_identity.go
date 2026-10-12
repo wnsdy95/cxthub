@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func setCaptureIdentity(cfg config) func(context.Context, string, domain.DocumentIdentity) error {

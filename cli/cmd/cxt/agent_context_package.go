@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Copy mutable receipt fields while retaining the non-serializable prompt

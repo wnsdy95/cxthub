@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 // A completion's Source is the immutable context bound to the PR head. Target

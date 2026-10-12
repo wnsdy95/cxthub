@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/chunkcas"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func validateMemoryDigestRefs(digest domain.MemoryDigest) error {

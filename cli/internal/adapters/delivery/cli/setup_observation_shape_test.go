@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Root parents arrive as [] from the real backend. The query's defensive copy

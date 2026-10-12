@@ -6,10 +6,12 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/wnsdy95/cxthub-cli/internal/testutil"
 )
 
 func TestTypedMemoryWirePreservesSourceClaims(t *testing.T) {
-	raw, err := os.ReadFile("../../../schemas/testdata/memory-claims-v1.json")
+	raw, err := os.ReadFile(testutil.RepositoryPath(t, "schemas", "testdata", "memory-claims-v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

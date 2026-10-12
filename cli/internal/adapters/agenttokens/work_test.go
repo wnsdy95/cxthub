@@ -9,7 +9,7 @@ import (
 
 	"github.com/dlclark/regexp2/v2"
 	"github.com/tiktoken-go/tokenizer"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestPieceWorkUsesEncodingBoundariesAndAggregateBytes(t *testing.T) {

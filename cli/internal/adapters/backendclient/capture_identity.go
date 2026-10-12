@@ -5,7 +5,7 @@ import (
 
 	"net/http"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // ConfirmRootCapture confirms support for the supported prepared-root route.

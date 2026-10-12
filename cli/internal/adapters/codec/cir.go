@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // normalizeCIR sorts CIR events in ascending order by seq. Used in the CanonicalBytes (hash) preprocessing step. Returns a sorted copy of the input slice without modifying it.

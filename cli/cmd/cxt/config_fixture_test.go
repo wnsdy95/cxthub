@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 )
 
 // Fixture-only full-map replacement always reads an explicit CAS expectation.

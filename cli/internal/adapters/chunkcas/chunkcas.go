@@ -15,7 +15,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // ChunkTarget is the chunk closure size threshold (uncompressed canonical byte count).

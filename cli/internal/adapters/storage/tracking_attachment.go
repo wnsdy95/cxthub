@@ -10,8 +10,8 @@ import (
 	"reflect"
 	"syscall"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // One accepted operation excludes subsequent ref writers until its redo ends.

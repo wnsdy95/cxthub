@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func repairFixture(t *testing.T, st *FileStore, repo, text string, parents ...domain.ContentHash) domain.ContentHash {

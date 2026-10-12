@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // ScrubTier is a secret scrub strength tier (capture path).

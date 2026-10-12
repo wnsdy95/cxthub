@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // A manual selector names the canonical context ref, never a Git tracking

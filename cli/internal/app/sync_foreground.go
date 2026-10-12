@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // foregroundSnapshots selects a complete local dependency closure. It is not a

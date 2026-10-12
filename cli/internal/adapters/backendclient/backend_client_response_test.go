@@ -13,7 +13,7 @@ import (
 	"testing/iotest"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 type ackResponseTransportFunc func(*http.Request) (*http.Response, error)

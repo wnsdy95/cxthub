@@ -2,7 +2,7 @@ package outbound
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // RemoteObservation is verified remote metadata, separate from locally applied

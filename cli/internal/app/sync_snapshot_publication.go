@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 // A metadata-only request still verifies its complete stored document while

@@ -2,7 +2,7 @@ package outbound
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // StagingStore uses the repository ref transaction lock for index mutations and

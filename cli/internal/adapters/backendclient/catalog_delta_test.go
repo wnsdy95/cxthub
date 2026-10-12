@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 const deltaEpoch = "e66213bd-003e-47d1-b965-e690036bfb08"

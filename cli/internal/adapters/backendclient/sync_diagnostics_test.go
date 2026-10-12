@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func diagnosticEvents(c *outbound.SyncDiagnostics, stage outbound.SyncDiagnosticStage) []outbound.SyncDiagnosticEvent {

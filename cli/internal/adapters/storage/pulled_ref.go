@@ -3,8 +3,8 @@ package storage
 import (
 	"context"
 	"errors"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func (s *FileStore) CompareAndSwapPulledRef(ctx context.Context, expected *domain.Ref, next domain.Ref) error {

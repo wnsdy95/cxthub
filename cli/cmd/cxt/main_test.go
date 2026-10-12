@@ -15,10 +15,10 @@ import (
 	"sync"
 	"testing"
 
-	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 func mainTestGit(t *testing.T, cwd string, args ...string) {

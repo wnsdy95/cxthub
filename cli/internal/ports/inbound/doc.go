@@ -5,7 +5,7 @@
 // and the adapters/delivery package calls this interface.
 //
 // Dependency rule (domain model):
-//   - This package imports only github.com/wnsdy95/cxthub/cli/internal/domain.
+//   - This package imports only github.com/wnsdy95/cxthub-cli/internal/domain.
 //   - It does not import the outbound package.
 //   - It does not import any adapters/* packages.
 package inbound

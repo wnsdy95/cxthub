@@ -7,13 +7,13 @@ import (
 	"os"
 	"sync"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capture"
-	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
-	"github.com/wnsdy95/cxthub/cli/internal/app"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
+	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativecodex"
+	"github.com/wnsdy95/cxthub-cli/internal/app"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // Runtime readiness is separate from input delivery. The original TUI supplies

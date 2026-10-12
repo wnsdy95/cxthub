@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func nativeLaunchRequest(args ...string) delivcli.ProviderLaunchRequest {

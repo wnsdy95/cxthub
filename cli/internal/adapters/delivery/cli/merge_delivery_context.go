@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 func mergeContextCoverage(ctx context.Context, c *Container, cwd string, evidence mergeEvidence, candidates []domain.ContentHash) (map[domain.ContentHash]bool, bool, error) {

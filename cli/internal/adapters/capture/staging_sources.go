@@ -13,9 +13,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // StagingSource is an explicitly resolved native session, never a latest-file

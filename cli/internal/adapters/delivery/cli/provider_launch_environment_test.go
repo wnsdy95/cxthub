@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	memoryadapter "github.com/wnsdy95/cxthub/cli/internal/adapters/memory"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativeclaude"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	memoryadapter "github.com/wnsdy95/cxthub-cli/internal/adapters/memory"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativeclaude"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestProviderLaunchClaudeEnvironmentReplacesInheritedProfile(t *testing.T) {

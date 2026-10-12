@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func calibrationScope(name string) domain.ContentHash { return domain.HashContent([]byte(name)) }

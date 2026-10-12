@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Exercise the actual public composition hook with stock native processes, an

@@ -9,5 +9,5 @@
 //   - Same ContentHash ⇒ Same content (dedup key)
 //
 // Dependency Rules (dependency boundaries):
-//   - This package must never import github.com/wnsdy95/cxthub/cli/internal/...
+//   - This package must never import github.com/wnsdy95/cxthub-cli/internal/...
 package domain

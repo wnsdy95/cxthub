@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/boundary"
 )
 
 func TestRestoredSessionID(t *testing.T) {

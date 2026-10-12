@@ -2,13 +2,13 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/wnsdy95/cxthub-cli/internal/testutil"
 )
 
 func TestUsageCoversEveryPublicCommand(t *testing.T) {
@@ -248,17 +248,7 @@ func TestUnknownCommandUsesPublicCommandCatalog(t *testing.T) {
 }
 
 func TestCLIReferenceCoversEveryPublicCommand(t *testing.T) {
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate test source")
-	}
-	docPath := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../../../docs/CLI.md"))
-	raw, err := os.ReadFile(docPath)
-	if errors.Is(err, os.ErrNotExist) {
-		// A separately packaged cli module may not include repository-level
-		// documentation. The public repository preflight requires the file.
-		t.Skip("repository-level CLI reference is not present in this module package")
-	}
+	raw, err := os.ReadFile(testutil.RepositoryPath(t, "docs", "CLI.md"))
 	if err != nil {
 		t.Fatalf("read CLI reference: %v", err)
 	}

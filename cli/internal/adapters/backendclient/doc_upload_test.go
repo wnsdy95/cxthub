@@ -14,9 +14,9 @@ import (
 	"testing"
 	"testing/iotest"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/chunkcas"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/chunkcas"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func docUploadFixture(t *testing.T, version string) outbound.DocumentChunks {

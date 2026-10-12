@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 const agentBoundedProjectionGap = "bounded_projection_remaining_sources_via_mcp"

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 type docJobStatus = domain.DocFinalizationStatus

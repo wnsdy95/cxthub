@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/codec"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func TestAgentContextHistoryBudgetCheckedBeforeMaterialization(t *testing.T) {

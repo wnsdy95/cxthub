@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 // This is an explicit server repair with a separately verified repository URL.

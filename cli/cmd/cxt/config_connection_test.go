@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestConfigCoordinationFrozenHTTPDestinationAndCredentials(t *testing.T) {

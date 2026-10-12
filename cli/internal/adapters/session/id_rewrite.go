@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"regexp"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 // id-rewrite on materialize — distills the internal session id of the materialized version into a file/restart id.

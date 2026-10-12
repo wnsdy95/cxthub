@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 type discoveryPager struct {

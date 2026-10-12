@@ -1,6 +1,6 @@
 package capture
 
-import "github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+import "github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 
 // newSessionID generates a UUIDv4-like identifier for session filenames (uses crypto/rand without external dependencies).
 // Format: 8-4-4-4-12 hex (RFC4122 v4 variant bit settings).

@@ -1,0 +1,35 @@
+version: 2
+project_name: cxt
+
+builds:
+  - id: cxt
+    main: ./cmd/cxt
+    binary: cxt
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags: ["-s -w -X main.version={{.Version}}"]
+
+archives:
+  - ids: [cxt]
+    formats: [tar.gz]
+    name_template: "cxt_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES.md
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  mode: keep-existing
+  header: |
+    ## cxt {{ .Tag }}
+
+    Built from an immutable tag on the generated CLI repository's main branch.
+    See README.md for source-build instructions and the source distribution
+    runbook for provenance. Existing monorepo installer URLs are unchanged.
+
+changelog:
+  sort: asc

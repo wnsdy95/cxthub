@@ -22,10 +22,13 @@ const tests = (await collectTests(testsRoot)).sort();
 if (tests.length === 0) throw new Error(`no frontend unit tests found under ${testsRoot}`);
 
 const outputDir = await mkdtemp(path.join(tmpdir(), 'cxt-web-tests-'));
+const unitOnly = process.argv.includes('--unit-only');
+let executed = 0;
+let contracts = 0;
 try {
   for (const [index, test] of tests.entries()) {
     const outfile = path.join(outputDir, `${index}-${path.basename(test, '.test.ts')}.cjs`);
-    await build({
+    const result = await build({
       absWorkingDir: projectRoot,
       entryPoints: [test],
       bundle: true,
@@ -36,11 +39,18 @@ try {
       platform: 'node',
       target: 'node20',
       define: { 'import.meta.env': '{}' },
+      metafile: true,
     });
+    if (unitOnly && Object.keys(result.metafile.inputs).some((input) => input.replaceAll('\\', '/').endsWith('tests/serverGraphFixture.ts'))) {
+      contracts++;
+      continue;
+    }
     await import(pathToFileURL(outfile).href);
+    executed++;
   }
 } finally {
   await rm(outputDir, { force: true, recursive: true });
 }
 
-console.log(`frontend unit tests: ${tests.length} passed`);
+if (executed === 0) throw new Error('no frontend tests executed');
+console.log(`frontend tests: ${executed} passed; ${contracts} Go contract suites reserved for monorepo CI`);

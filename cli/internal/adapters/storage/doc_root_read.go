@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // GetDocReference is the explicit dual reader. The hash-only GetDoc remains a

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativeclaude"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativeclaude"
 )
 
 func TestNativeClaudeRetirementSeparatesCancellationFromCleanupFailure(t *testing.T) {

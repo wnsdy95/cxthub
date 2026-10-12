@@ -2,7 +2,7 @@ package outbound
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // CheckoutState is the exact selection observed before provider preparation.

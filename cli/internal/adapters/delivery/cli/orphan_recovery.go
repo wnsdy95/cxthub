@@ -9,10 +9,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 )
 
 // Confirmation is explicit evidence supplied by the operator, never presented

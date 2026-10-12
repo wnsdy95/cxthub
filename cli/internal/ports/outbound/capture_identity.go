@@ -3,7 +3,7 @@ package outbound
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // CaptureDocumentPolicy selects the identity for a NEW local capture after

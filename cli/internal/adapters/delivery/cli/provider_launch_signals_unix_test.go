@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/boundary"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/boundary"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Run real signals only in a separate process group, never in the go test

@@ -3,7 +3,7 @@ package backendclient
 import (
 	"fmt"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Bound reassembly work, not merely the manifest's small wire size. Each request

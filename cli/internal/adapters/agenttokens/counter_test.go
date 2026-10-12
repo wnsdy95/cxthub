@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/tiktoken-go/tokenizer"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func TestCounterMatchesIndependentOrdinaryTextReference(t *testing.T) {

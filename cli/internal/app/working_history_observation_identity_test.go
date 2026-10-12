@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 // Pending snapshot metadata selects the reader identity. A body alone must not

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 func gitFixture(t *testing.T, dir string, args ...string) string {

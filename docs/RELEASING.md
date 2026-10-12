@@ -38,8 +38,12 @@ tag does not deploy a hosted CXTHub service.
 
 5. For persistence changes, run PostgreSQL tests and migration checks.
 6. Confirm the version has not already been tagged or released.
-7. Confirm installer, module, repository, and release workflow URLs still point
-   to `wnsdy95/cxthub`.
+7. Confirm the existing installer and this repository's release workflow still
+   publish to `wnsdy95/cxthub`. The independent CLI module path is now
+   `github.com/wnsdy95/cxthub-cli`; its generated repository has a separate,
+   manually dispatched release workflow. Do not redirect existing installers
+   until a new-repository release is verified. See
+   [repository distribution](REPOSITORY_DISTRIBUTION.md).
 
 Conditional automatic-merge append requires PostgreSQL transactions. An FS-only
 sync E2E run cannot certify this feature; it intentionally rejects conditional

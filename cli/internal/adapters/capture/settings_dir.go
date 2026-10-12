@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // ReadSettingsDir reads the SettingsBundle from the

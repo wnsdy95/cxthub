@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 const (

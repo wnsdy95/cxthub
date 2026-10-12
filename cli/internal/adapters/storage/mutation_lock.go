@@ -7,7 +7,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 // An OS lock cannot expire while its owner is still writing, and is released

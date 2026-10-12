@@ -139,6 +139,7 @@ Thumbs.db
 !/docs/PRICING.md
 !/docs/RELEASING.md
 !/docs/REPOSITORY_ORGANIZATIONS.md
+!/docs/REPOSITORY_DISTRIBUTION.md
 
 # Local operator setup guide; do not include in the public repository.
 /docs/GITHUB_CONNECTIONS_SETUP.md

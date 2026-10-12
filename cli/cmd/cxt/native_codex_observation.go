@@ -1,9 +1,9 @@
 package main
 
 import (
-	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativecodex"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativecodex"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Compare telemetry with the original preparation and the observed window.

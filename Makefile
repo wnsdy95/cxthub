@@ -34,6 +34,7 @@ install: ## Install cxt + cxtd + cxt-mcp using go install (GOPATH/bin)
 .PHONY: test
 test: ## Run unit tests for the CLI, backend, and web UI
 	cd cli && $(GO) test ./...
+	cd cli && $(GO) test -tags monorepo ./internal/domain
 	cd backend && $(GO) test ./...
 	cd frontend/web && npm test
 

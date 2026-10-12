@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativeclaude"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativeclaude"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // The first exchange owns the terminal until native TUI handoff. Serialize

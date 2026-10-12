@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 )
 
 const suppliedTestSessionID = "715ee90d-53b1-411d-a317-9f16e638ee6c"

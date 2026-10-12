@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/nativeclaude"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/nativeclaude"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Use the supervisor's argument classifier; never interpret settings or split

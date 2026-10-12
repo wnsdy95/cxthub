@@ -100,6 +100,13 @@ See the [installation guide](docs/INSTALLATION.md) for manual archive
 verification, custom install directories, upgrades, removal, source builds,
 and the separate `cxtd` server.
 
+The public [cxthub-cli](https://github.com/wnsdy95/cxthub-cli) repository is an
+independently buildable, generated CLI distribution. This monorepo remains the
+development source for all components. The existing installer and releases
+remain supported; component synchronization does not deploy the service.
+See [repository distribution](docs/REPOSITORY_DISTRIBUTION.md) for source
+provenance, private deployment mirrors, and the deployment readiness gate.
+
 ## Quick start
 
 Run these commands inside an existing Git repository:

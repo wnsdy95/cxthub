@@ -2,8 +2,8 @@ package storage
 
 import (
 	"context"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 // ReadWorkingPosition reads the atomically published cursor as-is. A pending

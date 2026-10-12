@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // MatchingTagRefs batches no-op recognition, not mutations. Thousands of

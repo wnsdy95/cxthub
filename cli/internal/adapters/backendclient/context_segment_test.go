@@ -10,12 +10,13 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/testutil"
 )
 
 func segmentWireFixture(t *testing.T) ([]byte, domain.ContextQueryView) {
 	t.Helper()
-	raw, err := os.ReadFile("../../../../schemas/testdata/context-segment-v1.json")
+	raw, err := os.ReadFile(testutil.RepositoryPath(t, "schemas", "testdata", "context-segment-v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

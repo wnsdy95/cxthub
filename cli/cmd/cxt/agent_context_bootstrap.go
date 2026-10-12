@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/codec"
-	delivcli "github.com/wnsdy95/cxthub/cli/internal/adapters/delivery/cli"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	sessionadapter "github.com/wnsdy95/cxthub/cli/internal/adapters/session"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/codec"
+	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	sessionadapter "github.com/wnsdy95/cxthub-cli/internal/adapters/session"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 type bootstrapGitPosition struct {

@@ -16,13 +16,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/authcfg"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/backendclient"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/remotecfg"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/storage"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func TestNamedSyncDestinationVerifiesIdentityAndIsolatesCredentials(t *testing.T) {

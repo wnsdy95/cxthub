@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 
-	"github.com/wnsdy95/cxthub/cli/internal/ports/outbound"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/outbound"
 )
 
 func withRetainedObjects[T any](ctx context.Context, store outbound.SessionStore, fn func() (T, error)) (out T, err error) {

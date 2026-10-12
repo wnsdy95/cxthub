@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 // Keep the existing complete attachment/position/CAS fixture, replacing only

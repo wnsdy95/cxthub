@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/branchjournal"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/capturejournal"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub/cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
-	"github.com/wnsdy95/cxthub/cli/internal/ports/inbound"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capturejournal"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
 
 // Mutations CAS the receipt under the same journal lock as capture resolutions.

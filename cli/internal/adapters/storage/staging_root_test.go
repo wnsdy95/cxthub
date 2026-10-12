@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wnsdy95/cxthub/cli/internal/domain"
+	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
 func rootFrozenFixture(t *testing.T, wrongSnapshot bool) (frozenFixture, domain.ContentHash) {
