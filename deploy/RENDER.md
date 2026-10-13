@@ -129,6 +129,15 @@ References: [Render free limits](https://render.com/docs/free),
    Do not set `VITE_API_BASE` for this same-origin deployment. Vercel rejects
    missing or identical API/MCP origins. Add the public domain to Firebase's
    authorized domains and configure GitHub provider callbacks separately.
+   The production CSP must also allow Firebase popup authentication's Google
+   API bootstrap (`https://apis.google.com/js/api.js`) and iframe module path
+   (`https://apis.google.com/_/scs/abc-static/`). The Vercel configuration permits
+   only those external script paths; do not add wildcard script hosts,
+   `unsafe-inline` or `unsafe-eval`. Keep Firebase/Google iframe permissions and
+   the other security directives intact. Run `npm run check:vercel` and the
+   Firebase CSP browser regression, then verify Google sign-in on the deployed
+   origin: local Vite does not exercise production response headers, and mocked
+   scripts do not verify provider configuration or real login.
 6. Wait for `/healthz` on both Render services to return 200. Each checks its
    own database pool, with 503 on database failure. Redeploy Vercel so rewrites
    contain the real Render origins. Connect clients to
