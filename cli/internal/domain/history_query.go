@@ -57,6 +57,9 @@ type BranchContext struct {
 	SnapshotIDs []ContentHash        `json:"snapshot_ids"`
 }
 type BranchContextMerge struct {
+	deliveryAcknowledgementAbsent bool
+	legacyReceiptEncoding         bool
+
 	DeliveryAcknowledged bool        `json:"delivery_acknowledged"`
 	DestinationBranchID  string      `json:"destination_branch_id"`
 	EventID              string      `json:"event_id"`
