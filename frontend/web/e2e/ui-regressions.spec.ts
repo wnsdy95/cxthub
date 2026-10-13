@@ -635,6 +635,7 @@ test('profile survives nullable activity arrays and keeps the legend inside the 
   const pageErrors = capturePageErrors(page);
   const unexpected = await installApiFixture(page, ({ method, pathname }) => {
     if (method !== 'GET') return undefined;
+    if (pathname === '/api/v1/repositories') return { body: [{ id: repositoryId, name: 'cxthub', slug: 'cxthub', owner_username: 'alice', visibility: 'public' }] };
     if (pathname === '/api/v1/me') {
       return {
         body: {

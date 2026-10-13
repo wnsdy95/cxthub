@@ -586,6 +586,8 @@ export const ko = {
     namespaceNotFound: '유저 또는 조직을 찾을 수 없습니다:',
     noRepositoriesSelf: '아직 레포지토리가 없습니다.',
     noRepositoriesPublic: '공개된 레포지토리가 없습니다.',
+    repositoriesLoadError: '참여한 레포지토리를 불러오지 못했습니다.',
+    retryRepositories: '레포지토리 다시 불러오기',
   },
   organization: {
     auditExport: '불러온 기록 내보내기 (JSONL)',

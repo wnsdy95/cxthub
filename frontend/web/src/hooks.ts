@@ -20,9 +20,9 @@ export function useMe() {
 function useAuthed() {
   return Boolean(useMe().data);
 }
-export function useRepositories() {
+export function useRepositories(enabled = true) {
   const authed = useAuthed();
-  return useQuery({ queryKey: ['repositories'], queryFn: api.listRepositories, enabled: authed });
+  return useQuery({ queryKey: ['repositories'], queryFn: api.listRepositories, enabled: authed && enabled });
 }
 export function useOrganizations() {
   const authed = useAuthed();

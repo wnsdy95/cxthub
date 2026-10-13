@@ -1,10 +1,7 @@
 import { InvitationInbox } from './CollaborationInvitations';
-// User profile — GitHub style /<username> page. Left avatar/name, right repository list
-// (repo card space). Anonymous view (only public repositories), owner includes private + 'Edit Profile'.
-// (Contribution graph/activity feed requires commit date aggregation — next step.)
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api';
-import { useMe } from '../hooks';
+import { useMe, useRepositories } from '../hooks';
 import { accountPath, navigate, repositoryPath } from '../route';
 import { Logo } from './Logo';
 import { avatarColor } from './Avatar';
@@ -95,7 +92,10 @@ function ProfileBody({
   const u = data.user;
   const displayName = u.nickname || u.name || u.username;
   const initial = (displayName || u.username || '?').trim().charAt(0).toUpperCase();
-  const repositories = data.repositories ?? [];
+  const joinedRepositories = useRepositories(isSelf);
+  const repositories = (isSelf ? joinedRepositories.data : data.repositories) ?? [];
+  const repositoriesLoading = isSelf && joinedRepositories.isPending;
+  const repositoriesError = isSelf && joinedRepositories.isError;
   const avatar = safeAvatarUrl(u.avatar);
 
   return (
@@ -119,20 +119,31 @@ function ProfileBody({
       <main className="profile-main">
         <div className="profile-section-head">
           <h2 className="profile-section">{t('common.repositories')}</h2>
-          <span className="count-badge">{repositories.length}</span>
+          {!repositoriesLoading && !repositoriesError && <span className="count-badge">{repositories.length}</span>}
         </div>
-        {repositories.length === 0 ? (
+        {repositoriesLoading ? (
+          <p className="hint" role="status">{t('common.loadingLabel')}</p>
+        ) : repositoriesError ? (
+          <div className="empty-box">
+            <p className="err" role="alert">{t('profile.repositoriesLoadError')}</p>
+            <button className="ghost" disabled={joinedRepositories.isFetching} onClick={() => void joinedRepositories.refetch()}>
+              {t('profile.retryRepositories')}
+            </button>
+          </div>
+        ) : repositories.length === 0 ? (
           <div className="empty-box">
             {isSelf ? t('profile.noRepositoriesSelf') : t('profile.noRepositoriesPublic')}
           </div>
         ) : (
           <div className="repository-cards">
-            {repositories.map((w) => (
-              <button key={w.id} className="repository-card" onClick={() => navigate(repositoryPath(w))}>
+            {repositories.map((repository) => (
+              <button key={repository.id} className="repository-card" onClick={() => navigate(repositoryPath(repository))}>
                 <span className="repository-card-top">
-                  <span className="repository-card-name">{w.name}</span>
+                  <span className="repository-card-name" title={`${repository.owner_username}/${repository.name}`}>
+                    {repository.owner_username}/{repository.name}
+                  </span>
                   <span className="repository-card-vis">
-                    {w.visibility === 'public' ? (
+                    {repository.visibility === 'public' ? (
                       t('common.public')
                     ) : (
                       <>
@@ -142,7 +153,7 @@ function ProfileBody({
                   </span>
                 </span>
                 <span className="repository-card-path">
-                  {w.owner_username}/{w.slug}
+                  {repository.owner_username}/{repository.slug}
                 </span>
               </button>
             ))}
