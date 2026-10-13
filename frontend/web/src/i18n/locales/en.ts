@@ -583,6 +583,8 @@ export const en: Messages = {
     namespaceNotFound: 'User or Organization not found:',
     noRepositoriesSelf: 'No repositories yet.',
     noRepositoriesPublic: 'No public repositories.',
+    repositoriesLoadError: 'Could not load your repositories.',
+    retryRepositories: 'Retry repositories',
   },
   organization: {
     auditExport: 'Export loaded records (JSONL)',
