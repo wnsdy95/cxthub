@@ -53,8 +53,7 @@ func (s *FSStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.Content
 	}
 	read := s.ownedFSChunkReader(repo)
 	if root {
-		doc, err := s.docProofs.verifyConversation(ctx, hash, manifest, read)
-		return doc.Reference(), err
+		return verifyStoredConversationReference(ctx, &s.docProofs.rootVerifier, hash, manifest, read)
 	}
 	return s.docProofs.verifyStored(ctx, repo, hash, raw, read)
 }

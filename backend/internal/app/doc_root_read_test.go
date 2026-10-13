@@ -17,13 +17,13 @@ import (
 )
 
 // Seed only synthetic stored fixtures. Root publication remains disabled.
-func seedRootReadDoc(t *testing.T, dir string, st *store.FSStore, repo domain.ContentHash, events ...domain.CIREvent) (domain.SessionDoc, domain.ConversationManifest) {
+func seedRootReadDoc(t testing.TB, dir string, st *store.FSStore, repo domain.ContentHash, events ...domain.CIREvent) (domain.SessionDoc, domain.ConversationManifest) {
 	t.Helper()
 	identity := domain.DocumentIdentityRootV1
 	return seedRootReadDocWithIdentity(t, dir, st, repo, &identity, events...)
 }
 
-func seedRootReadDocWithIdentity(t *testing.T, dir string, st *store.FSStore, repo domain.ContentHash, identity *domain.DocumentIdentity, events ...domain.CIREvent) (domain.SessionDoc, domain.ConversationManifest) {
+func seedRootReadDocWithIdentity(t testing.TB, dir string, st *store.FSStore, repo domain.ContentHash, identity *domain.DocumentIdentity, events ...domain.CIREvent) (domain.SessionDoc, domain.ConversationManifest) {
 	t.Helper()
 	cir := domain.CIRDocument{Envelope: historyEnvelope(), Events: append([]domain.CIREvent{}, events...)}
 	for i := range cir.Events {
@@ -146,6 +146,15 @@ func (s *rootReadSpy) ReadVerifiedDoc(ctx context.Context, repo, hash domain.Con
 		s.after()
 	}
 	return doc, err
+}
+
+func (spy *rootReadSpy) ReadVerifiedRootEvents(ctx context.Context, repo, hash domain.ContentHash, selection domain.RootEventSelection) (domain.VerifiedRootEvents, error) {
+	spy.reads++
+	projection, err := spy.FSStore.ReadVerifiedRootEvents(ctx, repo, hash, selection)
+	if err == nil && spy.after != nil {
+		spy.after()
+	}
+	return projection, err
 }
 
 func (s *rootReadSpy) MatchingDocHashes(context.Context, domain.ContentHash, string) (map[domain.ContentHash]bool, error) {

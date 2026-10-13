@@ -20,6 +20,10 @@ const conversationCheckBytes = 64 << 10
 // not concurrently mutate a returned slice while this call reads it. Metadata
 // is snapshotted before loader callbacks, and a bounded chunk copy is retained.
 func VerifyConversationManifest(ctx context.Context, want ContentHash, manifest ConversationManifest, load func(context.Context, ContentHash) ([]byte, error)) error {
+	return verifyConversationManifest(ctx, want, manifest, load, nil, nil)
+}
+
+func verifyConversationManifest(ctx context.Context, want ContentHash, manifest ConversationManifest, load func(context.Context, ContentHash) ([]byte, error), check func(context.Context, string, []byte) (int, error), observe func(int64, []byte, int) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -38,7 +42,10 @@ func VerifyConversationManifest(ctx context.Context, want ContentHash, manifest 
 		return conversationManifestError("expected root or loader")
 	}
 	version, _ := conversationManifestEnvelope(manifest.Envelope) // validated above
-	scanner := conversationEventScanner{version: version, limit: manifest.EventCount}
+	scanner := conversationEventScanner{version: version, limit: manifest.EventCount, check: check, observe: observe}
+	if scanner.check == nil {
+		scanner.check = conversationManifestEvent
+	}
 	for _, chunk := range manifest.Chunks {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -85,6 +92,8 @@ type conversationEventScanner struct {
 	afterComma, havePrevious   bool
 	previous                   int
 	count, limit               int64
+	check                      func(context.Context, string, []byte) (int, error)
+	observe                    func(int64, []byte, int) error
 }
 
 func (s *conversationEventScanner) add(ctx context.Context, body []byte) error {
@@ -142,12 +151,17 @@ func (s *conversationEventScanner) add(ctx context.Context, body []byte) error {
 				if !utf8.Valid(s.event) {
 					return conversationManifestError("event UTF-8")
 				}
-				seq, err := conversationManifestEvent(ctx, s.version, s.event)
+				seq, err := s.check(ctx, s.version, s.event)
 				if err != nil {
 					return fmt.Errorf("%w: event canonical validation: %w", ErrConversationManifest, err)
 				}
 				if s.havePrevious && seq < s.previous {
 					return conversationManifestError("event sequence regression")
+				}
+				if s.observe != nil {
+					if err := s.observe(s.count, s.event, seq); err != nil {
+						return err
+					}
 				}
 				s.previous, s.havePrevious = seq, true
 				s.count++

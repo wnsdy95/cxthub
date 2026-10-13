@@ -72,9 +72,13 @@ chunks. Callers join both the declared identity and hash to the expected
 snapshot/reference. Hash-only legacy readers reject root storage, including
 when a stale read/search index exists or snapshot metadata is absent.
 
-Server event pages, fragments and search can derive their projection from one
-owned, fully verified root document. They retain those same bytes for range
-reads; a later file mutation cannot substitute different content. PostgreSQL
+Server event pages stream the complete owned root, but retain only the selected
+event bytes. Exact-prefix comparison prepares the base's event hashes before
+reading the target; it does not retain two complete conversations. The page is
+returned only after every chunk occurrence, including the unused tail, passes
+verification. A later storage mutation cannot substitute different page bytes.
+Fragments, search and agent-history still materialize a verified root document;
+the event-page working-set improvement does not cover those paths. PostgreSQL
 reads use one read snapshot or the caller's existing transaction. These reads
 do not publish indexes, rewrite documents or grant future write authority.
 Root search cannot be excluded by legacy search-index candidate filters.
@@ -88,15 +92,40 @@ remain intact, and old staged derivatives retain their normal transactional
 cleanup and shared-owner protection. Backfill verifies current root bytes
 without creating a legacy index.
 
-Page and fragment reads use the event locations, hashes and sequence already
-established by root verification; they do not scan every event again for role
-or searchable text. Agent-history reads still derive exact roles, and search
-requests retain the complete search projection. Store instances may reuse up
+Page reads use hashes and sequences established by streaming verification;
+fragment reads use the verified document's event locations. Neither computes
+searchable text for the entire conversation. Agent-history reads still derive
+exact roles, and search requests retain the complete search projection. Store instances may reuse up
 to 65,536 exact event-hash/CIR-version semantic proofs to avoid repeated typed
 decoding; they retain no event
 bodies. Every read still checks current owned chunks, framing and ordering.
 Eviction or a process restart affects speed only. This does not make a first
 page proportional to page size: full current-byte verification remains required.
+
+Reference-only verification also streams every current chunk without retaining
+the full conversation. It returns a domain-owned reference only after complete
+validation. Neither that reference nor an event page is a persistent certificate.
+History preparation may reuse that successful reference only inside the same
+active request, repository, store and exact read transaction. Capture still
+checks the descriptor and records all dependency versions; the later write
+transaction pins those versions and rechecks authorization. Another read
+transaction, failed verification or ended proof scope cannot reuse it.
+Working memory still includes the largest complete event, selected page bytes,
+bounded semantic-proof metadata and, when requested, base event hashes. It is
+not a strict 512 KiB bound. Giant individual events and the remaining full-body
+consumers require separate capacity evaluation.
+
+An opt-in local measurement uses synthetic data by default:
+
+```sh
+cd backend
+CXT_TEST_ROOT_READ_LARGE=1 go test ./internal/app \
+  -run '^TestRootEventPageLargeWorkingSet$' -count=1 -timeout=120s -v
+```
+
+It compares bounded event-page working sets under `GOMEMLIMIT=384MiB`; this is
+not a cloud latency or concurrent-load acceptance test. Private local fixtures
+must stay outside the repository and must not be uploaded with benchmark logs.
 
 Local and FS maintenance mark root chunk dependencies without repacking the
 root as a legacy object. An undecodable document aborts destructive chunk
