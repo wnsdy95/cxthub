@@ -678,9 +678,16 @@ func (s *IdentityService) CreateCLIToken(ctx context.Context, userID, label stri
 // client-bound refresh token. Both are stored only by hash through the
 // existing session store. The refresh token deliberately does not use the
 // sess_ prefix, so it cannot be presented to ordinary API/MCP bearer gates.
-func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientID string) (domain.OAuthTokenPair, error) {
+func (s *IdentityService) IssueMCPTokenPair(ctx context.Context, userID, clientID string, resources ...string) (domain.OAuthTokenPair, error) {
+	resource := ""
+	if len(resources) > 0 {
+		if len(resources) != 1 || resources[0] == "" {
+			return domain.OAuthTokenPair{}, domain.ErrValidation
+		}
+		resource = resources[0]
+	}
 	return identityResult(ctx, s, func(ctx context.Context) (domain.OAuthTokenPair, error) {
-		return s.issueMCPTokenPair(ctx, userID, clientID)
+		return s.issueMCPTokenPair(ctx, userID, clientID, resource)
 	})
 }
 
@@ -1151,7 +1158,7 @@ func (s *IdentityService) ResolveUser(ctx context.Context, bearer string) (domai
 // ResolveMCPUser accepts only short-lived MCP access sessions. It deliberately
 // excludes web, CLI, refresh, and raw IDP tokens so the remote connector has a
 // separate authentication boundary from the mutation-capable REST API.
-func (s *IdentityService) ResolveMCPUser(ctx context.Context, bearer string) (domain.User, error) {
+func (s *IdentityService) ResolveMCPUser(ctx context.Context, bearer string, resources ...string) (domain.User, error) {
 	if !strings.HasPrefix(bearer, "sess_") {
 		return domain.User{}, domain.ErrUnauthorized
 	}
@@ -1159,7 +1166,7 @@ func (s *IdentityService) ResolveMCPUser(ctx context.Context, bearer string) (do
 	if err != nil || sess.Kind != "mcp_access" {
 		return domain.User{}, domain.ErrUnauthorized
 	}
-	if err := s.checkMCPGrant(ctx, sess); err != nil {
+	if err := s.checkMCPGrant(ctx, sess, resources...); err != nil {
 		return domain.User{}, err
 	}
 	return user, nil

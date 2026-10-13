@@ -109,6 +109,15 @@ func TestMCPAllowanceSharedAcrossServerInstances(t *testing.T) {
 }
 
 func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
+	for _, resourceOrigin := range []string{"https://cxthub.test", "https://mcp.cxthub.test"} {
+		t.Run(resourceOrigin, func(t *testing.T) {
+			testRemoteMCPAuthorizationFlow(t, resourceOrigin)
+		})
+	}
+}
+
+func testRemoteMCPAuthorizationFlow(t *testing.T, resourceOrigin string) {
+	t.Helper()
 	ctx := systemTestContext()
 	st := store.NewFSStore(t.TempDir())
 	user := domain.User{ID: "oauth-user", Email: "oauth@example.test", Name: "OAuth User", Username: "oauth-user"}
@@ -137,9 +146,27 @@ func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 		{ID: repoID, RemoteURL: "https://cxthub.test/oauth-user/project", DefaultBranch: "main", RepositoryID: repository.ID},
 		{ID: otherRepoID, RemoteURL: "https://cxthub.test/other/secret", DefaultBranch: "main", RepositoryID: privateOther.ID},
 	}}
-	server, err := NewServer(backend, id, st, "https://cxthub.test")
+	server, err := NewServerWithOrigins(backend, id, st, "https://cxthub.test", resourceOrigin)
 	if err != nil {
 		t.Fatal(err)
+	}
+	resource := resourceOrigin + "/mcp"
+	metadata := mcpRequest(t, server.Handler(), http.MethodGet, "/.well-known/oauth-protected-resource/mcp", nil, nil)
+	protected := decodeJSON[struct {
+		Resource string   `json:"resource"`
+		Servers  []string `json:"authorization_servers"`
+	}](t, metadata.Body)
+	if metadata.Code != http.StatusOK || protected.Resource != resource || len(protected.Servers) != 1 || protected.Servers[0] != "https://cxthub.test" {
+		t.Fatalf("protected resource metadata = %+v", protected)
+	}
+	challenge := mcpRequest(t, server.Handler(), http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`), remoteMCPHeaders(""))
+	if challenge.Code != http.StatusUnauthorized || !strings.Contains(challenge.Header().Get("WWW-Authenticate"), resourceOrigin+"/.well-known/oauth-protected-resource/mcp") {
+		t.Fatalf("MCP challenge = %d %s", challenge.Code, challenge.Header().Get("WWW-Authenticate"))
+	}
+	authorizationMetadata := mcpRequest(t, server.Handler(), http.MethodGet, "/.well-known/oauth-authorization-server", nil, nil)
+	issuer := decodeJSON[map[string]any](t, authorizationMetadata.Body)
+	if issuer["issuer"] != "https://cxthub.test" || issuer["authorization_endpoint"] != "https://cxthub.test/oauth/authorize" || issuer["token_endpoint"] != "https://cxthub.test/oauth/token" {
+		t.Fatalf("authorization metadata changed with resource origin: %+v", issuer)
 	}
 
 	for _, selector := range []string{string(repoID), "oauth-user/project", "https://cxthub.test/oauth-user/project"} {
@@ -176,10 +203,16 @@ func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 		"redirect_uri":          {"http://127.0.0.1/callback"},
 		"code_challenge":        {pkceChallenge(verifier)},
 		"code_challenge_method": {"S256"},
-		"resource":              {"https://cxthub.test/mcp"},
+		"resource":              {resource},
 		"scope":                 {readScope},
 		"state":                 {state},
 	}
+	authorizeQuery.Set("resource", "https://wrong-resource.test/mcp")
+	wrongResource := mcpRequest(t, server.Handler(), http.MethodGet, "/oauth/authorize?"+authorizeQuery.Encode(), nil, nil)
+	if wrongResource.Code != http.StatusBadRequest || !strings.Contains(wrongResource.Body.String(), "invalid_target") {
+		t.Fatalf("wrong resource accepted: %d", wrongResource.Code)
+	}
+	authorizeQuery.Set("resource", resource)
 	authorized := mcpRequest(t, server.Handler(), http.MethodGet, "/oauth/authorize?"+authorizeQuery.Encode(), nil, nil)
 	if authorized.Code != http.StatusSeeOther {
 		t.Fatalf("authorize = %d: %s", authorized.Code, authorized.Body.String())
@@ -187,6 +220,9 @@ func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 	consentURL, err := url.Parse(authorized.Header().Get("Location"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if consentURL.Scheme != "https" || consentURL.Host != "cxthub.test" || consentURL.Path != "/connect/mcp" {
+		t.Fatalf("consent escaped frontend origin: %s", consentURL)
 	}
 	requestID := consentURL.Query().Get("request")
 	if requestID == "" {
@@ -202,6 +238,14 @@ func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 	consentHeaders := map[string]string{
 		"Cookie": webSessionCookie(webSession.Token), "Content-Type": "application/json",
 		"X-Cxt-CSRF": "1", "Origin": "https://cxthub.test",
+	}
+	if resourceOrigin != "https://cxthub.test" {
+		wrongOrigin := mcpRequest(t, server.Handler(), http.MethodPost, "/api/v1/oauth/requests/"+requestID, strings.NewReader(`{"approve":true}`), map[string]string{
+			"Cookie": webSessionCookie(webSession.Token), "Content-Type": "application/json", "X-Cxt-CSRF": "1", "Origin": resourceOrigin,
+		})
+		if wrongOrigin.Code != http.StatusForbidden {
+			t.Fatalf("resource origin acquired consent authority: %d", wrongOrigin.Code)
+		}
 	}
 	missingOrigin := mcpRequest(t, server.Handler(), http.MethodPost, "/api/v1/oauth/requests/"+requestID, strings.NewReader(`{"approve":true}`), map[string]string{
 		"Cookie": webSessionCookie(webSession.Token), "Content-Type": "application/json", "X-Cxt-CSRF": "1",
@@ -231,7 +275,7 @@ func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 	tokenForm := url.Values{
 		"grant_type": {"authorization_code"}, "client_id": {client.ClientID},
 		"redirect_uri": {"http://127.0.0.1/callback"}, "code": {callback.Query().Get("code")},
-		"code_verifier": {verifier}, "resource": {"https://cxthub.test/mcp"},
+		"code_verifier": {verifier}, "resource": {resource},
 	}
 	wrongTokenType := mcpRequest(t, server.Handler(), http.MethodPost, "/oauth/token", strings.NewReader(tokenForm.Encode()), map[string]string{"Content-Type": "application/json"})
 	if wrongTokenType.Code != http.StatusUnsupportedMediaType {
@@ -272,7 +316,7 @@ func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 
 	refreshForm := url.Values{
 		"grant_type": {"refresh_token"}, "client_id": {client.ClientID},
-		"refresh_token": {tokens.RefreshToken}, "resource": {"https://cxthub.test/mcp"},
+		"refresh_token": {tokens.RefreshToken}, "resource": {resource},
 	}
 	refreshed := mcpRequest(t, server.Handler(), http.MethodPost, "/oauth/token", strings.NewReader(refreshForm.Encode()), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
 	if refreshed.Code != http.StatusOK || !strings.Contains(refreshed.Body.String(), "access_token") {
@@ -325,7 +369,7 @@ func TestRemoteMCPDCRPKCERefreshAndRepositoryIsolation(t *testing.T) {
 	}
 	revokedRefreshForm := url.Values{
 		"grant_type": {"refresh_token"}, "client_id": {client.ClientID},
-		"refresh_token": {refreshedTokens.RefreshToken}, "resource": {"https://cxthub.test/mcp"},
+		"refresh_token": {refreshedTokens.RefreshToken}, "resource": {resource},
 	}
 	revokedRefresh := mcpRequest(t, server.Handler(), http.MethodPost, "/oauth/token", strings.NewReader(revokedRefreshForm.Encode()), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
 	if revokedRefresh.Code != http.StatusBadRequest || !strings.Contains(revokedRefresh.Body.String(), "invalid_grant") {
@@ -408,7 +452,7 @@ func TestStreamableHTTPTransportGuards(t *testing.T) {
 	if err := st.UpsertUser(systemTestContext(), user); err != nil {
 		t.Fatal(err)
 	}
-	pair, err := id.IssueMCPTokenPair(systemTestContext(), user.ID, "transport-client")
+	pair, err := id.IssueMCPTokenPair(systemTestContext(), user.ID, "transport-client", "https://cxthub.test/mcp")
 	if err != nil {
 		t.Fatal(err)
 	}

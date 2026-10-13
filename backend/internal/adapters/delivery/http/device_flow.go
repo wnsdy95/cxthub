@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -25,6 +26,10 @@ const (
 	devicePairTTL      = 5 * time.Minute
 	devicePollInterval = 3 // seconds — CLI polling interval guidance
 )
+
+func (s *Server) SetDeviceVerificationOrigin(origin string) {
+	s.deviceVerificationOrigin = strings.TrimRight(origin, "/")
+}
 
 // newDeviceCode generates a short code for humans: excludes confusing characters (0/O/1/I, vowels) 6 characters, XXX-XXX.
 func newDeviceCode() string {
@@ -76,12 +81,18 @@ func (s *Server) deviceStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.respond(w, map[string]any{
+	response := map[string]any{
 		"code":       code,
 		"poll_token": poll,
 		"expires_in": int(devicePairTTL.Seconds()),
 		"interval":   devicePollInterval,
-	}, nil)
+	}
+	if s.deviceVerificationOrigin != "" {
+		verificationURI := s.deviceVerificationOrigin + "/login/device"
+		response["verification_uri"] = verificationURI
+		response["verification_uri_complete"] = verificationURI + "?code=" + url.QueryEscape(code)
+	}
+	s.respond(w, response, nil)
 }
 
 // deviceApprove is when a logged-in user approves a code.

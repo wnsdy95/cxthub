@@ -217,7 +217,7 @@ type OAuthStore interface {
 	GetOAuthAuthorizationRequest(ctx context.Context, requestID string) (domain.OAuthAuthorizationRequest, error)
 	ApproveOAuthAuthorizationRequest(ctx context.Context, requestID, userID, codeHash string, codeExpiresAt time.Time) (domain.OAuthAuthorizationCode, error)
 	DenyOAuthAuthorizationRequest(ctx context.Context, requestID string) (domain.OAuthAuthorizationRequest, error)
-	ConsumeOAuthAuthorizationCode(ctx context.Context, codeHash, clientID, redirectURI, codeChallenge string) (domain.OAuthAuthorizationCode, error)
+	ConsumeOAuthAuthorizationCode(ctx context.Context, codeHash, clientID, redirectURI, codeChallenge string, resources ...string) (domain.OAuthAuthorizationCode, error)
 }
 
 // OrganizationStore persists global namespaces, organization organization state,

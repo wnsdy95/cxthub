@@ -23,10 +23,14 @@ func retryDueMergeDelivery(saved mergeDelivery, now time.Time) bool {
 	return now.Before(saved.LastAttempt) || !now.Before(saved.LastAttempt.Add(delay))
 }
 
-func automaticMergeDeliveryKeys(jobs map[string]mergeDelivery, scope mergeEvidence, order map[string]int, now time.Time) []string {
+func automaticMergeDeliveryKeys(jobs map[string]mergeDelivery, scope mergeEvidence, order map[string]int, now time.Time, matchers ...func(mergeEvidence) bool) []string {
+	match := func(saved mergeEvidence) bool { return sameMergeScope(saved, scope) }
+	if len(matchers) != 0 {
+		match = matchers[0]
+	}
 	var keys []string
 	for key, saved := range jobs {
-		if saved.Completed || !sameMergeScope(saved.Evidence, scope) {
+		if saved.Completed || !match(saved.Evidence) {
 			continue
 		}
 		if saved.LeaseUntil.After(now) {
@@ -118,7 +122,12 @@ func pendingMergeDeliveryWake(ctx context.Context, cwd, root string, now time.Ti
 	remote, originHash := mergeDestinationHash(destination), domain.HashContent([]byte(origin))
 	for _, saved := range jobs {
 		_, ancestral := ancestry[saved.Evidence.After]
-		if retryDueMergeDelivery(saved, now) && saved.Evidence.LocalBranch == branch && saved.Evidence.Remote == remote && saved.Evidence.Origin == originHash && ancestral {
+		authorized := saved.Evidence.Remote == remote
+		if !authorized {
+			_, routeErr := resolvePendingTransport(root, saved.Evidence.RepoID, func(source CapturePushDestination) bool { return mergeDestinationHash(source) == saved.Evidence.Remote })
+			authorized = routeErr == nil
+		}
+		if retryDueMergeDelivery(saved, now) && saved.Evidence.LocalBranch == branch && authorized && saved.Evidence.Origin == originHash && ancestral {
 			return true, nil
 		}
 	}
@@ -146,14 +155,18 @@ func replayAutomaticMergeDeliveries(ctx context.Context, c *Container, cwd strin
 	if err != nil {
 		return false, false, err
 	}
+	match, err := mergeScopeMatcher(root, scope)
+	if err != nil {
+		return false, false, err
+	}
 	pending := false
 	for _, saved := range before {
 		_, ancestral := ancestry[saved.Evidence.After]
-		if !saved.Completed && sameMergeScope(saved.Evidence, scope) && ancestral {
+		if !saved.Completed && match(saved.Evidence) && ancestral {
 			pending = true
 		}
 	}
-	keys := automaticMergeDeliveryKeys(before, scope, ancestry, time.Now())
+	keys := automaticMergeDeliveryKeys(before, scope, ancestry, time.Now(), match)
 	if len(keys) == 0 {
 		return pending, false, nil
 	}
@@ -178,7 +191,7 @@ func replayAutomaticMergeDeliveries(ctx context.Context, c *Container, cwd strin
 	pending, progressed := false, false
 	for key, saved := range after {
 		_, ancestral := ancestry[saved.Evidence.After]
-		if !sameMergeScope(saved.Evidence, scope) || !ancestral {
+		if !match(saved.Evidence) || !ancestral {
 			continue
 		}
 		pending = pending || !saved.Completed

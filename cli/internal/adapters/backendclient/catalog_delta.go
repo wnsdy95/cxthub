@@ -29,10 +29,11 @@ func (c *BackendClient) acquireCatalog(ctx context.Context, repo string) (domain
 	if domain.ValidateContentHash(repo) != nil {
 		return zero, nil, false, domain.ErrHashMismatch
 	}
-	base := c.baseURL()
-	// Pin all requests to the captured endpoint; token lookup remains fresh.
-	peer := NewBackendClient(func() string { return base }, c.token, c.identity)
-	peer.httpc = c.httpc
+	base, token, err := c.transport()
+	if err != nil {
+		return zero, nil, false, err
+	}
+	peer := c.frozenRequestClient(base, token)
 	remote := peer.SyncRemoteIdentity()
 	fence := func() error {
 		if err := ctx.Err(); err != nil {

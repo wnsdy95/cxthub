@@ -3,9 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
-	"strings"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
@@ -33,23 +30,7 @@ func tokenForObservedDestination(cfg config, target, configuredOrigin string) st
 			base = resolved
 		}
 	}
-	u, err := url.Parse(target)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return ""
-	}
-	// Saved credentials are keyed by host, not scheme. Reject insecure remote
-	// transport before either credential source can be used. Loopback remains
-	// available for explicitly configured local development servers.
-	ip := net.ParseIP(u.Hostname())
-	loopback := strings.EqualFold(u.Hostname(), "localhost") || ip != nil && ip.IsLoopback()
-	if !strings.EqualFold(u.Scheme, "https") && !(strings.EqualFold(u.Scheme, "http") && loopback) {
-		return ""
-	}
-	origin, err := url.Parse(base)
-	if err == nil && strings.EqualFold(u.Scheme, origin.Scheme) && strings.EqualFold(u.Host, origin.Host) && strings.TrimRight(u.Path, "/") == strings.TrimRight(origin.Path, "/") && cfg.RemoteToken != "" {
-		return cfg.RemoteToken
-	}
-	return authcfg.Token(u.Host)
+	return authcfg.TokenForDestination(target, base, cfg.RemoteToken)
 }
 
 func selectedPullApplication(store *storage.FileStore, remote *backendclient.BackendClient, git outbound.GitContext) func(context.Context, string) (outbound.SelectedPullReceipt, error) {
@@ -65,7 +46,11 @@ func selectedPullApplication(store *storage.FileStore, remote *backendclient.Bac
 func namedSyncDestination(cfg config, store *storage.FileStore, git outbound.GitContext) func(context.Context, string, string) (delivcli.SyncDestination, error) {
 	return func(ctx context.Context, cwd, name string) (delivcli.SyncDestination, error) {
 		var out delivcli.SyncDestination
-		remotes, err := remotecfg.Load(cwd)
+		observed, err := remotecfg.Observe(ctx, cwd)
+		if err != nil {
+			return out, err
+		}
+		remotes, err := observed.Remotes()
 		if err != nil {
 			return out, err
 		}
@@ -73,16 +58,18 @@ func namedSyncDestination(cfg config, store *storage.FileStore, git outbound.Git
 		if !exists {
 			return out, fmt.Errorf("remote %q is not configured", name)
 		}
-		base, err := remotecfg.APIBase(raw)
+		binding, err := observed.ResolveEndpoint(raw)
 		if err != nil {
 			return out, err
 		}
-		client := backendclient.NewBackendClient(func() string { return base }, func() string { return tokenForSyncDestination(cfg, base) }, cfg.Identity)
+		base := binding.Endpoint
+		token := tokenForObservedDestination(cfg, base, remotes["origin"])
+		client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
 		repo, err := git.CurrentRepo(ctx, cwd)
 		if err != nil {
 			return out, err
 		}
-		connection, err := client.ResolveRepositoryConnection(ctx, raw)
+		connection, err := resolveEndpointConnection(ctx, client, binding)
 		if err != nil {
 			return out, fmt.Errorf("verify remote %q identity: %w", name, err)
 		}
@@ -105,10 +92,11 @@ func prepareRemoteConnection(cfg config) func(context.Context, string, string, s
 		if err != nil {
 			return out, err
 		}
-		base, err := remotecfg.APIBase(canonical)
+		binding, err := remotecfg.ResolveEndpoint(ctx, cwd, canonical)
 		if err != nil {
 			return out, err
 		}
+		base := binding.Endpoint
 		token := tokenForObservedDestination(cfg, base, configuredOrigin)
 		client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
 		git := gitctx.NewGitContextAdapter()
@@ -116,7 +104,7 @@ func prepareRemoteConnection(cfg config) func(context.Context, string, string, s
 		if err != nil {
 			return out, err
 		}
-		connection, err := client.ResolveRepositoryConnection(ctx, canonical)
+		connection, err := resolveEndpointConnection(ctx, client, binding)
 		if err != nil {
 			return out, fmt.Errorf("repository identity could not be verified; remote was not saved: %w", err)
 		}

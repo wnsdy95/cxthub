@@ -31,7 +31,7 @@ func (h captureGatePositionHistory) CurrentPosition(ctx context.Context) (domain
 // Embedding the old, narrow port deliberately hides both optional capabilities.
 type captureGateLegacyHistory struct{ inbound.ContextHistory }
 
-func captureGateFixture(t *testing.T) (string, *Container, *storage.FileStore, domain.Repo) {
+func captureGateFixture(t *testing.T, origins ...string) (string, *Container, *storage.FileStore, domain.Repo) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -41,6 +41,9 @@ func captureGateFixture(t *testing.T) (string, *Container, *storage.FileStore, d
 	runLifecycleGit(t, cwd, "config", "user.name", "test")
 	runLifecycleGit(t, cwd, "config", "user.email", "test@example.test")
 	runLifecycleGit(t, cwd, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "initial")
+	if len(origins) != 0 {
+		runLifecycleGit(t, cwd, "remote", "add", "origin", origins[0])
+	}
 	git := gitctx.NewGitContextAdapter()
 	repo, err := git.CurrentRepo(context.Background(), cwd)
 	if err != nil {

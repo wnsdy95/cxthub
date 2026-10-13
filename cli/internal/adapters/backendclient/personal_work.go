@@ -19,7 +19,10 @@ func (c *BackendClient) PersonalWorkPrincipal(ctx context.Context) (id, email st
 	if c == nil || c.token == nil {
 		return "", "", fmt.Errorf("%w: --work-state requires an authenticated backend account; log in to the configured remote", domain.ErrAgentContextUnavailable)
 	}
-	token := c.token()
+	endpoint, token, err := c.transport()
+	if err != nil {
+		return "", "", err
+	}
 	if strings.TrimSpace(token) == "" {
 		return "", "", fmt.Errorf("%w: --work-state requires an authenticated backend account; log in to the configured remote", domain.ErrAgentContextUnavailable)
 	}
@@ -28,7 +31,7 @@ func (c *BackendClient) PersonalWorkPrincipal(ctx context.Context) (id, email st
 		Email string `json:"email"`
 	}
 	// Suppress the caller-controlled legacy identity header for this request.
-	account := &BackendClient{baseURL: c.baseURL, token: func() string { return token }, httpc: c.httpc}
+	account := &BackendClient{baseURL: func() string { return endpoint }, token: func() string { return token }, httpc: c.httpc}
 	if err := account.doLimited(ctx, http.MethodGet, "/me", nil, &user, 1<<20); err != nil {
 		return "", "", fmt.Errorf("--work-state cannot authenticate the account through GET /me: %w", err)
 	}
@@ -52,11 +55,15 @@ func (c *BackendClient) FetchPersonalWorkDocumentReference(ctx context.Context, 
 		return doc, 0, domain.ErrHashMismatch
 	}
 	path := c.reposPath(repo) + "/docs/" + url.PathEscape(string(ref.Hash))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL()+path, nil)
+	endpoint, token, err := c.transport()
 	if err != nil {
 		return doc, 0, err
 	}
-	if token := c.token(); token != "" {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+path, nil)
+	if err != nil {
+		return doc, 0, err
+	}
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("X-Cxt-Doc-Identities", string(domain.DocumentIdentityRootV1))

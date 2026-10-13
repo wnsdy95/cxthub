@@ -18,7 +18,7 @@ func (s *IdentityService) grantStore() (outbound.OAuthGrants, error) {
 	return st, nil
 }
 
-func (s *IdentityService) issueMCPTokenPair(ctx context.Context, user, client string) (domain.OAuthTokenPair, error) {
+func (s *IdentityService) issueMCPTokenPair(ctx context.Context, user, client, resource string) (domain.OAuthTokenPair, error) {
 	st, err := s.grantStore()
 	if err != nil {
 		return domain.OAuthTokenPair{}, err
@@ -27,7 +27,7 @@ func (s *IdentityService) issueMCPTokenPair(ctx context.Context, user, client st
 		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	g := domain.OAuthGrant{ID: domain.NewID("grt_"), UserID: user, ClientID: client, CreatedAt: now, ExpiresAt: now.Add(mcpRefreshTokenTTL)}
+	g := domain.OAuthGrant{ID: domain.NewID("grt_"), UserID: user, ClientID: client, Resource: resource, CreatedAt: now, ExpiresAt: now.Add(mcpRefreshTokenTTL)}
 	if err = st.CreateOAuthGrant(ctx, g); err != nil {
 		return domain.OAuthTokenPair{}, err
 	}
@@ -65,8 +65,15 @@ func (s *IdentityService) issueGrantPair(ctx context.Context, st outbound.OAuthG
 	return domain.OAuthTokenPair{GrantID: g.ID, AccessToken: access.Token, RefreshToken: refresh.Token, ExpiresIn: int(mcpAccessTokenTTL.Seconds()), Scope: "mcp:read"}, nil
 }
 
-func (s *IdentityService) checkMCPGrant(ctx context.Context, sess domain.Session) error {
+func mcpGrantResourceMatches(resource string, expected []string) bool {
+	return len(expected) == 0 || len(expected) == 1 && expected[0] != "" && resource == expected[0]
+}
+
+func (s *IdentityService) checkMCPGrant(ctx context.Context, sess domain.Session, resources ...string) error {
 	if sess.GrantID == "" {
+		if !mcpGrantResourceMatches("", resources) {
+			return domain.ErrUnauthorized
+		}
 		return nil
 	} // Unassociated legacy access expires naturally.
 	st, err := s.grantStore()
@@ -80,7 +87,7 @@ func (s *IdentityService) checkMCPGrant(ctx context.Context, sess domain.Session
 	if err != nil {
 		return err
 	}
-	if g.UserID != sess.UserID || g.ClientID != sess.Label || !g.Active(time.Now().UTC()) {
+	if g.UserID != sess.UserID || g.ClientID != sess.Label || !g.Active(time.Now().UTC()) || !mcpGrantResourceMatches(g.Resource, resources) {
 		return domain.ErrUnauthorized
 	}
 	return nil
@@ -90,12 +97,12 @@ var errMCPGrantDenied = errors.New("MCP grant rejected")
 
 // Refresh rejection after a detected replay must COMMIT the revocation before
 // returning invalid_grant. An error from the transaction callback would undo it.
-func (s *IdentityService) RefreshMCPAccessToken(ctx context.Context, token, client string) (domain.OAuthTokenPair, error) {
+func (s *IdentityService) RefreshMCPAccessToken(ctx context.Context, token, client string, resources ...string) (domain.OAuthTokenPair, error) {
 	var pair domain.OAuthTokenPair
 	var rejected bool
 	err := s.withIdentity(ctx, func(ctx context.Context) error {
 		var err error
-		pair, err = s.rotateMCPGrant(ctx, token, client)
+		pair, err = s.rotateMCPGrant(ctx, token, client, resources...)
 		if errors.Is(err, errMCPGrantDenied) {
 			rejected = true
 			return nil
@@ -111,7 +118,7 @@ func (s *IdentityService) RefreshMCPAccessToken(ctx context.Context, token, clie
 	return pair, nil
 }
 
-func (s *IdentityService) rotateMCPGrant(ctx context.Context, token, client string) (domain.OAuthTokenPair, error) {
+func (s *IdentityService) rotateMCPGrant(ctx context.Context, token, client string, resources ...string) (domain.OAuthTokenPair, error) {
 	empty := domain.OAuthTokenPair{}
 	if !strings.HasPrefix(token, "refresh_") || domain.ValidateExternalID(client) != nil {
 		return empty, errMCPGrantDenied
@@ -126,6 +133,9 @@ func (s *IdentityService) rotateMCPGrant(ctx context.Context, token, client stri
 	if err != nil && !legacy {
 		return empty, err
 	}
+	if legacy && !mcpGrantResourceMatches("", resources) {
+		return empty, errMCPGrantDenied
+	}
 	var g domain.OAuthGrant
 	if !legacy {
 		g, err = st.GetOAuthGrant(ctx, ref.GrantID)
@@ -135,7 +145,7 @@ func (s *IdentityService) rotateMCPGrant(ctx context.Context, token, client stri
 		if err != nil {
 			return empty, err
 		}
-		if g.ClientID != client || !g.Active(time.Now().UTC()) || !time.Now().Before(ref.ExpiresAt) {
+		if g.ClientID != client || !g.Active(time.Now().UTC()) || !time.Now().Before(ref.ExpiresAt) || !mcpGrantResourceMatches(g.Resource, resources) {
 			return empty, errMCPGrantDenied
 		}
 	}

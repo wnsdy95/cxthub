@@ -5916,6 +5916,14 @@ paths:
                 properties:
                   code: { type: string, example: KX3-9F2 }
                   poll_token: { type: string }
+                  verification_uri:
+                    type: string
+                    format: uri
+                    description: Configured frontend approval page, independent of the API hostname.
+                  verification_uri_complete:
+                    type: string
+                    format: uri
+                    description: Frontend approval URL containing only the short user code, never the polling credential.
                   expires_in: { type: integer, example: 300 }
                   interval: { type: integer, example: 3 }
 

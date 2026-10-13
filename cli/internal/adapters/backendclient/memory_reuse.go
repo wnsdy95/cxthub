@@ -77,7 +77,10 @@ func (m *memoryReuseCache) disable(scope domain.ContentHash) {
 
 func (c *BackendClient) pushMemoryWithReuse(ctx context.Context, repo string, d domain.MemoryDigest, want domain.ContentHash) error {
 	// Pin lazy credential/URL resolution for this operation, including fallback.
-	baseURL, token := c.baseURL(), c.token()
+	baseURL, token, err := c.transport()
+	if err != nil {
+		return err
+	}
 	call := c.frozenRequestClient(baseURL, token)
 	publicBody := d
 	publicBody.SnapshotID, publicBody.PreviousMemoryHash, publicBody.Provider = "", "", ""

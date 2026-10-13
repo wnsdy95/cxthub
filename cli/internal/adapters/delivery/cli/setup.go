@@ -129,10 +129,11 @@ func runSetup(ctx context.Context, c *Container, cwd string, rest []string) erro
 	// Verify a new connection only after login, so private repository aliases
 	// cannot create a different URL-derived identity before authentication.
 	if remoteURL != "" && !flagPresent(rest, "--no-login") {
-		base, err := remotecfg.APIBase(remoteURL)
+		binding, err := remotecfg.ResolveEndpoint(ctx, cwd, remoteURL)
 		if err != nil {
 			return err
 		}
+		base := binding.Endpoint
 		server, err := url.Parse(base)
 		if err != nil {
 			return err

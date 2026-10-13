@@ -18,14 +18,14 @@ func (s *PostgresStore) CreateOAuthGrant(ctx context.Context, g domain.OAuthGran
 	if err := domain.ValidateOAuthGrant(g); err != nil {
 		return err
 	}
-	_, err := s.db(ctx).Exec(ctx, `INSERT INTO oauth_grants(id,user_id,client_id,created_at,expires_at,revoked_at) VALUES($1,$2,$3,$4,$5,$6)`, g.ID, g.UserID, g.ClientID, g.CreatedAt, g.ExpiresAt, g.RevokedAt)
+	_, err := s.db(ctx).Exec(ctx, `INSERT INTO oauth_grants(id,user_id,client_id,created_at,expires_at,revoked_at,resource) VALUES($1,$2,$3,$4,$5,$6,$7)`, g.ID, g.UserID, g.ClientID, g.CreatedAt, g.ExpiresAt, g.RevokedAt, g.Resource)
 	return mapPGConstraint(err)
 }
 func (s *PostgresStore) GetOAuthGrant(ctx context.Context, id string) (g domain.OAuthGrant, err error) {
 	if domain.ValidateExternalID(id) != nil {
 		return g, domain.ErrValidation
 	}
-	err = s.db(ctx).QueryRow(ctx, `SELECT id,user_id,client_id,created_at,expires_at,revoked_at FROM oauth_grants WHERE id=$1`, id).Scan(&g.ID, &g.UserID, &g.ClientID, &g.CreatedAt, &g.ExpiresAt, &g.RevokedAt)
+	err = s.db(ctx).QueryRow(ctx, `SELECT id,user_id,client_id,created_at,expires_at,revoked_at,resource FROM oauth_grants WHERE id=$1`, id).Scan(&g.ID, &g.UserID, &g.ClientID, &g.CreatedAt, &g.ExpiresAt, &g.RevokedAt, &g.Resource)
 	if err != nil {
 		return g, mapNoRows(err)
 	}
@@ -41,7 +41,7 @@ func (s *PostgresStore) UpdateOAuthGrant(ctx context.Context, g domain.OAuthGran
 	if err := domain.ValidateOAuthGrant(g); err != nil {
 		return err
 	}
-	r, err := s.db(ctx).Exec(ctx, `UPDATE oauth_grants SET expires_at=$5,revoked_at=$6 WHERE id=$1 AND user_id=$2 AND client_id=$3 AND created_at=$4 AND revoked_at IS NULL`, g.ID, g.UserID, g.ClientID, g.CreatedAt, g.ExpiresAt, g.RevokedAt)
+	r, err := s.db(ctx).Exec(ctx, `UPDATE oauth_grants SET expires_at=$5,revoked_at=$6 WHERE id=$1 AND user_id=$2 AND client_id=$3 AND created_at=$4 AND revoked_at IS NULL AND resource=$7`, g.ID, g.UserID, g.ClientID, g.CreatedAt, g.ExpiresAt, g.RevokedAt, g.Resource)
 	if err != nil {
 		return err
 	}

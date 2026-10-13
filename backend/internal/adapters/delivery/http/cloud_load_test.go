@@ -88,7 +88,7 @@ func TestPostgresMultiInstanceLoad(t *testing.T) {
 	if _, err := stores[0].PutRepo(ctx, repo); err != nil {
 		t.Fatal(err)
 	}
-	pair, err := ids[0].IssueMCPTokenPair(ctx, user.ID, "load-client")
+	pair, err := ids[0].IssueMCPTokenPair(ctx, user.ID, "load-client", "https://load.example.test/mcp")
 	if err != nil {
 		t.Fatal(err)
 	}

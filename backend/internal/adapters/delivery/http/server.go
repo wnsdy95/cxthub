@@ -100,17 +100,18 @@ type Backend interface {
 
 // Server binds REST handlers to Backend (session synchronization) + IdentityBackend (authentication/repository).
 type Server struct {
-	githubConnections GitHubConnections
-	githubAppSecret   string
-	githubReturnURL   string
-	gitSyncAudit      inbound.GitSyncAudit
-	docFinalization   inbound.DocFinalization
-	effectiveMemory   inbound.EffectiveMemoryQuery
-	memoryPositions   inbound.MemoryPositionQuery
-	codeApplicability inbound.CodeApplicabilityQuery
-	gitChanges        inbound.GitChanges
-	gitScans          inbound.GitScans
-	changes           repositoryChangeHub
+	deviceVerificationOrigin string
+	githubConnections        GitHubConnections
+	githubAppSecret          string
+	githubReturnURL          string
+	gitSyncAudit             inbound.GitSyncAudit
+	docFinalization          inbound.DocFinalization
+	effectiveMemory          inbound.EffectiveMemoryQuery
+	memoryPositions          inbound.MemoryPositionQuery
+	codeApplicability        inbound.CodeApplicabilityQuery
+	gitChanges               inbound.GitChanges
+	gitScans                 inbound.GitScans
+	changes                  repositoryChangeHub
 	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (repository ID set).
 	syncInflight sync.Map
 	runtime      outbound.RuntimeStore

@@ -126,6 +126,7 @@ func serve(ctx context.Context, args []string) error {
 		scans.SetSourceAuthorizer(githubConnections)
 	}
 	api := delivery.NewServer(svc, idSvc)
+	api.SetDeviceVerificationOrigin(publicURL)
 	if githubConnections != nil {
 		returnURL, _ := githubReturnURL(publicURL) // validated during configuration
 		api.SetGitHubConnections(githubConnections, os.Getenv("CXT_GITHUB_APP_WEBHOOK_SECRET"), returnURL)

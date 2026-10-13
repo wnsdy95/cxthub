@@ -139,12 +139,20 @@ func scanOAuthCode(row pgx.Row) (domain.OAuthAuthorizationCode, error) {
 	return code, nil
 }
 
-func (s *PostgresStore) ConsumeOAuthAuthorizationCode(ctx context.Context, codeHash, clientID, redirectURI, codeChallenge string) (domain.OAuthAuthorizationCode, error) {
+func (s *PostgresStore) ConsumeOAuthAuthorizationCode(ctx context.Context, codeHash, clientID, redirectURI, codeChallenge string, resources ...string) (domain.OAuthAuthorizationCode, error) {
+	var resource *string
+	if len(resources) > 0 {
+		if len(resources) != 1 || resources[0] == "" {
+			return domain.OAuthAuthorizationCode{}, domain.ErrUnauthorized
+		}
+		resource = &resources[0]
+	}
 	code, err := scanOAuthCode(s.db(ctx).QueryRow(ctx,
 		`DELETE FROM oauth_authorization_codes
 		 WHERE code_hash=$1 AND client_id=$2 AND redirect_uri=$3 AND code_challenge=$4 AND expires_at > now()
+		 AND ($5::text IS NULL OR resource=$5)
 		 RETURNING code_hash, client_id, redirect_uri, user_id, code_challenge, resource, scope, created_at, expires_at`,
-		codeHash, clientID, redirectURI, codeChallenge))
+		codeHash, clientID, redirectURI, codeChallenge, resource))
 	if errors.Is(err, domain.ErrNotFound) {
 		return domain.OAuthAuthorizationCode{}, domain.ErrUnauthorized
 	}

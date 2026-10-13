@@ -51,6 +51,11 @@ func SetCaptureDocumentIdentity(ctx context.Context, expected Observation, ident
 		if err != nil {
 			return fmt.Errorf("capture.identity requires a configured origin: %w", err)
 		}
+		transport, err := expected.ResolveEndpoint(binding.RemoteURL)
+		if err != nil {
+			return err
+		}
+		binding.Endpoint = transport.Endpoint
 		fields["capture_document"], err = json.Marshal(binding)
 		return err
 	})
@@ -70,6 +75,13 @@ func captureIdentityFromObservation(observation Observation, selected *domain.Re
 		return "", err
 	}
 	expected, err := captureBinding(binding.RemoteURL)
+	if err == nil {
+		transport, resolveErr := observation.ResolveEndpoint(binding.RemoteURL)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		expected.Endpoint = transport.Endpoint
+	}
 	if err != nil || binding != expected {
 		return "", fmt.Errorf("invalid capture_document preference: %w", domain.ErrUnsupportedDocumentIdentity)
 	}

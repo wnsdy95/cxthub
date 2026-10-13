@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -25,7 +24,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capturejournal"
@@ -234,28 +232,7 @@ func buildRepositoryAdapters(cfg config) (*storage.FileStore, *backendclient.Bac
 	if cacheDir, err := os.UserCacheDir(); err == nil {
 		store.EnableDocVerificationCache(filepath.Join(cacheDir, "cxthub", "doc-verification", "key-v1"))
 	}
-	// Remote sync: central server REST client (net/http stdlib). Server role is backend module.
-	// Like git, origin remote URL is the destination — server address is derived from URL at request time.
-	// (Immediate registration after remote add also works), otherwise CXT_REMOTE env fallback.
-	endpoint := func() string {
-		if origin, ok := remotecfg.Origin(cfg.RepoRoot); ok {
-			if base, err := remotecfg.APIBase(origin); err == nil {
-				return base
-			}
-		}
-		return cfg.RemoteEndpoint
-	}
-	// Token also lazy interpreted: CXT_TOKEN(CI) > ~/.cxt/auth.json[host] (saved by cxt login).
-	token := func() string {
-		if cfg.RemoteToken != "" {
-			return cfg.RemoteToken
-		}
-		if u, err := url.Parse(endpoint()); err == nil && u.Host != "" {
-			return authcfg.Token(u.Host)
-		}
-		return ""
-	}
-	remote := backendclient.NewBackendClient(endpoint, token, cfg.Identity)
+	remote := backendclient.NewResolvedBackendClient(func() (string, string, error) { return configuredTransport(cfg) }, cfg.Identity)
 	// Pull delta: Injects local chunk store, avoiding download of existing chunks.
 	remote.SetChunkLocal(store)
 	return store, remote, remotecfg.Wrap(cfg.RepoRoot, gitctx.NewGitContextAdapter())
@@ -376,6 +353,7 @@ func buildContainer(cfg config) container {
 		ProviderLaunch:          providerLaunchHooks(cfg),
 		WakeHistoricalSync:      delivcli.SpawnHistoricalSync,
 		SetCaptureIdentity:      setCaptureIdentity(cfg),
+		SetRemoteEndpoint:       setRemoteEndpoint(cfg),
 		ResolveRepo:             gitCtx.CurrentRepo,
 		PrepareRemoteConnection: prepareRemoteConnection(cfg),
 		PrepareCapturePush:      prepareCapturePush(cfg, store),
@@ -388,14 +366,22 @@ func buildContainer(cfg config) container {
 		IndexStash:              stagingSvc,
 		ListIndexStashes:        stagingSvc.ListIndexStashes,
 		ResolveConnection: func(ctx context.Context, raw string) (domain.RepositoryConnection, error) {
-			base, err := remotecfg.APIBase(raw)
+			observed, err := remotecfg.Observe(ctx, cfg.RepoRoot)
 			if err != nil {
 				return domain.RepositoryConnection{}, err
 			}
-			client := backendclient.NewBackendClient(func() string { return base }, func() string {
-				return tokenForSyncDestination(cfg, base)
-			}, cfg.Identity)
-			return client.ResolveRepositoryConnection(ctx, raw)
+			remotes, err := observed.Remotes()
+			if err != nil {
+				return domain.RepositoryConnection{}, err
+			}
+			binding, err := observed.ResolveEndpoint(raw)
+			if err != nil {
+				return domain.RepositoryConnection{}, err
+			}
+			base := binding.Endpoint
+			token := tokenForObservedDestination(cfg, base, remotes["origin"])
+			client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
+			return resolveEndpointConnection(ctx, client, binding)
 		},
 		Init:              initSvc,
 		Save:              saveSvc,

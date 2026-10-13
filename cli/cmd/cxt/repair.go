@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/backendclient"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
 	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
@@ -67,23 +65,24 @@ func runRepair(args []string) error {
 	if configErr == nil && remotes["origin"] != "" && string(remotecfg.RepoIDFor(remotes["origin"])) != repoID {
 		return fmt.Errorf("local config conflicts with durable repository identity; inspect before repair")
 	}
-	endpoint, err := remotecfg.APIBase(origin)
+	binding, err := observedConfig.ResolveEndpoint(origin)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot safely resolve repair transport; restore the repository config before retrying: %w", err)
 	}
-	u, _ := url.Parse(endpoint)
-	token := func() string {
-		if token := os.Getenv("CXT_TOKEN"); token != "" {
-			return token
+	endpoint := binding.Endpoint
+	credential := tokenForObservedDestination(config{RemoteEndpoint: os.Getenv("CXT_REMOTE"), RemoteToken: os.Getenv("CXT_TOKEN")}, endpoint, origin)
+	token := func() string { return credential }
+	remote := backendclient.NewBackendClient(func() string { return endpoint }, token, domain.TeamIdentity{})
+	if binding.Version != 0 {
+		if _, err := verifyEndpointRepository(ctx, remote, binding); err != nil {
+			return err
 		}
-		return authcfg.Token(u.Host)
 	}
 	backup, err := j.StartRepair(repoID)
 	if err != nil {
 		return err
 	}
 	stage := storage.NewFileStore(filepath.Join(backup, "server"))
-	remote := backendclient.NewBackendClient(func() string { return endpoint }, token, domain.TeamIdentity{})
 	remote.SetChunkLocal(stage)
 	syncer := app.NewSyncRepoService(stage, remote, nil, storage.NewSyncOutbox())
 	fetched, err := syncer.Pull(ctx, inbound.SyncInput{RepoID: repoID, FetchOnly: true})

@@ -53,6 +53,7 @@ type Container struct {
 	ResolveSyncDestination func(context.Context, string, string) (SyncDestination, error)
 	// ResolveRepo identifies a configured replica without registering or mutating it.
 	SetCaptureIdentity func(context.Context, string, domain.DocumentIdentity) error
+	SetRemoteEndpoint  func(context.Context, remotecfg.Observation, string, string, bool) error
 	ResolveRepo        func(context.Context, string) (domain.Repo, error)
 	Init               inbound.InitRepo
 	Save               inbound.SaveSession
@@ -1062,12 +1063,17 @@ func formatFsckReport(rep backendclient.FsckReport) string {
 // Fails with a warning if neither origin remote (recommended) nor CXT_REMOTE is set.
 // remoteAPIBase fetches the REST base and host from origin (or CXT_REMOTE) for login/logout.
 func remoteAPIBase(cwd string) (base, host string, err error) {
-	if origin, ok := remotecfg.Origin(cwd); ok {
-		if base, err = remotecfg.APIBase(origin); err != nil {
-			return "", "", err
-		}
-	} else {
-		base = strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_REMOTE")), "/")
+	observed, err := remotecfg.Observe(context.Background(), cwd)
+	if err != nil {
+		return "", "", err
+	}
+	binding, err := observed.OriginEndpoint(strings.TrimRight(strings.TrimSpace(os.Getenv("CXT_REMOTE")), "/"))
+	if err != nil {
+		return "", "", err
+	}
+	base = binding.Endpoint
+	if _, err := remotecfg.CanonicalEndpoint(base); err != nil {
+		return "", "", err
 	}
 	u, perr := url.Parse(base)
 	if perr != nil || u.Host == "" || u.Hostname() == "" || u.User != nil ||
@@ -1145,6 +1151,20 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 	pos := positionals(rest)
 	sub := firstPositional(rest)
 	switch sub {
+	case "set-endpoint":
+		if len(pos) != 3 || c.SetRemoteEndpoint == nil {
+			return fmt.Errorf("usage: cxt remote set-endpoint <name> <https-api-endpoint> [--migrate-pending]")
+		}
+		if err := c.SetRemoteEndpoint(ctx, observed, pos[1], pos[2], flagPresent(rest, "--migrate-pending")); err != nil {
+			return err
+		}
+		fmt.Println("Transport endpoint verified and saved; repository identity unchanged.")
+		if flagPresent(rest, "--migrate-pending") {
+			fmt.Println("Exact prior transport reauthorized for pending deliveries; job identities and proofs retained.")
+		} else {
+			fmt.Println("Historical queued deliveries are not retargeted without --migrate-pending.")
+		}
+		return nil
 	case "add":
 		if len(pos) != 3 {
 			return fmt.Errorf("usage: cxt remote add <name> <url>  (e.g., cxt remote add origin https://cxthub.com/<owner>/<repository>)")
@@ -1225,7 +1245,14 @@ func runRemote(ctx context.Context, c *Container, cwd string, rest []string) err
 		verbose := flagPresent(rest, "-v")
 		for name, u := range remotes {
 			if verbose {
+				binding, err := observed.ResolveEndpoint(u)
+				if err != nil {
+					return err
+				}
 				fmt.Printf("%s\t%s (repo %s)\n", name, u, shortHash(remotecfg.RepoIDFor(u)))
+				if binding.Version != 0 {
+					fmt.Printf("  endpoint\t%s (verified repository %s)\n", binding.Endpoint, binding.RepositoryID)
+				}
 			} else {
 				fmt.Println(name)
 			}
@@ -1328,6 +1355,7 @@ usage: cxt <command> [flags]
 
   Git-integrated commands:
   remote add origin <url>   connect the server repository URL (the context equivalent of Git origin)
+  remote set-endpoint <name> <api-url> [--migrate-pending]  verify transport; optionally authorize pending work
   remote [-v]               list configured remotes
   remote remove <name>      remove a configured remote
   branch [list]             list local context branches

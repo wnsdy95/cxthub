@@ -337,7 +337,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		}
 		pair, err = s.identity.ExchangeMCPAuthorizationCode(r.Context(), domain.HashToken(r.PostForm.Get("code")), clientID, r.PostForm.Get("redirect_uri"), pkceChallenge(verifier), s.resource)
 	case "refresh_token":
-		pair, err = s.identity.RefreshMCPAccessToken(r.Context(), r.PostForm.Get("refresh_token"), clientID)
+		pair, err = s.identity.RefreshMCPAccessToken(r.Context(), r.PostForm.Get("refresh_token"), clientID, s.resource)
 	default:
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "authorization_code and refresh_token are supported")
 		return

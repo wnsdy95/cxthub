@@ -20,6 +20,8 @@ Browser / CLI / MCP client
 
 The consent-specific API rule precedes `/api/*`. `/connect/mcp` is a frontend
 route. Browsers use the public Vercel origin throughout login and consent.
+MCP clients connect directly to `https://mcp.cxthub.io/mcp` when the independent
+MCP public origin is configured; discovery leads them back to Vercel for OAuth.
 The API still validates that browser Origin behind the proxy: the Blueprint
 sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
 `CXT_COOKIE_SECURE=1`. Keep SameSite=Lax and leave the cookie domain unset.
@@ -36,6 +38,47 @@ sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
 
 ## Provision
 
+### Initial budget deployment
+
+Use `deploy/render-repositories.yaml` for the approved initial deployment from
+the private backend and MCP repositories. Do not import the root `render.yaml`
+for this budget: it remains the larger, paid-service reference profile.
+
+| Resource | Initial plan |
+|---|---|
+| API | Free, 512 MB |
+| Independent MCP | Free, 512 MB |
+| PostgreSQL 16 | `0.1c-256mb`, 20 GB storage |
+| Storage autoscaling | Disabled; increases require separate approval |
+
+As of 2026-10-12, budget approximately $12/month for database compute and storage,
+excluding tax, overage and Vercel charges. Keep the Render workspace on Hobby;
+adding a payment method does not require a workspace upgrade. Review the current
+price in the creation screen before applying.
+
+This is a limited validation deployment, not an always-on production capacity
+claim. Free API/MCP instances sleep after 15 minutes without inbound traffic,
+share 750 free instance hours per workspace each month, and can take about a
+minute to wake. API retry and maintenance workers stop while the API sleeps.
+Do not use artificial keepalive traffic to work around these limits. The prior
+large-document rehearsal exceeded 512 MB; validate actual uploads, cold reads,
+OAuth and database restore under the smaller limits before accepting customers.
+Do not silently upgrade a service when a test fails.
+
+Keep the source database and its verified backup intact. Restore a fresh,
+consistent dump to the new cloud database before starting application writers.
+Verify migrations, record counts and document/memory/parent references before
+cutover. The earlier rehearsal dump is not a final cutover snapshot if local
+writes continued. Allow external database access only from the migration
+operator's IP for the transfer, then restore `ipAllowList: []`; never expose it
+to all IPs. Database storage cannot be shrunk after allocation.
+
+References: [Render free limits](https://render.com/docs/free),
+[current pricing](https://render.com/pricing), and
+[PostgreSQL storage](https://render.com/docs/postgresql-creating-connecting).
+
+### Shared configuration and paid reference profile
+
 1. Import the root `render.yaml` as a Render Blueprint. It declares two paid
    web services (`pro`: API 4 GB; `standard`: MCP 2 GB) and a PostgreSQL 16
    `0.1c-256mb` instance in Singapore.
@@ -48,6 +91,23 @@ sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
    trusted Origin reference update. References refresh on Blueprint sync, not
    immediately when a source environment value changes. Do not replace the
    exact Origin with a wildcard or disable CSRF validation.
+   On MCP only, set `CXT_MCP_PUBLIC_URL=https://mcp.cxthub.io` (origin only, no
+   `/mcp` suffix). This sets the canonical protected resource and its discovery
+   URL, not the issuer, consent page or browser CSRF origin. The issuer remains
+   `CXT_PUBLIC_URL=https://cxthub.io` on both services. If omitted, MCP retains
+   the single-origin configuration for existing deployments. Configure clients
+   with the canonical resource URL; changing it requires reconnecting clients.
+   Before directing clients to this resource, add `mcp.cxthub.io` to the MCP
+   service's Custom Domains, add its DNS CNAME to the service's actual
+   `onrender.com` hostname, and wait for domain verification and a valid TLS
+   certificate. Do the same for `api.cxthub.io` on the API service. Do not
+   bypass certificate validation or point both domains at one service. Verify
+   public DNS, HTTPS readiness and discovery before allowing client cutover.
+   CLI data uses `https://api.cxthub.io/api/v1` directly. Device login returns
+   the approval URL on `CXT_PUBLIC_URL`, while polling and token storage stay
+   bound to the API hostname. For an existing localhost repository, use the
+   [verified transport migration](../cli/TRANSPORT_MIGRATION.md), not remote URL
+   replacement or database identity rewrites.
 3. The Blueprint injects the same internal PostgreSQL connection string into
    both services. External DB access is disabled (`ipAllowList: []`). Docker
    images enforce PostgreSQL and bundle the migration directory. Concurrent
@@ -71,10 +131,18 @@ sets `CXT_CORS_ORIGINS` from API's own `CXT_PUBLIC_URL` and fixes
    authorized domains and configure GitHub provider callbacks separately.
 6. Wait for `/healthz` on both Render services to return 200. Each checks its
    own database pool, with 503 on database failure. Redeploy Vercel so rewrites
-   contain the real Render origins. Connect clients to `https://<public>/mcp`.
+   contain the real Render origins. Connect clients to
+   `https://mcp.cxthub.io/mcp` when `CXT_MCP_PUBLIC_URL` is set, or
+   `https://<public>/mcp` for the single-origin configuration. Verify that
+   `/.well-known/oauth-protected-resource/mcp` returns that exact resource URL;
+   the OAuth issuer and consent page must still use the frontend origin.
 
-The single public issuer preserves existing MCP registrations and tokens when
-moving an existing deployment **with its existing database**. Changing the
+The single public issuer preserves existing MCP registrations when moving an
+existing deployment **with its existing database**. Access and refresh tokens
+must also have a stored grant bound to the exact canonical MCP resource. Older
+grants without resource evidence, or grants issued for a different resource,
+require fresh browser approval; they are not silently rebound during migration.
+Changing the
 public domain/resource requires reconnecting clients. Do not point MCP at an
 empty database or a different Firebase project.
 
@@ -142,9 +210,11 @@ does not provision resources. See [compute specifications](https://render.com/do
 [plan naming compatibility](https://render.com/docs/compute-plans-update), and
 [current pricing](https://render.com/pricing).
 
-API workers need an always-running service; the Blueprint uses paid services
-rather than a sleeping free instance. Keep at least one API instance alive for
-retry/maintenance progress. MCP remains readable during an API restart, but new
+Continuous API worker progress needs an always-running service; the root
+Blueprint uses paid services for that purpose. The initial budget profile does
+not provide continuous progress while its free API sleeps. After a separately
+approved production upgrade, keep at least one API instance alive for
+retry/maintenance progress. An awake MCP remains readable during an API restart, but new
 web logins and background processing wait for API availability. A database
 outage affects both services and fails readiness/authorization closed.
 

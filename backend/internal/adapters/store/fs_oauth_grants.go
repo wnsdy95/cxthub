@@ -50,7 +50,7 @@ func (s *FSStore) UpdateOAuthGrant(ctx context.Context, g domain.OAuthGrant) err
 	if err != nil {
 		return err
 	}
-	if old.UserID != g.UserID || old.ClientID != g.ClientID || !old.CreatedAt.Equal(g.CreatedAt) || old.RevokedAt != nil {
+	if old.UserID != g.UserID || old.ClientID != g.ClientID || old.Resource != g.Resource || !old.CreatedAt.Equal(g.CreatedAt) || old.RevokedAt != nil {
 		return domain.ErrConflict
 	}
 	b, err := json.Marshal(g)

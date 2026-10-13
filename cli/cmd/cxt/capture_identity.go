@@ -29,10 +29,11 @@ func setCaptureIdentity(cfg config) func(context.Context, string, domain.Documen
 		if origin == "" {
 			return fmt.Errorf("capture.identity requires a configured origin")
 		}
-		endpoint, err := remotecfg.APIBase(origin)
+		binding, err := observed.ResolveEndpoint(origin)
 		if err != nil {
 			return err
 		}
+		endpoint := binding.Endpoint
 		token := tokenForObservedDestination(cfg, endpoint, origin)
 		remote := backendclient.NewBackendClient(func() string { return endpoint }, func() string { return token }, cfg.Identity)
 		if err := remote.ConfirmRootCapture(ctx, remotecfg.RepoIDFor(origin)); err != nil {

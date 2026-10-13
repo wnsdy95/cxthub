@@ -64,12 +64,12 @@ func TestPGIndependentMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := domain.NewID("mcp_client_")
-	pair, err := mcp.Identity.IssueMCPTokenPair(ctx, actor.ID, client)
+	pair, err := mcp.Identity.IssueMCPTokenPair(ctx, actor.ID, client, mcp.PublicURL+"/mcp")
 	if err != nil {
 		t.Fatal(err)
 	}
 	makeMCP := func() *httptest.Server {
-		h, err := Handler(mcp)
+		h, err := Handler(mcp, mcp.PublicURL)
 		if err != nil {
 			t.Fatal(err)
 		}

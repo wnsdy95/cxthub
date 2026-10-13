@@ -39,8 +39,10 @@ const (
 
 // fileConfig is for the .cxt/config file schema.
 type fileConfig struct {
-	Remotes         Remotes                 `json:"remotes,omitempty"`
-	CaptureDocument *captureDocumentBinding `json:"capture_document,omitempty"`
+	TransportEndpoints  map[string]EndpointBinding   `json:"transport_endpoints,omitempty"`
+	TransportMigrations map[string]EndpointMigration `json:"transport_migrations,omitempty"`
+	Remotes             Remotes                      `json:"remotes,omitempty"`
+	CaptureDocument     *captureDocumentBinding      `json:"capture_document,omitempty"`
 	// CheckoutMode is the context action for git checkout hooks (auto|prepare). Defaults to auto if not set.
 	CheckoutMode string `json:"checkout_mode,omitempty"`
 	// Staged is the legacy provider selector. Frozen-index commands and hooks ignore it;

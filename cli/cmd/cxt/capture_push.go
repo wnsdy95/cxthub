@@ -34,9 +34,10 @@ func prepareCapturePush(cfg config, store *storage.FileStore) func(context.Conte
 				return nil, fmt.Errorf("invalid bound API destination")
 			}
 			base = strings.TrimRight(destination.URL, "/")
-			observed := cfg
-			observed.RemoteEndpoint = base
-			token = tokenForObservedDestination(observed, base, "")
+			if destination.Endpoint != "" || destination.RepositoryID != "" {
+				return nil, fmt.Errorf("invalid API-only transport binding")
+			}
+			token = tokenForObservedDestination(cfg, base, "")
 		} else {
 			var err error
 			canonical, err = remotecfg.CanonicalURL(destination.URL)
@@ -48,6 +49,14 @@ func prepareCapturePush(cfg config, store *storage.FileStore) func(context.Conte
 				return nil, err
 			}
 			token = tokenForObservedDestination(cfg, base, destination.URL)
+			if destination.Endpoint != "" || destination.RepositoryID != "" {
+				binding := remotecfg.EndpointBinding{Version: 1, RemoteURL: canonical, RepoID: repoID, Endpoint: destination.Endpoint, RepositoryID: destination.RepositoryID}
+				if err := binding.Validate(); err != nil {
+					return nil, err
+				}
+				base = binding.Endpoint
+				token = tokenForObservedDestination(cfg, base, canonical)
+			}
 		}
 		client := backendclient.NewBackendClient(func() string { return base }, func() string { return token }, cfg.Identity)
 		git := gitctx.NewGitContextAdapter()
@@ -63,7 +72,11 @@ func prepareCapturePush(cfg config, store *storage.FileStore) func(context.Conte
 				return nil, err
 			}
 		} else {
-			connection, err := client.ResolveRepositoryConnection(ctx, canonical)
+			binding := remotecfg.EndpointBinding{RemoteURL: canonical, RepoID: repoID, Endpoint: base}
+			if destination.Endpoint != "" {
+				binding.Version, binding.RepositoryID = 1, destination.RepositoryID
+			}
+			connection, err := resolveEndpointConnection(ctx, client, binding)
 			if err != nil {
 				return nil, err
 			}

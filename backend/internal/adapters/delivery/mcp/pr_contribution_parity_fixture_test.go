@@ -161,7 +161,7 @@ func newPRContributionParityFixture(t *testing.T) *prContributionParityFixture {
 		user  domain.User
 		token *string
 	}{{owner, &fixture.mcpToken}, {outsider, &fixture.outsiderMCP}} {
-		pair, err := identity.IssueMCPTokenPair(system, account.user.ID, "contribution-parity-client")
+		pair, err := identity.IssueMCPTokenPair(system, account.user.ID, "contribution-parity-client", "https://parity.example.test/mcp")
 		if err != nil {
 			t.Fatal(err)
 		}

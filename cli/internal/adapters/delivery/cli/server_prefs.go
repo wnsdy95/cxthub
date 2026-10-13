@@ -16,9 +16,11 @@ import (
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 )
 
 type serverPrefs struct {
+	Endpoint string `json:"endpoint,omitempty"`
 	LoadMode string `json:"load_mode,omitempty"`
 	At       string `json:"at"`
 }
@@ -37,24 +39,38 @@ func serverLoadMode(cwd string) string {
 	}
 	tok := authcfg.Token(host)
 	if tok == "" {
-		tok = os.Getenv("CXT_TOKEN")
+		observed, err := remotecfg.Observe(context.Background(), cwd)
+		if err != nil {
+			return ""
+		}
+		binding, err := observed.OriginEndpoint(os.Getenv("CXT_REMOTE"))
+		if err != nil || binding.Endpoint != base {
+			return ""
+		}
+		environmentBase := os.Getenv("CXT_REMOTE")
+		if binding.RemoteURL != "" {
+			environmentBase, err = remotecfg.APIBase(binding.RemoteURL)
+			if err != nil {
+				return ""
+			}
+		}
+		tok = authcfg.TokenForDestination(base, environmentBase, os.Getenv("CXT_TOKEN"))
 	}
 	if tok == "" {
 		return ""
 	}
-	_ = host
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/me", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	if resp, err := http.DefaultClient.Do(req); err == nil {
+	if resp, err := loginHTTPClient().Do(req); err == nil {
 		defer resp.Body.Close()
 		if resp.StatusCode == 200 {
 			var me struct {
 				LoadMode string `json:"load_mode"`
 			}
 			if json.NewDecoder(resp.Body).Decode(&me) == nil {
-				cache := serverPrefs{LoadMode: me.LoadMode, At: time.Now().UTC().Format(time.RFC3339)}
+				cache := serverPrefs{Endpoint: base, LoadMode: me.LoadMode, At: time.Now().UTC().Format(time.RFC3339)}
 				if b, merr := json.Marshal(cache); merr == nil {
 					_ = providerfs.WriteRepoFileAtomic(stateRoot, filepath.Join(".cxt", "server-prefs.json"), b, 0o644)
 				}
@@ -65,7 +81,7 @@ func serverLoadMode(cwd string) string {
 	// Offline/timout fallback: last successful value.
 	if b, rerr := providerfs.ReadRepoFile(stateRoot, filepath.Join(".cxt", "server-prefs.json")); rerr == nil {
 		var cache serverPrefs
-		if json.Unmarshal(b, &cache) == nil {
+		if json.Unmarshal(b, &cache) == nil && cache.Endpoint == base {
 			return cache.LoadMode
 		}
 	}

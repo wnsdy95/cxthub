@@ -21,6 +21,9 @@ type MCPApplication struct {
 // Consumption, token creation, and revocation use the same identity transaction.
 // Revoking an application also invalidates unexchanged authorization codes.
 func (s *IdentityService) ExchangeMCPAuthorizationCode(ctx context.Context, hash, client, redirect, challenge, resource string) (domain.OAuthTokenPair, error) {
+	if resource == "" {
+		return domain.OAuthTokenPair{}, domain.ErrUnauthorized
+	}
 	return identityResult(ctx, s, func(ctx context.Context) (domain.OAuthTokenPair, error) {
 		oauth, ok := s.repositories.(outbound.OAuthStore)
 		if !ok {
@@ -30,11 +33,11 @@ func (s *IdentityService) ExchangeMCPAuthorizationCode(ctx context.Context, hash
 		if !ok {
 			return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 		}
-		code, err := oauth.ConsumeOAuthAuthorizationCode(ctx, hash, client, redirect, challenge)
+		code, err := oauth.ConsumeOAuthAuthorizationCode(ctx, hash, client, redirect, challenge, resource)
 		if err != nil || code.Resource != resource || code.Scope != "mcp:read" {
 			return domain.OAuthTokenPair{}, domain.ErrUnauthorized
 		}
-		pair, err := s.issueMCPTokenPair(ctx, code.UserID, client)
+		pair, err := s.issueMCPTokenPair(ctx, code.UserID, client, code.Resource)
 		if err != nil {
 			return domain.OAuthTokenPair{}, err
 		}

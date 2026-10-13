@@ -54,6 +54,8 @@ services:
           type: web
           name: cxthub-api
           envVarKey: CXT_PUBLIC_URL
+      - key: CXT_MCP_PUBLIC_URL
+        sync: false
       - key: CXT_POSTGRES_DSN
         fromDatabase:
           name: cxthub-postgres
@@ -63,6 +65,6 @@ databases:
     region: singapore
     plan: 0.1c-256mb
     postgresMajorVersion: "16"
-    databaseName: cxthub
-    user: cxt
+    databaseName: cxthub_postgres
+    user: cxthub_postgres_user
     ipAllowList: []
