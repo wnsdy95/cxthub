@@ -1,0 +1,11 @@
+package outbound
+
+import (
+	"context"
+
+	"github.com/wnsdy95/cxthub/backend/internal/domain"
+)
+
+type VerifiedRootEventReader interface {
+	ReadVerifiedRootEvents(context.Context, domain.ContentHash, domain.ContentHash, domain.RootEventSelection) (domain.VerifiedRootEvents, error)
+}

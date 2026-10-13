@@ -15,6 +15,11 @@ import (
 
 type historyDocumentProofKeyPG struct{}
 
+type historyRootReferencePG struct {
+	tx    *repositoryTx
+	proof domain.VerifiedDocReference
+}
+
 // Only version metadata survives preparation. This evidence is neither a
 // durable certificate nor a replacement for this request's full byte reads.
 type historyDocumentProofPG struct {
@@ -23,6 +28,7 @@ type historyDocumentProofPG struct {
 	active, attempted, captured bool
 	snapshots, blobs            map[string]string
 	grants                      map[string]map[string]string
+	rootReferences              map[domain.DocumentRef]historyRootReferencePG
 }
 
 var _ outbound.HistoryDocumentProofStore = (*PostgresStore)(nil)
@@ -44,8 +50,25 @@ func (s *PostgresStore) WithinHistoryDocumentProof(ctx context.Context, repo dom
 		return domain.ErrConflict
 	}
 	p := &historyDocumentProofPG{owner: s, repo: repo, active: true}
-	defer func() { p.active = false }()
+	defer func() {
+		p.active = false
+		p.rootReferences = nil
+	}()
 	return fn(context.WithValue(ctx, historyDocumentProofKeyPG{}, p), p)
+}
+
+func (store *PostgresStore) rememberHistoryRootReference(ctx context.Context, repo domain.ContentHash, proof domain.VerifiedDocReference) {
+	scope, ok := ctx.Value(historyDocumentProofKeyPG{}).(*historyDocumentProofPG)
+	if !ok || scope.owner != store || scope.repo != repo || scope.attempted || !proof.Valid() || proof.DocumentRef().Identity != domain.DocumentIdentityRootV1 {
+		return
+	}
+	if scope.transaction(ctx, true) != nil {
+		return
+	}
+	if scope.rootReferences == nil {
+		scope.rootReferences = make(map[domain.DocumentRef]historyRootReferencePG)
+	}
+	scope.rootReferences[proof.DocumentRef()] = historyRootReferencePG{tx: ctx.Value(repositoryTxKey{}).(*repositoryTx), proof: proof}
 }
 
 func (p *historyDocumentProofPG) transaction(ctx context.Context, readOnly bool) error {
@@ -70,6 +93,7 @@ func (p *historyDocumentProofPG) Capture(ctx context.Context, evidence []domain.
 		return domain.ErrConflict
 	}
 	p.attempted = true
+	defer func() { p.rootReferences = nil }()
 	snapshots, blobs := map[string]string{}, map[string]string{}
 	grants := map[string]map[string]string{"chunk": {}, "doc": {}}
 	for _, snap := range evidence {
@@ -124,14 +148,15 @@ func (p *historyDocumentProofPG) Capture(ctx context.Context, evidence []domain.
 			if repo.RequiredDocIdentity != domain.DocumentIdentityRootV1 {
 				return domain.ErrRootPublicationDisabled
 			}
-			// Root descriptors are strict and hash-bound. Re-read the complete
-			// ordered owned closure in this SAME RR snapshot; no receipt or
-			// generic full-CIR/legacy descriptor can authorize root pins.
-			proof, err := p.owner.docProofs.verifyConversation(ctx, snap.DocHash, manifest, p.owner.ownedDocChunkReader(p.repo, conversationChunkOrder(manifest)))
-			if err != nil {
-				return err
+			recorded, present := p.rootReferences[snap.DocumentRef()]
+			proof := recorded.proof
+			if !present || recorded.tx != ctx.Value(repositoryTxKey{}).(*repositoryTx) {
+				proof, err = verifyStoredConversationReference(ctx, &p.owner.docProofs.rootVerifier, snap.DocHash, manifest, p.owner.ownedDocChunkReader(p.repo, conversationChunkOrder(manifest)))
+				if err != nil {
+					return err
+				}
 			}
-			if proof.DocumentRef() != snap.DocumentRef() || !proof.Reference().Matches(snap) {
+			if proof.DocumentRef() != snap.DocumentRef() || !proof.Matches(snap) {
 				return domain.ErrIntegrity
 			}
 			// Canonical root hashing binds the complete descriptor, including

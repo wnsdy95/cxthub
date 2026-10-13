@@ -57,8 +57,7 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 			return err
 		}
 		if root {
-			doc, err := s.docProofs.verifyConversation(ctx, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
-			proof = doc.Reference()
+			proof, err = verifyStoredConversationReference(ctx, &s.docProofs.rootVerifier, hash, manifest, s.ownedDocChunkReader(repo, conversationChunkOrder(manifest)))
 			return err
 		}
 		proof, err = s.docProofs.verifyStoredWithLoader(ctx, repo, hash, raw, func(man domain.DocChunkManifest) storedChunkReader {
@@ -69,6 +68,7 @@ func (s *PostgresStore) VerifyStoredDoc(ctx context.Context, repo, hash domain.C
 	if err != nil {
 		return domain.VerifiedDocReference{}, err
 	}
+	s.rememberHistoryRootReference(ctx, repo, proof)
 	return proof, nil
 }
 

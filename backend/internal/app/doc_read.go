@@ -37,6 +37,21 @@ func (s *Service) ReadDocEvents(ctx context.Context, repo, hash, base domain.Con
 		if limit == 0 {
 			limit = 50
 		}
+		var previous []domain.ContentHash
+		if base != "" {
+			var err error
+			previous, err = s.docEventBaseHashes(ctx, repo, base)
+			if err != nil {
+				return out, err
+			}
+		}
+		projection, err := s.rootEventProjection(ctx, repo, hash, domain.RootEventSelection{Offset: offset, Limit: limit, Base: previous})
+		if err != nil {
+			return out, err
+		}
+		if projection != nil {
+			return projection.Page(ctx)
+		}
 		source, err := s.documentReadSource(ctx, repo, hash)
 		if err != nil {
 			return out, err
@@ -45,11 +60,7 @@ func (s *Service) ReadDocEvents(ctx context.Context, repo, hash, base domain.Con
 		out.Envelope = idx.Envelope
 		out.Total = len(idx.Events)
 		if base != "" {
-			previous, err := s.docReadIndex(ctx, repo, base)
-			if err != nil {
-				return out, err
-			}
-			for out.Inherited < len(idx.Events) && out.Inherited < len(previous.Events) && idx.Events[out.Inherited].Hash == previous.Events[out.Inherited].Hash {
+			for out.Inherited < len(idx.Events) && out.Inherited < len(previous) && idx.Events[out.Inherited].Hash == previous[out.Inherited] {
 				out.Inherited++
 			}
 		}
