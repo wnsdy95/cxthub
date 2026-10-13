@@ -83,7 +83,7 @@ var commandArgSpecs = map[string]commandArgSpec{
 	"repo":      {usage: "cxt repo create <url>", minArgs: 2, maxArgs: 2, effect: commandLocalWrite},
 	"claude":    {usage: "cxt claude [claude-arguments...]", passthrough: true, effect: commandProvider},
 	"codex":     {usage: "cxt codex [codex-arguments...]", passthrough: true, effect: commandProvider},
-	"remote":    {usage: "cxt remote [-v] | add <name> <url> | remove <name>", maxArgs: 3, flags: commandFlags(nil, []string{"-v"})},
+	"remote":    {usage: "cxt remote [-v] | add <name> <url> | remove <name> | set-endpoint <name> <api-url> [--migrate-pending]", maxArgs: 3, flags: commandFlags(nil, []string{"-v", "--migrate-pending"})},
 	"branch":    {usage: "cxt branch [list] | operations [--json] | replay | recover <operation-id> --confirm-orphan | archive <name> | restore <name> [--provider claude|codex] [--mode full|reconstructed|memory]", maxArgs: 2, flags: commandFlags([]string{"--provider", "--mode"}, []string{"--json", "--confirm-orphan"})},
 	"repack":    {usage: "cxt repack", effect: commandLocalWrite},
 	"add":       {usage: "cxt add [claude|codex|.]... [--expect <index-revision>] [--json]", maxArgs: -1, effect: commandContextWrite, flags: commandFlags([]string{"--expect"}, []string{"--json"})},
@@ -399,9 +399,12 @@ func validateCommand(cmd string, p *parsedCommand, spec commandArgSpec) error {
 	case "remote":
 		switch sub {
 		case "":
-			valid = len(pos) == 0
+			valid = len(pos) == 0 && only("-v")
 		case "add":
 			valid = len(pos) == 3 && only()
+			p.effect = commandLocalWrite
+		case "set-endpoint":
+			valid = len(pos) == 3 && only("--migrate-pending")
 			p.effect = commandLocalWrite
 		case "remove", "rm":
 			valid = len(pos) == 2 && only()

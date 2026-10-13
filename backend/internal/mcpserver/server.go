@@ -14,7 +14,7 @@ import (
 // Handler is the independent MCP composition root. Only query ports are
 // supplied to the protocol adapter. OAuth persists consent and credentials in
 // the shared database; no GitHub, email, ingestion or maintenance worker starts.
-func Handler(r *serverruntime.Runtime) (http.Handler, error) {
+func Handler(r *serverruntime.Runtime, resourceOrigin string) (http.Handler, error) {
 	changes, ok := r.Store.(outbound.GitChangeStore)
 	if !ok {
 		return nil, fmt.Errorf("Git evidence query store unavailable")
@@ -23,7 +23,7 @@ func Handler(r *serverruntime.Runtime) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := delivery.NewServer(r.Context, r.Identity, r.Store, r.PublicURL)
+	s, err := delivery.NewServerWithOrigins(r.Context, r.Identity, r.Store, r.PublicURL, resourceOrigin)
 	if err != nil {
 		return nil, err
 	}

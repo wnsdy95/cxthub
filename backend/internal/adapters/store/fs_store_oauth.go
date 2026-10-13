@@ -240,7 +240,7 @@ func (s *FSStore) DenyOAuthAuthorizationRequest(_ context.Context, requestID str
 	return req, nil
 }
 
-func (s *FSStore) ConsumeOAuthAuthorizationCode(_ context.Context, codeHash, clientID, redirectURI, codeChallenge string) (domain.OAuthAuthorizationCode, error) {
+func (s *FSStore) ConsumeOAuthAuthorizationCode(_ context.Context, codeHash, clientID, redirectURI, codeChallenge string, resources ...string) (domain.OAuthAuthorizationCode, error) {
 	lock := s.oauthLock()
 	lock.Lock()
 	defer lock.Unlock()
@@ -257,6 +257,9 @@ func (s *FSStore) ConsumeOAuthAuthorizationCode(_ context.Context, codeHash, cli
 		return domain.OAuthAuthorizationCode{}, domain.ErrUnauthorized
 	}
 	if code.CodeHash != codeHash || code.ClientID != clientID || code.RedirectURI != redirectURI || code.CodeChallenge != codeChallenge {
+		return domain.OAuthAuthorizationCode{}, domain.ErrUnauthorized
+	}
+	if len(resources) > 1 || len(resources) == 1 && (resources[0] == "" || code.Resource != resources[0]) {
 		return domain.OAuthAuthorizationCode{}, domain.ErrUnauthorized
 	}
 	if err := os.Remove(path); err != nil {

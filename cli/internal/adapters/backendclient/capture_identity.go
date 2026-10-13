@@ -19,7 +19,10 @@ func (c *BackendClient) ConfirmRootCapture(ctx context.Context, repo string) err
 		return err
 	}
 	// Freeze a possibly lazy endpoint/credential for both requests.
-	endpoint, token := c.baseURL(), c.token()
+	endpoint, token, err := c.transport()
+	if err != nil {
+		return err
+	}
 	peer := c.frozenRequestClient(endpoint, token)
 	var view struct {
 		ID         string                    `json:"id"`

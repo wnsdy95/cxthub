@@ -44,7 +44,10 @@ func (c *BackendClient) PreflightDocumentReferences(ctx context.Context, repo st
 		return err
 	}
 	// Both read-only requests must inspect the same destination and principal.
-	endpoint, token := c.baseURL(), c.token()
+	endpoint, token, err := c.transport()
+	if err != nil {
+		return err
+	}
 	peer := c.frozenRequestClient(endpoint, token)
 	var view struct {
 		ID                     string                    `json:"id"`

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/authcfg"
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 )
 
 // device flow login — `cxt login` (no args) default path (RFC 8628 pattern, gh compatibility).
@@ -30,17 +31,22 @@ func loginTarget(cwd, raw string) (base, host string, err error) {
 		return remoteAPIBase(cwd)
 	}
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") {
 		return "", "", fmt.Errorf("--server requires a server origin, for example https://cxthub.com")
 	}
-	return u.Scheme + "://" + u.Host + "/api/v1", u.Host, nil
+	base, err = remotecfg.CanonicalEndpoint(u.Scheme + "://" + u.Host + "/api/v1")
+	if err != nil {
+		return "", "", err
+	}
+	u, _ = url.Parse(base)
+	return base, u.Host, nil
 }
 
 // loginWithToken validates the token (GET /me) and stores it by host — manual/auto shared.
 func loginWithToken(ctx context.Context, base, host, tok string) error {
 	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/me", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := loginHTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -62,17 +68,20 @@ func loginWithToken(ctx context.Context, base, host, tok string) error {
 // deviceLogin initiates pairing and receives/saves the token after browser approval.
 func deviceLogin(ctx context.Context, base, host string) error {
 	var start struct {
-		Code      string `json:"code"`
-		PollToken string `json:"poll_token"`
-		ExpiresIn int    `json:"expires_in"`
-		Interval  int    `json:"interval"`
+		Code                    string `json:"code"`
+		PollToken               string `json:"poll_token"`
+		ExpiresIn               int    `json:"expires_in"`
+		Interval                int    `json:"interval"`
+		VerificationURIComplete string `json:"verification_uri_complete"`
 	}
 	label, _ := os.Hostname() // device name — displayed in web token list as "which device" (empty on failure)
 	if err := postJSON(ctx, base+"/auth/device/start", map[string]any{"label": label}, &start); err != nil {
 		return fmt.Errorf("pairing start failed: %w", err)
 	}
-	u, _ := url.Parse(base)
-	verifyURL := u.Scheme + "://" + host + "/login/device?code=" + url.QueryEscape(start.Code)
+	verifyURL, err := deviceVerificationURL(base, host, start.Code, start.VerificationURIComplete)
+	if err != nil {
+		return err
+	}
 
 	fmt.Printf("Check code in browser and approve: %s\n", start.Code)
 	fmt.Printf("  %s\n", verifyURL)
@@ -100,6 +109,36 @@ func deviceLogin(ctx context.Context, base, host string) error {
 	return fmt.Errorf("approval wait time (%d seconds) exceeded — run cxt login again", start.ExpiresIn)
 }
 
+func deviceVerificationURL(base, host, code, complete string) (string, error) {
+	api, err := url.Parse(base)
+	if err != nil || api.Host != host || code == "" || len(code) > 128 {
+		return "", fmt.Errorf("invalid device verification response")
+	}
+	if canonical, err := remotecfg.CanonicalEndpoint(base); err != nil || canonical != base {
+		return "", fmt.Errorf("invalid device API transport")
+	}
+	if complete == "" {
+		complete = api.Scheme + "://" + host + "/login/device?code=" + url.QueryEscape(code)
+	}
+	verification, err := url.Parse(complete)
+	if err != nil || len(complete) > 2048 || verification.User != nil || verification.Opaque != "" || strings.Contains(complete, "#") || verification.Path != "/login/device" || verification.RawPath != "" {
+		return "", fmt.Errorf("invalid device verification URL")
+	}
+	if _, err := remotecfg.CanonicalEndpoint(verification.Scheme + "://" + verification.Host + "/api/v1"); err != nil {
+		return "", fmt.Errorf("unsafe device verification URL")
+	}
+	if verification.Scheme == "http" {
+		if _, err := remotecfg.CanonicalEndpoint("http://" + api.Host + "/api/v1"); err != nil {
+			return "", fmt.Errorf("loopback verification requires a loopback API endpoint")
+		}
+	}
+	query, err := url.ParseQuery(verification.RawQuery)
+	if err != nil || len(query) != 1 || len(query["code"]) != 1 || query.Get("code") != code {
+		return "", fmt.Errorf("device verification URL must contain only the emitted pairing code")
+	}
+	return verification.String(), nil
+}
+
 // postJSON handles JSON round-trip (2xx errors only).
 func postJSON(ctx context.Context, url string, body, out any) error {
 	b, _ := json.Marshal(body)
@@ -108,7 +147,7 @@ func postJSON(ctx context.Context, url string, body, out any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := loginHTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -117,6 +156,12 @@ func postJSON(ctx context.Context, url string, body, out any) error {
 		return fmt.Errorf("%s", resp.Status)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func loginHTTPClient() *http.Client {
+	client := *http.DefaultClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &client
 }
 
 // openBrowser opens the URL in the default browser (best-effort per platform).

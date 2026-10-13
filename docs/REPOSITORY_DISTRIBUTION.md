@@ -264,10 +264,14 @@ CI or repository-sync automation.
 ### Render API and MCP
 
 [`deploy/render-repositories.yaml`](../deploy/render-repositories.yaml) is the
-repository-based handoff alternative to the unchanged root `render.yaml`. It
-preserves both service names, plans, region, health checks, ports, environment
-values/references, and the complete database block. Only the repository/branch,
-root Dockerfile path, and manual deployment policy differ.
+repository-based, initial budget handoff alternative to the root `render.yaml`.
+It uses free API/MCP services and a PostgreSQL 16 `0.1c-256mb` database with 20 GB
+storage and storage autoscaling disabled. The root file retains the larger paid
+service profile; do not import it for the budget deployment. Both preserve
+service names, region, health checks, ports, environment values/references, and
+database identity and network isolation. Repository/branch, root Dockerfile
+paths, and manual deployment policy also differ. See the
+[budget limits and migration checks](../deploy/RENDER.md#initial-budget-deployment).
 
 Render's [Blueprint specification](https://render.com/docs/blueprint-spec)
 supports explicit service `repo` URLs, root-relative `dockerfilePath` and

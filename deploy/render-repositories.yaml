@@ -5,7 +5,7 @@ services:
     repo: https://github.com/wnsdy95/cxthub-backend
     branch: main
     autoDeployTrigger: "off"
-    plan: pro
+    plan: free
     region: singapore
     dockerfilePath: ./Dockerfile
     dockerContext: .
@@ -36,7 +36,7 @@ services:
     repo: https://github.com/wnsdy95/cxthub-mcp
     branch: main
     autoDeployTrigger: "off"
-    plan: standard
+    plan: free
     region: singapore
     dockerfilePath: ./Dockerfile
     dockerContext: .
@@ -56,6 +56,8 @@ services:
           type: web
           name: cxthub-api
           envVarKey: CXT_PUBLIC_URL
+      - key: CXT_MCP_PUBLIC_URL
+        sync: false
       - key: CXT_POSTGRES_DSN
         fromDatabase:
           name: cxthub-postgres
@@ -64,7 +66,9 @@ databases:
   - name: cxthub-postgres
     region: singapore
     plan: 0.1c-256mb
+    diskSizeGB: 20
+    storageAutoscalingEnabled: false
     postgresMajorVersion: "16"
-    databaseName: cxthub
-    user: cxt
+    databaseName: cxthub_postgres
+    user: cxthub_postgres_user
     ipAllowList: []

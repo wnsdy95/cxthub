@@ -51,12 +51,20 @@ func serve(ctx context.Context, args []string) error {
 	if os.Getenv("CXT_PUBLIC_URL") == "" {
 		return fmt.Errorf("CXT_PUBLIC_URL must match the API's public frontend origin")
 	}
+	resourceOrigin := os.Getenv("CXT_MCP_PUBLIC_URL")
+	if resourceOrigin == "" {
+		resourceOrigin = os.Getenv("CXT_PUBLIC_URL")
+	}
+	resourceOrigin, err := serverruntime.PublicOrigin(addr, resourceOrigin)
+	if err != nil {
+		return fmt.Errorf("CXT_MCP_PUBLIC_URL: %w", err)
+	}
 	runtime, err := serverruntime.Open(ctx, addr, "", true)
 	if err != nil {
 		return err
 	}
 	defer runtime.Close()
-	handler, err := mcpserver.Handler(runtime)
+	handler, err := mcpserver.Handler(runtime, resourceOrigin)
 	if err != nil {
 		return err
 	}

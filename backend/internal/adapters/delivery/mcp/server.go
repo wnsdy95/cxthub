@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,12 +91,12 @@ type ContextBackend interface {
 type IdentityBackend interface {
 	ReadableRepository(context.Context, string, string, string) (domain.Repository, error)
 	ResolveUser(ctx context.Context, bearer string) (domain.User, error)
-	ResolveMCPUser(ctx context.Context, bearer string) (domain.User, error)
+	ResolveMCPUser(ctx context.Context, bearer string, resources ...string) (domain.User, error)
 	GetRepository(ctx context.Context, repositoryID string) (domain.Repository, error)
 	RoleOf(ctx context.Context, repositoryID, userID string) (domain.MemberRole, bool)
 	HasBreakGlassAccess(ctx context.Context, repositoryID, userID string) (bool, error)
 	ExchangeMCPAuthorizationCode(context.Context, string, string, string, string, string) (domain.OAuthTokenPair, error)
-	RefreshMCPAccessToken(ctx context.Context, refreshToken, clientID string) (domain.OAuthTokenPair, error)
+	RefreshMCPAccessToken(ctx context.Context, refreshToken, clientID string, resources ...string) (domain.OAuthTokenPair, error)
 	RevokeMCPToken(ctx context.Context, token, clientID string) error
 }
 
@@ -107,16 +109,41 @@ type Server struct {
 	identity          IdentityBackend
 	oauth             outbound.OAuthStore
 	publicURL         string
+	resourceOrigin    string
 	resource          string
 	handler           http.Handler
 }
 
 func NewServer(contextBackend ContextBackend, identity IdentityBackend, oauth outbound.OAuthStore, publicURL string) (*Server, error) {
-	publicURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
-	if publicURL == "" {
-		return nil, fmt.Errorf("CXT_PUBLIC_URL is required for the remote MCP server")
+	return NewServerWithOrigins(contextBackend, identity, oauth, publicURL, publicURL)
+}
+
+func canonicalMCPOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(raw), "/"))
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Opaque != "" {
+		return "", fmt.Errorf("MCP public origin must be an absolute origin without credentials, path, query or fragment")
 	}
-	s := &Server{context: contextBackend, identity: identity, oauth: oauth, publicURL: publicURL, resource: publicURL + "/mcp"}
+	loopback := strings.EqualFold(parsed.Hostname(), "localhost")
+	if address := net.ParseIP(parsed.Hostname()); address != nil {
+		loopback = loopback || address.IsLoopback()
+	}
+	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && loopback) {
+		return "", fmt.Errorf("MCP public origin requires HTTPS except for loopback development")
+	}
+	parsed.Host = strings.ToLower(parsed.Host)
+	return parsed.String(), nil
+}
+
+func NewServerWithOrigins(contextBackend ContextBackend, identity IdentityBackend, oauth outbound.OAuthStore, publicURL, resourceOrigin string) (*Server, error) {
+	publicURL, err := canonicalMCPOrigin(publicURL)
+	if err != nil {
+		return nil, err
+	}
+	resourceOrigin, err = canonicalMCPOrigin(resourceOrigin)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{context: contextBackend, identity: identity, oauth: oauth, publicURL: publicURL, resourceOrigin: resourceOrigin, resource: resourceOrigin + "/mcp"}
 	registerGate := newRequestGate(120, time.Minute)
 	authorizeGate := newRequestGate(600, time.Minute)
 	tokenGate := newRequestGate(1200, time.Minute)
@@ -271,13 +298,13 @@ func (s *Server) requestUser(r *http.Request, allowCookie bool) (domain.User, er
 		return domain.User{}, domain.ErrUnauthorized
 	}
 	if !allowCookie {
-		return s.identity.ResolveMCPUser(r.Context(), token)
+		return s.identity.ResolveMCPUser(r.Context(), token, s.resource)
 	}
 	return s.identity.ResolveUser(r.Context(), token)
 }
 
 func (s *Server) mcpUnauthorized(w http.ResponseWriter) {
-	metadata := s.publicURL + "/.well-known/oauth-protected-resource/mcp"
+	metadata := s.resourceOrigin + "/.well-known/oauth-protected-resource/mcp"
 	w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+metadata+`", scope="`+readScope+`"`)
 	writeJSON(w, http.StatusUnauthorized, map[string]any{
 		"jsonrpc": "2.0", "error": map[string]any{"code": -32001, "message": "authentication required"}, "id": nil,

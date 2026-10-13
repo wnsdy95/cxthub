@@ -35,13 +35,13 @@ type frozenDriver struct {
 	capture *capture.SessionCaptureAdapter
 }
 
-func newFrozenDriver(t *testing.T) frozenDriver {
+func newFrozenDriver(t *testing.T, origins ...string) frozenDriver {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	for _, key := range []string{"CXT_REMOTE", "CXT_WRAPPED", "CXT_WRAPPED_AGENT", "CODEX_THREAD_ID", "CODEX_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
-	cwd, c, store, repo := captureGateFixture(t)
+	cwd, c, store, repo := captureGateFixture(t, origins...)
 	ctx := context.Background()
 	base, err := store.PutDoc(ctx, domain.SessionDoc{CIR: domain.CIRDocument{Envelope: domain.Envelope{CIRVersion: domain.CIRVersionV1, SourceProvider: domain.ProviderClaude, SessionOriginID: "synthetic-driver-baseline", Fidelity: domain.FidelityFull}, Events: []domain.Event{{Kind: domain.EventMessage, Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "baseline"}}}}}})
 	if err != nil {

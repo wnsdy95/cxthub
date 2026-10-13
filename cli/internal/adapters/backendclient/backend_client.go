@@ -24,10 +24,11 @@ import (
 // It attaches Authorization: Bearer and X-Cxt-Identity headers to requests.
 type BackendClient struct {
 	// baseURL/token is resolved at request time — supports lazy evaluation for processes starting after remote add or cxt login.
-	baseURL  func() string
-	token    func() string
-	identity domain.TeamIdentity
-	httpc    *http.Client
+	baseURL          func() string
+	token            func() string
+	identity         domain.TeamIdentity
+	httpc            *http.Client
+	resolveTransport func() (string, string, error)
 	// chunks accesses local chunk store (optional — for pull delta, inject with SetChunkLocal).
 	chunks       ChunkLocal
 	memoryReuse  memoryReuseCache
@@ -38,7 +39,20 @@ type BackendClient struct {
 // NewBackendClient creates a BackendClient.
 // Timeout 30s: git hooks (pre-push/post-checkout, etc.) use this client for sync network, so infinite wait blocks git command itself (review #2 — fail-open contract hole).
 func NewBackendClient(baseURL, token func() string, identity domain.TeamIdentity) *BackendClient {
-	return &BackendClient{baseURL: baseURL, token: token, identity: identity, httpc: &http.Client{Timeout: 30 * time.Second}}
+	return &BackendClient{baseURL: baseURL, token: token, identity: identity, httpc: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+}
+
+func NewResolvedBackendClient(resolve func() (string, string, error), identity domain.TeamIdentity) *BackendClient {
+	client := NewBackendClient(func() string { endpoint, _, _ := resolve(); return endpoint }, func() string { _, token, _ := resolve(); return token }, identity)
+	client.resolveTransport = resolve
+	return client
+}
+
+func (c *BackendClient) transport() (string, string, error) {
+	if c.resolveTransport != nil {
+		return c.resolveTransport()
+	}
+	return c.baseURL(), c.token(), nil
 }
 
 // Freeze the destination and credentials for HTTP requests without copying the
@@ -177,6 +191,13 @@ func (c *BackendClient) do(ctx context.Context, method, path string, body, out a
 func (c *BackendClient) doLimited(ctx context.Context, method, path string, body, out any, max int64) (resultErr error) {
 	ctx = outbound.NextSyncDiagnosticRequest(ctx)
 	diagnosticCtx := ctx // Best-effort ACK cleanup must not look like caller cancellation.
+	endToken := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageTokenLookup, outbound.SyncDiagnosticCounts{})
+	endpoint, token, err := c.transport()
+	if err != nil {
+		endToken(err)
+		return err
+	}
+	endToken(diagnosticCtx.Err())
 	var rdr io.Reader
 	if body != nil {
 		endMarshal := outbound.BeginMeasuredSyncDiagnostic(diagnosticCtx, outbound.SyncStageRequestMarshal)
@@ -193,7 +214,7 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 		defer cancelACK()
 	}
 	endSetup := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageRequestSetup, outbound.SyncDiagnosticCounts{})
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL()+path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint+path, rdr)
 	endSetup(err)
 	if err != nil {
 		return err
@@ -204,9 +225,6 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 	// A protocol declaration only; the server still checks repository policy,
 	// current authorization and every referenced document's actual bytes.
 	req.Header.Set("X-Cxt-Doc-Identities", string(domain.DocumentIdentityRootV1))
-	endToken := outbound.BeginSyncDiagnostic(diagnosticCtx, outbound.SyncStageTokenLookup, outbound.SyncDiagnosticCounts{})
-	token := c.token()
-	endToken(diagnosticCtx.Err())
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

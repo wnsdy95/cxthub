@@ -16,7 +16,6 @@ import (
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capturejournal"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
@@ -27,8 +26,10 @@ const capturePushDir = ".cxt/capture/push-requests"
 // APIOnly preserves the documented CXT_REMOTE API-base fallback semantics.
 // Credentials stay in the prepared transport and never enter the intent.
 type CapturePushDestination struct {
-	URL     string
-	APIOnly bool
+	URL          string
+	APIOnly      bool
+	Endpoint     string `json:",omitempty"`
+	RepositoryID string `json:",omitempty"`
 }
 
 // A pre-push intent is separate from capture completion: recording a commit
@@ -40,15 +41,53 @@ type capturePushIntent struct {
 	Branch                             domain.PublicationBranch
 	Update                             gitPushUpdate
 	GitDestination, ContextDestination domain.ContentHash
-	ContextAPIOnly                     bool `json:",omitempty"`
+	ContextAPIOnly                     bool               `json:",omitempty"`
+	ContextTransport                   domain.ContentHash `json:",omitempty"`
+}
+
+func captureTransportHash(destination CapturePushDestination) domain.ContentHash {
+	if destination.Endpoint == "" && destination.RepositoryID == "" {
+		return ""
+	}
+	raw, _ := json.Marshal([]string{destination.Endpoint, destination.RepositoryID})
+	return domain.HashContent(raw)
 }
 
 type capturePushRequest struct {
-	Intent capturePushIntent
-	Tries  int
-	Next   time.Time
-	Done   bool
-	Error  string
+	Intent           capturePushIntent
+	Tries            int
+	Next             time.Time
+	Done             bool
+	Error            string
+	MigrationRetries map[string]capturePushRetry `json:",omitempty"`
+}
+
+type capturePushRetry struct {
+	Tries int
+	Next  time.Time
+}
+
+func (request *capturePushRequest) setRetry(route string, retry capturePushRetry) {
+	if route == "" {
+		request.Tries, request.Next = retry.Tries, retry.Next
+		return
+	}
+	if request.MigrationRetries == nil {
+		request.MigrationRetries = map[string]capturePushRetry{}
+	}
+	request.MigrationRetries[route] = retry
+}
+
+func (request capturePushRequest) validRetries() bool {
+	if request.Tries < 0 || request.Tries > 8 || len(request.MigrationRetries) > 64 {
+		return false
+	}
+	for route, retry := range request.MigrationRetries {
+		if domain.ValidateContentHash(route) != nil || retry.Tries < 0 || retry.Tries > 8 {
+			return false
+		}
+	}
+	return true
 }
 
 func (p capturePushIntent) id() string {
@@ -62,16 +101,9 @@ func capturePushDestinations(ctx context.Context, cwd, root string) (domain.Cont
 	if err != nil {
 		return "", destination, fmt.Errorf("Git origin unavailable")
 	}
-	remotes, err := remotecfg.Load(root)
+	destination, err = mergeDeliveryDestination(root)
 	if err != nil {
 		return "", destination, err
-	}
-	destination.URL = remotes["origin"]
-	if destination.URL == "" {
-		destination.URL, destination.APIOnly = os.Getenv("CXT_REMOTE"), true
-	}
-	if destination.URL == "" {
-		return "", destination, fmt.Errorf("context origin unavailable")
 	}
 	return domain.HashContent(git), destination, nil
 }
@@ -120,6 +152,7 @@ func queueCapturePush(ctx context.Context, c *Container, cwd string, updates []g
 			return err
 		}
 		intent := capturePushIntent{Version: 1, RepoID: repo.ID, AttemptID: match.Proof.ID, WorktreeID: match.Proof.WorktreeID, Branch: branch, Update: update, GitDestination: git, ContextDestination: domain.HashContent([]byte(remote.URL)), ContextAPIOnly: remote.APIOnly}
+		intent.ContextTransport = captureTransportHash(remote)
 		_, err = providerfs.WithCxtLock(ctx, root, "capture-push", intent.id(), syscall.LOCK_EX, true, func() error {
 			rel := filepath.Join(capturePushDir, intent.id()+".json")
 			if raw, err := providerfs.ReadRepoFile(root, rel); err == nil {
@@ -203,10 +236,10 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 			return next, err
 		}
 		var r capturePushRequest
-		if len(raw) > 65536 || json.Unmarshal(raw, &r) != nil || r.Intent.Version != 1 || r.Intent.RepoID != repoID || r.Intent.id()+".json" != file.Name() || r.Tries < 0 || r.Tries > 8 {
+		if len(raw) > 65536 || json.Unmarshal(raw, &r) != nil || r.Intent.Version != 1 || r.Intent.RepoID != repoID || r.Intent.id()+".json" != file.Name() || !r.validRetries() {
 			return next, domain.ErrHashMismatch
 		}
-		if r.Done || r.Tries >= 8 {
+		if r.Done {
 			continue
 		}
 		// Waiting for a capture consumes no transport attempt: a large input may
@@ -218,21 +251,51 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		if !p.Complete || !p.MemoryFinalized {
 			continue
 		}
-		if time.Now().Before(r.Next) {
-			if next.IsZero() || r.Next.Before(next) {
-				next = r.Next
+		destination, err := mergeDeliveryDestination(root)
+		if err != nil {
+			return next, err
+		}
+		route := ""
+		if captureTransportHash(destination) != r.Intent.ContextTransport {
+			destination, route, err = resolvePendingTransportRoute(root, r.Intent.RepoID, func(source CapturePushDestination) bool { return captureContextMatches(r.Intent, source) })
+			if errors.Is(err, errPendingTransportChanged) {
+				continue
+			} else if err != nil {
+				return next, err
+			}
+		}
+		retry := capturePushRetry{Tries: r.Tries, Next: r.Next}
+		if route != "" {
+			var exists bool
+			retry, exists = r.MigrationRetries[route]
+			if !exists && len(r.MigrationRetries) >= 64 {
+				return next, fmt.Errorf("pending migration retry limit reached")
+			}
+		}
+		if retry.Tries >= 8 {
+			continue
+		}
+		if time.Now().Before(retry.Next) {
+			if next.IsZero() || retry.Next.Before(next) {
+				next = retry.Next
 			}
 			continue
 		}
-		r.Tries++
-		r.Next = time.Now().Add(time.Duration(1<<r.Tries) * time.Second)
+		previousRetry := retry
+		retry.Tries++
+		retry.Next = time.Now().Add(time.Duration(1<<retry.Tries) * time.Second)
+		r.setRetry(route, retry)
 		raw, _ = json.Marshal(r)
 		if err := providerfs.WriteRepoFileDurable(root, rel, raw, 0600); err != nil {
 			return next, err
 		}
 		job, cancel := context.WithTimeout(ctx, time.Minute)
-		err = deliverCapturePush(job, c, cwd, root, r.Intent, p)
+		err = deliverCapturePush(job, c, cwd, root, r.Intent, p, destination)
 		cancel()
+		if pendingTransportMismatch(err) {
+			retry = previousRetry
+			r.setRetry(route, retry)
+		}
 		r.Error = ""
 		if err == nil {
 			r.Done = true
@@ -243,8 +306,8 @@ func drainCapturePush(ctx context.Context, c *Container, cwd, root, repoID strin
 		if err := providerfs.WriteRepoFileDurable(root, rel, raw, 0600); err != nil {
 			return next, err
 		}
-		if !r.Done && r.Tries < 8 && (next.IsZero() || r.Next.Before(next)) {
-			next = r.Next
+		if !r.Done && retry.Tries < 8 && (next.IsZero() || retry.Next.Before(next)) {
+			next = retry.Next
 		}
 	}
 	return next, nil
@@ -268,19 +331,42 @@ func capturePushAttempt(root string, intent capturePushIntent) (domain.CaptureAt
 	return p, nil
 }
 
-func deliverCapturePush(ctx context.Context, c *Container, cwd, root string, intent capturePushIntent, p domain.CaptureAttempt) error {
+func capturePushDestinationMatches(intent capturePushIntent, git domain.ContentHash, remote CapturePushDestination) bool {
+	return git == intent.GitDestination && captureContextMatches(intent, remote)
+}
+
+func captureContextMatches(intent capturePushIntent, remote CapturePushDestination) bool {
+	return domain.HashContent([]byte(remote.URL)) == intent.ContextDestination && remote.APIOnly == intent.ContextAPIOnly && captureTransportHash(remote) == intent.ContextTransport
+}
+
+func deliverCapturePush(ctx context.Context, c *Container, cwd, root string, intent capturePushIntent, p domain.CaptureAttempt, expected CapturePushDestination) error {
 	if c.PrepareCapturePush == nil {
 		return fmt.Errorf("bound context publication service unavailable")
 	}
 	updates := []gitPushUpdate{intent.Update}
 	var sync inbound.SyncRepo
+	var preparedDestination CapturePushDestination
 	for attempt := 0; attempt < 2; attempt++ {
 		git, remote, err := capturePushDestinations(ctx, cwd, root)
 		if err != nil {
 			return err
 		}
-		if git != intent.GitDestination || domain.HashContent([]byte(remote.URL)) != intent.ContextDestination || remote.APIOnly != intent.ContextAPIOnly {
+		if git != intent.GitDestination {
 			return fmt.Errorf("push destination changed; deferred publication retained")
+		}
+		resolved, err := resolvePendingTransport(root, intent.RepoID, func(source CapturePushDestination) bool { return captureContextMatches(intent, source) })
+		if err != nil {
+			if errors.Is(err, errPendingTransportChanged) && intent.ContextTransport == "" && remote.Endpoint == "" {
+				return fmt.Errorf("push destination changed; deferred publication retained")
+			}
+			return err
+		}
+		remote = resolved
+		if remote != expected {
+			return errPendingTransportChanged
+		}
+		if sync != nil && preparedDestination != remote {
+			return errPendingTransportChanged
 		}
 		if err := checkGitPushObjects(ctx, cwd, updates); err != nil {
 			return err
@@ -307,6 +393,7 @@ func deliverCapturePush(ctx context.Context, c *Container, cwd, root string, int
 			return domain.ErrHashMismatch
 		}
 		if sync == nil {
+			preparedDestination = remote
 			// Pass the exact observed URL, never ask the factory to select origin.
 			// The returned transport owns fixed endpoint/credential/repo bindings
 			// for every request, including the one bounded append retry.

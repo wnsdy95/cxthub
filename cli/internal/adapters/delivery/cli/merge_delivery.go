@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
@@ -138,18 +137,8 @@ func mergeDeliveryScope(ctx context.Context, c *Container, cwd string) (mergeEvi
 }
 
 func mergeDeliveryDestination(root string) (CapturePushDestination, error) {
-	remotes, err := remotecfg.Load(root)
-	if err != nil {
-		return CapturePushDestination{}, err
-	}
-	destination := CapturePushDestination{URL: remotes["origin"]}
-	if destination.URL == "" {
-		destination.URL, destination.APIOnly = os.Getenv("CXT_REMOTE"), true
-	}
-	if destination.URL == "" {
-		return destination, fmt.Errorf("context origin unavailable")
-	}
-	return destination, nil
+	destination, _, err := pendingTransportDestinations(root, "")
+	return destination, err
 }
 
 func mergeDestinationHash(destination CapturePushDestination) domain.ContentHash {
@@ -159,6 +148,7 @@ func mergeDestinationHash(destination CapturePushDestination) domain.ContentHash
 
 func mergeScopeKey(evidence mergeEvidence) string {
 	evidence.Before, evidence.After = "", ""
+	evidence.Remote = ""
 	return mergeDeliveryKey(evidence)
 }
 
@@ -251,8 +241,12 @@ func verifyMergeDeliveryScope(ctx context.Context, c *Container, cwd string, evi
 	if err != nil {
 		return err
 	}
-	if !sameMergeScope(evidence, current) {
-		return domain.ErrSyncConflict
+	match, err := mergeScopeMatcher(cxtRepoRoot(ctx, cwd), current)
+	if err != nil {
+		return err
+	}
+	if !match(evidence) {
+		return errPendingTransportChanged
 	}
 	if err := exec.CommandContext(ctx, "git", "-C", cwd, "merge-base", "--is-ancestor", evidence.After, "HEAD").Run(); err != nil {
 		return fmt.Errorf("recorded merge no longer belongs to selected code: %w", err)
@@ -266,14 +260,11 @@ func executeMergeDelivery(ctx context.Context, c *Container, cwd, key, lease str
 	if err := verifyMergeDeliveryScope(ctx, c, cwd, evidence); err != nil {
 		return incomingContextFetch{}, false, err
 	}
+	destination, err := resolvePendingTransport(root, evidence.RepoID, func(source CapturePushDestination) bool { return mergeDestinationHash(source) == evidence.Remote })
+	if err != nil {
+		return incomingContextFetch{}, false, err
+	}
 	if c.PrepareCapturePush != nil {
-		destination, err := mergeDeliveryDestination(root)
-		if err != nil {
-			return incomingContextFetch{}, false, err
-		}
-		if mergeDestinationHash(destination) != evidence.Remote {
-			return incomingContextFetch{}, false, domain.ErrSyncConflict
-		}
 		syncer, err := c.PrepareCapturePush(ctx, cwd, destination, evidence.RepoID)
 		if err != nil {
 			return incomingContextFetch{}, false, err
@@ -281,6 +272,18 @@ func executeMergeDelivery(ctx context.Context, c *Container, cwd, key, lease str
 		bound := *c
 		bound.Sync = syncer
 		c = &bound
+	} else if mergeDestinationHash(destination) != evidence.Remote {
+		return incomingContextFetch{}, false, fmt.Errorf("bound migrated merge transport unavailable")
+	}
+	verifyRoute := func() error {
+		current, err := resolvePendingTransport(root, evidence.RepoID, func(source CapturePushDestination) bool { return mergeDestinationHash(source) == evidence.Remote })
+		if err != nil {
+			return err
+		}
+		if current != destination {
+			return errPendingTransportChanged
+		}
+		return verifyMergeDeliveryScope(ctx, c, cwd, evidence)
 	}
 	out := incomingContextFetch{requireBranchPlan: job.RequireBranchPlan}
 	if len(job.Candidates) == 0 {
@@ -314,7 +317,7 @@ func executeMergeDelivery(ctx context.Context, c *Container, cwd, key, lease str
 			return out, false, err
 		}
 	}
-	if err := verifyMergeDeliveryScope(ctx, c, cwd, evidence); err != nil {
+	if err := verifyRoute(); err != nil {
 		return out, false, err
 	}
 	coverage, current, err := mergeContextCoverage(ctx, c, cwd, evidence, job.Candidates)
@@ -332,7 +335,7 @@ func executeMergeDelivery(ctx context.Context, c *Container, cwd, key, lease str
 	}
 	in := inbound.SyncInput{Cwd: cwd, RepoID: evidence.RepoID, RequireBranchPlan: job.RequireBranchPlan, ExpectedBranchID: evidence.BranchID}
 	reflected, err := appendMergeCandidates(ctx, c, evidence.Branch, candidates, in, evidence.After, func() error {
-		if err := verifyMergeDeliveryScope(ctx, c, cwd, evidence); err != nil {
+		if err := verifyRoute(); err != nil {
 			return err
 		}
 		saved, err := readMergeDelivery(root, key)
@@ -346,8 +349,16 @@ func executeMergeDelivery(ctx context.Context, c *Container, cwd, key, lease str
 		if err != nil {
 			return err
 		}
+		currentScope, err := mergeDeliveryScope(ctx, c, cwd)
+		if err != nil {
+			return err
+		}
+		match, err := mergeScopeMatcher(root, currentScope)
+		if err != nil {
+			return err
+		}
 		for _, later := range jobs {
-			if later.Completed && sameMergeScope(evidence, later.Evidence) && later.Evidence.After != evidence.After {
+			if later.Completed && match(later.Evidence) && later.Evidence.After != evidence.After {
 				err := exec.CommandContext(ctx, "git", "-C", cwd, "merge-base", "--is-ancestor", evidence.After, later.Evidence.After).Run()
 				if err == nil {
 					return errMergeHistoricalInsertion
@@ -403,8 +414,13 @@ func replayMergeDeliveriesAt(ctx context.Context, c *Container, cwd string, auto
 	}
 	key, lease := "", domain.NewSessionID()
 	var job mergeDelivery
+	var previousAttempt time.Time
 	_, err = providerfs.WithCxtLock(ctx, root, "merge-delivery-branches", mergeScopeKey(scope), syscall.LOCK_EX, true, func() error {
 		jobs, err := listMergeDeliveries(root)
+		if err != nil {
+			return err
+		}
+		match, err := mergeScopeMatcher(root, scope)
 		if err != nil {
 			return err
 		}
@@ -418,10 +434,10 @@ func replayMergeDeliveriesAt(ctx context.Context, c *Container, cwd string, auto
 			order[sha] = index
 		}
 		if automatic {
-			keys = automaticMergeDeliveryKeys(jobs, scope, order, time.Now())
+			keys = automaticMergeDeliveryKeys(jobs, scope, order, time.Now(), match)
 		} else {
 			for candidate, saved := range jobs {
-				if saved.Completed || !sameMergeScope(saved.Evidence, scope) {
+				if saved.Completed || !match(saved.Evidence) {
 					continue
 				}
 				if saved.LeaseUntil.After(time.Now()) {
@@ -465,6 +481,14 @@ func replayMergeDeliveriesAt(ctx context.Context, c *Container, cwd string, auto
 				key = ""
 				return nil
 			}
+			match, err := mergeScopeMatcher(root, scope)
+			if err != nil {
+				return err
+			}
+			if !match(job.Evidence) {
+				return errPendingTransportChanged
+			}
+			previousAttempt = job.LastAttempt
 			job.Lease, job.LeaseUntil = lease, time.Now().UTC().Add(65*time.Second)
 			job.LastAttempt, job.Attempts = time.Now().UTC(), job.Attempts+1
 			return writeMergeDelivery(root, key, job)
@@ -483,6 +507,10 @@ func replayMergeDeliveriesAt(ctx context.Context, c *Container, cwd string, auto
 	cancel()
 	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	err = updateLeasedMerge(finishCtx, root, key, lease, func(saved *mergeDelivery) {
+		if pendingTransportMismatch(attemptErr) {
+			saved.Attempts--
+			saved.LastAttempt = previousAttempt
+		}
 		saved.Completed = attemptErr == nil
 		saved.WaitingSource = len(saved.Candidates) == 0 && (saved.WaitingSource || errors.Is(attemptErr, errMergeSourcePending))
 		saved.ReviewRequired = !saved.Completed && (saved.ReviewRequired || errors.Is(attemptErr, errMergeHistoricalInsertion))
