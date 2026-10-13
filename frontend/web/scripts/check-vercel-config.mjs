@@ -60,6 +60,25 @@ assert.deepEqual(config.rewrites.slice(0, 5), [
   { source: '/.well-known/:path*', destination: 'https://cxthub-mcp.onrender.com/.well-known/:path*' },
 ]);
 assert.equal(config.rewrites[5].destination, '/index.html');
+const securityHeaders = config.headers.find((entry) => entry.source === '/(.*)').headers;
+const policy = securityHeaders.find((header) => header.key === 'Content-Security-Policy').value;
+const directives = new Map(policy.split(';').filter((part) => part.trim()).map((part) => {
+  const [name, ...sources] = part.trim().split(/\s+/);
+  return [name, sources];
+}));
+assert.deepEqual(directives.get('script-src'), [
+  "'self'",
+  'https://apis.google.com/js/api.js',
+  'https://apis.google.com/_/scs/abc-static/',
+], 'Firebase popup bootstrap and iframe modules need narrow script sources');
+assert.deepEqual(directives.get('default-src'), ["'self'"]);
+assert.deepEqual(directives.get('object-src'), ["'none'"]);
+assert.deepEqual(directives.get('base-uri'), ["'none'"]);
+assert.deepEqual(directives.get('frame-ancestors'), ["'none'"]);
+assert.deepEqual(directives.get('form-action'), ["'self'"]);
+assert.deepEqual(directives.get('frame-src'), [
+  'https://*.firebaseapp.com', 'https://accounts.google.com',
+]);
 assert.equal(normalizeApiOrigin('https://api.example.com'), 'https://api.example.com');
 assert.equal(normalizeApiOrigin('https://cxthub-mcp.onrender.com/'), 'https://cxthub-mcp.onrender.com');
 
