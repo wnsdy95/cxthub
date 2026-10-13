@@ -37,7 +37,21 @@ func (s *FileStore) ReadAppliedPull(ctx context.Context, repo, remote string) (o
 	if err != nil {
 		return receipt, err
 	}
-	if json.Unmarshal(raw, &receipt) != nil || receipt.Plan.Version != 1 || receipt.Plan.RepoID != repo || receipt.Plan.Remote != remote || receipt.Plan.Expected.Position == nil || receipt.Plan.Expected.Position.WorktreeID != s.worktreeID || receipt.Plan.ID != outbound.SelectedPullPlanID(receipt.Plan) || receipt.AppliedAt.IsZero() {
+	if json.Unmarshal(raw, &receipt) != nil || receipt.Plan.Version != 1 || receipt.Plan.RepoID != repo || receipt.Plan.Remote != remote || receipt.Plan.Expected.Position == nil || receipt.Plan.Expected.Position.WorktreeID != s.worktreeID || receipt.AppliedAt.IsZero() {
+		return receipt, domain.ErrHashMismatch
+	}
+	if inclusion := receipt.Plan.Context.Inclusion; inclusion != nil {
+		legacyMerges := 0
+		for index := range inclusion.Merges {
+			if inclusion.Merges[index].PreserveLegacyReceiptEncoding() {
+				legacyMerges++
+			}
+		}
+		if legacyMerges != 0 && legacyMerges != len(inclusion.Merges) {
+			return receipt, domain.ErrHashMismatch
+		}
+	}
+	if receipt.Plan.ID != outbound.SelectedPullPlanID(receipt.Plan) {
 		return receipt, domain.ErrHashMismatch
 	}
 	return receipt, nil
