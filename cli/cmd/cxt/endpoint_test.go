@@ -144,6 +144,33 @@ func TestEndpointRepairUsesVerifiedBindingAndPreservesIdentity(t *testing.T) {
 	}
 }
 
+func TestEndpointRepairRejectsDamagedConfigBeforeNetwork(t *testing.T) {
+	fixture := newEndpointFixture(t)
+	if err := fixture.migrate(t); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := branchjournal.Open(context.Background(), fixture.cfg.RepoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Bind(remotecfg.RepoIDFor(endpointTestIdentity)); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(fixture.cfg.RepoRoot, ".cxt/config")
+	damaged := []byte("broken config fixture\n")
+	if err := os.WriteFile(configPath, damaged, 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := fixture.requests
+	if err := runRepair([]string{"--from-server", "--remote", endpointTestIdentity}); err == nil || fixture.requests != calls {
+		t.Fatal("repair guessed a destination from damaged configuration", err)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil || !bytes.Equal(after, damaged) {
+		t.Fatal("rejected repair changed the damaged configuration", err)
+	}
+}
+
 func TestEndpointFrozenCaptureRejectsWrongBinding(t *testing.T) {
 	fixture := newEndpointFixture(t)
 	ctx := context.Background()

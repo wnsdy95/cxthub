@@ -176,12 +176,19 @@ if ! python3 "$ROOT/scripts/e2e-repair-proof.py" local-only "$TMP/repair-server-
   cat "$TMP/repair-proof.out"; FAIL=1; return
 fi
 printf 'corrupted document fixture\n' > ".cxt/objects/docs/${PROTOCOL_MAIN#sha256:}"
+cp .cxt/config "$TMP/repair-config-before.json"
 printf 'broken config fixture\n' > .cxt/config
 echo "  repair fixture: inspect damaged replica"
 # A damaged replica is expected to fail doctor; retain its JSON and stderr
 # separately so a process failure cannot be mistaken for an empty issue list.
 repair_command cxt doctor --json >"$TMP/doctor-before.json" 2>"$TMP/doctor-before.err"
 printf '%s\n' "$?" >"$TMP/doctor-before.status"
+expect "repair refuses to guess a lost transport binding" "$(repair_command cxt repair --from-server --remote "$PROTOCOL_REMOTE" >"$TMP/repair-unsafe.out" 2>&1; echo $?)" 1
+expect "repair explains the required config recovery" "$(grep -c 'cannot safely resolve repair transport' "$TMP/repair-unsafe.out")" 1
+expect "rejected repair preserves damaged config" "$(cat .cxt/config)" "broken config fixture"
+expect "rejected repair preserves damaged document" "$(cat ".cxt/objects/docs/${PROTOCOL_MAIN#sha256:}")" "corrupted document fixture"
+cp .cxt/config "$TMP/repair-config-damaged"
+cp "$TMP/repair-config-before.json" .cxt/config
 echo "  repair fixture: restore verified server objects"
 if ! repair_command cxt repair --from-server --remote "$PROTOCOL_REMOTE" >"$TMP/repair.out" 2>&1; then cat "$TMP/repair.out"; FAIL=1; return; fi
 expect "repair keeps unpushed local main" "$(ref_target .cxt/refs/heads/main)" "$REPAIR_LOCAL"
