@@ -368,7 +368,14 @@ func TestPGHistoryDocumentProofCompleteBoundedClosure(t *testing.T) {
 			}
 			return nil
 		})
-		wantReads := 2 + (len(f.chunks)+15)/16 // Full verification plus descriptor capture.
+		storedBytes := 0
+		for hash := range f.chunks {
+			storedBytes += len(f.stored[hash])
+		}
+		if storedBytes > ownedDocPrefetchBytesPG {
+			t.Fatalf("fixture exceeds one byte-bounded read window: %d", storedBytes)
+		}
+		wantReads := 3
 		wantPins := 2 + (len(f.chunks)+16)/16 + (len(f.chunks)+15)/16
 		if err != nil || tr.err != nil || tr.reads != wantReads || tr.pins != wantPins || len(tr.chunkKeys) != len(f.chunks) {
 			t.Fatalf("%s: err=%v trace=%+v want reads=%d pins=%d chunks=%d", phase, err, tr, wantReads, wantPins, len(f.chunks))
