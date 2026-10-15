@@ -11,6 +11,6 @@ require (
 	github.com/tiktoken-go/tokenizer v0.8.1
 )
 
-require github.com/dlclark/regexp2/v2 v2.8.3
+require github.com/dlclark/regexp2/v2 v2.8.4
 
-require golang.org/x/sys v0.48.0
+require golang.org/x/sys v0.49.0
