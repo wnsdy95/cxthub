@@ -114,6 +114,13 @@ remain lightweight. Completed graph projections are bounded and keyed by coheren
 revision plus actual inputs, repository and selected position; they are not reused
 as authorization or across uncommitted transactions.
 
+When a bulk slot becomes available, its queued work takes precedence over queued
+interactive work. At most one of the two active slots can be bulk, leaving the
+other available for interactive requests. Always prioritizing interactive reads
+can starve queued uploads and verification when cold graph reads repeatedly fail
+their bulk upgrade and retry. Both class reservations have deterministic tests;
+wait deadlines and capacity limits are unchanged.
+
 This does not make all metadata reads constant-cost: pending classification still
 walks repository metadata, and graph-cache lookup still fingerprints coherent
 inputs. Admission controls concurrent work, not the working-set size of a single
@@ -223,6 +230,14 @@ stress case. The script retains source, binary hashes and per-run measurements
 locally and removes its own test containers/database/network.
 
 ## Real-corpus check
+
+The first production rollout on 2026-10-15 still recorded an API OOM at 09:52 UTC
+under the 512 MiB limit. A complete graph returned 200 in 12.3 seconds, while other
+attempts returned admission overload (503). A small range page returned 200 in
+0.39 seconds, but an older large document's cold page did not respond within a
+150-second diagnostic client deadline. These are release observations, not an
+accepted performance gate. The responsible overlapping workload remains
+unidentified; production OOM and cold-read latency are still open in issue #508.
 
 Admitted HTTP reads and uploads have a two-minute request context and socket
 read/write deadline, including queue time. An earlier caller deadline wins.

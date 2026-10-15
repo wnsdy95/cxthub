@@ -79,6 +79,11 @@ jobs:
       - name: test (FS) + openapi drift guard
         working-directory: backend
         run: go test ./...
+      - name: test admission progress on one CPU
+        working-directory: backend
+        env:
+          GOMAXPROCS: "1"
+        run: go test -race ./internal/app -run '^TestResourceAdmission(DispatchReservesBothClasses|MixedGraphVerification)$' -count=3 -timeout=120s
       - name: vulnerability scan (FS and production PostgreSQL)
         working-directory: backend
         run: |

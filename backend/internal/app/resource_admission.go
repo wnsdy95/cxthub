@@ -137,10 +137,10 @@ func (gate *resourceAdmission) acquire(ctx context.Context, class ResourceClass)
 
 func (gate *resourceAdmission) dispatch() {
 	for gate.active < 2 {
-		class := ResourceInteractive
-		if len(gate.waiters[class]) == 0 {
-			class = ResourceBulk
-			if gate.bulk != 0 || len(gate.waiters[class]) == 0 {
+		class := ResourceBulk
+		if gate.bulk != 0 || len(gate.waiters[class]) == 0 {
+			class = ResourceInteractive
+			if len(gate.waiters[class]) == 0 {
 				return
 			}
 		}
