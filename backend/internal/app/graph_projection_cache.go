@@ -106,12 +106,7 @@ func (s *Service) cachedGraphState(ctx context.Context, repo domain.ContentHash,
 		return domain.GraphState{}, err
 	}
 	if finish == nil {
-		var graph domain.GraphState
-		err := json.Unmarshal(encoded, &graph)
-		if err == nil {
-			err = ctx.Err()
-		}
-		return graph, err
+		return decodeGraphProjection(ctx, encoded)
 	}
 	defer finish()
 	graph, err := s.admittedGraphState(ctx, view, position)
@@ -121,7 +116,10 @@ func (s *Service) cachedGraphState(ctx context.Context, repo domain.ContentHash,
 	if err != nil {
 		return domain.GraphState{}, err
 	}
-	encoded, err = json.Marshal(graph)
+	encoded, err = encodeGraphProjection(ctx, graph)
+	if errors.Is(err, errGraphProjectionCacheLimit) {
+		return graph, ctx.Err()
+	}
 	if err != nil {
 		return domain.GraphState{}, err
 	}

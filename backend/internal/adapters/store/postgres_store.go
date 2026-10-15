@@ -607,7 +607,7 @@ func (s *PostgresStore) ListSnapshots(ctx context.Context, repoID domain.Content
 		q += ` AND branch=$2`
 		args = append(args, branch)
 	}
-	q += ` ORDER BY created_at DESC`
+	q += ` ORDER BY created_at DESC,id`
 	rows, err := s.db(ctx).Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -672,7 +672,7 @@ func (s *PostgresStore) listRefsRaw(ctx context.Context, repoID domain.ContentHa
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db(ctx).Query(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id FROM refs WHERE repo_id=$1`, string(repoID))
+	rows, err := s.db(ctx).Query(ctx, `SELECT kind, name, repo_id, COALESCE(target,''), symbolic,branch_id FROM refs WHERE repo_id=$1 ORDER BY kind,name`, string(repoID))
 	if err != nil {
 		return nil, err
 	}
@@ -2009,7 +2009,7 @@ func (s *PostgresStore) ListPendings(ctx context.Context, repoID domain.ContentH
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db(ctx).Query(ctx, `SELECT data FROM pending_contexts WHERE repo_id=$1`, string(repoID))
+	rows, err := s.db(ctx).Query(ctx, `SELECT data FROM pending_contexts WHERE repo_id=$1 ORDER BY session_id`, string(repoID))
 	if err != nil {
 		return nil, err
 	}
@@ -2115,7 +2115,7 @@ func (s *PostgresStore) ListUnsyncs(ctx context.Context, repoID domain.ContentHa
 	if err := validateHash(repoID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db(ctx).Query(ctx, `SELECT data FROM unsync_contexts WHERE repo_id=$1`, string(repoID))
+	rows, err := s.db(ctx).Query(ctx, `SELECT data FROM unsync_contexts WHERE repo_id=$1 ORDER BY username,branch`, string(repoID))
 	if err != nil {
 		return nil, err
 	}

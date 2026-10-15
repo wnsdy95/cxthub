@@ -114,6 +114,22 @@ remain lightweight. Completed graph projections are bounded and keyed by coheren
 revision plus actual inputs, repository and selected position; they are not reused
 as authorization or across uncommitted transactions.
 
+Projection cache entries use compressed JSON within the same 8 MiB total retained
+budget and four-entry limit. Expansion is independently capped at 32 MiB, and
+reads validate the compressed stream through its checksum and end before returning
+an isolated graph value. Projections beyond either budget remain valid results but
+are not cached. This avoids silently disabling reuse for repeated identifier-heavy
+graphs: the incident corpus was 4.54 MB on the indexed wire, but 15.68 MB as the
+expanded projection and therefore never fit the former raw 8 MiB cache. Warm
+projection reads do not acquire the bulk worker slot; cold graph computation and
+metadata reads still have their existing resource and consistency requirements.
+
+PostgreSQL graph inputs use stable ordering, including snapshot-ID tie-breaking
+for equal creation timestamps. Ref, pending and unsynced-pointer row placement
+must not change an otherwise identical input fingerprint after an MVCC update.
+Repository revisions, coherent-read fingerprints and authorization checks remain
+part of every cache lookup; ordering is not permission to serve stale results.
+
 When a bulk slot becomes available, its queued work takes precedence over queued
 interactive work. At most one of the two active slots can be bulk, leaving the
 other available for interactive requests. Always prioritizing interactive reads
