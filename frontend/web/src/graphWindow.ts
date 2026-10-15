@@ -41,7 +41,12 @@ export function anchoredScrollTop(previousIds: readonly string[], previousOffset
   // an unrelated row's old numerical index as its identity after a live insert.
   for (let i = anchor; i < previousIds.length; i++) {
     const next = nextIndices.get(previousIds[i]);
-    if (next !== undefined) return nextOffsets[next] + (i === anchor ? Math.min(top - previousOffsets[i], nextOffsets[next + 1] - nextOffsets[next] - 1) : 0);
+    if (next !== undefined) {
+      const previousHeight = previousOffsets[i + 1] - previousOffsets[i];
+      const nextHeight = nextOffsets[next + 1] - nextOffsets[next];
+      const fraction = previousHeight > 0 ? (top - previousOffsets[i]) / previousHeight : 0;
+      return nextOffsets[next] + (i === anchor ? Math.min(fraction * nextHeight, Math.max(0, nextHeight - 1)) : 0);
+    }
   }
   return Math.min(top, nextOffsets[nextOffsets.length - 1]);
 }

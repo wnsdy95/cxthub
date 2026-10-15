@@ -9,6 +9,10 @@ import { validateGraphState } from './graphState';
 import type { StorageUsageReport, RefLogEntry, User, PublicUser, Repository, PublicRepository, RepositoryPatch, Membership, Invite, Repo, Ref, Snapshot, SessionDoc, MemoryDigest, SettingsUpload, DiffEntry, SearchHit, Pending, Unsync, Organization, PublicOrganization, OrganizationMembership, OrganizationPolicy, OrganizationAuditEvent, BreakGlassGrant, OrganizationRole } from './types';
 import { normalizeActivityResponse } from './activity';
 import { validateContextSemantics } from './graphEvidence';
+import type { DocFragmentPage, DocViewEvent, DocViewMode } from './types';
+import { DOCUMENT_DETAIL_BYTES, DOCUMENT_FRAGMENT_BYTES, DOCUMENT_FRAGMENT_RESPONSE_BYTES, DOCUMENT_PAGE_BYTES, readDocumentResponse, scheduleDocumentRead } from './documentReads';
+import { DOCUMENT_VISIBLE_MESSAGES, validateDocEventDetail, validateDocFragment, validateDocViewPage } from './documentPaging';
+import { validatePendingState } from './pendingState';
 
 // Default is same-origin relative path (/api/v1). Dev uses Vite proxy, prod assumes same-domain deployment.
 // To serve from a different origin, use an absolute URL with VITE_API_BASE, but cookies must be same-site.
@@ -32,7 +36,7 @@ export class ApiError extends Error {
   constructor(message: string, public readonly code: string, public readonly status: number) { super(message); }
 }
 
-async function call<T>(method: string, path: string, body?: unknown, idpToken?: string, signal?: AbortSignal): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, idpToken?: string, signal?: AbortSignal, maxBytes?: number): Promise<T> {
   // Compatibility declaration only; cookies continue to carry authentication.
   const headers: Record<string, string> = {'X-Cxt-Doc-Identities': 'cxt-manifest-sha256-v1'};
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') headers['X-Cxt-CSRF'] = '1';
@@ -49,7 +53,7 @@ async function call<T>(method: string, path: string, body?: unknown, idpToken?: 
     let detail = `${res.status} ${res.statusText}`;
     let code = '';
     try {
-      const e = (await res.json()) as { error?: { message?: string; code?: string } };
+      const e = (maxBytes === undefined ? await res.json() : JSON.parse(await readDocumentResponse(res, maxBytes))) as { error?: { message?: string; code?: string } };
       code = e?.error?.code ?? '';
       if (e?.error?.message) detail = e.error.message;
     } catch {
@@ -57,7 +61,7 @@ async function call<T>(method: string, path: string, body?: unknown, idpToken?: 
     }
     throw new ApiError(detail, code, res.status);
   }
-  const text = await res.text();
+  const text = maxBytes === undefined ? await res.text() : await readDocumentResponse(res, maxBytes);
   return (text ? JSON.parse(text) : null) as T;
 }
 
@@ -69,6 +73,10 @@ export interface DocEventPage {
   offset: number;
   next: number;
   inherited: number;
+}
+
+export interface DocViewEventPage extends Omit<DocEventPage, 'events'> {
+  events: DocViewEvent[];
 }
 
 export const api = {
@@ -112,8 +120,10 @@ export const api = {
  retryGitChange: (repo: string, id: string) => call('POST', `/repos/${encodeURIComponent(repo)}/git-changes/${encodeURIComponent(id)}/retry`, {}),
   repositoryChangesURL: (repo: string) => `${BASE}/repos/${encodeURIComponent(repo)}/changes?doc_identities=cxt-manifest-sha256-v1`,
   repositoryRevision: (repo: string) => call<import('./types').RepositoryRevision>('GET', `/repos/${encodeURIComponent(repo)}/revision`),
-  pendingView: async (repo: string) => {
-    const view = await call<Omit<import('./types').PendingView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repo)}/pending-view?graph_encoding=indexed-v2`);
+  pendingState: async (repo: string, signal?: AbortSignal) => validatePendingState(
+    await call<import('./types').PendingStateView>('GET', `/repos/${encodeURIComponent(repo)}/pending-view?projection=on-hold-v1`, undefined, undefined, signal)),
+  pendingView: async (repo: string, signal?: AbortSignal) => {
+    const view = await call<Omit<import('./types').PendingView, 'graph'> & {graph: GraphWire}>('GET', `/repos/${encodeURIComponent(repo)}/pending-view?graph_encoding=indexed-v2`, undefined, undefined, signal);
     const graph = decodeGraphState(view.graph);
     validateGraphState(graph, view.revision);
     return {...view, graph};
@@ -274,6 +284,24 @@ export const api = {
     call<SessionDoc>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}`),
   getDocEvents: (repoId: string, hash: string, base: string | undefined, offset: number, signal?: AbortSignal) =>
     call<DocEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?offset=${offset}&limit=50${base ? `&base=${encodeURIComponent(base)}` : ''}`, undefined, undefined, signal),
+  getDocViewEvents: (repoId: string, hash: string, base: string | undefined, offset: number, view: DocViewMode, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const params = new URLSearchParams({ view, offset: String(offset), limit: String(DOCUMENT_VISIBLE_MESSAGES) });
+      if (base) params.set('base', base);
+      const page = await call<DocViewEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?${params}`, undefined, undefined, signal, DOCUMENT_PAGE_BYTES);
+      return validateDocViewPage(page, hash, offset);
+    }, signal),
+  getDocEvent: (repoId: string, hash: string, index: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const page = await call<DocViewEventPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/events?view=raw&offset=${index}&limit=1`, undefined, undefined, signal, DOCUMENT_DETAIL_BYTES);
+      return validateDocEventDetail(page, hash, index);
+    }, signal),
+  getDocEventFragment: (repoId: string, hash: string, index: number, offset: number, signal?: AbortSignal) =>
+    scheduleDocumentRead(async () => {
+      const params = new URLSearchParams({ index: String(index), offset: String(offset), budget: String(DOCUMENT_FRAGMENT_BYTES) });
+      const page = await call<DocFragmentPage>('GET', `/repos/${encodeURIComponent(repoId)}/docs/${encodeURIComponent(hash)}/event-fragments?${params}`, undefined, undefined, signal, DOCUMENT_FRAGMENT_RESPONSE_BYTES);
+      return validateDocFragment(page, index, offset);
+    }, signal),
   // Fork/Diff — Server API(sync protocol). Fork requires member (write), diff requires viewer (read).
   fork: (repoId: string, from: string, newBranch: string, author: { name: string; email: string }) =>
     call<{ branch: string; head: string }>('POST', `/repos/${encodeURIComponent(repoId)}/fork`, {

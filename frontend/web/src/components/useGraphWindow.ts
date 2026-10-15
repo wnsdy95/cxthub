@@ -9,14 +9,14 @@ const useViewportEffect = typeof window === 'undefined' ? useEffect : useLayoutE
 
 // This hook owns viewport/focus state only. It never filters graph evidence,
 // classifies publication or changes the complete lane layout passed by callers.
-export function useGraphWindow(ids: string[], heights: number[], selection: string | null, identity: string, pinnedId: string | null, headerHeight: number, nodeHeight: number) {
+export function useGraphWindow(ids: string[], heights: number[], selection: string | null, identity: string, pinnedId: string | null, headerHeight: number, nodeHeight: number, scale = 1) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const offsets = useMemo(() => rowOffsets(heights), [heights]);
   const indices = useMemo(() => new Map(ids.map((id, index) => [id, index])), [ids]);
   const [viewport, setViewport] = useState({ top: 0, height: 344 });
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [requestedFocus, setRequestedFocus] = useState<string | null>(null);
-  const previous = useRef({ ids, offsets, identity });
+  const previous = useRef({ ids, offsets, identity, scale });
   const selected = useRef<string | null>(null);
   const measure = useCallback(() => {
     const element = viewportRef.current;
@@ -52,18 +52,20 @@ export function useGraphWindow(ids: string[], heights: number[], selection: stri
     const old = previous.current;
     if (old.identity !== identity) {
       element.scrollTop = 0;
+      element.scrollLeft = 0;
       selected.current = null;
       setFocusedId(null);
       setRequestedFocus(null);
     } else if (old.ids !== ids || old.offsets !== offsets) {
       element.scrollTop = anchoredScrollTop(old.ids, old.offsets, indices, offsets, element.scrollTop);
     }
+    if (old.identity === identity && old.scale !== scale) element.scrollLeft *= scale / old.scale;
     if (old.identity === identity && focusedId && !indices.has(focusedId)) {
       const replacement = Math.max(0, Math.min(ids.length - 1, old.ids.indexOf(focusedId)));
       setFocusedId(null);
       setRequestedFocus(ids[replacement] ?? null);
     }
-    previous.current = { ids, offsets, identity };
+    previous.current = { ids, offsets, identity, scale };
     // Live updates of the same selection must not drag a reader back to it.
     // A selection that arrives before its folded rows stays pending until found.
     if (!selection) selected.current = null;
@@ -73,7 +75,7 @@ export function useGraphWindow(ids: string[], heights: number[], selection: stri
       reveal(index);
     }
     measure();
-  }, [ids, offsets, indices, identity, selection, focusedId, reveal, measure]);
+  }, [ids, offsets, indices, identity, selection, focusedId, reveal, measure, scale]);
 
   const visible = visibleRowWindow(offsets, viewport.top, viewport.height - headerHeight);
   const virtualized = ids.length > VIRTUAL_THRESHOLD;

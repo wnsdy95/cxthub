@@ -173,11 +173,11 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
     compareBase && selected && compareBase.id !== selected.id ? selected.doc_hash : null,
   );
   const parent = useMemo(() => archiveSnapshots.find(s => s.id === selected?.parents?.[0]) ?? null, [archiveSnapshots, selected]);
-  const docQ = useDocPages(repo.id, selected?.doc_hash ?? null, parent?.doc_hash);
+  const [inheritedOpen, setInheritedOpen] = useState(false);
+  const docQ = useDocPages(repo.id, selected?.doc_hash ?? null, parent?.doc_hash, inheritedOpen ? 0 : -1, viewMode);
   const page = docQ.data?.pages[0];
   const doc = page ? { cir: { envelope: page.envelope, events: page.events } } : undefined;
   const inheritedCount = page?.inherited ?? 0;
-  const [inheritedOpen, setInheritedOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   useEffect(() => { setInheritedOpen(false); setMemoryOpen(false); }, [selected?.id]);
   const memoryQ = useMemory(repo.id, selected?.memory_hash ?? null, memoryOpen);

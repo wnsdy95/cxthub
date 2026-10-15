@@ -7,7 +7,9 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
 import { useRepositoryUpdates } from './useRepositoryUpdates';
-import type { User } from './types';
+import type { DocViewMode, User } from './types';
+import { docPageKey } from './documentPaging';
+import { pendingStateRows } from './pendingState';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseSocialIdToken, firebaseVerification, firebaseSignOut } from './auth';
 import { useT } from './i18n';
 
@@ -277,6 +279,7 @@ export function useFork() {
       api.fork(v.repoId, v.from, v.newBranch, v.author),
     onSuccess: (_r, v) => {
       void qc.invalidateQueries({ queryKey: ['refs', v.repoId] });
+      void qc.invalidateQueries({ queryKey: ['pending-state', v.repoId] });
       void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
     },
   });
@@ -305,15 +308,47 @@ export function useMemory(repoId: string | null, memoryHash: string | null, enab
     staleTime: Infinity,
   });
 }
-export function useDocPages(repoId: string | null, hash: string | null, base?: string, start = -1) {
+export function useDocPages(repoId: string | null, hash: string | null, base?: string, start = -1, mode: DocViewMode = 'chat') {
   return useInfiniteQuery({
-    queryKey: ['doc-events', repoId, hash, base ?? '', start],
-    queryFn: ({ pageParam, signal }) => api.getDocEvents(repoId!, hash!, base, pageParam, signal),
+    queryKey: docPageKey(repoId, hash, base, start, mode),
+    queryFn: ({ pageParam, signal }) => api.getDocViewEvents(repoId!, hash!, base, pageParam, mode, signal),
     initialPageParam: start,
     getNextPageParam: (last) => last.next < 0 ? undefined : last.next,
     enabled: Boolean(repoId && hash),
     staleTime: Infinity,
-    gcTime: 5 * 60_000,
+    gcTime: 60_000,
+    retry: false,
+    retryOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function useDocEvent(repoId: string, hash: string, index: number) {
+  return useQuery({
+    queryKey: ['doc-event-detail', repoId, hash, index],
+    queryFn: ({ signal }) => api.getDocEvent(repoId, hash, index, signal),
+    enabled: Boolean(repoId && hash),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+    retryOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function useDocEventFragment(repoId: string, hash: string, index: number, offset: number) {
+  return useQuery({
+    queryKey: ['doc-event-fragment', repoId, hash, index, offset],
+    queryFn: ({ signal }) => api.getDocEventFragment(repoId, hash, index, offset, signal),
+    enabled: Boolean(repoId && hash),
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+    retryOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 
@@ -375,6 +410,7 @@ export function useUndismissPending() {
     mutationFn: (v: { repoId: string; sessionId: string }) => api.undismissPending(v.repoId, v.sessionId),
     onSuccess: (_d, v) => {
       void qc.invalidateQueries({ queryKey: ['pending', v.repoId] });
+      void qc.invalidateQueries({ queryKey: ['pending-state', v.repoId] });
       void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
     },
   });
@@ -415,6 +451,7 @@ export function useJoinSnapshot() {
       }),
     onSuccess: (_d, v) => {
       void qc.invalidateQueries({ queryKey: ['snapshots', v.repoId, '*'] });
+      void qc.invalidateQueries({ queryKey: ['pending-state', v.repoId] });
       void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
       void qc.invalidateQueries({ queryKey: ['refs', v.repoId] });
       void qc.invalidateQueries({ queryKey: ['join-preview', v.repoId] });
@@ -429,6 +466,7 @@ export function useDismissPending() {
     mutationFn: (v: { repoId: string; sessionId: string }) => api.dismissPending(v.repoId, v.sessionId),
     onSuccess: (_d, v) => {
       void qc.invalidateQueries({ queryKey: ['pending', v.repoId] });
+      void qc.invalidateQueries({ queryKey: ['pending-state', v.repoId] });
       void qc.invalidateQueries({ queryKey: ['repo-view', v.repoId] });
     },
   });
@@ -437,11 +475,17 @@ export function useDismissPending() {
 // One server generation shared by the context and On Hold views.
 export function useRepoView(repoId: string | null, _primaryBranch?: string) {
   useRepositoryUpdates(repoId);
+  const pendingQuery = useQuery({queryKey:['pending-state',repoId,'on-hold-v1'],queryFn:({signal})=>api.pendingState(repoId!,signal),retry:false,
+    enabled:Boolean(repoId),refetchOnWindowFocus:false});
   const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>api.repositoryView(repoId!,signal),retry:false,
     enabled:Boolean(repoId),refetchOnWindowFocus:false});
   const view = viewQuery.data;
   const rows = useMemo(()=>graphViewRows(view),[view]);
-  return {...rows,refs:view?.refs ?? [],reflog:view?.reflog ?? [],history:view?.history ?? [],graphState:view?.graph,
+  const pendingRows = useMemo(()=>pendingStateRows(view,pendingQuery.data),[view,pendingQuery.data]);
+  return {...rows,pendingRows,
+    pendingLoading:!pendingRows.ready && pendingQuery.isPending,pendingError:pendingQuery.error?.message,
+    retryPending:()=>{void pendingQuery.refetch();},
+    refs:view?.refs ?? [],reflog:view?.reflog ?? [],history:view?.history ?? [],graphState:view?.graph,
     unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError,
     graphLoading:viewQuery.isPending,graphError:viewQuery.error?.message,retryGraph:()=>{void viewQuery.refetch();}};
 }
@@ -450,7 +494,10 @@ export function useSessionArchive() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (value: {repoId: string; snapshotId: string; archived: boolean}) => api.setSessionArchived(value.repoId, value.snapshotId, value.archived),
-    onSuccess: (_result, value) => qc.invalidateQueries({queryKey: ['repo-view', value.repoId]}),
+    onSuccess: (_result, value) => Promise.all([
+      qc.invalidateQueries({queryKey: ['repo-view', value.repoId]}),
+      qc.invalidateQueries({queryKey: ['pending-state', value.repoId]}),
+    ]),
   });
 }
 

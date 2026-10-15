@@ -8,6 +8,7 @@ import { sessionArchiveIndex } from '../sessionArchives';
 import { ArchivedSessions } from './SessionArchive';
 import { layoutGraph, mainlinesOf, sessionBoundaries, compactionBoundaries } from '../graph';
 import { projectBranchGraph, visibleBranchGraph, type GraphEvent } from '../graphProjection';
+import { summarizePRGraph, type GraphViewMode } from '../graphPresentation';
 import { completedBranchEvidence } from '../graphEvidence';
 import { GraphIndex } from '../graphIndex';
 import { graphStatus, graphProgress } from '../graphState';
@@ -123,6 +124,11 @@ export function CommitGraph({
   const [showArchived, setShowArchived] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
   const [positionId, setPositionId] = useState('');
+  const [viewMode, setViewMode] = useState<GraphViewMode>('commits');
+  const [zoomPercent, setZoomPercent] = useState(100);
+  const scale = zoomPercent / 100;
+  const rowHeight = ROW_H * scale;
+  const headerHeight = HEAD_H * scale;
   const positions = useMemo(() => (graphState?.positions ?? []).flatMap(p => {
     const event=history.find(e=>e.id===p.event_id);
     return event ? [{...event,branch:p.branch,archived:p.archived}] : [];
@@ -154,8 +160,11 @@ export function CommitGraph({
       && (archivedVisible || !status.archivedOnly.has(snapshot.id) || revealedHistory.has(snapshot.id))),
     [archivedVisible, snapshots, status.archivedOnly, hiddenHistory, revealedHistory, archiveBySnapshot],
   );
-  const graphIdentity = refs?.[0]?.repo_id ?? repoId ?? '';
-  useEffect(() => { setShowArchived(false); setExpandedHistory(new Set()); setPositionId(''); }, [graphIdentity]);
+  const graphIdentity = readRepoId ?? refs?.[0]?.repo_id ?? repoId ?? '';
+  useEffect(() => {
+    setShowArchived(false); setExpandedHistory(new Set()); setPositionId('');
+    setViewMode('commits'); setZoomPercent(100);
+  }, [graphIdentity]);
   const pinHead = useMemo(
     () => position && !position.archived && position.branch === pinBranch ? position.snapshot : (pinBranch ? refs?.find((r) => r.kind === 'branch' && r.name === pinBranch)?.target ?? null : null),
     [refs, pinBranch, position?.branch, position?.snapshot, position?.archived],
@@ -163,7 +172,14 @@ export function CommitGraph({
   const fullProjection = useMemo(() => projectBranchGraph(allSnapshots, refs ?? [], currentGraph, pinHead, pinBranch), [allSnapshots, refs, currentGraph, pinHead, pinBranch]);
   // Validate before folding too: hiding a bad component must not hide its error.
   const projectedIndex = useMemo(() => new GraphIndex(fullProjection.snapshots), [fullProjection]);
-  const projection = useMemo(() => visibleBranchGraph(fullProjection, new Set(visibleSnapshots.map(s => s.id))), [fullProjection, visibleSnapshots]);
+  const visibleProjection = useMemo(() => visibleBranchGraph(fullProjection, new Set(visibleSnapshots.map(s => s.id))), [fullProjection, visibleSnapshots]);
+  const preservedSelection = viewMode === 'prs' && !selectedEventId ? selectedId : null;
+  const projection = useMemo(() => {
+    if (viewMode === 'commits') return { ...visibleProjection, hiddenCount: 0, collapsedCounts: new Map<string, number>() };
+    const preserved = new Set(status.uncommitted);
+    if (preservedSelection) preserved.add(preservedSelection);
+    return summarizePRGraph(visibleProjection, preserved);
+  }, [visibleProjection, viewMode, status.uncommitted, preservedSelection]);
   const graphIssues = graphIndex.issues.length ? graphIndex.issues : projectedIndex.issues;
   const { rows, laneCount } = useMemo(() => graphError || graphIssues.length || (positionEvent && !currentGraph) ? { rows: [], laneCount: 0 } : layoutGraph(projection.snapshots, projection.pinHead), [projection, graphIssues, positionEvent, currentGraph, graphError]);
   const missingParents = graphIndex.missingParents;
@@ -179,6 +195,7 @@ export function CommitGraph({
     setExpandedHistory(next);
   }
   const svgW = Math.max(laneCount, 1) * LANE_W;
+  const scaledWidth = svgW * scale;
   // Publication tiers come from the same server projection used by On Hold.
   const unpushed = status.unpushed;
   const uncommittedIds = status.uncommitted;
@@ -254,7 +271,7 @@ export function CommitGraph({
   const rejectedDrop = Boolean(joinAsk?.dropTarget && plan && !plan.reason && !droppable.has(joinAsk.dropTarget));
   const dragHint = dragId ? preview.isFetching ? t('graph.joinLoading')
     : preview.error ? t('graph.joinUnavailable') : reasonText(plan?.reason) : null;
-  const joinEnabled = !graphIssues.length && Boolean(repoId);
+  const joinEnabled = viewMode === 'commits' && !graphIssues.length && Boolean(repoId);
   function openJoinModal(rowId: string) {
     if (!dragId) return;
     setJoinAsk({snapshot:dragId, branch:plan?.branch || joinBranch, dropTarget:rowId});
@@ -276,7 +293,7 @@ export function CommitGraph({
   const [tip, setTip] = useState<{ id: string; left: number; top: number } | null>(null);
   function showTip(id: string, el: HTMLElement) {
     const rect = el.getBoundingClientRect();
-    const rightAnchor = rect.left + svgW + 12;
+    const rightAnchor = rect.left + scaledWidth + 8 * scale + 12;
     const left =
       rightAnchor + TIP_W + 12 <= window.innerWidth
         ? rightAnchor
@@ -296,6 +313,12 @@ export function CommitGraph({
   const [laneTip, setLaneTip] = useState<
     (LaneLabel & { top: number; left?: number; right?: number; below: boolean; color: string }) | null
   >(null);
+  useEffect(() => {
+    setTip(null);
+    setLaneTip(null);
+    setDragId(null);
+    setDropRow(null);
+  }, [viewMode, zoomPercent]);
   function showLaneTip(label: LaneLabel, lane: number, element: HTMLElement) {
     if (label.text.length <= 6) return;
     const rect = element.getBoundingClientRect();
@@ -377,10 +400,10 @@ export function CommitGraph({
       && !(unpushed.has(next) && !uncommittedIds.has(next));
   }), [rows, unpushed, uncommittedIds]);
   const rowIds = useMemo(() => rows.map(row => row.snap.id), [rows]);
-  const rowHeights = useMemo(() => blockEnds.map(end => ROW_H + (end ? 20 : 0)), [blockEnds]);
+  const rowHeights = useMemo(() => blockEnds.map(end => rowHeight + (end ? 20 * scale : 0)), [blockEnds, rowHeight, scale]);
   const selectedRowId = useMemo(() => selectedEventId && rowIds.includes(selectedEventId) ? selectedEventId : selectedId, [rowIds, selectedEventId, selectedId]);
   const windowed = useGraphWindow(rowIds, rowHeights, selectedRowId,
-    graphIdentity, dragId, HEAD_H, ROW_H);
+    `${graphIdentity}:${viewMode}`, dragId, headerHeight, rowHeight, scale);
   const laneLabels = useMemo(() => {
     const labels: (LaneLabel | null)[] = Array(laneCount).fill(null);
     for (let rowIndex = windowed.visible.start; rowIndex < windowed.visible.end; rowIndex++) {
@@ -409,17 +432,17 @@ export function CommitGraph({
       {missingParents.size > 0 && <p role="status" className="graph-history-error">{t('graph.missingParents', { count: missingParents.size })}</p>}
       {positionEvent && !currentGraph && selectedPosition.isPending && <p role="status">{t('graph.loading')}</p>}
       {selectedPosition.error && <p role="alert">{selectedPosition.error.message} <button onClick={() => { void selectedPosition.refetch(); }}>{t('context.retryRead')}</button></p>}
-      <div className="graph-viewport" ref={windowed.viewportRef} data-virtualized={windowed.virtualized}>
-        <div className="graph-canvas" style={{ width: svgW + (uncommittedIds.size ? 100 : 0) }}>
+      <div className="graph-viewport" ref={windowed.viewportRef} data-virtualized={windowed.virtualized} data-graph-view={viewMode} data-graph-zoom={zoomPercent}>
+        <div className="graph-canvas" style={{ width: scaledWidth + (8 + (uncommittedIds.size || viewMode === 'prs' ? 100 : 0)) * scale }}>
           {/* Top: branch labels per currently visible track. The header and SVG rows share one scroll canvas. */}
-          <div className="graph-head">
+          <div className="graph-head" style={{ height: headerHeight }}>
             {laneLabels.map((label, i) =>
               label?.text ? (
                 <span
                   key={i}
                   data-graph-lane={i}
                   className={`graph-lane-label${label.archived ? ' archived' : ''}${label.text.length > 6 ? ' truncated' : ''}`}
-                  style={{ left: cx(i), color: label.archived ? TICK : laneColor(i) }}
+                  style={{ left: (cx(i) + 4) * scale, fontSize: `${0.68 * scale}rem`, color: label.archived ? TICK : laneColor(i) }}
                   tabIndex={label.text.length > 6 ? 0 : undefined}
                   aria-label={label.text.length > 6 ? label.text : undefined}
                   onMouseEnter={(event) => showLaneTip(label, i, event.currentTarget)}
@@ -565,9 +588,11 @@ export function CommitGraph({
                 data-graph-node-lane={r.lane}
                 data-graph-event={graphEvent?.kind}
                 data-graph-snapshot={selectId}
+                data-graph-collapsed={projection.collapsedCounts.get(r.snap.id)}
                 aria-pressed={sel}
                 data-graph-branch={graphEvent?.branch ?? r.snap.branch}
                 className={`graph-row${sel ? ' on' : ''}${dropRow === r.snap.id ? ' drop-target' : ''}${dragId === r.snap.id ? ' dragging' : ''}${dragId && droppable.has(r.snap.id) ? ' droppable' : ''}`}
+                style={{ height: rowHeight, padding: `0 ${4 * scale}px` }}
                 onContextMenu={(e) => { if (joinEnabled && !graphEvent) { e.preventDefault(); setJoinAsk({snapshot:r.snap.id,branch:joinBranch}); } }}
                 onClick={() => onSelect(selectId, graphEvent)}
                 onMouseEnter={(e) => showTip(r.snap.id, e.currentTarget)}
@@ -576,7 +601,7 @@ export function CommitGraph({
                 onKeyDown={e => windowed.onKeyDown(e, rowIdx)}
                 onFocus={(e) => { windowed.setFocusedId(r.snap.id); showTip(r.snap.id, e.currentTarget); }}
                 onBlur={() => { windowed.setFocusedId(null); setTip(null); }}
-                aria-label={graphEvent ? `${graphEvent.branch} · ${graphEvent.kind === 'birth' ? t(graphEvent.orphan ? 'graph.orphanBirth' : 'graph.branchBorn') : t('graph.branchMerged', { branch: graphEvent.sourceBranch ?? '' })}` : `${r.snap.message || '(no message)'} · ${isUncommitted ? t('graph.uncommitted') : isUnpushed ? t('graph.unpushed') : status.tagged.has(r.snap.id) ? t('graph.tagged') : status.pushed.has(r.snap.id) ? t('graph.pushed') : t('graph.archivedLane', { branch: r.snap.branch })}`}
+                aria-label={graphEvent ? `${graphEvent.branch} · ${graphEvent.kind === 'birth' ? t(graphEvent.orphan ? 'graph.orphanBirth' : 'graph.branchBorn') : t('graph.branchMerged', { branch: graphEvent.sourceBranch ?? '' })}${graphEvent.prNumber ? ` · PR #${graphEvent.prNumber}` : ''}` : `${r.snap.message || '(no message)'} · ${isUncommitted ? t('graph.uncommitted') : isUnpushed ? t('graph.unpushed') : status.tagged.has(r.snap.id) ? t('graph.tagged') : status.pushed.has(r.snap.id) ? t('graph.pushed') : t('graph.archivedLane', { branch: r.snap.branch })}`}
                 draggable={joinEnabled && !isUncommitted && !graphEvent}
                 onDragStart={(e) => {
                   e.dataTransfer.effectAllowed = 'move';
@@ -603,7 +628,7 @@ export function CommitGraph({
                 }}
               >
                 {/* Pending is a node state; through-lines may belong to published branches. */}
-                <svg width={svgW} height={ROW_H} className="graph-svg" aria-hidden="true" opacity={isUnpushed ? 0.42 : isSide ? 0.6 : 1}>
+                <svg width={scaledWidth} height={rowHeight} viewBox={`0 0 ${svgW} ${ROW_H}`} className="graph-svg" aria-hidden="true" opacity={isUnpushed ? 0.42 : isSide ? 0.6 : 1}>
                   {defs.length > 0 && <defs>{defs}</defs>}
                   {segs}
                   {sel && <circle cx={x} cy={mid} r={R + 3} fill="none" stroke={laneColor(r.lane)} strokeWidth={1.2} />}
@@ -624,10 +649,11 @@ export function CommitGraph({
                     <circle cx={x} cy={mid} r={R} fill={laneColor(r.lane)} />
                   )}
                 </svg>
-                {isUncommitted && <span className="graph-uncommitted-badge" style={{ left: (Math.max(...occupiedLanes(r)) + 1) * LANE_W + 12 }} aria-hidden="true">{t('graph.uncommittedLabel')}</span>}
+                {isUncommitted && <span className="graph-uncommitted-badge" style={{ left: ((Math.max(...occupiedLanes(r)) + 1) * LANE_W + 12) * scale, fontSize: `${0.64 * scale}rem` }} aria-hidden="true">{t('graph.uncommittedLabel')}</span>}
+                {viewMode === 'prs' && graphEvent?.kind === 'merge' && graphEvent.prNumber && <span className="graph-pr-badge" style={{ left: ((Math.max(...occupiedLanes(r)) + 1) * LANE_W + 12) * scale, fontSize: `${0.64 * scale}rem` }} aria-hidden="true">PR #{graphEvent.prNumber}</span>}
               </button>
-              {blockEnd && <div className="graph-status-divider" data-graph-divider={r.snap.id}>
-                <svg width={svgW} height={20} className="graph-svg" aria-hidden="true">
+              {blockEnd && <div className="graph-status-divider" data-graph-divider={r.snap.id} style={{ height: 20 * scale }}>
+                <svg width={scaledWidth} height={20 * scale} viewBox={`0 0 ${svgW} 20`} style={{ left: 4 * scale }} className="graph-svg" aria-hidden="true">
                   {r.outgoing.map((target, lane) => {
                     if (!target) return null;
                     const key = `${lane}:${target}`;
@@ -651,6 +677,18 @@ export function CommitGraph({
         </div>
       </div>
 
+      <div className="graph-controls">
+        <div className="graph-view-toggle" role="group" aria-label={t('graph.viewMode')}>
+          <button type="button" aria-pressed={viewMode === 'commits'} onClick={() => setViewMode('commits')}>{t('graph.commitView')}</button>
+          <button type="button" aria-pressed={viewMode === 'prs'} onClick={() => setViewMode('prs')}>{t('graph.prView')}</button>
+        </div>
+        <div className="graph-zoom" role="group" aria-label={t('graph.zoom')}>
+          <button type="button" aria-label={t('graph.zoomOut')} title={t('graph.zoomOut')} disabled={zoomPercent <= 50} onClick={() => setZoomPercent(value => Math.max(50, value - 25))}>−</button>
+          <button type="button" className="graph-zoom-reset" aria-label={t('graph.resetZoom')} title={t('graph.resetZoom')} onClick={() => setZoomPercent(100)}>{zoomPercent}%</button>
+          <button type="button" aria-label={t('graph.zoomIn')} title={t('graph.zoomIn')} disabled={zoomPercent >= 200} onClick={() => setZoomPercent(value => Math.min(200, value + 25))}>+</button>
+        </div>
+      </div>
+      {viewMode === 'prs' && <p className="graph-view-hint" role="status">{t('graph.prViewHint', { count: projection.hiddenCount })}</p>}
       {afterGraph}
       <section className="graph-details" aria-label={t('graph.detailsTitle')}>
         <h3 className="graph-details-title">{t('graph.detailsTitle')}</h3>
@@ -854,6 +892,7 @@ export function CommitGraph({
           </em>
           {projection.events.has(tipRow.snap.id) && <em>{t('graph.eventOpensSnapshot')}
             {projection.events.get(tipRow.snap.id)?.prNumber ? ` · PR #${projection.events.get(tipRow.snap.id)!.prNumber}` : ''}</em>}
+          {!!projection.collapsedCounts.get(tipRow.snap.id) && <em>{t('graph.collapsedCommits', { count: projection.collapsedCounts.get(tipRow.snap.id)! })}</em>}
           {(projection.lifecycleEdges.has(tipRow.snap.id) || [...projection.lifecycleEdges.values()].some(ids => ids.has(tipRow.snap.id)))
             && <em>{t('graph.lifecycleLine')}</em>}
           {tipRow.snap.grafted && <em style={{ color: '#d29922' }}>{t('graph.appended')}</em>}

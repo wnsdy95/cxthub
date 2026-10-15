@@ -376,9 +376,10 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   font-size: 0.6rem; letter-spacing: 0.04em; color: var(--muted); opacity: 0.8; }
 .unpushed-divider::before, .unpushed-divider::after { content: ''; flex: 1; border-top: 1px dashed var(--line); }
 /* Status belongs to this capture row, never a vertical range of other lanes. */
-.graph-uncommitted-badge { position: absolute; top: 50%; transform: translateY(-50%); padding: 1px 6px; border: 1px solid rgba(154, 106, 0, 0.35);
+.graph-uncommitted-badge, .graph-pr-badge { position: absolute; top: 50%; transform: translateY(-50%); padding: 1px 6px; border: 1px solid rgba(154, 106, 0, 0.35);
   border-radius: 4px; color: #9a6a00; background: var(--bg); font-family: var(--mono); font-size: 0.62rem;
   line-height: 1.4; white-space: nowrap; }
+.graph-pr-badge { color: var(--ink); border-color: var(--line); background: var(--hover); }
 /* Commit empty node — fill should follow background to avoid misshapen disks on hover/selection. */
 .uncommitted-node { fill: var(--bg); }
 .graph-row:hover .uncommitted-node, .graph-row.on .uncommitted-node { fill: var(--hover); }
@@ -450,7 +451,7 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
     overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; padding-right: 4px; }
   .ctx-main .viewer-head { top: 0; }
 }
-.ctx-side { border-left: 1px solid var(--line); padding-left: 24px; }
+.ctx-side { min-width: 0; border-left: 1px solid var(--line); padding-left: 24px; }
 .ctx-side > .label { display: block; margin-bottom: 6px; }
 .ctx-side .aibar { margin-top: 20px; }
 @media (max-width: 1000px) {
@@ -460,6 +461,18 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
 
 /* Commit graph (git log --graph) */
 .graph-wrap { margin: 0 0 14px; }
+.graph-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 10px 0; padding-top: 10px; border-top: 1px solid var(--line); }
+.graph-view-toggle, .graph-zoom { display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+.graph-controls button { min-height: 28px; min-width: 28px; padding: 3px 8px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--muted); font-size: .72rem; line-height: 1.4; }
+.graph-controls button:hover:not(:disabled), .graph-view-toggle button[aria-pressed="true"] { background: var(--hover); color: var(--ink); }
+.graph-view-toggle button[aria-pressed="true"] { font-weight: 600; }
+.graph-controls button:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.graph-controls button:disabled { opacity: .35; cursor: not-allowed; }
+.graph-zoom .graph-zoom-reset { min-width: 48px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.graph-view-hint { margin: 0 0 10px; color: var(--muted); font-size: .67rem; line-height: 1.6; }
 .graph-details { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); min-width: 0; }
 .graph-details-title { margin: 0 0 12px; font-size: .76rem; font-weight: 600; color: var(--muted); }
 .graph-details > details { margin: 0; padding: 0; border: 0; border-bottom: 1px solid var(--line);

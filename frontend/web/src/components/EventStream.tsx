@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import type { CIREvent } from '../types';
+import type { CIREvent, DocViewEvent, DocViewMode } from '../types';
 import { useT } from '../i18n';
 import { Markdown } from './Markdown';
+import { useDocEvent, useDocEventFragment } from '../hooks';
+import { ApiError } from '../api';
+import { DOCUMENT_RAW_EVENT_BYTES, DocumentReadLimitError } from '../documentReads';
 
 const CXT_SEED_PREFIXES = ['[cxt seed] Branch-switch context:', '[cxt] This session was resumed from a branch context seed.'];
 
@@ -38,41 +41,51 @@ function chatGroups(body: { ev: CIREvent; idx: number }[]): { pre: { ev: CIREven
 }
 
 // Non-rendered events (encryption reasoning without summary — ReasoningRow returns null) are excluded from turn body — the number of rows shown when expanded should match the "AI N" count.
-function isRendered(ev: CIREvent): boolean {
-  return !(ev.kind === 'reasoning' && !(ev.redacted_summary ?? '').trim());
+function isRendered(ev: DocViewEvent): boolean {
+  return !(ev.kind === 'reasoning' && !ev.deferred && !(ev.redacted_summary ?? '').trim());
 }
 
 // View mode: all = all events / prompts = prompts only (fold turns) / chat = prompts+assistant messages only (hide tools·results·reasoning — read conversation flow only).
-export type ViewMode = 'all' | 'prompts' | 'chat';
+export type ViewMode = DocViewMode;
 
-export function EventStream({ events, offset = 0, mode }: { events: CIREvent[]; offset?: number; mode: ViewMode }) {
+export function EventStream({ events, offset = 0, inherited = 0, mode, repoId = '', hash = '' }: {
+  events: DocViewEvent[]; offset?: number; inherited?: number; mode: ViewMode; repoId?: string; hash?: string;
+}) {
   const tr = useT();
-  const [open, setOpen] = useState<Set<number>>(new Set());
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const row = (event: DocViewEvent, index: number, revealed = false) => (
+    <div key={index} data-event-index={index} className={index < inherited ? 'doc-inherited' : undefined}>
+      {event.deferred && event.kind !== 'compaction'
+        ? <DeferredEventRow event={event} index={index} repoId={repoId} hash={hash} revealed={revealed} />
+        : <EventRow ev={event} />}
+    </div>
+  );
   if (mode === 'all') {
     return (
       <>
         {events.map((ev, i) => (
-          <EventRow key={offset + i} ev={ev} />
+          row(ev, ev.event_index ?? offset + i)
         ))}
       </>
     );
   }
 
   // Turn splitting: prompt as head, body up to next prompt. Events before the first prompt are grouped into a leading turn (headIdx=-1) with no head, shown as a collapsible row.
-  type Turn = { head: CIREvent | null; headIdx: number; body: { ev: CIREvent; idx: number }[] };
+  type Turn = { head: DocViewEvent | null; headIdx: number; body: { ev: DocViewEvent; idx: number }[] };
   const turns: Turn[] = [];
-  let cur: Turn = { head: null, headIdx: -1, body: [] };
+  let cur: Turn = { head: null, headIdx: offset - 1, body: [] };
   events.forEach((ev, i) => {
+    const absolute = ev.event_index ?? offset + i;
     if (isPrompt(ev)) {
       turns.push(cur);
-      cur = { head: ev, headIdx: i, body: [] };
+      cur = { head: ev, headIdx: absolute, body: [] };
     } else if (isRendered(ev)) {
-      cur.body.push({ ev, idx: i });
+      cur.body.push({ ev, idx: absolute });
     }
   });
   turns.push(cur);
 
-  const toggle = (k: number) =>
+  const toggle = (k: string) =>
     setOpen((prev) => {
       const next = new Set(prev);
       if (next.has(k)) next.delete(k);
@@ -84,7 +97,8 @@ export function EventStream({ events, offset = 0, mode }: { events: CIREvent[]; 
     <>
       {turns.map((t) => {
         if (!t.head && t.body.length === 0) return null; // Empty leading turn
-        const opened = open.has(t.headIdx);
+        const turnKey = `turn:${t.headIdx}`;
+        const opened = open.has(turnKey);
         const body = t.body;
         // chat mode: the entire conversation (prompt+response) is shown from the beginning (user confirmed) —
         // only the hidden work (tools·reasoning) per response is collapsed. No turn-based collapsing.
@@ -92,14 +106,22 @@ export function EventStream({ events, offset = 0, mode }: { events: CIREvent[]; 
           <div key={t.headIdx} className={`turn${opened ? ' open' : ''}`}>
             {t.head ? (
               mode === 'chat' ? (
-                <EventRow ev={t.head} />
+                row(t.head, t.headIdx)
               ) : (
                 <div
                   className={`turn-head${body.length > 0 ? ' has-more' : ''}`}
-                  onClick={body.length > 0 ? () => toggle(t.headIdx) : undefined}
+                  onClick={body.length > 0 ? () => toggle(turnKey) : undefined}
+                  role={body.length > 0 ? 'button' : undefined}
+                  tabIndex={body.length > 0 ? 0 : undefined}
+                  aria-expanded={body.length > 0 ? opened : undefined}
+                  onKeyDown={event => {
+                    if (event.target === event.currentTarget && body.length && ['Enter', ' '].includes(event.key)) {
+                      event.preventDefault(); toggle(turnKey);
+                    }
+                  }}
                   title={body.length > 0 ? `${tr('context.aiEvents', { count: body.length })} ${opened ? tr('common.collapse') : tr('common.expand')}` : undefined}
                 >
-                  <EventRow ev={t.head} />
+                  {row(t.head, t.headIdx)}
                   {body.length > 0 && (
                     <span className="turn-count">
                       {opened ? '▾' : '▸'} AI {body.length}
@@ -108,16 +130,16 @@ export function EventStream({ events, offset = 0, mode }: { events: CIREvent[]; 
                 </div>
               )
             ) : mode === 'chat' ? null : (
-              <button className="turn-lead" onClick={() => toggle(t.headIdx)}>
+              <button className="turn-lead" aria-expanded={opened} onClick={() => toggle(turnKey)}>
                 {opened ? '▾' : '▸'} {tr('context.leadingEvents', { count: body.length })}
               </button>
             )}
             {(mode === 'chat' || opened) &&
               (mode === 'chat'
                 ? // chat: collapses the hidden work (tools·reasoning) that made each response into ▸ AI N.
-                  chatGroups(t.body).map((g, gi) => {
-                    const key = g.msg ? g.msg.idx : t.headIdx * 100000 + gi + 1;
-                    const subOpened = open.has(-1000 - key); // negative space without colliding with turn key
+                  chatGroups(t.body).map((g) => {
+                    const key = `work:${g.pre[0]?.idx ?? g.msg!.idx}`;
+                    const subOpened = open.has(key);
                     return (
                       <div key={`g${key}`}>
                         {/* time-based rendering (user confirmed): work (tools·reasoning) appears before the response
@@ -126,19 +148,27 @@ export function EventStream({ events, offset = 0, mode }: { events: CIREvent[]; 
                             For interrupted or ongoing tail work with no answer, keep the anchor above
                             and do not imply a conclusion that does not exist. */}
                         {subOpened && g.msg && (
-                          <div className="asst-work">
+                          <div key="work" className="asst-work">
                             {g.pre.map(({ ev, idx }) => (
-                              <EventRow key={offset + idx} ev={ev} />
+                              row(ev, idx)
                             ))}
                           </div>
                         )}
                         {g.msg ? (
                           <div
                             className={`turn-head${g.pre.length > 0 ? ' has-more' : ''}`}
-                            onClick={g.pre.length > 0 ? () => toggle(-1000 - key) : undefined}
+                            onClick={g.pre.length > 0 ? () => toggle(key) : undefined}
+                            role={g.pre.length > 0 ? 'button' : undefined}
+                            tabIndex={g.pre.length > 0 ? 0 : undefined}
+                            aria-expanded={g.pre.length > 0 ? subOpened : undefined}
+                            onKeyDown={event => {
+                              if (event.target === event.currentTarget && g.pre.length && ['Enter', ' '].includes(event.key)) {
+                                event.preventDefault(); toggle(key);
+                              }
+                            }}
                             title={g.pre.length > 0 ? `${tr('context.aiEvents', { count: g.pre.length })} ${subOpened ? tr('common.collapse') : tr('common.expand')}` : undefined}
                           >
-                            <EventRow ev={g.msg.ev} />
+                            {row(g.msg.ev, g.msg.idx)}
                             {g.pre.length > 0 && (
                               <span className="turn-count">
                                 {subOpened ? '▾' : '▸'} AI {g.pre.length}
@@ -147,27 +177,84 @@ export function EventStream({ events, offset = 0, mode }: { events: CIREvent[]; 
                           </div>
                         ) : (
                           g.pre.length > 0 && (
-                            <button className="turn-lead" onClick={() => toggle(-1000 - key)}>
+                            <button className="turn-lead" aria-expanded={subOpened} onClick={() => toggle(key)}>
                               {subOpened ? '▾' : '▸'} AI {g.pre.length}
                             </button>
                           )
                         )}
                         {subOpened && !g.msg && (
-                          <div className="asst-work">
+                          <div key="work" className="asst-work">
                             {g.pre.map(({ ev, idx }) => (
-                              <EventRow key={offset + idx} ev={ev} />
+                              row(ev, idx)
                             ))}
                           </div>
                         )}
                       </div>
                     );
                   })
-                : body.map(({ ev, idx }) => <EventRow key={offset + idx} ev={ev} />))}
+                : body.map(({ ev, idx }) => row(ev, idx, true)))}
           </div>
         );
       })}
     </>
   );
+}
+
+type DeferredEventProps = { event: DocViewEvent; repoId: string; hash: string; index: number };
+
+function DeferredEventRow({ event, repoId, hash, index, revealed }: DeferredEventProps & { revealed: boolean }) {
+  const translate = useT();
+  const [expanded, setExpanded] = useState(false);
+  if (revealed && event.kind === 'message' && !event.compact_summary) {
+    return <DeferredEventContent event={event} repoId={repoId} hash={hash} index={index} />;
+  }
+  const label = event.provider_tool_name || event.tool_name || event.role || event.kind;
+  return <div className={`msg ${event.role ?? 'tool'}`}>
+    <span className="msg-role">{event.role ?? event.kind}</span>
+    <div className="msg-body">
+      <details className="tool-more" data-deferred-event={index} onClick={click => click.stopPropagation()}
+        onToggle={toggle => setExpanded(toggle.currentTarget.open)}>
+        <summary>{translate('common.expand')} — {label}{event.event_bytes ? ` (${event.event_bytes.toLocaleString()} B)` : ''}</summary>
+        {expanded && <DeferredEventContent event={event} repoId={repoId} hash={hash} index={index} />}
+      </details>
+    </div>
+  </div>;
+}
+
+function DeferredEventContent(props: DeferredEventProps) {
+  return (props.event.event_bytes ?? 0) > DOCUMENT_RAW_EVENT_BYTES
+    ? <FragmentEventContent {...props} />
+    : <RawEventContent {...props} />;
+}
+
+function RawEventContent(props: DeferredEventProps) {
+  const translate = useT();
+  const query = useDocEvent(props.repoId, props.hash, props.index);
+  if (query.data?.deferred || query.error instanceof DocumentReadLimitError || (query.error instanceof ApiError && query.error.status === 413)) {
+    return <FragmentEventContent {...props} />;
+  }
+  if (query.isError) return <div role="alert" className="err">{query.error.message} <button onClick={() => void query.refetch()}>{translate('context.retryRead')}</button></div>;
+  return query.data ? <EventRow ev={query.data} /> : <span role="status">{translate('context.loadingEvents')}</span>;
+}
+
+function FragmentEventContent({ repoId, hash, index }: DeferredEventProps) {
+  const translate = useT();
+  const [navigation, setNavigation] = useState({ offsets: [0], position: 0 });
+  const offset = navigation.offsets[navigation.position];
+  const query = useDocEventFragment(repoId, hash, index, offset);
+  const fragment = query.data;
+  return <div className="event-fragment" data-fragment-offset={offset}>
+    {fragment && <>
+      <p role="status">{translate('context.eventFragment', { start: fragment.byte_offset, end: fragment.next < 0 ? fragment.total_bytes : fragment.next, total: fragment.total_bytes })}</p>
+      <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '60vh', overflow: 'auto' }}>{fragment.json_fragment}</pre>
+    </>}
+    {query.isFetching && <span role="status">{translate('context.loadingEvents')}</span>}
+    {query.isError && <div role="alert" className="err">{query.error.message} <button onClick={() => void query.refetch()}>{translate('context.retryRead')}</button></div>}
+    <button disabled={navigation.position === 0 || query.isFetching} onClick={() => setNavigation(previous => ({ ...previous, position: previous.position - 1 }))}>{translate('context.previousFragment')}</button>
+    <button disabled={!fragment || fragment.next < 0 || query.isFetching || query.isError} onClick={() => {
+      if (fragment && fragment.next >= 0) setNavigation(previous => ({ offsets: [...previous.offsets.slice(0, previous.position + 1), fragment.next], position: previous.position + 1 }));
+    }}>{translate('context.nextFragment')}</button>
+  </div>;
 }
 
 // Event line: role label + block (text is body), tool_call is tool-specific details

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './api';
-import type { RepositoryRevision, RepositoryView } from './types';
+import type { PendingStateView, RepositoryRevision, RepositoryView } from './types';
 import { mergePendingView, pendingViewNeedsFull, revisionCovers, subscribeRepository } from './repositoryUpdates';
 
 export function useRepositoryUpdates(repo: string | null) {
@@ -9,6 +9,7 @@ export function useRepositoryUpdates(repo: string | null) {
   useEffect(() => {
     if (!repo) return;
     const key = ['repo-view', repo];
+    const pendingKey = ['pending-state', repo, 'on-hold-v1'];
     let disposed = false, busy = false, wanted: RepositoryRevision | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let delay = 15_000;
@@ -17,6 +18,7 @@ export function useRepositoryUpdates(repo: string | null) {
     const clearRetry = () => { if (retry) clearTimeout(retry); retry = undefined; };
     // React Query owns cancellation: another observer may still need this view.
     const full = () => qc.fetchQuery({queryKey: key, queryFn: ({signal}) => api.repositoryView(repo, signal), staleTime: 0});
+    const pending = () => qc.fetchQuery({queryKey: pendingKey, queryFn: ({signal}) => api.pendingState(repo, signal), staleTime: 0, retry: false});
     const readRevision = async () => {
       try { await changed(await api.repositoryRevision(repo)); }
       catch (error) {
@@ -76,7 +78,15 @@ export function useRepositoryUpdates(repo: string | null) {
         evidence = nextEvidence;
         for (const name of ['git-changes', 'git-scans', 'code-applicability', 'effective-memory']) void qc.invalidateQueries({queryKey: [name, repo]});
       }
-      wanted = r; await sync();
+      wanted = r;
+      const currentPending = qc.getQueryData<PendingStateView>(pendingKey);
+      if (!currentPending || !revisionCovers(currentPending.revision, r)) {
+        void pending().then(live => {
+          if (disposed || document.hidden) return;
+          if (wanted && !revisionCovers(live.revision, wanted)) recover();
+        }).catch(recover);
+      }
+      await sync();
     };
     const visible = () => {
       unsubscribe?.(); unsubscribe = undefined; clearRetry();

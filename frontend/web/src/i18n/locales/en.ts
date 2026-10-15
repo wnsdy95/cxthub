@@ -416,6 +416,10 @@ export const en: Messages = {
   context: {
     retryRead: 'Retry',
     loadingEvents: 'Loading conversation…',
+    loadMoreEvents: 'Load more events',
+    eventFragment: 'Canonical event JSON — bytes {start}–{end} of {total}. Only this fragment is loaded.',
+    previousFragment: 'Previous fragment',
+    nextFragment: 'Next fragment',
     storedMemory: 'View saved memory',
 
     branchCommits: '{branch} · {count} commits',
@@ -1031,6 +1035,15 @@ export const en: Messages = {
     owner: 'owner — co-owner',
   },
   graph: {
+    viewMode: 'Graph view',
+    commitView: 'Commits',
+    prView: 'PRs',
+    zoom: 'Graph zoom',
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
+    resetZoom: 'Reset zoom to 100%',
+    prViewHint: 'PR overview · {count} records folded. Branch points, merges, tips and your selection stay visible. Lines can span folded commits.',
+    collapsedCommits: '{count} records folded along the outgoing paths. Switch to Commits to see them.',
     detailsTitle: 'History & sync',
     branchMerged: 'Merged {branch}',
     mergeRecords: 'PR merge records · {count}',

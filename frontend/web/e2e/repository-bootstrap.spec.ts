@@ -1,6 +1,6 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { build } from 'esbuild';
-import { serverGraphWireFixture } from '../tests/serverGraphFixture';
+import { serverGraphWireFixture, serverPendingStateFixture } from '../tests/serverGraphFixture';
 import type { RepositoryView } from '../src/types';
 
 type Read = { path: string; startMs: number; headersMs?: number; bodyMs?: number; bytes?: number; abortedMs?: number };
@@ -133,8 +133,13 @@ async function fixture(page: Page, options: Options = {}) {
         if (id === 'a' && ++aReads === options.holdA?.at) await options.holdA.promise;
         await send(wires.get(id)); return;
       }
+      if (endpoint === 'pending-view') {
+        expect(url.searchParams.get('projection')).toBe('on-hold-v1');
+        const {graph: _graph, ...view} = wires.get(id)!;
+        await send(serverPendingStateFixture({...view, revision: {...revision, graph: id === 'a' ? options.aRevision?.() ?? '1' : '1'}})); return;
+      }
       if (endpoint.startsWith('docs/') && endpoint.endsWith('/events')) {
-        await send({ hash: endpoint.split('/')[1], envelope: { cir_version: '2', source_provider: 'codex', captured_at: '2026-09-18T00:00:00Z', git_branch: 'main' },
+        await send({ hash: decodeURIComponent(endpoint.split('/')[1]), envelope: { cir_version: '2', source_provider: 'codex', captured_at: '2026-09-18T00:00:00Z', git_branch: 'main' },
           events: [{ kind: 'message', role: 'user', seq: 1, blocks: [{ type: 'text', text: `BOOTSTRAP_BODY_${id}` }] }], total: 1, offset: 0, inherited: 0, next: -1 }); return;
       }
     }

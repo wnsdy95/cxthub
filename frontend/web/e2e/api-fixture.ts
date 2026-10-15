@@ -1,4 +1,4 @@
-import { serverGraphWireFixture, serverMemoryPositionsFixture } from '../tests/serverGraphFixture';
+import { serverGraphWireFixture, serverMemoryPositionsFixture, serverPendingStateFixture } from '../tests/serverGraphFixture';
 import type { Page } from '@playwright/test';
 
 export interface ApiRequest {
@@ -55,6 +55,9 @@ export async function installApiFixture(page: Page, responder: ApiResponder, opt
     if (input.pathname.endsWith('/revision')) return {body: revision};
     if (input.pathname.endsWith('/changes')) return {contentType: 'text/event-stream', body: `event: revision\ndata: ${JSON.stringify(revision)}\n\n`};
     try {
+      if (input.pathname.endsWith('/pending-view') && input.searchParams.get('projection') === 'on-hold-v1') {
+        return {body: serverPendingStateFixture({...body, revision})};
+      }
       const full=serverGraphWireFixture({...body,revision},input.pathname.endsWith('/graph-state')?input.searchParams.get('position') ?? '':'');
       if(input.pathname.endsWith('/graph-state')) return {body:full.graph};
       const archivedIDs = new Set((body.archived_sessions ?? []).flatMap((archive: import('../src/types').SessionArchiveView) => [archive.snapshot_id, archive.latest_snapshot_id, ...archive.snapshot_ids]));
