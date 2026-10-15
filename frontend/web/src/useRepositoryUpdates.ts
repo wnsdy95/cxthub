@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './api';
+import { capacityReadRetry } from './readRetry';
 import type { PendingStateView, RepositoryRevision, RepositoryView } from './types';
 import { mergePendingView, pendingViewNeedsFull, revisionCovers, subscribeRepository } from './repositoryUpdates';
 
@@ -17,8 +18,8 @@ export function useRepositoryUpdates(repo: string | null) {
     let unsubscribe: (() => void) | undefined;
     const clearRetry = () => { if (retry) clearTimeout(retry); retry = undefined; };
     // React Query owns cancellation: another observer may still need this view.
-    const full = () => qc.fetchQuery({queryKey: key, queryFn: ({signal}) => api.repositoryView(repo, signal), staleTime: 0});
-    const pending = () => qc.fetchQuery({queryKey: pendingKey, queryFn: ({signal}) => api.pendingState(repo, signal), staleTime: 0, retry: false});
+    const full = () => qc.fetchQuery({queryKey: key, queryFn: ({signal}) => api.repositoryView(repo, signal), staleTime: 0, ...capacityReadRetry});
+    const pending = () => qc.fetchQuery({queryKey: pendingKey, queryFn: ({signal}) => api.pendingState(repo, signal), staleTime: 0, ...capacityReadRetry});
     const readRevision = async () => {
       try { await changed(await api.repositoryRevision(repo)); }
       catch (error) {

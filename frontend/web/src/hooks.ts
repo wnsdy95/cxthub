@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './api';
 import { isRetryableGraphRefreshError } from './graphRefresh';
+import { capacityReadRetry } from './readRetry';
 import { useRepositoryUpdates } from './useRepositoryUpdates';
 import type { DocViewMode, User } from './types';
 import { docPageKey } from './documentPaging';
@@ -318,7 +319,7 @@ export function useDocPages(repoId: string | null, hash: string | null, base?: s
     enabled: Boolean(repoId && hash),
     staleTime: Infinity,
     gcTime: 60_000,
-    retry: false,
+    ...capacityReadRetry,
     retryOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -332,7 +333,7 @@ export function useDocEvent(repoId: string, hash: string, index: number) {
     enabled: Boolean(repoId && hash),
     staleTime: Infinity,
     gcTime: 0,
-    retry: false,
+    ...capacityReadRetry,
     retryOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -346,7 +347,7 @@ export function useDocEventFragment(repoId: string, hash: string, index: number,
     enabled: Boolean(repoId && hash),
     staleTime: Infinity,
     gcTime: 0,
-    retry: false,
+    ...capacityReadRetry,
     retryOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -476,9 +477,9 @@ export function useDismissPending() {
 // One server generation shared by the context and On Hold views.
 export function useRepoView(repoId: string | null, _primaryBranch?: string) {
   useRepositoryUpdates(repoId);
-  const pendingQuery = useQuery({queryKey:['pending-state',repoId,'on-hold-v1'],queryFn:({signal})=>api.pendingState(repoId!,signal),retry:false,
+  const pendingQuery = useQuery({queryKey:['pending-state',repoId,'on-hold-v1'],queryFn:({signal})=>api.pendingState(repoId!,signal),...capacityReadRetry,
     enabled:Boolean(repoId),refetchOnWindowFocus:false});
-  const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>api.repositoryView(repoId!,signal),retry:false,
+  const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>api.repositoryView(repoId!,signal),...capacityReadRetry,
     enabled:Boolean(repoId),refetchOnWindowFocus:false});
   const retryable = isRetryableGraphRefreshError(viewQuery.error);
   const inaccessible = viewQuery.error instanceof ApiError && [401, 403, 404].includes(viewQuery.error.status);
@@ -509,7 +510,7 @@ export function useSessionArchive() {
 export function useGraphPosition(repoId: string | null | undefined, position: string, revision?: import('./types').RepositoryRevision) {
   const qc = useQueryClient();
   const q = useQuery({queryKey:['graph-position',repoId,position,revision?.graph,revision?.pending,revision?.evidence],
-    queryFn:({signal})=>api.graphState(repoId!,position,signal),enabled:Boolean(repoId && position && revision),retry:false,refetchOnWindowFocus:false});
+    queryFn:({signal})=>api.graphState(repoId!,position,signal),enabled:Boolean(repoId && position && revision),...capacityReadRetry,refetchOnWindowFocus:false});
   const matches = q.data && revision && q.data.revision.graph===revision.graph && q.data.revision.pending===revision.pending && (q.data.revision.evidence??'0')===(revision.evidence??'0');
   useEffect(()=>{if(q.data && !matches) void qc.invalidateQueries({queryKey:['repo-view',repoId]});},[q.data,matches,qc,repoId]);
   return {...q,data:matches?q.data:undefined};

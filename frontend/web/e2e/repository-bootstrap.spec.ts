@@ -69,12 +69,16 @@ function gate() {
   return { promise, release };
 }
 
+type ReadResponse = { body: unknown; status?: number; headers?: Record<string, string> };
+type ReadOverride = () => ReadResponse | 'abort' | undefined;
 type Options = {
   public?: boolean; denied?: boolean; revisionStatus?: number; aRevision?: () => string;
   holdA?: { at: number; promise: Promise<void> };
   locale?: 'en' | 'ko';
-  aView?: () => { body: unknown; status?: number } | 'abort';
-  aPosition?: () => { body: unknown; status?: number };
+  aView?: ReadOverride;
+  aDoc?: ReadOverride;
+  aPending?: ReadOverride;
+  aPosition?: () => ReadResponse;
 };
 async function fixture(page: Page, options: Options = {}) {
   const unexpected: string[] = [], errors: string[] = [];
@@ -119,7 +123,7 @@ async function fixture(page: Page, options: Options = {}) {
       await route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><link rel="stylesheet" href="/fixture.css"></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>' }); return;
     }
     requests.push(p);
-    const send = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    const send = (body: unknown, status = 200, headers?: Record<string, string>) => route.fulfill({ status, headers, contentType: 'application/json', body: JSON.stringify(body) });
     if (p === '/api/v1/me') { await send(options.public ? { error: { message: 'Unauthorized' } } : { id: 'reader', username: 'reader', name: 'Reader', locale: options.locale ?? 'en' }, options.public ? 401 : 200); return; }
     const repositories = ['a', 'b', 'empty'].map(id => ({ id: `repository-${id}`, name: id, slug: id, owner_username: 'alice', owner_id: 'owner', effective_role: 'viewer', visibility: 'public', public_role: 'viewer' }));
     if (p === '/api/v1/repositories') { await send(repositories); return; }
@@ -141,20 +145,26 @@ async function fixture(page: Page, options: Options = {}) {
         if (id === 'a' && ++aReads === options.holdA?.at) await options.holdA.promise;
         const response = id === 'a' ? options.aView?.() : undefined;
         if (response === 'abort') { await route.abort('failed'); return; }
-        if (response) { await send(response.body, response.status); return; }
+        if (response) { await send(response.body, response.status, response.headers); return; }
         await send(wires.get(id)); return;
       }
       if (endpoint === 'graph-state' && id === 'a' && options.aPosition) {
         expect(url.searchParams.get('graph_encoding')).toBe('indexed-v2');
         const response = options.aPosition();
-        await send(response.body, response.status); return;
+        await send(response.body, response.status, response.headers); return;
       }
       if (endpoint === 'pending-view') {
         expect(url.searchParams.get('projection')).toBe('on-hold-v1');
+        const response = id === 'a' ? options.aPending?.() : undefined;
+        if (response === 'abort') { await route.abort('failed'); return; }
+        if (response) { await send(response.body, response.status, response.headers); return; }
         const {graph: _graph, ...view} = wires.get(id)!;
         await send(serverPendingStateFixture({...view, revision: {...revision, graph: id === 'a' ? options.aRevision?.() ?? '1' : '1'}})); return;
       }
       if (endpoint.startsWith('docs/') && endpoint.endsWith('/events')) {
+        const response = id === 'a' ? options.aDoc?.() : undefined;
+        if (response === 'abort') { await route.abort('failed'); return; }
+        if (response) { await send(response.body, response.status, response.headers); return; }
         await send({ hash: decodeURIComponent(endpoint.split('/')[1]), envelope: { cir_version: '2', source_provider: 'codex', captured_at: '2026-09-18T00:00:00Z', git_branch: 'main' },
           events: [{ kind: 'message', role: 'user', seq: 1, blocks: [{ type: 'text', text: `BOOTSTRAP_BODY_${id}` }] }], total: 1, offset: 0, inherited: 0, next: -1 }); return;
       }
@@ -267,6 +277,151 @@ const graphFailure = (page: Page) => page.locator('.graph-wrap > [role="alert"]'
   .or(page.locator('.graph-wrap > [role="alert"]').filter({ hasText: ko.graph.loadFailed }));
 const refreshRepository = (page: Page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 
+const capacityReads = [
+  { name: 'graph', option: 'aView', path: '/api/v1/repos/a/view', route: '/alice/a' },
+  { name: 'document page', option: 'aDoc', path: '/api/v1/repos/a/docs/a-119/events', route: '/alice/a' },
+  { name: 'pending', option: 'aPending', path: '/api/v1/repos/a/pending-view', route: '/alice/a?tab=onhold' },
+] as const;
+
+async function finishCapacityRetries(page: Page, requests: string[], path: string, initial = 1) {
+  await expect.poll(() => requests.filter(request => request === path).length).toBe(initial);
+  for (const [attempt, backoff] of [1000, 2000, 4000, 8000].entries()) {
+    await expect.poll(async () => (await reads(page, path))[initial + attempt - 1]?.headersMs).toBeDefined();
+    await settle(page);
+    await page.clock.fastForward(backoff + 250);
+    await expect.poll(() => requests.filter(request => request === path).length).toBe(initial + attempt + 1);
+  }
+}
+
+for (const resource of capacityReads) for (const header of resource.name === 'graph' ? [undefined, 'unreadable'] : [undefined]) {
+  test(`initial ${resource.name} capacity failure recovers automatically (${header ?? 'absent'} Retry-After)`, async ({ page }) => {
+    let attempts = 0;
+    const pending = resource.name === 'pending' ? serverPendingStateFixture({ revision, default_branch: 'main',
+      snapshots: [{ ...wires.get('a')!.snapshots[0], id: 'a-pending', doc_hash: 'a-pending', parents: [], session_id: 'retry-session', branch: 'retry-capture' }],
+      pending: [{ repo_id: 'a', session_id: 'retry-session', branch: 'retry-capture', provider: 'codex', target: 'a-pending', updated_at: '2026-10-15T00:00:00Z' }],
+    }) : undefined;
+    const fixtureState = await fixture(page, { [resource.option]: () => ++attempts === 1
+      ? { ...overloaded, headers: header ? { 'Retry-After': header } : undefined }
+      : pending ? { body: pending } : undefined });
+    await page.goto(`http://bootstrap.test${resource.route}`);
+    if (pending) await expect(page.locator('.pending-sessions .commit-row')).toContainText('retry-capture');
+    else await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(refreshWarning(page)).toHaveCount(0);
+    expect(fixtureState.requests.filter(path => path === resource.path)).toHaveLength(2);
+    fixtureState.check();
+  });
+}
+
+for (const resource of capacityReads) {
+  test(`persistent ${resource.name} capacity failure stops after five requests`, async ({ page }) => {
+    await page.clock.install();
+    const fixtureState = await fixture(page, { [resource.option]: () => overloaded });
+    await page.goto(`http://bootstrap.test${resource.route}`);
+    await finishCapacityRetries(page, fixtureState.requests, resource.path);
+    await expect(page.getByRole('alert').filter({ hasText: overloaded.body.error.message })).toBeVisible();
+    if (resource.name === 'graph') {
+      await expect(graphFailure(page)).toBeVisible();
+      await expect(page.locator('.graph-row')).toHaveCount(0);
+      expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+    } else {
+      await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+      if (resource.name === 'document page') await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toHaveCount(0);
+      else await expect(page.locator('.pending-sessions .commit-row')).toHaveCount(0);
+    }
+    await page.clock.fastForward(10_000);
+    await settle(page);
+    expect(fixtureState.requests.filter(path => path === resource.path)).toHaveLength(5);
+    const attempts = await reads(page, resource.path);
+    for (const [attempt, backoff] of [1000, 2000, 4000, 8000].entries()) {
+      expect(attempts[attempt + 1].startMs - attempts[attempt].headersMs!).toBeGreaterThanOrEqual(backoff);
+    }
+    fixtureState.check();
+  });
+
+  test(`navigation cancels a delayed ${resource.name} capacity retry`, async ({ page }) => {
+    await page.clock.install();
+    const fixtureState = await fixture(page, { [resource.option]: () => ({ ...overloaded, headers: { 'Retry-After': '10' } }) });
+    await page.goto(`http://bootstrap.test${resource.route}`);
+    await expect.poll(async () => (await reads(page, resource.path))[0]?.headersMs).toBeDefined();
+    await settle(page);
+    expect(fixtureState.requests.filter(path => path === resource.path)).toHaveLength(1);
+    await page.evaluate(route => { history.pushState(null, '', route); dispatchEvent(new PopStateEvent('popstate')); }, resource.route.replace('/alice/a', '/alice/b'));
+    await expect(page.locator('[data-graph-id="b-119"]')).toBeVisible();
+    if (resource.name !== 'pending') await expect(page.getByText('BOOTSTRAP_BODY_b', { exact: true })).toBeVisible();
+    expect(await reads(page, resource.path)).toHaveLength(1);
+    await expect.poll(async () => (await reads(page, resource.path))[0]?.abortedMs).toBeDefined();
+    await page.clock.fastForward(20_000);
+    await settle(page);
+    expect(fixtureState.requests.filter(path => path === resource.path)).toHaveLength(1);
+    await expect(page.locator('[data-graph-id="b-119"]')).toBeVisible();
+    await expect(page.locator('[data-graph-id="a-119"]')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    fixtureState.check();
+  });
+}
+
+for (const format of ['numeric', 'date'] as const) {
+  test(`initial graph capacity retry honors a readable ${format} Retry-After`, async ({ page }) => {
+    const now = new Date('2026-10-15T12:00:00Z');
+    await page.clock.install({ time: now });
+    let attempts = 0;
+    const hint = format === 'numeric' ? '5' : new Date(now.getTime() + 5000).toUTCString();
+    const fixtureState = await fixture(page, { aView: () => ++attempts === 1 ? { ...overloaded, headers: { 'Retry-After': hint } } : undefined });
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect.poll(async () => (await reads(page, '/api/v1/repos/a/view'))[0]?.headersMs).toBeDefined();
+    await settle(page);
+    await page.clock.fastForward(2000);
+    await settle(page);
+    expect(fixtureState.requests.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(1);
+    await expect(page.locator('.graph-row')).toHaveCount(0);
+    await expect(graphFailure(page)).toHaveCount(0);
+    await page.clock.fastForward(3500);
+    await expect(page.getByText('BOOTSTRAP_BODY_a', { exact: true })).toBeVisible();
+    expect(fixtureState.requests.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(2);
+    fixtureState.check();
+  });
+
+  test(`initial graph capacity failure does not retry ${format} Retry-After above ten seconds`, async ({ page }) => {
+    const now = new Date('2026-10-15T12:00:00Z');
+    await page.clock.install({ time: now });
+    const hint = format === 'numeric' ? '11' : new Date(now.getTime() + 20_000).toUTCString();
+    const fixtureState = await fixture(page, { revisionStatus: 403, aView: () => ({ ...overloaded, headers: { 'Retry-After': hint } }) });
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect(graphFailure(page)).toBeVisible();
+    await page.clock.fastForward(25_000);
+    await settle(page);
+    expect(fixtureState.requests.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(1);
+    await expect(page.locator('.graph-row')).toHaveCount(0);
+    expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+    fixtureState.check();
+  });
+}
+
+for (const failure of ['401', '403', '404', '429', '500', 'other-code', 'missing-code', 'contract-invalid', 'contract-typeerror', 'graph-revision', 'transport']) {
+  test(`initial graph ${failure} failure does not automatically retry`, async ({ page }) => {
+    await page.clock.install();
+    const invalid = structuredClone(wires.get('a')!);
+    if (failure === 'contract-invalid') invalid.graph.version = 2 as 1;
+    if (failure === 'contract-typeerror') Object.assign(invalid.graph, { branch_contexts: { main: null } });
+    if (failure === 'graph-revision') invalid.graph.revision.graph = '99';
+    const response = failure === 'transport' ? 'abort'
+      : ['contract-invalid', 'contract-typeerror', 'graph-revision'].includes(failure) ? { body: invalid }
+      : { status: /^\d+$/.test(failure) ? Number(failure) : 503,
+        body: { error: { code: failure === 'other-code' ? 'service_unavailable' : failure === 'missing-code' ? undefined : 'resource_overloaded', message: 'Rejected read' } } };
+    const fixtureState = await fixture(page, { revisionStatus: 403, aView: () => response });
+    await page.goto('http://bootstrap.test/alice/a');
+    await expect(graphFailure(page)).toBeVisible();
+    await page.clock.fastForward(20_000);
+    await settle(page);
+    expect(fixtureState.requests.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(1);
+    await expect(page.locator('.graph-row')).toHaveCount(0);
+    expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
+    fixtureState.check();
+  });
+}
+
 function nextGraph() {
   const previous = wires.get('a')!;
   const snapshot = { ...previous.snapshots[0], id: 'a-120', doc_hash: 'a-120', parents: ['a-119'], message: 'Recovered generation', created_at: '2026-10-15T00:00:00Z' };
@@ -274,11 +429,36 @@ function nextGraph() {
     snapshots: [snapshot, ...previous.snapshots], refs: [{ repo_id: 'a', kind: 'branch', name: 'main', target: snapshot.id }] }, '', 2);
 }
 
+for (const view of ['context', 'onhold']) {
+  test(`transient ${view} graph refresh capacity failure recovers without a manual retry`, async ({ page }) => {
+    const recovered = nextGraph();
+    let graph = '1', attempts = 0;
+    const fixtureState = await fixture(page, { aRevision: () => graph,
+      aView: () => ++attempts === 2 ? overloaded : { body: graph === '1' ? wires.get('a') : recovered } });
+    await page.goto(`http://bootstrap.test/alice/a${view === 'onhold' ? '?tab=onhold' : ''}`);
+    await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
+    await settle(page);
+    const previous = await page.locator('.graph').innerHTML();
+    graph = '2';
+    await refreshRepository(page);
+    await expect.poll(async () => (await reads(page, '/api/v1/repos/a/view'))[1]?.headersMs).toBeDefined();
+    expect(await page.locator('.graph').innerHTML()).toBe(previous);
+    await expect(refreshWarning(page)).toHaveCount(0);
+    await expect(graphFailure(page)).toHaveCount(0);
+    await expect(page.locator('[data-graph-id="a-120"]')).toBeVisible();
+    expect(fixtureState.requests.filter(path => path === '/api/v1/repos/a/view')).toHaveLength(3);
+    await expect(refreshWarning(page)).toHaveCount(0);
+    await expect(graphFailure(page)).toHaveCount(0);
+    fixtureState.check();
+  });
+}
+
 for (const view of ['context', 'onhold']) for (const locale of ['en', 'ko'] as const) {
   test(`graph refresh keeps a complete ${view} graph after 200 → 503 and recovers (${locale})`, async ({ page }) => {
+    await page.clock.install();
     const delayed = gate(), recovered = nextGraph();
     let graph = '1', failing = false;
-    const fixtureState = await fixture(page, { locale, aRevision: () => graph, holdA: { at: 3, promise: delayed.promise },
+    const fixtureState = await fixture(page, { locale, aRevision: () => graph, holdA: { at: 7, promise: delayed.promise },
       aView: () => failing ? overloaded : { body: graph === '1' ? wires.get('a') : recovered } });
     const statuses: number[] = [];
     page.on('response', response => { if (new URL(response.url()).pathname === '/api/v1/repos/a/view') statuses.push(response.status()); });
@@ -289,39 +469,25 @@ for (const view of ['context', 'onhold']) for (const locale of ['en', 'ko'] as c
       const previous = await page.locator('.graph').innerHTML();
       graph = '2'; failing = true;
       await refreshRepository(page);
+      await finishCapacityRetries(page, fixtureState.requests, '/api/v1/repos/a/view', 2);
       await expect(refreshWarning(page)).toContainText((locale === 'ko' ? ko : en).graph.refreshFailed);
-      expect(statuses).toEqual([200, 503]);
+      expect(statuses).toEqual([200, 503, 503, 503, 503, 503]);
       expect(await page.locator('.graph').innerHTML()).toBe(previous);
       await expect(page.locator('[data-graph-id="a-120"]')).toHaveCount(0);
       await expect(graphFailure(page)).toHaveCount(0);
       failing = false;
       await refreshWarning(page).getByRole('button', { name: (locale === 'ko' ? ko : en).context.retryRead, exact: true }).click();
-      await expect.poll(() => fixtureState.requests.filter(path => path === '/api/v1/repos/a/view').length).toBe(3);
+      await expect.poll(() => fixtureState.requests.filter(path => path === '/api/v1/repos/a/view').length).toBe(7);
       await expect(refreshWarning(page)).toBeVisible();
       expect(await page.locator('.graph').innerHTML()).toBe(previous);
       delayed.release();
       await expect(page.locator('[data-graph-id="a-120"]')).toBeVisible();
       await expect(refreshWarning(page)).toHaveCount(0);
-      expect(statuses).toEqual([200, 503, 200]);
+      expect(statuses).toEqual([200, 503, 503, 503, 503, 503, 200]);
       fixtureState.check();
     } finally { delayed.release(); }
   });
 }
-
-test('graph refresh first-load 503 shows an error without invented rows and retries', async ({ page }) => {
-  let failing = true;
-  const fixtureState = await fixture(page, { aView: () => failing ? overloaded : { body: wires.get('a') } });
-  await page.goto('http://bootstrap.test/alice/a');
-  await expect(graphFailure(page)).toBeVisible();
-  await expect(page.locator('.graph-row')).toHaveCount(0);
-  await expect(refreshWarning(page)).toHaveCount(0);
-  expect(fixtureState.requests.some(path => path.includes('/docs/'))).toBe(false);
-  failing = false;
-  await graphFailure(page).getByRole('button', { name: 'Retry', exact: true }).click();
-  await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
-  await expect(graphFailure(page)).toHaveCount(0);
-  fixtureState.check();
-});
 
 test('graph refresh preserves the complete graph on a real fetch transport failure', async ({ page }) => {
   let graph = '1', failing = false;
@@ -337,12 +503,14 @@ test('graph refresh preserves the complete graph on a real fetch transport failu
 });
 
 test('graph refresh warns even when the last complete generation was empty', async ({ page }) => {
+  await page.clock.install();
   let graph = '1', failing = false;
   const fixtureState = await fixture(page, { aRevision: () => graph, aView: () => failing ? overloaded : { body: wires.get('empty') } });
   await page.goto('http://bootstrap.test/alice/a');
   await expect(page.locator('.empty-box')).toContainText('No context');
   graph = '2'; failing = true;
   await refreshRepository(page);
+  await finishCapacityRetries(page, fixtureState.requests, '/api/v1/repos/a/view', 2);
   await expect(refreshWarning(page)).toBeVisible();
   await expect(refreshWarning(page).getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
   await expect(page.locator('.graph-row')).toHaveCount(0);
@@ -379,6 +547,7 @@ for (const failure of ['401', '403', 'contract-invalid', 'contract-typeerror', '
 }
 
 test('graph refresh retention does not bypass selected code-position revision checks', async ({ page }) => {
+  await page.clock.install();
   const original = wires.get('a')!;
   const positionInput: Partial<RepositoryView> = { ...original, graph: undefined, history: [{ id: 'recorded-position', repo_id: 'a', kind: 'position',
     branch: 'main', branch_id: '', target: 'a-119', git_after: 'a'.repeat(40), created_at: '2026-10-15T00:00:00Z' }] };
@@ -391,11 +560,12 @@ test('graph refresh retention does not bypass selected code-position revision ch
   await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
   graph = '2'; failing = true;
   await refreshRepository(page);
+  await finishCapacityRetries(page, fixtureState.requests, '/api/v1/repos/a/view', 2);
   await expect(refreshWarning(page)).toBeVisible();
   const positions = page.locator('.graph-history-scope select');
   await positions.selectOption('recorded-position');
   await expect.poll(() => fixtureState.requests.filter(path => path === '/api/v1/repos/a/graph-state').length).toBe(1);
-  await expect.poll(() => fixtureState.requests.filter(path => path === '/api/v1/repos/a/view').length).toBeGreaterThanOrEqual(3);
+  await expect.poll(() => fixtureState.requests.filter(path => path === '/api/v1/repos/a/view').length).toBe(7);
   await expect(page.locator('.graph-row')).toHaveCount(0);
   await positions.selectOption('');
   await expect(page.locator('[data-graph-id="a-119"]')).toBeVisible();
