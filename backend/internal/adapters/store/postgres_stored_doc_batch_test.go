@@ -21,7 +21,7 @@ type storedDocQueryCount struct{ reads atomic.Int32 }
 type storedDocQueryTracer struct{}
 
 func (storedDocQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if c, ok := ctx.Value(storedDocQueryCountKey{}).(*storedDocQueryCount); ok && strings.Contains(data.SQL, "FROM repo_blobs rb JOIN blobs b") {
+	if c, ok := ctx.Value(storedDocQueryCountKey{}).(*storedDocQueryCount); ok && strings.Contains(data.SQL, "b.bytes") {
 		c.reads.Add(1)
 	}
 	return ctx
@@ -36,8 +36,6 @@ func TestPGStoredDocVerificationBatchesCurrentOwnedChunks(t *testing.T) {
 	}
 	cir := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "1", SessionOriginID: string(repo)}}
 	for i := 0; i < 40; i++ {
-		// Compressible but distinct chunks keep the regression bounded while crossing
-		// more than two query windows. No search-index writes are part of this fixture.
 		text := strings.Repeat(fmt.Sprintf("%s/%03d ", repo, i), 7200)
 		cir.Events = append(cir.Events, domain.CIREvent{Kind: domain.EventMessage, Seq: i, Role: domain.RoleUser, Blocks: []domain.ContentBlock{{Type: "text", Text: text}}})
 	}
@@ -52,6 +50,11 @@ func TestPGStoredDocVerificationBatchesCurrentOwnedChunks(t *testing.T) {
 	}
 	if _, _, err := base.PutChunks(ctx, repo, plan.Bodies); err != nil {
 		t.Fatal(err)
+	}
+	for hash, body := range plan.Bodies {
+		if _, err := base.pool.Exec(ctx, `UPDATE blobs SET bytes=$2 WHERE hash=$1`, hash, body); err != nil {
+			t.Fatal(err)
+		}
 	}
 	manifest, err := json.Marshal(plan.Manifest)
 	if err != nil {
@@ -73,7 +76,23 @@ func TestPGStoredDocVerificationBatchesCurrentOwnedChunks(t *testing.T) {
 	defer s.Close()
 	counts := &storedDocQueryCount{}
 	counted := context.WithValue(ctx, storedDocQueryCountKey{}, counts)
-	want := int32(1 + (len(plan.Bodies)+15)/16)
+	want := int32(1)
+	windowBytes := 0
+	seen := map[domain.ContentHash]bool{}
+	for _, hash := range plan.Order {
+		if seen[hash] {
+			continue
+		}
+		seen[hash] = true
+		if windowBytes == 0 || windowBytes+len(plan.Bodies[hash]) > ownedDocPrefetchBytesPG {
+			want++
+			windowBytes = 0
+		}
+		windowBytes += len(plan.Bodies[hash])
+	}
+	if want < 4 {
+		t.Fatal("fixture must cross three byte-bounded windows")
+	}
 	for _, phase := range []string{"cold", "warm"} {
 		counts.reads.Store(0)
 		err := s.WithinRepository(counted, repo, func(bound context.Context) error {

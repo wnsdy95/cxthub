@@ -206,7 +206,7 @@ type rootPGReadTracer struct {
 }
 
 func (tr *rootPGReadTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "FROM repo_blobs rb JOIN blobs b") {
+	if strings.Contains(data.SQL, "b.bytes") {
 		tr.reads.Add(1)
 	}
 	if tr.entered != nil && strings.Contains(data.SQL, "rb.kind='chunk'") && tr.paused.CompareAndSwap(false, true) {
