@@ -164,12 +164,26 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			beforeView, err := svc.GetRepositoryView(ctx, repo.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			body := &pausedWriteBody{reader: strings.NewReader(string(payload)), entered: make(chan struct{}), release: make(chan struct{})}
 			req := httptest.NewRequest(method, path, body)
 			req.Header.Set("Authorization", "Bearer "+session.Token)
 			req.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			done := make(chan struct{})
+			var release sync.Once
+			finish := func() {
+				release.Do(func() { close(body.release) })
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Fatal("request did not finish")
+				}
+			}
+			t.Cleanup(finish)
 			go func() { defer close(done); handler.ServeHTTP(response, req) }()
 			select {
 			case <-body.entered:
@@ -199,8 +213,6 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 				err = revoker.UpdateOrganizationMember(ctx, owner.ID, organizationID, actor.ID, domain.OrganizationMember)
 			}
 			if err != nil {
-				close(body.release)
-				<-done
 				t.Fatal(err)
 			}
 			before, e := st.RepositoryRevision(ctx, repo.ID)
@@ -211,21 +223,14 @@ func TestPGRepositoryWriteRevocation(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			beforeView, err := svc.GetRepositoryView(ctx, repo.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
 			control := httptest.NewRequest(method, path, strings.NewReader(string(payload)))
 			control.Header = req.Header.Clone()
 			denied := httptest.NewRecorder()
 			handler.ServeHTTP(denied, control)
 			if denied.Code != 403 {
-				close(body.release)
-				<-done
 				t.Fatalf("control request after revocation = %d %s", denied.Code, denied.Body.String())
 			}
-			close(body.release)
-			<-done
+			finish()
 			persisted := false
 			if kind == "ref" {
 				ref, e := st.GetRef(ctx, repo.ID, domain.RefTag, "review-race")

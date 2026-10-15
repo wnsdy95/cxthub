@@ -224,6 +224,15 @@ locally and removes its own test containers/database/network.
 
 ## Real-corpus check
 
+Admitted HTTP reads and uploads have a two-minute request context and socket
+read/write deadline, including queue time. An earlier caller deadline wins.
+The permit stays held until the handler actually exits, including response
+encoding; cancellation does not prematurely release capacity while work is still
+running. Deadlines remain in place through HTTP response finalization and are
+reset by `net/http` for the next request. SSE retains its separate streaming
+lifetime and write deadlines. Network tests cover stalled HTTP/1.1 and HTTP/2
+bodies/responses, permit recovery, and reuse of a healthy keep-alive connection.
+
 An opt-in test copies a specified CLI manifest root and its referenced compressed
 chunks to a temporary FS store. It verifies the copied archive before building
 the index and checks that the original compressed source files are unchanged.
