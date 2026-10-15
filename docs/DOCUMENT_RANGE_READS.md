@@ -337,3 +337,32 @@ the stricter mixed HTTP/upload peak gate above, nor proof of universal capacity.
 Production loading, queue progress and the OOM timeline still require verification
 after deployment. No paid instance upgrade or production queue deletion is part
 of this correction.
+
+## Queue-only writes and transient refreshes
+
+Accepting or replaying a PR promotion request stores a durable job and schedules
+Git scans; it does not publish graph facts. Both direct submission and GitHub
+reconciliation use a revision-neutral repository transaction. Authorization,
+binding checks and audit remain transactional. Actual promotion still advances
+the graph revision, and published scan evidence advances the evidence revision.
+Keeping these separate prevents periodic reconciliation from discarding a warm
+graph for every already-known PR. Exact revision, input fingerprint and origin
+checks still govern the graph cache; no epoch is ignored to obtain a cache hit.
+
+Unsync cleanup advances the graph revision only when a pointer was actually
+removed, including legacy filesystem filenames. An already-shared target cannot
+revive an unsync pointer. A real write or removal still advances the revision in
+the same repository transaction; PostgreSQL rollback restores both together.
+
+The web client retains the last complete repository generation when a refresh
+fails with a narrowly classified transport, gateway or resource-capacity error.
+It shows an explicit stale warning and Retry. It does not combine new partial
+graph data with old inputs. Initial failures have no cached graph to display;
+authorization, integrity and response-contract failures remain blocking, as do
+invalid graph structure and unmatched code-position revisions.
+
+These changes avoid unnecessary rebuilds and blanking a previously loaded graph.
+They do not remove cold projection cost or promise that a cold read can execute
+while another bulk operation occupies the memory budget. Production verification
+must distinguish response-header time from transfer time and use the browser's
+gzip negotiation; a successful health check alone does not verify graph loading.

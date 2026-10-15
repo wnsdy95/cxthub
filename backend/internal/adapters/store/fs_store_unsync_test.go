@@ -53,3 +53,36 @@ func TestDeleteUnsyncRemovesLegacySchemeZombies(t *testing.T) {
 		t.Fatalf("Irrelevant pointer deleted: %v", list)
 	}
 }
+
+func TestDeleteUnsyncIfPresentTracksLegacyFiles(t *testing.T) {
+	ctx := context.Background()
+	storage := NewFSStore(t.TempDir())
+	repo, target := rlHash('0'), rlHash('a')
+	if changed, err := storage.DeleteUnsyncIfPresent(ctx, repo, "alice", "main"); err != nil || changed {
+		t.Fatalf("absent deletion: changed=%v err=%v", changed, err)
+	}
+	pointer := domain.Unsync{RepoID: repo, User: "alice", Branch: "main", Target: target}
+	raw, err := json.Marshal(pointer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(storage.repoDir(repo), "unsync")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"old-pointer.json", "duplicate-pointer.json"} {
+		if err := os.WriteFile(filepath.Join(directory, name), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if changed, err := storage.DeleteUnsyncIfPresent(ctx, repo, "alice", "main"); err != nil || !changed {
+		t.Fatalf("legacy deletion: changed=%v err=%v", changed, err)
+	}
+	if changed, err := storage.DeleteUnsyncIfPresent(ctx, repo, "alice", "main"); err != nil || changed {
+		t.Fatalf("replayed deletion: changed=%v err=%v", changed, err)
+	}
+	pointers, err := storage.ListUnsyncs(ctx, repo)
+	if err != nil || len(pointers) != 0 {
+		t.Fatalf("legacy pointers remain: %+v %v", pointers, err)
+	}
+}

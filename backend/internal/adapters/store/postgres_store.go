@@ -2143,18 +2143,23 @@ func (s *PostgresStore) ListUnsyncs(ctx context.Context, repoID domain.ContentHa
 
 // DeleteUnsync removes the push pending pointer (no error if not present — idempotent).
 func (s *PostgresStore) DeleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error {
+	_, err := s.DeleteUnsyncIfPresent(ctx, repoID, user, branch)
+	return err
+}
+
+func (s *PostgresStore) DeleteUnsyncIfPresent(ctx context.Context, repoID domain.ContentHash, user, branch string) (bool, error) {
 	if err := validateHash(repoID); err != nil {
-		return err
+		return false, err
 	}
 	if err := domain.ValidateBranchName(branch); err != nil {
-		return err
+		return false, err
 	}
 	if user == "" || len(user) > 128 {
-		return domain.ErrValidation
+		return false, domain.ErrValidation
 	}
-	_, err := s.db(ctx).Exec(ctx, `DELETE FROM unsync_contexts WHERE repo_id=$1 AND username=$2 AND branch=$3`,
+	tag, err := s.db(ctx).Exec(ctx, `DELETE FROM unsync_contexts WHERE repo_id=$1 AND username=$2 AND branch=$3`,
 		string(repoID), user, branch)
-	return err
+	return tag.RowsAffected() > 0, err
 }
 
 // DeleteSnapshot removes the snapshot metadata (hook capture leaf GC exclusive — idempotent).

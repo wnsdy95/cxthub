@@ -1065,6 +1065,7 @@ export const en: Messages = {
     noCommits: 'No commits',
     loading: 'Loading graph…',
     loadFailed: 'Could not load the complete graph.',
+    refreshFailed: 'Refresh failed. Showing the last complete graph, which may be out of date.',
     invalidStructure: 'The graph contains invalid connections. Drawing is paused; context records are still available. Reload or run cxt doctor to investigate.',
     duplicateIds: 'Duplicate snapshot IDs: {count}.',
     cycleDetected: 'A parent cycle was detected ({count} snapshots in this cycle).',

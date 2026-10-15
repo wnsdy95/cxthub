@@ -49,6 +49,42 @@ type githubPRObservationStore struct {
 	err          error
 }
 
+func TestGitHubPREnqueueDoesNotInvalidateGraph(t *testing.T) {
+	worker, storage, repo := githubPRObservationFixture(t)
+	ctx := context.Background()
+	connections, err := storage.ListGitHubConnections(ctx)
+	if err != nil || len(connections) != 1 || len(connections[0].Bindings) != 1 {
+		t.Fatalf("connection fixture: %+v %v", connections, err)
+	}
+	connection := connections[0]
+	before, err := storage.RepositoryRevision(ctx, repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := domain.PullRequestMerge{Number: 42, BaseBranch: "main", HeadBranch: "feature", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)}
+	for range 3 {
+		if err := worker.enqueuePR(ctx, connection, connection.Bindings[0], pr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := storage.RepositoryRevision(ctx, repo.ID)
+	if err != nil || after != before {
+		t.Fatalf("reconciliation invalidated graph without publication: before=%+v after=%+v err=%v", before, after, err)
+	}
+	job, err := storage.GetPRJob(ctx, repo.ID, domain.PRPromotionID(repo.ID, pr.Number))
+	if err != nil || job.PR != pr || job.State != "waiting" {
+		t.Fatalf("durable PR acceptance: %+v %v", job, err)
+	}
+	scans, err := storage.ListGitScans(ctx, repo.ID, "", 100)
+	if err != nil || len(scans) != 2 {
+		t.Fatalf("durable evidence scans: %+v %v", scans, err)
+	}
+	connection.Generation++
+	if err := worker.enqueuePR(ctx, connection, connection.Bindings[0], pr); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("stale binding accepted: %v", err)
+	}
+}
+
 func (storage *githubPRObservationStore) RecordGitRefObservation(ctx context.Context, observation domain.GitRefObservation, now time.Time) error {
 	if storage.err != nil {
 		return storage.err

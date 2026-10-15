@@ -408,6 +408,7 @@ func (g *GitHubConnections) binding(ctx context.Context, c domain.GitHubConnecti
 	return repo, nil
 }
 func (g *GitHubConnections) enqueuePR(ctx context.Context, c domain.GitHubConnection, b domain.GitHubBinding, pr domain.PullRequestMerge) error {
+	ctx = context.WithValue(ctx, revisionScopeKey{}, "none")
 	return repositoryWriteError(g.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx)), g.core, b.ContextRepoID, func(tx context.Context) error {
 		if _, e := g.binding(tx, c, b); e != nil {
 			return e

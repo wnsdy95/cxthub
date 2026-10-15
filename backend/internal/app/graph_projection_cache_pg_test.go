@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,46 @@ func (storage graphCachePGRootPolicy) GetRepo(ctx context.Context, repo domain.C
 	metadata, err := storage.PostgresStore.GetRepo(ctx, repo)
 	metadata.RequiredDocIdentity = domain.DocumentIdentityRootV1
 	return metadata, err
+}
+
+func TestPGGraphProjectionSurvivesPRQueueReplay(t *testing.T) {
+	svc, storage, repo := collaborationPG(t)
+	ctx := systemTestContext()
+	metadata, err := storage.GetRepo(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.GitRemoteURL = "https://github.com/cache/repository.git"
+	if _, err := storage.PutRepo(ctx, metadata); err != nil {
+		t.Fatal(err)
+	}
+	first := collaborationSnapshot(t, storage, repo, "first")
+	if err := svc.PutPending(ctx, repo, "pending", domain.Pending{Target: first}); err != nil {
+		t.Fatal(err)
+	}
+	full, err := svc.GetRepositoryView(ctx, repo)
+	if err != nil || len(svc.graphCache.entries) != 1 {
+		t.Fatalf("initial cache: %v", err)
+	}
+	entry := svc.graphCache.entries[0]
+	pr := domain.PullRequestMerge{Number: 42, BaseBranch: "main", HeadBranch: "feature", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)}
+	for range 3 {
+		if _, err := svc.SubmitPRPromotion(ctx, repo, pr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admission, gate := admissionTestContext(10 * time.Millisecond)
+	_, releaseBulk, err := AcquireResources(admission, ResourceBulk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseBulk()
+	after, err := svc.GetRepositoryView(admission, repo)
+	if err != nil || after.Revision != full.Revision || &entry.value[0] != &svc.graphCache.entries[0].value[0] {
+		t.Fatalf("queue replay discarded warm graph: before=%+v after=%+v err=%v", full.Revision, after.Revision, err)
+	}
+	releaseBulk()
+	assertResourcesReleased(t, gate)
 }
 
 func TestPGGraphProjectionCacheSharedEndpointsAndUnversionedUpload(t *testing.T) {

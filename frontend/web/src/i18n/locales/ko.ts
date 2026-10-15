@@ -1068,6 +1068,7 @@ export const ko = {
     noCommits: '커밋 없음',
     loading: '그래프 불러오는 중…',
     loadFailed: '그래프 전체를 불러오지 못했습니다.',
+    refreshFailed: '새로고침에 실패했습니다. 마지막으로 온전히 불러온 그래프를 표시하고 있어 최신 상태와 다를 수 있습니다.',
     invalidStructure: '그래프 연결에 오류가 있어 그리기를 중단했습니다. 컨텍스트 기록은 계속 열 수 있습니다. 다시 불러오거나 cxt doctor로 확인해 주세요.',
     duplicateIds: '중복 스냅샷 ID: {count}개.',
     cycleDetected: '부모 연결에 순환이 있습니다(확인된 순환의 스냅샷 {count}개).',

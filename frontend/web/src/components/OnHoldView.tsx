@@ -32,7 +32,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
   const [now, setNow] = useState(Date.now);
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, archiveSnapshots: graphArchiveSnapshots, archivedSessions, badges, graphState, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendingRows, pendingLoading, pendingError, retryPending } =
+  const { refs, archiveSnapshots: graphArchiveSnapshots, archivedSessions, badges, graphState, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, graphRefreshError, retryGraph, pendingRows, pendingLoading, pendingError, retryPending } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const { archiveSnapshots, archiveBySnapshot, chains, orphans, pendings } = pendingRows;
   const activityTimes = pendings.map(p => p.activity_at ?? '').join(',');
@@ -436,7 +436,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
           onSelect={openSnapshot}
           badges={badges}
           refs={refs}
-          reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph}
+          reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} graphRefreshError={graphRefreshError} retryGraph={retryGraph}
           uncommitted={uncommittedIds}
           pinBranch={repo.default_branch || 'main'}
           repoId={atLeast(role, 'member') ? repo.id : null}

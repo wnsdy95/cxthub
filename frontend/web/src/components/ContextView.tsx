@@ -87,7 +87,7 @@ type ContextRepository = Pick<Repository, 'id' | 'owner_username' | 'slug' | 'vi
 export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; repositoryMetadata: ContextRepository | null; role: Role | null }) {
   // repo derivative state (excluding refs·stash snapshots·badges·graph sources) must use the same assembly point as the On Hold tab — if input splits, badge count = tab row count guarantee is broken.
   const t = useT();
-  const { refs, snapshots: allSnapshots, archiveSnapshots, archivedSessions, archiveBySnapshot, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
+  const { refs, snapshots: allSnapshots, archiveSnapshots, archivedSessions, archiveBySnapshot, badges, graphState, holdCount, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, graphRefreshError, retryGraph, pendings } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const branches = useMemo(() => refs.filter((r) => r.kind === 'branch').map((r) => r.name).sort(), [refs]);
 
@@ -203,7 +203,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
     return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure); };
   }, [branches.length > 0]);
 
-  if (branches.length === 0 && !selected && !archivedSessions.length && !graphLoading && !graphError) {
+  if (branches.length === 0 && !selected && !archivedSessions.length && !graphLoading && !graphError && !graphRefreshError) {
     return <>
       <div className="empty-box"><Rich>{t('context.noContextYet')}</Rich></div>
       <GitAssociations key={`git-associations:${repo.id}`} repoId={repo.id} />
@@ -530,7 +530,7 @@ export function ContextView({ repo, repositoryMetadata, role }: { repo: Repo; re
 
       <aside className="ctx-side">
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} archivedSessions={archivedSessions} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null}
+        <CommitGraph readRepoId={repo.id} graphState={graphState} snapshots={graphSnapshots} archivedSessions={archivedSessions} selectedId={snapId} selectedEventId={selectedEvent?.id} onSelect={openSnapshot} badges={badges} refs={refs} reflog={reflog} history={history} semantics={semantics} historyError={historyError} graphLoading={graphLoading} graphError={graphError} graphRefreshError={graphRefreshError} retryGraph={retryGraph} uncommitted={uncommittedIds} pinBranch={repo.default_branch || 'main'} joinBranch={branch ?? undefined} repoId={atLeast(role, 'member') ? repo.id : null}
           allSnapshots={archiveSnapshots} afterGraph={<AIBar snapshots={committedSnapshots} />}
           diagnostics={<>
             <PRPromotions repoId={repo.id} canRetry={atLeast(role, 'member')} />
