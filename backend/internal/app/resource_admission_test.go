@@ -42,6 +42,36 @@ func assertResourcesReleased(t *testing.T, gate *resourceAdmission) {
 	}
 }
 
+func TestResourceAdmissionDispatchReservesBothClasses(t *testing.T) {
+	for _, scenario := range []struct {
+		name     string
+		active   int
+		bulk     int
+		wantBulk bool
+		wantRead bool
+	}{
+		{name: "idle serves both queues", wantBulk: true, wantRead: true},
+		{name: "read backlog cannot starve bulk", active: 1, wantBulk: true},
+		{name: "bulk preserves read capacity", active: 1, bulk: 1, wantRead: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			bulk := &resourceWaiter{ready: make(chan struct{})}
+			read := &resourceWaiter{ready: make(chan struct{})}
+			followingRead := &resourceWaiter{ready: make(chan struct{})}
+			gate := &resourceAdmission{active: scenario.active, bulk: scenario.bulk}
+			gate.waiters[ResourceBulk] = []*resourceWaiter{bulk}
+			gate.waiters[ResourceInteractive] = []*resourceWaiter{read, followingRead}
+			gate.dispatch()
+			if bulk.granted != scenario.wantBulk || read.granted != scenario.wantRead || followingRead.granted {
+				t.Fatalf("dispatch grants bulk=%v read=%v followingRead=%v", bulk.granted, read.granted, followingRead.granted)
+			}
+			if gate.active != 2 || gate.bulk != 1 {
+				t.Fatalf("admission counts active=%d bulk=%d", gate.active, gate.bulk)
+			}
+		})
+	}
+}
+
 func TestResourceAdmissionReserveQueueCancellation(t *testing.T) {
 	ctx, gate := admissionTestContext(time.Minute)
 	_, releaseBulk, err := AcquireResources(ctx, ResourceBulk)
