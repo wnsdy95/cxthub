@@ -1034,7 +1034,7 @@ func restoredSessionID(path, resumeCmd string) string {
 	if !providerfs.ValidSessionID(resumeID) {
 		return ""
 	}
-	if !strings.Contains(filepath.Base(path), resumeID) {
+	if !strings.EqualFold(providerfs.SessionIDFromPath(path), resumeID) {
 		return ""
 	}
 	return resumeID

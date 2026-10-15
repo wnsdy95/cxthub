@@ -66,6 +66,7 @@ func observeSession(ctx context.Context, cwd string, provider domain.ProviderKin
 	var size int64 = -1
 	var modified time.Time
 	var policy string
+	var observedPath string
 	root, _, _ := appSessionRoots(ctx, cwd)
 	pending := false
 	for {
@@ -87,10 +88,10 @@ func observeSession(ctx context.Context, cwd string, provider domain.ProviderKin
 			return err
 		}
 		currentPolicy, policyErr := ScrubPolicyFingerprint(root)
-		if !pending && policyErr == nil && (info.Size() != size || !info.ModTime().Equal(modified) || policy != currentPolicy) {
+		if !pending && policyErr == nil && (s.Path != observedPath || info.Size() != size || !info.ModTime().Equal(modified) || policy != currentPolicy) {
 			// Retain the old observation on failure, retrying even without new text.
 			if err := watch.Poll(ctx); err == nil {
-				size, modified, policy = info.Size(), info.ModTime(), currentPolicy
+				observedPath, size, modified, policy = s.Path, info.Size(), info.ModTime(), currentPolicy
 				pending = watch.Publish != nil
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,17 +66,19 @@ func rolloutCwd(path string) (string, bool) {
 }
 
 // LocateActiveSession detects the path to the active Codex session file for the current cwd. Returns domain.ErrNoActiveSession if none found.
-func (c *CodexCaptureSource) LocateActiveSession(_ context.Context, cwd string) (string, error) {
+func (c *CodexCaptureSource) LocateActiveSession(ctx context.Context, cwd string) (string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		abs = cwd
 	}
 	stateRoot := repositoryStateRoot(cwd)
+	worktree := codexSessionWorktree(ctx, abs)
 	root, err := codexSessionsDir()
 	if err != nil {
 		return "", err
 	}
 	candidates := map[string]int64{}
+	current := map[string]string{}
 	err = filepath.Walk(root, func(path string, info os.FileInfo, werr error) error {
 		if werr != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return nil
@@ -84,7 +87,21 @@ func (c *CodexCaptureSource) LocateActiveSession(_ context.Context, cwd string) 
 		if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") {
 			return nil
 		}
-		if c, ok := rolloutCwd(path); ok && c == abs {
+		if nativeCwd, ok := rolloutCwd(path); ok && worktree != "" && codexSessionWorktree(ctx, nativeCwd) == worktree {
+			if id := providerfs.SessionIDFromPath(path); id != "" {
+				resolved, known := current[id]
+				if !known {
+					var err error
+					resolved, err = c.LocateSession(ctx, cwd, id)
+					if err != nil && !errors.Is(err, domain.ErrNoActiveSession) {
+						return err
+					}
+					current[id] = resolved
+				}
+				if path != resolved {
+					return nil
+				}
+			}
 			// Ledger correction: Materialized but unprocessed recovery sessions or isolated sessions are not active candidates.
 			if providerfs.CaptureExcluded(stateRoot, path, info.Size()) {
 				return nil
@@ -106,39 +123,12 @@ func (c *CodexCaptureSource) LocateActiveSession(_ context.Context, cwd string) 
 // LocateSession returns the capture-eligible rollout with the exact native ID
 // and cwd. The ID is validated before entering a glob so it cannot alter the
 // search pattern.
-func (c *CodexCaptureSource) LocateSession(_ context.Context, cwd, sessionID string) (string, error) {
-	if !providerfs.ValidSessionID(sessionID) {
-		return "", domain.ErrNoActiveSession
-	}
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		abs = cwd
-	}
-	stateRoot := repositoryStateRoot(cwd)
-	root, err := codexSessionsDir()
-	if err != nil {
-		return "", err
-	}
-	matches, err := filepath.Glob(filepath.Join(root, "*", "*", "*", "rollout-*-"+sessionID+".jsonl"))
-	if err != nil {
-		return "", err
-	}
-	candidates := map[string]int64{}
-	for _, path := range matches {
-		info, statErr := os.Lstat(path)
-		if statErr != nil || !info.Mode().IsRegular() || !providerfs.IsProviderSessionPath(path) {
-			continue
-		}
-		if sessionCwd, ok := rolloutCwd(path); !ok || sessionCwd != abs || providerfs.CaptureExcluded(stateRoot, path, info.Size()) {
-			continue
-		}
-		candidates[path] = info.ModTime().UnixNano()
-	}
-	best := pickLatest(candidates)
-	if best == "" {
-		return "", domain.ErrNoActiveSession
-	}
-	return best, nil
+func (c *CodexCaptureSource) LocateSession(ctx context.Context, cwd, sessionID string) (string, error) {
+	wanted := codexSessionWorktree(ctx, cwd)
+	return locateCodexSession(ctx, sessionID, repositoryStateRoot(cwd), true, func(nativeCwd string) (string, bool) {
+		native := codexSessionWorktree(ctx, nativeCwd)
+		return native, wanted != "" && native == wanted
+	})
 }
 
 // SessionFilesForCwd returns all rollout session files in this cwd (for branch switch isolation). Unlike LocateActiveSession, it does not apply CaptureExcluded — isolation is unrelated to activity. Files already isolated are renamed with .jsonl.superseded and thus excluded.

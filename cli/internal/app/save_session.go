@@ -136,6 +136,18 @@ func (s *SaveSessionService) save(ctx context.Context, in inbound.SaveInput, rep
 			return inbound.SaveOutput{}, domain.ErrNoActiveSession
 		}
 	}
+	validateCurrent := func() error {
+		if in.Pending && !s.capture.Eligible(repo.LocalPath, path) {
+			return domain.ErrNoActiveSession
+		}
+		if current, ok := capt.(outbound.CurrentSessionSource); ok && in.Pending {
+			return current.ValidateCurrentSession(ctx, path)
+		}
+		return nil
+	}
+	if err := validateCurrent(); err != nil {
+		return inbound.SaveOutput{}, err
+	}
 	envelope, docRef, capturedBytes, activityAt, err := s.capture.Project(ctx, repo.LocalPath, path, capt, cdc, in.Pending, in.DocIdentity)
 	if err != nil {
 		return inbound.SaveOutput{}, err
@@ -286,7 +298,7 @@ func (s *SaveSessionService) save(ctx context.Context, in inbound.SaveInput, rep
 	if in.Pending {
 		// Uncommitted capture: branch ref remains immutable while the per-session
 		// pointer advances to the latest durable snapshot.
-		oldTarget, err := s.store.ReplacePending(ctx, domain.Pending{
+		pending := domain.Pending{
 			RepoID:     repo.ID,
 			SessionID:  envelope.SessionOriginID,
 			Branch:     branch,
@@ -295,7 +307,13 @@ func (s *SaveSessionService) save(ctx context.Context, in inbound.SaveInput, rep
 			Author:     in.Author,
 			UpdatedAt:  time.Now().UTC(),
 			ActivityAt: activityAt,
-		})
+		}
+		var oldTarget domain.ContentHash
+		if guarded, ok := s.store.(outbound.ValidatedPendingStore); ok {
+			oldTarget, err = guarded.ReplacePendingValidated(ctx, pending, validateCurrent)
+		} else if err = validateCurrent(); err == nil {
+			oldTarget, err = s.store.ReplacePending(ctx, pending)
+		}
 		if err != nil {
 			return inbound.SaveOutput{}, err
 		}

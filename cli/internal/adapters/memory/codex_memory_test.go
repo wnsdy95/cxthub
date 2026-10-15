@@ -38,6 +38,11 @@ func TestCodexReadNative(t *testing.T) {
 	}
 	write(mine, repo)
 	write(other, "/elsewhere")
+	const instance = "33333333-3333-4333-8333-333333333333"
+	plain := filepath.Join(dateDir, "rollout-2026-07-05T00-00-00-"+mine+".jsonl")
+	if err := os.Rename(plain, strings.TrimSuffix(plain, ".jsonl")+"_"+instance+".jsonl"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create stage1_outputs in the real schema and insert memory for two threads.
 	db := filepath.Join(home, ".codex", "memories_1.sqlite")
@@ -65,6 +70,9 @@ func TestCodexReadNative(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected found=true")
+	}
+	if _, found, err := NewCodexMemorySource().ReadNative(context.Background(), repo, instance); err != nil || found {
+		t.Fatalf("rollover instance selected as logical memory identity: %v %v", found, err)
 	}
 	if !strings.Contains(native.Text, "user prefers tabs") {
 		t.Errorf("expected this cwd's memory, got %q", native.Text)

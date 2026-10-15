@@ -46,8 +46,13 @@ func (s *CodexMemorySource) ReadNative(ctx context.Context, cwd, sessionID strin
 		return domain.NativeMemory{}, false, nil
 	}
 	var ids []string
+	seen := map[string]bool{}
 	for _, p := range capture.NewCodexCapture().SessionFilesForCwd(ctx, cwd) {
-		if id := threadIDFromRollout(p); id != "" && isSafeThreadID(id) {
+		if id := threadIDFromRollout(p); id != "" && isSafeThreadID(id) && !seen[id] {
+			if err := capture.NewCodexCapture().ValidateCurrentSession(ctx, p); err != nil {
+				continue
+			}
+			seen[id] = true
 			ids = append(ids, "'"+id+"'")
 		}
 	}
@@ -105,14 +110,9 @@ func (s *CodexMemorySource) ReadNative(ctx context.Context, cwd, sessionID strin
 }
 
 // threadIDFromRollout extracts the thread uuid from a rollout file name.
-// Format: rollout-<2006-01-02T15-04-05>-<uuid>.jsonl (fixed 19-character timestamp).
+// Optional rollover instance suffixes do not change the logical thread ID.
 func threadIDFromRollout(path string) string {
-	base := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	base = strings.TrimPrefix(base, "rollout-")
-	if len(base) <= 20 {
-		return ""
-	}
-	return base[20:]
+	return providerfs.SessionIDFromPath(path)
 }
 
 // isSafeThreadID allows only uuid string sets for SQL IN clause safety.

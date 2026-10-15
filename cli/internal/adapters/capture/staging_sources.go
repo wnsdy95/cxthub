@@ -70,6 +70,7 @@ func ResolveStagingSources(ctx context.Context, cwd string, providers []domain.P
 		return result, err
 	}
 	identities := map[string]string{}
+	codexFamilies := map[string][]codexSessionCandidate{}
 	add := func(path string, provider domain.ProviderKind, info fs.FileInfo) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -79,7 +80,7 @@ func ResolveStagingSources(ctx context.Context, cwd string, providers []domain.P
 		}
 		// Same eligibility rule as CaptureExcluded, but reading the complete ledger
 		// once propagates corruption and avoids a per-file mutation/lock in discovery.
-		if entry, ok := ledger[path]; ok && (entry.Superseded || info.Size() <= entry.Size) {
+		if entry, recorded := ledger[path]; recorded && (entry.Superseded || info.Size() <= entry.Size) {
 			return nil
 		}
 		session, nativeCwd, identityErr := stagingNativeIdentity(path, provider)
@@ -125,6 +126,14 @@ func ResolveStagingSources(ctx context.Context, cwd string, providers []domain.P
 			return fmt.Errorf("unsafe provider session path %q", path)
 		}
 		key := string(provider) + "\x00" + session
+		if provider == domain.ProviderCodex {
+			header, err := readCodexSessionHeader(path)
+			if err != nil {
+				return incomplete(err)
+			}
+			codexFamilies[session] = append(codexFamilies[session], codexSessionCandidate{path: path, header: header, worktree: nativeRoots.WorktreeRoot})
+			return nil
+		}
 		if prior, ok := identities[key]; ok && prior != path {
 			return fmt.Errorf("ambiguous %s native session %q in this worktree", provider, session)
 		}
@@ -214,6 +223,14 @@ func ResolveStagingSources(ctx context.Context, cwd string, providers []domain.P
 			}
 		}
 	}
+	for session, family := range codexFamilies {
+		if _, err := selectCodexSession(family); err != nil {
+			return result, err
+		}
+		for _, generation := range family {
+			result.Sessions = append(result.Sessions, StagingSource{Provider: domain.ProviderCodex, Path: generation.path, SessionID: session})
+		}
+	}
 	sort.Slice(result.Sessions, func(i, j int) bool {
 		a, b := result.Sessions[i], result.Sessions[j]
 		if a.Provider != b.Provider {
@@ -270,7 +287,7 @@ func stagingNativeIdentity(path string, provider domain.ProviderKind) (string, s
 			}
 			return h.Payload.ID, h.Payload.Cwd, err
 		}
-		if filenameID != "" && !sameNativeSessionID(filenameID, h.Payload.ID) {
+		if (strings.Contains(filepath.Base(path), "_") && filenameID == "") || (filenameID != "" && !sameNativeSessionID(filenameID, h.Payload.ID)) {
 			return h.Payload.ID, h.Payload.Cwd, ErrSessionIdentityMismatch
 		}
 		return h.Payload.ID, h.Payload.Cwd, nil

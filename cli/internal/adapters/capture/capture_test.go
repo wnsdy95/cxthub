@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
@@ -134,7 +135,7 @@ func TestCodexLocateSessionUsesExactIDAndCwd(t *testing.T) {
 	newer := filepath.Join(day, "rollout-new-44444444-4444-4444-8444-444444444444.jsonl")
 	wrongCwd := filepath.Join(day, "rollout-wrong-"+wantedID+".jsonl")
 	for path, sessionCwd := range map[string]string{wanted: cwd, newer: cwd, wrongCwd: "/other"} {
-		line := `{"type":"session_meta","payload":{"cwd":"` + sessionCwd + `"}}` + "\n"
+		line := `{"type":"session_meta","payload":{"id":"` + providerfs.SessionIDFromPath(path) + `","cwd":"` + sessionCwd + `"}}` + "\n"
 		if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
 			t.Fatal(err)
 		}

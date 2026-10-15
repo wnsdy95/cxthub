@@ -1374,6 +1374,10 @@ func (s *FileStore) PutPending(ctx context.Context, p domain.Pending) error {
 // cross-process lock makes the returned value the exact predecessor of p,
 // allowing the caller to GC that leaf without leaking an interleaved capture.
 func (s *FileStore) ReplacePending(ctx context.Context, p domain.Pending) (domain.ContentHash, error) {
+	return s.ReplacePendingValidated(ctx, p, nil)
+}
+
+func (s *FileStore) ReplacePendingValidated(ctx context.Context, p domain.Pending, validate func() error) (domain.ContentHash, error) {
 	if p.SessionID == "" || len(p.SessionID) > 128 {
 		return "", errors.New("pending: session_id is required as the pointer key")
 	}
@@ -1392,6 +1396,11 @@ func (s *FileStore) ReplacePending(ctx context.Context, p domain.Pending) (domai
 	}
 	var previous domain.ContentHash
 	err := s.withPendingMutationLock(ctx, p.SessionID, func() error {
+		if validate != nil {
+			if err := validate(); err != nil {
+				return err
+			}
+		}
 		current, found, err := s.pendingForSession(p.SessionID)
 		if err != nil {
 			return err

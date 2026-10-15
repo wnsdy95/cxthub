@@ -167,13 +167,15 @@ func TestSessionIDFromPath(t *testing.T) {
 	for _, path := range []string{
 		"/tmp/" + id + ".jsonl",
 		"/tmp/rollout-2026-08-30T12-00-00-" + id + ".jsonl",
+		"/tmp/rollout-2026-10-09T16-19-52-" + id + "_01a122f7-45a3-7c93-affe-7165d614925e.jsonl",
+		"/tmp/rollout-2026-10-09T16-19-52-" + id + "_01a122f7-45a3-7c93-affe-7165d614925e.jsonl.superseded",
 		"/tmp/" + id + ".jsonl.superseded",
 	} {
 		if got := SessionIDFromPath(path); got != id {
 			t.Fatalf("SessionIDFromPath(%q) = %q, want %q", path, got, id)
 		}
 	}
-	for _, path := range []string{"", "/tmp/not-a-session.jsonl", "/tmp/12345678-1234-4abc-8def-1234567890ab.txt"} {
+	for _, path := range []string{"", "/tmp/not-a-session.jsonl", "/tmp/12345678-1234-4abc-8def-1234567890ab.txt", "/tmp/rollout-test-" + id + "_invalid.jsonl", "/tmp/rollout-test-" + id + "_" + id + "_" + id + ".jsonl"} {
 		if got := SessionIDFromPath(path); got != "" {
 			t.Fatalf("SessionIDFromPath(%q) = %q, want empty", path, got)
 		}

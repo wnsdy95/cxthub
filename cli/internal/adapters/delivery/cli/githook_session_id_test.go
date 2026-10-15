@@ -9,6 +9,7 @@ import (
 
 func TestRestoredSessionID(t *testing.T) {
 	const sessionID = "12345678-1234-4abc-8def-1234567890ab"
+	const instanceID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	tests := []struct {
 		name      string
 		path      string
@@ -26,6 +27,32 @@ func TestRestoredSessionID(t *testing.T) {
 			path:      "/tmp/.codex/sessions/2026/07/30/rollout-2026-07-30T12-00-00-" + sessionID + ".jsonl",
 			resumeCmd: "codex resume " + sessionID,
 			want:      sessionID,
+		},
+		{
+			name:      "codex rollover logical identity",
+			path:      "/tmp/rollout-2026-10-09T16-19-52-" + sessionID + "_" + instanceID + ".jsonl",
+			resumeCmd: "codex resume " + sessionID,
+			want:      sessionID,
+		},
+		{
+			name:      "codex rollover instance is not a resume identity",
+			path:      "/tmp/rollout-2026-10-09T16-19-52-" + sessionID + "_" + instanceID + ".jsonl",
+			resumeCmd: "codex resume " + instanceID,
+		},
+		{
+			name:      "embedded identity is not the filename identity",
+			path:      "/tmp/rollout-" + sessionID + "-" + instanceID + ".jsonl",
+			resumeCmd: "codex resume " + sessionID,
+		},
+		{
+			name:      "invalid rollover suffix",
+			path:      "/tmp/rollout-2026-10-09T16-19-52-" + sessionID + "_invalid.jsonl",
+			resumeCmd: "codex resume " + sessionID,
+		},
+		{
+			name:      "identity in a non-session filename",
+			path:      "/tmp/" + sessionID + ".txt",
+			resumeCmd: "codex resume " + sessionID,
 		},
 		{
 			// The materialized file name is the independent cross-check (#34):
