@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -100,13 +101,17 @@ func (c *docProofCache) verifyStoredWithLoader(ctx context.Context, repo, hash d
 	if !chunked {
 		return c.verify(ctx, repo, hash, data)
 	}
-	readChunk := reader(man)
+	storedHash := domain.HashContent(stored)
+	readChunk := reader(domain.DocChunkManifest{Format: man.Format, Envelope: bytes.Clone(man.Envelope), Chunks: append([]domain.ContentHash(nil), man.Chunks...)})
+	if man.Format == domain.ChunkFormatV2 {
+		return c.verifyStoredLegacyStream(ctx, repo, hash, storedHash, man, readChunk)
+	}
 	// Fixed-width hashes after a domain separator bind the exact descriptor and
 	// each distinct chunk identity/body pair. The descriptor includes ordering,
 	// duplicate occurrences, format and envelope. Repacking is a cache miss.
 	fingerprint := sha256.New()
 	fingerprint.Write([]byte("cxt-stored-doc-proof-v1\x00"))
-	fingerprint.Write([]byte(domain.HashContent(stored)))
+	fingerprint.Write([]byte(storedHash))
 	bodies := make(map[domain.ContentHash][]byte, len(man.Chunks))
 	for _, ch := range man.Chunks {
 		if err := ctx.Err(); err != nil {

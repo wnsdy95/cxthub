@@ -4,6 +4,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -111,6 +114,9 @@ func putPreparedReadBlocksPG(ctx context.Context, tx pgx.Tx, blocks []domain.Doc
 // identities in global hash order across the whole document. Per-block ordering
 // alone can deadlock concurrent documents with differently grouped shared events.
 func putReadBlockEventsPG(ctx context.Context, tx pgx.Tx, blocks []domain.DocReadBlock) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(blocks) == 0 {
 		return nil
 	}
@@ -122,31 +128,53 @@ func putReadBlockEventsPG(ctx context.Context, tx pgx.Tx, blocks []domain.DocRea
 	if err != nil {
 		return err
 	}
+	spool, err := os.CreateTemp("", "cxthub-search-events-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(spool.Name())
+	defer spool.Close()
+	buffer := make([]byte, 32<<10)
+	writer := struct{ io.Writer }{spool}
+	textHash := sha256.New()
 	indexes := make([]domain.DocReadIndex, len(blocks))
-	hashes, texts, lower := []string{}, []string{}, []string{}
+	var entries []readBlockSearchEntryPG
+	var offset int64
 	for i, b := range blocks {
-		idx, err := b.Build(known)
+		idx := domain.DocReadIndex{}
+		err := b.VisitContext(ctx, known, func(event domain.DocEventIndex) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !known[event.Hash] {
+				textHash.Reset()
+				written, err := io.CopyBuffer(io.MultiWriter(writer, textHash), readBlockSearchReaderPG{ctx, strings.NewReader(event.Text)}, buffer)
+				if err != nil {
+					return err
+				}
+				var checksum [sha256.Size]byte
+				textHash.Sum(checksum[:0])
+				entries = append(entries, readBlockSearchEntryPG{hash: string(event.Hash), offset: offset, length: written, checksum: checksum})
+				offset += written
+				known[event.Hash] = true
+			}
+			event.Text = ""
+			idx.Events = append(idx.Events, event)
+			return nil
+		})
 		if err != nil {
 			return err
 		}
 		indexes[i] = idx
-		for _, e := range idx.Events {
-			if known[e.Hash] {
-				continue
-			}
-			known[e.Hash] = true
-			hashes = append(hashes, string(e.Hash))
-			texts = append(texts, e.Text)
-			lower = append(lower, strings.ToLower(e.Text))
-		}
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO doc_search_events_v2(hash,search_text,search_lower)
- SELECT DISTINCT ON (hash) hash,body,lower FROM unnest($1::text[],$2::text[],$3::text[]) AS x(hash,body,lower)
- ORDER BY hash ON CONFLICT DO NOTHING`, hashes, texts, lower); err != nil {
+	if err = putReadBlockSearchPG(ctx, tx, spool, entries); err != nil {
 		return err
 	}
 	block, event := 0, 0
 	_, err = tx.CopyFrom(ctx, pgx.Identifier{"doc_read_block_events_v3"}, []string{"block_hash", "ordinal", "byte_offset", "byte_length", "event_hash", "seq", "role"}, pgx.CopyFromFunc(func() ([]any, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for block < len(blocks) && event == len(indexes[block].Events) {
 			block++
 			event = 0
@@ -159,4 +187,94 @@ func putReadBlockEventsPG(ctx context.Context, tx pgx.Tx, blocks []domain.DocRea
 		return []any{string(blocks[block].Hash), e.Index, int64(e.Offset), e.Length, string(e.Hash), e.Seq, e.Role}, nil
 	}))
 	return err
+}
+
+const readBlockSearchBatchBytesPG = 4 << 20
+const readBlockSearchBatchRowsPG = 1024
+
+type readBlockSearchEntryPG struct {
+	hash     string
+	offset   int64
+	length   int64
+	checksum [sha256.Size]byte
+}
+
+type readBlockSearchReaderPG struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader readBlockSearchReaderPG) Read(body []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(body)
+}
+
+func putReadBlockSearchPG(ctx context.Context, tx pgx.Tx, spool io.ReaderAt, entries []readBlockSearchEntryPG) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sort.Slice(entries, func(left, right int) bool { return entries[left].hash < entries[right].hash })
+	buffer := make([]byte, 32<<10)
+	textHash := sha256.New()
+	var hashes, texts, lower []string
+	batchBytes := 0
+	flush := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(hashes) == 0 {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO doc_search_events_v2(hash,search_text,search_lower)
+ SELECT DISTINCT ON (hash) hash,body,lower FROM unnest($1::text[],$2::text[],$3::text[]) AS x(hash,body,lower)
+ ORDER BY hash ON CONFLICT DO NOTHING`, hashes, texts, lower); err != nil {
+			return err
+		}
+		clear(hashes)
+		clear(texts)
+		clear(lower)
+		hashes, texts, lower = hashes[:0], texts[:0], lower[:0]
+		batchBytes = 0
+		return nil
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var text strings.Builder
+		text.Grow(int(entry.length))
+		textHash.Reset()
+		written, err := io.CopyBuffer(io.MultiWriter(&text, textHash), readBlockSearchReaderPG{ctx, io.NewSectionReader(spool, entry.offset, entry.length)}, buffer)
+		if err != nil {
+			return err
+		}
+		if written != entry.length {
+			return io.ErrUnexpectedEOF
+		}
+		var checksum [sha256.Size]byte
+		textHash.Sum(checksum[:0])
+		if checksum != entry.checksum {
+			return domain.ErrIntegrity
+		}
+		body := text.String()
+		folded := strings.ToLower(body)
+		entryBytes := len(entry.hash) + len(body) + len(folded)
+		if batchBytes+entryBytes > readBlockSearchBatchBytesPG || len(hashes) == readBlockSearchBatchRowsPG {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		hashes = append(hashes, entry.hash)
+		texts = append(texts, body)
+		lower = append(lower, folded)
+		batchBytes += entryBytes
+		if batchBytes >= readBlockSearchBatchBytesPG {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
 }

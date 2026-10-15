@@ -40,9 +40,37 @@ type publicationObserved struct {
 	owner *publicationObservedStore
 }
 
+type streamingPublicationObserved struct {
+	outbound.PreparedRootDocPublication
+	owner *publicationObservedStore
+}
+
 func (s *publicationObservedStore) PrepareDocJob(ctx context.Context, doc domain.VerifiedSessionDoc) (outbound.PreparedDocPublication, error) {
 	p, err := s.PostgresStore.PrepareDocJob(ctx, doc)
 	return publicationObserved{p, s}, err
+}
+
+func (s *publicationObservedStore) PrepareLegacyDocJob(ctx context.Context, job domain.DocFinalizationJob) (outbound.PreparedRootDocPublication, error) {
+	prepared, err := s.PostgresStore.PrepareLegacyDocJob(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	return streamingPublicationObserved{prepared, s}, nil
+}
+
+func (p streamingPublicationObserved) Stage(ctx context.Context, job domain.DocFinalizationJob, lease time.Duration) error {
+	staged, ok := p.PreparedRootDocPublication.(outbound.StagedDocPublication)
+	if !ok {
+		return fmt.Errorf("streaming publication does not support staging")
+	}
+	return staged.Stage(ctx, job, lease)
+}
+
+func (p streamingPublicationObserved) Complete(ctx context.Context, job domain.DocFinalizationJob, now time.Time) error {
+	p.owner.publicationStart = time.Now()
+	err := p.PreparedRootDocPublication.Complete(ctx, job, now)
+	p.owner.publicationEnd = time.Now()
+	return err
 }
 
 func (p publicationObserved) Complete(ctx context.Context, j domain.DocFinalizationJob, now time.Time) error {

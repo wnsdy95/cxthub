@@ -143,6 +143,11 @@ func (s *Service) verifyDocJob(ctx context.Context, j domain.DocFinalizationJob)
 	})
 }
 func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j domain.DocFinalizationJob) error {
+	started := time.Now()
+	log.Printf("document finalization started: job=%s identity=%s format=%s attempt=%d", j.ID, j.DocIdentity, j.Manifest.Format, j.Attempts)
+	defer func() {
+		log.Printf("document finalization exited: job=%s elapsed=%s", j.ID, time.Since(started).Round(time.Millisecond))
+	}()
 	work, cancel := context.WithTimeout(ctx, docJobWorkLimit)
 	defer cancel()
 	// Renew using an independent short operation. A lost lease cancels validation;
@@ -186,6 +191,17 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 			defer prepared.Close()
 		}
 		publication = prepared
+	} else if streaming, ok := st.(outbound.StreamingLegacyJobStore); ok && j.DocIdentity == domain.DocumentIdentityLegacy && j.Manifest.Format == domain.ChunkFormatV2 {
+		var prepared outbound.PreparedRootDocPublication
+		_, err = repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (struct{}, error) {
+			var prepareErr error
+			prepared, prepareErr = streaming.PrepareLegacyDocJob(read, j)
+			return struct{}{}, prepareErr
+		})
+		if prepared != nil {
+			defer prepared.Close()
+		}
+		publication = prepared
 	} else {
 		var verified domain.VerifiedSessionDoc
 		verified, err = repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (domain.VerifiedSessionDoc, error) { return s.verifyDocJob(read, j) })
@@ -198,6 +214,9 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 	// Preparation may succeed before an in-flight renewal cancels the work.
 	if err == nil {
 		err = work.Err()
+	}
+	if staged, ok := publication.(outbound.StagedDocPublication); err == nil && ok {
+		err = staged.Stage(work, j, docJobLease)
 	}
 	if err == nil {
 		err = publication.Complete(work, j, time.Now().UTC())
@@ -214,6 +233,9 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 	j.UpdatedAt = now
 	j.LeaseUntil = time.Time{}
 	j.NextAttempt = now.Add(time.Second << min(j.Attempts, 8))
+	if errors.Is(err, domain.ErrDocumentResourceLimit) {
+		j.Reason = "resource_limit"
+	}
 	if errors.Is(err, domain.ErrIntegrity) || errors.Is(err, domain.ErrValidation) || errors.Is(err, domain.ErrUnsupportedCIRVersion) || errors.Is(err, domain.ErrConversationManifest) || errors.Is(err, domain.ErrUnsupportedDocumentIdentity) {
 		j.State = "rejected"
 		j.Reason = "invalid_document"
