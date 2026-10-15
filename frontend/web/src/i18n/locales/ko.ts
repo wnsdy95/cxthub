@@ -419,6 +419,10 @@ export const ko = {
   context: {
     retryRead: '다시 불러오기',
     loadingEvents: '대화 불러오는 중…',
+    loadMoreEvents: '이벤트 더 읽기',
+    eventFragment: '이벤트 원본 JSON — 전체 {total}바이트 중 {start}–{end}바이트. 현재 조각만 불러왔습니다.',
+    previousFragment: '이전 조각',
+    nextFragment: '다음 조각',
     storedMemory: '저장된 메모리 보기',
 
     branchCommits: '{branch} 커밋 {count}',
@@ -1034,6 +1038,15 @@ export const ko = {
     owner: 'owner — 공동 소유',
   },
   graph: {
+    viewMode: '그래프 보기',
+    commitView: '커밋',
+    prView: 'PR',
+    zoom: '그래프 확대·축소',
+    zoomIn: '확대',
+    zoomOut: '축소',
+    resetZoom: '배율 100%로 초기화',
+    prViewHint: 'PR 중심 · 기록 {count}개 접힘. 분기·합류점, 끝점과 선택한 기록은 유지합니다. 선 사이의 커밋은 생략될 수 있습니다.',
+    collapsedCommits: '이전 기록으로 이어지는 경로에서 {count}개 접힘. 커밋 보기에서 펼칠 수 있습니다.',
     detailsTitle: '기록 및 동기화',
     branchMerged: '{branch} 합류',
     mergeRecords: 'PR 합류 기록 · {count}개',

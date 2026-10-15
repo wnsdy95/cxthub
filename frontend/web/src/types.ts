@@ -296,6 +296,22 @@ export interface CIRBlock {
   name?: string;
 }
 
+export type DocViewMode = 'all' | 'chat' | 'prompts';
+
+export interface DocViewEvent extends CIREvent {
+  deferred?: boolean;
+  event_index?: number;
+  event_bytes?: number;
+}
+
+export interface DocFragmentPage {
+  event_index: number;
+  byte_offset: number;
+  next: number;
+  total_bytes: number;
+  json_fragment: string;
+}
+
 export interface CIREvent {
   kind: string;
   id?: string;
@@ -528,6 +544,18 @@ export interface SessionArchiveView {
   };
 }
 export interface PendingView { graph: GraphState; revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[]; archived_sessions?: SessionArchiveView[] }
+export interface PendingStateView {
+  projection: 'on-hold-v1';
+  revision: RepositoryRevision;
+  default_branch: string;
+  refs: Ref[];
+  pending: Pending[];
+  snapshots: PendingSnapshot[];
+  archived_sessions: SessionArchiveView[];
+  hold: GraphState['hold'];
+  orphan_sessions: string[];
+  hold_counts: Record<string, number>;
+}
 export type BranchLineage = 'natural' | 'unchanged' | 'graft' | 'disconnected' | 'missing' | 'unknown' | 'orphan';
 export interface ContextSemantics {
   version: 1;

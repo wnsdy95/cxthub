@@ -28,11 +28,15 @@ for (const selected of ['legacy', 'named']) {
       if (resource === 'unsync') return { body: [{ repo_id: repo, branch: 'main', user: 'alice', target: held, updated_at: '2026-09-16T01:00:00Z' }] };
       if (['pending', 'history', 'reflog'].includes(resource)) return { body: [] };
       if (resource.startsWith('settings/') || resource === 'secrets') return { body: null };
-      if (resource.startsWith('docs/') && resource.endsWith('/events')) return { body: {
-        hash: resource.split('/')[1], envelope: { cir_version: '2', source_provider: 'codex' },
-        events: Array.from({length:60},(_,seq)=>({ kind: 'message', role: 'user', seq, blocks: [{ type: 'text', text: `${repo} conversation ${seq}` }] })),
-        total: 60, offset: 0, next: -1, inherited: 0,
-      } };
+      if (resource.startsWith('docs/') && resource.endsWith('/events')) {
+        const offset = Math.max(0, Number(searchParams.get('offset') ?? 0));
+        const end = Math.min(60, offset + 20);
+        return { body: {
+          hash: decodeURIComponent(resource.split('/')[1]), envelope: { cir_version: '2', source_provider: 'codex' },
+          events: Array.from({length:end-offset},(_,index)=>({ kind: 'message', role: 'user', seq:offset+index, event_index:offset+index, blocks: [{ type: 'text', text: `${repo} conversation ${offset+index}` }] })),
+          total: 60, offset, next: end === 60 ? -1 : end, inherited: 0,
+        } };
+      }
       return undefined;
     });
 
@@ -46,9 +50,12 @@ for (const selected of ['legacy', 'named']) {
     const graphTarget = page.locator(`[data-graph-snapshot="${held}"]`);
     await graphTarget.click();
     await expect(page.locator('.viewer-head code')).toHaveText('2222222222');
-    await expect(page.getByText(`${selected} conversation 59`, {exact:true})).toBeAttached();
+    await expect(page.getByText(`${selected} conversation 19`, {exact:true})).toBeAttached();
     await expect.poll(()=>page.locator('.viewer').evaluate(el=>Math.abs(el.getBoundingClientRect().top-el.closest('.ctx-main')!.getBoundingClientRect().top))).toBeLessThan(3);
-    await page.locator('.ctx-main').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+    for (const last of [39, 59]) {
+      await page.locator('.ctx-main').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+      await expect(page.getByText(`${selected} conversation ${last}`, {exact:true})).toBeAttached();
+    }
     await expect.poll(()=>page.locator('.ctx-main').evaluate(el=>el.scrollTop)).toBeGreaterThan(300);
     await graphTarget.click();
     await expect.poll(()=>page.locator('.viewer').evaluate(el=>Math.abs(el.getBoundingClientRect().top-el.closest('.ctx-main')!.getBoundingClientRect().top))).toBeLessThan(3);

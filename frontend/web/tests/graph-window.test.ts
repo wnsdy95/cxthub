@@ -23,3 +23,6 @@ const nextIndices = new Map(next.map((id, index) => [id, index]));
 assert.equal(anchoredScrollTop(old, oldOffsets, nextIndices, nextOffsets, 0), 0, 'readers at the top see new work');
 assert.equal(anchoredScrollTop(old, oldOffsets, nextIndices, nextOffsets, 35), 61, 'live inserts preserve the same row and pixel offset');
 assert.equal(anchoredScrollTop(old, oldOffsets, new Map([['a', 0], ['c', 1]]), rowOffsets([26, 26]), 35), 26, 'folding retains a surviving successor');
+const sameIndices = new Map(old.map((id, index) => [id, index]));
+assert.equal(anchoredScrollTop(old, oldOffsets, sameIndices, rowOffsets([52, 92, 52]), 35), 70, 'zoom preserves the fractional row position');
+assert.equal(anchoredScrollTop(old, oldOffsets, sameIndices, rowOffsets([13, 23, 13]), 35), 17.5);

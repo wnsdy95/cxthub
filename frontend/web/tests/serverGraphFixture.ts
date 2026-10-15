@@ -23,6 +23,10 @@ export function serverGraphWireFixture(input: Partial<RepositoryView>, position 
   return serverGraphFixture(input, position, (input.graph?.branch_contexts ? 'integrations-wire' : 'wire') + (version === 2 ? '-v2' : '')) as unknown as Omit<RepositoryView, 'graph'> & {graph: GraphWire};
 }
 
+export function serverPendingStateFixture(input: Partial<RepositoryView>): import('../src/types').PendingStateView {
+  return serverGraphFixture(input, '', 'pending-state') as unknown as import('../src/types').PendingStateView;
+}
+
 // Existing layout regressions now exercise Go's business plan plus TS rendering.
 export function projectBranchGraph(snapshots: Snapshot[],refs: Ref[],history: HistoryEvent[],reflog: RefLogEntry[],pinHead?: string|null,pinBranch?: string,_index?: unknown,_evidence?: unknown) {
   const view = serverGraphFixture({snapshots,refs,history,reflog,default_branch:pinBranch ?? 'main'});

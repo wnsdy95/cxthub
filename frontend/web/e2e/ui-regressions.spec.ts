@@ -309,6 +309,124 @@ test('virtual graph preserves line continuity through a variable-height unpushed
   expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
 });
 
+for (const width of [1440, 390]) test(`graph controls stay below the viewport outside its scroll canvas (${width}px)`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 900 });
+  const root = auditSnapshot(pushedHead, 'main', [], 'Controls baseline', 1);
+  const branches = Array.from({ length: 24 }, (_, index) => auditSnapshot(
+    `sha256:${(8000 + index).toString(16).padStart(64, '0')}`, `feature/controls-${index}`, [pushedHead], `Controls branch ${index}`, index + 2,
+  ));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi([...branches, root], [
+    { repo_id: repoId, kind: 'branch', name: 'main', target: pushedHead },
+    ...branches.map(snapshot => ({ repo_id: repoId, kind: 'branch', name: snapshot.branch, target: snapshot.id })),
+  ]));
+  const viewport = page.locator('.graph-viewport');
+  const controls = page.locator('.graph-controls');
+  await controls.scrollIntoViewIfNeeded();
+  await expect(page.locator('.graph-viewport + .graph-controls')).toHaveCount(1);
+  const graphBox = (await viewport.boundingBox())!;
+  const controlsBox = (await controls.boundingBox())!;
+  expect(controlsBox.y).toBeGreaterThanOrEqual(graphBox.y + graphBox.height);
+  expect(controlsBox.x).toBeGreaterThanOrEqual(graphBox.x);
+  expect(controlsBox.x + controlsBox.width).toBeLessThanOrEqual(graphBox.x + graphBox.width + 1);
+  expect(await viewport.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  await viewport.evaluate(element => { element.scrollLeft = element.scrollWidth; element.scrollTop = element.scrollHeight; });
+  await expect.poll(async () => (await controls.boundingBox())!.x).toBe(controlsBox.x);
+  await expect.poll(async () => (await controls.boundingBox())!.y).toBe(controlsBox.y);
+  const mode = controls.getByRole('group', { name: 'Graph view', exact: true });
+  await mode.getByRole('button', { name: 'PRs', exact: true }).click();
+  await expect(viewport).toHaveAttribute('data-graph-view', 'prs');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await controls.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await expect(viewport).toHaveAttribute('data-graph-zoom', '125');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await controls.getByRole('button', { name: 'Zoom out', exact: true }).click();
+  await expect(viewport).toHaveAttribute('data-graph-zoom', '100');
+  await mode.getByRole('button', { name: 'Commits', exact: true }).click();
+  await expect(viewport).toHaveAttribute('data-graph-view', 'commits');
+  await controls.screenshot({ path: testInfo.outputPath(`graph-footer-${width}.png`) });
+  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
+});
+
+test('graph zoom preserves virtual rows, selection and continuous divider paths', async ({ page }, testInfo) => {
+  const hash = (index: number) => `sha256:${(6000 + index).toString(16).padStart(64, '0')}`;
+  const snapshots = Array.from({ length: 100 }, (_, index) => auditSnapshot(hash(index), 'main', index < 99 ? [hash(index + 1)] : [], `Zoom row ${index}`, 100 - index));
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi(snapshots,
+    [{ repo_id: repoId, kind: 'branch', name: 'main', target: hash(50) }], [],
+    [{ repo_id: repoId, branch: 'main', target: hash(0), user: 'alice', updated_at: snapshots[0].created_at }]));
+  const viewport = page.locator('.graph-viewport');
+  const selected = page.locator(`.graph-row[data-graph-id="${hash(50)}"]`);
+  await expect(selected).toHaveAttribute('aria-pressed', 'true');
+  await viewport.evaluate(element => { element.scrollTop = 49 * 26 + 4; element.dispatchEvent(new Event('scroll')); });
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await expect(viewport).toHaveAttribute('data-graph-zoom', '125');
+  await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBe(Math.round((49 * 26 + 4) * 1.25));
+  await expect(selected).toHaveAttribute('aria-pressed', 'true');
+  await expect(selected.locator('svg')).toHaveAttribute('height', '32.5');
+  await expectRenderedGraphPath(page, hash(49), hash(50));
+  for (let step = 0; step < 3; step++) await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Zoom in', exact: true })).toBeDisabled();
+  await expect(viewport).toHaveAttribute('data-graph-zoom', '200');
+  await expectRenderedGraphPath(page, hash(49), hash(50));
+  await page.getByRole('button', { name: 'Reset zoom to 100%' }).click();
+  await page.getByRole('button', { name: 'Zoom out', exact: true }).click();
+  await page.getByRole('button', { name: 'Zoom out', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Zoom out', exact: true })).toBeDisabled();
+  await expect(viewport).toHaveAttribute('data-graph-zoom', '50');
+  await expectRenderedGraphPath(page, hash(49), hash(50));
+  await selected.focus();
+  await page.keyboard.press('End');
+  await expect(page.locator('.graph-row:focus')).toHaveAttribute('data-graph-id', hash(99));
+  expect(await page.locator('.graph-row').count()).toBeLessThan(42);
+  await viewport.screenshot({ path: testInfo.outputPath('graph-zoom-50.png') });
+  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
+});
+
+test('PR overview folds commits without losing branch evidence or context selection', async ({ page }, testInfo) => {
+  const root = auditSnapshot(pushedHead, 'main', [], 'Shared PR baseline', 1);
+  const hash = (index: number) => `sha256:${(7000 + index).toString(16).padStart(64, '0')}`;
+  const newer = Array.from({ length: 120 }, (_, index) => auditSnapshot(hash(index), 'main', [index === 119 ? pushedHead : hash(index + 1)], `PR overview row ${index}`, 1000 - index));
+  const branch = 'feature/pr-overview';
+  const birth = { id: 'overview-birth', repo_id: repoId, branch_id: 'feature-id', branch, kind: 'birth', source: pushedHead, target: pushedHead, created_at: '2026-09-18T00:00:02Z' };
+  const completed = { ...birth, id: 'overview-merge', kind: 'pr-merge', branch: 'main', branch_id: 'main-id', source_branch_id: 'feature-id', shared_target: pushedHead, pr_completed: true,
+    pr: { number: 42, base_branch: 'main', head_branch: branch, head_sha: 'a'.repeat(40), merge_sha: 'b'.repeat(40) }, created_at: '2026-09-18T00:00:03Z' };
+  const { pageErrors, unexpected } = await openGraph(page, publicRepositoryApi([...newer, root],
+    [{ repo_id: repoId, kind: 'branch', name: 'main', target: newer[0].id }], [], [], [], [birth, completed]));
+  const mode = page.getByRole('group', { name: 'Graph view', exact: true });
+  await expect(mode.getByRole('button', { name: 'Commits', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await mode.getByRole('button', { name: 'PRs', exact: true }).click();
+  await expect(page.locator('.graph-viewport')).toHaveAttribute('data-graph-view', 'prs');
+  await expect(page.locator('.graph-row')).toHaveCount(4);
+  await expect(page.locator('.graph-view-hint')).toContainText('119 records folded');
+  await expect(page.locator('.graph-pr-badge')).toHaveText('PR #42');
+  const merge = page.locator('[data-graph-event="merge"]');
+  await expectRenderedGraphPath(page, 'graph:merge:overview-merge', 'graph:birth:overview-birth');
+  await expectRenderedGraphPath(page, 'graph:birth:overview-birth', pushedHead);
+  await merge.click();
+  await expect(merge).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('Visible fixture prompt', { exact: true })).toBeVisible();
+  await merge.hover();
+  await expect(page.locator('.graph-tip')).toContainText('PR #42');
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await expect(merge).toHaveAttribute('aria-pressed', 'true');
+  await expectRenderedGraphPath(page, 'graph:merge:overview-merge', 'graph:birth:overview-birth');
+  await page.locator('.graph-wrap').screenshot({ path: testInfo.outputPath('graph-pr-overview.png') });
+  await mode.getByRole('button', { name: 'PRs', exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath('graph-controls.png') });
+  await mode.getByRole('button', { name: 'Commits', exact: true }).click();
+  await expect(merge).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.graph-viewport')).toHaveAttribute('data-virtualized', 'true');
+  await expect(page.locator('.graph-viewport')).toHaveAttribute('data-graph-zoom', '125');
+  await merge.focus();
+  await page.keyboard.press('Home');
+  await expect(page.locator('.graph-row:focus')).toHaveAttribute('data-graph-id', hash(0));
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await mode.getByRole('button', { name: 'PRs', exact: true }).click();
+  await expect(page.locator(`.graph-row[data-graph-id="${hash(1)}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.graph-view-hint')).toContainText('118 records folded');
+  expect(pageErrors).toEqual([]); expect(unexpected).toEqual([]);
+});
+
 test('legacy repository alias resolves to one canonical DAG across reload', async ({ page }) => {
   const pageErrors = capturePageErrors(page);
   const responder = publicRepositoryApi([{id:pushedHead,repo_id:repoId,doc_hash:pushedHead,branch:'main',parents:[],message:'frontend context',created_at:'2026-09-03T00:00:00Z'}], [{kind:'branch',name:'main',target:pushedHead}]);
@@ -1137,6 +1255,15 @@ test('branch labels exist only for visible graph lanes and share horizontal scro
     (movement.after.labelAnchor - movement.after.nodeAnchor) -
       (movement.before.labelAnchor - movement.before.nodeAnchor),
   ).toBeCloseTo(0, 1);
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+  await expect.poll(() => wideViewport.evaluate(element => element.scrollLeft)).toBe(Math.round(movement.scrollLeft * 1.25));
+  const scaledAlignment = await wideViewport.evaluate(element => {
+    const label = element.querySelector<HTMLElement>('[data-graph-lane="4"]')!;
+    const node = element.querySelector<SVGCircleElement>('[data-graph-node-lane="4"] circle:last-of-type')!;
+    const center = new DOMPoint(node.cx.baseVal.value, node.cy.baseVal.value).matrixTransform(node.getScreenCTM()!);
+    return label.parentElement!.getBoundingClientRect().left + parseFloat(label.style.left) - center.x;
+  });
+  expect(Math.abs(scaledAlignment)).toBeLessThan(1);
   expect(second.pageErrors).toEqual([]);
   expect(second.unexpected).toEqual([]);
 });

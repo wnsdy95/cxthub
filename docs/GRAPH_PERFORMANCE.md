@@ -133,3 +133,123 @@ folding, invalid-input, archived-path and horizontal-scroll regressions remain.
 This bounds browser DOM work; it is not server pagination or a cloud latency
 claim, and extremely wide lane layouts still consume memory proportional to
 their complete layout.
+
+## Graph controls (2026-10-14)
+
+The graph toolbar switches between Commits (the default) and PRs, with zoom
+from 50% to 200% in 25-point steps and a percentage button to reset to 100%.
+Zoom scales SVG geometry, row offsets, dividers and sticky labels together.
+The viewport retains its row-relative vertical position and horizontal scale;
+switching view modes reveals the selected record without changing the reader's
+selected context. Repository changes reset these presentation preferences.
+
+PR view consumes the same server-confirmed projection. It folds only linear
+single-parent, single-child capture chains. Recorded branch births and PR
+merges, branch/ref tips, graph junctions, uncommitted records and a selected
+commit remain visible. PR numbers identify merge nodes. Selecting a PR still
+opens its original source snapshot, not a newly assembled document.
+
+This is display contraction, not a new ancestry or merge decision. It never
+crosses missing or archived/hidden captures; lifecycle and graft endpoints
+remain intact. The hint and node tooltip report folded records. Join gestures
+are available only in Commits view, where all visible records are explicit.
+Changing views makes no writes and does not alter publication counts, saved
+parents, PR completion, memory or context inclusion.
+
+Tests cover a 100,000-node linear contraction, unchanged PR evidence and source
+selection, missing/hidden inputs, graft and lifecycle edges, invalid structures,
+zoom limits, fractional scroll anchors and rendered SVG continuity across
+scaled dividers. The PR view reduces layout rows, not the initial API payload
+or database read cost.
+
+## Shared backend admission and projection reuse (2026-10-14)
+
+`app.AcquireResources(ctx, class)` returns a permit-bearing context, a release
+function and an error. Use that context for synchronous nested work and release
+on every exit; do not share a permit across independent concurrent operations.
+Admission precedes database snapshots, worker claims and HTTP upload decoding.
+One process admits at most two heavy operations, at most one of them bulk.
+Graph/full-view/legacy pending reads enter as interactive; a cache miss or cache
+bypass must upgrade to bulk before graph computation. Warm results can therefore
+be read while a bulk worker runs. Upload verification, history preparation,
+document/PR/Git jobs and Git reconciliation share the same bulk capacity.
+Context-query and the independent On Hold projection use interactive capacity.
+Revision reads and the existing coalesced SSE polling remain outside this gate;
+document range reads select capacity at their own preparation/read boundaries.
+
+Legacy whole-document reads (full document, strict events without `view`, search,
+fragments, agent-history pages, downloads and diff) acquire bulk before storage.
+HTTP full-document, strict-events, turns, search, pull-objects, pull-chunks and
+diff handlers retain the same context permit through response serialization and
+body writes, including write-error exits; nested application reads cannot release
+the outer HTTP permit. New bounded document view/fragment endpoints are not
+wrapped in bulk for root documents with verified range indexes. If a view page,
+fragment, or inherited-prefix comparison reads a legacy document, its permit
+upgrades to bulk before the whole-document index is loaded and remains charged
+until the outer page/fragment read finishes. MCP/direct application callers receive application-level
+admission only: the caller's later serialization/retention is not covered unless
+it holds an outer permit itself.
+
+Each class queues at most eight callers for at most one second. Saturation or
+an expired admission wait returns `resource_overloaded` (HTTP 503 with
+`Retry-After: 1`); caller cancellation preserves its context error. A nested
+bulk permit can serve interactive work. Interactive-to-bulk escalation succeeds
+only immediately when bulk capacity is free and no bulk caller is queued;
+otherwise it returns overload, never waits while holding the interactive slot.
+An upgrade remains charged until the outer release. Workers acquire before
+claiming durable work, so admission rejection does not increase job attempts.
+The existing durable retry/lease policies are unchanged. A missing document
+range index also maps to retryable HTTP 503, `doc_range_index_unavailable`.
+
+Graph-state, full-view and pending-view reuse the same immutable graph result
+only after fresh coherent metadata/compatibility reads. Keys include repository,
+graph/pending/evidence revisions, position, Git origin and a fingerprint of all
+view inputs: uploads can change snapshots without advancing a public revision.
+Each service cache retains at most four entries and 8 MiB of encoded projections; decoding
+owns each response's mutable collections. An identical concurrent cache miss
+returns retryable overload rather than waiting while holding another read slot.
+Zero revisions, writes and adapters without a positively identified read-only
+snapshot bypass this cache; PostgreSQL can reuse it, FS deliberately recomputes.
+Authorization remains at the existing transport/service boundaries. No native
+documents or permissions are cached, and no new per-row queries are introduced.
+
+`GET /pending-view?projection=on-hold-v1` explicitly selects `PendingStateView`:
+`projection`, `revision`, `default_branch`, `refs`, `pending`, `snapshots`,
+`archived_sessions`, `hold`, `orphan_sessions` and `hold_counts`. It has **no
+`graph` field** and must never replace a complete graph. Missing/empty projection
+keeps the original full `PendingView.Graph` contract; unknown, malformed or
+duplicate projection parameters are rejected. Both paths retain viewer
+authorization and document-identity compatibility checks.
+
+The lightweight projection shares the domain's hold/orphan classifier (including
+historical publications, completed PRs, reflog roots, grafts and dismissals), not
+application branch integrations, Git evidence or all-branch query construction.
+Its snapshot metadata covers pending targets, held captures and archive sources,
+without owning full graph branch memberships. Each read uses fresh repository
+graph/pending/evidence generations; PostgreSQL pins the metadata together, while
+FS retains its existing read consistency. It still scans repository metadata,
+so it is independent of full graph computation, not constant-cost pagination.
+
+The local mixed regression runs 24 operations (eight graph, eight interactive
+graph, eight canonical document verifications), with 10,000 snapshots and a
+1,069,107-byte document. On macOS with `GOMEMLIMIT=512MiB`, the final test-binary
+run completed in 3.09s wall time (1.33s workload), with maximum RSS 102,039,552
+bytes (97.3 MiB), 1,004 explicit overload retries and a 3,700,647-byte graph cache.
+Other local test processes were running concurrently; retry counts and timing
+are observations, not latency guarantees. Reproduce from `backend`:
+
+```sh
+go test -c -o /tmp/cxt-admission.test ./internal/app
+/usr/bin/time -l env GOMEMLIMIT=512MiB /tmp/cxt-admission.test -test.run '^TestResourceAdmissionMixedGraphVerification$' -test.v
+```
+
+This uses synthetic metadata, not HTTP/PostgreSQL/end-to-end production load.
+The Go memory setting is a soft runtime target, not an RSS cap. Full metadata
+reads, individual graph size, response encoding, DB/native memory and other
+maintenance paths still require separate production-sized measurement; admission
+and cache retention alone do not establish a 512 MiB deployment guarantee. Even
+one whole-document read plus JSON encoding can exceed that target. A concurrent
+race-instrumented run with the same memory target hit this synthetic test's
+30-second deadline; race overhead is not represented by the RSS figure above.
+The focused race suite, including that mixed test, subsequently passed without
+the memory target. This does not establish a race-instrumented 512 MiB guarantee.

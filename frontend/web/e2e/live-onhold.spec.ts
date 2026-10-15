@@ -29,7 +29,7 @@ test('live sessions precede stored captures, follow replacement, expire offline 
     }))};
     if (['unsync','history','reflog'].includes(resource)) return {body:[]};
     if (resource.startsWith('settings/') || resource === 'secrets') return {body:null};
-    if (resource.startsWith('docs/') && resource.endsWith('/events')) return {body:{hash:resource.split('/')[1],envelope:{cir_version:'2',source_provider:'codex'},
+    if (resource.startsWith('docs/') && resource.endsWith('/events')) return {body:{hash:decodeURIComponent(resource.split('/')[1]),envelope:{cir_version:'2',source_provider:'codex'},
       events:[{kind:'message',role:'user',seq:0,blocks:[{type:'text',text:`Capture generation ${generation}`}]}],total:1,offset:0,next:-1,inherited:0}};
     return undefined;
   }, {graphRevision: () => '1'}); // object staging does not publish a graph change
@@ -51,8 +51,6 @@ test('live sessions precede stored captures, follow replacement, expire offline 
   await expect(page.locator('.live-viewer-status')).toContainText('LIVE');
   expect(fullReads).toBe(initialReads);
   expect(pendingReads).toBeGreaterThan(0);
-  // A capture with an ancestor absent from the browser cache requires one
-  // coherent refresh, then returns to cheap pending updates.
   generation = 7;
   await page.clock.fastForward(6_000);
   await expect(page.getByText('Capture generation 7', {exact:true})).toBeVisible();

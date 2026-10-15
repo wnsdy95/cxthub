@@ -6,7 +6,7 @@ import { DocEvents } from './DocEvents';
 //   2) Pending orphan sessions (pending): Sessions that don't connect to any tip (server ref/unsync included). Resolved by git commit. Saved manually until deleted.
 // Pending following an unsync tip is rendered as the "following thread" tail of the commit viewer.
 import { useEffect, useMemo, useState } from 'react';
-import type { Repo, Pending } from '../types';
+import type { Repo, Pending, Snapshot } from '../types';
 import {
   useDismissPending,
   useUndismissPending,
@@ -32,8 +32,9 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
   const [now, setNow] = useState(Date.now);
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, archiveSnapshots, archivedSessions, archiveBySnapshot, badges, graphState, chains, orphans, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendings } =
+  const { refs, archiveSnapshots: graphArchiveSnapshots, archivedSessions, badges, graphState, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, retryGraph, pendingRows, pendingLoading, pendingError, retryPending } =
     useRepoView(repo.id, repo.default_branch || 'main');
+  const { archiveSnapshots, archiveBySnapshot, chains, orphans, pendings } = pendingRows;
   const activityTimes = pendings.map(p => p.activity_at ?? '').join(',');
   useEffect(() => {
     const current = Date.now();
@@ -60,8 +61,8 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
     });
   };
 
-  const byId = useMemo(() => new Map(archiveSnapshots.map((s) => [s.id, s])), [archiveSnapshots]);
-  const branches = useMemo(() => [...new Set([...refs.filter((r) => r.kind === 'branch').map((r) => r.name), ...pendings.map(p => p.branch).filter(Boolean)])].sort(), [refs, pendings]);
+  const byId = useMemo(() => new Map([...graphArchiveSnapshots, ...archiveSnapshots].map(snapshot => [snapshot.id, snapshot])), [graphArchiveSnapshots, archiveSnapshots]);
+  const branches = useMemo(() => [...new Set([...pendingRows.refs.filter((r) => r.kind === 'branch').map((r) => r.name), ...pendings.map(p => p.branch).filter(Boolean)])].sort(), [pendingRows.refs, pendings]);
 
   // Branch/member filters — pending items can span multiple branches/authors, default is all.
   const [branchSel, setBranchSel] = useState<string>('*');
@@ -120,8 +121,14 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
 
   const [selSnap, setSelSnap] = useState<string | null>(null);
   const [selPending, setSelPending] = useState<string | null>(null);
+  const [retainedSelection, setRetainedSelection] = useState<{ repoId: string; snapshot: Snapshot } | null>(null);
   const selectedPending = (selPending ? pendings.find(p => p.session_id === selPending) : null) ?? null;
-  const selected = (selectedPending ? byId.get(selectedPending.target) : selSnap ? byId.get(selSnap) : null) ?? null;
+  const selectedId = selectedPending?.target ?? selSnap;
+  const selected = (selectedId ? byId.get(selectedId) : null)
+    ?? (retainedSelection?.repoId === repo.id && retainedSelection.snapshot.id === selectedId ? retainedSelection.snapshot : null);
+  useEffect(() => {
+    setRetainedSelection(selected ? { repoId: repo.id, snapshot: selected } : null);
+  }, [repo.id, selected]);
   // Keep following a session's mutable target. Remember its last snapshot so
   // commit resolution doesn't abruptly close the conversation being read.
   useEffect(() => {
@@ -207,7 +214,10 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
 
         {holdItems.length > 0 && <PageControl paged={paged} />}
 
-        {chainsShown.length === 0 && orphansShown.length === 0 && (
+        {pendingLoading && <div className="skel" style={{ height: 60 }} />}
+        {pendingError && <p role="alert" className="err">{pendingError} <button onClick={retryPending}>{t('context.retryRead')}</button></p>}
+
+        {!pendingLoading && !pendingError && chainsShown.length === 0 && orphansShown.length === 0 && (
           <div className="empty-box"><Rich>{t('onhold.empty')}</Rich></div>
         )}
 
@@ -331,7 +341,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
                 </select>
                 {/* Shared commit = fork, local predecessor (unpushed ∪ uncommitted) tip = checkout -b (entire chain branch),
                     // Intermediate node in predecessor chain = no branch action (same rules as ContextView). */}
-                {selected &&
+                {selected && graphState && graphArchiveSnapshots.some(snapshot => snapshot.id === selected.id) &&
                   atLeast(role, 'member') &&
                   (!localAhead.ids.has(selected.id) ? (
                     <button className={`dl-btn${forkOpen ? ' on' : ''}`} onClick={() => setForkOpen((v) => !v)}>
@@ -419,7 +429,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
         <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
         <CommitGraph readRepoId={repo.id} graphState={graphState}
           snapshots={graphSnapshots}
-          allSnapshots={archiveSnapshots}
+          allSnapshots={graphArchiveSnapshots}
           archivedSessions={archivedSessions}
           selectedId={selSnap}
           selectedEventId={selectedEvent?.id}

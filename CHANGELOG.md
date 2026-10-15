@@ -9,10 +9,23 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Follow verified Codex rollout generations without capturing an older file or
+  letting late lifecycle hooks retire the current conversation.
+- Count finalized commit publications in profile activity instead of snapshot
+  timestamps or capture labels.
+- Read conversation pages from verified range indexes, load tool details on
+  demand, and share bounded resources across reads, uploads and workers.
+
 - Keep global Codex and Claude lifecycle hooks inert in Git repositories that
   have not run `cxt init` or `cxt setup`.
 - Preserve and quarantine directory-only `.cxt` residue from older hooks while
   automatically registering `.cxt/` and `.cxtsecrets` in Git ignore files.
+
+### Added
+
+- Commit/PR graph views and 50-200% zoom controls below the graph viewport.
+- Additive PostgreSQL migration 0093 for verified conversation range indexes;
+  existing archives and document identities remain unchanged.
 
 ## [0.1.1] - 2026-07-29
 
