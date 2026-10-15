@@ -897,6 +897,29 @@ including when the prior process wrote the completion receipt but failed to mark
 its queue job complete. Later captures do not retroactively enlarge an already
 completed PR's scope.
 
+### Profile contribution calendar and activity
+
+The profile calendar and monthly activity count finalized `publish` history once
+per `(content repo ID, GitAfter)`, across all branches. Retries and publications
+of the same revision do not add counts, even across snapshots or worktrees.
+Reusing an old snapshot in a new Git revision does count as a new contribution.
+Uncommitted captures and legacy observations without finalization are excluded;
+a finalized publication is not excluded by its snapshot's hook or stash label.
+
+The date is the earliest retained publication's `CreatedAt`, converted to UTC.
+It is the recorded finalization event time, not snapshot creation, server receipt,
+or Git author/committer time. A late-arriving earlier publication can move the
+existing count to an earlier day without increasing the total. Monthly commit
+totals use the same daily counts; repository creation keeps its own creation date.
+
+These are repository-wide totals, **not commits authored by the profile user**.
+History carries neither Git author identity nor Git author/committer timestamps;
+snapshot authors and repository ownership are not substitutes. The existing
+`PublicUser` scope remains: personally owned repositories only, public for other
+viewers and private included for self. Membership-only and organization-owned
+repositories remain excluded, and document-identity compatibility checks still
+apply before reading contribution history.
+
 ### First memory selection at an existing code position
 
 A pinned empty or explicitly inherited position and a later self-owned memory
@@ -1059,6 +1082,25 @@ file is rejected without overwriting the existing pointer. This covers child
 task hooks carrying an inherited parent ID. Command-only exact-ID discovery uses
 native metadata and the shared Git repository, never a newer sibling transcript;
 background discovery still requires its exact worktree registration.
+
+Codex rollover files may use `rollout-...-<session>_<instance>.jsonl` while
+`session_meta.payload.id` retains the logical session UUID. The instance suffix
+is not a new session or a resume target. Exact discovery verifies filename,
+native ID and cwd together. Multiple generations require distinct, valid native
+`payload.timestamp` values in the same worktree, at most one unsuffixed source,
+and a uniquely newest suffixed source. Mtime is not generation evidence; missing
+timestamps, copied files and cross-worktree ambiguity fail closed. An excluded
+or retired newest generation never falls back to an older eligible file.
+
+Liveness follows the selected generation without refreshing its hook heartbeat.
+Late hooks from older generations cannot update capture hints or registry state;
+pending publication revalidates the current generation inside its mutation lock.
+Ending a generation only removes its own registered path. Observer change
+detection includes the path even when file size and modification time are equal.
+These rules select current input, not prove historical completeness: `cxt add`
+retains all eligible, verified generations as separate source paths, and capture
+collection still requires full content-prefix evidence. Native files remain
+read-only during discovery and capture.
 
 Branch creation replay requires the durable committed transaction callback.
 A later reflog entry with the same name and Git hash is insufficient to identify

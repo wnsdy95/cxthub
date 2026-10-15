@@ -21,7 +21,9 @@ func (s *Service) ListHistory(ctx context.Context, repoID domain.ContentHash) ([
 }
 
 func (s *Service) RecordHistory(ctx context.Context, event domain.HistoryEvent) error {
-	return s.recordHistoryWithDocumentPreparation(ctx, event)
+	return resourceWork(ctx, ResourceBulk, func(ctx context.Context) error {
+		return s.recordHistoryWithDocumentPreparation(ctx, event)
+	})
 }
 
 // A verification set lives for one operation, not on the service or store.

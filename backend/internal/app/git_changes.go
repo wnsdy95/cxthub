@@ -140,15 +140,19 @@ func (g *GitChanges) Process(ctx context.Context, limit int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		j, err := g.store.ClaimGitChange(ctx, "", "", time.Now().UTC(), 2*time.Minute)
+		err := admittedJob(ctx, func(bound context.Context) (domain.GitChangeJob, error) {
+			return g.store.ClaimGitChange(bound, "", "", time.Now().UTC(), 2*time.Minute)
+		}, func(bound context.Context, job domain.GitChangeJob) error {
+			if err := g.run(bound, job); err != nil {
+				log.Printf("Git change verification %s attempt %d deferred", job.ID, job.Attempts)
+			}
+			return nil
+		})
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
-		}
-		if err = g.run(ctx, j); err != nil {
-			log.Printf("Git change verification %s attempt %d deferred", j.ID, j.Attempts)
 		}
 	}
 	return nil

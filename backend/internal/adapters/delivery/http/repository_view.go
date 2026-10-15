@@ -2,12 +2,18 @@ package http
 
 import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/graphwire"
+	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"net/http"
 	"strconv"
 )
 
 func (s *Server) repositoryView(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
+	if !ok {
+		return
+	}
+	defer release()
 	v, err := s.b.GetRepositoryView(r.Context(), s.repoID(r))
 	if err != nil {
 		s.respond(w, nil, err)
@@ -20,6 +26,11 @@ func (s *Server) repositoryView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) contextQuery(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
+	if !ok {
+		return
+	}
+	defer release()
 	q := r.URL.Query()
 	in := domain.ContextSelection{Branch: q.Get("branch"), Position: q.Get("position"), Scope: q.Get("scope"), CodeCommit: q.Get("code_commit"), SegmentStateHash: domain.ContentHash(q.Get("segment_state_hash"))}
 	for name, dst := range map[string]*int{"segment_limit": &in.SegmentLimit, "segment_offset": &in.SegmentOffset} {
@@ -37,6 +48,11 @@ func (s *Server) contextQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) graphState(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
+	if !ok {
+		return
+	}
+	defer release()
 	v, err := s.b.QueryGraphState(r.Context(), s.repoID(r), r.URL.Query().Get("position"))
 	if err != nil {
 		s.respond(w, nil, err)

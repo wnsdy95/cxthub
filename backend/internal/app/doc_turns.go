@@ -24,7 +24,7 @@ func (s *Service) ReadAgentHistoryPage(ctx context.Context, repo, hash domain.Co
 		return domain.AgentHistoryPage{}, err
 	}
 
-	return repositoryReadForRepo(outbound.WithDocReadOnly(ctx), s, repo, func(ctx context.Context) (domain.AgentHistoryPage, error) {
+	return resourceReadForRepo(outbound.WithDocReadOnly(ctx), s, repo, func(ctx context.Context) (domain.AgentHistoryPage, error) {
 		return s.readAgentHistoryPage(ctx, repo, hash, req)
 	})
 }

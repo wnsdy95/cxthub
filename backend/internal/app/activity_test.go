@@ -44,6 +44,13 @@ func TestActivitySerializesEmptyCollectionsAsArrays(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.ApplyHistoryEvent(ctx, domain.HistoryEvent{
+		ID: strings.Repeat("1", 32), RepoID: string(repoID), Branch: "main", BranchID: "main",
+		Kind: "publish", Source: snapshotID, Target: snapshotID, GitAfter: strings.Repeat("a", 40),
+		CreatedAt: time.Date(2026, time.August, 4, 0, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	months, err := svc.Activity(ctx, []domain.Repository{commitRepository, createdRepository})
 	if err != nil {

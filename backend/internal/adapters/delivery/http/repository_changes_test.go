@@ -70,7 +70,10 @@ func TestRepositoryChangesAuthorizationAndPendingDelivery(t *testing.T) {
 		t.Fatal("repo")
 	}
 	base := ts.URL + "/api/v1/repos/" + url.PathEscape(string(repo))
-	for _, path := range []string{"/revision", "/pending-view", "/changes", "/context-query", "/graph-state", "/view"} {
+	if code := doJSONAs(t, "", "GET", base+"/pending-view?projection=on-hold-v1", nil, nil); code != 401 {
+		t.Fatalf("anonymous lightweight projection exposed: %d", code)
+	}
+	for _, path := range []string{"/revision", "/pending-view", "/pending-view?projection=on-hold-v1", "/changes", "/context-query", "/graph-state", "/view"} {
 		if code := doJSONAs(t, "dev:outsider@example.test:Other", "GET", base+path, nil, nil); code != 403 {
 			t.Fatalf("%s exposed: %d", path, code)
 		}
@@ -139,6 +142,10 @@ func TestRepositoryChangesAuthorizationAndPendingDelivery(t *testing.T) {
 	}
 	if doJSON(t, "GET", base+"/pending-view", nil, &v) != 200 || len(v.Snapshots) != 1 || v.Revision != changed {
 		t.Fatalf("%+v", v)
+	}
+	var state domain.PendingStateView
+	if code := doJSON(t, "GET", base+"/pending-view?projection=on-hold-v1", nil, &state); code != 200 || state.Projection != "on-hold-v1" || state.Revision != changed || len(state.Snapshots) != 1 || len(state.OrphanSessions) != 1 || state.OrphanSessions[0] != "synthetic" {
+		t.Fatalf("lightweight generation/classification mismatch: status=%d %+v", code, state)
 	}
 	var full struct {
 		Graph json.RawMessage `json:"graph"`

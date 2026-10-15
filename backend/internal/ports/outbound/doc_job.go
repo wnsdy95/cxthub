@@ -30,3 +30,12 @@ type DocJobStore interface {
 type PreparedDocPublication interface {
 	Complete(context.Context, domain.DocFinalizationJob, time.Time) error
 }
+
+type StreamingRootJobStore interface {
+	PrepareRootDocJob(context.Context, domain.DocFinalizationJob) (PreparedRootDocPublication, error)
+}
+
+type PreparedRootDocPublication interface {
+	PreparedDocPublication
+	Close() error
+}

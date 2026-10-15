@@ -90,8 +90,9 @@ var ErrSessionIdentityMismatch = errors.New("provider session identity mismatch"
 type codexSessionHeader struct {
 	Type    string `json:"type"`
 	Payload struct {
-		ID  string `json:"id"`
-		Cwd string `json:"cwd"`
+		ID        string `json:"id"`
+		Cwd       string `json:"cwd"`
+		Timestamp string `json:"timestamp"`
 	} `json:"payload"`
 }
 
@@ -165,6 +166,9 @@ func ValidateHookSession(cwd string, provider domain.ProviderKind, sessionID, pa
 		return fmt.Errorf("%w: %s hook ID %q does not match native filename ID %q", ErrSessionIdentityMismatch, provider, sessionID, filenameID)
 	}
 	if provider == domain.ProviderCodex {
+		if strings.Contains(filepath.Base(path), "_") && filenameID == "" {
+			return fmt.Errorf("%w: malformed Codex rollout generation", ErrSessionIdentityMismatch)
+		}
 		header, err := readCodexSessionHeader(path)
 		if err != nil {
 			return fmt.Errorf("validate Codex session header: %w", err)
@@ -176,6 +180,11 @@ func ValidateHookSession(cwd string, provider domain.ProviderKind, sessionID, pa
 		_, hookWorktree, _ := appSessionRoots(context.Background(), cwd)
 		if nativeWorktree == "" || nativeWorktree != hookWorktree {
 			return fmt.Errorf("%w: Codex native cwd does not match hook worktree", ErrSessionIdentityMismatch)
+		}
+		if providerfs.ValidSessionID(header.Payload.ID) {
+			if err := NewCodexCapture().ValidateCurrentSession(context.Background(), path); err != nil {
+				return err
+			}
 		}
 		return validateAliasBinding(cwd, provider, sessionID, path, header.Payload.ID)
 	}
@@ -337,12 +346,36 @@ func TrackAppSession(cwd string, provider domain.ProviderKind, sessionID, path s
 
 // EndAppSession removes only the liveness pointer. The provider transcript and
 // all cxt snapshots remain untouched.
-func EndAppSession(cwd string, provider domain.ProviderKind, sessionID string) {
+func EndAppSession(cwd string, provider domain.ProviderKind, sessionID string, expectedPath ...string) {
 	if !validHookSessionID(sessionID) {
 		return
 	}
 	if root, worktree, enabled := appSessionRoots(context.Background(), cwd); enabled {
-		_ = providerfs.RemoveRepoFile(root, appSessionRelativePath(provider, worktree, sessionID))
+		lockPath, err := providerfs.PrepareRepoFile(root, filepath.Join(".cxt", "app-sessions", "registry.lock"), 0700)
+		if err != nil {
+			return
+		}
+		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+		if err != nil {
+			return
+		}
+		defer lock.Close()
+		if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+			return
+		}
+		defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		relative := appSessionRelativePath(provider, worktree, sessionID)
+		if len(expectedPath) > 0 {
+			raw, err := providerfs.ReadRepoFile(root, relative)
+			var state appSessionFile
+			if err != nil || json.Unmarshal(raw, &state) != nil || state.Path != expectedPath[0] {
+				return
+			}
+			if provider == domain.ProviderCodex && NewCodexCapture().ValidateCurrentSession(context.Background(), state.Path) != nil {
+				return
+			}
+		}
+		_ = providerfs.RemoveRepoFile(root, relative)
 	}
 }
 
@@ -388,52 +421,10 @@ func LocateCodexCommandSession(ctx context.Context, cwd, sessionID string) (stri
 	if err != nil {
 		return "", err
 	}
-	root, err := codexSessionsDir()
-	if err != nil {
-		return "", err
-	}
-	matches, err := filepath.Glob(filepath.Join(root, "*", "*", "*", "rollout-*-"+sessionID+".jsonl"))
-	if err != nil {
-		return "", err
-	}
-	selected := ""
-	for _, path := range matches {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if !validAppSessionPath(path) {
-			continue
-		}
-		header, err := readCodexSessionHeader(path)
-		if err != nil {
-			return "", fmt.Errorf("verify exact Codex session %q: %w", sessionID, err)
-		}
-		if !sameNativeSessionID(header.Payload.ID, sessionID) {
-			return "", fmt.Errorf("%w: Codex filename ID %q does not match native metadata ID %q", ErrSessionIdentityMismatch, sessionID, header.Payload.ID)
-		}
-		nativeRoots, err := gitctx.ResolveRepositoryRoots(ctx, header.Payload.Cwd)
-		if err != nil || nativeRoots.SharedRoot != commandRoots.SharedRoot {
-			continue
-		}
-		if err := ValidateHookSession(header.Payload.Cwd, domain.ProviderCodex, sessionID, path); err != nil {
-			return "", err
-		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return "", err
-		}
-		if providerfs.CaptureExcluded(commandRoots.SharedRoot, path, info.Size()) {
-			continue
-		}
-		if selected != "" && selected != path {
-			return "", fmt.Errorf("ambiguous exact Codex session %q in shared Git repository", sessionID)
-		}
-		selected = path
-	}
-	if selected == "" {
-		return "", domain.ErrNoActiveSession
-	}
-	return selected, nil
+	return locateCodexSession(ctx, sessionID, commandRoots.SharedRoot, true, func(nativeCwd string) (string, bool) {
+		nativeRoots, err := gitctx.ResolveRepositoryRoots(ctx, nativeCwd)
+		return nativeRoots.WorktreeRoot, err == nil && nativeRoots.SharedRoot == commandRoots.SharedRoot
+	})
 }
 
 func activeAppSessions(cwd string, relatedWorktrees bool) []AppSession {
@@ -472,7 +463,6 @@ func activeAppSessions(cwd string, relatedWorktrees bool) []AppSession {
 			age >= -time.Minute && age <= appSessionTTL &&
 			validAppSessionPath(state.Path)
 		if !valid {
-			_ = providerfs.RemoveRepoFile(root, relative)
 			continue
 		}
 		// Older clients could store a parent ID with a child's transcript. Do
@@ -482,6 +472,27 @@ func activeAppSessions(cwd string, relatedWorktrees bool) []AppSession {
 			nativeCwd = state.Worktree
 		}
 		_, nativeWorktree, _ := appSessionRoots(ctx, nativeCwd)
+		if state.Provider == domain.ProviderCodex && providerfs.ValidSessionID(state.SessionID) && nativeWorktree == state.Worktree {
+			header, err := readCodexSessionHeader(state.Path)
+			if err != nil || !sameNativeSessionID(header.Payload.ID, state.SessionID) {
+				continue
+			}
+			wanted := codexSessionWorktree(ctx, header.Payload.Cwd)
+			current, err := locateCodexSession(ctx, state.SessionID, root, relatedWorktrees, func(nativeCwd string) (string, bool) {
+				candidateWorktree := codexSessionWorktree(ctx, nativeCwd)
+				return candidateWorktree, wanted != "" && candidateWorktree == wanted
+			})
+			if err != nil {
+				continue
+			}
+			if !relatedWorktrees {
+				ledger, err := stagingCaptureLedger(root)
+				if err != nil || ledger[current].Superseded {
+					continue
+				}
+			}
+			state.Path = current
+		}
 		if nativeWorktree != state.Worktree || ValidateHookSession(nativeCwd, state.Provider, state.SessionID, state.Path) != nil {
 			continue
 		}

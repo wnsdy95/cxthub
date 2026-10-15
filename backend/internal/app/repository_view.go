@@ -15,12 +15,17 @@ func (s *Service) GetRepositoryView(ctx context.Context, repo domain.ContentHash
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return domain.RepositoryView{}, err
 	}
+	ctx, release, err := AcquireResources(ctx, ResourceInteractive)
+	if err != nil {
+		return domain.RepositoryView{}, err
+	}
+	defer release()
 	v, err := repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.RepositoryView, error) {
 		v, err := s.loadRepositoryView(ctx, repo)
 		if err != nil {
 			return v, err
 		}
-		graph, err := s.projectGraphState(ctx, v, "")
+		graph, err := s.cachedGraphState(ctx, repo, v, "")
 		if err != nil {
 			return domain.RepositoryView{}, err
 		}
@@ -105,6 +110,11 @@ func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (
 	if err := domain.ValidateContentHash(repo); err != nil {
 		return domain.PendingView{}, err
 	}
+	ctx, release, err := AcquireResources(ctx, ResourceInteractive)
+	if err != nil {
+		return domain.PendingView{}, err
+	}
+	defer release()
 	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (v domain.PendingView, err error) {
 		// Both endpoints classify the same coherent metadata generation. Only the
 		// pending target metadata is retransmitted; no documents are loaded.
@@ -112,7 +122,7 @@ func (s *Service) GetPendingView(ctx context.Context, repo domain.ContentHash) (
 		if err != nil {
 			return v, err
 		}
-		graph, err := s.projectGraphState(ctx, base, "")
+		graph, err := s.cachedGraphState(ctx, repo, base, "")
 		if err != nil {
 			return v, err
 		}

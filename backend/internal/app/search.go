@@ -21,7 +21,7 @@ const (
 )
 
 func (s *Service) Search(ctx context.Context, in inbound.SearchInput) (inbound.SearchOutput, error) {
-	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.SearchOutput, error) {
+	return resourceReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.SearchOutput, error) {
 		q := strings.ToLower(strings.TrimSpace(in.Query))
 		if len([]rune(q)) < 2 || len([]rune(q)) > 256 {
 			return inbound.SearchOutput{}, fmt.Errorf("%w: Search term must contain 2 to 256 characters", domain.ErrValidation)

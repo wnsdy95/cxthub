@@ -3,12 +3,98 @@ package capture
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
+
+func TestObserverCapturesEqualStatRolloverAfterPublicationAndRetries(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	cwd := stagingSourceRepo(t)
+	const sessionID = "11111111-1111-4111-8111-111111111111"
+	const instanceID = "22222222-2222-4222-8222-222222222222"
+	dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "09")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(dir, "rollout-2026-07-31T02-40-24-"+sessionID+".jsonl")
+	rotated := filepath.Join(dir, "rollout-2026-10-09T23-19-52-"+sessionID+"_"+instanceID+".jsonl")
+	modified := time.Now()
+	write := func(path, timestamp string) {
+		t.Helper()
+		header := fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":%q,\"timestamp\":%q}}\n", sessionID, cwd, timestamp)
+		if err := os.WriteFile(path, []byte(header), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		if err := TrackAppSession(cwd, domain.ProviderCodex, sessionID, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(original, "2026-07-31T02:40:24.464Z")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	captures, publications := 0, 0
+	err := observeSession(ctx, cwd, domain.ProviderCodex, sessionID, time.Millisecond, time.Minute, SessionWatch{
+		Poll: func(context.Context) error {
+			captures++
+			registered, ok := RegisteredSession(cwd, domain.ProviderCodex, sessionID)
+			wanted := rotated
+			if captures == 1 {
+				wanted = original
+			}
+			if !ok || registered.Path != wanted || captures > 3 {
+				t.Fatalf("capture %d selected %+v, want %q", captures, registered, wanted)
+			}
+			if captures == 2 {
+				return errors.New("retry rotated capture")
+			}
+			return nil
+		},
+		Publish: func(context.Context) error {
+			publications++
+			switch publications {
+			case 1:
+				write(rotated, "2026-10-09T23:19:52.995Z")
+				originalInfo, err := os.Stat(original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rotatedInfo, err := os.Stat(rotated)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if originalInfo.Size() != rotatedInfo.Size() || !originalInfo.ModTime().Equal(rotatedInfo.ModTime()) {
+					t.Fatal("rollover fixture must preserve size and mtime")
+				}
+				return errors.New("retry original publication")
+			case 2:
+				if captures != 1 {
+					t.Fatal("rollover capture interrupted pending publication")
+				}
+			case 3:
+				if captures != 3 {
+					t.Fatal("rotated capture was not retried")
+				}
+				EndAppSession(cwd, domain.ProviderCodex, sessionID)
+			default:
+				t.Fatal("unchanged rollover republished")
+			}
+			return nil
+		},
+	})
+	if err != nil || captures != 3 || publications != 3 {
+		t.Fatalf("captures=%d publications=%d err=%v", captures, publications, err)
+	}
+}
 
 func TestObserveSessionTracksOnlyRegisteredGrowthAndRetries(t *testing.T) {
 	for _, provider := range []domain.ProviderKind{domain.ProviderClaude, domain.ProviderCodex} {

@@ -27,6 +27,10 @@ func (a11UnavailableChunk) ReadConversationChunk(context.Context, domain.Content
 	return nil, a11TemporaryRead
 }
 
+func (a11UnavailableChunk) PrepareRootDocJob(context.Context, domain.DocFinalizationJob) (outbound.PreparedRootDocPublication, error) {
+	return nil, a11TemporaryRead
+}
+
 type a11BeforeCompletion struct {
 	*store.PostgresStore
 	before func() error
@@ -47,6 +51,26 @@ func (p a11PreparedCompletion) Complete(ctx context.Context, job domain.DocFinal
 		return err
 	}
 	return p.PreparedDocPublication.Complete(ctx, job, now)
+}
+
+type a11PreparedRootCompletion struct {
+	outbound.PreparedRootDocPublication
+	before func() error
+}
+
+func (s a11BeforeCompletion) PrepareRootDocJob(ctx context.Context, job domain.DocFinalizationJob) (outbound.PreparedRootDocPublication, error) {
+	plan, err := s.PostgresStore.PrepareRootDocJob(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	return a11PreparedRootCompletion{plan, s.before}, nil
+}
+
+func (p a11PreparedRootCompletion) Complete(ctx context.Context, job domain.DocFinalizationJob, now time.Time) error {
+	if err := p.before(); err != nil {
+		return err
+	}
+	return p.PreparedRootDocPublication.Complete(ctx, job, now)
 }
 
 func a11RootRepresentation(t *testing.T, text string) (domain.DocumentRepresentation, map[domain.ContentHash][]byte) {

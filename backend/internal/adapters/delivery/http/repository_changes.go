@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
@@ -103,6 +105,30 @@ func (h *repositoryChangeHub) run(ctx context.Context, repo domain.ContentHash, 
 	}
 }
 func (s *Server) pendingView(w http.ResponseWriter, r *http.Request) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(query["projection"]) > 1 {
+		s.respond(w, nil, domain.ErrValidation)
+		return
+	}
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
+	if !ok {
+		return
+	}
+	defer release()
+	if projection := query.Get("projection"); projection != "" {
+		if projection != "on-hold-v1" {
+			s.respond(w, nil, domain.ErrValidation)
+			return
+		}
+		query, ok := s.b.(inbound.PendingStateQuery)
+		if !ok {
+			s.writeError(w, http.StatusNotImplemented, "pending_projection_unavailable", "On Hold projection unavailable")
+			return
+		}
+		view, err := query.GetPendingState(r.Context(), s.repoID(r))
+		s.respond(w, view, err)
+		return
+	}
 	v, err := s.b.GetPendingView(r.Context(), s.repoID(r))
 	if err != nil {
 		s.respond(w, nil, err)

@@ -179,7 +179,7 @@ func (h *Handler) run(ctx context.Context, provider domain.ProviderKind, event s
 		// retry using the retained on-disk liveness pointer.
 		captured, err := h.coord.RequestCapture(ctx, provider, cwd, path, p.SessionID, false, true)
 		if err == nil {
-			capture.EndAppSession(cwd, provider, p.SessionID)
+			capture.EndAppSession(cwd, provider, p.SessionID, path)
 		}
 		if captured {
 			spawnPendingSync(cwd)

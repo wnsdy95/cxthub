@@ -101,6 +101,11 @@ func (s *Service) DeliverPRPromotion(ctx context.Context, repo domain.ContentHas
 	if err != nil {
 		return inbound.UpdateRefOutput{}, err
 	}
+	ctx, release, err := AcquireResources(ctx, ResourceBulk)
+	if err != nil {
+		return inbound.UpdateRefOutput{}, err
+	}
+	defer release()
 	if j.State == "completed" {
 		return s.promoteBoundPR(ctx, repo, pr, j.BaseBranchID)
 	}
@@ -240,16 +245,19 @@ func (s *Service) ProcessPRPromotions(ctx context.Context, limit int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		j, err := st.ClaimPRJob(ctx, "", "", time.Now().UTC(), prJobLease)
+		err := admittedJob(ctx, func(bound context.Context) (domain.PRPromotionJob, error) {
+			return st.ClaimPRJob(bound, "", "", time.Now().UTC(), prJobLease)
+		}, func(bound context.Context, job domain.PRPromotionJob) error {
+			if _, err := s.runPRJob(bound, job); err != nil {
+				log.Printf("PR promotion %s attempt %d deferred: %v", job.ID, job.Attempts, err)
+			}
+			return nil
+		})
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
-		}
-		_, err = s.runPRJob(ctx, j)
-		if err != nil {
-			log.Printf("PR promotion %s attempt %d deferred: %v", j.ID, j.Attempts, err)
 		}
 	}
 	return nil

@@ -186,11 +186,12 @@ func TestPGHistoryDocumentPreparationConcurrentAcceptanceWinsFailure(t *testing.
 	}
 	defer peer.Close()
 	other := NewService(peer, peer, svc.auth, svc.engine, peer)
+	otherProcessContext := context.WithValue(systemTestContext(), resourceAdmissionKey{}, &resourceAdmission{wait: resourceWaitLimit})
 	probe.afterVerify = func(ctx context.Context) error {
 		if !probe.InReadOnlyTransaction(ctx) {
 			return errors.New("preparation still holds the write transaction")
 		}
-		if err := other.RecordHistory(systemTestContext(), event); err != nil {
+		if err := other.RecordHistory(otherProcessContext, event); err != nil {
 			return err
 		}
 		return domain.ErrIntegrity // Redundant preparation failed after acceptance.

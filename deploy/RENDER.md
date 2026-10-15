@@ -65,6 +65,16 @@ large-document rehearsal exceeded 512 MB; validate actual uploads, cold reads,
 OAuth and database restore under the smaller limits before accepting customers.
 Do not silently upgrade a service when a test fails.
 
+The API and MCP Docker images default to `GOMEMLIMIT=400MiB`. This is a Go
+runtime soft target, leaving part of a 512 MiB container for memory outside the
+Go heap; it is not a hard per-request limit or an OOM guarantee. Keep this default
+for the initial tier. A Render environment override takes precedence and must be
+revalidated with that service's actual workload. Do not set it to `off` merely
+because the platform already has a container limit: the local 310 MiB mixed-load
+negative control still OOM-killed without the soft target, even after streaming
+publication was implemented. The bounded-read, publication and load-test contract
+is documented in [Conversation range reads](../docs/DOCUMENT_RANGE_READS.md).
+
 Keep the source database and its verified backup intact. Restore a fresh,
 consistent dump to the new cloud database before starting application writers.
 Verify migrations, record counts and document/memory/parent references before

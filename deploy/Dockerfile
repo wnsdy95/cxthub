@@ -13,6 +13,7 @@ COPY --from=build /out/cxtd /app/cxtd
 COPY schemas/db/migrations/ /app/migrations/
 ENV CXT_MIGRATIONS_DIR=/app/migrations
 ENV CXT_REQUIRE_POSTGRES=1
+ENV GOMEMLIMIT=400MiB
 USER nonroot:nonroot
 EXPOSE 8907
 # Production required env vars are injected by terraform (cloudrun.tf): CXT_AUTH/CXT_POSTGRES_DSN/…

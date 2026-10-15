@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,7 @@ func TestP9IdentityAdminFencesBeforeEffects(t *testing.T) {
 type p9ReadBoundaryKey struct{}
 type p9AggregateStore struct {
 	outbound.MetadataStore
+	outbound.HistoryStore
 	repos []domain.Repo
 	calls int
 }
@@ -184,12 +186,12 @@ func (s *p9AggregateStore) ListRepos(ctx context.Context, _ string) ([]domain.Re
 	}
 	return s.repos, nil
 }
-func (s *p9AggregateStore) ListSnapshots(ctx context.Context, id domain.ContentHash, _ string) ([]domain.Snapshot, error) {
+func (s *p9AggregateStore) ListHistoryEvents(ctx context.Context, id domain.ContentHash) ([]domain.HistoryEvent, error) {
 	if ctx.Value(p9ReadBoundaryKey{}) != true || id != s.repos[0].ID {
 		panic("unsupported or unpinned payload")
 	}
 	s.calls++
-	return []domain.Snapshot{{CreatedAt: time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)}}, nil
+	return []domain.HistoryEvent{{ID: strings.Repeat("1", 32), RepoID: string(id), Branch: "main", BranchID: "main", Kind: "publish", Source: hh("snapshot"), Target: hh("snapshot"), GitAfter: strings.Repeat("a", 40), CreatedAt: time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)}}, nil
 }
 func TestP9CoherentDiscoveryAggregates(t *testing.T) {
 	st := &p9AggregateStore{repos: []domain.Repo{{ID: hh("legacy"), RepositoryID: "legacy"}, {ID: hh("root"), RepositoryID: "root", RequiredDocIdentity: domain.DocumentIdentityRootV1}}}

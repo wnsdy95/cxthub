@@ -179,7 +179,8 @@ image_smoke() (
 
   local kind image internal name missing port status api_port mcp_port
   for kind in api mcp; do
-    if [ "$kind" = api ]; then image=cxtd:preflight; internal=8907; else image=cxt-mcp:preflight; internal=8908; fi
+    if [ "$kind" = api ]; then image="${CXT_PREFLIGHT_API_IMAGE:-cxtd:preflight}"; internal=8907; else image="${CXT_PREFLIGHT_MCP_IMAGE:-cxt-mcp:preflight}"; internal=8908; fi
+    docker image inspect "$image" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -qx 'GOMEMLIMIT=400MiB' || die "$kind Go soft memory target is missing or changed; rerun the constrained-load gate before changing it"
     name="${prefix}-${kind}"; missing="${prefix}-missing-${kind}"
     docker run -d --name "$missing" \
       -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \

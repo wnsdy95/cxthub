@@ -714,6 +714,22 @@ components:
         revision: { $ref: '#/components/schemas/RepositoryRevision' }
         pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
         snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+    PendingStateView:
+      type: object
+      additionalProperties: false
+      description: Lightweight On Hold classification from a coherent metadata revision. Uses the same publication/reachability rules as the full graph but contains no branch-integration graph, document bodies or code-evidence projection. Must never replace or patch RepositoryView.graph.
+      required: [projection, revision, default_branch, refs, pending, snapshots, archived_sessions, hold, orphan_sessions, hold_counts]
+      properties:
+        projection: { type: string, enum: [on-hold-v1] }
+        revision: { $ref: '#/components/schemas/RepositoryRevision' }
+        default_branch: { type: string }
+        refs: { type: array, items: { $ref: '#/components/schemas/Ref' } }
+        pending: { type: array, items: { $ref: '#/components/schemas/Pending' } }
+        snapshots: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+        archived_sessions: { type: array, items: { $ref: '#/components/schemas/SessionArchiveView' } }
+        hold: { type: array, items: { $ref: '#/components/schemas/GraphHoldCluster' } }
+        orphan_sessions: { type: array, items: { type: string } }
+        hold_counts: { type: object, additionalProperties: { type: integer, minimum: 0 } }
     SessionOrigin:
       type: object
       required: [main_branch]
@@ -1405,6 +1421,32 @@ components:
         offset: { type: integer, minimum: 0 }
         next: { type: integer, minimum: -1, description: "Next event offset; -1 means exhausted." }
         inherited: { type: integer, minimum: 0, description: "Exact shared event prefix with base." }
+
+    DocViewPage:
+      allOf:
+        - $ref: "#/components/schemas/DocEventPage"
+        - type: object
+          properties:
+            events:
+              type: array
+              items:
+                type: object
+                required: [event_index, event_bytes, kind]
+                properties:
+                  event_index: { type: integer, minimum: 0, description: "Absolute ordinal in the original archive." }
+                  event_bytes: { type: integer, minimum: 1 }
+                  deferred: { type: boolean, description: "Only presentation metadata is present; load the body explicitly on expansion." }
+                  kind: { type: string }
+
+    DocViewFragment:
+      type: object
+      required: [event_index, byte_offset, next, total_bytes, json_fragment]
+      properties:
+        event_index: { type: integer, minimum: 0 }
+        byte_offset: { type: integer, minimum: 0 }
+        next: { type: integer, minimum: -1, description: "Next UTF-8 byte offset; -1 means exhausted." }
+        total_bytes: { type: integer, minimum: 1 }
+        json_fragment: { type: string, description: "Unmodified UTF-8 slice of one canonical event. Concatenate all slices before JSON decoding." }
 
     AgentHistoryTurn:
       type: object
@@ -3375,20 +3417,29 @@ paths:
         in: query
         description: Optional compact branch timeline encoding; old clients receive indexed-v1.
         schema: { type: string, enum: [indexed-v1, indexed-v2], default: indexed-v1 }
+      - name: projection
+        in: query
+        description: Opt into the independent On Hold projection without a complete graph. Omission preserves the full PendingView contract. Repeated or unknown values are invalid.
+        schema: { type: string, enum: [on-hold-v1] }
     get:
       operationId: getPendingView
       summary: Read pending pointers and their target snapshot metadata
-      description: Requires viewer access. Returns unique current capture targets without traversing historical ancestors. Clients refresh the complete repository view when the graph revision differs or a new target references an unknown parent.
+      description: Requires viewer access. By default returns the full PendingView contract. projection=on-hold-v1 computes only pending/held-session classification from coherent repository metadata, without building branch integrations or loading conversation bodies. Its explicitly partial DTO has no graph field and uses a separate client cache. Publication rules are shared with the full graph, not reimplemented in the browser.
       tags: [snapshots]
       responses:
         "200":
           description: Committed repository state
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PendingView' }
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PendingView'
+                  - $ref: '#/components/schemas/PendingStateView'
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+        "422": { description: Invalid projection or query. }
+        "503": { description: Shared resource queue saturated; retry after the indicated interval. }
 
   /repos/{repoID}/changes:
     parameters:
@@ -3945,22 +3996,64 @@ paths:
       - $ref: "#/components/parameters/docHash"
     get:
       operationId: getDocEvents
-      summary: Read verified conversation events without restoring the whole document
+      summary: Read conversation events or a bounded presentation page
+      description: |
+        Without view, retain the strict audit contract: root documents verify all current
+        dependencies on every request. With view, use a separately published verified
+        range index: validate repository ownership, the root descriptor, index pages,
+        and selected chunk hashes without auditing unrelated chunks. Publication fully
+        validates the document before committing the projection. A missing projection
+        on an older root is built through a bounded-admission full verification; damaged
+        projections fail closed rather than silently being trusted or replaced.
+        View pages retain absolute event ordinals and return metadata placeholders for
+        hidden bodies. Root prefix comparison uses verified index blocks, not bodies.
+        Legacy documents retain their existing verified read-index compatibility path.
       tags: [docs]
       parameters:
         - { in: query, name: offset, schema: { type: integer, minimum: -1, default: -1 }, description: "-1 starts after the inherited prefix." }
-        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100 }, description: "Without view, defaults to 50 raw events. With view, defaults to 20 visible messages (20 rows in all/raw)." }
+        - { in: query, name: view, schema: { type: string, enum: [all, chat, prompts, raw] }, description: "Opt into verified range reads. chat counts messages; prompts counts non-compacted user messages. all defers tool/reasoning bodies; raw loads one selected event unless oversized." }
         - { in: query, name: base, schema: { $ref: "#/components/schemas/ContentHash" }, description: "Optional parent document owned by the same repository." }
       responses:
         "200":
-          description: "At most limit events and 512 KiB of event bytes, except that one oversized event is returned intact. Archive content is never truncated."
+          description: "Without view: at most limit events and 512 KiB, with an oversized first event intact. With view: at most limit visible items, 512 traversed events and a 128 KiB soft payload budget; oversized bodies are deferred to event-fragments. next always advances through original ordinals. Archive content is never truncated."
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/DocEventPage" }
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/DocEventPage"
+                  - $ref: "#/components/schemas/DocViewPage"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { description: "Invalid event range or hash." }
+        "503": { description: "Projection unavailable or shared resource queue saturated. Retry later; no document was modified." }
+
+  /repos/{repoID}/docs/{hash}/event-fragments:
+    parameters:
+      - $ref: "#/components/parameters/repoID"
+      - $ref: "#/components/parameters/DocIdentities"
+      - $ref: "#/components/parameters/docHash"
+    get:
+      operationId: getDocEventFragment
+      summary: Load a deferred event body in bounded UTF-8 fragments
+      description: "Uses the same viewer authorization and verified range index as view pages. Reads and hash-verifies only selected root chunks. A fragment is not standalone JSON."
+      tags: [docs]
+      parameters:
+        - { in: query, name: index, required: true, schema: { type: integer, minimum: 0 } }
+        - { in: query, name: offset, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: budget, schema: { type: integer, minimum: 4, maximum: 65536, default: 65536 } }
+      responses:
+        "200":
+          description: "At most budget original UTF-8 bytes; next=-1 when the event is complete."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocViewFragment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "Invalid event index, byte offset, budget or hash." }
+        "503": { description: "Projection unavailable or shared resource queue saturated." }
 
   /repos/{repoID}/docs/{hash}/turns:
     parameters:

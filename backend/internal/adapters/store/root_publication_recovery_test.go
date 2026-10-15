@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -23,10 +22,8 @@ func TestRootFSPublicationInterruptedAfterManifest(t *testing.T) {
 			st := NewFSStore(t.TempDir())
 			fixture := rootFixture(t, "interrupted root publication")
 			claim, proof := rootPublicationClaimFS(t, st, fixture)
-			// A non-directory index parent deterministically fails after the root
-			// file is installed, before the completed receipt can be persisted.
-			blocked := filepath.Dir(st.readIndexPath(claim.RepoID, fixture.hash))
-			if err := os.WriteFile(blocked, []byte("injected index failure"), 0600); err != nil {
+			blocked := st.rangeIndexPath(claim.RepoID, fixture.hash)
+			if err := os.MkdirAll(blocked, 0700); err != nil {
 				t.Fatal(err)
 			}
 			if err := st.CompleteDocJob(ctx, claim, proof, time.Now()); err == nil {

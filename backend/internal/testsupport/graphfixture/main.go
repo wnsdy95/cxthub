@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,6 +32,16 @@ func main() {
 		return
 	}
 	v := input.View
+	if input.Mode == "pending-state" {
+		pending, err := domain.ProjectPendingState(context.Background(), v)
+		if err != nil {
+			fail(err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(pending); err != nil {
+			fail(err)
+		}
+		return
+	}
 	v.Semantics = domain.ProjectContextSemantics(v.Snapshots, v.History)
 	if input.Mode == "semantics" {
 		if err := json.NewEncoder(os.Stdout).Encode(v); err != nil {

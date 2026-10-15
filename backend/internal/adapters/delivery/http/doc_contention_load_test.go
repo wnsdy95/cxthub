@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,6 +89,7 @@ func TestPostgresDocPublicationContention(t *testing.T) {
 	base := server.URL + "/api/v1/repos/" + string(repo.ID)
 	client := &http.Client{Timeout: 30 * time.Second}
 	defer client.CloseIdleConnections()
+	var admissionRetries atomic.Int64
 	// Return errors rather than Fatal from request goroutines. Read every body,
 	// and reject oversized/truncated/non-JSON successful responses as failures.
 	requestBounded := func(method, path string, body, out any, status, maxBytes int) (int, error) {
@@ -99,30 +101,50 @@ func TestPostgresDocPublicationContention(t *testing.T) {
 				return 0, e
 			}
 		}
-		req, e := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(raw))
-		if e != nil {
-			return 0, e
+		for attempt := 0; ; attempt++ {
+			req, requestErr := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(raw))
+			if requestErr != nil {
+				return 0, requestErr
+			}
+			req.Header.Set("Authorization", "Bearer "+session.Token)
+			if body != nil {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			resp, requestErr := client.Do(req)
+			if requestErr != nil {
+				return 0, requestErr
+			}
+			data, readErr := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
+			resp.Body.Close()
+			if readErr != nil {
+				return 0, readErr
+			}
+			if len(data) > maxBytes || !json.Valid(data) {
+				return len(data), fmt.Errorf("%s %s: invalid response status=%d bytes=%d", method, path, resp.StatusCode, len(data))
+			}
+			var failure struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if method == http.MethodGet && status == http.StatusOK && resp.StatusCode == http.StatusServiceUnavailable &&
+				resp.Header.Get("Retry-After") == "1" && json.Unmarshal(data, &failure) == nil && failure.Error.Code == "resource_overloaded" && attempt < 8 {
+				admissionRetries.Add(1)
+				select {
+				case <-ctx.Done():
+					return 0, ctx.Err()
+				case <-time.After(time.Second):
+					continue
+				}
+			}
+			if resp.StatusCode != status {
+				return len(data), fmt.Errorf("%s %s: status=%d bytes=%d expected=%d attempts=%d", method, path, resp.StatusCode, len(data), status, attempt+1)
+			}
+			if out != nil {
+				return len(data), json.Unmarshal(data, out)
+			}
+			return len(data), nil
 		}
-		req.Header.Set("Authorization", "Bearer "+session.Token)
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		resp, e := client.Do(req)
-		if e != nil {
-			return 0, e
-		}
-		defer resp.Body.Close()
-		data, e := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
-		if e != nil {
-			return 0, e
-		}
-		if resp.StatusCode != status || len(data) > maxBytes || !json.Valid(data) {
-			return len(data), fmt.Errorf("%s %s: status=%d bytes=%d expected=%d", method, path, resp.StatusCode, len(data), status)
-		}
-		if out != nil {
-			e = json.Unmarshal(data, out)
-		}
-		return len(data), e
 	}
 	request := func(method, path string, body, out any, status int) (int, error) {
 		return requestBounded(method, path, body, out, status, 1<<20)
@@ -340,5 +362,5 @@ func TestPostgresDocPublicationContention(t *testing.T) {
 	if len(expectedNames) != 0 {
 		t.Fatal("missing written refs")
 	}
-	t.Logf("contention fixture canonical_bytes=%d upload_json_bytes=%d download_json_bytes=%d chunks=%d events=1024 worker=%s publication_boundary=%s; hash/page/receipt/snapshot/ref-count verified", canonicalBytes, uploadJSONBytes, downloadJSONBytes, len(plan.Order), workerEnd.Sub(workerStart), observed.publicationEnd.Sub(observed.publicationStart))
+	t.Logf("contention fixture canonical_bytes=%d upload_json_bytes=%d download_json_bytes=%d chunks=%d events=1024 worker=%s publication_boundary=%s admission_retries=%d; hash/page/receipt/snapshot/ref-count verified", canonicalBytes, uploadJSONBytes, downloadJSONBytes, len(plan.Order), workerEnd.Sub(workerStart), observed.publicationEnd.Sub(observed.publicationStart), admissionRetries.Load())
 }

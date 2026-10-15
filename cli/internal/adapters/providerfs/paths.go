@@ -54,7 +54,19 @@ func ValidSessionID(value string) bool { return domain.ValidSessionID(value) }
 func SessionIDFromPath(value string) string {
 	base := filepath.Base(value)
 	base = strings.TrimSuffix(base, ".superseded")
+	if !strings.HasSuffix(base, ".jsonl") {
+		return ""
+	}
 	base = strings.TrimSuffix(base, ".jsonl")
+	if strings.HasPrefix(base, "rollout-") {
+		stem, generation, suffixed := strings.Cut(base, "_")
+		if suffixed {
+			if !ValidSessionID(generation) {
+				return ""
+			}
+			base = stem
+		}
+	}
 	if len(base) < 36 {
 		return ""
 	}
@@ -63,6 +75,19 @@ func SessionIDFromPath(value string) string {
 		return ""
 	}
 	return candidate
+}
+
+func CodexRolloutGeneration(value string) string {
+	base := filepath.Base(value)
+	if !strings.HasPrefix(base, "rollout-") || SessionIDFromPath(value) == "" {
+		return ""
+	}
+	base = strings.TrimSuffix(strings.TrimSuffix(base, ".superseded"), ".jsonl")
+	_, generation, suffixed := strings.Cut(base, "_")
+	if suffixed && ValidSessionID(generation) {
+		return generation
+	}
+	return ""
 }
 
 // IsProviderSessionPath reports whether value stays inside a resolved Claude

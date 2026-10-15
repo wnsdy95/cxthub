@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -539,16 +541,49 @@ func retireOwnedProviderSession(ctx context.Context, cwd string, provider domain
 		return
 	}
 	var paths []string
-	if provider == domain.ProviderClaude {
+	switch provider {
+	case domain.ProviderClaude:
 		paths = claudeSessionFiles(cwd)
-	} else {
+	case domain.ProviderCodex:
 		paths = codexSessionFiles(ctx, cwd)
+	default:
+		return
 	}
 	for _, path := range paths {
-		if providerfs.SessionIDFromPath(path) == sessionID {
-			boundary.Supersede(cwd, path)
+		if providerfs.SessionIDFromPath(path) != sessionID {
+			continue
 		}
+		if provider == domain.ProviderCodex && !validCodexRetirementTarget(cwd, sessionID, path) {
+			continue
+		}
+		boundary.Supersede(cwd, path)
 	}
+}
+
+func validCodexRetirementTarget(cwd, sessionID, path string) bool {
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return false
+	}
+	file, err := providerfs.OpenRegularFile(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(io.LimitReader(file, 1<<20))
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	if !scanner.Scan() {
+		return false
+	}
+	var header struct {
+		Type    string `json:"type"`
+		Payload struct {
+			ID  string `json:"id"`
+			Cwd string `json:"cwd"`
+		} `json:"payload"`
+	}
+	return json.Unmarshal(scanner.Bytes(), &header) == nil && header.Type == "session_meta" &&
+		strings.EqualFold(header.Payload.ID, sessionID) && header.Payload.Cwd == abs
 }
 
 var errProviderCleanup = errors.New("provider runtime cleanup failed")

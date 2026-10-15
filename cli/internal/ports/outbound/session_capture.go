@@ -15,3 +15,11 @@ type SessionCapture interface {
 	Settings(root, kind string) (domain.SettingsBundle, bool)
 	RecordAffinity(root string, provider domain.ProviderKind, sessionID string)
 }
+
+type CurrentSessionSource interface {
+	ValidateCurrentSession(context.Context, string) error
+}
+
+type ValidatedPendingStore interface {
+	ReplacePendingValidated(context.Context, domain.Pending, func() error) (domain.ContentHash, error)
+}

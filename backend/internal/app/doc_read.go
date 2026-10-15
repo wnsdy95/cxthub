@@ -29,7 +29,7 @@ func (s *Service) legacyDocReadIndex(ctx context.Context, repo, hash domain.Cont
 // ReadDocEvents reads a bounded window from verified chunks. A base hash only
 // selects the exact inherited prefix; it never rewrites or truncates the archive.
 func (s *Service) ReadDocEvents(ctx context.Context, repo, hash, base domain.ContentHash, offset, limit int) (domain.DocEventPage, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.DocEventPage, error) {
+	return resourceReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.DocEventPage, error) {
 		out := domain.DocEventPage{Hash: hash, Next: -1, Events: []domain.CIREvent{}}
 		if offset < -1 || limit < 0 || limit > 100 {
 			return out, fmt.Errorf("%w: invalid event range", domain.ErrValidation)
@@ -104,7 +104,7 @@ func (s *Service) ReadDocEvents(ctx context.Context, repo, hash, base domain.Con
 }
 
 func (s *Service) SearchDocEvents(ctx context.Context, repo, hash domain.ContentHash, q string, after, limit int) ([]domain.DocEventIndex, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) ([]domain.DocEventIndex, error) {
+	return resourceReadForRepo(ctx, s, repo, func(ctx context.Context) ([]domain.DocEventIndex, error) {
 		q = strings.ToLower(strings.TrimSpace(q))
 		if len([]rune(q)) < 2 || len([]rune(q)) > 256 || after < -1 || limit < 1 || limit > 201 {
 			return nil, fmt.Errorf("%w: invalid event search", domain.ErrValidation)
@@ -147,7 +147,7 @@ func searchReadIndex(ctx context.Context, idx domain.DocReadIndex, q string, aft
 // non-nil set excludes legacy indexed documents only; roots still require their
 // explicit current-byte reader before searching the verified projection.
 func (s *Service) MatchingDocHashes(ctx context.Context, repo domain.ContentHash, q string) (map[domain.ContentHash]bool, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (map[domain.ContentHash]bool, error) {
+	return resourceReadForRepo(ctx, s, repo, func(ctx context.Context) (map[domain.ContentHash]bool, error) {
 		if indexed, ok := s.blobs.(interface {
 			MatchingDocHashes(context.Context, domain.ContentHash, string) (map[domain.ContentHash]bool, error)
 		}); ok {
@@ -206,7 +206,7 @@ func (s *Service) eventRangeReader(ctx context.Context, repo, hash domain.Conten
 // indexes use bounded chunk ranges. Roots first verify the whole current source,
 // then return ranges from those owned bytes, preserving UTF-8 and exact JSON.
 func (s *Service) ReadDocFragments(ctx context.Context, repo, hash domain.ContentHash, index, offset, limit, budget int) (domain.DocFragmentPage, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.DocFragmentPage, error) {
+	return resourceReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.DocFragmentPage, error) {
 		out := domain.DocFragmentPage{Fragments: []domain.DocEventFragment{}}
 		if index < 0 || offset < 0 || limit < 1 || limit > 50 || budget < 4 || budget > 64<<10 {
 			return out, domain.ErrValidation
