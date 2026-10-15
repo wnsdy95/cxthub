@@ -5,7 +5,7 @@ import { graphViewRows } from './graphState';
 // Tokens are stored in HttpOnly cookies, which JS cannot read, so cookie validity is determined by the single judge, the `me` query on the server.
 import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from './api';
+import { api, ApiError } from './api';
 import { isRetryableGraphRefreshError } from './graphRefresh';
 import { useRepositoryUpdates } from './useRepositoryUpdates';
 import type { DocViewMode, User } from './types';
@@ -481,7 +481,8 @@ export function useRepoView(repoId: string | null, _primaryBranch?: string) {
   const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>api.repositoryView(repoId!,signal),retry:false,
     enabled:Boolean(repoId),refetchOnWindowFocus:false});
   const retryable = isRetryableGraphRefreshError(viewQuery.error);
-  const view = viewQuery.error && !retryable ? undefined : viewQuery.data;
+  const inaccessible = viewQuery.error instanceof ApiError && [401, 403, 404].includes(viewQuery.error.status);
+  const view = inaccessible ? undefined : viewQuery.data;
   const stale = Boolean(view && viewQuery.error && retryable);
   const rows = useMemo(()=>graphViewRows(view),[view]);
   const pendingRows = useMemo(()=>pendingStateRows(view,pendingQuery.data),[view,pendingQuery.data]);

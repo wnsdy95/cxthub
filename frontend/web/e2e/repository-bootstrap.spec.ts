@@ -261,8 +261,10 @@ for (const status of [401, 403]) test(`revision ${status} does not trigger fallb
 });
 
 const overloaded = { status: 503, body: { error: { code: 'resource_overloaded', message: 'Graph worker is busy' } } };
-const refreshWarning = (page: Page) => page.locator('.graph-wrap > [role="status"]').filter({ hasText: /Refresh failed|새로고침에 실패/ });
-const graphFailure = (page: Page) => page.locator('.graph-wrap > [role="alert"]').filter({ hasText: /Could not load the complete graph|그래프 전체를 불러오지/ });
+const refreshWarning = (page: Page) => page.locator('.graph-wrap > [role="status"]').filter({ hasText: en.graph.refreshFailed })
+  .or(page.locator('.graph-wrap > [role="status"]').filter({ hasText: ko.graph.refreshFailed }));
+const graphFailure = (page: Page) => page.locator('.graph-wrap > [role="alert"]').filter({ hasText: en.graph.loadFailed })
+  .or(page.locator('.graph-wrap > [role="alert"]').filter({ hasText: ko.graph.loadFailed }));
 const refreshRepository = (page: Page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 
 function nextGraph() {
