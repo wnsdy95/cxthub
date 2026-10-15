@@ -33,10 +33,22 @@ export interface OAuthConsentRequest {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly code: string, public readonly status: number) { super(message); }
+  constructor(message: string, public readonly code: string, public readonly status: number, public readonly retryAfterMs?: number) { super(message); }
 }
 
 export class ApiTransportError extends Error {}
+
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value?.trim()) return undefined;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const delay = Number(trimmed) * 1000;
+    return Number.isSafeInteger(delay) ? delay : undefined;
+  }
+  if (!/^[A-Za-z]{3}, /.test(trimmed)) return undefined;
+  const timestamp = Date.parse(trimmed);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now) : undefined;
+}
 
 async function readTransport<T>(read: () => Promise<T>): Promise<T> {
   try { return await read(); }
@@ -69,7 +81,7 @@ async function call<T>(method: string, path: string, body?: unknown, idpToken?: 
     } catch {
       /* non-JSON error body */
     }
-    throw new ApiError(detail, code, res.status);
+    throw new ApiError(detail, code, res.status, parseRetryAfter(res.headers.get('Retry-After')));
   }
   const text = maxBytes === undefined ? await readTransport(() => res.text()) : await readDocumentResponse(res, maxBytes);
   return (text ? JSON.parse(text) : null) as T;

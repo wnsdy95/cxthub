@@ -366,3 +366,15 @@ They do not remove cold projection cost or promise that a cold read can execute
 while another bulk operation occupies the memory budget. Production verification
 must distinguish response-header time from transfer time and use the browser's
 gzip negotiation; a successful health check alone does not verify graph loading.
+
+Read-only graph, pending, document page and expanded-event queries automatically
+retry only an explicit `503 resource_overloaded` response, at most four times.
+They use 1/2/4/8-second exponential backoff with up to 250 ms jitter and honor
+`Retry-After` when it asks for a longer delay. A server hint over ten seconds is
+left to explicit user retry instead of creating an extended automatic wait.
+Configured cross-origin browsers can read this response header; no new origin
+or credential permission is granted. Query cancellation stops delayed retries
+after navigation. Mutations, authentication, authorization, integrity, malformed
+responses and untyped gateway failures are not automatically replayed. Persistent
+capacity exhaustion still shows the final error or stale-graph warning; bounded
+recovery is not a claim that cold generation or capacity limits have disappeared.
