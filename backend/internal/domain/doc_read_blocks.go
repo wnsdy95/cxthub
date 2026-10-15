@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // ReadIndexBlockEvents bounds repeated location writes for a growing capture.
 // These are derived index blocks, independent of archival byte-chunk boundaries.
@@ -34,7 +37,7 @@ func (p DocReadPlan) Blocks() []DocReadBlock {
 			index.Events[i].Offset -= events[0].Offset
 		}
 		blocks = append(blocks, DocReadBlock{Hash: HashContent([]byte(key.String())), FirstEvent: start, Offset: events[0].Offset, Count: end - start,
-			plan: DocReadPlan{index: index, stream: p.stream, bodies: p.bodies[start:end]}})
+			plan: DocReadPlan{index: index, stream: p.stream, source: p.source, bodies: p.bodies[start:end], sequencesKnown: p.sequencesKnown}})
 	}
 	return blocks
 }
@@ -47,5 +50,13 @@ func (p DocReadPlan) Envelope() CIREnvelope {
 func (p DocReadPlan) EventCount() int             { return len(p.index.Events) }
 func (b DocReadBlock) EventHashes() []ContentHash { return b.plan.EventHashes() }
 func (b DocReadBlock) Build(known map[ContentHash]bool) (DocReadIndex, error) {
-	return b.plan.Build(known)
+	return b.BuildContext(context.Background(), known)
+}
+
+func (b DocReadBlock) BuildContext(ctx context.Context, known map[ContentHash]bool) (DocReadIndex, error) {
+	return b.plan.BuildContext(ctx, known)
+}
+
+func (b DocReadBlock) VisitContext(ctx context.Context, known map[ContentHash]bool, visit func(DocEventIndex) error) error {
+	return b.plan.visit(ctx, known, false, visit)
 }

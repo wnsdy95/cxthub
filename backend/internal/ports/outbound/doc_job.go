@@ -39,3 +39,11 @@ type PreparedRootDocPublication interface {
 	PreparedDocPublication
 	Close() error
 }
+
+type StreamingLegacyJobStore interface {
+	PrepareLegacyDocJob(context.Context, domain.DocFinalizationJob) (PreparedRootDocPublication, error)
+}
+
+type StagedDocPublication interface {
+	Stage(context.Context, domain.DocFinalizationJob, time.Duration) error
+}

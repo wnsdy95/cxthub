@@ -9,6 +9,11 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
+const (
+	ownedDocChunkBytesPG    = 2 * domain.MaxLegacyStreamEventBytes
+	ownedDocPrefetchBytesPG = 8 << 20
+)
+
 // Ownership is checked through the caller's transaction for documents and
 // chunks alike, even when a disposable physical proof is already cached.
 func (s *PostgresStore) readOwnedDocObject(ctx context.Context, repo domain.ContentHash, kind string, hash domain.ContentHash) ([]byte, error) {
@@ -19,6 +24,22 @@ func (s *PostgresStore) readOwnedDocObject(ctx context.Context, repo domain.Cont
 		return nil, err
 	}
 	var raw []byte
+	if kind == "chunk" {
+		var size int
+		if err := s.db(ctx).QueryRow(ctx, `SELECT octet_length(b.bytes),
+ CASE WHEN octet_length(b.bytes)<=$4 THEN substring(b.bytes FROM 1 FOR $4) END
+ FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
+ WHERE rb.repo_id=$1 AND rb.kind=$2 AND rb.hash=$3`, string(repo), kind, string(hash), ownedDocChunkBytesPG).Scan(&size, &raw); err != nil {
+			return nil, mapNoRows(err)
+		}
+		if size > ownedDocChunkBytesPG {
+			return nil, domain.ErrDocumentResourceLimit
+		}
+		if len(raw) != size {
+			return nil, domain.ErrIntegrity
+		}
+		return raw, ctx.Err()
+	}
 	if err := s.db(ctx).QueryRow(ctx, `SELECT b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
  WHERE rb.repo_id=$1 AND rb.kind=$2 AND rb.hash=$3`, string(repo), kind, string(hash)).Scan(&raw); err != nil {
 		return nil, mapNoRows(err)
@@ -132,41 +153,75 @@ func (s *PostgresStore) ownedDocChunkReader(repo domain.ContentHash, chunks []do
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if err := validateHashes(repo, hash); err != nil {
+			return nil, err
+		}
 		if body, found := window[hash]; found {
 			delete(window, hash)
 			return body, nil
 		}
+		window = nil
 		start, found := positions[hash]
 		if !found {
 			return one(ctx, hash)
 		}
-		const batchSize = 16
-		wanted := order[start:min(start+batchSize, len(order))]
-		rows, err := s.db(ctx).Query(ctx, `SELECT rb.hash,b.bytes FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
- WHERE rb.repo_id=$1 AND rb.kind='chunk' AND rb.hash=ANY($2::text[])`, string(repo), wanted)
+		wanted := order[start:]
+		rows, err := s.db(ctx).Query(ctx, `WITH sizes AS MATERIALIZED (
+ SELECT wanted.hash,wanted.ordinal,octet_length(b.bytes) AS size
+ FROM unnest($2::text[]) WITH ORDINALITY AS wanted(hash,ordinal)
+ LEFT JOIN repo_blobs rb ON rb.repo_id=$1 AND rb.kind='chunk' AND rb.hash=wanted.hash
+ LEFT JOIN blobs b ON b.hash=rb.hash
+), selected AS MATERIALIZED (
+ SELECT hash,ordinal,size FROM (
+  SELECT sizes.*,sum(COALESCE(size,0)) OVER (ORDER BY ordinal) AS total_bytes FROM sizes
+ ) budgeted WHERE ordinal=1 OR total_bytes<=$4
+)
+SELECT selected.hash,selected.size,
+ CASE WHEN selected.size<=$3 THEN substring(b.bytes FROM 1 FOR $3) END
+ FROM selected LEFT JOIN blobs b ON b.hash=selected.hash AND selected.size IS NOT NULL
+ ORDER BY selected.ordinal`, string(repo), wanted, ownedDocChunkBytesPG, ownedDocPrefetchBytesPG)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
-		window = make(map[domain.ContentHash][]byte, len(wanted))
+		nextWindow := make(map[domain.ContentHash][]byte)
+		windowBytes := 0
 		for rows.Next() {
 			var id domain.ContentHash
+			var size *int
 			var body []byte
-			if err := rows.Scan(&id, &body); err != nil {
+			if err := rows.Scan(&id, &size, &body); err != nil {
 				return nil, err
 			}
-			window[id] = body
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if size == nil {
+				return nil, domain.ErrNotFound
+			}
+			if *size > ownedDocChunkBytesPG {
+				return nil, domain.ErrDocumentResourceLimit
+			}
+			if len(nextWindow) >= len(wanted) || string(id) != wanted[len(nextWindow)] || len(body) != *size {
+				return nil, domain.ErrIntegrity
+			}
+			windowBytes += len(body)
+			if len(nextWindow) > 0 && windowBytes > ownedDocPrefetchBytesPG {
+				return nil, domain.ErrDocumentResourceLimit
+			}
+			nextWindow[id] = body
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		if len(window) != len(wanted) {
-			return nil, domain.ErrNotFound
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		body, found := window[hash]
+		body, found := nextWindow[hash]
 		if !found {
 			return nil, domain.ErrNotFound
 		}
+		window = nextWindow
 		delete(window, hash)
 		return body, ctx.Err()
 	}

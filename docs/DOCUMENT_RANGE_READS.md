@@ -237,7 +237,8 @@ attempts returned admission overload (503). A small range page returned 200 in
 0.39 seconds, but an older large document's cold page did not respond within a
 150-second diagnostic client deadline. These are release observations, not an
 accepted performance gate. The responsible overlapping workload remains
-unidentified; production OOM and cold-read latency are still open in issue #508.
+unidentified in that first rollout. The subsequent investigation and legacy
+publication correction are tracked in issue #516.
 
 Admitted HTTP reads and uploads have a two-minute request context and socket
 read/write deadline, including queue time. An earlier caller deadline wins.
@@ -275,3 +276,48 @@ This check caught a deferred compaction serialization error missed by synthetic
 tool-only fixtures. Metadata-only compaction rows now serialize through their
 own presentation DTO rather than the archive union that requires replacement or
 locked-state payloads; an explicit regression preserves that distinction.
+
+## Legacy finalization incident
+
+Read-only production diagnostics on 2026-10-15 identified a repeatedly reclaimed
+legacy `cxt-doc-chunks-v2` finalization: 514 distinct chunks, 107.8 MB compressed,
+and more than 277 attempts. New manifest-root jobs were waiting behind it. This
+is not evidence of missing migrated database rows: the old worker retained the
+entire decoded stream, a second normalized chunk plan, and document-wide search
+text. The root-only streaming correction did not cover this legacy path.
+
+Legacy v2 jobs now verify one chunk/event at a time into a private temporary spool.
+The original legacy DocHash and exact canonical bytes remain unchanged. Only
+event coordinates and hashes survive preparation. Search text is spooled per
+event and inserted in globally hash-ordered batches of at most 4 MiB/1,024 rows;
+one oversized entry is processed separately, never truncated. Reference-only
+checks also avoid retaining every compressed and decoded chunk simultaneously.
+PostgreSQL prefetch selects a byte-bounded window before transferring bodies,
+rather than treating sixteen arbitrarily large blobs as a bounded batch.
+
+Rebuildable search blocks are staged in short transactions with generation pins.
+The worker stops its asynchronous renewal before staging; staging renews between
+batches, so its own job-row lock cannot cause a competing renewal to cancel it.
+Final publication rechecks the current lease, policy, owned input bytes, private
+spool hashes and stored normalized chunks, and commits ownership, the read index
+and completion receipt atomically. Existing valid representations and their
+other owners are preserved. An existing broken archive is rejected, not silently
+repaired from another partitioning of the upload.
+
+Spools are removed on success, rejection, cancellation and ordinary errors.
+Memory scratch is limited to 32 MiB per legacy event/decoded input chunk. Larger
+valid items report retryable `resource_limit`, not `invalid_document`. Existing
+whole/v1 alternate representations are verified only within a 32 MiB compatibility
+budget. Those limits do not silently truncate an archive or delete its queue item.
+
+`TestLegacyStreamingPGMemoryQualification` is an opt-in PostgreSQL regression
+(`CXT_LEGACY_MEMORY_QUALIFICATION=1`, `CXT_TEST_DSN` pointing to a disposable DB).
+It constructs approximately 257 MiB/515 chunks incrementally, publishes the full
+index, verifies the stored reference, and keeps another 64 MiB live throughout.
+Run the compiled test inside a 512 MiB, swap-disabled container with one CPU,
+`GOMAXPROCS=2` and the production `GOMEMLIMIT=400MiB`. It gates sampled heap at
+320 MiB; capture cgroup `memory.events` and peak separately. A no-OOM run is not
+the stricter mixed HTTP/upload peak gate above, nor proof of universal capacity.
+Production loading, queue progress and the OOM timeline still require verification
+after deployment. No paid instance upgrade or production queue deletion is part
+of this correction.

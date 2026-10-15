@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -69,13 +70,13 @@ func (doc VerifiedSessionDoc) ReadIndex() (DocReadIndex, error) {
 	return plan.Build(nil)
 }
 
-// DocReadPlan contains only event bytes from a verified document. Adapters may
-// reuse an existing search projection keyed by its exact canonical event hash;
-// document offsets, sequence and role are always derived from this document.
-// The private bodies prevent a caller from changing the bytes behind the hash.
+// DocReadPlan retains verified event coordinates and either immutable bytes or
+// a spooled source whose event length and hash are checked on every read.
+// Adapters may reuse a search projection keyed by the exact canonical event hash.
 type DocReadPlan struct {
 	index          DocReadIndex
 	stream         canonicalSegments
+	source         VerifiedDocStream
 	bodies         []canonicalSpan
 	sequencesKnown bool // Exact sequences retained by a chunk-backed proof.
 }
@@ -197,45 +198,82 @@ func (p DocReadPlan) BuildRangesContext(ctx context.Context) (DocReadIndex, erro
 }
 
 func (p DocReadPlan) build(ctx context.Context, reusedSearch map[ContentHash]bool, metadataOnly bool) (DocReadIndex, error) {
-	if err := ctx.Err(); err != nil {
-		return DocReadIndex{}, err
-	}
-	if p.index.Hash == "" {
-		return DocReadIndex{}, ErrIntegrity
-	}
 	out := p.index
 	out.Envelope = p.Envelope()
-	out.Events = append([]DocEventIndex{}, p.index.Events...)
+	out.Events = make([]DocEventIndex, 0, len(p.index.Events))
+	err := p.visit(ctx, reusedSearch, metadataOnly, func(event DocEventIndex) error {
+		out.Events = append(out.Events, event)
+		return nil
+	})
+	if err != nil {
+		return DocReadIndex{}, err
+	}
+	return out, nil
+}
+
+func (p DocReadPlan) visit(ctx context.Context, reusedSearch map[ContentHash]bool, metadataOnly bool, visit func(DocEventIndex) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.index.Hash == "" || visit == nil || len(p.bodies) != len(p.index.Events) {
+		return ErrIntegrity
+	}
 	var body []byte
 	for i, span := range p.bodies {
 		if err := ctx.Err(); err != nil {
-			return DocReadIndex{}, err
+			return err
 		}
-		body = p.stream.appendRange(body[:0], span)
+		entry := p.index.Events[i]
+		entry.Text = ""
+		if p.source != nil {
+			current, err := p.source.Read(ctx, span.offset, span.length)
+			if err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if len(current) != span.length {
+				return ErrIntegrity
+			}
+			body = bytes.Clone(current)
+			hash, err := legacyStreamHash(ctx, body)
+			if err != nil {
+				return err
+			}
+			if hash != entry.Hash {
+				return ErrIntegrity
+			}
+		} else {
+			body = p.stream.appendRange(body[:0], span)
+		}
 		if err := ctx.Err(); err != nil {
-			return DocReadIndex{}, err
+			return err
 		}
-		if metadataOnly || reusedSearch[out.Events[i].Hash] {
+		if metadataOnly || reusedSearch[entry.Hash] {
 			var metadata struct {
 				Seq  int    `json:"seq"`
 				Role string `json:"role"`
 			}
 			if err := json.Unmarshal(body, &metadata); err != nil {
-				return DocReadIndex{}, err
+				return err
 			}
-			out.Events[i].Seq, out.Events[i].Role = metadata.Seq, metadata.Role
-			continue
+			entry.Seq, entry.Role = metadata.Seq, metadata.Role
+		} else {
+			var ev CIREvent
+			if err := json.Unmarshal(body, &ev); err != nil {
+				return err
+			}
+			entry.Seq, entry.Role, entry.Text = ev.Seq, string(ev.Role), SearchableEventText(ev)
 		}
-		var ev CIREvent
-		if err := json.Unmarshal(body, &ev); err != nil {
-			return DocReadIndex{}, err
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		out.Events[i].Seq, out.Events[i].Role, out.Events[i].Text = ev.Seq, string(ev.Role), SearchableEventText(ev)
+		if err := visit(entry); err != nil {
+			return err
+		}
 	}
-	if err := ctx.Err(); err != nil {
-		return DocReadIndex{}, err
-	}
-	return out, nil
+	return ctx.Err()
 }
 
 func DecodeIndexedEvent(raw []byte, item DocEventIndex) (CIREvent, error) {
