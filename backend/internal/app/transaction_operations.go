@@ -8,6 +8,11 @@ import (
 )
 
 func (s *Service) Commit(ctx context.Context, in inbound.CommitInput) (inbound.CommitOutput, error) {
+	ctx, release, err := AcquireResources(ctx, ResourceBulk)
+	if err != nil {
+		return inbound.CommitOutput{}, err
+	}
+	defer release()
 	ctx = auditOperation(ctx, "context.objects.stored")
 	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, in.RepoID, func(ctx context.Context) (inbound.CommitOutput, error) { return s.commit(ctx, in) })
 }
@@ -54,7 +59,7 @@ func (s *Service) List(ctx context.Context, in inbound.ListSnapshotsInput) ([]do
 	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) ([]domain.Snapshot, error) { return s.list(ctx, in) })
 }
 func (s *Service) Send(ctx context.Context, in inbound.PullSendInput) (inbound.PullSendOutput, error) {
-	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.PullSendOutput, error) { return s.send(ctx, in) })
+	return resourceReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.PullSendOutput, error) { return s.send(ctx, in) })
 }
 func (s *Service) GetManifest(ctx context.Context, repo domain.ContentHash) (domain.Manifest, error) {
 	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.Manifest, error) { return s.getManifest(ctx, repo) })
@@ -71,10 +76,10 @@ func (s *Service) ListRefs(ctx context.Context, repo domain.ContentHash) ([]doma
 	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) ([]domain.Ref, error) { return s.listRefs(ctx, repo) })
 }
 func (s *Service) Fsck(ctx context.Context, repo domain.ContentHash) (inbound.FsckReport, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (inbound.FsckReport, error) { return s.fsck(ctx, repo) })
+	return resourceReadForRepo(ctx, s, repo, func(ctx context.Context) (inbound.FsckReport, error) { return s.fsck(ctx, repo) })
 }
 func (s *Service) GetDoc(ctx context.Context, repo, id domain.ContentHash) (domain.SessionDoc, error) {
-	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.SessionDoc, error) { return s.getDoc(ctx, repo, id) })
+	return resourceReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.SessionDoc, error) { return s.getDoc(ctx, repo, id) })
 }
 func (s *Service) GetMemoryDigest(ctx context.Context, repo, id domain.ContentHash) (domain.MemoryDigest, error) {
 	return repositoryReadForRepo(ctx, s, repo, func(ctx context.Context) (domain.MemoryDigest, error) { return s.getMemoryDigest(ctx, repo, id) })
@@ -85,6 +90,11 @@ func (s *Service) PutUnsync(ctx context.Context, repo domain.ContentHash, user, 
 }
 
 func (s *Service) StoreChunks(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error) {
+	ctx, release, err := AcquireResources(ctx, ResourceBulk)
+	if err != nil {
+		return inbound.StoreChunksOutput{}, err
+	}
+	defer release()
 	ctx = auditOperation(ctx, "context.chunks.stored")
 	return repositoryWrite(context.WithValue(ctx, revisionScopeKey{}, "none"), s, in.RepoID, func(ctx context.Context) (inbound.StoreChunksOutput, error) { return s.storeChunksCommand(ctx, in) })
 }

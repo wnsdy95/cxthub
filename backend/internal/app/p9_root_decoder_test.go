@@ -13,6 +13,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
 // Regression from the independently reproduced P3 decoder finding.
@@ -91,6 +92,10 @@ func (s p9FailingRootReader) ReadConversationChunk(context.Context, domain.Conte
 	return nil, s.failure
 }
 
+func (s p9FailingRootReader) PrepareRootDocJob(context.Context, domain.DocFinalizationJob) (outbound.PreparedRootDocPublication, error) {
+	return nil, s.failure
+}
+
 func TestP9RootWorkerLoaderErrorControls(t *testing.T) {
 	for _, mode := range []string{"transient", "missing", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
@@ -124,8 +129,9 @@ func TestP9RootWorkerLoaderErrorControls(t *testing.T) {
 				cancel()
 				failure = context.Canceled
 			}
-			svc.blobs = p9FailingRootReader{st, failure}
-			if err = svc.runDocJob(ctx, st, claim); !errors.Is(err, failure) {
+			failing := p9FailingRootReader{st, failure}
+			svc.blobs = failing
+			if err = svc.runDocJob(ctx, failing, claim); !errors.Is(err, failure) {
 				t.Fatal(err)
 			}
 			got, err := st.GetDocJob(context.Background(), repo, claim.ID)

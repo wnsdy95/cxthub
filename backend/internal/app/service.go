@@ -25,6 +25,7 @@ import (
 type Service struct {
 	rootPublication bool // configured before serving; cannot override release readiness
 	branchCache     branchProjectionCache
+	graphCache      graphProjectionCache
 	segmentCache    contextSegmentCache
 	deliveryCache   effectiveMemoryDeliveryCache
 	docVerifier     domain.CanonicalDocVerifier
@@ -313,7 +314,7 @@ func (s *Service) storeChunksCommand(ctx context.Context, in inbound.StoreChunks
 
 // PullChunks returns the request prefix up to the raw upper bound. If the first chunk exceeds the upper bound, it stops with an explicit validation error to preserve the cause instead of the proxy's ambiguous 413.
 func (s *Service) PullChunks(ctx context.Context, in inbound.PullChunksInput) (inbound.PullChunksOutput, error) {
-	return repositoryReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.PullChunksOutput, error) {
+	return resourceReadForRepo(ctx, s, in.RepoID, func(ctx context.Context) (inbound.PullChunksOutput, error) {
 		if err := domain.ValidateContentHash(in.RepoID); err != nil {
 			return inbound.PullChunksOutput{}, err
 		}
@@ -2125,37 +2126,23 @@ func (s *Service) Activity(ctx context.Context, repositories []domain.Repository
 }
 func (s *Service) activity(ctx context.Context, repositories []domain.Repository) ([]domain.ActivityMonth, error) {
 	repositoryByID := make(map[string]domain.Repository, len(repositories))
+	repositoryIDs := make([]string, 0, len(repositories))
 	for _, w := range repositories {
 		repositoryByID[w.ID] = w
+		repositoryIDs = append(repositoryIDs, w.ID)
 	}
-	repos, err := s.meta.ListRepos(ctx, "default")
+	days, err := s.commitActivityDays(ctx, repositoryIDs)
 	if err != nil {
 		return nil, err
 	}
 	commits := map[string]map[string]int{} // month -> repositoryID -> count
-	for _, r := range repos {
-		if _, ok := repositoryByID[r.RepositoryID]; !ok {
-			continue
-		}
-		if err := outbound.CheckDocumentIdentityCompatibility(ctx, r.RequiredDocIdentity); err != nil {
-			if errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
-				continue
+	for repositoryID, counts := range days {
+		for date, count := range counts {
+			month := date[:7]
+			if commits[month] == nil {
+				commits[month] = map[string]int{}
 			}
-			return nil, err
-		}
-		snaps, err := s.meta.ListSnapshots(ctx, r.ID, "")
-		if err != nil {
-			return nil, err
-		}
-		for _, sn := range snaps {
-			if sn.CreatedAt.IsZero() || strings.HasPrefix(sn.Message, domain.HookMessagePrefix) || sn.Branch == domain.StashBranchLabel {
-				continue
-			}
-			m := sn.CreatedAt.UTC().Format("2006-01")
-			if commits[m] == nil {
-				commits[m] = map[string]int{}
-			}
-			commits[m][r.RepositoryID]++
+			commits[month][repositoryID] += count
 		}
 	}
 	created := map[string][]domain.Repository{} // month -> repositories created
@@ -2210,15 +2197,28 @@ func (s *Service) activity(ctx context.Context, repositories []domain.Repository
 	return out, nil
 }
 
-// Contributions aggregates repo commits by date (YYYY-MM-DD, UTC) for the given repositories
-// (for contribution heatmap). Hooks and stash are excluded — only actual context commits are counted.
-// Note: repo/snapshot full traversal, inefficient for large-scale — assumes small self-hosted (future DB aggregation optimization possible).
+// Contributions aggregates finalized commit-linked history by recorded event
+// date (YYYY-MM-DD, UTC) for caller-filtered repositories, without author claims.
 func (s *Service) Contributions(ctx context.Context, repositoryIDs []string) (map[string]int, error) {
 	ctx = outbound.WithDocumentIdentityCompatibility(ctx, inbound.DocumentIdentities(ctx), s.DocumentIdentitiesSupported())
 	return repositoryRead(ctx, s, func(ctx context.Context) (map[string]int, error) { return s.contributions(ctx, repositoryIDs) })
 }
 func (s *Service) contributions(ctx context.Context, repositoryIDs []string) (map[string]int, error) {
 	out := map[string]int{}
+	days, err := s.commitActivityDays(ctx, repositoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, counts := range days {
+		for date, count := range counts {
+			out[date] += count
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) commitActivityDays(ctx context.Context, repositoryIDs []string) (map[string]map[string]int, error) {
+	out := map[string]map[string]int{}
 	if len(repositoryIDs) == 0 {
 		return out, nil
 	}
@@ -2230,25 +2230,35 @@ func (s *Service) contributions(ctx context.Context, repositoryIDs []string) (ma
 	if err != nil {
 		return nil, err
 	}
+	historyStore, supported := s.meta.(outbound.HistoryStore)
+	seen := make(map[domain.ContentHash]bool)
 	for _, r := range repos {
-		if !wanted[r.RepositoryID] {
+		if !wanted[r.RepositoryID] || seen[r.ID] {
 			continue
 		}
+		seen[r.ID] = true
 		if err := outbound.CheckDocumentIdentityCompatibility(ctx, r.RequiredDocIdentity); err != nil {
 			if errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
 				continue
 			}
 			return nil, err
 		}
-		snaps, err := s.meta.ListSnapshots(ctx, r.ID, "")
+		if !supported {
+			return nil, fmt.Errorf("context history storage unavailable")
+		}
+		history, err := historyStore.ListHistoryEvents(ctx, r.ID)
 		if err != nil {
 			return nil, err
 		}
-		for _, sn := range snaps {
-			if sn.CreatedAt.IsZero() || strings.HasPrefix(sn.Message, domain.HookMessagePrefix) || sn.Branch == domain.StashBranchLabel {
-				continue
-			}
-			out[sn.CreatedAt.UTC().Format("2006-01-02")]++
+		days, err := domain.CommitActivityDays(r.ID, history)
+		if err != nil {
+			return nil, err
+		}
+		if out[r.RepositoryID] == nil {
+			out[r.RepositoryID] = map[string]int{}
+		}
+		for date, count := range days {
+			out[r.RepositoryID][date] += count
 		}
 	}
 	return out, nil
@@ -2410,7 +2420,7 @@ func (s *Service) Diff(ctx context.Context, in inbound.DiffInput) (inbound.DiffO
 	if err := validateHashes(in.RepoID, in.Left, in.Right); err != nil {
 		return inbound.DiffOutput{}, err
 	}
-	return repositoryReadForRepo(ctx, s, in.RepoID, func(bound context.Context) (inbound.DiffOutput, error) {
+	return resourceReadForRepo(ctx, s, in.RepoID, func(bound context.Context) (inbound.DiffOutput, error) {
 		left, err := s.getDoc(bound, in.RepoID, in.Left)
 		if err != nil {
 			return inbound.DiffOutput{}, err

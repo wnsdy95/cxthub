@@ -173,10 +173,25 @@ func (s *Service) runDocJob(ctx context.Context, st outbound.DocJobStore, j doma
 			}
 		}
 	}()
-	verified, err := repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (domain.VerifiedSessionDoc, error) { return s.verifyDocJob(read, j) })
 	var publication outbound.PreparedDocPublication
-	if err == nil {
-		publication, err = st.PrepareDocJob(work, verified)
+	var err error
+	if streaming, ok := st.(outbound.StreamingRootJobStore); ok && j.DocIdentity == domain.DocumentIdentityRootV1 {
+		var prepared outbound.PreparedRootDocPublication
+		_, err = repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (struct{}, error) {
+			var prepareErr error
+			prepared, prepareErr = streaming.PrepareRootDocJob(read, j)
+			return struct{}{}, prepareErr
+		})
+		if prepared != nil {
+			defer prepared.Close()
+		}
+		publication = prepared
+	} else {
+		var verified domain.VerifiedSessionDoc
+		verified, err = repositoryReadForRepo(work, s, j.RepoID, func(read context.Context) (domain.VerifiedSessionDoc, error) { return s.verifyDocJob(read, j) })
+		if err == nil {
+			publication, err = st.PrepareDocJob(work, verified)
+		}
 	}
 	stop()
 	<-renewed
@@ -218,14 +233,17 @@ func (s *Service) ProcessDocFinalizations(ctx context.Context, limit int) error 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		j, err := st.ClaimDocJob(ctx, "", time.Now().UTC(), docJobLease)
-		if errors.Is(err, domain.ErrNotFound) {
+		claimed := false
+		err := admittedJob(ctx, func(bound context.Context) (domain.DocFinalizationJob, error) {
+			return st.ClaimDocJob(bound, "", time.Now().UTC(), docJobLease)
+		}, func(bound context.Context, job domain.DocFinalizationJob) error {
+			claimed = true
+			return s.runDocJob(bound, st, job)
+		})
+		if !claimed && errors.Is(err, domain.ErrNotFound) {
 			return nil
 		}
 		if err != nil {
-			return err
-		}
-		if err = s.runDocJob(ctx, st, j); err != nil {
 			return err
 		}
 	}

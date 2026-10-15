@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -227,10 +228,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/snapshots/{id}/graft", s.guard(domain.RoleMember, s.graftSnapshot))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/join/preview", s.guard(domain.RoleMember, s.previewJoin))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/join", s.guard(domain.RoleMember, s.joinSnapshot))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/search", s.guard(domain.RoleViewer, s.search))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}", s.guard(domain.RoleViewer, s.getDoc))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/search", s.guard(domain.RoleViewer, s.bulkRead(s.search)))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}", s.guard(domain.RoleViewer, s.bulkRead(s.getDoc)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/events", s.guard(domain.RoleViewer, s.getDocEvents))
-	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/turns", s.guard(domain.RoleViewer, s.getDocTurns))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/event-fragments", s.guard(domain.RoleViewer, s.getDocEventFragment))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/turns", s.guard(domain.RoleViewer, s.bulkRead(s.getDocTurns)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleViewer, s.getMemory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memory-objects/{hash}", s.guard(domain.RoleViewer, s.getMemoryObject))
 	// Team-asset reads require puller. Settings writes use the action gate;
@@ -270,15 +272,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/doc-jobs", s.guard(domain.RoleMember, s.submitDocFinalization))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/push/doc-jobs/{jobID}", s.guard(domain.RoleMember, s.getDocFinalization))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/push/objects", s.guard(domain.RoleMember, s.pushObjects))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/chunks", s.guard(domain.RolePuller, s.pullChunks))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/chunks", s.guard(domain.RolePuller, s.bulkRead(s.pullChunks)))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/branch-plan", s.guard(domain.RolePuller, s.pullBranchPlan))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/catalog", s.guard(domain.RolePuller, s.pullCatalog))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/catalog/merkle", s.guard(domain.RolePuller, s.pullCatalogMerkle))
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/objects", s.guard(domain.RolePuller, s.pullObjects))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/pull/objects", s.guard(domain.RolePuller, s.bulkRead(s.pullObjects)))
 
 	// Actions exposed by the server. Provider-session restoration remains a local
 	// CLI operation and is deliberately absent from the HTTP surface.
-	mux.HandleFunc("POST /api/v1/repos/{repoID}/diff", s.guard(domain.RoleViewer, s.diff))
+	mux.HandleFunc("POST /api/v1/repos/{repoID}/diff", s.guard(domain.RoleViewer, s.bulkRead(s.diff)))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/fork", s.guard(domain.RoleMember, s.fork))
 
 	// Authentication · Repository · Invite (all Firebase/dev tokens required — requireUser middleware).
@@ -1080,6 +1082,11 @@ type chunksBody struct {
 }
 
 func (s *Server) pushChunks(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceBulk)
+	if !ok {
+		return
+	}
+	defer release()
 	var body chunksBody
 	if !s.decodeLimited(w, r, &body, inbound.MaxChunkWireJSONBody) {
 		return
@@ -1096,6 +1103,11 @@ type objectsBody struct {
 }
 
 func (s *Server) pushObjects(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceBulk)
+	if !ok {
+		return
+	}
+	defer release()
 	var body objectsBody
 	if !s.decode(w, r, &body) {
 		return
@@ -1296,6 +1308,10 @@ func (s *Server) respond(w http.ResponseWriter, v any, err error) {
 
 func mapError(err error) (code string, status int) {
 	switch {
+	case errors.Is(err, domain.ErrResourceOverloaded):
+		return "resource_overloaded", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrDocRangeIndexUnavailable):
+		return "doc_range_index_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrFederationUnavailable):
 		return "identity_connection_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrVerifiedDomainRequired):
@@ -1373,6 +1389,9 @@ func mapError(err error) (code string, status int) {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, code, msg string) {
+	if code == "resource_overloaded" || code == "doc_range_index_unavailable" {
+		w.Header().Set("Retry-After", "1")
+	}
 	if code == "internal" {
 		msg = "internal server error"
 	}

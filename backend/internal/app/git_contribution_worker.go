@@ -35,16 +35,23 @@ func (scans *GitScans) ProcessContributions(ctx context.Context, limit int) erro
 			if err := ctx.Err(); err != nil {
 				return errors.Join(append(failures, err)...)
 			}
-			job, err := store.ClaimGitContributionWork(ctx, repo.ID, time.Now().UTC(), time.Minute)
+			err := admittedJob(ctx, func(bound context.Context) (domain.GitContributionWork, error) {
+				return store.ClaimGitContributionWork(bound, repo.ID, time.Now().UTC(), time.Minute)
+			}, func(bound context.Context, job domain.GitContributionWork) error {
+				if err := scans.runGitContribution(bound, job); err != nil {
+					failures = append(failures, fmt.Errorf("Git contribution %s: %w", job.AdmissionID, err))
+				}
+				return nil
+			})
+			if errors.Is(err, domain.ErrResourceOverloaded) || ctx.Err() != nil {
+				return errors.Join(append(failures, err)...)
+			}
 			if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) || errors.Is(err, domain.ErrForbidden) {
 				break
 			}
 			if err != nil {
 				failures = append(failures, fmt.Errorf("Git contribution claim %s: %w", repo.ID, err))
 				break
-			}
-			if err := scans.runGitContribution(ctx, job); err != nil {
-				failures = append(failures, fmt.Errorf("Git contribution %s: %w", job.AdmissionID, err))
 			}
 		}
 		if err := scans.processGitContributionSupplements(ctx, repo.ID, limit); err != nil {

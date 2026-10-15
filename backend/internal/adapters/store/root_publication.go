@@ -14,6 +14,7 @@ import (
 type preparedRootDoc struct {
 	manifest  domain.ConversationManifest
 	canonical []byte
+	ranges    domain.VerifiedDocRangeIndex
 }
 
 func prepareRootPublication(ctx context.Context, doc domain.VerifiedSessionDoc) (preparedRootDoc, error) {
@@ -136,6 +137,10 @@ func (s *FSStore) putRootDocJob(ctx context.Context, repo domain.ContentHash, do
 	if err != nil {
 		return err
 	}
+	ranges, err := domain.BuildDocRangeIndex(ctx, doc)
+	if err != nil {
+		return err
+	}
 	path := s.docPath(repo, doc.Hash())
 	current, err := os.ReadFile(path)
 	missing := os.IsNotExist(err)
@@ -155,16 +160,17 @@ func (s *FSStore) putRootDocJob(ctx context.Context, repo domain.ContentHash, do
 	if err := fence(); err != nil {
 		return err
 	}
-	if missing {
-		if err := writeAtomic(path, docCompress(root.canonical)); err != nil {
+	return s.putRangeIndex(ctx, repo, ranges, func() error {
+		if err := fence(); err != nil {
 			return err
 		}
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := s.putVerifiedReadIndex(repo, doc); err != nil {
-		return err
-	}
-	return ctx.Err()
+		if missing {
+			return writeAtomic(path, docCompress(root.canonical))
+		}
+		current, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return root.matchesStored(ctx, current)
+	})
 }

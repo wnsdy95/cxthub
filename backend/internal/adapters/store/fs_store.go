@@ -817,7 +817,7 @@ func (s *FSStore) DeleteDoc(_ context.Context, repoID, hash domain.ContentHash) 
 			return err
 		}
 	}
-	return nil
+	return os.RemoveAll(filepath.Dir(s.rangeIndexPath(repoID, hash)))
 }
 
 // GetSettingsBundle retrieves the settings bundle. Returns ErrNotFound if not found.

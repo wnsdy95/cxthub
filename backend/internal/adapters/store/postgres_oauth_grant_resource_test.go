@@ -61,8 +61,13 @@ func TestPGOAuthGrantResourceUpgradeAndImmutability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pendingMigrations := 0
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || entry.Name() >= "0092_oauth_grant_resource.sql" {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		if entry.Name() >= "0092_oauth_grant_resource.sql" {
+			pendingMigrations++
 			continue
 		}
 		contents, err := os.ReadFile(filepath.Join(migrations, entry.Name()))
@@ -85,7 +90,7 @@ func TestPGOAuthGrantResourceUpgradeAndImmutability(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO oauth_grants(id,user_id,client_id,created_at,expires_at) VALUES($1,$2,$3,$4,$5)`, legacyID, user.ID, "upgrade-client", now, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if applied, err := storage.ApplyMigrations(ctx, migrations); err != nil || applied != 1 {
+	if applied, err := storage.ApplyMigrations(ctx, migrations); err != nil || applied != pendingMigrations || pendingMigrations == 0 {
 		t.Fatalf("additive migration count=%d err=%v", applied, err)
 	}
 	if applied, err := storage.ApplyMigrations(ctx, migrations); err != nil || applied != 0 {

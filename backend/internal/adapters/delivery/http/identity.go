@@ -550,7 +550,8 @@ func (s *Server) publicUser(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, map[string]any{"user": publicUserViewOf(u), "repositories": publicRepositories}, nil)
 }
 
-// userContributions is user profile contribution heatmap data — daily commit counts per visible repository (PublicUser same visibility: anonymous only public, self includes private).
+// userContributions counts finalized publications by recorded UTC event date,
+// repository-wide rather than by Git author. PublicUser visibility is unchanged.
 func (s *Server) userContributions(w http.ResponseWriter, r *http.Request) {
 	viewer, _ := userFrom(r.Context())
 	_, repositoryList, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)
@@ -582,7 +583,8 @@ func (s *Server) userContributions(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, map[string]any{"days": days, "total": total}, nil)
 }
 
-// userActivity is user profile activity feed — monthly commit bundles + repository creation (PublicUser same visibility).
+// userActivity groups the same finalized publication counts by month, plus
+// repository creation, within the existing PublicUser visibility boundary.
 func (s *Server) userActivity(w http.ResponseWriter, r *http.Request) {
 	viewer, _ := userFrom(r.Context())
 	_, repositoryList, err := s.id.PublicUser(r.Context(), r.PathValue("username"), viewer.ID)

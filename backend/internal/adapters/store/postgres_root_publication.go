@@ -14,8 +14,10 @@ func prepareRootDocPG(ctx context.Context, doc domain.VerifiedSessionDoc) (prepa
 	if err != nil {
 		return preparedDocPG{}, err
 	}
-	// Root consumers derive their projection from current verified bytes. The
-	// legacy persistent index is neither consumed nor a root readiness proof.
+	root.ranges, err = domain.BuildDocRangeIndex(ctx, doc)
+	if err != nil {
+		return preparedDocPG{}, err
+	}
 	return preparedDocPG{doc: doc, root: &root, payload: docCompress(root.canonical)}, ctx.Err()
 }
 
@@ -59,5 +61,5 @@ func (s *PostgresStore) putRootDocJob(ctx context.Context, repo domain.ContentHa
 	if _, err := tx.Exec(ctx, `INSERT INTO repo_blobs(repo_id,kind,hash) VALUES($1,'doc',$2) ON CONFLICT DO NOTHING`, repo, prepared.doc.Hash()); err != nil {
 		return err
 	}
-	return ctx.Err()
+	return s.putRangeIndex(ctx, repo, prepared.root.ranges)
 }

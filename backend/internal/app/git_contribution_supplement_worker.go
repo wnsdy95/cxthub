@@ -20,15 +20,19 @@ func (scans *GitScans) processGitContributionSupplements(ctx context.Context, re
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(failures, err)...)
 		}
-		job, err := queue.ClaimGitContributionSupplement(ctx, repo, time.Now().UTC(), time.Minute)
+		err := admittedJob(ctx, func(bound context.Context) (domain.GitContributionSupplement, error) {
+			return queue.ClaimGitContributionSupplement(bound, repo, time.Now().UTC(), time.Minute)
+		}, func(bound context.Context, job domain.GitContributionSupplement) error {
+			if err := scans.runGitContributionSupplement(bound, job); err != nil {
+				failures = append(failures, fmt.Errorf("Git memory supplement %s: %w", job.ID, err))
+			}
+			return nil
+		})
 		if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) || errors.Is(err, domain.ErrForbidden) {
 			break
 		}
 		if err != nil {
 			return errors.Join(append(failures, err)...)
-		}
-		if err := scans.runGitContributionSupplement(ctx, job); err != nil {
-			failures = append(failures, fmt.Errorf("Git memory supplement %s: %w", job.ID, err))
 		}
 	}
 	return errors.Join(failures...)

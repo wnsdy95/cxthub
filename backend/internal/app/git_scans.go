@@ -221,15 +221,19 @@ func (g *GitScans) Process(ctx context.Context, limit int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		j, err := g.store.ClaimGitScan(ctx, "", time.Now().UTC(), 2*time.Minute)
+		err := admittedJob(ctx, func(bound context.Context) (domain.GitScanJob, error) {
+			return g.store.ClaimGitScan(bound, "", time.Now().UTC(), 2*time.Minute)
+		}, func(bound context.Context, job domain.GitScanJob) error {
+			if err := g.run(bound, job); err != nil {
+				log.Printf("Git observation %s attempt %d deferred", job.ID, job.Attempts)
+			}
+			return nil
+		})
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
-		}
-		if err = g.run(ctx, j); err != nil {
-			log.Printf("Git observation %s attempt %d deferred", j.ID, j.Attempts)
 		}
 	}
 	return nil
@@ -335,129 +339,137 @@ func (g *GitScans) reconcile(ctx context.Context) (bool, error) {
 		if repo.GitRemoteURL == "" {
 			continue
 		}
-		advanced, discoveryErr := g.discoverGitAssociations(ctx, repo)
-		progress = progress || advanced
-		if discoveryErr != nil && !errors.Is(discoveryErr, domain.ErrForbidden) && !errors.Is(discoveryErr, domain.ErrConflict) && !errors.Is(discoveryErr, domain.ErrDocumentIdentityUpgradeRequired) {
-			log.Printf("Git association discovery %s deferred", repo.ID)
-		}
-		if err = ctx.Err(); err != nil {
-			return progress, errors.Join(append(claimErrors, err)...)
-		}
-		j, e := st.ClaimGitHeadScan(ctx, repo.ID, repo.GitRemoteURL, time.Now().UTC(), time.Minute)
-		if errors.Is(e, domain.ErrNotFound) || errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
-			continue
-		}
-		if e != nil {
-			claimErrors = append(claimErrors, fmt.Errorf("Git head reconciliation %s claim: %w", repo.ID, e))
-			continue
-		}
-		work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 30*time.Second)
-		_, e = g.core.workerRepository(work, j.RepoID)
-		var fence GitReadFence
-		var identity *domain.GitProviderObservation
-		if e == nil {
-			identity, fence, e = authorizeGitObservation(work, g.sourceAccess, j.RepoID)
-		}
-		var frozenAdmissions *frozenGitAdmissionBatch
-		if e == nil {
-			var admissionErr error
-			frozenAdmissions, admissionErr = g.freezeGitAdmissionBatch(work, j, identity, fence)
-			if admissionErr != nil {
-				log.Printf("Git admission snapshot %s deferred", j.RepoID)
+		admissionErr := resourceWork(ctx, ResourceBulk, func(ctx context.Context) error {
+			advanced, discoveryErr := g.discoverGitAssociations(ctx, repo)
+			progress = progress || advanced
+			if discoveryErr != nil && !errors.Is(discoveryErr, domain.ErrForbidden) && !errors.Is(discoveryErr, domain.ErrConflict) && !errors.Is(discoveryErr, domain.ErrDocumentIdentityUpgradeRequired) {
+				log.Printf("Git association discovery %s deferred", repo.ID)
 			}
-		}
-		var heads []outbound.GitHead
-		var frozenContext *gitAdmissionSnapshot
-		if e == nil {
-			var contextErr error
-			frozenContext, contextErr = g.freezeGitHeadContext(work, j, identity, frozenAdmissions)
-			if contextErr != nil {
-				log.Printf("Git context head snapshot %s deferred", j.RepoID)
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-		}
-		var more bool
-		var sourceHeads []domain.GitRefObservation
-		if e == nil {
-			sourceHeads, e = g.readGitAdmissionSources(work, frozenAdmissions)
-		}
-		if e == nil {
-			heads, more, e = g.reader.ListGitHeads(work, j.GitOrigin, j.Page)
-		}
-		if e == nil {
-			observations := []domain.GitRefObservation{}
-			for _, h := range heads {
-				observations = append(observations, domain.GitRefObservation{RepoID: j.RepoID, GitOrigin: j.GitOrigin, Source: "reconciliation", Ref: h.Ref, After: h.Commit, Provider: identity}.WithID())
+			j, e := st.ClaimGitHeadScan(ctx, repo.ID, repo.GitRemoteURL, time.Now().UTC(), time.Minute)
+			if errors.Is(e, domain.ErrNotFound) || errors.Is(e, domain.ErrDocumentIdentityUpgradeRequired) {
+				return nil
 			}
-			var preparedAdmissions *preparedGitAdmissionBatch
-			var boundHeads []domain.GitContextHead
-			receipt, receiptErr := domain.NewGitHeadReceiptWithSources(j, observations, sourceHeads, more)
-			if receiptErr == nil {
-				var contextErr error
-				boundHeads, contextErr = prepareGitContextHeads(frozenContext, receipt)
-				if contextErr != nil {
-					log.Printf("Git context head preparation %s deferred", j.RepoID)
-				}
+			if e != nil {
+				return fmt.Errorf("Git head reconciliation %s claim: %w", repo.ID, e)
 			}
-			if frozenAdmissions != nil {
-				admissionErr := receiptErr
-				if admissionErr == nil {
-					preparedAdmissions, admissionErr = g.prepareGitAdmissionBatch(work, frozenAdmissions, receipt)
-				}
+			work, cancel := context.WithTimeout(outbound.WithGitRepository(ctx, j.RepoID), 30*time.Second)
+			_, e = g.core.workerRepository(work, j.RepoID)
+			var fence GitReadFence
+			var identity *domain.GitProviderObservation
+			if e == nil {
+				identity, fence, e = authorizeGitObservation(work, g.sourceAccess, j.RepoID)
+			}
+			var frozenAdmissions *frozenGitAdmissionBatch
+			if e == nil {
+				var admissionErr error
+				frozenAdmissions, admissionErr = g.freezeGitAdmissionBatch(work, j, identity, fence)
 				if admissionErr != nil {
-					log.Printf("Git admission preparation %s deferred", j.RepoID)
+					log.Printf("Git admission snapshot %s deferred", j.RepoID)
 				}
 			}
-			e = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
-				r, e := g.core.meta.GetRepo(tx, j.RepoID)
-				if e != nil {
-					return e
+			var heads []outbound.GitHead
+			var frozenContext *gitAdmissionSnapshot
+			if e == nil {
+				var contextErr error
+				frozenContext, contextErr = g.freezeGitHeadContext(work, j, identity, frozenAdmissions)
+				if contextErr != nil {
+					log.Printf("Git context head snapshot %s deferred", j.RepoID)
 				}
-				if r.GitRemoteURL != j.GitOrigin {
-					return domain.ErrConflict
+			}
+			var more bool
+			var sourceHeads []domain.GitRefObservation
+			if e == nil {
+				sourceHeads, e = g.readGitAdmissionSources(work, frozenAdmissions)
+			}
+			if e == nil {
+				heads, more, e = g.reader.ListGitHeads(work, j.GitOrigin, j.Page)
+			}
+			if e == nil {
+				observations := []domain.GitRefObservation{}
+				for _, h := range heads {
+					observations = append(observations, domain.GitRefObservation{RepoID: j.RepoID, GitOrigin: j.GitOrigin, Source: "reconciliation", Ref: h.Ref, After: h.Commit, Provider: identity}.WithID())
 				}
-				if e := fence(tx); e != nil {
-					return e
-				}
-				var finishErr error
-				if len(sourceHeads) > 0 {
-					finishErr = g.core.meta.(outbound.GitHeadSourceScanStore).FinishGitHeadScanWithSources(tx, j, observations, sourceHeads, more, time.Now().UTC())
-				} else {
-					finishErr = st.FinishGitHeadScan(tx, j, observations, more, time.Now().UTC())
-				}
-				if finishErr != nil {
-					return finishErr
-				}
-				var current *gitAdmissionSnapshot
-				if len(boundHeads) > 0 || (preparedAdmissions != nil && len(preparedAdmissions.admissions) > 0) {
-					var err error
-					basis := frozenContext
-					if preparedAdmissions != nil && preparedAdmissions.frozen.snapshot != nil {
-						basis = preparedAdmissions.frozen.snapshot
+				var preparedAdmissions *preparedGitAdmissionBatch
+				var boundHeads []domain.GitContextHead
+				receipt, receiptErr := domain.NewGitHeadReceiptWithSources(j, observations, sourceHeads, more)
+				if receiptErr == nil {
+					var contextErr error
+					boundHeads, contextErr = prepareGitContextHeads(frozenContext, receipt)
+					if contextErr != nil {
+						log.Printf("Git context head preparation %s deferred", j.RepoID)
 					}
-					current, err = g.core.reuseGitAdmissionSnapshot(tx, j.RepoID, basis)
-					if errors.Is(err, domain.ErrConflict) {
-						boundHeads = nil
-						if preparedAdmissions != nil {
-							preparedAdmissions.admissions = nil
+				}
+				if frozenAdmissions != nil {
+					admissionErr := receiptErr
+					if admissionErr == nil {
+						preparedAdmissions, admissionErr = g.prepareGitAdmissionBatch(work, frozenAdmissions, receipt)
+					}
+					if admissionErr != nil {
+						log.Printf("Git admission preparation %s deferred", j.RepoID)
+					}
+				}
+				e = repositoryWriteError(evidenceWriteContext(work), g.core, j.RepoID, func(tx context.Context) error {
+					r, e := g.core.meta.GetRepo(tx, j.RepoID)
+					if e != nil {
+						return e
+					}
+					if r.GitRemoteURL != j.GitOrigin {
+						return domain.ErrConflict
+					}
+					if e := fence(tx); e != nil {
+						return e
+					}
+					var finishErr error
+					if len(sourceHeads) > 0 {
+						finishErr = g.core.meta.(outbound.GitHeadSourceScanStore).FinishGitHeadScanWithSources(tx, j, observations, sourceHeads, more, time.Now().UTC())
+					} else {
+						finishErr = st.FinishGitHeadScan(tx, j, observations, more, time.Now().UTC())
+					}
+					if finishErr != nil {
+						return finishErr
+					}
+					var current *gitAdmissionSnapshot
+					if len(boundHeads) > 0 || (preparedAdmissions != nil && len(preparedAdmissions.admissions) > 0) {
+						var err error
+						basis := frozenContext
+						if preparedAdmissions != nil && preparedAdmissions.frozen.snapshot != nil {
+							basis = preparedAdmissions.frozen.snapshot
 						}
-						err = nil
+						current, err = g.core.reuseGitAdmissionSnapshot(tx, j.RepoID, basis)
+						if errors.Is(err, domain.ErrConflict) {
+							boundHeads = nil
+							if preparedAdmissions != nil {
+								preparedAdmissions.admissions = nil
+							}
+							err = nil
+						}
+						if err != nil {
+							return err
+						}
 					}
-					if err != nil {
+					if err := g.persistGitContextHeads(tx, receipt, boundHeads, current); err != nil {
 						return err
 					}
-				}
-				if err := g.persistGitContextHeads(tx, receipt, boundHeads, current); err != nil {
-					return err
-				}
-				return g.persistGitAdmissionBatch(tx, preparedAdmissions, current)
-			})
-		}
-		cancel()
-		if e != nil {
-			finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			_ = repositoryWriteError(evidenceWriteContext(finish), g.core, j.RepoID, func(tx context.Context) error { return st.FailGitHeadScan(tx, j, time.Now().UTC()) })
-			done()
-			log.Printf("Git head reconciliation %s page %d deferred", j.RepoID, j.Page)
+					return g.persistGitAdmissionBatch(tx, preparedAdmissions, current)
+				})
+			}
+			cancel()
+			if e != nil {
+				finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				_ = repositoryWriteError(evidenceWriteContext(finish), g.core, j.RepoID, func(tx context.Context) error { return st.FailGitHeadScan(tx, j, time.Now().UTC()) })
+				done()
+				log.Printf("Git head reconciliation %s page %d deferred", j.RepoID, j.Page)
+			}
+			return nil
+		})
+		if admissionErr != nil {
+			claimErrors = append(claimErrors, admissionErr)
+			if errors.Is(admissionErr, domain.ErrResourceOverloaded) || ctx.Err() != nil {
+				return progress, errors.Join(append(claimErrors, ctx.Err())...)
+			}
 		}
 	}
 	return progress, errors.Join(append(claimErrors, ctx.Err())...)

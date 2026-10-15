@@ -120,6 +120,10 @@ type graphClosure struct {
 }
 
 func newGraphStateIndex(snaps []Snapshot) (*graphStateIndex, error) {
+	return newGraphStateIndexContext(context.Background(), snaps)
+}
+
+func newGraphStateIndexContext(ctx context.Context, snaps []Snapshot) (*graphStateIndex, error) {
 	x := &graphStateIndex{byID: map[ContentHash]Snapshot{}, closure: map[ContentHash]graphClosure{}}
 	for _, s := range snaps {
 		if _, ok := x.byID[s.ID]; ok {
@@ -127,7 +131,7 @@ func newGraphStateIndex(snaps []Snapshot) (*graphStateIndex, error) {
 		}
 		x.byID[s.ID] = s
 	}
-	if err := ValidateAcyclicAncestry(context.Background(), x.byID); err != nil {
+	if err := ValidateAcyclicAncestry(ctx, x.byID); err != nil {
 		return nil, err
 	}
 	x.ordinal = make(map[ContentHash]int, len(snaps))
@@ -289,59 +293,10 @@ func ProjectGraphState(v RepositoryView, primary, positionID string) (GraphState
 		}
 	}
 	out.PrimaryBranch = primary
-	historicalRoots := []ContentHash{}
-	for _, e := range v.Reflog {
-		if e.Kind == RefBranch {
-			historicalRoots = append(historicalRoots, e.Old, e.New)
-		}
-	}
-	for _, e := range v.History {
-		switch e.Kind {
-		case "advance":
-			historicalRoots = append(historicalRoots, e.Source, e.Target)
-		case "publish":
-			historicalRoots = append(historicalRoots, e.Target)
-		case "pr-merge":
-			if e.PRCompleted {
-				historicalRoots = append(historicalRoots, e.Source, e.Target, e.SharedTarget)
-			}
-		}
-	}
-	historical := x.roots(historicalRoots)
-	shared := x.roots(sharedRoots)
-	graphUnion(shared, historical)
-	kept := graphSet{}
-	for _, s := range v.Snapshots {
-		if s.Branch != "(stash)" || shared[s.ID] {
-			kept[s.ID] = true
-		}
-	}
-	hold, inHold := graphHold(v.Unsync, x, shared, kept)
-	out.Hold = hold
-	pendings := append([]Pending(nil), v.Pending...)
-	sort.Slice(pendings, func(i, j int) bool {
-		if pendings[i].UpdatedAt.Equal(pendings[j].UpdatedAt) {
-			return pendings[i].SessionID < pendings[j].SessionID
-		}
-		return pendings[i].UpdatedAt.After(pendings[j].UpdatedAt)
-	})
-	pendingRoots := []ContentHash{}
-	for _, p := range pendings {
-		if !p.Dismissed && !shared[p.Target] && !inHold[p.Target] {
-			out.OrphanSessions = append(out.OrphanSessions, p.SessionID)
-			pendingRoots = append(pendingRoots, p.Target)
-			out.HoldCounts[p.Branch]++
-		}
-	}
-	for _, c := range hold {
-		names := map[string]bool{}
-		for _, u := range c.Tips {
-			names[u.Branch] = true
-		}
-		for b := range names {
-			out.HoldCounts[b] += len(c.IDs)
-		}
-	}
+	classification := classifyPending(v, x, sharedRoots)
+	historical, shared, kept, inHold := classification.historical, classification.shared, classification.kept, classification.inHold
+	pendings, pendingRoots := classification.pendings, classification.roots
+	out.Hold, out.OrphanSessions, out.HoldCounts = classification.hold, classification.orphans, classification.counts
 	pendingPath := x.roots(pendingRoots)
 	uncommitted := graphSubset(pendingPath, func(id ContentHash) bool {
 		return kept[id] && !shared[id] && !inHold[id] && strings.HasPrefix(x.byID[id].Message, "hook: ")
