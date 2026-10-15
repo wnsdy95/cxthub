@@ -36,19 +36,29 @@ export class ApiError extends Error {
   constructor(message: string, public readonly code: string, public readonly status: number) { super(message); }
 }
 
+export class ApiTransportError extends Error {}
+
+async function readTransport<T>(read: () => Promise<T>): Promise<T> {
+  try { return await read(); }
+  catch (error) {
+    if (error instanceof TypeError) throw new ApiTransportError(error.message, { cause: error });
+    throw error;
+  }
+}
+
 async function call<T>(method: string, path: string, body?: unknown, idpToken?: string, signal?: AbortSignal, maxBytes?: number): Promise<T> {
   // Compatibility declaration only; cookies continue to carry authentication.
   const headers: Record<string, string> = {'X-Cxt-Doc-Identities': 'cxt-manifest-sha256-v1'};
   if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') headers['X-Cxt-CSRF'] = '1';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idpToken) headers['Authorization'] = `Bearer ${idpToken}`; // Only used for exchangeSession
-  const res = await fetch(BASE + path, {
+  const res = await readTransport(() => fetch(BASE + path, {
     method,
     signal,
     headers,
     credentials: 'include', // HttpOnly session cookie exchange
     body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  }));
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     let code = '';
@@ -61,7 +71,7 @@ async function call<T>(method: string, path: string, body?: unknown, idpToken?: 
     }
     throw new ApiError(detail, code, res.status);
   }
-  const text = maxBytes === undefined ? await res.text() : await readDocumentResponse(res, maxBytes);
+  const text = maxBytes === undefined ? await readTransport(() => res.text()) : await readDocumentResponse(res, maxBytes);
   return (text ? JSON.parse(text) : null) as T;
 }
 

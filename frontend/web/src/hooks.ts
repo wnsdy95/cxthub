@@ -5,7 +5,8 @@ import { graphViewRows } from './graphState';
 // Tokens are stored in HttpOnly cookies, which JS cannot read, so cookie validity is determined by the single judge, the `me` query on the server.
 import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from './api';
+import { api, ApiError } from './api';
+import { isRetryableGraphRefreshError } from './graphRefresh';
 import { useRepositoryUpdates } from './useRepositoryUpdates';
 import type { DocViewMode, User } from './types';
 import { docPageKey } from './documentPaging';
@@ -479,15 +480,19 @@ export function useRepoView(repoId: string | null, _primaryBranch?: string) {
     enabled:Boolean(repoId),refetchOnWindowFocus:false});
   const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>api.repositoryView(repoId!,signal),retry:false,
     enabled:Boolean(repoId),refetchOnWindowFocus:false});
-  const view = viewQuery.data;
+  const retryable = isRetryableGraphRefreshError(viewQuery.error);
+  const inaccessible = viewQuery.error instanceof ApiError && [401, 403, 404].includes(viewQuery.error.status);
+  const view = inaccessible ? undefined : viewQuery.data;
+  const stale = Boolean(view && viewQuery.error && retryable);
   const rows = useMemo(()=>graphViewRows(view),[view]);
   const pendingRows = useMemo(()=>pendingStateRows(view,pendingQuery.data),[view,pendingQuery.data]);
   return {...rows,pendingRows,
     pendingLoading:!pendingRows.ready && pendingQuery.isPending,pendingError:pendingQuery.error?.message,
     retryPending:()=>{void pendingQuery.refetch();},
     refs:view?.refs ?? [],reflog:view?.reflog ?? [],history:view?.history ?? [],graphState:view?.graph,
-    unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError,
-    graphLoading:viewQuery.isPending,graphError:viewQuery.error?.message,retryGraph:()=>{void viewQuery.refetch();}};
+    unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError && !stale,
+    graphLoading:viewQuery.isPending,graphError:stale ? undefined : viewQuery.error?.message,
+    graphRefreshError:stale ? viewQuery.error?.message : undefined,retryGraph:()=>{void viewQuery.refetch();}};
 }
 
 export function useSessionArchive() {

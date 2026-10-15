@@ -702,28 +702,36 @@ func (s *FSStore) ListUnsyncs(_ context.Context, repoID domain.ContentHash) ([]d
 
 // DeleteUnsync removes a push pending pointer (no error if it doesn't exist — idempotent).
 // In addition to deleting derivative paths (current + legacy), it also scans directories to delete files with names in the (user, branch) format — pointers recorded before the filename scheme change are not reachable via derivative paths, leaving them as zombie entries in ListUnsyncs that cannot be deleted (bug: residual pointers from old branches persist after push resolution, contaminating web On Hold/continuing conversations).
-func (s *FSStore) DeleteUnsync(_ context.Context, repoID domain.ContentHash, user, branch string) error {
+func (s *FSStore) DeleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error {
+	_, err := s.DeleteUnsyncIfPresent(ctx, repoID, user, branch)
+	return err
+}
+
+func (s *FSStore) DeleteUnsyncIfPresent(_ context.Context, repoID domain.ContentHash, user, branch string) (bool, error) {
 	if err := validateHash(repoID); err != nil {
-		return err
+		return false, err
 	}
 	if err := domain.ValidateBranchName(branch); err != nil {
-		return err
+		return false, err
 	}
 	if user == "" || len(user) > 128 {
-		return domain.ErrValidation
+		return false, domain.ErrValidation
 	}
+	changed := false
 	for _, path := range []string{s.unsyncPath(repoID, user, branch), s.legacyUnsyncPath(repoID, user, branch)} {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
+		if err := os.Remove(path); err == nil {
+			changed = true
+		} else if !os.IsNotExist(err) {
+			return changed, err
 		}
 	}
 	dir := filepath.Join(s.repoDir(repoID), "unsync")
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
-		return nil
+		return changed, nil
 	}
 	if err != nil {
-		return err
+		return changed, err
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -739,12 +747,14 @@ func (s *FSStore) DeleteUnsync(_ context.Context, repoID domain.ContentHash, use
 			continue
 		}
 		if u.User == user && u.Branch == branch {
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				return err
+			if err := os.Remove(path); err == nil {
+				changed = true
+			} else if !os.IsNotExist(err) {
+				return changed, err
 			}
 		}
 	}
-	return nil
+	return changed, nil
 }
 
 // UpdateSnapshotMessage is a hook label → commit message promotion exclusive metadata update (service calls this after unidirectional rule validation — here it handles existence and atomic replacement only).

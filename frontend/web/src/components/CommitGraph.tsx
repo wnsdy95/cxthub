@@ -77,6 +77,7 @@ export function CommitGraph({
   historyError = false,
   graphLoading = false,
   graphError,
+  graphRefreshError,
   retryGraph,
   graphState,
   pinBranch,
@@ -102,6 +103,7 @@ export function CommitGraph({
   historyError?: boolean;
   graphLoading?: boolean;
   graphError?: string;
+  graphRefreshError?: string;
   retryGraph?: () => void;
 /** Uncommitted hook-capture IDs, rendered as hollow dashed nodes with an individual label. */
   uncommitted?: Set<string>;
@@ -419,6 +421,7 @@ export function CommitGraph({
   return (
     <div className="graph-wrap">
       {graphError ? <p role="alert" className="graph-history-error">{t('graph.loadFailed')} {graphError} {retryGraph && <button onClick={retryGraph}>{t('context.retryRead')}</button>}</p>
+        : graphRefreshError ? <p role="status" className="graph-history-error">{t('graph.refreshFailed')} {graphRefreshError} {retryGraph && <button onClick={retryGraph}>{t('context.retryRead')}</button>}</p>
         : historyError && <p role="status" className="graph-history-error">{t('graph.historyUnavailable')}</p>}
       {graphIssues.length > 0 && <div role="alert" className="graph-history-error graph-invalid">
         <p>{t('graph.invalidStructure')}</p>

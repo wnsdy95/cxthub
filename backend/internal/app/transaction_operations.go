@@ -41,6 +41,7 @@ func (s *Service) promoteBoundPR(ctx context.Context, repo domain.ContentHash, p
 }
 func (s *Service) SubmitPRPromotion(ctx context.Context, repo domain.ContentHash, pr domain.PullRequestMerge) (domain.PRPromotionJob, error) {
 	ctx = auditOperation(ctx, "context.promotion.submitted")
+	ctx = context.WithValue(ctx, revisionScopeKey{}, "none")
 	return repositoryWrite(ctx, s, repo, func(ctx context.Context) (domain.PRPromotionJob, error) { return s.submitPRPromotion(ctx, repo, pr) })
 }
 func (s *Service) PutPending(ctx context.Context, repo domain.ContentHash, session string, p domain.Pending) error {
@@ -86,6 +87,7 @@ func (s *Service) GetMemoryDigest(ctx context.Context, repo, id domain.ContentHa
 }
 func (s *Service) PutUnsync(ctx context.Context, repo domain.ContentHash, user, branch string, u domain.Unsync) error {
 	ctx = auditOperation(ctx, "context.unsync.updated")
+	ctx = context.WithValue(ctx, revisionScopeKey{}, "none")
 	return repositoryWriteError(ctx, s, repo, func(ctx context.Context) error { return s.putUnsync(ctx, repo, user, branch, u) })
 }
 

@@ -26,6 +26,19 @@ func TestPRJobSurvivesRestartAndLateSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	pr := domain.PullRequestMerge{Number: 42, BaseBranch: "main", HeadBranch: "feature", HeadSHA: strings.Repeat("a", 40), MergeSHA: strings.Repeat("b", 40)}
+	beforeSubmit, err := svc.RepositoryRevision(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := svc.SubmitPRPromotion(ctx, repo, pr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	afterSubmit, err := svc.RepositoryRevision(ctx, repo)
+	if err != nil || afterSubmit != beforeSubmit {
+		t.Fatalf("queue submission invalidated graph before publication: before=%+v after=%+v err=%v", beforeSubmit, afterSubmit, err)
+	}
 	if _, err := svc.DeliverPRPromotion(ctx, repo, pr); !errors.Is(err, domain.ErrPRSourcePending) {
 		t.Fatalf("late source=%v", err)
 	}
@@ -44,12 +57,20 @@ func TestPRJobSurvivesRestartAndLateSource(t *testing.T) {
 	if err := svc.RetryPRPromotion(ctx, repo, jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}
+	beforePublication, err := svc.RepositoryRevision(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.ProcessPRPromotions(ctx, 8); err != nil {
 		t.Fatal(err)
 	}
 	jobs, _ = svc.ListPRPromotions(ctx, repo)
 	if jobs[0].State != "completed" {
 		t.Fatalf("state=%+v", jobs[0])
+	}
+	afterPublication, err := svc.RepositoryRevision(ctx, repo)
+	if err != nil || afterPublication.Graph <= beforePublication.Graph {
+		t.Fatalf("publication did not advance graph revision: before=%+v after=%+v err=%v", beforePublication, afterPublication, err)
 	}
 	for i := 0; i < 3; i++ {
 		if _, err := svc.SubmitPRPromotion(ctx, repo, pr); err != nil {

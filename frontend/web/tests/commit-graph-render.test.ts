@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createElement } from 'react';
+import { createElement, type ComponentProps } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CommitGraph } from '../src/components/CommitGraph.tsx';
@@ -36,25 +36,29 @@ const snapshots: Snapshot[] = [
 ];
 const refs: Ref[] = [{ kind: 'branch', name: 'main', repo_id: 'repo', target: childId }];
 const client = new QueryClient();
-const markup = renderToStaticMarkup(
-  createElement(
-    QueryClientProvider,
-    { client },
+function renderGraph(props: Partial<ComponentProps<typeof CommitGraph>> = {}) {
+  return renderToStaticMarkup(
     createElement(
-      I18nProvider,
-      null,
-      createElement(CommitGraph, {
-        snapshots,
-        selectedId: null,
-        onSelect: () => undefined,
-        badges: new Map(),
-        refs,
-        uncommitted: new Set(),
-        pinBranch: 'main',
-      }),
+      QueryClientProvider,
+      { client },
+      createElement(
+        I18nProvider,
+        null,
+        createElement(CommitGraph, {
+          snapshots,
+          selectedId: null,
+          onSelect: () => undefined,
+          badges: new Map(),
+          refs,
+          uncommitted: new Set(),
+          pinBranch: 'main',
+          ...props,
+        }),
+      ),
     ),
-  ),
-);
+  );
+}
+const markup = renderGraph();
 
 assert.match(markup, /id="seam-out-aaaaaaaaaa"[^>]*gradientUnits="userSpaceOnUse"/);
 assert.match(markup, /id="seam-in-bbbbbbbbbb"[^>]*gradientUnits="userSpaceOnUse"/);
@@ -70,3 +74,14 @@ assert.match(markup, /class="graph-view-toggle" role="group"/);
 assert.match(markup, /class="graph-zoom" role="group"/);
 assert.match(markup, /<\/ul><\/div><\/div><div class="graph-controls">/);
 assert.ok(markup.indexOf('class="graph-controls"') < markup.indexOf('class="graph-details"'));
+
+const stale = renderGraph({ graphRefreshError: 'busy', retryGraph: () => undefined });
+assert.match(stale, /role="status"[^>]*>Refresh failed\. Showing the last complete graph/);
+assert.match(stale, /<button>Retry<\/button>/);
+assert.match(stale, /data-graph-row-index="0"/);
+const rejected = renderGraph({ graphError: 'rejected', retryGraph: () => undefined });
+assert.match(rejected, /role="alert"[^>]*>Could not load the complete graph/);
+assert.doesNotMatch(rejected, /data-graph-row-index=/);
+const invalid = renderGraph({ snapshots: [snapshots[0], snapshots[0]], graphRefreshError: 'busy' });
+assert.match(invalid, /data-graph-issue="duplicate-id"/);
+assert.doesNotMatch(invalid, /data-graph-row-index=/);

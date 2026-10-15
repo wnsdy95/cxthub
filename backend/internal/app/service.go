@@ -1924,14 +1924,17 @@ func (s *Service) putUnsync(ctx context.Context, repoID domain.ContentHash, user
 	// late-revives unsync, self-healing (review backlog #2 defense-in-depth).
 	if ref, err := s.meta.GetRef(ctx, repoID, domain.RefBranch, branch); err == nil {
 		if reached, aerr := s.engine.IsAncestor(ctx, repoID, u.Target, ref.Target); aerr == nil && reached {
-			return s.meta.DeleteUnsync(ctx, repoID, user, branch)
+			return s.resolveUnsync(ctx, repoID, user, branch)
 		}
 	}
 	u.RepoID = repoID
 	u.User = user
 	u.Branch = branch
 	u.UpdatedAt = time.Now().UTC()
-	return s.meta.PutUnsync(ctx, repoID, u)
+	if err := s.meta.PutUnsync(ctx, repoID, u); err != nil {
+		return err
+	}
+	return revisionWrite(context.WithValue(ctx, revisionScopeKey{}, "graph"), s, repoID)
 }
 
 // ListUnsyncs returns the entire push wait pointer set for the repo (for web On Hold display).
@@ -1946,6 +1949,7 @@ func (s *Service) ListUnsyncs(ctx context.Context, repoID domain.ContentHash) ([
 
 // DeleteUnsync resolves a push wait pointer (git push/manual cleanup — idempotent).
 func (s *Service) DeleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error {
+	ctx = context.WithValue(ctx, revisionScopeKey{}, "none")
 	return repositoryWriteError(ctx, s, repoID, func(ctx context.Context) error { return s.deleteUnsync(ctx, repoID, user, branch) })
 }
 func (s *Service) deleteUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error {
@@ -1958,7 +1962,19 @@ func (s *Service) deleteUnsync(ctx context.Context, repoID domain.ContentHash, u
 	if err := domain.ValidateBranchName(branch); err != nil {
 		return err
 	}
-	return s.meta.DeleteUnsync(ctx, repoID, user, branch)
+	return s.resolveUnsync(ctx, repoID, user, branch)
+}
+
+func (s *Service) resolveUnsync(ctx context.Context, repoID domain.ContentHash, user, branch string) error {
+	if storage, ok := s.meta.(outbound.UnsyncDeletionStore); ok {
+		changed, err := storage.DeleteUnsyncIfPresent(ctx, repoID, user, branch)
+		if err != nil || !changed {
+			return err
+		}
+	} else if err := s.meta.DeleteUnsync(ctx, repoID, user, branch); err != nil {
+		return err
+	}
+	return revisionWrite(context.WithValue(ctx, revisionScopeKey{}, "graph"), s, repoID)
 }
 
 // GetSecrets returns secret ciphertext envelopes (ciphertext as-is — decryption is on the client).
