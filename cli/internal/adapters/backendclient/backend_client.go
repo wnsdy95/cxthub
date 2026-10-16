@@ -201,7 +201,13 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 	var rdr io.Reader
 	if body != nil {
 		endMarshal := outbound.BeginMeasuredSyncDiagnostic(diagnosticCtx, outbound.SyncStageRequestMarshal)
-		b, err := json.Marshal(body)
+		var b []byte
+		var err error
+		if frozen, ok := body.(uploadJSON); ok {
+			b = frozen
+		} else {
+			b, err = json.Marshal(body)
+		}
 		endMarshal(outbound.SyncDiagnosticCounts{Bytes: len(b)}, err)
 		if err != nil {
 			return err
@@ -257,8 +263,12 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 	defer func() { endBody(resultErr) }()
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return newHTTPError(resp.StatusCode, method, path, b)
+		b, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		rejection := newHTTPError(resp.StatusCode, method, path, b)
+		if readErr == nil && rejection.Status == http.StatusServiceUnavailable && rejection.Code == "resource_overloaded" {
+			rejection.retryAfter, rejection.retryAfterValid = uploadRetryAfter(resp.Header.Values("Retry-After"), time.Now())
+		}
+		return rejection
 	}
 	if resp.StatusCode == http.StatusNoContent {
 		// Optional singleton assets (team settings and the sealed secrets
@@ -305,9 +315,11 @@ func (c *BackendClient) doLimited(ctx context.Context, method, path string, body
 // ({ "error": { "code", "message" } }) to preserve the Code, allowing the caller to distinguish
 // and handle specific rejections (e.g., git_origin_mismatch).
 type HTTPError struct {
-	Status  int
-	Code    string
-	Message string
+	Status          int
+	Code            string
+	Message         string
+	retryAfter      time.Duration
+	retryAfterValid bool
 	// Operation contains only the method and escaped path, never query values,
 	// credentials, headers or request bodies.
 	Operation string
@@ -442,7 +454,7 @@ func (c *BackendClient) pushChunkBatches(ctx context.Context, repoID string, chu
 		return err
 	}
 	for _, batch := range batches {
-		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/chunks", chunksReq{Chunks: batch}, nil); err != nil {
+		if err := c.uploadBatch(ctx, c.reposPath(repoID)+"/push/chunks", chunksReq{Chunks: batch}); err != nil {
 			return err
 		}
 	}
@@ -1034,7 +1046,7 @@ func (c *BackendClient) Push(ctx context.Context, repoID string, snapshots []dom
 		return err
 	}
 	for i, batch := range batches {
-		if err := c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/objects", batch, nil); err != nil {
+		if err := c.uploadBatch(ctx, c.reposPath(repoID)+"/push/objects", batch); err != nil {
 			return fmt.Errorf("finalize object batch %d/%d (no ref updates sent): %w", i+1, len(batches), err)
 		}
 	}
