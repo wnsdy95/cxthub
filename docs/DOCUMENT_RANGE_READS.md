@@ -98,6 +98,13 @@ intersection-triggered retry loop.
 Inherited prefixes compare exact event hashes; equal range-index blocks can be
 skipped without loading bodies. Pagination keeps original ordinals for detail
 requests and turn grouping, including after a mode change.
+The browser sends `base` only for the initial page of a query, including retries
+of that page and explicit expansion from offset zero. It retains that page's
+server-computed `inherited` boundary for the entire stream. Following pages use
+the server's absolute `next` cursor without `base`, so a legacy parent is not
+reopened and compared on every scroll. Mode/base/start changes create a separate
+query and compute its initial boundary again; authorization and selected-page
+integrity checks still run on every request.
 
 ## Independent pending reads and shared admission
 

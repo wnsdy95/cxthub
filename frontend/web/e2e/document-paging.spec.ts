@@ -102,6 +102,62 @@ test('near-bottom prefetch stays hidden until the bottom and continuation waits 
   expect(errors).toEqual([]);
 });
 
+for (const start of [-1, 0, 13]) {
+  test(`document pages compare the parent only on initial reads and preserve inheritance (start ${start})`, async ({ page }) => {
+    const reads: { mode: string | null; offset: number; base: string | null }[] = [];
+    const initialOffset = start < 0 ? 40 : start;
+    const nextOffset = initialOffset + 20;
+    let initialFails = true;
+    let nextFails = true;
+    await page.route('**/api/v1/**', async route => {
+      const url = new URL(route.request().url());
+      const offset = Number(url.searchParams.get('offset'));
+      const base = url.searchParams.get('base');
+      reads.push({ mode: url.searchParams.get('view'), offset, base });
+      if ((offset === start && initialFails) || (offset === nextOffset && nextFails)) {
+        if (offset === start) initialFails = false;
+        else nextFails = false;
+        await route.fulfill({ status: 503, json: { error: { message: 'Page unavailable' } } });
+        return;
+      }
+      const pageOffset = offset < 0 ? 40 : offset;
+      const events = Array.from({ length: 20 }, (_, index) => message(pageOffset + index,
+        `Message ${pageOffset + index}\n\n` + 'A visible paragraph.\n\n'.repeat(3)));
+      await route.fulfill({ json: eventPage(events, pageOffset, 120, base ? 40 : 0) });
+    });
+    const errors = await harness(page, `?start=${start}`);
+    await expect(page.getByRole('alert')).toContainText('Page unavailable');
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect(page.locator(`[data-event-index="${initialOffset + 19}"]`)).toBeAttached();
+    expect(reads).toEqual([
+      { mode: 'chat', offset: start, base: 'base' },
+      { mode: 'chat', offset: start, base: 'base' },
+    ]);
+    const scroll = page.getByTestId('document-scroll');
+    await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await expect(page.getByRole('alert')).toContainText('Page unavailable');
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect(page.locator(`[data-event-index="${nextOffset + 19}"]`)).toBeAttached();
+    expect(reads.slice(2)).toEqual([
+      { mode: 'chat', offset: nextOffset, base: null },
+      { mode: 'chat', offset: nextOffset, base: null },
+    ]);
+    if (start >= 0) await expect(page.locator('[data-event-index="39"]')).toHaveClass('doc-inherited');
+    if (start === 13) await expect(page.locator('[data-event-index="40"]')).not.toHaveClass('doc-inherited');
+    if (start === 0) {
+      await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await expect(page.locator('[data-event-index="59"]')).toBeAttached();
+      await expect(page.locator('[data-event-index="40"]')).not.toHaveClass('doc-inherited');
+      expect(reads.at(-1)).toEqual({ mode: 'chat', offset: 40, base: null });
+    }
+    await page.getByLabel('View mode').selectOption('prompts');
+    await expect(page.locator(`[data-event-index="${initialOffset + 19}"]`)).toBeAttached();
+    await expect(page.locator(`[data-event-index="${nextOffset}"]`)).toHaveCount(0);
+    expect(reads.at(-1)).toEqual({ mode: 'prompts', offset: start, base: 'base' });
+    expect(errors).toEqual([]);
+  });
+}
+
 test('root view HTTP metadata stays compact with a large envelope, tool-heavy prefetch and mode reset', async ({ page }) => {
   const requests: { mode: string | null; offset: number }[] = [];
   const bodies: string[] = [];
