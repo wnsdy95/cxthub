@@ -901,6 +901,20 @@ request; this count is not the number of ref updates sent over the network.
 
 Prefer `--append` or pull-and-retry over `--force`.
 
+Immutable chunk and object upload batches retry only an explicit HTTP 503
+`resource_overloaded` rejection, at most four times with 1/2/4/8-second backoff
+and 1–250 ms positive jitter. Each batch keeps the same serialized payload and
+destination, with one shared budget of at most 30 seconds (a shorter client
+timeout or caller deadline wins). Valid `Retry-After` seconds or HTTP dates up
+to 10 seconds are honored; malformed, duplicate, or longer hints stop retries.
+A missing hint uses the backoff. Cancellation stops waiting, and a delay that
+cannot fit the remaining budget returns the rejection without another attempt.
+Already acknowledged batches are not replayed. Network errors, timeouts, and
+successful-write ACK cleanup failures do not trigger retries. This policy does
+not retry ref, history, PR, or other mutation requests, reset exhausted outbox
+attempts, or bypass branch conflict checks. Sustained pressure can still fail
+the push; it is not a reason to use `--force` or `--append`.
+
 For a slow or failing push, enable optional diagnostics for that invocation:
 
 ```sh

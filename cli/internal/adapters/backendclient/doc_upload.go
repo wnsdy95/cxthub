@@ -142,7 +142,7 @@ func (c *BackendClient) PushDocChunks(ctx context.Context, repoID string, doc ou
 	if neg.AsyncDocsSupported {
 		return true, c.finalizeDocument(ctx, repoID, manifest)
 	}
-	return true, c.do(ctx, http.MethodPost, c.reposPath(repoID)+"/push/objects", objectsReq{ChunkedDocs: []chunkedDocWire{manifest}}, nil)
+	return true, c.uploadBatch(ctx, c.reposPath(repoID)+"/push/objects", objectsReq{ChunkedDocs: []chunkedDocWire{manifest}})
 }
 
 func (c *BackendClient) pushRequestedDocChunks(ctx context.Context, repoID string, doc outbound.DocumentChunks, order []domain.ContentHash, wants map[domain.ContentHash]bool) error {
