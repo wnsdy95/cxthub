@@ -313,7 +313,7 @@ export function useMemory(repoId: string | null, memoryHash: string | null, enab
 export function useDocPages(repoId: string | null, hash: string | null, base?: string, start = -1, mode: DocViewMode = 'chat') {
   return useInfiniteQuery({
     queryKey: docPageKey(repoId, hash, base, start, mode),
-    queryFn: ({ pageParam, signal }) => api.getDocViewEvents(repoId!, hash!, base, pageParam, mode, signal),
+    queryFn: ({ pageParam, signal }) => api.getDocViewEvents(repoId!, hash!, pageParam === start ? base : undefined, pageParam, mode, signal),
     initialPageParam: start,
     getNextPageParam: (last) => last.next < 0 ? undefined : last.next,
     enabled: Boolean(repoId && hash),

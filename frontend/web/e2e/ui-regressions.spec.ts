@@ -1796,7 +1796,8 @@ test('context loads bounded pages and only reads inherited events when expanded'
       if (!request.pathname.endsWith('/events')) return { status: 500, body: { error: { message: 'whole document read is forbidden in viewer' } } };
       const offset = Number(request.searchParams.get('offset')) === -1 ? 100 : Number(request.searchParams.get('offset'));
       const end = Math.min(offset + 50, 220);
-      return { body: { hash: pushedHead, envelope: sessionDoc(pushedHead).cir.envelope, events: Array.from({ length: end - offset }, (_, n) => ({ seq: offset+n, kind: 'message', role: 'user', blocks: [{ type: 'text', text: `Event ${offset+n} — ${offset < 100 ? 'inherited' : 'current'}` }] })), total: 220, inherited: 100, offset, next: end === 220 ? -1 : end } };
+      const inherited = request.searchParams.has('base') ? 100 : 0;
+      return { body: { hash: pushedHead, envelope: sessionDoc(pushedHead).cir.envelope, events: Array.from({ length: end - offset }, (_, n) => ({ seq: offset+n, kind: 'message', role: 'user', blocks: [{ type: 'text', text: `Event ${offset+n} — ${offset < 100 ? 'inherited' : 'current'}` }] })), total: 220, inherited, offset, next: end === 220 ? -1 : end } };
     }
     return base(request);
   };
@@ -1820,6 +1821,10 @@ test('context loads bounded pages and only reads inherited events when expanded'
   await expect(page.getByText('Event 100 — current', { exact: true })).toHaveCount(0);
   await page.locator('.doc-load-trigger').scrollIntoViewIfNeeded();
   await expect(page.getByText('Event 100 — current', { exact: true })).toBeAttached();
+  for (const read of reads) {
+    const query = new URLSearchParams(read.split('?')[1]);
+    expect(query.has('base')).toBe(['-1', '0'].includes(query.get('offset')!));
+  }
   expect(reads.every(url => url.includes('/events?'))).toBe(true);
   expect(reads.some(url => url.includes(`/docs/${encodeURIComponent(graftTarget)}/events`))).toBe(false);
   expect(pageErrors).toEqual([]);
@@ -1854,11 +1859,11 @@ for (const view of ['context', 'onhold']) for (const width of [1440, 390]) test(
     if (req.pathname.endsWith('/events')) {
       const hash = decodeURIComponent(req.pathname.split('/').at(-2)!);
       const requested = Number(req.searchParams.get('offset'));
-      const inherited = hash === tail ? 100 : 0;
+      const inherited = hash === tail && req.searchParams.has('base') ? 100 : 0;
       const total = hash === tail ? 180 : hash === head ? 100 : 0;
       const offset = requested === -1 ? inherited : requested;
       const end = Math.min(offset + 50, total);
-      if (hash === tail) expect(req.searchParams.get('base')).toBe(head);
+      if (hash === tail) expect(req.searchParams.get('base')).toBe(requested === -1 ? head : null);
       return {body:{hash,envelope:sessionDoc(hash).cir.envelope,total,inherited,offset,next:end < total ? end : -1,
         events:Array.from({length:end-offset},(_,i)=>({seq:offset+i,kind:'message',role:i%2?'assistant':'user',
           blocks:[{type:'text',text:`${hash === tail ? 'Live' : 'Saved'} ${offset+i}\n`+'Conversation line.\n'.repeat(4)}]}))}};
