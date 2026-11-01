@@ -210,7 +210,10 @@ for (const kind of ['initial', 'detail', 'fragment'] as const) {
       return route.fulfill({ json: eventPage([tool(0, kind === 'fragment' ? 512 * 1024 * 1024 : 800)]) });
     });
     const errors = await harness(page, '?mode=all');
-    if (kind !== 'initial') await page.locator('[data-deferred-event="0"] summary').click();
+    if (kind !== 'initial') {
+      await settleDocumentReads(page);
+      await page.locator('[data-deferred-event="0"] summary').click();
+    }
     await waitForDocumentFailure(page, 1);
     await page.getByLabel('View mode').selectOption('prompts');
     await settleDocumentReads(page);
@@ -236,9 +239,12 @@ for (const failure of [
         json: { error: { code: failure.code, message: 'Terminal read failure' } } });
     });
     const errors = await harness(page);
+    await expect.poll(() => requests).toBe(1);
+    await settleDocumentReads(page);
     await expect(page.getByRole('alert')).toContainText('Terminal read failure');
     await page.clock.runFor(120_000);
     expect(requests).toBe(1);
+    await expect(page.getByRole('alert')).toContainText('Terminal read failure');
     expect(errors).toEqual([]);
   });
 }

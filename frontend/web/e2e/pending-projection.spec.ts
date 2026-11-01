@@ -37,7 +37,7 @@ await import('/e2e/document-paging-harness.ts');
   }));
 }
 
-test('cheap notices gate LIVE and body reads; revision denial fences the selected viewer until authorized refresh', async ({ page }) => {
+for (const recovery of ['visibility', 'retry'] as const) test(`cheap notices gate LIVE and body reads; revision denial fences the selected viewer until authorized ${recovery}`, async ({ page }) => {
   await prepareOnHold(page);
   const revision = { graph: '1', pending: '1' };
   const epoch = '12345678-abcd-4321-9876-123456789abc:1';
@@ -129,7 +129,8 @@ test('cheap notices gate LIVE and body reads; revision denial fences the selecte
   expect(fullReads).toBe(initialFullReads);
   denied = false;
   const beforeAuthorization = revisionReads;
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  if (recovery === 'retry') await page.locator('.ctx-main').getByRole('alert').getByRole('button', { name: 'Retry', exact: true }).click();
+  else await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await expect.poll(async () => {
     await page.clock.runFor(1);
     return page.locator('.pending-sessions[data-live="true"] .commit-row').count();

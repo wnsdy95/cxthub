@@ -1740,7 +1740,7 @@ test('real cxtd wire renders a newly created public profile', async ({ page }, t
   expect(pageErrors).toEqual([]);
 });
 
-test('independent API and MCP complete remote OAuth consent, PKCE, read-only call, and revocation', async ({ page }) => {
+test('independent API and MCP complete remote OAuth consent, PKCE, read-only call, and revocation', async ({ page }, info) => {
   test.skip(!process.env.CXT_E2E_FULLSTACK, 'full-stack smoke runs in CI or with CXT_E2E_FULLSTACK=1');
 
   const pageErrors = capturePageErrors(page);
@@ -1749,9 +1749,10 @@ test('independent API and MCP complete remote OAuth consent, PKCE, read-only cal
   const callback = `${origin}/e2e-mcp-callback`;
   const verifier = 'v'.repeat(64);
   const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const email = `mcp-e2e-${Date.now()}-${info.workerIndex}-${info.retry}@example.test`;
 
   const login = await api.post('/api/v1/auth/session', {
-    headers: { Origin: origin, 'X-Cxt-CSRF': '1', Authorization: 'Bearer dev:mcp-e2e@example.test:MCP E2E' },
+    headers: { Origin: origin, 'X-Cxt-CSRF': '1', Authorization: `Bearer dev:${email}:MCP E2E` },
   });
   expect(login.ok()).toBe(true);
 
@@ -1846,7 +1847,7 @@ test('independent API and MCP complete remote OAuth consent, PKCE, read-only cal
     });
     expect(toolResponse.ok()).toBe(true);
     const tool = await toolResponse.json();
-    expect(tool.result.isError).not.toBe(true);
+    expect(tool.result.isError, JSON.stringify(tool)).not.toBe(true);
     expect(JSON.parse(tool.result.content[0].text)).toEqual(status);
   }
   await api.patch('/api/v1/me', {headers:{Origin:origin,'X-Cxt-CSRF':'1'},data:{locale:'en'}});
