@@ -16,6 +16,8 @@ type legacyNormalizationCheckpointBatch struct {
 	state       legacyByteCheckpoint
 	transaction pgx.Tx
 	protocol    bool
+	objects     []legacyByteCheckpointOwnedObject
+	bytes       int
 }
 
 func (work *legacyNormalizationCheckpointWork) beginBatch(ctx context.Context) (context.Context, *legacyNormalizationCheckpointBatch, error) {
@@ -31,9 +33,14 @@ func (batch *legacyNormalizationCheckpointBatch) finish(ctx context.Context, fai
 	defer func() {
 		rollbackPG(batch.transaction)
 		batch.transaction = nil
+		batch.objects = nil
+		batch.bytes = 0
 	}()
 	if failure != nil {
 		return failure
+	}
+	if err := batch.flush(ctx); err != nil {
+		return err
 	}
 	if err := liveLegacyByteJob(ctx, batch.transaction, batch.owner.job); err != nil {
 		return err
@@ -75,7 +82,21 @@ func (work *legacyNormalizationCheckpointWork) stageParserObjects(ctx context.Co
 		}
 		batch.protocol = true
 	}
-	return writeLegacyByteCheckpointObjects(ctx, batch.transaction, work.job, batch.state, owned)
+	for _, object := range owned {
+		if batch.bytes+len(object.data) > domain.LegacyCanonicalEncodingBytes {
+			if err := batch.flush(ctx); err != nil {
+				return err
+			}
+		}
+		batch.objects = append(batch.objects, object)
+		batch.bytes += len(object.data)
+		if len(batch.objects) == domain.DocLegacyByteBackfillBatchBlocks || batch.bytes == domain.LegacyCanonicalEncodingBytes {
+			if err := batch.flush(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (work *legacyNormalizationCheckpointWork) readParserObject(ctx context.Context, hash domain.ContentHash, size int) ([]byte, error) {
@@ -85,6 +106,9 @@ func (work *legacyNormalizationCheckpointWork) readParserObject(ctx context.Cont
 	}
 	if batch == nil {
 		return work.store.readLegacyNormalizationCheckpointObject(ctx, work.job, work.state, hash, size)
+	}
+	if err := batch.flush(ctx); err != nil {
+		return nil, err
 	}
 	return readLegacyNormalizationCheckpointObject(ctx, batch.transaction, work.job, batch.state, hash, size)
 }
@@ -96,6 +120,9 @@ func (work *legacyNormalizationCheckpointWork) readPrefix(ctx context.Context, p
 	}
 	if batch == nil {
 		return work.store.readLegacyNormalizationPrefix(ctx, work.job, work.state, prefix, offset, length)
+	}
+	if err := batch.flush(ctx); err != nil {
+		return nil, err
 	}
 	return readLegacyNormalizationPrefix(ctx, batch.transaction, work.job, batch.state, prefix, offset, length)
 }

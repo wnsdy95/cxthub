@@ -70,6 +70,7 @@ type legacyCanonicalPreparedFrameWrite struct {
 	numbers *legacyCanonicalNumberValidation
 	binding ContentHash
 	store   legacyNativeCheckpointIO
+	keyRefs *legacyCanonicalPreparedKeyRefs
 	budget  int64
 	state   legacyCanonicalPreparedFrameState
 	fields  *legacyCanonicalPreparedFieldsWrite
@@ -124,7 +125,7 @@ func (work *legacyCanonicalPreparedFrameWrite) step(ctx context.Context) (bool, 
 			keyAt, valueAt = frame.fields.length(), frame.position
 		}
 		work.fields = &legacyCanonicalPreparedFieldsWrite{source: &frame.fields, numbers: work.numbers, binding: work.binding,
-			store: work.store, budget: work.budget - retained, keyAt: keyAt, valueAt: valueAt, keySkip: keySkip}
+			store: work.store, keyRefs: work.keyRefs, budget: work.budget - retained, keyAt: keyAt, valueAt: valueAt, keySkip: keySkip}
 		work.phase++
 		return false, nil
 	}
@@ -248,6 +249,7 @@ type legacyCanonicalPreparedCheckpoint struct {
 	source  *LegacyCanonicalEncoding
 	state   legacyCanonicalPreparedState
 	store   legacyNativeCheckpointIO
+	keyRefs legacyCanonicalPreparedKeyRefs
 	budget  int64
 	numbers *legacyCanonicalPreparedNumbersCheckpoint
 	keys    legacyNativeCheckpointListWriter[legacyCanonicalPreparedKeysState]
@@ -281,6 +283,7 @@ func (work *legacyCanonicalPreparedCheckpoint) retainedBytes() (int64, error) {
 	}
 	var heap docRangeHeaderHeapEstimate
 	heap.allocation(1, int64(unsafe.Sizeof(*work)))
+	work.keyRefs.retained(&heap)
 	heap.allocation(int64(len(work.state.Binding)+len(work.state.Numbers.Pending.Ref.Hash)+len(work.state.Keys.Ref.Hash)+len(work.state.Frames.Ref.Hash)+len(work.ref.Hash)), 1)
 	for _, list := range []interface{ retainedBytes() (int64, error) }{&work.keys, &work.frames} {
 		retained, err := list.retainedBytes()
@@ -350,7 +353,7 @@ func (work *legacyCanonicalPreparedCheckpoint) step(ctx context.Context) (bool, 
 		entry := work.source.mapKeys.at(work.index)
 		if work.fields == nil {
 			work.fields = &legacyCanonicalPreparedFieldsWrite{source: &entry.fields, numbers: &work.source.numbers,
-				binding: work.state.Binding, store: work.store, budget: work.budget - retained, keySkip: -1}
+				binding: work.state.Binding, store: work.store, keyRefs: &work.keyRefs, budget: work.budget - retained, keySkip: -1}
 			return false, nil
 		}
 		childBytes, err := work.fields.retainedBytes()
@@ -384,7 +387,7 @@ func (work *legacyCanonicalPreparedCheckpoint) step(ctx context.Context) (bool, 
 		}
 		if work.frame == nil {
 			work.frame = &legacyCanonicalPreparedFrameWrite{source: work.source.frames.at(work.index), numbers: &work.source.numbers,
-				binding: work.state.Binding, store: work.store, budget: work.budget - retained}
+				binding: work.state.Binding, store: work.store, keyRefs: &work.keyRefs, budget: work.budget - retained}
 			return false, nil
 		}
 		childBytes, err := work.frame.retainedBytes()

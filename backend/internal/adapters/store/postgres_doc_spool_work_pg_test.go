@@ -83,6 +83,17 @@ func (trace *docSpoolWorkPGTrace) TraceQueryStart(ctx context.Context, connectio
 
 func (*docSpoolWorkPGTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+func (trace *docSpoolWorkPGTrace) TraceBatchStart(ctx context.Context, connection *pgx.Conn, batch pgx.TraceBatchStartData) context.Context {
+	for _, query := range batch.Batch.QueuedQueries {
+		trace.TraceQueryStart(ctx, connection, pgx.TraceQueryStartData{SQL: query.SQL, Args: query.Arguments})
+	}
+	return ctx
+}
+
+func (*docSpoolWorkPGTrace) TraceBatchQuery(context.Context, *pgx.Conn, pgx.TraceBatchQueryData) {}
+
+func (*docSpoolWorkPGTrace) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
+
 func docSpoolWorkPGCheckpointWrites(test *testing.T, trace *docSpoolWorkPGTrace) map[string]int {
 	test.Helper()
 	allowed := map[string]string{
@@ -604,7 +615,11 @@ func TestDocSpoolWorkPGPublicPrepareStillRejectsUnverifiedSource(test *testing.T
 			break
 		}
 	}
-	test.Log("provisional mutation classes", docSpoolWorkPGCheckpointWrites(test, trace), "legacy stage writes", trace.privateWrites.Load())
+	mutations := docSpoolWorkPGCheckpointWrites(test, trace)
+	if mutations["checkpoint-object"] == 0 || mutations["checkpoint-cas"] == 0 {
+		test.Fatal("unverified checkpoint fixture did not observe its batched objects and durable root", mutations)
+	}
+	test.Log("provisional mutation classes", mutations, "legacy stage writes", trace.privateWrites.Load())
 	if !errors.Is(failure, domain.ErrIntegrity) || capture.work != nil ||
 		trace.sourceReads.Load() != docSpoolWorkPGSourceQuanta(len(damaged)) {
 		test.Fatal("capture skipped original full-source verification", capture.work, failure, trace.sourceReads.Load(), trace.privateWrites.Load())

@@ -16,6 +16,7 @@ type legacyCanonicalPreparedFieldsWrite struct {
 	numbers  *legacyCanonicalNumberValidation
 	binding  ContentHash
 	store    legacyNativeCheckpointIO
+	keyRefs  *legacyCanonicalPreparedKeyRefs
 	budget   int64
 	position int
 	valueAt  int
@@ -70,11 +71,12 @@ func (work *legacyCanonicalPreparedFieldsWrite) step(ctx context.Context) (bool,
 	if work.phase == 0 || work.phase == 2 {
 		var value any
 		if work.phase == 0 {
-			if work.position >= work.keyAt && work.position != work.keySkip {
-				value = field.key
-			} else {
-				value = ""
+			key := work.key(field)
+			if ref := work.keyRefs.find(key); ref.Bytes != 0 {
+				work.record.Key, work.phase = ref, 2
+				return false, nil
 			}
+			value = key
 		} else if work.position >= work.valueAt {
 			value = field.value
 		}
@@ -104,6 +106,7 @@ func (work *legacyCanonicalPreparedFieldsWrite) step(ctx context.Context) (bool,
 		}
 		if work.phase == 1 {
 			work.record.Key = ref
+			work.keyRefs.remember(work.key(field), ref)
 		} else {
 			work.record.Value = ref
 		}
@@ -117,6 +120,13 @@ func (work *legacyCanonicalPreparedFieldsWrite) step(ctx context.Context) (bool,
 	work.position++
 	work.record, work.phase = legacyCanonicalPreparedFieldState{}, 0
 	return false, nil
+}
+
+func (work *legacyCanonicalPreparedFieldsWrite) key(field *legacyCanonicalKeyField) string {
+	if work.position >= work.keyAt && work.position != work.keySkip {
+		return field.key
+	}
+	return ""
 }
 
 func (work *legacyCanonicalPreparedFieldsWrite) close() {

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func legacyCanonicalPreparedMachineFixture(test *testing.T, numbers bool) (*legacyNormalizationNativeEvent, *LegacyCanonicalEncoding, []byte) {
+func legacyCanonicalPreparedMachineFixture(test *testing.T, cut string) (*legacyNormalizationNativeEvent, *LegacyCanonicalEncoding, []byte) {
 	test.Helper()
 	output := make(map[string]any)
 	for index := 0; index < 32; index++ {
@@ -18,11 +18,18 @@ func legacyCanonicalPreparedMachineFixture(test *testing.T, numbers bool) (*lega
 	output["a-array"] = []any{strings.Repeat("array <&>\ud55c🙂", 42000), map[string]any{"next": []any{true, nil, "tail"}}, "last"}
 	output["z-body"] = strings.Repeat("body <&>\ud55c🙂\"\n", 42000)
 	event := CIREvent{Kind: EventToolResult, Seq: 9, CallID: "prepared-machine", Output: output}
+	if cut == "repeated-keys" {
+		items := make([]any, 64)
+		for position := range items {
+			items[position] = map[string]any{"shared-key": strings.Repeat("x", 2048), "tail-key": true}
+		}
+		event.Output = map[string]any{"items": items}
+	}
 	raw, err := json.Marshal(event)
 	if err != nil {
 		test.Fatal(err)
 	}
-	if numbers {
+	if cut == "number-proof" {
 		raw = []byte(`{"kind":"reasoning","seq":9,"status":"done","provider_metadata":{"turn_id":"number-cursor","create_time":` + strings.Repeat("9", 90000) + `}}`)
 	}
 	native, typed, _ := legacyCanonicalNativePreparationDecode(test, string(raw))
@@ -32,9 +39,9 @@ func legacyCanonicalPreparedMachineFixture(test *testing.T, numbers bool) (*lega
 }
 
 func TestLegacyCanonicalPreparedMachineContinuesActualOutput(test *testing.T) {
-	for _, cut := range []string{"array-child", "body-string", "key-order", "number-proof"} {
+	for _, cut := range []string{"array-child", "body-string", "key-order", "number-proof", "repeated-keys"} {
 		test.Run(cut, func(test *testing.T) {
-			native, encoding, want := legacyCanonicalPreparedMachineFixture(test, cut == "number-proof")
+			native, encoding, want := legacyCanonicalPreparedMachineFixture(test, cut)
 			ctx := context.Background()
 			var output []byte
 			reached := false
@@ -48,6 +55,8 @@ func TestLegacyCanonicalPreparedMachineContinuesActualOutput(test *testing.T) {
 					continue
 				}
 				switch cut {
+				case "repeated-keys":
+					reached = len(output) > 0
 				case "number-proof":
 					reached = encoding.numbers.position > 0 && encoding.numbers.next < encoding.numbers.pending.length()
 				case "key-order":
@@ -75,6 +84,14 @@ func TestLegacyCanonicalPreparedMachineContinuesActualOutput(test *testing.T) {
 				test.Fatal(err)
 			}
 			storage := legacyCanonicalPreparedValueTestStorage(test)
+			keyWrites := 0
+			put := storage.io.Put
+			storage.io.Put = func(ctx context.Context, hash ContentHash, body []byte) error {
+				if hash == HashContent([]byte("shared-key")) {
+					keyWrites++
+				}
+				return put(ctx, hash, body)
+			}
 			binding := HashContent([]byte("prepared-machine-" + cut))
 			retained, err := encoding.RetainedBytes()
 			if err != nil {
@@ -87,9 +104,13 @@ func TestLegacyCanonicalPreparedMachineContinuesActualOutput(test *testing.T) {
 			before, keyWork := encoding.inspectWork, encoding.keyWork
 			ready := false
 			for steps := 0; steps < 1<<18; steps++ {
+				storage.bytes = 0
 				ready, err = writer.step(ctx)
 				if err != nil || encoding.inspectWork != before || encoding.keyWork != keyWork {
 					test.Fatal("checkpoint replayed or advanced the actual output machine", err)
+				}
+				if storage.bytes > LegacyCanonicalEncodingBytes {
+					test.Fatal("checkpoint control batching exceeded its existing I/O quantum", steps, storage.bytes)
 				}
 				if ready {
 					break
@@ -98,10 +119,36 @@ func TestLegacyCanonicalPreparedMachineContinuesActualOutput(test *testing.T) {
 			if !ready {
 				test.Fatal("prepared output checkpoint did not finish within its finite allowance")
 			}
+			if cut == "repeated-keys" && keyWrites != 1 {
+				test.Fatal("one capture repeatedly serialized identical short field keys", keyWrites)
+			}
 			ref, err := writer.take(ctx)
 			grant.release()
 			if err != nil {
 				test.Fatal(err)
+			}
+			if writer.keyRefs != (legacyCanonicalPreparedKeyRefs{}) {
+				test.Fatal("completed checkpoint retained its key references")
+			}
+			if cut == "repeated-keys" {
+				freshGrant, err := native.object.mutation.beginCapture()
+				if err != nil {
+					test.Fatal(err)
+				}
+				fresh, err := newLegacyCanonicalPreparedCheckpoint(ctx, encoding, binding, storage.io, (64<<20)-retained)
+				if err != nil {
+					test.Fatal(err)
+				}
+				for steps := 0; steps < 1<<18 && fresh.keyRefs.find("shared-key").Bytes == 0; steps++ {
+					if _, err := fresh.step(ctx); err != nil {
+						test.Fatal(err)
+					}
+				}
+				if keyWrites != 2 || fresh.keyRefs.find("shared-key").Bytes == 0 {
+					test.Fatal("new capture reused an earlier capture's key authority", keyWrites)
+				}
+				fresh.close()
+				freshGrant.release()
 			}
 			encoding.release()
 			restore, err := newLegacyCanonicalPreparedRestore(ctx, ref, binding, storage.io, 64<<20)

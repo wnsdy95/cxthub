@@ -407,6 +407,18 @@ func (work *preparedLegacyCaptureWork) advanceNormalization(ctx context.Context,
 			}
 		}
 		if consumed || parserCheckpoint || encoderCheckpoint {
+			capture, err := work.normalization.preparation.BeginCheckpoint(ctx)
+			if err != nil {
+				if errors.Is(err, domain.ErrLegacyNormalizationBusy) || errors.Is(err, domain.ErrDocRangeIndexPending) {
+					return outbound.DocRangeWorkPending, nil
+				}
+				return 0, err
+			}
+			defer func() {
+				if capture != nil {
+					capture.Close()
+				}
+			}()
 			if work.checkpoint == nil {
 				stage, err := work.store.ensureLegacyNormalizationStage(ctx, job, work.witness.stage)
 				if err != nil {
@@ -435,12 +447,10 @@ func (work *preparedLegacyCaptureWork) advanceNormalization(ctx context.Context,
 				}
 				work.checkpoint = &legacyNormalizationCheckpointWork{store: work.store, job: work.job, state: state}
 			}
-			if err := work.checkpoint.begin(ctx, work.normalization.preparation); err != nil {
-				if errors.Is(err, domain.ErrLegacyNormalizationBusy) || errors.Is(err, domain.ErrDocRangeIndexPending) {
-					return outbound.DocRangeWorkPending, nil
-				}
+			if err := work.checkpoint.beginCapture(ctx, capture); err != nil {
 				return 0, err
 			}
+			capture = nil
 		}
 	}
 	if !complete {
