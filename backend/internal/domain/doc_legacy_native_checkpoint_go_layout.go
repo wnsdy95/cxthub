@@ -8,12 +8,11 @@ import (
 )
 
 type legacyNativeGoLayoutVisit struct {
-	key         legacyNativeCheckpointGoGraphKey
-	length      int
-	source      []any
-	fullBacking bool
-	group       *legacyNativeGoLayoutGroup
-	active      bool
+	key    legacyNativeCheckpointGoGraphKey
+	length int
+	source []any
+	group  *legacyNativeGoLayoutGroup
+	active bool
 }
 
 type legacyNativeGoLayoutLookup struct {
@@ -49,6 +48,7 @@ type legacyNativeCheckpointGoLayout struct {
 	frame       *legacyNativeGoLayoutFrame
 	views       legacyCanonicalPages[legacyCanonicalKeyField]
 	groups      legacyCanonicalPages[*legacyNativeGoLayoutGroup]
+	backings    legacyCanonicalPages[*legacyNativeGoLayoutGroup]
 	order       legacyCanonicalKeyOrder
 	current     *legacyNativeGoLayoutGroup
 	rootIndex   int
@@ -58,6 +58,7 @@ type legacyNativeCheckpointGoLayout struct {
 	depth       int
 	allocations int64
 	phase       uint8
+	overlap     bool
 	ready       bool
 }
 
@@ -78,6 +79,7 @@ func (layout *legacyNativeCheckpointGoLayout) retainedBytes() (int64, error) {
 	layout.views.retained(&heap)
 	legacyCanonicalStorageAllocation(&heap, layout.views.length(), int64(unsafe.Sizeof(uintptr(0))))
 	layout.groups.retained(&heap)
+	layout.backings.retained(&heap)
 	legacyCanonicalStorageAllocation(&heap, layout.groups.length(), int64(unsafe.Sizeof(legacyNativeGoLayoutGroup{})))
 	heap.include(docRangeHeaderHeapEstimate{bytes: layout.allocations})
 	return heap.bytes, heap.err
@@ -192,6 +194,8 @@ func (layout *legacyNativeCheckpointGoLayout) discover(ctx context.Context) erro
 	frame := layout.frame
 	if frame == nil {
 		if layout.rootIndex == len(layout.roots) {
+			layout.root, layout.roots = nil, nil
+			layout.nodes, layout.visits = 0, int64(layout.views.length())
 			layout.order = newLegacyCanonicalKeyOrder(layout.views.length(), false)
 			layout.phase = 1
 			return nil
@@ -212,11 +216,8 @@ func (layout *legacyNativeCheckpointGoLayout) discover(ctx context.Context) erro
 			return layout.push(ctx, frame.iterator.Value().Interface())
 		}
 	} else {
-		for checked := 0; checked < legacyNativeCheckpointPageItems/4 && frame.position < key.capacity; checked++ {
+		if frame.position < key.capacity {
 			value := frame.source.([]any)[:key.capacity][frame.position]
-			if frame.position >= frame.visit.length && value != nil {
-				frame.visit.fullBacking = true
-			}
 			frame.position++
 			before := layout.frame
 			if err := layout.push(ctx, value); err != nil {
@@ -237,6 +238,10 @@ func (layout *legacyNativeCheckpointGoLayout) discover(ctx context.Context) erro
 
 func (layout *legacyNativeCheckpointGoLayout) groupNext() error {
 	if layout.position == layout.views.length() {
+		if !layout.overlap {
+			*layout = legacyNativeCheckpointGoLayout{parent: layout.parent, work: layout.work, ready: true}
+			return nil
+		}
 		layout.position, layout.phase = 0, 3
 		return nil
 	}
@@ -279,6 +284,7 @@ func (layout *legacyNativeCheckpointGoLayout) groupNext() error {
 			return ErrIntegrity
 		}
 		group.end = max(group.end, end)
+		layout.overlap = true
 	}
 	group.views++
 	visit.group = group
@@ -319,12 +325,28 @@ func (layout *legacyNativeCheckpointGoLayout) step(ctx context.Context) error {
 		var err error
 		switch layout.phase {
 		case 0:
-			err = layout.discover(ctx)
+			for transitions := 0; transitions < legacyNativeCheckpointPageItems/4 && layout.phase == 0; transitions++ {
+				err = layout.discover(ctx)
+				if err != nil {
+					break
+				}
+			}
 		case 1:
-			_, ready, _, failure := layout.order.advance(&layout.views, canonicalCheckBytes)
-			err = failure
-			if ready {
-				layout.phase = 2
+			remaining := canonicalCheckBytes / 4
+			for transitions := 0; transitions < legacyNativeCheckpointPageItems/4; transitions++ {
+				used, ready, yield, failure := layout.order.advance(&layout.views, remaining)
+				if failure != nil {
+					err = failure
+					break
+				}
+				remaining -= used
+				if ready {
+					layout.phase = 2
+					break
+				}
+				if yield {
+					break
+				}
 			}
 		case 2:
 			err = layout.groupNext()
@@ -333,15 +355,7 @@ func (layout *legacyNativeCheckpointGoLayout) step(ctx context.Context) error {
 		case 4:
 			err = layout.copyNext(ctx)
 		case 5:
-			if layout.position == layout.groups.length() {
-				layout.ready = true
-			} else {
-				group := *layout.groups.at(layout.position)
-				if group.source != nil {
-					group.source = group.source[:group.length]
-				}
-				layout.position++
-			}
+			err = layout.retainBacking()
 		default:
 			return ErrIntegrity
 		}
@@ -350,6 +364,62 @@ func (layout *legacyNativeCheckpointGoLayout) step(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (layout *legacyNativeCheckpointGoLayout) retainBacking() error {
+	if layout.position == layout.groups.length() {
+		*layout = legacyNativeCheckpointGoLayout{parent: layout.parent, work: layout.work,
+			groups: layout.backings, allocations: layout.allocations, ready: true}
+		return nil
+	}
+	group := *layout.groups.at(layout.position)
+	if group.source != nil {
+		_, future, err := layout.backings.appendRequirements()
+		if err != nil {
+			return err
+		}
+		var current docRangeHeaderHeapEstimate
+		layout.backings.retained(&current)
+		if future.err != nil || current.err != nil || future.bytes < current.bytes {
+			return ErrIntegrity
+		}
+		if err := layout.admit(future.bytes - current.bytes); err != nil {
+			return err
+		}
+		group.source = group.source[:group.length]
+		if err := layout.backings.append(group); err != nil {
+			return err
+		}
+	}
+	layout.position++
+	return nil
+}
+
+func (layout *legacyNativeCheckpointGoLayout) backing(key legacyNativeCheckpointGoGraphKey) (*legacyNativeGoLayoutGroup, error) {
+	if !layout.ready || key.kind != legacyNativeCheckpointArray {
+		return nil, ErrIntegrity
+	}
+	if key.capacity == 0 {
+		return nil, nil
+	}
+	const width = uintptr(unsafe.Sizeof(any(nil)))
+	end := key.address + uintptr(key.capacity)*width
+	lower, upper := 0, layout.groups.length()
+	for lower < upper {
+		middle := lower + (upper-lower)/2
+		group := *layout.groups.at(middle)
+		if key.address >= group.end {
+			lower = middle + 1
+		} else if end <= group.start {
+			upper = middle
+		} else {
+			if key.address < group.start || end > group.end || (key.address-group.start)%width != 0 {
+				return nil, ErrConflict
+			}
+			return group, nil
+		}
+	}
+	return nil, nil
 }
 
 func (layout *legacyNativeCheckpointGoLayout) close() {
