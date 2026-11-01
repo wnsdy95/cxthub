@@ -19,6 +19,8 @@ const docRangeEnqueueTimeout = 500 * time.Millisecond
 
 const legacyRangeValidationRevision = 1
 
+var errDocRangeJobReleased = errors.New("document range job lease was released")
+
 const docRangeJobActiveCountSQL = `SELECT count(*) FROM (
  SELECT 1 FROM doc_range_jobs_v1 WHERE repo_id=$1 AND state IN ('waiting','running','retrying') LIMIT $2
 ) active`
@@ -327,6 +329,9 @@ func (s *PostgresStore) ClaimDocRangeJob(ctx context.Context, now time.Time, lea
 			return domain.DocRangeIndexJob{}, err
 		}
 		claimed, err := s.claimDocRangeCandidate(ctx, now, lease, job)
+		if errors.Is(err, errDocRangeJobReleased) {
+			return domain.DocRangeIndexJob{}, domain.ErrNotFound
+		}
 		if !errors.Is(err, domain.ErrNotFound) {
 			return claimed, err
 		}
@@ -377,7 +382,7 @@ func (s *PostgresStore) claimDocRangeCandidate(ctx context.Context, now time.Tim
 			if err := transaction.Commit(ctx); err != nil {
 				return domain.DocRangeIndexJob{}, err
 			}
-			return domain.DocRangeIndexJob{}, domain.ErrNotFound
+			return domain.DocRangeIndexJob{}, errDocRangeJobReleased
 		}
 	}
 	if _, err := transaction.Exec(ctx, `SET LOCAL cxt.doc_range_worker_protocol='4'`); err != nil {

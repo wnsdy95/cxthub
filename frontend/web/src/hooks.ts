@@ -571,7 +571,10 @@ export function useAcceptInvite() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (token: string) => api.acceptInvite(token),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['repositories'] }),
+    onSuccess: async () => {
+      await qc.cancelQueries({ queryKey: ['repositories'] });
+      await qc.invalidateQueries({ queryKey: ['repositories'] });
+    },
   });
 }
 

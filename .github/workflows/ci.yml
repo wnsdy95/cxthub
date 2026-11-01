@@ -236,6 +236,10 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -255,11 +259,12 @@ jobs:
         run: npx playwright install chromium --with-deps
       - name: Browser UI E2E
         working-directory: frontend/web
-        run: npm run test:e2e
+        run: npm run test:e2e -- --shard=${{ matrix.shard }}/2 --workers=1
         env:
           CXT_E2E_FULLSTACK: "1"
           CXT_E2E_DSN: postgres://cxt:cxt@localhost:5432/cxthub_browser_test?sslmode=disable
       - name: Windowed document combined candidate
+        if: matrix.shard == 1
         working-directory: frontend/web
         run: npm run test:e2e -- e2e/document-combined-adoption.spec.ts --project=chromium --workers=1
         env:
@@ -268,7 +273,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: frontend/web/playwright-report/
           retention-days: 14
 

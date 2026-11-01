@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 const legacyNativeCheckpointVersion = 1
 const legacyNativeCheckpointPageItems = 32
@@ -46,17 +49,35 @@ type legacyNativeCheckpointMember struct {
 
 type legacyNativeCheckpointOwner struct {
 	Version     uint8                            `json:"v"`
-	Identity    uint64                           `json:"i"`
 	Kind        uint8                            `json:"k"`
+	FullBacking bool                             `json:"f,omitempty"`
+	Identity    uint64                           `json:"i"`
 	Length      uint64                           `json:"n"`
 	Capacity    uint64                           `json:"c"`
 	Maximum     uint64                           `json:"m"`
 	Revision    uint64                           `json:"r"`
 	Members     legacyNativeCheckpointTree       `json:"e"`
 	Dirty       legacyNativeCheckpointTree       `json:"d"`
-	FullBacking bool                             `json:"f,omitempty"`
 	Visible     uint64                           `json:"l,omitempty"`
 	Allocation  *legacyNativeCheckpointArrayView `json:"a,omitempty"`
+}
+
+func (record legacyNativeCheckpointOwner) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Version     uint8                            `json:"v"`
+		Identity    uint64                           `json:"i"`
+		Kind        uint8                            `json:"k"`
+		Length      uint64                           `json:"n"`
+		Capacity    uint64                           `json:"c"`
+		Maximum     uint64                           `json:"m"`
+		Revision    uint64                           `json:"r"`
+		Members     legacyNativeCheckpointTree       `json:"e"`
+		Dirty       legacyNativeCheckpointTree       `json:"d"`
+		FullBacking bool                             `json:"f,omitempty"`
+		Visible     uint64                           `json:"l,omitempty"`
+		Allocation  *legacyNativeCheckpointArrayView `json:"a,omitempty"`
+	}{record.Version, record.Identity, record.Kind, record.Length, record.Capacity, record.Maximum,
+		record.Revision, record.Members, record.Dirty, record.FullBacking, record.Visible, record.Allocation})
 }
 
 func (record legacyNativeCheckpointOwner) logicalLength() uint64 {

@@ -141,10 +141,12 @@ func (work *legacyNativeCheckpointGoGraph) prepareBacking(ctx context.Context, f
 	work.resource.close()
 	work.resource = nil
 	frame.group.owner, frame.group.preparing = owner, false
-	frame.group.entry.resource = owner
-	if err := work.registry.account(frame.group.entry); err != nil {
-		return err
+	metadata := docRangeHeaderHeapEstimate{bytes: work.registry.owned}
+	metadata.include(owner.metadataHeap())
+	if metadata.err != nil {
+		return metadata.err
 	}
+	work.registry.owned = metadata.bytes
 	frame.child, frame.phase = legacyNativeAnyValue{}, legacyNativeCheckpointGoGraphStart
 	return nil
 }

@@ -93,7 +93,6 @@ type legacyNativeCheckpointGoGraphEntry struct {
 	fullBacking bool
 	verified    bool
 	synthetic   bool
-	resource    *legacyNativeResourceOwner
 }
 
 type legacyNativeCheckpointGoGraphRegistry struct {
@@ -223,9 +222,6 @@ func (registry *legacyNativeCheckpointGoGraphRegistry) account(entry *legacyNati
 	heap := docRangeHeaderHeapEstimate{bytes: native.bytes - entry.descendants}
 	if entry.array != nil && entry.array.resource != nil {
 		heap = entry.array.viewMetadataHeap()
-	}
-	if entry.resource != nil {
-		heap.include(entry.resource.metadataHeap())
 	}
 	heap.include(docRangeHeaderHeapEstimate{bytes: entry.sourceBytes})
 	entry.samples.retained(&heap)
@@ -517,26 +513,26 @@ func (work *legacyNativeCheckpointGoGraph) begin(ctx context.Context, frame *leg
 			layout = work.layout
 		}
 		if layout != nil && layout.ready && !frame.synthetic {
-			visit, _ := layout.lookup(key)
-			if visit == nil || visit.key != key {
-				return ErrConflict
+			group, err := layout.backing(key)
+			if err != nil {
+				return err
 			}
-			frame.fullBacking = visit.fullBacking
-			if visit.group != nil && visit.group.source != nil {
-				frame.group = visit.group
-				if visit.group.owner == nil {
-					if visit.group.preparing {
+			if group != nil {
+				frame.group = group
+				if group.owner == nil {
+					if group.preparing {
 						return ErrIntegrity
 					}
-					visit.group.preparing = true
+					group.preparing = true
 					frame.phase = legacyNativeCheckpointGoGraphWaitingBacking
-					if err := work.push(ctx, visit.group.source); err != nil {
+					if err := work.push(ctx, group.source); err != nil {
 						return err
 					}
 					work.frame.synthetic = true
 					return nil
 				}
-				return work.register(ctx, frame)
+				frame.position, frame.phase = frame.length, legacyNativeCheckpointGoGraphTail
+				return nil
 			}
 		}
 		frame.overlap, frame.phase = work.registry.ranges, legacyNativeCheckpointGoGraphOverlap
