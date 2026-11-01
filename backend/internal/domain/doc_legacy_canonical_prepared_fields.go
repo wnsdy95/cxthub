@@ -2,13 +2,43 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"unsafe"
 )
 
+const legacyCanonicalPreparedFieldInlineBytes = 512
+
+type legacyCanonicalPreparedFieldInline struct {
+	Binding ContentHash     `json:"binding"`
+	Pair    json.RawMessage `json:"pair"`
+}
+
 type legacyCanonicalPreparedFieldState struct {
-	Key       legacyNativeCheckpointRef `json:"key"`
-	Value     legacyNativeCheckpointRef `json:"value"`
-	ChildKeys int                       `json:"child_keys"`
+	Key       legacyNativeCheckpointRef           `json:"key"`
+	Value     legacyNativeCheckpointRef           `json:"value"`
+	ChildKeys int                                 `json:"child_keys"`
+	Inline    *legacyCanonicalPreparedFieldInline `json:"inline,omitempty"`
+}
+
+func (record legacyCanonicalPreparedFieldState) inlineValues(binding ContentHash) (string, any, error) {
+	if record.Inline == nil || record.Key != (legacyNativeCheckpointRef{}) || record.Value != (legacyNativeCheckpointRef{}) ||
+		record.ChildKeys < 0 || record.Inline.Binding != binding || ValidateContentHash(binding) != nil ||
+		len(record.Inline.Pair) == 0 || len(record.Inline.Pair) > legacyCanonicalPreparedFieldInlineBytes {
+		return "", nil, ErrIntegrity
+	}
+	body, err := json.Marshal(record)
+	if err != nil || len(body) > legacyCanonicalPreparedFieldInlineBytes {
+		return "", nil, ErrIntegrity
+	}
+	values, err := legacyCanonicalPreparedUnpackArray(record.Inline.Pair)
+	if err != nil || len(values) != 2 {
+		return "", nil, ErrIntegrity
+	}
+	key, valid := values[0].(string)
+	if !valid {
+		return "", nil, ErrIntegrity
+	}
+	return key, values[1], nil
 }
 
 type legacyCanonicalPreparedFieldsWrite struct {
@@ -35,6 +65,10 @@ func (work *legacyCanonicalPreparedFieldsWrite) retainedBytes() (int64, error) {
 	}
 	var heap docRangeHeaderHeapEstimate
 	heap.allocation(1, int64(unsafe.Sizeof(*work)))
+	if work.record.Inline != nil {
+		heap.allocation(1, int64(unsafe.Sizeof(*work.record.Inline)))
+		heap.allocation(int64(cap(work.record.Inline.Pair)), 1)
+	}
 	retained, err := work.list.retainedBytes()
 	heap.include(docRangeHeaderHeapEstimate{bytes: retained, err: err})
 	if work.value != nil {
@@ -42,6 +76,36 @@ func (work *legacyCanonicalPreparedFieldsWrite) retainedBytes() (int64, error) {
 		heap.include(docRangeHeaderHeapEstimate{bytes: retained, err: err})
 	}
 	return heap.bytes, heap.err
+}
+
+func (work *legacyCanonicalPreparedFieldsWrite) inlineField(field *legacyCanonicalKeyField) error {
+	if !legacyCanonicalPreparedInlineArrayValid([]any{field.key, field.value}) {
+		return nil
+	}
+	if field.childKeys < 0 || ValidateContentHash(work.binding) != nil {
+		return ErrIntegrity
+	}
+	key, value := field.key, field.value
+	if work.position < work.keyAt || work.position == work.keySkip {
+		key = ""
+	}
+	if work.position < work.valueAt {
+		value = nil
+	}
+	pair := legacyCanonicalPreparedPackArray([]any{key, value})
+	if pair == nil {
+		return ErrIntegrity
+	}
+	record := legacyCanonicalPreparedFieldState{ChildKeys: field.childKeys,
+		Inline: &legacyCanonicalPreparedFieldInline{Binding: work.binding, Pair: pair}}
+	body, err := json.Marshal(record)
+	if err != nil {
+		return ErrIntegrity
+	}
+	if len(body) <= legacyCanonicalPreparedFieldInlineBytes {
+		work.record, work.phase = record, 4
+	}
+	return nil
 }
 
 func (work *legacyCanonicalPreparedFieldsWrite) step(ctx context.Context) (bool, error) {
@@ -66,6 +130,15 @@ func (work *legacyCanonicalPreparedFieldsWrite) step(ctx context.Context) (bool,
 	field := work.source.at(work.position)
 	if field == nil {
 		return false, ErrIntegrity
+	}
+	if work.phase == 0 {
+		if err := work.inlineField(field); err != nil {
+			return false, err
+		}
+		retained, err = work.retainedBytes()
+		if err != nil || retained+legacyNativeAnyCheckpointScratch > work.budget {
+			return false, ErrDocumentResourceLimit
+		}
 	}
 	if work.phase == 0 || work.phase == 2 {
 		var value any
@@ -186,6 +259,29 @@ func (work *legacyCanonicalPreparedFieldsRestore) step(ctx context.Context) (boo
 		if err != nil || !found {
 			work.ready = err == nil
 			return work.ready, err
+		}
+		if record.Inline != nil {
+			key, value, err := record.inlineValues(work.binding)
+			if err != nil {
+				return false, err
+			}
+			var payload docRangeHeaderHeapEstimate
+			payload.allocation(1, int64(unsafe.Sizeof(key)))
+			payload.allocation(int64(len(key)), 1)
+			switch scalar := value.(type) {
+			case string:
+				payload.allocation(1, int64(unsafe.Sizeof(scalar)))
+				payload.allocation(int64(len(scalar)), 1)
+			case bool:
+				payload.allocation(1, int64(unsafe.Sizeof(scalar)))
+			}
+			retained, err = work.retainedBytes()
+			if err != nil || payload.err != nil || retained+payload.bytes+legacyNativeAnyCheckpointScratch > work.budget {
+				return false, ErrDocumentResourceLimit
+			}
+			work.payload.include(payload)
+			work.record, work.field, work.phase = record, legacyCanonicalKeyField{key: key, value: value}, 5
+			return false, work.payload.err
 		}
 		if !record.Key.valid() || !record.Value.valid() || record.ChildKeys < 0 {
 			return false, ErrIntegrity

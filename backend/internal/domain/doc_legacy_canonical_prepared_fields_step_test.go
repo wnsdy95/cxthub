@@ -3,15 +3,17 @@ package domain
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func TestLegacyCanonicalPreparedFieldsKeepFormatWithoutEmptySetupSteps(test *testing.T) {
 	ctx := context.Background()
 	binding := HashContent([]byte("prepared-field-step"))
+	fallbackValue := strings.Repeat("value", 16)
 	expectedStorage := legacyCanonicalPreparedValueTestStorage(test)
 	key := legacyCanonicalPreparedValueTestWrite(test, "name", nil, binding, expectedStorage, legacyCanonicalPreparedValueTestBudget)
-	value := legacyCanonicalPreparedValueTestWrite(test, "value", nil, binding, expectedStorage, legacyCanonicalPreparedValueTestBudget)
+	value := legacyCanonicalPreparedValueTestWrite(test, fallbackValue, nil, binding, expectedStorage, legacyCanonicalPreparedValueTestBudget)
 	list := legacyNativeCheckpointListWriter[legacyCanonicalPreparedFieldState]{}
 	defer list.close()
 	if err := list.append(ctx, expectedStorage.io, legacyCanonicalPreparedFieldState{Key: key, Value: value}); err != nil {
@@ -22,7 +24,7 @@ func TestLegacyCanonicalPreparedFieldsKeepFormatWithoutEmptySetupSteps(test *tes
 		test.Fatal(err)
 	}
 	fields := legacyCanonicalPages[legacyCanonicalKeyField]{}
-	if err := fields.append(legacyCanonicalKeyField{key: "name", value: "value"}); err != nil {
+	if err := fields.append(legacyCanonicalKeyField{key: "name", value: fallbackValue}); err != nil {
 		test.Fatal(err)
 	}
 	storage := legacyCanonicalPreparedValueTestStorage(test)
