@@ -197,7 +197,7 @@ func (layout *legacyNativeCheckpointGoLayout) discover(ctx context.Context) erro
 			parent.registry.active == nil && parent.registry.first == nil && parent.identity.first == nil {
 			start := layout.rootIndex
 			for roots := 0; roots < 32 && layout.rootIndex < len(layout.roots) &&
-				legacyNativeCheckpointGoGraphSetTrivial(layout.roots[layout.rootIndex]); roots++ {
+				parent.trivialRoot(layout.rootIndex, layout.roots[layout.rootIndex]); roots++ {
 				if err := parent.checkTrivialRoot(ctx); err != nil {
 					return err
 				}

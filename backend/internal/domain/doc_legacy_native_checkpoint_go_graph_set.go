@@ -322,9 +322,12 @@ func legacyNativeCheckpointGoGraphSetScalar(value any) bool {
 	}
 }
 
-func legacyNativeCheckpointGoGraphSetTrivial(value any) bool {
+func (work *legacyNativeCheckpointGoGraphSet) trivialRoot(index int, value any) bool {
+	if work.record != nil && work.record.state.HasCreateTime && index == legacyCanonicalSourceNumberRoot {
+		return false
+	}
 	if text, ok := value.(string); ok {
-		return text == ""
+		return len(text) <= 64
 	}
 	return legacyNativeCheckpointGoGraphSetScalar(value)
 }
@@ -417,7 +420,7 @@ func (work *legacyNativeCheckpointGoGraphSet) advance(ctx context.Context) error
 		(work.layout != nil && work.layout.ready || !legacyNativeCheckpointGoGraphSetScalar(work.values[work.position])) {
 		start := work.position
 		for roots := 0; roots < 32 && work.position < len(work.values) &&
-			legacyNativeCheckpointGoGraphSetTrivial(work.values[work.position]) && work.registry.first == nil && work.identity.first == nil; roots++ {
+			work.trivialRoot(work.position, work.values[work.position]) && work.registry.first == nil && work.identity.first == nil; roots++ {
 			if err := work.checkTrivialRoot(ctx); err != nil {
 				return err
 			}

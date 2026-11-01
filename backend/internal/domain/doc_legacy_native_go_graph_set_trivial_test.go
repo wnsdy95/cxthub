@@ -145,45 +145,51 @@ func (ctx legacyNativeGoGraphSetTrivialBatchContext) Err() error {
 }
 
 func TestLegacyNativeGoGraphSetTrivialBatchStopsAtIOAndOwners(test *testing.T) {
-	shared := map[string]any{"child": true}
-	roots := []any{nil, true, "text", "", false, shared, false, ""}
-	storage := legacyNativeGoGraphSetW85Storage(test)
-	work, err := newLegacyNativeCheckpointGoGraphSet(context.Background(), roots, HashContent([]byte("trivial-batch-boundaries")), storage.io, legacyNativeGoGraphSetW85Budget)
-	if err != nil {
-		test.Fatal(err)
-	}
-	defer work.close()
-	legacyNativeGoGraphSetTrivialLayout(test, work, storage)
-	for _, expected := range []struct{ position, writes, transferred int }{{2, 0, 0}, {3, 0, 0}, {5, 0, 0}} {
-		if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != expected.position ||
-			storage.writes != expected.writes || storage.transferred != expected.transferred || work.prepare != nil || work.write != nil {
-			test.Fatal("batch crossed a text CAS or owner boundary", expected, work.position, storage.writes, storage.transferred, ready, err)
+	for _, text := range []string{"text", strings.Repeat("x", 65)} {
+		shared := map[string]any{"child": true}
+		roots := []any{nil, true, text, "", false, shared, false, ""}
+		storage := legacyNativeGoGraphSetW85Storage(test)
+		work, err := newLegacyNativeCheckpointGoGraphSet(context.Background(), roots, HashContent([]byte("trivial-batch-boundaries")), storage.io, legacyNativeGoGraphSetW85Budget)
+		if err != nil {
+			test.Fatal(err)
 		}
-	}
-	if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != 5 || work.prepare == nil {
-		test.Fatal("map root lost its original preparation operation", ready, err)
-	}
-	for range legacyNativeGoGraphSetW85Steps {
-		if work.position == 6 {
-			break
+		defer work.close()
+		legacyNativeGoGraphSetTrivialLayout(test, work, storage)
+		expectedSteps := []struct{ position, writes, transferred int }{{5, 0, 0}}
+		if len(text) > 64 {
+			expectedSteps = []struct{ position, writes, transferred int }{{2, 0, 0}, {3, 1, len(text)}, {5, 1, len(text)}}
 		}
-		if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready {
-			test.Fatal("map root did not finish", ready, err)
+		for _, expected := range expectedSteps {
+			if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != expected.position ||
+				storage.writes != expected.writes || storage.transferred != expected.transferred || work.prepare != nil || work.write != nil {
+				test.Fatal("batch crossed a text CAS or owner boundary", expected, work.position, storage.writes, storage.transferred, ready, err)
+			}
 		}
+		if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != 5 || work.prepare == nil {
+			test.Fatal("map root lost its original preparation operation", ready, err)
+		}
+		for range legacyNativeGoGraphSetW85Steps {
+			if work.position == 6 {
+				break
+			}
+			if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready {
+				test.Fatal("map root did not finish", ready, err)
+			}
+		}
+		if work.position != 6 || work.registry.first == nil || work.identity.first == nil {
+			test.Fatal("missing registered root owner")
+		}
+		identity := work.identity.nextID
+		if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != 6 || work.prepare == nil || work.identity.nextID != identity {
+			test.Fatal("registered root map allowed scalar fast path", ready, err)
+		}
+		shared["child"] = false
+		legacyNativeGoGraphSetW85Reject[legacyNativeCheckpointRef](test, work, nil, storage, ErrConflict, legacyNativeGoGraphSetW85Budget)
 	}
-	if work.position != 6 || work.registry.first == nil || work.identity.first == nil {
-		test.Fatal("missing registered root owner")
-	}
-	identity := work.identity.nextID
-	if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != 6 || work.prepare == nil || work.identity.nextID != identity {
-		test.Fatal("registered root map allowed scalar fast path", ready, err)
-	}
-	shared["child"] = false
-	legacyNativeGoGraphSetW85Reject[legacyNativeCheckpointRef](test, work, nil, storage, ErrConflict, legacyNativeGoGraphSetW85Budget)
 }
 
 func TestLegacyNativeGoGraphSetTrivialLayoutRootBatch(test *testing.T) {
-	for _, roots := range [][]any{make([]any, 32), {nil, false, "text", true, map[string]any{"child": nil}, nil, false}} {
+	for _, roots := range [][]any{make([]any, 32), {nil, false, "text", true, map[string]any{"child": nil}, nil, false}, {nil, false, strings.Repeat("x", 65), true, map[string]any{"child": nil}, nil, false}} {
 		storage := legacyNativeGoGraphSetW85Storage(test)
 		work, err := newLegacyNativeCheckpointGoGraphSet(context.Background(), roots, HashContent([]byte("trivial-layout-batch")), storage.io, legacyNativeGoGraphSetW85Budget)
 		if err != nil {
@@ -196,7 +202,10 @@ func TestLegacyNativeGoGraphSetTrivialLayoutRootBatch(test *testing.T) {
 		layout := work.layout
 		expected := []int{32}
 		if len(roots) != 32 {
-			expected = []int{2, 3, 4, 5}
+			expected = []int{4, 5}
+			if len(roots[2].(string)) > 64 {
+				expected = []int{2, 3, 4, 5}
+			}
 		}
 		for _, position := range expected {
 			if err := layout.discover(context.Background()); err != nil || layout.rootIndex != position || work.position != 0 || work.identity.nextID != 0 || storage.reads != 0 || storage.writes != 0 {
@@ -307,17 +316,24 @@ func TestLegacyNativeGoGraphSetTrivialBatchCurrentHeadroom(test *testing.T) {
 }
 
 func TestLegacyNativeGoGraphSetTrivialBatchCapturePerRoot(test *testing.T) {
-	for _, phase := range []string{"layout", "wire"} {
+	for _, phase := range []string{"layout", "wire", "layout-inline", "wire-inline"} {
 		test.Run(phase, func(test *testing.T) {
-			list := legacyNativeEventRecordFieldsTestList(test, legacyNativeEventValue{event: CIREvent{}})
+			event := CIREvent{}
+			if strings.HasSuffix(phase, "inline") {
+				event = CIREvent{Kind: EventToolCall, ID: "second"}
+			}
+			list := legacyNativeEventRecordFieldsTestList(test, legacyNativeEventValue{event: event})
 			storage := legacyNativeGoGraphSetW85Storage(test)
 			work, err := newLegacyNativeEventRecordFieldsCheckpoint(context.Background(), list, 0, HashContent([]byte("trivial-batch-capture")), storage.io, legacyNativeGoGraphSetW85Budget)
 			if err != nil {
 				test.Fatal(err)
 			}
 			defer work.close()
+			if err := list.mutation.enter(); !errors.Is(err, ErrLegacyNormalizationBusy) {
+				test.Fatal("batched field did not hold mutation exclusion", err)
+			}
 			graph := work.graph
-			if phase == "wire" {
+			if strings.HasPrefix(phase, "wire") {
 				legacyNativeGoGraphSetTrivialLayout(test, graph, storage)
 			} else if ready, err := graph.step(context.Background()); ready || err != nil || graph.layout == nil {
 				test.Fatal("layout setup", ready, err)
@@ -325,7 +341,7 @@ func TestLegacyNativeGoGraphSetTrivialBatchCapturePerRoot(test *testing.T) {
 			injected := false
 			ctx := legacyNativeGoGraphSetTrivialBatchContext{Context: context.Background(), check: func() error {
 				position := graph.position
-				if phase == "layout" {
+				if strings.HasPrefix(phase, "layout") {
 					position = graph.layout.rootIndex
 				}
 				if !injected && position == 1 {
@@ -503,24 +519,27 @@ func TestLegacyNativeGoGraphSetShortScalarOneLeafPerStep(test *testing.T) {
 	}
 	defer work.close()
 	legacyNativeGoGraphSetTrivialLayout(test, work, storage)
-	for position, root := range roots {
+	for _, position := range []int{2, 3} {
+		start := work.position
 		before, err := work.retainedBytes()
 		if err != nil {
 			test.Fatal(err)
 		}
 		writes, transferred := storage.writes, storage.transferred
-		if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != position+1 || work.identity.nextID != uint64(position+1) {
+		if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != position || work.identity.nextID != uint64(position) {
 			test.Fatal("short scalar did not complete in one step", position, ready, err)
 		}
-		wantWrites, wantBytes := 1, len(root.(string))
-		if wantBytes <= 64 {
-			wantWrites, wantBytes = 0, 0
+		wantWrites, wantBytes := 0, 0
+		if position == len(roots) {
+			wantWrites, wantBytes = 1, len(roots[position-1].(string))
 		}
 		if work.prepare != nil || work.write != nil || work.phase != 0 || storage.reads != 0 || storage.writes-writes != wantWrites || storage.transferred-transferred != wantBytes {
 			test.Fatal("short scalar exceeded its one-leaf byte/operation bound")
 		}
 		var expected docRangeHeaderHeapEstimate
-		legacyNativeCheckpointGraphCapturedValueHeap(&expected, work.state.Roots[position])
+		for index := start; index < position; index++ {
+			legacyNativeCheckpointGraphCapturedValueHeap(&expected, work.state.Roots[index])
+		}
 		after, err := work.retainedBytes()
 		if err != nil || expected.err != nil || after-before != expected.bytes {
 			test.Fatal("short scalar wire/hash ownership changed retained heap", before, after, expected, err)
