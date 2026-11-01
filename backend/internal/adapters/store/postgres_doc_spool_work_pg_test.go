@@ -153,7 +153,8 @@ func docSpoolWorkPGStep(test *testing.T, work *preparedLegacyByteWork, ctx conte
 			test.Fatal("spooling did not account for its partial source extent", step, work.spooling.SourceBytes(), expectedBytes)
 		}
 	} else {
-		if work.spooling != nil || !reflect.ValueOf(work.header).IsZero() || work.preparation == nil ||
+		if work.spooling != nil || work.preparation == nil || work.recoveryReady ||
+			work.header.Reference() != work.preparation.Reference() || work.header.PlanKey() != work.preparation.PlanKey() ||
 			work.preparation.ObjectCount() != 0 || work.session.proof.Valid() {
 			test.Fatal("last local spool quantum did not release raw proof state and create unstepped metadata")
 		}
@@ -243,9 +244,13 @@ func TestDocSpoolWorkPGDirectCompatibilityPreparationAndTwoPassQuantaStayPrivate
 				test.Fatal("first post-spool step did not leave metadata finalization pending", complete, err)
 			}
 			stage.next, stage.complete = min(spec.Blocks, domain.DocLegacyByteBackfillBatchBlocks), spec.Blocks <= domain.DocLegacyByteBackfillBatchBlocks
+			stage.incarnation = work.session.stage.incarnation
 			legacyByteStagePGAssertStored(test, storage, ctx, fixture, stage)
 			if trace.privateWrites.Load() == 0 || trace.sourceReads.Load() != 1 {
 				test.Fatal("private copying did not begin exclusively after local verification", trace.privateWrites.Load(), trace.sourceReads.Load())
+			}
+			if !work.recoveryReady || !reflect.ValueOf(work.header).IsZero() {
+				test.Fatal("persisted recovery header retained its metadata seed")
 			}
 			docRangeWorkPGAssertMetadataPending(test, work, ctx, job)
 			docRangeWorkPGAssertClosed(test, work, ctx, job)
