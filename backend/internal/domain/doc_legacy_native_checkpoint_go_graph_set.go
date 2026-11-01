@@ -309,8 +309,138 @@ func (work *legacyNativeCheckpointGoGraphSet) checkSource() error {
 	return nil
 }
 
+func legacyNativeCheckpointGoGraphSetScalar(value any) bool {
+	switch value := value.(type) {
+	case nil, bool:
+		return true
+	case float64:
+		return !math.IsNaN(value) && !math.IsInf(value, 0)
+	case string:
+		return len(value) <= LegacyCanonicalEncodingBytes
+	default:
+		return false
+	}
+}
+
+func (work *legacyNativeCheckpointGoGraphSet) trivialRoot(index int, value any) bool {
+	if work.record != nil && work.record.state.HasCreateTime && index == legacyCanonicalSourceNumberRoot {
+		return false
+	}
+	if text, ok := value.(string); ok {
+		return len(text) <= 64
+	}
+	return legacyNativeCheckpointGoGraphSetScalar(value)
+}
+
+func (work *legacyNativeCheckpointGoGraphSet) checkTrivialRoot(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := work.checkSource(); err != nil {
+		return err
+	}
+	if work.registry.failure != nil {
+		return work.registry.failure
+	}
+	if work.identity.failure != nil {
+		return work.identity.failure
+	}
+	if work.registry.closed || work.identity.closed || work.identity.nextID >= legacyNativeCheckpointNodes {
+		return ErrIntegrity
+	}
+	if work.registry.active != nil || work.registry.first != nil || work.identity.first != nil {
+		return ErrConflict
+	}
+	return work.admit(legacyNativeAnyCheckpointScratch)
+}
+
+func (work *legacyNativeCheckpointGoGraphSet) scalarRoot(ctx context.Context) (bool, error) {
+	if !legacyNativeCheckpointGoGraphSetScalar(work.values[work.position]) {
+		return false, nil
+	}
+	if work.registry.first != nil || work.identity.first != nil {
+		return false, nil
+	}
+	if work.registry.failure != nil {
+		return false, work.registry.failure
+	}
+	if work.identity.failure != nil {
+		return false, work.identity.failure
+	}
+	if work.registry.closed || work.identity.closed || work.identity.nextID >= legacyNativeCheckpointNodes {
+		return false, ErrIntegrity
+	}
+	if work.registry.active != nil {
+		return false, ErrConflict
+	}
+	value := legacyNativeAnyValue{value: work.values[work.position]}
+	if text, ok := value.value.(string); ok {
+		value.capacity = len(text)
+	}
+	if err := work.admit(64 + 2*legacyNativeValueCheckpointBytes + 2*int64(value.capacity) + int64(len(contentHashPrefix)+64)); err != nil {
+		return false, err
+	}
+	bounds := legacyNativeValueCheckpointBounds{PayloadBytes: legacyNativeValueCheckpointPayloadLimit(), Nodes: legacyNativeCheckpointNodes}
+	snapshot, err := value.checkpoint(ctx, 0, bounds)
+	if err != nil {
+		return false, err
+	}
+	defer snapshot.close()
+	wire, err := snapshot.state.encode(ctx, bounds)
+	if err != nil {
+		return false, err
+	}
+	saved := legacyNativeCheckpointValue{Wire: wire}
+	if snapshot.state.Kind == legacyNativeCheckpointString && snapshot.state.Length > 0 {
+		numberReference := work.record != nil && work.record.state.HasCreateTime && work.position == legacyCanonicalSourceNumberRoot
+		if snapshot.state.Length <= 64 && snapshot.state.Capacity <= 64 && !numberReference {
+			saved.Inline = []byte(snapshot.text)
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+		} else {
+			ref, err := legacyNativeCheckpointWrite(ctx, work.store, []byte(snapshot.text))
+			if err != nil {
+				return false, err
+			}
+			saved.Text = legacyNativeCheckpointText{Bytes: len(snapshot.text), Tree: legacyNativeCheckpointTree{Ref: ref, Count: snapshot.state.Length}}
+		}
+		if err := work.checkSource(); err != nil {
+			return false, err
+		}
+	}
+	work.identity.nextID++
+	work.state.Roots[work.position] = saved
+	work.position++
+	return true, nil
+}
+
 func (work *legacyNativeCheckpointGoGraphSet) advance(ctx context.Context) error {
-	if work.phase == 0 && work.position < len(work.values) && work.prepare == nil {
+	if work.phase == 0 && work.position < len(work.values) && work.prepare == nil &&
+		(work.layout != nil && work.layout.ready || !legacyNativeCheckpointGoGraphSetScalar(work.values[work.position])) {
+		start := work.position
+		for roots := 0; roots < 32 && work.position < len(work.values) &&
+			work.trivialRoot(work.position, work.values[work.position]) && work.registry.first == nil && work.identity.first == nil; roots++ {
+			if err := work.checkTrivialRoot(ctx); err != nil {
+				return err
+			}
+			handled, err := work.scalarRoot(ctx)
+			if err != nil {
+				return err
+			}
+			if !handled {
+				break
+			}
+			if err := work.admit(0); err != nil {
+				return err
+			}
+		}
+		if work.position != start {
+			return nil
+		}
+		if handled, err := work.scalarRoot(ctx); handled || err != nil {
+			return err
+		}
 		remaining, err := work.remaining()
 		if err != nil {
 			return err

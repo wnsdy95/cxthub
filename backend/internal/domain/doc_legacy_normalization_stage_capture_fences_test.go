@@ -14,7 +14,7 @@ func legacyNormalizationStageFenceStart(test *testing.T, prepared bool) (*Legacy
 	test.Helper()
 	event := `{"kind":"turn","seq":7}`
 	if prepared {
-		event = `{"kind":"tool_result","seq":7,"call_id":"stage-fences","output":{"payload":"` + strings.Repeat("x", 2*LegacyCanonicalEncodingBytes) + `","z-tail":{"remaining":true}}}`
+		event = `{"kind":"tool_result","seq":7,"call_id":"stage-fences","output":{"payload":"` + strings.Repeat("x", 2*LegacyCanonicalEncodingBytes) + `","z-tail":{"remaining":"` + strings.Repeat("r", 80) + `"}}}`
 	}
 	work, buffer := legacyCanonicalInitialCheckpointStage(test, event+`,{"kind":"turn","seq":9}`)
 	if prepared {

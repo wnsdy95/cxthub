@@ -133,16 +133,11 @@ func (work *legacyNativeEventValuesCheckpointRestore) finishFrame() error {
 	return nil
 }
 
-func (work *legacyNativeEventValuesCheckpointRestore) appendBlock(ctx context.Context) error {
+func (work *legacyNativeEventValuesCheckpointRestore) appendBlock(ctx context.Context, record legacyNativeBlockValue) error {
 	frame := work.current
 	blocks := frame.record.blocks
 	if blocks == nil {
 		return ErrIntegrity
-	}
-	record, err := work.block.take(ctx)
-	work.block = nil
-	if err != nil {
-		return err
 	}
 	var payload, excess docRangeHeaderHeapEstimate
 	for index, heap := range record.heaps {
@@ -304,6 +299,13 @@ func (work *legacyNativeEventValuesCheckpointRestore) advance(ctx context.Contex
 			if err != nil {
 				return err
 			}
+			if entry.Block.Inline != nil {
+				record, err := legacyNativeBlockInlineRestore(ctx, entry.Block, work.sourceBytes, remaining)
+				if err != nil {
+					return err
+				}
+				return work.appendBlock(ctx, record)
+			}
 			work.block, err = newLegacyNativeCheckpointBlockRecordRestore(ctx, entry.Block, work.store, work.sourceBytes, remaining)
 			return err
 		}
@@ -311,7 +313,12 @@ func (work *legacyNativeEventValuesCheckpointRestore) advance(ctx context.Contex
 		if err != nil || !ready {
 			return err
 		}
-		return work.appendBlock(ctx)
+		record, err := work.block.take(ctx)
+		work.block = nil
+		if err != nil {
+			return err
+		}
+		return work.appendBlock(ctx, record)
 	case 5:
 		if work.frames >= 10000 {
 			return ErrIntegrity

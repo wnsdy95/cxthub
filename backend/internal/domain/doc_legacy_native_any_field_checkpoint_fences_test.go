@@ -852,9 +852,17 @@ func TestLegacyNativeAnyFieldCheckpointW84FloatAndLifecycle(test *testing.T) {
 				})
 			})
 			saved, _ := legacyNativeAnyFieldW84RoundTrip(test, request, native, native.metadata.match("output"), scanner, source, storage)
+			if saved.Destination == nil || string(saved.Destination.Inline) != "prior" || saved.Destination.Text != (legacyNativeCheckpointText{}) {
+				test.Fatal("original independent value did not retain its raw inline checkpoint")
+			}
+			ioRequest, ioNative, ioScanner, ioSource := legacyNativeEventW82FencePrepare(test, raw, &wire{Output: strings.Repeat("prior", 13)}, stop)
+			ioSaved, _ := legacyNativeAnyFieldW84RoundTrip(test, ioRequest, ioNative, ioNative.metadata.match("output"), ioScanner, ioSource, storage)
+			if ioSaved.Destination == nil || ioSaved.Destination.Inline != nil || ioSaved.Destination.Text.Bytes != 65 {
+				test.Fatal("IO lifecycle fixture did not retain its legacy text dependency")
+			}
 			test.Run("any-capture-lifecycle", func(test *testing.T) {
 				legacyNativeAnyFieldW84Lifecycle[legacyNativeObjectCheckpointAnyField](test, storage, func(current context.Context, storageIO legacyNativeCheckpointIO, budget int64) (legacyNativeAnyCheckpointTask[legacyNativeObjectCheckpointAnyField], error) {
-					work, failure := newLegacyNativeObjectAnyCheckpoint(current, native, native.metadata.match("output"), scanner, request.Binding, source, storageIO, budget)
+					work, failure := newLegacyNativeObjectAnyCheckpoint(current, ioNative, ioNative.metadata.match("output"), ioScanner, ioRequest.Binding, ioSource, storageIO, budget)
 					if failure != nil {
 						return nil, failure
 					}
@@ -863,7 +871,7 @@ func TestLegacyNativeAnyFieldCheckpointW84FloatAndLifecycle(test *testing.T) {
 			})
 			test.Run("any-restore-lifecycle", func(test *testing.T) {
 				legacyNativeAnyFieldW84Lifecycle[legacyNativeObjectAnyRestored](test, storage, func(current context.Context, storageIO legacyNativeCheckpointIO, budget int64) (legacyNativeAnyCheckpointTask[legacyNativeObjectAnyRestored], error) {
-					work, failure := newLegacyNativeObjectAnyCheckpointRestore(current, saved, false, true, request.Binding, source, storageIO, budget)
+					work, failure := newLegacyNativeObjectAnyCheckpointRestore(current, ioSaved, false, true, ioRequest.Binding, ioSource, storageIO, budget)
 					if failure != nil {
 						return nil, failure
 					}

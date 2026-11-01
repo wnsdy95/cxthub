@@ -38,6 +38,10 @@ func (entry legacyNativeEventValuesCheckpointEntry) validate(kind uint8, sourceB
 		if entry.Nil || entry.Count != 0 || entry.Length != 0 || entry.Fields != (legacyNativeCheckpointRef{}) {
 			return ErrIntegrity
 		}
+		if entry.Block.Inline != nil {
+			_, err := legacyNativeBlockInlinePlan(entry.Block)
+			return err
+		}
 		schema, err := legacyNativeCheckpointBlockSchema()
 		if err != nil || entry.Block.Schema != schema || entry.Block.Values.Nil || entry.Block.Values.Length != 2 || entry.Block.Values.Capacity != 2 {
 			return ErrIntegrity
@@ -297,6 +301,17 @@ func (work *legacyNativeEventValuesCheckpoint) advance(ctx context.Context) erro
 					return err
 				}
 				return ErrIntegrity
+			}
+			inline, packed, err := legacyNativeBlockInlineRecord(ctx, *record, true)
+			if err != nil {
+				return err
+			}
+			if packed {
+				if err := work.rows.append(ctx, work.store, legacyNativeEventValuesCheckpointEntry{Kind: legacyNativeEventValuesEntryBlock, Block: inline}); err != nil {
+					return err
+				}
+				frame.blockIndex++
+				return nil
 			}
 			work.block, err = newLegacyNativeCheckpointBlockRecordWriter(ctx, *record, true, work.store, remaining)
 			return err

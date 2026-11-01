@@ -369,15 +369,36 @@ func docRangeNativeBlockPagedPGDocument(test *testing.T, fixture docViewPGFixtur
 }
 
 func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences(test *testing.T) {
-	for _, decode := range []bool{true, false} {
-		test.Run(fmt.Sprintf("block_decode=%t", decode), func(test *testing.T) {
-			for _, change := range []string{"unchanged", "lease expiry", "source version"} {
-				test.Run(change, func(test *testing.T) {
-					docRangeNativeBlockPagedPGParksAndRechecksFences(test, decode, change)
-				})
-			}
+	docRangeNativeBlockPagedPGScenario(test, true, "unchanged")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesLeaseExpiry(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, true, "lease expiry")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesSourceVersion(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, true, "source version")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparation(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, false, "unchanged")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparationLeaseExpiry(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, false, "lease expiry")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparationSourceVersion(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, false, "source version")
+}
+
+func docRangeNativeBlockPagedPGScenario(test *testing.T, decode bool, change string) {
+	test.Helper()
+	test.Run(fmt.Sprintf("block_decode=%t", decode), func(test *testing.T) {
+		test.Run(change, func(test *testing.T) {
+			docRangeNativeBlockPagedPGParksAndRechecksFences(test, decode, change)
 		})
-	}
+	})
 }
 
 func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bool, change string) {
@@ -420,6 +441,7 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 	foreground := make(chan error, 1)
 	var foregroundCompleted, parkedObserved atomic.Bool
 	var parked, decoded docRangeNativeBlockPagedPGInspection
+	var parkedPrivateImage string
 	var parkedResources outbound.RootPublicationResources
 	var parkedPermit *resourcePermit
 	var resumeBefore int64
@@ -509,7 +531,11 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 			resources.HeapBytes < state.heap || resources.HeapBytes > maxParkedRootHeapBytes || resources.SpoolBytes < 0 || resources.SpoolBytes > maxParkedRootSpoolBytes {
 			return fmt.Errorf("actual block work is not parkable under unchanged heap/spool policy: %+v", resources)
 		}
-		if err := docRangeWorkPGNoByteStage(bound, fixture, document.Hash); err != nil {
+		if err := docRangeNativePagesPGUnpublishedNormalization(bound, fixture, document.Hash, sourceVersion, probe.job, observed.work.handle); err != nil {
+			return err
+		}
+		parkedPrivateImage, err = docRangeNativePagesPGPrivateImage(bound, fixture, document.Hash)
+		if err != nil {
 			return err
 		}
 		var generations int
@@ -596,8 +622,8 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 			work.before != parked || work.after != parked || work.beforeResources != parkedResources || work.afterResources != parkedResources || probe.steps != parkStep || probe.published != 0 {
 			test.Fatal("lease or source fence resumed actual block work or published stale pages", err, work)
 		}
-		if err := docRangeWorkPGNoByteStage(ctx, fixture, document.Hash); err != nil {
-			test.Fatal(err)
+		if image, err := docRangeNativePagesPGPrivateImage(ctx, fixture, document.Hash); err != nil || image != parkedPrivateImage {
+			test.Fatal("fenced block normalization changed its private checkpoint or published canonical state", err)
 		}
 		var generations int
 		if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM doc_range_generations_v2 WHERE doc_hash=$1`, document.Hash).Scan(&generations); err != nil || generations != 0 {

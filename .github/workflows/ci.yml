@@ -113,7 +113,7 @@ jobs:
         if: matrix.lane == 'store'
         working-directory: backend
         run: |
-          python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres \
+          python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres --batch-size 1 \
             --require-test TestLegacyByteRecoveryPGColdChild \
             --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
             --require-test TestNormalizationCheckpointPGColdChild \

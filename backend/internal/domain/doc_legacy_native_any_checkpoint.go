@@ -298,6 +298,7 @@ func legacyNativeAnyCheckpointControlHeap(state legacyNativeAnyCheckpointControl
 func legacyNativeAnyCheckpointDescriptorHeap(value legacyNativeCheckpointValue) docRangeHeaderHeapEstimate {
 	var heap docRangeHeaderHeapEstimate
 	heap.allocation(int64(cap(value.Wire)), 1)
+	heap.allocation(int64(cap(value.Inline)), 1)
 	heap.allocation(int64(len(value.Body.Hash)), 1)
 	heap.allocation(int64(len(value.Text.Tree.Ref.Hash)), 1)
 	return heap

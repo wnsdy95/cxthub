@@ -139,7 +139,7 @@ func (work *legacyNormalizationCheckpointWork) writeParser(ctx context.Context) 
 		return false, err
 	}
 	binding, store := work.parserBinding(), work.parserIO()
-	ctx, batch, err := work.beginBatch(ctx)
+	ctx, batch, err := work.deferBatch(ctx)
 	if err != nil {
 		return false, err
 	}

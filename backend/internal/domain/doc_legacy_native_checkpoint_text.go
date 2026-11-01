@@ -57,6 +57,17 @@ func (work *legacyNativeCheckpointTextWriter) step(ctx context.Context) (bool, e
 		if err != nil {
 			return work.fail(err)
 		}
+		if work.position == 0 && work.length <= LegacyCanonicalEncodingBytes {
+			if ref.Bytes != work.length || ref.Bytes != len(work.part) {
+				return work.fail(ErrIntegrity)
+			}
+			work.result = legacyNativeCheckpointText{Bytes: work.length, Tree: legacyNativeCheckpointTree{Ref: ref, Count: uint64(work.length)}}
+			work.position, work.ready = work.length, true
+			work.part, work.read = nil, nil
+			work.pending = legacyNativeCheckpointRef{}
+			work.tree.close()
+			return true, nil
+		}
 		work.pending, work.phase = ref, legacyNativeCheckpointTextIndex
 		return false, nil
 	}

@@ -60,7 +60,7 @@ func assertDocDisplayPageDecodeParity(test testing.TB, source DocDisplayStringSo
 }
 
 func TestDocDisplayPageBoundedDecoderCanonicalParity(test *testing.T) {
-	for _, text := range []string{"ab", strings.Repeat("a🙂<&>\n", 200), "a\x00\t\r\n\"\\<>&\u2028\u2029\ufffd한글🙂", strings.Repeat("a", DocDisplayPageTextBytes)} {
+	for _, text := range []string{"ab", strings.Repeat("a🙂<&>\n", 200), "a\x00\t\r\n\"\\<>&\u2028\u2029\ufffd\ud55c\uae00🙂", strings.Repeat("a", DocDisplayPageTextBytes)} {
 		source, raw := docDisplayPageDecodeFixture(test, text)
 		assertDocDisplayPageDecodeParity(test, source, HashContent(raw), raw)
 		page, err := DecodeDocDisplayPage(source, HashContent(raw), raw)

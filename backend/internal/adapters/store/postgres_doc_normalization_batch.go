@@ -16,6 +16,8 @@ type legacyNormalizationCheckpointBatch struct {
 	state       legacyByteCheckpoint
 	transaction pgx.Tx
 	protocol    bool
+	deferred    bool
+	closed      bool
 	objects     []legacyByteCheckpointOwnedObject
 	bytes       int
 }
@@ -31,13 +33,25 @@ func (work *legacyNormalizationCheckpointWork) beginBatch(ctx context.Context) (
 
 func (batch *legacyNormalizationCheckpointBatch) finish(ctx context.Context, failure error) error {
 	defer func() {
-		rollbackPG(batch.transaction)
+		if batch.transaction != nil {
+			rollbackPG(batch.transaction)
+		}
+		batch.closed = true
 		batch.transaction = nil
 		batch.objects = nil
 		batch.bytes = 0
 	}()
 	if failure != nil {
 		return failure
+	}
+	if batch.closed || batch.state != batch.owner.state {
+		return domain.ErrConflict
+	}
+	if batch.transaction == nil {
+		if !batch.deferred {
+			return domain.ErrConflict
+		}
+		return batch.owner.confirmDeferredBatch(ctx, batch.state)
 	}
 	if err := batch.flush(ctx); err != nil {
 		return err
@@ -57,8 +71,21 @@ func (work *legacyNormalizationCheckpointWork) currentBatch(ctx context.Context)
 	}
 	batch, _ := ctx.Value(legacyNormalizationCheckpointBatchKey{}).(*legacyNormalizationCheckpointBatch)
 	if batch != nil {
-		if batch.owner != work || batch.transaction == nil || batch.state != work.state {
+		if batch.owner != work || batch.closed || batch.state != work.state || batch.transaction == nil && !batch.deferred {
 			return nil, domain.ErrConflict
+		}
+		if batch.transaction == nil {
+			transaction, state, err := work.store.openLegacyByteCheckpoint(ctx, work.job, batch.state.stage, &batch.state, false)
+			if err != nil {
+				batch.closed = true
+				return nil, err
+			}
+			if state != batch.state || state.stage.plan != "" {
+				rollbackPG(transaction)
+				batch.closed = true
+				return nil, domain.ErrConflict
+			}
+			batch.transaction = transaction
 		}
 	}
 	return batch, nil

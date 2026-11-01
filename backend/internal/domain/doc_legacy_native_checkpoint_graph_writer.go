@@ -478,6 +478,7 @@ func (work *legacyNativeCheckpointGraphWriter) push(ctx context.Context, value l
 
 func legacyNativeCheckpointGraphCapturedValueHeap(estimate *docRangeHeaderHeapEstimate, saved legacyNativeCheckpointValue) {
 	estimate.allocation(int64(cap(saved.Wire)), 1)
+	estimate.allocation(int64(cap(saved.Inline)), 1)
 	estimate.allocation(int64(len(saved.Body.Hash)), 1)
 	estimate.allocation(int64(len(saved.Text.Tree.Ref.Hash)), 1)
 }
@@ -638,6 +639,24 @@ func (work *legacyNativeCheckpointGraphWriter) stepFrame(ctx context.Context, fr
 		}
 		if err := work.admit(legacyNativeCheckpointGraphCaptureWorkspace); err != nil {
 			return err
+		}
+		if frame.state.Length <= 64 {
+			body, err := frame.snapshot.read(ctx, 0, int(frame.state.Length))
+			if err != nil {
+				return err
+			}
+			if len(body) > 0 && frame.state.Capacity <= 64 {
+				frame.result.Inline = body
+			} else if len(body) > 0 {
+				ref, err := legacyNativeCheckpointWrite(ctx, work.store, body)
+				if err != nil {
+					return err
+				}
+				frame.result.Text = legacyNativeCheckpointText{Bytes: len(body), Tree: legacyNativeCheckpointTree{Ref: ref, Count: uint64(len(body))}}
+			}
+			frame.snapshot.close()
+			frame.snapshot = nil
+			return work.finishFrame(ctx, frame)
 		}
 		text, err := newLegacyNativeCheckpointTextWriter(ctx, int(frame.state.Length), frame.snapshot.read, work.store)
 		if err != nil {
