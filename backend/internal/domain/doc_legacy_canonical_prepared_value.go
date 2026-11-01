@@ -376,6 +376,22 @@ func (work *legacyCanonicalPreparedValueWrite) advance(ctx context.Context) erro
 			return nil
 		}
 		text := frame.texts[frame.textSlot]
+		if len(text) <= LegacyCanonicalEncodingBytes {
+			var tree legacyNativeCheckpointTree
+			if len(text) > 0 {
+				ref, err := legacyNativeCheckpointWrite(ctx, work.store, []byte(text))
+				if err != nil {
+					return err
+				}
+				tree = legacyNativeCheckpointTree{Ref: ref, Count: uint64(len(text))}
+			}
+			frame.record.Texts[frame.textSlot] = legacyNativeCheckpointText{Bytes: len(text), Tree: tree}
+			frame.textSlot++
+			if frame.textSlot == limit {
+				frame.phase = legacyCanonicalPreparedWriteEmit
+			}
+			return work.refresh(frame)
+		}
 		read := func(current context.Context, offset, length int) ([]byte, error) {
 			if err := current.Err(); err != nil {
 				return nil, err
