@@ -49,7 +49,7 @@ func legacyNativeCheckpointGraphShortCapture(test *testing.T, value legacyNative
 		}
 		short := frame != nil && frame.phase == legacyNativeCheckpointGraphCaptureValue && frame.state.Kind == legacyNativeCheckpointString && frame.state.Length <= 64
 		writes, transferred := storage.writes, storage.transferred
-		ready, err := work.step(ctx)
+		ready, err := work.stepTransition(ctx)
 		if err != nil {
 			test.Fatal(err)
 		}

@@ -556,6 +556,42 @@ func (work *legacyNativeCheckpointGraphWriter) finishFrame(ctx context.Context, 
 }
 
 func (work *legacyNativeCheckpointGraphWriter) step(ctx context.Context) (bool, error) {
+	for transitions := 0; transitions < 8; transitions++ {
+		administrative := work.administrativeTransition()
+		ready, err := work.stepTransition(ctx)
+		if err != nil || ready || !administrative {
+			return ready, err
+		}
+	}
+	return false, nil
+}
+
+func (work *legacyNativeCheckpointGraphWriter) administrativeTransition() bool {
+	if work == nil || work.ready {
+		return false
+	}
+	if work.verifying {
+		return work.verify == nil
+	}
+	frame := work.frame
+	if frame == nil {
+		return false
+	}
+	switch frame.phase {
+	case legacyNativeCheckpointGraphCaptureBacking, legacyNativeCheckpointGraphCaptureKey, legacyNativeCheckpointGraphCaptureChild, legacyNativeCheckpointGraphCaptureTextFinish:
+		return true
+	case legacyNativeCheckpointGraphCaptureValue:
+		return frame.state.Kind != legacyNativeCheckpointString || frame.state.Length > 64
+	case legacyNativeCheckpointGraphCaptureMembers:
+		return frame.members == nil || frame.captured != nil && frame.captured.owner.array != nil && frame.position == frame.captured.record.Length
+	case legacyNativeCheckpointGraphCaptureDirty:
+		return frame.dirty == nil
+	default:
+		return false
+	}
+}
+
+func (work *legacyNativeCheckpointGraphWriter) stepTransition(ctx context.Context) (bool, error) {
 	if work == nil {
 		return false, ErrIntegrity
 	}
