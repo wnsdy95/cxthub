@@ -43,7 +43,11 @@ func memoryReadObjectWakeDrainPG(test *testing.T, storage *PostgresStore, ctx co
 
 func memoryReadObjectWakePG(test *testing.T) (*PostgresStore, context.Context, domain.ContentHash, domain.ContentHash) {
 	test.Helper()
-	storage, ctx, repo := catalogPG(test)
+	storage, ctx := rootProjectionIsolatedPG(test)
+	repo := domain.HashContent([]byte(test.Name() + time.Now().String()))
+	if _, err := storage.PutRepo(ctx, domain.Repo{ID: repo}); err != nil {
+		test.Fatal(err)
+	}
 	if err := storage.ConfigureMemoryReadWork(ctx, repo, true); err != nil {
 		test.Fatal(err)
 	}
@@ -99,6 +103,25 @@ func memoryReadObjectWakeOwnersPG(test *testing.T, storage *PostgresStore, ctx c
 		owners = append(owners, memoryReadObjectWakeOwnerPG(test, storage, ctx, hash, ordinal))
 	}
 	return owners
+}
+
+func TestPGMemoryReadObjectWakeFixturePreservesForeignNotices(test *testing.T) {
+	storage, ctx := rootProjectionIsolatedPG(test)
+	repo := memorySourceRepoPG(test, ctx, storage, "foreign physical notice")
+	if err := storage.ConfigureMemoryReadWork(ctx, repo, true); err != nil {
+		test.Fatal(err)
+	}
+	hash := memorySourceBlobPG(test, ctx, storage, repo, "memory", "foreign physical notice")
+	catalogExecPG(test, ctx, storage.pool, `UPDATE blobs SET hash=hash WHERE hash=$1`, string(hash))
+	before := memoryReadObjectWakeReadPG(test, storage, ctx, hash)
+	test.Run("independent-fixture", func(test *testing.T) {
+		owned, local, _, source := memoryReadObjectWakePG(test)
+		catalogExecPG(test, local, owned.pool, `UPDATE blobs SET hash=hash WHERE hash=$1`, string(source))
+		memoryReadObjectWakeDispatchPG(test, owned, local, 1, 2)
+	})
+	if after := memoryReadObjectWakeReadPG(test, storage, ctx, hash); !reflect.DeepEqual(after, before) {
+		test.Fatal("object-wake fixture changed another database's notice", before, after)
+	}
 }
 
 func TestPGMemoryReadObjectWakeRepeatableWriterFindsLaterOwner(test *testing.T) {
