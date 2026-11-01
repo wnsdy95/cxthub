@@ -13,6 +13,7 @@ import (
 
 type repositoryRefCommands struct {
 	meta               RepositoryRefStore
+	boundedTags        RepositoryRefBoundedTagStore
 	engine             RepositoryRefEngine
 	scope              RepositoryRefWriteScope
 	history            RepositoryRefHistory
@@ -88,10 +89,7 @@ func (s *repositoryRefCommands) updateRef(ctx context.Context, in inbound.Update
 		if _, err := s.meta.GetRef(ctx, in.RepoID, domain.RefBranch, branch); err != nil {
 			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: symbolic HEAD branch %q does not exist", domain.ErrIntegrity, branch)
 		}
-	} else if _, err := s.meta.GetSnapshot(ctx, in.RepoID, in.Ref.Target); err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return inbound.UpdateRefOutput{}, fmt.Errorf("%w: ref target snapshot %s does not exist", domain.ErrIntegrity, in.Ref.Target)
-		}
+	} else if err := s.checkRefTarget(ctx, in.RepoID, in.Ref); err != nil {
 		return inbound.UpdateRefOutput{}, err
 	}
 	if event, lifecycle, err := domain.ParseBranchLifecycleRef(in.Ref); err != nil {
