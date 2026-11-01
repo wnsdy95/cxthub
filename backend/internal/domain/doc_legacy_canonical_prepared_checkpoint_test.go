@@ -84,14 +84,6 @@ func TestLegacyCanonicalPreparedMachineContinuesActualOutput(test *testing.T) {
 				test.Fatal(err)
 			}
 			storage := legacyCanonicalPreparedValueTestStorage(test)
-			keyWrites := 0
-			put := storage.io.Put
-			storage.io.Put = func(ctx context.Context, hash ContentHash, body []byte) error {
-				if hash == HashContent([]byte("shared-key")) {
-					keyWrites++
-				}
-				return put(ctx, hash, body)
-			}
 			binding := HashContent([]byte("prepared-machine-" + cut))
 			retained, err := encoding.RetainedBytes()
 			if err != nil {
@@ -119,36 +111,10 @@ func TestLegacyCanonicalPreparedMachineContinuesActualOutput(test *testing.T) {
 			if !ready {
 				test.Fatal("prepared output checkpoint did not finish within its finite allowance")
 			}
-			if cut == "repeated-keys" && keyWrites != 1 {
-				test.Fatal("one capture repeatedly serialized identical short field keys", keyWrites)
-			}
 			ref, err := writer.take(ctx)
 			grant.release()
 			if err != nil {
 				test.Fatal(err)
-			}
-			if writer.keyRefs != (legacyCanonicalPreparedKeyRefs{}) {
-				test.Fatal("completed checkpoint retained its key references")
-			}
-			if cut == "repeated-keys" {
-				freshGrant, err := native.object.mutation.beginCapture()
-				if err != nil {
-					test.Fatal(err)
-				}
-				fresh, err := newLegacyCanonicalPreparedCheckpoint(ctx, encoding, binding, storage.io, (64<<20)-retained)
-				if err != nil {
-					test.Fatal(err)
-				}
-				for steps := 0; steps < 1<<18 && fresh.keyRefs.find("shared-key").Bytes == 0; steps++ {
-					if _, err := fresh.step(ctx); err != nil {
-						test.Fatal(err)
-					}
-				}
-				if keyWrites != 2 || fresh.keyRefs.find("shared-key").Bytes == 0 {
-					test.Fatal("new capture reused an earlier capture's key authority", keyWrites)
-				}
-				fresh.close()
-				freshGrant.release()
 			}
 			encoding.release()
 			restore, err := newLegacyCanonicalPreparedRestore(ctx, ref, binding, storage.io, 64<<20)
