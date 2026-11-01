@@ -14,14 +14,17 @@ const legacyNormalizationBatchObjectRead = `WITH verified AS MATERIALIZED (
  SELECT octet_length(bytes) AS stored_bytes,CASE WHEN octet_length(bytes)=$4
  THEN 'sha256:'||encode(sha256(bytes),'hex') ELSE '' END AS stored_hash
  FROM doc_legacy_byte_stage_checkpoint_objects_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3
+), retained AS MATERIALIZED (
+ SELECT 1 FROM doc_legacy_checkpoint_staging_v1
+ WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3 AND last_sequence=$5
 ), touched AS (
  INSERT INTO doc_legacy_checkpoint_staging_v1(doc_hash,stage_id,hash,last_sequence)
- SELECT $1,$2::uuid,$3,$5 FROM verified WHERE stored_bytes=$4 AND stored_hash=$3
+ SELECT $1,$2::uuid,$3,$5 FROM verified WHERE stored_bytes=$4 AND stored_hash=$3 AND NOT EXISTS(SELECT 1 FROM retained)
  ON CONFLICT(doc_hash,stage_id,hash) DO UPDATE
  SET last_sequence=GREATEST(doc_legacy_checkpoint_staging_v1.last_sequence,EXCLUDED.last_sequence)
  RETURNING 1
 )
- SELECT stored_bytes,stored_hash,EXISTS(SELECT 1 FROM touched) FROM verified`
+ SELECT stored_bytes,stored_hash,EXISTS(SELECT 1 FROM retained) OR EXISTS(SELECT 1 FROM touched) FROM verified`
 
 func (batch *legacyNormalizationCheckpointBatch) verify(ctx context.Context, objects []legacyByteCheckpointOwnedObject, allowMissing bool) (missing []legacyByteCheckpointOwnedObject, failure error) {
 	queries := &pgx.Batch{}
