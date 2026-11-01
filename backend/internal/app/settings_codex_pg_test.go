@@ -287,6 +287,7 @@ func TestPGSettingsCodexRejectedWritesAndRollbackHaveNoEffects(test *testing.T) 
 }
 
 func TestPGSettingsCodexImmutableObjectsAndScopedAttachments(test *testing.T) {
+	test.Setenv("CXT_TEST_DSN", a11IsolatedPGDSN(test, context.Background()))
 	fixture := settingsCodexPG(test)
 	member := inbound.WithRepositoryActor(fixture.ctx, fixture.team.member.ID)
 	if err := fixture.service.PutSettings(member, fixture.repo, settingsCodexBundlePG("codex", "current defaults")); err != nil {
