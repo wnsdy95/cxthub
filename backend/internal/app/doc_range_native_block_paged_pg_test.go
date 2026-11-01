@@ -441,6 +441,7 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 	foreground := make(chan error, 1)
 	var foregroundCompleted, parkedObserved atomic.Bool
 	var parked, decoded docRangeNativeBlockPagedPGInspection
+	var parkedPrivateImage string
 	var parkedResources outbound.RootPublicationResources
 	var parkedPermit *resourcePermit
 	var resumeBefore int64
@@ -530,7 +531,11 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 			resources.HeapBytes < state.heap || resources.HeapBytes > maxParkedRootHeapBytes || resources.SpoolBytes < 0 || resources.SpoolBytes > maxParkedRootSpoolBytes {
 			return fmt.Errorf("actual block work is not parkable under unchanged heap/spool policy: %+v", resources)
 		}
-		if err := docRangeWorkPGNoByteStage(bound, fixture, document.Hash); err != nil {
+		if err := docRangeNativePagesPGUnpublishedNormalization(bound, fixture, document.Hash, sourceVersion, probe.job, observed.work.handle); err != nil {
+			return err
+		}
+		parkedPrivateImage, err = docRangeNativePagesPGPrivateImage(bound, fixture, document.Hash)
+		if err != nil {
 			return err
 		}
 		var generations int
@@ -617,8 +622,8 @@ func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bo
 			work.before != parked || work.after != parked || work.beforeResources != parkedResources || work.afterResources != parkedResources || probe.steps != parkStep || probe.published != 0 {
 			test.Fatal("lease or source fence resumed actual block work or published stale pages", err, work)
 		}
-		if err := docRangeWorkPGNoByteStage(ctx, fixture, document.Hash); err != nil {
-			test.Fatal(err)
+		if image, err := docRangeNativePagesPGPrivateImage(ctx, fixture, document.Hash); err != nil || image != parkedPrivateImage {
+			test.Fatal("fenced block normalization changed its private checkpoint or published canonical state", err)
 		}
 		var generations int
 		if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM doc_range_generations_v2 WHERE doc_hash=$1`, document.Hash).Scan(&generations); err != nil || generations != 0 {
