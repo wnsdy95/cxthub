@@ -23,7 +23,16 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 )
 
-func TestPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T) {
+func TestPGDocFindPreparedHTTPQueuesThenContinuesRoot(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, false)
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacy(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, true)
+}
+
+func testPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T, legacySource bool) {
+	test.Helper()
 	dsn := os.Getenv("CXT_TEST_DSN")
 	if dsn == "" {
 		test.Skip("requires disposable CXT_TEST_DSN")
@@ -70,6 +79,9 @@ func TestPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T) {
 		{tool: "Bash"}, {legacy: true, tool: "Bash"}, {tool: "generic"}, {legacy: true, tool: "generic"},
 		{legacy: true, implicit: true}, {legacy: true, structured: true, implicit: true},
 	} {
+		if scenario.legacy != legacySource {
+			continue
+		}
 		legacy, structured := scenario.legacy, scenario.structured
 		name := "root"
 		if legacy {
