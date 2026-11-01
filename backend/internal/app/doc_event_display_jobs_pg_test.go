@@ -290,13 +290,15 @@ func TestPGDocEventDisplayReauthorizesDemandAndReadOnlyDoesNotWrite(test *testin
 	}
 	missing, checks := false, 0
 	fixture.service.ConfigureDocumentDisplayReads(&docEventDisplayReadProbe{DocDisplayReader: fixture.storage, DocEventDisplayReader: fixture.storage, missing: func() { missing = true }})
-	ctx := inbound.WithDocumentReadAuthorizer(fixture.ctx, func(read context.Context, _ domain.ContentHash) (context.Context, error) {
+	authorize := func(read context.Context, _ domain.ContentHash) (context.Context, error) {
 		checks++
 		if missing {
 			return read, domain.ErrForbidden
 		}
 		return read, nil
-	})
+	}
+	ctx := inbound.WithDocumentReadAuthorizer(fixture.ctx, authorize)
+	ctx = inbound.WithDocumentSnapshotReadAuthorizer(ctx, authorize)
 	if _, err := fixture.service.FindDocPage(ctx, fixture.repo, hash, request); !errors.Is(err, domain.ErrForbidden) || count() != 0 || checks < 2 || !missing {
 		test.Fatal("revocation before enqueue was bypassed", err, checks)
 	}
