@@ -2,9 +2,11 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -220,4 +222,189 @@ func TestLegacyNativeGoGraphSetTrivialRecordCaptureFences(test *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLegacyNativeGoGraphSetShortScalarWireOracle(test *testing.T) {
+	for _, fixture := range []struct {
+		name string
+		text string
+	}{
+		{name: "empty"},
+		{name: "one-byte", text: "x"},
+		{name: "exact-bytes", text: "\x00\ud55c\U0001f642\xff\xfe\"\\\n<>&"},
+		{name: "below-leaf", text: strings.Repeat("x", LegacyCanonicalEncodingBytes-1)},
+		{name: "full-leaf", text: strings.Repeat("x", LegacyCanonicalEncodingBytes)},
+		{name: "multi-leaf-fallback", text: strings.Repeat("x", LegacyCanonicalEncodingBytes+1)},
+	} {
+		test.Run(fixture.name, func(test *testing.T) {
+			binding := HashContent([]byte("short-scalar-wire-oracle"))
+			original, optimized := legacyNativeGoGraphSetW85Storage(test), legacyNativeGoGraphSetW85Storage(test)
+			roots := []any{fixture.text}
+			before, oldIdentity, oldSteps := legacyNativeGoGraphSetTrivialCapture(test, roots, binding, original, true)
+			after, newIdentity, newSteps := legacyNativeGoGraphSetTrivialCapture(test, roots, binding, optimized, false)
+			if before != after || oldIdentity != 1 || newIdentity != oldIdentity || original.writes != optimized.writes || !reflect.DeepEqual(original.objects, optimized.objects) {
+				test.Fatal("short scalar changed the generic writer wire, Text, CAS bytes, or identity")
+			}
+			var state legacyNativeCheckpointGoGraphSetState
+			if err := json.Unmarshal(original.objects[before.Hash], &state); err != nil || len(state.Roots) != 1 {
+				test.Fatal("generic writer root is invalid", err)
+			}
+			bounds := legacyNativeValueCheckpointBounds{PayloadBytes: legacyNativeValueCheckpointPayloadLimit(), Nodes: legacyNativeCheckpointNodes}
+			wire, err := decodeLegacyNativeValueCheckpoint(context.Background(), state.Roots[0].Wire, bounds)
+			length := len(fixture.text)
+			if err != nil || wire != (legacyNativeValueCheckpoint{Version: 1, Kind: legacyNativeCheckpointString, Length: uint64(length), Capacity: uint64(length)}) {
+				test.Fatal("generic root string capacity differs from source length", wire, err)
+			}
+			if length <= LegacyCanonicalEncodingBytes {
+				expected := legacyNativeCheckpointText{}
+				if length > 0 {
+					expected = legacyNativeCheckpointText{Bytes: length, Tree: legacyNativeCheckpointTree{Ref: legacyNativeCheckpointRef{Hash: HashContent([]byte(fixture.text)), Bytes: length}, Count: uint64(length)}}
+				}
+				if state.Roots[0].Text != expected || state.Roots[0].Body != (legacyNativeCheckpointRef{}) {
+					test.Fatal("generic short root does not use the existing single-leaf Text form")
+				}
+			}
+			expectedValues := legacyNativeGoGraphSetW85Restore(test, before, binding, original, 0)
+			values := legacyNativeGoGraphSetW85Restore(test, after, binding, optimized, 0)
+			legacyNativeGoGraphSetW85Values(test, roots, values)
+			if values[0].capacity != expectedValues[0].capacity || values[0].heap != expectedValues[0].heap || values[0].excess != expectedValues[0].excess {
+				test.Fatal("restored short scalar changed generic reader capacity or heap", values[0], expectedValues[0])
+			}
+			test.Log("original/current steps", oldSteps, newSteps, "CAS writes", optimized.writes)
+		})
+	}
+}
+
+func TestLegacyNativeGoGraphSetShortScalarOneLeafPerStep(test *testing.T) {
+	roots := []any{"kind", "\x00\ud55c\U0001f642\xff", strings.Repeat("x", LegacyCanonicalEncodingBytes)}
+	storage := legacyNativeGoGraphSetW85Storage(test)
+	work, err := newLegacyNativeCheckpointGoGraphSet(context.Background(), roots, HashContent([]byte("short-scalar-steps")), storage.io, legacyNativeGoGraphSetW85Budget)
+	if err != nil {
+		test.Fatal(err)
+	}
+	defer work.close()
+	legacyNativeGoGraphSetTrivialLayout(test, work, storage)
+	for position, root := range roots {
+		before, err := work.retainedBytes()
+		if err != nil {
+			test.Fatal(err)
+		}
+		writes, transferred := storage.writes, storage.transferred
+		if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready || work.position != position+1 || work.identity.nextID != uint64(position+1) {
+			test.Fatal("short scalar did not complete in one step", position, ready, err)
+		}
+		if work.prepare != nil || work.write != nil || work.phase != 0 || storage.reads != 0 || storage.writes-writes != 1 || storage.transferred-transferred != len(root.(string)) {
+			test.Fatal("short scalar exceeded its one-leaf byte/operation bound")
+		}
+		var expected docRangeHeaderHeapEstimate
+		legacyNativeCheckpointGraphCapturedValueHeap(&expected, work.state.Roots[position])
+		after, err := work.retainedBytes()
+		if err != nil || expected.err != nil || after-before != expected.bytes {
+			test.Fatal("short scalar wire/hash ownership changed retained heap", before, after, expected, err)
+		}
+	}
+	if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || !ready || storage.writes != len(roots)+1 {
+		test.Fatal("short scalar set changed final root publication", ready, err)
+	}
+}
+
+func TestLegacyNativeGoGraphSetShortScalarIOFences(test *testing.T) {
+	for _, scenario := range []string{"budget", "cancel", "put", "put-cancel", "put-source-change", "put-budget-change", "identity-limit"} {
+		test.Run(scenario, func(test *testing.T) {
+			roots := []any{"short"}
+			storage := legacyNativeGoGraphSetW85Storage(test)
+			work, err := newLegacyNativeCheckpointGoGraphSet(context.Background(), roots, HashContent([]byte("short-scalar-io-fences")), storage.io, legacyNativeGoGraphSetW85Budget)
+			if err != nil {
+				test.Fatal(err)
+			}
+			defer work.close()
+			legacyNativeGoGraphSetTrivialLayout(test, work, storage)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			expected, writes := ErrConflict, 1
+			switch scenario {
+			case "budget":
+				retained, err := work.retainedBytes()
+				if err != nil {
+					test.Fatal(err)
+				}
+				work.budget = retained + legacyNativeAnyCheckpointScratch - 1
+				expected, writes = ErrDocumentResourceLimit, 0
+			case "cancel":
+				cancel()
+				expected, writes = context.Canceled, 0
+			case "put":
+				storage.failure = ErrConflict
+			case "put-cancel":
+				storage.cancelIO, expected = cancel, context.Canceled
+			case "put-source-change", "put-budget-change":
+				put := work.store.Put
+				work.store.Put = func(current context.Context, hash ContentHash, body []byte) error {
+					err := put(current, hash, body)
+					if scenario == "put-source-change" {
+						roots[0] = "changed"
+					} else {
+						work.budget = 0
+					}
+					return err
+				}
+				if scenario == "put-budget-change" {
+					expected = ErrDocumentResourceLimit
+				}
+			case "identity-limit":
+				work.identity.nextID = legacyNativeCheckpointNodes
+				expected, writes = ErrIntegrity, 0
+			}
+			storage.current = ctx
+			if ready, err := work.step(ctx); ready || !errors.Is(err, expected) || storage.writes != writes || storage.reads != 0 {
+				test.Fatal("short scalar bypassed IO/source/budget failure", ready, err, expected, storage.writes, writes)
+			}
+			storage.current = nil
+			legacyNativeGoGraphSetW85Failed[legacyNativeCheckpointRef](test, work, storage, expected)
+		})
+	}
+}
+
+func TestLegacyNativeGoGraphSetShortScalarCaptureRevokedDuringPut(test *testing.T) {
+	list := legacyNativeEventRecordFieldsTestList(test, legacyNativeEventValue{event: CIREvent{Kind: EventToolCall}})
+	storage := legacyNativeGoGraphSetW85Storage(test)
+	work, err := newLegacyNativeEventRecordFieldsCheckpoint(context.Background(), list, 0, HashContent([]byte("short-scalar-capture")), storage.io, legacyNativeGoGraphSetW85Budget)
+	if err != nil {
+		test.Fatal(err)
+	}
+	defer work.close()
+	legacyNativeGoGraphSetTrivialLayout(test, work.graph, storage)
+	put := work.graph.store.Put
+	work.graph.store.Put = func(ctx context.Context, hash ContentHash, body []byte) error {
+		err := put(ctx, hash, body)
+		list.mutation.stop()
+		return err
+	}
+	if ready, err := legacyNativeGoGraphSetW85Step(test, work.graph, storage); ready || !errors.Is(err, ErrConflict) || storage.writes != 1 {
+		test.Fatal("short scalar published after source capture revocation", ready, err, storage.writes)
+	}
+	legacyNativeGoGraphSetW85Released[legacyNativeCheckpointRef](test, work.graph)
+}
+
+func TestLegacyNativeGoGraphSetShortScalarOwnerFallback(test *testing.T) {
+	shared := map[string]any{"child": true}
+	storage := legacyNativeGoGraphSetW85Storage(test)
+	work, err := newLegacyNativeCheckpointGoGraphSet(context.Background(), []any{shared, "short"}, HashContent([]byte("short-scalar-owner")), storage.io, legacyNativeGoGraphSetW85Budget)
+	if err != nil {
+		test.Fatal(err)
+	}
+	defer work.close()
+	for range legacyNativeGoGraphSetW85Steps {
+		if work.position == 1 {
+			break
+		}
+		if ready, err := legacyNativeGoGraphSetW85Step(test, work, storage); err != nil || ready {
+			test.Fatal("owner was not captured before short scalar", ready, err)
+		}
+	}
+	if work.position != 1 || work.registry.first == nil || work.identity.first == nil {
+		test.Fatal("fixture did not reach short scalar after owner capture")
+	}
+	shared["child"] = false
+	legacyNativeGoGraphSetW85Reject[legacyNativeCheckpointRef](test, work, nil, storage, ErrConflict, legacyNativeGoGraphSetW85Budget)
 }

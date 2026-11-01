@@ -309,21 +309,21 @@ func (work *legacyNativeCheckpointGoGraphSet) checkSource() error {
 	return nil
 }
 
-func legacyNativeCheckpointGoGraphSetTrivial(value any) bool {
+func legacyNativeCheckpointGoGraphSetScalar(value any) bool {
 	switch value := value.(type) {
 	case nil, bool:
 		return true
 	case float64:
 		return !math.IsNaN(value) && !math.IsInf(value, 0)
 	case string:
-		return value == ""
+		return len(value) <= LegacyCanonicalEncodingBytes
 	default:
 		return false
 	}
 }
 
-func (work *legacyNativeCheckpointGoGraphSet) trivialRoot(ctx context.Context) (bool, error) {
-	if !legacyNativeCheckpointGoGraphSetTrivial(work.values[work.position]) {
+func (work *legacyNativeCheckpointGoGraphSet) scalarRoot(ctx context.Context) (bool, error) {
+	if !legacyNativeCheckpointGoGraphSetScalar(work.values[work.position]) {
 		return false, nil
 	}
 	if work.registry.first != nil || work.identity.first != nil {
@@ -341,11 +341,15 @@ func (work *legacyNativeCheckpointGoGraphSet) trivialRoot(ctx context.Context) (
 	if work.registry.active != nil {
 		return false, ErrConflict
 	}
-	if err := work.admit(64 + 2*legacyNativeValueCheckpointBytes); err != nil {
+	value := legacyNativeAnyValue{value: work.values[work.position]}
+	if text, ok := value.value.(string); ok {
+		value.capacity = len(text)
+	}
+	if err := work.admit(64 + 2*legacyNativeValueCheckpointBytes + 2*int64(value.capacity) + int64(len(contentHashPrefix)+64)); err != nil {
 		return false, err
 	}
 	bounds := legacyNativeValueCheckpointBounds{PayloadBytes: legacyNativeValueCheckpointPayloadLimit(), Nodes: legacyNativeCheckpointNodes}
-	snapshot, err := (legacyNativeAnyValue{value: work.values[work.position]}).checkpoint(ctx, 0, bounds)
+	snapshot, err := value.checkpoint(ctx, 0, bounds)
 	if err != nil {
 		return false, err
 	}
@@ -354,16 +358,27 @@ func (work *legacyNativeCheckpointGoGraphSet) trivialRoot(ctx context.Context) (
 	if err != nil {
 		return false, err
 	}
+	saved := legacyNativeCheckpointValue{Wire: wire}
+	if snapshot.state.Kind == legacyNativeCheckpointString && snapshot.state.Length > 0 {
+		ref, err := legacyNativeCheckpointWrite(ctx, work.store, []byte(snapshot.text))
+		if err != nil {
+			return false, err
+		}
+		if err := work.checkSource(); err != nil {
+			return false, err
+		}
+		saved.Text = legacyNativeCheckpointText{Bytes: len(snapshot.text), Tree: legacyNativeCheckpointTree{Ref: ref, Count: snapshot.state.Length}}
+	}
 	work.identity.nextID++
-	work.state.Roots[work.position] = legacyNativeCheckpointValue{Wire: wire}
+	work.state.Roots[work.position] = saved
 	work.position++
 	return true, nil
 }
 
 func (work *legacyNativeCheckpointGoGraphSet) advance(ctx context.Context) error {
 	if work.phase == 0 && work.position < len(work.values) && work.prepare == nil &&
-		(work.layout != nil && work.layout.ready || !legacyNativeCheckpointGoGraphSetTrivial(work.values[work.position])) {
-		if handled, err := work.trivialRoot(ctx); handled || err != nil {
+		(work.layout != nil && work.layout.ready || !legacyNativeCheckpointGoGraphSetScalar(work.values[work.position])) {
+		if handled, err := work.scalarRoot(ctx); handled || err != nil {
 			return err
 		}
 		remaining, err := work.remaining()
