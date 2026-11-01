@@ -7,16 +7,25 @@ import (
 )
 
 type PendingStateView struct {
-	Projection       string               `json:"projection"`
-	Revision         RepositoryRevision   `json:"revision"`
-	DefaultBranch    string               `json:"default_branch"`
-	Refs             []Ref                `json:"refs"`
-	Pending          []Pending            `json:"pending"`
-	Snapshots        []Snapshot           `json:"snapshots"`
-	ArchivedSessions []SessionArchiveView `json:"archived_sessions"`
-	Hold             []GraphHoldCluster   `json:"hold"`
-	OrphanSessions   []string             `json:"orphan_sessions"`
-	HoldCounts       map[string]int       `json:"hold_counts"`
+	ReadGeneration   *PendingReadGeneration `json:"read_generation,omitempty"`
+	Projection       string                 `json:"projection"`
+	Revision         RepositoryRevision     `json:"revision"`
+	DefaultBranch    string                 `json:"default_branch"`
+	Refs             []Ref                  `json:"refs"`
+	Pending          []Pending              `json:"pending"`
+	Snapshots        []Snapshot             `json:"snapshots"`
+	ArchivedSessions []SessionArchiveView   `json:"archived_sessions"`
+	Hold             []GraphHoldCluster     `json:"hold"`
+	OrphanSessions   []string               `json:"orphan_sessions"`
+	HoldCounts       map[string]int         `json:"hold_counts"`
+}
+
+type PendingReadGeneration struct {
+	Generation   ContentHash `json:"generation"`
+	SourceEpoch  string      `json:"source_epoch"`
+	AppliedEpoch string      `json:"applied_epoch"`
+	Rules        int         `json:"rules"`
+	Complete     bool        `json:"complete"`
 }
 
 type pendingClassification struct {
@@ -107,6 +116,12 @@ func ProjectPendingState(ctx context.Context, view RepositoryView) (PendingState
 		Refs: append([]Ref{}, view.Refs...), Pending: classification.pendings, Snapshots: []Snapshot{},
 		ArchivedSessions: append([]SessionArchiveView{}, view.ArchivedSessions...), Hold: classification.hold,
 		OrphanSessions: classification.orphans, HoldCounts: classification.counts}
+	sort.Slice(out.Refs, func(left, right int) bool {
+		if out.Refs[left].Kind != out.Refs[right].Kind {
+			return out.Refs[left].Kind < out.Refs[right].Kind
+		}
+		return out.Refs[left].Name < out.Refs[right].Name
+	})
 	selected := graphSet{}
 	for _, pending := range out.Pending {
 		if _, exists := index.byID[pending.Target]; !exists {

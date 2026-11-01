@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 	"github.com/wnsdy95/cxthub-cli/internal/ports/inbound"
 )
@@ -27,7 +25,7 @@ func selectCodePosition(ctx context.Context, c *Container, cwd string) error {
 	if err == nil && old.GitBranch() == branch && old.GitCommit == oid {
 		return reconcileCompletedPRPosition(ctx, c, cwd)
 	}
-	repo, err := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return err
 	}

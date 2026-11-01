@@ -11,18 +11,25 @@ import (
 )
 
 type legacyDocSpool struct {
-	file *os.File
-	size int
-	once sync.Once
-	err  error
+	file          *os.File
+	quota         *transientSpoolAllocation
+	reservedBytes int64
+	size          int
+	once          sync.Once
+	err           error
 }
 
 func newLegacyDocSpool() (*legacyDocSpool, error) {
-	file, err := os.CreateTemp("", "cxthub-legacy-doc-*")
+	quota, err := newTransientSpoolAllocation()
 	if err != nil {
 		return nil, err
 	}
-	return &legacyDocSpool{file: file}, nil
+	file, err := os.CreateTemp("", "cxthub-legacy-doc-*")
+	if err != nil {
+		quota.Close()
+		return nil, err
+	}
+	return &legacyDocSpool{file: file, quota: quota}, nil
 }
 
 func (spool *legacyDocSpool) Append(ctx context.Context, body []byte) error {
@@ -32,7 +39,14 @@ func (spool *legacyDocSpool) Append(ctx context.Context, body []byte) error {
 	if len(body) > domain.MaxFinalizedDocBytes-spool.size {
 		return domain.ErrIntegrity
 	}
+	if err := spool.quota.Reserve(int64(len(body))); err != nil {
+		return err
+	}
 	written, err := spool.file.WriteAt(body, int64(spool.size))
+	spool.reservedBytes += int64(written)
+	if written < len(body) {
+		spool.quota.Release(int64(len(body) - written))
+	}
 	if err != nil {
 		return err
 	}
@@ -40,6 +54,19 @@ func (spool *legacyDocSpool) Append(ctx context.Context, body []byte) error {
 		return io.ErrShortWrite
 	}
 	spool.size += written
+	return ctx.Err()
+}
+
+func (spool *legacyDocSpool) Truncate(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := spool.file.Truncate(0); err != nil {
+		return err
+	}
+	spool.quota.Release(spool.reservedBytes)
+	spool.reservedBytes = 0
+	spool.size = 0
 	return ctx.Err()
 }
 
@@ -66,6 +93,9 @@ func (spool *legacyDocSpool) Close() error {
 		removeErr := os.Remove(spool.file.Name())
 		if os.IsNotExist(removeErr) {
 			removeErr = nil
+		}
+		if removeErr == nil {
+			spool.quota.Close()
 		}
 		spool.err = errors.Join(closeErr, removeErr)
 	})

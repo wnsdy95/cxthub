@@ -74,7 +74,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 	st := store.NewFSStore(t.TempDir())
 	svc := app.NewService(st, st, auth.NewTeamTokenAuth(), gitengine.NewEngine(st), st)
 	idSvc := app.NewIdentityService(auth.NewDevVerifier(), st)
-	return httptest.NewServer(NewServer(svc, idSvc).Handler())
+	delivery := NewServer(svc, idSvc)
+	if err := delivery.SetMemorySnapshotQueries(memorySnapshotQueriesForTest(t, svc)); err != nil {
+		t.Fatal(err)
+	}
+	setServiceDocumentEventQueries(t, delivery, svc)
+	return httptest.NewServer(delivery.Handler())
 }
 
 func doJSON(t *testing.T, method, url string, body any, out any) int {

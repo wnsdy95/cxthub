@@ -64,8 +64,11 @@ func TestP9PGRootWorkerStoredDecoderBoundary(t *testing.T) {
 			switch kind {
 			case "oversized":
 				enc, _ := zstd.NewWriter(nil)
-				raw = enc.EncodeAll(bytes.Repeat([]byte("x"), 4<<20), nil)
+				raw = enc.EncodeAll(bytes.Repeat([]byte("x"), 1<<20), nil)
 				enc.Close()
+				if len(raw) > 2*int(chunk.Bytes)+64 {
+					t.Fatal("fixture does not reach the bounded decoder", len(raw), chunk.Bytes)
+				}
 			case "hostile-window":
 				body := bodies[chunk.Hash]
 				header := len(body)<<3 | 1

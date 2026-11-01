@@ -22,29 +22,19 @@ type preparedGitContributionSupplement struct {
 }
 
 func gitSupplementPublication(index *domain.GitPublicationIndex, record domain.GitContribution, id string) (domain.HistoryEvent, error) {
-	if record.Validate() != nil {
-		return domain.HistoryEvent{}, domain.ErrIntegrity
-	}
-	publication, err := index.Publication(id)
-	if err != nil {
-		return domain.HistoryEvent{}, err
-	}
-	if publication.RepoID != string(record.RepoID) || publication.BranchID != record.SourceBranchID || publication.Target != record.Capture || publication.Source != record.Capture || publication.GitAfter != record.OriginalHead || !publication.MemoryPinned {
-		return domain.HistoryEvent{}, domain.ErrConflict
-	}
-	return publication, nil
+	return domain.GitSupplementPublication(index, record, id)
 }
 
-func (scans *GitScans) prepareGitContributionSupplement(ctx context.Context, job domain.GitContributionSupplement) (preparedGitContributionSupplement, error) {
-	return repositoryReadForRepo(ctx, scans.core, job.RepoID, func(read context.Context) (preparedGitContributionSupplement, error) {
+func (workers *GitIntegrationWorkers) prepareGitContributionSupplement(ctx context.Context, job domain.GitContributionSupplement) (preparedGitContributionSupplement, error) {
+	return repositoryReadForRepoWithWork(ctx, workers.work, job.RepoID, func(read context.Context) (preparedGitContributionSupplement, error) {
 		var prepared preparedGitContributionSupplement
 		if job.Validate() != nil || job.State != "processing" {
 			return prepared, domain.ErrValidation
 		}
-		store, supported := scans.core.meta.(outbound.GitContributionSupplementStore)
-		admissions, admitted := scans.core.meta.(outbound.GitContributionAdmissionStore)
-		heads, bound := scans.core.meta.(outbound.GitContextHeadStore)
-		receipts, readReceipts := scans.core.meta.(outbound.GitHeadReceiptStore)
+		store, supported := workers.work.meta.(outbound.GitContributionSupplementStore)
+		admissions, admitted := workers.work.meta.(outbound.GitContributionAdmissionStore)
+		heads, bound := workers.work.meta.(outbound.GitContextHeadStore)
+		receipts, readReceipts := workers.work.meta.(outbound.GitHeadReceiptStore)
 		if !supported || !admitted || !bound || !readReceipts {
 			return prepared, domain.ErrValidation
 		}
@@ -78,7 +68,7 @@ func (scans *GitScans) prepareGitContributionSupplement(ctx context.Context, job
 		if !admission.MatchesBaseline(baseline) {
 			return prepared, domain.ErrIntegrity
 		}
-		snapshot, err := scans.core.readGitAdmissionEvidence(read, job.RepoID, []gitAdmissionLookup{historicalGitAdmissionLookup(admission), {publicationID: job.PublicationID}})
+		snapshot, err := workers.readGitAdmissionEvidence(read, job.RepoID, []gitAdmissionLookup{historicalGitAdmissionLookup(admission), {publicationID: job.PublicationID}})
 		if err != nil {
 			return prepared, err
 		}
@@ -89,7 +79,7 @@ func (scans *GitScans) prepareGitContributionSupplement(ctx context.Context, job
 		if err != nil {
 			return prepared, err
 		}
-		source, err := scans.core.contributionPublicationMemorySource(read, job.RepoID, record.Capture, publication)
+		source, err := workers.contributionPublicationMemorySource(read, job.RepoID, record.Capture, publication)
 		if err != nil {
 			return prepared, err
 		}
@@ -101,11 +91,11 @@ func (scans *GitScans) prepareGitContributionSupplement(ctx context.Context, job
 	})
 }
 
-func (scans *GitScans) applyGitContributionSupplement(ctx context.Context, prepared preparedGitContributionSupplement, authorization gitAdmissionAuthorization) error {
+func (workers *GitIntegrationWorkers) applyGitContributionSupplement(ctx context.Context, prepared preparedGitContributionSupplement, authorization gitAdmissionAuthorization) error {
 	job := prepared.job
-	ledger, supported := scans.core.meta.(outbound.GitContributionStore)
-	queue, queued := scans.core.meta.(outbound.GitContributionSupplementStore)
-	_, atomic := scans.core.meta.(outbound.RepositoryTransactions)
+	ledger, supported := workers.work.meta.(outbound.GitContributionStore)
+	queue, queued := workers.work.meta.(outbound.GitContributionSupplementStore)
+	_, atomic := workers.work.meta.(outbound.RepositoryTransactions)
 	if !supported || !queued || !atomic || authorization.fence == nil || job.Validate() != nil || job.State != "processing" || prepared.memory.Validate() != nil {
 		return domain.ErrValidation
 	}
@@ -115,11 +105,11 @@ func (scans *GitScans) applyGitContributionSupplement(ctx context.Context, prepa
 	if authorization.repo != job.RepoID || authorization.provider.RepositoryID != prepared.admission.Destination.ProviderRepositoryID || authorization.provider.InstallationID != prepared.admission.Destination.InstallationID {
 		return domain.ErrConflict
 	}
-	return repositoryWriteError(context.WithValue(ctx, revisionScopeKey{}, "none"), scans.core, job.RepoID, func(write context.Context) error {
+	return repositoryWriteErrorWithWork(context.WithValue(ctx, revisionScopeKey{}, "none"), workers.work, job.RepoID, func(write context.Context) error {
 		if err := authorization.fence(write); err != nil {
 			return err
 		}
-		current, err := scans.core.workerRepository(write, job.RepoID)
+		current, err := workers.workerRepository(write, job.RepoID)
 		if err != nil {
 			return err
 		}
@@ -133,7 +123,7 @@ func (scans *GitScans) applyGitContributionSupplement(ctx context.Context, prepa
 		if proof != prepared.proof {
 			return domain.ErrIntegrity
 		}
-		snapshot, err := scans.core.reuseGitAdmissionSnapshot(write, job.RepoID, prepared.snapshot)
+		snapshot, err := workers.reuseGitAdmissionSnapshot(write, job.RepoID, prepared.snapshot)
 		if err != nil {
 			return err
 		}
@@ -150,7 +140,7 @@ func (scans *GitScans) applyGitContributionSupplement(ctx context.Context, prepa
 		if !reflect.DeepEqual(publication, prepared.publication) {
 			return domain.ErrConflict
 		}
-		source, err := scans.core.contributionPublicationMemorySource(write, job.RepoID, proof.Contribution.Capture, publication)
+		source, err := workers.contributionPublicationMemorySource(write, job.RepoID, proof.Contribution.Capture, publication)
 		if err != nil {
 			return err
 		}
@@ -169,7 +159,7 @@ func (scans *GitScans) applyGitContributionSupplement(ctx context.Context, prepa
 			if err := ledger.PutGitContributionMemory(write, want); err != nil {
 				return err
 			}
-			if err := revisionWrite(evidenceWriteContext(write), scans.core, job.RepoID); err != nil {
+			if err := workers.work.revisionWrite(evidenceWriteContext(write), job.RepoID); err != nil {
 				return err
 			}
 		}

@@ -278,6 +278,7 @@ export interface SearchHit {
   kind: 'commit' | 'event';
   role?: string;
   seq?: number;
+  event_index?: number;
   snippet: string;
   created_at: string;
 }
@@ -517,7 +518,28 @@ export interface StorageUsageReport {
 }
 
 /** A complete graph generation, read in one backend transaction. */
-export interface RepositoryRevision { graph: string; pending: string; evidence?: string }
+export interface RepositoryRevision { graph: string; pending: string; evidence?: string; pending_projection?: PendingProjectionStatus; graph_projection?: GraphProjectionStatus }
+export interface GraphReadGeneration {
+  generation: string;
+  source_epoch: string;
+  applied_epoch: string;
+  rules: 2;
+  complete: true;
+  current: boolean;
+}
+export interface GraphProjectionStatus {
+  state: 'disabled' | 'needs_attention' | 'catching_up' | 'ready';
+  source_epoch: string;
+  applied_epoch?: string;
+  rules: 2;
+  generation?: string;
+  complete: boolean;
+  current: boolean;
+}
+export type PendingProjectionStatus = { source_epoch: string; rules: 1 } & (
+  { state: 'ready'; generation: string } |
+  { state: 'disabled' | 'catching_up' | 'needs_attention'; generation?: never }
+);
 /** Raw capture patch: branch memberships belong to the full graph generation. */
 export type PendingSnapshot = Omit<Snapshot, 'branches'>;
 export interface SessionArchiveView {
@@ -543,8 +565,9 @@ export interface SessionArchiveView {
     main_branch: string;
   };
 }
-export interface PendingView { graph: GraphState; revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[]; archived_sessions?: SessionArchiveView[] }
+export interface PendingView { read_generation?: GraphReadGeneration; graph: GraphState; revision: RepositoryRevision; pending: Pending[]; snapshots: PendingSnapshot[]; archived_sessions?: SessionArchiveView[] }
 export interface PendingStateView {
+	read_generation?: { generation: string; source_epoch: string; applied_epoch: string; rules: 1; complete: true };
   projection: 'on-hold-v1';
   revision: RepositoryRevision;
   default_branch: string;
@@ -562,6 +585,7 @@ export interface ContextSemantics {
   merges: { event_id: string; birth_id?: string; completed: boolean; placement_intact: boolean; source_available: boolean; lineage: BranchLineage }[];
 }
 export interface RepositoryView {
+  read_generation?: GraphReadGeneration;
   graph: GraphState;
   default_branch: string;
   /** Absent only during rolling upgrades from pre-projection servers. */
@@ -667,6 +691,7 @@ export interface JoinPreview {
 
 /** Server-owned business facts. UI owns only filtering, folding and coordinates. */
 export interface GraphState {
+  read_generation?: GraphReadGeneration;
 	integrations?: {branch: string; scope: string; target: string; head: string; parents: Record<string,string[]>; extra_parents: string[]}[];
 	branch_contexts?: Record<string, BranchContext>;
   version: 1; revision: RepositoryRevision; position_event?: string; primary_branch: string;

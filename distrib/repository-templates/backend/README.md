@@ -24,6 +24,7 @@ go vet -C backend ./...
 go vet -C backend -tags postgres ./...
 go build -C backend -tags postgres -o ../bin/cxtd ./cmd/cxtd
 docker build -f Dockerfile -t cxthub-api:local .
+docker build -f Dockerfile.migrate -t cxthub-migrate:local .
 ```
 
 CI builds and vets both default and `postgres` variants and builds the API
@@ -40,6 +41,13 @@ for `cxthub-api`. The source Blueprint keeps automatic deployment off. Both API
 and MCP must use the same existing PostgreSQL database, Firebase project, and
 public frontend origin. PostgreSQL is shared infrastructure, not another source
 repository. Do not create a new database to switch code repositories.
+
+Before API/MCP/worker startup, explicitly apply and verify the exact schema with
+the separate `cxthub-migrate:local` image and privileged operator credentials.
+Its default is check-only; applying requires `--apply`. Runtime startup is
+verification-only and must not have migration authority. See
+[`docs/DATABASE_MIGRATIONS.md`](docs/DATABASE_MIGRATIONS.md) for coordinated
+drain, public namespace, history/checksum checks, and rollback limits.
 
 After all four generated repositories are verified against the same source
 commit and their CI succeeds, deploy the exact exported API commit manually.

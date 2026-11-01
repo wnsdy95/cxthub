@@ -110,7 +110,7 @@ func capturePushDestinations(ctx context.Context, cwd, root string) (domain.Cont
 
 func queueCapturePush(ctx context.Context, c *Container, cwd string, updates []gitPushUpdate, scope domain.PublicationScope) error {
 	root := cxtRepoRoot(ctx, cwd)
-	repo, err := resolvePublicationRepo(ctx, c, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return err
 	}

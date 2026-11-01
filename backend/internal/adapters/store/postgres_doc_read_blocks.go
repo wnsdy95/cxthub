@@ -128,14 +128,23 @@ func putReadBlockEventsPG(ctx context.Context, tx pgx.Tx, blocks []domain.DocRea
 	if err != nil {
 		return err
 	}
-	spool, err := os.CreateTemp("", "cxthub-search-events-*")
+	quota, err := newTransientSpoolAllocation()
 	if err != nil {
 		return err
 	}
-	defer os.Remove(spool.Name())
+	spool, err := os.CreateTemp("", "cxthub-search-events-*")
+	if err != nil {
+		quota.Close()
+		return err
+	}
+	defer func() {
+		if err := os.Remove(spool.Name()); err == nil || os.IsNotExist(err) {
+			quota.Close()
+		}
+	}()
 	defer spool.Close()
 	buffer := make([]byte, 32<<10)
-	writer := struct{ io.Writer }{spool}
+	writer := readBlockSearchWriterPG{writer: spool, quota: quota}
 	textHash := sha256.New()
 	indexes := make([]domain.DocReadIndex, len(blocks))
 	var entries []readBlockSearchEntryPG
@@ -197,6 +206,25 @@ type readBlockSearchEntryPG struct {
 	offset   int64
 	length   int64
 	checksum [sha256.Size]byte
+}
+
+type readBlockSearchWriterPG struct {
+	writer io.Writer
+	quota  *transientSpoolAllocation
+}
+
+func (writer readBlockSearchWriterPG) Write(body []byte) (int, error) {
+	if err := writer.quota.Reserve(int64(len(body))); err != nil {
+		return 0, err
+	}
+	written, err := writer.writer.Write(body)
+	if written < len(body) {
+		writer.quota.Release(int64(len(body) - written))
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+	}
+	return written, err
 }
 
 type readBlockSearchReaderPG struct {

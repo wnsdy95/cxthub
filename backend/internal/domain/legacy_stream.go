@@ -61,7 +61,7 @@ func (doc VerifiedLegacyStream) Chunk(ctx context.Context, ordinal int) ([]byte,
 		return nil, ErrIntegrity
 	}
 	body := bytes.Clone(current)
-	hash, err := legacyStreamHash(ctx, body)
+	hash, err := HashContentContext(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -120,16 +120,9 @@ func (verifier *CanonicalDocVerifier) verifyLegacyStream(ctx context.Context, wa
 	if err != nil || len(encoded) > MaxDocJobManifestBytes {
 		return zero, ErrIntegrity
 	}
-	var envelope CIREnvelope
-	if json.Unmarshal(manifest.Envelope, &envelope) != nil {
-		return zero, ErrIntegrity
-	}
-	if err := ValidateCIRVersion(CIRDocument{Envelope: envelope}); err != nil {
+	envelope, err := decodeCanonicalCIREnvelope(manifest.Envelope)
+	if err != nil {
 		return zero, err
-	}
-	canonical, err := canonicalJSON(envelope)
-	if err != nil || !bytes.Equal(canonical, manifest.Envelope) {
-		return zero, ErrIntegrity
 	}
 	total := canonicalFrameBytes + len(manifest.Envelope)
 	if total > documentLimit {
@@ -142,7 +135,7 @@ func (verifier *CanonicalDocVerifier) verifyLegacyStream(ctx context.Context, wa
 	result := VerifiedLegacyStream{source: stream, manifest: DocChunkManifest{Format: ChunkFormatV2, Envelope: manifest.Envelope}}
 	var pending []canonicalEventProof
 	scanner := legacyStreamScanner{limit: eventLimit, visit: func(span canonicalSpan, body []byte) (int, error) {
-		hash, err := legacyStreamHash(ctx, body)
+		hash, err := HashContentContext(ctx, body)
 		if err != nil {
 			return 0, err
 		}
@@ -216,18 +209,4 @@ func (verifier *CanonicalDocVerifier) verifyLegacyStream(ctx context.Context, wa
 	result.size = total - canonicalFrameBytes - len(manifest.Envelope)
 	result.reference = VerifiedDocReference{hash: want, identity: DocumentIdentityLegacy}
 	return result, nil
-}
-
-func legacyStreamHash(ctx context.Context, body []byte) (ContentHash, error) {
-	hasher := sha256.New()
-	for offset := 0; offset < len(body); offset += canonicalCheckBytes {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		hasher.Write(body[offset:min(offset+canonicalCheckBytes, len(body))])
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return ContentHash("sha256:" + hex.EncodeToString(hasher.Sum(nil))), nil
 }

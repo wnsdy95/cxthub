@@ -10,26 +10,17 @@ import (
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
-type ReplicaInspection struct {
-	// Completed means every inspection phase finished, even if damage was found.
-	Completed        bool     `json:"completed"`
-	Snapshots        int      `json:"snapshots"`
-	DocumentsChecked int      `json:"documents_checked"`
-	HistoryEvents    int      `json:"history_events"`
-	Issues           []string `json:"issues"`
-}
-
 // InspectReplica never acquires a mutation lock, recovers a journal, repacks a
 // document, or creates a directory. It reports observable content/reference
 // failures; it is not evidence of who caused damage or an atomic disk snapshot.
-func (s *FileStore) InspectReplica(ctx context.Context) ReplicaInspection {
+func (s *FileStore) InspectReplica(ctx context.Context) domain.ReplicaInspection {
 	return s.inspectReplica(ctx, nil)
 }
 
 // beforeRead is an optional per-call test hook at actual read boundaries. It
 // neither replaces validation nor adds shared state to the store.
-func (s *FileStore) inspectReplica(ctx context.Context, beforeRead func(string)) ReplicaInspection {
-	r := ReplicaInspection{Issues: []string{}}
+func (s *FileStore) inspectReplica(ctx context.Context, beforeRead func(string)) domain.ReplicaInspection {
+	r := domain.ReplicaInspection{Issues: []string{}}
 	stop := func(label string) bool {
 		if err := ctx.Err(); err != nil {
 			r.Issues = append(r.Issues, fmt.Sprintf("incomplete inspection at %s: %v", label, err))

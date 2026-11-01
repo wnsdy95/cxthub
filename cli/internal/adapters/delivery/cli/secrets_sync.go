@@ -13,7 +13,6 @@ import (
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/secretscrypto"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
 )
 
@@ -39,8 +38,11 @@ func secretsPlainHash(plain []byte) string {
 // This file belongs to this worktree, never the shared context object store.
 const secretsBaselinePath = ".cxt/secrets-baseline.json"
 
-func syncSecrets(ctx context.Context, remote secretsRemote, cwd, repo, sub, pass string, rotate, force bool) error {
-	return storage.NewFileStore(cwd).WithSecretsLock(ctx, func() error {
+func syncSecrets(ctx context.Context, withLock func(context.Context, string, func() error) error, remote secretsRemote, cwd, repo, sub, pass string, rotate, force bool) error {
+	if withLock == nil {
+		return fmt.Errorf("secrets lock unavailable")
+	}
+	return withLock(ctx, cwd, func() error {
 		baseline := secretsBaseline{Origin: remote.SecretsOrigin(), Repo: repo}
 		if raw, err := providerfs.ReadRepoFile(cwd, secretsBaselinePath); err == nil {
 			if err := json.Unmarshal(raw, &baseline); err != nil {

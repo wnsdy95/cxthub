@@ -3,6 +3,12 @@
 import type { Messages } from './ko';
 
 export const en: Messages = {
+ graphRead: {
+  pending: 'The graph is being prepared. No complete generation is available yet.',
+  lagging: 'Showing the last complete graph while newer changes are being processed.',
+  failed: 'Graph preparation requires attention. Automatic retries have stopped.',
+  failedRetained: 'Showing the last complete graph. Processing newer changes requires attention; automatic retries have stopped.',
+ },
  sessionArchive: {
   archive: 'Archive session',
   restore: 'Restore session',
@@ -413,8 +419,31 @@ export const en: Messages = {
     expand: 'Expand',
     collapse: 'Collapse',
   },
+  documentFind: {
+    title: 'Find in document',
+    query: 'Find text',
+    representation: 'Search representation',
+    sourceText: 'Source text',
+    displayText: 'Displayed text',
+    displayScope: 'Search formatted messages and expanded tool data in loaded ranges, excluding control labels. Large records are prepared on the server and may need a retry. Source search is never substituted. Your reading position stays unchanged.',
+    search: 'Search',
+    previous: 'Previous result',
+    next: 'Next result',
+    scope: 'Search loaded source ranges, including folded details. Your reading position stays unchanged.',
+    changed: 'The searched record changed or closed. Start a new search.',
+    unsupported: 'This record or server does not support document find yet. The full document will not be downloaded instead.',
+    scanning: 'Searching loaded ranges…',
+    range: 'Search scope · records: {records} · events: {events}.',
+    newContent: 'Search again to include newly loaded content.',
+    match: 'Match {number}',
+    noMatch: 'No more matches in this range.',
+    event: 'Event {index}',
+    raw: 'Raw JSON coordinates',
+    reveal: 'Read the matching conversation',
+  },
   context: {
     retryRead: 'Retry',
+    restartDocument: 'Restart document',
     loadingEvents: 'Loading conversation…',
     loadMoreEvents: 'Load more events',
     eventFragment: 'Canonical event JSON — bytes {start}–{end} of {total}. Only this fragment is loaded.',
@@ -426,6 +455,8 @@ export const en: Messages = {
     searchPlaceholder: 'Search — commit messages & chat',
     searchAria: 'Search context',
     searchFailed: 'Search failed — {msg}',
+    searchPosition: 'Showing the matching conversation.',
+    showFromStart: 'Read from the beginning',
     hitCommit: 'commit',
     hitConvo: 'chat',
     noResults: 'No results',
@@ -751,6 +782,8 @@ export const en: Messages = {
     inviteHint: 'Links are reusable until revoked (joining is idempotent). Set an email to restrict acceptance to that account.',
   },
   onhold: {
+    needsAttention: 'On Hold requires server attention. Cached results are not live.',
+    refreshing: 'Refreshing On Hold… Cached results may be out of date.',
     liveSection: 'Live uncommitted sessions',
     liveHint: 'Transcript activity observed in the last 2 minutes. New records are saved in batches; server change notifications update the latest capture. Large sessions can take longer to process.',
     followingSession: 'Following this session’s latest capture.',

@@ -4,7 +4,8 @@ package store
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
@@ -13,23 +14,49 @@ import (
 
 type pgStreamingRootPublication struct {
 	*preparedStreamingRootDoc
-	store *PostgresStore
+	store     *PostgresStore
+	source    pgRootSourceWitness
+	indexes   *pgPreparedRootIndexes
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (storage *PostgresStore) PrepareRootDocJob(ctx context.Context, job domain.DocFinalizationJob) (outbound.PreparedRootDocPublication, error) {
+	sources := make(map[domain.ContentHash]pgRootDependencySource)
 	prepared, err := prepareStreamingRootJob(ctx, job, &storage.docProofs.rootVerifier, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
 		var raw []byte
-		err := storage.db(ctx).QueryRow(ctx, `SELECT substring(b.bytes FROM 1 FOR $3) FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
- WHERE rb.repo_id=$1 AND rb.kind='chunk' AND rb.hash=$2`, job.RepoID, hash, maxStoredRangeChunkBytes+1).Scan(&raw)
-		if err == nil && len(raw) > maxStoredRangeChunkBytes {
+		source := pgRootDependencySource{hash: hash}
+		err := storage.db(ctx).QueryRow(ctx, `SELECT substring(b.bytes FROM 1 FOR $3),b.doc_range_source_version,incarnation.incarnation::text
+ FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
+ JOIN blob_source_incarnations incarnation ON incarnation.hash=b.hash
+ WHERE rb.repo_id=$1 AND rb.kind='chunk' AND rb.hash=$2`, job.RepoID, hash, maxStoredRangeChunkBytes+1).Scan(&raw, &source.version, &source.incarnation)
+		if err != nil {
+			return nil, mapNoRows(err)
+		}
+		if len(raw) > maxStoredRangeChunkBytes {
 			return nil, domain.ErrIntegrity
 		}
-		return raw, mapNoRows(err)
+		if previous, exists := sources[hash]; exists && previous != source {
+			return nil, domain.ErrConflict
+		}
+		sources[hash] = source
+		return raw, ctx.Err()
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &pgStreamingRootPublication{preparedStreamingRootDoc: prepared, store: storage}, nil
+	if err := verifyMigrationRootSources(ctx, storage.db(ctx)); err != nil {
+		return nil, errors.Join(err, prepared.Close())
+	}
+	source, err := newPGRootSourceWitness(prepared, sources)
+	if err != nil {
+		return nil, errors.Join(err, prepared.Close())
+	}
+	indexes, err := preparePGRootIndexes(ctx, prepared)
+	if err != nil {
+		return nil, errors.Join(err, prepared.Close())
+	}
+	return &pgStreamingRootPublication{preparedStreamingRootDoc: prepared, store: storage, source: source, indexes: indexes}, nil
 }
 
 func (publication *pgStreamingRootPublication) Complete(ctx context.Context, job domain.DocFinalizationJob, _ time.Time) error {
@@ -38,12 +65,8 @@ func (publication *pgStreamingRootPublication) Complete(ctx context.Context, job
 	}
 	storage := publication.store
 	return storage.WithinRepository(ctx, job.RepoID, func(write context.Context) error {
-		var raw []byte
-		if err := storage.db(write).QueryRow(write, `SELECT payload FROM doc_finalization_jobs WHERE repo_id=$1 AND id=$2 FOR UPDATE`, job.RepoID, job.ID).Scan(&raw); err != nil {
-			return mapNoRows(err)
-		}
-		var current domain.DocFinalizationJob
-		if err := json.Unmarshal(raw, &current); err != nil {
+		current, err := readLockedDocJobPG(write, storage.db(write), job.RepoID, job.ID)
+		if err != nil {
 			return err
 		}
 		if !current.Fences(job, time.Now().UTC()) {
@@ -83,6 +106,9 @@ func (publication *pgStreamingRootPublication) publish(ctx context.Context) erro
 	if !ok || bound.owner != storage || bound.readOnly || bound.repo != job.RepoID {
 		return domain.ErrConflict
 	}
+	if err := publication.source.matches(job, publication.root.canonical); err != nil {
+		return err
+	}
 	if _, err := bound.Exec(ctx, `INSERT INTO blobs(hash,bytes) VALUES($1,$2) ON CONFLICT(hash) DO NOTHING`, job.DocHash, docCompress(publication.root.canonical)); err != nil {
 		return err
 	}
@@ -96,21 +122,20 @@ func (publication *pgStreamingRootPublication) publish(ctx context.Context) erro
 	if err := publication.root.matchesStored(ctx, raw); err != nil {
 		return err
 	}
-	if err := publication.compareCurrent(ctx, func(ctx context.Context, hash domain.ContentHash) ([]byte, error) {
-		var raw []byte
-		err := bound.QueryRow(ctx, `SELECT substring(b.bytes FROM 1 FOR $3) FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
- WHERE rb.repo_id=$1 AND rb.kind='chunk' AND rb.hash=$2 FOR SHARE OF rb,b`, job.RepoID, hash, maxStoredRangeChunkBytes+1).Scan(&raw)
-		if err == nil && len(raw) > maxStoredRangeChunkBytes {
-			return nil, domain.ErrIntegrity
-		}
-		return raw, mapNoRows(err)
-	}); err != nil {
+	read, current, err := storage.retainedRootChunkReaderWithSource(ctx, job.RepoID, conversationChunkOrder(publication.root.manifest), &publication.source)
+	if err != nil {
 		return err
+	}
+	if !current {
+		if err := publication.compareCurrent(ctx, read); err != nil {
+			return err
+		}
+		return domain.ErrConflict
 	}
 	if _, err := bound.Exec(ctx, `INSERT INTO repo_blobs(repo_id,kind,hash) VALUES($1,'doc',$2) ON CONFLICT DO NOTHING`, job.RepoID, job.DocHash); err != nil {
 		return err
 	}
-	return storage.putRangeIndex(ctx, job.RepoID, publication.root.ranges)
+	return storage.putPreparedRootIndexes(ctx, job.RepoID, publication.preparedStreamingRootDoc, publication.indexes)
 }
 
 var _ outbound.StreamingRootJobStore = (*PostgresStore)(nil)

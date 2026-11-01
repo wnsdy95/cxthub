@@ -23,6 +23,46 @@ func (buffer *docRangeMemoryBuffer) Read(ctx context.Context, position int) ([]b
 	return bytes.Clone(buffer.pages[position]), ctx.Err()
 }
 
+func (buffer *docRangeMemoryBuffer) Flush(ctx context.Context) error {
+	return ctx.Err()
+}
+
+type docRangeFlushFailingBuffer struct {
+	docRangeMemoryBuffer
+	err    error
+	cancel context.CancelFunc
+}
+
+func (buffer *docRangeFlushFailingBuffer) Flush(ctx context.Context) error {
+	if buffer.cancel != nil {
+		buffer.cancel()
+		return nil
+	}
+	return buffer.err
+}
+
+func TestDocRangeIndexFlushFailureNeverSealsOrAdmits(t *testing.T) {
+	manifest, bodies, _ := rootEventsFixture(t)
+	hash := manifestProofHash(t, manifest)
+	for _, mode := range []string{"flush", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			want := errors.New("spool flush failed")
+			buffer := &docRangeFlushFailingBuffer{err: want}
+			if mode == "cancel" {
+				want = context.Canceled
+				buffer.cancel = cancel
+			}
+			var verifier CanonicalDocVerifier
+			index, err := verifier.VerifyConversationRangeIndex(ctx, hash, manifest, manifestProofLoad(bodies), buffer)
+			if !errors.Is(err, want) || index.Header().Hash != "" || index.read != nil || len(verifier.events) != 0 || len(buffer.pages) == 0 {
+				t.Fatal("failed flush became verified", err)
+			}
+		})
+	}
+}
+
 func docRangeTestPage(t *testing.T, index VerifiedDocRangeIndex, position int) []byte {
 	t.Helper()
 	raw, err := index.Page(context.Background(), position)
@@ -30,6 +70,56 @@ func docRangeTestPage(t *testing.T, index VerifiedDocRangeIndex, position int) [
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func TestVerifiedDocRangePageEntriesOwnAndRevalidateBytes(t *testing.T) {
+	manifest, bodies, _ := rootEventsFixture(t)
+	buffer := &docRangeReusingBuffer{}
+	var verifier CanonicalDocVerifier
+	index, err := verifier.VerifyConversationRangeIndex(context.Background(), manifestProofHash(t, manifest), manifest, manifestProofLoad(bodies), buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, entries, err := index.pageEntries(context.Background(), 0)
+	if err != nil || len(entries) == 0 {
+		t.Fatal(err)
+	}
+	original := bytes.Clone(raw)
+	originalHash := entries[0].Hash
+	buffer.raw[0] = 'x'
+	if !bytes.Equal(raw, original) {
+		t.Fatal("decoded page retained the reader buffer")
+	}
+	raw[0], entries[0].Hash = 'x', "invalid"
+	raw, entries, err = index.pageEntries(context.Background(), 0)
+	if err != nil || !bytes.Equal(raw, original) || entries[0].Hash != originalHash {
+		t.Fatal("caller mutation changed the next decoded page", err)
+	}
+	buffer.pages[0][0] = 'x'
+	if _, _, err := index.pageEntries(context.Background(), 0); !errors.Is(err, ErrIntegrity) {
+		t.Fatal("repeat read did not authenticate current bytes", err)
+	}
+	entries[0].Index++
+	malformed, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer.pages[0] = malformed
+	index.index.Pages[0] = HashContent(malformed)
+	if _, _, err := index.pageEntries(context.Background(), 0); !errors.Is(err, ErrIntegrity) {
+		t.Fatal("matching hash hid invalid entry metadata", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	index.index.Pages[0] = HashContent(original)
+	index.read = func(context.Context, int) ([]byte, error) {
+		cancel()
+		return original, nil
+	}
+	raw, entries, err = index.pageEntries(ctx, 0)
+	if !errors.Is(err, context.Canceled) || raw != nil || entries != nil {
+		t.Fatal("canceled read exposed decoded results", err)
+	}
 }
 
 func TestDocRangeIndexRequiresCompleteVerificationAndAuthenticatesPages(t *testing.T) {

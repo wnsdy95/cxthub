@@ -33,18 +33,19 @@ func TestNativeDeferredCaptureUsesOwnedToolThreadNotStaleAffinity(t *testing.T) 
 	}
 	defer retire()
 	capture.RecordSessionAffinity(root, domain.ProviderCodex, stale)
-	got, err := commandCapture(context.Background(), root, "codex")
+	resolver := captureSelectionForTest()
+	got, err := resolver.ResolveCommandSession(context.Background(), root, "codex")
 	if err != nil || got.SessionPath != path {
 		t.Fatal("wrong native capture", err)
 	}
 	if err := retire(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := commandCapture(context.Background(), root, "codex"); err == nil {
+	if _, err := resolver.ResolveCommandSession(context.Background(), root, "codex"); err == nil {
 		t.Fatal("missing ownership fell back to previous session")
 	}
 	t.Setenv("CODEX_THREAD_ID", "")
-	if _, err := commandCapture(context.Background(), root, "codex"); err == nil {
+	if _, err := resolver.ResolveCommandSession(context.Background(), root, "codex"); err == nil {
 		t.Fatal("missing native identity used affinity")
 	}
 }

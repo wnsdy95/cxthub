@@ -52,12 +52,13 @@ git status --short > "$artifacts/git-status.txt"
 cp "$root/scripts/test-doc-range-load.sh" "$artifacts/runner.sh"
 if [ -n "${CXT_RANGE_REUSE_BUILD:-}" ]; then
   cmp "$CXT_RANGE_REUSE_BUILD/docker-info.txt" "$artifacts/docker-info.txt"
-  for file in source.tar.gz source-files.txt git-head.txt worktree.diff git-status.txt go-version.txt setup.test load.test; do
+  for file in source.tar.gz source-files.txt source-sha256.txt git-head.txt worktree.diff git-status.txt go-version.txt setup.test load.test; do
     cp "$CXT_RANGE_REUSE_BUILD/$file" "$artifacts/$file"
   done
   printf '%s\n' "$CXT_RANGE_REUSE_BUILD" > "$artifacts/reused-build.txt"
 else
 python3 - "$root" "$artifacts" <<'PY'
+import hashlib
 import pathlib
 import subprocess
 import sys
@@ -76,10 +77,15 @@ for encoded in listed.split(b'\0'):
     source = root / relative
     if source.is_file() and not source.is_symlink():
         selected.append(relative.as_posix())
+hashes = []
 with tarfile.open(directory / 'source.tar.gz', 'w:gz') as archive:
     for relative in sorted(set(selected)):
         archive.add(root / relative, arcname=relative, recursive=False)
+with tarfile.open(directory / 'source.tar.gz', 'r:gz') as archive:
+    for relative in sorted(set(selected)):
+        hashes.append(f'{hashlib.sha256(archive.extractfile(relative).read()).hexdigest()}  {relative}')
 (directory / 'source-files.txt').write_text('\n'.join(sorted(set(selected))) + '\n')
+(directory / 'source-sha256.txt').write_text('\n'.join(hashes) + '\n')
 PY
 fi
 mkdir -m 700 "$artifacts/source"
@@ -90,12 +96,12 @@ if [ -z "${CXT_RANGE_REUSE_BUILD:-}" ]; then
   CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" go test -tags postgres -c -o "$artifacts/load.test" ./internal/adapters/delivery/http > "$artifacts/build-linux.log" 2>&1
 fi
 shasum -a 256 "$artifacts/source.tar.gz" "$artifacts/setup.test" "$artifacts/load.test" "$artifacts/runner.sh" > "$artifacts/sha256.txt"
-"$artifacts/setup.test" -test.run '^TestDocRangeLoadFixtureRoundTrip$' -test.v > "$artifacts/fixture-self-test.log" 2>&1
+"$artifacts/setup.test" -test.run '^TestDoc(Range|Visible)Load' -test.v -test.timeout 2m > "$artifacts/fixture-self-test.log" 2>&1
 docker network create "$network" > "$artifacts/network.txt"
 docker run -d --name "$postgres" --network "$network" --network-alias range-postgres --label "cxthub.range-load=$run" -p 127.0.0.1::5432 -e POSTGRES_USER=range_load -e "POSTGRES_PASSWORD=$password" -e POSTGRES_DB=cxthub_range_load postgres:16 -c shared_buffers=64MB -c max_connections=48 > "$artifacts/postgres-id.txt"
 ready=0
 for attempt in $(seq 1 60); do
-  if docker exec "$postgres" pg_isready -U range_load -d cxthub_range_load > /dev/null 2>&1; then ready=1; break; fi
+  if docker exec "$postgres" pg_isready -h 127.0.0.1 -U range_load -d cxthub_range_load > /dev/null 2>&1; then ready=1; break; fi
   sleep 1
 done
 test "$ready" = 1
@@ -118,6 +124,7 @@ docker inspect "$load" > "$artifacts/load-inspect.json"
 cat "$artifacts/load.log"
 python3 - "$artifacts" "$phase" <<'PY'
 import json
+import math
 import pathlib
 import sys
 directory = pathlib.Path(sys.argv[1])
@@ -134,7 +141,33 @@ def read_json(name, default):
 peak = read_integer('memory.peak')
 events = read_values('memory.events')
 samples = read_json('samples.json', [])
+operations = read_json('operations.json', [])
+visible_costs = read_json('visible-costs.json', [])
+if visible_costs is None:
+    visible_costs = []
+assert isinstance(visible_costs, list), 'visible cost observations must be an array'
+windows = read_json('work-windows.json', {})
 functional = read_json('functional-result.json', {})
+def latency(group):
+    values = sorted(sample['Microseconds'] for sample in group)
+    return {'samples': len(group), 'p50_us': values[(len(values) - 1) // 2], 'p95_us': values[math.ceil(len(values) * .95) - 1], 'max_us': values[-1]}
+latency_groups = {}
+for sample in samples:
+    key = f'{sample["Phase"]}/{sample["Kind"]}/HTTP{sample["Status"]}'
+    latency_groups.setdefault(key, []).append(sample)
+operation_groups = {}
+for operation in operations:
+    key = f'{operation["Phase"]}/{operation["Kind"]}'
+    operation_groups.setdefault(key, []).append(operation)
+overlap = {}
+for phase, (start, end) in windows.items():
+    overlap[phase] = {}
+    for sample in samples:
+        if sample['Phase'] != phase or sample['Kind'] in ('chunk_upload', 'submit'):
+            continue
+        counts = overlap[phase].setdefault(sample['Kind'], {'overlapping_attempts': 0, 'http200_completed_during': 0})
+        counts['overlapping_attempts'] += sample['Start'] < end and sample['End'] > start
+        counts['http200_completed_during'] += sample['Status'] == 200 and not sample.get('Error') and start < sample['End'] < end
 memory_samples = []
 sampling_errors = []
 memory_path = directory / 'memory-samples.jsonl'
@@ -157,7 +190,7 @@ report = {
     'cgroup_memory_max_bytes': read_integer('memory.max'),
     'cgroup_memory_swap_max_bytes': read_integer('memory.swap.max'),
     'functional': functional,
-    'functional_pass': functional.get('passed') is True and bool(samples) and all(not sample.get('Error') for sample in samples),
+    'functional_pass': functional.get('passed') is True and bool(samples) and all(not sample.get('Error') for sample in samples) and bool(operations) and all(operation['Completed'] for operation in operations),
     'no_oom_pass': not container['State']['OOMKilled'] and all(events.get(key) == 0 for key in ('oom', 'oom_kill')),
     'strict_peak_pass': peak is not None and 0 < peak <= limit,
     'peak_bytes': peak,
@@ -167,13 +200,20 @@ report = {
     'memory_stat_after_process_exit': read_values('memory.stat'),
     'http_attempts': len(samples),
     'retryable_503': sum(sample['Status'] == 503 for sample in samples),
+    'admission_retry_attempts': sum(sample.get('Retry', False) for sample in samples),
+    'http_latency_by_kind_status': {key: {**latency(group), 'max_response_bytes': max(sample['Bytes'] for sample in group)} for key, group in sorted(latency_groups.items())},
+    'http_operations_including_retry_wait': {key: {**latency(group), 'completed': sum(operation['Completed'] for operation in group), 'failed': sum(not operation['Completed'] for operation in group), 'attempts': sum(operation['Attempts'] for operation in group)} for key, group in sorted(operation_groups.items())},
+    'completion_during_overlap': overlap,
+    'visible_cost_samples': len(visible_costs),
+    'visible_cost_maxima': {name: max((cost[name] for cost in visible_costs), default=None) for name in ('Units', 'Pages', 'Chunks', 'ChunkBytes', 'Forbidden')},
+    'worker_admission': read_json('worker-admission.json', {}),
     'process_rss_high_water_bytes': max((sample['process_bytes']['VmHWM'] for sample in memory_samples), default=None),
     'first_observed_over_cap': next((memory_point(sample) for sample in memory_samples if sample['cgroup']['memory.peak']['bytes'] > limit), None),
     'maximum_sampled_rss': memory_point(max(memory_samples, key=lambda sample: sample['process_bytes']['VmRSS'])) if memory_samples else None,
     'sample_count': len(memory_samples),
     'phase_extrema': {phase: {'samples': len(group), 'max_anon_bytes': max(sample['cgroup']['memory.stat']['anon'] for sample in group), 'max_file_bytes': max(sample['cgroup']['memory.stat']['file'] for sample in group), 'max_rss_bytes': max(sample['process_bytes']['VmRSS'] for sample in group), 'max_current_bytes': max(sample['cgroup']['memory.current']['bytes'] for sample in group), 'cumulative_peak_bytes': max(sample['cgroup']['memory.peak']['bytes'] for sample in group)} for phase, group in memory_groups.items()},
     'sampling_errors': sampling_errors,
-    'work_windows': read_json('work-windows.json', {}),
+    'work_windows': windows,
     'interpretation': {
         'kernel_reference': 'https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#memory-interface-files',
         'memory_max': 'Temporary overages are possible; this regression nevertheless retains its stricter peak <= 512MiB requirement.',
@@ -181,11 +221,17 @@ report = {
         'stat': 'file includes filesystem cache; anon includes anonymous mappings. Neither is equivalent to Go heap alone.',
         'scope': 'Server, worker, bounded clients, fixture metadata, verification and sampler share the cgroup. File-cache ownership is not isolated.',
         'sampling': '100ms observations are non-atomic and may miss transients; memory.peak and VmHWM are cumulative high-water marks.',
-        'claims': 'Functional and no-OOM success do not override the strict gate or establish production headroom or an SLA.'
+        'claims': 'Functional and no-OOM success do not override the strict gate or establish production headroom or an SLA.',
+        'unmeasured': 'PostgreSQL is outside the app cap. No disk-cold cache reset, production corpus, base/inherited-boundary matrix, sustained traffic, cross-replica behavior, or process-isolated server RSS measurement.',
+        'visible_cost_scope': 'Per-request service-to-store port calls and bounded chunk bytes, not SQL count or PostgreSQL memory. Whole-document and legacy fallback ports are rejected before reading.',
+        'retries': 'HTTP status groups count attempts, not completed operations. Operation latency includes retry waits; failed/exhausted operations fail the functional gate.'
     }
 }
 (directory / 'diagnostics.json').write_text(json.dumps(report, indent=2) + '\n')
 print(f'Diagnostics: functional_pass={report["functional_pass"]} no_oom_pass={report["no_oom_pass"]} strict_peak_pass={report["strict_peak_pass"]} events.max={events.get("max")} report={directory / "diagnostics.json"}', flush=True)
+for key, stats in report['http_latency_by_kind_status'].items():
+    print(f'{key}: samples={stats["samples"]} p95_us={stats["p95_us"]}', flush=True)
+print(f'Completion during overlap: {json.dumps(overlap, sort_keys=True)}', flush=True)
 assert container['HostConfig']['Memory'] == 512 * 1024 * 1024, 'Docker memory cap differs'
 assert container['HostConfig']['MemorySwap'] == 512 * 1024 * 1024, 'Docker swap allowance differs'
 assert not container['State']['OOMKilled'], 'Docker reports OOMKilled'

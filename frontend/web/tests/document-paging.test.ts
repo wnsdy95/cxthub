@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { api, ApiError, type DocViewEventPage } from '../src/api';
-import { docPageKey, validateDocViewPage, validateDocEventDetail, validateDocFragment } from '../src/documentPaging';
+import { validateDocViewPage, validateDocEventDetail, validateDocFragment } from '../src/documentPaging';
+import { documentVisibleKey } from '../src/documentVisible';
 import type { DocViewMode } from '../src/types';
 
 const hash = 'sha256:document';
@@ -29,10 +30,12 @@ test('view page ranges preserve absolute indices, hidden placeholders and inheri
   assert.throws(() => validateDocViewPage(page, hash, 0));
   assert.throws(() => validateDocViewPage(page, 'another', -1));
   assert.equal(validateDocViewPage({ ...page, events: [], offset: 102, next: -1 }, hash, 102).next, -1);
-  const keys = ['all', 'chat', 'prompts'].map(mode => JSON.stringify(docPageKey('repo', hash, 'base', -1, mode as DocViewMode)));
+  const selection = { repoId: 'repo', hash, base: 'base', start: -1, mode: 'chat' as DocViewMode };
+  const keys = ['all', 'chat', 'prompts'].map(mode => JSON.stringify(documentVisibleKey({ ...selection, mode: mode as DocViewMode })));
   assert.equal(new Set(keys).size, 3);
-  assert.notDeepEqual(docPageKey('repo', hash, 'base', -1, 'chat'), docPageKey('repo', hash, 'base', 0, 'chat'));
-  assert.notDeepEqual(docPageKey('repo', hash, 'base', -1, 'chat'), docPageKey('repo', hash, 'other', -1, 'chat'));
+  assert.notDeepEqual(documentVisibleKey(selection), documentVisibleKey({ ...selection, start: 0 }));
+  assert.notDeepEqual(documentVisibleKey(selection), documentVisibleKey({ ...selection, base: 'other' }));
+  assert.notDeepEqual(documentVisibleKey(selection), documentVisibleKey(selection, 'restart'));
 });
 
 test('details and fragments reject misbound and nonadvancing byte ranges', () => {

@@ -19,7 +19,7 @@ func TestMemoryLoadIncludesPreviousMainImmediatelyAfterPromotion(t *testing.T) {
 		{ID: base, RepoID: repo.ID, MemoryHash: bh},
 		{ID: source, RepoID: repo.ID, MemoryHash: sh, GraftSeq: 1, GraftParents: []domain.ContentHash{base}},
 	}}, memories: map[domain.ContentHash]domain.MemoryDigest{bh: previous, sh: feature}}}
-	s := &Server{context: f}
+	s := &Server{context: f, memorySnapshots: f}
 	got, err := s.memoryPage(systemTestContext(), repo, toolArgs{Ref: string(source)})
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestProjectedMemoryPagesAreStatelessAndRejectDependencyChanges(t *testing.T
 	var projection domain.ContentHash
 	for i := 0; i < 100; i++ {
 		// Each page goes through a fresh MCP server instance (no sticky replica).
-		raw, err := (&Server{context: f}).memoryPage(systemTestContext(), repo, a)
+		raw, err := (&Server{context: f, memorySnapshots: f}).memoryPage(systemTestContext(), repo, a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -91,7 +91,7 @@ func TestProjectedMemoryPagesAreStatelessAndRejectDependencyChanges(t *testing.T
 	}
 	bad := cursor
 	bad.FragmentFormat = "future-format"
-	if _, err := (&Server{context: f}).memoryPage(systemTestContext(), repo, toolArgs{Ref: string(source), Cursor: encodeCursor(bad)}); err == nil {
+	if _, err := (&Server{context: f, memorySnapshots: f}).memoryPage(systemTestContext(), repo, toolArgs{Ref: string(source), Cursor: encodeCursor(bad)}); err == nil {
 		t.Fatal("mixed projection rendering versions")
 	}
 
@@ -101,11 +101,11 @@ func TestProjectedMemoryPagesAreStatelessAndRejectDependencyChanges(t *testing.T
 	f.memories[newHash] = changed
 	f.snapshots[repo.ID][0].MemoryHash = newHash
 	a.Cursor = firstCursor
-	if _, err := (&Server{context: f}).memoryPage(systemTestContext(), repo, a); err == nil || !strings.Contains(err.Error(), "restart") {
+	if _, err := (&Server{context: f, memorySnapshots: f}).memoryPage(systemTestContext(), repo, a); err == nil || !strings.Contains(err.Error(), "restart") {
 		t.Fatalf("mixed projection revisions: %v", err)
 	}
 	// Explicit history remains the exact archived object after later changes.
-	exact, err := (&Server{context: f}).memoryPage(systemTestContext(), repo, toolArgs{Ref: string(base), MemoryHash: string(hash)})
+	exact, err := (&Server{context: f, memorySnapshots: f}).memoryPage(systemTestContext(), repo, toolArgs{Ref: string(base), MemoryHash: string(hash)})
 	if err != nil || !strings.Contains(exact, string(hash)) {
 		t.Fatalf("historical memory lost: %s %v", exact, err)
 	}
@@ -117,7 +117,7 @@ func TestMemoryModeValidationAndLegacyCursor(t *testing.T) {
 	d := domain.MemoryDigest{SnapshotID: id, Summary: strings.Repeat("original", 3000)}
 	hash, _ := domain.MemoryDigestHash(d)
 	f := fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {{ID: id, RepoID: repo.ID, MemoryHash: hash}}}, memories: map[domain.ContentHash]domain.MemoryDigest{hash: d}}
-	s := &Server{context: f}
+	s := &Server{context: f, memorySnapshots: f}
 	for _, a := range []toolArgs{{Mode: "invalid"}, {Mode: "project", MemoryHash: string(hash)}} {
 		if _, err := s.memoryPage(systemTestContext(), repo, a); err == nil {
 			t.Fatal("invalid mode accepted")
@@ -145,6 +145,7 @@ func TestMergedConversationsRemainDiscoverableAndFetchable(t *testing.T) {
 		f.docs[id] = domain.SessionDoc{Hash: id, CIR: domain.CIRDocument{Events: []domain.CIREvent{{Seq: 0, Kind: "message", Role: "user", Blocks: []domain.ContentBlock{{Type: "text", Text: "conversation " + string(id)}}}}}}
 	}
 	s := &Server{context: f}
+	setPageDocumentEventQueries(t, s, repo.ID, f)
 	raw, err := s.contextPage(systemTestContext(), repo, toolArgs{Scope: "current", Position: "main"})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +171,7 @@ func TestProjectMemoryCollapsesRepeatedProviderGenerationsWithoutChangingArchive
 	d := domain.MemoryDigest{SnapshotID: id, Summary: prefix + "OLD GENERATION\n" + prefix + "LATEST DECISION"}
 	hash, _ := domain.MemoryDigestHash(d)
 	f := fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {{ID: id, RepoID: repo.ID, MemoryHash: hash}}}, memories: map[domain.ContentHash]domain.MemoryDigest{hash: d}}
-	server := &Server{context: f}
+	server := &Server{context: f, memorySnapshots: f}
 	got, err := server.memoryPage(systemTestContext(), repo, toolArgs{Ref: string(id)})
 	if err != nil {
 		t.Fatal(err)

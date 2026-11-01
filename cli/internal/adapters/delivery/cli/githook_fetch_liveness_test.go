@@ -147,6 +147,9 @@ func TestFetchLivenessObserverRestartDrainsExistingJob(t *testing.T) {
 				}
 				cancel()
 			}}
+			container.ObserveLiveSession = func(ctx context.Context, cwd string, provider domain.ProviderKind, sessionID string) error {
+				return capture.ObserveLiveSession(ctx, cwd, provider, sessionID, container.WakeFetchDiscovery)
+			}
 			if err := runGitHook(observerCtx, container, root, []string{"live-watch", "codex", id}); !errors.Is(err, context.Canceled) || wakes != 1 || resumed.Process == nil {
 				t.Fatalf("observer startup did not wake queue: wakes=%d err=%v", wakes, err)
 			}

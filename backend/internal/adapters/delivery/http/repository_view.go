@@ -4,28 +4,29 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/delivery/graphwire"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"net/http"
 	"strconv"
 )
 
 func (s *Server) repositoryView(w http.ResponseWriter, r *http.Request) {
-	r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
-	if !ok {
-		return
-	}
-	defer release()
-	v, err := s.b.GetRepositoryView(r.Context(), s.repoID(r))
-	if err != nil {
-		s.respond(w, nil, err)
-		return
-	}
-	s.respond(w, struct {
-		domain.RepositoryView
-		Graph any `json:"graph"`
-	}{v, encodeGraphResponse(r, *v.Graph)}, nil)
+	s.graphRead(w, r, func(request *http.Request) (any, error) {
+		view, err := s.repositoryGraphs.GetRepositoryView(request.Context(), s.repoID(request))
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			domain.RepositoryView
+			Graph any `json:"graph"`
+		}{view, encodeGraphResponse(request, *view.Graph)}, nil
+	})
 }
 
 func (s *Server) contextQuery(w http.ResponseWriter, r *http.Request) {
+	if s.contextQueries == nil {
+		s.writeError(w, http.StatusNotImplemented, "context_query_unavailable", "context query unavailable")
+		return
+	}
 	r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
 	if !ok {
 		return
@@ -43,22 +44,23 @@ func (s *Server) contextQuery(w http.ResponseWriter, r *http.Request) {
 			*dst = n
 		}
 	}
-	v, err := s.b.QueryContext(r.Context(), s.repoID(r), in)
+	authorize := s.docVisibleReadAuthorizer(r, s.repoID(r))
+	if s.contextQueryProfile == inbound.ContextQueryPinnedSnapshots {
+		authorize = s.memoryReadAuthorizer(r, s.repoID(r))
+	}
+	ctx := inbound.WithDocumentReadAuthorizer(r.Context(), authorize)
+	v, err := s.contextQueries.QueryContext(ctx, s.repoID(r), in)
 	s.respond(w, v, err)
 }
 
 func (s *Server) graphState(w http.ResponseWriter, r *http.Request) {
-	r, release, ok := s.admitResourceRequest(w, r, app.ResourceInteractive)
-	if !ok {
-		return
-	}
-	defer release()
-	v, err := s.b.QueryGraphState(r.Context(), s.repoID(r), r.URL.Query().Get("position"))
-	if err != nil {
-		s.respond(w, nil, err)
-		return
-	}
-	s.respond(w, encodeGraphResponse(r, v), nil)
+	s.graphRead(w, r, func(request *http.Request) (any, error) {
+		view, err := s.repositoryGraphs.QueryGraphState(request.Context(), s.repoID(request), request.URL.Query().Get("position"))
+		if err != nil {
+			return nil, err
+		}
+		return encodeGraphResponse(request, view), nil
+	})
 }
 
 func encodeGraphResponse(r *http.Request, g domain.GraphState) any {

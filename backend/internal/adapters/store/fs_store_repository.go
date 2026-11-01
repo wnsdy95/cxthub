@@ -79,11 +79,56 @@ func (s *FSStore) GetSession(_ context.Context, token string) (domain.Session, e
 	return sess, err
 }
 
-var fsSessionLocks sync.Map
+var fsSessionLocks [256]sync.Mutex
 
 func (s *FSStore) sessionLock(token string) *sync.Mutex {
-	lock, _ := fsSessionLocks.LoadOrStore(s.dataDir+"\x00"+token, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+	if !strings.HasPrefix(token, "tkh_") {
+		token = domain.HashToken(token)
+	}
+	key := sha256.Sum256([]byte(s.dataDir + "\x00" + token))
+	return &fsSessionLocks[key[0]]
+}
+
+func legacySessionKind(token string) string {
+	if strings.HasPrefix(token, "sess_cli_") {
+		return "cli"
+	}
+	return "web"
+}
+
+func (storage *FSStore) MigrateSession(ctx context.Context, token string) (domain.Session, error) {
+	if err := domain.ValidateStoredSessionToken(token); err != nil {
+		return domain.Session{}, err
+	}
+	if !strings.HasPrefix(token, "sess_") {
+		return domain.Session{}, domain.ErrValidation
+	}
+	lock := storage.sessionLock(token)
+	lock.Lock()
+	defer lock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return domain.Session{}, err
+	}
+	hashed := domain.HashToken(token)
+	if session, err := storage.GetSession(ctx, hashed); !errors.Is(err, domain.ErrNotFound) {
+		return session, err
+	}
+	session, err := storage.GetSession(ctx, token)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	session.Token = hashed
+	session.Hint = domain.TokenHint(token)
+	if session.Kind == "" {
+		session.Kind = legacySessionKind(token)
+	}
+	if err := storage.CreateSession(ctx, session); err != nil {
+		return domain.Session{}, err
+	}
+	if err := os.Remove(filepath.Join(storage.sessionsDir(), token+".json")); err != nil {
+		return domain.Session{}, err
+	}
+	return session, nil
 }
 
 func (s *FSStore) ConsumeSession(ctx context.Context, token, kind, label string) (domain.Session, error) {
@@ -106,13 +151,41 @@ func (s *FSStore) ConsumeSession(ctx context.Context, token, kind, label string)
 	return sess, nil
 }
 
-func (s *FSStore) DeleteSession(_ context.Context, token string) error {
+func (s *FSStore) DeleteSession(ctx context.Context, token string) error {
 	if err := domain.ValidateStoredSessionToken(token); err != nil {
 		return err
 	}
-	err := os.Remove(filepath.Join(s.sessionsDir(), token+".json"))
-	if err != nil && !os.IsNotExist(err) {
+	lock := s.sessionLock(token)
+	lock.Lock()
+	defer lock.Unlock()
+	if err := ctx.Err(); err != nil {
 		return err
+	}
+	tokens := []string{token}
+	if !strings.HasPrefix(token, "tkh_") {
+		tokens = append(tokens, domain.HashToken(token))
+	} else {
+		entries, err := os.ReadDir(s.sessionsDir())
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if entry.IsDir() || !strings.HasPrefix(entry.Name(), "sess_") || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			legacy := strings.TrimSuffix(entry.Name(), ".json")
+			if domain.ValidateStoredSessionToken(legacy) == nil && domain.HashToken(legacy) == token {
+				tokens = append(tokens, legacy)
+			}
+		}
+	}
+	for _, key := range tokens {
+		if err := os.Remove(filepath.Join(s.sessionsDir(), key+".json")); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	return nil
 }

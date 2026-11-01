@@ -10,9 +10,7 @@ import (
 	"syscall"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/branchjournal"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/gitctx"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/providerfs"
-	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
 )
 
 // Confirmation is explicit evidence supplied by the operator, never presented
@@ -23,7 +21,7 @@ func confirmOrphanRecovery(ctx context.Context, c *Container, cwd, id string) er
 	if err != nil {
 		return err
 	}
-	repo, err := remotecfg.Wrap(cwd, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+	repo, err := resolveLocalRepo(ctx, c, cwd)
 	if err != nil {
 		return err
 	}

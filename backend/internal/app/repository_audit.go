@@ -2,10 +2,8 @@ package app
 
 import (
 	"context"
-	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
-	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
@@ -17,43 +15,16 @@ func auditOperation(ctx context.Context, action string) context.Context {
 
 // Only metadata is logged. Payloads, secret envelopes and webhook URLs are never copied.
 func appendRepositoryAudit(ctx context.Context, repositories outbound.RepositoryStore, actor, id, action string) error {
-	r, err := repositories.GetRepository(ctx, id)
-	if err != nil {
-		return err
+	audit, _ := repositories.(outbound.OrganizationStore)
+	for _, source := range []any{repositories, audit} {
+		if source != nil && !rootAdapterPresent(source) {
+			return domain.ErrValidation
+		}
 	}
-	if r.OwnerNamespaceID == "" {
-		return nil
-	}
-	org, ok := repositories.(outbound.OrganizationStore)
-	if !ok {
-		return domain.ErrForbidden
-	}
-	ns, err := org.GetNamespace(ctx, r.OwnerNamespaceID)
-	if err != nil {
-		return err
-	}
-	if ns.Kind != domain.NamespaceOrganization {
-		return nil
-	}
-	return org.AppendOrganizationAudit(ctx, organizationAudit(ctx, ns.OrganizationID, actor, action, "repository", id, "", time.Now().UTC()))
+	return appendRepositoryAuditFromSources(ctx, repositories, audit, actor, id, action)
 }
-func (s *Service) auditRepositoryWrite(ctx context.Context, repo domain.ContentHash) error {
-	actor, system := inbound.RepositoryActor(ctx)
-	if system {
-		return nil
-	}
-	record, err := s.meta.GetRepo(ctx, repo)
-	if err != nil {
-		return err
-	}
-	if record.RepositoryID == "" {
-		return nil
-	}
-	action, _ := ctx.Value(auditOperationKey{}).(string)
-	if action == "" {
-		action = "context.updated"
-	}
-	return appendRepositoryAudit(ctx, s.repositories, actor, record.RepositoryID, action)
+func (service *Service) auditRepositoryWrite(ctx context.Context, repo domain.ContentHash) error {
+	return service.repositoryWork().auditRepositoryWrite(ctx, repo)
 }
 func (s *IdentityService) OrganizationAuditPage(ctx context.Context, actor, org, cursor string, limit int) (domain.OrganizationAuditPage, error) {
 	if role, _ := s.OrganizationRoleOf(ctx, org, actor); !role.AtLeast(domain.OrganizationAdmin) {

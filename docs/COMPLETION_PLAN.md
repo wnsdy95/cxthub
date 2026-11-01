@@ -6,6 +6,145 @@ existing repository, organization and Enterprise authority boundaries remain.
 
 ## Delivery order and acceptance
 
+Current performance priority (2026-10-19):
+[architecture design](INCREMENTAL_READ_PUBLICATION_DESIGN.md) has been approved
+for staged implementation. D1 admission and D2 pinned-header/readiness,
+durable missing-index work, source-version-fenced compact generations and resumable
+exact inherited boundaries are locally implemented and validated. The
+mode-specific visible index, explicit HTTP unit/fold pagination and separate Web
+validator/renderer are now implemented locally. Focused browser and actual
+PostgreSQL-to-Web wire checks pass; mixed-load and release gates remain separate.
+The first D3 source-journal boundary is also implemented and locally validated:
+missing repository-view metadata shares the existing transactional catalog
+clock without changing public CLI kinds. The next local slice implements
+opt-in durable pending generations, retention-protected workers and an explicit
+catch-up/readiness contract. Cheap revision/SSE metadata now distinguishes source
+changes and projection readiness even when legacy counters do not change;
+notification and body-read validation remain separate. A subsequent private
+graph-source boundary captures Git/PR proofs and fences process caches against
+source-only changes and catalog reset; it is not a durable graph cutover.
+Frozen graph reconstruction now uses only completed source images, with no live
+proof fallback. The next graph publisher persists page progress, an independent
+retention pin and an atomic complete result through the shared fenced consumer
+engine. A subsequent default-off Web reader consumes a rules-2 graph/metadata
+bundle, exposes source/applied checkpoints, retains coherent lagged results and
+reauthorizes after admission. Full/live/default/historical graph parity now has
+local PostgreSQL coverage. Bounded corrupt-generation repair now queues after
+owned reads, coalesces concurrent reports, survives restart, preserves terminal
+failures and quarantines repeated corruption without rewriting source data.
+Mounted browser checks and complete frontend/backend test runners pass locally.
+Bounded persisted shadow comparisons and an exact-generation experimental reader
+gate are locally verified, including actual PostgreSQL restart/mismatch/input
+limits and independent review fixes. A separately retained qualified serving
+head now keeps the last matching metadata bundle readable while newer candidates
+are published or fail comparison. Atomic promotion, monotonic serving fences,
+candidate/serving repair isolation and legacy-receipt bootstrap have local
+PostgreSQL race coverage. Initial qualification, continuous-write freshness and
+recovery after losing the only serving copy still require catch-up verification.
+Independent D3h review identified further retry-classification, unavailable-head
+status, promotion byte-bound and quarantine races. Their fixes, deterministic
+interleaving tests and re-review are complete; final targeted PostgreSQL and unit
+races pass locally. This does not close continuous-write catch-up or release gates.
+D3i closes reproduced current-query continuation gaps: effective-memory proof
+reuse/cursors now include the read-only committed source checkpoint, and context
+segments bind selected delivery provenance across Git-origin changes. Immutable
+memory/component ownership and bytes remain checked before any proof-cache hit;
+the graph generation is not a memory-ready or access certificate. Direct AI
+queries still do not consume lagged Web bundles. Actual HTTP/MCP-to-PostgreSQL
+continuation parity, inline/chunked ownership/hash checks, focused race runs,
+full normal backend tests, PostgreSQL vet, builds and independent review pass
+locally. D3j adds shared bulk admission for all six public memory reads and
+transport-owned scopes through response assembly. It avoids waiting in borrowed
+transactions, revalidates transport authority after owned queue waits and expires
+nested authorization at scope exit. Core and disposable PostgreSQL admission,
+cross-replica revocation, HTTP/MCP serialization/cancellation, existing continuation
+contracts, independent review and the final complete backend runner pass locally.
+The incremental plan now has a compact D1–D5 checkpoint map; its remaining gates
+are not closed by this admission work.
+D3k adds an independent transactional memory-metadata generation for legacy
+metadata, PR/Git pins and root/component ownership. Current effective-memory
+continuation binds it with the graph checkpoint from the same read snapshot;
+semantic delivery identity remains unchanged. Focused unit/actual PostgreSQL
+race checks, the full normal backend suite, PostgreSQL vet, builds and independent
+review pass. Shared-byte fan-out was rejected:
+equal metadata generations do not prove current bytes or retention, and
+ownership/hash checks still precede proof reuse. Captured object dependencies,
+retention and durable memory serving remain open.
+D3l separates read-only memory selection inputs from general writer adapters.
+An internal coherent capture records demanded object bytes and observed absence,
+then detached projection uses the same selection/assessment/pagination rules
+without live store fallback. PostgreSQL capture bounds object decompression,
+logical repeated components and exact-pin metadata. This is an input/replay
+boundary, not persisted staging, retention or a current-serving cutover.
+Actual PostgreSQL mutation/parity and store-limit tests, focused race runs and
+independent review pass locally. Final review also closes a cumulative stored-
+payload gap: valid compressed padding across components can no longer bypass
+the per-digest transfer budget. This is not production latency/RSS qualification.
+The final complete normal backend suite, PostgreSQL vet and API/MCP builds also
+pass. The disposable PostgreSQL cluster is stopped; no binary is installed and
+no migration or deployment is applied by this slice.
+D3m adds restartable, content-addressed frozen memory inputs with atomic
+PostgreSQL persistence, shared blocks, bounded expiry/pruning and strict restore.
+Replay survives process restart and original-input mutation without treating old
+bytes as current access authority. Empty chunks cannot masquerade as observed
+absence. Focused race/actual-PG regressions, the complete normal backend suite,
+vet/builds and independent review pass locally. This is not incremental
+current-memory preparation or qualified output serving: those contracts, original
+object lifetime and the live endpoint cutover remain open. No deployment occurs.
+D3n adds a selection-scoped persisted result and internal range reader. Strict
+preparation rejects exhausted item/receipt/branch traversal budgets instead of
+sealing incomplete review output. Missing evidence is still an explicit review
+state. Source-capture expiry bounds result lifetime; historical result bytes do
+not authorize current reads. D3o replaces repeated header/index checks and
+decoding with a scoped range operation, but incremental preparation,
+qualification and current authority/source checks remain open. No API/MCP
+cutover is claimed by this persistence work.
+Final focused race, actual PostgreSQL, vet/build and complete normal backend
+checks pass. Earlier package/fixture timeout attempts are retained separately;
+unchanged rechecks pass without extending guards. The owned test cluster is
+stopped, and production is untouched.
+D3o's real PostgreSQL two-chunk range uses five SELECTs/five rows at both 640 and
+6,400 result items; the latter point-read baseline uses 14 SELECTs/311 rows.
+Remaining header work is O(index), not constant. Scope expiry/cancellation,
+selected corruption, callback ownership, maximum pages and audit separation
+pass targeted race/actual-PG checks; vet and builds pass. Independent reviewer
+capacity was unavailable, so no independent sign-off is claimed for D3o.
+D3p adds verified selected-object witnesses using the existing blob write counter
+and new delete/reinsert incarnations. Fresh validation rejects stale borrowed
+transactions and checks current grants without rereading unchanged payloads.
+A shared domain budget includes roots and components across the whole capture.
+Actual PostgreSQL five-object checks use one SELECT/380 received bytes despite
+10x unrelated-object growth. Upgrade/rollback, ABA, interleaved writes, revoked
+grants, absent dependencies and document fences pass focused race regressions;
+broader memory races, compile/vet/build and independent source re-review pass.
+This is not durable qualification or current endpoint serving; retained source
+lifetimes, incremental preparation, migration lock-time and rollout gates remain.
+D3q adds worker-only preparation/publication and immutable qualifications binding
+capture/result identity, source versions and selected object witnesses. Fresh
+fenced publication handles concurrent writers without lock cycles; a new scoped
+reader rechecks current sources before selected result chunks. Restart, rollback,
+expiry, revocation, root-v1 compatibility and 10x unrelated-object cost checks
+pass locally, along with focused/broader race tests, compile/vet/build and
+independent source review. This is an internal boundary, not a transport cutover:
+ordinary callers must provide an explicit snapshot-safe authorizer. Existing
+HTTP/MCP login/migration/break-glass callbacks perform writes and cannot be reused
+there. D3r separates those operations before current endpoint integration.
+Incremental preparation, durable worker leases/retries and rollout remain open.
+D4a starts publication-cost work without depending on or claiming D3 serving
+completion. Streaming root final verification batches retained current bytes;
+the previous materialized acceptance contract is unchanged. Repeated evicted
+chunks reload alone rather than amplifying transfer with an old window. Legacy
+publication, safe preparation/short-commit separation and independent derivation
+workers remain open, as do the full mixed-load and rollout gates.
+Rollout qualification, effective-memory dependencies, complete MCP cutover and
+production validation remain open; worker/shadow/read flags are independent.
+The remaining design, release and production gates are still open. The
+[incremental publication and bounded reads](INCREMENTAL_READ_PUBLICATION_PLAN.md)
+specifies cold-read admission, conversation range indexes, durable graph/pending
+projections and shorter publication transactions, in that order. It preserves
+the automatic-association invariants below; its unchecked gates are not completed
+by earlier local range-read or deployment checks.
+
 Current priority (2026-10-10): [automatic context association](AUTOMATIC_CONTEXT_LINKING.md)
 tracks #494 and the related #492 delivery gap. GitHub changes, ordinary local
 fetch/pull and server reconciliation must converge without a customer-operated

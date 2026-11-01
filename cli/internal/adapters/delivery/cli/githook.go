@@ -130,10 +130,10 @@ func snapshotForCommitWithPublication(ctx context.Context, c *Container, cwd, me
 	}
 	for i, p := range providers {
 		claimed := p == domain.ProviderCodex && (providerfs.ValidSessionID(os.Getenv("CODEX_THREAD_ID")) || providerfs.ValidSessionID(os.Getenv("CODEX_SESSION_ID")))
-		if owner, managed := supervisedProvider(ctx, cwd); managed && owner == p {
+		if owner, managed := c.supervisedProvider(ctx, cwd); managed && owner == p {
 			claimed = true
 		}
-		target, err := commandCapture(ctx, cwd, string(p))
+		target, err := c.commandCapture(ctx, cwd, string(p))
 		if err != nil {
 			state := "failed"
 			if errors.Is(err, domain.ErrNoActiveSession) && !claimed {
@@ -468,10 +468,13 @@ func contextSwitchWithPublication(ctx context.Context, c *Container, cwd string,
 		hookWarn("keep-session — context switch omitted (current session maintained)")
 		return nil
 	}
+	if c == nil || c.SessionSelection == nil || c.SessionInventory == nil {
+		return fmt.Errorf("context switch capture selection and session inventory unavailable")
+	}
 	branch := gitOut(cwd, "symbolic-ref", "--short", "HEAD")
 	prevBranch := gitOut(cwd, "rev-parse", "--abbrev-ref", "@{-1}")
 	detached := branch == "" || branch == "HEAD"
-	targetProvider, wrapperManaged := supervisedProvider(ctx, cwd)
+	targetProvider, wrapperManaged := c.supervisedProvider(ctx, cwd)
 
 	// 1) Checkpoint: snapshot and push (best-effort) the live sessions from the previous branch.
 	//    Ensure isolation target file paths here (direct use of capture adapter — hook-specific paths).
@@ -498,15 +501,7 @@ func contextSwitchWithPublication(ctx context.Context, c *Container, cwd string,
 	// newest capture-eligible session; once selected it is registered, so later
 	// switches never fall through to an older archived sibling.
 	if len(lives) == 0 {
-		var src interface {
-			LocateActiveSession(context.Context, string) (string, error)
-		}
-		if targetProvider == domain.ProviderCodex {
-			src = capture.NewCodexCapture()
-		} else {
-			src = capture.NewClaudeCapture()
-		}
-		if path, err := src.LocateActiveSession(ctx, cwd); err == nil {
+		if path, err := c.SessionInventory.LocateActiveSession(ctx, cwd, targetProvider); err == nil {
 			if info, statErr := os.Lstat(path); statErr == nil && info.Mode().IsRegular() {
 				lives = append(lives, liveSession{
 					provider: string(targetProvider), path: path, checkpoint: true,
@@ -737,7 +732,7 @@ func contextSwitchWithPublication(ctx context.Context, c *Container, cwd string,
 	// sessions in this cwd (multi-terminal invariant), then atomically record the
 	// boundary consumed by the wrapper. The newly materialized restart target is
 	// deliberately excluded from the old-session inventory.
-	for _, p := range append(claudeSessionFiles(cwd), codexSessionFiles(ctx, cwd)...) {
+	for _, p := range append(c.SessionInventory.SessionFilesForCwd(ctx, cwd, domain.ProviderClaude), c.SessionInventory.SessionFilesForCwd(ctx, cwd, domain.ProviderCodex)...) {
 		if !shouldSupersedeSession(p, b.SeedPath) {
 			continue
 		}
@@ -774,246 +769,9 @@ func contextSwitchWithPublication(ctx context.Context, c *Container, cwd string,
 	return nil
 }
 
-// supervisedProvider returns the provider owned by the live cxt wrapper in the
-// current process ancestry. A boolean environment marker alone is insufficient:
-// resumed shells and app integrations can retain CXT_WRAPPED after the original
-// supervisor has exited, which previously caused an unrestartable boundary kill.
-func supervisedProvider(ctx context.Context, cwd string) (domain.ProviderKind, bool) {
-	agent := domain.ProviderKind(os.Getenv("CXT_WRAPPED_AGENT"))
-	if agent != domain.ProviderClaude && agent != domain.ProviderCodex {
-		// Pre-wrapper-env sessions and plain terminals carry no agent marker.
-		// A fixed claude default materialized claude seeds for live codex
-		// sessions (#35) — follow the provider that is actually active here.
-		agent = activeProviderForCwd(ctx, cwd)
-	}
-	if os.Getenv("CXT_WRAPPED") != "1" {
-		return agent, false
-	}
-	wrapperPID, err := strconv.Atoi(os.Getenv("CXT_WRAPPER_PID"))
-	if err != nil || wrapperPID <= 1 {
-		return agent, false
-	}
-	return agent, hasProcessAncestor(os.Getppid(), wrapperPID, snapshotParentPID())
-}
-
-// activeProviderForCwd picks the provider whose capture-eligible active session
-// for this cwd was modified most recently (claude on ties and when neither has
-// sessions). Use LocateActiveSession rather than the isolation inventory: the
-// latter intentionally includes ledger-excluded materialized recovery files.
-func activeProviderForCwd(ctx context.Context, cwd string) domain.ProviderKind {
-	mtime := func(path string, err error) int64 {
-		if err != nil || path == "" {
-			return 0
-		}
-		if info, statErr := os.Stat(path); statErr == nil {
-			return info.ModTime().UnixNano()
-		}
-		return 0
-	}
-	claudePath, claudeErr := capture.NewClaudeCapture().LocateActiveSession(ctx, cwd)
-	codexPath, codexErr := capture.NewCodexCapture().LocateActiveSession(ctx, cwd)
-	return providerByRecency(mtime(claudePath, claudeErr), mtime(codexPath, codexErr))
-}
-
-type commandCaptureTarget struct {
-	SessionID   string
-	Provider    domain.ProviderKind
-	SessionPath string
-}
-
-// commandCapture resolves both provider and, when an owning wrapper exists,
-// its exact native session. Provider-only selection is insufficient because
-// two terminals can run the same provider in one worktree. Explicit choice of
-// another provider intentionally uses that provider's latest eligible file.
-func commandCapture(ctx context.Context, cwd, explicit string) (commandCaptureTarget, error) {
-	wrappedProvider, managed := supervisedProvider(ctx, cwd)
-	appPath := ""
-	if !managed && (explicit == "" || explicit == string(domain.ProviderCodex)) {
-		// Codex app commands carry the native thread ID even when their working
-		// directory is a linked worktree. An exact native session is required;
-		// never select an arbitrary recent conversation from another worktree.
-		id := strings.TrimSpace(os.Getenv("CODEX_THREAD_ID"))
-		if id == "" {
-			id = strings.TrimSpace(os.Getenv("CODEX_SESSION_ID"))
-		}
-		if providerfs.ValidSessionID(id) {
-			var err error
-			appPath, err = capture.LocateRegisteredAppSession(cwd, domain.ProviderCodex, id)
-			if errors.Is(err, domain.ErrNoActiveSession) {
-				// Before the first app hook, exact cwd lookup is still safe. An
-				// unknown ID must never fall back to another terminal's latest file.
-				appPath, err = capture.NewCodexCapture().LocateSession(ctx, cwd, id)
-			}
-			if err == nil || errors.Is(err, domain.ErrNoActiveSession) {
-				// Verify every exact command result, including pre-registry cwd
-				// discovery, or recover an unregistered related-worktree session.
-				// A matching filename alone is not a native identity.
-				verified, verifyErr := capture.LocateCodexCommandSession(ctx, cwd, id)
-				if verifyErr != nil {
-					err = verifyErr
-				} else if err == nil && verified != appPath {
-					err = fmt.Errorf("ambiguous exact Codex command session")
-				} else {
-					appPath, err = verified, nil
-				}
-			}
-			if err != nil {
-				return commandCaptureTarget{}, err
-			}
-		}
-	}
-	provider := domain.ProviderKind(explicit)
-	if provider == "" {
-		if managed {
-			provider = wrappedProvider
-		} else if appPath != "" {
-			provider = domain.ProviderCodex
-		} else {
-			provider = activeProviderForCwd(ctx, cwd)
-		}
-	}
-	target := commandCaptureTarget{Provider: provider}
-	if !managed && provider == domain.ProviderCodex && appPath != "" {
-		target.SessionPath = appPath
-		target.SessionID = strings.TrimSpace(os.Getenv("CODEX_THREAD_ID"))
-		if target.SessionID == "" {
-			target.SessionID = strings.TrimSpace(os.Getenv("CODEX_SESSION_ID"))
-		}
-		return target, nil
-	}
-	if !managed || provider != wrappedProvider {
-		return target, nil
-	}
-
-	sessionID := strings.TrimSpace(os.Getenv("CXT_WRAPPED_SESSION_ID"))
-	if protocol := os.Getenv("CXT_WRAPPED_CAPTURE_PROTOCOL"); protocol != "" && provider == domain.ProviderCodex {
-		if protocol != capture.NativeWrapperCaptureProtocol {
-			return commandCaptureTarget{}, fmt.Errorf("unsupported native wrapper capture protocol")
-		}
-		pid, err := strconv.Atoi(os.Getenv("CXT_WRAPPER_PID"))
-		if err != nil {
-			return commandCaptureTarget{}, fmt.Errorf("invalid native capture supervisor")
-		}
-		sessionID, err = capture.NativeWrapperSession(cwd, pid, strings.TrimSpace(os.Getenv("CODEX_THREAD_ID")))
-		if err != nil {
-			return commandCaptureTarget{}, fmt.Errorf("cannot identify this wrapper's owned native Codex thread")
-		}
-	} else if !providerfs.ValidSessionID(sessionID) {
-		sessionID = capture.SessionAffinity(cwd, provider)
-	}
-	if !providerfs.ValidSessionID(sessionID) {
-		return commandCaptureTarget{}, fmt.Errorf("cannot identify the %s session owned by this cxt wrapper yet", provider)
-	}
-
-	var path string
-	var err error
-	switch provider {
-	case domain.ProviderClaude:
-		path, err = capture.NewClaudeCapture().LocateSession(ctx, cwd, sessionID)
-	case domain.ProviderCodex:
-		path, err = capture.NewCodexCapture().LocateSession(ctx, cwd, sessionID)
-	default:
-		return target, nil // the use case reports an explicit unsupported provider
-	}
-	if errors.Is(err, domain.ErrNoActiveSession) {
-		path, err = capture.LocateRegisteredAppSession(cwd, provider, sessionID)
-	}
-	if err != nil {
-		return commandCaptureTarget{}, fmt.Errorf("cannot locate the %s session %s owned by this cxt wrapper: %w", provider, sessionID, err)
-	}
-	target.SessionPath = path
-	target.SessionID = sessionID
-	return target, nil
-}
-
-func providerByRecency(claudeNewest, codexNewest int64) domain.ProviderKind {
-	if codexNewest > claudeNewest {
-		return domain.ProviderCodex
-	}
-	return domain.ProviderClaude
-}
-
-// snapshotParentPID reads the process table once and answers ancestry lookups
-// from memory — the previous per-ancestor `ps -p` spawned a process for every
-// step of the walk on the git-hook hot path (#35).
-func snapshotParentPID() func(int) (int, bool) {
-	out, err := exec.Command("ps", "-axo", "pid=,ppid=").Output()
-	if err != nil {
-		return processParentPID // degraded fallback: per-pid query
-	}
-	table := parsePIDTable(out)
-	return func(pid int) (int, bool) {
-		ppid, ok := table[pid]
-		return ppid, ok && ppid > 0
-	}
-}
-
-func parsePIDTable(out []byte) map[int]int {
-	table := map[int]int{}
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			continue
-		}
-		pid, perr := strconv.Atoi(fields[0])
-		ppid, qerr := strconv.Atoi(fields[1])
-		if perr == nil && qerr == nil && pid > 0 {
-			table[pid] = ppid
-		}
-	}
-	return table
-}
-
-func processParentPID(pid int) (int, bool) {
-	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return 0, false
-	}
-	ppid, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	return ppid, err == nil && ppid > 0
-}
-
-func hasProcessAncestor(start, want int, parent func(int) (int, bool)) bool {
-	if start <= 1 || want <= 1 {
-		return false
-	}
-	seen := map[int]bool{}
-	for pid, depth := start, 0; pid > 1 && depth < 64 && !seen[pid]; depth++ {
-		if pid == want {
-			return true
-		}
-		seen[pid] = true
-		next, ok := parent(pid)
-		if !ok {
-			return false
-		}
-		pid = next
-	}
-	return false
-}
-
 // Git transitions prepare managed latest-main input. A saved replay preference
 // must not silently substitute the selected branch's archived conversation.
 func hookLoadMode(_ string) string { return "" }
-
-// claudeSessionFiles returns all Claude session files (*.jsonl) in the cwd (for isolation).
-func claudeSessionFiles(cwd string) []string {
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		abs = cwd
-	}
-	root, err := providerfs.ClaudeProjectsDir()
-	if err != nil {
-		return nil
-	}
-	matches, _ := filepath.Glob(filepath.Join(root, providerfs.EncodeCwd(abs), "*.jsonl"))
-	return matches
-}
-
-// codexSessionFiles returns all Codex rollout session files (*.jsonl) in the cwd (for isolation, symmetric to claude).
-func codexSessionFiles(ctx context.Context, cwd string) []string {
-	return capture.NewCodexCapture().SessionFilesForCwd(ctx, cwd)
-}
 
 // restoredSessionID returns the canonical provider-rewritten resume target.
 // Materialization must have produced both a path and a trusted resume command.

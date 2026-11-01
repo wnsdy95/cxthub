@@ -65,6 +65,7 @@ expected = [
     "!deploy/",
     "!deploy/Dockerfile",
     "!deploy/Dockerfile.mcp",
+    "!deploy/Dockerfile.migrate",
     "!backend/",
     "!backend/go.mod",
     "!backend/go.sum",
@@ -74,6 +75,8 @@ expected = [
     "!backend/internal/",
     "!backend/internal/**/",
     "!backend/internal/**/*.go",
+    "!backend/internal/domain/legacy_native_float64/NOTICE.md",
+    "!backend/internal/domain/legacy_native_float64/SOURCE.json",
     "!schemas/",
     "!schemas/db/",
     "!schemas/db/migrations/",
@@ -126,7 +129,7 @@ PY
 postgres_smoke() (
   need docker
   local name="cxt-preflight-pg-$$"
-  local port=""
+  local port="" dsn=""
   cleanup_postgres() { docker rm -f "$name" >/dev/null 2>&1 || true; }
   trap cleanup_postgres EXIT
 
@@ -149,10 +152,14 @@ postgres_smoke() (
   fi
   port="$(docker port "$name" 5432/tcp | awk -F: 'NR==1 {print $NF}')"
   [ -n "$port" ] || die "Postgres temporary port not found"
+  dsn="postgres://cxt:cxt@127.0.0.1:${port}/cxthub_test?sslmode=disable"
 
   (
     cd "$ROOT/backend"
-    CXT_TEST_DSN="postgres://cxt:cxt@127.0.0.1:${port}/cxthub_test?sslmode=disable" \
+    CXT_ENV_FILE=/dev/null CXT_POSTGRES_DSN="$dsn" \
+      CXT_MIGRATIONS_DIR="$ROOT/schemas/db/migrations" \
+      go run -tags postgres ./cmd/cxt-admin migrate --apply
+    CXT_TEST_DSN="$dsn" \
       go test -tags postgres ./internal/adapters/store/ ./internal/mcpserver/ -run 'TestPGSmoke|TestPGIndependentMCP' -count=1 -v
   )
   pass "All migrations apply idempotently on a real PostgreSQL instance"
@@ -163,8 +170,10 @@ image_smoke() (
   need docker
   local prefix="cxt-preflight-$$"
   local network="${prefix}-net" postgres="${prefix}-pg"
+  local fixture_dsn='postgres://cxt:cxt@postgres:5432/cxthub_test?sslmode=disable'
   cleanup_app() {
-    docker rm -f "${prefix}-api" "${prefix}-mcp" "${prefix}-missing-api" "${prefix}-missing-mcp" "$postgres" >/dev/null 2>&1 || true
+    docker rm -f "${prefix}-api" "${prefix}-mcp" "${prefix}-missing-api" "${prefix}-missing-mcp" \
+      "${prefix}-unprepared-api" "${prefix}-unprepared-mcp" "${prefix}-migrate" "$postgres" >/dev/null 2>&1 || true
     docker network rm "$network" >/dev/null 2>&1 || true
   }
   trap cleanup_app EXIT
@@ -177,11 +186,11 @@ image_smoke() (
   done
   docker exec "$postgres" psql -h 127.0.0.1 -U cxt -d cxthub_test -tAc 'SELECT 1' >/dev/null || die "PostgreSQL not ready"
 
-  local kind image internal name missing port status api_port mcp_port
+  local kind image internal name missing unprepared port status api_port mcp_port
   for kind in api mcp; do
     if [ "$kind" = api ]; then image="${CXT_PREFLIGHT_API_IMAGE:-cxtd:preflight}"; internal=8907; else image="${CXT_PREFLIGHT_MCP_IMAGE:-cxt-mcp:preflight}"; internal=8908; fi
     docker image inspect "$image" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -qx 'GOMEMLIMIT=400MiB' || die "$kind Go soft memory target is missing or changed; rerun the constrained-load gate before changing it"
-    name="${prefix}-${kind}"; missing="${prefix}-missing-${kind}"
+    missing="${prefix}-missing-${kind}"; unprepared="${prefix}-unprepared-${kind}"
     docker run -d --name "$missing" \
       -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
       -e CXT_PUBLIC_URL=https://cxthub.example "$image" >/dev/null
@@ -190,11 +199,35 @@ image_smoke() (
       sleep 0.25
     done
     [ "$(docker inspect "$missing" --format '{{.State.Running}}')" = false ] || die "$kind served without PostgreSQL"
+    [ "$(docker inspect "$missing" --format '{{.State.ExitCode}}')" -ne 0 ] || die "$kind accepted a missing PostgreSQL DSN"
     docker logs "$missing" 2>&1 | grep -q 'CXT_POSTGRES_DSN is required' || die "$kind missing DSN diagnostic failed"
+    docker run -d --name "$unprepared" --network "$network" \
+      -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
+      -e CXT_PUBLIC_URL=https://cxthub.example \
+      -e "CXT_POSTGRES_DSN=$fixture_dsn" "$image" >/dev/null
+    for _ in $(seq 1 40); do
+      [ "$(docker inspect "$unprepared" --format '{{.State.Running}}')" = false ] && break
+      sleep 0.25
+    done
+    [ "$(docker inspect "$unprepared" --format '{{.State.Running}}')" = false ] || die "$kind served with an unprepared schema"
+    [ "$(docker inspect "$unprepared" --format '{{.State.ExitCode}}')" -ne 0 ] || die "$kind accepted an unprepared schema"
+    status="$(docker exec "$postgres" psql -h 127.0.0.1 -U cxt -d cxthub_test -tAc "SELECT count(*) FROM pg_class WHERE relnamespace NOT IN (SELECT oid FROM pg_namespace WHERE nspname LIKE 'pg_%' OR nspname = 'information_schema')")"
+    [ "$status" = 0 ] || die "$kind modified the unprepared database schema"
+    pass "$kind image refuses missing DSN and unprepared schema without applying migrations"
+  done
+
+  docker run --rm --name "${prefix}-migrate" --network "$network" \
+    -e "CXT_POSTGRES_DSN=$fixture_dsn" \
+    "${CXT_PREFLIGHT_MIGRATE_IMAGE:-cxt-migrate:preflight}" --apply
+  pass "Dedicated migration image explicitly prepares the disposable PostgreSQL schema"
+
+  for kind in api mcp; do
+    if [ "$kind" = api ]; then image="${CXT_PREFLIGHT_API_IMAGE:-cxtd:preflight}"; internal=8907; else image="${CXT_PREFLIGHT_MCP_IMAGE:-cxt-mcp:preflight}"; internal=8908; fi
+    name="${prefix}-${kind}"
     docker run -d --name "$name" --network "$network" \
       -e CXT_AUTH=firebase -e CXT_FIREBASE_PROJECT=example-firebase-project \
       -e CXT_PUBLIC_URL=https://cxthub.example \
-      -e CXT_POSTGRES_DSN='postgres://cxt:cxt@postgres:5432/cxthub_test?sslmode=disable' \
+      -e "CXT_POSTGRES_DSN=$fixture_dsn" \
       -p "127.0.0.1::${internal}" "$image" >/dev/null
     port="$(docker port "$name" "$internal/tcp" | awk -F: 'NR==1 {print $NF}')"
     if [ "$kind" = api ]; then api_port="$port"; else mcp_port="$port"; fi
@@ -213,7 +246,7 @@ image_smoke() (
       docker stop "${prefix}-api" >/dev/null
       curl --max-time 3 -fsS "http://127.0.0.1:${port}/healthz" >/dev/null || die "MCP depends on API process"
     fi
-    pass "$kind image: migrations, readiness, route isolation, PostgreSQL requirement"
+    pass "$kind image: readiness and route isolation after explicit migration"
   done
   docker start "${prefix}-api" >/dev/null
   # Docker can assign a new ephemeral host port when a container restarts.
@@ -270,7 +303,8 @@ full_check() {
   postgres_smoke
   docker build -f "$ROOT/deploy/Dockerfile" -t cxtd:preflight "$ROOT"
   docker build -f "$ROOT/deploy/Dockerfile.mcp" -t cxt-mcp:preflight "$ROOT"
-  pass "Both production Docker images built (no push)"
+  docker build -f "$ROOT/deploy/Dockerfile.migrate" -t cxt-migrate:preflight "$ROOT"
+  pass "Production API/MCP and operator migration Docker images built (no push)"
   image_smoke
 }
 

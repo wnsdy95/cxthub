@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"reflect"
 	"strings"
 	"testing"
@@ -31,6 +32,7 @@ func TestContextSegmentMCPUsesSharedProjectionAndBoundsMetadata(t *testing.T) {
 	page := domain.ContextSegmentPage{Version: 1, StateHash: pageHash(4), PageHash: pageHash(5), Total: 1, Next: -1, Complete: true, Entries: []domain.ContextSegmentCoverage{entry}}
 	b := &segmentBackend{view: domain.ContextQueryView{Version: 1, Position: entry.SnapshotID, Branch: "logical", Segments: &page}}
 	s := &Server{context: b}
+	setContextQueryTestPort(t, s, b)
 	a := toolArgs{Repository: string(repo.ID), Mode: "segments", Position: "main", Scope: "current", CodeCommit: strings.Repeat("e", 40)}
 	rawPage := ""
 	calls := 0
@@ -97,6 +99,13 @@ func TestContextFetchCanonicalRangeNeverLeaksAdjacentEvents(t *testing.T) {
 	snap := domain.Snapshot{ID: doc.Hash, DocHash: doc.Hash, RepoID: repo.ID}
 	backend := &indexedPageBackend{pageBackend: pageBackend{fakeContextBackend: fakeContextBackend{snapshots: map[domain.ContentHash][]domain.Snapshot{repo.ID: {snap}}}}, reader: app.NewService(st, st, nil, nil, nil)}
 	s := &Server{context: backend}
+	queries, err := backend.reader.DocumentEventQueries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDocumentEventQueries(queries, inbound.DocumentQueryCompatibility); err != nil {
+		t.Fatal(err)
+	}
 	start, end := 1, 2
 	a := toolArgs{Ref: string(snap.ID), EventStart: &start, EventEnd: &end, Events: 50}
 	body := ""

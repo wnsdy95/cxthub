@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/contextprojection"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
@@ -58,7 +59,7 @@ func TestBranchQueryIndexEdgesCancellationDuringBuild(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(fresh.snapshots) != len(snapshots) || len(fresh.history.byID) != len(history) {
+			if fresh.SnapshotCount() != len(snapshots) || fresh.History().EventCount() != len(history) {
 				t.Fatalf("canceled build contaminated fresh inputs: %+v", fresh)
 			}
 		})
@@ -117,7 +118,7 @@ func TestBranchQueryIndexEdgesCompletionFirstOccurrence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			selected, complete, err := index.completion(receipt)
+			selected, complete, err := index.Completion(receipt)
 			if complete != scenario.complete || !errors.Is(err, scenario.wantError) {
 				t.Fatalf("completion = %+v/%t/%v, want complete=%t error=%v", selected, complete, err, scenario.complete, scenario.wantError)
 			}
@@ -259,9 +260,13 @@ func TestBranchQueryIndexEdgesCancellationDuringTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshotMap := make(map[domain.ContentHash]domain.Snapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		snapshotMap[snapshot.ID] = snapshot
+	}
 	t.Run("causal target walk", func(t *testing.T) {
 		ctx := branchIndexCancelOnCheck(t, context.Background(), 2)
-		code, err := resolvedBranchCodeFromIndex(ctx, ref, inputs.history, &codeEvidence{repo: repo})
+		code, err := resolvedBranchCodeFromIndex(ctx, ref, inputs.History(), &codeEvidence{repo: repo})
 		if !errors.Is(err, context.Canceled) || code != "" {
 			t.Fatalf("canceled resolver returned partial selection: %q/%v", code, err)
 		}
@@ -271,11 +276,11 @@ func TestBranchQueryIndexEdgesCancellationDuringTraversal(t *testing.T) {
 	})
 	t.Run("inherited natural ancestry walk", func(t *testing.T) {
 		ctx := branchIndexCancelOnCheck(t, context.Background(), 2)
-		scopes, err := inheritedIntegrationScopes(ctx, "child-id", inputs.snapshots, inputs.history)
+		scopes, err := contextprojection.InheritedIntegrationScopes(ctx, "child-id", snapshotMap, inputs.History())
 		if !errors.Is(err, context.Canceled) || scopes != nil {
 			t.Fatalf("canceled inheritance exposed partial scopes: %+v/%v", scopes, err)
 		}
-		fresh, err := inheritedIntegrationScopes(context.Background(), "child-id", inputs.snapshots, inputs.history)
+		fresh, err := contextprojection.InheritedIntegrationScopes(context.Background(), "child-id", snapshotMap, inputs.History())
 		if err != nil || !reflect.DeepEqual(fresh, map[string]bool{"child-id": true, ref.BranchID: true}) {
 			t.Fatalf("cancellation contaminated reusable index: %+v/%v", fresh, err)
 		}

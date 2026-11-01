@@ -15,25 +15,12 @@ type identityMutationKey struct{}
 var localIdentityMutation sync.Mutex
 
 func (s *IdentityService) withIdentity(ctx context.Context, fn func(context.Context) error) error {
-	if tx, ok := s.repositories.(outbound.IdentityTransactions); ok {
-		return tx.WithinIdentity(ctx, fn)
-	}
-	// Development stores serialize commands in-process; only the production
-	// transaction port promises rollback and cross-server atomicity.
-	if ctx.Value(identityMutationKey{}) != nil {
-		return fn(ctx)
-	}
-	localIdentityMutation.Lock()
-	defer localIdentityMutation.Unlock()
-	return fn(context.WithValue(ctx, identityMutationKey{}, true))
+	transactions, _ := s.repositories.(outbound.IdentityTransactions)
+	return withIdentityTransactions(ctx, transactions, fn)
 }
-func identityResult[T any](ctx context.Context, s *IdentityService, fn func(context.Context) (T, error)) (out T, err error) {
-	err = s.withIdentity(ctx, func(ctx context.Context) error { out, err = fn(ctx); return err })
-	if err != nil {
-		var zero T
-		return zero, err
-	}
-	return out, nil
+func identityResult[T any](ctx context.Context, s *IdentityService, fn func(context.Context) (T, error)) (T, error) {
+	transactions, _ := s.repositories.(outbound.IdentityTransactions)
+	return identityResultWithTransactions(ctx, transactions, fn)
 }
 
 func repositoryRole(ctx context.Context, repositories outbound.RepositoryStore, id, actor string) (domain.MemberRole, bool) {
@@ -56,33 +43,28 @@ func repositoryOrganizationAccess(ctx context.Context, repositories outbound.Rep
 }
 
 func repositoryRoleFor(ctx context.Context, repositories outbound.RepositoryStore, repository domain.Repository, actor string) (domain.MemberRole, bool, error) {
-	members, err := repositories.ListMembers(ctx, repository.ID)
+	sources, err := repositoryRoleSourcesFromRepositories(repositories)
 	if err != nil {
 		return "", false, err
 	}
-	var grants []domain.TeamRepositoryAccess
-	if teams, ok := repositories.(outbound.TeamStore); ok {
-		grants, err = teams.RepositoryTeamAccess(ctx, repository.ID, actor)
-		if err != nil {
-			return "", false, err
-		}
-	}
-	organization, err := repositoryOrganizationAccess(ctx, repositories, repository.ID, actor)
-	if err != nil {
-		return "", false, err
-	}
-	role, ok := domain.EffectiveRepositoryRole(repository, members, actor, grants, organization)
-	return role, ok, nil
+	return sources.roleFor(ctx, repository, actor)
 }
 
-func (s *IdentityService) UpdateProfile(ctx context.Context, u domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
-	return identityResult(ctx, s, func(ctx context.Context) (domain.User, error) {
-		return s.mutateUpdateProfile(ctx, u, username, nickname, loadMode, avatar, locale)
+func (service *IdentityService) UpdateProfile(ctx context.Context, user domain.User, username, nickname, loadMode, avatar, locale *string) (domain.User, error) {
+	patch := domain.UserPreferencesPatch{Nickname: nickname, LoadMode: loadMode, Avatar: avatar, Locale: locale}
+	if username == nil && service.userPreferences != nil && service.transactionalPreferences {
+		return service.userPreferences.UpdateUserPreferences(ctx, user.ID, patch)
+	}
+	return identityResult(ctx, service, func(ctx context.Context) (domain.User, error) {
+		if username == nil && service.userPreferences != nil {
+			return service.userPreferences.UpdateUserPreferences(ctx, user.ID, patch)
+		}
+		return service.mutateUpdateProfile(ctx, user, username, nickname, loadMode, avatar, locale)
 	})
 }
 
 func (s *IdentityService) UpdateRepositorySettings(ctx context.Context, userID, repositoryID string, p RepositoryPatch) (domain.Repository, error) {
-	return identityResult(ctx, s, func(ctx context.Context) (domain.Repository, error) {
+	return repositoryIdentityResult(ctx, s, repositoryID, func(ctx context.Context) (domain.Repository, error) {
 		result, err := s.mutateUpdateRepositorySettings(ctx, userID, repositoryID, p)
 		if err == nil {
 			err = appendRepositoryAudit(ctx, s.repositories, userID, repositoryID, "repository.access_settings.updated")
@@ -102,7 +84,7 @@ func (s *IdentityService) TransferOwnership(ctx context.Context, actorID, reposi
 }
 
 func (s *IdentityService) UpdateMemberRole(ctx context.Context, actorID, repositoryID, targetID string, role domain.MemberRole) error {
-	return s.withIdentity(ctx, func(ctx context.Context) error {
+	return s.withRepositoryMetadata(ctx, repositoryID, func(ctx context.Context) error {
 		if err := s.mutateUpdateMemberRole(ctx, actorID, repositoryID, targetID, role); err != nil {
 			return err
 		}
@@ -111,7 +93,7 @@ func (s *IdentityService) UpdateMemberRole(ctx context.Context, actorID, reposit
 }
 
 func (s *IdentityService) RemoveMember(ctx context.Context, actorID, repositoryID, targetID string) error {
-	return s.withIdentity(ctx, func(ctx context.Context) error {
+	return s.withRepositoryMetadata(ctx, repositoryID, func(ctx context.Context) error {
 		if err := s.mutateRemoveMember(ctx, actorID, repositoryID, targetID); err != nil {
 			return err
 		}

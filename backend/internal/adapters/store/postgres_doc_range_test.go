@@ -303,7 +303,7 @@ func TestDocRangePGColdFailureDoesNotPublish(t *testing.T) {
 }
 
 func TestDocRangePGPublicationAtomicity(t *testing.T) {
-	for _, mode := range []string{"empty", "pages", "corrupt", "expired", "rollback", "quota"} {
+	for _, mode := range []string{"empty", "pages", "corrupt", "root-corrupt", "expired", "rollback", "quota"} {
 		t.Run(mode, func(t *testing.T) {
 			storage, ctx := chunkReusePG(t)
 			ctx = rootPublicationContext(ctx)
@@ -321,9 +321,14 @@ func TestDocRangePGPublicationAtomicity(t *testing.T) {
 			if got := rangeCountsPG(t, storage, ctx, fixture.hash); got != [2]int{} {
 				t.Fatal("preparation exposed index", got)
 			}
+			if got := generationCountsPG(t, storage, ctx, fixture.hash); got != [2]int{} {
+				t.Fatal("preparation exposed generation", got)
+			}
 			switch mode {
 			case "corrupt":
 				_, err = storage.pool.Exec(ctx, `UPDATE blobs SET bytes=$2 WHERE hash=$1`, fixture.manifest.Chunks[0].Hash, []byte("corrupt after proof"))
+			case "root-corrupt":
+				_, err = storage.pool.Exec(ctx, `INSERT INTO blobs(hash,bytes) VALUES($1,$2)`, fixture.hash, []byte("corrupt root after proof"))
 			case "expired":
 				old := job
 				old.LeaseUntil = time.Now().Add(-time.Second)
@@ -344,6 +349,9 @@ func TestDocRangePGPublicationAtomicity(t *testing.T) {
 					if got := rangeCountsPG(t, storage, ctx, fixture.hash); got != [2]int{} {
 						t.Fatal("uncommitted index was visible", got)
 					}
+					if got := generationCountsPG(t, storage, ctx, fixture.hash); got != [2]int{} {
+						t.Fatal("uncommitted generation was visible", got)
+					}
 					return stop
 				})
 				if !errors.Is(err, stop) {
@@ -356,6 +364,9 @@ func TestDocRangePGPublicationAtomicity(t *testing.T) {
 				if err == nil || rangeCountsPG(t, storage, ctx, fixture.hash) != [2]int{} {
 					t.Fatal("failed publication exposed index", err)
 				}
+				if got := generationCountsPG(t, storage, ctx, fixture.hash); got != [2]int{} {
+					t.Fatal("failed publication exposed generation", got)
+				}
 				assertDocNotPublishedPG(t, storage, ctx, job)
 				return
 			}
@@ -363,6 +374,9 @@ func TestDocRangePGPublicationAtomicity(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertRangePages(t, ctx, storage, repo, fixture)
+			if got := generationCountsPG(t, storage, ctx, fixture.hash); got[0] != 1 || mode == "pages" && got[1] == 0 {
+				t.Fatal("publication omitted generation", got)
+			}
 			rootProjectionNoIndex(t, storage, ctx, fixture.hash)
 			done, err := storage.GetDocJob(ctx, repo, job.ID)
 			if err != nil || done.State != "completed" {
@@ -416,6 +430,14 @@ func TestDocRangePGColdBuildRetainsSourceThroughCommit(t *testing.T) {
 				if err := <-mutationDone; err != nil {
 					t.Fatal(err)
 				}
+			}
+			counts := generationCountsPG(t, storage, ctx, fixture.hash)
+			if mutation == "root-bytes" {
+				if counts != [2]int{} {
+					t.Fatal("root update left stale generation after publisher commit", counts)
+				}
+			} else if counts[0] != 1 || counts[1] == 0 {
+				t.Fatal("unrelated source mutation removed global generation", counts)
 			}
 		})
 	}

@@ -25,6 +25,12 @@ type serverPrefs struct {
 	At       string `json:"at"`
 }
 
+func loginHTTPClient() *http.Client {
+	client := *http.DefaultClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &client
+}
+
 func serverPrefsPath(cwd string) string {
 	return filepath.Join(cxtRepoRoot(context.Background(), cwd), ".cxt", "server-prefs.json")
 }

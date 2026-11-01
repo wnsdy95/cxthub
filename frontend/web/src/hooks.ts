@@ -4,16 +4,18 @@ import { graphViewRows } from './graphState';
 // Authentication status is represented by the `me` query: success (200) → logged in, failure (401) → logged out.
 // Tokens are stored in HttpOnly cookies, which JS cannot read, so cookie validity is determined by the single judge, the `me` query on the server.
 import { useEffect, useMemo, useRef } from 'react';
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query';
 import { api, ApiError } from './api';
 import { isRetryableGraphRefreshError } from './graphRefresh';
-import { capacityReadRetry } from './readRetry';
-import { useRepositoryUpdates } from './useRepositoryUpdates';
-import type { DocViewMode, User } from './types';
-import { docPageKey } from './documentPaging';
+import { capacityReadRetry, documentReadRetry, pendingStateReadRetry } from './readRetry';
+import { graphReadRetry, readRepositoryGraph, readRepositoryPending, useRepositoryUpdates } from './useRepositoryUpdates';
+import { graphPositionMatches, graphReadState, validateGraphPosition } from './graphReadState';
+import type { GraphReadGeneration, RepositoryRevision, User } from './types';
 import { pendingStateRows } from './pendingState';
 import { firebaseEnabled, devIdpToken, firebaseEmailIdToken, firebaseEmailSignUp, firebaseSocialIdToken, firebaseVerification, firebaseSignOut } from './auth';
 import { useT } from './i18n';
+import { useDocumentReadScope } from './documentReadScope';
+import { documentBodyKey } from './documentPageCache';
 
 // ── Authentication/Query ─────────────────────────────────────────
 // me: Called once on boot to check cookie session validity. A 401 is normal (not logged in), so no retry.
@@ -310,56 +312,37 @@ export function useMemory(repoId: string | null, memoryHash: string | null, enab
     staleTime: Infinity,
   });
 }
-export function useDocPages(repoId: string | null, hash: string | null, base?: string, start = -1, mode: DocViewMode = 'chat') {
-  return useInfiniteQuery({
-    queryKey: docPageKey(repoId, hash, base, start, mode),
-    queryFn: ({ pageParam, signal }) => api.getDocViewEvents(repoId!, hash!, pageParam === start ? base : undefined, pageParam, mode, signal),
-    initialPageParam: start,
-    getNextPageParam: (last) => last.next < 0 ? undefined : last.next,
-    enabled: Boolean(repoId && hash),
-    staleTime: Infinity,
-    gcTime: 60_000,
-    ...capacityReadRetry,
-    retryOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
-}
-
 export function useDocEvent(repoId: string, hash: string, index: number) {
+  const owner = useDocumentReadScope();
   return useQuery({
-    queryKey: ['doc-event-detail', repoId, hash, index],
+    queryKey: owner ? documentBodyKey(owner, 'event', repoId, hash, index) : ['doc-event-detail', repoId, hash, index],
     queryFn: ({ signal }) => api.getDocEvent(repoId, hash, index, signal),
-    enabled: Boolean(repoId && hash),
+    enabled: query => Boolean(repoId && hash) && query.state.status !== 'error',
     staleTime: Infinity,
-    gcTime: 0,
-    ...capacityReadRetry,
+    gcTime: owner ? Infinity : 0,
+    meta: { documentBody: Boolean(owner) },
+    ...documentReadRetry,
     retryOnMount: false,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
 }
 
 export function useDocEventFragment(repoId: string, hash: string, index: number, offset: number) {
+  const owner = useDocumentReadScope();
   return useQuery({
-    queryKey: ['doc-event-fragment', repoId, hash, index, offset],
+    queryKey: owner ? documentBodyKey(owner, 'fragment', repoId, hash, index, offset) : ['doc-event-fragment', repoId, hash, index, offset],
     queryFn: ({ signal }) => api.getDocEventFragment(repoId, hash, index, offset, signal),
-    enabled: Boolean(repoId && hash),
+    enabled: query => Boolean(repoId && hash) && query.state.status !== 'error',
     staleTime: Infinity,
-    gcTime: 0,
-    ...capacityReadRetry,
+    gcTime: owner ? Infinity : 0,
+    meta: { documentBody: Boolean(owner) },
+    ...documentReadRetry,
     retryOnMount: false,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-  });
-}
-
-export function useDoc(repoId: string | null, hash: string | null) {
-  return useQuery({
-    queryKey: ['doc', repoId, hash],
-    queryFn: () => api.getDoc(repoId as string, hash as string),
-    enabled: Boolean(repoId && hash),
-    staleTime: Infinity, // content-addressed — same hash always same content
   });
 }
 
@@ -476,23 +459,43 @@ export function useDismissPending() {
 
 // One server generation shared by the context and On Hold views.
 export function useRepoView(repoId: string | null, _primaryBranch?: string) {
+  const t = useT();
+  const qc = useQueryClient();
   useRepositoryUpdates(repoId);
-  const pendingQuery = useQuery({queryKey:['pending-state',repoId,'on-hold-v1'],queryFn:({signal})=>api.pendingState(repoId!,signal),...capacityReadRetry,
-    enabled:Boolean(repoId),refetchOnWindowFocus:false});
-  const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>api.repositoryView(repoId!,signal),...capacityReadRetry,
-    enabled:Boolean(repoId),refetchOnWindowFocus:false});
+  const noticeQuery = useQuery<RepositoryRevision>({queryKey:['repository-notice',repoId],queryFn:skipToken});
+  const projection = noticeQuery.data?.pending_projection;
+  const graphProjection = noticeQuery.data?.graph_projection;
+  const graphEnabled = !graphProjection || graphProjection.state === 'disabled' ||
+    (graphProjection.complete && graphProjection.state !== 'needs_attention');
+  const pendingEnabled = !projection || projection.state === 'ready' || projection.state === 'disabled';
+  const pendingQuery = useQuery({queryKey:['pending-state',repoId,'on-hold-v1'],queryFn:({signal})=>readRepositoryPending(repoId!,qc,signal),
+    ...(projection?.state === 'ready' ? capacityReadRetry : pendingStateReadRetry),
+    enabled:Boolean(repoId && !noticeQuery.error && pendingEnabled),staleTime:projection?.state === 'ready' ? Infinity : 0,refetchOnWindowFocus:false});
+  const viewQuery = useQuery({queryKey:['repo-view',repoId],queryFn:({signal})=>readRepositoryGraph(repoId!,qc,signal),...graphReadRetry,
+    enabled:Boolean(repoId && !noticeQuery.error && graphEnabled),staleTime:Infinity,refetchOnMount:'always',refetchOnWindowFocus:false});
   const retryable = isRetryableGraphRefreshError(viewQuery.error);
-  const inaccessible = viewQuery.error instanceof ApiError && [401, 403, 404].includes(viewQuery.error.status);
-  const view = inaccessible ? undefined : viewQuery.data;
-  const stale = Boolean(view && viewQuery.error && retryable);
+  const fullReadState = useMemo(()=>graphReadState(viewQuery.data,graphProjection,viewQuery.error,noticeQuery.error),
+    [viewQuery.data,graphProjection,viewQuery.error,noticeQuery.error]);
+  const pendingFallback = fullReadState.showGraph ? viewQuery.data : undefined;
+  const pendingRows = useMemo(()=>pendingStateRows(pendingFallback,pendingQuery.data,{
+    fetching:pendingQuery.isFetching,error:pendingQuery.error,failureReason:pendingQuery.failureReason,fullError:viewQuery.error,
+    projection:noticeQuery.data?.pending_projection,noticeError:noticeQuery.error,
+  }),[pendingFallback,viewQuery.error,pendingQuery.data,pendingQuery.isFetching,pendingQuery.error,pendingQuery.failureReason,noticeQuery.data,noticeQuery.error]);
+  const noticeError = noticeQuery.error ?? (pendingRows.inaccessible ? pendingRows.error : undefined);
+  const readState = pendingRows.inaccessible ? { state: 'denied' as const, showGraph: false } : fullReadState;
+  const view = readState.showGraph ? viewQuery.data : undefined;
+  const stale = Boolean(view && viewQuery.error && (retryable || readState.state !== 'legacy'));
   const rows = useMemo(()=>graphViewRows(view),[view]);
-  const pendingRows = useMemo(()=>pendingStateRows(view,pendingQuery.data),[view,pendingQuery.data]);
   return {...rows,pendingRows,
-    pendingLoading:!pendingRows.ready && pendingQuery.isPending,pendingError:pendingQuery.error?.message,
+    graphReadStatus:readState,
+    graphReadNotice:{view:viewQuery.data,projection:graphProjection,error:viewQuery.error,noticeError},
+    pendingLoading:!pendingRows.ready && !pendingRows.inaccessible && !pendingRows.needsAttention && pendingQuery.isPending,
+    pendingError:pendingRows.needsAttention ? t('onhold.needsAttention') : pendingRows.error,
     retryPending:()=>{void pendingQuery.refetch();},
     refs:view?.refs ?? [],reflog:view?.reflog ?? [],history:view?.history ?? [],graphState:view?.graph,
     unsyncs:view?.unsync ?? [],semantics:view?.semantics,historyError:viewQuery.isError && !stale,
-    graphLoading:viewQuery.isPending,graphError:stale ? undefined : viewQuery.error?.message,
+    graphLoading:readState.state === 'pending' || (viewQuery.isPending && readState.state === 'legacy'),
+    graphError:noticeQuery.error?.message ?? (pendingRows.inaccessible ? pendingRows.error : stale ? undefined : viewQuery.error?.message),
     graphRefreshError:stale ? viewQuery.error?.message : undefined,retryGraph:()=>{void viewQuery.refetch();}};
 }
 
@@ -507,13 +510,25 @@ export function useSessionArchive() {
   });
 }
 
-export function useGraphPosition(repoId: string | null | undefined, position: string, revision?: import('./types').RepositoryRevision) {
+export function useGraphPosition(repoId: string | null | undefined, position: string, revision?: RepositoryRevision, generation?: GraphReadGeneration) {
   const qc = useQueryClient();
-  const q = useQuery({queryKey:['graph-position',repoId,position,revision?.graph,revision?.pending,revision?.evidence],
-    queryFn:({signal})=>api.graphState(repoId!,position,signal),enabled:Boolean(repoId && position && revision),...capacityReadRetry,refetchOnWindowFocus:false});
-  const matches = q.data && revision && q.data.revision.graph===revision.graph && q.data.revision.pending===revision.pending && (q.data.revision.evidence??'0')===(revision.evidence??'0');
-  useEffect(()=>{if(q.data && !matches) void qc.invalidateQueries({queryKey:['repo-view',repoId]});},[q.data,matches,qc,repoId]);
-  return {...q,data:matches?q.data:undefined};
+  const refreshed = useRef<{ identity: string; attempted: boolean }>();
+  const identity = JSON.stringify([repoId,revision?.graph,revision?.pending,revision?.evidence ?? '0',
+    generation?.generation,generation?.applied_epoch,generation?.rules]);
+  const query = useQuery({queryKey:['graph-position',repoId,position,identity],
+    queryFn:async ({signal})=>validateGraphPosition(await api.graphState(repoId!,position,signal)),
+    enabled:Boolean(repoId && position && revision),...graphReadRetry,refetchOnWindowFocus:false});
+  const matches = graphPositionMatches(query.data,revision,generation);
+  const denied = query.error instanceof ApiError && [401,403,404].includes(query.error.status);
+  const mismatch = Boolean(query.data && !matches);
+  useEffect(()=>{
+    if (refreshed.current?.identity !== identity) refreshed.current = {identity,attempted:false};
+    if ((!mismatch && !denied) || refreshed.current.attempted) return;
+    refreshed.current.attempted = true;
+    void qc.invalidateQueries({queryKey:['repo-view',repoId]});
+  },[mismatch,denied,identity,qc,repoId]);
+  return {...query,data:matches && !denied ? query.data : undefined,
+    error:query.error ?? (mismatch ? new Error('Historical graph generation changed. Refresh the graph.') : null)};
 }
 
 // ── Mutation ──────────────────────────────────────────

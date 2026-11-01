@@ -118,15 +118,14 @@ func TestWorkerNotificationPolicyBeforeEgressAndAfterSend(t *testing.T) {
 				}
 			}
 			sends := 0
-			old := safeWebhookClient()
-			webhookClient = &http.Client{Transport: workerRoundTrip(func(r *http.Request) (*http.Response, error) {
+			client := &http.Client{Transport: workerRoundTrip(func(request *http.Request) (*http.Response, error) {
 				sends++
 				if when == "after-send" {
 					upgrade()
 				}
 				return &http.Response{StatusCode: 204, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 			})}
-			defer func() { webhookClient = old }()
+			configureNotificationTestSender(t, svc, client)
 			roots := []domain.DocumentIdentity{domain.DocumentIdentityRootV1}
 			ctx = inbound.WithDocumentIdentities(ctx, roots)
 			ctx = outbound.WithDocumentIdentityCompatibility(ctx, roots, roots)

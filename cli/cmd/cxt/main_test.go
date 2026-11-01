@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
 	delivcli "github.com/wnsdy95/cxthub-cli/internal/adapters/delivery/cli"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/storage"
 	"github.com/wnsdy95/cxthub-cli/internal/domain"
@@ -32,11 +35,69 @@ func mainTestGit(t *testing.T, cwd string, args ...string) {
 
 func TestReadCompositionDoesNotExposeCommandServices(t *testing.T) {
 	c := buildReadContainer(config{RepoRoot: t.TempDir()}).clictr
-	if c.Save != nil || c.Checkout != nil || c.Load != nil || c.Fork != nil || c.Sync != nil || c.History != nil || c.Memorize != nil || c.Init != nil || c.Tag != nil || c.Stash != nil || c.Staging != nil || c.IndexStash != nil || c.PrepareAgent != nil || c.ProviderLaunch.Prepare != nil || c.SettingsObjects != nil || c.WakeHistoricalSync != nil {
-		t.Fatal("read composition exposes mutation services")
+	if c.SessionSelection != nil || c.SessionInventory != nil || c.RequestCapture != nil || c.WithSecretsLock != nil || c.WithBackfillDaemon != nil || c.ProviderLaunch.SessionInventory != nil || c.Save != nil || c.Checkout != nil || c.Load != nil || c.Fork != nil || c.Sync != nil || c.History != nil || c.Memorize != nil || c.Init != nil || c.Tag != nil || c.Stash != nil || c.Staging != nil || c.IndexStash != nil || c.PrepareAgent != nil || c.ProviderLaunch.Prepare != nil || c.SettingsObjects != nil || c.WakeHistoricalSync != nil {
+		t.Fatal("read composition exposes command services")
 	}
-	if c.List == nil || c.Queries == nil || c.ResolveRepo == nil {
+	if c.List == nil || c.Queries == nil || c.ResolveRepo == nil || c.Inspection == nil {
 		t.Fatal("missing read services")
+	}
+}
+
+func TestLiveObserverRootCompositionAndCancellation(test *testing.T) {
+	cwd := test.TempDir()
+	home := test.TempDir()
+	test.Setenv("HOME", home)
+	test.Setenv("CODEX_HOME", "")
+	test.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	test.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	if buildReadContainer(config{RepoRoot: cwd}).clictr.ObserveLiveSession != nil {
+		test.Fatal("read-only composition exposes an observer")
+	}
+	container := buildContainer(config{RepoRoot: cwd}).clictr
+	if container.ObserveLiveSession == nil {
+		test.Fatal("write composition did not supply an observer")
+	}
+	const sessionID = "11111111-1111-4111-8111-111111111111"
+	container.WakeFetchDiscovery = func(string) { test.Fatal("unregistered session woke discovery") }
+	if err := container.ObserveLiveSession(context.Background(), cwd, domain.ProviderCodex, sessionID); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, ".cxt")); !os.IsNotExist(err) {
+		test.Fatal("unregistered observer created state", err)
+	}
+	mainTestGit(test, cwd, "init", "-q", "-b", "main")
+	if err := os.MkdirAll(filepath.Join(cwd, ".cxt"), 0700); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, ".cxt", "HEAD"), []byte("ref: refs/heads/main\n"), 0600); err != nil {
+		test.Fatal(err)
+	}
+	sessionPath := filepath.Join(home, ".codex", "sessions", "2026", "11", "01", "rollout-test-"+sessionID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(sessionPath), 0700); err != nil {
+		test.Fatal(err)
+	}
+	data := fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":%q,\"cwd\":%q}}\n", sessionID, cwd)
+	if err := os.WriteFile(sessionPath, []byte(data), 0600); err != nil {
+		test.Fatal(err)
+	}
+	if err := capture.TrackAppSession(cwd, domain.ProviderCodex, sessionID, sessionPath); err != nil {
+		test.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		wakes := 0
+		container.WakeFetchDiscovery = func(observedCwd string) {
+			wakes++
+			if observedCwd != cwd {
+				test.Error("observer changed worktree", observedCwd)
+			}
+			cancel()
+		}
+		err := container.ObserveLiveSession(ctx, cwd, domain.ProviderCodex, sessionID)
+		cancel()
+		if !errors.Is(err, context.Canceled) || wakes != 1 {
+			test.Fatal("root observer lost wake, cancellation or lock release", attempt, wakes, err)
+		}
 	}
 }
 
@@ -176,15 +237,30 @@ func TestDesktopWorktreeSaveUsesSharedContextStore(t *testing.T) {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	const sessionID = "019desktop-worktree-session"
+	const sessionID = "11111111-1111-4111-8111-111111111111"
 	session := filepath.Join(sessionDir, "rollout-2026-08-30T00-00-00-"+sessionID+".jsonl")
 	raw := `{"type":"session_meta","payload":{"id":"` + sessionID + `","cwd":"` + linked + `","model":"gpt-test"}}` + "\n" +
 		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"desktop capture"}]}}` + "\n"
 	if err := os.WriteFile(session, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("CXT_WRAPPED", "")
+	t.Setenv("CODEX_THREAD_ID", sessionID)
+	selected, err := ctr.clictr.SessionSelection.ResolveCommandSession(context.Background(), linked, domain.ProviderCodex)
+	if err != nil || selected.SessionPath != session || selected.SessionID != sessionID || selected.Provider != domain.ProviderCodex {
+		t.Fatalf("composed desktop selection=%+v err=%v", selected, err)
+	}
+	if ctr.clictr.ProviderLaunch.SessionInventory != ctr.clictr.SessionInventory {
+		t.Fatal("provider launch did not reuse the root session inventory")
+	}
+	if ctr.clictr.RequestCapture == nil {
+		t.Fatal("root live capture coordinator missing")
+	}
+	if paths := ctr.clictr.SessionInventory.SessionFilesForCwd(context.Background(), linked, domain.ProviderCodex); !reflect.DeepEqual(paths, []string{session}) {
+		t.Fatalf("composed desktop inventory=%v", paths)
+	}
 	out, err := ctr.clictr.Save.Save(context.Background(), inbound.SaveInput{
-		Cwd: linked, Provider: domain.ProviderCodex, SessionPath: session,
+		Cwd: linked, Provider: selected.Provider, SessionPath: selected.SessionPath,
 		Message: domain.HookMessagePrefix + "desktop capture", Pending: true,
 	})
 	if err != nil {
@@ -250,13 +326,20 @@ func TestProductionDoctorCaptureInspectionDoesNotRecoverTransactions(t *testing.
 		t.Fatalf("passive production callback attempted recovery: %v", err)
 	}
 	var report bytes.Buffer
-	if err := delivcli.RunDiagnostics(context.Background(), root, []string{"doctor", "--json"}, &report, inspectCaptureRecovery); err == nil {
+	if err := delivcli.RunDiagnostics(context.Background(), localReplicaInspector{}, root, []string{"doctor", "--json"}, &report, inspectCaptureRecovery); err == nil {
 		t.Fatal("pending transactions not reported")
 	}
 	for _, name := range []string{"working-commit.json", "checkout-transition.json"} {
 		if !strings.Contains(report.String(), "pending local transaction: "+name) {
 			t.Fatal("pending transaction omitted: " + name)
 		}
+	}
+	t.Chdir(root)
+	if err := run([]string{"cxt", "doctor", "--json"}); err == nil {
+		t.Fatal("actual doctor dispatch ignored pending transactions")
+	}
+	if err := run([]string{"cxt", "sync", "status", "--json"}); err != nil {
+		t.Fatalf("metadata status attempted transaction recovery: %v", err)
 	}
 	if !reflect.DeepEqual(before, tree()) {
 		t.Fatal("production doctor callback changed files, modes or directories")

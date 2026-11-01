@@ -136,7 +136,7 @@ export function CommitGraph({
     return event ? [{...event,branch:p.branch,archived:p.archived}] : [];
   }),[graphState,history]);
   const positionEvent = positions.find(e=>e.id===positionId);
-  const selectedPosition = useGraphPosition(readRepoId ?? repoId,positionEvent?.id ?? '',graphState?.revision);
+  const selectedPosition = useGraphPosition(readRepoId ?? repoId,positionEvent?.id ?? '',graphState?.revision,graphState?.read_generation);
   const currentGraph = positionEvent ? selectedPosition.data : graphState;
   const position = positionEvent && currentGraph ? {branch:positionEvent.branch,snapshot:positionEvent.target!,archived:positionEvent.archived} : undefined;
   const historyGroups = useMemo(()=>graphProgress(currentGraph),[currentGraph]);

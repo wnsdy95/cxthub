@@ -56,7 +56,7 @@ func TestEndpointLoginDoesNotFollowCredentialRedirects(t *testing.T) {
 	}))
 	defer server.Close()
 	parsed, _ := url.Parse(server.URL)
-	if err := loginWithToken(context.Background(), server.URL+"/api/v1", parsed.Host, "synthetic-login"); err == nil {
+	if err := testDeviceLoginContainer().loginWithToken(context.Background(), server.URL+"/api/v1", parsed.Host, "synthetic-login"); err == nil {
 		t.Fatal("redirected login succeeded")
 	}
 	if authcfg.Token(parsed.Host) != "" {

@@ -35,8 +35,7 @@ type Store interface {
 	outbound.OAuthStore
 	outbound.PRJobStore
 	outbound.RuntimeStore
-	// ApplyMigrations applies schema migrations idempotently (FS is no-op).
-	ApplyMigrations(ctx context.Context, dir string) (int, error)
+	VerifyMigrations(ctx context.Context, dir string) error
 }
 
 // FSStore is a file system-based content-addressed server store (MetadataStore + BlobStore).
@@ -58,6 +57,8 @@ type FSStore struct {
 	docProofs   docProofCache
 	dataDir     string
 	recoveryErr error
+
+	joinProjectionWriter func(path string, data []byte) error
 }
 
 // NewFSStore creates an FSStore rooted at dataDir.
@@ -1355,7 +1356,7 @@ func (s *FSStore) ApplyJoin(ctx context.Context, m domain.JoinMutation) error {
 		return s.failPreparedJoin(journalPath, journal, err)
 	}
 	// After the committed marker, no rollbacks are performed. On reflog/remove failure, the journal is left to allow startup recovery to complete the same after-state and audit log.
-	return s.finishCommittedJoin(journalPath, journal)
+	return s.completeCommittedJoin(journalPath, journal)
 }
 
 func (s *FSStore) ensureJoinGraphScope(ctx context.Context, m domain.JoinMutation) error {
@@ -1586,36 +1587,40 @@ func (s *FSStore) validateJoinJournalProjection(ctx context.Context, j fsJoinJou
 
 // applyJoinProjection accepts only fully validated journals. Forwards are applied in the order service has defined (supersede→new edge), and rollbacks in reverse order to avoid cycles in any intermediate state.
 func (s *FSStore) applyJoinProjection(j fsJoinJournal, forward bool) error {
+	writeProjection := s.joinProjectionWriter
+	if writeProjection == nil {
+		writeProjection = writeAtomic
+	}
 	if forward {
 		for _, entry := range j.Snapshots {
-			if err := writeAtomic(s.snapshotPath(j.RepoID, entry.ID), entry.After); err != nil {
+			if err := writeProjection(s.snapshotPath(j.RepoID, entry.ID), entry.After); err != nil {
 				return err
 			}
 		}
 		if j.ForkName != "" {
-			if err := writeAtomic(s.refFile(j.RepoID, domain.RefSession, j.ForkName), []byte(string(j.ForkTip)+"\n")); err != nil {
+			if err := writeProjection(s.refFile(j.RepoID, domain.RefSession, j.ForkName), []byte(string(j.ForkTip)+"\n")); err != nil {
 				return err
 			}
 		}
-		return writeAtomic(s.refFile(j.RepoID, domain.RefBranch, j.Branch), encodeRef(domain.Ref{RepoID: j.RepoID, Kind: domain.RefBranch, Name: j.Branch, BranchID: j.BranchID, Target: j.NewHead}))
+		return writeProjection(s.refFile(j.RepoID, domain.RefBranch, j.Branch), encodeRef(domain.Ref{RepoID: j.RepoID, Kind: domain.RefBranch, Name: j.Branch, BranchID: j.BranchID, Target: j.NewHead}))
 	}
 	for i := len(j.Snapshots) - 1; i >= 0; i-- {
 		entry := j.Snapshots[i]
-		if err := writeAtomic(s.snapshotPath(j.RepoID, entry.ID), entry.Before); err != nil {
+		if err := writeProjection(s.snapshotPath(j.RepoID, entry.ID), entry.Before); err != nil {
 			return err
 		}
 	}
 	if j.ForkName != "" {
 		path := s.refFile(j.RepoID, domain.RefSession, j.ForkName)
 		if j.ForkExisted {
-			if err := writeAtomic(path, []byte(string(j.ForkTip)+"\n")); err != nil {
+			if err := writeProjection(path, []byte(string(j.ForkTip)+"\n")); err != nil {
 				return err
 			}
 		} else if err := removeFileDurable(path); err != nil {
 			return err
 		}
 	}
-	return writeAtomic(s.refFile(j.RepoID, domain.RefBranch, j.Branch), encodeRef(domain.Ref{RepoID: j.RepoID, Kind: domain.RefBranch, Name: j.Branch, BranchID: j.BranchID, Target: j.ExpectedHead}))
+	return writeProjection(s.refFile(j.RepoID, domain.RefBranch, j.Branch), encodeRef(domain.Ref{RepoID: j.RepoID, Kind: domain.RefBranch, Name: j.Branch, BranchID: j.BranchID, Target: j.ExpectedHead}))
 }
 
 func (s *FSStore) failPreparedJoin(path string, j fsJoinJournal, cause error) error {
@@ -1646,12 +1651,16 @@ func (s *FSStore) finishCommittedJoin(path string, j fsJoinJournal) error {
 	if err := s.applyJoinProjection(j, true); err != nil {
 		return err
 	}
-	if j.ForkName != "" && !j.ForkExisted {
-		if err := s.ensureJoinReflog(j.RepoID, domain.RefLogEntry{Kind: domain.RefSession, Name: j.ForkName, New: j.ForkTip, CreatedAt: j.CreatedAt}); err != nil {
+	return s.completeCommittedJoin(path, j)
+}
+
+func (storage *FSStore) completeCommittedJoin(path string, journal fsJoinJournal) error {
+	if journal.ForkName != "" && !journal.ForkExisted {
+		if err := storage.ensureJoinReflog(journal.RepoID, domain.RefLogEntry{Kind: domain.RefSession, Name: journal.ForkName, New: journal.ForkTip, CreatedAt: journal.CreatedAt}); err != nil {
 			return err
 		}
 	}
-	if err := s.ensureJoinReflog(j.RepoID, domain.RefLogEntry{Kind: domain.RefBranch, Name: j.Branch, Old: j.ExpectedHead, New: j.NewHead, CreatedAt: j.CreatedAt}); err != nil {
+	if err := storage.ensureJoinReflog(journal.RepoID, domain.RefLogEntry{Kind: domain.RefBranch, Name: journal.Branch, Old: journal.ExpectedHead, New: journal.NewHead, CreatedAt: journal.CreatedAt}); err != nil {
 		return err
 	}
 	return removeFileDurable(path)

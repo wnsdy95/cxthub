@@ -40,6 +40,12 @@ type Container struct {
 	WakeCommitCapture       func(string)
 	WakeFetchDiscovery      func(string)
 	CommitCapture           inbound.CommitCapture
+	SessionSelection        outbound.CommandSessionResolver
+	SessionInventory        outbound.ProviderSessionInventory
+	DeviceLoginClient       func(string) (outbound.DeviceLoginClient, error)
+	OpenLoginBrowser        func(string)
+	RequestCapture          func(context.Context, domain.ProviderKind, string, string, string, bool, bool) (bool, error)
+	ObserveLiveSession      func(context.Context, string, domain.ProviderKind, string) error
 	ProviderLaunch          ProviderLaunchHooks
 	PrepareAgent            inbound.PrepareAgentContext
 	ApplySelectedPull       func(context.Context, string) (outbound.SelectedPullReceipt, error)
@@ -55,6 +61,9 @@ type Container struct {
 	SetCaptureIdentity func(context.Context, string, domain.DocumentIdentity) error
 	SetRemoteEndpoint  func(context.Context, remotecfg.Observation, string, string, bool) error
 	ResolveRepo        func(context.Context, string) (domain.Repo, error)
+	Inspection         outbound.LocalReplicaInspector
+	WithSecretsLock    func(context.Context, string, func() error) error
+	WithBackfillDaemon func(context.Context, string, func() error) (bool, error)
 	Init               inbound.InitRepo
 	Save               inbound.SaveSession
 	Fork               inbound.ForkSession
@@ -126,19 +135,22 @@ func Run(c *Container, args []string) error {
 	ctx := context.Background()
 	rest := args[2:]
 	cwd, _ := os.Getwd()
+	var inspection outbound.LocalReplicaInspector
+	if c != nil {
+		inspection = c.Inspection
+	}
 	if cmd == "sync" {
-		return RunSyncStatus(ctx, cwd, parsed.has("--json"), os.Stdout)
+		return RunSyncStatus(ctx, inspection, cwd, parsed.has("--json"), os.Stdout)
 	}
 	if cmd == "capture" {
-		root := cxtRepoRoot(ctx, cwd)
-		repo, err := remotecfg.Wrap(root, gitctx.NewGitContextAdapter()).CurrentRepo(ctx, cwd)
+		repo, err := resolveLocalRepo(ctx, c, cwd)
 		if err != nil {
 			return err
 		}
 		return RunCaptureRecovery(ctx, c, cwd, string(repo.ID), rest, os.Stdout)
 	}
 	if cmd == "doctor" || (cmd == "branch" && parsed.first() == "operations") {
-		return RunDiagnostics(ctx, cwd, args[1:], os.Stdout)
+		return RunDiagnostics(ctx, inspection, cwd, args[1:], os.Stdout)
 	}
 	if cmd == "branch" && parsed.first() == "recover" {
 		if err := confirmOrphanRecovery(ctx, c, cwd, parsed.last()); err != nil {
@@ -471,9 +483,9 @@ func Run(c *Container, args []string) error {
 			return err
 		}
 		if tok != "" {
-			return loginWithToken(ctx, base, host, tok)
+			return c.loginWithToken(ctx, base, host, tok)
 		}
-		return deviceLogin(ctx, base, host)
+		return c.deviceLogin(ctx, base, host)
 
 	case "logout":
 		if err := requireRemote(cwd); err != nil {
@@ -496,7 +508,7 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
-		repo, cerr := resolveReadRepo(ctx, c, cwd)
+		repo, cerr := resolveLocalRepo(ctx, c, cwd)
 		if cerr != nil {
 			return cerr
 		}
@@ -514,7 +526,7 @@ func Run(c *Container, args []string) error {
 		if err := requireRemote(cwd); err != nil {
 			return err
 		}
-		repo, cerr := resolveReadRepo(ctx, c, cwd)
+		repo, cerr := resolveLocalRepo(ctx, c, cwd)
 		if cerr != nil {
 			return cerr
 		}
@@ -543,6 +555,9 @@ func Run(c *Container, args []string) error {
 		sub := parsed.first()
 		if sub != "push" && sub != "pull" {
 			return fmt.Errorf("usage: cxt secrets push|pull [-p <team passphrase>] [--remember] [--rotate] [--force (pull only)]")
+		}
+		if c.WithSecretsLock == nil {
+			return fmt.Errorf("secrets lock unavailable")
 		}
 		if err := requireRemote(cwd); err != nil {
 			return err
@@ -584,7 +599,7 @@ func Run(c *Container, args []string) error {
 		if !ok {
 			return fmt.Errorf("secrets client unavailable")
 		}
-		if err := syncSecrets(ctx, remote, cwd, repoID, sub, pass, parsed.has("--rotate"), parsed.has("--force")); err != nil {
+		if err := syncSecrets(ctx, c.WithSecretsLock, remote, cwd, repoID, sub, pass, parsed.has("--rotate"), parsed.has("--force")); err != nil {
 			return err
 		}
 		remember()
@@ -683,7 +698,7 @@ func Run(c *Container, args []string) error {
 		if err := reconcileCompletedPRPosition(ctx, c, cwd); err != nil {
 			return err
 		}
-		target, err := commandCapture(ctx, cwd, parsed.flags["--provider"])
+		target, err := c.commandCapture(ctx, cwd, parsed.flags["--provider"])
 		if err != nil {
 			return err
 		}
@@ -920,7 +935,7 @@ func Run(c *Container, args []string) error {
 		// git stash equivalent: save active session and return to branch head (commit chain) context.
 		switch parsed.first() {
 		case "", "push":
-			target, err := commandCapture(ctx, cwd, parsed.flags["--provider"])
+			target, err := c.commandCapture(ctx, cwd, parsed.flags["--provider"])
 			if err != nil {
 				return err
 			}
@@ -1094,9 +1109,9 @@ func requireRemote(cwd string) error {
 }
 
 // Server audits identify the replica but never register it as a side effect.
-func resolveReadRepo(ctx context.Context, c *Container, cwd string) (domain.Repo, error) {
-	if c.ResolveRepo == nil {
-		return domain.Repo{}, fmt.Errorf("read-only repository resolver unavailable")
+func resolveLocalRepo(ctx context.Context, c *Container, cwd string) (domain.Repo, error) {
+	if c == nil || c.ResolveRepo == nil {
+		return domain.Repo{}, fmt.Errorf("repository resolver unavailable")
 	}
 	return c.ResolveRepo(ctx, cwd)
 }

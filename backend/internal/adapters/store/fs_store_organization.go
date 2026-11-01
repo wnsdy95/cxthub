@@ -687,6 +687,23 @@ func (s *FSStore) CreateBreakGlassGrantWithAudit(ctx context.Context, grant doma
 	return nil
 }
 
+func (s *FSStore) GetBreakGlassGrant(ctx context.Context, organizationID, repositoryID, userID, grantID string) (domain.BreakGlassGrant, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.BreakGlassGrant{}, err
+	}
+	if err := validateBreakGlassRead(organizationID, repositoryID, userID, grantID); err != nil {
+		return domain.BreakGlassGrant{}, err
+	}
+	var grant domain.BreakGlassGrant
+	if err := readJSON(filepath.Join(s.breakGlassDir(), organizationID, repositoryID, opaqueName(userID), grantID+".json"), &grant); err != nil {
+		return domain.BreakGlassGrant{}, err
+	}
+	if domain.ValidateBreakGlassGrant(grant) != nil || grant.ID != grantID || grant.OrganizationID != organizationID || grant.RepositoryID != repositoryID || grant.UserID != userID {
+		return domain.BreakGlassGrant{}, domain.ErrIntegrity
+	}
+	return grant, nil
+}
+
 func (s *FSStore) GetActiveBreakGlassGrant(_ context.Context, organizationID, repositoryID, userID string, now time.Time) (domain.BreakGlassGrant, error) {
 	if err := domain.ValidateOrganizationID(organizationID); err != nil {
 		return domain.BreakGlassGrant{}, err

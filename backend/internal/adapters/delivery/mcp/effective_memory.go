@@ -9,7 +9,29 @@ import (
 	"unicode/utf8"
 )
 
-func (s *Server) SetEffectiveMemory(q inbound.EffectiveMemoryQuery) { s.effectiveMemory = q }
+func (s *Server) SetEffectiveMemory(reader inbound.EffectiveMemoryReader) error {
+	if err := validateMemoryReader(reader); err != nil {
+		return err
+	}
+	s.effectiveMemory = reader
+	return nil
+}
+
+func (s *Server) SetBranchMemory(reader inbound.BranchMemoryReader) error {
+	if err := validateMemoryReader(reader); err != nil {
+		return err
+	}
+	s.branchMemory = reader
+	return nil
+}
+
+func (s *Server) SetLiveMemoryQueries(reader inbound.LiveMemoryQueries) error {
+	if err := validateMemoryReader(reader); err != nil {
+		return err
+	}
+	s.effectiveMemory, s.branchMemory = reader, reader
+	return nil
+}
 
 // Fragment only the transport representation. The shared application query
 // owns selection, proof, status, continuation and the coherent generation.

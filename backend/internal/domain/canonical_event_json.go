@@ -22,6 +22,18 @@ func canonicalDecodedEventJSON(e CIREvent) ([]byte, error) {
 }
 
 func canonicalEventJSONObject(e CIREvent) (map[string]any, error) {
+	return canonicalEventJSONObjectWithBlocks(e, false)
+}
+
+func legacyCanonicalEventJSONObject(event CIREvent) (map[string]any, error) {
+	return canonicalEventJSONObjectWithBlocks(event, true)
+}
+
+func canonicalEventJSONObjectWithBlocks(e CIREvent, typedBlocks bool) (map[string]any, error) {
+	return canonicalEventJSONObjectWithReplacement(e, typedBlocks, false)
+}
+
+func canonicalEventJSONObjectWithReplacement(e CIREvent, typedBlocks, deferredReplacement bool) (map[string]any, error) {
 	m, err := eventJSONObject(e)
 	if err != nil {
 		return nil, err
@@ -31,12 +43,23 @@ func canonicalEventJSONObject(e CIREvent) (map[string]any, error) {
 	for key, value := range m {
 		switch v := value.(type) {
 		case []ContentBlock:
+			if typedBlocks {
+				continue
+			}
+			if v == nil {
+				m[key] = nil
+				continue
+			}
 			blocks := make([]map[string]any, len(v))
 			for i, block := range v {
 				blocks[i] = map[string]any{"type": block.Type, "text": block.Text}
 			}
 			m[key] = blocks
 		case *ProviderMetadata:
+			if v == nil {
+				m[key] = nil
+				continue
+			}
 			metadata := map[string]any{}
 			if v.TurnID != "" {
 				metadata["turn_id"] = v.TurnID
@@ -46,11 +69,23 @@ func canonicalEventJSONObject(e CIREvent) (map[string]any, error) {
 			}
 			m[key] = metadata
 		case *LockedBlob:
+			if v == nil {
+				m[key] = nil
+				continue
+			}
 			m[key] = map[string]any{"provider": v.Provider, "scheme": v.Scheme, "blob": v.Blob}
 		case []CIREvent:
+			if v == nil {
+				m[key] = nil
+				continue
+			}
+			if deferredReplacement {
+				m[key] = &legacyCanonicalReplacement{events: v}
+				continue
+			}
 			events := make([]map[string]any, len(v))
 			for i, event := range v {
-				events[i], err = canonicalEventJSONObject(event)
+				events[i], err = canonicalEventJSONObjectWithBlocks(event, typedBlocks)
 				if err != nil {
 					return nil, err
 				}

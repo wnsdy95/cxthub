@@ -61,7 +61,7 @@ func beginCommitCapture(ctx context.Context, c *Container, cwd string, providers
 	}
 	var captureRepo string
 	if admission, ok := c.History.(inbound.ContextCaptureAdmission); ok {
-		repo, err := resolvePublicationRepo(ctx, c, cwd)
+		repo, err := resolveLocalRepo(ctx, c, cwd)
 		if err != nil {
 			return nil, err
 		}
@@ -86,7 +86,7 @@ func beginCommitCapture(ctx context.Context, c *Container, cwd string, providers
 
 func freezeCommitCapture(ctx context.Context, c *Container, cwd string, providers []string, captureRepo string) (*commitCapturePass, error) {
 	if captureRepo != "" {
-		repo, err := resolvePublicationRepo(ctx, c, cwd)
+		repo, err := resolveLocalRepo(ctx, c, cwd)
 		if err != nil {
 			return nil, err
 		}

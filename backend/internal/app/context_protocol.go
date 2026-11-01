@@ -2,52 +2,13 @@ package app
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 )
 
-func (s *Service) enableContextProtocolCommand(ctx context.Context, repo domain.ContentHash) error {
-	if err := domain.ValidateContentHash(repo); err != nil {
-		return err
-	}
-	if _, err := s.meta.GetRepo(ctx, repo); err != nil {
-		return err
-	}
-	store, ok := s.meta.(interface {
-		EnableContextProtocol(context.Context, domain.ContentHash) error
-	})
-	if !ok {
-		return fmt.Errorf("context protocol storage unavailable")
-	}
-	return store.EnableContextProtocol(ctx, repo)
-}
-
 func (s *Service) checkContextWrite(ctx context.Context, repoID domain.ContentHash, next domain.Ref) error {
-	repo, err := s.meta.GetRepo(ctx, repoID)
-	if errors.Is(err, domain.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if needsState, err := domain.ContextRefWriteNeedsState(repo.ContextProtocol, next); err != nil || !needsState {
-		return err
-	}
-	events, err := s.ListHistory(ctx, repoID)
-	if err != nil {
-		return err
-	}
-	var current *domain.Ref
-	ref, err := s.meta.GetRef(ctx, repoID, next.Kind, next.Name)
-	if err == nil {
-		current = &ref
-	} else if !errors.Is(err, domain.ErrNotFound) {
-		return err
-	}
-	return domain.ValidateContextRefWrite(repo.ContextProtocol, events, current, next)
+	return s.repositoryRefs().checkContextWrite(ctx, repoID, next)
 }
 
 func (s *Service) EnableContextProtocol(ctx context.Context, repo domain.ContentHash) error {
-	return repositoryWriteError(writeAction(ctx, "manage"), s, repo, func(ctx context.Context) error { return s.enableContextProtocolCommand(ctx, repo) })
+	return s.branchOperations().EnableContextProtocol(ctx, repo)
 }

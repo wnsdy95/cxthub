@@ -137,12 +137,16 @@ func TestUnmanagedAppBranchSwitchPreservesProviderSession(t *testing.T) {
 			if mode == "prepare-first-wrapper" {
 				prepared = filepath.Join(sessionDir, "rollout-2026-08-31T00-00-00-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl")
 			}
+			sessions := captureSelectionForTest()
+			inventory := &recordingSessionInventory{ProviderSessionInventory: sessions}
 			container := &Container{
-				Save:     appSwitchSave{},
-				Memorize: appSwitchMemorize{},
-				List:     appSwitchList{target: target},
-				Checkout: appSwitchCheckout{seen: &checkoutInput, prepared: prepared},
-				Handoff:  appSwitchHandoff{},
+				SessionSelection: sessions,
+				SessionInventory: inventory,
+				Save:             appSwitchSave{},
+				Memorize:         appSwitchMemorize{},
+				List:             appSwitchList{target: target},
+				Checkout:         appSwitchCheckout{seen: &checkoutInput, prepared: prepared},
+				Handoff:          appSwitchHandoff{},
 			}
 			failure := errors.New("synthetic transition failure")
 			switch mode {
@@ -155,6 +159,9 @@ func TestUnmanagedAppBranchSwitchPreservesProviderSession(t *testing.T) {
 			}
 			if err := contextSwitch(context.Background(), container, repo); err != nil {
 				t.Fatal(err)
+			}
+			if inventory.active != 1 {
+				t.Fatalf("context transition bypassed its session inventory: %d", inventory.active)
 			}
 			if checkoutInput.SkipMaterialize != (mode != "prepare-first-wrapper") {
 				t.Fatal("checkout preparation did not match session ownership")

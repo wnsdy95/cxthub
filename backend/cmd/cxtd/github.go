@@ -2,13 +2,13 @@ package main
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/githubapp"
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
 	"github.com/wnsdy95/cxthub/backend/internal/app"
+	"github.com/wnsdy95/cxthub/backend/internal/serverruntime"
 )
 
 func configureGitHub(id *app.IdentityService, core *app.Service, st store.Store, publicURL string) (*app.GitHubConnections, *githubapp.Client, error) {
@@ -50,12 +50,5 @@ func githubReturnURL(publicURL string) (string, error) {
 }
 
 func validateGitHubOrigin(origin string) error {
-	u, err := url.Parse(origin)
-	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || u.Host == "" {
-		return fmt.Errorf("GitHub return origin must be an absolute origin")
-	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")) {
-		return fmt.Errorf("GitHub return origin must use HTTPS except on loopback")
-	}
-	return nil
+	return serverruntime.ValidateGitHubOrigin(origin)
 }

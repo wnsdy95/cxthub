@@ -97,8 +97,9 @@ func TestResourceAdmissionMixedGraphVerification(t *testing.T) {
 			t.Errorf("class %d completed %d/8", kind, completed[kind].Load())
 		}
 	}
-	if len(svc.graphCache.entries) != 1 || svc.graphCache.bytes > graphProjectionCacheBytes {
-		t.Fatalf("mixed workload cache: entries=%d bytes=%d", len(svc.graphCache.entries), svc.graphCache.bytes)
+	stats := svc.graphCache.Stats()
+	if stats.Entries != 1 || stats.Bytes > graphProjectionCacheBytes {
+		t.Fatalf("mixed workload cache: entries=%d bytes=%d", stats.Entries, stats.Bytes)
 	}
-	t.Logf("24 operations (8 graph/8 interactive graph/8 canonical verification), 10000 snapshots, doc=%d bytes, elapsed=%s, overload retries=%d, cache=%d bytes, total allocations=%d, final heap=%d; synthetic metadata, not end-to-end RSS", len(raw), time.Since(started), overloaded.Load(), svc.graphCache.bytes, after.TotalAlloc-before.TotalAlloc, after.HeapAlloc)
+	t.Logf("24 operations (8 graph/8 interactive graph/8 canonical verification), 10000 snapshots, doc=%d bytes, elapsed=%s, overload retries=%d, cache=%d bytes, total allocations=%d, final heap=%d; synthetic metadata, not end-to-end RSS", len(raw), time.Since(started), overloaded.Load(), stats.Bytes, after.TotalAlloc-before.TotalAlloc, after.HeapAlloc)
 }

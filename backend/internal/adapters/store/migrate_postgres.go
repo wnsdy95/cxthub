@@ -9,15 +9,30 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 )
 
 // ApplyMigrations applies *.sql files in dir in file name order (based on schema_migrations history for idempotency).
 // Each file is applied in a transaction, and its version is recorded upon success — skipped on restart for already applied versions. Returns: number of files applied this time.
 func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, error) {
-	conn, err := s.pool.Acquire(ctx)
+	return s.applyMigrations(ctx, dir, false)
+}
+
+func (storage *PostgresStore) ApplyPublicMigrations(ctx context.Context, directory string) (int, error) {
+	return storage.applyMigrations(ctx, directory, true)
+}
+
+func (storage *PostgresStore) applyMigrations(ctx context.Context, dir string, public bool) (int, error) {
+	manifest, err := migrationManifest(ctx, dir)
+	if err != nil {
+		return 0, err
+	}
+	if public {
+		if err := verifyMigrationCatalog(manifest); err != nil {
+			return 0, err
+		}
+	}
+	conn, err := storage.pool.Acquire(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -32,6 +47,32 @@ func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, e
 			_ = conn.Conn().Close(cleanup)
 		}
 	}()
+	if public {
+		if err := verifyMigrationNamespace(ctx, conn); err != nil {
+			return 0, err
+		}
+	}
+	var historyExists bool
+	if err := conn.QueryRow(ctx, `SELECT to_regclass('schema_migrations') IS NOT NULL`).Scan(&historyExists); err != nil {
+		return 0, err
+	}
+	if public && historyExists {
+		var safe bool
+		if err := conn.QueryRow(ctx, `SELECT COALESCE((SELECT relkind='r' AND NOT relrowsecurity AND NOT relforcerowsecurity
+ FROM pg_class WHERE oid=to_regclass('public.schema_migrations')),false)`).Scan(&safe); err != nil {
+			return 0, err
+		}
+		if !safe {
+			return 0, fmt.Errorf("%w: migration history table is unsafe", ErrSchemaMismatch)
+		}
+		previous, err := readMigrationHistory(ctx, conn, "public.schema_migrations")
+		if err != nil {
+			return 0, err
+		}
+		if err := migrationHistoryMatches(manifest, previous, false); err != nil {
+			return 0, err
+		}
+	}
 	if _, err := conn.Exec(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    TEXT PRIMARY KEY,
@@ -44,55 +85,27 @@ func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, e
 	if _, err := conn.Exec(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT ''`); err != nil {
 		return 0, fmt.Errorf("schema_migrations checksum column addition: %w", err)
 	}
-	entries, err := os.ReadDir(dir)
+	applied, err := readMigrationHistory(ctx, conn, "schema_migrations")
 	if err != nil {
 		return 0, err
 	}
-	var files []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			files = append(files, e.Name())
-		}
-	}
-	sort.Strings(files) // File names in 0001, 0002, … order are applied in that sequence
-
-	applied := map[string]string{} // version → checksum
-	rows, err := conn.Query(ctx, `SELECT version, checksum FROM schema_migrations`)
-	if err != nil {
-		return 0, err
-	}
-	for rows.Next() {
-		var v, c string
-		if err := rows.Scan(&v, &c); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		applied[v] = c
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	if err := migrationHistoryMatches(manifest, migrationApplyHistory(manifest, applied, public), false); err != nil {
 		return 0, err
 	}
 
 	n := 0
-	for _, f := range files {
-		prev, isApplied := applied[f]
-		sql, err := os.ReadFile(filepath.Join(dir, f))
+	for _, migration := range manifest {
+		if _, isApplied := applied[migration.name]; isApplied {
+			continue
+		}
+		sql, err := os.ReadFile(filepath.Join(dir, migration.name))
 		if err != nil {
-			// Do not block startup if an applied file is unreadable (due to permissions or partial deployment) — just verify, do not reapply. Stop for unapplied files that need to be applied.
-			if isApplied {
-				continue
-			}
 			return n, err
 		}
 		sum := sha256.Sum256(sql)
 		checksum := hex.EncodeToString(sum[:])
-		if isApplied {
-			// Already applied — if content has changed, tree and DB will be inconsistent (silently skip forbidden, fail loudly).
-			if prev != "" && prev != checksum {
-				return n, fmt.Errorf("%s: applied migration modified (checksum mismatch) — revert or add with new number", f)
-			}
-			continue
+		if checksum != migration.checksum {
+			return n, fmt.Errorf("%w: migration %q changed after preflight", ErrSchemaMismatch, migration.name)
 		}
 		tx, err := conn.Begin(ctx)
 		if err != nil {
@@ -100,9 +113,9 @@ func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, e
 		}
 		if _, err := tx.Exec(ctx, string(sql)); err != nil {
 			_ = tx.Rollback(ctx)
-			return n, fmt.Errorf("%s application failed: %w", f, err)
+			return n, fmt.Errorf("%s application failed: %w", migration.name, err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version, checksum) VALUES ($1,$2)`, f, checksum); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version, checksum) VALUES ($1,$2)`, migration.name, checksum); err != nil {
 			_ = tx.Rollback(ctx)
 			return n, err
 		}
@@ -111,8 +124,8 @@ func (s *PostgresStore) ApplyMigrations(ctx context.Context, dir string) (int, e
 		}
 		n++
 	}
-	if _, present := applied["0052_repository_organizations.sql"]; present || containsMigration(files, "0052_repository_organizations.sql") {
-		if err := s.migrateRepositoryOwnership(ctx, conn); err != nil {
+	if _, present := applied["0052_repository_organizations.sql"]; present || manifestContains(manifest, "0052_repository_organizations.sql") {
+		if err := storage.migrateRepositoryOwnership(ctx, conn); err != nil {
 			return n, err
 		}
 	}

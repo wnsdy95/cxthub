@@ -47,8 +47,8 @@ func decodeGitContributionAdmissionPG(raw []byte, repo domain.ContentHash, id, k
 	if err != nil {
 		return domain.GitContributionAdmission{}, err
 	}
-	if admission.ID != id || admission.Key() != key || admission.Destination.RepoID != repo || admission.Destination.GitOrigin != origin || admission.Destination.ReadReceiptID != receiptID {
-		return domain.GitContributionAdmission{}, domain.ErrIntegrity
+	if err := validateGitContributionAdmissionIdentity(admission, repo, id, key, origin, receiptID); err != nil {
+		return domain.GitContributionAdmission{}, err
 	}
 	return admission, nil
 }

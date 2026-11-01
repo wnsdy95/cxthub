@@ -8,7 +8,7 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func requireRootDocumentRepository(ctx context.Context, meta outbound.MetadataStore, repo domain.ContentHash) error {
+func requireRootDocumentRepository(ctx context.Context, meta documentRequirementReader, repo domain.ContentHash) error {
 	r, err := meta.GetRepo(ctx, repo)
 	if err != nil {
 		return err

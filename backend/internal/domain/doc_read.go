@@ -237,7 +237,7 @@ func (p DocReadPlan) visit(ctx context.Context, reusedSearch map[ContentHash]boo
 				return ErrIntegrity
 			}
 			body = bytes.Clone(current)
-			hash, err := legacyStreamHash(ctx, body)
+			hash, err := HashContentContext(ctx, body)
 			if err != nil {
 				return err
 			}
@@ -260,11 +260,19 @@ func (p DocReadPlan) visit(ctx context.Context, reusedSearch map[ContentHash]boo
 			}
 			entry.Seq, entry.Role = metadata.Seq, metadata.Role
 		} else {
-			var ev CIREvent
+			var ev struct {
+				Kind            EventKind      `json:"kind"`
+				Seq             int            `json:"seq"`
+				Role            Role           `json:"role"`
+				Blocks          []ContentBlock `json:"blocks"`
+				RedactedSummary string         `json:"redacted_summary"`
+			}
 			if err := json.Unmarshal(body, &ev); err != nil {
 				return err
 			}
-			entry.Seq, entry.Role, entry.Text = ev.Seq, string(ev.Role), SearchableEventText(ev)
+			entry.Seq, entry.Role, entry.Text = ev.Seq, string(ev.Role), SearchableEventText(CIREvent{
+				Kind: ev.Kind, Blocks: ev.Blocks, RedactedSummary: ev.RedactedSummary,
+			})
 		}
 		if err := ctx.Err(); err != nil {
 			return err

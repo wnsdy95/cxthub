@@ -18,6 +18,7 @@ import { atLeast, type Role } from '../roles';
 import { AIIcon, PROVIDER_META, PROVIDER_LOGOS, PROVIDER_INK } from './AIBar';
 import { AIBar } from './AIBar';
 import { CommitGraph } from './CommitGraph';
+import { ReadGenerationBanner } from './ReadGenerationBanner';
 import { ContextSelectionNotice, useContextSelection } from './ContextSelection';
 import { ArchivedSessionNotice, SessionArchiveActions } from './SessionArchive';
 import { short, when } from '../snapshotFormat';
@@ -32,9 +33,10 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
   const [now, setNow] = useState(Date.now);
   // Repo derivative state is the same assembly point (useRepoView) as the context tab — excluding stash, badges, and graph.
   // If the source forks, the "badge count = tab row count" guarantee from the input phase breaks (review front #2).
-  const { refs, archiveSnapshots: graphArchiveSnapshots, archivedSessions, badges, graphState, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, graphRefreshError, retryGraph, pendingRows, pendingLoading, pendingError, retryPending } =
+  const { refs, archiveSnapshots: graphArchiveSnapshots, archivedSessions, badges, graphState, graphSnapshots, committedSnapshots, uncommittedIds, localAhead, reflog, history, semantics, historyError, graphLoading, graphError, graphRefreshError, graphReadStatus, graphReadNotice, retryGraph, pendingRows, pendingLoading, pendingError, retryPending } =
     useRepoView(repo.id, repo.default_branch || 'main');
   const { archiveSnapshots, archiveBySnapshot, chains, orphans, pendings } = pendingRows;
+  const graphEmptyIsCurrent = graphReadStatus.showGraph && (graphReadStatus.state === 'legacy' || graphReadStatus.state === 'ready');
   const activityTimes = pendings.map(p => p.activity_at ?? '').join(',');
   useEffect(() => {
     const current = Date.now();
@@ -105,15 +107,18 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
     () => chainsShown.reduce((n, c) => n + c.chain.length, 0) + orphansShown.length,
     [chainsShown, orphansShown],
   );
+  const liveSessions = useMemo(() => new Set(pendingRows.ready
+    ? pendings.filter(pending => pendingIsLive(pending, now)).map(pending => pending.session_id) : []),
+  [pendingRows.ready, pendings, now]);
   // "View N at a time" (default 5) — paginates chain clusters and orphan sessions as a single stream.
   // Chains are not split, so pagination is by item count (clusters/sessions) rather than commit count.
   const holdItems = useMemo(
     () => [
-      ...orphansShown.filter(p => pendingIsLive(p, now)).map((p) => ({ kind: 'orphan' as const, p })),
+      ...orphansShown.filter(p => liveSessions.has(p.session_id)).map((p) => ({ kind: 'orphan' as const, p })),
       ...chainsShown.map((c) => ({ kind: 'chain' as const, c })),
-      ...orphansShown.filter(p => !pendingIsLive(p, now)).map((p) => ({ kind: 'orphan' as const, p })),
+      ...orphansShown.filter(p => !liveSessions.has(p.session_id)).map((p) => ({ kind: 'orphan' as const, p })),
     ],
-    [chainsShown, orphansShown, now],
+    [chainsShown, orphansShown, liveSessions],
   );
   const paged = usePaged(holdItems, `${branchSel}|${memberSel}`);
   const visChains = paged.visible.flatMap((it) => (it.kind === 'chain' ? [it.c] : []));
@@ -124,8 +129,8 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
   const [retainedSelection, setRetainedSelection] = useState<{ repoId: string; snapshot: Snapshot } | null>(null);
   const selectedPending = (selPending ? pendings.find(p => p.session_id === selPending) : null) ?? null;
   const selectedId = selectedPending?.target ?? selSnap;
-  const selected = (selectedId ? byId.get(selectedId) : null)
-    ?? (retainedSelection?.repoId === repo.id && retainedSelection.snapshot.id === selectedId ? retainedSelection.snapshot : null);
+  const selected = pendingRows.inaccessible || pendingRows.sourceReset ? null : ((selectedId ? byId.get(selectedId) : null)
+    ?? (retainedSelection?.repoId === repo.id && retainedSelection.snapshot.id === selectedId ? retainedSelection.snapshot : null));
   useEffect(() => {
     setRetainedSelection(selected ? { repoId: repo.id, snapshot: selected } : null);
   }, [repo.id, selected]);
@@ -157,7 +162,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
   const [forkName, setForkName] = useState('');
 
   const renderPendings = (live: boolean) => {
-    const items = visOrphans.filter(p => pendingIsLive(p, now) === live);
+    const items = visOrphans.filter(p => liveSessions.has(p.session_id) === live);
     return items.length > 0 && <section className="pending-sessions" key={String(live)} data-live={live}>
       <span className="label">{t(live ? 'onhold.liveSection' : 'onhold.uncommittedSection')}</span>
       {live && <p className="live-capture-hint">{t('onhold.liveHint')}</p>}
@@ -215,9 +220,10 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
         {holdItems.length > 0 && <PageControl paged={paged} />}
 
         {pendingLoading && <div className="skel" style={{ height: 60 }} />}
+        {pendingRows.refreshing && !pendingError && <p role="status">{t('onhold.refreshing')}</p>}
         {pendingError && <p role="alert" className="err">{pendingError} <button onClick={retryPending}>{t('context.retryRead')}</button></p>}
 
-        {!pendingLoading && !pendingError && chainsShown.length === 0 && orphansShown.length === 0 && (
+        {pendingRows.ready && !pendingError && chainsShown.length === 0 && orphansShown.length === 0 && (
           <div className="empty-box"><Rich>{t('onhold.empty')}</Rich></div>
         )}
 
@@ -320,7 +326,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
           >
             <ContextSelectionNotice event={selectedEvent} />
             {selectedPending && <div className="live-viewer-status" role="status">
-              <span className={`ref-badge ${pendingIsLive(selectedPending, now) ? 'live' : 'pending'}`}>{pendingIsLive(selectedPending, now) ? '● LIVE' : '◌ uncommitted'}</span>
+              <span className={`ref-badge ${liveSessions.has(selectedPending.session_id) ? 'live' : 'pending'}`}>{liveSessions.has(selectedPending.session_id) ? '● LIVE' : '◌ uncommitted'}</span>
               {t('onhold.followingSession')}
             </div>}
             <div className="viewer-head">
@@ -426,8 +432,9 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
       </div>
 
       <aside className="ctx-side">
-        <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>
-        <CommitGraph readRepoId={repo.id} graphState={graphState}
+        <ReadGenerationBanner {...graphReadNotice} />
+        {graphReadStatus.showGraph && <span className="label">{t('common.commitGraphTotal', { count: committedSnapshots.length })}</span>}
+        {(graphSnapshots.length > 0 || archivedSessions.length > 0 || graphEmptyIsCurrent || graphLoading || graphError) && <CommitGraph readRepoId={repo.id} graphState={graphState}
           snapshots={graphSnapshots}
           allSnapshots={graphArchiveSnapshots}
           archivedSessions={archivedSessions}
@@ -441,7 +448,7 @@ export function OnHoldView({ repo, role }: { repo: Repo; role: Role | null }) {
           pinBranch={repo.default_branch || 'main'}
           repoId={atLeast(role, 'member') ? repo.id : null}
           afterGraph={<AIBar snapshots={committedSnapshots} />}
-        />
+        />}
       </aside>
     </div>
   );

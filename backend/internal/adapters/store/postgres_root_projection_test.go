@@ -394,7 +394,9 @@ func rootProjectionIsolatedDSN(t *testing.T, ctx context.Context) string {
 		admin.Close()
 		t.Fatal(err)
 	}
+	docDisplayOwnedFixturesPG.Store(name, true)
 	t.Cleanup(func() {
+		defer docDisplayOwnedFixturesPG.Delete(name)
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if _, err := admin.Exec(cleanup, "DROP DATABASE "+quoted); err != nil {

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"time"
 
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/capture"
 	"github.com/wnsdy95/cxthub-cli/internal/adapters/remotecfg"
@@ -17,31 +15,10 @@ func runLiveObserver(ctx context.Context, c *Container, cwd string, args []strin
 	if len(args) != 2 {
 		return fmt.Errorf("live-watch requires provider and registered session")
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return err
+	if c == nil || c.ObserveLiveSession == nil {
+		return fmt.Errorf("live session observer unavailable")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
-	defer cancel()
-	run := func(phase string) func(context.Context) error {
-		return func(ctx context.Context) error {
-			ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, exe, "git-hook", phase, args[0], args[1])
-			cmd.Dir = cwd
-			return cmd.Run()
-		}
-	}
-	// Capture and publication have independent bounds. The durable pending is
-	// the retry checkpoint, so publication never repeats transcript parsing.
-	return capture.WatchSession(ctx, cwd, domain.ProviderKind(args[0]), args[1], capture.SessionWatch{
-		Poll: run("live-capture"), Publish: run("live-publish"),
-		Wake: func(context.Context) {
-			if c.WakeFetchDiscovery != nil {
-				c.WakeFetchDiscovery(cwd)
-			}
-		},
-	})
+	return c.ObserveLiveSession(ctx, cwd, domain.ProviderKind(args[0]), args[1])
 }
 
 func runLiveCapture(ctx context.Context, c *Container, cwd string, args []string) error {
@@ -53,9 +30,11 @@ func runLiveCapture(ctx context.Context, c *Container, cwd string, args []string
 	if !ok {
 		return nil
 	}
-	coord := capture.NewCaptureCoordinator(c.Save, c.Identity)
+	if c == nil || c.RequestCapture == nil {
+		return fmt.Errorf("live capture coordinator unavailable")
+	}
 	// The observer supplies the 10-second cadence; retain growth/lock gates.
-	if _, err := coord.RequestCapture(ctx, provider, cwd, session.Path, id, false, false); err != nil {
+	if _, err := c.RequestCapture(ctx, provider, cwd, session.Path, id, false, false); err != nil {
 		return err
 	}
 	return nil

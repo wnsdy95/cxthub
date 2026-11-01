@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wnsdy95/cxthub/backend/internal/adapters/store"
+	"github.com/wnsdy95/cxthub/backend/internal/adapters/webhookdelivery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
@@ -34,10 +35,7 @@ func TestNotificationRetryRestartAndCredentialIsolation(t *testing.T) {
 		w.WriteHeader(status)
 	}))
 	defer receiver.Close()
-	// Install a private-network test transport without changing production SSRF behavior.
-	old := safeWebhookClient()
-	webhookClient = receiver.Client()
-	defer func() { webhookClient = old }()
+	configureNotificationTestSender(t, svc, receiver.Client())
 	repositoryRecord.WebhookURL = receiver.URL + "/private-credential"
 	if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 		t.Fatal(err)
@@ -119,6 +117,11 @@ func TestNotificationClaimsAreExclusiveAndExpiredWorkersCannotFinish(t *testing.
 func TestNotificationChangedDestinationRequiresExplicitRetry(t *testing.T) {
 	ctx := systemTestContext()
 	svc, st, repositoryRecord := notificationFixture(t)
+	client := &http.Client{Transport: workerRoundTrip(func(request *http.Request) (*http.Response, error) {
+		t.Fatal("changed destination reached transport", request.URL)
+		return nil, domain.ErrForbidden
+	})}
+	configureNotificationTestSender(t, svc, client)
 	if err := enqueueRepositoryNotification(ctx, st, repositoryRecord, "ref_updated", "safe metadata"); err != nil {
 		t.Fatal(err)
 	}
@@ -151,12 +154,8 @@ func TestNotificationHTTPOutcomeAndExhaustion(t *testing.T) {
 				w.WriteHeader(tc.code)
 			}))
 			defer receiver.Close()
-			// Use the test transport while retaining the production redirect policy.
-			old := safeWebhookClient()
 			client := receiver.Client()
-			client.CheckRedirect = old.CheckRedirect
-			webhookClient = client
-			defer func() { webhookClient = old }()
+			configureNotificationTestSender(t, svc, client)
 			repositoryRecord.WebhookURL = receiver.URL
 			if err := st.CreateRepository(ctx, repositoryRecord); err != nil {
 				t.Fatal(err)
@@ -173,6 +172,20 @@ func TestNotificationHTTPOutcomeAndExhaustion(t *testing.T) {
 			if len(jobs) != 1 || jobs[0].State != tc.state || jobs[0].Reason != tc.reason {
 				t.Fatalf("unexpected outcome: %+v", jobs)
 			}
+			if jobs[0].HTTPStatus != tc.code || jobs[0].Attempts != tc.prior+1 {
+				t.Fatalf("HTTP status or attempts changed: %+v", jobs)
+			}
 		})
+	}
+}
+
+func configureNotificationTestSender(test testing.TB, service *Service, client *http.Client) {
+	test.Helper()
+	sender, err := webhookdelivery.NewWithClient(client)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if err := service.ConfigureNotificationSender(sender); err != nil {
+		test.Fatal(err)
 	}
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"github.com/wnsdy95/cxthub/backend/internal/app/evidencequery"
 	"github.com/wnsdy95/cxthub/backend/internal/domain"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/inbound"
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
@@ -10,12 +11,34 @@ import (
 
 // NewGitChangeQuery reads previously verified evidence without provider access
 // or command methods. The API command service embeds the same query rules.
-func NewGitChangeQuery(st outbound.GitChangeStore) inbound.GitChangeQuery {
-	var core *Service
-	if metadata, ok := st.(outbound.MetadataStore); ok {
-		core = NewService(metadata, nil, nil, nil, nil)
+func NewGitChangeQuery(reader evidencequery.ChangeReader) inbound.GitChangeQuery {
+	metadata, ok := reader.(evidencequery.MetadataReader)
+	if !ok || !rootAdapterPresent(metadata) {
+		return unavailableGitChangeQuery{failure: domain.ErrDocumentIdentityUpgradeRequired}
 	}
-	return &gitChangeQuery{store: st, core: core}
+	transactions, _ := reader.(documentQuerySnapshots)
+	scope := &statusQueryScope{repository: &repositoryQueryScope{
+		metadata: metadata, transactions: transactions, supported: []domain.DocumentIdentity{domain.DocumentIdentityLegacy},
+	}}
+	queries, err := evidencequery.NewChangeQueries(evidencequery.ChangeConfig{
+		Scope: scope, Changes: reader, AtomicRead: transactions != nil,
+	})
+	if err != nil {
+		return unavailableGitChangeQuery{failure: err}
+	}
+	return queries
+}
+
+type unavailableGitChangeQuery struct {
+	failure error
+}
+
+func (query unavailableGitChangeQuery) Get(context.Context, domain.ContentHash, string) (domain.GitChangeJob, error) {
+	return domain.GitChangeJob{}, query.failure
+}
+
+func (query unavailableGitChangeQuery) List(context.Context, domain.ContentHash, string, int) (domain.GitChangePage, error) {
+	return domain.GitChangePage{}, query.failure
 }
 
 type gitChangeQuery struct {
@@ -28,43 +51,20 @@ func (g *gitChangeQuery) Get(ctx context.Context, repo domain.ContentHash, id st
 		var zero domain.GitChangeJob
 		return zero, domain.ErrDocumentIdentityUpgradeRequired
 	}
-	return repositoryReadForRepo(ctx, g.core, repo, func(ctx context.Context) (domain.GitChangeJob, error) {
-		if err := domain.ValidateContentHash(repo); err != nil {
-			return domain.GitChangeJob{}, err
-		}
-		if err := domain.ValidateGitChangeID(id); err != nil {
-			return domain.GitChangeJob{}, err
-		}
-		return g.store.GetGitChange(ctx, repo, id)
-	})
+	queries, err := newGitChangeQueries(g.core, g.store)
+	if err != nil {
+		return domain.GitChangeJob{}, err
+	}
+	return queries.Get(ctx, repo, id)
 }
 func (g *gitChangeQuery) List(ctx context.Context, repo domain.ContentHash, cursor string, limit int) (domain.GitChangePage, error) {
 	if g.core == nil {
 		var zero domain.GitChangePage
 		return zero, domain.ErrDocumentIdentityUpgradeRequired
 	}
-	return repositoryReadForRepo(ctx, g.core, repo, func(ctx context.Context) (domain.GitChangePage, error) {
-		out := domain.GitChangePage{Items: []domain.GitChangeSummary{}}
-		if err := domain.ValidateContentHash(repo); err != nil {
-			return out, err
-		}
-		if cursor != "" {
-			if err := domain.ValidateGitChangeID(cursor); err != nil {
-				return out, err
-			}
-		}
-		if limit < 1 || limit > 100 {
-			return out, domain.ErrValidation
-		}
-		jobs, err := g.store.ListGitChanges(ctx, repo, cursor, limit+1)
-		if err != nil {
-			return out, err
-		}
-		if len(jobs) > limit {
-			out.NextCursor = jobs[limit-1].ID
-			jobs = jobs[:limit]
-		}
-		out.Items = jobs
-		return out, nil
-	})
+	queries, err := newGitChangeQueries(g.core, g.store)
+	if err != nil {
+		return domain.GitChangePage{}, err
+	}
+	return queries.List(ctx, repo, cursor, limit)
 }

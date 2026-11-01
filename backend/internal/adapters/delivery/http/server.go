@@ -31,11 +31,6 @@ import (
 type Backend interface {
 	inbound.RepositoryInitialization
 	inbound.BranchPullPlanner
-	inbound.ContextQuery
-	inbound.GraphStateQuery
-	GetRepositoryView(context.Context, domain.ContentHash) (domain.RepositoryView, error)
-	GetPendingView(context.Context, domain.ContentHash) (domain.PendingView, error)
-	RepositoryRevision(context.Context, domain.ContentHash) (domain.RepositoryRevision, error)
 	Negotiate(ctx context.Context, in inbound.PushNegotiateInput) (inbound.PushNegotiateOutput, error)
 	StoreChunks(ctx context.Context, in inbound.StoreChunksInput) (inbound.StoreChunksOutput, error)
 	PullChunks(ctx context.Context, in inbound.PullChunksInput) (inbound.PullChunksOutput, error)
@@ -68,8 +63,6 @@ type Backend interface {
 	PutMemoryDigest(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error)
 	PutMemoryDigestCAS(ctx context.Context, repoID domain.ContentHash, d domain.MemoryDigest) (domain.ContentHash, error)
 	inbound.MemoryReuser
-	GetMemoryDigest(ctx context.Context, repoID, snapshotID domain.ContentHash) (domain.MemoryDigest, error)
-	GetMemoryObject(ctx context.Context, repoID, hash domain.ContentHash) (domain.MemoryDigest, error)
 	// About + team default settings bundle (web editing).
 	UpdateAbout(ctx context.Context, repoID domain.ContentHash, description, website string, topics []string) error
 	PatchRepoProfile(context.Context, domain.ContentHash, inbound.RepoProfilePatch) (domain.Repo, error)
@@ -107,11 +100,33 @@ type Server struct {
 	githubReturnURL          string
 	gitSyncAudit             inbound.GitSyncAudit
 	docFinalization          inbound.DocFinalization
-	effectiveMemory          inbound.EffectiveMemoryQuery
-	memoryPositions          inbound.MemoryPositionQuery
+	documentEvents           inbound.DocumentEventQueries
+	documentViews            inbound.DocumentViewQueries
+	documentQueryProfile     inbound.DocumentQueryProfile
+	contextQueries           inbound.ContextQuery
+	contextQueryProfile      inbound.ContextQueryProfile
+	docFind                  inbound.DocumentFindQuery
+	docFindFragment          inbound.DocumentFindFragmentQuery
+	effectiveMemory          inbound.EffectiveMemoryReader
+	preparedMemory           inbound.PreparedMemoryReader
+	memorySnapshots          inbound.MemorySnapshotQueries
+	memoryPositions          inbound.MemoryPositionReader
 	codeApplicability        inbound.CodeApplicabilityQuery
 	gitChanges               inbound.GitChanges
 	gitScans                 inbound.GitScans
+	repositoryAssets         inbound.RepositoryAssetCommands
+	documentPublications     inbound.DocumentPublicationCommands
+	repositoryRefs           inbound.RepositoryRefCommands
+	snapshotGrafts           app.SnapshotGraftWriter
+	memoryDigests            app.MemoryDigestWriter
+	historyCommands          inbound.HistoryCommands
+	prPromoter               inbound.PRPromotionDeliverer
+	prPromotions             inbound.PRPromotionCommands
+	contextBranches          inbound.ContextBranchOperations
+	repositoryStates         inbound.RepositoryStateQueries
+	repositoryStateProfile   inbound.RepositoryStateQueryProfile
+	repositoryGraphs         inbound.RepositoryGraphQueries
+	repositoryGraphProfile   inbound.RepositoryGraphQueryProfile
 	changes                  repositoryChangeHub
 	// syncInflight is a guard against duplicate execution of GitHub sync lazy TTL (repository ID set).
 	syncInflight sync.Map
@@ -137,7 +152,87 @@ func NewServer(b Backend, id IdentityBackend) *Server {
 		runtime = provider.RuntimeStore()
 	}
 	docFinalization, _ := b.(inbound.DocFinalization)
-	return &Server{b: b, id: id, docFinalization: docFinalization, runtime: runtime, cookie: loadCookieCfg(), cors: splitCSV(os.Getenv("CXT_CORS_ORIGINS"))}
+	prPromoter, prPromotions := legacyPRPromotionBindings(b)
+	return &Server{b: b, id: id, repositoryAssets: b, documentPublications: b, repositoryRefs: b, snapshotGrafts: b, memoryDigests: b, historyCommands: b, contextBranches: b,
+		prPromoter: prPromoter, prPromotions: prPromotions, docFinalization: docFinalization, runtime: runtime, cookie: loadCookieCfg(), cors: splitCSV(os.Getenv("CXT_CORS_ORIGINS"))}
+}
+
+func (server *Server) SetRepositoryAssetCommands(commands inbound.RepositoryAssetCommands) error {
+	if commands == nil {
+		return fmt.Errorf("%w: repository asset commands are required", domain.ErrValidation)
+	}
+	switch value := reflect.ValueOf(commands); value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return fmt.Errorf("%w: repository asset commands are required", domain.ErrValidation)
+		}
+	}
+	server.repositoryAssets = commands
+	return nil
+}
+
+func (server *Server) SetRepositoryStateQueries(queries inbound.RepositoryStateQueries, profile inbound.RepositoryStateQueryProfile) error {
+	if profile != inbound.RepositoryStateCompatibility && profile != inbound.RepositoryStatePinnedSnapshots {
+		return fmt.Errorf("%w: explicit repository state query profile is required", domain.ErrValidation)
+	}
+	if queries == nil {
+		return fmt.Errorf("%w: repository state queries are required", domain.ErrValidation)
+	}
+	switch value := reflect.ValueOf(queries); value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return fmt.Errorf("%w: repository state queries are required", domain.ErrValidation)
+		}
+	}
+	server.repositoryStates = queries
+	server.repositoryStateProfile = profile
+	return nil
+}
+
+func (server *Server) SetRepositoryGraphQueries(queries inbound.RepositoryGraphQueries, profile inbound.RepositoryGraphQueryProfile) error {
+	if profile != inbound.RepositoryGraphCompatibility && profile != inbound.RepositoryGraphPinnedSnapshots {
+		return fmt.Errorf("%w: explicit repository graph query profile is required", domain.ErrValidation)
+	}
+	if queries == nil {
+		return fmt.Errorf("%w: repository graph queries are required", domain.ErrValidation)
+	}
+	switch value := reflect.ValueOf(queries); value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return fmt.Errorf("%w: repository graph queries are required", domain.ErrValidation)
+		}
+	}
+	server.repositoryGraphs = queries
+	server.repositoryGraphProfile = profile
+	return nil
+}
+
+func (server *Server) SetDocumentQueries(queries inbound.DocumentQueries, profile inbound.DocumentQueryProfile) error {
+	if err := server.SetDocumentEventQueries(queries, profile); err != nil {
+		return err
+	}
+	server.documentViews = queries
+	server.docFind = queries
+	server.docFindFragment = queries
+	return nil
+}
+
+func (server *Server) SetDocumentEventQueries(queries inbound.DocumentEventQueries, profile inbound.DocumentQueryProfile) error {
+	if profile != inbound.DocumentQueryCompatibility && profile != inbound.DocumentQueryVerifiedRoots {
+		return fmt.Errorf("%w: explicit document query profile is required", domain.ErrValidation)
+	}
+	if queries == nil {
+		return fmt.Errorf("%w: document event queries are required", domain.ErrValidation)
+	}
+	switch value := reflect.ValueOf(queries); value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return fmt.Errorf("%w: document event queries are required", domain.ErrValidation)
+		}
+	}
+	server.documentEvents = queries
+	server.documentQueryProfile = profile
+	return nil
 }
 
 // loadCookieCfg reads cookie attributes from CXT_COOKIE_SECURE / _SAMESITE / _DOMAIN.
@@ -208,6 +303,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/context-query", s.guard(domain.RoleViewer, s.contextQuery))
 	mux.HandleFunc("POST /api/v1/repos/{repoID}/git-changes", s.guard(domain.RoleMember, s.submitGitChange))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory", s.guard(domain.RoleViewer, s.queryEffectiveMemory))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory/read", s.guard(domain.RoleViewer, s.queryPreparedMemory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/effective-memory/positions", s.guard(domain.RoleViewer, s.queryMemoryPositions))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/code-applicability", s.guard(domain.RoleViewer, s.queryCodeApplicability))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/git-scans", s.guard(domain.RoleViewer, s.listGitScans))
@@ -232,6 +328,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}", s.guard(domain.RoleViewer, s.bulkRead(s.getDoc)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/events", s.guard(domain.RoleViewer, s.getDocEvents))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/event-fragments", s.guard(domain.RoleViewer, s.getDocEventFragment))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/find", s.guard(domain.RoleViewer, s.getDocFindPage))
+	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/find-fragments", s.guard(domain.RoleViewer, s.getDocFindFragment))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/docs/{hash}/turns", s.guard(domain.RoleViewer, s.bulkRead(s.getDocTurns)))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memories/{snapshotID}", s.guard(domain.RoleViewer, s.getMemory))
 	mux.HandleFunc("GET /api/v1/repos/{repoID}/memory-objects/{hash}", s.guard(domain.RoleViewer, s.getMemoryObject))
@@ -513,58 +611,73 @@ func (s *Server) kickVisibilitySync(repositoryID string) {
 //   - Reading at the viewer level in a public repository is allowed for anonymous users (GitHub public repo compatibility).
 //   - Repos not belonging to the repository have no policy boundary and are all rejected.
 func (s *Server) requireRepoRole(w http.ResponseWriter, r *http.Request, min domain.MemberRole) bool {
-	repo, err := s.b.GetRepo(r.Context(), s.repoID(r))
+	if err := s.checkRepoRole(r.Context(), s.repoID(r), min); err != nil {
+		s.respond(w, nil, err)
+		return false
+	}
+	return true
+}
+
+type httpAccessError struct {
+	status  int
+	code    string
+	message string
+	cause   error
+}
+
+func (err *httpAccessError) Error() string { return err.message }
+func (err *httpAccessError) Unwrap() error { return err.cause }
+
+func (s *Server) checkRepoRole(ctx context.Context, repoID domain.ContentHash, min domain.MemberRole) error {
+	repo, err := s.b.GetRepo(ctx, repoID)
 	if err != nil {
 		code, status := mapError(err)
-		s.writeError(w, status, code, err.Error())
-		return false
+		return &httpAccessError{status: status, code: code, message: err.Error(), cause: err}
 	}
-	u, authed := userFrom(r.Context())
+	u, authed := userFrom(ctx)
 	if repo.RepositoryID == "" {
-		s.writeError(w, http.StatusForbidden, "repo_unbound",
-			"repository is not bound to a repository — verify that <namespace>/<repository>/<repository> in the remote URL matches an existing repository, then reconnect with cxt setup <url>")
-		return false
+		return &httpAccessError{status: http.StatusForbidden, code: "repo_unbound", cause: domain.ErrForbidden,
+			message: "repository is not bound to a repository — verify that <namespace>/<repository>/<repository> in the remote URL matches an existing repository, then reconnect with cxt setup <url>"}
 	}
-	repositoryRecord, werr := s.id.GetRepository(r.Context(), repo.RepositoryID)
+	repositoryRecord, werr := s.id.GetRepository(ctx, repo.RepositoryID)
 	if werr != nil {
 		code, status := mapError(werr)
-		s.writeError(w, status, code, werr.Error())
-		return false
+		return &httpAccessError{status: status, code: code, message: werr.Error(), cause: werr}
 	}
 	// Public repository: non-members (including anonymous) receive the default role set by the repository (viewer by default, owner can go up to puller). Members are determined by their actual role below.
 	if repositoryRecord.IsPublic() {
 		if repositoryRecord.PublicBaseRole().AtLeast(min) && (min == domain.RoleViewer || !repositoryRecord.Archived) {
-			return true // Satisfies the default role for non-members (viewer exceeds storage is blocked)
+			return nil
 		}
 	}
 	if !authed {
-		s.writeError(w, http.StatusUnauthorized, "unauthenticated", "Login required — cxt login <token> (generate from Account Settings ⚙)")
-		return false
+		return &httpAccessError{status: http.StatusUnauthorized, code: "unauthenticated", cause: domain.ErrUnauthorized,
+			message: "Login required — cxt login <token> (generate from Account Settings ⚙)"}
 	}
 	// The archived repository is read-only — deny actions beyond viewer (check after authentication —
 	// does not leak repository status to anonymous users).
 	if min != domain.RoleViewer && repositoryRecord.Archived {
-		s.writeError(w, http.StatusForbidden, "forbidden", "archived repository (read-only) — owner can disable in settings")
-		return false
+		return &httpAccessError{status: http.StatusForbidden, code: "forbidden", cause: domain.ErrForbidden,
+			message: "archived repository (read-only) — owner can disable in settings"}
 	}
-	role, ok := s.id.RoleOf(r.Context(), repo.RepositoryID, u.ID)
+	role, ok := s.id.RoleOf(ctx, repo.RepositoryID, u.ID)
 	if !ok || !role.AtLeast(min) {
 		// Break-glass is a narrow read-only exception. It never satisfies pull,
 		// push, settings, secrets, or any other write-capable role gate.
 		if min == domain.RoleViewer {
-			allowed, accessErr := s.id.HasBreakGlassAccess(r.Context(), repo.RepositoryID, u.ID)
+			allowed, accessErr := s.id.HasBreakGlassAccess(ctx, repo.RepositoryID, u.ID)
 			if accessErr != nil {
-				s.writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "break-glass audit unavailable")
-				return false
+				return &httpAccessError{status: http.StatusServiceUnavailable, code: "audit_unavailable", cause: accessErr,
+					message: "break-glass audit unavailable"}
 			}
 			if allowed {
-				return true
+				return nil
 			}
 		}
-		s.writeError(w, http.StatusForbidden, "forbidden", "insufficient role permissions — at least "+string(min)+" required")
-		return false
+		return &httpAccessError{status: http.StatusForbidden, code: "forbidden", cause: domain.ErrForbidden,
+			message: "insufficient role permissions — at least " + string(min) + " required"}
 	}
-	return true
+	return nil
 }
 
 // requireRepoAction narrows down policy by action after role gate (maintainer and above).
@@ -613,7 +726,7 @@ func (s *Server) patchAbout(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	repo, err := s.b.PatchRepoProfile(r.Context(), s.repoID(r), body)
+	repo, err := s.repositoryAssets.PatchRepoProfile(r.Context(), s.repoID(r), body)
 	s.respond(w, repo, err)
 }
 
@@ -647,7 +760,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if u, ok := userFrom(r.Context()); ok {
 		bundle.UpdatedBy = u.Username
 	}
-	if err := s.b.PutSettings(r.Context(), s.repoID(r), bundle); err != nil {
+	if err := s.repositoryAssets.PutSettings(r.Context(), s.repoID(r), bundle); err != nil {
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
 		return
@@ -671,7 +784,7 @@ func (s *Server) putSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := userFrom(r.Context())
-	out, err := s.b.SaveSecrets(r.Context(), inbound.SaveSecretsInput{
+	out, err := s.repositoryAssets.SaveSecrets(r.Context(), inbound.SaveSecretsInput{
 		RepoID: s.repoID(r), ActorID: actor.ID, Envelope: raw,
 		Edit: domain.SecretsEdit{ExpectedRevision: r.URL.Query().Get("expected_revision"), Rotate: r.URL.Query().Get("rotate") == "true", ExpectedFingerprint: r.URL.Query().Get("expect")},
 	})
@@ -715,7 +828,7 @@ func (s *Server) putSettingsObject(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &bundle) {
 		return
 	}
-	err := s.b.PutSettingsObject(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")), bundle)
+	err := s.repositoryAssets.PutSettingsObject(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")), bundle)
 	s.respond(w, map[string]string{"status": "stored"}, err)
 }
 
@@ -850,8 +963,14 @@ func (s *Server) deleteUnsync(w http.ResponseWriter, r *http.Request) {
 
 // getMemory returns the compressed memory (MemoryDigest) of a snapshot.
 func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.GetMemoryDigest(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("snapshotID")))
-	s.respond(w, out, err)
+	reader := s.memorySnapshots
+	if reader == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "unavailable", "Memory snapshot queries unavailable")
+		return
+	}
+	s.memoryReadWithScope(w, r, reader, func(ctx context.Context) (any, error) {
+		return reader.GetMemoryDigest(ctx, s.repoID(r), domain.ContentHash(r.PathValue("snapshotID")))
+	})
 }
 
 // putMemory attaches compressed memory to a snapshot (idempotent). Target snapshot must exist (404 if not).
@@ -861,7 +980,7 @@ func (s *Server) putMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.SnapshotID = domain.ContentHash(r.PathValue("snapshotID"))
-	hash, err := s.b.PutMemoryDigest(r.Context(), s.repoID(r), d)
+	hash, err := s.memoryDigests.PutMemoryDigest(r.Context(), s.repoID(r), d)
 	s.respond(w, map[string]any{"memory_hash": hash}, err)
 }
 
@@ -892,13 +1011,19 @@ func (s *Server) putMemoryAttachmentVersion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	d.SnapshotID = domain.ContentHash(r.PathValue("snapshotID"))
-	hash, err := s.b.PutMemoryDigestCAS(r.Context(), s.repoID(r), d)
+	hash, err := s.memoryDigests.PutMemoryDigestCAS(r.Context(), s.repoID(r), d)
 	s.respond(w, map[string]any{"memory_hash": hash}, err)
 }
 
 func (s *Server) getMemoryObject(w http.ResponseWriter, r *http.Request) {
-	out, err := s.b.GetMemoryObject(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("hash")))
-	s.respond(w, out, err)
+	reader := s.memorySnapshots
+	if reader == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "unavailable", "Memory snapshot queries unavailable")
+		return
+	}
+	s.memoryReadWithScope(w, r, reader, func(ctx context.Context) (any, error) {
+		return reader.GetMemoryObject(ctx, s.repoID(r), domain.ContentHash(r.PathValue("hash")))
+	})
 }
 
 func (s *Server) getDoc(w http.ResponseWriter, r *http.Request) {
@@ -926,6 +1051,11 @@ type putRefsBody struct {
 }
 
 func (s *Server) putRefs(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceBulk)
+	if !ok {
+		return
+	}
+	defer release()
 	var body putRefsBody
 	if !s.decodeLimited(w, r, &body, inbound.MaxRefBatchJSONBody) {
 		return
@@ -942,7 +1072,7 @@ func (s *Server) putRefs(w http.ResponseWriter, r *http.Request) {
 			RepoID: rid, Ref: update.Ref, Force: update.Force, Append: update.Append,
 		})
 	}
-	out, err := s.b.UpdateRefs(r.Context(), inbound.UpdateRefsInput{RepoID: rid, Updates: updates})
+	out, err := s.repositoryRefs.UpdateRefs(r.Context(), inbound.UpdateRefsInput{RepoID: rid, Updates: updates})
 	s.respond(w, out, err)
 }
 
@@ -1045,6 +1175,11 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putRef(w http.ResponseWriter, r *http.Request) {
+	r, release, ok := s.admitResourceRequest(w, r, app.ResourceBulk)
+	if !ok {
+		return
+	}
+	defer release()
 	var body putRefBody
 	if !s.decode(w, r, &body) {
 		return
@@ -1058,7 +1193,7 @@ func (s *Server) putRef(w http.ResponseWriter, r *http.Request) {
 		Symbolic: body.Symbolic,
 		BranchID: body.BranchID,
 	}
-	out, err := s.b.UpdateRef(r.Context(), inbound.UpdateRefInput{RepoID: rid, Ref: ref, ExpectedTarget: body.ExpectedTarget, Force: body.Force, Append: body.Append})
+	out, err := s.repositoryRefs.UpdateRef(r.Context(), inbound.UpdateRefInput{RepoID: rid, Ref: ref, ExpectedTarget: body.ExpectedTarget, Force: body.Force, Append: body.Append})
 	s.respond(w, out, err)
 }
 
@@ -1091,7 +1226,7 @@ func (s *Server) pushChunks(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeLimited(w, r, &body, inbound.MaxChunkWireJSONBody) {
 		return
 	}
-	out, err := s.b.StoreChunks(r.Context(), inbound.StoreChunksInput{RepoID: s.repoID(r), Chunks: body.Chunks})
+	out, err := s.documentPublications.StoreChunks(r.Context(), inbound.StoreChunksInput{RepoID: s.repoID(r), Chunks: body.Chunks})
 	s.respond(w, out, err)
 }
 
@@ -1112,7 +1247,7 @@ func (s *Server) pushObjects(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.b.Commit(r.Context(), inbound.CommitInput{RepoID: s.repoID(r), Snapshots: body.Snapshots, Docs: body.Docs, ChunkedDocs: body.ChunkedDocs, ChunkObjects: body.ChunkObjects})
+	out, err := s.documentPublications.Commit(r.Context(), inbound.CommitInput{RepoID: s.repoID(r), Snapshots: body.Snapshots, Docs: body.Docs, ChunkedDocs: body.ChunkedDocs, ChunkObjects: body.ChunkObjects})
 	s.respond(w, out, err)
 }
 
@@ -1141,18 +1276,28 @@ func (s *Server) graftSnapshot(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, nil, fmt.Errorf("%w: expected_seq is required", domain.ErrValidation))
 		return
 	}
-	err := s.b.GraftSnapshotParents(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("id")), body.Parents, *body.ExpectedSeq)
+	err := s.snapshotGrafts.GraftSnapshotParents(r.Context(), s.repoID(r), domain.ContentHash(r.PathValue("id")), body.Parents, *body.ExpectedSeq)
 	s.respond(w, map[string]string{"status": "ok"}, err)
 }
 
 // joinSnapshot repositions session forks of the same git branch behind the branch head.
 func (s *Server) previewJoin(w http.ResponseWriter, r *http.Request) {
+	r, release, admitted := s.admitResourceRequest(w, r, app.ResourceBulk)
+	if !admitted {
+		return
+	}
+	defer release()
 	u, _ := userFrom(r.Context())
-	out, err := s.b.PreviewJoin(r.Context(), inbound.JoinPreviewInput{ActorID: u.ID, RepoID: s.repoID(r), Snapshot: domain.ContentHash(r.URL.Query().Get("snapshot")), Branch: r.URL.Query().Get("branch")})
+	out, err := s.contextBranches.PreviewJoin(r.Context(), inbound.JoinPreviewInput{ActorID: u.ID, RepoID: s.repoID(r), Snapshot: domain.ContentHash(r.URL.Query().Get("snapshot")), Branch: r.URL.Query().Get("branch")})
 	s.respond(w, out, err)
 }
 
 func (s *Server) joinSnapshot(w http.ResponseWriter, r *http.Request) {
+	r, release, admitted := s.admitResourceRequest(w, r, app.ResourceBulk)
+	if !admitted {
+		return
+	}
+	defer release()
 	var body struct {
 		ExpectedHead       domain.ContentHash `json:"expected_head"`
 		PlanRevision       domain.ContentHash `json:"plan_revision"`
@@ -1165,7 +1310,7 @@ func (s *Server) joinSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, _ := userFrom(r.Context())
-	out, err := s.b.ConfirmJoin(r.Context(), inbound.ConfirmJoinInput{ActorID: u.ID, JoinInput: inbound.JoinInput{
+	out, err := s.contextBranches.ConfirmJoin(r.Context(), inbound.ConfirmJoinInput{ActorID: u.ID, JoinInput: inbound.JoinInput{
 		ExpectedHead: body.ExpectedHead, PlanRevision: body.PlanRevision,
 		RepoID: s.repoID(r), TargetBranch: body.Branch, BranchID: body.BranchID, Snapshot: body.Snapshot,
 		IncludeDescendants: body.IncludeDescendants,
@@ -1231,11 +1376,16 @@ type forkBody struct {
 }
 
 func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
+	r, release, admitted := s.admitResourceRequest(w, r, app.ResourceBulk)
+	if !admitted {
+		return
+	}
+	defer release()
 	var body forkBody
 	if !s.decode(w, r, &body) {
 		return
 	}
-	out, err := s.b.Fork(r.Context(), inbound.ForkInput{RepoID: s.repoID(r), FromSnapshot: body.From, NewBranch: body.NewBranch, Author: body.Author})
+	out, err := s.contextBranches.Fork(r.Context(), inbound.ForkInput{RepoID: s.repoID(r), FromSnapshot: body.From, NewBranch: body.NewBranch, Author: body.Author})
 	s.respond(w, out, err)
 }
 
@@ -1293,6 +1443,11 @@ func (s *Server) writeDecodeError(w http.ResponseWriter, err error) {
 
 func (s *Server) respond(w http.ResponseWriter, v any, err error) {
 	if err != nil {
+		var prepared *preparedMemoryHTTPError
+		if errors.As(err, &prepared) {
+			s.writePreparedMemoryError(w, prepared.cause)
+			return
+		}
 		code, status := mapError(err)
 		s.writeError(w, status, code, err.Error())
 		return
@@ -1307,11 +1462,33 @@ func (s *Server) respond(w http.ResponseWriter, v any, err error) {
 }
 
 func mapError(err error) (code string, status int) {
+	var accessErr *httpAccessError
+	if errors.As(err, &accessErr) {
+		return accessErr.code, accessErr.status
+	}
 	switch {
+	case errors.Is(err, domain.ErrGraphProjectionFailed):
+		return "graph_projection_failed", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrGraphProjectionNotReady):
+		return "graph_projection_pending", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrDocVisibleProjectionUnsupported):
+		return "doc_visible_projection_unsupported", http.StatusConflict
+	case errors.Is(err, domain.ErrDocVisibleGenerationStale):
+		return "doc_visible_generation_stale", http.StatusConflict
+	case errors.Is(err, domain.ErrDocFindFieldsUnavailable):
+		return "doc_find_fields_unavailable", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrDocFindDisplayUnavailable):
+		return "doc_find_display_unavailable", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrDocFindFieldsPending):
+		return "doc_find_fields_pending", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrDocDisplayPending):
+		return "doc_display_pending", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrResourceOverloaded):
 		return "resource_overloaded", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrDocRangeIndexUnavailable):
 		return "doc_range_index_unavailable", http.StatusServiceUnavailable
+	case errors.Is(err, domain.ErrDocRangeIndexPending):
+		return "doc_range_index_pending", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrFederationUnavailable):
 		return "identity_connection_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrVerifiedDomainRequired):
@@ -1361,6 +1538,8 @@ func mapError(err error) (code string, status int) {
 		return "branch_archived", http.StatusConflict
 	case errors.Is(err, domain.ErrUnauthorized):
 		return "unauthenticated", http.StatusUnauthorized
+	case errors.Is(err, domain.ErrBreakGlassAuditUnavailable):
+		return "audit_unavailable", http.StatusServiceUnavailable
 	case errors.Is(err, domain.ErrForbidden):
 		return "forbidden", http.StatusForbidden
 	case errors.Is(err, domain.ErrGitOriginMismatch):
@@ -1389,7 +1568,10 @@ func mapError(err error) (code string, status int) {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, code, msg string) {
-	if code == "resource_overloaded" || code == "doc_range_index_unavailable" {
+	if code == "doc_range_index_pending" {
+		w.Header().Set("Retry-After", "3")
+	}
+	if code == "resource_overloaded" || code == "doc_range_index_unavailable" || code == "graph_projection_pending" || code == "doc_find_fields_pending" || code == "doc_display_pending" {
 		w.Header().Set("Retry-After", "1")
 	}
 	if code == "internal" {
@@ -1397,6 +1579,9 @@ func (s *Server) writeError(w http.ResponseWriter, status int, code, msg string)
 	}
 	if code == "consistency_check_failed" {
 		msg = domain.ErrSecretsConsistency.Error()
+	}
+	if code == "audit_unavailable" {
+		msg = domain.ErrBreakGlassAuditUnavailable.Error()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

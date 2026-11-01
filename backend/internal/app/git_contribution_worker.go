@@ -11,18 +11,18 @@ import (
 	"github.com/wnsdy95/cxthub/backend/internal/ports/outbound"
 )
 
-func (scans *GitScans) ProcessContributions(ctx context.Context, limit int) error {
+func (workers *GitIntegrationWorkers) ProcessContributions(ctx context.Context, limit int) error {
 	if limit < 1 || limit > 8 {
 		return domain.ErrValidation
 	}
-	store, supported := scans.core.meta.(outbound.GitContributionWorkStore)
-	_, heads := scans.core.meta.(outbound.GitContextHeadStore)
-	_, admissions := scans.core.meta.(outbound.GitContributionAdmissionStore)
+	store, supported := workers.work.meta.(outbound.GitContributionWorkStore)
+	_, heads := workers.work.meta.(outbound.GitContextHeadStore)
+	_, admissions := workers.work.meta.(outbound.GitContributionAdmissionStore)
 	if !supported || !heads || !admissions {
 		return nil
 	}
-	ctx = scans.core.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
-	repos, err := scans.core.meta.ListRepos(ctx, "default")
+	ctx = workers.workerDocumentIdentityContext(inbound.WithSystemActor(ctx))
+	repos, err := workers.work.meta.ListRepos(ctx, "default")
 	if err != nil {
 		return err
 	}
@@ -38,7 +38,7 @@ func (scans *GitScans) ProcessContributions(ctx context.Context, limit int) erro
 			err := admittedJob(ctx, func(bound context.Context) (domain.GitContributionWork, error) {
 				return store.ClaimGitContributionWork(bound, repo.ID, time.Now().UTC(), time.Minute)
 			}, func(bound context.Context, job domain.GitContributionWork) error {
-				if err := scans.runGitContribution(bound, job); err != nil {
+				if err := workers.runGitContribution(bound, job); err != nil {
 					failures = append(failures, fmt.Errorf("Git contribution %s: %w", job.AdmissionID, err))
 				}
 				return nil
@@ -54,24 +54,24 @@ func (scans *GitScans) ProcessContributions(ctx context.Context, limit int) erro
 				break
 			}
 		}
-		if err := scans.processGitContributionSupplements(ctx, repo.ID, limit); err != nil {
+		if err := workers.processGitContributionSupplements(ctx, repo.ID, limit); err != nil {
 			failures = append(failures, fmt.Errorf("Git memory supplements %s: %w", repo.ID, err))
 		}
 	}
 	return errors.Join(failures...)
 }
 
-func (scans *GitScans) runGitContribution(ctx context.Context, job domain.GitContributionWork) error {
+func (workers *GitIntegrationWorkers) runGitContribution(ctx context.Context, job domain.GitContributionWork) error {
 	work, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	store := scans.core.meta.(outbound.GitContributionWorkStore)
-	headStore := scans.core.meta.(outbound.GitContextHeadStore)
-	admissions := scans.core.meta.(outbound.GitContributionAdmissionStore)
+	store := workers.work.meta.(outbound.GitContributionWorkStore)
+	headStore := workers.work.meta.(outbound.GitContextHeadStore)
+	admissions := workers.work.meta.(outbound.GitContributionAdmissionStore)
 	next := job
 	next.State, next.Reason, next.LeaseUntil = "waiting", "", time.Time{}
 	next.NextAttempt = time.Now().UTC().Add(time.Second)
 	var prepared *preparedGitContribution
-	authorization, err := authorizeGitAdmission(work, scans.sourceAccess, job.RepoID)
+	authorization, err := authorizeGitAdmission(work, workers.sourceAccess, job.RepoID)
 	var admission domain.GitContributionAdmission
 	if err == nil {
 		admission, err = admissions.GetGitContributionAdmission(work, job.RepoID, job.AdmissionID)
@@ -101,7 +101,7 @@ func (scans *GitScans) runGitContribution(ctx context.Context, job domain.GitCon
 				next.Reason = "provider_scope_changed"
 			} else {
 				var result preparedGitContribution
-				result, err = scans.prepareGitContribution(work, admission, head)
+				result, err = workers.prepareGitContribution(work, admission, head)
 				if err == nil {
 					prepared = &result
 					next.State = "completed"
@@ -110,11 +110,11 @@ func (scans *GitScans) runGitContribution(ctx context.Context, job domain.GitCon
 		}
 	}
 	if err == nil {
-		err = repositoryWriteError(context.WithValue(work, revisionScopeKey{}, "none"), scans.core, job.RepoID, func(write context.Context) error {
+		err = repositoryWriteErrorWithWork(context.WithValue(work, revisionScopeKey{}, "none"), workers.work, job.RepoID, func(write context.Context) error {
 			if err := authorization.fence(write); err != nil {
 				return err
 			}
-			current, err := scans.core.workerRepository(write, job.RepoID)
+			current, err := workers.workerRepository(write, job.RepoID)
 			if err != nil {
 				return err
 			}
@@ -122,7 +122,7 @@ func (scans *GitScans) runGitContribution(ctx context.Context, job domain.GitCon
 				return domain.ErrConflict
 			}
 			if prepared != nil {
-				if _, err := scans.applyGitContribution(write, *prepared, authorization); err != nil {
+				if _, err := workers.applyGitContribution(write, *prepared, authorization); err != nil {
 					return err
 				}
 			}
@@ -135,7 +135,7 @@ func (scans *GitScans) runGitContribution(ctx context.Context, job domain.GitCon
 	failure := gitContributionFailure(job, next, err, time.Now().UTC())
 	finish, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
-	finishErr := repositoryWriteError(context.WithValue(finish, revisionScopeKey{}, "none"), scans.core, job.RepoID, func(write context.Context) error { return store.FinishGitContributionWork(write, failure) })
+	finishErr := repositoryWriteErrorWithWork(context.WithValue(finish, revisionScopeKey{}, "none"), workers.work, job.RepoID, func(write context.Context) error { return store.FinishGitContributionWork(write, failure) })
 	if finishErr != nil {
 		return errors.Join(err, finishErr)
 	}

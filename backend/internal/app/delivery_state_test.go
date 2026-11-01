@@ -320,14 +320,14 @@ func TestEffectiveMemoryDeliveryOutsidePageAssessmentAndBoundedFallback(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence.reads = maxCodeEvidenceReads
+	exhaustCodeEvidenceReads(t, evidence)
 	resolver, err := newMemoryIntegration(f.svc, evidence, f.repo, history)
 	if err != nil {
 		t.Fatal(err)
 	}
 	page := domain.EffectiveMemoryPage{Selection: req.Selection, Total: len(items)}
 	proof, err := effectiveMemoryDeliveryHash(ctx, resolver, page, items)
-	if err != nil || proof != "" || !evidence.limited {
+	if err != nil || proof != "" || !evidence.Limited() {
 		t.Fatal("budget-degraded projection received proof", err)
 	}
 	canceled, cancel := context.WithCancel(ctx)
@@ -339,7 +339,14 @@ func TestEffectiveMemoryDeliveryOutsidePageAssessmentAndBoundedFallback(t *testi
 
 type deliveryEvidenceReadSpy struct {
 	*store.FSStore
-	reads int
+	reads      int
+	generation domain.RepositoryViewSourceCheckpoint
+}
+
+func (s *deliveryEvidenceReadSpy) InReadOnlyTransaction(context.Context) bool { return true }
+
+func (s *deliveryEvidenceReadSpy) ReadRepositoryGraphSourceGeneration(context.Context, domain.ContentHash) (domain.RepositoryViewSourceCheckpoint, error) {
+	return s.generation, nil
 }
 
 func (s *deliveryEvidenceReadSpy) GetGitCommitTree(ctx context.Context, repo domain.ContentHash, origin, id string) (domain.GitCommitTree, error) {
@@ -361,7 +368,7 @@ func TestEffectiveMemoryDeliveryManyClaimsCacheCost(t *testing.T) {
 	if _, err := f.svc.PutMemoryDigestCAS(ctx, f.repo, digest); err != nil {
 		t.Fatal(err)
 	}
-	spy := &deliveryEvidenceReadSpy{FSStore: f.st}
+	spy := &deliveryEvidenceReadSpy{FSStore: f.st, generation: testProjectionGeneration(f.repo)}
 	f.svc.meta = spy
 	req := domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(3)}, Limit: 1}
 	start := time.Now()
@@ -382,7 +389,7 @@ func TestEffectiveMemoryDeliveryManyClaimsCacheCost(t *testing.T) {
 		t.Fatalf("full proof repeated or page skipped: cold reads=%d continuation=%d", coldReads, spy.reads)
 	}
 	t.Logf("2048 code claims, limit=1: cold=%s continuation=%s commit reads=%d/%d; complete assessment cached by full state", cold, warm, coldReads, spy.reads)
-	if _, ok := f.svc.deliveryCache.get(first.StateHash); !ok {
+	if _, ok := f.svc.deliveryCache.Lookup(first.StateHash); !ok {
 		t.Fatal("missing generation cache")
 	}
 	if err := f.st.AdvanceEvidenceRevision(ctx, f.repo); err != nil {
@@ -398,17 +405,17 @@ func TestEffectiveMemoryDeliveryManyClaimsCacheCost(t *testing.T) {
 
 func TestEffectiveMemoryDeliveryCacheBoundsAndAbsence(t *testing.T) {
 	var cache effectiveMemoryDeliveryCache
-	cache.put(hh("absent"), "")
-	if proof, ok := cache.get(hh("absent")); !ok || proof != "" {
+	cache.Store(hh("absent"), "")
+	if proof, ok := cache.Lookup(hh("absent")); !ok || proof != "" {
 		t.Fatal("bounded absence not cacheable")
 	}
 	for i := 0; i < 65; i++ {
-		cache.put(hh(fmt.Sprint(i)), hh("proof"))
+		cache.Store(hh(fmt.Sprint(i)), hh("proof"))
 	}
-	if len(cache.entries) != 64 {
+	if cache.Len() != 64 {
 		t.Fatal("unbounded cache")
 	}
-	if _, ok := cache.get(hh("absent")); ok {
+	if _, ok := cache.Lookup(hh("absent")); ok {
 		t.Fatal("old generation not evicted")
 	}
 }
@@ -416,7 +423,7 @@ func TestEffectiveMemoryDeliveryCacheBoundsAndAbsence(t *testing.T) {
 func TestEffectiveMemoryDeliveryCacheBypassedInsideWrite(t *testing.T) {
 	f := newEffectiveFixture(t)
 	ctx := systemTestContext()
-	spy := &deliveryEvidenceReadSpy{FSStore: f.st}
+	spy := &deliveryEvidenceReadSpy{FSStore: f.st, generation: testProjectionGeneration(f.repo)}
 	f.svc.meta = spy
 	req := domain.EffectiveMemoryRequest{Selection: domain.EffectiveMemorySelection{SnapshotID: f.root, CodeCommit: effectiveOID(3)}, Limit: 1}
 	first, err := f.svc.QueryEffectiveMemory(ctx, f.repo, req)
@@ -430,17 +437,17 @@ func TestEffectiveMemoryDeliveryCacheBypassedInsideWrite(t *testing.T) {
 	if err != nil || got.DeliveryStateHash != first.DeliveryStateHash || spy.reads != coldReads {
 		t.Fatal("nested write reused committed cache", err)
 	}
-	f.svc.deliveryCache.entries = nil
+	f.svc.deliveryCache = effectiveMemoryDeliveryCache{}
 	if _, err := f.svc.QueryEffectiveMemory(inside, f.repo, req); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.svc.deliveryCache.entries) != 0 {
+	if f.svc.deliveryCache.Len() != 0 {
 		t.Fatal("nested write published uncommitted proof")
 	}
 	if _, err := f.svc.QueryEffectiveMemory(ctx, f.repo, req); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := f.svc.deliveryCache.get(first.StateHash); !ok {
+	if _, ok := f.svc.deliveryCache.Lookup(first.StateHash); !ok {
 		t.Fatal("committed read did not repopulate cache")
 	}
 }
@@ -458,13 +465,14 @@ func (s *unknownDeliveryTransactionStore) WithinReadSnapshot(ctx context.Context
 func TestEffectiveMemoryDeliveryCacheUnknownTransactionMode(t *testing.T) {
 	f := newEffectiveFixture(t)
 	first := f.query(t, 3)
-	f.svc.deliveryCache.entries = []effectiveMemoryDeliveryCacheEntry{{first.StateHash, hh("must not reuse")}}
+	f.svc.deliveryCache = effectiveMemoryDeliveryCache{}
+	f.svc.deliveryCache.Store(first.StateHash, hh("must not reuse"))
 	f.svc.meta = &unknownDeliveryTransactionStore{f.st}
 	if got := f.query(t, 3); got.DeliveryStateHash != first.DeliveryStateHash {
 		t.Fatal("unknown transaction mode reused cache")
 	}
-	f.svc.deliveryCache.entries = nil
-	if got := f.query(t, 3); got.DeliveryStateHash != first.DeliveryStateHash || len(f.svc.deliveryCache.entries) != 0 {
+	f.svc.deliveryCache = effectiveMemoryDeliveryCache{}
+	if got := f.query(t, 3); got.DeliveryStateHash != first.DeliveryStateHash || f.svc.deliveryCache.Len() != 0 {
 		t.Fatal("unknown transaction mode published cache")
 	}
 }

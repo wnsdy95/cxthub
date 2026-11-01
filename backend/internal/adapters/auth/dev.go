@@ -19,6 +19,13 @@ func NewDevVerifier() *DevVerifier { return &DevVerifier{} }
 
 var _ outbound.IdentityVerifier = (*DevVerifier)(nil)
 
+func (d *DevVerifier) VerifyCached(ctx context.Context, token string) (domain.User, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.User{}, err
+	}
+	return d.Verify(ctx, token)
+}
+
 // Verify parses "dev:<email>[:<name>]" tokens into Users. Format mismatch → ErrUnauthorized.
 func (d *DevVerifier) Verify(_ context.Context, token string) (domain.User, error) {
 	rest, ok := strings.CutPrefix(strings.TrimSpace(token), "dev:")

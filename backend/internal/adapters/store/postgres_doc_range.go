@@ -68,33 +68,69 @@ func (s *PostgresStore) putRangeIndex(ctx context.Context, repo domain.ContentHa
 	if err != nil {
 		return err
 	}
-	if _, err := bound.Exec(ctx, `INSERT INTO doc_range_indexes_v1(hash,header) VALUES($1,$2)
- ON CONFLICT(hash) DO UPDATE SET header=EXCLUDED.header`, header.Hash, raw); err != nil {
+	proof, objects, err := domain.BuildVerifiedDocRangeGeneration(ctx, index)
+	if err != nil {
 		return err
 	}
-	if _, err := bound.Exec(ctx, `DELETE FROM doc_range_pages_v1 WHERE doc_hash=$1`, header.Hash); err != nil {
+	descriptor, err := proof.Descriptor().Encode()
+	if err != nil {
 		return err
 	}
-	for start := 0; start < len(header.Pages); start += 128 {
+	if err := writeRangeGenerationPG(ctx, bound, header.Hash, raw, domain.HashContent(descriptor), descriptor); err != nil {
+		return err
+	}
+	for start := 0; start < len(objects); start += 128 {
 		batch := &pgx.Batch{}
-		for position := start; position < min(start+128, len(header.Pages)); position++ {
+		for _, object := range objects[start:min(start+128, len(objects))] {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			page, err := index.Page(ctx, position)
-			if err != nil {
-				return err
-			}
-			batch.Queue(`INSERT INTO doc_range_pages_v1(doc_hash,ordinal,bytes) VALUES($1,$2,$3)`, header.Hash, position, page)
+			batch.Queue(`INSERT INTO doc_range_objects_v2(doc_hash,hash,bytes) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, header.Hash, object.Hash, object.Bytes)
 		}
 		if err := bound.SendBatch(ctx, batch).Close(); err != nil {
 			return err
 		}
 	}
-	return ctx.Err()
+	return s.putDocVisibleGeneration(ctx, repo, proof, true)
+}
+
+func writeRangeGenerationPG(ctx context.Context, transaction *repositoryTx, hash domain.ContentHash, header []byte, generation domain.ContentHash, descriptor []byte) error {
+	if _, err := transaction.Exec(ctx, `INSERT INTO doc_range_indexes_v1(hash,header) VALUES($1,$2)
+ ON CONFLICT(hash) DO UPDATE SET header=EXCLUDED.header`, hash, header); err != nil {
+		return err
+	}
+	if _, err := transaction.Exec(ctx, `DELETE FROM doc_range_pages_v1 WHERE doc_hash=$1`, hash); err != nil {
+		return err
+	}
+	tag, err := transaction.Exec(ctx, `INSERT INTO doc_range_generations_v2(doc_hash,source_version,generation_hash,descriptor)
+ SELECT hash,doc_range_source_version,$2,$3 FROM blobs WHERE hash=$1
+ ON CONFLICT(doc_hash) DO UPDATE SET source_version=EXCLUDED.source_version,generation_hash=EXCLUDED.generation_hash,descriptor=EXCLUDED.descriptor`, hash, generation, descriptor)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return domain.ErrNotFound
+	}
+	_, err = transaction.Exec(ctx, `DELETE FROM doc_range_objects_v2 WHERE doc_hash=$1`, hash)
+	return err
 }
 
 func (s *PostgresStore) ensureRangeIndex(ctx context.Context, repo, hash domain.ContentHash) error {
+	return s.ensureRangeVersion(ctx, repo, hash, false)
+}
+
+func (s *PostgresStore) ensureRangeGeneration(ctx context.Context, repo, hash domain.ContentHash) error {
+	return s.ensureRangeVersion(ctx, repo, hash, true)
+}
+
+func (s *PostgresStore) ensureRangeVersion(ctx context.Context, repo, hash domain.ContentHash, generation bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	bound, ok := ctx.Value(repositoryTxKey{}).(*repositoryTx)
+	if !ok || bound.owner != s || bound.readOnly || bound.repo != repo || outbound.DocReadOnly(ctx) {
+		return domain.ErrConflict
+	}
 	var raw []byte
 	if err := s.db(ctx).QueryRow(ctx, `SELECT substring(b.bytes FROM 1 FOR $3) FROM repo_blobs rb JOIN blobs b ON b.hash=rb.hash
  WHERE rb.repo_id=$1 AND rb.kind='doc' AND rb.hash=$2 FOR UPDATE OF rb,b`, repo, hash, maxStoredRangeRootBytes+1).Scan(&raw); err != nil {
@@ -104,7 +140,19 @@ func (s *PostgresStore) ensureRangeIndex(ctx context.Context, repo, hash domain.
 	if err != nil {
 		return err
 	}
-	if _, err := s.DocRangeIndex(ctx, repo, hash); !errors.Is(err, domain.ErrDocRangeIndexUnavailable) {
+	if generation {
+		var current domain.DocRangeGeneration
+		current, err = s.readRangeGeneration(ctx, repo, hash)
+		if err == nil {
+			if current.Identity() != domain.DocumentIdentityRootV1 {
+				return domain.ErrIntegrity
+			}
+			_, err = s.readVisibleGeneration(ctx, repo, hash)
+		}
+	} else {
+		_, err = s.DocRangeIndex(ctx, repo, hash)
+	}
+	if !errors.Is(err, domain.ErrDocRangeIndexUnavailable) {
 		return err
 	}
 	spool, err := newDocRangeSpool()

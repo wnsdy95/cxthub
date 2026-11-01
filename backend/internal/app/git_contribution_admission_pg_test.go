@@ -23,12 +23,14 @@ type admissionPGFixture struct {
 	claim         domain.GitHeadScan
 	observations  []domain.GitRefObservation
 	authorization gitAdmissionAuthorization
+	dsn           string
 }
 
 func newAdmissionPGFixture(t *testing.T) admissionPGFixture {
 	t.Helper()
-	worker, storage, repo := providerObservationPGFixture(t)
 	ctx := systemTestContext()
+	dsn := a11IsolatedPGDSN(t, ctx)
+	worker, storage, repo := providerObservationPGFixtureAt(t, dsn)
 	base := collaborationSnapshot(t, storage, repo.ID, "admission base")
 	capture := collaborationSnapshot(t, storage, repo.ID, "admission source", base)
 	destinationID := domain.LegacyContextBranchID(string(repo.ID), "main")
@@ -86,15 +88,19 @@ func newAdmissionPGFixture(t *testing.T) admissionPGFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return admissionPGFixture{worker, storage, repo, frozen, prepared, claim, observations, authorization}
+	return admissionPGFixture{worker, storage, repo, frozen, prepared, claim, observations, authorization, dsn}
 }
 
 func (fixture admissionPGFixture) finish(ctx context.Context, rollback bool) (domain.GitContributionAdmission, error) {
 	return repositoryWrite(evidenceWriteContext(ctx), fixture.worker.core, fixture.repo.ID, func(write context.Context) (domain.GitContributionAdmission, error) {
+		current, err := fixture.worker.core.reuseGitAdmissionSnapshot(write, fixture.repo.ID, fixture.frozen.snapshot)
+		if err != nil {
+			return domain.GitContributionAdmission{}, err
+		}
 		if err := fixture.storage.FinishGitHeadScan(write, fixture.claim, fixture.observations, false, time.Now().UTC()); err != nil {
 			return domain.GitContributionAdmission{}, err
 		}
-		admitted, err := fixture.worker.core.persistGitAdmission(write, fixture.frozen, fixture.prepared, fixture.authorization)
+		admitted, err := fixture.worker.core.persistGitAdmissionInWrite(write, fixture.frozen, fixture.prepared, fixture.authorization, current)
 		if err == nil && rollback {
 			return domain.GitContributionAdmission{}, domain.ErrIntegrity
 		}

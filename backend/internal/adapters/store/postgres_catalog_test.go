@@ -136,12 +136,14 @@ func TestPGCatalogStagingDoesNotDependOnGraphRevision(t *testing.T) {
 	if err != nil || image.ID != stored.ID || image.RepoID != repo || image.DocHash != stored.DocHash || !image.CreatedAt.Equal(stored.CreatedAt) || image.CreatedAt.IsZero() {
 		t.Fatalf("staged immutable image=%+v stored=%+v err=%v", image, stored, err)
 	}
-	// Document bodies and publication counters are outside this catalog's scope.
 	if err := s.AdvanceRepositoryRevision(ctx, repo, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := catalogReadStatePG(t, ctx, s, repo); got.head != initial.head+1 {
-		t.Fatalf("publication revision fabricated a metadata change: %+v", got)
+	if got := catalogReadStatePG(t, ctx, s, repo); got.head != initial.head+2 {
+		t.Fatalf("private revision did not advance shared source sequence: %+v", got)
+	}
+	if got := catalogRowsPG(t, ctx, s, repo, initial.head); !reflect.DeepEqual(got, rows) {
+		t.Fatalf("private revision changed public catalog images: %+v", got)
 	}
 }
 
@@ -202,12 +204,19 @@ func TestPGCatalogDirectSQLCoverageCoalescingAndNoOps(t *testing.T) {
 	stable := catalogReadStatePG(t, ctx, s, repo)
 	catalogExecPG(t, ctx, s.pool, `UPDATE snapshots SET message=message,memory_hash=memory_hash WHERE repo_id=$1`, string(repo))
 	catalogExecPG(t, ctx, s.pool, `UPDATE context_history SET event=event,received_at=received_at+interval '1 second' WHERE repo_id=$1`, string(repo))
-	catalogExecPG(t, ctx, s.pool, `UPDATE repos SET default_branch='metadata-outside-v1',context_protocol=context_protocol WHERE id=$1`, string(repo))
+	catalogExecPG(t, ctx, s.pool, `UPDATE repos SET default_branch=default_branch,context_protocol=context_protocol WHERE id=$1`, string(repo))
 	if err := s.DeleteSnapshot(ctx, repo, domain.HashContent([]byte("absent snapshot"))); err != nil {
 		t.Fatal(err)
 	}
 	if got := catalogReadStatePG(t, ctx, s, repo); got != stable {
 		t.Fatalf("no-op writes advanced catalog: %+v -> %+v", stable, got)
+	}
+	catalogExecPG(t, ctx, s.pool, `UPDATE repos SET default_branch='metadata-outside-v1' WHERE id=$1`, string(repo))
+	if got := catalogReadStatePG(t, ctx, s, repo); got.head != stable.head+1 {
+		t.Fatalf("private default-branch change was not tracked: %+v", got)
+	}
+	if rows := catalogRowsPG(t, ctx, s, repo, stable.head); len(rows) != 0 {
+		t.Fatalf("private default branch leaked into public catalog: %+v", rows)
 	}
 	// Direct history UPDATE and DELETE must both be captured, not just INSERT.
 	catalogExecPG(t, ctx, s.pool, `UPDATE context_history SET event=jsonb_set(event,'{branch}','"renamed"'::jsonb) WHERE repo_id=$1`, string(repo))
