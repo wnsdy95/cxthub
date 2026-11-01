@@ -115,9 +115,79 @@ func docDisplayStorageFootprintPG(test *testing.T, fixture docViewPGFixture) str
 	return string(raw)
 }
 
-func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReads(test *testing.T) {
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsGenericRoot(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "generic", false)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsGenericLegacy(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "generic", true)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsWriteRoot(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "Write", false)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsWriteLegacy(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "Write", true)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsEditRoot(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "Edit", false)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsEditLegacy(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "Edit", true)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsBashRoot(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "Bash", false)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsBashLegacy(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "Bash", true)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsResultRoot(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "result", false)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsResultLegacy(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "result", true)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsReasoningRoot(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "reasoning", false)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsReasoningLegacy(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "reasoning", true)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsMessageRoot(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "message", false)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsMessageLegacy(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "message", true)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsPRERoot(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "PRE", false)
+}
+
+func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReadsPRELegacy(test *testing.T) {
+	docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test, "PRE", true)
+}
+
+func docDisplayMaintenanceActualWorkerRestartAndPublishedReads(test *testing.T, selectedKind string, selectedLegacy bool) {
+	test.Helper()
+	matched := 0
 	for _, legacy := range []bool{false, true} {
 		for _, kind := range []string{"generic", "Write", "Edit", "Bash", "result", "reasoning", "message", "PRE"} {
+			if kind != selectedKind || legacy != selectedLegacy {
+				continue
+			}
+			matched++
 			test.Run(fmt.Sprintf("%s/legacy=%t", kind, legacy), func(test *testing.T) {
 				test.Setenv("CXT_TEST_DSN", a11IsolatedPGDSN(test, context.Background()))
 				fixture := newDocDisplayPGFixture(test)
@@ -273,6 +343,9 @@ func TestPGDocDisplayMaintenanceActualWorkerRestartAndPublishedReads(test *testi
 				test.Logf("kind=%s legacy=%t active_deleted_objects=%d active_deleted_bytes=%d final_deleted_objects=%d final_deleted_bytes=%d retained_objects=%d retained_logical_bytes=%d", kind, legacy, activeDeleted, activeDeletedBytes, deleted, deletedBytes, objects, bytes)
 			})
 		}
+	}
+	if matched != 1 {
+		test.Fatal("maintenance wrapper must select exactly one original case", selectedKind, selectedLegacy, matched)
 	}
 }
 

@@ -541,6 +541,93 @@ func docRangeNativePagesPGRawSource(test *testing.T, document domain.CIRDocument
 	return []byte(`{"envelope":` + string(envelope) + `,"events":[` + replacement + "," + string(boundary) + "]}")
 }
 
+func docRangeNativePagesPGUnpublishedNormalization(ctx context.Context, fixture docViewPGFixture, hash domain.ContentHash, sourceVersion int64, job domain.DocRangeIndexJob, handle outbound.PreparedDocRangeWork) error {
+	if fixture.storage.InTransaction(ctx) || job.Validate() != nil || job.RepoID != fixture.repo || job.DocHash != hash || job.BaseHash != "" || job.State != "running" || job.RepositoryEpoch == "" {
+		return errors.New("active normalization lost its unborrowed current claim")
+	}
+	capture := reflect.ValueOf(handle).Elem()
+	normalization := capture.FieldByName("normalization")
+	if normalization.IsNil() || normalization.Elem().FieldByName("preparation").IsNil() || !normalization.Elem().FieldByName("canonical").IsNil() {
+		return errors.New("checkpoint allowance requires active native normalization before canonical publication")
+	}
+	checkpoint := capture.FieldByName("checkpoint")
+	if checkpoint.IsNil() {
+		return docRangeWorkPGNoByteStage(ctx, fixture, hash)
+	}
+	state := checkpoint.Elem().FieldByName("state")
+	stage := state.FieldByName("stage")
+	if stage.FieldByName("incarnation").String() == "" || stage.FieldByName("sourceID").String() == "" ||
+		stage.FieldByName("sourceVersion").Int() != sourceVersion || stage.FieldByName("plan").String() != "" ||
+		stage.FieldByName("blocks").Int() != 0 || stage.FieldByName("next").Int() != 0 || stage.FieldByName("complete").Bool() {
+		return errors.New("active normalization checkpoint lost its provisional source binding")
+	}
+	var sourceID, stageID, checkpointHash string
+	var version, sequence int64
+	var checkpointBytes int
+	var provisional, current, checkpointValid, unpublished bool
+	err := fixture.pool.QueryRow(ctx, `SELECT stage.source_id::text,stage.source_version,stage.stage_id::text,
+ stage.checkpoint_sequence,COALESCE(stage.checkpoint_hash,''),stage.checkpoint_bytes,
+ stage.plan_hash IS NULL AND stage.spec IS NULL AND stage.blocks IS NULL AND stage.next_block=0 AND NOT stage.complete
+ AND stage.header_version=0 AND stage.header_bytes IS NULL AND stage.header_next=0 AND NOT stage.header_complete,
+ EXISTS(SELECT 1 FROM snapshots snapshot
+ JOIN repo_blobs owned ON owned.repo_id=snapshot.repo_id AND owned.hash=snapshot.doc_hash AND owned.kind='doc'
+ JOIN blobs original ON original.hash=owned.hash
+ JOIN blob_source_incarnations incarnation ON incarnation.hash=original.hash
+ JOIN repository_catalog_state catalog ON catalog.repo_id=snapshot.repo_id
+ JOIN doc_range_jobs_v1 job ON job.repo_id=snapshot.repo_id AND job.doc_hash=snapshot.doc_hash AND job.base_hash=''
+ WHERE snapshot.repo_id=$1 AND snapshot.id=$2 AND snapshot.doc_hash=$2 AND snapshot.doc_identity=''
+ AND original.doc_range_source_version=$3 AND stage.source_version=$3 AND incarnation.incarnation=stage.source_id
+ AND catalog.epoch::text=$5 AND job.version=$4 AND job.state='running' AND job.lease_until>clock_timestamp()
+ AND job.minimum_range_version=4 AND job.byte_source_version=$3),
+ stage.checkpoint_sequence>=0 AND ((stage.checkpoint_hash IS NULL AND stage.checkpoint_bytes=0)
+ OR (stage.checkpoint_sequence>0 AND EXISTS(SELECT 1 FROM doc_legacy_byte_stage_checkpoint_objects_v1 object
+ WHERE object.doc_hash=stage.doc_hash AND object.stage_id=stage.stage_id AND object.hash=stage.checkpoint_hash
+ AND octet_length(object.bytes)=stage.checkpoint_bytes AND object.hash='sha256:'||encode(sha256(object.bytes),'hex'))))
+ AND NOT EXISTS(SELECT 1 FROM doc_legacy_byte_stage_checkpoint_objects_v1 object WHERE object.doc_hash=$2 AND object.stage_id<>stage.stage_id),
+ NOT EXISTS(SELECT 1 FROM doc_legacy_byte_stage_parts_v1 WHERE doc_hash=$2)
+ AND NOT EXISTS(SELECT 1 FROM doc_legacy_byte_stage_objects_v1 WHERE doc_hash=$2)
+ AND NOT EXISTS(SELECT 1 FROM doc_legacy_byte_stage_headers_v1 WHERE doc_hash=$2)
+ AND NOT EXISTS(SELECT 1 FROM doc_range_generations_v2 WHERE doc_hash=$2)
+ AND NOT EXISTS(SELECT 1 FROM doc_range_objects_v2 WHERE doc_hash=$2)
+ AND NOT EXISTS(SELECT 1 FROM doc_range_indexes_v1 WHERE hash=$2)
+ AND NOT EXISTS(SELECT 1 FROM doc_range_pages_v1 WHERE doc_hash=$2)
+ AND NOT EXISTS(SELECT 1 FROM doc_range_boundaries_v1 WHERE doc_hash=$2 OR base_hash=$2)
+ FROM doc_legacy_byte_stages_v1 stage WHERE stage.doc_hash=$2`, fixture.repo, hash, sourceVersion, job.Version, job.RepositoryEpoch).Scan(
+		&sourceID, &version, &stageID, &sequence, &checkpointHash, &checkpointBytes,
+		&provisional, &current, &checkpointValid, &unpublished)
+	if err != nil {
+		return err
+	}
+	if sourceID != stage.FieldByName("sourceID").String() || version != sourceVersion || stageID != stage.FieldByName("incarnation").String() ||
+		sequence != state.FieldByName("sequence").Int() || checkpointHash != state.FieldByName("hash").String() || int64(checkpointBytes) != state.FieldByName("bytes").Int() ||
+		!provisional || !current || !checkpointValid || !unpublished {
+		return fmt.Errorf("normalization checkpoint lost current private state or exposed publication: stage=%s sequence=%d provisional=%t current=%t checkpoint=%t unpublished=%t",
+			stageID, sequence, provisional, current, checkpointValid, unpublished)
+	}
+	return nil
+}
+
+func docRangeNativePagesPGPrivateImage(ctx context.Context, fixture docViewPGFixture, hash domain.ContentHash) (string, error) {
+	if fixture.storage.InTransaction(ctx) {
+		return "", errors.New("normalization checkpoint retained a transaction")
+	}
+	var image string
+	err := fixture.pool.QueryRow(ctx, `SELECT jsonb_build_object(
+ 'stage',(SELECT jsonb_build_array(to_jsonb(stage),stage.xmin::text) FROM doc_legacy_byte_stages_v1 stage WHERE doc_hash=$1),
+ 'checkpoints',(SELECT jsonb_agg(jsonb_build_array(stage_id,hash,octet_length(bytes),encode(sha256(bytes),'hex'),object.xmin::text)
+ ORDER BY stage_id,hash) FROM doc_legacy_byte_stage_checkpoint_objects_v1 object WHERE doc_hash=$1),
+ 'parts',(SELECT count(*) FROM doc_legacy_byte_stage_parts_v1 WHERE doc_hash=$1),
+ 'objects',(SELECT count(*) FROM doc_legacy_byte_stage_objects_v1 WHERE doc_hash=$1),
+ 'headers',(SELECT count(*) FROM doc_legacy_byte_stage_headers_v1 WHERE doc_hash=$1),
+ 'generations',(SELECT count(*) FROM doc_range_generations_v2 WHERE doc_hash=$1),
+ 'verified_objects',(SELECT count(*) FROM doc_range_objects_v2 WHERE doc_hash=$1),
+ 'indexes',(SELECT count(*) FROM doc_range_indexes_v1 WHERE hash=$1),
+ 'pages',(SELECT count(*) FROM doc_range_pages_v1 WHERE doc_hash=$1),
+ 'boundaries',(SELECT count(*) FROM doc_range_boundaries_v1 WHERE doc_hash=$1 OR base_hash=$1)
+)::text`, hash).Scan(&image)
+	return image, err
+}
+
 func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFences(test *testing.T) {
 	for _, input := range []docRangeNativePagesPGInput{
 		{name: "dense-map", version: domain.CIRVersionV1, events: docRangeNativePagesPGDenseEvents},
@@ -632,6 +719,7 @@ func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRange
 			foreground := make(chan error, 1)
 			var foregroundCompleted, parkedObserved atomic.Bool
 			var parked docRangeNativePagesPGInspection
+			var parkedPrivateImage string
 			var parkedResources outbound.RootPublicationResources
 			var parkedPermit *resourcePermit
 			var resumeBefore int64
@@ -735,7 +823,11 @@ func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRange
 					test.Logf("actual paged source values=%x count=%d records=%d pages=%d nodes=%d borrowed=%d field_heap=%d", state.eventValues.values,
 						state.eventValues.count, state.eventValues.records, state.eventValues.pages, state.eventValues.nodes, state.eventBorrowed, state.eventHeap)
 				}
-				if err := docRangeWorkPGNoByteStage(bound, fixture, document.Hash); err != nil {
+				if err := docRangeNativePagesPGUnpublishedNormalization(bound, fixture, document.Hash, sourceVersion, probe.job, observed.work.handle); err != nil {
+					return err
+				}
+				parkedPrivateImage, err = docRangeNativePagesPGPrivateImage(bound, fixture, document.Hash)
+				if err != nil {
 					return err
 				}
 				var generations int
@@ -823,8 +915,8 @@ func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRange
 					work.afterResources != parkedResources || probe.steps != parkStep || probe.published != 0 {
 					test.Fatal("lease or current-source fence resumed native preparation or published stale work", err, work)
 				}
-				if err := docRangeWorkPGNoByteStage(ctx, fixture, document.Hash); err != nil {
-					test.Fatal(err)
+				if image, err := docRangeNativePagesPGPrivateImage(ctx, fixture, document.Hash); err != nil || image != parkedPrivateImage {
+					test.Fatal("fenced native normalization changed its private checkpoint or published canonical state", err)
 				}
 				var generations int
 				if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM doc_range_generations_v2 WHERE doc_hash=$1`, document.Hash).Scan(&generations); err != nil || generations != 0 {

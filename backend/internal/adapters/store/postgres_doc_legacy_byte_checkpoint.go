@@ -264,18 +264,7 @@ func writeLegacyByteCheckpointObjects(ctx context.Context, transaction pgx.Tx, j
 		var storedHash domain.ContentHash
 		var touched bool
 		read := func() error {
-			return transaction.QueryRow(ctx, `WITH verified AS MATERIALIZED (
- SELECT octet_length(bytes) AS stored_bytes,CASE WHEN octet_length(bytes)=$4
- THEN 'sha256:'||encode(sha256(bytes),'hex') ELSE '' END AS stored_hash
- FROM doc_legacy_byte_stage_checkpoint_objects_v1 WHERE doc_hash=$1 AND stage_id=$2::uuid AND hash=$3
-), touched AS (
- INSERT INTO doc_legacy_checkpoint_staging_v1(doc_hash,stage_id,hash,last_sequence)
- SELECT $1,$2::uuid,$3,$5 FROM verified WHERE stored_bytes=$4 AND stored_hash=$3
- ON CONFLICT(doc_hash,stage_id,hash) DO UPDATE
- SET last_sequence=GREATEST(doc_legacy_checkpoint_staging_v1.last_sequence,EXCLUDED.last_sequence)
- RETURNING 1
-)
- SELECT stored_bytes,stored_hash,EXISTS(SELECT 1 FROM touched) FROM verified`,
+			return transaction.QueryRow(ctx, legacyNormalizationBatchObjectRead,
 				job.DocHash, state.stage.incarnation, object.hash, len(object.data), state.sequence).Scan(&storedBytes, &storedHash, &touched)
 		}
 		err := read()

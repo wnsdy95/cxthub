@@ -134,7 +134,7 @@ jobs:
         if: matrix.lane == 'app'
         working-directory: backend
         run: |
-          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestPG' --count 3 \
+          python3 ../scripts/test-go-batches.py ./internal/app/ --tags postgres --race --run '^TestPG' --count 3 --batch-size 1 \
             --allow-skip TestPGMemoryPreparationCostD3ab \
             --allow-skip TestPGReadModelMixedProgress
           go test -tags postgres ./internal/app/ -race -run '^Test(P[69]PG|RootStartupPG|PostgresCatalogVersion)' -count=1 -timeout=120s -v
