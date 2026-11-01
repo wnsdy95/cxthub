@@ -98,6 +98,10 @@ jobs:
           CXT_ROOT_WRITER_COST: "1"
         run: |
           python3 ../scripts/test-go-batches.py ./internal/adapters/store/ --tags postgres \
+            --require-test TestLegacyByteRecoveryPGColdChild \
+            --require-test TestLegacyByteRecoveryPGColdRestartPublishesExactCanonicalSource \
+            --require-test TestNormalizationCheckpointPGColdChild \
+            --require-test TestNormalizationCheckpointPGColdRestartPublishes \
             --require-test TestPGRootWriterCost \
             --require-test TestPGRootWriterCostPreparationReferenceRead \
             --require-test TestPGRootWriterWait \
