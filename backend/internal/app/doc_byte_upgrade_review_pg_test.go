@@ -29,7 +29,11 @@ func TestPGDocByteUpgradeDisabledWorkerReleasesExpiredByteLease(test *testing.T)
 	if _, err := fixture.storage.ClaimDocRangeJob(fixture.ctx, time.Now().UTC(), time.Minute); !errors.Is(err, domain.ErrNotFound) {
 		test.Fatal("disabled worker bypassed an unexpired byte lease", err)
 	}
-	if current := readDocByteUpgradePGJob(test, fixture, document.Hash); !reflect.DeepEqual(current.receipt, claimed) {
+	current := readDocByteUpgradePGJob(test, fixture, document.Hash)
+	if err := fixture.pool.QueryRow(fixture.ctx, `SELECT epoch::text FROM repository_catalog_state WHERE repo_id=$1`, fixture.repo).Scan(&current.receipt.RepositoryEpoch); err != nil {
+		test.Fatal(err)
+	}
+	if claimed.RepositoryEpoch == "" || !reflect.DeepEqual(current.receipt, claimed) {
 		test.Fatal("disabled worker changed an unexpired byte lease", current, claimed)
 	}
 	if _, err := fixture.pool.Exec(fixture.ctx, `UPDATE doc_range_jobs_v1 SET lease_until=clock_timestamp()-interval '1 minute'
@@ -39,7 +43,7 @@ func TestPGDocByteUpgradeDisabledWorkerReleasesExpiredByteLease(test *testing.T)
 	if _, err := fixture.storage.ClaimDocRangeJob(fixture.ctx, time.Now().UTC(), time.Minute); !errors.Is(err, domain.ErrNotFound) {
 		test.Fatal("expired incompatible work should consume only one bounded release step", err)
 	}
-	current := readDocByteUpgradePGJob(test, fixture, document.Hash)
+	current = readDocByteUpgradePGJob(test, fixture, document.Hash)
 	if current.receipt.State != "waiting" || current.receipt.Version != claimed.Version+1 || !current.receipt.LeaseUntil.IsZero() || current.minimumVersion != 4 {
 		test.Fatal("expired byte work was not preserved and fenced", current, claimed)
 	}
