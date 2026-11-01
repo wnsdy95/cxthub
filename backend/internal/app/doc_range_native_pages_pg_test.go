@@ -910,6 +910,12 @@ func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRange
 				return nil
 			}
 			err = fixture.service.ProcessDocRangeJobs(ctx, 1)
+			if err != nil && observed.work != nil {
+				last := observed.work.before
+				test.Logf("normalization failure: steps=%d published=%d event_count=%d event_position=%d records=%d replacement_position=%d actions=%d error=%v",
+					probe.steps, probe.published, last.eventCount, last.eventPosition, last.eventValues.records,
+					last.replacementPosition, last.actions, err)
+			}
 			if parkStep == 0 {
 				test.Fatal("actual native preparation never remained active at a parkable quantum boundary", err)
 			}
