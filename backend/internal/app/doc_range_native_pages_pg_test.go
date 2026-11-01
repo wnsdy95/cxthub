@@ -629,20 +629,44 @@ func docRangeNativePagesPGPrivateImage(ctx context.Context, fixture docViewPGFix
 }
 
 func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFences(test *testing.T) {
-	for _, input := range []docRangeNativePagesPGInput{
-		{name: "dense-map", version: domain.CIRVersionV1, events: docRangeNativePagesPGDenseEvents},
-		{name: "replacement-unsorted-tie-4097", version: domain.CIRVersionV2, events: docRangeNativePagesPGReplacementEvents, replacementCount: 4097},
-		{name: "raw-replacement-8192-text64", version: domain.CIRVersionV2, events: docRangeNativePagesPGRawEvents, replacementCount: 8192, rawDecode: true},
-	} {
-		test.Run(input.name, func(test *testing.T) {
-			docRangeNativePagesPGParksAndRechecksFences(test, input)
-		})
-	}
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "dense-map", version: domain.CIRVersionV1, events: docRangeNativePagesPGDenseEvents}, "unchanged")
 }
 
-func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRangeNativePagesPGInput) {
+func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesLeaseExpiry(test *testing.T) {
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "dense-map", version: domain.CIRVersionV1, events: docRangeNativePagesPGDenseEvents}, "lease expiry")
+}
+
+func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesSourceVersion(test *testing.T) {
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "dense-map", version: domain.CIRVersionV1, events: docRangeNativePagesPGDenseEvents}, "source version")
+}
+
+func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacement(test *testing.T) {
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "replacement-unsorted-tie-4097", version: domain.CIRVersionV2, events: docRangeNativePagesPGReplacementEvents, replacementCount: 4097}, "unchanged")
+}
+
+func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementLeaseExpiry(test *testing.T) {
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "replacement-unsorted-tie-4097", version: domain.CIRVersionV2, events: docRangeNativePagesPGReplacementEvents, replacementCount: 4097}, "lease expiry")
+}
+
+func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesReplacementSourceVersion(test *testing.T) {
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "replacement-unsorted-tie-4097", version: domain.CIRVersionV2, events: docRangeNativePagesPGReplacementEvents, replacementCount: 4097}, "source version")
+}
+
+func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacement(test *testing.T) {
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "raw-replacement-8192-text64", version: domain.CIRVersionV2, events: docRangeNativePagesPGRawEvents, replacementCount: 8192, rawDecode: true}, "unchanged")
+}
+
+func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacementLeaseExpiry(test *testing.T) {
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "raw-replacement-8192-text64", version: domain.CIRVersionV2, events: docRangeNativePagesPGRawEvents, replacementCount: 8192, rawDecode: true}, "lease expiry")
+}
+
+func TestPGDocRangeNativePagesActiveNormalizationParksAndRechecksFencesRawReplacementSourceVersion(test *testing.T) {
+	docRangeNativePagesPGParksAndRechecksFences(test, docRangeNativePagesPGInput{name: "raw-replacement-8192-text64", version: domain.CIRVersionV2, events: docRangeNativePagesPGRawEvents, replacementCount: 8192, rawDecode: true}, "source version")
+}
+
+func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRangeNativePagesPGInput, change string) {
 	test.Helper()
-	for _, change := range []string{"unchanged", "lease expiry", "source version"} {
+	test.Run(input.name, func(test *testing.T) {
 		test.Run(change, func(test *testing.T) {
 			started := time.Now()
 			fixture := newDocViewPGFixture(test)
@@ -975,5 +999,5 @@ func docRangeNativePagesPGParksAndRechecksFences(test *testing.T, input docRange
 				test.Fatal("published native fragment reads rewrote the original noncanonical PG source", err)
 			}
 		})
-	}
+	})
 }

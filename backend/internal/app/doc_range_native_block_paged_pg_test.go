@@ -369,15 +369,36 @@ func docRangeNativeBlockPagedPGDocument(test *testing.T, fixture docViewPGFixtur
 }
 
 func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFences(test *testing.T) {
-	for _, decode := range []bool{true, false} {
-		test.Run(fmt.Sprintf("block_decode=%t", decode), func(test *testing.T) {
-			for _, change := range []string{"unchanged", "lease expiry", "source version"} {
-				test.Run(change, func(test *testing.T) {
-					docRangeNativeBlockPagedPGParksAndRechecksFences(test, decode, change)
-				})
-			}
+	docRangeNativeBlockPagedPGScenario(test, true, "unchanged")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesLeaseExpiry(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, true, "lease expiry")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesSourceVersion(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, true, "source version")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparation(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, false, "unchanged")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparationLeaseExpiry(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, false, "lease expiry")
+}
+
+func TestPGDocRangeNativeBlockPagedNormalizationParksAndRechecksFencesPreparationSourceVersion(test *testing.T) {
+	docRangeNativeBlockPagedPGScenario(test, false, "source version")
+}
+
+func docRangeNativeBlockPagedPGScenario(test *testing.T, decode bool, change string) {
+	test.Helper()
+	test.Run(fmt.Sprintf("block_decode=%t", decode), func(test *testing.T) {
+		test.Run(change, func(test *testing.T) {
+			docRangeNativeBlockPagedPGParksAndRechecksFences(test, decode, change)
 		})
-	}
+	})
 }
 
 func docRangeNativeBlockPagedPGParksAndRechecksFences(test *testing.T, decode bool, change string) {
