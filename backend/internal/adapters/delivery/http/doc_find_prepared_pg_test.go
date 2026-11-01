@@ -24,14 +24,62 @@ import (
 )
 
 func TestPGDocFindPreparedHTTPQueuesThenContinuesRoot(test *testing.T) {
-	testPGDocFindPreparedHTTPQueuesThenContinues(test, false)
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "root")
 }
 
 func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacy(test *testing.T) {
-	testPGDocFindPreparedHTTPQueuesThenContinues(test, true)
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "legacy")
 }
 
-func testPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T, legacySource bool) {
+func TestPGDocFindPreparedHTTPQueuesThenContinuesRootStructured(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "rootStructured")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacyStructured(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "legacyStructured")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesRootEdit(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "rootEdit")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacyEdit(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "legacyEdit")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesRootWrite(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "rootWrite")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacyWrite(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "legacyWrite")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesRootBash(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "rootBash")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacyBash(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "legacyBash")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesRootGeneric(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "rootgeneric")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacyGeneric(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "legacygeneric")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacyImplicitV1(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "legacyImplicitV1")
+}
+
+func TestPGDocFindPreparedHTTPQueuesThenContinuesLegacyStructuredImplicitV1(test *testing.T) {
+	testPGDocFindPreparedHTTPQueuesThenContinues(test, "legacyStructuredImplicitV1")
+}
+
+func testPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T, selected string) {
 	test.Helper()
 	dsn := os.Getenv("CXT_TEST_DSN")
 	if dsn == "" {
@@ -69,6 +117,7 @@ func testPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T, legacySource 
 		test.Fatal(err)
 	}
 	handler := server.Handler()
+	matched := 0
 	for _, scenario := range []struct {
 		legacy, structured bool
 		tool               string
@@ -79,9 +128,6 @@ func testPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T, legacySource 
 		{tool: "Bash"}, {legacy: true, tool: "Bash"}, {tool: "generic"}, {legacy: true, tool: "generic"},
 		{legacy: true, implicit: true}, {legacy: true, structured: true, implicit: true},
 	} {
-		if scenario.legacy != legacySource {
-			continue
-		}
 		legacy, structured := scenario.legacy, scenario.structured
 		name := "root"
 		if legacy {
@@ -94,6 +140,10 @@ func testPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T, legacySource 
 			name += "ImplicitV1"
 		}
 		name += scenario.tool
+		if name != selected {
+			continue
+		}
+		matched++
 		test.Run(name, func(test *testing.T) {
 			repository, err := identity.CreateRepository(ctx, owner, "PreparedFindHTTP"+name)
 			if err != nil {
@@ -305,5 +355,8 @@ func testPGDocFindPreparedHTTPQueuesThenContinues(test *testing.T, legacySource 
 			}
 			test.Logf("legacy=%t authenticated_pending=true worker_batches=%d response_pages=%d cross_page_offset=%d late_offset=%d", legacy, workerBatches, pages, matches[0].Offset, matches[1].Offset)
 		})
+	}
+	if matched != 1 {
+		test.Fatal("prepared HTTP wrapper must select exactly one original case", selected, matched)
 	}
 }
