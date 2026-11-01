@@ -67,3 +67,41 @@ func TestNormalizationCheckpointPGReuseDoesNotRewriteCurrentPin(test *testing.T)
 		})
 	}
 }
+
+func TestNormalizationCheckpointPGReusedStructureRejectsDamagedChild(test *testing.T) {
+	for _, pipeline := range []bool{false, true} {
+		name := "direct"
+		if pipeline {
+			name = "pipeline"
+		}
+		test.Run(name, func(test *testing.T) {
+			storage, ctx, _, job, state := legacyNormalizationParserReusePGStart(test)
+			object := legacyCheckpointPGObject("retained-structure-leaf")
+			if err := storage.stageLegacyNormalizationParserObject(ctx, job, state, object.hash, object.data); err != nil {
+				test.Fatal(err)
+			}
+			work := &legacyNormalizationCheckpointWork{store: storage, job: job, state: state}
+			refs := []legacyNormalizationBufferRef{{Hash: object.hash, Bytes: len(object.data)}}
+			_, err := work.parserPinNode(ctx, refs)
+			if err != nil {
+				test.Fatal(err)
+			}
+			legacyNormalizationParserReusePGDamage(test, storage, ctx, job, state, object.hash, object.data[:len(object.data)-1])
+			bound := ctx
+			var batch *legacyNormalizationCheckpointBatch
+			if pipeline {
+				bound, batch, err = work.beginBatch(ctx)
+				if err != nil {
+					test.Fatal(err)
+				}
+			}
+			_, err = work.parserPinNode(bound, refs)
+			if batch != nil {
+				err = batch.finish(bound, err)
+			}
+			if err == nil {
+				test.Fatal("reused structure accepted a corrupted child's stored length")
+			}
+		})
+	}
+}

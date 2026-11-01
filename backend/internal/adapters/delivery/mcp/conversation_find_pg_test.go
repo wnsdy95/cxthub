@@ -78,8 +78,44 @@ func publishConversationFindPG(test *testing.T, ctx context.Context, storage *st
 }
 
 func TestPGConversationFindMCPPreparationRoundTrip(test *testing.T) {
-	for _, scenario := range []string{"root", "legacy", "implicit_legacy", "outage", "acknowledgment_lost", "revoked", "reasoning_root", "reasoning_legacy", "message_root", "message_legacy", "summary_root", "summary_legacy", "seed_root", "seed_legacy",
-		"tool_edit_root", "tool_edit_legacy", "tool_write_root", "tool_write_legacy", "tool_bash_root", "tool_bash_legacy", "tool_generic_root", "tool_generic_legacy"} {
+	runConversationFindMCPPreparationRoundTrip(test, "root", "legacy", "implicit_legacy", "outage", "acknowledgment_lost", "revoked")
+}
+
+func TestPGConversationFindMCPPreparationRoundTripReasoning(test *testing.T) {
+	runConversationFindMCPPreparationRoundTrip(test, "reasoning_root", "reasoning_legacy")
+}
+
+func TestPGConversationFindMCPPreparationRoundTripMessage(test *testing.T) {
+	runConversationFindMCPPreparationRoundTrip(test, "message_root", "message_legacy")
+}
+
+func TestPGConversationFindMCPPreparationRoundTripSummary(test *testing.T) {
+	runConversationFindMCPPreparationRoundTrip(test, "summary_root", "summary_legacy")
+}
+
+func TestPGConversationFindMCPPreparationRoundTripSeed(test *testing.T) {
+	runConversationFindMCPPreparationRoundTrip(test, "seed_root", "seed_legacy")
+}
+
+func TestPGConversationFindMCPPreparationRoundTripToolEdit(test *testing.T) {
+	runConversationFindMCPPreparationRoundTrip(test, "tool_edit_root", "tool_edit_legacy")
+}
+
+func TestPGConversationFindMCPPreparationRoundTripToolWrite(test *testing.T) {
+	runConversationFindMCPPreparationRoundTrip(test, "tool_write_root", "tool_write_legacy")
+}
+
+func TestPGConversationFindMCPPreparationRoundTripToolBash(test *testing.T) {
+	runConversationFindMCPPreparationRoundTrip(test, "tool_bash_root", "tool_bash_legacy")
+}
+
+func TestPGConversationFindMCPPreparationRoundTripToolGeneric(test *testing.T) {
+	runConversationFindMCPPreparationRoundTrip(test, "tool_generic_root", "tool_generic_legacy")
+}
+
+func runConversationFindMCPPreparationRoundTrip(test *testing.T, scenarios ...string) {
+	test.Helper()
+	for _, scenario := range scenarios {
 		test.Run(scenario, func(test *testing.T) {
 			legacy := scenario == "legacy" || strings.HasSuffix(scenario, "_legacy")
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

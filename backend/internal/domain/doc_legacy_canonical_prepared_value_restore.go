@@ -92,6 +92,7 @@ func (work *legacyCanonicalPreparedValueRestore) refresh(frame *legacyCanonicalP
 	}
 	var heap docRangeHeaderHeapEstimate
 	heap.allocation(1, int64(unsafe.Sizeof(*frame)))
+	heap.allocation(int64(cap(frame.record.Inline)), 1)
 	heap.allocation(int64(len(frame.ref.Hash)), 1)
 	heap.allocation(int64(len(frame.record.Kind)), 1)
 	heap.allocation(int64(len(frame.record.Binding)), 1)
@@ -313,6 +314,32 @@ func (work *legacyCanonicalPreparedValueRestore) advance(ctx context.Context) er
 		return work.refresh(frame)
 	case legacyCanonicalPreparedRestoreStart:
 		switch frame.record.Tag {
+		case legacyCanonicalPreparedInlineArray:
+			values, err := legacyCanonicalPreparedUnpackArray(frame.record.Inline)
+			if err != nil {
+				return err
+			}
+			var planned docRangeHeaderHeapEstimate
+			array := &legacyCanonicalPreparedArray{}
+			planned.allocation(1, int64(unsafe.Sizeof(*array)))
+			for _, value := range values {
+				if err := array.values.append(value); err != nil {
+					return err
+				}
+				switch typed := value.(type) {
+				case string:
+					planned.allocation(1, int64(unsafe.Sizeof(typed)))
+					planned.allocation(int64(len(typed)), 1)
+				case bool:
+					planned.allocation(1, int64(unsafe.Sizeof(typed)))
+				}
+			}
+			array.values.retained(&planned)
+			if err := work.admit(planned); err != nil {
+				return err
+			}
+			work.payload.include(planned)
+			return work.complete(array)
 		case legacyCanonicalPreparedString, legacyCanonicalPreparedBlock:
 			frame.phase = legacyCanonicalPreparedRestoreTextStart
 			return nil

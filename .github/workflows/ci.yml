@@ -153,7 +153,19 @@ jobs:
           go test -tags postgres ./internal/mcpserver/ -race -run '^TestPG' -timeout=120s -v
           python3 ../scripts/test-go-batches.py ./internal/serverruntime/ --tags postgres --race --run '^Test(ExecutionProfilePostgres|BoundedExecutionProcessesPG|InfrastructurePostgres|RuntimePostgresCallersReuseInfrastructurePool)'
           python3 ../scripts/test-go-batches.py ./cmd/cxtd/ --tags postgres --race --run '^TestServerLifecyclePGProcess(SIGTERM|BindFailure)'
-          go test -tags postgres ./internal/adapters/delivery/mcp/ -race -run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity|PGConversationFindMCPPreparationRoundTrip)$' -count=1 -timeout=120s -v
+          python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/mcp/ --tags postgres --race --count 3 --batch-size 1 \
+            --run '^Test(RootProjectionPGConsumersWithoutPersistentIndex|PRContributionTransportParity|PGConversationFindMCPPreparationRoundTrip.*)$' \
+            --require-test TestRootProjectionPGConsumersWithoutPersistentIndex \
+            --require-test TestPRContributionTransportParity \
+            --require-test TestPGConversationFindMCPPreparationRoundTrip \
+            --require-test TestPGConversationFindMCPPreparationRoundTripReasoning \
+            --require-test TestPGConversationFindMCPPreparationRoundTripMessage \
+            --require-test TestPGConversationFindMCPPreparationRoundTripSummary \
+            --require-test TestPGConversationFindMCPPreparationRoundTripSeed \
+            --require-test TestPGConversationFindMCPPreparationRoundTripToolEdit \
+            --require-test TestPGConversationFindMCPPreparationRoundTripToolWrite \
+            --require-test TestPGConversationFindMCPPreparationRoundTripToolBash \
+            --require-test TestPGConversationFindMCPPreparationRoundTripToolGeneric
           python3 ../scripts/test-go-batches.py ./internal/adapters/delivery/mcp/ --tags postgres --race --run '^TestPGMCPResourceCutover$'
           python3 ../scripts/test-go-batches.py ./cmd/cxt-admin/ --tags postgres --race --run '^TestIdentityKeyCommandRejectsSecretsWithoutEchoingConfiguration$'
 

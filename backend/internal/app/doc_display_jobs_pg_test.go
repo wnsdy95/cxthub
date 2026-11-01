@@ -110,76 +110,82 @@ func readDocDisplayGenerationPG(fixture docViewPGFixture, target domain.DocDispl
 }
 
 func TestPGDocDisplayWorkerResumesBoundedBatchesWithoutPublishingStaging(test *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		name := "root"
-		if legacy {
-			name = "legacy"
-		}
-		test.Run(name, func(test *testing.T) {
-			fixture := newDocDisplayPGFixture(test)
-			output := string(fixture.repo) + strings.Repeat("a🙂<&>\n", 100_000)
-			document := domain.CIRDocument{Envelope: fixture.cir.Envelope, Events: []domain.CIREvent{{Kind: domain.EventToolResult, Output: output}}}
-			var hash domain.ContentHash
-			if legacy {
-				hash = seedLegacyFindPGDocument(test, fixture, document.Events).Hash
-				prepareLegacyFindGenerationPG(test, fixture, hash)
-			} else {
-				hash = seedDocViewBoundaryPG(test, fixture, document)
-			}
-			target := docDisplayTargetPG(test, fixture, hash, 0)
-			queued, err := fixture.storage.EnqueueDocDisplay(fixture.ctx, target, time.Now().UTC())
-			if err != nil || queued.State != "waiting" {
-				test.Fatal(queued, err)
-			}
-			probe := &docDisplayJobProbe{DocDisplayStore: fixture.storage}
-			fixture.service.ConfigureDocumentDisplay(probe)
-			if err := fixture.service.ProcessDocDisplayJobs(fixture.ctx, 1); err != nil {
-				test.Fatal(err)
-			}
-			if probe.discovered != docDisplayJobSteps || probe.saved != 0 || probe.initialized != 0 || probe.verified != 0 || probe.completed != 0 {
-				test.Fatal("preparation did not yield at bounded checkpoint", probe)
-			}
-			if _, err := readDocDisplayGenerationPG(fixture, target); !errors.Is(err, domain.ErrNotFound) {
-				test.Fatal("staging became readable before completion", err)
-			}
-			for attempt := 0; attempt < 400; attempt++ {
-				restarted := NewService(fixture.storage, fixture.storage, nil, nil, fixture.storage)
-				restarted.ConfigureDocumentDisplay(probe)
-				if err := restarted.ProcessDocDisplayJobs(fixture.ctx, 1); err != nil {
-					test.Fatal("new process could not resume persisted work", err)
-				}
-				if probe.completed == 1 {
-					break
-				}
-			}
-			generation, err := readDocDisplayGenerationPG(fixture, target)
-			if err != nil || generation.TextBytes != len(output) || probe.completed != 1 || probe.initialized != 0 || probe.verified != 1 || probe.discovered != (target.Event.Length+domain.DocFieldDiscoveryStepBytes-1)/domain.DocFieldDiscoveryStepBytes {
-				test.Fatal("prepared generation lost content or repeated discovery", generation, probe, err)
-			}
-			for index, from := range probe.discoveryFrom {
-				if from != index*domain.DocFieldDiscoveryStepBytes {
-					test.Fatal("discovery restarted or skipped a source range", index, from)
-				}
-			}
-			var text strings.Builder
-			for index := 0; index < generation.Pages.Count; index++ {
-				page, err := repositoryReadForRepo(fixture.ctx, fixture.service, fixture.repo, func(read context.Context) (domain.DocDisplayPage, error) {
-					return fixture.storage.ReadDocDisplayPage(read, target, index)
-				})
-				if err != nil || page.From != text.Len() {
-					test.Fatal("selected page did not continue exact display text", page, err)
-				}
-				_, _ = text.WriteString(page.Text)
-			}
-			if text.String() != output {
-				test.Fatal("prepared pages differ from original displayed output")
-			}
-			if err := fixture.service.ProcessDocDisplayJobs(fixture.ctx, 2); err != nil || probe.completed != 1 {
-				test.Fatal("completed work repeated", err, probe.completed)
-			}
-			test.Logf("pages=%d render_steps=%d discovery_steps=%d source_verifications=%d output_bytes=%d", generation.Pages.Count, probe.saved, probe.discovered, probe.verified, generation.TextBytes)
-		})
+	testPGDocDisplayWorkerResumesBoundedBatchesWithoutPublishingStaging(test, false)
+}
+
+func TestPGDocDisplayWorkerResumesLegacyBoundedBatchesWithoutPublishingStaging(test *testing.T) {
+	testPGDocDisplayWorkerResumesBoundedBatchesWithoutPublishingStaging(test, true)
+}
+
+func testPGDocDisplayWorkerResumesBoundedBatchesWithoutPublishingStaging(test *testing.T, legacy bool) {
+	name := "root"
+	if legacy {
+		name = "legacy"
 	}
+	test.Run(name, func(test *testing.T) {
+		fixture := newDocDisplayPGFixture(test)
+		output := string(fixture.repo) + strings.Repeat("a🙂<&>\n", 100_000)
+		document := domain.CIRDocument{Envelope: fixture.cir.Envelope, Events: []domain.CIREvent{{Kind: domain.EventToolResult, Output: output}}}
+		var hash domain.ContentHash
+		if legacy {
+			hash = seedLegacyFindPGDocument(test, fixture, document.Events).Hash
+			prepareLegacyFindGenerationPG(test, fixture, hash)
+		} else {
+			hash = seedDocViewBoundaryPG(test, fixture, document)
+		}
+		target := docDisplayTargetPG(test, fixture, hash, 0)
+		queued, err := fixture.storage.EnqueueDocDisplay(fixture.ctx, target, time.Now().UTC())
+		if err != nil || queued.State != "waiting" {
+			test.Fatal(queued, err)
+		}
+		probe := &docDisplayJobProbe{DocDisplayStore: fixture.storage}
+		fixture.service.ConfigureDocumentDisplay(probe)
+		if err := fixture.service.ProcessDocDisplayJobs(fixture.ctx, 1); err != nil {
+			test.Fatal(err)
+		}
+		if probe.discovered != docDisplayJobSteps || probe.saved != 0 || probe.initialized != 0 || probe.verified != 0 || probe.completed != 0 {
+			test.Fatal("preparation did not yield at bounded checkpoint", probe)
+		}
+		if _, err := readDocDisplayGenerationPG(fixture, target); !errors.Is(err, domain.ErrNotFound) {
+			test.Fatal("staging became readable before completion", err)
+		}
+		for attempt := 0; attempt < 400; attempt++ {
+			restarted := NewService(fixture.storage, fixture.storage, nil, nil, fixture.storage)
+			restarted.ConfigureDocumentDisplay(probe)
+			if err := restarted.ProcessDocDisplayJobs(fixture.ctx, 1); err != nil {
+				test.Fatal("new process could not resume persisted work", err)
+			}
+			if probe.completed == 1 {
+				break
+			}
+		}
+		generation, err := readDocDisplayGenerationPG(fixture, target)
+		if err != nil || generation.TextBytes != len(output) || probe.completed != 1 || probe.initialized != 0 || probe.verified != 1 || probe.discovered != (target.Event.Length+domain.DocFieldDiscoveryStepBytes-1)/domain.DocFieldDiscoveryStepBytes {
+			test.Fatal("prepared generation lost content or repeated discovery", generation, probe, err)
+		}
+		for index, from := range probe.discoveryFrom {
+			if from != index*domain.DocFieldDiscoveryStepBytes {
+				test.Fatal("discovery restarted or skipped a source range", index, from)
+			}
+		}
+		var text strings.Builder
+		for index := 0; index < generation.Pages.Count; index++ {
+			page, err := repositoryReadForRepo(fixture.ctx, fixture.service, fixture.repo, func(read context.Context) (domain.DocDisplayPage, error) {
+				return fixture.storage.ReadDocDisplayPage(read, target, index)
+			})
+			if err != nil || page.From != text.Len() {
+				test.Fatal("selected page did not continue exact display text", page, err)
+			}
+			_, _ = text.WriteString(page.Text)
+		}
+		if text.String() != output {
+			test.Fatal("prepared pages differ from original displayed output")
+		}
+		if err := fixture.service.ProcessDocDisplayJobs(fixture.ctx, 2); err != nil || probe.completed != 1 {
+			test.Fatal("completed work repeated", err, probe.completed)
+		}
+		test.Logf("pages=%d render_steps=%d discovery_steps=%d source_verifications=%d output_bytes=%d", generation.Pages.Count, probe.saved, probe.discovered, probe.verified, generation.TextBytes)
+	})
 }
 
 func TestPGDocDisplayWorkerRecoversTransientFailureWithoutRepeatingDiscovery(test *testing.T) {
