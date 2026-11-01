@@ -166,9 +166,20 @@ func TestP6DiscoveryPinsRequirementBeforeStateRead(t *testing.T) {
 	}
 }
 
+type p6DirectReadStore struct {
+	*p6Store
+	outbound.BlobStore
+	outbound.HistoryStore
+}
+
+func (storage *p6DirectReadStore) RepositoryRevision(context.Context, domain.ContentHash) (domain.RepositoryRevision, error) {
+	storage.effects++
+	return domain.RepositoryRevision{}, nil
+}
+
 func TestP6DirectReadsRejectBeforeStorePayload(t *testing.T) {
-	st := &p6Store{root: true}
-	s := NewService(st, nil, nil, nil, nil)
+	st := &p6DirectReadStore{p6Store: &p6Store{root: true}}
+	s := NewService(st, st, nil, nil, nil)
 	ctx := context.Background()
 	repo := domain.HashContent([]byte("direct"))
 	hash := domain.HashContent([]byte("doc"))
@@ -203,8 +214,12 @@ func TestP6DirectReadsRejectBeforeStorePayload(t *testing.T) {
 	}
 	for name, call := range tests {
 		t.Run(name, func(t *testing.T) {
+			checksBefore := st.checks
 			if err := call(); !errors.Is(err, domain.ErrDocumentIdentityUpgradeRequired) {
 				t.Fatal("unfenced read", err)
+			}
+			if st.checks != checksBefore+1 || st.effects != 0 {
+				t.Fatalf("read did not fence before payload: checks=%d effects=%d", st.checks-checksBefore, st.effects)
 			}
 		})
 	}
