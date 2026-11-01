@@ -134,9 +134,31 @@ func (probe *denseDocDisplayBlobProbe) GetDoc(ctx context.Context, repo, hash do
 	return probe.PostgresStore.GetDoc(ctx, repo, hash)
 }
 
-func TestPGDocMessageDenseDisplayDemandThenSearchLatePages(test *testing.T) {
+func TestPGDocMessageDenseDisplayDemandThenSearchLatePagesMessageRoot(test *testing.T) {
+	docMessageDenseDisplayDemandThenSearchLatePages(test, domain.EventMessage, false)
+}
+
+func TestPGDocMessageDenseDisplayDemandThenSearchLatePagesMessageLegacy(test *testing.T) {
+	docMessageDenseDisplayDemandThenSearchLatePages(test, domain.EventMessage, true)
+}
+
+func TestPGDocMessageDenseDisplayDemandThenSearchLatePagesReasoningRoot(test *testing.T) {
+	docMessageDenseDisplayDemandThenSearchLatePages(test, domain.EventReasoning, false)
+}
+
+func TestPGDocMessageDenseDisplayDemandThenSearchLatePagesReasoningLegacy(test *testing.T) {
+	docMessageDenseDisplayDemandThenSearchLatePages(test, domain.EventReasoning, true)
+}
+
+func docMessageDenseDisplayDemandThenSearchLatePages(test *testing.T, selectedKind domain.EventKind, selectedLegacy bool) {
+	test.Helper()
+	matched := 0
 	for _, kind := range []domain.EventKind{domain.EventMessage, domain.EventReasoning} {
 		for _, legacy := range []bool{false, true} {
+			if kind != selectedKind || legacy != selectedLegacy {
+				continue
+			}
+			matched++
 			test.Run(fmt.Sprintf("%s/legacy=%t", kind, legacy), func(test *testing.T) {
 				fixture := newDocDisplayPGFixture(test)
 				fixture.service.ConfigureDocumentDisplay(fixture.storage)
@@ -276,6 +298,9 @@ func TestPGDocMessageDenseDisplayDemandThenSearchLatePages(test *testing.T) {
 				test.Logf("kind=%s legacy=%t raw_event_bytes=%d prepared_pages=%d worker_batches=%d search_requests=%d initial_raw_reads=%d continuation_raw_reads=0 whole_event_offset=%d prepared_page=%d", kind, legacy, target.Event.Length, generation.Pages.Count, batches+1, requests+1, rawProbeReads, match.Offset, *match.PreparedPage)
 			})
 		}
+	}
+	if matched != 1 {
+		test.Fatal("dense display wrapper must select exactly one original case", selectedKind, selectedLegacy, matched)
 	}
 }
 
