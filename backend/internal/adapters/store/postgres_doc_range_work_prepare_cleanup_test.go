@@ -82,49 +82,33 @@ func TestDocSpoolWorkPGDirectCompatibilityCancellationAfterPartialWriteClosesBot
 }
 
 func TestLegacyMetadataPreparationCancellationRemovesPartialSpools(test *testing.T) {
+	storage, ctx := chunkReusePG(test)
 	document := domain.CIRDocument{Envelope: domain.CIREnvelope{CIRVersion: "2"}}
 	for ordinal := 0; ordinal < 4097; ordinal++ {
 		document.Events = append(document.Events, domain.CIREvent{Kind: domain.EventMessage, Role: domain.RoleUser,
 			Seq: ordinal, Blocks: []domain.ContentBlock{{Type: "text", Text: fmt.Sprintf("metadata cleanup event %d", ordinal)}}})
 	}
-	raw, err := domain.CanonicalBytes(document)
-	if err != nil {
-		test.Fatal(err)
-	}
-	hash := domain.HashContent(raw)
-	proof, err := domain.VerifySessionDoc(domain.SessionDoc{Hash: hash, CIR: document})
-	if err != nil {
-		test.Fatal(err)
-	}
-	plan, err := domain.NewLegacyByteBackfill(context.Background(), proof)
-	if err != nil {
-		test.Fatal(err)
-	}
-	key, err := plan.Key()
-	if err != nil {
-		test.Fatal(err)
-	}
-	spec, err := plan.Spec()
-	if err != nil {
-		test.Fatal(err)
-	}
-	encoded, err := spec.Encode()
-	if err != nil {
-		test.Fatal(err)
-	}
+	repo, _ := docRangeJobPGRepo(test, storage, ctx)
+	fixture := legacyByteStagePGDocument(test, storage, ctx, repo, document)
+	storage.ConfigureLegacyByteRangePublication(true)
 	created := time.Now().UTC()
-	job := domain.DocRangeIndexJob{RepoID: domain.HashContent([]byte(test.Name())), DocHash: hash, State: "running",
-		Version: 1, CreatedAt: created, NextAttempt: created, LeaseUntil: created.Add(time.Minute)}
-	if err := job.Validate(); err != nil {
+	if _, err := storage.EnqueueDocByteRangeJob(ctx, repo, fixture.hash, created); err != nil {
 		test.Fatal(err)
 	}
-	session := legacyByteBackfillSession{repo: job.RepoID, hash: hash, proof: proof, plan: plan, encoded: encoded,
-		stage: legacyByteStage{plan: key, blocks: spec.Blocks}}
+	job, err := storage.ClaimDocRangeJob(ctx, created, time.Minute)
+	if err != nil || job.RepoID != repo || job.DocHash != fixture.hash || job.State != "running" {
+		test.Fatal("claim metadata cleanup job", job, err)
+	}
+	session, err := storage.prepareLegacyByteBackfill(ctx, job)
+	if err != nil {
+		test.Fatal(err)
+	}
+	public := legacyByteStagePGPublicImage(test, storage, ctx, fixture)
 	directory := rangeSpoolTempDir(test)
-	base, cancel := context.WithCancel(context.Background())
+	base, cancel := context.WithCancel(ctx)
 	defer cancel()
 	observed := &metadataSpoolCancellation{Context: base, directory: directory, cancel: cancel}
-	prepared, err := (&PostgresStore{}).prepareLegacyByteWork(observed, job, session)
+	prepared, err := storage.prepareLegacyByteWork(observed, job, session)
 	if prepared != nil {
 		defer prepared.Close()
 	}
@@ -134,5 +118,8 @@ func TestLegacyMetadataPreparationCancellationRemovesPartialSpools(test *testing
 	remaining, err := os.ReadDir(directory)
 	if err != nil || len(remaining) != 0 {
 		test.Fatalf("partial preparation leaked data or metadata spools: files=%v error=%v", remaining, err)
+	}
+	if legacyByteStagePGPublicImage(test, storage, ctx, fixture) != public {
+		test.Fatal("canceled metadata preparation changed public state")
 	}
 }
