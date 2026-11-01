@@ -309,8 +309,63 @@ func (work *legacyNativeCheckpointGoGraphSet) checkSource() error {
 	return nil
 }
 
+func legacyNativeCheckpointGoGraphSetTrivial(value any) bool {
+	switch value := value.(type) {
+	case nil, bool:
+		return true
+	case float64:
+		return !math.IsNaN(value) && !math.IsInf(value, 0)
+	case string:
+		return value == ""
+	default:
+		return false
+	}
+}
+
+func (work *legacyNativeCheckpointGoGraphSet) trivialRoot(ctx context.Context) (bool, error) {
+	if !legacyNativeCheckpointGoGraphSetTrivial(work.values[work.position]) {
+		return false, nil
+	}
+	if work.registry.first != nil || work.identity.first != nil {
+		return false, nil
+	}
+	if work.registry.failure != nil {
+		return false, work.registry.failure
+	}
+	if work.identity.failure != nil {
+		return false, work.identity.failure
+	}
+	if work.registry.closed || work.identity.closed || work.identity.nextID >= legacyNativeCheckpointNodes {
+		return false, ErrIntegrity
+	}
+	if work.registry.active != nil {
+		return false, ErrConflict
+	}
+	if err := work.admit(64 + 2*legacyNativeValueCheckpointBytes); err != nil {
+		return false, err
+	}
+	bounds := legacyNativeValueCheckpointBounds{PayloadBytes: legacyNativeValueCheckpointPayloadLimit(), Nodes: legacyNativeCheckpointNodes}
+	snapshot, err := (legacyNativeAnyValue{value: work.values[work.position]}).checkpoint(ctx, 0, bounds)
+	if err != nil {
+		return false, err
+	}
+	defer snapshot.close()
+	wire, err := snapshot.state.encode(ctx, bounds)
+	if err != nil {
+		return false, err
+	}
+	work.identity.nextID++
+	work.state.Roots[work.position] = legacyNativeCheckpointValue{Wire: wire}
+	work.position++
+	return true, nil
+}
+
 func (work *legacyNativeCheckpointGoGraphSet) advance(ctx context.Context) error {
-	if work.phase == 0 && work.position < len(work.values) && work.prepare == nil {
+	if work.phase == 0 && work.position < len(work.values) && work.prepare == nil &&
+		(work.layout != nil && work.layout.ready || !legacyNativeCheckpointGoGraphSetTrivial(work.values[work.position])) {
+		if handled, err := work.trivialRoot(ctx); handled || err != nil {
+			return err
+		}
 		remaining, err := work.remaining()
 		if err != nil {
 			return err
