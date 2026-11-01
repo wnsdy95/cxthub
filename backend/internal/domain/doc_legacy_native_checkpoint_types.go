@@ -45,17 +45,18 @@ type legacyNativeCheckpointMember struct {
 }
 
 type legacyNativeCheckpointOwner struct {
-	Version     uint8                      `json:"v"`
-	Identity    uint64                     `json:"i"`
-	Kind        uint8                      `json:"k"`
-	Length      uint64                     `json:"n"`
-	Capacity    uint64                     `json:"c"`
-	Maximum     uint64                     `json:"m"`
-	Revision    uint64                     `json:"r"`
-	Members     legacyNativeCheckpointTree `json:"e"`
-	Dirty       legacyNativeCheckpointTree `json:"d"`
-	FullBacking bool                       `json:"f,omitempty"`
-	Visible     uint64                     `json:"l,omitempty"`
+	Version     uint8                            `json:"v"`
+	Identity    uint64                           `json:"i"`
+	Kind        uint8                            `json:"k"`
+	Length      uint64                           `json:"n"`
+	Capacity    uint64                           `json:"c"`
+	Maximum     uint64                           `json:"m"`
+	Revision    uint64                           `json:"r"`
+	Members     legacyNativeCheckpointTree       `json:"e"`
+	Dirty       legacyNativeCheckpointTree       `json:"d"`
+	FullBacking bool                             `json:"f,omitempty"`
+	Visible     uint64                           `json:"l,omitempty"`
+	Allocation  *legacyNativeCheckpointArrayView `json:"a,omitempty"`
 }
 
 func (record legacyNativeCheckpointOwner) logicalLength() uint64 {
@@ -66,6 +67,9 @@ func (record legacyNativeCheckpointOwner) logicalLength() uint64 {
 }
 
 func (record legacyNativeCheckpointOwner) validateBacking() error {
+	if record.Allocation != nil && (record.Kind != legacyNativeCheckpointArray || record.Capacity == 0 || record.Allocation.Offset > legacyNativeCheckpointNodes || !record.Allocation.Backing.Body.valid() || len(record.Allocation.Backing.Wire) == 0) {
+		return ErrIntegrity
+	}
 	if record.FullBacking {
 		if record.Kind != legacyNativeCheckpointArray || record.Length != record.Capacity || record.Visible >= record.Length {
 			return ErrIntegrity

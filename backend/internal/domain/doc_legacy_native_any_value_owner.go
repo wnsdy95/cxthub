@@ -74,6 +74,9 @@ func (owner legacyNativeAnyValueOwner) validate() error {
 		}
 		owner.object.retained(&retained)
 	} else {
+		if err := owner.array.validateResource(); err != nil {
+			return err
+		}
 		if owner.array.revision != owner.revision {
 			return ErrConflict
 		}

@@ -32,6 +32,7 @@ type legacyNativeCheckpointGraphIdentity struct {
 	nextID  uint64
 	nodes   int64
 	owners  int64
+	views   int64
 	closed  bool
 	failure error
 }
@@ -52,6 +53,9 @@ func (identity *legacyNativeCheckpointGraphIdentity) retainedBytes() (int64, err
 	legacyCanonicalStorageAllocation(&estimate, int(identity.nodes), int64(unsafe.Sizeof(legacyNativeCheckpointGraphLookup{})))
 	legacyCanonicalStorageAllocation(&estimate, int(identity.owners), int64(unsafe.Sizeof(legacyNativeCheckpointGraphCaptured{})))
 	legacyCanonicalStorageAllocation(&estimate, 3*int(identity.owners), int64(len(contentHashPrefix)+64))
+	legacyCanonicalStorageAllocation(&estimate, int(identity.views), int64(unsafe.Sizeof(legacyNativeCheckpointArrayView{})))
+	legacyCanonicalStorageAllocation(&estimate, int(identity.views), legacyNativeValueCheckpointBytes)
+	legacyCanonicalStorageAllocation(&estimate, 3*int(identity.views), int64(len(contentHashPrefix)+64))
 	return estimate.bytes, estimate.err
 }
 
@@ -119,6 +123,16 @@ func (captured *legacyNativeCheckpointGraphCaptured) validate() error {
 		return nil
 	}
 	list := captured.owner.array
+	if list != nil && list.resource != nil {
+		if err := list.validateResource(); err != nil {
+			return err
+		}
+		if captured.finished && (captured.record.Allocation == nil || captured.record.Allocation.Offset != uint64(list.offset)) {
+			return ErrConflict
+		}
+	} else if captured.record.Allocation != nil {
+		return ErrIntegrity
+	}
 	if list == nil || !list.children.valid() || list.children.length() != len(list.decoded) || len(list.decoded) > 0 && !list.tracked ||
 		list.maximum < 0 || list.copied < 0 || list.previous != nil && (len(list.previous) != len(list.decoded) || list.copied > len(list.previous)) {
 		return ErrIntegrity
@@ -159,6 +173,8 @@ const (
 	legacyNativeCheckpointGraphCaptureWaitingKey
 	legacyNativeCheckpointGraphCaptureWaitingChild
 	legacyNativeCheckpointGraphCaptureTextFinish
+	legacyNativeCheckpointGraphCaptureBacking
+	legacyNativeCheckpointGraphCaptureWaitingBacking
 )
 
 type legacyNativeCheckpointGraphCaptureFrame struct {
@@ -440,6 +456,9 @@ func (work *legacyNativeCheckpointGraphWriter) push(ctx context.Context, value l
 		if fresh {
 			frame.captured.state = frame.state
 			frame.phase = legacyNativeCheckpointGraphCaptureMembers
+			if frame.captured.owner.array != nil && frame.captured.owner.array.resource != nil {
+				frame.phase = legacyNativeCheckpointGraphCaptureBacking
+			}
 		} else if frame.captured.state != frame.state {
 			snapshot.close()
 			return ErrConflict
@@ -521,6 +540,10 @@ func (work *legacyNativeCheckpointGraphWriter) finishFrame(ctx context.Context, 
 		return work.admit(0)
 	}
 	switch parent.phase {
+	case legacyNativeCheckpointGraphCaptureWaitingBacking:
+		parent.captured.record.Allocation = &legacyNativeCheckpointArrayView{Backing: result, Offset: uint64(parent.captured.owner.array.offset)}
+		work.identity.views++
+		parent.phase = legacyNativeCheckpointGraphCaptureMembers
 	case legacyNativeCheckpointGraphCaptureWaitingKey:
 		parent.member.Key, parent.phase = result, legacyNativeCheckpointGraphCaptureChild
 	case legacyNativeCheckpointGraphCaptureWaitingChild:
@@ -603,6 +626,12 @@ func (work *legacyNativeCheckpointGraphWriter) step(ctx context.Context) (bool, 
 
 func (work *legacyNativeCheckpointGraphWriter) stepFrame(ctx context.Context, frame *legacyNativeCheckpointGraphCaptureFrame) error {
 	switch frame.phase {
+	case legacyNativeCheckpointGraphCaptureBacking:
+		if err := work.admit(legacyNativeCheckpointGraphCaptureWorkspace); err != nil {
+			return err
+		}
+		frame.phase = legacyNativeCheckpointGraphCaptureWaitingBacking
+		return work.push(ctx, frame.captured.owner.array.resource.root)
 	case legacyNativeCheckpointGraphCaptureValue:
 		if frame.state.Kind != legacyNativeCheckpointString {
 			return work.finishFrame(ctx, frame)
