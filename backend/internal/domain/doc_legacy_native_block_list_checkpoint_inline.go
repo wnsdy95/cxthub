@@ -41,14 +41,10 @@ func legacyNativeBlockInlineRecord(ctx context.Context, record legacyNativeBlock
 	return result, true, nil
 }
 
-func legacyNativeBlockInlineRestore(ctx context.Context, saved legacyNativeCheckpointBlockRecord, sourceBytes int, budget int64) (legacyNativeBlockValue, error) {
-	var empty legacyNativeBlockValue
-	if err := ctx.Err(); err != nil {
-		return empty, err
-	}
+func legacyNativeBlockInlinePlan(saved legacyNativeCheckpointBlockRecord) (docRangeHeaderHeapEstimate, error) {
+	var empty docRangeHeaderHeapEstimate
 	schema, err := legacyNativeCheckpointBlockSchema()
-	if err != nil || saved.Schema != schema || saved.Inline == nil || saved.Values != (legacyNativeCheckpointStrings{}) ||
-		sourceBytes < 0 || sourceBytes > MaxFinalizedDocBytes || budget <= 0 {
+	if err != nil || saved.Schema != schema || saved.Inline == nil || saved.Values != (legacyNativeCheckpointStrings{}) {
 		return empty, ErrIntegrity
 	}
 	inline := saved.Inline
@@ -67,14 +63,27 @@ func legacyNativeBlockInlineRestore(ctx context.Context, saved legacyNativeCheck
 		return empty, ErrIntegrity
 	}
 	planned.allocation(2, int64(unsafe.Sizeof(strings.Builder{})))
-	if planned.err != nil {
-		return empty, planned.err
+	return planned, planned.err
+}
+
+func legacyNativeBlockInlineRestore(ctx context.Context, saved legacyNativeCheckpointBlockRecord, sourceBytes int, budget int64) (legacyNativeBlockValue, error) {
+	var empty legacyNativeBlockValue
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
+	if sourceBytes < 0 || sourceBytes > MaxFinalizedDocBytes || budget <= 0 {
+		return empty, ErrIntegrity
+	}
+	planned, err := legacyNativeBlockInlinePlan(saved)
+	if err != nil {
+		return empty, err
 	}
 	if planned.bytes > budget {
 		return empty, ErrDocumentResourceLimit
 	}
 	var values [2]string
 	result := legacyNativeBlockValue{}
+	inline := saved.Inline
 	for ordinal, body := range inline.Values {
 		capacity := inline.Capacities[ordinal]
 		if capacity == len(body) {
