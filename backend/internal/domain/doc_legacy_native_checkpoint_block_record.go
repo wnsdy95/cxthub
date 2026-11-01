@@ -105,6 +105,13 @@ func (work *legacyNativeCheckpointBlockRecordWriter) step(ctx context.Context) (
 	if err != nil {
 		return work.fail(err)
 	}
+	if !ready && work.strings.pending && work.strings.text == nil && len(work.strings.values) == len(work.values) &&
+		len(work.strings.rows.values) < legacyNativeCheckpointPageItems-1 {
+		ready, err = work.strings.step(ctx)
+		if err != nil {
+			return work.fail(err)
+		}
+	}
 	if ready {
 		work.result.Values, err = work.strings.take(ctx)
 		if err != nil {
